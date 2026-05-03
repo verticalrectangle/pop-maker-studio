@@ -71,13 +71,13 @@ bool audio_load(const std::string& path) {
     g_duration = 0.f;
     g_loading.store(true);
 
-    // Probe duration via libav synchronously (fast — no decode).
-    // This runs on the main thread before the background thread starts,
-    // so there is no concurrent libav usage with video.cpp.
+    // Probe container duration — avformat_open_input alone is enough for
+    // MP4/MOV/MKV (duration lives in the container header). Skipping
+    // avformat_find_stream_info avoids the multi-second packet-decode scan
+    // that was freezing the main thread on every video import.
     {
         AVFormatContext* fc = nullptr;
         if (avformat_open_input(&fc, path.c_str(), nullptr, nullptr) == 0) {
-            avformat_find_stream_info(fc, nullptr);
             if (fc->duration != AV_NOPTS_VALUE)
                 g_duration = (float)fc->duration / (float)AV_TIME_BASE;
             avformat_close_input(&fc);

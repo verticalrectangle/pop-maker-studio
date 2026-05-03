@@ -261,15 +261,18 @@ static void import_file(AppState& state, const std::string& path) {
 
     bool is_video = (ext==".mp4"||ext==".mov"||ext==".mkv"||ext==".avi"||ext==".webm");
 
-    // Load audio for playback
-    audio_load(path);
-    state.duration = audio_duration();
-
     if (is_video) {
+        // Open video first — this sets duration via container header (fast).
+        // Then start async audio decode. This order avoids two concurrent
+        // avformat_find_stream_info calls and gives us a reliable duration
+        // without the slow audio probe.
         if (video_open(path)) {
             state.video_path   = path;
             state.video_loaded = true;
         }
+        state.duration = (float)video_info().duration;
+        audio_load(path);  // async — probes container header only, no find_stream_info
+
         // Add or update Video track
         Track* vt = nullptr;
         for (auto& t : state.tracks) if (t.type==TrackType::Video) { vt=&t; break; }
@@ -280,6 +283,9 @@ static void import_file(AppState& state, const std::string& path) {
         vt->clips.push_back(vc);
     } else {
         state.audio_path = path;
+        audio_load(path);  // async — also probes container duration
+        state.duration = audio_duration();
+
         // Add Audio track
         Track* at = nullptr;
         for (auto& t : state.tracks)
