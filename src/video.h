@@ -50,6 +50,10 @@ VideoInfo video_info();    // from the most recently opened proxy or export cont
 // Re-decodes only when the frame index changes.  Returns 0 if nothing is open.
 uintptr_t video_get_texture(double playhead);
 
+// Decode the frame at `t` into a separate thumbnail texture (never clobbers the
+// main preview texture).  out_w / out_h receive the proxy pixel dimensions.
+uintptr_t video_get_thumbnail(double t, int* out_w, int* out_h);
+
 // Probe original video container for duration without full stream scan.
 // Reads container header only — safe to call on the main thread, < 100 ms.
 float video_probe_duration(const std::string& path);

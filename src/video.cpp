@@ -41,6 +41,14 @@ static struct PreviewState {
     VideoInfo info = {};
 } g_pv;
 
+// Separate texture for hover-preview thumbnails (doesn't disturb main tex).
+static struct ThumbState {
+    GLuint tex           = 0;
+    int    tex_w         = 0;
+    int    tex_h         = 0;
+    int    last_frame_idx = -1;
+} g_th;
+
 // Decode and upload one JPEG frame from an in-memory buffer.
 static void upload_jpeg(const uint8_t* buf, size_t sz, int expected_w, int expected_h) {
     int w, h, ch;
@@ -128,6 +136,9 @@ void video_close() {
     g_pv.is_proxy = false;
     g_pv.proxy    = {};
     g_pv.info     = {};
+    if (g_th.tex) { glDeleteTextures(1, &g_th.tex); g_th.tex = 0; }
+    g_th.tex_w = g_th.tex_h = 0;
+    g_th.last_frame_idx = -1;
 }
 
 bool      video_is_open() { return g_pv.is_open; }
@@ -188,6 +199,81 @@ uintptr_t video_get_texture(double playhead) {
 
     upload_jpeg(s_buf.data(), got, g_pv.proxy.width, g_pv.proxy.height);
     return g_pv.tex ? (uintptr_t)g_pv.tex : 0;
+}
+
+uintptr_t video_get_thumbnail(double t, int* out_w, int* out_h) {
+    if (out_w) *out_w = 0;
+    if (out_h) *out_h = 0;
+    if (!g_pv.is_open || !g_pv.is_proxy) return 0;
+    if (!g_pv.mjpeg_file || g_pv.proxy.offsets.empty()) return 0;
+
+    double dur = g_pv.info.duration;
+    if (t < 0.0) t = 0.0;
+    if (dur > 0.0 && t > dur) t = dur;
+
+    int64_t num = g_pv.proxy.fps_num;
+    int64_t den = g_pv.proxy.fps_den;
+    int frame_idx = (num > 0 && den > 0)
+        ? (int)((int64_t)(t * (double)num) / den)
+        : (int)(t * g_pv.proxy.fps);
+    if (frame_idx >= (int)g_pv.proxy.offsets.size())
+        frame_idx = (int)g_pv.proxy.offsets.size() - 1;
+    if (frame_idx < 0) frame_idx = 0;
+
+    if (frame_idx == g_th.last_frame_idx && g_th.tex) {
+        if (out_w) *out_w = g_th.tex_w;
+        if (out_h) *out_h = g_th.tex_h;
+        return (uintptr_t)g_th.tex;
+    }
+    g_th.last_frame_idx = frame_idx;
+
+    uint64_t offset = g_pv.proxy.offsets[(size_t)frame_idx];
+    bool is_last = ((size_t)frame_idx + 1 >= g_pv.proxy.offsets.size());
+    size_t frame_sz = 0;
+    if (!is_last) {
+        frame_sz = (size_t)(g_pv.proxy.offsets[(size_t)frame_idx + 1] - offset);
+    } else {
+        fseeko(g_pv.mjpeg_file, (off_t)offset, SEEK_SET);
+        long cur = ftell(g_pv.mjpeg_file);
+        fseeko(g_pv.mjpeg_file, 0, SEEK_END);
+        long end = ftell(g_pv.mjpeg_file);
+        frame_sz = (end > cur) ? (size_t)(end - cur) : 0;
+    }
+    if (frame_sz == 0) return g_th.tex ? (uintptr_t)g_th.tex : 0;
+
+    static std::vector<uint8_t> s_th_buf;
+    s_th_buf.resize(frame_sz);
+    fseeko(g_pv.mjpeg_file, (off_t)offset, SEEK_SET);
+    size_t got = fread(s_th_buf.data(), 1, frame_sz, g_pv.mjpeg_file);
+    if (got == 0) return g_th.tex ? (uintptr_t)g_th.tex : 0;
+
+    int w, h, ch;
+    uint8_t* pixels = stbi_load_from_memory(s_th_buf.data(), (int)got, &w, &h, &ch, 3);
+    if (!pixels) return g_th.tex ? (uintptr_t)g_th.tex : 0;
+
+    if (g_th.tex == 0) {
+        glGenTextures(1, &g_th.tex);
+        glBindTexture(GL_TEXTURE_2D, g_th.tex);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    } else {
+        glBindTexture(GL_TEXTURE_2D, g_th.tex);
+    }
+
+    if (w != g_th.tex_w || h != g_th.tex_h) {
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, w, h, 0, GL_RGB, GL_UNSIGNED_BYTE, pixels);
+        g_th.tex_w = w; g_th.tex_h = h;
+    } else {
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_RGB, GL_UNSIGNED_BYTE, pixels);
+    }
+    glBindTexture(GL_TEXTURE_2D, 0);
+    stbi_image_free(pixels);
+
+    if (out_w) *out_w = g_th.tex_w;
+    if (out_h) *out_h = g_th.tex_h;
+    return (uintptr_t)g_th.tex;
 }
 
 float video_probe_duration(const std::string& path) {
