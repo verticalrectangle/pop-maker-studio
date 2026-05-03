@@ -13,7 +13,6 @@ extern "C" {
 #include <atomic>
 #include <deque>
 #include <cstring>
-#include <cstdlib>
 
 // ── Internal state ────────────────────────────────────────────────────────────
 
@@ -43,7 +42,7 @@ static constexpr int MAX_QUEUE = 8;
 
 static void free_frame(VideoFrame* f) {
     if (!f) return;
-    free(f->data);
+    av_free(f->data);
     delete f;
 }
 
@@ -93,7 +92,9 @@ static void decode_thread_fn() {
             auto* vf   = new VideoFrame();
             vf->width  = g_vs.info.width;
             vf->height = g_vs.info.height;
-            vf->data   = (uint8_t*)malloc(vf->width * vf->height * 4);
+            // av_malloc guarantees alignment for SIMD — sws_scale can write
+            // up to 32 extra bytes past the end with AVX2; plain malloc is not safe.
+            vf->data   = (uint8_t*)av_malloc((size_t)vf->width * vf->height * 4 + 64);
 
             AVStream* st = g_vs.fmt_ctx->streams[g_vs.stream_idx];
             vf->pts = frm->pts * av_q2d(st->time_base);
@@ -216,9 +217,6 @@ uintptr_t video_get_texture(double playhead) {
 }
 
 VideoFrame* video_decode_frame_at(double seconds) {
-    // Blocking single-frame decode for export — opens a fresh context
-    AVFormatContext* fmt = nullptr;
-    // (reuse the already-open format context path from g_vs)
     if (!g_vs.fmt_ctx) return nullptr;
 
     int64_t ts = (int64_t)(seconds * AV_TIME_BASE);
@@ -237,7 +235,7 @@ VideoFrame* video_decode_frame_at(double seconds) {
             result = new VideoFrame();
             result->width  = g_vs.info.width;
             result->height = g_vs.info.height;
-            result->data   = (uint8_t*)malloc(result->width * result->height * 4);
+            result->data   = (uint8_t*)av_malloc((size_t)result->width * result->height * 4 + 64);
             uint8_t* dst[1] = { result->data };
             int      lsz[1] = { result->width * 4 };
             sws_scale(g_vs.sws,
