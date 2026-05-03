@@ -1,25 +1,24 @@
 #pragma once
 #include <string>
 #include <vector>
-#include <functional>
 
 // ── Track / clip data model ───────────────────────────────────────────────────
 
 enum class TrackType { Subtitle, Audio, Video };
 
 struct Clip {
-    float       start   = 0.f;
-    float       end     = 0.f;
-    std::string text;           // subtitle tracks only
+    float       start = 0.f;
+    float       end   = 0.f;
+    std::string text;
 };
 
 struct Track {
-    TrackType            type;
-    std::string          name;
-    std::vector<Clip>    clips;
-    bool                 visible = true;
-    bool                 muted   = false;
-    int                  sub_row = 0;   // vertical slot in preview (0=bottom)
+    TrackType         type;
+    std::string       name;
+    std::vector<Clip> clips;
+    bool              visible = true;
+    bool              muted   = false;
+    int               sub_row = 0;
 };
 
 // ── Pipeline state ────────────────────────────────────────────────────────────
@@ -27,7 +26,7 @@ struct Track {
 enum class PipelineStage { Idle, Extract, Transcribe, Align, Done, Error };
 
 struct PipelineStatus {
-    PipelineStage stage = PipelineStage::Idle;
+    PipelineStage stage    = PipelineStage::Idle;
     float         progress = 0.f;
     std::string   message;
     std::string   error;
@@ -43,22 +42,19 @@ enum class AnimStyle {
 };
 
 struct RenderStatus {
-    bool    running      = false;
-    float   progress     = 0.f;
-    int     frame        = 0;
-    int     total_frames = 0;
-    float   eta_secs     = 0.f;
+    bool        running      = false;
+    float       progress     = 0.f;
+    int         frame        = 0;
+    int         total_frames = 0;
+    float       eta_secs     = 0.f;
     std::string stage;
 };
-
-// ── App screen ────────────────────────────────────────────────────────────────
-
-enum class Screen { Home, Upload, Editor, Styles, Export };
 
 // ── Central app state ─────────────────────────────────────────────────────────
 
 struct AppState {
-    Screen current_screen = Screen::Home;
+    // splash
+    float splash_timer = 1.6f;  // counts down from launch; studio shows when <= 0
 
     // files
     std::string audio_path;
@@ -70,17 +66,17 @@ struct AppState {
 
     // timeline
     std::vector<Track> tracks;
-    int   selected_track  = -1;
-    int   selected_clip   = -1;
+    int   selected_track = -1;
+    int   selected_clip  = -1;
 
     // playback
-    float playhead  = 0.f;
-    bool  playing   = false;
-    float duration  = 0.f;
+    float playhead = 0.f;
+    bool  playing  = false;
+    float duration = 0.f;
 
     // timeline view
-    float tl_scroll  = 0.f;   // horizontal scroll in pixels
-    float tl_zoom    = 80.f;  // pixels per second
+    float tl_scroll = 0.f;
+    float tl_zoom   = 80.f;
 
     // style
     AnimStyle    style       = AnimStyle::Block;
@@ -101,10 +97,9 @@ struct AppState {
     // venv python
     std::string python_path = "/home/alexis/dev/song2subs/venv/bin/python";
 
-    void go(Screen s) { current_screen = s; }
+    // right panel active tab: 0=Clip, 1=Style, 2=Export
+    int panel_tab = 0;
 
-    // Helpers for blender export / SRT — collect all subtitle clips
-    // ordered by start time across all subtitle tracks
     std::vector<std::pair<int,int>> subtitle_clip_indices() const;
 };
 

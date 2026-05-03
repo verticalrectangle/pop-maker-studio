@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# embed_font.sh <regular.ttf> <bold.ttf> <output.h>
+# embed_font.sh <regular.ttf> <bold.ttf> <black.ttf> <output.h>
 set -e
 REGULAR="$1"
 BOLD="$2"
-OUTPUT="$3"
+BLACK="$3"
+OUTPUT="$4"
 
 xxd_to_array() {
     local file="$1"
@@ -12,8 +13,6 @@ xxd_to_array() {
     size=$(wc -c < "$file")
     echo "static const unsigned int ${name}_size = ${size};"
     echo "static const unsigned char ${name}[] = {"
-    # Use xxd directly on the file (not stdin) so it emits proper hex lines,
-    # then strip the variable declaration xxd adds and keep only the byte lines
     xxd -i "$file" \
         | grep -v "^unsigned\|^};" \
         | sed 's/^/  /'
@@ -26,6 +25,8 @@ xxd_to_array() {
     xxd_to_array "$REGULAR" "inter_regular_ttf"
     echo ""
     xxd_to_array "$BOLD" "inter_bold_ttf"
+    echo ""
+    xxd_to_array "$BLACK" "inter_black_ttf"
 } > "$OUTPUT"
 
 echo "Wrote $OUTPUT"

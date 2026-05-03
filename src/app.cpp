@@ -38,22 +38,15 @@ void app_frame(AppState& state) {
         ImGuiWindowFlags_NoMove     |
         ImGuiWindowFlags_NoBringToFrontOnFocus |
         ImGuiWindowFlags_NoScrollbar |
-        ImGuiWindowFlags_NoScrollWithMouse
+        ImGuiWindowFlags_NoScrollWithMouse |
+        ImGuiWindowFlags_MenuBar
     );
 
-    ui_topbar(state);
-
-    if (!ImGui::IsAnyItemActive() && !ImGui::IsAnyItemFocused()) {
-        if (ImGui::IsKeyPressed(ImGuiKey_RightArrow)) {
-            int next = (int)state.current_screen + 1;
-            if (next <= (int)Screen::Export)
-                state.go((Screen)next);
-        }
-        if (ImGui::IsKeyPressed(ImGuiKey_LeftArrow)) {
-            int prev = (int)state.current_screen - 1;
-            if (prev >= (int)Screen::Home)
-                state.go((Screen)prev);
-        }
+    if (state.splash_timer > 0.f) {
+        state.splash_timer -= io.DeltaTime;
+        ui_splash(state);
+    } else {
+        ui_studio(state);
     }
 
     if (state.playing) {
@@ -62,14 +55,6 @@ void app_frame(AppState& state) {
             state.playhead = 0.f;
             state.playing  = false;
         }
-    }
-
-    switch (state.current_screen) {
-        case Screen::Home:   ui_screen_home(state);   break;
-        case Screen::Upload: ui_screen_upload(state); break;
-        case Screen::Editor: ui_screen_editor(state); break;
-        case Screen::Styles: ui_screen_styles(state); break;
-        case Screen::Export: ui_screen_export(state); break;
     }
 
     ImGui::End();

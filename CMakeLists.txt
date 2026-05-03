@@ -37,11 +37,8 @@ set(SOURCES
     src/filepicker.cpp
     src/video.cpp
     src/blender_export.cpp
-    src/ui/screen_home.cpp
-    src/ui/screen_upload.cpp
-    src/ui/screen_editor.cpp
-    src/ui/screen_styles.cpp
-    src/ui/screen_export.cpp
+    src/ui/screen_splash.cpp
+    src/ui/screen_studio.cpp
     src/ui/theme.cpp
 )
 
@@ -82,11 +79,13 @@ add_custom_command(
     COMMAND ${CMAKE_SOURCE_DIR}/scripts/embed_font.sh
             ${CMAKE_SOURCE_DIR}/assets/fonts/Inter-Regular.ttf
             ${CMAKE_SOURCE_DIR}/assets/fonts/Inter-Bold.ttf
+            ${CMAKE_SOURCE_DIR}/assets/fonts/Inter-Black.ttf
             ${CMAKE_BINARY_DIR}/inter_font.h
     DEPENDS
         ${CMAKE_SOURCE_DIR}/assets/fonts/Inter-Regular.ttf
         ${CMAKE_SOURCE_DIR}/assets/fonts/Inter-Bold.ttf
-    COMMENT "Embedding Inter font"
+        ${CMAKE_SOURCE_DIR}/assets/fonts/Inter-Black.ttf
+    COMMENT "Embedding Inter fonts"
 )
 add_custom_target(embed_font DEPENDS ${CMAKE_BINARY_DIR}/inter_font.h)
 add_dependencies(pop-maker-studio embed_font)

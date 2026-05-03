@@ -4,11 +4,11 @@
 #include <string>
 #include <cctype>
 
-// Fonts loaded from inter_font.h (generated at build time)
 #include "inter_font.h"
 
 ImFont* g_font_regular = nullptr;
 ImFont* g_font_bold    = nullptr;
+ImFont* g_font_black   = nullptr;
 
 void theme_apply() {
     ImGuiIO& io = ImGui::GetIO();
@@ -22,6 +22,8 @@ void theme_apply() {
         (void*)inter_regular_ttf, (int)inter_regular_ttf_size, 14.f, &cfg);
     g_font_bold = io.Fonts->AddFontFromMemoryTTF(
         (void*)inter_bold_ttf, (int)inter_bold_ttf_size, 14.f, &cfg);
+    g_font_black = io.Fonts->AddFontFromMemoryTTF(
+        (void*)inter_black_ttf, (int)inter_black_ttf_size, 14.f, &cfg);
 
     io.Fonts->Build();
 
@@ -36,17 +38,16 @@ void theme_apply() {
     s.WindowBorderSize  = 0.f;
     s.ChildBorderSize   = 1.f;
     s.FrameBorderSize   = 1.f;
-    s.WindowPadding     = {32.f, 32.f};
+    s.WindowPadding     = {8.f, 8.f};
     s.FramePadding      = {10.f, 6.f};
     s.ItemSpacing       = {8.f, 6.f};
     s.ItemInnerSpacing  = {6.f, 4.f};
     s.ScrollbarSize     = 6.f;
 
-    // Map every ImGui color to the B&W palette
     ImVec4* c = s.Colors;
     c[ImGuiCol_WindowBg]             = Col::bg;
     c[ImGuiCol_ChildBg]              = Col::bg_soft;
-    c[ImGuiCol_PopupBg]              = Col::bg;
+    c[ImGuiCol_PopupBg]              = {0.06f, 0.06f, 0.06f, 0.98f};
     c[ImGuiCol_Border]               = Col::line;
     c[ImGuiCol_BorderShadow]         = Col::transparent;
     c[ImGuiCol_FrameBg]              = Col::bg_soft;
@@ -92,10 +93,7 @@ void theme_apply() {
     c[ImGuiCol_ModalWindowDimBg]     = {0.f, 0.f, 0.f, 0.5f};
 }
 
-// ── Shared UI helpers ─────────────────────────────────────────────────────────
-
 void ui_label(const char* text, ImVec4 col) {
-    // Uppercase + tight letter spacing approximated by inter-character spacing
     std::string upper;
     for (const char* p = text; *p; ++p)
         upper += (char)toupper((unsigned char)*p);
@@ -111,8 +109,8 @@ void ui_separator() {
 }
 
 bool ui_card_begin(const char* id, ImVec2 size, bool selected, bool hoverable) {
-    ImGui::PushStyleColor(ImGuiCol_ChildBg,    selected ? Col::bg_soft_hov : Col::bg_soft);
-    ImGui::PushStyleColor(ImGuiCol_Border,     selected ? Col::fg : (hoverable ? Col::line : Col::line));
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, selected ? Col::bg_soft_hov : Col::bg_soft);
+    ImGui::PushStyleColor(ImGuiCol_Border,  selected ? Col::fg : (hoverable ? Col::line : Col::line));
     bool v = ImGui::BeginChild(id, size, ImGuiChildFlags_Borders);
     ImGui::PopStyleColor(2);
     return v;
@@ -143,73 +141,4 @@ bool ui_btn(const char* label, bool filled, bool small) {
     else        ImGui::PopStyleColor(5);
     ImGui::PopStyleVar();
     return clicked;
-}
-
-// ── Top bar ───────────────────────────────────────────────────────────────────
-
-static const char* SCREEN_LABELS[] = {
-    "01  Start", "02  Upload", "03  Lyrics", "04  Style", "05  Export"
-};
-
-void ui_topbar(AppState& state) {
-    float bar_h = 48.f;
-    ImDrawList* dl = ImGui::GetWindowDrawList();
-    ImVec2 p = ImGui::GetCursorScreenPos();
-    ImVec2 sz = {ImGui::GetContentRegionAvail().x, bar_h};
-
-    // Background
-    dl->AddRectFilled(p, {p.x + sz.x, p.y + sz.y}, to_u32(Col::bg));
-    // Bottom border
-    dl->AddLine({p.x, p.y + sz.y}, {p.x + sz.x, p.y + sz.y}, to_u32(Col::line));
-
-    ImGui::SetCursorScreenPos({p.x + 32.f, p.y + 14.f});
-    ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
-    ImGui::TextUnformatted("POP MAKER  /  STUDIO");
-    ImGui::PopStyleColor();
-
-    // Nav buttons centered
-    float btn_w = 110.f;
-    float total_w = btn_w * 5.f;
-    float start_x = p.x + (sz.x - total_w) * 0.5f;
-
-    for (int i = 0; i < 5; ++i) {
-        bool active = (int)state.current_screen == i;
-        ImGui::SetCursorScreenPos({start_x + i * btn_w, p.y});
-        ImGui::PushStyleColor(ImGuiCol_Button,        active ? Col::bg_soft_hov : Col::transparent);
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, Col::bg_soft_hov);
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive,  Col::bg_soft_hov);
-        ImGui::PushStyleColor(ImGuiCol_Text,          active ? Col::fg : Col::muted);
-        ImGui::PushStyleColor(ImGuiCol_Border,        Col::line);
-        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {0.f, 0.f});
-
-        char nav_id[32];
-        snprintf(nav_id, sizeof(nav_id), "##nav%d", i);
-        if (ImGui::Button(nav_id, {btn_w, bar_h}))
-            state.go((Screen)i);
-
-        // Label drawn manually centered in the button
-        ImVec2 lsz = ImGui::CalcTextSize(SCREEN_LABELS[i]);
-        ImVec2 lpos = {start_x + i * btn_w + (btn_w - lsz.x) * 0.5f,
-                       p.y + (bar_h - lsz.y) * 0.5f};
-        dl->AddText(lpos, to_u32(active ? Col::fg : Col::muted), SCREEN_LABELS[i]);
-
-        // Active underline
-        if (active)
-            dl->AddLine({start_x + i * btn_w, p.y + bar_h - 1.f},
-                        {start_x + i * btn_w + btn_w, p.y + bar_h - 1.f},
-                        to_u32(Col::fg));
-
-        ImGui::PopStyleColor(5);
-        ImGui::PopStyleVar();
-    }
-
-    // Right side — session indicator
-    ImGui::SetCursorScreenPos({p.x + sz.x - 160.f, p.y + 14.f});
-    ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
-    ImGui::TextUnformatted("SESSION LIVE");
-    ImGui::PopStyleColor();
-
-    // Advance cursor past the topbar
-    ImGui::SetCursorScreenPos({p.x, p.y + bar_h + 1.f});
-    ImGui::Dummy({0.f, 0.f});
 }
