@@ -10,6 +10,17 @@ struct Clip {
     float       start = 0.f;
     float       end   = 0.f;
     std::string text;
+
+    // per-clip overrides (Tier 1)
+    float volume  = 1.f;   // audio gain multiplier (0–2)
+    float speed   = 1.f;   // playback speed (0.25–4)
+    float opacity = 1.f;   // video opacity (0–1)
+
+    // subtitle-only overrides
+    int   sub_pos   = 0;       // 0=bottom 1=center 2=top 3=custom Y
+    float sub_pos_y = 0.85f;   // custom Y fraction from top (0=top, 1=bottom)
+    float sub_color[4] = {1.f, 1.f, 1.f, 1.f};  // RGBA
+    bool  sub_color_override = false;
 };
 
 struct Track {
