@@ -9,6 +9,7 @@
 #include "globals.h"
 #include "render.h"
 #include "blender_export.h"
+#include "history.h"
 #include <imgui.h>
 #include <imgui_internal.h>
 #include "json.hpp"
@@ -301,6 +302,8 @@ static void import_file(AppState& state, const std::string& path) {
         state.out_wav            = state.vocals_path;
         apply_subtitle_mode(state);
     }
+
+    history_push(state, "Import \"" + fp.filename().string() + "\"");
 }
 
 // ── Kick ML pipeline on a specific clip ──────────────────────────────────────
@@ -376,13 +379,6 @@ static void draw_pipeline_strip(AppState& state, float w) {
     if (hov && ImGui::IsMouseClicked(0)) transcribe_cancel();
 
     ImGui::Dummy({w, h});
-
-    // When pipeline finishes, group and load
-    if (state.pipeline.stage == PipelineStage::Done &&
-        !state.words_json_path.empty()) {
-        apply_subtitle_mode(state);
-        save_all_srts(state);
-    }
 }
 
 // ── Preview ───────────────────────────────────────────────────────────────────
@@ -551,7 +547,15 @@ static void panel_track(AppState& state, float w) {
         }
 
         ImGui::Dummy({0.f, 8.f});
-        if (ui_btn("Apply grouping", true, true)) apply_subtitle_mode(state);
+        if (ui_btn("Apply grouping", true, true)) {
+            apply_subtitle_mode(state);
+            const char* mode_name =
+                state.subtitle_mode == SubtitleMode::Word    ? "Word"    :
+                state.subtitle_mode == SubtitleMode::Phrase  ? "Phrase"  :
+                state.subtitle_mode == SubtitleMode::Line    ? "Line"    :
+                state.subtitle_mode == SubtitleMode::Segment ? "Segment" : "Custom";
+            history_push(state, std::string("Grouping — ") + mode_name);
+        }
         if (ImGui::IsItemHovered()) {
             ImGui::BeginTooltip();
             ImGui::TextUnformatted("Re-build this track from saved word JSON");
@@ -619,7 +623,10 @@ static void panel_clip(AppState& state, float w) {
         if (ImGui::InputText("##clip_text", s_edit_buf, sizeof(s_edit_buf),
                 ImGuiInputTextFlags_EnterReturnsTrue))
             clip.text = s_edit_buf;
-        if (ImGui::IsItemDeactivated()) clip.text = s_edit_buf;
+        if (ImGui::IsItemDeactivated()) {
+            if (clip.text != s_edit_buf) history_push(state, "Edit clip text");
+            clip.text = s_edit_buf;
+        }
         ImGui::PopStyleColor(2);
 
         ImGui::Dummy({0.f, 12.f}); ui_separator(); ImGui::Dummy({0.f, 8.f});
@@ -635,6 +642,7 @@ static void panel_clip(AppState& state, float w) {
         float st_start = clip.start;
         if (ImGui::InputFloat("##start", &st_start, 0.05f, 0.1f, "%.3f"))
             if (st_start < clip.end - 0.05f) clip.start = st_start;
+        if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Adjust timing");
         ImGui::EndGroup();
         ImGui::SameLine(0.f, 8.f);
         ImGui::BeginGroup();
@@ -643,6 +651,7 @@ static void panel_clip(AppState& state, float w) {
         float st_end = clip.end;
         if (ImGui::InputFloat("##end", &st_end, 0.05f, 0.1f, "%.3f"))
             if (st_end > clip.start + 0.05f) clip.end = st_end;
+        if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Adjust timing");
         ImGui::EndGroup();
         ImGui::PopStyleColor(2);
         ImGui::Dummy({0.f, 4.f});
@@ -651,13 +660,15 @@ static void panel_clip(AppState& state, float w) {
         ImGui::PushStyleColor(ImGuiCol_Text, Col::muted); ImGui::TextUnformatted(dur_buf); ImGui::PopStyleColor();
 
         ImGui::Dummy({0.f, 8.f}); ui_label("Nudge"); ImGui::Dummy({0.f, 4.f});
-        if (ui_btn("-100ms", false, true)) { clip.start-=0.1f; clip.end-=0.1f; if(clip.start<0){clip.end-=clip.start;clip.start=0;} }
+        bool nudged = false;
+        if (ui_btn("-100ms", false, true)) { clip.start-=0.1f; clip.end-=0.1f; if(clip.start<0){clip.end-=clip.start;clip.start=0;} nudged=true; }
         ImGui::SameLine(0.f, 4.f);
-        if (ui_btn("-10ms",  false, true)) { clip.start-=0.01f; clip.end-=0.01f; }
+        if (ui_btn("-10ms",  false, true)) { clip.start-=0.01f; clip.end-=0.01f; nudged=true; }
         ImGui::SameLine(0.f, 4.f);
-        if (ui_btn("+10ms",  false, true)) { clip.start+=0.01f; clip.end+=0.01f; }
+        if (ui_btn("+10ms",  false, true)) { clip.start+=0.01f; clip.end+=0.01f; nudged=true; }
         ImGui::SameLine(0.f, 4.f);
-        if (ui_btn("+100ms", false, true)) { clip.start+=0.1f;  clip.end+=0.1f;  }
+        if (ui_btn("+100ms", false, true)) { clip.start+=0.1f;  clip.end+=0.1f;  nudged=true; }
+        if (nudged) history_push(state, "Nudge clip");
 
         ImGui::Dummy({0.f, 12.f}); ui_separator(); ImGui::Dummy({0.f, 8.f});
 
@@ -666,7 +677,10 @@ static void panel_clip(AppState& state, float w) {
         struct PosBtn { int v; const char* label; };
         PosBtn pbtns[] = {{0,"Bottom"},{1,"Center"},{2,"Top"},{3,"Custom Y"}};
         for (auto& pb : pbtns) {
-            if (ui_btn(pb.label, clip.sub_pos == pb.v, true)) clip.sub_pos = pb.v;
+            if (ui_btn(pb.label, clip.sub_pos == pb.v, true)) {
+                clip.sub_pos = pb.v;
+                history_push(state, "Subtitle position");
+            }
             ImGui::SameLine(0.f, 4.f);
         }
         ImGui::NewLine();
@@ -676,6 +690,7 @@ static void panel_clip(AppState& state, float w) {
             ImGui::PushStyleColor(ImGuiCol_FrameBg, Col::bg_soft);
             ImGui::SetNextItemWidth(w - 16.f);
             ImGui::SliderFloat("##sub_y", &clip.sub_pos_y, 0.f, 1.f, "Y  %.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Subtitle position Y");
             ImGui::PopStyleColor(2);
         }
 
@@ -685,12 +700,16 @@ static void panel_clip(AppState& state, float w) {
         ui_label("Color"); ImGui::Dummy({0.f, 4.f});
         ImGui::PushStyleColor(ImGuiCol_FrameBg, Col::bg_soft);
         bool col_ov = clip.sub_color_override;
-        if (ImGui::Checkbox("Override color##col_ov", &col_ov)) clip.sub_color_override = col_ov;
+        if (ImGui::Checkbox("Override color##col_ov", &col_ov)) {
+            clip.sub_color_override = col_ov;
+            history_push(state, "Subtitle color override");
+        }
         if (clip.sub_color_override) {
             ImGui::Dummy({0.f, 4.f});
             ImGui::SetNextItemWidth(w - 16.f);
             ImGui::ColorEdit4("##sub_col", clip.sub_color,
                 ImGuiColorEditFlags_NoLabel | ImGuiColorEditFlags_AlphaBar);
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Subtitle color");
         }
         ImGui::PopStyleColor();
 
@@ -723,6 +742,7 @@ static void panel_clip(AppState& state, float w) {
         ImGui::PushStyleColor(ImGuiCol_FrameBg,    Col::bg_soft);
         ImGui::SetNextItemWidth(w - 16.f);
         ImGui::SliderFloat("##vol", &clip.volume, 0.f, 2.f, "%.2f×");
+        if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Volume");
         ImGui::PopStyleColor(2);
 
         ImGui::Dummy({0.f, 12.f}); ui_separator(); ImGui::Dummy({0.f, 8.f});
@@ -732,13 +752,17 @@ static void panel_clip(AppState& state, float w) {
         ImGui::PushStyleColor(ImGuiCol_SliderGrab, Col::fg);
         ImGui::PushStyleColor(ImGuiCol_FrameBg,    Col::bg_soft);
         ImGui::SetNextItemWidth(w - 16.f);
-        ImGui::SliderFloat("##spd", &clip.speed, 0.25f, 4.f, "%.2f×");
+        ImGui::SliderFloat("##spd", &clip.speed, 0.25f, 4.f, "%.2f\xc3\x97");
+        if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Speed");
         ImGui::PopStyleColor(2);
         ImGui::Dummy({0.f, 4.f});
         { struct SP { float f; const char* l; };
           SP presets[] = {{0.25f,"¼×"},{0.5f,"½×"},{1.f,"1×"},{2.f,"2×"},{4.f,"4×"}};
           for (auto& p : presets) {
-              if (ui_btn(p.l, fabsf(clip.speed - p.f) < 0.01f, true)) clip.speed = p.f;
+              if (ui_btn(p.l, fabsf(clip.speed - p.f) < 0.01f, true)) {
+                  clip.speed = p.f;
+                  history_push(state, "Speed");
+              }
               ImGui::SameLine(0.f, 4.f);
           }
           ImGui::NewLine();
@@ -752,6 +776,7 @@ static void panel_clip(AppState& state, float w) {
             ImGui::PushStyleColor(ImGuiCol_FrameBg,    Col::bg_soft);
             ImGui::SetNextItemWidth(w - 16.f);
             ImGui::SliderFloat("##opa", &clip.opacity, 0.f, 1.f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Opacity");
             ImGui::PopStyleColor(2);
 
             ImGui::Dummy({0.f, 12.f}); ui_separator(); ImGui::Dummy({0.f, 8.f});
@@ -760,13 +785,16 @@ static void panel_clip(AppState& state, float w) {
             ImGui::PushStyleColor(ImGuiCol_FrameBg,    Col::bg_soft);
             ImGui::SetNextItemWidth(w - 16.f);
             ImGui::SliderFloat("##trans", &clip.transition_out, 0.f, 2.f, "%.2fs");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Transition");
             ImGui::PopStyleColor(2);
             ImGui::Dummy({0.f, 4.f});
             struct TP { float f; const char* l; };
             TP tpresets[] = {{0.f,"None"},{0.5f,"0.5s"},{1.f,"1s"},{2.f,"2s"}};
             for (auto& tp : tpresets) {
-                if (ui_btn(tp.l, fabsf(clip.transition_out - tp.f) < 0.01f, true))
+                if (ui_btn(tp.l, fabsf(clip.transition_out - tp.f) < 0.01f, true)) {
                     clip.transition_out = tp.f;
+                    history_push(state, "Transition");
+                }
                 ImGui::SameLine(0.f, 4.f);
             }
             ImGui::NewLine();
@@ -827,6 +855,7 @@ static void panel_clip(AppState& state, float w) {
     if (ui_btn("Delete clip", false, true)) {
         track.clips.erase(track.clips.begin() + state.selected_clip);
         state.selected_clip = -1;
+        history_push(state, "Delete clip");
     }
 }
 
@@ -895,7 +924,10 @@ static void panel_style(AppState& state, float w) {
             ImGui::PopStyleColor();
         }
         ImGui::EndChild();
-        if (ImGui::IsItemClicked()) state.style = sc.style;
+        if (ImGui::IsItemClicked()) {
+            state.style = sc.style;
+            history_push(state, std::string("Style — ") + sc.name);
+        }
         ImGui::PopStyleColor(2);
         if (i % 2 == 1 && i < 7) ImGui::Dummy({0.f, 4.f});
     }
@@ -904,7 +936,10 @@ static void panel_style(AppState& state, float w) {
     ui_label("Font weight"); ImGui::Dummy({0.f, 6.f});
     for (int fw : {400, 700, 900}) {
         char wl[8]; snprintf(wl, sizeof(wl), "%d", fw);
-        if (ui_btn(wl, state.font_weight == fw, true)) state.font_weight = fw;
+        if (ui_btn(wl, state.font_weight == fw, true)) {
+            state.font_weight = fw;
+            history_push(state, "Font weight");
+        }
         ImGui::SameLine(0.f, 4.f);
     }
 }
@@ -945,7 +980,10 @@ static void panel_export(AppState& state, float w) {
             ImGui::PopStyleColor();
         }
         ImGui::EndChild();
-        if (ImGui::IsItemClicked()) state.format = fmts[i].fmt;
+        if (ImGui::IsItemClicked()) {
+            state.format = fmts[i].fmt;
+            history_push(state, std::string("Format — ") + fmts[i].name);
+        }
         ImGui::PopStyleColor(2);
     }
 
@@ -1261,6 +1299,11 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
         }
     }
     if (ImGui::IsMouseReleased(0)) {
+        if (drag_track >= 0 && drag_clip >= 0) {
+            const char* act = drag_left  ? "Trim clip start" :
+                              drag_right ? "Trim clip end"   : "Move clip";
+            history_push(state, act);
+        }
         drag_track=-1; drag_clip=-1; drag_left=false; drag_right=false;
     }
 
@@ -1351,6 +1394,7 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
                     if (ImGui::MenuItem(rm.label, nullptr, cur)) {
                         state.subtitle_mode = rm.m;
                         apply_subtitle_mode(state);
+                        history_push(state, std::string("Grouping — ") + rm.label);
                     }
                     if (!has_json) ImGui::EndDisabled();
                 }
@@ -1365,6 +1409,7 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
                 if (cut > cc->start+0.02f && cut < cc->end-0.02f) {
                     Clip right = *cc; cc->end = cut; right.start = cut;
                     ct->clips.insert(ct->clips.begin()+ci+1, right);
+                    history_push(state, "Split clip");
                 }
             }
         }
@@ -1372,6 +1417,7 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
             if (valid) {
                 Clip dup = *cc; dup.start = cc->end; dup.end = dup.start + (cc->end - cc->start);
                 ct->clips.insert(ct->clips.begin()+ci+1, dup);
+                history_push(state, "Duplicate clip");
             }
         }
         ImGui::Separator();
@@ -1386,6 +1432,7 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
             if (valid) {
                 ct->clips.erase(ct->clips.begin()+ci);
                 state.selected_clip = -1;
+                history_push(state, "Delete clip");
             }
         }
         ImGui::EndPopup();
@@ -1405,7 +1452,9 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
             ImGui::SetNextItemWidth(140.f);
             if (ImGui::InputText("##rename", rename_buf, sizeof(rename_buf),
                     ImGuiInputTextFlags_EnterReturnsTrue)) {
-                ct->name = rename_buf; ImGui::CloseCurrentPopup();
+                ct->name = rename_buf;
+                history_push(state, "Rename track");
+                ImGui::CloseCurrentPopup();
             }
             rename_open = ImGui::IsItemActive();
             ImGui::Separator();
@@ -1415,27 +1464,35 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
             if (ImGui::MenuItem("Move up")) {
                 std::swap(state.tracks[ti], state.tracks[ti-1]);
                 state.selected_track = ti-1;
+                history_push(state, "Move track up");
             }
         }
         if (valid && ti < (int)state.tracks.size()-1) {
             if (ImGui::MenuItem("Move down")) {
                 std::swap(state.tracks[ti], state.tracks[ti+1]);
                 state.selected_track = ti+1;
+                history_push(state, "Move track down");
             }
         }
         ImGui::Separator();
         if (ct) {
-            if (ImGui::MenuItem(ct->visible ? "Hide track" : "Show track"))
+            if (ImGui::MenuItem(ct->visible ? "Hide track" : "Show track")) {
                 ct->visible = !ct->visible;
+                history_push(state, "Track visibility");
+            }
             if (ct->type != TrackType::Subtitle) {
-                if (ImGui::MenuItem(ct->muted ? "Unmute" : "Mute"))
+                if (ImGui::MenuItem(ct->muted ? "Unmute" : "Mute")) {
                     ct->muted = !ct->muted;
+                    history_push(state, "Track mute");
+                }
             }
         }
         ImGui::Separator();
         if (ImGui::MenuItem("Delete track", nullptr, false, valid)) {
+            std::string tname = ct ? ct->name : "";
             if (state.selected_track == ti) { state.selected_track=-1; state.selected_clip=-1; }
             state.tracks.erase(state.tracks.begin()+ti);
+            history_push(state, "Delete track — " + tname);
         }
         ImGui::EndPopup();
     }
@@ -1446,16 +1503,19 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
             Track t; t.type=TrackType::Subtitle;
             char n[32]; snprintf(n,sizeof(n),"Sub %d",(int)state.tracks.size()+1);
             t.name=n; state.tracks.push_back(t);
+            history_push(state, "Add Subtitle Track");
         }
         if (ImGui::MenuItem("Add Audio Track")) {
             Track t; t.type=TrackType::Audio;
             char n[32]; snprintf(n,sizeof(n),"Audio %d",(int)state.tracks.size()+1);
             t.name=n; state.tracks.push_back(t);
+            history_push(state, "Add Audio Track");
         }
         if (ImGui::MenuItem("Add Video Track")) {
             Track t; t.type=TrackType::Video;
             char n[32]; snprintf(n,sizeof(n),"Video %d",(int)state.tracks.size()+1);
             t.name=n; state.tracks.push_back(t);
+            history_push(state, "Add Video Track");
         }
         ImGui::EndPopup();
     }
@@ -1468,6 +1528,15 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
 
 static void handle_shortcuts(AppState& state) {
     if (ImGui::IsAnyItemActive()) return;
+
+    if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_Z)) {
+        history_undo(state); return;
+    }
+    if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_Z) ||
+        ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_Y)) {
+        history_redo(state); return;
+    }
+
     if (state.selected_track<0 || state.selected_clip<0) return;
     if (state.selected_track>=(int)state.tracks.size()) return;
     Track& track = state.tracks[state.selected_track];
@@ -1480,11 +1549,13 @@ static void handle_shortcuts(AppState& state) {
         if (cut > clip.start+0.02f && cut < clip.end-0.02f) {
             Clip right = clip; clip.end = cut; right.start = cut;
             track.clips.insert(track.clips.begin()+state.selected_clip+1, right);
+            history_push(state, "Split clip");
         }
     }
     if (ImGui::IsKeyPressed(ImGuiKey_Delete)) {
         track.clips.erase(track.clips.begin()+state.selected_clip);
         state.selected_clip = -1;
+        history_push(state, "Delete clip");
     }
 }
 
@@ -1494,6 +1565,7 @@ void ui_studio(AppState& state) {
     ImGuiIO& io   = ImGui::GetIO();
     float    win_w = io.DisplaySize.x;
     float    win_h = io.DisplaySize.y;
+    static bool s_show_history = false;
 
     handle_shortcuts(state);
 
@@ -1504,12 +1576,15 @@ void ui_studio(AppState& state) {
         g_dropped_file.clear();
     }
 
-    // Pipeline done → apply grouping + save all SRTs
+    // Pipeline done → apply grouping + save all SRTs + push history
     static PipelineStage last_stage = PipelineStage::Idle;
     if (last_stage != PipelineStage::Done &&
         state.pipeline.stage == PipelineStage::Done) {
         apply_subtitle_mode(state);
         save_all_srts(state);
+        std::string stem = state.audio_path.empty() ? "audio"
+            : fs::path(state.audio_path).stem().string();
+        history_push(state, "Pipeline complete — " + stem);
     }
     last_stage = state.pipeline.stage;
 
@@ -1527,6 +1602,9 @@ void ui_studio(AppState& state) {
         }
         audio_set_volume(vol);
     }
+
+    if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_H))
+        s_show_history = !s_show_history;
 
     // ── Menu bar ─────────────────────────────────────────────────────────────
     if (ImGui::BeginMenuBar()) {
@@ -1568,6 +1646,7 @@ void ui_studio(AppState& state) {
             ImGui::Separator();
             if (ImGui::MenuItem("Close project")) {
                 transcribe_cancel();
+                history_clear();
                 state = AppState{};
                 state.splash_timer = 0.f;  // don't re-show splash
                 audio_shutdown(); audio_init();
@@ -1576,21 +1655,36 @@ void ui_studio(AppState& state) {
             ImGui::EndMenu();
         }
 
+        if (ImGui::BeginMenu("Edit")) {
+            bool can_undo = history_can_undo();
+            bool can_redo = history_can_redo();
+            if (!can_undo) ImGui::BeginDisabled();
+            if (ImGui::MenuItem("Undo", "Ctrl+Z")) history_undo(state);
+            if (!can_undo) ImGui::EndDisabled();
+            if (!can_redo) ImGui::BeginDisabled();
+            if (ImGui::MenuItem("Redo", "Ctrl+Shift+Z")) history_redo(state);
+            if (!can_redo) ImGui::EndDisabled();
+            ImGui::EndMenu();
+        }
+
         if (ImGui::BeginMenu("Track")) {
             if (ImGui::MenuItem("Add Subtitle Track")) {
                 Track t; t.type=TrackType::Subtitle;
                 char n[32]; snprintf(n,sizeof(n),"Sub %d",(int)state.tracks.size()+1);
                 t.name=n; state.tracks.push_back(t);
+                history_push(state, "Add Subtitle Track");
             }
             if (ImGui::MenuItem("Add Audio Track")) {
                 Track t; t.type=TrackType::Audio;
                 char n[32]; snprintf(n,sizeof(n),"Audio %d",(int)state.tracks.size()+1);
                 t.name=n; state.tracks.push_back(t);
+                history_push(state, "Add Audio Track");
             }
             if (ImGui::MenuItem("Add Video Track")) {
                 Track t; t.type=TrackType::Video;
                 char n[32]; snprintf(n,sizeof(n),"Video %d",(int)state.tracks.size()+1);
                 t.name=n; state.tracks.push_back(t);
+                history_push(state, "Add Video Track");
             }
             ImGui::EndMenu();
         }
@@ -1607,6 +1701,7 @@ void ui_studio(AppState& state) {
                 if (cut>c.start+0.02f && cut<c.end-0.02f) {
                     Clip r=c; c.end=cut; r.start=cut;
                     t.clips.insert(t.clips.begin()+state.selected_clip+1, r);
+                    history_push(state, "Split clip");
                 }
             }
             if (ImGui::MenuItem("Duplicate clip") && has_clip) {
@@ -1615,11 +1710,13 @@ void ui_studio(AppState& state) {
                 float len = dup.end - dup.start;
                 dup.start = dup.end; dup.end = dup.start+len;
                 t.clips.insert(t.clips.begin()+state.selected_clip+1, dup);
+                history_push(state, "Duplicate clip");
             }
             if (ImGui::MenuItem("Delete clip", "Del") && has_clip) {
                 state.tracks[state.selected_track].clips.erase(
                     state.tracks[state.selected_track].clips.begin()+state.selected_clip);
                 state.selected_clip=-1;
+                history_push(state, "Delete clip");
             }
             if (!has_clip) ImGui::EndDisabled();
             ImGui::EndMenu();
@@ -1635,6 +1732,9 @@ void ui_studio(AppState& state) {
                     state.tl_scroll = 0.f;
                 }
             }
+            ImGui::Separator();
+            if (ImGui::MenuItem("History", "Ctrl+Shift+H", s_show_history))
+                s_show_history = !s_show_history;
             ImGui::EndMenu();
         }
 
@@ -1736,6 +1836,58 @@ void ui_studio(AppState& state) {
     }
     ImGui::EndChild();
     ImGui::PopStyleColor(2);
+
+    // ── History panel ─────────────────────────────────────────────────────────
+    if (s_show_history) {
+        ImGui::SetNextWindowSize({220.f, 360.f}, ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowPos({win_w - 240.f, 40.f}, ImGuiCond_FirstUseEver);
+        ImGui::PushStyleColor(ImGuiCol_WindowBg, Col::bg_soft);
+        ImGui::PushStyleColor(ImGuiCol_Border,   Col::line);
+        if (ImGui::Begin("History##hist_win", &s_show_history, ImGuiWindowFlags_NoCollapse)) {
+            const auto& entries = history_entries();
+            int cur = history_pos();
+
+            ImGui::BeginDisabled(!history_can_undo());
+            if (ImGui::SmallButton("Undo")) history_undo(state);
+            ImGui::EndDisabled();
+            ImGui::SameLine(0.f, 4.f);
+            ImGui::BeginDisabled(!history_can_redo());
+            if (ImGui::SmallButton("Redo")) history_redo(state);
+            ImGui::EndDisabled();
+            ImGui::Separator();
+
+            if (entries.empty()) {
+                ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+                ImGui::TextUnformatted("No history yet");
+                ImGui::PopStyleColor();
+            } else {
+                ImGui::BeginChild("##hist_list", {0.f, 0.f}, false);
+                static int s_last_pos = -1;
+                for (int i = 0; i < (int)entries.size(); ++i) {
+                    bool is_cur  = (i == cur);
+                    bool is_redo = (i > cur);
+                    ImU32 col = is_redo ? to_u32(Col::dim)   :
+                                is_cur  ? to_u32(Col::fg)    : to_u32(Col::muted);
+                    ImGui::PushStyleColor(ImGuiCol_Text, col);
+                    char lbl[128];
+                    snprintf(lbl, sizeof(lbl), "%s %s##hst%d",
+                        is_cur ? "\xe2\x96\xb6" : " ", entries[i].action.c_str(), i);
+                    if (ImGui::Selectable(lbl, is_cur)) history_jump(state, i);
+                    ImGui::PopStyleColor();
+                }
+                // Auto-scroll to keep current entry visible when it changes
+                if (cur != s_last_pos) {
+                    float frac = ((int)entries.size() > 1)
+                        ? (float)cur / (float)((int)entries.size() - 1) : 1.f;
+                    ImGui::SetScrollY(frac * ImGui::GetScrollMaxY());
+                    s_last_pos = cur;
+                }
+                ImGui::EndChild();
+            }
+        }
+        ImGui::End();
+        ImGui::PopStyleColor(2);
+    }
 
     // ── Pipeline strip ────────────────────────────────────────────────────────
     if (pipeline_h > 0.f) {
