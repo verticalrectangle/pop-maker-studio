@@ -1,0 +1,1803 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Pop Maker Studio</title>
+<style>
+  /* =========================================================
+     POP MAKER STUDIO
+     B&W. Sharp corners. No external libs. No gradients.
+     ========================================================= */
+
+  :root {
+    --bg: #000000;
+    --fg: #ffffff;
+    --accent-dark: #080a0e;
+
+    --line: rgba(255,255,255,0.15);
+    --line-hover: rgba(255,255,255,0.5);
+    --btn-line: rgba(255,255,255,0.3);
+    --btn-line-hover: rgba(255,255,255,0.8);
+    --bg-soft: rgba(255,255,255,0.03);
+    --bg-soft-hover: rgba(255,255,255,0.04);
+    --muted: rgba(255,255,255,0.45);
+    --label: rgba(255,255,255,0.4);
+    --dim: rgba(255,255,255,0.25);
+
+    --s-1: 4px; --s-2: 8px; --s-3: 12px; --s-4: 16px; --s-5: 20px;
+    --s-6: 24px; --s-7: 28px; --s-8: 32px; --s-9: 48px; --s-10: 64px; --s-11: 100px;
+
+    --r: 2px;
+    --max-w: 1000px;
+    --max-w-narrow: 700px;
+    --max-w-body: 680px;
+
+    --font: 'Inter', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+
+    --t: 0.2s ease;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: var(--font);
+    font-weight: 400;
+    line-height: 1.75;
+    font-size: 15px;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    min-height: 100vh;
+  }
+  ::selection { background: var(--fg); color: var(--bg); }
+
+  button, input, textarea { font-family: inherit; color: inherit; }
+  button { background: transparent; border: 0; cursor: pointer; padding: 0; }
+
+  /* ---------- Type primitives ---------- */
+  .label {
+    text-transform: uppercase;
+    letter-spacing: 0.2em;
+    font-size: 11px;
+    color: var(--label);
+    font-weight: 700;
+    line-height: 1;
+  }
+  .label.tight { letter-spacing: 0.18em; }
+  .label.wide  { letter-spacing: 0.22em; }
+  .mono-num { font-variant-numeric: tabular-nums; letter-spacing: 0.04em; }
+
+  /* ---------- Layout primitives ---------- */
+  .wrap { max-width: var(--max-w); margin: 0 auto; padding: 0 var(--s-8); }
+  .wrap-narrow { max-width: var(--max-w-narrow); margin: 0 auto; padding: 0 var(--s-8); }
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s-8); }
+  .stack { display: flex; flex-direction: column; }
+  .row { display: flex; align-items: center; }
+  .gap-2 { gap: var(--s-2); } .gap-3 { gap: var(--s-3); } .gap-4 { gap: var(--s-4); }
+  .gap-5 { gap: var(--s-5); } .gap-6 { gap: var(--s-6); } .gap-8 { gap: var(--s-8); }
+  .between { justify-content: space-between; }
+
+  /* ---------- Top bar ---------- */
+  .topbar {
+    position: sticky; top: 0; z-index: 50;
+    background: var(--bg);
+    border-bottom: 1px solid var(--line);
+  }
+  .topbar-inner {
+    display: grid; grid-template-columns: 1fr auto 1fr;
+    align-items: center;
+    padding: var(--s-5) var(--s-8);
+  }
+  .brand {
+    display: flex; align-items: center; gap: var(--s-3);
+    text-transform: uppercase; letter-spacing: 0.18em; font-weight: 700;
+    font-size: 12px;
+  }
+  .brand-mark {
+    width: 10px; height: 10px;
+    border: 1px solid var(--fg);
+    background: var(--fg);
+    display: inline-block;
+  }
+  .brand .sep { color: var(--dim); margin: 0 var(--s-2); }
+  .brand .sub { color: var(--muted); font-weight: 400; letter-spacing: 0.18em; }
+
+  .nav { display: flex; gap: 0; justify-self: center; }
+  .nav button {
+    padding: var(--s-3) var(--s-5);
+    text-transform: uppercase;
+    letter-spacing: 0.18em;
+    font-weight: 700;
+    font-size: 11px;
+    color: var(--muted);
+    transition: color var(--t), background var(--t);
+    display: inline-flex; align-items: center; gap: var(--s-3);
+    border-right: 1px solid var(--line);
+  }
+  .nav button:first-child { border-left: 1px solid var(--line); }
+  .nav button .num { color: var(--dim); font-weight: 400; }
+  .nav button:hover { color: var(--fg); background: var(--bg-soft); }
+  .nav button.active { color: var(--fg); background: var(--bg-soft-hover); }
+  .nav button.active .num { color: var(--fg); }
+
+  .top-right {
+    justify-self: end;
+    display: flex; gap: var(--s-6); align-items: center;
+    text-transform: uppercase; letter-spacing: 0.18em; font-weight: 700;
+    font-size: 11px; color: var(--muted);
+  }
+  .top-right .live::before {
+    content: ""; display: inline-block; width: 6px; height: 6px;
+    background: var(--fg); margin-right: var(--s-2); vertical-align: 1px;
+  }
+
+  /* ---------- Buttons ---------- */
+  .btn {
+    display: inline-flex; align-items: center; gap: var(--s-4);
+    padding: var(--s-4) var(--s-5);
+    border: 1px solid var(--btn-line);
+    color: var(--fg);
+    text-transform: uppercase;
+    letter-spacing: 0.18em;
+    font-weight: 700;
+    font-size: 11px;
+    border-radius: var(--r);
+    transition: border-color var(--t), background var(--t), color var(--t);
+    text-decoration: none;
+  }
+  .btn:hover { border-color: var(--btn-line-hover); background: var(--bg-soft); }
+  .btn .arr {
+    display: inline-block; transition: transform var(--t);
+    font-weight: 400; font-size: 13px;
+  }
+  .btn:hover .arr { transform: translate(4px, -4px); }
+  .btn-lg { padding: var(--s-5) var(--s-7); font-size: 12px; }
+  .btn-sm { padding: var(--s-2) var(--s-3); font-size: 10px; letter-spacing: 0.18em; }
+  .btn-fill { background: var(--fg); color: var(--bg); border-color: var(--fg); }
+  .btn-fill:hover { background: var(--bg); color: var(--fg); border-color: var(--btn-line-hover); }
+  .btn-fill .arr { font-weight: 700; }
+  .btn[disabled], .btn.is-disabled { opacity: 0.35; pointer-events: none; }
+
+  .icon-btn {
+    width: 28px; height: 28px;
+    border: 1px solid var(--line);
+    border-radius: var(--r);
+    color: var(--muted);
+    display: inline-flex; align-items: center; justify-content: center;
+    font-size: 11px; line-height: 1;
+    transition: border-color var(--t), color var(--t);
+  }
+  .icon-btn:hover { border-color: var(--line-hover); color: var(--fg); }
+
+  /* ---------- Card ---------- */
+  .card {
+    border: 1px solid var(--line);
+    background: var(--bg-soft);
+    border-radius: var(--r);
+    transition: border-color var(--t), background var(--t);
+  }
+  .card.hoverable:hover { border-color: var(--line-hover); background: var(--bg-soft-hover); }
+  .card.selected { border-color: var(--fg); }
+
+  /* Striped placeholder used for video previews / thumbs */
+  .stripes {
+    background:
+      repeating-linear-gradient(45deg,
+        rgba(255,255,255,0) 0 10px,
+        rgba(255,255,255,0.04) 10px 11px);
+  }
+
+  /* ---------- Page entry animation ---------- */
+  .screen { display: none; }
+  .screen.active { display: block; animation: fadein 0.35s ease both; }
+  @keyframes fadein {
+    from { opacity: 0; transform: translateY(10px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  /* =========================================================
+     SCREEN 01 — LANDING
+     ========================================================= */
+  .hero {
+    min-height: calc(100vh - 56px);
+    display: grid;
+    grid-template-rows: 1fr auto;
+    padding-top: var(--s-11);
+    padding-bottom: var(--s-9);
+  }
+  .hero-inner {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: var(--s-10);
+  }
+  .hero-eyebrow {
+    text-transform: uppercase; letter-spacing: 0.22em; font-weight: 700; font-size: 11px;
+    color: var(--muted);
+    display: flex; align-items: center; gap: var(--s-3); flex-wrap: wrap;
+  }
+  .hero-eyebrow .sq { width: 6px; height: 6px; background: var(--fg); display: inline-block; }
+  .hero-title {
+    font-size: clamp(40px, 9vw, 96px);
+    line-height: 1;
+    letter-spacing: -0.02em;
+    font-weight: 900;
+    margin: 0;
+    text-transform: uppercase;
+    text-wrap: balance;
+    max-width: 14ch;
+  }
+  .hero-title .strike { text-decoration: line-through; text-decoration-thickness: 4px; color: var(--muted); }
+  .hero-title .outline {
+    -webkit-text-stroke: 1.5px var(--fg);
+    color: transparent;
+  }
+  .hero-tag {
+    text-transform: uppercase; letter-spacing: 0.22em; font-weight: 700; font-size: 12px;
+    color: var(--muted);
+    line-height: 1.75;
+    max-width: 60ch;
+  }
+  .hero-cta-row {
+    display: flex; gap: var(--s-3); flex-wrap: wrap; align-items: center;
+  }
+  .hero-cta-row .meta {
+    text-transform: uppercase; letter-spacing: 0.18em; font-weight: 700; font-size: 10px; color: var(--label);
+    margin-left: var(--s-4);
+  }
+
+  .hero-foot {
+    display: grid; grid-template-columns: repeat(4, 1fr);
+    border-top: 1px solid var(--line);
+    margin-top: var(--s-9);
+  }
+  .hero-foot .stat { padding: var(--s-7) var(--s-6) var(--s-6); border-right: 1px solid var(--line); }
+  .hero-foot .stat:last-child { border-right: 0; }
+  .hero-foot .stat .num {
+    font-size: 36px; font-weight: 900; letter-spacing: -0.02em; line-height: 1;
+  }
+  .hero-foot .stat .cap {
+    margin-top: var(--s-3);
+    text-transform: uppercase; letter-spacing: 0.2em; font-weight: 700; font-size: 10px;
+    color: var(--muted);
+  }
+
+  .hero-marquee {
+    border-top: 1px solid var(--line);
+    overflow: hidden;
+    padding: var(--s-4) 0;
+    text-transform: uppercase; letter-spacing: 0.22em; font-weight: 700; font-size: 11px;
+    color: var(--muted);
+    white-space: nowrap;
+  }
+  .hero-marquee .track { display: inline-flex; gap: var(--s-9); animation: scroll 45s linear infinite; }
+  .hero-marquee .track span { display: inline-flex; align-items: center; gap: var(--s-4); }
+  .hero-marquee .track .sq { width: 4px; height: 4px; background: var(--fg); display: inline-block; }
+  @keyframes scroll { from { transform: translateX(0); } to { transform: translateX(-50%); } }
+
+  /* =========================================================
+     SCREEN 02 — UPLOAD
+     ========================================================= */
+  .upload-section { padding: var(--s-11) 0 var(--s-10); }
+  .section-head {
+    display: grid; grid-template-columns: 1fr auto; gap: var(--s-6); align-items: end;
+    padding-bottom: var(--s-7);
+    border-bottom: 1px solid var(--line);
+    margin-bottom: var(--s-9);
+  }
+  .section-head h2 {
+    margin: 0;
+    font-size: clamp(28px, 4vw, 44px);
+    font-weight: 900; letter-spacing: -0.02em; line-height: 1;
+    text-transform: uppercase;
+  }
+  .section-head .index {
+    text-transform: uppercase; letter-spacing: 0.22em; font-weight: 700; font-size: 11px;
+    color: var(--muted);
+  }
+  .section-head .blurb {
+    margin-top: var(--s-4);
+    text-transform: uppercase; letter-spacing: 0.18em; font-weight: 700; font-size: 11px;
+    color: var(--muted); max-width: var(--max-w-body);
+  }
+
+  .dropzone {
+    border: 1px dashed var(--line);
+    border-radius: var(--r);
+    background: var(--bg-soft);
+    padding: var(--s-11) var(--s-8);
+    text-align: center;
+    transition: border-color var(--t), background var(--t);
+    position: relative;
+  }
+  .dropzone:hover, .dropzone.dragging {
+    border-color: var(--line-hover);
+    background: var(--bg-soft-hover);
+  }
+  .dropzone.dragging { border-style: solid; }
+  .dz-icon {
+    width: 64px; height: 64px;
+    border: 1px solid var(--line);
+    border-radius: var(--r);
+    margin: 0 auto var(--s-7);
+    display: grid; place-items: center;
+    font-size: 22px; font-weight: 900;
+  }
+  .dz-title {
+    font-size: clamp(22px, 3vw, 32px);
+    font-weight: 900; letter-spacing: -0.01em; line-height: 1;
+    text-transform: uppercase;
+    margin: 0 0 var(--s-4);
+  }
+  .dz-sub {
+    text-transform: uppercase; letter-spacing: 0.22em; font-weight: 700; font-size: 11px;
+    color: var(--muted);
+    margin: 0 0 var(--s-7);
+  }
+  .dz-formats {
+    display: inline-flex; gap: var(--s-3); flex-wrap: wrap; justify-content: center;
+    text-transform: uppercase; letter-spacing: 0.18em; font-weight: 700; font-size: 10px; color: var(--label);
+  }
+  .dz-formats .chip {
+    border: 1px solid var(--line); padding: var(--s-2) var(--s-3); border-radius: var(--r);
+  }
+
+  .pipeline {
+    margin-top: var(--s-9);
+    display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0;
+    border: 1px solid var(--line); border-radius: var(--r);
+  }
+  .pipe-step {
+    padding: var(--s-7) var(--s-6);
+    border-right: 1px solid var(--line);
+    position: relative;
+  }
+  .pipe-step:last-child { border-right: 0; }
+  .pipe-step .pnum {
+    text-transform: uppercase; letter-spacing: 0.22em; font-weight: 700; font-size: 10px; color: var(--label);
+    margin-bottom: var(--s-3);
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .pipe-step .pname {
+    font-size: 22px; font-weight: 900; letter-spacing: -0.01em; line-height: 1; text-transform: uppercase;
+  }
+  .pipe-step .pdesc {
+    margin-top: var(--s-3);
+    text-transform: uppercase; letter-spacing: 0.18em; font-weight: 700; font-size: 10px; color: var(--muted);
+  }
+  .pipe-step .pstate {
+    margin-top: var(--s-5);
+    text-transform: uppercase; letter-spacing: 0.18em; font-weight: 700; font-size: 11px; color: var(--muted);
+  }
+  .pipe-step.pending .pname { color: var(--muted); }
+  .pipe-step.active .pstate { color: var(--fg); }
+  .pipe-step.done .pstate { color: var(--fg); }
+  .pipe-step.done .pstate::after { content: " ✓"; }
+  .pipe-step .pbar {
+    position: absolute; left: 0; right: 0; bottom: -1px; height: 1px;
+    background: var(--fg); width: 0%; transition: width 200ms linear;
+  }
+  .pipe-step.done .pbar { width: 100%; }
+
+  .upload-actions {
+    margin-top: var(--s-9);
+    display: flex; justify-content: space-between; align-items: center; gap: var(--s-5); flex-wrap: wrap;
+  }
+  .upload-actions .left {
+    display: flex; gap: var(--s-3); align-items: center;
+  }
+
+  /* =========================================================
+     SCREEN 03 — LYRICS EDITOR
+     ========================================================= */
+  .editor-section { padding: var(--s-9) 0 var(--s-10); }
+  .editor-section .wrap-wide { max-width: 1200px; margin: 0 auto; padding: 0 var(--s-8); }
+  .editor-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--s-8);
+    align-items: start;
+  }
+
+  .panel {
+    border: 1px solid var(--line);
+    border-radius: var(--r);
+    background: var(--bg-soft);
+  }
+  .panel-head {
+    padding: var(--s-4) var(--s-5);
+    border-bottom: 1px solid var(--line);
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .panel-head .ph-title {
+    text-transform: uppercase; letter-spacing: 0.22em; font-weight: 700; font-size: 11px;
+  }
+  .panel-head .ph-meta {
+    text-transform: uppercase; letter-spacing: 0.18em; font-weight: 700; font-size: 10px; color: var(--muted);
+  }
+
+  .lyric-list {
+    max-height: 560px; overflow-y: auto;
+    padding: var(--s-3);
+  }
+  .lyric-list::-webkit-scrollbar { width: 4px; }
+  .lyric-list::-webkit-scrollbar-thumb { background: var(--line); }
+  .lyric-list::-webkit-scrollbar-track { background: transparent; }
+
+  .lyric-line {
+    border: 1px solid var(--line);
+    border-radius: var(--r);
+    margin: var(--s-2);
+    background: var(--bg-soft);
+    transition: border-color var(--t), background var(--t);
+  }
+  .lyric-line.active { border-color: var(--fg); background: var(--bg-soft-hover); }
+  .lyric-line .ll-head {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: var(--s-3) var(--s-4);
+    border-bottom: 1px solid var(--line);
+    text-transform: uppercase; letter-spacing: 0.18em; font-weight: 700; font-size: 10px; color: var(--muted);
+  }
+  .lyric-line.active .ll-head { color: var(--fg); }
+  .lyric-line .ll-words {
+    padding: var(--s-3) var(--s-4) var(--s-4);
+    display: flex; flex-wrap: wrap; gap: var(--s-3) var(--s-4);
+    line-height: 1.4;
+  }
+  .word {
+    cursor: pointer;
+    padding: 2px 4px;
+    border-bottom: 1px dashed transparent;
+    transition: color var(--t), border-color var(--t);
+    font-weight: 400;
+    color: var(--fg);
+    outline: none;
+    border-radius: var(--r);
+  }
+  .word:hover { border-bottom-color: var(--line-hover); }
+  .word.dim { color: var(--muted); }
+  .word.current {
+    background: var(--fg); color: var(--bg);
+    border-bottom-color: transparent;
+  }
+  .word[contenteditable="true"]:focus {
+    background: var(--bg-soft-hover);
+    outline: 1px solid var(--btn-line);
+    color: var(--fg);
+  }
+  .word .ts {
+    display: block;
+    text-transform: uppercase; letter-spacing: 0.04em; font-weight: 400; font-size: 9px;
+    color: var(--label); line-height: 1; margin-top: 2px;
+  }
+  .word.current .ts { color: var(--bg); opacity: 0.6; }
+
+  /* Right panel — preview */
+  .preview-pane { padding: var(--s-5); display: flex; flex-direction: column; gap: var(--s-5); }
+  .preview-stage {
+    aspect-ratio: 16 / 9;
+    background: var(--accent-dark);
+    border: 1px solid var(--line);
+    border-radius: var(--r);
+    position: relative;
+    overflow: hidden;
+    display: grid; place-items: center;
+  }
+  .preview-stage .corner {
+    position: absolute; width: 12px; height: 12px;
+    border: 1px solid var(--muted);
+  }
+  .preview-stage .corner.tl { top: 8px; left: 8px; border-right: 0; border-bottom: 0; }
+  .preview-stage .corner.tr { top: 8px; right: 8px; border-left: 0; border-bottom: 0; }
+  .preview-stage .corner.bl { bottom: 8px; left: 8px; border-right: 0; border-top: 0; }
+  .preview-stage .corner.br { bottom: 8px; right: 8px; border-left: 0; border-top: 0; }
+  .preview-stage .stage-tag {
+    position: absolute; top: 12px; left: 12px;
+    text-transform: uppercase; letter-spacing: 0.22em; font-weight: 700; font-size: 9px; color: var(--muted);
+  }
+  .preview-stage .stage-tag.r { left: auto; right: 12px; color: var(--fg); }
+  .preview-stage .stage-tag.r::before { content: "● "; }
+
+  .stage-lyric {
+    text-align: center;
+    padding: 0 var(--s-7);
+  }
+  .stage-lyric .now {
+    font-size: clamp(36px, 6vw, 64px);
+    font-weight: 900; letter-spacing: -0.02em; line-height: 1; text-transform: uppercase;
+  }
+  .stage-lyric .next {
+    margin-top: var(--s-4);
+    text-transform: uppercase; letter-spacing: 0.22em; font-weight: 700; font-size: 11px; color: var(--muted);
+  }
+
+  /* style-specific stage anims */
+  .stage-lyric.fx-fade .now { animation: fxFade 0.6s ease both; }
+  @keyframes fxFade { from { opacity: 0; } to { opacity: 1; } }
+
+  .stage-lyric.fx-glitch .now { animation: fxGlitch 0.7s steps(6) both; }
+  @keyframes fxGlitch {
+    0% { transform: translate(0,0); }
+    20% { transform: translate(-2px,1px); }
+    40% { transform: translate(2px,-1px); }
+    60% { transform: translate(-1px,-1px); }
+    80% { transform: translate(1px,1px); }
+    100% { transform: translate(0,0); }
+  }
+
+  .stage-lyric.fx-typew .now {
+    overflow: hidden; white-space: nowrap;
+    border-right: 4px solid var(--fg);
+    margin: 0 auto;
+    width: max-content;
+    animation: fxTypew 0.5s steps(12) both;
+  }
+  @keyframes fxTypew { from { width: 0; } to { width: max-content; } }
+
+  .stage-lyric.fx-bounce .now { animation: fxBounce 0.6s ease both; }
+  @keyframes fxBounce {
+    0% { transform: translateY(20px); opacity: 0; }
+    60% { transform: translateY(-6px); opacity: 1; }
+    100% { transform: translateY(0); }
+  }
+
+  .stage-lyric.fx-scale .now { animation: fxScale 0.5s ease both; }
+  @keyframes fxScale {
+    0% { transform: scale(0.6); opacity: 0; }
+    100% { transform: scale(1); opacity: 1; }
+  }
+
+  .stage-lyric.fx-slide .now { animation: fxSlide 0.5s ease both; }
+  @keyframes fxSlide {
+    0% { transform: translateX(-30px); opacity: 0; }
+    100% { transform: translateX(0); opacity: 1; }
+  }
+
+  .stage-lyric.fx-block .now {
+    background: var(--fg); color: var(--bg);
+    padding: var(--s-2) var(--s-5);
+    display: inline-block;
+    animation: fxFade 0.4s ease both;
+  }
+  .stage-lyric.fx-block.now-line .next { color: var(--fg); }
+
+  .stage-lyric.fx-stack .now { animation: fxFade 0.4s ease both; }
+
+  /* Transport */
+  .transport {
+    display: grid; grid-template-columns: auto 1fr auto;
+    gap: var(--s-4); align-items: center;
+  }
+  .transport .play {
+    width: 44px; height: 44px;
+    border: 1px solid var(--btn-line); border-radius: var(--r);
+    display: grid; place-items: center;
+    color: var(--fg);
+    transition: border-color var(--t), background var(--t);
+  }
+  .transport .play:hover { border-color: var(--btn-line-hover); background: var(--bg-soft); }
+  .transport .play .icon { width: 0; height: 0; border-left: 9px solid var(--fg); border-top: 6px solid transparent; border-bottom: 6px solid transparent; margin-left: 2px; }
+  .transport.playing .play .icon { width: 10px; height: 12px; border: 0; background:
+    linear-gradient(to right, var(--fg) 0 3px, transparent 3px 7px, var(--fg) 7px 10px); margin-left: 0; }
+  .transport .time {
+    text-transform: uppercase; letter-spacing: 0.18em; font-weight: 700; font-size: 11px; color: var(--muted);
+    font-variant-numeric: tabular-nums;
+  }
+  .transport .time .sep { color: var(--dim); margin: 0 var(--s-2); }
+
+  .scrub-track {
+    height: 28px;
+    border: 1px solid var(--line);
+    border-radius: var(--r);
+    position: relative;
+    cursor: pointer;
+    background: var(--bg);
+    overflow: hidden;
+    display: flex; align-items: center; gap: 2px;
+    padding: 0 4px;
+  }
+  .scrub-track .wbar {
+    flex: 1 0 auto;
+    width: 2px;
+    background: var(--muted);
+    height: 30%;
+  }
+  .scrub-track .pfill {
+    position: absolute; top: 0; bottom: 0; left: 0;
+    background: rgba(255,255,255,0.07);
+    pointer-events: none;
+  }
+  .scrub-track .phead {
+    position: absolute; top: -1px; bottom: -1px; width: 1px; background: var(--fg);
+    pointer-events: none;
+  }
+  .scrub-track .phead::before { content: ""; position: absolute; top: -3px; left: -3px; width: 7px; height: 7px; background: var(--fg); }
+
+  .editor-toolbar {
+    display: flex; justify-content: space-between; align-items: center;
+    margin-bottom: var(--s-7);
+    padding-bottom: var(--s-5);
+    border-bottom: 1px solid var(--line);
+  }
+  .editor-toolbar .left, .editor-toolbar .right { display: flex; gap: var(--s-2); align-items: center; }
+
+  /* =========================================================
+     SCREEN 04 — STYLE PICKER
+     ========================================================= */
+  .styles-section { padding: var(--s-11) 0 var(--s-10); }
+  .styles-grid {
+    display: grid; grid-template-columns: 1fr 1fr; gap: var(--s-8);
+  }
+
+  .style-card { padding: var(--s-5); cursor: pointer; }
+  .style-card .style-thumb {
+    aspect-ratio: 16 / 9;
+    background: var(--accent-dark);
+    border: 1px solid var(--line);
+    border-radius: var(--r);
+    position: relative;
+    overflow: hidden;
+    display: grid; place-items: center;
+    margin-bottom: var(--s-5);
+  }
+  .style-thumb .stamp {
+    position: absolute; top: 10px; left: 10px;
+    text-transform: uppercase; letter-spacing: 0.22em; font-weight: 700; font-size: 9px; color: var(--muted);
+  }
+  .style-thumb .stamp.r { left: auto; right: 10px; }
+  .style-card .style-foot {
+    display: grid; grid-template-columns: 1fr auto; gap: var(--s-4); align-items: end;
+  }
+  .style-card .sf-name {
+    font-size: 22px; font-weight: 900; letter-spacing: -0.01em; line-height: 1; text-transform: uppercase;
+  }
+  .style-card .sf-desc {
+    margin-top: var(--s-3);
+    color: var(--muted);
+    line-height: 1.6;
+    font-size: 13px;
+    max-width: 40ch;
+  }
+  .style-card .sf-meta {
+    margin-top: var(--s-3);
+    text-transform: uppercase; letter-spacing: 0.18em; font-weight: 700; font-size: 10px; color: var(--label);
+    display: flex; gap: var(--s-3); align-items: center;
+  }
+  .style-card .sf-meta .sep { color: var(--dim); }
+  .style-card .arr { font-size: 18px; transition: transform var(--t); color: var(--muted); }
+  .style-card:hover .arr { transform: translate(4px, -4px); color: var(--fg); }
+  .style-card.selected .arr { color: var(--fg); }
+  .style-card.selected .style-thumb { border-color: var(--fg); }
+  .style-card.selected::after {
+    content: "● ACTIVE";
+    position: absolute;
+  }
+
+  .style-card { position: relative; }
+  .style-card .active-tag {
+    position: absolute; top: var(--s-5); right: var(--s-5);
+    background: var(--fg); color: var(--bg);
+    padding: 4px 8px;
+    text-transform: uppercase; letter-spacing: 0.22em; font-weight: 700; font-size: 9px;
+    border-radius: var(--r);
+    display: none; z-index: 2;
+  }
+  .style-card.selected .active-tag { display: block; }
+
+  /* Style preview animations (looping in cards) */
+  .demo {
+    text-transform: uppercase; font-weight: 900; letter-spacing: -0.01em; line-height: 1;
+    color: var(--fg);
+  }
+  .demo.fade { font-size: 36px; animation: dFade 2.4s infinite; }
+  @keyframes dFade { 0%,15% { opacity: 0; } 50%,85% { opacity: 1; } 100% { opacity: 0; } }
+
+  .demo.glitch { font-size: 34px; animation: dGlitch 1.4s infinite; }
+  @keyframes dGlitch {
+    0%,100% { transform: translate(0); }
+    10% { transform: translate(-2px,1px); }
+    20% { transform: translate(2px,-1px); }
+    30% { transform: translate(-1px,1px); }
+    40% { transform: translate(1px,-2px); }
+    50% { transform: translate(-1px,-1px); }
+    60% { transform: translate(2px,1px); }
+    70% { transform: translate(0,0); }
+  }
+  .demo.glitch::before, .demo.glitch::after {
+    content: attr(data-text); position: absolute; left: 0; right: 0; top: 0; bottom: 0;
+    display: grid; place-items: center; mix-blend-mode: difference; opacity: 0.6;
+  }
+
+  .demo.typew {
+    font-family: 'Inter', monospace;
+    font-size: 28px;
+    overflow: hidden; white-space: nowrap;
+    border-right: 3px solid var(--fg);
+    width: 0;
+    animation: dTypew 3s steps(8) infinite;
+  }
+  @keyframes dTypew {
+    0% { width: 0; }
+    50% { width: 7ch; }
+    90% { width: 7ch; }
+    100% { width: 0; }
+  }
+
+  .demo.bounce { font-size: 36px; }
+  .demo.bounce span { display: inline-block; animation: dBounce 0.9s infinite; }
+  .demo.bounce span:nth-child(2) { animation-delay: 0.1s; }
+  .demo.bounce span:nth-child(3) { animation-delay: 0.2s; }
+  .demo.bounce span:nth-child(4) { animation-delay: 0.3s; }
+  .demo.bounce span:nth-child(5) { animation-delay: 0.4s; }
+  .demo.bounce span:nth-child(6) { animation-delay: 0.5s; }
+  @keyframes dBounce { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-10px); } }
+
+  .demo.scale { font-size: 36px; animation: dScale 1.8s infinite; }
+  @keyframes dScale { 0%,100% { transform: scale(0.85); opacity: 0.7; } 50% { transform: scale(1.15); opacity: 1; } }
+
+  .demo.slide { font-size: 34px; animation: dSlide 2.4s infinite; }
+  @keyframes dSlide {
+    0% { transform: translateX(-40px); opacity: 0; }
+    25%,80% { transform: translateX(0); opacity: 1; }
+    100% { transform: translateX(40px); opacity: 0; }
+  }
+
+  .demo.stack { display: flex; flex-direction: column; align-items: flex-start; line-height: 0.95; gap: 2px; }
+  .demo.stack span { font-size: 22px; animation: dFade 1.8s infinite; }
+  .demo.stack span:nth-child(1) { animation-delay: 0s; padding-left: 0; }
+  .demo.stack span:nth-child(2) { animation-delay: 0.3s; padding-left: 24px; }
+  .demo.stack span:nth-child(3) { animation-delay: 0.6s; padding-left: 48px; }
+
+  .demo.block-anim {
+    font-size: 28px;
+    background: var(--fg); color: var(--bg);
+    padding: 8px 14px;
+    animation: dFade 2s infinite;
+  }
+
+  /* =========================================================
+     SCREEN 05 — RENDER & EXPORT
+     ========================================================= */
+  .render-section { padding: var(--s-11) 0 var(--s-10); }
+  .render-grid {
+    display: grid; grid-template-columns: 1fr; gap: var(--s-9);
+  }
+  .render-grid .wrap-narrow { padding: 0; }
+
+  .formats {
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 0;
+    border: 1px solid var(--line); border-radius: var(--r);
+  }
+  .format {
+    padding: var(--s-7) var(--s-6) var(--s-6);
+    border-right: 1px solid var(--line);
+    cursor: pointer; position: relative;
+    transition: background var(--t);
+  }
+  .format:last-child { border-right: 0; }
+  .format:hover { background: var(--bg-soft-hover); }
+  .format.selected { background: var(--bg-soft-hover); }
+  .format.selected::before {
+    content: ""; position: absolute; top: var(--s-5); right: var(--s-5);
+    width: 8px; height: 8px; background: var(--fg);
+  }
+  .format-shape {
+    border: 1px solid var(--line);
+    background: var(--accent-dark);
+    margin: 0 auto var(--s-6);
+    position: relative;
+  }
+  .format-shape.r-vertical { aspect-ratio: 9/16; max-width: 70px; }
+  .format-shape.r-horizontal { aspect-ratio: 16/9; max-width: 140px; }
+  .format-shape.r-square { aspect-ratio: 1/1; max-width: 100px; }
+  .format-shape::after {
+    content: attr(data-ratio);
+    position: absolute; bottom: 4px; right: 6px;
+    text-transform: uppercase; letter-spacing: 0.18em; font-weight: 700; font-size: 8px; color: var(--muted);
+  }
+  .format-name {
+    font-size: 20px; font-weight: 900; letter-spacing: -0.01em; line-height: 1; text-transform: uppercase;
+    text-align: center;
+  }
+  .format-meta {
+    margin-top: var(--s-3); text-align: center;
+    text-transform: uppercase; letter-spacing: 0.18em; font-weight: 700; font-size: 10px; color: var(--muted);
+    display: flex; justify-content: center; gap: var(--s-3); flex-wrap: wrap;
+  }
+  .format-meta .sep { color: var(--dim); }
+
+  .render-status {
+    border: 1px solid var(--line); border-radius: var(--r);
+    padding: var(--s-7) var(--s-7);
+    background: var(--bg-soft);
+  }
+  .render-status .head {
+    display: flex; justify-content: space-between; align-items: baseline;
+    margin-bottom: var(--s-5);
+  }
+  .render-status .pct {
+    font-size: 56px; font-weight: 900; letter-spacing: -0.03em; line-height: 1;
+  }
+  .render-status .pct .pct-mark { font-size: 22px; color: var(--muted); margin-left: 4px; }
+  .render-status .eta {
+    text-transform: uppercase; letter-spacing: 0.22em; font-weight: 700; font-size: 11px; color: var(--muted);
+    text-align: right;
+  }
+  .render-status .eta .v { color: var(--fg); }
+  .render-bar {
+    height: 1px; background: var(--line); position: relative; overflow: hidden; margin: var(--s-5) 0;
+  }
+  .render-bar .fill { position: absolute; left: 0; top: 0; bottom: 0; width: 0%; background: var(--fg); transition: width 200ms linear; }
+  .render-bar.is-thick { height: 2px; }
+  .render-tags {
+    display: flex; justify-content: space-between;
+    text-transform: uppercase; letter-spacing: 0.18em; font-weight: 700; font-size: 10px; color: var(--muted);
+    flex-wrap: wrap; gap: var(--s-3);
+  }
+  .render-actions {
+    margin-top: var(--s-6);
+    display: flex; gap: var(--s-3); flex-wrap: wrap;
+  }
+
+  .downloads { border-top: 1px solid var(--line); }
+  .download {
+    display: grid; grid-template-columns: 60px 1fr auto; gap: var(--s-5);
+    align-items: center;
+    padding: var(--s-6) 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .download .dl-tag {
+    border: 1px solid var(--line); border-radius: var(--r);
+    height: 60px; display: grid; place-items: center;
+    text-transform: uppercase; letter-spacing: 0.18em; font-weight: 900; font-size: 11px;
+  }
+  .download.locked .dl-tag, .download.locked .dl-name, .download.locked .dl-meta { color: var(--muted); }
+  .download .dl-name {
+    font-size: 18px; font-weight: 900; letter-spacing: -0.01em; line-height: 1; text-transform: uppercase;
+  }
+  .download .dl-meta {
+    margin-top: var(--s-3);
+    text-transform: uppercase; letter-spacing: 0.18em; font-weight: 700; font-size: 10px; color: var(--muted);
+    display: flex; gap: var(--s-3); flex-wrap: wrap;
+  }
+  .download .dl-meta .sep { color: var(--dim); }
+
+  /* ---------- Footer ---------- */
+  .foot {
+    border-top: 1px solid var(--line);
+    padding: var(--s-9) 0;
+  }
+  .foot-inner {
+    display: grid; grid-template-columns: 1fr 1fr 1fr; gap: var(--s-8);
+    text-transform: uppercase; letter-spacing: 0.22em; font-weight: 700; font-size: 11px; color: var(--muted);
+  }
+  .foot a { color: inherit; text-decoration: none; transition: color var(--t); }
+  .foot a:hover { color: var(--fg); }
+  .foot .col-title { color: var(--label); margin-bottom: var(--s-5); }
+  .foot .col ul { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: var(--s-3); }
+
+  /* ---------- Responsive ---------- */
+  @media (max-width: 900px) {
+    .topbar-inner { grid-template-columns: 1fr auto; }
+    .top-right { display: none; }
+    .nav { grid-column: 1 / -1; justify-self: stretch; flex-wrap: wrap; }
+    .nav button { flex: 1 1 auto; }
+    .grid-2, .styles-grid { grid-template-columns: 1fr; }
+    .editor-grid { grid-template-columns: 1fr; }
+    .pipeline { grid-template-columns: 1fr; }
+    .pipe-step { border-right: 0; border-bottom: 1px solid var(--line); }
+    .pipe-step:last-child { border-bottom: 0; }
+    .formats { grid-template-columns: 1fr; }
+    .format { border-right: 0; border-bottom: 1px solid var(--line); }
+    .format:last-child { border-bottom: 0; }
+    .hero-foot { grid-template-columns: 1fr 1fr; }
+    .hero-foot .stat:nth-child(2) { border-right: 0; }
+    .hero-foot .stat:nth-child(1), .hero-foot .stat:nth-child(2) { border-bottom: 1px solid var(--line); }
+    .foot-inner { grid-template-columns: 1fr; gap: var(--s-7); }
+  }
+</style>
+</head>
+<body>
+
+<!-- ============================ TOP BAR ============================ -->
+<header class="topbar" data-screen-label="Top Bar">
+  <div class="topbar-inner">
+    <div class="brand">
+      <span class="brand-mark"></span>
+      <span>Pop Maker</span>
+      <span class="sep">/</span>
+      <span class="sub">Studio v0.4</span>
+    </div>
+    <nav class="nav" id="nav">
+      <button data-screen="hero" class="active"><span class="num">01</span><span>Start</span></button>
+      <button data-screen="upload"><span class="num">02</span><span>Upload</span></button>
+      <button data-screen="editor"><span class="num">03</span><span>Lyrics</span></button>
+      <button data-screen="styles"><span class="num">04</span><span>Style</span></button>
+      <button data-screen="render"><span class="num">05</span><span>Export</span></button>
+    </nav>
+    <div class="top-right">
+      <span class="live">Session live</span>
+      <span>Workspace ↗</span>
+    </div>
+  </div>
+</header>
+
+<!-- ============================ 01 LANDING ============================ -->
+<section class="screen active" id="screen-hero" data-screen-label="01 Landing">
+  <div class="hero">
+    <div class="wrap">
+      <div class="hero-eyebrow">
+        <span class="sq"></span>
+        <span>Pop Maker Studio — Est. 2026</span>
+        <span style="color:var(--dim)">/</span>
+        <span>Lyric &amp; karaoke video for pop artists</span>
+      </div>
+      <h1 class="hero-title" style="margin-top: var(--s-7)">
+        Make your<br>
+        <span class="outline">lyric video</span><br>
+        before the<br>
+        track <span class="strike">leaks</span> drops.
+      </h1>
+      <p class="hero-tag" style="margin-top: var(--s-7)">
+        Drop a stem. Get word-timed lyrics, a render in three formats, and a karaoke export — in the time it takes to load a draft tweet.
+        Built for pop artists, not corporate content teams. Merciless, and musical.
+      </p>
+      <div class="hero-cta-row" style="margin-top: var(--s-8)">
+        <button class="btn btn-fill btn-lg" id="cta-upload">
+          <span>Upload your track</span>
+          <span class="arr">↗</span>
+        </button>
+        <button class="btn btn-lg" data-goto="styles">
+          <span>See the styles</span>
+          <span class="arr">↗</span>
+        </button>
+        <span class="meta">No signup · 96kHz wav · ≤ 12 min</span>
+      </div>
+
+      <div class="hero-foot">
+        <div class="stat">
+          <div class="num">3:42</div>
+          <div class="cap">Avg. render — 1080p</div>
+        </div>
+        <div class="stat">
+          <div class="num">.97</div>
+          <div class="cap">Whisper-grade alignment</div>
+        </div>
+        <div class="stat">
+          <div class="num">9:16</div>
+          <div class="cap">Native vertical out</div>
+        </div>
+        <div class="stat">
+          <div class="num">↗</div>
+          <div class="cap">Direct to TikTok / Reels</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="hero-marquee" aria-hidden="true">
+      <div class="track">
+        <span><span class="sq"></span> WHISPER-V3 ALIGNMENT</span>
+        <span><span class="sq"></span> WORD-LEVEL TIMESTAMPS</span>
+        <span><span class="sq"></span> KARAOKE BOUNCE READY</span>
+        <span><span class="sq"></span> SRT / VTT EXPORT</span>
+        <span><span class="sq"></span> 9:16 · 16:9 · 1:1</span>
+        <span><span class="sq"></span> NO TEMPLATES NO LOOPS</span>
+        <span><span class="sq"></span> WHISPER-V3 ALIGNMENT</span>
+        <span><span class="sq"></span> WORD-LEVEL TIMESTAMPS</span>
+        <span><span class="sq"></span> KARAOKE BOUNCE READY</span>
+        <span><span class="sq"></span> SRT / VTT EXPORT</span>
+        <span><span class="sq"></span> 9:16 · 16:9 · 1:1</span>
+        <span><span class="sq"></span> NO TEMPLATES NO LOOPS</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ 02 UPLOAD ============================ -->
+<section class="screen" id="screen-upload" data-screen-label="02 Upload">
+  <div class="wrap">
+    <div class="upload-section">
+      <div class="section-head">
+        <div>
+          <h2>Drop the track.</h2>
+          <p class="blurb">WAV, MP3, M4A, or a video file we can pull stems from. Up to 12 minutes. Your file never leaves the session.</p>
+        </div>
+        <div class="index">02 / 05 — Upload</div>
+      </div>
+
+      <div class="dropzone" id="dropzone">
+        <input type="file" id="file-input" accept="audio/*,video/*" hidden>
+        <div class="dz-icon">↓</div>
+        <h3 class="dz-title" id="dz-title">Drag a file here</h3>
+        <p class="dz-sub" id="dz-sub">Or click to browse · Audio &amp; video accepted</p>
+        <div class="dz-formats">
+          <span class="chip">.wav</span>
+          <span class="chip">.mp3</span>
+          <span class="chip">.m4a</span>
+          <span class="chip">.flac</span>
+          <span class="chip">.mp4</span>
+          <span class="chip">.mov</span>
+        </div>
+      </div>
+
+      <div class="pipeline" id="pipeline">
+        <div class="pipe-step pending" data-step="0">
+          <div class="pnum">
+            <span>Stage 01</span>
+            <span>↗</span>
+          </div>
+          <div class="pname">Extract</div>
+          <div class="pdesc">Pull stems · isolate vocals from instrumental</div>
+          <div class="pstate">Awaiting input</div>
+          <div class="pbar"></div>
+        </div>
+        <div class="pipe-step pending" data-step="1">
+          <div class="pnum">
+            <span>Stage 02</span>
+            <span>↗</span>
+          </div>
+          <div class="pname">Transcribe</div>
+          <div class="pdesc">Word-level alignment · Whisper-V3 + forced</div>
+          <div class="pstate">—</div>
+          <div class="pbar"></div>
+        </div>
+        <div class="pipe-step pending" data-step="2">
+          <div class="pnum">
+            <span>Stage 03</span>
+            <span>↗</span>
+          </div>
+          <div class="pname">Ready</div>
+          <div class="pdesc">Hand off to lyrics editor &amp; preview</div>
+          <div class="pstate">—</div>
+          <div class="pbar"></div>
+        </div>
+      </div>
+
+      <div class="upload-actions">
+        <div class="left">
+          <span class="label wide" id="file-meta">No file selected</span>
+        </div>
+        <div class="row gap-3">
+          <button class="btn" id="upload-cancel" disabled>
+            <span>Cancel</span>
+          </button>
+          <button class="btn btn-fill is-disabled" id="upload-next">
+            <span>Continue to lyrics</span>
+            <span class="arr">↗</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ 03 LYRICS EDITOR ============================ -->
+<section class="screen" id="screen-editor" data-screen-label="03 Lyrics Editor">
+  <div class="editor-section">
+    <div class="wrap-wide">
+      <div class="section-head">
+        <div>
+          <h2>Lyrics editor.</h2>
+          <p class="blurb">Click a word to seek. Double-click to retype. The preview keeps up — and so should you.</p>
+        </div>
+        <div class="index">03 / 05 — Editor</div>
+      </div>
+
+      <div class="editor-toolbar">
+        <div class="left">
+          <button class="icon-btn" title="Undo">↶</button>
+          <button class="icon-btn" title="Redo">↷</button>
+          <button class="btn btn-sm" id="auto-align"><span>Re-align</span><span class="arr">↗</span></button>
+          <button class="btn btn-sm" id="add-line"><span>+ Line</span></button>
+        </div>
+        <div class="right">
+          <span class="label tight" id="track-name">No Tomorrow — Demo 04</span>
+          <span class="label tight" style="color:var(--dim)">·</span>
+          <span class="label tight">2:48 · 122 BPM · Key Bm</span>
+        </div>
+      </div>
+
+      <div class="editor-grid">
+        <!-- LEFT: lyric list -->
+        <div class="panel">
+          <div class="panel-head">
+            <span class="ph-title">Lyrics — Word Timestamps</span>
+            <span class="ph-meta" id="word-count">— words</span>
+          </div>
+          <div class="lyric-list" id="lyric-list"></div>
+        </div>
+
+        <!-- RIGHT: preview + transport -->
+        <div class="panel">
+          <div class="panel-head">
+            <span class="ph-title">Live preview</span>
+            <span class="ph-meta" id="preview-style-tag">Style — Block · 16:9</span>
+          </div>
+          <div class="preview-pane">
+            <div class="preview-stage" id="preview-stage">
+              <span class="corner tl"></span><span class="corner tr"></span>
+              <span class="corner bl"></span><span class="corner br"></span>
+              <span class="stage-tag">Preview · 1080p</span>
+              <span class="stage-tag r" id="stage-rec">Live</span>
+              <div class="stage-lyric fx-block" id="stage-lyric">
+                <div class="now" id="stage-now">DROP</div>
+                <div class="next" id="stage-next">Next — A FILE TO BEGIN</div>
+              </div>
+            </div>
+
+            <div class="transport" id="transport">
+              <button class="play" id="play-btn"><span class="icon"></span></button>
+              <div class="scrub-track" id="scrub"></div>
+              <div class="time"><span id="t-now">0:00</span><span class="sep">/</span><span id="t-total">2:48</span></div>
+            </div>
+
+            <div class="row between">
+              <span class="label">Font weight</span>
+              <div class="row gap-2">
+                <button class="btn btn-sm" data-stage-weight="500">500</button>
+                <button class="btn btn-sm" data-stage-weight="700">700</button>
+                <button class="btn btn-sm" data-stage-weight="900">900</button>
+              </div>
+            </div>
+
+            <div class="row between" style="border-top: 1px solid var(--line); padding-top: var(--s-5);">
+              <span class="label">Style</span>
+              <div class="row gap-2">
+                <button class="btn btn-sm" data-goto="styles"><span>Change style</span><span class="arr">↗</span></button>
+                <button class="btn btn-fill btn-sm" data-goto="render"><span>Render</span><span class="arr">↗</span></button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ 04 STYLE PICKER ============================ -->
+<section class="screen" id="screen-styles" data-screen-label="04 Style Picker">
+  <div class="wrap">
+    <div class="styles-section">
+      <div class="section-head">
+        <div>
+          <h2>Pick a style.</h2>
+          <p class="blurb">Eight motion presets, all word-synced. Hover for the loop. Click to commit. Tweak per-line later if you must.</p>
+        </div>
+        <div class="index">04 / 05 — Style</div>
+      </div>
+
+      <div class="styles-grid" id="styles-grid"><!-- populated by JS --></div>
+
+      <div class="upload-actions" style="margin-top: var(--s-9)">
+        <div class="left">
+          <span class="label wide" id="style-summary">Active — Block · sharp · weight 900</span>
+        </div>
+        <div class="row gap-3">
+          <button class="btn" data-goto="editor"><span>Back to lyrics</span></button>
+          <button class="btn btn-fill" data-goto="render"><span>Render</span><span class="arr">↗</span></button>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ 05 RENDER & EXPORT ============================ -->
+<section class="screen" id="screen-render" data-screen-label="05 Render &amp; Export">
+  <div class="wrap">
+    <div class="render-section">
+      <div class="section-head">
+        <div>
+          <h2>Render &amp; export.</h2>
+          <p class="blurb">Pick the format. Hit render. Download the lyric video, the vocal stem, and the SRT — done in one pass.</p>
+        </div>
+        <div class="index">05 / 05 — Export</div>
+      </div>
+
+      <!-- Formats -->
+      <div class="label wide" style="margin-bottom: var(--s-4)">Output format</div>
+      <div class="formats" id="formats">
+        <button class="format selected" data-format="vertical">
+          <div class="format-shape r-vertical" data-ratio="9:16"></div>
+          <div class="format-name">TikTok / Reels</div>
+          <div class="format-meta"><span>9:16</span><span class="sep">·</span><span>1080×1920</span><span class="sep">·</span><span>30 fps</span></div>
+        </button>
+        <button class="format" data-format="horizontal">
+          <div class="format-shape r-horizontal" data-ratio="16:9"></div>
+          <div class="format-name">YouTube</div>
+          <div class="format-meta"><span>16:9</span><span class="sep">·</span><span>1920×1080</span><span class="sep">·</span><span>30 fps</span></div>
+        </button>
+        <button class="format" data-format="square">
+          <div class="format-shape r-square" data-ratio="1:1"></div>
+          <div class="format-name">Square</div>
+          <div class="format-meta"><span>1:1</span><span class="sep">·</span><span>1080×1080</span><span class="sep">·</span><span>30 fps</span></div>
+        </button>
+      </div>
+
+      <!-- Status -->
+      <div class="render-status" style="margin-top: var(--s-9)">
+        <div class="head">
+          <div>
+            <div class="label tight" style="margin-bottom: var(--s-3)">Render status</div>
+            <div class="pct"><span id="r-pct">0</span><span class="pct-mark">%</span></div>
+          </div>
+          <div class="eta">
+            <div>Time remaining</div>
+            <div class="v" id="r-eta" style="font-size: 22px; font-weight: 900; letter-spacing: -0.01em; line-height: 1; margin-top: var(--s-3); color: var(--fg);">—:—</div>
+          </div>
+        </div>
+        <div class="render-bar is-thick"><div class="fill" id="r-fill"></div></div>
+        <div class="render-tags">
+          <span id="r-stage">Idle — press render</span>
+          <span><span id="r-frame">0</span> / 5040 frames</span>
+        </div>
+        <div class="render-actions">
+          <button class="btn btn-fill" id="r-start"><span>Start render</span><span class="arr">↗</span></button>
+          <button class="btn" id="r-cancel" disabled><span>Cancel</span></button>
+        </div>
+      </div>
+
+      <!-- Downloads -->
+      <div style="margin-top: var(--s-9)">
+        <div class="label wide" style="margin-bottom: var(--s-4)">Downloads</div>
+        <div class="downloads" id="downloads">
+          <div class="download locked" data-dl="mp4">
+            <div class="dl-tag">.MP4</div>
+            <div>
+              <div class="dl-name">Lyric video</div>
+              <div class="dl-meta"><span id="dl-mp4-fmt">9:16 · 1080×1920</span><span class="sep">·</span><span>H.264</span><span class="sep">·</span><span id="dl-mp4-size">— MB</span></div>
+            </div>
+            <button class="btn"><span>Download</span><span class="arr">↗</span></button>
+          </div>
+          <div class="download locked" data-dl="wav">
+            <div class="dl-tag">.WAV</div>
+            <div>
+              <div class="dl-name">Vocals only</div>
+              <div class="dl-meta"><span>Stem · isolated</span><span class="sep">·</span><span>96 kHz · 24-bit</span><span class="sep">·</span><span id="dl-wav-size">— MB</span></div>
+            </div>
+            <button class="btn"><span>Download</span><span class="arr">↗</span></button>
+          </div>
+          <div class="download locked" data-dl="srt">
+            <div class="dl-tag">.SRT</div>
+            <div>
+              <div class="dl-name">Subtitles</div>
+              <div class="dl-meta"><span>Word-level timing</span><span class="sep">·</span><span>UTF-8</span><span class="sep">·</span><span id="dl-srt-size">— KB</span></div>
+            </div>
+            <button class="btn"><span>Download</span><span class="arr">↗</span></button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ FOOT ============================ -->
+<footer class="foot">
+  <div class="wrap">
+    <div class="foot-inner">
+      <div class="col">
+        <div class="col-title">Pop Maker Studio</div>
+        <div>Built in a basement. Tested in a green room.</div>
+      </div>
+      <div class="col">
+        <div class="col-title">Tools</div>
+        <ul>
+          <li><a href="#">Aligner ↗</a></li>
+          <li><a href="#">Stem splitter ↗</a></li>
+          <li><a href="#">SRT studio ↗</a></li>
+        </ul>
+      </div>
+      <div class="col">
+        <div class="col-title">Console</div>
+        <ul>
+          <li><a href="#">Docs ↗</a></li>
+          <li><a href="#">CLI ↗</a></li>
+          <li><a href="#">Status ↗</a></li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</footer>
+
+<script>
+/* ============================================================
+   App state + screen routing
+   ============================================================ */
+const SCREENS = ['hero','upload','editor','styles','render'];
+const navButtons = document.querySelectorAll('#nav button');
+const screenEls = Object.fromEntries(SCREENS.map(s => [s, document.getElementById('screen-' + s)]));
+
+function go(screen) {
+  if (!SCREENS.includes(screen)) return;
+  SCREENS.forEach(s => screenEls[s].classList.toggle('active', s === screen));
+  navButtons.forEach(b => b.classList.toggle('active', b.dataset.screen === screen));
+  window.scrollTo({ top: 0, behavior: 'instant' });
+}
+
+navButtons.forEach(b => b.addEventListener('click', () => go(b.dataset.screen)));
+document.querySelectorAll('[data-goto]').forEach(b => {
+  b.addEventListener('click', () => go(b.dataset.goto));
+});
+document.getElementById('cta-upload').addEventListener('click', () => go('upload'));
+
+document.addEventListener('keydown', (e) => {
+  if (e.target.matches('input, textarea, [contenteditable="true"]')) return;
+  const idx = SCREENS.findIndex(s => screenEls[s].classList.contains('active'));
+  if (e.key === 'ArrowRight' && idx < SCREENS.length - 1) go(SCREENS[idx + 1]);
+  if (e.key === 'ArrowLeft' && idx > 0) go(SCREENS[idx - 1]);
+});
+
+/* ============================================================
+   02 — UPLOAD: dropzone + pipeline
+   ============================================================ */
+const dz = document.getElementById('dropzone');
+const fileInput = document.getElementById('file-input');
+const dzTitle = document.getElementById('dz-title');
+const dzSub = document.getElementById('dz-sub');
+const fileMeta = document.getElementById('file-meta');
+const uploadNext = document.getElementById('upload-next');
+const uploadCancel = document.getElementById('upload-cancel');
+const pipeSteps = document.querySelectorAll('#pipeline .pipe-step');
+
+dz.addEventListener('click', () => fileInput.click());
+dz.addEventListener('dragover', (e) => { e.preventDefault(); dz.classList.add('dragging'); });
+dz.addEventListener('dragleave', () => dz.classList.remove('dragging'));
+dz.addEventListener('drop', (e) => {
+  e.preventDefault(); dz.classList.remove('dragging');
+  const f = e.dataTransfer.files[0]; if (f) acceptFile(f);
+});
+fileInput.addEventListener('change', (e) => {
+  const f = e.target.files[0]; if (f) acceptFile(f);
+});
+
+function fmtBytes(n) {
+  if (n < 1024) return n + ' B';
+  if (n < 1048576) return (n/1024).toFixed(1) + ' KB';
+  return (n/1048576).toFixed(1) + ' MB';
+}
+
+let pipeTimer = null;
+function resetPipeline() {
+  if (pipeTimer) clearInterval(pipeTimer);
+  pipeSteps.forEach(s => {
+    s.classList.remove('done','active');
+    s.classList.add('pending');
+    s.querySelector('.pstate').textContent = s.dataset.step === '0' ? 'Awaiting input' : '—';
+  });
+}
+
+function acceptFile(f) {
+  resetPipeline();
+  dzTitle.textContent = f.name.length > 44 ? f.name.slice(0,40) + '…' : f.name;
+  dzSub.textContent = (f.type || 'audio') + ' · ' + fmtBytes(f.size);
+  fileMeta.textContent = f.name + ' · ' + fmtBytes(f.size);
+  uploadCancel.disabled = false;
+
+  const stages = [
+    { i: 0, label: 'Extracting stems', dur: 1800, last: 'Vocals isolated' },
+    { i: 1, label: 'Aligning words',  dur: 2400, last: 'Words timed · 0.97 confidence' },
+    { i: 2, label: 'Packaging',        dur: 1200, last: 'Ready · go to lyrics' }
+  ];
+
+  let idx = 0;
+  function runStage() {
+    if (idx >= stages.length) {
+      uploadNext.classList.remove('is-disabled');
+      uploadNext.onclick = () => go('editor');
+      return;
+    }
+    const stage = stages[idx];
+    const step = pipeSteps[stage.i];
+    step.classList.remove('pending');
+    step.classList.add('active');
+    step.querySelector('.pstate').textContent = stage.label + '…';
+    const start = performance.now();
+    function tick() {
+      const t = (performance.now() - start) / stage.dur;
+      step.querySelector('.pbar').style.width = Math.min(100, t * 100) + '%';
+      if (t < 1) requestAnimationFrame(tick);
+      else {
+        step.classList.remove('active');
+        step.classList.add('done');
+        step.querySelector('.pbar').style.width = '100%';
+        step.querySelector('.pstate').textContent = stage.last;
+        idx++;
+        runStage();
+      }
+    }
+    requestAnimationFrame(tick);
+  }
+  runStage();
+}
+
+uploadCancel.addEventListener('click', () => {
+  resetPipeline();
+  dzTitle.textContent = 'Drag a file here';
+  dzSub.textContent = 'Or click to browse · Audio & video accepted';
+  fileMeta.textContent = 'No file selected';
+  uploadCancel.disabled = true;
+  uploadNext.classList.add('is-disabled');
+});
+
+/* ============================================================
+   03 — LYRICS EDITOR
+   ============================================================ */
+// Demo lyrics — "No Tomorrow"
+const LYRICS = [
+  { line: "I should be sleeping but I'm wide awake", words: [
+    [0.8, "I"], [1.0, "should"], [1.3, "be"], [1.55, "sleeping"], [2.05, "but"], [2.25, "I'm"], [2.5, "wide"], [2.85, "awake"]
+  ]},
+  { line: "Counting all the bridges I just helped to break", words: [
+    [3.6, "Counting"], [4.1, "all"], [4.3, "the"], [4.5, "bridges"], [5.0, "I"], [5.2, "just"], [5.45, "helped"], [5.8, "to"], [5.95, "break"]
+  ]},
+  { line: "There's a version of me that doesn't bend", words: [
+    [7.1, "There's"], [7.45, "a"], [7.55, "version"], [8.0, "of"], [8.15, "me"], [8.45, "that"], [8.7, "doesn't"], [9.1, "bend"]
+  ]},
+  { line: "She's not here tonight — but say hi to her again", words: [
+    [10.4, "She's"], [10.7, "not"], [10.95, "here"], [11.25, "tonight"], [11.95, "but"], [12.2, "say"], [12.5, "hi"], [12.8, "to"], [13.0, "her"], [13.3, "again"]
+  ]},
+  { line: "No tomorrow", words: [
+    [14.6, "No"], [15.0, "tomorrow"]
+  ]},
+  { line: "Just the loud, loud now", words: [
+    [16.4, "Just"], [16.7, "the"], [16.9, "loud"], [17.4, "loud"], [17.9, "now"]
+  ]},
+  { line: "I'll be sorry tomorrow — I'm not sorry now", words: [
+    [19.2, "I'll"], [19.5, "be"], [19.7, "sorry"], [20.1, "tomorrow"], [20.9, "I'm"], [21.15, "not"], [21.45, "sorry"], [21.85, "now"]
+  ]}
+];
+const TOTAL = 23.5; // seconds for the loop
+
+const lyricListEl = document.getElementById('lyric-list');
+const wordCountEl = document.getElementById('word-count');
+const stageNow = document.getElementById('stage-now');
+const stageNext = document.getElementById('stage-next');
+const stageLyric = document.getElementById('stage-lyric');
+const tNow = document.getElementById('t-now');
+const tTotal = document.getElementById('t-total');
+const playBtn = document.getElementById('play-btn');
+const transport = document.getElementById('transport');
+const scrub = document.getElementById('scrub');
+const previewStyleTag = document.getElementById('preview-style-tag');
+
+function fmtTime(s) {
+  const m = Math.floor(s/60), sec = Math.floor(s % 60);
+  return m + ':' + (sec < 10 ? '0' : '') + sec;
+}
+
+function buildLyrics() {
+  lyricListEl.innerHTML = '';
+  let totalWords = 0;
+  LYRICS.forEach((line, li) => {
+    totalWords += line.words.length;
+    const lineEl = document.createElement('div');
+    lineEl.className = 'lyric-line';
+    lineEl.dataset.line = li;
+    const startTs = line.words[0][0];
+    const endTs = line.words[line.words.length - 1][0];
+    lineEl.innerHTML = `
+      <div class="ll-head">
+        <span>Line ${String(li + 1).padStart(2, '0')}</span>
+        <span>${fmtTime(startTs)} → ${fmtTime(endTs)}</span>
+      </div>
+      <div class="ll-words"></div>`;
+    const wordsWrap = lineEl.querySelector('.ll-words');
+    line.words.forEach(([t, w], wi) => {
+      const span = document.createElement('span');
+      span.className = 'word';
+      span.dataset.t = t;
+      span.dataset.line = li;
+      span.dataset.wi = wi;
+      span.innerHTML = `${w}<span class="ts">${t.toFixed(2)}s</span>`;
+      span.addEventListener('click', (e) => {
+        if (span.isContentEditable) return;
+        currentTime = parseFloat(span.dataset.t);
+        renderPlayhead();
+        updateActiveWord();
+      });
+      span.addEventListener('dblclick', () => {
+        span.contentEditable = 'true';
+        span.focus();
+        const range = document.createRange();
+        range.selectNodeContents(span.firstChild || span);
+        const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(range);
+      });
+      span.addEventListener('blur', () => { span.contentEditable = 'false'; });
+      span.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); span.blur(); }
+      });
+      wordsWrap.appendChild(span);
+    });
+    lyricListEl.appendChild(lineEl);
+  });
+  wordCountEl.textContent = totalWords + ' words';
+}
+
+function buildScrub() {
+  scrub.innerHTML = '';
+  const fill = document.createElement('div'); fill.className = 'pfill'; scrub.appendChild(fill);
+  const head = document.createElement('div'); head.className = 'phead'; scrub.appendChild(head);
+  // bars representing waveform
+  const N = 90;
+  for (let i = 0; i < N; i++) {
+    const b = document.createElement('div'); b.className = 'wbar';
+    const h = 12 + Math.abs(Math.sin(i * 0.5) * 14) + (i % 5 === 0 ? 6 : 0) + Math.random() * 6;
+    b.style.height = h + 'px';
+    scrub.appendChild(b);
+  }
+  scrub.addEventListener('click', (e) => {
+    const r = scrub.getBoundingClientRect();
+    const t = (e.clientX - r.left) / r.width;
+    currentTime = Math.max(0, Math.min(TOTAL, t * TOTAL));
+    renderPlayhead();
+    updateActiveWord();
+  });
+}
+
+function renderPlayhead() {
+  const pct = (currentTime / TOTAL) * 100;
+  scrub.querySelector('.phead').style.left = pct + '%';
+  scrub.querySelector('.pfill').style.width = pct + '%';
+  tNow.textContent = fmtTime(currentTime);
+  tTotal.textContent = fmtTime(TOTAL);
+}
+
+let currentTime = 0;
+let playing = false;
+let lastTick = 0;
+let activeWordKey = null;
+
+function findCurrentWord(t) {
+  let last = null;
+  for (let li = 0; li < LYRICS.length; li++) {
+    const line = LYRICS[li];
+    for (let wi = 0; wi < line.words.length; wi++) {
+      if (line.words[wi][0] <= t) last = { li, wi, w: line.words[wi][1] };
+      else return last;
+    }
+  }
+  return last;
+}
+
+function updateActiveWord() {
+  const cur = findCurrentWord(currentTime);
+  if (!cur) {
+    stageNow.textContent = '—';
+    stageNext.textContent = 'Press play';
+    document.querySelectorAll('.word.current, .lyric-line.active').forEach(el => {
+      el.classList.remove('current','active');
+    });
+    activeWordKey = null;
+    return;
+  }
+  const key = cur.li + ':' + cur.wi;
+  if (key !== activeWordKey) {
+    activeWordKey = key;
+    document.querySelectorAll('.word.current').forEach(el => el.classList.remove('current'));
+    document.querySelectorAll('.lyric-line.active').forEach(el => el.classList.remove('active'));
+    const wordEl = document.querySelector(`.word[data-line="${cur.li}"][data-wi="${cur.wi}"]`);
+    const lineEl = document.querySelector(`.lyric-line[data-line="${cur.li}"]`);
+    if (wordEl) {
+      wordEl.classList.add('current');
+      // scroll into view inside list only, no global scroll
+      const list = lyricListEl;
+      const lineRect = lineEl.getBoundingClientRect();
+      const listRect = list.getBoundingClientRect();
+      if (lineRect.top < listRect.top || lineRect.bottom > listRect.bottom) {
+        list.scrollTop += (lineRect.top - listRect.top) - 40;
+      }
+    }
+    if (lineEl) lineEl.classList.add('active');
+
+    // update preview stage
+    const word = (wordEl && wordEl.firstChild ? wordEl.firstChild.textContent : cur.w).trim();
+    stageNow.textContent = word.toUpperCase();
+    // next word/line
+    const line = LYRICS[cur.li];
+    let nextLabel = '—';
+    if (cur.wi + 1 < line.words.length) nextLabel = 'Next — ' + line.words[cur.wi + 1][1].toUpperCase();
+    else if (cur.li + 1 < LYRICS.length) nextLabel = 'Next line — ' + LYRICS[cur.li + 1].line.toUpperCase();
+    else nextLabel = 'End of section';
+    stageNext.textContent = nextLabel;
+
+    // retrigger style animation
+    stageLyric.classList.remove('animate');
+    void stageLyric.offsetWidth;
+    stageLyric.classList.add('animate');
+  }
+}
+
+function loop(ts) {
+  if (!lastTick) lastTick = ts;
+  const dt = (ts - lastTick) / 1000;
+  lastTick = ts;
+  if (playing) {
+    currentTime += dt;
+    if (currentTime >= TOTAL) { currentTime = 0; }
+    renderPlayhead();
+    updateActiveWord();
+  }
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+
+playBtn.addEventListener('click', () => {
+  playing = !playing;
+  transport.classList.toggle('playing', playing);
+  document.getElementById('stage-rec').textContent = playing ? 'Live · playing' : 'Paused';
+  if (playing) lastTick = 0;
+});
+
+document.querySelectorAll('[data-stage-weight]').forEach(b => {
+  b.addEventListener('click', () => {
+    const w = b.dataset.stageWeight;
+    document.documentElement.style.setProperty('--stage-weight', w);
+    stageNow.style.fontWeight = w;
+  });
+});
+
+buildLyrics();
+buildScrub();
+renderPlayhead();
+updateActiveWord();
+
+/* ============================================================
+   04 — STYLES
+   ============================================================ */
+const STYLES = [
+  { id: 'fade',    name: 'Fade',       desc: 'Soft cross-fade per word. The default for ballads, slow burns, and anything you want to feel inevitable.', meta: ['Word', '60 fps', 'Easy'], demo: '<span class="demo fade">DREAM</span>' },
+  { id: 'glitch',  name: 'Glitch',     desc: 'Hard offset jitter on every hit. Built for trap, hyperpop, and songs that bite.', meta: ['Word', '120 fps', 'Loud'], demo: '<span class="demo glitch" data-text="STATIC">STATIC</span>' },
+  { id: 'typew',   name: 'Typewriter', desc: 'Letters appear in time, monospace cursor blinking. For diaristic verses and confession-core.', meta: ['Letter', '60 fps', 'Calm'], demo: '<span class="demo typew">CONFESS</span>' },
+  { id: 'bounce',  name: 'Bounce',     desc: 'Each letter lifts on the beat. Karaoke-grade. Pop bridges. Children\u2019s choirs of the damned.', meta: ['Letter', '60 fps', 'Lively'], demo: '<span class="demo bounce"><span>P</span><span>O</span><span>P</span><span>!</span></span>' },
+  { id: 'scale',   name: 'Scale',      desc: 'Words punch in on the downbeat. Use sparingly — every line will feel like a chorus.', meta: ['Word', '60 fps', 'Punch'], demo: '<span class="demo scale">LOUD</span>' },
+  { id: 'slide',   name: 'Slide',      desc: 'Lyrics arrive from the left, exit right. Reads like a ticker. Narrative-friendly.', meta: ['Word', '60 fps', 'Linear'], demo: '<span class="demo slide">RUN</span>' },
+  { id: 'stack',   name: 'Stack',      desc: 'Lines step diagonally as they arrive. Verticality for the chorus. Holds the eye.', meta: ['Line', '30 fps', 'Layered'], demo: '<span class="demo stack"><span>NO</span><span>TOMOR-</span><span>ROW</span></span>' },
+  { id: 'block',   name: 'Block',      desc: 'White block, black type, no apology. The Pop Maker house style. Default for a reason.', meta: ['Word', '60 fps', 'House'], demo: '<span class="demo block-anim">DROP</span>' }
+];
+
+const stylesGrid = document.getElementById('styles-grid');
+const styleSummary = document.getElementById('style-summary');
+let activeStyle = 'block';
+
+function buildStyles() {
+  stylesGrid.innerHTML = '';
+  STYLES.forEach((s, i) => {
+    const card = document.createElement('button');
+    card.className = 'style-card card hoverable';
+    card.dataset.style = s.id;
+    if (s.id === activeStyle) card.classList.add('selected');
+    card.innerHTML = `
+      <span class="active-tag">● Active</span>
+      <div class="style-thumb stripes">
+        <span class="stamp">[${String(i + 1).padStart(2,'0')}] Loop</span>
+        <span class="stamp r">${s.meta[1]}</span>
+        ${s.demo}
+      </div>
+      <div class="style-foot">
+        <div>
+          <div class="sf-name">${s.name}</div>
+          <div class="sf-desc">${s.desc}</div>
+          <div class="sf-meta"><span>${s.meta[0]}-level</span><span class="sep">·</span><span>${s.meta[1]}</span><span class="sep">·</span><span>${s.meta[2]}</span></div>
+        </div>
+        <div class="arr">↗</div>
+      </div>`;
+    card.addEventListener('click', () => setStyle(s.id));
+    stylesGrid.appendChild(card);
+  });
+}
+
+function setStyle(id) {
+  activeStyle = id;
+  const meta = STYLES.find(s => s.id === id);
+  document.querySelectorAll('.style-card').forEach(c => c.classList.toggle('selected', c.dataset.style === id));
+  // apply to preview stage
+  stageLyric.className = 'stage-lyric fx-' + id;
+  previewStyleTag.textContent = `Style — ${meta.name} · 16:9`;
+  styleSummary.textContent = `Active — ${meta.name} · ${meta.meta[2].toLowerCase()} · ${meta.meta[0].toLowerCase()}-level`;
+}
+
+buildStyles();
+setStyle('block');
+
+/* ============================================================
+   05 — RENDER & EXPORT
+   ============================================================ */
+const formatBtns = document.querySelectorAll('#formats .format');
+let activeFormat = 'vertical';
+const FORMAT_INFO = {
+  vertical:   { label: '9:16 · 1080×1920', mp4: '24.4 MB' },
+  horizontal: { label: '16:9 · 1920×1080', mp4: '32.1 MB' },
+  square:     { label: '1:1 · 1080×1080',  mp4: '21.7 MB' }
+};
+
+formatBtns.forEach(b => b.addEventListener('click', () => {
+  activeFormat = b.dataset.format;
+  formatBtns.forEach(x => x.classList.toggle('selected', x === b));
+  document.getElementById('dl-mp4-fmt').textContent = FORMAT_INFO[activeFormat].label;
+  document.getElementById('dl-mp4-size').textContent = FORMAT_INFO[activeFormat].mp4;
+}));
+document.getElementById('dl-mp4-size').textContent = FORMAT_INFO.vertical.mp4;
+document.getElementById('dl-wav-size').textContent = '14.2 MB';
+document.getElementById('dl-srt-size').textContent = '4.1 KB';
+
+const rPct = document.getElementById('r-pct');
+const rEta = document.getElementById('r-eta');
+const rFill = document.getElementById('r-fill');
+const rStage = document.getElementById('r-stage');
+const rFrame = document.getElementById('r-frame');
+const rStart = document.getElementById('r-start');
+const rCancel = document.getElementById('r-cancel');
+const downloadsEl = document.getElementById('downloads');
+
+const RENDER_STAGES = [
+  { upTo: 18, label: 'Compositing frames' },
+  { upTo: 52, label: 'Drawing lyric overlay' },
+  { upTo: 78, label: 'Encoding H.264' },
+  { upTo: 96, label: 'Muxing audio' },
+  { upTo: 100, label: 'Writing files' }
+];
+const TOTAL_FRAMES = 5040;
+
+let rTimer = null, rProg = 0, rStart0 = 0;
+function setRender(p) {
+  rProg = p;
+  const pct = Math.floor(p);
+  rPct.textContent = pct;
+  rFill.style.width = pct + '%';
+  rFrame.textContent = Math.floor((p / 100) * TOTAL_FRAMES).toLocaleString();
+  const stage = RENDER_STAGES.find(s => p <= s.upTo) || RENDER_STAGES[RENDER_STAGES.length - 1];
+  rStage.textContent = stage.label;
+  // ETA
+  if (p > 1 && p < 100) {
+    const elapsed = (performance.now() - rStart0) / 1000;
+    const total = elapsed / (p / 100);
+    const remain = Math.max(0, total - elapsed);
+    rEta.textContent = fmtTime(remain);
+  } else if (p >= 100) {
+    rEta.textContent = '0:00';
+  } else {
+    rEta.textContent = '—:—';
+  }
+}
+
+function unlockDownloads() {
+  downloadsEl.querySelectorAll('.download').forEach(d => d.classList.remove('locked'));
+  rStage.textContent = 'Done — files ready below';
+  rStart.querySelector('span').textContent = 'Re-render';
+  rCancel.disabled = true;
+}
+
+rStart.addEventListener('click', () => {
+  if (rTimer) return;
+  setRender(0);
+  rStart0 = performance.now();
+  rCancel.disabled = false;
+  downloadsEl.querySelectorAll('.download').forEach(d => d.classList.add('locked'));
+  rStart.classList.add('is-disabled');
+  rTimer = setInterval(() => {
+    let next = rProg + 0.6 + Math.random() * 1.0;
+    if (next >= 100) {
+      next = 100;
+      setRender(next);
+      clearInterval(rTimer); rTimer = null;
+      rStart.classList.remove('is-disabled');
+      unlockDownloads();
+      return;
+    }
+    setRender(next);
+  }, 80);
+});
+
+rCancel.addEventListener('click', () => {
+  if (rTimer) { clearInterval(rTimer); rTimer = null; }
+  setRender(0);
+  rStage.textContent = 'Cancelled — press render to retry';
+  rStart.classList.remove('is-disabled');
+  rCancel.disabled = true;
+});
+
+setRender(0);
+</script>
+
+</body>
+</html>
