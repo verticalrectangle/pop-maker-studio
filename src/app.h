@@ -78,6 +78,10 @@ struct AppState {
     int           font_weight = 900;  // 400 / 700 / 900 maps to regular/bold/bold+scale
     OutputFormat  format = OutputFormat::Vertical;
 
+    // video background
+    std::string video_path;
+    bool        video_loaded = false;
+
     // render
     RenderStatus render;
     bool         render_done = false;

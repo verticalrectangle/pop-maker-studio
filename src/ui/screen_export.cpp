@@ -2,6 +2,7 @@
 #include "theme.h"
 #include "app.h"
 #include "render.h"
+#include "blender_export.h"
 #include <imgui.h>
 #include <cmath>
 #include <cstdio>
@@ -262,6 +263,73 @@ void ui_screen_export(AppState& state) {
         ImGui::PopStyleColor(2);
         ImGui::Dummy({0.f, 4.f});
     }
+
+    // ── Blender export ────────────────────────────────────────────────────────
+    ImGui::Dummy({0.f, 24.f});
+    ImGui::SetCursorPosX(pad_x);
+    ui_separator();
+    ImGui::Dummy({0.f, 16.f});
+    ImGui::SetCursorPosX(pad_x);
+    ui_label("Blender export");
+    ImGui::Dummy({0.f, 8.f});
+
+    ImGui::SetCursorPosX(pad_x);
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, Col::bg_soft);
+    ImGui::PushStyleColor(ImGuiCol_Border,  Col::line);
+    if (ImGui::BeginChild("##blender_row", {win_w - pad_x * 2.f, 52.f}, ImGuiChildFlags_Borders)) {
+        // Badge
+        ImVec2 bp = ImGui::GetCursorScreenPos();
+        ImGui::GetWindowDrawList()->AddRectFilled(bp, {bp.x + 52.f, bp.y + 36.f},
+            to_u32(Col::line), 2.f);
+        ImGui::GetWindowDrawList()->AddText({bp.x + 4.f, bp.y + 10.f},
+            to_u32(Col::fg), ".PY");
+
+        ImGui::Dummy({60.f, 0.f});
+        ImGui::SameLine();
+        ImGui::BeginGroup();
+        ImGui::PushFont(g_font_bold);
+        ImGui::TextUnformatted("Blender scene script");
+        ImGui::PopFont();
+        ImGui::SameLine(0.f, 16.f);
+        ImGui::PushStyleColor(ImGuiCol_Text, Col::label);
+        ImGui::TextUnformatted("lyric-video-blender  ·  Run in Blender Text Editor");
+        ImGui::PopStyleColor();
+        ImGui::EndGroup();
+
+        float btn_x = win_w - pad_x * 2.f - 160.f;
+        ImGui::SameLine(btn_x);
+
+        static std::string blender_status;
+        bool has_lyrics = !state.lines.empty();
+        if (!has_lyrics) ImGui::BeginDisabled();
+        if (ui_btn("Export script  ->")) {
+            // Write next to the audio file, or in current dir
+            std::string script_path;
+            if (!state.audio_path.empty()) {
+                fs::path audio(state.audio_path);
+                script_path = (audio.parent_path() /
+                    (audio.stem().string() + "_blender.py")).string();
+            } else {
+                script_path = "pop_maker_blender.py";
+            }
+            if (blender_export_script(state, script_path)) {
+                blender_status = script_path;
+                std::string cmd = "xdg-open \"" +
+                    fs::path(script_path).parent_path().string() + "\"";
+                system(cmd.c_str());
+            }
+        }
+        if (!has_lyrics) ImGui::EndDisabled();
+
+        if (!blender_status.empty()) {
+            ImGui::SameLine(0.f, 12.f);
+            ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+            ImGui::TextUnformatted(("Saved: " + fs::path(blender_status).filename().string()).c_str());
+            ImGui::PopStyleColor();
+        }
+    }
+    ImGui::EndChild();
+    ImGui::PopStyleColor(2);
 
     ImGui::EndChild();
 }

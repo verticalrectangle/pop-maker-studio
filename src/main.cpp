@@ -7,10 +7,11 @@
 #include <filesystem>
 
 #include "app.h"
+#include "globals.h"
 
 namespace fs = std::filesystem;
 
-// Shared globals — read by screen_upload.cpp
+// Definitions of globals declared in globals.h
 std::string g_dropped_file;
 std::string g_pipeline_script;
 

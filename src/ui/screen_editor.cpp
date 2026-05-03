@@ -2,6 +2,8 @@
 #include "theme.h"
 #include "app.h"
 #include "audio.h"
+#include "video.h"
+#include "filepicker.h"
 #include <imgui.h>
 #include <cmath>
 #include <string>
@@ -57,6 +59,29 @@ void ui_screen_editor(AppState& state) {
     }
     ImGui::SameLine(0.f, 8.f);
     if (ui_btn("Re-align", false, true)) { /* re-run alignment — TODO */ }
+    ImGui::SameLine(0.f, 8.f);
+    // Video background import
+    const char* vid_label = state.video_loaded ? "Video  ✓" : "+ Video";
+    if (ui_btn(vid_label, state.video_loaded, true)) {
+        std::string picked = filepicker_open(
+            "Select background video",
+            "Video", "*.mp4 *.mov *.mkv *.avi *.webm");
+        if (!picked.empty()) {
+            if (video_open(picked)) {
+                state.video_path   = picked;
+                state.video_loaded = true;
+                video_seek(0.0);
+            }
+        }
+    }
+    if (state.video_loaded) {
+        ImGui::SameLine(0.f, 4.f);
+        if (ui_btn("x", false, true)) {
+            video_close();
+            state.video_loaded = false;
+            state.video_path.clear();
+        }
+    }
     ImGui::SameLine(win_w - pad_x - 300.f);
     ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
     if (!state.audio_path.empty())
@@ -219,9 +244,23 @@ void ui_screen_editor(AppState& state) {
         ImVec2 stage_p = ImGui::GetCursorScreenPos();
         ImDrawList* dl = ImGui::GetWindowDrawList();
 
-        // Background
-        dl->AddRectFilled(stage_p, {stage_p.x + stage_w, stage_p.y + stage_h},
-            to_u32(Col::accent_dark), 2.f);
+        // Background — video frame or solid dark fill
+        if (state.video_loaded && video_is_open()) {
+            uintptr_t tex = video_get_texture((double)state.playhead);
+            if (tex) {
+                dl->AddImage(
+                    ImTextureRef((ImTextureID)tex),
+                    stage_p, {stage_p.x + stage_w, stage_p.y + stage_h});
+            } else {
+                dl->AddRectFilled(stage_p,
+                    {stage_p.x + stage_w, stage_p.y + stage_h},
+                    to_u32(Col::accent_dark), 2.f);
+            }
+        } else {
+            dl->AddRectFilled(stage_p,
+                {stage_p.x + stage_w, stage_p.y + stage_h},
+                to_u32(Col::accent_dark), 2.f);
+        }
         dl->AddRect(stage_p, {stage_p.x + stage_w, stage_p.y + stage_h},
             to_u32(Col::line), 2.f);
 

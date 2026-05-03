@@ -34,6 +34,9 @@ set(SOURCES
     src/transcribe.cpp
     src/stems.cpp
     src/render.cpp
+    src/filepicker.cpp
+    src/video.cpp
+    src/blender_export.cpp
     src/ui/screen_home.cpp
     src/ui/screen_upload.cpp
     src/ui/screen_editor.cpp

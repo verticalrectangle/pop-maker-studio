@@ -3,6 +3,8 @@
 #include "app.h"
 #include "transcribe.h"
 #include "audio.h"
+#include "filepicker.h"
+#include "globals.h"
 #include <imgui.h>
 #include "json.hpp"
 #include <fstream>
@@ -102,8 +104,6 @@ void ui_screen_upload(AppState& state) {
     float dz_h = 180.f;
     ImGui::SetCursorPosX(pad_x);
 
-    bool file_pending = !state.audio_path.empty() &&
-                        state.pipeline.stage != PipelineStage::Idle;
     bool is_dragging  = !g_drop_hover_path.empty();
 
     ImGui::PushStyleColor(ImGuiCol_ChildBg,
@@ -175,9 +175,15 @@ void ui_screen_upload(AppState& state) {
     ImGui::PopStyleColor(2);
     ImGui::PopStyleVar();
 
-    // Click dropzone to open file dialog (imgui-native: handled via GLFW/OS drag)
+    // Click dropzone — open native file picker
     if (ImGui::IsItemClicked() && state.audio_path.empty()) {
-        // Native file dialog would go here — for now type in path
+        std::string picked = filepicker_open(
+            "Select audio or video file",
+            "Audio & Video",
+            "*.wav *.mp3 *.m4a *.flac *.aac *.mp4 *.mov *.mkv");
+        if (!picked.empty()) {
+            g_dropped_file = picked;
+        }
     }
 
     // OS drag-and-drop handled in main.cpp via GLFW drop callback
@@ -285,15 +291,12 @@ void ui_screen_upload(AppState& state) {
     }
     if (!ready) ImGui::EndDisabled();
 
-    // ── If a file was dropped via GLFW, kick off pipeline ────────────────────
-    // Check flag set by main.cpp drop callback
-    extern std::string g_dropped_file;
+    // ── If a file was dropped or picked, kick off pipeline ───────────────────
     if (!g_dropped_file.empty() && is_audio_file(g_dropped_file)) {
         state.audio_path = g_dropped_file;
         state.pipeline   = PipelineStatus{};
         g_dropped_file.clear();
 
-        // Determine output paths
         fs::path audio(state.audio_path);
         fs::path outdir = audio.parent_path() / audio.stem();
         state.words_json_path = (outdir / (audio.stem().string() + ".json")).string();
@@ -301,8 +304,6 @@ void ui_screen_upload(AppState& state) {
         state.out_srt         = (outdir / (audio.stem().string() + ".srt")).string();
         state.out_wav         = state.vocals_path;
 
-        // Find pipeline script next to executable
-        extern std::string g_pipeline_script;
         transcribe_start(
             state.audio_path,
             state.python_path,

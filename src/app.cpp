@@ -1,5 +1,6 @@
 #include "app.h"
 #include "audio.h"
+#include "video.h"
 #include "transcribe.h"
 #include "ui/theme.h"
 #include "ui/screens.h"
@@ -40,7 +41,8 @@ void app_frame(AppState& state) {
     ui_topbar(state);
 
     // ── Arrow key navigation ─────────────────────────────────────────────────
-    if (!ImGui::IsAnyItemActive()) {
+    // Guard: skip arrow nav when a text field, slider, or button is active/focused
+    if (!ImGui::IsAnyItemActive() && !ImGui::IsAnyItemFocused()) {
         if (ImGui::IsKeyPressed(ImGuiKey_RightArrow)) {
             int next = (int)state.current_screen + 1;
             if (next <= (int)Screen::Export)
@@ -89,6 +91,7 @@ void app_frame(AppState& state) {
 
 void app_shutdown(AppState& state) {
     audio_shutdown();
+    video_close();
     transcribe_cancel();
     (void)state;
 }
