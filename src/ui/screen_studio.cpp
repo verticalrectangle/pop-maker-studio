@@ -696,7 +696,7 @@ static void panel_clip(AppState& state, float w) {
           ImGui::NewLine();
         }
 
-        // Opacity — video only
+        // Opacity + Transition — video only
         if (track.type == TrackType::Video) {
             ImGui::Dummy({0.f, 12.f}); ui_separator(); ImGui::Dummy({0.f, 8.f});
             ui_label("Opacity"); ImGui::Dummy({0.f, 4.f});
@@ -705,6 +705,27 @@ static void panel_clip(AppState& state, float w) {
             ImGui::SetNextItemWidth(w - 16.f);
             ImGui::SliderFloat("##opa", &clip.opacity, 0.f, 1.f, "%.2f");
             ImGui::PopStyleColor(2);
+
+            ImGui::Dummy({0.f, 12.f}); ui_separator(); ImGui::Dummy({0.f, 8.f});
+            ui_label("Transition out"); ImGui::Dummy({0.f, 4.f});
+            ImGui::PushStyleColor(ImGuiCol_SliderGrab, Col::fg);
+            ImGui::PushStyleColor(ImGuiCol_FrameBg,    Col::bg_soft);
+            ImGui::SetNextItemWidth(w - 16.f);
+            ImGui::SliderFloat("##trans", &clip.transition_out, 0.f, 2.f, "%.2fs");
+            ImGui::PopStyleColor(2);
+            ImGui::Dummy({0.f, 4.f});
+            struct TP { float f; const char* l; };
+            TP tpresets[] = {{0.f,"None"},{0.5f,"0.5s"},{1.f,"1s"},{2.f,"2s"}};
+            for (auto& tp : tpresets) {
+                if (ui_btn(tp.l, fabsf(clip.transition_out - tp.f) < 0.01f, true))
+                    clip.transition_out = tp.f;
+                ImGui::SameLine(0.f, 4.f);
+            }
+            ImGui::NewLine();
+            ImGui::Dummy({0.f, 2.f});
+            ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+            ImGui::TextUnformatted("Crossfade — applied on render");
+            ImGui::PopStyleColor();
         }
 
         ImGui::Dummy({0.f, 12.f}); ui_separator(); ImGui::Dummy({0.f, 8.f});
@@ -1109,6 +1130,19 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
                 dl->AddRectFilled({vis_x1-ew,cy0},{vis_x1,cy1},to_u32(Col::muted),1.f);
             }
 
+            // Transition out indicator — diagonal slash at right edge of video clips
+            if (track.type == TrackType::Video && clip.transition_out > 0.f) {
+                float trans_px = fminf(clip.transition_out * zoom, cx1 - cx0);
+                float tx = vis_x1 - trans_px;
+                if (tx < vis_x1 && tx >= vis_x0) {
+                    dl->AddTriangleFilled(
+                        {tx, cy0}, {vis_x1, cy0}, {vis_x1, cy1},
+                        IM_COL32(255,255,255,40));
+                    dl->AddLine({tx, cy0}, {vis_x1, cy1},
+                        IM_COL32(255,255,255,130));
+                }
+            }
+
             // Left click to select / drag
             if (ImGui::IsMouseClicked(0) && !ImGui::IsAnyItemActive()) {
                 if (mouse.y>=cy0 && mouse.y<=cy1 && mouse.x>=vis_x0 && mouse.x<=vis_x1) {
@@ -1363,6 +1397,11 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
             char n[32]; snprintf(n,sizeof(n),"Audio %d",(int)state.tracks.size()+1);
             t.name=n; state.tracks.push_back(t);
         }
+        if (ImGui::MenuItem("Add Video Track")) {
+            Track t; t.type=TrackType::Video;
+            char n[32]; snprintf(n,sizeof(n),"Video %d",(int)state.tracks.size()+1);
+            t.name=n; state.tracks.push_back(t);
+        }
         ImGui::EndPopup();
     }
 
@@ -1418,6 +1457,21 @@ void ui_studio(AppState& state) {
         save_all_srts(state);
     }
     last_stage = state.pipeline.stage;
+
+    // Per-clip volume — find the audio/video clip covering the playhead and apply its gain
+    {
+        float vol = 1.f;
+        for (auto& tr : state.tracks) {
+            if (tr.type != TrackType::Audio && tr.type != TrackType::Video) continue;
+            if (tr.muted) { vol = 0.f; break; }
+            for (auto& cl : tr.clips) {
+                if (state.playhead >= cl.start && state.playhead < cl.end) {
+                    vol = cl.volume; break;
+                }
+            }
+        }
+        audio_set_volume(vol);
+    }
 
     // ── Menu bar ─────────────────────────────────────────────────────────────
     if (ImGui::BeginMenuBar()) {
@@ -1476,6 +1530,11 @@ void ui_studio(AppState& state) {
             if (ImGui::MenuItem("Add Audio Track")) {
                 Track t; t.type=TrackType::Audio;
                 char n[32]; snprintf(n,sizeof(n),"Audio %d",(int)state.tracks.size()+1);
+                t.name=n; state.tracks.push_back(t);
+            }
+            if (ImGui::MenuItem("Add Video Track")) {
+                Track t; t.type=TrackType::Video;
+                char n[32]; snprintf(n,sizeof(n),"Video %d",(int)state.tracks.size()+1);
                 t.name=n; state.tracks.push_back(t);
             }
             ImGui::EndMenu();

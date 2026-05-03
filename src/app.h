@@ -12,9 +12,10 @@ struct Clip {
     std::string text;
 
     // per-clip overrides (Tier 1)
-    float volume  = 1.f;   // audio gain multiplier (0–2)
-    float speed   = 1.f;   // playback speed (0.25–4)
-    float opacity = 1.f;   // video opacity (0–1)
+    float volume         = 1.f;   // audio gain multiplier (0–2)
+    float speed          = 1.f;   // playback speed (0.25–4)
+    float opacity        = 1.f;   // video opacity (0–1)
+    float transition_out = 0.f;   // crossfade out duration in seconds (video, applied on render)
 
     // subtitle-only overrides
     int   sub_pos   = 0;       // 0=bottom 1=center 2=top 3=custom Y

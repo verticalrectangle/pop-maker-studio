@@ -8,6 +8,7 @@ bool  audio_load(const std::string& path);  // load audio file for playback
 void  audio_play();
 void  audio_pause();
 void  audio_seek(float seconds);
+void  audio_set_volume(float v);  // per-clip gain, applied in callback (0–2)
 float audio_duration();
 float audio_position();
 bool  audio_is_playing();

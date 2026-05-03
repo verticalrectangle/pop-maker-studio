@@ -24,13 +24,16 @@ static std::vector<float> g_samples;  // interleaved stereo f32
 static size_t             g_read_pos  = 0;
 static int                g_sample_rate = 44100;
 static float              g_duration   = 0.f;
+static float              g_volume     = 1.f;
 
 static void data_callback(ma_device* pDevice, void* pOutput, const void*, ma_uint32 frameCount) {
     auto* out = (float*)pOutput;
     size_t available = (g_samples.size() > g_read_pos) ? (g_samples.size() - g_read_pos) : 0;
     size_t need      = frameCount * (size_t)pDevice->playback.channels;
     size_t copy      = (available < need) ? available : need;
-    memcpy(out, g_samples.data() + g_read_pos, copy * sizeof(float));
+    float  vol       = g_volume;
+    for (size_t i = 0; i < copy; ++i)
+        out[i] = g_samples[g_read_pos + i] * vol;
     if (copy < need)
         memset(out + copy, 0, (need - copy) * sizeof(float));
     g_read_pos += copy;
@@ -122,8 +125,9 @@ bool audio_load(const std::string& path) {
     return true;
 }
 
-void audio_play()  { if (g_device_init) ma_device_start(&g_device); }
-void audio_pause() { if (g_device_init) ma_device_stop(&g_device); }
+void audio_play()       { if (g_device_init) ma_device_start(&g_device); }
+void audio_pause()      { if (g_device_init) ma_device_stop(&g_device); }
+void audio_set_volume(float v) { g_volume = (v < 0.f) ? 0.f : (v > 4.f) ? 4.f : v; }
 
 void audio_seek(float seconds) {
     size_t sample = (size_t)(seconds * g_sample_rate) * 2;
