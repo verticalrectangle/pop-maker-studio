@@ -496,25 +496,97 @@ static char s_edit_buf[512] = {};
 static bool s_edit_focus_next = false;
 
 static void panel_clip(AppState& state, float w) {
-    if (state.selected_track < 0 ||
-        state.selected_track >= (int)state.tracks.size() ||
-        state.selected_clip  < 0 ||
-        state.selected_clip  >= (int)state.tracks[state.selected_track].clips.size()) {
+    // ── Nothing selected ──────────────────────────────────────────────────────
+    if (state.selected_track < 0 || state.selected_track >= (int)state.tracks.size()) {
         ImGui::Dummy({0.f, 24.f});
         ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
-        const char* hint = "Click a clip to edit";
-        ImGui::SetCursorPosX((w - ImGui::CalcTextSize(hint).x) * 0.5f);
-        ImGui::TextUnformatted(hint);
+        auto centre = [&](const char* s) {
+            ImGui::SetCursorPosX((w - ImGui::CalcTextSize(s).x) * 0.5f);
+            ImGui::TextUnformatted(s);
+        };
+        centre("Click a track label to configure it");
+        ImGui::Dummy({0.f, 4.f});
+        centre("Click a clip to edit it");
         ImGui::PopStyleColor();
         return;
     }
 
     Track& track = state.tracks[state.selected_track];
-    Clip&  clip  = track.clips[state.selected_clip];
+
+    // ── Track face — track selected, no clip ──────────────────────────────────
+    if (state.selected_clip < 0 || state.selected_clip >= (int)track.clips.size()) {
+        ImGui::Dummy({0.f, 8.f});
+        ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+        const char* type_tag =
+            track.type == TrackType::Subtitle ? "Subtitle" :
+            track.type == TrackType::Audio    ? "Audio"    : "Video";
+        char header[80];
+        snprintf(header, sizeof(header), "Track — %s  ·  %s", track.name.c_str(), type_tag);
+        ImGui::TextUnformatted(header);
+        ImGui::PopStyleColor();
+        ImGui::Dummy({0.f, 4.f}); ui_separator(); ImGui::Dummy({0.f, 8.f});
+
+        if (track.type == TrackType::Subtitle &&
+            !state.words_json_path.empty() && fs::exists(state.words_json_path)) {
+
+            ui_label("Subtitle grouping"); ImGui::Dummy({0.f, 4.f});
+
+            struct ModeBtn { SubtitleMode m; const char* label; const char* tip; };
+            ModeBtn modes[] = {
+                {SubtitleMode::Word,    "Word",    "One clip per word"},
+                {SubtitleMode::Phrase,  "Phrase",  "Group by short pauses (>0.3s)"},
+                {SubtitleMode::Line,    "Line",    "Group by breath gaps (>0.8s)"},
+                {SubtitleMode::Segment, "Segment", "WhisperX sentence boundaries"},
+                {SubtitleMode::CustomN, "Custom",  "N words per clip"},
+            };
+            for (auto& mb : modes) {
+                bool sel = state.subtitle_mode == mb.m;
+                if (ui_btn(mb.label, sel, true)) state.subtitle_mode = mb.m;
+                if (ImGui::IsItemHovered()) {
+                    ImGui::BeginTooltip(); ImGui::TextUnformatted(mb.tip); ImGui::EndTooltip();
+                }
+                ImGui::SameLine(0.f, 4.f);
+            }
+            ImGui::NewLine();
+
+            if (state.subtitle_mode == SubtitleMode::CustomN) {
+                ImGui::Dummy({0.f, 4.f});
+                ImGui::PushStyleColor(ImGuiCol_FrameBg, Col::bg_soft);
+                ImGui::PushStyleColor(ImGuiCol_Border,  Col::line);
+                ImGui::SetNextItemWidth(80.f);
+                int n = state.subtitle_n;
+                if (ImGui::InputInt("words/clip##n", &n))
+                    state.subtitle_n = (n < 1) ? 1 : (n > 20) ? 20 : n;
+                ImGui::PopStyleColor(2);
+            }
+
+            ImGui::Dummy({0.f, 8.f});
+            if (ui_btn("Apply grouping", true, true)) apply_subtitle_mode(state);
+            if (ImGui::IsItemHovered()) {
+                ImGui::BeginTooltip();
+                ImGui::TextUnformatted("Re-build this track from saved word JSON");
+                ImGui::EndTooltip();
+            }
+
+        } else if (track.type == TrackType::Subtitle) {
+            ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+            ImGui::TextWrapped("Run ML Processing on an audio clip first to generate word-level JSON, then grouping controls will appear here.");
+            ImGui::PopStyleColor();
+        } else {
+            ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+            ImGui::TextUnformatted("Click a clip on this track to edit it.");
+            ImGui::PopStyleColor();
+        }
+        return;
+    }
+
+    Clip& clip = track.clips[state.selected_clip];
 
     ImGui::Dummy({0.f, 8.f});
     ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
-    char tlabel[64]; snprintf(tlabel, sizeof(tlabel), "Track — %s", track.name.c_str());
+    char tlabel[80];
+    snprintf(tlabel, sizeof(tlabel), "%s  ·  clip %d of %d",
+        track.name.c_str(), state.selected_clip + 1, (int)track.clips.size());
     ImGui::TextUnformatted(tlabel);
     ImGui::PopStyleColor();
     ImGui::Dummy({0.f, 4.f}); ui_separator(); ImGui::Dummy({0.f, 8.f});
@@ -603,48 +675,6 @@ static void panel_clip(AppState& state, float w) {
                 ImGuiColorEditFlags_NoLabel | ImGuiColorEditFlags_AlphaBar);
         }
         ImGui::PopStyleColor();
-
-        ImGui::Dummy({0.f, 12.f}); ui_separator(); ImGui::Dummy({0.f, 8.f});
-
-        // ── Subtitle grouping ─────────────────────────────────────────────────
-        if (!state.words_json_path.empty() && fs::exists(state.words_json_path)) {
-            ui_label("Subtitle grouping"); ImGui::Dummy({0.f, 4.f});
-            struct ModeBtn { SubtitleMode m; const char* label; const char* tip; };
-            ModeBtn modes[] = {
-                {SubtitleMode::Word,    "Word",    "One clip per word"},
-                {SubtitleMode::Phrase,  "Phrase",  "Group by short pauses (>0.3s)"},
-                {SubtitleMode::Line,    "Line",    "Group by breath gaps (>0.8s)"},
-                {SubtitleMode::Segment, "Segment", "WhisperX sentence boundaries"},
-                {SubtitleMode::CustomN, "Custom",  "N words per clip"},
-            };
-            for (auto& mb : modes) {
-                bool sel = state.subtitle_mode == mb.m;
-                if (ui_btn(mb.label, sel, true)) state.subtitle_mode = mb.m;
-                if (ImGui::IsItemHovered()) {
-                    ImGui::BeginTooltip(); ImGui::TextUnformatted(mb.tip); ImGui::EndTooltip();
-                }
-                ImGui::SameLine(0.f, 4.f);
-            }
-            ImGui::NewLine();
-            if (state.subtitle_mode == SubtitleMode::CustomN) {
-                ImGui::Dummy({0.f, 4.f});
-                ImGui::PushStyleColor(ImGuiCol_FrameBg, Col::bg_soft);
-                ImGui::PushStyleColor(ImGuiCol_Border,  Col::line);
-                ImGui::SetNextItemWidth(80.f);
-                int n = state.subtitle_n;
-                if (ImGui::InputInt("words/clip##n", &n))
-                    state.subtitle_n = (n < 1) ? 1 : (n > 20) ? 20 : n;
-                ImGui::PopStyleColor(2);
-            }
-            ImGui::Dummy({0.f, 6.f});
-            if (ui_btn("Apply grouping", true, true)) apply_subtitle_mode(state);
-            if (ImGui::IsItemHovered()) {
-                ImGui::BeginTooltip();
-                ImGui::TextUnformatted("Re-build Lyrics track from saved word JSON");
-                ImGui::EndTooltip();
-            }
-            ImGui::Dummy({0.f, 8.f});
-        }
 
     } else {
         // ── Audio / Video clip ────────────────────────────────────────────────
@@ -1061,10 +1091,17 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
             to_u32(row_hov ? Col::bg_soft_hov : Col::bg_soft));
         dl->AddLine({origin.x, row_br.y}, {origin.x+total_w, row_br.y}, to_u32(Col::line));
 
-        // Track label
+        // Track label — left-click selects the track (clears clip selection)
         bool track_sel = state.selected_track == ti;
         dl->AddText({origin.x+8.f, track_y+(TL_TRACK_H-13.f)*0.5f},
             to_u32(track_sel ? Col::fg : Col::muted), track.name.c_str());
+        if (ImGui::IsMouseClicked(0) &&
+            mouse.x >= origin.x+2.f && mouse.x < origin.x+TL_LABEL_W-20.f &&
+            mouse.y >= track_y && mouse.y < track_y+TL_TRACK_H) {
+            state.selected_track = ti;
+            state.selected_clip  = -1;
+            state.panel_tab      = 0;
+        }
 
         // Visibility dot
         ImVec2 vc = {origin.x+TL_LABEL_W-16.f, track_y+TL_TRACK_H*0.5f};
