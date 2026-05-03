@@ -124,7 +124,7 @@ struct AppState {
     SubtitleMode subtitle_mode = SubtitleMode::Word;
     int          subtitle_n    = 3;   // words per clip for CustomN mode
 
-    // right panel active tab: 0=Clip, 1=Style, 2=Export
+    // right panel active tab: 0=Clip, 1=Style, 2=Track, 3=Export
     int panel_tab = 0;
 
     std::vector<std::pair<int,int>> subtitle_clip_indices() const;

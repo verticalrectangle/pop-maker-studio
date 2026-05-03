@@ -490,6 +490,85 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
     }
 }
 
+// ── Right panel: Track tab ────────────────────────────────────────────────────
+
+static void panel_track(AppState& state, float w) {
+    if (state.selected_track < 0 || state.selected_track >= (int)state.tracks.size()) {
+        ImGui::Dummy({0.f, 24.f});
+        ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+        const char* hint = "Click a track label to select it";
+        ImGui::SetCursorPosX((w - ImGui::CalcTextSize(hint).x) * 0.5f);
+        ImGui::TextUnformatted(hint);
+        ImGui::PopStyleColor();
+        return;
+    }
+
+    Track& track = state.tracks[state.selected_track];
+
+    ImGui::Dummy({0.f, 8.f});
+    ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+    const char* type_tag =
+        track.type == TrackType::Subtitle ? "Subtitle" :
+        track.type == TrackType::Audio    ? "Audio"    : "Video";
+    char header[80];
+    snprintf(header, sizeof(header), "Track — %s  ·  %s", track.name.c_str(), type_tag);
+    ImGui::TextUnformatted(header);
+    ImGui::PopStyleColor();
+    ImGui::Dummy({0.f, 4.f}); ui_separator(); ImGui::Dummy({0.f, 8.f});
+
+    if (track.type == TrackType::Subtitle &&
+        !state.words_json_path.empty() && fs::exists(state.words_json_path)) {
+
+        ui_label("Subtitle grouping"); ImGui::Dummy({0.f, 4.f});
+
+        struct ModeBtn { SubtitleMode m; const char* label; const char* tip; };
+        ModeBtn modes[] = {
+            {SubtitleMode::Word,    "Word",    "One clip per word"},
+            {SubtitleMode::Phrase,  "Phrase",  "Group by short pauses (>0.3s)"},
+            {SubtitleMode::Line,    "Line",    "Group by breath gaps (>0.8s)"},
+            {SubtitleMode::Segment, "Segment", "WhisperX sentence boundaries"},
+            {SubtitleMode::CustomN, "Custom",  "N words per clip"},
+        };
+        for (auto& mb : modes) {
+            bool sel = state.subtitle_mode == mb.m;
+            if (ui_btn(mb.label, sel, true)) state.subtitle_mode = mb.m;
+            if (ImGui::IsItemHovered()) {
+                ImGui::BeginTooltip(); ImGui::TextUnformatted(mb.tip); ImGui::EndTooltip();
+            }
+            ImGui::SameLine(0.f, 4.f);
+        }
+        ImGui::NewLine();
+
+        if (state.subtitle_mode == SubtitleMode::CustomN) {
+            ImGui::Dummy({0.f, 4.f});
+            ImGui::PushStyleColor(ImGuiCol_FrameBg, Col::bg_soft);
+            ImGui::PushStyleColor(ImGuiCol_Border,  Col::line);
+            ImGui::SetNextItemWidth(80.f);
+            int n = state.subtitle_n;
+            if (ImGui::InputInt("words/clip##tn", &n))
+                state.subtitle_n = (n < 1) ? 1 : (n > 20) ? 20 : n;
+            ImGui::PopStyleColor(2);
+        }
+
+        ImGui::Dummy({0.f, 8.f});
+        if (ui_btn("Apply grouping", true, true)) apply_subtitle_mode(state);
+        if (ImGui::IsItemHovered()) {
+            ImGui::BeginTooltip();
+            ImGui::TextUnformatted("Re-build this track from saved word JSON");
+            ImGui::EndTooltip();
+        }
+
+    } else if (track.type == TrackType::Subtitle) {
+        ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+        ImGui::TextWrapped("Run ML Processing on an audio clip first to generate word-level JSON, then grouping controls will appear here.");
+        ImGui::PopStyleColor();
+    } else {
+        ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+        ImGui::TextUnformatted("Click a clip on this track to edit it.");
+        ImGui::PopStyleColor();
+    }
+}
+
 // ── Right panel: Clip tab ─────────────────────────────────────────────────────
 
 static char s_edit_buf[512] = {};
@@ -513,70 +592,9 @@ static void panel_clip(AppState& state, float w) {
 
     Track& track = state.tracks[state.selected_track];
 
-    // ── Track face — track selected, no clip ──────────────────────────────────
+    // ── Track face — track selected, no clip — delegate to panel_track ────────
     if (state.selected_clip < 0 || state.selected_clip >= (int)track.clips.size()) {
-        ImGui::Dummy({0.f, 8.f});
-        ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
-        const char* type_tag =
-            track.type == TrackType::Subtitle ? "Subtitle" :
-            track.type == TrackType::Audio    ? "Audio"    : "Video";
-        char header[80];
-        snprintf(header, sizeof(header), "Track — %s  ·  %s", track.name.c_str(), type_tag);
-        ImGui::TextUnformatted(header);
-        ImGui::PopStyleColor();
-        ImGui::Dummy({0.f, 4.f}); ui_separator(); ImGui::Dummy({0.f, 8.f});
-
-        if (track.type == TrackType::Subtitle &&
-            !state.words_json_path.empty() && fs::exists(state.words_json_path)) {
-
-            ui_label("Subtitle grouping"); ImGui::Dummy({0.f, 4.f});
-
-            struct ModeBtn { SubtitleMode m; const char* label; const char* tip; };
-            ModeBtn modes[] = {
-                {SubtitleMode::Word,    "Word",    "One clip per word"},
-                {SubtitleMode::Phrase,  "Phrase",  "Group by short pauses (>0.3s)"},
-                {SubtitleMode::Line,    "Line",    "Group by breath gaps (>0.8s)"},
-                {SubtitleMode::Segment, "Segment", "WhisperX sentence boundaries"},
-                {SubtitleMode::CustomN, "Custom",  "N words per clip"},
-            };
-            for (auto& mb : modes) {
-                bool sel = state.subtitle_mode == mb.m;
-                if (ui_btn(mb.label, sel, true)) state.subtitle_mode = mb.m;
-                if (ImGui::IsItemHovered()) {
-                    ImGui::BeginTooltip(); ImGui::TextUnformatted(mb.tip); ImGui::EndTooltip();
-                }
-                ImGui::SameLine(0.f, 4.f);
-            }
-            ImGui::NewLine();
-
-            if (state.subtitle_mode == SubtitleMode::CustomN) {
-                ImGui::Dummy({0.f, 4.f});
-                ImGui::PushStyleColor(ImGuiCol_FrameBg, Col::bg_soft);
-                ImGui::PushStyleColor(ImGuiCol_Border,  Col::line);
-                ImGui::SetNextItemWidth(80.f);
-                int n = state.subtitle_n;
-                if (ImGui::InputInt("words/clip##n", &n))
-                    state.subtitle_n = (n < 1) ? 1 : (n > 20) ? 20 : n;
-                ImGui::PopStyleColor(2);
-            }
-
-            ImGui::Dummy({0.f, 8.f});
-            if (ui_btn("Apply grouping", true, true)) apply_subtitle_mode(state);
-            if (ImGui::IsItemHovered()) {
-                ImGui::BeginTooltip();
-                ImGui::TextUnformatted("Re-build this track from saved word JSON");
-                ImGui::EndTooltip();
-            }
-
-        } else if (track.type == TrackType::Subtitle) {
-            ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
-            ImGui::TextWrapped("Run ML Processing on an audio clip first to generate word-level JSON, then grouping controls will appear here.");
-            ImGui::PopStyleColor();
-        } else {
-            ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
-            ImGui::TextUnformatted("Click a clip on this track to edit it.");
-            ImGui::PopStyleColor();
-        }
+        panel_track(state, w);
         return;
     }
 
@@ -1100,7 +1118,7 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
             mouse.y >= track_y && mouse.y < track_y+TL_TRACK_H) {
             state.selected_track = ti;
             state.selected_clip  = -1;
-            state.panel_tab      = 0;
+            state.panel_tab      = 2;  // Track tab
         }
 
         // Visibility dot
@@ -1700,20 +1718,19 @@ void ui_studio(AppState& state) {
         if (ImGui::BeginTabBar("##panel_tabs")) {
             if (ImGui::BeginTabItem("Clip"))   { state.panel_tab=0; ImGui::EndTabItem(); }
             if (ImGui::BeginTabItem("Style"))  { state.panel_tab=1; ImGui::EndTabItem(); }
-            if (ImGui::BeginTabItem("Export")) { state.panel_tab=2; ImGui::EndTabItem(); }
+            if (ImGui::BeginTabItem("Track"))  { state.panel_tab=2; ImGui::EndTabItem(); }
+            if (ImGui::BeginTabItem("Export")) { state.panel_tab=3; ImGui::EndTabItem(); }
             ImGui::EndTabBar();
         }
         ImGui::PopStyleColor(2);
         ImGui::PopStyleVar();
-
-        // Force tab selection when panel_tab was set by click-on-clip
-        // (ImGui tab bar manages this via its own state; panel_tab is advisory)
 
         ImGui::BeginChild("##panel_scroll", {0.f, 0.f});
         ImGui::SetCursorPosX(8.f);
         float pw = props_w - 16.f;
         if      (state.panel_tab == 0) panel_clip(state, pw);
         else if (state.panel_tab == 1) panel_style(state, pw);
+        else if (state.panel_tab == 2) panel_track(state, pw);
         else                           panel_export(state, pw);
         ImGui::EndChild();
     }
