@@ -73,6 +73,15 @@ static float tl_fps(const AppState& state) {
            ? (float)video_info(0).fps : 30.f;
 }
 
+// Maximum timeline position covered by any clip across all tracks.
+static float project_end(const AppState& state) {
+    float end = 0.f;
+    for (auto& tr : state.tracks)
+        for (auto& cl : tr.clips)
+            if (cl.end > end) end = cl.end;
+    return fmaxf(end, 0.01f);
+}
+
 static bool is_audio_file(const std::string& path) {
     std::string ext = fs::path(path).extension().string();
     for (auto& c : ext) c = (char)tolower((unsigned char)c);
@@ -306,18 +315,18 @@ static void import_file(AppState& state, const std::string& path) {
         float vprobed = video_probe_duration(path);
         if (vprobed > 0.f) state.duration = vprobed;
 
-        // Find or create a Video track; get its index (= proxy slot).
-        // If one already exists, reuse it (single-file replace); otherwise append.
-        int track_ti = -1;
-        for (int i = 0; i < (int)state.tracks.size(); ++i)
-            if (state.tracks[i].type == TrackType::Video) { track_ti = i; break; }
-        if (track_ti < 0) {
-            state.tracks.push_back({});
-            track_ti = (int)state.tracks.size() - 1;
-        }
+        // Each import creates its own video track (= its own compositor layer).
+        // Count existing video tracks to generate the right name.
+        int vid_count = 0;
+        for (auto& t : state.tracks) if (t.type == TrackType::Video) vid_count++;
+
+        state.tracks.push_back({});
+        int track_ti = (int)state.tracks.size() - 1;
         Track& vt = state.tracks[track_ti];
-        vt.type = TrackType::Video; vt.name = "Video";
-        vt.clips.clear();
+        vt.type = TrackType::Video;
+        char vname[32];
+        snprintf(vname, sizeof(vname), vid_count == 0 ? "Video" : "Video %d", vid_count + 1);
+        vt.name = vname;
         Clip vc; vc.start=0.f; vc.end=state.duration; vc.text=path;
         vt.clips.push_back(vc);
 
@@ -1507,8 +1516,8 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
     dl->AddRect(origin, {origin.x+total_w, origin.y+total_h}, to_u32(Col::line));
 
     // ── Fps + frame snap helper ───────────────────────────────────────────────
-    float fps = (state.proxy_ready && video_info().fps > 0.0)
-                ? (float)video_info().fps : 30.f;
+    float fps = (state.proxy_ready && video_info(0).fps > 0.0)
+                ? (float)video_info(0).fps : 30.f;
     // snap(t): round t to nearest frame unless Ctrl is held
     auto snap = [&](float t) -> float {
         if (ImGui::GetIO().KeyCtrl || fps <= 0.f) return t;
@@ -1778,6 +1787,27 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
         }
 
         track_y += TL_TRACK_H;
+    }
+
+    // ── Past-end dim overlay ──────────────────────────────────────────────────
+    {
+        float end_x = origin.x + TL_LABEL_W + dur * zoom - scroll;
+        if (end_x < origin.x + total_w) {
+            float dim_x = fmaxf(end_x, origin.x + TL_LABEL_W);
+            // Ruler area
+            dl->AddRectFilled({dim_x, origin.y},
+                {origin.x + total_w, origin.y + TL_RULER_H},
+                IM_COL32(0, 0, 0, 110));
+            // Track rows
+            dl->AddRectFilled({dim_x, origin.y + TL_RULER_H},
+                {origin.x + total_w, origin.y + total_h},
+                IM_COL32(0, 0, 0, 85));
+            // Subtle end-of-project line
+            if (end_x >= origin.x + TL_LABEL_W)
+                dl->AddLine({end_x, origin.y},
+                    {end_x, origin.y + total_h},
+                    IM_COL32(255, 255, 255, 50));
+        }
     }
 
     // Drag handling (frame-snapped, Ctrl bypasses)
@@ -2107,6 +2137,12 @@ void ui_studio(AppState& state) {
     float    win_h = io.DisplaySize.y;
 
     handle_shortcuts(state);
+
+    // Keep state.duration in sync with actual clip content every frame.
+    if (!state.tracks.empty()) {
+        float pe = project_end(state);
+        if (pe > 0.01f) state.duration = pe;
+    }
 
     // Handle OS drop — just import, no auto-pipeline
     extern std::string g_dropped_file;
