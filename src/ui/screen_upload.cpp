@@ -9,6 +9,7 @@
 #include "json.hpp"
 #include <fstream>
 #include <filesystem>
+#include <algorithm>
 #include <cmath>
 
 namespace fs = std::filesystem;
@@ -20,31 +21,26 @@ static void load_words_json(const std::string& path, AppState& state) {
     if (!f) return;
     try {
         auto j = nlohmann::json::parse(f);
-        state.lines.clear();
-        LyricLine current_line;
-        float last_end = -1.f;
+
+        // Remove any pre-existing Lyrics track so we don't double-import
+        state.tracks.erase(
+            std::remove_if(state.tracks.begin(), state.tracks.end(),
+                [](const Track& t){ return t.name == "Lyrics"; }),
+            state.tracks.end());
+
+        Track lyrics;
+        lyrics.type = TrackType::Subtitle;
+        lyrics.name = "Lyrics";
 
         for (auto& w : j) {
-            Word word;
-            word.text  = w["word"].get<std::string>();
-            word.start = w["start"].get<float>();
-            word.end   = w["end"].get<float>();
-
-            // New line if gap > 0.8s
-            if (last_end >= 0.f && word.start - last_end > 0.8f && !current_line.words.empty()) {
-                state.lines.push_back(current_line);
-                current_line = LyricLine{};
-            }
-            current_line.words.push_back(word);
-            last_end = word.end;
+            Clip clip;
+            clip.text  = w["word"].get<std::string>();
+            clip.start = w["start"].get<float>();
+            clip.end   = w["end"].get<float>();
+            lyrics.clips.push_back(clip);
         }
-        if (!current_line.words.empty())
-            state.lines.push_back(current_line);
 
-        // Count total words for the panel header
-        int total = 0;
-        for (auto& l : state.lines) total += (int)l.words.size();
-        (void)total;
+        state.tracks.insert(state.tracks.begin(), std::move(lyrics));
     } catch (...) {}
 }
 
@@ -277,7 +273,7 @@ void ui_screen_upload(AppState& state) {
         transcribe_cancel();
         state.audio_path.clear();
         state.pipeline = PipelineStatus{};
-        state.lines.clear();
+        state.tracks.clear();
     }
     ImGui::SameLine(0.f, 8.f);
 

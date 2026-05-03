@@ -79,19 +79,16 @@ bool blender_export_script(const AppState& state, const std::string& out_path) {
     f << "lvb_lines = props.lyric_lines\n";
     f << "lvb_lines.clear()\n\n";
 
-    for (size_t li = 0; li < state.lines.size(); ++li) {
-        const auto& line = state.lines[li];
-        if (line.words.empty()) continue;
-
-        std::string text = line.full_text();
-        float start      = line.start_time();
-        float end        = line.end_time() + 0.3f;  // small hold after last word
-
-        f << "# Line " << (li + 1) << "\n";
+    auto indices = state.subtitle_clip_indices();
+    int li = 1;
+    for (auto& [ti, ci] : indices) {
+        const Clip& clip = state.tracks[ti].clips[ci];
+        if (clip.text.empty()) continue;
+        f << "# Clip " << li++ << "\n";
         f << "item = lvb_lines.add()\n";
-        f << "item.text = '" << py_escape(text) << "'\n";
-        f << "item.start_time = " << start << "\n";
-        f << "item.end_time   = " << end   << "\n";
+        f << "item.text = '" << py_escape(clip.text) << "'\n";
+        f << "item.start_time = " << clip.start << "\n";
+        f << "item.end_time   = " << (clip.end + 0.3f) << "\n";
         f << "item.style = '" << style_name << "'\n\n";
     }
 

@@ -5,15 +5,20 @@
 #include "ui/theme.h"
 #include "ui/screens.h"
 #include <imgui.h>
-#include <sstream>
+#include <algorithm>
 
-std::string LyricLine::full_text() const {
-    std::string s;
-    for (size_t i = 0; i < words.size(); ++i) {
-        if (i) s += ' ';
-        s += words[i].text;
+std::vector<std::pair<int,int>> AppState::subtitle_clip_indices() const {
+    std::vector<std::pair<int,int>> out;
+    for (int ti = 0; ti < (int)tracks.size(); ++ti) {
+        if (tracks[ti].type != TrackType::Subtitle) continue;
+        for (int ci = 0; ci < (int)tracks[ti].clips.size(); ++ci)
+            out.push_back({ti, ci});
     }
-    return s;
+    std::sort(out.begin(), out.end(), [&](auto& a, auto& b){
+        return tracks[a.first].clips[a.second].start <
+               tracks[b.first].clips[b.second].start;
+    });
+    return out;
 }
 
 void app_init(AppState& state) {
@@ -23,7 +28,6 @@ void app_init(AppState& state) {
 }
 
 void app_frame(AppState& state) {
-    // Full-screen dockspace window
     ImGuiIO& io = ImGui::GetIO();
     ImGui::SetNextWindowPos({0, 0});
     ImGui::SetNextWindowSize(io.DisplaySize);
@@ -37,11 +41,8 @@ void app_frame(AppState& state) {
         ImGuiWindowFlags_NoScrollWithMouse
     );
 
-    // ── Top nav bar ──────────────────────────────────────────────────────────
     ui_topbar(state);
 
-    // ── Arrow key navigation ─────────────────────────────────────────────────
-    // Guard: skip arrow nav when a text field, slider, or button is active/focused
     if (!ImGui::IsAnyItemActive() && !ImGui::IsAnyItemFocused()) {
         if (ImGui::IsKeyPressed(ImGuiKey_RightArrow)) {
             int next = (int)state.current_screen + 1;
@@ -55,29 +56,14 @@ void app_frame(AppState& state) {
         }
     }
 
-    // ── Tick audio playhead ──────────────────────────────────────────────────
     if (state.playing) {
         state.playhead += io.DeltaTime;
         if (state.duration > 0.f && state.playhead >= state.duration) {
             state.playhead = 0.f;
             state.playing  = false;
         }
-        // update active word
-        state.active_line = -1;
-        state.active_word = -1;
-        for (int li = 0; li < (int)state.lines.size(); ++li) {
-            const auto& line = state.lines[li];
-            for (int wi = 0; wi < (int)line.words.size(); ++wi) {
-                if (state.playhead >= line.words[wi].start &&
-                    state.playhead <  line.words[wi].end) {
-                    state.active_line = li;
-                    state.active_word = wi;
-                }
-            }
-        }
     }
 
-    // ── Active screen ────────────────────────────────────────────────────────
     switch (state.current_screen) {
         case Screen::Home:   ui_screen_home(state);   break;
         case Screen::Upload: ui_screen_upload(state); break;

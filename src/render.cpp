@@ -22,16 +22,16 @@ static std::string srt_timestamp(float seconds) {
     return oss.str();
 }
 
-bool render_export_srt(const std::vector<LyricLine>& lines, const std::string& out_path) {
+bool render_export_srt(const AppState& state, const std::string& out_path) {
     std::ofstream f(out_path);
     if (!f) return false;
     int idx = 1;
-    for (const auto& line : lines) {
-        for (const auto& w : line.words) {
-            f << idx++ << "\n"
-              << srt_timestamp(w.start) << " --> " << srt_timestamp(w.end) << "\n"
-              << w.text << "\n\n";
-        }
+    auto indices = state.subtitle_clip_indices();
+    for (auto& [ti, ci] : indices) {
+        const Clip& clip = state.tracks[ti].clips[ci];
+        f << idx++ << "\n"
+          << srt_timestamp(clip.start) << " --> " << srt_timestamp(clip.end) << "\n"
+          << clip.text << "\n\n";
     }
     return true;
 }
@@ -43,23 +43,18 @@ void render_start(AppState& state) {
     state.render.frame    = 0;
     state.render.stage    = "Initialising…";
 
-    // MP4 render via libavcodec — TODO: full implementation
-    // For now: export SRT immediately and simulate progress for the UI
     std::thread([&state]() {
-        // SRT is real
         if (!state.out_srt.empty())
-            render_export_srt(state.lines, state.out_srt);
+            render_export_srt(state, state.out_srt);
 
-        // Simulated frame progress so the render screen looks live
         state.render.total_frames = 5040;
         for (int i = 0; i <= state.render.total_frames && !g_cancel.load(); ++i) {
             state.render.frame    = i;
             state.render.progress = (float)i / state.render.total_frames;
-            state.render.stage    = i < 500   ? "Writing header…"  :
-                                    i < 4500  ? "Encoding frames…" :
-                                                "Muxing audio…";
-            float remaining = (state.render.total_frames - i) / 1400.f; // ~1400 fps sim
-            state.render.eta_secs = remaining;
+            state.render.stage    = i < 500  ? "Writing header…"  :
+                                    i < 4500 ? "Encoding frames…" :
+                                               "Muxing audio…";
+            state.render.eta_secs = (state.render.total_frames - i) / 1400.f;
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
 

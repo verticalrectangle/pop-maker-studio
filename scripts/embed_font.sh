@@ -12,7 +12,11 @@ xxd_to_array() {
     size=$(wc -c < "$file")
     echo "static const unsigned int ${name}_size = ${size};"
     echo "static const unsigned char ${name}[] = {"
-    xxd -i < "$file" | grep -v '^[^0-9]' | sed 's/^/    /'
+    # Use xxd directly on the file (not stdin) so it emits proper hex lines,
+    # then strip the variable declaration xxd adds and keep only the byte lines
+    xxd -i "$file" \
+        | grep -v "^unsigned\|^};" \
+        | sed 's/^/  /'
     echo "};"
 }
 

@@ -300,7 +300,7 @@ void ui_screen_export(AppState& state) {
         ImGui::SameLine(btn_x);
 
         static std::string blender_status;
-        bool has_lyrics = !state.lines.empty();
+        bool has_lyrics = !state.tracks.empty();
         if (!has_lyrics) ImGui::BeginDisabled();
         if (ui_btn("Export script  ->")) {
             // Write next to the audio file, or in current dir
