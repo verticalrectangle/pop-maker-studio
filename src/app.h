@@ -50,6 +50,16 @@ struct RenderStatus {
     std::string stage;
 };
 
+// ── Subtitle grouping mode ────────────────────────────────────────────────────
+
+enum class SubtitleMode {
+    Word,       // one clip per word (WhisperX default)
+    Phrase,     // split on short pauses  > 0.3 s
+    Line,       // split on breath gaps   > 0.8 s
+    Segment,    // WhisperX sentence segments
+    CustomN,    // user-defined N words per clip
+};
+
 // ── Central app state ─────────────────────────────────────────────────────────
 
 struct AppState {
@@ -59,7 +69,8 @@ struct AppState {
     // files
     std::string audio_path;
     std::string vocals_path;
-    std::string words_json_path;
+    std::string words_json_path;    // <stem>_words.json
+    std::string segments_json_path; // <stem>_segments.json
 
     // pipeline
     PipelineStatus pipeline;
@@ -96,6 +107,10 @@ struct AppState {
 
     // venv python
     std::string python_path = "/home/alexis/dev/song2subs/venv/bin/python";
+
+    // subtitle grouping
+    SubtitleMode subtitle_mode = SubtitleMode::Word;
+    int          subtitle_n    = 3;   // words per clip for CustomN mode
 
     // right panel active tab: 0=Clip, 1=Style, 2=Export
     int panel_tab = 0;

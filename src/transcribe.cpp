@@ -12,12 +12,6 @@ static std::thread       g_thread;
 static std::atomic<bool> g_running{false};
 static std::atomic<bool> g_cancel{false};
 
-// Parse progress markers written by ml_pipeline.py to stderr:
-//   [MODEL]      loading models
-//   [SEPARATE]   demucs stem separation
-//   [TRANSCRIBE] whisperx transcription
-//   [ALIGN]      forced alignment
-//   [DONE]       finished
 static void parse_line(const std::string& line, PipelineStatus& status) {
     if (line.find("[MODEL]") != std::string::npos) {
         status.stage    = PipelineStage::Extract;
@@ -40,8 +34,8 @@ static void parse_line(const std::string& line, PipelineStatus& status) {
         status.progress = 1.0f;
         status.message  = line.substr(line.find(']') + 2);
     } else if (line.find("[ERROR]") != std::string::npos) {
-        status.stage   = PipelineStage::Error;
-        status.error   = line;
+        status.stage = PipelineStage::Error;
+        status.error = line;
     }
 }
 
@@ -51,33 +45,35 @@ void transcribe_start(
     const std::string& pipeline_script,
     PipelineStatus&    status,
     std::string&       out_words_json,
-    std::string&       out_vocals_wav)
+    std::string&       out_vocals_wav,
+    PipelineMode       mode)
 {
     if (g_running.load()) return;
-
     g_cancel.store(false);
     g_running.store(true);
 
-    g_thread = std::thread([&]() {
-        // Build output paths alongside the audio file
+    g_thread = std::thread([&, mode]() {
         fs::path audio(audio_path);
         fs::path outdir = audio.parent_path() / audio.stem();
         fs::create_directories(outdir);
 
-        std::string json_path  = (outdir / (audio.stem().string() + ".json")).string();
+        std::string words_json = (outdir / (audio.stem().string() + "_words.json")).string();
         std::string vocals_out = (outdir / "vocals.wav").string();
 
-        out_words_json = json_path;
+        out_words_json = words_json;
         out_vocals_wav = vocals_out;
 
-        // Build command
+        const char* mode_str = (mode == PipelineMode::SeparateOnly)   ? "separate"   :
+                               (mode == PipelineMode::TranscribeOnly)  ? "transcribe" :
+                                                                          "both";
+
         std::ostringstream cmd;
-        cmd << "\"" << python_path << "\" "
+        cmd << "\"" << python_path    << "\" "
             << "\"" << pipeline_script << "\" "
-            << "\"" << audio_path << "\" "
-            << "--output \"" << json_path << "\" "
-            << "--vocals-out \"" << vocals_out << "\" "
-            << "2>&1";  // merge stderr into stdout so we can read progress
+            << "\"" << audio_path      << "\" "
+            << "--outdir \"" << outdir.string() << "\" "
+            << "--mode " << mode_str
+            << " 2>&1";
 
         status.stage    = PipelineStage::Extract;
         status.progress = 0.01f;
@@ -101,7 +97,6 @@ void transcribe_start(
                 return;
             }
             std::string line(buf);
-            // strip trailing newline
             if (!line.empty() && line.back() == '\n') line.pop_back();
             parse_line(line, status);
         }
@@ -118,10 +113,5 @@ void transcribe_start(
     g_thread.detach();
 }
 
-void transcribe_cancel() {
-    g_cancel.store(true);
-}
-
-bool transcribe_running() {
-    return g_running.load();
-}
+void transcribe_cancel() { g_cancel.store(true); }
+bool transcribe_running() { return g_running.load(); }

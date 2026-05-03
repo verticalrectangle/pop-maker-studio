@@ -48,53 +48,291 @@ static bool is_audio_file(const std::string& path) {
            ext==".flac"||ext==".mp4"||ext==".mov"||ext==".aac";
 }
 
-static void load_words_json(const std::string& path, AppState& state) {
-    std::ifstream f(path);
+// ── Subtitle grouping ─────────────────────────────────────────────────────────
+
+// Build clips from a flat list of words using the requested grouping mode.
+static std::vector<Clip> group_words(
+    const std::vector<Clip>& words,
+    SubtitleMode mode, int custom_n)
+{
+    if (words.empty()) return {};
+    std::vector<Clip> out;
+
+    switch (mode) {
+    case SubtitleMode::Word:
+        return words;
+
+    case SubtitleMode::Phrase: {
+        // Split when gap between words exceeds 0.3 s
+        Clip cur = words[0];
+        for (size_t i = 1; i < words.size(); ++i) {
+            float gap = words[i].start - words[i-1].end;
+            if (gap > 0.3f) {
+                out.push_back(cur);
+                cur = words[i];
+            } else {
+                cur.text += " " + words[i].text;
+                cur.end   = words[i].end;
+            }
+        }
+        out.push_back(cur);
+        break;
+    }
+
+    case SubtitleMode::Line: {
+        // Split when gap exceeds 0.8 s (breath / phrase boundary)
+        Clip cur = words[0];
+        for (size_t i = 1; i < words.size(); ++i) {
+            float gap = words[i].start - words[i-1].end;
+            if (gap > 0.8f) {
+                out.push_back(cur);
+                cur = words[i];
+            } else {
+                cur.text += " " + words[i].text;
+                cur.end   = words[i].end;
+            }
+        }
+        out.push_back(cur);
+        break;
+    }
+
+    case SubtitleMode::CustomN: {
+        int n = (custom_n < 1) ? 1 : custom_n;
+        for (size_t i = 0; i < words.size(); ) {
+            Clip c = words[i++];
+            for (int k = 1; k < n && i < words.size(); ++k, ++i) {
+                c.text += " " + words[i].text;
+                c.end   = words[i].end;
+            }
+            out.push_back(c);
+        }
+        break;
+    }
+
+    case SubtitleMode::Segment:
+        // Handled separately via segments JSON — fall back to Line grouping
+        // if segment data isn't available.
+        return group_words(words, SubtitleMode::Line, custom_n);
+    }
+
+    return out;
+}
+
+// Load word JSON and apply current grouping mode to the Lyrics track.
+static void apply_subtitle_mode(AppState& state) {
+    if (state.words_json_path.empty()) return;
+
+    // For Segment mode, read _segments.json instead
+    if (state.subtitle_mode == SubtitleMode::Segment &&
+        !state.segments_json_path.empty() &&
+        fs::exists(state.segments_json_path)) {
+        std::ifstream f(state.segments_json_path);
+        if (!f) return;
+        try {
+            auto j = nlohmann::json::parse(f);
+            // Find or create Lyrics track
+            Track* lyrics = nullptr;
+            for (auto& t : state.tracks)
+                if (t.name == "Lyrics") { lyrics = &t; break; }
+            if (!lyrics) {
+                state.tracks.insert(state.tracks.begin(), Track{});
+                lyrics = &state.tracks[0];
+                lyrics->type = TrackType::Subtitle;
+                lyrics->name = "Lyrics";
+            }
+            lyrics->clips.clear();
+            for (auto& seg : j) {
+                Clip c;
+                c.text  = seg["text"].get<std::string>();
+                c.start = seg["start"].get<float>();
+                c.end   = seg["end"].get<float>();
+                lyrics->clips.push_back(c);
+            }
+        } catch (...) {}
+        return;
+    }
+
+    // Word-level JSON → group
+    std::ifstream f(state.words_json_path);
     if (!f) return;
     try {
         auto j = nlohmann::json::parse(f);
-        state.tracks.erase(
-            std::remove_if(state.tracks.begin(), state.tracks.end(),
-                [](const Track& t){ return t.name == "Lyrics"; }),
-            state.tracks.end());
-        Track lyrics;
-        lyrics.type = TrackType::Subtitle;
-        lyrics.name = "Lyrics";
+        std::vector<Clip> raw;
         for (auto& w : j) {
-            Clip clip;
-            clip.text  = w["word"].get<std::string>();
-            clip.start = w["start"].get<float>();
-            clip.end   = w["end"].get<float>();
-            lyrics.clips.push_back(clip);
+            Clip c;
+            c.text  = w["word"].get<std::string>();
+            c.start = w["start"].get<float>();
+            c.end   = w["end"].get<float>();
+            raw.push_back(c);
         }
-        state.tracks.insert(state.tracks.begin(), std::move(lyrics));
+        auto grouped = group_words(raw, state.subtitle_mode, state.subtitle_n);
+
+        Track* lyrics = nullptr;
+        for (auto& t : state.tracks)
+            if (t.name == "Lyrics") { lyrics = &t; break; }
+        if (!lyrics) {
+            state.tracks.insert(state.tracks.begin(), Track{});
+            lyrics = &state.tracks[0];
+            lyrics->type = TrackType::Subtitle;
+            lyrics->name = "Lyrics";
+        }
+        lyrics->clips = grouped;
     } catch (...) {}
 }
 
-static void kick_pipeline(AppState& state, const std::string& path) {
+// Save all four SRT variants to the output directory.
+static void save_all_srts(AppState& state) {
+    if (state.words_json_path.empty()) return;
+
+    std::ifstream f(state.words_json_path);
+    if (!f) return;
+    std::vector<Clip> raw;
+    try {
+        auto j = nlohmann::json::parse(f);
+        for (auto& w : j) {
+            Clip c;
+            c.text  = w["word"].get<std::string>();
+            c.start = w["start"].get<float>();
+            c.end   = w["end"].get<float>();
+            raw.push_back(c);
+        }
+    } catch (...) { return; }
+
+    fs::path base = fs::path(state.words_json_path).parent_path() /
+                    fs::path(state.audio_path).stem();
+
+    auto write_srt = [](const std::vector<Clip>& clips, const std::string& path) {
+        auto ts = [](float s) -> std::string {
+            int h=int(s/3600), m=int(s/60)%60, sc=int(s)%60, ms=int(fmodf(s,1.f)*1000);
+            char buf[20]; snprintf(buf,sizeof(buf),"%02d:%02d:%02d,%03d",h,m,sc,ms);
+            return buf;
+        };
+        std::ofstream o(path);
+        int idx = 1;
+        for (auto& c : clips)
+            o << idx++ << "\n" << ts(c.start) << " --> " << ts(c.end) << "\n"
+              << c.text << "\n\n";
+    };
+
+    struct { SubtitleMode mode; const char* suffix; } variants[] = {
+        {SubtitleMode::Word,    "_word"},
+        {SubtitleMode::Phrase,  "_phrase"},
+        {SubtitleMode::Line,    "_line"},
+        {SubtitleMode::CustomN, "_custom"},
+    };
+    for (auto& v : variants) {
+        auto clips = group_words(raw, v.mode, state.subtitle_n);
+        write_srt(clips, base.string() + v.suffix + ".srt");
+    }
+
+    // Segment SRT from segments JSON
+    if (!state.segments_json_path.empty() && fs::exists(state.segments_json_path)) {
+        std::ifstream sf(state.segments_json_path);
+        try {
+            auto j = nlohmann::json::parse(sf);
+            std::vector<Clip> segs;
+            for (auto& seg : j) {
+                Clip c;
+                c.text  = seg["text"].get<std::string>();
+                c.start = seg["start"].get<float>();
+                c.end   = seg["end"].get<float>();
+                segs.push_back(c);
+            }
+            write_srt(segs, base.string() + "_segment.srt");
+        } catch (...) {}
+    }
+
+    // Set the primary SRT path to the current mode's file
+    const char* suffix = "_word";
+    if (state.subtitle_mode == SubtitleMode::Phrase)   suffix = "_phrase";
+    if (state.subtitle_mode == SubtitleMode::Line)     suffix = "_line";
+    if (state.subtitle_mode == SubtitleMode::Segment)  suffix = "_segment";
+    if (state.subtitle_mode == SubtitleMode::CustomN)  suffix = "_custom";
+    state.out_srt = base.string() + std::string(suffix) + ".srt";
+}
+
+// ── Import a file onto the timeline (no pipeline) ─────────────────────────────
+
+static void import_file(AppState& state, const std::string& path) {
+    fs::path fp(path);
+    std::string ext = fp.extension().string();
+    for (auto& c : ext) c = (char)tolower((unsigned char)c);
+
+    bool is_video = (ext==".mp4"||ext==".mov"||ext==".mkv"||ext==".avi"||ext==".webm");
+
+    // Load audio for playback
+    audio_load(path);
+    state.duration = audio_duration();
+
+    if (is_video) {
+        if (video_open(path)) {
+            state.video_path   = path;
+            state.video_loaded = true;
+        }
+        // Add or update Video track
+        Track* vt = nullptr;
+        for (auto& t : state.tracks) if (t.type==TrackType::Video) { vt=&t; break; }
+        if (!vt) { state.tracks.push_back({}); vt=&state.tracks.back(); }
+        vt->type = TrackType::Video; vt->name = "Video";
+        vt->clips.clear();
+        Clip vc; vc.start=0.f; vc.end=state.duration; vc.text=path;
+        vt->clips.push_back(vc);
+    } else {
+        state.audio_path = path;
+        // Add Audio track
+        Track* at = nullptr;
+        for (auto& t : state.tracks)
+            if (t.type==TrackType::Audio && t.name=="Audio") { at=&t; break; }
+        if (!at) { state.tracks.push_back({}); at=&state.tracks.back(); }
+        at->type = TrackType::Audio; at->name = "Audio";
+        at->clips.clear();
+        Clip ac; ac.start=0.f; ac.end=state.duration; ac.text=path;
+        at->clips.push_back(ac);
+    }
+
+    // Pre-fill output paths in case user already has JSON from a previous run
+    fs::path outdir = fp.parent_path() / fp.stem();
+    std::string words_candidate = (outdir / (fp.stem().string() + "_words.json")).string();
+    std::string segs_candidate  = (outdir / (fp.stem().string() + "_segments.json")).string();
+    if (fs::exists(words_candidate)) {
+        state.words_json_path    = words_candidate;
+        state.segments_json_path = (outdir / (fp.stem().string() + "_segments.json")).string();
+        state.vocals_path        = (outdir / "vocals.wav").string();
+        state.out_wav            = state.vocals_path;
+        apply_subtitle_mode(state);
+    }
+}
+
+// ── Kick ML pipeline on a specific clip ──────────────────────────────────────
+
+static void kick_pipeline(AppState& state, const std::string& path, PipelineMode mode) {
+    if (transcribe_running()) return;
+
     state.audio_path = path;
     state.pipeline   = PipelineStatus{};
-    state.tracks.erase(
-        std::remove_if(state.tracks.begin(), state.tracks.end(),
-            [](const Track& t){ return t.name == "Lyrics"; }),
-        state.tracks.end());
-
-    // Add placeholder Lyrics track
-    Track ph; ph.type = TrackType::Subtitle; ph.name = "Lyrics";
-    state.tracks.insert(state.tracks.begin(), std::move(ph));
 
     fs::path audio(path);
     fs::path outdir = audio.parent_path() / audio.stem();
-    state.words_json_path = (outdir / (audio.stem().string() + ".json")).string();
-    state.vocals_path     = (outdir / "vocals.wav").string();
-    state.out_srt         = (outdir / (audio.stem().string() + ".srt")).string();
-    state.out_wav         = state.vocals_path;
+    std::string words_json = (outdir / (audio.stem().string() + "_words.json")).string();
+    std::string vocals_out = (outdir / "vocals.wav").string();
+    state.words_json_path    = words_json;
+    state.segments_json_path = (outdir / (audio.stem().string() + "_segments.json")).string();
+    state.vocals_path        = vocals_out;
+    state.out_wav            = vocals_out;
+
+    if (mode != PipelineMode::SeparateOnly) {
+        // Add placeholder Lyrics track while processing
+        bool has_lyrics = false;
+        for (auto& t : state.tracks) if (t.name=="Lyrics") { has_lyrics=true; break; }
+        if (!has_lyrics) {
+            Track ph; ph.type=TrackType::Subtitle; ph.name="Lyrics";
+            state.tracks.insert(state.tracks.begin(), std::move(ph));
+        }
+    }
 
     extern std::string g_pipeline_script;
     transcribe_start(path, state.python_path, g_pipeline_script,
-                     state.pipeline, state.words_json_path, state.vocals_path);
-    audio_load(path);
-    state.duration = audio_duration();
+                     state.pipeline, state.words_json_path, state.vocals_path, mode);
 }
 
 // ── Pipeline inline strip ─────────────────────────────────────────────────────
@@ -139,10 +377,11 @@ static void draw_pipeline_strip(AppState& state, float w) {
 
     ImGui::Dummy({w, h});
 
-    // When pipeline finishes, load JSON
+    // When pipeline finishes, group and load
     if (state.pipeline.stage == PipelineStage::Done &&
         !state.words_json_path.empty()) {
-        load_words_json(state.words_json_path, state);
+        apply_subtitle_mode(state);
+        save_all_srts(state);
     }
 }
 
@@ -325,6 +564,65 @@ static void panel_clip(AppState& state, float w) {
     if (ui_btn("Delete clip", false, true)) {
         track.clips.erase(track.clips.begin() + state.selected_clip);
         state.selected_clip = -1;
+    }
+
+    // Subtitle grouping mode — shown for any subtitle track that has a source JSON
+    if (track.type == TrackType::Subtitle && !state.words_json_path.empty() &&
+        fs::exists(state.words_json_path)) {
+        ImGui::Dummy({0.f, 12.f}); ui_separator(); ImGui::Dummy({0.f, 8.f});
+        ui_label("Subtitle grouping"); ImGui::Dummy({0.f, 4.f});
+
+        struct ModeBtn { SubtitleMode m; const char* label; const char* tip; };
+        ModeBtn modes[] = {
+            {SubtitleMode::Word,    "Word",    "One clip per word"},
+            {SubtitleMode::Phrase,  "Phrase",  "Group by short pauses (>0.3s)"},
+            {SubtitleMode::Line,    "Line",    "Group by breath gaps (>0.8s)"},
+            {SubtitleMode::Segment, "Segment", "WhisperX sentence boundaries"},
+            {SubtitleMode::CustomN, "Custom",  "N words per clip"},
+        };
+
+        SubtitleMode prev = state.subtitle_mode;
+        for (auto& mb : modes) {
+            bool sel = state.subtitle_mode == mb.m;
+            if (ui_btn(mb.label, sel, true)) state.subtitle_mode = mb.m;
+            if (ImGui::IsItemHovered()) {
+                ImGui::BeginTooltip();
+                ImGui::TextUnformatted(mb.tip);
+                ImGui::EndTooltip();
+            }
+            ImGui::SameLine(0.f, 4.f);
+        }
+        ImGui::NewLine();
+
+        if (state.subtitle_mode == SubtitleMode::CustomN) {
+            ImGui::Dummy({0.f, 4.f});
+            ImGui::PushStyleColor(ImGuiCol_FrameBg, Col::bg_soft);
+            ImGui::PushStyleColor(ImGuiCol_Border,  Col::line);
+            ImGui::SetNextItemWidth(80.f);
+            int n = state.subtitle_n;
+            if (ImGui::InputInt("words/clip##n", &n)) {
+                state.subtitle_n = (n < 1) ? 1 : (n > 20) ? 20 : n;
+            }
+            ImGui::PopStyleColor(2);
+        }
+
+        if (state.subtitle_mode != prev ||
+            (state.subtitle_mode == SubtitleMode::CustomN)) {
+            // Re-apply whenever mode changes; button click handles commit
+        }
+
+        ImGui::Dummy({0.f, 6.f});
+        bool can_regroup = !state.words_json_path.empty() && fs::exists(state.words_json_path);
+        if (!can_regroup) ImGui::BeginDisabled();
+        if (ui_btn("Apply grouping", true, true)) {
+            apply_subtitle_mode(state);
+        }
+        if (!can_regroup) ImGui::EndDisabled();
+        if (ImGui::IsItemHovered()) {
+            ImGui::BeginTooltip();
+            ImGui::TextUnformatted("Re-build Lyrics track from saved word JSON");
+            ImGui::EndTooltip();
+        }
     }
 }
 
@@ -784,13 +1082,59 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
         Track* ct = valid ? &state.tracks[ti] : nullptr;
         Clip*  cc = valid ? &ct->clips[ci]    : nullptr;
 
+        // ── ML Processing — Audio & Video clips ──────────────────────────────
+        if (ct && (ct->type==TrackType::Audio || ct->type==TrackType::Video) && cc) {
+            bool busy = transcribe_running();
+            if (busy) ImGui::BeginDisabled();
+            if (ImGui::BeginMenu("ML Processing")) {
+                if (ImGui::MenuItem("Transcribe + Separate Vocals")) {
+                    state.audio_path = cc->text;
+                    kick_pipeline(state, cc->text, PipelineMode::Both);
+                }
+                if (ImGui::MenuItem("Transcribe only  (WhisperX)")) {
+                    state.audio_path = cc->text;
+                    kick_pipeline(state, cc->text, PipelineMode::TranscribeOnly);
+                }
+                if (ImGui::MenuItem("Separate Vocals only  (Demucs)")) {
+                    kick_pipeline(state, cc->text, PipelineMode::SeparateOnly);
+                }
+                ImGui::EndMenu();
+            }
+            if (busy) ImGui::EndDisabled();
+            ImGui::Separator();
+        }
+
+        // ── Subtitle clips ────────────────────────────────────────────────────
         if (ct && ct->type==TrackType::Subtitle) {
             if (ImGui::MenuItem("Edit text")) {
                 state.panel_tab = 0;
                 s_edit_focus_next = true;
             }
+            // Re-group submenu — only if we have source JSON
+            bool has_json = !state.words_json_path.empty() &&
+                            fs::exists(state.words_json_path);
+            if (ImGui::BeginMenu("Re-group track as…")) {
+                struct { SubtitleMode m; const char* label; } rmodes[] = {
+                    {SubtitleMode::Word,    "Word-by-word"},
+                    {SubtitleMode::Phrase,  "Phrase  (pauses >0.3s)"},
+                    {SubtitleMode::Line,    "Line  (gaps >0.8s)"},
+                    {SubtitleMode::Segment, "Segment  (sentence)"},
+                    {SubtitleMode::CustomN, "Custom N words"},
+                };
+                for (auto& rm : rmodes) {
+                    bool cur = state.subtitle_mode == rm.m;
+                    if (!has_json) ImGui::BeginDisabled();
+                    if (ImGui::MenuItem(rm.label, nullptr, cur)) {
+                        state.subtitle_mode = rm.m;
+                        apply_subtitle_mode(state);
+                    }
+                    if (!has_json) ImGui::EndDisabled();
+                }
+                ImGui::EndMenu();
+            }
             ImGui::Separator();
         }
+
         if (ImGui::MenuItem("Split at playhead", "S")) {
             if (valid) {
                 float cut = state.playhead;
@@ -924,18 +1268,19 @@ void ui_studio(AppState& state) {
 
     handle_shortcuts(state);
 
-    // Handle OS drop
+    // Handle OS drop — just import, no auto-pipeline
     extern std::string g_dropped_file;
     if (!g_dropped_file.empty() && is_audio_file(g_dropped_file)) {
-        kick_pipeline(state, g_dropped_file);
+        import_file(state, g_dropped_file);
         g_dropped_file.clear();
     }
 
-    // Pipeline done → load JSON
+    // Pipeline done → apply grouping + save all SRTs
     static PipelineStage last_stage = PipelineStage::Idle;
     if (last_stage != PipelineStage::Done &&
         state.pipeline.stage == PipelineStage::Done) {
-        load_words_json(state.words_json_path, state);
+        apply_subtitle_mode(state);
+        save_all_srts(state);
     }
     last_stage = state.pipeline.stage;
 
@@ -954,7 +1299,7 @@ void ui_studio(AppState& state) {
                 std::string picked = filepicker_open(
                     "Import audio or video",
                     "Audio & Video", "*.wav *.mp3 *.m4a *.flac *.aac *.mp4 *.mov *.mkv");
-                if (!picked.empty()) kick_pipeline(state, picked);
+                if (!picked.empty()) import_file(state, picked);
             }
             ImGui::Separator();
             bool has_tracks = !state.tracks.empty();

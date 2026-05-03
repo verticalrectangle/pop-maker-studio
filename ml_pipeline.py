@@ -1,9 +1,21 @@
 #!/usr/bin/env python3
 """
-Lyric Video Blender — ML pipeline
-Called as a subprocess with the venv Python (not Blender's Python).
-Runs Demucs vocal separation + WhisperX forced-alignment transcription.
-Progress is written to stderr. Word JSON is written to --output path.
+Pop Maker Studio — ML pipeline
+Called as a subprocess from the C++ app.
+Runs Demucs vocal separation and/or WhisperX forced-alignment transcription.
+
+Progress markers written to stderr:
+  [MODEL]      loading models
+  [SEPARATE]   demucs separation
+  [TRANSCRIBE] whisperx transcription
+  [ALIGN]      forced alignment
+  [DONE]       finished
+
+Output files (all written to --outdir):
+  <stem>_words.json        word-level timestamps  (transcribe/both)
+  <stem>_segments.json     sentence-level segments (transcribe/both)
+  vocals.wav               isolated vocal stem     (separate/both)
+  instrumental.wav         instrumental stem       (separate/both)
 """
 import argparse
 import json
@@ -27,92 +39,145 @@ def log(msg):
     print(msg, file=sys.stderr, flush=True)
 
 
+def run_separate(audio_path: Path, outdir: Path) -> Path:
+    """Run Demucs, copy vocals.wav and instrumental.wav to outdir. Returns vocals path."""
+    log("[SEPARATE] Running Demucs (htdemucs two-stem)...")
+    tmpdir = Path(tempfile.mkdtemp(prefix="pms_"))
+    try:
+        subprocess.run(
+            [
+                sys.executable, "-m", "demucs",
+                "--two-stems=vocals",
+                "-n", DEMUCS_MODEL,
+                "-o", str(tmpdir / "sep"),
+                str(audio_path),
+            ],
+            check=True, stderr=sys.stderr,
+        )
+        stem        = audio_path.stem
+        sep_base    = tmpdir / "sep" / DEMUCS_MODEL / stem
+        vocals_src  = sep_base / "vocals.wav"
+        instru_src  = sep_base / "no_vocals.wav"
+
+        if not vocals_src.exists():
+            matches = list((tmpdir / "sep" / DEMUCS_MODEL).rglob("vocals.wav"))
+            if not matches:
+                log(f"[ERROR] vocals.wav not found under {tmpdir}")
+                sys.exit(1)
+            vocals_src = matches[0]
+            sep_base   = vocals_src.parent
+
+        outdir.mkdir(parents=True, exist_ok=True)
+        vocals_dst = outdir / "vocals.wav"
+        instru_dst = outdir / "instrumental.wav"
+
+        shutil.copy2(str(vocals_src), str(vocals_dst))
+        log(f"[SEPARATE] Saved vocals → {vocals_dst}")
+
+        # no_vocals.wav name varies by demucs version
+        for candidate in [instru_src, sep_base / "no_vocals.wav",
+                           sep_base / "other.wav"]:
+            if candidate.exists():
+                shutil.copy2(str(candidate), str(instru_dst))
+                log(f"[SEPARATE] Saved instrumental → {instru_dst}")
+                break
+
+        return vocals_dst
+    finally:
+        shutil.rmtree(str(tmpdir), ignore_errors=True)
+
+
+def run_transcribe(vocals_path: Path, outdir: Path, stem: str):
+    """Run WhisperX on vocals, write _words.json and _segments.json to outdir."""
+    log(f"[MODEL] Loading WhisperX {WHISPER_MODEL} on {DEVICE}...")
+    model = whisperx.load_model(
+        WHISPER_MODEL, DEVICE,
+        compute_type=COMPUTE_TYPE,
+        language=LANGUAGE,
+    )
+    log("[MODEL] Loading alignment model...")
+    align_model, align_metadata = whisperx.load_align_model(
+        language_code=LANGUAGE, device=DEVICE
+    )
+
+    log("[TRANSCRIBE] Running WhisperX transcription...")
+    audio  = whisperx.load_audio(str(vocals_path))
+    result = model.transcribe(audio, batch_size=16, language=LANGUAGE)
+
+    log("[ALIGN] Running forced alignment...")
+    result = whisperx.align(
+        result["segments"], align_model, align_metadata, audio, DEVICE
+    )
+
+    # ── Word-level JSON ───────────────────────────────────────────────────────
+    words = []
+    for seg in result.get("segments", []):
+        for w in seg.get("words", []):
+            text = w.get("word", "").strip()
+            if not text:
+                continue
+            words.append({
+                "word":  text,
+                "start": float(w.get("start", 0)),
+                "end":   float(w.get("end", w.get("start", 0) + 0.2)),
+            })
+
+    words_path = outdir / f"{stem}_words.json"
+    words_path.write_text(json.dumps(words, indent=2))
+    log(f"[DONE] {len(words)} words → {words_path}")
+
+    # ── Segment-level JSON ────────────────────────────────────────────────────
+    segments = []
+    for seg in result.get("segments", []):
+        text = seg.get("text", "").strip()
+        if not text:
+            continue
+        segments.append({
+            "text":  text,
+            "start": float(seg.get("start", 0)),
+            "end":   float(seg.get("end",   0)),
+        })
+
+    segs_path = outdir / f"{stem}_segments.json"
+    segs_path.write_text(json.dumps(segments, indent=2))
+    log(f"[DONE] {len(segments)} segments → {segs_path}")
+
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("audio", help="Input audio/video file")
-    parser.add_argument("--output", required=True, help="Output JSON path for word list")
-    parser.add_argument("--vocals", help="Skip separation, use this vocals WAV directly")
-    parser.add_argument("--vocals-out", dest="vocals_out",
-                        help="Copy the vocals WAV to this path after separation")
+    parser.add_argument("audio",
+        help="Input audio or video file")
+    parser.add_argument("--outdir", required=True,
+        help="Output directory for all generated files")
+    parser.add_argument("--mode", default="both",
+        choices=["both", "separate", "transcribe"],
+        help="Which stages to run (default: both)")
+    parser.add_argument("--vocals",
+        help="Skip separation — use this existing vocals WAV for transcription")
     args = parser.parse_args()
 
     audio_path = Path(args.audio)
-    out_path   = Path(args.output)
-    tmpdir     = None
+    outdir     = Path(args.outdir)
+    outdir.mkdir(parents=True, exist_ok=True)
 
-    try:
-        log(f"[MODEL] Loading WhisperX {WHISPER_MODEL} on {DEVICE}...")
-        model = whisperx.load_model(
-            WHISPER_MODEL, DEVICE,
-            compute_type=COMPUTE_TYPE,
-            language=LANGUAGE,
-        )
-        log("[MODEL] Loading alignment model...")
-        align_model, align_metadata = whisperx.load_align_model(
-            language_code=LANGUAGE, device=DEVICE
-        )
+    vocals_path = None
 
-        if args.vocals:
-            vocals_path = Path(args.vocals)
-            log(f"[SEPARATE] Using provided vocals: {vocals_path}")
-        else:
-            log("[SEPARATE] Running Demucs (vocals only stem)...")
-            tmpdir  = tempfile.mkdtemp(prefix="lvb_")
-            sep_out = Path(tmpdir) / "sep"
-            subprocess.run(
-                [
-                    sys.executable, "-m", "demucs",
-                    "--two-stems=vocals",
-                    "-n", DEMUCS_MODEL,
-                    "-o", str(sep_out),
-                    str(audio_path),
-                ],
-                check=True,
-                stderr=sys.stderr,
-            )
-            stem        = audio_path.stem
-            vocals_path = sep_out / DEMUCS_MODEL / stem / "vocals.wav"
-            if not vocals_path.exists():
-                matches = list((sep_out / DEMUCS_MODEL).rglob("vocals.wav"))
-                if not matches:
-                    log(f"[ERROR] Vocals WAV not found under {sep_out}")
-                    sys.exit(1)
-                vocals_path = matches[0]
-            log(f"[SEPARATE] Vocals: {vocals_path}")
+    if args.mode in ("both", "separate"):
+        vocals_path = run_separate(audio_path, outdir)
 
-        if args.vocals_out:
-            dest = Path(args.vocals_out)
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(str(vocals_path), str(dest))
-            log(f"[SEPARATE] Saved vocals to {dest}")
+    if args.mode in ("both", "transcribe"):
+        if vocals_path is None:
+            if args.vocals:
+                vocals_path = Path(args.vocals)
+                log(f"[SEPARATE] Using provided vocals: {vocals_path}")
+            else:
+                # No separation — transcribe the original file directly
+                vocals_path = audio_path
+                log(f"[SEPARATE] No separation — transcribing original file")
+        run_transcribe(vocals_path, outdir, audio_path.stem)
 
-        log("[TRANSCRIBE] Running WhisperX transcription...")
-        audio  = whisperx.load_audio(str(vocals_path))
-        result = model.transcribe(audio, batch_size=16, language=LANGUAGE)
-
-        log("[ALIGN] Running forced alignment...")
-        result = whisperx.align(
-            result["segments"], align_model, align_metadata, audio, DEVICE
-        )
-
-        words = []
-        for seg in result.get("segments", []):
-            for w in seg.get("words", []):
-                text = w.get("word", "").strip()
-                if not text:
-                    continue
-                words.append({
-                    "word":  text,
-                    "start": float(w.get("start", 0)),
-                    "end":   float(w.get("end", w.get("start", 0) + 0.2)),
-                })
-
-        out_path.write_text(json.dumps(words, indent=2))
-        log(f"[DONE] {len(words)} words written to {out_path}")
-
-    finally:
-        if tmpdir:
-            shutil.rmtree(tmpdir, ignore_errors=True)
+    if args.mode == "separate":
+        log("[DONE] Separation complete")
 
 
 if __name__ == "__main__":

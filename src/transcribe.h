@@ -2,17 +2,23 @@
 #include "app.h"
 #include <string>
 
-// Kick off the ml_pipeline.py subprocess (Demucs + WhisperX).
-// Writes progress updates to `status` from a background thread.
-// On completion fills `out_words_json` with the path to the JSON file
-// and `out_vocals_wav` with the extracted vocals path.
+enum class PipelineMode {
+    Both,        // Demucs + WhisperX
+    TranscribeOnly,  // WhisperX on original file (no Demucs)
+    SeparateOnly,    // Demucs only, no subtitles
+};
+
+// Kick off ml_pipeline.py as a subprocess.
+// Writes progress to `status` from a background thread.
+// out_words_json / out_vocals_wav are set before the thread reads them.
 void transcribe_start(
     const std::string& audio_path,
     const std::string& python_path,
     const std::string& pipeline_script,
-    PipelineStatus&    status,          // written from bg thread — read from UI thread
+    PipelineStatus&    status,
     std::string&       out_words_json,
-    std::string&       out_vocals_wav
+    std::string&       out_vocals_wav,
+    PipelineMode       mode = PipelineMode::Both
 );
 
 void transcribe_cancel();
