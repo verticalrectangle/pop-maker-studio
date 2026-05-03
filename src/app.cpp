@@ -2,6 +2,7 @@
 #include "audio.h"
 #include "video.h"
 #include "transcribe.h"
+#include "render.h"
 #include "ui/theme.h"
 #include "ui/screens.h"
 #include <imgui.h>
@@ -24,6 +25,7 @@ std::vector<std::pair<int,int>> AppState::subtitle_clip_indices() const {
 void app_init(AppState& state) {
     theme_apply();
     audio_init();
+    render_init_fonts();
     (void)state;
 }
 

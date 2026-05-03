@@ -396,6 +396,12 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
         dl->AddRectFilled(p, {p.x+w, p.y+h}, to_u32(Col::accent_dark), 2.f);
     }
     dl->AddRect(p, {p.x+w, p.y+h}, to_u32(Col::line), 2.f);
+    // Format label
+    {
+        const char* fmt_lbl = state.format == OutputFormat::Vertical   ? "9:16" :
+                              state.format == OutputFormat::Horizontal  ? "16:9" : "1:1";
+        dl->AddText({p.x+6.f, p.y+6.f}, to_u32(Col::dim), fmt_lbl);
+    }
 
     // Corner marks
     float cm = 10.f; ImU32 cc = to_u32(Col::muted);
@@ -428,6 +434,7 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
     }
 
     // Active subtitle clips — stack vertically from bottom
+    static bool s_sub_was_dragging = false;
     int rendered = 0;
     for (int ti = 0; ti < (int)state.tracks.size(); ++ti) {
         auto& track = state.tracks[ti];
@@ -444,21 +451,24 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
             }
         }
         const Clip* show = active;
+        int show_ci = active_ci;
         if (!show && state.selected_track == ti && state.selected_clip >= 0 &&
-            state.selected_clip < (int)track.clips.size())
-            show = &track.clips[state.selected_clip];
+            state.selected_clip < (int)track.clips.size()) {
+            show    = &track.clips[state.selected_clip];
+            show_ci = state.selected_clip;
+        }
         if (!show) { ++rendered; continue; }
 
         // Determine Y position from per-clip override
         float slot_h = 40.f;
         float slot_y;
-        if (show->sub_pos == 1) {           // center
+        if (show->sub_pos == 1) {
             slot_y = p.y + h * 0.5f - slot_h * 0.5f;
-        } else if (show->sub_pos == 2) {    // top
+        } else if (show->sub_pos == 2) {
             slot_y = p.y + 24.f + rendered * slot_h;
-        } else if (show->sub_pos == 3) {    // custom Y
+        } else if (show->sub_pos == 3) {
             slot_y = p.y + show->sub_pos_y * h - slot_h * 0.5f;
-        } else {                            // bottom (default)
+        } else {
             slot_y = p.y + h - 24.f - (rendered + 1) * slot_h;
         }
 
@@ -482,6 +492,35 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
             {tx, slot_y}, tcol, show->text.c_str());
         ImGui::SetWindowFontScale(1.f);
         ImGui::PopFont();
+
+        // Drag handle — allows repositioning subtitle Y on the canvas
+        if (show_ci >= 0 && slot_y >= p.y && slot_y + tsz.y <= p.y + h) {
+            float pad = 8.f;
+            ImGui::SetCursorScreenPos({tx - pad, slot_y - pad});
+            char drag_id[32]; snprintf(drag_id, sizeof(drag_id), "##sdrag%d_%d", ti, show_ci);
+            ImGui::InvisibleButton(drag_id, {tsz.x + pad*2.f, tsz.y + pad*2.f});
+            if (ImGui::IsItemHovered() || ImGui::IsItemActive())
+                ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
+            if (ImGui::IsItemActive() && ImGui::IsMouseDragging(0)) {
+                s_sub_was_dragging = true;
+                Clip& mc   = state.tracks[ti].clips[show_ci];
+                float new_y = (slot_y + ImGui::GetIO().MouseDelta.y - p.y) / h;
+                mc.sub_pos   = 3;
+                mc.sub_pos_y = fmaxf(0.02f, fminf(0.98f, new_y));
+            }
+            if (s_sub_was_dragging && ImGui::IsItemDeactivated()) {
+                history_push(state, "Subtitle position Y");
+                s_sub_was_dragging = false;
+            }
+            // Draw drag indicator dots when hovered
+            if (ImGui::IsItemHovered() && !ImGui::IsItemActive()) {
+                float mid_x = tx + tsz.x * 0.5f;
+                for (int d = -1; d <= 1; ++d)
+                    dl->AddCircleFilled({mid_x + d*6.f, slot_y - 6.f},
+                        2.f, to_u32(Col::muted));
+            }
+        }
+
         ++rendered;
     }
 }
@@ -571,6 +610,54 @@ static void panel_track(AppState& state, float w) {
         ImGui::TextUnformatted("Click a clip on this track to edit it.");
         ImGui::PopStyleColor();
     }
+}
+
+// ── Right panel: History tab ──────────────────────────────────────────────────
+
+static void panel_history(AppState& state, float /*w*/) {
+    ImGui::Dummy({0.f, 8.f});
+
+    ImGui::BeginDisabled(!history_can_undo());
+    if (ui_btn("Undo", false, true)) history_undo(state);
+    ImGui::EndDisabled();
+    ImGui::SameLine(0.f, 4.f);
+    ImGui::BeginDisabled(!history_can_redo());
+    if (ui_btn("Redo", false, true)) history_redo(state);
+    ImGui::EndDisabled();
+
+    ImGui::Dummy({0.f, 4.f}); ui_separator(); ImGui::Dummy({0.f, 4.f});
+
+    const auto& entries = history_entries();
+    int cur = history_pos();
+
+    if (entries.empty()) {
+        ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+        ImGui::TextUnformatted("No history yet.");
+        ImGui::PopStyleColor();
+        return;
+    }
+
+    ImGui::BeginChild("##hist_list", {0.f, 0.f}, false);
+    static int s_last_hist_pos = -1;
+    for (int i = 0; i < (int)entries.size(); ++i) {
+        bool is_cur  = (i == cur);
+        bool is_redo = (i > cur);
+        ImU32 col = is_redo ? to_u32(Col::dim)  :
+                    is_cur  ? to_u32(Col::fg)    : to_u32(Col::muted);
+        ImGui::PushStyleColor(ImGuiCol_Text, col);
+        char lbl[128];
+        snprintf(lbl, sizeof(lbl), "%s %s##hst%d",
+            is_cur ? "\xe2\x96\xb6" : " ", entries[i].action.c_str(), i);
+        if (ImGui::Selectable(lbl, is_cur)) history_jump(state, i);
+        ImGui::PopStyleColor();
+    }
+    if (cur != s_last_hist_pos) {
+        float frac = ((int)entries.size() > 1)
+            ? (float)cur / (float)((int)entries.size() - 1) : 1.f;
+        ImGui::SetScrollY(frac * ImGui::GetScrollMaxY());
+        s_last_hist_pos = cur;
+    }
+    ImGui::EndChild();
 }
 
 // ── Right panel: Clip tab ─────────────────────────────────────────────────────
@@ -954,7 +1041,7 @@ static void panel_export(AppState& state, float w) {
     Fmt fmts[] = {
         {OutputFormat::Vertical,   "TikTok / Reels", "9:16", "1080×1920", 24.f, 42.f},
         {OutputFormat::Horizontal, "YouTube",        "16:9", "1920×1080", 54.f, 30.f},
-        {OutputFormat::Square,     "Square",         "1:1",  "1080×1080", 36.f, 36.f},
+        {OutputFormat::Square,     "Instagram",      "1:1",  "1080×1080", 36.f, 36.f},
     };
     float fw = (w - 16.f) / 3.f;
     for (int i = 0; i < 3; ++i) {
@@ -985,6 +1072,68 @@ static void panel_export(AppState& state, float w) {
             history_push(state, std::string("Format — ") + fmts[i].name);
         }
         ImGui::PopStyleColor(2);
+    }
+
+    ImGui::Dummy({0.f, 12.f}); ui_separator(); ImGui::Dummy({0.f, 8.f});
+
+    // Advanced settings (collapsible)
+    ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+    bool adv_open = ImGui::TreeNodeEx("Advanced##adv",
+        ImGuiTreeNodeFlags_SpanFullWidth |
+        (state.render_settings.advanced_open ? ImGuiTreeNodeFlags_DefaultOpen : 0));
+    ImGui::PopStyleColor();
+    state.render_settings.advanced_open = adv_open;
+    if (adv_open) {
+        ImGui::Dummy({0.f, 6.f});
+
+        // CRF
+        ui_label("Quality (CRF)"); ImGui::Dummy({0.f, 4.f});
+        ImGui::PushStyleColor(ImGuiCol_SliderGrab, Col::fg);
+        ImGui::PushStyleColor(ImGuiCol_FrameBg,    Col::bg_soft);
+        ImGui::SetNextItemWidth(w - 16.f);
+        ImGui::SliderInt("##crf", &state.render_settings.crf, 0, 51, "CRF %d");
+        ImGui::PopStyleColor(2);
+        ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+        ImGui::TextUnformatted("18 = near-lossless  ·  23 = default  ·  28 = smaller file");
+        ImGui::PopStyleColor();
+
+        // Audio bitrate
+        ImGui::Dummy({0.f, 8.f}); ui_label("Audio bitrate"); ImGui::Dummy({0.f, 4.f});
+        for (int abr : {128, 192, 320}) {
+            char lbl[8]; snprintf(lbl, sizeof(lbl), "%dk", abr);
+            if (ui_btn(lbl, state.render_settings.audio_bitrate == abr, true))
+                state.render_settings.audio_bitrate = abr;
+            ImGui::SameLine(0.f, 4.f);
+        }
+        ImGui::NewLine();
+
+        // Encode preset
+        ImGui::Dummy({0.f, 8.f}); ui_label("Encode speed"); ImGui::Dummy({0.f, 4.f});
+        const char* presets[] = {"ultrafast","fast","medium","slow","veryslow"};
+        for (auto& ps : presets) {
+            if (ui_btn(ps, state.render_settings.preset == ps, true))
+                state.render_settings.preset = ps;
+            ImGui::SameLine(0.f, 4.f);
+        }
+        ImGui::NewLine();
+        ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+        ImGui::TextUnformatted("Slower = better compression, same quality.");
+        ImGui::PopStyleColor();
+
+        // Profile
+        ImGui::Dummy({0.f, 8.f}); ui_label("H.264 profile"); ImGui::Dummy({0.f, 4.f});
+        if (ui_btn("Main", !state.render_settings.high_profile, true))
+            state.render_settings.high_profile = false;
+        ImGui::SameLine(0.f, 4.f);
+        if (ui_btn("High", state.render_settings.high_profile, true))
+            state.render_settings.high_profile = true;
+        ImGui::NewLine();
+        ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+        ImGui::TextUnformatted("Main = max compatibility  ·  High = better compression");
+        ImGui::PopStyleColor();
+
+        ImGui::Dummy({0.f, 4.f});
+        ImGui::TreePop();
     }
 
     ImGui::Dummy({0.f, 12.f}); ui_separator(); ImGui::Dummy({0.f, 8.f});
@@ -1565,7 +1714,6 @@ void ui_studio(AppState& state) {
     ImGuiIO& io   = ImGui::GetIO();
     float    win_w = io.DisplaySize.x;
     float    win_h = io.DisplaySize.y;
-    static bool s_show_history = false;
 
     handle_shortcuts(state);
 
@@ -1604,7 +1752,7 @@ void ui_studio(AppState& state) {
     }
 
     if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_H))
-        s_show_history = !s_show_history;
+        state.panel_tab = 4;
 
     // ── Menu bar ─────────────────────────────────────────────────────────────
     if (ImGui::BeginMenuBar()) {
@@ -1733,8 +1881,7 @@ void ui_studio(AppState& state) {
                 }
             }
             ImGui::Separator();
-            if (ImGui::MenuItem("History", "Ctrl+Shift+H", s_show_history))
-                s_show_history = !s_show_history;
+            if (ImGui::MenuItem("History", "Ctrl+Shift+H")) state.panel_tab = 4;
             ImGui::EndMenu();
         }
 
@@ -1759,15 +1906,24 @@ void ui_studio(AppState& state) {
     }
 
     // ── Body layout ──────────────────────────────────────────────────────────
-    float menubar_h   = ImGui::GetFrameHeight() + 2.f;  // already consumed by BeginMenuBar
-    float body_top    = ImGui::GetCursorPosY();
-    float tl_h        = fminf(200.f, TL_RULER_H + ((int)state.tracks.size()+2) * TL_TRACK_H);
-    float pipeline_h  = (state.pipeline.stage != PipelineStage::Idle &&
-                         state.pipeline.stage != PipelineStage::Done &&
-                         state.pipeline.stage != PipelineStage::Error) ? 28.f : 0.f;
-    float body_h      = win_h - menubar_h - body_top - tl_h - pipeline_h - 2.f;
+    float menubar_h  = ImGui::GetFrameHeight() + 2.f;
+    float body_top   = ImGui::GetCursorPosY();
+    float pipeline_h = (state.pipeline.stage != PipelineStage::Idle &&
+                        state.pipeline.stage != PipelineStage::Done &&
+                        state.pipeline.stage != PipelineStage::Error) ? 28.f : 0.f;
+    float avail_h    = win_h - menubar_h - body_top - pipeline_h - 2.f;
 
-    float props_w = fmaxf(260.f, win_w * 0.27f);
+    // Timeline height — user-draggable, default auto
+    float tl_h_auto  = fminf(200.f, TL_RULER_H + ((int)state.tracks.size()+2) * TL_TRACK_H);
+    float tl_h       = (state.tl_h_frac > 0.f)
+                        ? fmaxf(60.f, fminf(avail_h * 0.7f, state.tl_h_frac * avail_h))
+                        : tl_h_auto;
+    float body_h     = avail_h - tl_h;
+
+    // Right panel width — user-draggable, default auto
+    float props_w   = (state.panel_w > 0.f)
+                       ? fmaxf(200.f, fminf(win_w * 0.6f, state.panel_w))
+                       : fmaxf(260.f, win_w * 0.27f);
     float preview_w = win_w - props_w - 1.f;
 
     // ── Preview ───────────────────────────────────────────────────────────────
@@ -1778,9 +1934,12 @@ void ui_studio(AppState& state) {
         float aw = ImGui::GetContentRegionAvail().x;
         float ah = ImGui::GetContentRegionAvail().y - 36.f; // leave room for scrub
 
+        float asp_w = 9.f, asp_h = 16.f;
+        if (state.format == OutputFormat::Horizontal) { asp_w = 16.f; asp_h = 9.f; }
+        else if (state.format == OutputFormat::Square) { asp_w = 1.f; asp_h = 1.f; }
         float sw, sh;
-        if (aw / ah > 16.f/9.f) { sh = ah; sw = sh*16.f/9.f; }
-        else                     { sw = aw; sh = sw*9.f/16.f; }
+        if (aw / ah > asp_w / asp_h) { sh = ah; sw = sh * asp_w / asp_h; }
+        else                          { sw = aw; sh = sw * asp_h / asp_w; }
         float ox = (aw - sw) * 0.5f;
         float oy = (ah - sh) * 0.5f;
         ImGui::SetCursorPos({ox, oy});
@@ -1816,10 +1975,11 @@ void ui_studio(AppState& state) {
         ImGui::PushStyleColor(ImGuiCol_Tab,       Col::bg_soft);
         ImGui::PushStyleColor(ImGuiCol_TabActive, Col::line);
         if (ImGui::BeginTabBar("##panel_tabs")) {
-            if (ImGui::BeginTabItem("Clip"))   { state.panel_tab=0; ImGui::EndTabItem(); }
-            if (ImGui::BeginTabItem("Style"))  { state.panel_tab=1; ImGui::EndTabItem(); }
-            if (ImGui::BeginTabItem("Track"))  { state.panel_tab=2; ImGui::EndTabItem(); }
-            if (ImGui::BeginTabItem("Export")) { state.panel_tab=3; ImGui::EndTabItem(); }
+            if (ImGui::BeginTabItem("Clip"))    { state.panel_tab=0; ImGui::EndTabItem(); }
+            if (ImGui::BeginTabItem("Style"))   { state.panel_tab=1; ImGui::EndTabItem(); }
+            if (ImGui::BeginTabItem("Track"))   { state.panel_tab=2; ImGui::EndTabItem(); }
+            if (ImGui::BeginTabItem("Export"))  { state.panel_tab=3; ImGui::EndTabItem(); }
+            if (ImGui::BeginTabItem("History")) { state.panel_tab=4; ImGui::EndTabItem(); }
             ImGui::EndTabBar();
         }
         ImGui::PopStyleColor(2);
@@ -1831,62 +1991,47 @@ void ui_studio(AppState& state) {
         if      (state.panel_tab == 0) panel_clip(state, pw);
         else if (state.panel_tab == 1) panel_style(state, pw);
         else if (state.panel_tab == 2) panel_track(state, pw);
-        else                           panel_export(state, pw);
+        else if (state.panel_tab == 3) panel_export(state, pw);
+        else                           panel_history(state, pw);
         ImGui::EndChild();
     }
     ImGui::EndChild();
     ImGui::PopStyleColor(2);
 
-    // ── History panel ─────────────────────────────────────────────────────────
-    if (s_show_history) {
-        ImGui::SetNextWindowSize({220.f, 360.f}, ImGuiCond_FirstUseEver);
-        ImGui::SetNextWindowPos({win_w - 240.f, 40.f}, ImGuiCond_FirstUseEver);
-        ImGui::PushStyleColor(ImGuiCol_WindowBg, Col::bg_soft);
-        ImGui::PushStyleColor(ImGuiCol_Border,   Col::line);
-        if (ImGui::Begin("History##hist_win", &s_show_history, ImGuiWindowFlags_NoCollapse)) {
-            const auto& entries = history_entries();
-            int cur = history_pos();
+    // ── Drag splitters ────────────────────────────────────────────────────────
+    {
+        static bool s_drag_vsplit = false, s_drag_hsplit = false;
+        ImVec2 wpos = ImGui::GetWindowPos();
+        ImVec2 mpos = ImGui::GetIO().MousePos;
 
-            ImGui::BeginDisabled(!history_can_undo());
-            if (ImGui::SmallButton("Undo")) history_undo(state);
-            ImGui::EndDisabled();
-            ImGui::SameLine(0.f, 4.f);
-            ImGui::BeginDisabled(!history_can_redo());
-            if (ImGui::SmallButton("Redo")) history_redo(state);
-            ImGui::EndDisabled();
-            ImGui::Separator();
-
-            if (entries.empty()) {
-                ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
-                ImGui::TextUnformatted("No history yet");
-                ImGui::PopStyleColor();
-            } else {
-                ImGui::BeginChild("##hist_list", {0.f, 0.f}, false);
-                static int s_last_pos = -1;
-                for (int i = 0; i < (int)entries.size(); ++i) {
-                    bool is_cur  = (i == cur);
-                    bool is_redo = (i > cur);
-                    ImU32 col = is_redo ? to_u32(Col::dim)   :
-                                is_cur  ? to_u32(Col::fg)    : to_u32(Col::muted);
-                    ImGui::PushStyleColor(ImGuiCol_Text, col);
-                    char lbl[128];
-                    snprintf(lbl, sizeof(lbl), "%s %s##hst%d",
-                        is_cur ? "\xe2\x96\xb6" : " ", entries[i].action.c_str(), i);
-                    if (ImGui::Selectable(lbl, is_cur)) history_jump(state, i);
-                    ImGui::PopStyleColor();
-                }
-                // Auto-scroll to keep current entry visible when it changes
-                if (cur != s_last_pos) {
-                    float frac = ((int)entries.size() > 1)
-                        ? (float)cur / (float)((int)entries.size() - 1) : 1.f;
-                    ImGui::SetScrollY(frac * ImGui::GetScrollMaxY());
-                    s_last_pos = cur;
-                }
-                ImGui::EndChild();
-            }
+        // Vertical splitter between preview and props
+        float vborder_x = wpos.x + preview_w + 1.f;
+        bool near_v = fabsf(mpos.x - vborder_x) < 6.f &&
+                      mpos.y > wpos.y + body_top &&
+                      mpos.y < wpos.y + body_top + body_h;
+        if (near_v || s_drag_vsplit) {
+            ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+            if (ImGui::IsMouseClicked(0)) s_drag_vsplit = true;
         }
-        ImGui::End();
-        ImGui::PopStyleColor(2);
+        if (s_drag_vsplit) {
+            state.panel_w = fmaxf(200.f, fminf(win_w * 0.6f, wpos.x + win_w - mpos.x));
+        }
+        if (ImGui::IsMouseReleased(0)) s_drag_vsplit = false;
+
+        // Horizontal splitter between body and timeline
+        float hborder_y = wpos.y + body_top + body_h + pipeline_h;
+        bool near_h = fabsf(mpos.y - hborder_y) < 6.f &&
+                      mpos.x > wpos.x &&
+                      mpos.x < wpos.x + win_w;
+        if (near_h || s_drag_hsplit) {
+            ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
+            if (ImGui::IsMouseClicked(0)) s_drag_hsplit = true;
+        }
+        if (s_drag_hsplit) {
+            float new_tl_h = wpos.y + body_top + avail_h - mpos.y;
+            state.tl_h_frac = fmaxf(0.1f, fminf(0.7f, new_tl_h / avail_h));
+        }
+        if (ImGui::IsMouseReleased(0)) s_drag_hsplit = false;
     }
 
     // ── Pipeline strip ────────────────────────────────────────────────────────

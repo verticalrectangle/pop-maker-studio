@@ -44,6 +44,16 @@ struct PipelineStatus {
     std::string   error;
 };
 
+// ── Render settings ───────────────────────────────────────────────────────────
+
+struct RenderSettings {
+    int         crf           = 23;       // 0=lossless … 51=worst; 23 is default
+    int         audio_bitrate = 192;      // kbps: 128 / 192 / 320
+    std::string preset        = "medium"; // ultrafast/fast/medium/slow/veryslow
+    bool        high_profile  = false;    // false=Main, true=High
+    bool        advanced_open = false;    // UI collapsible state
+};
+
 // ── Render state ──────────────────────────────────────────────────────────────
 
 enum class OutputFormat { Vertical, Horizontal, Square };
@@ -111,11 +121,16 @@ struct AppState {
     bool        video_loaded = false;
 
     // render
-    RenderStatus render;
-    bool         render_done = false;
-    std::string  out_mp4;
-    std::string  out_wav;
-    std::string  out_srt;
+    RenderStatus   render;
+    RenderSettings render_settings;
+    bool           render_done = false;
+    std::string    out_mp4;
+    std::string    out_wav;
+    std::string    out_srt;
+
+    // UI layout — user-dragged splitter positions (0 = auto)
+    float panel_w   = 0.f;   // right panel width
+    float tl_h_frac = 0.f;   // timeline height as fraction of body height (0 = auto)
 
     // venv python
     std::string python_path = "/home/alexis/dev/song2subs/venv/bin/python";
@@ -124,7 +139,7 @@ struct AppState {
     SubtitleMode subtitle_mode = SubtitleMode::Word;
     int          subtitle_n    = 3;   // words per clip for CustomN mode
 
-    // right panel active tab: 0=Clip, 1=Style, 2=Track, 3=Export
+    // right panel active tab: 0=Clip, 1=Style, 2=Track, 3=Export, 4=History
     int panel_tab = 0;
 
     std::vector<std::pair<int,int>> subtitle_clip_indices() const;
