@@ -361,20 +361,27 @@ static void draw_pipeline_strip(AppState& state, float w) {
     dl->AddCircleFilled({p.x + 14.f, p.y + h * 0.5f}, 4.f,
         ImGui::ColorConvertFloat4ToU32({1.f, 1.f, 1.f, pulse}));
 
-    // Text
+    // Text — status + raw debug line
     std::string msg = state.pipeline.message.empty() ?
         "Processing…" : state.pipeline.message;
-    char buf[128];
+    char buf[256];
     snprintf(buf, sizeof(buf), "%s  %d%%", msg.c_str(),
         (int)(state.pipeline.progress * 100.f));
-    dl->AddText({p.x + 26.f, p.y + (h - 13.f) * 0.5f}, to_u32(Col::muted), buf);
+    dl->AddText({p.x + 26.f, p.y + 3.f}, to_u32(Col::muted), buf);
+    if (!state.pipeline.raw_line.empty()) {
+        // truncate long lines for display
+        std::string raw = state.pipeline.raw_line;
+        if (raw.size() > 120) raw = raw.substr(0, 117) + "...";
+        dl->AddText(ImGui::GetFont(), 10.f, {p.x + 26.f, p.y + 15.f},
+            to_u32(Col::dim), raw.c_str());
+    }
 
     // Cancel button (draw as text, handle click)
     const char* cancel_lbl = "Cancel";
     float cx = p.x + w - ImGui::CalcTextSize(cancel_lbl).x - 16.f;
     ImVec2 mp = ImGui::GetIO().MousePos;
     bool hov = mp.x >= cx && mp.y >= p.y && mp.y < p.y + h;
-    dl->AddText({cx, p.y + (h - 13.f) * 0.5f},
+    dl->AddText({cx, p.y + 3.f},
         to_u32(hov ? Col::fg : Col::muted), cancel_lbl);
     if (hov && ImGui::IsMouseClicked(0)) transcribe_cancel();
 
@@ -928,6 +935,14 @@ static void panel_clip(AppState& state, float w) {
             snprintf(pbuf, sizeof(pbuf), "%s  %d%%", msg.c_str(), (int)(state.pipeline.progress * 100.f));
             ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
             ImGui::TextUnformatted(pbuf);
+            if (!state.pipeline.raw_line.empty()) {
+                ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+                ImGui::SetNextItemWidth(w - 16.f);
+                std::string raw = state.pipeline.raw_line;
+                if (raw.size() > 100) raw = raw.substr(0, 97) + "...";
+                ImGui::TextUnformatted(raw.c_str());
+                ImGui::PopStyleColor();
+            }
             ImGui::PopStyleColor();
             ImGui::Dummy({0.f, 4.f});
             if (ui_btn("Cancel", false, true)) transcribe_cancel();
@@ -1516,6 +1531,17 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
         Track* ct = valid ? &state.tracks[ti] : nullptr;
         Clip*  cc = valid ? &ct->clips[ci]    : nullptr;
 
+        // ── Extract raw audio (video clips only) ─────────────────────────────
+        if (ct && ct->type==TrackType::Video && cc) {
+            bool ext_busy = state.extract_running;
+            if (ext_busy) ImGui::BeginDisabled();
+            if (ImGui::MenuItem(ext_busy ? "Extracting audio…" : "Extract audio as track")) {
+                extract_audio_start(state, cc->text);
+            }
+            if (ext_busy) ImGui::EndDisabled();
+            ImGui::Separator();
+        }
+
         // ── ML Processing — Audio & Video clips ──────────────────────────────
         if (ct && (ct->type==TrackType::Audio || ct->type==TrackType::Video) && cc) {
             bool busy = transcribe_running();
@@ -1742,6 +1768,23 @@ void ui_studio(AppState& state) {
         g_dropped_file.clear();
     }
 
+    // Extract audio done → add Audio track
+    if (state.extract_done) {
+        state.extract_done = false;
+        if (!state.extract_wav_path.empty() && fs::exists(state.extract_wav_path)) {
+            Track at;
+            at.type = TrackType::Audio;
+            at.name = fs::path(state.extract_wav_path).stem().string();
+            AudioMeta meta;
+            float dur = audio_probe(state.extract_wav_path, meta) ? meta.duration_secs : state.duration;
+            Clip ac; ac.start = 0.f; ac.end = dur; ac.text = state.extract_wav_path;
+            at.clips.push_back(ac);
+            state.tracks.push_back(at);
+            history_push(state, "Extract audio from video");
+        }
+        state.extract_wav_path.clear();
+    }
+
     // Pipeline done → apply grouping + save all SRTs + push history
     static PipelineStage last_stage = PipelineStage::Idle;
     if (last_stage != PipelineStage::Done &&
@@ -1915,9 +1958,19 @@ void ui_studio(AppState& state) {
         ImGui::PopStyleColor();
 
         ImGui::SameLine(0.f, 12.f);
-        if (ui_btn(state.playing ? "||" : ">", false, true)) {
-            state.playing = !state.playing;
-            if (state.playing) audio_play(); else audio_pause();
+        if (audio_loading()) {
+            ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+            ImGui::TextUnformatted("loading…");
+            ImGui::PopStyleColor();
+        } else if (state.extract_running) {
+            ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+            ImGui::TextUnformatted("extracting…");
+            ImGui::PopStyleColor();
+        } else {
+            if (ui_btn(state.playing ? "||" : ">", false, true)) {
+                state.playing = !state.playing;
+                if (state.playing) audio_play(); else audio_pause();
+            }
         }
 
         ImGui::EndMenuBar();

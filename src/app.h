@@ -42,6 +42,7 @@ struct PipelineStatus {
     float         progress = 0.f;
     std::string   message;
     std::string   error;
+    std::string   raw_line;  // last raw line from subprocess (debug)
 };
 
 // ── Render settings ───────────────────────────────────────────────────────────
@@ -131,6 +132,11 @@ struct AppState {
     // UI layout — user-dragged splitter positions (0 = auto)
     float panel_w   = 0.f;   // right panel width
     float tl_h_frac = 0.f;   // timeline height as fraction of body height (0 = auto)
+
+    // audio extraction (ffmpeg demux, no ML)
+    bool        extract_running  = false;
+    bool        extract_done     = false;
+    std::string extract_wav_path;
 
     // venv python
     std::string python_path = "/home/alexis/dev/song2subs/venv/bin/python";

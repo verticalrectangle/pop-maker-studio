@@ -10,3 +10,6 @@ const std::string& render_font_path();
 void render_start(AppState& state);
 void render_cancel();
 bool render_export_srt(const AppState& state, const std::string& out_path);
+
+// Extract raw audio from a video file into a WAV, add as Audio track when done.
+void extract_audio_start(AppState& state, const std::string& video_path);

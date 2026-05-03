@@ -370,3 +370,48 @@ void render_cancel() {
     pid_t pid = g_ffmpeg_pid.load();
     if (pid > 0) kill(pid, SIGTERM);
 }
+
+// ── Extract raw audio from video ──────────────────────────────────────────────
+
+void extract_audio_start(AppState& state, const std::string& video_path) {
+    if (state.extract_running) return;
+    state.extract_running = true;
+    state.extract_done    = false;
+    state.extract_wav_path.clear();
+
+    std::thread([&state, video_path]() {
+        fs::path vp(video_path);
+        fs::path outdir = vp.parent_path() / vp.stem();
+        fs::create_directories(outdir);
+        std::string out_wav = (outdir / (vp.stem().string() + "_audio.wav")).string();
+
+        std::vector<std::string> args = {
+            "ffmpeg", "-hide_banner", "-loglevel", "error",
+            "-y", "-i", video_path,
+            "-vn", "-acodec", "pcm_s16le", out_wav
+        };
+
+        pid_t pid = fork();
+        if (pid == 0) {
+            int devnull = open("/dev/null", O_WRONLY);
+            if (devnull >= 0) {
+                dup2(devnull, STDOUT_FILENO);
+                dup2(devnull, STDERR_FILENO);
+                close(devnull);
+            }
+            std::vector<char*> argv_ptrs;
+            for (auto& s : args) argv_ptrs.push_back(const_cast<char*>(s.c_str()));
+            argv_ptrs.push_back(nullptr);
+            execvp("ffmpeg", argv_ptrs.data());
+            _exit(127);
+        }
+
+        int wstat = 0;
+        waitpid(pid, &wstat, 0);
+
+        bool ok = WIFEXITED(wstat) && WEXITSTATUS(wstat) == 0 && fs::exists(out_wav);
+        if (ok) state.extract_wav_path = out_wav;
+        state.extract_running = false;
+        state.extract_done    = ok;
+    }).detach();
+}

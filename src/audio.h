@@ -4,7 +4,8 @@
 
 void  audio_init();
 void  audio_shutdown();
-bool  audio_load(const std::string& path);  // load audio file for playback
+bool  audio_load(const std::string& path);  // async — probe+enqueue decode in background
+bool  audio_loading();                       // true while background decode is in progress
 void  audio_play();
 void  audio_pause();
 void  audio_seek(float seconds);
