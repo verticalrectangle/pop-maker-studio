@@ -28,11 +28,19 @@ struct PropTrack {
     int   find_nearest(float t, float tol = 0.1f)                    const;
 };
 
+// ── Constants ─────────────────────────────────────────────────────────────────
+
+static const int MAX_VIDEO_TRACKS = 8;
+
 // ── Track / clip data model ───────────────────────────────────────────────────
 
-enum class TrackType { Subtitle, Audio, Video };
+enum class TrackType { Subtitle, Audio, Video };  // track display hint / default drop type
+
+// Each clip carries its own type so any track can hold mixed content.
+enum class ClipType { Text, Video, Audio };
 
 struct Clip {
+    ClipType    clip_type = ClipType::Text;  // Text/Video/Audio — independent of track type
     float       start = 0.f;
     float       end   = 0.f;
     std::string text;
@@ -168,8 +176,9 @@ struct AppState {
     bool        proxy_ready    = false;        // proxy ready for track 0 (backwards compat)
     bool        proxy_was_generating = false;  // tracks generation state changes
 
-    // per-track proxy ready flags (indexed by tracks[] index)
-    std::array<bool, 8> track_proxy_ready = {};
+    // Proxy slot table: proxy_paths[slot] = source file path (empty = free).
+    // Keyed by file path so two clips sharing a source share one proxy.
+    std::string proxy_paths[MAX_VIDEO_TRACKS];
 
     // keyframe selection
     int         kf_sel_track = -1;

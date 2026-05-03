@@ -2,6 +2,7 @@
 #include <string>
 #include <cstdint>
 #include "proxy.h"
+#include "app.h"
 
 // Video preview — two separate paths:
 //
@@ -34,9 +35,8 @@ struct VideoInfo {
 
 // ── Preview path (multi-track) ────────────────────────────────────────────────
 
-static const int MAX_VIDEO_TRACKS = 8;
-
-// Each video track gets its own slot (track_id = index in AppState::tracks[]).
+// MAX_VIDEO_TRACKS is defined in app.h (included above).
+// Each video clip gets its own slot keyed by file path (see AppState::proxy_paths).
 // track_id=-1 in video_close() closes all slots.
 
 void      video_open_still(int track_id, const std::string& jpeg_path);

@@ -244,9 +244,9 @@ static bool write_filter_script(
         // Find matching video track in state (by path)
         const Clip* cl_ptr = nullptr;
         for (auto& tr : state.tracks) {
-            if (tr.type != TrackType::Video) continue;
             for (auto& cl : tr.clips)
-                if (cl.text == vs.path) { cl_ptr = &cl; break; }
+                if (cl.clip_type == ClipType::Video && cl.text == vs.path)
+                    { cl_ptr = &cl; break; }
             if (cl_ptr) break;
         }
         if (!cl_ptr) continue;
@@ -349,12 +349,13 @@ static bool write_filter_script(
     if (aud_in >= 0) {
         float vol = 1.f;
         for (auto& tr : state.tracks) {
-            if ((tr.type == TrackType::Audio || tr.type == TrackType::Video)
-                    && !tr.clips.empty() && !tr.muted) {
-                vol = tr.clips[0].volume;
-                break;
+            if (tr.muted) continue;
+            for (auto& cl : tr.clips) {
+                if (cl.clip_type == ClipType::Text) continue;
+                vol = cl.volume; goto vol_done;
             }
         }
+        vol_done:;
         char vbuf[32]; snprintf(vbuf, sizeof(vbuf), "%.3f", (double)vol);
         line() << "[" << aud_in << ":a]volume=" << vbuf << "[aout]";
         aout_label = "[aout]";
@@ -383,25 +384,34 @@ static std::vector<std::string> build_args(AppState& state) {
     std::vector<VidSpec> vid_specs;
     InSpec audio_in;
 
+    // Collect video clips across all tracks (in track order = z-order),
+    // deduplicated by path so the same file on two tracks uses one ffmpeg input.
     for (auto& tr : state.tracks) {
-        if (tr.type != TrackType::Video) continue;
         for (auto& cl : tr.clips) {
+            if (cl.clip_type != ClipType::Video) continue;
             if (cl.text.empty() || !fs::exists(cl.text)) continue;
+            // Dedup: skip if path already registered.
+            bool dup = false;
+            for (auto& v : vid_specs) if (v.path == cl.text) { dup=true; break; }
+            if (dup) continue;
             VidSpec vs; vs.path = cl.text; vs.ss = cl.start; vs.to = cl.end;
             vid_specs.push_back(vs);
-            break; // one clip per track for now
         }
     }
 
     audio_in.path = state.audio_path;
-    for (auto& tr : state.tracks)
-        if (tr.type == TrackType::Audio && !tr.clips.empty()
-                && !tr.clips[0].text.empty() && fs::exists(tr.clips[0].text)) {
-            audio_in.path = tr.clips[0].text;
-            audio_in.ss   = tr.clips[0].start;
-            audio_in.to   = tr.clips[0].end;
-            break;
+    for (auto& tr : state.tracks) {
+        bool found = false;
+        for (auto& cl : tr.clips) {
+            if (cl.clip_type != ClipType::Audio) continue;
+            if (cl.text.empty() || !fs::exists(cl.text)) continue;
+            audio_in.path = cl.text;
+            audio_in.ss   = cl.start;
+            audio_in.to   = cl.end;
+            found = true; break;
         }
+        if (found) break;
+    }
     if (!audio_in.path.empty() && !fs::exists(audio_in.path)) audio_in.path.clear();
 
     if (vid_specs.empty() && audio_in.path.empty()) return {};

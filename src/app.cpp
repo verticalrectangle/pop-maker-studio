@@ -83,9 +83,10 @@ float Clip::eval_prop(const std::string& name, float playhead) const {
 std::vector<std::pair<int,int>> AppState::subtitle_clip_indices() const {
     std::vector<std::pair<int,int>> out;
     for (int ti = 0; ti < (int)tracks.size(); ++ti) {
-        if (tracks[ti].type != TrackType::Subtitle) continue;
+        if (!tracks[ti].visible) continue;
         for (int ci = 0; ci < (int)tracks[ti].clips.size(); ++ci)
-            out.push_back({ti, ci});
+            if (tracks[ti].clips[ci].clip_type == ClipType::Text)
+                out.push_back({ti, ci});
     }
     std::sort(out.begin(), out.end(), [&](auto& a, auto& b){
         return tracks[a.first].clips[a.second].start <

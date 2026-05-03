@@ -73,6 +73,17 @@ static float tl_fps(const AppState& state) {
            ? (float)video_info(0).fps : 30.f;
 }
 
+// Proxy slot for a video file: reuse if already registered, else claim next free.
+// O(MAX_VIDEO_TRACKS) scan — effectively O(1).  Returns -1 when all slots full.
+static int slot_for_video(AppState& state, const std::string& path) {
+    if (path.empty()) return -1;
+    for (int i = 0; i < MAX_VIDEO_TRACKS; ++i)
+        if (state.proxy_paths[i] == path) return i;
+    for (int i = 0; i < MAX_VIDEO_TRACKS; ++i)
+        if (state.proxy_paths[i].empty()) { state.proxy_paths[i] = path; return i; }
+    return -1;
+}
+
 // Maximum timeline position covered by any clip across all tracks.
 static float project_end(const AppState& state) {
     float end = 0.f;
@@ -321,35 +332,31 @@ static void import_file(AppState& state, const std::string& path) {
         for (auto& t : state.tracks) if (t.type == TrackType::Video) vid_count++;
 
         state.tracks.push_back({});
-        int track_ti = (int)state.tracks.size() - 1;
-        Track& vt = state.tracks[track_ti];
+        Track& vt = state.tracks.back();
         vt.type = TrackType::Video;
         char vname[32];
         snprintf(vname, sizeof(vname), vid_count == 0 ? "Video" : "Video %d", vid_count + 1);
         vt.name = vname;
-        Clip vc; vc.start=0.f; vc.end=state.duration; vc.text=path;
+        Clip vc; vc.clip_type = ClipType::Video;
+        vc.start=0.f; vc.end=state.duration; vc.text=path;
         vt.clips.push_back(vc);
 
-        // Reset proxy-ready flags for this slot.
+        // Claim or reuse proxy slot for this file path.
+        int slot = slot_for_video(state, path);
         state.proxy_ready = false;
-        if (track_ti < MAX_VIDEO_TRACKS) state.track_proxy_ready[track_ti] = false;
 
         // Start proxy generation (no-op if proxy already exists on disk).
-        // This also extracts the preview still synchronously (< 1 s).
         proxy_start(path);
 
-        if (track_ti < MAX_VIDEO_TRACKS) {
-            // Show still immediately while proxy generates.
+        if (slot >= 0) {
             std::string still = proxy_still_path(path);
-            video_open_still(track_ti, still);
+            video_open_still(slot, still);
 
-            // If the proxy already existed from a previous session, open it now.
             if (proxy_is_ready(path)) {
                 ProxyInfo pi;
                 if (proxy_load(path, pi)) {
-                    video_open_proxy(track_ti, pi);
+                    video_open_proxy(slot, pi);
                     state.proxy_ready = true;
-                    state.track_proxy_ready[track_ti] = true;
                 }
             }
         }
@@ -365,7 +372,8 @@ static void import_file(AppState& state, const std::string& path) {
         if (!at) { state.tracks.push_back({}); at=&state.tracks.back(); }
         at->type = TrackType::Audio; at->name = "Audio";
         at->clips.clear();
-        Clip ac; ac.start=0.f; ac.end=state.duration; ac.text=path;
+        Clip ac; ac.clip_type = ClipType::Audio;
+        ac.start=0.f; ac.end=state.duration; ac.text=path;
         at->clips.push_back(ac);
     }
 
@@ -478,18 +486,22 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
     // Composite all video layers bottom-to-top (tracks array order = bottom first).
     {
         float lookahead = ImGui::GetIO().DeltaTime;
-        for (int ti = 0; ti < (int)state.tracks.size() && ti < MAX_VIDEO_TRACKS; ++ti) {
+        for (int ti = 0; ti < (int)state.tracks.size(); ++ti) {
             const Track& tr = state.tracks[ti];
-            if (tr.type != TrackType::Video || !tr.visible) continue;
-            if (!video_is_open(ti)) continue;
+            if (!tr.visible) continue;
 
-            // Find the active clip at the current playhead.
+            // Find the active Video clip at the current playhead on this track.
             const Clip* active = nullptr;
             for (auto& cl : tr.clips)
-                if (state.playhead >= cl.start && state.playhead < cl.end) { active=&cl; break; }
+                if (cl.clip_type == ClipType::Video &&
+                    state.playhead >= cl.start && state.playhead < cl.end)
+                    { active=&cl; break; }
             if (!active) continue;
 
-            uintptr_t tex = video_get_texture(ti, (double)(state.playhead + lookahead));
+            int slot = slot_for_video(const_cast<AppState&>(state), active->text);
+            if (slot < 0 || !video_is_open(slot)) continue;
+
+            uintptr_t tex = video_get_texture(slot, (double)(state.playhead + lookahead));
             if (!tex) continue;
 
             float px    = active->eval_prop("pos_x",    state.playhead);
@@ -571,11 +583,13 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
     int rendered = 0;
     for (int ti = 0; ti < (int)state.tracks.size(); ++ti) {
         auto& track = state.tracks[ti];
-        if (track.type != TrackType::Subtitle || !track.visible) continue;
+        if (!track.visible) continue;
 
+        // Find active Text clip on this track.
         const Clip* active = nullptr;
         int active_ci = -1;
         for (int ci = 0; ci < (int)track.clips.size(); ++ci) {
+            if (track.clips[ci].clip_type != ClipType::Text) continue;
             if (state.playhead >= track.clips[ci].start &&
                 state.playhead <  track.clips[ci].end) {
                 active = &track.clips[ci];
@@ -586,7 +600,8 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
         const Clip* show = active;
         int show_ci = active_ci;
         if (!show && state.selected_track == ti && state.selected_clip >= 0 &&
-            state.selected_clip < (int)track.clips.size()) {
+            state.selected_clip < (int)track.clips.size() &&
+            track.clips[state.selected_clip].clip_type == ClipType::Text) {
             show    = &track.clips[state.selected_clip];
             show_ci = state.selected_clip;
         }
@@ -696,7 +711,10 @@ static void panel_track(AppState& state, float w) {
     ImGui::PopStyleColor();
     ImGui::Dummy({0.f, 4.f}); ui_separator(); ImGui::Dummy({0.f, 8.f});
 
-    if (track.type == TrackType::Subtitle &&
+    // Show grouping controls on any track whose clips are Text type (e.g. Lyrics).
+    bool is_text_track = !track.clips.empty() &&
+                         track.clips[0].clip_type == ClipType::Text;
+    if (is_text_track &&
         !state.words_json_path.empty() && fs::exists(state.words_json_path)) {
 
         ui_label("Subtitle grouping"); ImGui::Dummy({0.f, 4.f});
@@ -746,7 +764,7 @@ static void panel_track(AppState& state, float w) {
             ImGui::EndTooltip();
         }
 
-    } else if (track.type == TrackType::Subtitle) {
+    } else if (is_text_track) {
         ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
         ImGui::TextWrapped("Run ML Processing on an audio clip first to generate word-level JSON, then grouping controls will appear here.");
         ImGui::PopStyleColor();
@@ -845,7 +863,7 @@ static void panel_clip(AppState& state, float w) {
     ImGui::PopStyleColor();
     ImGui::Dummy({0.f, 4.f}); ui_separator(); ImGui::Dummy({0.f, 8.f});
 
-    if (track.type == TrackType::Subtitle) {
+    if (clip.clip_type == ClipType::Text) {
         // ── Text ─────────────────────────────────────────────────────────────
         ui_label("Text"); ImGui::Dummy({0.f, 4.f});
         if (s_edit_focus_next) { ImGui::SetKeyboardFocusHere(); s_edit_focus_next = false; }
@@ -1001,7 +1019,7 @@ static void panel_clip(AppState& state, float w) {
         }
 
         // Opacity + Transition — video only
-        if (track.type == TrackType::Video) {
+        if (clip.clip_type == ClipType::Video) {
             ImGui::Dummy({0.f, 12.f}); ui_separator(); ImGui::Dummy({0.f, 8.f});
             ui_label("Opacity"); ImGui::Dummy({0.f, 4.f});
             ImGui::PushStyleColor(ImGuiCol_SliderGrab, Col::fg);
@@ -1183,7 +1201,7 @@ static void panel_clip(AppState& state, float w) {
             ImGui::Dummy({0.f, 2.f});
             if (ui_btn("Separate Vocals only", false, true))
                 kick_pipeline(state, clip.text, PipelineMode::SeparateOnly);
-            if (track.type == TrackType::Video) {
+            if (clip.clip_type == ClipType::Video) {
                 ImGui::Dummy({0.f, 2.f});
                 if (ImGui::IsItemHovered()) {
                     ImGui::BeginTooltip();
@@ -1648,8 +1666,8 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
             float cy0 = track_y+3.f, cy1 = track_y+TL_TRACK_H-3.f;
             bool sel = (state.selected_track==ti && state.selected_clip==ci);
 
-            ImVec4 clip_fill = (track.type==TrackType::Subtitle) ? Col::clip_sub
-                             : (track.type==TrackType::Audio)    ? Col::clip_audio
+            ImVec4 clip_fill = (clip.clip_type==ClipType::Text)  ? Col::clip_sub
+                             : (clip.clip_type==ClipType::Audio) ? Col::clip_audio
                                                                  : Col::clip_video;
             dl->AddRectFilled({vis_x0,cy0},{vis_x1,cy1},
                 to_u32(sel ? Col::fg : clip_fill), 2.f);
@@ -1657,12 +1675,12 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
                 to_u32(sel ? Col::fg : Col::line), 2.f);
 
             // Clip label / waveform
-            if (track.type==TrackType::Subtitle && !clip.text.empty()) {
+            if (clip.clip_type==ClipType::Text && !clip.text.empty()) {
                 ImGui::PushClipRect({vis_x0,cy0},{vis_x1,cy1},true);
                 dl->AddText({vis_x0+4.f, cy0+(cy1-cy0-13.f)*0.5f},
                     to_u32(sel ? Col::bg : Col::fg), clip.text.c_str());
                 ImGui::PopClipRect();
-            } else if (track.type==TrackType::Audio) {
+            } else if (clip.clip_type==ClipType::Audio) {
                 int bars = (int)((vis_x1-vis_x0)/3.f);
                 for (int b=0;b<bars;++b) {
                     float bx=vis_x0+b*3.f+1.f;
@@ -1670,7 +1688,7 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
                     float mid=(cy0+cy1)*0.5f, ht=amp*(cy1-cy0-6.f)*0.5f;
                     dl->AddLine({bx,mid-ht},{bx,mid+ht},to_u32(Col::muted));
                 }
-            } else if (track.type==TrackType::Video) {
+            } else if (clip.clip_type==ClipType::Video) {
                 ImGui::PushClipRect({vis_x0,cy0},{vis_x1,cy1},true);
                 dl->AddText({vis_x0+4.f,cy0+3.f},
                     to_u32(sel?Col::bg:Col::fg),
@@ -1731,7 +1749,7 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
             }
 
             // Transition out indicator — diagonal slash at right edge of video clips
-            if (track.type == TrackType::Video && clip.transition_out > 0.f) {
+            if (clip.clip_type == ClipType::Video && clip.transition_out > 0.f) {
                 float trans_px = fminf(clip.transition_out * zoom, cx1 - cx0);
                 float tx = vis_x1 - trans_px;
                 if (tx < vis_x1 && tx >= vis_x0) {
@@ -1750,7 +1768,7 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
                     state.selected_clip  = ci;
                     strncpy(s_edit_buf, clip.text.c_str(), sizeof(s_edit_buf)-1);
                     s_edit_buf[sizeof(s_edit_buf)-1] = '\0';
-                    s_edit_focus_next = (track.type==TrackType::Subtitle);
+                    s_edit_focus_next = (clip.clip_type==ClipType::Text);
                     if (!state.playing) seek_to(state, clip.start);
                     state.panel_tab = 0;  // switch to Clip tab
 
@@ -1878,7 +1896,7 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
         Clip*  cc = valid ? &ct->clips[ci]    : nullptr;
 
         // ── Extract raw audio (video clips only) ─────────────────────────────
-        if (ct && ct->type==TrackType::Video && cc) {
+        if (cc && cc->clip_type==ClipType::Video) {
             bool ext_busy = state.extract_running;
             if (ext_busy) ImGui::BeginDisabled();
             if (ImGui::MenuItem(ext_busy ? "Extracting audio…" : "Extract audio as track")) {
@@ -1889,7 +1907,7 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
         }
 
         // ── ML Processing — Audio & Video clips ──────────────────────────────
-        if (ct && (ct->type==TrackType::Audio || ct->type==TrackType::Video) && cc) {
+        if (cc && (cc->clip_type==ClipType::Audio || cc->clip_type==ClipType::Video)) {
             bool busy = transcribe_running();
             if (busy) ImGui::BeginDisabled();
             if (ImGui::BeginMenu("ML Processing")) {
@@ -1911,7 +1929,7 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
         }
 
         // ── Subtitle clips ────────────────────────────────────────────────────
-        if (ct && ct->type==TrackType::Subtitle) {
+        if (cc && cc->clip_type==ClipType::Text) {
             if (ImGui::MenuItem("Edit text")) {
                 state.panel_tab = 0;
                 s_edit_focus_next = true;
@@ -2019,7 +2037,7 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
                 ct->visible = !ct->visible;
                 history_push(state, "Track visibility");
             }
-            if (ct->type != TrackType::Subtitle) {
+            if (ct->type != TrackType::Subtitle) {  // mute only makes sense on audio/video tracks
                 if (ImGui::MenuItem(ct->muted ? "Unmute" : "Mute")) {
                     ct->muted = !ct->muted;
                     history_push(state, "Track mute");
@@ -2151,32 +2169,26 @@ void ui_studio(AppState& state) {
         g_dropped_file.clear();
     }
 
-    // Proxy ready → upgrade from still to interactive proxy preview for each video track.
-    for (int ti = 0; ti < (int)state.tracks.size() && ti < MAX_VIDEO_TRACKS; ++ti) {
-        Track& tr = state.tracks[ti];
-        if (tr.type != TrackType::Video) continue;
-        if (tr.clips.empty() || tr.clips[0].text.empty()) continue;
-        if (state.track_proxy_ready[ti]) continue;
-
-        const std::string& vpath = tr.clips[0].text;
+    // Proxy ready → upgrade from still to proxy for each registered file path.
+    for (int slot = 0; slot < MAX_VIDEO_TRACKS; ++slot) {
+        const std::string& vpath = state.proxy_paths[slot];
+        if (vpath.empty()) continue;
+        if (!video_is_open(slot) || video_info(slot).fps > 0.0) continue; // still or already proxy
         if (!proxy_is_ready(vpath)) continue;
 
         ProxyInfo pi;
         if (!proxy_load(vpath, pi)) continue;
-        video_open_proxy(ti, pi);
-        state.track_proxy_ready[ti] = true;
+        video_open_proxy(slot, pi);
 
-        if (ti == 0) {
+        if (slot == 0) {
             state.proxy_ready = true;
-            // Proxy frame count/fps is the most accurate duration source.
             float pd = (float)video_info(0).duration;
             if (pd > 0.f) {
-                state.duration = pd;
-                for (auto& t2 : state.tracks) {
-                    if (t2.type != TrackType::Video) continue;
-                    for (auto& c : t2.clips)
-                        if (c.end < pd) c.end = pd;
-                }
+                // Extend all video clips for this file to match corrected duration.
+                for (auto& tr : state.tracks)
+                    for (auto& cl : tr.clips)
+                        if (cl.clip_type == ClipType::Video && cl.text == vpath && cl.end < pd)
+                            cl.end = pd;
             }
         }
     }
@@ -2203,7 +2215,8 @@ void ui_studio(AppState& state) {
             at.name = fs::path(state.extract_wav_path).stem().string();
             AudioMeta meta;
             float dur = audio_probe(state.extract_wav_path, meta) ? meta.duration_secs : state.duration;
-            Clip ac; ac.start = 0.f; ac.end = dur; ac.text = state.extract_wav_path;
+            Clip ac; ac.clip_type = ClipType::Audio;
+            ac.start = 0.f; ac.end = dur; ac.text = state.extract_wav_path;
             at.clips.push_back(ac);
             state.tracks.push_back(at);
             history_push(state, "Extract audio from video");
@@ -2227,9 +2240,9 @@ void ui_studio(AppState& state) {
     {
         float vol = 1.f;
         for (auto& tr : state.tracks) {
-            if (tr.type != TrackType::Audio && tr.type != TrackType::Video) continue;
             if (tr.muted) { vol = 0.f; break; }
             for (auto& cl : tr.clips) {
+                if (cl.clip_type == ClipType::Text) continue;
                 if (state.playhead >= cl.start && state.playhead < cl.end) {
                     vol = cl.volume; break;
                 }
