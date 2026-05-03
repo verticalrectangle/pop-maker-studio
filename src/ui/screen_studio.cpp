@@ -434,7 +434,13 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
     }
 
     // Active subtitle clips — stack vertically from bottom
-    static bool s_sub_was_dragging = false;
+    // Drag state: raw mouse detection, no ImGui widget (avoids backward-cursor assert)
+    static int   s_drag_ti   = -1, s_drag_ci   = -1;
+    static bool  s_dragging  = false;
+    ImVec2 mpos = ImGui::GetIO().MousePos;
+    bool   ldown = ImGui::IsMouseDown(0);
+    bool   lclick = ImGui::IsMouseClicked(0);
+
     int rendered = 0;
     for (int ti = 0; ti < (int)state.tracks.size(); ++ti) {
         auto& track = state.tracks[ti];
@@ -493,27 +499,31 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
         ImGui::SetWindowFontScale(1.f);
         ImGui::PopFont();
 
-        // Drag handle — allows repositioning subtitle Y on the canvas
+        // Drag handle — raw mouse hit detection, no ImGui widget calls
         if (show_ci >= 0 && slot_y >= p.y && slot_y + tsz.y <= p.y + h) {
             float pad = 8.f;
-            ImGui::SetCursorScreenPos({tx - pad, slot_y - pad});
-            char drag_id[32]; snprintf(drag_id, sizeof(drag_id), "##sdrag%d_%d", ti, show_ci);
-            ImGui::InvisibleButton(drag_id, {tsz.x + pad*2.f, tsz.y + pad*2.f});
-            if (ImGui::IsItemHovered() || ImGui::IsItemActive())
+            bool in_handle = mpos.x >= tx - pad && mpos.x <= tx + tsz.x + pad &&
+                             mpos.y >= slot_y - pad && mpos.y <= slot_y + tsz.y + pad;
+            bool is_this_drag = (s_drag_ti == ti && s_drag_ci == show_ci);
+
+            if (in_handle || (is_this_drag && ldown))
                 ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
-            if (ImGui::IsItemActive() && ImGui::IsMouseDragging(0)) {
-                s_sub_was_dragging = true;
-                Clip& mc   = state.tracks[ti].clips[show_ci];
-                float new_y = (slot_y + ImGui::GetIO().MouseDelta.y - p.y) / h;
+
+            if (in_handle && lclick) {
+                s_drag_ti = ti;
+                s_drag_ci = show_ci;
+            }
+
+            if (is_this_drag && ldown) {
+                s_dragging = true;
+                Clip& mc = state.tracks[ti].clips[show_ci];
+                float new_y = (mpos.y - p.y) / h;
                 mc.sub_pos   = 3;
                 mc.sub_pos_y = fmaxf(0.02f, fminf(0.98f, new_y));
             }
-            if (s_sub_was_dragging && ImGui::IsItemDeactivated()) {
-                history_push(state, "Subtitle position Y");
-                s_sub_was_dragging = false;
-            }
-            // Draw drag indicator dots when hovered
-            if (ImGui::IsItemHovered() && !ImGui::IsItemActive()) {
+
+            // Dot indicator when hoverable
+            if (in_handle && !ldown) {
                 float mid_x = tx + tsz.x * 0.5f;
                 for (int d = -1; d <= 1; ++d)
                     dl->AddCircleFilled({mid_x + d*6.f, slot_y - 6.f},
@@ -522,6 +532,14 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
         }
 
         ++rendered;
+    }
+
+    // Commit drag on mouse release
+    if (s_dragging && !ldown) {
+        history_push(state, "Subtitle position Y");
+        s_dragging = false;
+        s_drag_ti  = -1;
+        s_drag_ci  = -1;
     }
 }
 
