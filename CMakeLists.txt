@@ -37,6 +37,7 @@ set(SOURCES
     src/history.cpp
     src/filepicker.cpp
     src/video.cpp
+    src/proxy.cpp
     src/blender_export.cpp
     src/ui/screen_splash.cpp
     src/ui/screen_studio.cpp

@@ -15,6 +15,10 @@ namespace Col {
     inline constexpr ImVec4 bg_soft       = {1.000f, 1.000f, 1.000f, 0.030f};
     inline constexpr ImVec4 bg_soft_hov   = {1.000f, 1.000f, 1.000f, 0.040f};
     inline constexpr ImVec4 muted         = {1.000f, 1.000f, 1.000f, 0.450f};
+    // per-track-type clip fill colors
+    inline constexpr ImVec4 clip_sub      = {0.200f, 0.480f, 0.900f, 0.700f};  // blue  — subtitle
+    inline constexpr ImVec4 clip_audio    = {0.180f, 0.700f, 0.420f, 0.700f};  // green — audio
+    inline constexpr ImVec4 clip_video    = {0.560f, 0.200f, 0.900f, 0.700f};  // purple — video
     inline constexpr ImVec4 label         = {1.000f, 1.000f, 1.000f, 0.400f};
     inline constexpr ImVec4 dim           = {1.000f, 1.000f, 1.000f, 0.250f};
     inline constexpr ImVec4 transparent   = {0.000f, 0.000f, 0.000f, 0.000f};

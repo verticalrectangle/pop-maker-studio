@@ -3,6 +3,7 @@
 #include "app.h"
 #include "audio.h"
 #include "video.h"
+#include "proxy.h"
 #include "filepicker.h"
 #include <imgui.h>
 #include <imgui_internal.h>
@@ -567,10 +568,16 @@ void ui_screen_editor(AppState& state) {
         std::string picked = filepicker_open(
             "Select background video", "Video", "*.mp4 *.mov *.mkv *.avi *.webm");
         if (!picked.empty()) {
-            if (video_open(picked)) {
+            proxy_start(picked);
+            video_open_still(proxy_still_path(picked));
+            if (proxy_is_ready(picked)) {
+                ProxyInfo pi;
+                if (proxy_load(picked, pi)) { video_open_proxy(pi); state.proxy_ready = true; }
+            }
+            {
                 state.video_path   = picked;
                 state.video_loaded = true;
-                video_seek(0.0);
+                state.proxy_ready  = false;
                 // Add a video track if none exists
                 bool has_vid = false;
                 for (auto& t : state.tracks)

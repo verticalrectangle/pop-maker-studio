@@ -1,45 +1,64 @@
 #pragma once
 #include <string>
 #include <cstdint>
+#include "proxy.h"
 
-// Video background layer — FFmpeg decode, OpenGL texture per-frame.
-// Designed for preview (real-time) and export (frame-accurate).
+// Video preview — two separate paths:
+//
+// PREVIEW (proxy-based, stb_image, main thread only):
+//   video_open_still()  — show a single JPEG while proxy is generating
+//   video_open_proxy()  — open MJPEG + seek table; scrub is fseek + stb_image
+//   video_get_texture() — decode current frame, upload to GL, return texture ID
+//   video_close()
+//
+// EXPORT (FFmpeg, original file, frame-accurate):
+//   video_open_export()         — open original for decode
+//   video_decode_frame_at()     — decode exact frame at timestamp (blocks)
+//   video_close_export()
+//   VideoFrame                  — raw RGBA pixel data returned by decode_frame_at
 
 struct VideoFrame {
-    uint8_t* data   = nullptr;  // RGBA packed, width*height*4 bytes
+    uint8_t* data   = nullptr;  // RGBA, width*height*4 bytes — caller must av_free()
     int      width  = 0;
     int      height = 0;
-    double   pts    = 0.0;      // presentation timestamp in seconds
+    double   pts    = 0.0;
 };
 
 struct VideoInfo {
-    double duration = 0.0;
-    int    width    = 0;
-    int    height   = 0;
-    double fps      = 0.0;
+    double duration  = 0.0;
+    int    width     = 0;
+    int    height    = 0;
+    double fps       = 0.0;
     bool   has_audio = false;
 };
 
-// Open a video file for preview playback.
-// Spawns a background decode thread; call video_get_frame() each render frame.
-bool  video_open(const std::string& path);
-void  video_close();
-bool  video_is_open();
-VideoInfo video_info();
+// ── Preview path ──────────────────────────────────────────────────────────────
 
-// Seek to timestamp (seconds). Non-blocking — frame arrives next poll.
-void  video_seek(double seconds);
+// Show a static JPEG until the proxy is ready.
+void video_open_still(const std::string& jpeg_path);
 
-// Returns the most recently decoded frame at or before `playhead`.
-// Returns nullptr if no frame is ready yet.
-// The returned pointer is valid until the next call to video_get_frame().
-const VideoFrame* video_get_frame(double playhead);
+// Open a proxy for interactive scrubbing.
+bool video_open_proxy(const ProxyInfo& proxy);
 
-// Upload the current frame to an OpenGL texture.
-// Creates the texture on first call; reuses it thereafter.
-// Returns the OpenGL texture ID (cast to uintptr_t for ImGui).
+// Close whichever preview is open.
+void video_close();
+
+bool      video_is_open();
+VideoInfo video_info();    // from the most recently opened proxy or export context
+
+// Upload the frame nearest to `playhead` to a GL texture.
+// Re-decodes only when the frame index changes.  Returns 0 if nothing is open.
 uintptr_t video_get_texture(double playhead);
 
-// Frame-accurate decode for export: returns the frame at exactly `seconds`.
-// Blocks until the frame is decoded. Caller frees VideoFrame->data.
+// Probe original video container for duration without full stream scan.
+// Reads container header only — safe to call on the main thread, < 100 ms.
+float video_probe_duration(const std::string& path);
+
+// ── Export path ───────────────────────────────────────────────────────────────
+
+bool  video_open_export(const std::string& path);
+void  video_close_export();
+
+// Frame-accurate single-frame decode.  Caller must av_free(result->data)
+// and delete result when done.
 VideoFrame* video_decode_frame_at(double seconds);

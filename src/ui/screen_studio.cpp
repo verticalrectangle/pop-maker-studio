@@ -10,6 +10,7 @@
 #include "render.h"
 #include "blender_export.h"
 #include "history.h"
+#include "proxy.h"
 #include <imgui.h>
 #include <imgui_internal.h>
 #include "json.hpp"
@@ -19,6 +20,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <chrono>
 
 namespace fs = std::filesystem;
 
@@ -40,6 +42,18 @@ static std::string fmt_time_short(float s) {
     int sc = (int)s % 60;
     char buf[12]; snprintf(buf, sizeof(buf), "%d:%02d", m, sc);
     return buf;
+}
+
+// Re-anchor wall-clock playback whenever the playhead is moved.
+// Delays the wall clock by audio_latency() so that the video frame and the
+// audio sample at position t both become visible/audible at the same moment.
+static void seek_to(AppState& state, float t) {
+    state.playhead = t;
+    audio_seek(t);
+    if (state.playing) {
+        state.play_start_pos  = t;
+        state.play_start_wall = std::chrono::steady_clock::now();
+    }
 }
 
 static bool is_audio_file(const std::string& path) {
@@ -262,16 +276,37 @@ static void import_file(AppState& state, const std::string& path) {
     bool is_video = (ext==".mp4"||ext==".mov"||ext==".mkv"||ext==".avi"||ext==".webm");
 
     if (is_video) {
-        // Open video first — this sets duration via container header (fast).
-        // Then start async audio decode. This order avoids two concurrent
-        // avformat_find_stream_info calls and gives us a reliable duration
-        // without the slow audio probe.
-        if (video_open(path)) {
-            state.video_path   = path;
-            state.video_loaded = true;
+        state.video_path  = path;
+        state.video_loaded = true;
+        state.proxy_ready  = false;
+
+        // Start proxy generation (no-op if proxy already exists on disk).
+        // This also extracts the preview still synchronously (< 1 s).
+        proxy_start(path);
+
+        // Show still immediately while proxy generates; switch to proxy
+        // once ready (checked each frame in the main loop below).
+        std::string still = proxy_still_path(path);
+        video_open_still(still);
+
+        // If the proxy already existed from a previous session, open it now.
+        if (proxy_is_ready(path)) {
+            ProxyInfo pi;
+            if (proxy_load(path, pi)) {
+                video_open_proxy(pi);
+                state.proxy_ready = true;
+            }
         }
-        state.duration = (float)video_info().duration;
-        audio_load(path);  // async — probes container header only, no find_stream_info
+
+        // audio_load probes duration from the container header synchronously
+        // before spawning its background decode thread — use that as the
+        // primary duration source since it works on all formats.
+        audio_load(path);
+        state.duration = audio_duration();
+        // video_probe_duration is a faster path that works when the container
+        // header carries duration; use it only as an override if it succeeds.
+        float vprobed = video_probe_duration(path);
+        if (vprobed > 0.f) state.duration = vprobed;
 
         // Add or update Video track
         Track* vt = nullptr;
@@ -400,7 +435,10 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
     ImDrawList* dl = ImGui::GetWindowDrawList();
 
     if (state.video_loaded && video_is_open()) {
-        uintptr_t tex = video_get_texture((double)state.playhead);
+        // Look one frame ahead so the decoded frame matches the audio position
+        // by the time it reaches the screen after the vsync buffer swap.
+        float lookahead = ImGui::GetIO().DeltaTime;
+        uintptr_t tex = video_get_texture((double)(state.playhead + lookahead));
         if (tex)
             dl->AddImage(ImTextureRef((ImTextureID)tex), p, {p.x+w, p.y+h});
         else
@@ -1377,8 +1415,11 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
             float cy0 = track_y+3.f, cy1 = track_y+TL_TRACK_H-3.f;
             bool sel = (state.selected_track==ti && state.selected_clip==ci);
 
+            ImVec4 clip_fill = (track.type==TrackType::Subtitle) ? Col::clip_sub
+                             : (track.type==TrackType::Audio)    ? Col::clip_audio
+                                                                 : Col::clip_video;
             dl->AddRectFilled({vis_x0,cy0},{vis_x1,cy1},
-                to_u32(sel ? Col::fg : Col::bg_soft_hov), 2.f);
+                to_u32(sel ? Col::fg : clip_fill), 2.f);
             dl->AddRect({vis_x0,cy0},{vis_x1,cy1},
                 to_u32(sel ? Col::fg : Col::line), 2.f);
 
@@ -1432,8 +1473,7 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
                     strncpy(s_edit_buf, clip.text.c_str(), sizeof(s_edit_buf)-1);
                     s_edit_buf[sizeof(s_edit_buf)-1] = '\0';
                     s_edit_focus_next = (track.type==TrackType::Subtitle);
-                    state.playhead = clip.start;
-                    audio_seek(clip.start);
+                    seek_to(state, clip.start);
                     state.panel_tab = 0;  // switch to Clip tab
 
                     float orig_cx0 = origin.x+TL_LABEL_W+clip.start*zoom-scroll;
@@ -1507,8 +1547,7 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
         if (mouse.y>=origin.y && mouse.y<=origin.y+TL_RULER_H &&
             mouse.x>=origin.x+TL_LABEL_W && mouse.x<=origin.x+total_w) {
             float t = (mouse.x - origin.x - TL_LABEL_W + scroll) / zoom;
-            state.playhead = fmaxf(0.f, fminf(t, dur));
-            audio_seek(state.playhead);
+            seek_to(state, fmaxf(0.f, fminf(t, dur)));
         }
     }
 
@@ -1621,10 +1660,10 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
         }
         ImGui::Separator();
         if (ImGui::MenuItem("Seek to clip start")) {
-            if (valid) { state.playhead=cc->start; audio_seek(cc->start); }
+            if (valid) { seek_to(state, cc->start); }
         }
         if (ImGui::MenuItem("Seek to clip end")) {
-            if (valid) { state.playhead=cc->end; audio_seek(cc->end); }
+            if (valid) { seek_to(state, cc->end); }
         }
         ImGui::Separator();
         if (ImGui::MenuItem("Delete clip")) {
@@ -1772,6 +1811,41 @@ void ui_studio(AppState& state) {
     if (!g_dropped_file.empty() && is_audio_file(g_dropped_file)) {
         import_file(state, g_dropped_file);
         g_dropped_file.clear();
+    }
+
+    // Proxy ready → upgrade from still to interactive proxy preview
+    if (state.video_loaded && !state.proxy_ready && !state.video_path.empty()) {
+        if (proxy_is_ready(state.video_path)) {
+            ProxyInfo pi;
+            if (proxy_load(state.video_path, pi)) {
+                video_open_proxy(pi);
+                state.proxy_ready = true;
+                // Proxy frame count / fps is the most accurate duration source.
+                float pd = (float)video_info().duration;
+                if (pd > 0.f) {
+                    state.duration = pd;
+                    // Extend any full-span video clips to match corrected duration.
+                    for (auto& t : state.tracks) {
+                        if (t.type != TrackType::Video) continue;
+                        for (auto& c : t.clips)
+                            if (c.end < pd) c.end = pd;
+                    }
+                }
+            }
+        }
+    }
+
+    // Audio just finished loading while playing — start from current playhead
+    {
+        static bool s_was_loading = false;
+        bool loading = audio_loading();
+        if (s_was_loading && !loading && state.playing) {
+            state.play_start_pos  = state.playhead;
+            state.play_start_wall = std::chrono::steady_clock::now();
+            audio_seek(state.playhead);
+            audio_play();
+        }
+        s_was_loading = loading;
     }
 
     // Extract audio done → add Audio track
@@ -1968,6 +2042,10 @@ void ui_studio(AppState& state) {
             ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
             ImGui::TextUnformatted("loading…");
             ImGui::PopStyleColor();
+        } else if (proxy_is_generating()) {
+            ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+            ImGui::TextUnformatted("building preview…");
+            ImGui::PopStyleColor();
         } else if (state.extract_running) {
             ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
             ImGui::TextUnformatted("extracting…");
@@ -1975,7 +2053,14 @@ void ui_studio(AppState& state) {
         } else {
             if (ui_btn(state.playing ? "||" : ">", false, true)) {
                 state.playing = !state.playing;
-                if (state.playing) audio_play(); else audio_pause();
+                if (state.playing) {
+                    state.play_start_pos  = state.playhead;
+                    state.play_start_wall = std::chrono::steady_clock::now();
+                    audio_seek(state.playhead);
+                    audio_play();
+                } else {
+                    audio_pause();
+                }
             }
         }
 
@@ -2033,8 +2118,7 @@ void ui_studio(AppState& state) {
         ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {0.f, 0.f});
         ImGui::SetNextItemWidth(sw);
         if (ImGui::SliderFloat("##scrub", &fill, 0.f, 1.f, "")) {
-            state.playhead = fill * dur;
-            audio_seek(state.playhead);
+            seek_to(state, fill * dur);
         }
         ImGui::PopStyleVar();
         ImGui::PopStyleColor(2);

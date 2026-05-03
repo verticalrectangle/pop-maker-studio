@@ -1,5 +1,13 @@
 #include "video.h"
 
+// ── stb_image — JPEG decode for preview frames ────────────────────────────────
+#define STB_IMAGE_IMPLEMENTATION
+#define STBI_ONLY_JPEG
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-function"
+#include "stb_image.h"
+#pragma GCC diagnostic pop
+
 extern "C" {
 #include <libavformat/avformat.h>
 #include <libavcodec/avcodec.h>
@@ -8,237 +16,271 @@ extern "C" {
 }
 
 #include <GL/gl.h>
-#include <thread>
-#include <mutex>
-#include <atomic>
-#include <deque>
+
+#include <cstdio>
 #include <cstring>
+#include <vector>
 
-// ── Internal state ────────────────────────────────────────────────────────────
+// ── Preview state ─────────────────────────────────────────────────────────────
 
-static struct VideoState {
+static struct PreviewState {
+    // MJPEG proxy
+    FILE*    mjpeg_file     = nullptr;
+    ProxyInfo proxy         = {};
+    int      last_frame_idx = -1;
+
+    // GL texture (single RGB texture, reused every frame)
+    GLuint   tex    = 0;
+    int      tex_w  = 0;
+    int      tex_h  = 0;
+
+    // Mode
+    bool     is_proxy = false;   // false → still JPEG
+    bool     is_open  = false;
+
+    VideoInfo info = {};
+} g_pv;
+
+// Decode and upload one JPEG frame from an in-memory buffer.
+static void upload_jpeg(const uint8_t* buf, size_t sz, int expected_w, int expected_h) {
+    int w, h, ch;
+    uint8_t* pixels = stbi_load_from_memory(buf, (int)sz, &w, &h, &ch, 3);
+    if (!pixels) return;
+
+    if (g_pv.tex == 0) {
+        glGenTextures(1, &g_pv.tex);
+        glBindTexture(GL_TEXTURE_2D, g_pv.tex);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    } else {
+        glBindTexture(GL_TEXTURE_2D, g_pv.tex);
+    }
+
+    if (w != g_pv.tex_w || h != g_pv.tex_h) {
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, w, h, 0,
+                     GL_RGB, GL_UNSIGNED_BYTE, pixels);
+        g_pv.tex_w = w;
+        g_pv.tex_h = h;
+    } else {
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h,
+                        GL_RGB, GL_UNSIGNED_BYTE, pixels);
+    }
+    glBindTexture(GL_TEXTURE_2D, 0);
+    stbi_image_free(pixels);
+    (void)expected_w; (void)expected_h;
+}
+
+// ── Preview API ───────────────────────────────────────────────────────────────
+
+void video_open_still(const std::string& jpeg_path) {
+    video_close();
+
+    FILE* f = fopen(jpeg_path.c_str(), "rb");
+    if (!f) return;
+    fseek(f, 0, SEEK_END);
+    long sz = ftell(f);
+    rewind(f);
+    if (sz <= 0) { fclose(f); return; }
+
+    std::vector<uint8_t> buf((size_t)sz);
+    fread(buf.data(), 1, (size_t)sz, f);
+    fclose(f);
+
+    upload_jpeg(buf.data(), (size_t)sz, 0, 0);
+    g_pv.is_open  = true;
+    g_pv.is_proxy = false;
+}
+
+bool video_open_proxy(const ProxyInfo& proxy) {
+    video_close();
+
+    FILE* f = fopen(proxy.mjpeg_path.c_str(), "rb");
+    if (!f) return false;
+
+    g_pv.mjpeg_file = f;
+    g_pv.proxy      = proxy;
+    g_pv.is_proxy   = true;
+    g_pv.is_open    = true;
+    g_pv.last_frame_idx = -1;
+
+    g_pv.info.width    = proxy.width;
+    g_pv.info.height   = proxy.height;
+    g_pv.info.fps      = proxy.fps;
+    // Duration from frame count — more accurate than container header for MJPEG.
+    g_pv.info.duration = proxy.fps > 0.0
+        ? (double)proxy.frame_count / proxy.fps
+        : 0.0;
+
+    // Show frame 0 immediately.
+    uintptr_t tex = video_get_texture(0.0);
+    (void)tex;
+    return true;
+}
+
+void video_close() {
+    if (g_pv.mjpeg_file) { fclose(g_pv.mjpeg_file); g_pv.mjpeg_file = nullptr; }
+    if (g_pv.tex)        { glDeleteTextures(1, &g_pv.tex); g_pv.tex = 0; }
+    g_pv.tex_w = g_pv.tex_h = 0;
+    g_pv.last_frame_idx = -1;
+    g_pv.is_open  = false;
+    g_pv.is_proxy = false;
+    g_pv.proxy    = {};
+    g_pv.info     = {};
+}
+
+bool      video_is_open() { return g_pv.is_open; }
+VideoInfo video_info()    { return g_pv.info; }
+
+uintptr_t video_get_texture(double playhead) {
+    if (!g_pv.is_open) return 0;
+
+    if (!g_pv.is_proxy) {
+        // Still image — texture already uploaded, just return it.
+        return g_pv.tex ? (uintptr_t)g_pv.tex : 0;
+    }
+
+    if (!g_pv.mjpeg_file || g_pv.proxy.offsets.empty()) return 0;
+
+    // Clamp playhead to valid range.
+    double dur = g_pv.info.duration;
+    if (playhead < 0.0) playhead = 0.0;
+    if (dur > 0.0 && playhead > dur) playhead = dur;
+
+    // Integer rational arithmetic avoids floating-point drift at long timecodes.
+    int64_t num = g_pv.proxy.fps_num;
+    int64_t den = g_pv.proxy.fps_den;
+    int frame_idx = (num > 0 && den > 0)
+        ? (int)((int64_t)(playhead * (double)num) / den)
+        : (int)(playhead * g_pv.proxy.fps);
+    if (frame_idx >= (int)g_pv.proxy.offsets.size())
+        frame_idx = (int)g_pv.proxy.offsets.size() - 1;
+    if (frame_idx < 0) frame_idx = 0;
+
+    if (frame_idx == g_pv.last_frame_idx && g_pv.tex)
+        return (uintptr_t)g_pv.tex;
+
+    g_pv.last_frame_idx = frame_idx;
+
+    uint64_t offset = g_pv.proxy.offsets[(size_t)frame_idx];
+    bool is_last = ((size_t)frame_idx + 1 >= g_pv.proxy.offsets.size());
+
+    size_t frame_sz = 0;
+    if (!is_last) {
+        frame_sz = (size_t)(g_pv.proxy.offsets[(size_t)frame_idx + 1] - offset);
+    } else {
+        fseeko(g_pv.mjpeg_file, (off_t)offset, SEEK_SET);
+        long cur = ftell(g_pv.mjpeg_file);
+        fseeko(g_pv.mjpeg_file, 0, SEEK_END);
+        long end = ftell(g_pv.mjpeg_file);
+        frame_sz = (end > cur) ? (size_t)(end - cur) : 0;
+    }
+
+    if (frame_sz == 0) return g_pv.tex ? (uintptr_t)g_pv.tex : 0;
+
+    // Read the JPEG chunk.
+    static std::vector<uint8_t> s_buf;
+    s_buf.resize(frame_sz);
+    fseeko(g_pv.mjpeg_file, (off_t)offset, SEEK_SET);
+    size_t got = fread(s_buf.data(), 1, frame_sz, g_pv.mjpeg_file);
+    if (got == 0) return g_pv.tex ? (uintptr_t)g_pv.tex : 0;
+
+    upload_jpeg(s_buf.data(), got, g_pv.proxy.width, g_pv.proxy.height);
+    return g_pv.tex ? (uintptr_t)g_pv.tex : 0;
+}
+
+float video_probe_duration(const std::string& path) {
+    AVFormatContext* fc = nullptr;
+    if (avformat_open_input(&fc, path.c_str(), nullptr, nullptr) != 0) return 0.f;
+    // find_stream_info is required for files where the container header doesn't
+    // carry a reliable duration (e.g. some MP4/MKV variants).
+    avformat_find_stream_info(fc, nullptr);
+    float dur = (fc->duration != AV_NOPTS_VALUE)
+        ? (float)fc->duration / (float)AV_TIME_BASE
+        : 0.f;
+    avformat_close_input(&fc);
+    return dur;
+}
+
+// ── Export path — FFmpeg original file ───────────────────────────────────────
+
+static struct ExportState {
     AVFormatContext* fmt_ctx    = nullptr;
     AVCodecContext*  codec_ctx  = nullptr;
     SwsContext*      sws        = nullptr;
     int              stream_idx = -1;
     VideoInfo        info       = {};
+} g_ex;
 
-    // Decode thread
-    std::thread        decode_thread;
-    std::atomic<bool>  running{false};
-    std::atomic<bool>  seek_requested{false};
-    std::atomic<double> seek_target{0.0};
+bool video_open_export(const std::string& path) {
+    video_close_export();
 
-    // Frame ring — mutex protected
-    std::mutex              frame_mutex;
-    std::deque<VideoFrame*> frame_queue;  // decoded frames, PTS order
-    VideoFrame*             current = nullptr;
-
-    // OpenGL texture
-    GLuint tex_id = 0;
-} g_vs;
-
-static constexpr int MAX_QUEUE = 8;
-
-static void free_frame(VideoFrame* f) {
-    if (!f) return;
-    av_free(f->data);
-    delete f;
-}
-
-static void decode_thread_fn() {
-    AVPacket* pkt = av_packet_alloc();
-    AVFrame*  frm = av_frame_alloc();
-
-    while (g_vs.running.load()) {
-        // Handle seek
-        if (g_vs.seek_requested.load()) {
-            g_vs.seek_requested.store(false);
-            double target = g_vs.seek_target.load();
-            int64_t ts = (int64_t)(target * AV_TIME_BASE);
-            av_seek_frame(g_vs.fmt_ctx, -1, ts, AVSEEK_FLAG_BACKWARD);
-            avcodec_flush_buffers(g_vs.codec_ctx);
-            std::lock_guard<std::mutex> lock(g_vs.frame_mutex);
-            for (auto* f : g_vs.frame_queue) free_frame(f);
-            g_vs.frame_queue.clear();
-        }
-
-        // Throttle if queue is full
-        {
-            std::lock_guard<std::mutex> lock(g_vs.frame_mutex);
-            if ((int)g_vs.frame_queue.size() >= MAX_QUEUE) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(8));
-                continue;
-            }
-        }
-
-        int ret = av_read_frame(g_vs.fmt_ctx, pkt);
-        if (ret == AVERROR_EOF) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(20));
-            continue;
-        }
-        if (ret < 0) break;
-
-        if (pkt->stream_index != g_vs.stream_idx) {
-            av_packet_unref(pkt);
-            continue;
-        }
-
-        avcodec_send_packet(g_vs.codec_ctx, pkt);
-        av_packet_unref(pkt);
-
-        while (avcodec_receive_frame(g_vs.codec_ctx, frm) == 0) {
-            // Convert to RGBA
-            auto* vf   = new VideoFrame();
-            vf->width  = g_vs.info.width;
-            vf->height = g_vs.info.height;
-            // av_malloc guarantees alignment for SIMD — sws_scale can write
-            // up to 32 extra bytes past the end with AVX2; plain malloc is not safe.
-            vf->data   = (uint8_t*)av_malloc((size_t)vf->width * vf->height * 4 + 64);
-
-            AVStream* st = g_vs.fmt_ctx->streams[g_vs.stream_idx];
-            vf->pts = frm->pts * av_q2d(st->time_base);
-
-            uint8_t* dst[1]  = { vf->data };
-            int      lsz[1]  = { vf->width * 4 };
-            sws_scale(g_vs.sws,
-                (const uint8_t* const*)frm->data, frm->linesize,
-                0, frm->height, dst, lsz);
-
-            av_frame_unref(frm);
-
-            std::lock_guard<std::mutex> lock(g_vs.frame_mutex);
-            g_vs.frame_queue.push_back(vf);
-        }
-    }
-
-    av_packet_free(&pkt);
-    av_frame_free(&frm);
-}
-
-// ── Public API ────────────────────────────────────────────────────────────────
-
-bool video_open(const std::string& path) {
-    video_close();
-
-    if (avformat_open_input(&g_vs.fmt_ctx, path.c_str(), nullptr, nullptr) < 0)
+    if (avformat_open_input(&g_ex.fmt_ctx, path.c_str(), nullptr, nullptr) < 0)
         return false;
-    if (avformat_find_stream_info(g_vs.fmt_ctx, nullptr) < 0) {
-        avformat_close_input(&g_vs.fmt_ctx);
-        return false;
+    if (avformat_find_stream_info(g_ex.fmt_ctx, nullptr) < 0) {
+        avformat_close_input(&g_ex.fmt_ctx); return false;
     }
-
-    for (unsigned i = 0; i < g_vs.fmt_ctx->nb_streams; ++i) {
-        if (g_vs.fmt_ctx->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
-            g_vs.stream_idx = (int)i;
-            break;
+    for (unsigned i = 0; i < g_ex.fmt_ctx->nb_streams; ++i) {
+        if (g_ex.fmt_ctx->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
+            g_ex.stream_idx = (int)i; break;
         }
     }
-    if (g_vs.stream_idx < 0) { avformat_close_input(&g_vs.fmt_ctx); return false; }
+    if (g_ex.stream_idx < 0) { avformat_close_input(&g_ex.fmt_ctx); return false; }
 
-    AVStream* st = g_vs.fmt_ctx->streams[g_vs.stream_idx];
+    AVStream* st = g_ex.fmt_ctx->streams[g_ex.stream_idx];
     const AVCodec* codec = avcodec_find_decoder(st->codecpar->codec_id);
-    g_vs.codec_ctx = avcodec_alloc_context3(codec);
-    avcodec_parameters_to_context(g_vs.codec_ctx, st->codecpar);
-    avcodec_open2(g_vs.codec_ctx, codec, nullptr);
+    g_ex.codec_ctx = avcodec_alloc_context3(codec);
+    avcodec_parameters_to_context(g_ex.codec_ctx, st->codecpar);
+    avcodec_open2(g_ex.codec_ctx, codec, nullptr);
 
-    g_vs.info.width    = g_vs.codec_ctx->width;
-    g_vs.info.height   = g_vs.codec_ctx->height;
-    g_vs.info.duration = (double)g_vs.fmt_ctx->duration / AV_TIME_BASE;
-    g_vs.info.fps      = av_q2d(st->avg_frame_rate);
+    g_ex.info.width    = g_ex.codec_ctx->width;
+    g_ex.info.height   = g_ex.codec_ctx->height;
+    g_ex.info.duration = (double)g_ex.fmt_ctx->duration / AV_TIME_BASE;
+    g_ex.info.fps      = av_q2d(st->avg_frame_rate);
 
-    g_vs.sws = sws_getContext(
-        g_vs.info.width, g_vs.info.height, g_vs.codec_ctx->pix_fmt,
-        g_vs.info.width, g_vs.info.height, AV_PIX_FMT_RGBA,
+    g_ex.sws = sws_getContext(
+        g_ex.info.width, g_ex.info.height, g_ex.codec_ctx->pix_fmt,
+        g_ex.info.width, g_ex.info.height, AV_PIX_FMT_RGBA,
         SWS_BILINEAR, nullptr, nullptr, nullptr);
 
-    g_vs.running.store(true);
-    g_vs.decode_thread = std::thread(decode_thread_fn);
     return true;
 }
 
-void video_close() {
-    g_vs.running.store(false);
-    if (g_vs.decode_thread.joinable()) g_vs.decode_thread.join();
-
-    std::lock_guard<std::mutex> lock(g_vs.frame_mutex);
-    for (auto* f : g_vs.frame_queue) free_frame(f);
-    g_vs.frame_queue.clear();
-    free_frame(g_vs.current); g_vs.current = nullptr;
-
-    if (g_vs.sws)       { sws_freeContext(g_vs.sws);       g_vs.sws = nullptr; }
-    if (g_vs.codec_ctx) { avcodec_free_context(&g_vs.codec_ctx); }
-    if (g_vs.fmt_ctx)   { avformat_close_input(&g_vs.fmt_ctx); }
-    if (g_vs.tex_id)    { glDeleteTextures(1, &g_vs.tex_id); g_vs.tex_id = 0; }
-    g_vs.stream_idx = -1;
-}
-
-bool      video_is_open() { return g_vs.stream_idx >= 0; }
-VideoInfo video_info()    { return g_vs.info; }
-
-void video_seek(double seconds) {
-    g_vs.seek_target.store(seconds);
-    g_vs.seek_requested.store(true);
-}
-
-const VideoFrame* video_get_frame(double playhead) {
-    std::lock_guard<std::mutex> lock(g_vs.frame_mutex);
-
-    // Drain frames that are behind the playhead, keep the last valid one
-    while (g_vs.frame_queue.size() > 1 &&
-           g_vs.frame_queue.front()->pts <= playhead) {
-        free_frame(g_vs.current);
-        g_vs.current = g_vs.frame_queue.front();
-        g_vs.frame_queue.pop_front();
-    }
-    return g_vs.current;
-}
-
-uintptr_t video_get_texture(double playhead) {
-    const VideoFrame* f = video_get_frame(playhead);
-    if (!f) return 0;
-
-    if (g_vs.tex_id == 0) {
-        glGenTextures(1, &g_vs.tex_id);
-        glBindTexture(GL_TEXTURE_2D, g_vs.tex_id);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, f->width, f->height,
-                     0, GL_RGBA, GL_UNSIGNED_BYTE, f->data);
-    } else {
-        glBindTexture(GL_TEXTURE_2D, g_vs.tex_id);
-        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, f->width, f->height,
-                        GL_RGBA, GL_UNSIGNED_BYTE, f->data);
-    }
-    glBindTexture(GL_TEXTURE_2D, 0);
-    return (uintptr_t)g_vs.tex_id;
+void video_close_export() {
+    if (g_ex.sws)       { sws_freeContext(g_ex.sws);       g_ex.sws       = nullptr; }
+    if (g_ex.codec_ctx) { avcodec_free_context(&g_ex.codec_ctx); }
+    if (g_ex.fmt_ctx)   { avformat_close_input(&g_ex.fmt_ctx); }
+    g_ex.stream_idx = -1;
+    g_ex.info = {};
 }
 
 VideoFrame* video_decode_frame_at(double seconds) {
-    if (!g_vs.fmt_ctx) return nullptr;
+    if (!g_ex.fmt_ctx) return nullptr;
 
     int64_t ts = (int64_t)(seconds * AV_TIME_BASE);
-    av_seek_frame(g_vs.fmt_ctx, -1, ts, AVSEEK_FLAG_BACKWARD);
-    avcodec_flush_buffers(g_vs.codec_ctx);
+    av_seek_frame(g_ex.fmt_ctx, -1, ts, AVSEEK_FLAG_BACKWARD);
+    avcodec_flush_buffers(g_ex.codec_ctx);
 
     AVPacket* pkt = av_packet_alloc();
     AVFrame*  frm = av_frame_alloc();
     VideoFrame* result = nullptr;
 
-    while (av_read_frame(g_vs.fmt_ctx, pkt) >= 0 && !result) {
-        if (pkt->stream_index != g_vs.stream_idx) { av_packet_unref(pkt); continue; }
-        avcodec_send_packet(g_vs.codec_ctx, pkt);
+    while (av_read_frame(g_ex.fmt_ctx, pkt) >= 0 && !result) {
+        if (pkt->stream_index != g_ex.stream_idx) { av_packet_unref(pkt); continue; }
+        avcodec_send_packet(g_ex.codec_ctx, pkt);
         av_packet_unref(pkt);
-        while (avcodec_receive_frame(g_vs.codec_ctx, frm) == 0 && !result) {
+        while (avcodec_receive_frame(g_ex.codec_ctx, frm) == 0 && !result) {
             result = new VideoFrame();
-            result->width  = g_vs.info.width;
-            result->height = g_vs.info.height;
-            result->data   = (uint8_t*)av_malloc((size_t)result->width * result->height * 4 + 64);
+            result->width  = g_ex.info.width;
+            result->height = g_ex.info.height;
+            result->data   = (uint8_t*)av_malloc(
+                (size_t)result->width * result->height * 4 + 64);
+            AVStream* st = g_ex.fmt_ctx->streams[g_ex.stream_idx];
+            result->pts = frm->pts * av_q2d(st->time_base);
             uint8_t* dst[1] = { result->data };
             int      lsz[1] = { result->width * 4 };
-            sws_scale(g_vs.sws,
+            sws_scale(g_ex.sws,
                 (const uint8_t* const*)frm->data, frm->linesize,
                 0, frm->height, dst, lsz);
             av_frame_unref(frm);

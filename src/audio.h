@@ -12,6 +12,7 @@ void  audio_seek(float seconds);
 void  audio_set_volume(float v);  // per-clip gain, applied in callback (0–2)
 float audio_duration();
 float audio_position();
+float audio_latency();   // hardware buffer latency in seconds — subtract from audio_position() for true playback time
 bool  audio_is_playing();
 
 // Decode audio file metadata without full load

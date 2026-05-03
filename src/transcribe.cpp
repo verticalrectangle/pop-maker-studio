@@ -98,6 +98,7 @@ void transcribe_start(
             }
             std::string line(buf);
             if (!line.empty() && line.back() == '\n') line.pop_back();
+            status.raw_line = line;
             parse_line(line, status);
         }
 

@@ -1,6 +1,7 @@
 #pragma once
 #include <string>
 #include <vector>
+#include <chrono>
 
 // ── Track / clip data model ───────────────────────────────────────────────────
 
@@ -108,6 +109,10 @@ struct AppState {
     bool  playing  = false;
     float duration = 0.f;
 
+    // wall-clock playback sync
+    std::chrono::steady_clock::time_point play_start_wall;
+    float play_start_pos = 0.f;
+
     // timeline view
     float tl_scroll = 0.f;
     float tl_zoom   = 80.f;
@@ -119,7 +124,9 @@ struct AppState {
 
     // video background
     std::string video_path;
-    bool        video_loaded = false;
+    bool        video_loaded   = false;
+    bool        proxy_ready    = false;   // proxy has been opened for preview
+    bool        proxy_was_generating = false; // tracks generation state changes
 
     // render
     RenderStatus   render;

@@ -27,10 +27,10 @@ static ma_device        g_device;
 static ma_device_config g_device_cfg;
 static bool             g_device_init = false;
 
-static std::vector<float> g_samples;   // interleaved stereo f32 @ 44100 Hz
-static size_t             g_read_pos  = 0;
-static float              g_duration  = 0.f;
-static float              g_volume    = 1.f;
+static std::vector<float>    g_samples;           // interleaved stereo f32 @ 44100 Hz
+static std::atomic<size_t>  g_read_pos{0};        // written by callback + seek, read by position query
+static float                g_duration  = 0.f;
+static float                g_volume    = 1.f;
 
 // True while the ffmpeg subprocess is running and samples are not ready yet.
 static std::atomic<bool> g_loading{false};
@@ -40,16 +40,17 @@ static void data_callback(ma_device* pDevice, void* pOutput, const void*, ma_uin
         memset(pOutput, 0, frameCount * pDevice->playback.channels * sizeof(float));
         return;
     }
-    auto* out = (float*)pOutput;
-    size_t available = (g_samples.size() > g_read_pos) ? (g_samples.size() - g_read_pos) : 0;
+    auto*  out = (float*)pOutput;
+    size_t pos  = g_read_pos.load(std::memory_order_relaxed);
+    size_t available = (g_samples.size() > pos) ? (g_samples.size() - pos) : 0;
     size_t need      = frameCount * (size_t)pDevice->playback.channels;
     size_t copy      = (available < need) ? available : need;
     float  vol       = g_volume;
     for (size_t i = 0; i < copy; ++i)
-        out[i] = g_samples[g_read_pos + i] * vol;
+        out[i] = g_samples[pos + i] * vol;
     if (copy < need)
         memset(out + copy, 0, (need - copy) * sizeof(float));
-    g_read_pos += copy;
+    g_read_pos.store(pos + copy, std::memory_order_relaxed);
 }
 
 void audio_init() {}
@@ -67,7 +68,7 @@ bool audio_loading() { return g_loading.load(); }
 bool audio_load(const std::string& path) {
     audio_shutdown();
     g_samples.clear();
-    g_read_pos = 0;
+    g_read_pos.store(0, std::memory_order_relaxed);
     g_duration = 0.f;
     g_loading.store(true);
 
@@ -129,7 +130,7 @@ bool audio_load(const std::string& path) {
         fclose(f);
 
         g_duration = (float)g_samples.size() / 2.f / 44100.f;
-        g_read_pos = 0;
+        g_read_pos.store(0, std::memory_order_relaxed);
 
         // Init miniaudio device now that samples are ready.
         ma_device_config cfg = ma_device_config_init(ma_device_type_playback);
@@ -156,14 +157,23 @@ void audio_set_volume(float v) { g_volume = (v < 0.f) ? 0.f : (v > 4.f) ? 4.f : 
 void audio_seek(float seconds) {
     if (g_loading.load()) return;
     size_t sample = (size_t)(seconds * 44100.f) * 2;
-    g_read_pos = (sample < g_samples.size()) ? sample : g_samples.size();
+    g_read_pos.store((sample < g_samples.size()) ? sample : g_samples.size(),
+                     std::memory_order_relaxed);
 }
 
 float audio_duration()   { return g_duration; }
 bool  audio_is_playing() { return g_device_init && ma_device_is_started(&g_device); }
 
 float audio_position() {
-    return (float)(g_read_pos / 2) / 44100.f;
+    return (float)(g_read_pos.load(std::memory_order_relaxed) / 2) / 44100.f;
+}
+
+float audio_latency() {
+    if (!g_device_init) return 0.f;
+    ma_uint32 period = g_device.playback.internalPeriodSizeInFrames;
+    ma_uint32 rate   = g_device.playback.internalSampleRate;
+    if (rate == 0) return 0.f;
+    return (float)period / (float)rate;
 }
 
 bool audio_probe(const std::string& path, AudioMeta& meta) {

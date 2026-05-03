@@ -7,6 +7,7 @@
 #include "ui/screens.h"
 #include <imgui.h>
 #include <algorithm>
+#include <chrono>
 
 std::vector<std::pair<int,int>> AppState::subtitle_clip_indices() const {
     std::vector<std::pair<int,int>> out;
@@ -44,19 +45,33 @@ void app_frame(AppState& state) {
         ImGuiWindowFlags_MenuBar
     );
 
+    // Update playhead BEFORE rendering so the video frame shown this cycle
+    // matches the audio position this cycle, not last cycle's.
+    if (state.playing) {
+        float pos;
+        if (!audio_loading() && audio_is_playing()) {
+            pos = audio_position() - audio_latency();
+            if (pos < 0.f) pos = 0.f;
+        } else {
+            using namespace std::chrono;
+            double elapsed = duration<double>(steady_clock::now() - state.play_start_wall).count();
+            if (elapsed < 0.0) elapsed = 0.0;
+            pos = state.play_start_pos + (float)elapsed;
+        }
+        state.playhead = pos;
+        if (state.duration > 0.f && state.playhead >= state.duration) {
+            state.playhead = state.duration;
+            state.playing  = false;
+            audio_pause();
+            audio_seek(0.f);
+        }
+    }
+
     if (state.splash_timer > 0.f) {
         state.splash_timer -= io.DeltaTime;
         ui_splash(state);
     } else {
         ui_studio(state);
-    }
-
-    if (state.playing) {
-        state.playhead += io.DeltaTime;
-        if (state.duration > 0.f && state.playhead >= state.duration) {
-            state.playhead = 0.f;
-            state.playing  = false;
-        }
     }
 
     ImGui::End();
