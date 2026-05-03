@@ -8,6 +8,77 @@
 #include <imgui.h>
 #include <algorithm>
 #include <chrono>
+#include <cmath>
+
+// ── PropTrack ─────────────────────────────────────────────────────────────────
+
+static float apply_interp(float t, InterpType it) {
+    switch (it) {
+        case InterpType::EaseIn:   return t * t;
+        case InterpType::EaseOut:  return t * (2.f - t);
+        case InterpType::EaseBoth: return t < 0.5f ? 2.f*t*t : -1.f + (4.f - 2.f*t)*t;
+        case InterpType::Hold:     return 0.f;
+        default:                   return t;
+    }
+}
+
+float PropTrack::eval(float t) const {
+    if (keys.empty()) return 0.f;
+    if ((int)keys.size() == 1 || t <= keys.front().time) return keys.front().value;
+    if (t >= keys.back().time) return keys.back().value;
+    for (int i = 0; i < (int)keys.size() - 1; ++i) {
+        if (t >= keys[i].time && t < keys[i+1].time) {
+            if (keys[i].interp == InterpType::Hold) return keys[i].value;
+            float alpha = (t - keys[i].time) / (keys[i+1].time - keys[i].time);
+            alpha = apply_interp(alpha, keys[i].interp);
+            return keys[i].value + alpha * (keys[i+1].value - keys[i].value);
+        }
+    }
+    return keys.back().value;
+}
+
+void PropTrack::set(float t, float v, InterpType it) {
+    for (auto& k : keys) {
+        if (fabsf(k.time - t) < 0.02f) { k.value = v; k.interp = it; return; }
+    }
+    keys.push_back({t, v, it});
+    std::sort(keys.begin(), keys.end(),
+              [](const Keyframe& a, const Keyframe& b){ return a.time < b.time; });
+}
+
+void PropTrack::remove_at(float t, float tol) {
+    keys.erase(std::remove_if(keys.begin(), keys.end(),
+        [&](const Keyframe& k){ return fabsf(k.time - t) < tol; }), keys.end());
+}
+
+int PropTrack::find_nearest(float t, float tol) const {
+    int best = -1; float bd = tol;
+    for (int i = 0; i < (int)keys.size(); ++i) {
+        float d = fabsf(keys[i].time - t);
+        if (d < bd) { bd = d; best = i; }
+    }
+    return best;
+}
+
+// ── Clip::eval_prop ───────────────────────────────────────────────────────────
+
+float Clip::eval_prop(const std::string& name, float playhead) const {
+    float t = playhead - start;
+    auto it = ktracks.find(name);
+    if (it != ktracks.end() && !it->second.empty())
+        return it->second.eval(t);
+    if (name == "pos_x")     return pos_x;
+    if (name == "pos_y")     return pos_y;
+    if (name == "scale_x")   return scale_x;
+    if (name == "scale_y")   return scale_y;
+    if (name == "rotation")  return rotation;
+    if (name == "opacity")   return opacity;
+    if (name == "volume")    return volume;
+    if (name == "sub_pos_y") return sub_pos_y;
+    return 0.f;
+}
+
+// ── AppState ──────────────────────────────────────────────────────────────────
 
 std::vector<std::pair<int,int>> AppState::subtitle_clip_indices() const {
     std::vector<std::pair<int,int>> out;

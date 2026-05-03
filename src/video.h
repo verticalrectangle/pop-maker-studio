@@ -32,26 +32,21 @@ struct VideoInfo {
     bool   has_audio = false;
 };
 
-// ── Preview path ──────────────────────────────────────────────────────────────
+// ── Preview path (multi-track) ────────────────────────────────────────────────
 
-// Show a static JPEG until the proxy is ready.
-void video_open_still(const std::string& jpeg_path);
+static const int MAX_VIDEO_TRACKS = 8;
 
-// Open a proxy for interactive scrubbing.
-bool video_open_proxy(const ProxyInfo& proxy);
+// Each video track gets its own slot (track_id = index in AppState::tracks[]).
+// track_id=-1 in video_close() closes all slots.
 
-// Close whichever preview is open.
-void video_close();
+void      video_open_still(int track_id, const std::string& jpeg_path);
+bool      video_open_proxy(int track_id, const ProxyInfo& proxy);
+void      video_close(int track_id = -1);
+bool      video_is_open(int track_id = 0);
+VideoInfo video_info(int track_id = 0);
+uintptr_t video_get_texture(int track_id, double playhead);
 
-bool      video_is_open();
-VideoInfo video_info();    // from the most recently opened proxy or export context
-
-// Upload the frame nearest to `playhead` to a GL texture.
-// Re-decodes only when the frame index changes.  Returns 0 if nothing is open.
-uintptr_t video_get_texture(double playhead);
-
-// Decode the frame at `t` into a separate thumbnail texture (never clobbers the
-// main preview texture).  out_w / out_h receive the proxy pixel dimensions.
+// Thumbnail for the scrub bar hover — always uses track 0's proxy.
 uintptr_t video_get_thumbnail(double t, int* out_w, int* out_h);
 
 // Probe original video container for duration without full stream scan.

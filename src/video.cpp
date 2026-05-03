@@ -23,67 +23,100 @@ extern "C" {
 
 // ── Preview state ─────────────────────────────────────────────────────────────
 
-static struct PreviewState {
-    // MJPEG proxy
-    FILE*    mjpeg_file     = nullptr;
-    ProxyInfo proxy         = {};
-    int      last_frame_idx = -1;
-
-    // GL texture (single RGB texture, reused every frame)
-    GLuint   tex    = 0;
-    int      tex_w  = 0;
-    int      tex_h  = 0;
-
-    // Mode
-    bool     is_proxy = false;   // false → still JPEG
-    bool     is_open  = false;
-
+struct PreviewState {
+    FILE*     mjpeg_file     = nullptr;
+    ProxyInfo proxy          = {};
+    int       last_frame_idx = -1;
+    GLuint    tex    = 0;
+    int       tex_w  = 0;
+    int       tex_h  = 0;
+    bool      is_proxy = false;
+    bool      is_open  = false;
     VideoInfo info = {};
-} g_pv;
+};
 
-// Separate texture for hover-preview thumbnails (doesn't disturb main tex).
+static PreviewState g_pv[MAX_VIDEO_TRACKS];
+
+// Separate texture for hover-preview thumbnails (track 0's proxy).
 static struct ThumbState {
-    GLuint tex           = 0;
-    int    tex_w         = 0;
-    int    tex_h         = 0;
+    GLuint tex            = 0;
+    int    tex_w          = 0;
+    int    tex_h          = 0;
     int    last_frame_idx = -1;
 } g_th;
 
-// Decode and upload one JPEG frame from an in-memory buffer.
-static void upload_jpeg(const uint8_t* buf, size_t sz, int expected_w, int expected_h) {
+// Upload a JPEG buffer into a GL texture slot.
+static void upload_jpeg(GLuint* tex, int* tex_w, int* tex_h,
+                        const uint8_t* buf, size_t sz) {
     int w, h, ch;
     uint8_t* pixels = stbi_load_from_memory(buf, (int)sz, &w, &h, &ch, 3);
     if (!pixels) return;
 
-    if (g_pv.tex == 0) {
-        glGenTextures(1, &g_pv.tex);
-        glBindTexture(GL_TEXTURE_2D, g_pv.tex);
+    if (*tex == 0) {
+        glGenTextures(1, tex);
+        glBindTexture(GL_TEXTURE_2D, *tex);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     } else {
-        glBindTexture(GL_TEXTURE_2D, g_pv.tex);
+        glBindTexture(GL_TEXTURE_2D, *tex);
     }
 
-    if (w != g_pv.tex_w || h != g_pv.tex_h) {
+    if (w != *tex_w || h != *tex_h) {
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, w, h, 0,
                      GL_RGB, GL_UNSIGNED_BYTE, pixels);
-        g_pv.tex_w = w;
-        g_pv.tex_h = h;
+        *tex_w = w; *tex_h = h;
     } else {
         glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h,
                         GL_RGB, GL_UNSIGNED_BYTE, pixels);
     }
     glBindTexture(GL_TEXTURE_2D, 0);
     stbi_image_free(pixels);
-    (void)expected_w; (void)expected_h;
+}
+
+// ── Internal: read one JPEG frame from a proxy at frame_idx ──────────────────
+
+static uintptr_t decode_proxy_frame(PreviewState& pv, int frame_idx) {
+    uint64_t offset = pv.proxy.offsets[(size_t)frame_idx];
+    bool is_last = ((size_t)frame_idx + 1 >= pv.proxy.offsets.size());
+
+    size_t frame_sz = 0;
+    if (!is_last) {
+        frame_sz = (size_t)(pv.proxy.offsets[(size_t)frame_idx + 1] - offset);
+    } else {
+        fseeko(pv.mjpeg_file, (off_t)offset, SEEK_SET);
+        long cur = ftell(pv.mjpeg_file);
+        fseeko(pv.mjpeg_file, 0, SEEK_END);
+        long end = ftell(pv.mjpeg_file);
+        frame_sz = (end > cur) ? (size_t)(end - cur) : 0;
+    }
+    if (frame_sz == 0) return pv.tex ? (uintptr_t)pv.tex : 0;
+
+    static std::vector<uint8_t> s_buf;
+    s_buf.resize(frame_sz);
+    fseeko(pv.mjpeg_file, (off_t)offset, SEEK_SET);
+    size_t got = fread(s_buf.data(), 1, frame_sz, pv.mjpeg_file);
+    if (got == 0) return pv.tex ? (uintptr_t)pv.tex : 0;
+
+    upload_jpeg(&pv.tex, &pv.tex_w, &pv.tex_h, s_buf.data(), got);
+    return pv.tex ? (uintptr_t)pv.tex : 0;
 }
 
 // ── Preview API ───────────────────────────────────────────────────────────────
 
-void video_open_still(const std::string& jpeg_path) {
-    video_close();
+static void close_slot(PreviewState& pv) {
+    if (pv.mjpeg_file) { fclose(pv.mjpeg_file); pv.mjpeg_file = nullptr; }
+    if (pv.tex)        { glDeleteTextures(1, &pv.tex); pv.tex = 0; }
+    pv.tex_w = pv.tex_h = 0;
+    pv.last_frame_idx = -1;
+    pv.is_open = pv.is_proxy = false;
+    pv.proxy = {}; pv.info = {};
+}
+
+void video_open_still(int track_id, const std::string& jpeg_path) {
+    if (track_id < 0 || track_id >= MAX_VIDEO_TRACKS) return;
+    close_slot(g_pv[track_id]);
 
     FILE* f = fopen(jpeg_path.c_str(), "rb");
     if (!f) return;
@@ -96,128 +129,106 @@ void video_open_still(const std::string& jpeg_path) {
     fread(buf.data(), 1, (size_t)sz, f);
     fclose(f);
 
-    upload_jpeg(buf.data(), (size_t)sz, 0, 0);
-    g_pv.is_open  = true;
-    g_pv.is_proxy = false;
+    upload_jpeg(&g_pv[track_id].tex, &g_pv[track_id].tex_w, &g_pv[track_id].tex_h,
+                buf.data(), (size_t)sz);
+    g_pv[track_id].is_open  = true;
+    g_pv[track_id].is_proxy = false;
 }
 
-bool video_open_proxy(const ProxyInfo& proxy) {
-    video_close();
+bool video_open_proxy(int track_id, const ProxyInfo& proxy) {
+    if (track_id < 0 || track_id >= MAX_VIDEO_TRACKS) return false;
+    close_slot(g_pv[track_id]);
 
     FILE* f = fopen(proxy.mjpeg_path.c_str(), "rb");
     if (!f) return false;
 
-    g_pv.mjpeg_file = f;
-    g_pv.proxy      = proxy;
-    g_pv.is_proxy   = true;
-    g_pv.is_open    = true;
-    g_pv.last_frame_idx = -1;
-
-    g_pv.info.width    = proxy.width;
-    g_pv.info.height   = proxy.height;
-    g_pv.info.fps      = proxy.fps;
-    // Duration from frame count — more accurate than container header for MJPEG.
-    g_pv.info.duration = proxy.fps > 0.0
-        ? (double)proxy.frame_count / proxy.fps
-        : 0.0;
+    PreviewState& pv = g_pv[track_id];
+    pv.mjpeg_file      = f;
+    pv.proxy           = proxy;
+    pv.is_proxy        = true;
+    pv.is_open         = true;
+    pv.last_frame_idx  = -1;
+    pv.info.width      = proxy.width;
+    pv.info.height     = proxy.height;
+    pv.info.fps        = proxy.fps;
+    pv.info.duration   = proxy.fps > 0.0
+                         ? (double)proxy.frame_count / proxy.fps : 0.0;
 
     // Show frame 0 immediately.
-    uintptr_t tex = video_get_texture(0.0);
+    uintptr_t tex = video_get_texture(track_id, 0.0);
     (void)tex;
     return true;
 }
 
-void video_close() {
-    if (g_pv.mjpeg_file) { fclose(g_pv.mjpeg_file); g_pv.mjpeg_file = nullptr; }
-    if (g_pv.tex)        { glDeleteTextures(1, &g_pv.tex); g_pv.tex = 0; }
-    g_pv.tex_w = g_pv.tex_h = 0;
-    g_pv.last_frame_idx = -1;
-    g_pv.is_open  = false;
-    g_pv.is_proxy = false;
-    g_pv.proxy    = {};
-    g_pv.info     = {};
-    if (g_th.tex) { glDeleteTextures(1, &g_th.tex); g_th.tex = 0; }
-    g_th.tex_w = g_th.tex_h = 0;
-    g_th.last_frame_idx = -1;
+void video_close(int track_id) {
+    if (track_id == -1) {
+        for (int i = 0; i < MAX_VIDEO_TRACKS; ++i) close_slot(g_pv[i]);
+        if (g_th.tex) { glDeleteTextures(1, &g_th.tex); g_th.tex = 0; }
+        g_th.tex_w = g_th.tex_h = 0;
+        g_th.last_frame_idx = -1;
+    } else if (track_id >= 0 && track_id < MAX_VIDEO_TRACKS) {
+        close_slot(g_pv[track_id]);
+    }
 }
 
-bool      video_is_open() { return g_pv.is_open; }
-VideoInfo video_info()    { return g_pv.info; }
+bool      video_is_open(int track_id) {
+    if (track_id < 0 || track_id >= MAX_VIDEO_TRACKS) return false;
+    return g_pv[track_id].is_open;
+}
+VideoInfo video_info(int track_id) {
+    if (track_id < 0 || track_id >= MAX_VIDEO_TRACKS) return {};
+    return g_pv[track_id].info;
+}
 
-uintptr_t video_get_texture(double playhead) {
-    if (!g_pv.is_open) return 0;
+uintptr_t video_get_texture(int track_id, double playhead) {
+    if (track_id < 0 || track_id >= MAX_VIDEO_TRACKS) return 0;
+    PreviewState& pv = g_pv[track_id];
+    if (!pv.is_open) return 0;
 
-    if (!g_pv.is_proxy) {
-        // Still image — texture already uploaded, just return it.
-        return g_pv.tex ? (uintptr_t)g_pv.tex : 0;
-    }
+    if (!pv.is_proxy)
+        return pv.tex ? (uintptr_t)pv.tex : 0;
 
-    if (!g_pv.mjpeg_file || g_pv.proxy.offsets.empty()) return 0;
+    if (!pv.mjpeg_file || pv.proxy.offsets.empty()) return 0;
 
-    // Clamp playhead to valid range.
-    double dur = g_pv.info.duration;
+    double dur = pv.info.duration;
     if (playhead < 0.0) playhead = 0.0;
     if (dur > 0.0 && playhead > dur) playhead = dur;
 
-    // Integer rational arithmetic avoids floating-point drift at long timecodes.
-    int64_t num = g_pv.proxy.fps_num;
-    int64_t den = g_pv.proxy.fps_den;
+    int64_t num = pv.proxy.fps_num;
+    int64_t den = pv.proxy.fps_den;
     int frame_idx = (num > 0 && den > 0)
         ? (int)((int64_t)(playhead * (double)num) / den)
-        : (int)(playhead * g_pv.proxy.fps);
-    if (frame_idx >= (int)g_pv.proxy.offsets.size())
-        frame_idx = (int)g_pv.proxy.offsets.size() - 1;
+        : (int)(playhead * pv.proxy.fps);
+    if (frame_idx >= (int)pv.proxy.offsets.size())
+        frame_idx = (int)pv.proxy.offsets.size() - 1;
     if (frame_idx < 0) frame_idx = 0;
 
-    if (frame_idx == g_pv.last_frame_idx && g_pv.tex)
-        return (uintptr_t)g_pv.tex;
+    if (frame_idx == pv.last_frame_idx && pv.tex)
+        return (uintptr_t)pv.tex;
 
-    g_pv.last_frame_idx = frame_idx;
-
-    uint64_t offset = g_pv.proxy.offsets[(size_t)frame_idx];
-    bool is_last = ((size_t)frame_idx + 1 >= g_pv.proxy.offsets.size());
-
-    size_t frame_sz = 0;
-    if (!is_last) {
-        frame_sz = (size_t)(g_pv.proxy.offsets[(size_t)frame_idx + 1] - offset);
-    } else {
-        fseeko(g_pv.mjpeg_file, (off_t)offset, SEEK_SET);
-        long cur = ftell(g_pv.mjpeg_file);
-        fseeko(g_pv.mjpeg_file, 0, SEEK_END);
-        long end = ftell(g_pv.mjpeg_file);
-        frame_sz = (end > cur) ? (size_t)(end - cur) : 0;
-    }
-
-    if (frame_sz == 0) return g_pv.tex ? (uintptr_t)g_pv.tex : 0;
-
-    // Read the JPEG chunk.
-    static std::vector<uint8_t> s_buf;
-    s_buf.resize(frame_sz);
-    fseeko(g_pv.mjpeg_file, (off_t)offset, SEEK_SET);
-    size_t got = fread(s_buf.data(), 1, frame_sz, g_pv.mjpeg_file);
-    if (got == 0) return g_pv.tex ? (uintptr_t)g_pv.tex : 0;
-
-    upload_jpeg(s_buf.data(), got, g_pv.proxy.width, g_pv.proxy.height);
-    return g_pv.tex ? (uintptr_t)g_pv.tex : 0;
+    pv.last_frame_idx = frame_idx;
+    return decode_proxy_frame(pv, frame_idx);
 }
 
 uintptr_t video_get_thumbnail(double t, int* out_w, int* out_h) {
     if (out_w) *out_w = 0;
     if (out_h) *out_h = 0;
-    if (!g_pv.is_open || !g_pv.is_proxy) return 0;
-    if (!g_pv.mjpeg_file || g_pv.proxy.offsets.empty()) return 0;
+    // Uses track 0's proxy for scrub bar hover preview
+    PreviewState& pv = g_pv[0];
+    if (!pv.is_open || !pv.is_proxy) return 0;
+    if (!pv.mjpeg_file || pv.proxy.offsets.empty()) return 0;
 
-    double dur = g_pv.info.duration;
+    double dur = pv.info.duration;
     if (t < 0.0) t = 0.0;
     if (dur > 0.0 && t > dur) t = dur;
 
-    int64_t num = g_pv.proxy.fps_num;
-    int64_t den = g_pv.proxy.fps_den;
+    int64_t num = pv.proxy.fps_num;
+    int64_t den = pv.proxy.fps_den;
     int frame_idx = (num > 0 && den > 0)
         ? (int)((int64_t)(t * (double)num) / den)
-        : (int)(t * g_pv.proxy.fps);
-    if (frame_idx >= (int)g_pv.proxy.offsets.size())
-        frame_idx = (int)g_pv.proxy.offsets.size() - 1;
+        : (int)(t * pv.proxy.fps);
+    if (frame_idx >= (int)pv.proxy.offsets.size())
+        frame_idx = (int)pv.proxy.offsets.size() - 1;
     if (frame_idx < 0) frame_idx = 0;
 
     if (frame_idx == g_th.last_frame_idx && g_th.tex) {
@@ -227,49 +238,27 @@ uintptr_t video_get_thumbnail(double t, int* out_w, int* out_h) {
     }
     g_th.last_frame_idx = frame_idx;
 
-    uint64_t offset = g_pv.proxy.offsets[(size_t)frame_idx];
-    bool is_last = ((size_t)frame_idx + 1 >= g_pv.proxy.offsets.size());
+    uint64_t offset = pv.proxy.offsets[(size_t)frame_idx];
+    bool is_last = ((size_t)frame_idx + 1 >= pv.proxy.offsets.size());
     size_t frame_sz = 0;
     if (!is_last) {
-        frame_sz = (size_t)(g_pv.proxy.offsets[(size_t)frame_idx + 1] - offset);
+        frame_sz = (size_t)(pv.proxy.offsets[(size_t)frame_idx + 1] - offset);
     } else {
-        fseeko(g_pv.mjpeg_file, (off_t)offset, SEEK_SET);
-        long cur = ftell(g_pv.mjpeg_file);
-        fseeko(g_pv.mjpeg_file, 0, SEEK_END);
-        long end = ftell(g_pv.mjpeg_file);
+        fseeko(pv.mjpeg_file, (off_t)offset, SEEK_SET);
+        long cur = ftell(pv.mjpeg_file);
+        fseeko(pv.mjpeg_file, 0, SEEK_END);
+        long end = ftell(pv.mjpeg_file);
         frame_sz = (end > cur) ? (size_t)(end - cur) : 0;
     }
     if (frame_sz == 0) return g_th.tex ? (uintptr_t)g_th.tex : 0;
 
     static std::vector<uint8_t> s_th_buf;
     s_th_buf.resize(frame_sz);
-    fseeko(g_pv.mjpeg_file, (off_t)offset, SEEK_SET);
-    size_t got = fread(s_th_buf.data(), 1, frame_sz, g_pv.mjpeg_file);
+    fseeko(pv.mjpeg_file, (off_t)offset, SEEK_SET);
+    size_t got = fread(s_th_buf.data(), 1, frame_sz, pv.mjpeg_file);
     if (got == 0) return g_th.tex ? (uintptr_t)g_th.tex : 0;
 
-    int w, h, ch;
-    uint8_t* pixels = stbi_load_from_memory(s_th_buf.data(), (int)got, &w, &h, &ch, 3);
-    if (!pixels) return g_th.tex ? (uintptr_t)g_th.tex : 0;
-
-    if (g_th.tex == 0) {
-        glGenTextures(1, &g_th.tex);
-        glBindTexture(GL_TEXTURE_2D, g_th.tex);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    } else {
-        glBindTexture(GL_TEXTURE_2D, g_th.tex);
-    }
-
-    if (w != g_th.tex_w || h != g_th.tex_h) {
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, w, h, 0, GL_RGB, GL_UNSIGNED_BYTE, pixels);
-        g_th.tex_w = w; g_th.tex_h = h;
-    } else {
-        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_RGB, GL_UNSIGNED_BYTE, pixels);
-    }
-    glBindTexture(GL_TEXTURE_2D, 0);
-    stbi_image_free(pixels);
+    upload_jpeg(&g_th.tex, &g_th.tex_w, &g_th.tex_h, s_th_buf.data(), got);
 
     if (out_w) *out_w = g_th.tex_w;
     if (out_h) *out_h = g_th.tex_h;

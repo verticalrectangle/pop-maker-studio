@@ -2,6 +2,31 @@
 #include <string>
 #include <vector>
 #include <chrono>
+#include <unordered_map>
+#include <set>
+#include <array>
+#include <algorithm>
+#include <cmath>
+
+// ── Keyframing ────────────────────────────────────────────────────────────────
+
+enum class InterpType { Linear, EaseIn, EaseOut, EaseBoth, Hold };
+
+struct Keyframe {
+    float      time   = 0.f;   // seconds relative to clip.start
+    float      value  = 0.f;
+    InterpType interp = InterpType::EaseBoth;
+};
+
+struct PropTrack {
+    std::vector<Keyframe> keys;  // always sorted by time
+
+    bool  empty()                                                     const { return keys.empty(); }
+    float eval(float t)                                               const;
+    void  set(float t, float v, InterpType it = InterpType::EaseBoth);
+    void  remove_at(float t, float tol = 0.05f);
+    int   find_nearest(float t, float tol = 0.1f)                    const;
+};
 
 // ── Track / clip data model ───────────────────────────────────────────────────
 
@@ -23,6 +48,21 @@ struct Clip {
     float sub_pos_y = 0.85f;   // custom Y fraction from top (0=top, 1=bottom)
     float sub_color[4] = {1.f, 1.f, 1.f, 1.f};  // RGBA
     bool  sub_color_override = false;
+
+    // per-clip transform (video clips; fractions of canvas size)
+    float pos_x    = 0.5f;   // 0=left edge, 1=right edge (centre default)
+    float pos_y    = 0.5f;   // 0=top edge,  1=bottom edge
+    float scale_x  = 1.f;
+    float scale_y  = 1.f;
+    float rotation = 0.f;    // degrees, clockwise
+
+    // keyframe tracks — keyed by property name string
+    // empty = use the matching static field above
+    std::unordered_map<std::string, PropTrack> ktracks;
+
+    // Evaluate named property at absolute timeline time `playhead`.
+    // Falls back to the static field when no keyframes exist.
+    float eval_prop(const std::string& name, float playhead) const;
 };
 
 struct Track {
@@ -125,8 +165,20 @@ struct AppState {
     // video background
     std::string video_path;
     bool        video_loaded   = false;
-    bool        proxy_ready    = false;   // proxy has been opened for preview
-    bool        proxy_was_generating = false; // tracks generation state changes
+    bool        proxy_ready    = false;        // proxy ready for track 0 (backwards compat)
+    bool        proxy_was_generating = false;  // tracks generation state changes
+
+    // per-track proxy ready flags (indexed by tracks[] index)
+    std::array<bool, 8> track_proxy_ready = {};
+
+    // keyframe selection
+    int         kf_sel_track = -1;
+    int         kf_sel_clip  = -1;
+    std::string kf_sel_prop;
+    int         kf_sel_idx   = -1;
+
+    // expanded clips in timeline (track_idx, clip_idx)
+    std::set<std::pair<int,int>> expanded_clips;
 
     // render
     RenderStatus   render;

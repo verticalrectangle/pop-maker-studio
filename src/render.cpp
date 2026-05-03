@@ -94,30 +94,138 @@ static std::string esc(const std::string& s) {
     return o;
 }
 
+// ── Keyframe expression builder ───────────────────────────────────────────────
+
+// Returns a constant string (e.g. "0.500") for a static prop, or a piecewise
+// linear if-chain expression over ffmpeg `t` (seconds from input start).
+// `bias` is added to `t` before evaluation (e.g. clip.start when -ss is used).
+// `scale` multiplies the output value (e.g. out_w for pos_x → pixel X).
+static std::string prop_expr(const Clip& cl, const std::string& prop,
+                              float scale_factor, float default_val = -999.f)
+{
+    auto it = cl.ktracks.find(prop);
+    bool has_kf = (it != cl.ktracks.end() && !it->second.empty());
+
+    float sv = (default_val > -998.f) ? default_val : cl.eval_prop(prop, cl.start);
+
+    if (!has_kf) {
+        char buf[32]; snprintf(buf, sizeof(buf), "%.4f", (double)(sv * scale_factor));
+        return buf;
+    }
+
+    const auto& keys = it->second.keys;
+    if (keys.size() == 1) {
+        char buf[32];
+        snprintf(buf, sizeof(buf), "%.4f", (double)(keys[0].value * scale_factor));
+        return buf;
+    }
+
+    // Build piecewise linear expression (right-to-left nesting).
+    // Each segment: lerp from keys[i] to keys[i+1] over [t0..t1].
+    // Easing is baked as the alpha curve; Hold just clamps at start value.
+    std::string expr;
+    for (int i = (int)keys.size() - 2; i >= 0; --i) {
+        float t0  = keys[i].time,   t1  = keys[i+1].time;
+        float v0  = keys[i].value,  v1  = keys[i+1].value;
+        float dt  = (t1 - t0 < 1e-5f) ? 1e-5f : (t1 - t0);
+
+        std::string alpha_expr;
+        switch (keys[i].interp) {
+            case InterpType::Hold:
+                alpha_expr = "0";
+                break;
+            case InterpType::EaseIn: {
+                // a=clamp((t-t0)/dt,0,1); a^2
+                char buf[128];
+                snprintf(buf, sizeof(buf),
+                    "pow(clip((t-%.4f)/%.4f\\,0\\,1)\\,2)",
+                    (double)t0, (double)dt);
+                alpha_expr = buf;
+                break;
+            }
+            case InterpType::EaseOut: {
+                char buf[128];
+                snprintf(buf, sizeof(buf),
+                    "(1-pow(1-clip((t-%.4f)/%.4f\\,0\\,1)\\,2))",
+                    (double)t0, (double)dt);
+                alpha_expr = buf;
+                break;
+            }
+            case InterpType::EaseBoth: {
+                char buf[128];
+                snprintf(buf, sizeof(buf),
+                    "smoothstep(%.4f\\,%.4f\\,t)",
+                    (double)t0, (double)(t0 + dt));
+                alpha_expr = buf;
+                break;
+            }
+            default: { // Linear
+                char buf[128];
+                snprintf(buf, sizeof(buf),
+                    "clip((t-%.4f)/%.4f\\,0\\,1)",
+                    (double)t0, (double)dt);
+                alpha_expr = buf;
+                break;
+            }
+        }
+
+        float vs = v0 * scale_factor;
+        float vd = (v1 - v0) * scale_factor;
+        char seg[256];
+        snprintf(seg, sizeof(seg), "(%.4f+%.4f*%s)",
+                 (double)vs, (double)vd, alpha_expr.c_str());
+
+        if (expr.empty()) {
+            // Last segment — value after last keyframe
+            char tail[32];
+            snprintf(tail, sizeof(tail), "%.4f",
+                     (double)(keys.back().value * scale_factor));
+            expr = std::string("if(lt(t,") + std::to_string(t1) + "),"
+                   + seg + "," + tail + ")";
+        } else {
+            expr = std::string("if(lt(t,") + std::to_string(t1) + "),"
+                   + seg + "," + expr + ")";
+        }
+    }
+
+    // Clamp before first key
+    char head[32];
+    snprintf(head, sizeof(head), "%.4f",
+             (double)(keys[0].value * scale_factor));
+    expr = std::string("if(lt(t,") + std::to_string(keys[0].time)
+           + ")," + head + "," + expr + ")";
+
+    return expr;
+}
+
 // ── Filter-complex script writer ──────────────────────────────────────────────
+
+// Represents one video input to ffmpeg (path + seek boundaries).
+struct VidSpec { std::string path; float ss=0.f; float to=-1.f; int in_idx=-1; };
 
 static bool write_filter_script(
     const AppState& state,
     const std::string& path,
-    int vid_in, int aud_in,
+    const std::vector<VidSpec>& vid_specs,  // ordered video inputs
+    int aud_in,
     int out_w, int out_h,
-    float sub_offset,        // subtract from subtitle enable times (= video clip start)
+    float sub_offset,
     std::string& vout_label,
     std::string& aout_label)
 {
     std::ostringstream fc;
     bool first = true;
-    // Helper: append a new filter line, preceded by ";\n" after the first
     auto line = [&]() -> std::ostringstream& {
         if (!first) fc << ";\n";
         first = false;
         return fc;
     };
 
-    // ── Video source ──────────────────────────────────────────────────────────
+    // ── Base (first video or black) ───────────────────────────────────────────
     std::string vcur;
-    if (vid_in >= 0) {
-        line() << "[" << vid_in << ":v]"
+    if (!vid_specs.empty()) {
+        const VidSpec& v0 = vid_specs[0];
+        line() << "[" << v0.in_idx << ":v]"
                << "scale=" << out_w << ":" << out_h
                << ":force_original_aspect_ratio=decrease,"
                << "pad=" << out_w << ":" << out_h
@@ -130,6 +238,65 @@ static bool write_filter_script(
     }
     vcur = "[vbase]";
 
+    // ── Overlay extra video layers (indices 1+) ───────────────────────────────
+    for (int vi = 1; vi < (int)vid_specs.size(); ++vi) {
+        const VidSpec& vs   = vid_specs[vi];
+        // Find matching video track in state (by path)
+        const Clip* cl_ptr = nullptr;
+        for (auto& tr : state.tracks) {
+            if (tr.type != TrackType::Video) continue;
+            for (auto& cl : tr.clips)
+                if (cl.text == vs.path) { cl_ptr = &cl; break; }
+            if (cl_ptr) break;
+        }
+        if (!cl_ptr) continue;
+        const Clip& cl = *cl_ptr;
+
+        // Scale expressions (pixels)
+        std::string sw_expr = prop_expr(cl, "scale_x", (float)out_w, cl.scale_x);
+        std::string sh_expr = prop_expr(cl, "scale_y", (float)out_h, cl.scale_y);
+
+        std::string layer_tag = "[vlayer" + std::to_string(vi) + "]";
+        std::string layer_rgba = "[vlr" + std::to_string(vi) + "]";
+
+        // Scale to desired size
+        line() << "[" << vs.in_idx << ":v]"
+               << "scale=" << sw_expr << ":" << sh_expr
+               << ",format=rgba"
+               << layer_tag;
+
+        // Opacity via colorchannelmixer (only if not fully opaque / keyframed)
+        bool has_opa = (cl_ptr->ktracks.count("opacity") > 0 ||
+                        fabsf(cl.opacity - 1.f) > 0.01f);
+        std::string layer_in = layer_tag;
+        if (has_opa) {
+            std::string opa_expr = prop_expr(cl, "opacity", 1.f, cl.opacity);
+            std::string opa_tag  = "[vlopa" + std::to_string(vi) + "]";
+            line() << layer_tag
+                   << "colorchannelmixer=aa=" << opa_expr
+                   << opa_tag;
+            layer_in = opa_tag;
+        }
+
+        // Overlay position expressions (pixels from top-left corner of canvas,
+        // centred on pos_x * out_w, pos_y * out_h).
+        std::string x_expr = "(" + prop_expr(cl, "pos_x", (float)out_w, cl.pos_x) + "-iw/2)";
+        std::string y_expr = "(" + prop_expr(cl, "pos_y", (float)out_h, cl.pos_y) + "-ih/2)";
+
+        // Enable expression — only show while the clip is active.
+        float en_start = fmaxf(0.f, cl.start - vs.ss);
+        float en_end   = fmaxf(0.f, cl.end   - vs.ss);
+
+        std::string vnext = "[vov" + std::to_string(vi) + "]";
+        line() << vcur << layer_in
+               << "overlay=x=" << x_expr << ":y=" << y_expr
+               << ":format=auto"
+               << ":enable='between(t,"
+               << std::fixed << std::setprecision(3) << en_start << "," << en_end << ")'"
+               << vnext;
+        vcur = vnext;
+    }
+
     // ── Subtitle drawtext chain ───────────────────────────────────────────────
     int font_sz = (out_h >= 1500) ? 96 : 72;
     int si = 0;
@@ -139,15 +306,14 @@ static bool write_filter_script(
         if (!tr.visible || cl.text.empty()) continue;
 
         // Y expression
-        std::string y_expr;
-        if      (cl.sub_pos == 1) y_expr = "(h-text_h)/2";
-        else if (cl.sub_pos == 2) y_expr = "h*0.10";
+        std::string y_e;
+        if      (cl.sub_pos == 1) y_e = "(h-text_h)/2";
+        else if (cl.sub_pos == 2) y_e = "h*0.10";
         else if (cl.sub_pos == 3) {
-            char yb[64];
-            snprintf(yb, sizeof(yb), "h*%.4f-text_h/2", (double)cl.sub_pos_y);
-            y_expr = yb;
+            char yb[64]; snprintf(yb, sizeof(yb), "h*%.4f-text_h/2", (double)cl.sub_pos_y);
+            y_e = yb;
         } else {
-            y_expr = "h*0.88-text_h";
+            y_e = "h*0.88-text_h";
         }
 
         // Color
@@ -160,7 +326,6 @@ static bool write_filter_script(
             strcpy(col, "white");
 
         std::string vnext = "[vsub" + std::to_string(si++) + "]";
-
         line() << vcur
                << "drawtext="
                << "fontfile=" << esc(g_font_path) << ":"
@@ -170,7 +335,7 @@ static bool write_filter_script(
                << "borderw=3:bordercolor=black@0.7:"
                << "shadowx=2:shadowy=2:shadowcolor=black@0.5:"
                << "x=(w-text_w)/2:"
-               << "y=" << y_expr                  << ":"
+               << "y=" << y_e                     << ":"
                << "enable='between(t,"
                << std::fixed << std::setprecision(3)
                << fmaxf(0.f, cl.start - sub_offset) << ","
@@ -185,7 +350,7 @@ static bool write_filter_script(
         float vol = 1.f;
         for (auto& tr : state.tracks) {
             if ((tr.type == TrackType::Audio || tr.type == TrackType::Video)
-                    && !tr.clips.empty() && tr.muted == false) {
+                    && !tr.clips.empty() && !tr.muted) {
                 vol = tr.clips[0].volume;
                 break;
             }
@@ -213,18 +378,20 @@ static std::vector<std::string> build_args(AppState& state) {
         default: break;
     }
 
-    // Find best video and audio source files, capturing clip boundaries
-    struct InSpec { std::string path; float ss = 0.f; float to = -1.f; };
+    // Collect all video track clips as separate inputs (ordered = layer order).
+    struct InSpec { std::string path; float ss=0.f; float to=-1.f; };
+    std::vector<VidSpec> vid_specs;
+    InSpec audio_in;
 
-    InSpec video_in, audio_in;
-    for (auto& tr : state.tracks)
-        if (tr.type == TrackType::Video && !tr.clips.empty()
-                && !tr.clips[0].text.empty() && fs::exists(tr.clips[0].text)) {
-            video_in.path = tr.clips[0].text;
-            video_in.ss   = tr.clips[0].start;
-            video_in.to   = tr.clips[0].end;
-            break;
+    for (auto& tr : state.tracks) {
+        if (tr.type != TrackType::Video) continue;
+        for (auto& cl : tr.clips) {
+            if (cl.text.empty() || !fs::exists(cl.text)) continue;
+            VidSpec vs; vs.path = cl.text; vs.ss = cl.start; vs.to = cl.end;
+            vid_specs.push_back(vs);
+            break; // one clip per track for now
         }
+    }
 
     audio_in.path = state.audio_path;
     for (auto& tr : state.tracks)
@@ -237,25 +404,36 @@ static std::vector<std::string> build_args(AppState& state) {
         }
     if (!audio_in.path.empty() && !fs::exists(audio_in.path)) audio_in.path.clear();
 
-    int n_in = 0, vid_in = -1, aud_in = -1;
-    std::vector<InSpec> inputs;
-    if (!video_in.path.empty()) { vid_in = n_in++; inputs.push_back(video_in); }
-    if (!audio_in.path.empty()) { aud_in = n_in++; inputs.push_back(audio_in); }
-    if (n_in == 0) return {};
+    if (vid_specs.empty() && audio_in.path.empty()) return {};
 
-    // Subtitle enable times are relative to the video start (after -ss seek)
-    float sub_offset = video_in.ss > 0.001f ? video_in.ss
+    // Assign input indices: video tracks first, then audio.
+    int n_in = 0;
+    for (auto& vs : vid_specs) vs.in_idx = n_in++;
+    int aud_in = -1;
+    if (!audio_in.path.empty()) { aud_in = n_in++; }
+
+    // Build flat ffmpeg input list (same order).
+    std::vector<InSpec> inputs;
+    for (auto& vs : vid_specs) inputs.push_back({vs.path, vs.ss, vs.to});
+    if (aud_in >= 0) inputs.push_back(audio_in);
+
+    // Subtitle offset = start of first video clip (or audio clip).
+    float sub_offset = (!vid_specs.empty() && vid_specs[0].ss > 0.001f)
+                     ? vid_specs[0].ss
                      : (audio_in.ss > 0.001f ? audio_in.ss : 0.f);
 
-    // Output duration derived from clip boundaries, fallback to state.duration
+    // Output duration from primary video/audio clip.
     float out_duration = state.duration;
-    if (video_in.to > 0.001f)       out_duration = video_in.to - video_in.ss;
-    else if (audio_in.to > 0.001f)  out_duration = audio_in.to - audio_in.ss;
+    if (!vid_specs.empty() && vid_specs[0].to > 0.001f)
+        out_duration = vid_specs[0].to - vid_specs[0].ss;
+    else if (audio_in.to > 0.001f)
+        out_duration = audio_in.to - audio_in.ss;
 
     // Write filter script
     std::string script = "/tmp/pms_filter.txt";
     std::string vout, aout;
-    if (!write_filter_script(state, script, vid_in, aud_in, out_w, out_h, sub_offset, vout, aout))
+    if (!write_filter_script(state, script, vid_specs, aud_in,
+                             out_w, out_h, sub_offset, vout, aout))
         return {};
 
     const auto& rs = state.render_settings;

@@ -69,8 +69,8 @@ static void toggle_play(AppState& state) {
 }
 
 static float tl_fps(const AppState& state) {
-    return (state.proxy_ready && video_info().fps > 0.0)
-           ? (float)video_info().fps : 30.f;
+    return (state.proxy_ready && video_info(0).fps > 0.0)
+           ? (float)video_info(0).fps : 30.f;
 }
 
 static bool is_audio_file(const std::string& path) {
@@ -293,27 +293,8 @@ static void import_file(AppState& state, const std::string& path) {
     bool is_video = (ext==".mp4"||ext==".mov"||ext==".mkv"||ext==".avi"||ext==".webm");
 
     if (is_video) {
-        state.video_path  = path;
+        state.video_path   = path;
         state.video_loaded = true;
-        state.proxy_ready  = false;
-
-        // Start proxy generation (no-op if proxy already exists on disk).
-        // This also extracts the preview still synchronously (< 1 s).
-        proxy_start(path);
-
-        // Show still immediately while proxy generates; switch to proxy
-        // once ready (checked each frame in the main loop below).
-        std::string still = proxy_still_path(path);
-        video_open_still(still);
-
-        // If the proxy already existed from a previous session, open it now.
-        if (proxy_is_ready(path)) {
-            ProxyInfo pi;
-            if (proxy_load(path, pi)) {
-                video_open_proxy(pi);
-                state.proxy_ready = true;
-            }
-        }
 
         // audio_load probes duration from the container header synchronously
         // before spawning its background decode thread — use that as the
@@ -325,14 +306,44 @@ static void import_file(AppState& state, const std::string& path) {
         float vprobed = video_probe_duration(path);
         if (vprobed > 0.f) state.duration = vprobed;
 
-        // Add or update Video track
-        Track* vt = nullptr;
-        for (auto& t : state.tracks) if (t.type==TrackType::Video) { vt=&t; break; }
-        if (!vt) { state.tracks.push_back({}); vt=&state.tracks.back(); }
-        vt->type = TrackType::Video; vt->name = "Video";
-        vt->clips.clear();
+        // Find or create a Video track; get its index (= proxy slot).
+        // If one already exists, reuse it (single-file replace); otherwise append.
+        int track_ti = -1;
+        for (int i = 0; i < (int)state.tracks.size(); ++i)
+            if (state.tracks[i].type == TrackType::Video) { track_ti = i; break; }
+        if (track_ti < 0) {
+            state.tracks.push_back({});
+            track_ti = (int)state.tracks.size() - 1;
+        }
+        Track& vt = state.tracks[track_ti];
+        vt.type = TrackType::Video; vt.name = "Video";
+        vt.clips.clear();
         Clip vc; vc.start=0.f; vc.end=state.duration; vc.text=path;
-        vt->clips.push_back(vc);
+        vt.clips.push_back(vc);
+
+        // Reset proxy-ready flags for this slot.
+        state.proxy_ready = false;
+        if (track_ti < MAX_VIDEO_TRACKS) state.track_proxy_ready[track_ti] = false;
+
+        // Start proxy generation (no-op if proxy already exists on disk).
+        // This also extracts the preview still synchronously (< 1 s).
+        proxy_start(path);
+
+        if (track_ti < MAX_VIDEO_TRACKS) {
+            // Show still immediately while proxy generates.
+            std::string still = proxy_still_path(path);
+            video_open_still(track_ti, still);
+
+            // If the proxy already existed from a previous session, open it now.
+            if (proxy_is_ready(path)) {
+                ProxyInfo pi;
+                if (proxy_load(path, pi)) {
+                    video_open_proxy(track_ti, pi);
+                    state.proxy_ready = true;
+                    state.track_proxy_ready[track_ti] = true;
+                }
+            }
+        }
     } else {
         state.audio_path = path;
         audio_load(path);  // async — also probes container duration
@@ -451,28 +462,56 @@ static void draw_pipeline_strip(AppState& state, float w) {
 static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
     ImDrawList* dl = ImGui::GetWindowDrawList();
 
-    if (state.video_loaded && video_is_open()) {
-        // Only show video while playhead is inside a video clip's time range.
-        bool in_clip = false;
-        for (auto& tr : state.tracks) {
+    // Black base
+    dl->AddRectFilled(p, {p.x+w, p.y+h},
+        state.video_loaded ? IM_COL32(0,0,0,255) : to_u32(Col::accent_dark), 2.f);
+
+    // Composite all video layers bottom-to-top (tracks array order = bottom first).
+    {
+        float lookahead = ImGui::GetIO().DeltaTime;
+        for (int ti = 0; ti < (int)state.tracks.size() && ti < MAX_VIDEO_TRACKS; ++ti) {
+            const Track& tr = state.tracks[ti];
             if (tr.type != TrackType::Video || !tr.visible) continue;
+            if (!video_is_open(ti)) continue;
+
+            // Find the active clip at the current playhead.
+            const Clip* active = nullptr;
             for (auto& cl : tr.clips)
-                if (state.playhead >= cl.start && state.playhead < cl.end)
-                    { in_clip = true; break; }
-            if (in_clip) break;
+                if (state.playhead >= cl.start && state.playhead < cl.end) { active=&cl; break; }
+            if (!active) continue;
+
+            uintptr_t tex = video_get_texture(ti, (double)(state.playhead + lookahead));
+            if (!tex) continue;
+
+            float px    = active->eval_prop("pos_x",    state.playhead);
+            float py    = active->eval_prop("pos_y",    state.playhead);
+            float sx    = active->eval_prop("scale_x",  state.playhead);
+            float sy    = active->eval_prop("scale_y",  state.playhead);
+            float rot   = active->eval_prop("rotation", state.playhead);
+            float alpha = active->eval_prop("opacity",  state.playhead);
+
+            // Layer centre in screen-space.
+            float cx = p.x + px * w;
+            float cy = p.y + py * h;
+            float hw = w * sx * 0.5f;
+            float hh = h * sy * 0.5f;
+
+            float rad   = rot * 3.14159265f / 180.f;
+            float cos_r = cosf(rad), sin_r = sinf(rad);
+            auto rot_pt = [&](float ox, float oy) -> ImVec2 {
+                return { cx + ox*cos_r - oy*sin_r, cy + ox*sin_r + oy*cos_r };
+            };
+
+            ImVec2 q0 = rot_pt(-hw, -hh);  // top-left
+            ImVec2 q1 = rot_pt( hw, -hh);  // top-right
+            ImVec2 q2 = rot_pt( hw,  hh);  // bottom-right
+            ImVec2 q3 = rot_pt(-hw,  hh);  // bottom-left
+
+            ImU32 col = IM_COL32(255, 255, 255, (int)(alpha * 255.f));
+            dl->AddImageQuad(ImTextureRef((ImTextureID)tex),
+                q0, q1, q2, q3,
+                {0,0}, {1,0}, {1,1}, {0,1}, col);
         }
-        if (in_clip) {
-            float lookahead = ImGui::GetIO().DeltaTime;
-            uintptr_t tex = video_get_texture((double)(state.playhead + lookahead));
-            if (tex)
-                dl->AddImage(ImTextureRef((ImTextureID)tex), p, {p.x+w, p.y+h});
-            else
-                dl->AddRectFilled(p, {p.x+w, p.y+h}, to_u32(Col::accent_dark), 2.f);
-        } else {
-            dl->AddRectFilled(p, {p.x+w, p.y+h}, IM_COL32(0, 0, 0, 255));
-        }
-    } else {
-        dl->AddRectFilled(p, {p.x+w, p.y+h}, to_u32(Col::accent_dark), 2.f);
     }
     dl->AddRect(p, {p.x+w, p.y+h}, to_u32(Col::line), 2.f);
     // Format label
@@ -986,6 +1025,113 @@ static void panel_clip(AppState& state, float w) {
             ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
             ImGui::TextUnformatted("Crossfade — applied on render");
             ImGui::PopStyleColor();
+
+            // ── Transform (keyframeable) ──────────────────────────────────────
+            ImGui::Dummy({0.f, 12.f}); ui_separator(); ImGui::Dummy({0.f, 8.f});
+            ui_label("Transform"); ImGui::Dummy({0.f, 4.f});
+
+            float ph = state.playhead;
+            float t_local = ph - clip.start;
+            int   sel_ti = state.selected_track, sel_ci = state.selected_clip;
+
+            // Helper: slider + ◆ keyframe button for one property.
+            // Returns true if the value changed.
+            auto kf_slider = [&](const char* prop, const char* label,
+                                 float* val_ptr, float vmin, float vmax,
+                                 const char* fmt) -> bool
+            {
+                bool changed = false;
+                PropTrack& pt = clip.ktracks[prop];
+                bool has_kf   = (pt.find_nearest(t_local, 0.05f) >= 0);
+
+                // ◆ button — active colour when keyframe exists at current time
+                ImGui::PushStyleColor(ImGuiCol_Button,
+                    has_kf ? IM_COL32(255,200,60,200) : IM_COL32(80,80,80,180));
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(255,220,80,220));
+                char kbid[64]; snprintf(kbid, sizeof(kbid), "\xe2\x97\x86##kf_%s", prop);
+                if (ImGui::Button(kbid, {20.f, 0.f})) {
+                    if (has_kf) {
+                        pt.remove_at(t_local, 0.05f);
+                        if (pt.empty()) clip.ktracks.erase(prop);
+                        history_push(state, std::string("Remove KF ") + prop);
+                    } else {
+                        float cur = clip.eval_prop(prop, ph);
+                        pt.set(t_local, cur);
+                        state.kf_sel_track = sel_ti;
+                        state.kf_sel_clip  = sel_ci;
+                        state.kf_sel_prop  = prop;
+                        state.kf_sel_idx   = pt.find_nearest(t_local, 0.1f);
+                        history_push(state, std::string("Add KF ") + prop);
+                    }
+                }
+                ImGui::PopStyleColor(2);
+                ImGui::SameLine(0.f, 4.f);
+
+                // Label
+                ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+                ImGui::TextUnformatted(label);
+                ImGui::PopStyleColor();
+                ImGui::SameLine(0.f, 4.f);
+
+                // Slider — editing live updates the static field; if keyframe exists at
+                // this time, also updates that keyframe's value.
+                ImGui::PushStyleColor(ImGuiCol_SliderGrab, has_kf ? IM_COL32(255,200,60,255) : to_u32(Col::fg));
+                ImGui::PushStyleColor(ImGuiCol_FrameBg,    Col::bg_soft);
+                float slider_w = w - 20.f - ImGui::CalcTextSize(label).x - 28.f;
+                ImGui::SetNextItemWidth(fmaxf(40.f, slider_w));
+                char sid[64]; snprintf(sid, sizeof(sid), "##kfs_%s", prop);
+                if (ImGui::SliderFloat(sid, val_ptr, vmin, vmax, fmt)) {
+                    changed = true;
+                    if (has_kf) {
+                        int ki = pt.find_nearest(t_local, 0.05f);
+                        if (ki >= 0) pt.keys[ki].value = *val_ptr;
+                    }
+                }
+                ImGui::PopStyleColor(2);
+
+                if (ImGui::IsItemDeactivatedAfterEdit()) {
+                    history_push(state, std::string("Edit ") + prop);
+                }
+
+                return changed;
+            };
+
+            kf_slider("pos_x",    "X",    &clip.pos_x,    0.f, 1.f, "%.2f");
+            kf_slider("pos_y",    "Y",    &clip.pos_y,    0.f, 1.f, "%.2f");
+            kf_slider("scale_x",  "ScX",  &clip.scale_x,  0.f, 4.f, "%.2f");
+            kf_slider("scale_y",  "ScY",  &clip.scale_y,  0.f, 4.f, "%.2f");
+            kf_slider("rotation", "Rot",  &clip.rotation, -180.f, 180.f, "%.1f\xc2\xb0");
+            kf_slider("opacity",  "Opa",  &clip.opacity,  0.f, 1.f, "%.2f");
+
+            // ── Keyframe interp selector ──────────────────────────────────────
+            bool sel_this = (state.kf_sel_track == sel_ti &&
+                             state.kf_sel_clip  == sel_ci &&
+                             !state.kf_sel_prop.empty() &&
+                             state.kf_sel_idx   >= 0);
+            if (sel_this) {
+                auto it2 = clip.ktracks.find(state.kf_sel_prop);
+                if (it2 != clip.ktracks.end() &&
+                    state.kf_sel_idx < (int)it2->second.keys.size()) {
+                    Keyframe& kf = it2->second.keys[state.kf_sel_idx];
+                    ImGui::Dummy({0.f, 4.f});
+                    ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+                    ImGui::TextUnformatted("Interpolation:");
+                    ImGui::PopStyleColor();
+                    ImGui::SameLine(0.f, 6.f);
+                    struct IT { InterpType t; const char* n; };
+                    IT its[] = {{InterpType::Linear,"Lin"},{InterpType::EaseIn,"In"},
+                                {InterpType::EaseOut,"Out"},{InterpType::EaseBoth,"Both"},
+                                {InterpType::Hold,"Hold"}};
+                    for (auto& it3 : its) {
+                        if (ui_btn(it3.n, kf.interp == it3.t, true)) {
+                            kf.interp = it3.t;
+                            history_push(state, "KF interp");
+                        }
+                        ImGui::SameLine(0.f, 4.f);
+                    }
+                    ImGui::NewLine();
+                }
+            }
         }
 
         ImGui::Dummy({0.f, 12.f}); ui_separator(); ImGui::Dummy({0.f, 8.f});
@@ -1540,6 +1686,41 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
                     ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
             }
 
+            // Keyframe diamond markers — drawn for all keyframed properties
+            if (!clip.ktracks.empty()) {
+                float kf_mid_y = (cy0 + cy1) * 0.5f;
+                float d = 4.f;  // half-size of diamond
+                for (auto& [pname, pt] : clip.ktracks) {
+                    for (auto& kf : pt.keys) {
+                        float kx = origin.x + TL_LABEL_W + (clip.start + kf.time) * zoom - scroll;
+                        if (kx < vis_x0 || kx > vis_x1) continue;
+                        bool kf_sel = (state.kf_sel_track == ti &&
+                                       state.kf_sel_clip  == ci &&
+                                       state.kf_sel_prop  == pname &&
+                                       &kf == &pt.keys[state.kf_sel_idx > 0 &&
+                                           state.kf_sel_idx < (int)pt.keys.size()
+                                           ? state.kf_sel_idx : 0]);
+                        ImU32 kc = kf_sel ? IM_COL32(255,200,60,255) : IM_COL32(220,220,220,200);
+                        dl->AddQuadFilled(
+                            {kx, kf_mid_y-d}, {kx+d, kf_mid_y},
+                            {kx, kf_mid_y+d}, {kx-d, kf_mid_y}, kc);
+                        // Click to select keyframe
+                        if (ImGui::IsMouseClicked(0) &&
+                            fabsf(mouse.x - kx) < d+2.f &&
+                            fabsf(mouse.y - kf_mid_y) < d+2.f) {
+                            state.kf_sel_track = ti;
+                            state.kf_sel_clip  = ci;
+                            state.kf_sel_prop  = pname;
+                            int idx = (int)(&kf - pt.keys.data());
+                            state.kf_sel_idx   = idx;
+                            state.selected_track = ti;
+                            state.selected_clip  = ci;
+                            state.panel_tab      = 0;
+                        }
+                    }
+                }
+            }
+
             // Transition out indicator — diagonal slash at right edge of video clips
             if (track.type == TrackType::Video && clip.transition_out > 0.f) {
                 float trans_px = fminf(clip.transition_out * zoom, cx1 - cx0);
@@ -1934,23 +2115,31 @@ void ui_studio(AppState& state) {
         g_dropped_file.clear();
     }
 
-    // Proxy ready → upgrade from still to interactive proxy preview
-    if (state.video_loaded && !state.proxy_ready && !state.video_path.empty()) {
-        if (proxy_is_ready(state.video_path)) {
-            ProxyInfo pi;
-            if (proxy_load(state.video_path, pi)) {
-                video_open_proxy(pi);
-                state.proxy_ready = true;
-                // Proxy frame count / fps is the most accurate duration source.
-                float pd = (float)video_info().duration;
-                if (pd > 0.f) {
-                    state.duration = pd;
-                    // Extend any full-span video clips to match corrected duration.
-                    for (auto& t : state.tracks) {
-                        if (t.type != TrackType::Video) continue;
-                        for (auto& c : t.clips)
-                            if (c.end < pd) c.end = pd;
-                    }
+    // Proxy ready → upgrade from still to interactive proxy preview for each video track.
+    for (int ti = 0; ti < (int)state.tracks.size() && ti < MAX_VIDEO_TRACKS; ++ti) {
+        Track& tr = state.tracks[ti];
+        if (tr.type != TrackType::Video) continue;
+        if (tr.clips.empty() || tr.clips[0].text.empty()) continue;
+        if (state.track_proxy_ready[ti]) continue;
+
+        const std::string& vpath = tr.clips[0].text;
+        if (!proxy_is_ready(vpath)) continue;
+
+        ProxyInfo pi;
+        if (!proxy_load(vpath, pi)) continue;
+        video_open_proxy(ti, pi);
+        state.track_proxy_ready[ti] = true;
+
+        if (ti == 0) {
+            state.proxy_ready = true;
+            // Proxy frame count/fps is the most accurate duration source.
+            float pd = (float)video_info(0).duration;
+            if (pd > 0.f) {
+                state.duration = pd;
+                for (auto& t2 : state.tracks) {
+                    if (t2.type != TrackType::Video) continue;
+                    for (auto& c : t2.clips)
+                        if (c.end < pd) c.end = pd;
                 }
             }
         }
