@@ -452,14 +452,25 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
     ImDrawList* dl = ImGui::GetWindowDrawList();
 
     if (state.video_loaded && video_is_open()) {
-        // Look one frame ahead so the decoded frame matches the audio position
-        // by the time it reaches the screen after the vsync buffer swap.
-        float lookahead = ImGui::GetIO().DeltaTime;
-        uintptr_t tex = video_get_texture((double)(state.playhead + lookahead));
-        if (tex)
-            dl->AddImage(ImTextureRef((ImTextureID)tex), p, {p.x+w, p.y+h});
-        else
-            dl->AddRectFilled(p, {p.x+w, p.y+h}, to_u32(Col::accent_dark), 2.f);
+        // Only show video while playhead is inside a video clip's time range.
+        bool in_clip = false;
+        for (auto& tr : state.tracks) {
+            if (tr.type != TrackType::Video || !tr.visible) continue;
+            for (auto& cl : tr.clips)
+                if (state.playhead >= cl.start && state.playhead < cl.end)
+                    { in_clip = true; break; }
+            if (in_clip) break;
+        }
+        if (in_clip) {
+            float lookahead = ImGui::GetIO().DeltaTime;
+            uintptr_t tex = video_get_texture((double)(state.playhead + lookahead));
+            if (tex)
+                dl->AddImage(ImTextureRef((ImTextureID)tex), p, {p.x+w, p.y+h});
+            else
+                dl->AddRectFilled(p, {p.x+w, p.y+h}, to_u32(Col::accent_dark), 2.f);
+        } else {
+            dl->AddRectFilled(p, {p.x+w, p.y+h}, IM_COL32(0, 0, 0, 255));
+        }
     } else {
         dl->AddRectFilled(p, {p.x+w, p.y+h}, to_u32(Col::accent_dark), 2.f);
     }
@@ -1513,10 +1524,20 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
             }
 
             // Edge handles
-            float ew=4.f;
+            const float ew     = 6.f;   // drawn width
+            const float ew_hit = 12.f;  // hit zone width
             if (sel) {
                 dl->AddRectFilled({vis_x0,cy0},{vis_x0+ew,cy1},to_u32(Col::muted),1.f);
                 dl->AddRectFilled({vis_x1-ew,cy0},{vis_x1,cy1},to_u32(Col::muted),1.f);
+            }
+            // Resize cursor — show on hover even before clicking
+            {
+                float orig_cx0h = origin.x+TL_LABEL_W+clip.start*zoom-scroll;
+                float orig_cx1h = origin.x+TL_LABEL_W+clip.end*zoom-scroll;
+                bool in_clip = mouse.y>=cy0 && mouse.y<=cy1 &&
+                               mouse.x>=vis_x0 && mouse.x<=vis_x1;
+                if (in_clip && (mouse.x <= orig_cx0h+ew_hit || mouse.x >= orig_cx1h-ew_hit))
+                    ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
             }
 
             // Transition out indicator — diagonal slash at right edge of video clips
@@ -1540,14 +1561,14 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
                     strncpy(s_edit_buf, clip.text.c_str(), sizeof(s_edit_buf)-1);
                     s_edit_buf[sizeof(s_edit_buf)-1] = '\0';
                     s_edit_focus_next = (track.type==TrackType::Subtitle);
-                    seek_to(state, clip.start);
+                    if (!state.playing) seek_to(state, clip.start);
                     state.panel_tab = 0;  // switch to Clip tab
 
                     float orig_cx0 = origin.x+TL_LABEL_W+clip.start*zoom-scroll;
                     float orig_cx1 = origin.x+TL_LABEL_W+clip.end*zoom-scroll;
-                    if (mouse.x <= orig_cx0+ew+2.f) {
+                    if (mouse.x <= orig_cx0+ew_hit) {
                         drag_track=ti; drag_clip=ci; drag_left=true; drag_right=false; drag_offset=0.f;
-                    } else if (mouse.x >= orig_cx1-ew-2.f) {
+                    } else if (mouse.x >= orig_cx1-ew_hit) {
                         drag_track=ti; drag_clip=ci; drag_right=true; drag_left=false; drag_offset=0.f;
                     } else {
                         drag_track=ti; drag_clip=ci; drag_left=false; drag_right=false;
@@ -1579,6 +1600,8 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
     }
 
     // Drag handling (frame-snapped, Ctrl bypasses)
+    if (drag_track>=0 && drag_clip>=0 && (drag_left||drag_right))
+        ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
     if (drag_track>=0 && drag_clip>=0 && ImGui::IsMouseDragging(0)) {
         Clip& dc = state.tracks[drag_track].clips[drag_clip];
         float new_t = (mouse.x - origin.x - TL_LABEL_W + scroll - drag_offset) / zoom;

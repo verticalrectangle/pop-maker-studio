@@ -101,6 +101,7 @@ static bool write_filter_script(
     const std::string& path,
     int vid_in, int aud_in,
     int out_w, int out_h,
+    float sub_offset,        // subtract from subtitle enable times (= video clip start)
     std::string& vout_label,
     std::string& aout_label)
 {
@@ -172,7 +173,8 @@ static bool write_filter_script(
                << "y=" << y_expr                  << ":"
                << "enable='between(t,"
                << std::fixed << std::setprecision(3)
-               << cl.start << "," << cl.end << ")'"
+               << fmaxf(0.f, cl.start - sub_offset) << ","
+               << fmaxf(0.f, cl.end   - sub_offset) << ")'"
                << vnext;
         vcur = vnext;
     }
@@ -211,32 +213,49 @@ static std::vector<std::string> build_args(AppState& state) {
         default: break;
     }
 
-    // Find best video and audio source files
-    std::string video_file;
+    // Find best video and audio source files, capturing clip boundaries
+    struct InSpec { std::string path; float ss = 0.f; float to = -1.f; };
+
+    InSpec video_in, audio_in;
     for (auto& tr : state.tracks)
         if (tr.type == TrackType::Video && !tr.clips.empty()
                 && !tr.clips[0].text.empty() && fs::exists(tr.clips[0].text)) {
-            video_file = tr.clips[0].text; break;
+            video_in.path = tr.clips[0].text;
+            video_in.ss   = tr.clips[0].start;
+            video_in.to   = tr.clips[0].end;
+            break;
         }
 
-    std::string audio_file = state.audio_path;
+    audio_in.path = state.audio_path;
     for (auto& tr : state.tracks)
         if (tr.type == TrackType::Audio && !tr.clips.empty()
                 && !tr.clips[0].text.empty() && fs::exists(tr.clips[0].text)) {
-            audio_file = tr.clips[0].text; break;
+            audio_in.path = tr.clips[0].text;
+            audio_in.ss   = tr.clips[0].start;
+            audio_in.to   = tr.clips[0].end;
+            break;
         }
-    if (!audio_file.empty() && !fs::exists(audio_file)) audio_file.clear();
+    if (!audio_in.path.empty() && !fs::exists(audio_in.path)) audio_in.path.clear();
 
     int n_in = 0, vid_in = -1, aud_in = -1;
-    std::vector<std::string> in_files;
-    if (!video_file.empty()) { vid_in = n_in++; in_files.push_back(video_file); }
-    if (!audio_file.empty()) { aud_in = n_in++; in_files.push_back(audio_file); }
+    std::vector<InSpec> inputs;
+    if (!video_in.path.empty()) { vid_in = n_in++; inputs.push_back(video_in); }
+    if (!audio_in.path.empty()) { aud_in = n_in++; inputs.push_back(audio_in); }
     if (n_in == 0) return {};
+
+    // Subtitle enable times are relative to the video start (after -ss seek)
+    float sub_offset = video_in.ss > 0.001f ? video_in.ss
+                     : (audio_in.ss > 0.001f ? audio_in.ss : 0.f);
+
+    // Output duration derived from clip boundaries, fallback to state.duration
+    float out_duration = state.duration;
+    if (video_in.to > 0.001f)       out_duration = video_in.to - video_in.ss;
+    else if (audio_in.to > 0.001f)  out_duration = audio_in.to - audio_in.ss;
 
     // Write filter script
     std::string script = "/tmp/pms_filter.txt";
     std::string vout, aout;
-    if (!write_filter_script(state, script, vid_in, aud_in, out_w, out_h, vout, aout))
+    if (!write_filter_script(state, script, vid_in, aud_in, out_w, out_h, sub_offset, vout, aout))
         return {};
 
     const auto& rs = state.render_settings;
@@ -248,7 +267,11 @@ static std::vector<std::string> build_args(AppState& state) {
     a.push_back("-progress"); a.push_back("pipe:1");
     a.push_back("-y");
 
-    for (auto& f : in_files) { a.push_back("-i"); a.push_back(f); }
+    for (auto& inp : inputs) {
+        if (inp.ss > 0.001f) { a.push_back("-ss"); a.push_back(std::to_string(inp.ss)); }
+        if (inp.to > 0.001f) { a.push_back("-to"); a.push_back(std::to_string(inp.to)); }
+        a.push_back("-i"); a.push_back(inp.path);
+    }
 
     a.push_back("-filter_complex_script"); a.push_back(script);
     a.push_back("-map"); a.push_back(vout);
@@ -268,8 +291,8 @@ static std::vector<std::string> build_args(AppState& state) {
         a.push_back("-b:a"); a.push_back(std::to_string(rs.audio_bitrate) + "k");
     }
 
-    if (state.duration > 0.f)
-        { a.push_back("-t"); a.push_back(std::to_string(state.duration)); }
+    if (out_duration > 0.f)
+        { a.push_back("-t"); a.push_back(std::to_string(out_duration)); }
 
     a.push_back(state.out_mp4);
     return a;
