@@ -73,6 +73,61 @@ static float tl_fps(const AppState& state) {
            ? (float)video_info(0).fps : 30.f;
 }
 
+static int slot_for_video(AppState& state, const std::string& path); // forward decl
+
+// Track index the mouse is hovering over in the timeline — updated by draw_timeline
+// each frame so the drop handler can target a specific lane.
+static int s_tl_hover_track = -1;
+
+// Add a clip of the given type to an existing track, probing duration as needed.
+static void add_clip_to_track(AppState& state, int ti, const std::string& path, ClipType ct) {
+    if (ti < 0 || ti >= (int)state.tracks.size()) return;
+    Track& tr = state.tracks[ti];
+
+    Clip cl;
+    cl.clip_type = ct;
+    cl.start     = state.playhead;
+    cl.text      = path;
+
+    if (ct == ClipType::Video) {
+        float dur = video_probe_duration(path);
+        if (dur <= 0.f) dur = 4.f;
+        cl.end = cl.start + dur;
+        int slot = slot_for_video(state, path);
+        proxy_start(path);
+        if (slot >= 0) {
+            video_open_still(slot, proxy_still_path(path));
+            if (proxy_is_ready(path)) {
+                ProxyInfo pi;
+                if (proxy_load(path, pi)) video_open_proxy(slot, pi);
+            }
+        }
+        state.video_loaded = true;
+    } else if (ct == ClipType::Audio) {
+        AudioMeta meta;
+        float dur = audio_probe(path, meta) ? meta.duration_secs : 4.f;
+        cl.end = cl.start + dur;
+    } else {
+        cl.end = cl.start + 2.f;  // blank text clip — 2 s default
+    }
+
+    tr.clips.push_back(cl);
+    std::sort(tr.clips.begin(), tr.clips.end(),
+              [](const Clip& a, const Clip& b){ return a.start < b.start; });
+
+    // Select the newly added clip.
+    state.selected_track = ti;
+    for (int ci = 0; ci < (int)tr.clips.size(); ++ci)
+        if (&tr.clips[ci] == &tr.clips.back() ||
+            (fabsf(tr.clips[ci].start - cl.start) < 0.01f &&
+             tr.clips[ci].clip_type == ct))
+            { state.selected_clip = ci; break; }
+    state.panel_tab = 0;
+    history_push(state, std::string("Add ") +
+                        (ct==ClipType::Video ? "video" :
+                         ct==ClipType::Audio ? "audio" : "text") + " clip");
+}
+
 // Proxy slot for a video file: reuse if already registered, else claim next free.
 // O(MAX_VIDEO_TRACKS) scan — effectively O(1).  Returns -1 when all slots full.
 static int slot_for_video(AppState& state, const std::string& path) {
@@ -1193,13 +1248,23 @@ static void panel_clip(AppState& state, float w) {
             if (ui_btn("Cancel", false, true)) transcribe_cancel();
         } else {
             if (!has_path) ImGui::BeginDisabled();
-            if (ui_btn("Transcribe + Separate", false, true))
+            if (ui_btn("Extract Lyrics", false, true))
                 kick_pipeline(state, clip.text, PipelineMode::Both);
+            if (ImGui::IsItemHovered()) {
+                ImGui::BeginTooltip();
+                ImGui::TextUnformatted("Separate vocals + transcribe → Lyrics track");
+                ImGui::EndTooltip();
+            }
             ImGui::Dummy({0.f, 2.f});
-            if (ui_btn("Transcribe only", false, true))
+            if (ui_btn("Extract Subtitles", false, true))
                 kick_pipeline(state, clip.text, PipelineMode::TranscribeOnly);
+            if (ImGui::IsItemHovered()) {
+                ImGui::BeginTooltip();
+                ImGui::TextUnformatted("Transcribe only → Lyrics track");
+                ImGui::EndTooltip();
+            }
             ImGui::Dummy({0.f, 2.f});
-            if (ui_btn("Separate Vocals only", false, true))
+            if (ui_btn("Separate Vocals", false, true))
                 kick_pipeline(state, clip.text, PipelineMode::SeparateOnly);
             if (clip.clip_type == ClipType::Video) {
                 ImGui::Dummy({0.f, 2.f});
@@ -1606,6 +1671,7 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
 
     // Tracks
     float track_y = origin.y + TL_RULER_H;
+    s_tl_hover_track = -1;  // reset each frame; set below as we scan rows
     static int   drag_track = -1, drag_clip = -1;
     static float drag_offset = 0.f;
     static bool  drag_left = false, drag_right = false;
@@ -1619,6 +1685,7 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
         ImVec2 row_tl = {origin.x, track_y};
         ImVec2 row_br = {origin.x+total_w, track_y+TL_TRACK_H};
         bool row_hov = mouse.y >= row_tl.y && mouse.y < row_br.y;
+        if (row_hov) s_tl_hover_track = ti;
 
         dl->AddRectFilled(row_tl, row_br,
             to_u32(row_hov ? Col::bg_soft_hov : Col::bg_soft));
@@ -1911,15 +1978,15 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
             bool busy = transcribe_running();
             if (busy) ImGui::BeginDisabled();
             if (ImGui::BeginMenu("ML Processing")) {
-                if (ImGui::MenuItem("Transcribe + Separate Vocals")) {
+                if (ImGui::MenuItem("Extract Lyrics  (separate + transcribe)")) {
                     state.audio_path = cc->text;
                     kick_pipeline(state, cc->text, PipelineMode::Both);
                 }
-                if (ImGui::MenuItem("Transcribe only  (WhisperX)")) {
+                if (ImGui::MenuItem("Extract Subtitles  (transcribe only)")) {
                     state.audio_path = cc->text;
                     kick_pipeline(state, cc->text, PipelineMode::TranscribeOnly);
                 }
-                if (ImGui::MenuItem("Separate Vocals only  (Demucs)")) {
+                if (ImGui::MenuItem("Separate Vocals  (Demucs)")) {
                     kick_pipeline(state, cc->text, PipelineMode::SeparateOnly);
                 }
                 ImGui::EndMenu();
@@ -2014,6 +2081,25 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
                 ImGui::CloseCurrentPopup();
             }
             rename_open = ImGui::IsItemActive();
+            ImGui::Separator();
+        }
+
+        // ── Add clip to this track ────────────────────────────────────────────
+        if (valid) {
+            if (ImGui::MenuItem("Add Text Clip")) {
+                add_clip_to_track(state, ti, "", ClipType::Text);
+                s_edit_focus_next = true;
+            }
+            if (ImGui::MenuItem("Add Video Clip…")) {
+                std::string p = filepicker_open("Add video clip",
+                    "Video", "*.mp4 *.mov *.mkv *.avi *.webm");
+                if (!p.empty()) add_clip_to_track(state, ti, p, ClipType::Video);
+            }
+            if (ImGui::MenuItem("Add Audio Clip…")) {
+                std::string p = filepicker_open("Add audio clip",
+                    "Audio", "*.wav *.mp3 *.m4a *.flac *.aac");
+                if (!p.empty()) add_clip_to_track(state, ti, p, ClipType::Audio);
+            }
             ImGui::Separator();
         }
 
@@ -2162,10 +2248,30 @@ void ui_studio(AppState& state) {
         if (pe > 0.01f) state.duration = pe;
     }
 
-    // Handle OS drop — just import, no auto-pipeline
+    // Handle OS drop — add to hovered track if over one, else create new track.
     extern std::string g_dropped_file;
     if (!g_dropped_file.empty() && is_audio_file(g_dropped_file)) {
-        import_file(state, g_dropped_file);
+        const std::string& dp = g_dropped_file;
+        fs::path fp(dp);
+        std::string ext = fp.extension().string();
+        for (auto& c : ext) c = (char)tolower((unsigned char)c);
+        bool is_vid = (ext==".mp4"||ext==".mov"||ext==".mkv"||ext==".avi"||ext==".webm");
+        ClipType drop_ct = is_vid ? ClipType::Video : ClipType::Audio;
+
+        if (s_tl_hover_track >= 0 &&
+            s_tl_hover_track < (int)state.tracks.size()) {
+            // Drop onto an existing track — just add the clip there.
+            add_clip_to_track(state, s_tl_hover_track, dp, drop_ct);
+            // If it's a video/audio file and no audio loaded yet, seed it.
+            if (state.audio_path.empty()) {
+                state.audio_path = dp;
+                audio_load(dp);
+                if (state.duration <= 0.f) state.duration = audio_duration();
+            }
+        } else {
+            // Drop on empty space — original behaviour (create new track).
+            import_file(state, dp);
+        }
         g_dropped_file.clear();
     }
 
