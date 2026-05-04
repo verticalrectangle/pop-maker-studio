@@ -2380,7 +2380,7 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
             int n_tracks = (int)state.tracks.size();
             const float GAP_PX = 8.f;
             drag_hot_gap = -1;
-            for (int gi = 1; gi < n_tracks; ++gi) {
+            for (int gi = 0; gi < n_tracks; ++gi) {
                 float boundary_y = ruler_bottom + gi * TL_TRACK_H;
                 if (fabsf(mouse.y - boundary_y) < GAP_PX) {
                     drag_hot_gap = gi;
@@ -2488,7 +2488,8 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
                     IM_COL32(120, 200, 255, 220), 2.f);
         dl->AddCircleFilled({origin.x + 5.f, gap_y}, 4.f, IM_COL32(120, 200, 255, 220));
         float lh = ImGui::GetTextLineHeight();
-        dl->AddText({origin.x + 14.f, gap_y - lh - 3.f},
+        float label_off = (drag_hot_gap == 0) ? 3.f : (-lh - 3.f);
+        dl->AddText({origin.x + 14.f, gap_y + label_off},
                     IM_COL32(120, 200, 255, 200), "New Track");
     }
 
