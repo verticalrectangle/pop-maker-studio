@@ -4054,8 +4054,10 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
 
         ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
 
-        // Click to place
-        if (ImGui::IsMouseClicked(0)) {
+        // Click to place — only respond to clicks inside the timeline drawing area
+        bool in_tl = mouse.x >= origin.x && mouse.x <= origin.x + total_w &&
+                     mouse.y >= origin.y && mouse.y <= origin.y + total_h;
+        if (in_tl && ImGui::IsMouseClicked(0)) {
             if (in_area && s_tl_hover_track >= 0 && s_tl_hover_track < (int)state.tracks.size()) {
                 add_clip_to_track(state, s_tl_hover_track, s_ghost_path, s_ghost_type, s_ghost_cursor_t);
                 if (s_ghost_type != ClipType::Video && state.audio_path.empty()) {
@@ -4064,7 +4066,8 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
                     if (state.duration <= 0.f) state.duration = audio_duration();
                 }
                 s_drop_flash_track = s_tl_hover_track;
-            } else {
+            } else if (in_area || state.tracks.empty()) {
+                // No hover track but inside the track body, or empty timeline — new top track
                 import_file(state, s_ghost_path);
                 s_drop_flash_track = (int)state.tracks.size() - 1;
             }
@@ -4402,8 +4405,8 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
     ImVec2 mp = ImGui::GetIO().MousePos;
     bool add_hov = mp.y>=add_row_y && mp.y<origin.y+total_h &&
                    mp.x>=origin.x && mp.x<=origin.x+total_w;
-    dl->AddText(add_p, to_u32(add_hov ? Col::fg : Col::muted), "+ Add Track");
-    if (add_hov && ImGui::IsMouseClicked(0)) {
+    dl->AddText(add_p, to_u32((add_hov && s_ghost_path.empty()) ? Col::fg : Col::muted), "+ Add Track");
+    if (add_hov && s_ghost_path.empty() && ImGui::IsMouseClicked(0)) {
         Track t;
         char name[32]; snprintf(name,sizeof(name),"Track %d",(int)state.tracks.size()+1);
         t.name=name; state.tracks.insert(state.tracks.begin(), std::move(t));
