@@ -868,8 +868,18 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                     float rot   = active->eval_prop("rotation", state.playhead);
                     float alpha = active->eval_prop("opacity",  state.playhead);
 
+                    // Letterbox: fit video's native aspect into the canvas
+                    VideoInfo vi = video_info(slot);
+                    float fit_w = w, fit_h = h;
+                    if (vi.width > 0 && vi.height > 0) {
+                        float vid_asp = (float)vi.width / (float)vi.height;
+                        float can_asp = w / h;
+                        if (vid_asp > can_asp) { fit_w = w;           fit_h = w / vid_asp; }
+                        else                   { fit_h = h;           fit_w = h * vid_asp; }
+                    }
+
                     float cx = p.x + px * w,  cy = p.y + py * h;
-                    float hw = w * sx * 0.5f, hh = h * sy * 0.5f;
+                    float hw = fit_w * sx * 0.5f, hh = fit_h * sy * 0.5f;
                     float rad   = rot * 3.14159265f / 180.f;
                     float cos_r = cosf(rad), sin_r = sinf(rad);
                     auto rot_pt = [&](float ox, float oy) -> ImVec2 {
@@ -1229,29 +1239,13 @@ static void draw_clip_header(AppState& state, Clip& clip, Track& track, float w)
     ImGui::PopStyleColor();
     ImGui::SetCursorScreenPos({bp.x, bp.y + bh + 8.f});
 
-    // Timing row — editable start / end
-    float half = (w - 24.f) * 0.5f;
-    ImGui::PushStyleColor(ImGuiCol_FrameBg, Col::bg_soft);
-    ImGui::PushStyleColor(ImGuiCol_Border,  Col::line);
-    ImGui::BeginGroup();
-    ImGui::PushStyleColor(ImGuiCol_Text, Col::muted); ImGui::TextUnformatted("In"); ImGui::PopStyleColor();
-    ImGui::SetNextItemWidth(half);
-    float s0 = clip.start;
-    if (ImGui::InputFloat("##hdr_s", &s0, 0.01f, 0.1f, "%.3f"))
-        if (s0 >= 0.f && s0 < clip.end - 0.02f) { clip.start = s0; history_push(state, "Clip start"); }
-    ImGui::EndGroup();
-    ImGui::SameLine(0.f, 8.f);
-    ImGui::BeginGroup();
-    ImGui::PushStyleColor(ImGuiCol_Text, Col::muted); ImGui::TextUnformatted("Out"); ImGui::PopStyleColor();
-    ImGui::SetNextItemWidth(half);
-    float s1 = clip.end;
-    if (ImGui::InputFloat("##hdr_e", &s1, 0.01f, 0.1f, "%.3f"))
-        if (s1 > clip.start + 0.02f) { clip.end = s1; history_push(state, "Clip end"); }
-    ImGui::EndGroup();
-    ImGui::PopStyleColor(2);
-    ImGui::Dummy({0.f, 2.f});
-    char durbuf[32]; snprintf(durbuf, sizeof(durbuf), "%.3fs", clip.end - clip.start);
-    ImGui::PushStyleColor(ImGuiCol_Text, Col::dim); ImGui::TextUnformatted(durbuf); ImGui::PopStyleColor();
+    // Timing row — duration display only
+    ImGui::Dummy({0.f, 4.f});
+    char durbuf[48];
+    snprintf(durbuf, sizeof(durbuf), "%.3fs  ·  start %.3fs", clip.end - clip.start, clip.start);
+    ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+    ImGui::TextUnformatted(durbuf);
+    ImGui::PopStyleColor();
 
     // Nudge strip
     ImGui::Dummy({0.f, 4.f});
