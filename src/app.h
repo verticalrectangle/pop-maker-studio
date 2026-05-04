@@ -68,6 +68,7 @@ struct Clip {
     std::string source_id;  // file path or audio path that produced this clip; groups related clips
 
     // per-clip overrides (Tier 1)
+    bool  muted          = false; // silences audio output for this clip; shown as icon on brick
     float volume         = 1.f;   // audio gain multiplier (0–2)
     float speed          = 1.f;   // playback speed (0.25–4)
     float opacity        = 1.f;   // video opacity (0–1)

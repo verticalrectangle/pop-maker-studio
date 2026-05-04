@@ -3829,7 +3829,7 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
 
         // Track label — single click selects, double-click renames
         bool track_sel = state.selected_track == ti;
-        bool in_label = mouse.x >= origin.x+2.f && mouse.x < origin.x+TL_LABEL_W-20.f &&
+        bool in_label = mouse.x >= origin.x+2.f && mouse.x < origin.x+TL_LABEL_W-38.f &&
                         mouse.y >= track_y && mouse.y < track_y+TL_TRACK_H;
 
         if (s_rename_track == ti) {
@@ -3872,11 +3872,45 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
             }
         }
 
-        // Visibility dot
-        ImVec2 vc = {origin.x+TL_LABEL_W-16.f, track_y+TL_TRACK_H*0.5f};
-        dl->AddCircleFilled(vc, 4.f, to_u32(track.visible ? Col::fg : Col::dim));
-        if (ImGui::IsMouseClicked(0) && fabsf(mouse.x-vc.x)<8.f && fabsf(mouse.y-vc.y)<8.f)
-            track.visible = !track.visible;
+        // Track icon buttons — eye (visible) and speaker (mute) — right side of label
+        float btn_y  = track_y + TL_TRACK_H * 0.5f;
+        // Eye button
+        ImVec2 eye_c = {origin.x + TL_LABEL_W - 13.f, btn_y};
+        {
+            bool hov = fabsf(mouse.x-eye_c.x)<8.f && fabsf(mouse.y-eye_c.y)<8.f;
+            ImU32 ecol = to_u32(track.visible ? Col::fg : Col::dim);
+            dl->AddCircle(eye_c, 4.5f, ecol, 12, 1.2f);
+            dl->AddCircleFilled(eye_c, 1.8f, ecol);
+            if (!track.visible) {  // strike-through when hidden
+                dl->AddLine({eye_c.x-5.f, eye_c.y-4.f}, {eye_c.x+5.f, eye_c.y+4.f},
+                            to_u32(Col::dim), 1.5f);
+            }
+            if (hov && ImGui::IsMouseClicked(0)) {
+                track.visible = !track.visible;
+                history_push(state, "Toggle track visibility");
+            }
+        }
+        // Mute button (speaker icon)
+        ImVec2 mut_c = {origin.x + TL_LABEL_W - 29.f, btn_y};
+        {
+            bool hov = fabsf(mouse.x-mut_c.x)<8.f && fabsf(mouse.y-mut_c.y)<8.f;
+            ImU32 mcol = track.muted ? IM_COL32(255,80,80,230) : to_u32(Col::dim);
+            // Simple speaker: small filled rect + triangle
+            dl->AddRectFilled({mut_c.x-4.f, mut_c.y-2.5f}, {mut_c.x-1.f, mut_c.y+2.5f}, mcol);
+            dl->AddTriangleFilled({mut_c.x-1.f, mut_c.y-4.f},
+                                  {mut_c.x-1.f, mut_c.y+4.f},
+                                  {mut_c.x+4.f, mut_c.y}, mcol);
+            if (track.muted) {  // X lines when muted
+                dl->AddLine({mut_c.x+2.f, mut_c.y-3.f}, {mut_c.x+6.f, mut_c.y+3.f},
+                            IM_COL32(255,80,80,230), 1.5f);
+                dl->AddLine({mut_c.x+6.f, mut_c.y-3.f}, {mut_c.x+2.f, mut_c.y+3.f},
+                            IM_COL32(255,80,80,230), 1.5f);
+            }
+            if (hov && ImGui::IsMouseClicked(0)) {
+                track.muted = !track.muted;
+                history_push(state, "Toggle track mute");
+            }
+        }
 
         dl->AddLine({origin.x+TL_LABEL_W, track_y},
                     {origin.x+TL_LABEL_W, track_y+TL_TRACK_H}, to_u32(Col::line));
@@ -3987,6 +4021,16 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
                 }
 
                 ImGui::PopClipRect();
+            }
+
+            // Per-clip mute icon — small crossed speaker at top-right of brick
+            if (clip.muted && vis_x1 - vis_x0 > 16.f) {
+                float ix = vis_x1 - 10.f, iy = cy0 + 7.f;
+                ImU32 ic = IM_COL32(255, 80, 80, 220);
+                dl->AddRectFilled({ix-3.f, iy-2.f}, {ix-1.f, iy+2.f}, ic);
+                dl->AddTriangleFilled({ix-1.f,iy-3.f},{ix-1.f,iy+3.f},{ix+3.f,iy}, ic);
+                dl->AddLine({ix+1.f,iy-3.f},{ix+4.f,iy+2.f}, ic, 1.2f);
+                dl->AddLine({ix+4.f,iy-3.f},{ix+1.f,iy+2.f}, ic, 1.2f);
             }
 
             } // end else (non-Effect clips)
@@ -4399,8 +4443,12 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
                 // Live update selection while dragging
                 float t0 = (bx0 - origin.x - TL_LABEL_W + scroll) / zoom;
                 float t1 = (bx1 - origin.x - TL_LABEL_W + scroll) / zoom;
-                int   tr0 = (int)((by0 - origin.y - TL_RULER_H) / TL_TRACK_H);
-                int   tr1 = (int)((by1 - origin.y - TL_RULER_H) / TL_TRACK_H);
+                // tl_v_scroll shifts all track rows up — must add it back to map screen-y → track index
+                int n_tr  = (int)state.tracks.size();
+                int   tr0 = (int)((by0 - origin.y - TL_RULER_H + state.tl_v_scroll) / TL_TRACK_H);
+                int   tr1 = (int)((by1 - origin.y - TL_RULER_H + state.tl_v_scroll) / TL_TRACK_H);
+                tr0 = (tr0 < 0) ? 0 : (tr0 >= n_tr ? n_tr-1 : tr0);
+                tr1 = (tr1 < 0) ? 0 : (tr1 >= n_tr ? n_tr-1 : tr1);
 
                 if (!ImGui::GetIO().KeyCtrl) state.clip_selection.clear();
                 for (int t2=0; t2<(int)state.tracks.size(); ++t2) {
@@ -4865,6 +4913,14 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
             if (valid) { seek_to(state, cc->end); }
         }
         ImGui::Separator();
+        if (valid) {
+            const char* mute_lbl = cc->muted ? "Unmute clip" : "Mute clip";
+            if (ImGui::MenuItem(mute_lbl)) {
+                cc->muted = !cc->muted;
+                history_push(state, cc->muted ? "Mute clip" : "Unmute clip");
+            }
+        }
+        ImGui::Separator();
         if (ImGui::MenuItem("Delete clip")) {
             if (valid) {
                 ct->clips.erase(ct->clips.begin()+ci);
@@ -5221,7 +5277,7 @@ void ui_studio(AppState& state) {
         for (auto& tr : state.tracks) {
             if (tr.muted) continue;
             for (auto& cl : tr.clips) {
-                if (cl.text.empty()) continue;
+                if (cl.text.empty() || cl.muted) continue;
                 AudioClipDesc d;
                 d.tl_start = cl.start;    d.tl_end   = cl.end;
                 d.in_point = cl.in_point; d.speed    = cl.speed;

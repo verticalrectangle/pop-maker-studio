@@ -6,7 +6,7 @@
 // ── Binary serialization helpers ──────────────────────────────────────────────
 
 static const uint32_t MAGIC   = 0x534D5001u; // "PMS\x01"
-static const uint32_t VERSION = 7u;
+static const uint32_t VERSION = 8u;
 
 struct Writer {
     std::ofstream f;
@@ -113,6 +113,7 @@ static void write_clip(Writer& w, const Clip& c) {
     w.pod((uint8_t)c.fx_blur_on); w.pod(c.fx_blur);
     w.pod((uint8_t)c.fx_vignette_on); w.pod(c.fx_vignette);
     w.pod((uint8_t)c.fx_text_on); w.pod(c.fx_opacity_mul); w.pod(c.fx_scale_mul);
+    w.pod((uint8_t)c.muted);
     // ktracks
     uint32_t nk = (uint32_t)c.ktracks.size();
     w.pod(nk);
@@ -158,6 +159,7 @@ static Clip read_clip(Reader& r, uint32_t version) {
     c.fx_vignette_on= (bool)r.pod<uint8_t>(); c.fx_vignette = r.pod<float>();
     c.fx_text_on    = (bool)r.pod<uint8_t>();
     c.fx_opacity_mul= r.pod<float>(); c.fx_scale_mul = r.pod<float>();
+    if (version >= 8u) c.muted = (bool)r.pod<uint8_t>();
     // ktracks
     uint32_t nk = r.pod<uint32_t>();
     for (uint32_t i = 0; i < nk && r.ok; ++i) {
