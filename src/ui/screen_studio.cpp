@@ -4656,14 +4656,16 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
         dl->AddTriangleFilled({ph_x-5.f,origin.y},{ph_x+5.f,origin.y},{ph_x,origin.y+10.f},to_u32(Col::fg));
     }
 
-    // Click ruler to seek (frame-snapped + edge-snapped, Ctrl bypasses both)
+    // Click/drag ruler to seek. Once grabbed, mouse can roam outside the ruler strip.
+    static bool s_ruler_drag = false;
     bool any_popup_global = ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
-    if (!any_popup_global && (ImGui::IsMouseClicked(0)||ImGui::IsMouseDragging(0)) && drag_track<0) {
-        if (mouse.y>=origin.y && mouse.y<=origin.y+TL_RULER_H &&
-            mouse.x>=origin.x+TL_LABEL_W && mouse.x<=origin.x+total_w) {
+    if (ImGui::IsMouseReleased(0)) s_ruler_drag = false;
+    if (!any_popup_global && drag_track < 0) {
+        bool in_ruler = mouse.y >= origin.y && mouse.y <= origin.y + TL_RULER_H &&
+                        mouse.x >= origin.x + TL_LABEL_W && mouse.x <= origin.x + total_w;
+        if (in_ruler && ImGui::IsMouseClicked(0)) s_ruler_drag = true;
+        if (s_ruler_drag && ImGui::IsMouseDown(0)) {
             float raw = (mouse.x - origin.x - TL_LABEL_W + scroll) / zoom;
-            auto cands = build_snap_candidates(drag_track, drag_clip);
-            // For ruler seek, snap to clip edges (exclude playhead from candidates)
             std::vector<float> edge_cands;
             for (int ti = 0; ti < (int)state.tracks.size(); ++ti)
                 for (auto& cl : state.tracks[ti].clips) {
