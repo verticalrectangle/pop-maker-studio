@@ -11,6 +11,7 @@
 #include "blender_export.h"
 #include "history.h"
 #include "proxy.h"
+#include "waveform.h"
 #include <imgui.h>
 #include <imgui_internal.h>
 #include "json.hpp"
@@ -21,6 +22,7 @@
 #include <cstdio>
 #include <cstring>
 #include <chrono>
+#include <thread>
 
 namespace fs = std::filesystem;
 
@@ -48,6 +50,7 @@ static std::string fmt_time_short(float s) {
 // Delays the wall clock by audio_latency() so that the video frame and the
 // audio sample at position t both become visible/audible at the same moment.
 static void seek_to(AppState& state, float t) {
+    t = roundf(t * 30.f) / 30.f;
     state.playhead = t;
     audio_seek(t);
     if (state.playing) {
@@ -286,6 +289,92 @@ static std::vector<Clip> group_words(
 }
 
 // Load the flat word list from words_json_path into AppState::words_cache.
+// ── Beat detection subprocess ─────────────────────────────────────────────────
+
+static void load_beats_cache(AppState& state) {
+    state.beats.clear();
+    state.beat_bpm = 0.f;
+    if (state.beats_json_path.empty() || !fs::exists(state.beats_json_path)) return;
+    std::ifstream f(state.beats_json_path);
+    if (!f) return;
+    try {
+        auto j = nlohmann::json::parse(f);
+        state.beat_bpm = j.value("bpm", 0.f);
+        for (auto& v : j["beats"])
+            state.beats.push_back(v.get<float>());
+    } catch (...) {}
+}
+
+static void run_beat_detect(AppState& state) {
+    if (state.beats_running) return;
+    std::string src = state.vocals_path.empty() ? state.audio_path : state.vocals_path;
+    if (src.empty() || !fs::exists(src)) return;
+    extern std::string g_beat_detect_script;
+    if (g_beat_detect_script.empty()) return;
+
+    fs::path out = fs::path(src).parent_path() / "beats.json";
+    state.beats_json_path = out.string();
+    state.beats_running   = true;
+
+    std::string python  = state.python_path;
+    std::string script  = g_beat_detect_script;
+    std::string outpath = out.string();
+
+    std::thread([&state, python, script, src, outpath]() {
+        std::string cmd = "\"" + python + "\" \"" + script + "\" \"" + src + "\" \"" + outpath + "\" 2>&1";
+        FILE* p = popen(cmd.c_str(), "r");
+        char buf[256];
+        while (p && fgets(buf, sizeof(buf), p)) {}
+        if (p) pclose(p);
+        state.beats_running = false;
+        load_beats_cache(state);
+    }).detach();
+}
+
+// ── Envelope extraction subprocess ───────────────────────────────────────────
+
+static void load_envelope_cache(AppState& state) {
+    state.amplitude_envelope.clear();
+    state.envelope_fps = 0.f;
+    if (state.envelope_json_path.empty() || !fs::exists(state.envelope_json_path)) return;
+    std::ifstream f(state.envelope_json_path);
+    if (!f) return;
+    try {
+        auto j = nlohmann::json::parse(f);
+        state.envelope_fps = j.value("fps", 0.f);
+        for (auto& v : j["rms"])
+            state.amplitude_envelope.push_back(v.get<float>());
+    } catch (...) {}
+}
+
+static void run_envelope_extract(AppState& state) {
+    if (state.envelope_running) return;
+    std::string src = state.vocals_path.empty() ? state.audio_path : state.vocals_path;
+    if (src.empty() || !fs::exists(src)) return;
+    extern std::string g_envelope_script;
+    if (g_envelope_script.empty()) return;
+
+    fs::path out = fs::path(src).parent_path() / "envelope.json";
+    state.envelope_json_path = out.string();
+    state.envelope_running   = true;
+
+    std::string python  = state.python_path;
+    std::string script  = g_envelope_script;
+    std::string outpath = out.string();
+
+    std::thread([&state, python, script, src, outpath]() {
+        std::string cmd = "\"" + python + "\" \"" + script + "\" \"" + src + "\" \"" + outpath + "\" 2>&1";
+        FILE* p = popen(cmd.c_str(), "r");
+        char buf[256];
+        while (p && fgets(buf, sizeof(buf), p)) {}
+        if (p) pclose(p);
+        state.envelope_running = false;
+        load_envelope_cache(state);
+    }).detach();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 static void load_words_cache(AppState& state) {
     state.words_cache.clear();
     if (state.words_json_path.empty() || !fs::exists(state.words_json_path)) return;
@@ -576,6 +665,14 @@ static void import_file(AppState& state, const std::string& path) {
         load_words_cache(state);
         apply_subtitle_mode(state);
     }
+    {
+        std::string src = (outdir / "vocals.wav").string();
+        if (!fs::exists(src)) src = path;
+        std::string bc = (fs::path(src).parent_path() / "beats.json").string();
+        if (fs::exists(bc)) { state.beats_json_path = bc; load_beats_cache(state); }
+        std::string ec = (fs::path(src).parent_path() / "envelope.json").string();
+        if (fs::exists(ec)) { state.envelope_json_path = ec; load_envelope_cache(state); }
+    }
 
     history_push(state, "Import \"" + fp.filename().string() + "\"");
 }
@@ -789,14 +886,81 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
             ImVec2 tsz = ImGui::CalcTextSize(show->text.c_str());
             float  tx  = p.x + (w - tsz.x) * 0.5f;
 
+            // Kinetic typography: compute per-style animation offsets
+            float local_t  = state.playhead - show->start;  // clip-relative time
+            float clip_dur = show->end - show->start;
+            float fade_in  = fminf(0.25f, clip_dur * 0.3f);
+            float fade_out = fminf(0.25f, clip_dur * 0.2f);
+
+            float anim_dx    = 0.f;
+            float anim_dy    = 0.f;
+            float anim_alpha = 1.f;
+
+            if (active_ci >= 0) {  // only animate when actively playing
+                switch (state.style) {
+                    case AnimStyle::Fade: {
+                        if (local_t < fade_in)
+                            anim_alpha = local_t / fade_in;
+                        else if (local_t > clip_dur - fade_out)
+                            anim_alpha = (clip_dur - local_t) / fade_out;
+                        break;
+                    }
+                    case AnimStyle::Glitch: {
+                        float decay = fmaxf(0.f, 1.f - local_t / 0.5f);
+                        anim_dx = sinf(local_t * 97.f + sinf(local_t * 53.f) * 31.f) * 12.f * decay;
+                        break;
+                    }
+                    case AnimStyle::Typewriter: {
+                        if (local_t < fade_in) {
+                            anim_alpha = local_t / fade_in;
+                            anim_dy    = (fade_in - local_t) / fade_in * (-8.f);
+                        }
+                        break;
+                    }
+                    case AnimStyle::Bounce: {
+                        float bounce_dur = fminf(0.6f, clip_dur);
+                        if (local_t < bounce_dur) {
+                            float p2 = local_t / bounce_dur;
+                            anim_dy = sinf(p2 * 3.14159f) * (-60.f) * expf(-p2 * 4.f);
+                        }
+                        break;
+                    }
+                    case AnimStyle::Slide: {
+                        if (local_t < fade_in)
+                            anim_dx = (local_t / fade_in - 1.f) * w * 0.6f;
+                        else if (local_t > clip_dur - fade_out)
+                            anim_dx = ((local_t - (clip_dur - fade_out)) / fade_out) * w * 0.6f;
+                        break;
+                    }
+                    case AnimStyle::Stack: {
+                        if (local_t < fade_in)
+                            anim_dy = (1.f - local_t / fade_in) * 80.f;
+                        break;
+                    }
+                    default: break;
+                }
+            }
+
+            float tx_anim  = tx + anim_dx;
+            float ty_anim  = slot_y + anim_dy;
+            ImU32 shad_col = IM_COL32(0, 0, 0, (int)(180.f * anim_alpha));
+
+            // Block style: filled box behind text
+            if (state.style == AnimStyle::Block && active_ci >= 0) {
+                float pad_x = 8.f, pad_y = 4.f;
+                dl->AddRectFilled(
+                    {tx_anim - pad_x, ty_anim - pad_y},
+                    {tx_anim + tsz.x + pad_x, ty_anim + tsz.y + pad_y},
+                    to_u32(Col::fg), 2.f);
+            }
+
             // Shadow pass
-            dl->AddText(ImGui::GetFont(), fsz, {tx+2.f, slot_y+2.f}, IM_COL32(0,0,0,180), show->text.c_str());
+            dl->AddText(ImGui::GetFont(), fsz, {tx_anim+2.f, ty_anim+2.f}, shad_col, show->text.c_str());
 
             // Karaoke: per-word coloring when words_cache is available and clip is active.
             // Falls back to solid color for selected-but-not-playing previews.
             bool did_karaoke = false;
             if (active_ci >= 0 && show->karaoke && !state.words_cache.empty()) {
-                // Collect words that belong to this clip (their timestamps fall within clip range)
                 std::vector<const WordEntry*> clip_words;
                 for (auto& we : state.words_cache)
                     if (we.end > show->start && we.start < show->end)
@@ -804,24 +968,25 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
 
                 if (!clip_words.empty()) {
                     did_karaoke = true;
-                    float cur_x = tx;
+                    float cur_x = tx_anim;
                     for (int wi = 0; wi < (int)clip_words.size(); ++wi) {
                         const WordEntry* we = clip_words[wi];
                         bool is_active = state.playhead >= we->start && state.playhead < we->end;
 
                         ImU32 wcol;
                         if (show->sub_color_override) {
-                            float a = is_active ? show->sub_color[3] : show->sub_color[3] * 0.45f;
+                            float a = (is_active ? show->sub_color[3] : show->sub_color[3] * 0.45f) * anim_alpha;
                             wcol = IM_COL32((int)(show->sub_color[0]*255),
                                             (int)(show->sub_color[1]*255),
                                             (int)(show->sub_color[2]*255), (int)(a*255));
                         } else {
-                            wcol = is_active ? IM_COL32(255,255,255,255) : IM_COL32(255,255,255,100);
+                            wcol = is_active ? IM_COL32(255,255,255,(int)(255*anim_alpha))
+                                             : IM_COL32(255,255,255,(int)(100*anim_alpha));
                         }
 
                         std::string word_sp = we->text + (wi+1 < (int)clip_words.size() ? " " : "");
                         ImVec2 wsz = ImGui::CalcTextSize(word_sp.c_str());
-                        dl->AddText(ImGui::GetFont(), fsz, {cur_x, slot_y}, wcol, word_sp.c_str());
+                        dl->AddText(ImGui::GetFont(), fsz, {cur_x, ty_anim}, wcol, word_sp.c_str());
                         cur_x += wsz.x;
                     }
                 }
@@ -830,21 +995,24 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
             if (!did_karaoke) {
                 ImU32 tcol;
                 if (show->sub_color_override) {
-                    float a = (active_ci >= 0) ? show->sub_color[3] : show->sub_color[3] * 0.5f;
+                    float a = ((active_ci >= 0) ? show->sub_color[3] : show->sub_color[3] * 0.5f) * anim_alpha;
                     tcol = IM_COL32((int)(show->sub_color[0]*255), (int)(show->sub_color[1]*255),
                                     (int)(show->sub_color[2]*255), (int)(a*255));
+                } else if (state.style == AnimStyle::Block && active_ci >= 0) {
+                    tcol = to_u32(Col::bg);  // dark text on white block
                 } else {
-                    tcol = (active_ci >= 0) ? to_u32(Col::fg) : to_u32(Col::muted);
+                    float a = (active_ci >= 0) ? anim_alpha : anim_alpha * 0.5f;
+                    tcol = IM_COL32(255, 255, 255, (int)(255.f * a));
                 }
-                dl->AddText(ImGui::GetFont(), fsz, {tx, slot_y}, tcol, show->text.c_str());
+                dl->AddText(ImGui::GetFont(), fsz, {tx_anim, ty_anim}, tcol, show->text.c_str());
             }
 
             ImGui::PopFont();
 
             if (show_ci >= 0 && slot_y >= p.y && slot_y + tsz.y <= p.y + h) {
                 float pad = 8.f;
-                bool in_handle = mpos.x >= tx - pad && mpos.x <= tx + tsz.x + pad &&
-                                 mpos.y >= slot_y - pad && mpos.y <= slot_y + tsz.y + pad;
+                bool in_handle = mpos.x >= tx_anim - pad && mpos.x <= tx_anim + tsz.x + pad &&
+                                 mpos.y >= ty_anim - pad && mpos.y <= ty_anim + tsz.y + pad;
                 bool is_this_drag = (s_drag_ti == ti && s_drag_ci == show_ci);
 
                 if (in_handle || (is_this_drag && ldown))
@@ -858,9 +1026,9 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                     mc.sub_pos_y = fmaxf(0.02f, fminf(0.98f, new_y));
                 }
                 if (in_handle && !ldown) {
-                    float mid_x = tx + tsz.x * 0.5f;
+                    float mid_x = tx_anim + tsz.x * 0.5f;
                     for (int d = -1; d <= 1; ++d)
-                        dl->AddCircleFilled({mid_x + d*6.f, slot_y - 6.f}, 2.f, to_u32(Col::muted));
+                        dl->AddCircleFilled({mid_x + d*6.f, ty_anim - 6.f}, 2.f, to_u32(Col::muted));
                 }
             }
             ++text_rendered;
@@ -1740,6 +1908,22 @@ static void panel_lyrics(AppState& state, float w) {
             ImGui::EndTooltip();
         }
 
+        // Apply karaoke flag to every Lyrics clip on every track
+        ImGui::Dummy({0.f, 4.f});
+        if (ui_btn("Apply to all Lyrics", false, true)) {
+            bool is_karaoke = state.subtitle_mode == SubtitleMode::Karaoke;
+            for (auto& tr : state.tracks)
+                for (auto& cl : tr.clips)
+                    if (cl.clip_type == ClipType::Lyrics)
+                        cl.karaoke = is_karaoke;
+            history_push(state, "Apply grouping to all Lyrics");
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::BeginTooltip();
+            ImGui::TextUnformatted("Apply current grouping mode flag to every Lyrics clip");
+            ImGui::EndTooltip();
+        }
+
         // Apply grouping to selected clips only
         int sel_lyrics = 0;
         for (auto& [st, sc] : state.clip_selection) {
@@ -1859,6 +2043,160 @@ static void panel_animation(AppState& state, float w) {
             history_push(state, "Font weight");
         }
         ImGui::SameLine(0.f, 4.f);
+    }
+
+    // ── Beat sync ─────────────────────────────────────────────────────────────
+    ImGui::Dummy({0.f, 12.f}); ui_separator(); ImGui::Dummy({0.f, 8.f});
+    ui_label("Beat sync"); ImGui::Dummy({0.f, 6.f});
+
+    if (state.beats_running) {
+        ImGui::ProgressBar(-1.f * (float)ImGui::GetTime(), {-1.f, 6.f}, "");
+        ImGui::Dummy({0.f, 4.f});
+        ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+        ImGui::TextUnformatted("Detecting beats…");
+        ImGui::PopStyleColor();
+    } else if (!state.beats.empty()) {
+        ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+        char bpmbuf[32];
+        snprintf(bpmbuf, sizeof(bpmbuf), "%.1f BPM  ·  %d beats", state.beat_bpm, (int)state.beats.size());
+        ImGui::TextUnformatted(bpmbuf);
+        ImGui::PopStyleColor();
+        ImGui::Dummy({0.f, 4.f});
+        if (ImGui::Button("Re-detect beats")) run_beat_detect(state);
+        ImGui::SameLine(0.f, 8.f);
+        // "Pulse on beats" — adds scale keyframes at every beat for selected clips
+        bool has_lyrics_sel = false;
+        for (auto& [ti, ci] : state.clip_selection) {
+            if (ti >= 0 && ti < (int)state.tracks.size() &&
+                ci >= 0 && ci < (int)state.tracks[ti].clips.size() &&
+                (state.tracks[ti].clips[ci].clip_type == ClipType::Lyrics ||
+                 state.tracks[ti].clips[ci].clip_type == ClipType::Text)) {
+                has_lyrics_sel = true; break;
+            }
+        }
+        if (!has_lyrics_sel && state.selected_track >= 0 && state.selected_clip >= 0) {
+            int sti = state.selected_track, sci = state.selected_clip;
+            if (sti < (int)state.tracks.size() && sci < (int)state.tracks[sti].clips.size())
+                has_lyrics_sel = true;
+        }
+        ImGui::BeginDisabled(!has_lyrics_sel);
+        if (ImGui::Button("Pulse on beats")) {
+            auto pulse_clip = [&](Clip& cl) {
+                for (float bt : state.beats) {
+                    float rel = bt - cl.start;
+                    if (rel < 0.f || rel > cl.end - cl.start) continue;
+                    cl.ktracks["scale_x"].set(rel, 1.12f, InterpType::EaseOut);
+                    cl.ktracks["scale_y"].set(rel, 1.12f, InterpType::EaseOut);
+                    float decay = fminf(0.18f, (cl.end - cl.start - rel));
+                    cl.ktracks["scale_x"].set(rel + decay, 1.f, InterpType::EaseIn);
+                    cl.ktracks["scale_y"].set(rel + decay, 1.f, InterpType::EaseIn);
+                }
+            };
+            if (!state.clip_selection.empty()) {
+                for (auto& [ti, ci] : state.clip_selection) {
+                    if (ti < (int)state.tracks.size() && ci < (int)state.tracks[ti].clips.size())
+                        pulse_clip(state.tracks[ti].clips[ci]);
+                }
+            } else if (state.selected_track >= 0 && state.selected_clip >= 0) {
+                int sti = state.selected_track, sci = state.selected_clip;
+                if (sti < (int)state.tracks.size() && sci < (int)state.tracks[sti].clips.size())
+                    pulse_clip(state.tracks[sti].clips[sci]);
+            }
+            history_push(state, "Pulse on beats");
+        }
+        ImGui::EndDisabled();
+    } else {
+        bool no_src = state.audio_path.empty() && state.vocals_path.empty();
+        ImGui::BeginDisabled(no_src);
+        if (ImGui::Button("Detect beats")) run_beat_detect(state);
+        ImGui::EndDisabled();
+        if (no_src) {
+            ImGui::SameLine();
+            ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+            ImGui::TextUnformatted("(import audio first)");
+            ImGui::PopStyleColor();
+        }
+    }
+
+    // ── Audio-reactive envelope ───────────────────────────────────────────────
+    ImGui::Dummy({0.f, 12.f}); ui_separator(); ImGui::Dummy({0.f, 8.f});
+    ui_label("Audio-reactive"); ImGui::Dummy({0.f, 6.f});
+
+    if (state.envelope_running) {
+        ImGui::ProgressBar(-1.f * (float)ImGui::GetTime(), {-1.f, 6.f}, "");
+        ImGui::Dummy({0.f, 4.f});
+        ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+        ImGui::TextUnformatted("Analysing amplitude…");
+        ImGui::PopStyleColor();
+    } else if (!state.amplitude_envelope.empty()) {
+        ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+        char ebuf[48];
+        snprintf(ebuf, sizeof(ebuf), "%.1f fps  ·  %d frames", state.envelope_fps, (int)state.amplitude_envelope.size());
+        ImGui::TextUnformatted(ebuf);
+        ImGui::PopStyleColor();
+        ImGui::Dummy({0.f, 4.f});
+
+        static const char* env_props[] = { "scale_x+y", "opacity", "scale_x", "scale_y" };
+        static int env_prop_idx = 0;
+        ImGui::SetNextItemWidth(w - 16.f);
+        ImGui::Combo("##envprop", &env_prop_idx, env_props, 4);
+        ImGui::Dummy({0.f, 4.f});
+        static float env_min = 0.8f, env_max = 1.2f;
+        ImGui::SetNextItemWidth((w - 16.f) * 0.5f - 4.f);
+        ImGui::DragFloat("##emin", &env_min, 0.01f, 0.f, 2.f, "min %.2f");
+        ImGui::SameLine(0.f, 4.f);
+        ImGui::SetNextItemWidth((w - 16.f) * 0.5f - 4.f);
+        ImGui::DragFloat("##emax", &env_max, 0.01f, 0.f, 4.f, "max %.2f");
+        ImGui::Dummy({0.f, 4.f});
+
+        bool has_sel2 = !state.clip_selection.empty() ||
+                        (state.selected_track >= 0 && state.selected_clip >= 0);
+        ImGui::BeginDisabled(!has_sel2);
+        if (ImGui::Button("Bake to keyframes")) {
+            auto bake_clip = [&](Clip& cl) {
+                // Sample local maxima from the envelope and write keyframes
+                float dur_cl = cl.end - cl.start;
+                if (dur_cl <= 0.f || state.envelope_fps <= 0.f) return;
+                float dt = 1.f / state.envelope_fps;
+                int n = (int)state.amplitude_envelope.size();
+                for (int fi = 1; fi < n - 1; ++fi) {
+                    float v = state.amplitude_envelope[fi];
+                    if (v < state.amplitude_envelope[fi-1] || v < state.amplitude_envelope[fi+1]) continue;
+                    float abs_t = fi * dt;
+                    float rel   = abs_t - cl.start;
+                    if (rel < 0.f || rel > dur_cl) continue;
+                    float mapped = env_min + v * (env_max - env_min);
+                    if (env_prop_idx == 0 || env_prop_idx == 2) cl.ktracks["scale_x"].set(rel, mapped);
+                    if (env_prop_idx == 0 || env_prop_idx == 3) cl.ktracks["scale_y"].set(rel, mapped);
+                    if (env_prop_idx == 1) cl.ktracks["opacity"].set(rel, mapped);
+                }
+            };
+            if (!state.clip_selection.empty()) {
+                for (auto& [ti, ci] : state.clip_selection) {
+                    if (ti < (int)state.tracks.size() && ci < (int)state.tracks[ti].clips.size())
+                        bake_clip(state.tracks[ti].clips[ci]);
+                }
+            } else if (state.selected_track >= 0 && state.selected_clip >= 0) {
+                int sti = state.selected_track, sci = state.selected_clip;
+                if (sti < (int)state.tracks.size() && sci < (int)state.tracks[sti].clips.size())
+                    bake_clip(state.tracks[sti].clips[sci]);
+            }
+            history_push(state, "Bake envelope to keyframes");
+        }
+        ImGui::EndDisabled();
+        ImGui::SameLine(0.f, 8.f);
+        if (ImGui::Button("Re-analyse##env")) run_envelope_extract(state);
+    } else {
+        bool no_src2 = state.audio_path.empty() && state.vocals_path.empty();
+        ImGui::BeginDisabled(no_src2);
+        if (ImGui::Button("Analyse amplitude")) run_envelope_extract(state);
+        ImGui::EndDisabled();
+        if (no_src2) {
+            ImGui::SameLine();
+            ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+            ImGui::TextUnformatted("(import audio first)");
+            ImGui::PopStyleColor();
+        }
     }
 }
 
@@ -2114,6 +2452,7 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
                 cands.push_back(state.tracks[ti].clips[ci].start);
                 cands.push_back(state.tracks[ti].clips[ci].end);
             }
+        for (float bt : state.beats) cands.push_back(bt);
         return cands;
     };
 
@@ -2217,8 +2556,31 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
         }
     }
 
+    // Beat tick marks (small orange triangles at the bottom of the ruler)
+    if (!state.beats.empty()) {
+        ImU32 beat_col = IM_COL32(255, 160, 50, 180);
+        float ty = ruler_y + TL_RULER_H - 5.f;
+        for (float bt : state.beats) {
+            float px = origin.x + TL_LABEL_W + bt * zoom - scroll;
+            if (px < origin.x + TL_LABEL_W || px > origin.x + total_w) continue;
+            dl->AddTriangleFilled({px-3.f, ty}, {px+3.f, ty}, {px, ty+5.f}, beat_col);
+        }
+    }
+
     // Tracks
-    float track_y = origin.y + TL_RULER_H;
+    // Vertical scroll: mouse wheel in the track body area
+    float track_area_top = origin.y + TL_RULER_H;
+    float track_area_bot = origin.y + total_h - TL_TRACK_H;  // above pinned add-track row
+    float tracks_total_h = (int)state.tracks.size() * TL_TRACK_H;
+    float max_v_scroll   = fmaxf(0.f, tracks_total_h - (track_area_bot - track_area_top));
+    if (ImGui::IsMouseHoveringRect({origin.x, track_area_top}, {origin.x+total_w, track_area_bot})) {
+        float wheel = ImGui::GetIO().MouseWheel;
+        if (wheel != 0.f && !ImGui::GetIO().KeyCtrl)
+            state.tl_v_scroll -= wheel * TL_TRACK_H;
+    }
+    state.tl_v_scroll = fmaxf(0.f, fminf(max_v_scroll, state.tl_v_scroll));
+
+    float track_y = track_area_top - state.tl_v_scroll;
     s_tl_hover_track = -1;  // reset each frame; set below as we scan rows
     static int   drag_track = -1, drag_clip = -1;
     static float drag_offset = 0.f;
@@ -2241,6 +2603,9 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
     // Context menu state
     static int ctx_track = -1, ctx_clip = -1;
     static bool open_clip_ctx = false, open_track_ctx = false, open_tl_ctx = false;
+
+    // Clip all track drawing to the scrollable area (below ruler, above add-track row)
+    dl->PushClipRect({origin.x, track_area_top}, {origin.x+total_w, track_area_bot}, true);
 
     for (int ti = 0; ti < (int)state.tracks.size(); ++ti) {
         Track& track = state.tracks[ti];
@@ -2370,19 +2735,47 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
                 dl->AddText({vis_x0+4.f, cy0+(cy1-cy0-13.f)*0.5f},
                     to_u32(sel ? Col::bg : Col::fg), clip.text.c_str());
                 ImGui::PopClipRect();
-            } else if (clip.clip_type==ClipType::Audio) {
-                int bars = (int)((vis_x1-vis_x0)/3.f);
-                for (int b=0;b<bars;++b) {
-                    float bx=vis_x0+b*3.f+1.f;
-                    float amp=0.25f+0.55f*fabsf(sinf(b*0.37f+ti)*cosf(b*0.11f));
-                    float mid=(cy0+cy1)*0.5f, ht=amp*(cy1-cy0-6.f)*0.5f;
-                    dl->AddLine({bx,mid-ht},{bx,mid+ht},to_u32(Col::muted));
+            } else if (clip.clip_type==ClipType::Audio || clip.clip_type==ClipType::Video) {
+                // For video clips, only draw waveform if no Audio clip overlaps (audio not extracted yet)
+                bool show_wave = true;
+                if (clip.clip_type==ClipType::Video) {
+                    for (auto& tr2 : state.tracks)
+                        for (auto& cl2 : tr2.clips)
+                            if (cl2.clip_type==ClipType::Audio &&
+                                cl2.end > clip.start && cl2.start < clip.end)
+                                { show_wave = false; break; }
                 }
-            } else if (clip.clip_type==ClipType::Video) {
+
+                const std::string& wave_path = clip.text;
+                const WaveformData* wd = show_wave && !wave_path.empty()
+                    ? waveform_get(wave_path) : nullptr;
+
                 ImGui::PushClipRect({vis_x0,cy0},{vis_x1,cy1},true);
-                dl->AddText({vis_x0+4.f,cy0+3.f},
-                    to_u32(sel?Col::bg:Col::fg),
-                    clip.text.empty()?"Video":fs::path(clip.text).filename().string().c_str());
+
+                // Filename label at top of brick
+                if (clip.clip_type==ClipType::Video) {
+                    dl->AddText({vis_x0+4.f, cy0+3.f},
+                        to_u32(sel?Col::bg:Col::fg),
+                        clip.text.empty()?"Video":fs::path(clip.text).filename().string().c_str());
+                }
+
+                if (wd && !wd->samples.empty()) {
+                    float mid   = (cy0 + cy1) * 0.5f;
+                    float half  = (cy1 - cy0) * 0.44f;
+                    float dt    = 1.f / WAVEFORM_FPS;
+                    ImU32 wcol  = sel ? IM_COL32(0,0,0,160) : IM_COL32(255,255,255,120);
+
+                    // Draw one vertical bar per screen pixel in visible range
+                    for (float px = vis_x0; px < vis_x1; px += 1.f) {
+                        float t_abs = clip.start + (px - (origin.x+TL_LABEL_W) + scroll) / zoom;
+                        int   fi    = (int)(t_abs / dt);
+                        if (fi < 0 || fi >= (int)wd->samples.size()) continue;
+                        float amp = wd->samples[fi] * half;
+                        if (amp < 1.f) amp = 1.f;
+                        dl->AddLine({px, mid-amp}, {px, mid+amp}, wcol);
+                    }
+                }
+
                 ImGui::PopClipRect();
             }
 
@@ -2527,6 +2920,8 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
 
         track_y += TL_TRACK_H;
     }
+
+    dl->PopClipRect();  // end scrollable track area clip
 
     // ── Track reorder drag ────────────────────────────────────────────────────
     if (s_track_drag_src >= 0) {
@@ -2843,10 +3238,13 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
         track_y += TL_TRACK_H;  // push "+ Add Track" down so they don't overlap
     }
 
-    // "+ Add Track" row
-    ImVec2 add_p = {origin.x+8.f, track_y+6.f};
+    // "+ Add Track" — pinned to the bottom of the timeline area so it's always visible
+    float add_row_y = origin.y + total_h - TL_TRACK_H;
+    dl->AddRectFilled({origin.x, add_row_y}, {origin.x+total_w, origin.y+total_h}, to_u32(Col::bg));
+    dl->AddLine({origin.x, add_row_y}, {origin.x+total_w, add_row_y}, to_u32(Col::line));
+    ImVec2 add_p = {origin.x+8.f, add_row_y+6.f};
     ImVec2 mp = ImGui::GetIO().MousePos;
-    bool add_hov = mp.y>=track_y && mp.y<track_y+TL_TRACK_H &&
+    bool add_hov = mp.y>=add_row_y && mp.y<origin.y+total_h &&
                    mp.x>=origin.x && mp.x<=origin.x+total_w;
     dl->AddText(add_p, to_u32(add_hov ? Col::fg : Col::muted), "+ Add Track");
     if (add_hov && ImGui::IsMouseClicked(0)) {
@@ -3261,6 +3659,9 @@ void ui_studio(AppState& state) {
         std::string stem = state.audio_path.empty() ? "audio"
             : fs::path(state.audio_path).stem().string();
         history_push(state, "Pipeline complete — " + stem);
+        // Auto-trigger beat detection and envelope extraction on the stems
+        run_beat_detect(state);
+        run_envelope_extract(state);
     }
     last_stage = state.pipeline.stage;
 
@@ -3525,7 +3926,7 @@ void ui_studio(AppState& state) {
     ImGui::PushStyleColor(ImGuiCol_Border,  Col::line);
     if (ImGui::BeginChild("##preview_zone", {preview_w, body_h}, ImGuiChildFlags_Borders)) {
         float aw = ImGui::GetContentRegionAvail().x;
-        float ah = ImGui::GetContentRegionAvail().y - 36.f; // leave room for transport bar
+        float ah = ImGui::GetContentRegionAvail().y;
 
         float asp_w = 9.f, asp_h = 16.f;
         if (state.format == OutputFormat::Horizontal) { asp_w = 16.f; asp_h = 9.f; }
@@ -3540,265 +3941,252 @@ void ui_studio(AppState& state) {
         ImGui::Dummy({sw, sh});
         draw_preview(state, stage_p, sw, sh);
 
-        // ── YouTube-style overlay scrub bar ───────────────────────────────────
+        // ── Glass transport overlay ───────────────────────────────────────────
         {
-            static float s_bar_anim = 3.f;
-            static float s_dim_anim = 0.f;
+            ImDrawList* dl  = ImGui::GetWindowDrawList();
+            float fps_v     = tl_fps(state);
+            float f_dt_v    = fps_v > 0.f ? 1.f / fps_v : 1.f / 30.f;
+            float dur       = fmaxf(state.duration, 0.01f);
+            bool  busy      = audio_loading() || proxy_is_generating() || state.extract_running;
 
-            const float BAR_FULL = 8.f;
-            const float BAR_THIN = 3.f;
-            const float BAR_ZONE = 22.f;  // hover hit area height
+            // ── Geometry ──────────────────────────────────────────────────────
+            const float PILL_PAD_X = 16.f;
+            const float PILL_PAD_Y = 10.f;
+            const float SCRUB_H    = 4.f;   // resting height of scrubber track
+            const float SCRUB_H_H  = 6.f;   // hovered height
+            const float BTN_ROW_H  = 36.f;
+            const float TC_ROW_H   = 18.f;  // timecode row below buttons
+            const float PILL_H     = SCRUB_H + BTN_ROW_H + TC_ROW_H + PILL_PAD_Y * 2.f + 10.f;
+            const float PILL_W     = fminf(sw, fmaxf(360.f, sw * 0.85f));
+            const float PILL_R     = 16.f;
 
-            float fps_ov  = tl_fps(state);
-            float dur_ov  = fmaxf(state.duration, 0.01f);
-            float bar_bottom = stage_p.y + sh;
-            float bar_left   = stage_p.x;
-            float bar_right  = stage_p.x + sw;
+            float pill_x0 = stage_p.x + (sw - PILL_W) * 0.5f;
+            float pill_x1 = pill_x0 + PILL_W;
+            float pill_y1 = stage_p.y + sh - 14.f;
+            float pill_y0 = pill_y1 - PILL_H;
 
-            // Invisible hit area covering bottom of video
-            ImGui::SetCursorScreenPos({bar_left, bar_bottom - BAR_ZONE});
-            ImGui::InvisibleButton("##scrub_ov", {sw, BAR_ZONE});
-            bool hov  = ImGui::IsItemHovered();
-            bool held = ImGui::IsItemActive();
-
-            // Dim video while scrubbing
-            float dim_target = held ? 110.f : 0.f;
-            s_dim_anim += (dim_target - s_dim_anim) * ImGui::GetIO().DeltaTime * 12.f;
-            if (s_dim_anim > 1.f) {
-                ImDrawList* dl_dim = ImGui::GetWindowDrawList();
-                dl_dim->AddRectFilled(stage_p, {stage_p.x + sw, stage_p.y + sh},
-                                      IM_COL32(0, 0, 0, (int)s_dim_anim));
-            }
-
-            // Animate bar height
-            float target_h = (hov || held) ? BAR_FULL : BAR_THIN;
-            s_bar_anim += (target_h - s_bar_anim) * ImGui::GetIO().DeltaTime * 14.f;
-            s_bar_anim = fmaxf(BAR_THIN, fminf(BAR_FULL, s_bar_anim));
-            float bh = s_bar_anim;
-
-            // Resolve hover time from mouse x
-            float mouse_t = 0.f;
-            bool  has_hover = false;
-            if (hov || held) {
-                float frac = (ImGui::GetIO().MousePos.x - bar_left) / sw;
-                frac  = fmaxf(0.f, fminf(1.f, frac));
-                mouse_t = frac * dur_ov;
-                if (!ImGui::GetIO().KeyCtrl && fps_ov > 0.f)
-                    mouse_t = roundf(mouse_t * fps_ov) / fps_ov;
-                has_hover = true;
-                if (held) seek_to(state, mouse_t);
-            }
-
-            ImDrawList* dl = ImGui::GetWindowDrawList();
-
-            // Gradient behind bar for readability
-            float grad_h = 48.f;
+            // Gradient shadow behind pill
             dl->AddRectFilledMultiColor(
-                {bar_left, bar_bottom - bh - grad_h},
-                {bar_right, bar_bottom - bh},
+                {stage_p.x, pill_y0 - 40.f}, {stage_p.x + sw, pill_y1 + 8.f},
                 IM_COL32(0,0,0,0),   IM_COL32(0,0,0,0),
-                IM_COL32(0,0,0,120), IM_COL32(0,0,0,120));
+                IM_COL32(0,0,0,160), IM_COL32(0,0,0,160));
 
-            // Track background
-            dl->AddRectFilled({bar_left, bar_bottom - bh}, {bar_right, bar_bottom},
-                              IM_COL32(90, 90, 90, 180));
+            // Glass pill body
+            dl->AddRectFilled({pill_x0, pill_y0}, {pill_x1, pill_y1},
+                              IM_COL32(18, 18, 22, 210), PILL_R);
+            // Top-edge glass highlight
+            dl->AddLine({pill_x0 + PILL_R, pill_y0 + 1.f},
+                        {pill_x1 - PILL_R, pill_y0 + 1.f},
+                        IM_COL32(255,255,255,28), 1.f);
+            // Outer border
+            dl->AddRect({pill_x0, pill_y0}, {pill_x1, pill_y1},
+                        IM_COL32(255,255,255,22), PILL_R, 0, 1.f);
 
-            // Played portion
-            float play_x = bar_left + (state.playhead / dur_ov) * sw;
-            dl->AddRectFilled({bar_left, bar_bottom - bh}, {play_x, bar_bottom},
-                              IM_COL32(255, 60, 60, 230));
+            // ── Scrubber ──────────────────────────────────────────────────────
+            float scrub_margin = PILL_PAD_X + 4.f;
+            float scrub_x0 = pill_x0 + scrub_margin;
+            float scrub_x1 = pill_x1 - scrub_margin;
+            float scrub_w  = scrub_x1 - scrub_x0;
+            float scrub_cy = pill_y0 + PILL_PAD_Y + SCRUB_H * 0.5f;
 
-            // Hover thumbnail + ghost dot
-            if (has_hover) {
-                float hx = bar_left + (mouse_t / dur_ov) * sw;
+            ImGui::SetCursorScreenPos({scrub_x0, scrub_cy - 10.f});
+            ImGui::InvisibleButton("##scrub", {scrub_w, 20.f});
+            bool scrub_hov  = ImGui::IsItemHovered();
+            bool scrub_held = ImGui::IsItemActive();
 
-                // Hover highlight on played portion
-                dl->AddRectFilled({bar_left, bar_bottom - bh}, {hx, bar_bottom},
-                                  IM_COL32(255, 90, 90, 60));
+            static float s_scrub_h_anim = SCRUB_H;
+            float scrub_h_target = (scrub_hov || scrub_held) ? SCRUB_H_H : SCRUB_H;
+            s_scrub_h_anim += (scrub_h_target - s_scrub_h_anim) * ImGui::GetIO().DeltaTime * 18.f;
 
-                // Thumbnail
+            float mouse_t  = 0.f;
+            bool  has_scrub_hov = false;
+            if (scrub_hov || scrub_held) {
+                float frac = (ImGui::GetIO().MousePos.x - scrub_x0) / scrub_w;
+                frac = fmaxf(0.f, fminf(1.f, frac));
+                mouse_t = frac * dur;
+                mouse_t = roundf(mouse_t * 30.f) / 30.f;
+                has_scrub_hov = true;
+                if (scrub_held) seek_to(state, mouse_t);
+            }
+
+            float played_frac = fmaxf(0.f, fminf(1.f, state.playhead / dur));
+            float play_sx = scrub_x0 + played_frac * scrub_w;
+            float bh2 = s_scrub_h_anim * 0.5f;
+
+            // Track
+            dl->AddRectFilled({scrub_x0, scrub_cy - bh2}, {scrub_x1, scrub_cy + bh2},
+                              IM_COL32(255,255,255,30), bh2);
+            // Played
+            dl->AddRectFilled({scrub_x0, scrub_cy - bh2}, {play_sx, scrub_cy + bh2},
+                              IM_COL32(220,220,255,200), bh2);
+
+            // Hover ghost
+            if (has_scrub_hov) {
+                float hsx = scrub_x0 + (mouse_t / dur) * scrub_w;
+                dl->AddRectFilled({scrub_x0, scrub_cy - bh2}, {hsx, scrub_cy + bh2},
+                                  IM_COL32(255,255,255,20), bh2);
+                // Timecode bubble
+                char htc[16]; snprintf(htc, sizeof(htc), "%s", fmt_time(mouse_t).c_str());
+                float htc_w = ImGui::CalcTextSize(htc).x + 10.f;
+                float htc_x = fmaxf(scrub_x0, fminf(hsx - htc_w*0.5f, scrub_x1 - htc_w));
+                float htc_y = scrub_cy - bh2 - 22.f;
+                dl->AddRectFilled({htc_x-2.f, htc_y-2.f}, {htc_x+htc_w+2.f, htc_y+16.f},
+                                  IM_COL32(30,30,35,220), 4.f);
+                dl->AddText({htc_x+5.f, htc_y+1.f}, IM_COL32(220,220,220,220), htc);
+                // Hover dot
+                dl->AddCircleFilled({hsx, scrub_cy}, s_scrub_h_anim + 1.f, IM_COL32(0,0,0,80));
+                dl->AddCircleFilled({hsx, scrub_cy}, s_scrub_h_anim,       IM_COL32(255,255,255,160));
+            }
+
+            // Playhead knob
+            float knob_r = (scrub_hov || scrub_held) ? s_scrub_h_anim + 2.f : s_scrub_h_anim;
+            dl->AddCircleFilled({play_sx, scrub_cy}, knob_r + 1.5f, IM_COL32(0,0,0,120));
+            dl->AddCircleFilled({play_sx, scrub_cy}, knob_r,        IM_COL32(255,255,255,255));
+
+            // ── Thumbnail above pill on scrub hover ───────────────────────────
+            if (has_scrub_hov) {
+                float hsx = scrub_x0 + (mouse_t / dur) * scrub_w;
                 int th_w = 0, th_h = 0;
                 uintptr_t th_tex = video_get_thumbnail((double)mouse_t, &th_w, &th_h);
                 if (th_tex && th_w > 0 && th_h > 0) {
                     float td_w = 120.f;
                     float td_h = td_w * (float)th_h / (float)th_w;
-                    float tx = hx - td_w * 0.5f;
-                    float ty = bar_bottom - bh - 6.f - td_h - 18.f; // 18 for timecode
-                    if (tx < bar_left)             tx = bar_left;
-                    if (tx + td_w > bar_right)     tx = bar_right - td_w;
-                    dl->AddRectFilled({tx-2.f, ty-2.f}, {tx+td_w+2.f, ty+td_h+2.f},
-                                      IM_COL32(20, 20, 20, 230), 3.f);
-                    dl->AddImage((ImTextureID)(uintptr_t)th_tex,
-                                 {tx, ty}, {tx+td_w, ty+td_h});
-                    // Timecode below thumbnail
-                    char tcbuf[16];
-                    snprintf(tcbuf, sizeof(tcbuf), "%s", fmt_time(mouse_t).c_str());
-                    float tc_w = ImGui::CalcTextSize(tcbuf).x;
-                    dl->AddText({tx + (td_w - tc_w)*0.5f, ty + td_h + 4.f},
-                                IM_COL32(220, 220, 220, 220), tcbuf);
-                } else {
-                    // No video — timecode only
-                    char tcbuf[16];
-                    snprintf(tcbuf, sizeof(tcbuf), "%s", fmt_time(mouse_t).c_str());
-                    float tc_w = ImGui::CalcTextSize(tcbuf).x;
-                    dl->AddText({hx - tc_w*0.5f, bar_bottom - bh - 20.f},
-                                IM_COL32(220, 220, 220, 220), tcbuf);
+                    float tx = fmaxf(scrub_x0, fminf(hsx - td_w*0.5f, scrub_x1 - td_w));
+                    float ty = pill_y0 - td_h - 8.f;
+                    dl->AddRectFilled({tx-3.f,ty-3.f},{tx+td_w+3.f,ty+td_h+3.f},
+                                      IM_COL32(20,20,20,220), 4.f);
+                    dl->AddImage((ImTextureID)(uintptr_t)th_tex, {tx,ty}, {tx+td_w,ty+td_h});
                 }
-
-                // Hover dot on bar
-                dl->AddCircleFilled({hx, bar_bottom - bh*0.5f}, bh*0.9f + 1.f,
-                                    IM_COL32(0,0,0,80));
-                dl->AddCircleFilled({hx, bar_bottom - bh*0.5f}, bh*0.9f,
-                                    IM_COL32(255,255,255,180));
             }
 
-            // Playhead dot
-            float dot_r = (hov || held) ? bh : bh * 0.7f;
-            dl->AddCircleFilled({play_x, bar_bottom - bh*0.5f}, dot_r + 1.f,
-                                IM_COL32(0,0,0,100));
-            dl->AddCircleFilled({play_x, bar_bottom - bh*0.5f}, dot_r,
-                                IM_COL32(255, 255, 255, 255));
-        }
+            // ── Transport button row ──────────────────────────────────────────
+            const float SB  = 26.f;
+            const float PB  = 38.f;
+            const float GAP = 8.f;
+            float btns_total = SB * 4.f + PB + GAP * 4.f;
+            float btn_row_y  = pill_y0 + PILL_PAD_Y + SCRUB_H + 10.f;
+            float bx = pill_x0 + (PILL_W - btns_total) * 0.5f;
+            float btn_cy = btn_row_y + BTN_ROW_H * 0.5f;
 
-        // ── Transport buttons ─────────────────────────────────────────────────
-        float fps_v  = tl_fps(state);
-        float f_dt_v = fps_v > 0.f ? 1.f / fps_v : 1.f / 30.f;
-        float dur    = fmaxf(state.duration, 0.01f);
+            // Glass circle button helper
+            auto glass_btn = [&](const char* id, float sz) -> std::pair<bool, ImU32> {
+                float cy2 = btn_row_y + (BTN_ROW_H - sz) * 0.5f;
+                ImGui::SetCursorScreenPos({bx, cy2});
+                ImGui::InvisibleButton(id, {sz, sz});
+                bool h = ImGui::IsItemHovered();
+                bool a = ImGui::IsItemActive();
+                bool c = ImGui::IsItemClicked();
+                float cx2 = bx + sz * 0.5f, cy3 = cy2 + sz * 0.5f;
+                // Glass circle bg
+                dl->AddCircleFilled({cx2, cy3}, sz * 0.5f,
+                    IM_COL32(255,255,255, a ? 45 : h ? 28 : 12));
+                dl->AddCircle({cx2, cy3}, sz * 0.5f - 0.5f,
+                    IM_COL32(255,255,255, a ? 80 : h ? 50 : 22), 0, 1.f);
+                ImU32 ic = IM_COL32(255,255,255, a ? 255 : h ? 230 : 180);
+                bx += sz + GAP;
+                return {c, ic};
+            };
 
-        const float SB  = 22.f;
-        const float PB  = 30.f;
-        const float GAP = 6.f;
-        float btns_w = SB*4 + PB + GAP*4;
-        float bx = ox + (sw - btns_w) * 0.5f;
-        float by = oy + sh + 6.f;   // just below video
-        ImDrawList* wdl = ImGui::GetWindowDrawList();
-
-        // Helper: invisible button → returns click; out_col is icon colour
-        auto tbtn = [&](const char* id, float w, float h) -> bool {
-            ImGui::SetCursorPos({bx - ImGui::GetWindowPos().x +
-                                 ImGui::GetWindowPos().x,   // no-op, just use SetCursorScreenPos
-                                 by - ImGui::GetWindowPos().y});
-            // Use screen-space cursor directly
-            ImGui::SetCursorScreenPos({bx, by});
-            ImGui::InvisibleButton(id, {w, h});
-            return ImGui::IsItemClicked();
-        };
-
-        // Better helper using screen pos
-        auto icon_btn = [&](const char* id, float sz) -> std::pair<bool,ImU32> {
-            ImGui::SetCursorScreenPos({bx, by});
-            ImGui::InvisibleButton(id, {sz, sz});
-            bool hov  = ImGui::IsItemHovered();
-            bool held = ImGui::IsItemActive();
-            bool clk  = ImGui::IsItemClicked();
-            if (hov || held)
-                wdl->AddRectFilled(ImGui::GetItemRectMin(), ImGui::GetItemRectMax(),
-                                   IM_COL32(255,255,255, held?40:20), 5.f);
-            ImU32 col = IM_COL32(255,255,255, held?255 : hov?210 : 140);
-            bx += sz + GAP;
-            return {clk, col};
-        };
-        (void)tbtn; // suppress unused warning
-
-        // |< skip to start
-        {
-            auto [clk, col] = icon_btn("##t_start", SB);
-            ImVec2 p = ImGui::GetItemRectMin();
-            float cx = p.x + SB*0.5f, cy = p.y + SB*0.5f;
-            float r = SB*0.28f;
-            wdl->AddRectFilled({p.x+3.f, cy-r},{p.x+5.5f, cy+r}, col, 1.f);
-            wdl->AddTriangleFilled({cx+r*0.3f,cy-r},{cx+r*0.3f,cy+r},{cx-r*1.1f,cy}, col);
-            if (clk) seek_to(state, 0.f);
-        }
-
-        // < step back
-        {
-            auto [clk, col] = icon_btn("##t_prev", SB);
-            ImVec2 p = ImGui::GetItemRectMin();
-            float cx = p.x + SB*0.5f, cy = p.y + SB*0.5f;
-            float r = SB*0.28f;
-            wdl->AddTriangleFilled({cx+r,cy-r},{cx+r,cy+r},{cx-r,cy}, col);
-            if (clk) seek_to(state, fmaxf(0.f, state.playhead - f_dt_v));
-        }
-
-        // play / pause  (larger, with subtle circle bg)
-        {
-            ImGui::SetCursorScreenPos({bx, by - (PB-SB)*0.5f});
-            ImGui::InvisibleButton("##t_play", {PB, PB});
-            bool hov  = ImGui::IsItemHovered();
-            bool held = ImGui::IsItemActive();
-            bool clk  = ImGui::IsItemClicked();
-            ImVec2 p  = ImGui::GetItemRectMin();
-            float cx = p.x + PB*0.5f, cy = p.y + PB*0.5f;
-            // Circle background
-            wdl->AddCircleFilled({cx,cy}, PB*0.5f,
-                                 IM_COL32(255,255,255, held?55 : hov?38 : 22));
-            wdl->AddCircle({cx,cy}, PB*0.5f-1.f, IM_COL32(255,255,255,60), 0, 1.f);
-            ImU32 col = IM_COL32(255,255,255, held?255 : hov?230 : 190);
-            float r = PB*0.22f;
-            if (audio_loading() || proxy_is_generating() || state.extract_running) {
-                // Spinner dots — just three small dots for "busy"
-                for (int i=0;i<3;++i)
-                    wdl->AddCircleFilled({cx-r+i*r, cy}, 2.f,
-                                        IM_COL32(255,255,255,120));
-            } else if (state.playing) {
-                // Pause: two bars
-                float bw=r*0.55f, bh=r*1.6f;
-                wdl->AddRectFilled({cx-bw*1.4f, cy-bh},{cx-bw*0.3f, cy+bh}, col, 1.f);
-                wdl->AddRectFilled({cx+bw*0.3f, cy-bh},{cx+bw*1.4f, cy+bh}, col, 1.f);
-            } else {
-                // Play triangle (offset slightly right to look centred)
-                wdl->AddTriangleFilled({cx-r*0.7f, cy-r*1.1f},
-                                       {cx-r*0.7f, cy+r*1.1f},
-                                       {cx+r*1.1f, cy}, col);
+            // |< to start
+            {
+                auto [c, ic] = glass_btn("##t_start", SB);
+                float cx2 = ImGui::GetItemRectMin().x + SB*0.5f;
+                float r = SB * 0.22f;
+                dl->AddRectFilled({cx2 - r*1.6f, btn_cy - r}, {cx2 - r*1.1f, btn_cy + r}, ic, 1.f);
+                dl->AddTriangleFilled({cx2-r*0.9f, btn_cy-r}, {cx2-r*0.9f, btn_cy+r}, {cx2+r*0.9f, btn_cy}, ic);
+                if (c) seek_to(state, 0.f);
             }
-            if (clk && !audio_loading() && !proxy_is_generating() && !state.extract_running)
-                toggle_play(state);
-            bx += PB + GAP;
-        }
 
-        // > step forward
-        {
-            auto [clk, col] = icon_btn("##t_next", SB);
-            ImVec2 p = ImGui::GetItemRectMin();
-            float cx = p.x + SB*0.5f, cy = p.y + SB*0.5f;
-            float r = SB*0.28f;
-            wdl->AddTriangleFilled({cx-r,cy-r},{cx-r,cy+r},{cx+r,cy}, col);
-            if (clk) seek_to(state, fminf(dur, state.playhead + f_dt_v));
-        }
+            // < frame back
+            {
+                auto [c, ic] = glass_btn("##t_prev", SB);
+                float cx2 = ImGui::GetItemRectMin().x + SB*0.5f;
+                float r = SB * 0.22f;
+                dl->AddTriangleFilled({cx2+r, btn_cy-r}, {cx2+r, btn_cy+r}, {cx2-r, btn_cy}, ic);
+                if (c) seek_to(state, fmaxf(0.f, state.playhead - f_dt_v));
+            }
 
-        // >| skip to end
-        {
-            auto [clk, col] = icon_btn("##t_end", SB);
-            ImVec2 p = ImGui::GetItemRectMin();
-            float cx = p.x + SB*0.5f, cy = p.y + SB*0.5f;
-            float r = SB*0.28f;
-            wdl->AddTriangleFilled({cx-r*1.1f,cy-r},{cx-r*1.1f,cy+r},{cx+r*0.3f,cy}, col);
-            wdl->AddRectFilled({cx+r*0.3f, cy-r},{cx+r*0.3f+2.5f, cy+r}, col, 1.f);
-            if (clk) seek_to(state, dur);
-        }
+            // Play / Pause (larger glass circle)
+            {
+                float sz = PB;
+                float cy2 = btn_row_y + (BTN_ROW_H - sz) * 0.5f;
+                ImGui::SetCursorScreenPos({bx, cy2});
+                ImGui::InvisibleButton("##t_play", {sz, sz});
+                bool h = ImGui::IsItemHovered();
+                bool a = ImGui::IsItemActive();
+                bool c = ImGui::IsItemClicked();
+                float cx2 = bx + sz*0.5f, cy3 = cy2 + sz*0.5f;
+                // Glow ring
+                dl->AddCircleFilled({cx2, cy3}, sz*0.5f + 2.f, IM_COL32(180,180,255, h||a ? 18 : 8));
+                // Glass body
+                dl->AddCircleFilled({cx2, cy3}, sz*0.5f,
+                    IM_COL32(255,255,255, a ? 60 : h ? 42 : 25));
+                dl->AddCircle({cx2, cy3}, sz*0.5f - 0.5f,
+                    IM_COL32(255,255,255, a ? 100 : h ? 70 : 40), 0, 1.2f);
+                // Top highlight arc — fake refraction
+                dl->AddCircle({cx2, cy3 - 1.f}, sz*0.5f - 2.f,
+                    IM_COL32(255,255,255, 18), 0, 1.f);
 
-        // Status text (right of buttons, left of timecode)
-        if (audio_loading() || proxy_is_generating() || state.extract_running) {
-            ImGui::SetCursorScreenPos({bx, by + (SB-13.f)*0.5f});
-            ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
-            if      (audio_loading())       ImGui::TextUnformatted("loading…");
-            else if (proxy_is_generating()) ImGui::TextUnformatted("building preview…");
-            else                            ImGui::TextUnformatted("extracting…");
-            ImGui::PopStyleColor();
-        }
+                ImU32 ic = IM_COL32(255,255,255, a ? 255 : h ? 235 : 200);
+                float r = sz * 0.18f;
+                if (busy) {
+                    float t_spin = fmodf((float)ImGui::GetTime(), 1.2f) / 1.2f;
+                    for (int i = 0; i < 3; ++i) {
+                        float ang = (t_spin + i / 3.f) * 6.2832f;
+                        dl->AddCircleFilled({cx2 + cosf(ang)*r, cy3 + sinf(ang)*r},
+                                            2.2f, IM_COL32(255,255,255,200));
+                    }
+                } else if (state.playing) {
+                    float bw = r*0.5f, bh3 = r*1.5f;
+                    dl->AddRectFilled({cx2-bw*1.5f, cy3-bh3}, {cx2-bw*0.4f, cy3+bh3}, ic, 1.f);
+                    dl->AddRectFilled({cx2+bw*0.4f, cy3-bh3}, {cx2+bw*1.5f, cy3+bh3}, ic, 1.f);
+                } else {
+                    dl->AddTriangleFilled({cx2-r*0.65f, cy3-r*1.05f},
+                                          {cx2-r*0.65f, cy3+r*1.05f},
+                                          {cx2+r*1.1f,  cy3}, ic);
+                }
+                if (c && !busy) toggle_play(state);
+                bx += sz + GAP;
+            }
 
-        // Timecode right-aligned
-        char tcbuf[32];
-        snprintf(tcbuf, sizeof(tcbuf), "%s / %s",
-            fmt_time(state.playhead).c_str(),
-            fmt_time(dur).c_str());
-        float tc_w = ImGui::CalcTextSize(tcbuf).x;
-        ImGui::SetCursorScreenPos({ImGui::GetWindowPos().x + ox + sw - tc_w,
-                                   by + (SB - ImGui::GetTextLineHeight())*0.5f});
-        ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
-        ImGui::TextUnformatted(tcbuf);
-        ImGui::PopStyleColor();
+            // > frame forward
+            {
+                auto [c, ic] = glass_btn("##t_next", SB);
+                float cx2 = ImGui::GetItemRectMin().x + SB*0.5f;
+                float r = SB * 0.22f;
+                dl->AddTriangleFilled({cx2-r, btn_cy-r}, {cx2-r, btn_cy+r}, {cx2+r, btn_cy}, ic);
+                if (c) seek_to(state, fminf(dur, state.playhead + f_dt_v));
+            }
+
+            // >| to end
+            {
+                auto [c, ic] = glass_btn("##t_end", SB);
+                float cx2 = ImGui::GetItemRectMin().x + SB*0.5f;
+                float r = SB * 0.22f;
+                dl->AddTriangleFilled({cx2-r*0.9f, btn_cy-r}, {cx2-r*0.9f, btn_cy+r}, {cx2+r*0.9f, btn_cy}, ic);
+                dl->AddRectFilled({cx2+r*1.1f, btn_cy-r}, {cx2+r*1.6f, btn_cy+r}, ic, 1.f);
+                if (c) seek_to(state, dur);
+            }
+
+            // ── Timecode — centered row below buttons ─────────────────────────
+            char tcbuf[32];
+            snprintf(tcbuf, sizeof(tcbuf), "%s / %s",
+                fmt_time(state.playhead).c_str(), fmt_time(dur).c_str());
+            float tc_w = ImGui::CalcTextSize(tcbuf).x;
+            float tc_y = btn_row_y + BTN_ROW_H + 2.f;
+            float tc_x = pill_x0 + (PILL_W - tc_w) * 0.5f;
+            dl->AddText({tc_x, tc_y}, IM_COL32(160,160,160,160), tcbuf);
+
+            // Status text left of timecode when busy
+            if (busy) {
+                const char* st = audio_loading()       ? "loading…"
+                               : proxy_is_generating() ? "building preview…"
+                                                       : "extracting…";
+                float st_w = ImGui::CalcTextSize(st).x;
+                float st_x = pill_x0 + (PILL_W - st_w) * 0.5f;
+                dl->AddText({st_x, tc_y}, IM_COL32(140,140,140,160), st);
+            }
+        }
     }
     ImGui::EndChild();
     ImGui::PopStyleColor(2);
@@ -3894,10 +4282,44 @@ void ui_studio(AppState& state) {
         draw_pipeline_strip(state, win_w);
     }
 
-    // ── Timeline ─────────────────────────────────────────────────────────────
+    // ── Timeline panel ────────────────────────────────────────────────────────
     ImGui::PushStyleColor(ImGuiCol_ChildBg, Col::bg);
     ImGui::PushStyleColor(ImGuiCol_Border,  Col::line);
     if (ImGui::BeginChild("##tl_zone", {win_w, tl_h}, ImGuiChildFlags_Borders)) {
+        // Header bar
+        ImDrawList* tl_dl = ImGui::GetWindowDrawList();
+        ImVec2 hdr_tl = ImGui::GetCursorScreenPos();
+        float  hdr_w  = ImGui::GetContentRegionAvail().x;
+        constexpr float HDR_H = 22.f;
+        tl_dl->AddRectFilled(hdr_tl, {hdr_tl.x+hdr_w, hdr_tl.y+HDR_H}, to_u32(Col::bg_soft));
+        tl_dl->AddLine({hdr_tl.x, hdr_tl.y+HDR_H}, {hdr_tl.x+hdr_w, hdr_tl.y+HDR_H}, to_u32(Col::line));
+        ImGui::PushFont(g_font_bold);
+        tl_dl->AddText({hdr_tl.x+8.f, hdr_tl.y+4.f}, to_u32(Col::muted), "TIMELINE");
+        ImGui::PopFont();
+
+        // Zoom controls in header
+        {
+            char zbuf[20]; snprintf(zbuf, sizeof(zbuf), "%.0f%%", state.tl_zoom / 80.f * 100.f);
+            float zx = hdr_tl.x + hdr_w - 120.f;
+            ImGui::SetCursorScreenPos({zx, hdr_tl.y+2.f});
+            ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {4.f, 2.f});
+            ImGui::PushStyleColor(ImGuiCol_Button,        Col::bg_soft);
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, Col::bg_soft_hov);
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive,  Col::bg_soft_hov);
+            if (ImGui::SmallButton("-##zout")) state.tl_zoom = fmaxf(state.tl_zoom*0.8f, 20.f);
+            ImGui::SameLine(0.f,4.f);
+            ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+            ImGui::SetNextItemWidth(48.f);
+            ImGui::TextUnformatted(zbuf);
+            ImGui::PopStyleColor();
+            ImGui::SameLine(0.f,4.f);
+            if (ImGui::SmallButton("+##zin"))  state.tl_zoom = fminf(state.tl_zoom*1.25f, 4000.f);
+            ImGui::PopStyleColor(3);
+            ImGui::PopStyleVar();
+        }
+
+        // Advance cursor past header, then draw timeline
+        ImGui::SetCursorScreenPos({hdr_tl.x, hdr_tl.y + HDR_H});
         ImVec2 tl_origin = ImGui::GetCursorScreenPos();
         float  tl_w      = ImGui::GetContentRegionAvail().x;
         float  tl_h_real = ImGui::GetContentRegionAvail().y;

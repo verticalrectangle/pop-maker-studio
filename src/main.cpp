@@ -26,6 +26,8 @@ extern "C" {
 #include "ml_pipeline_embedded.h"
 #include "ml_prefetch_embedded.h"
 #include "ml_setup_embedded.h"
+#include "beat_detect_embedded.h"
+#include "envelope_extract_embedded.h"
 
 namespace fs = std::filesystem;
 
@@ -34,6 +36,8 @@ std::string g_dropped_file;
 std::string g_pipeline_script;
 std::string g_prefetch_script;
 std::string g_setup_script;
+std::string g_beat_detect_script;
+std::string g_envelope_script;
 std::string g_managed_dir;
 
 static void glfw_drop_callback(GLFWwindow*, int count, const char** paths) {
@@ -148,8 +152,12 @@ int main(int, char**) {
                                           "pop_maker_ml_pipeline.py");
     g_prefetch_script = extract_embedded(ml_prefetch_py,  ml_prefetch_py_size,
                                           "pop_maker_ml_prefetch.py");
-    g_setup_script    = extract_embedded(ml_setup_py,     ml_setup_py_size,
+    g_setup_script    = extract_embedded(ml_setup_py,          ml_setup_py_size,
                                           "pop_maker_ml_setup.py");
+    g_beat_detect_script = extract_embedded(beat_detect_py,   beat_detect_py_size,
+                                          "pop_maker_beat_detect.py");
+    g_envelope_script    = extract_embedded(envelope_extract_py, envelope_extract_py_size,
+                                          "pop_maker_envelope_extract.py");
 
     glfwSetErrorCallback(glfw_error_callback);
     if (!glfwInit()) return 1;
@@ -162,6 +170,7 @@ int main(int, char**) {
     GLFWwindow* window = glfwCreateWindow(1280, 800, "Pop Maker Studio", nullptr, nullptr);
     if (!window) { glfwTerminate(); return 1; }
 
+    glfwSetWindowSizeLimits(window, 1000, 640, GLFW_DONT_CARE, GLFW_DONT_CARE);
     glfwMakeContextCurrent(window);
     glfwSwapInterval(1);
 

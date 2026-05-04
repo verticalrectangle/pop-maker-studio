@@ -326,33 +326,181 @@ static bool write_filter_script(
 
             bool has_karaoke = !clip_words.empty();
 
-            // Base layer: dim color for the full clip duration
-            char dim_col[32];
-            if (cl.sub_color_override)
-                snprintf(dim_col, sizeof(dim_col), "0x%02x%02x%02x%02x",
-                    (int)(cl.sub_color[0]*255), (int)(cl.sub_color[1]*255),
-                    (int)(cl.sub_color[2]*255),
-                    has_karaoke ? (int)(cl.sub_color[3]*255*0.4f) : (int)(cl.sub_color[3]*255));
-            else
-                strcpy(dim_col, has_karaoke ? "white@0.4" : "white");
+            // Kinetic typography: per-style x/y/alpha modifiers
+            // `lt` = clip-relative time = t - clip_t0 (where clip_t0 = cl.start - sub_offset)
+            float clip_t0 = fmaxf(0.f, cl.start - sub_offset);
+            float clip_dur = fmaxf(0.01f, cl.end - cl.start);
+            float fade_in  = fminf(0.25f, clip_dur * 0.3f);
+            float fade_out = fminf(0.25f, clip_dur * 0.2f);
+
+            // lt = clip-relative time (0 at clip start)
+            char lt_def[64];
+            snprintf(lt_def, sizeof(lt_def), "(t-%.3f)", (double)clip_t0);
+            std::string lt = lt_def;
+
+            // Alpha modifier (multiplied into fontcolor alpha)
+            std::string alpha_mod = "1";
+            // X offset added to base x=(w-text_w)/2
+            std::string x_off = "0";
+            // Y offset added to base y
+            std::string y_off = "0";
+            // Extra border/box prefix filter chain inserts (appended after vcur before drawtext)
+            std::string box_prefix;
+
+            switch (state.style) {
+                case AnimStyle::Fade: {
+                    char buf[256];
+                    snprintf(buf, sizeof(buf),
+                        "if(lt(%s,%.3f)"
+                        ",clip(%s/%.3f\\,0\\,1)"
+                        ",if(gt(%s,%.3f)"
+                        ",clip((%.3f-%s)/%.3f\\,0\\,1)"
+                        ",1))",
+                        lt.c_str(), (double)fade_in,
+                        lt.c_str(), (double)fade_in,
+                        lt.c_str(), (double)(clip_dur - fade_out),
+                        (double)clip_dur, lt.c_str(), (double)fade_out);
+                    alpha_mod = buf;
+                    break;
+                }
+                case AnimStyle::Glitch: {
+                    // Random-looking horizontal jitter using sin at high frequency, fades out
+                    char buf[128];
+                    snprintf(buf, sizeof(buf),
+                        "(sin(%s*97+sin(%s*53)*31)*12*clip(1-%s/0.5\\,0\\,1))",
+                        lt.c_str(), lt.c_str(), lt.c_str());
+                    x_off = buf;
+                    break;
+                }
+                case AnimStyle::Typewriter: {
+                    // Fade-in each character by revealing characters left-to-right
+                    // Approximate with fontsize scaling alpha ramp (true char reveal needs per-char)
+                    char buf[256];
+                    snprintf(buf, sizeof(buf),
+                        "if(lt(%s,%.3f),clip(%s/%.3f\\,0\\,1),1)",
+                        lt.c_str(), (double)fade_in,
+                        lt.c_str(), (double)fade_in);
+                    alpha_mod = buf;
+                    // Also use a slight scale-up of font size via y squeeze
+                    char yb[128];
+                    snprintf(yb, sizeof(yb),
+                        "(if(lt(%s,%.3f),(%.3f-%s)/%.3f*(-8)\\,0))",
+                        lt.c_str(), (double)fade_in,
+                        (double)fade_in, lt.c_str(), (double)fade_in);
+                    y_off = yb;
+                    break;
+                }
+                case AnimStyle::Bounce: {
+                    // Spring enter from above, settles at 0
+                    char buf[256];
+                    snprintf(buf, sizeof(buf),
+                        "(if(lt(%s,%.3f)"
+                        ",sin(clip(%s/%.3f\\,0\\,1)*3.14159)*(-60)*exp(-clip(%s/%.3f\\,0\\,1)*4)"
+                        ",0))",
+                        lt.c_str(), (double)fminf(0.6f, clip_dur),
+                        lt.c_str(), (double)fminf(0.6f, clip_dur),
+                        lt.c_str(), (double)fminf(0.6f, clip_dur));
+                    y_off = buf;
+                    break;
+                }
+                case AnimStyle::Slide: {
+                    // Slide in from left, slide out to right
+                    char buf[256];
+                    snprintf(buf, sizeof(buf),
+                        "(if(lt(%s,%.3f)"
+                        ",(clip(%s/%.3f\\,0\\,1)-1)*w*0.6"
+                        ",if(gt(%s,%.3f)"
+                        ",(clip((%s-%.3f)/%.3f\\,0\\,1))*w*0.6"
+                        ",0)))",
+                        lt.c_str(), (double)fade_in,
+                        lt.c_str(), (double)fade_in,
+                        lt.c_str(), (double)(clip_dur - fade_out),
+                        lt.c_str(), (double)(clip_dur - fade_out), (double)fade_out);
+                    x_off = buf;
+                    break;
+                }
+                case AnimStyle::Stack: {
+                    // Slide in from bottom
+                    char buf[128];
+                    snprintf(buf, sizeof(buf),
+                        "(if(lt(%s,%.3f),(1-clip(%s/%.3f\\,0\\,1))*80,0))",
+                        lt.c_str(), (double)fade_in,
+                        lt.c_str(), (double)fade_in);
+                    y_off = buf;
+                    break;
+                }
+                case AnimStyle::Block: {
+                    // Draw a filled box behind text (handled as drawbox prefix)
+                    char buf[512];
+                    float en0 = clip_t0, en1 = fmaxf(0.f, cl.end - sub_offset);
+                    snprintf(buf, sizeof(buf),
+                        "drawbox=x=(w-text_w)/2-8:y=%s-4:w=text_w+16:h=text_h+8:"
+                        "color=white:t=fill:enable='between(t,%.3f,%.3f)'",
+                        y_e.c_str(), (double)en0, (double)en1);
+                    // We'll insert this as a separate pass before the drawtext
+                    box_prefix = buf;
+                    break;
+                }
+                default: break;
+            }
+
+            // Compose alpha into fontcolor if needed
+            char dim_col[64];
+            if (alpha_mod == "1") {
+                if (cl.sub_color_override)
+                    snprintf(dim_col, sizeof(dim_col), "0x%02x%02x%02x%02x",
+                        (int)(cl.sub_color[0]*255), (int)(cl.sub_color[1]*255),
+                        (int)(cl.sub_color[2]*255),
+                        has_karaoke ? (int)(cl.sub_color[3]*255*0.4f) : (int)(cl.sub_color[3]*255));
+                else
+                    strcpy(dim_col, has_karaoke ? "white@0.4" : "white");
+            } else {
+                // Use alpha expression — embed as fontcolor=white@<expr>
+                // (ffmpeg drawtext alpha= option, multiplied into fontcolor alpha)
+                if (cl.sub_color_override)
+                    snprintf(dim_col, sizeof(dim_col), "0x%02x%02x%02x%02x",
+                        (int)(cl.sub_color[0]*255), (int)(cl.sub_color[1]*255),
+                        (int)(cl.sub_color[2]*255),
+                        has_karaoke ? (int)(cl.sub_color[3]*255*0.4f) : (int)(cl.sub_color[3]*255));
+                else
+                    strcpy(dim_col, has_karaoke ? "white@0.4" : "white");
+            }
+
+            // Build final x/y expressions combining base position and anim offsets
+            std::string x_final = "(w-text_w)/2";
+            if (x_off != "0") x_final = "(" + x_final + "+" + x_off + ")";
+            std::string y_final = y_e;
+            if (y_off != "0") y_final = "(" + y_final + "+" + y_off + ")";
+
+            // Block style: insert drawbox pass before drawtext
+            if (!box_prefix.empty()) {
+                std::string vnext = "[vtxt" + std::to_string(txt_idx++) + "]";
+                line() << vcur << box_prefix << vnext;
+                vcur = vnext;
+            }
 
             {
                 std::string vnext = "[vtxt" + std::to_string(txt_idx++) + "]";
-                line() << vcur
-                       << "drawtext="
-                       << "fontfile=" << esc(g_font_path) << ":"
-                       << "text="     << esc(cl.text)     << ":"
-                       << "fontsize=" << font_sz           << ":"
-                       << "fontcolor=" << dim_col          << ":"
-                       << "borderw=3:bordercolor=black@0.7:"
-                       << "shadowx=2:shadowy=2:shadowcolor=black@0.5:"
-                       << "x=(w-text_w)/2:"
-                       << "y=" << y_e                     << ":"
-                       << "enable='between(t,"
-                       << std::fixed << std::setprecision(3)
-                       << fmaxf(0.f, cl.start - sub_offset) << ","
-                       << fmaxf(0.f, cl.end   - sub_offset) << ")'"
-                       << vnext;
+                auto& ln = line();
+                ln << vcur
+                   << "drawtext="
+                   << "fontfile=" << esc(g_font_path) << ":"
+                   << "text="     << esc(cl.text)     << ":"
+                   << "fontsize=" << font_sz           << ":"
+                   << "fontcolor=" << dim_col          << ":"
+                   << "borderw=3:bordercolor=black@0.7:"
+                   << "shadowx=2:shadowy=2:shadowcolor=black@0.5:"
+                   << "x=" << x_final                 << ":"
+                   << "y=" << y_final                 << ":";
+                if (alpha_mod != "1")
+                    ln << "alpha=" << alpha_mod        << ":";
+                if (state.style == AnimStyle::Block)
+                    ln << "fontcolor=black:borderw=0:shadowx=0:shadowy=0:";
+                ln << "enable='between(t,"
+                   << std::fixed << std::setprecision(3)
+                   << clip_t0 << ","
+                   << fmaxf(0.f, cl.end - sub_offset) << ")'"
+                   << vnext;
                 vcur = vnext;
             }
 

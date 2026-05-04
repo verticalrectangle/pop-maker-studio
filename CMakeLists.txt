@@ -38,6 +38,7 @@ set(SOURCES
     src/filepicker.cpp
     src/video.cpp
     src/proxy.cpp
+    src/waveform.cpp
     src/blender_export.cpp
     src/ui/screen_splash.cpp
     src/ui/screen_setup.cpp
@@ -135,6 +136,34 @@ add_custom_command(
 )
 add_custom_target(embed_setup DEPENDS ${CMAKE_BINARY_DIR}/ml_setup_embedded.h)
 add_dependencies(pop-maker-studio embed_setup)
+
+# Embed beat_detect.py
+add_custom_command(
+    OUTPUT ${CMAKE_BINARY_DIR}/beat_detect_embedded.h
+    COMMAND ${CMAKE_COMMAND}
+        -DINPUT=${CMAKE_SOURCE_DIR}/beat_detect.py
+        -DVAR=beat_detect_py
+        -DOUTPUT=${CMAKE_BINARY_DIR}/beat_detect_embedded.h
+        -P ${CMAKE_SOURCE_DIR}/cmake/EmbedFile.cmake
+    DEPENDS ${CMAKE_SOURCE_DIR}/beat_detect.py
+    COMMENT "Embedding beat_detect.py"
+)
+add_custom_target(embed_beat_detect DEPENDS ${CMAKE_BINARY_DIR}/beat_detect_embedded.h)
+add_dependencies(pop-maker-studio embed_beat_detect)
+
+# Embed envelope_extract.py
+add_custom_command(
+    OUTPUT ${CMAKE_BINARY_DIR}/envelope_extract_embedded.h
+    COMMAND ${CMAKE_COMMAND}
+        -DINPUT=${CMAKE_SOURCE_DIR}/envelope_extract.py
+        -DVAR=envelope_extract_py
+        -DOUTPUT=${CMAKE_BINARY_DIR}/envelope_extract_embedded.h
+        -P ${CMAKE_SOURCE_DIR}/cmake/EmbedFile.cmake
+    DEPENDS ${CMAKE_SOURCE_DIR}/envelope_extract.py
+    COMMENT "Embedding envelope_extract.py"
+)
+add_custom_target(embed_envelope DEPENDS ${CMAKE_BINARY_DIR}/envelope_extract_embedded.h)
+add_dependencies(pop-maker-studio embed_envelope)
 
 # ── Embed Python 3.11 standalone runtime (multiplatform) ─────────────────────
 set(PYTHON_STANDALONE_VERSION "3.11.15")

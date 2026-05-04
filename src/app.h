@@ -151,6 +151,18 @@ struct AppState {
     std::string segments_json_path; // <stem>_segments.json
     std::vector<WordEntry> words_cache; // flat word list loaded from words_json_path
 
+    // beat sync
+    std::vector<float> beats;           // beat timestamps in seconds
+    float              beat_bpm  = 0.f;
+    std::string        beats_json_path;
+    bool               beats_running = false;
+
+    // amplitude envelope
+    std::vector<float> amplitude_envelope; // normalized RMS, one value per envelope frame
+    float              envelope_fps  = 0.f;
+    std::string        envelope_json_path;
+    bool               envelope_running = false;
+
     // pipeline
     PipelineStatus pipeline;
 
@@ -169,8 +181,9 @@ struct AppState {
     float play_start_pos = 0.f;
 
     // timeline view
-    float tl_scroll = 0.f;
-    float tl_zoom   = 80.f;
+    float tl_scroll   = 0.f;
+    float tl_zoom     = 80.f;
+    float tl_v_scroll = 0.f;   // vertical scroll offset in the track area (pixels)
 
     // style
     AnimStyle    style       = AnimStyle::Block;

@@ -109,6 +109,7 @@ void app_frame(AppState& state) {
     ImGui::SetNextWindowPos({0, 0});
     ImGui::SetNextWindowSize(io.DisplaySize);
     ImGui::SetNextWindowBgAlpha(1.f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {0.f, 0.f});
     ImGui::Begin("##root", nullptr,
         ImGuiWindowFlags_NoTitleBar |
         ImGuiWindowFlags_NoResize   |
@@ -118,6 +119,7 @@ void app_frame(AppState& state) {
         ImGuiWindowFlags_NoScrollWithMouse |
         ImGuiWindowFlags_MenuBar
     );
+    ImGui::PopStyleVar();  // WindowPadding
 
     // Update playhead BEFORE rendering so the video frame shown this cycle
     // matches the audio position this cycle, not last cycle's.
