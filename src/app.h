@@ -37,6 +37,12 @@ static const int MAX_VIDEO_TRACKS = 8;
 // Each clip carries its own type so any track can hold mixed content.
 enum class ClipType { Text, Lyrics, Subtitle, Video, Audio };
 
+struct WordEntry {
+    std::string text;
+    float start = 0.f;
+    float end   = 0.f;
+};
+
 struct Clip {
     ClipType    clip_type = ClipType::Text;  // Text/Video/Audio — independent of track type
     float       start = 0.f;
@@ -141,6 +147,7 @@ struct AppState {
     std::string vocals_path;
     std::string words_json_path;    // <stem>_words.json
     std::string segments_json_path; // <stem>_segments.json
+    std::vector<WordEntry> words_cache; // flat word list loaded from words_json_path
 
     // pipeline
     PipelineStatus pipeline;

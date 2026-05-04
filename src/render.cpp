@@ -198,15 +198,22 @@ static std::string prop_expr(const Clip& cl, const std::string& prop,
     return expr;
 }
 
-// ── Filter-complex script writer ──────────────────────────────────────────────
+// ── Unified render layer ──────────────────────────────────────────────────────
+// One entry per clip that contributes to the visual output, ordered
+// bottom-to-top (index 0 = background, last = frontmost).
+struct RLayer {
+    enum Kind { Vid, Txt } kind;
+    int track_idx, clip_idx;
+    int   in_idx  = -1;   // Vid: ffmpeg input index
+    float vid_ss  = 0.f;  // Vid: -ss seek of that input (for enable expr)
+};
 
-// Represents one video input to ffmpeg (path + seek boundaries).
-struct VidSpec { std::string path; float ss=0.f; float to=-1.f; int in_idx=-1; };
+// ── Filter-complex script writer ──────────────────────────────────────────────
 
 static bool write_filter_script(
     const AppState& state,
     const std::string& path,
-    const std::vector<VidSpec>& vid_specs,  // ordered video inputs
+    const std::vector<RLayer>& layers,
     int aud_in,
     int out_w, int out_h,
     float sub_offset,
@@ -221,127 +228,163 @@ static bool write_filter_script(
         return fc;
     };
 
-    // ── Base (first video or black) ───────────────────────────────────────────
-    std::string vcur;
-    if (!vid_specs.empty()) {
-        const VidSpec& v0 = vid_specs[0];
-        line() << "[" << v0.in_idx << ":v]"
-               << "scale=" << out_w << ":" << out_h
-               << ":force_original_aspect_ratio=decrease,"
-               << "pad=" << out_w << ":" << out_h
-               << ":(ow-iw)/2:(oh-ih)/2:color=black,"
-               << "setsar=1,format=yuv420p"
-               << "[vbase]";
-    } else {
-        line() << "color=c=black:s=" << out_w << "x" << out_h
-               << ":r=30,format=yuv420p[vbase]";
-    }
-    vcur = "[vbase]";
+    int font_sz  = (out_h >= 1500) ? 96 : 72;
+    int vid_idx  = 0;   // counter for unique filter labels
+    int txt_idx  = 0;
+    bool base_done = false;  // true once first video overlay is composited
 
-    // ── Overlay extra video layers (indices 1+) ───────────────────────────────
-    for (int vi = 1; vi < (int)vid_specs.size(); ++vi) {
-        const VidSpec& vs   = vid_specs[vi];
-        // Find matching video track in state (by path)
-        const Clip* cl_ptr = nullptr;
-        for (auto& tr : state.tracks) {
-            for (auto& cl : tr.clips)
-                if (cl.clip_type == ClipType::Video && cl.text == vs.path)
-                    { cl_ptr = &cl; break; }
-            if (cl_ptr) break;
+    // ── Black canvas base ─────────────────────────────────────────────────────
+    line() << "color=c=black:s=" << out_w << "x" << out_h << ":r=30[vbase]";
+    std::string vcur = "[vbase]";
+
+    // ── Process all layers bottom-to-top ─────────────────────────────────────
+    for (const RLayer& rl : layers) {
+        const Track& tr = state.tracks[rl.track_idx];
+        const Clip&  cl = tr.clips[rl.clip_idx];
+        if (!tr.visible) continue;
+
+        if (rl.kind == RLayer::Vid) {
+            std::string scaled_tag = "[vsc"  + std::to_string(vid_idx) + "]";
+            std::string layer_in   = scaled_tag;
+
+            if (!base_done) {
+                // Bottom-most video: scale+pad to fill canvas (letterbox).
+                line() << "[" << rl.in_idx << ":v]"
+                       << "scale=" << out_w << ":" << out_h
+                       << ":force_original_aspect_ratio=decrease,"
+                       << "pad=" << out_w << ":" << out_h
+                       << ":(ow-iw)/2:(oh-ih)/2:color=black,"
+                       << "setsar=1,format=rgba"
+                       << scaled_tag;
+                base_done = true;
+            } else {
+                // Upper video layers: scale to user-specified size.
+                std::string sw = prop_expr(cl, "scale_x", (float)out_w, cl.scale_x);
+                std::string sh = prop_expr(cl, "scale_y", (float)out_h, cl.scale_y);
+                line() << "[" << rl.in_idx << ":v]"
+                       << "scale=" << sw << ":" << sh
+                       << ",format=rgba"
+                       << scaled_tag;
+            }
+
+            // Optional opacity
+            bool has_opa = (cl.ktracks.count("opacity") > 0 ||
+                            fabsf(cl.opacity - 1.f) > 0.01f);
+            if (has_opa) {
+                std::string opa_tag = "[vopa" + std::to_string(vid_idx) + "]";
+                line() << scaled_tag
+                       << "colorchannelmixer=aa="
+                       << prop_expr(cl, "opacity", 1.f, cl.opacity)
+                       << opa_tag;
+                layer_in = opa_tag;
+            }
+
+            // Position (base fills canvas at 0,0; upper layers use pos_x/pos_y)
+            std::string x_e = base_done && vid_idx > 0
+                ? "(" + prop_expr(cl, "pos_x", (float)out_w, cl.pos_x) + "-iw/2)"
+                : "0";
+            std::string y_e = base_done && vid_idx > 0
+                ? "(" + prop_expr(cl, "pos_y", (float)out_h, cl.pos_y) + "-ih/2)"
+                : "0";
+
+            // Enable window
+            float en0 = fmaxf(0.f, cl.start - rl.vid_ss);
+            float en1 = fmaxf(0.f, cl.end   - rl.vid_ss);
+
+            std::string vnext = "[vov" + std::to_string(vid_idx) + "]";
+            line() << vcur << layer_in
+                   << "overlay=x=" << x_e << ":y=" << y_e
+                   << ":format=auto"
+                   << ":enable='between(t,"
+                   << std::fixed << std::setprecision(3)
+                   << en0 << "," << en1 << ")'"
+                   << vnext;
+            vcur = vnext;
+            ++vid_idx;
+
+        } else { // Txt
+            if (cl.text.empty()) continue;
+
+            std::string y_e;
+            if      (cl.sub_pos == 1) y_e = "(h-text_h)/2";
+            else if (cl.sub_pos == 2) y_e = "h*0.10";
+            else if (cl.sub_pos == 3) {
+                char yb[64];
+                snprintf(yb, sizeof(yb), "h*%.4f-text_h/2", (double)cl.sub_pos_y);
+                y_e = yb;
+            } else {
+                y_e = "h*0.88-text_h";
+            }
+
+            // Collect words from cache that belong to this clip
+            std::vector<const WordEntry*> clip_words;
+            for (auto& we : state.words_cache)
+                if (we.end > cl.start && we.start < cl.end)
+                    clip_words.push_back(&we);
+
+            bool has_karaoke = !clip_words.empty();
+
+            // Base layer: dim color for the full clip duration
+            char dim_col[32];
+            if (cl.sub_color_override)
+                snprintf(dim_col, sizeof(dim_col), "0x%02x%02x%02x%02x",
+                    (int)(cl.sub_color[0]*255), (int)(cl.sub_color[1]*255),
+                    (int)(cl.sub_color[2]*255),
+                    has_karaoke ? (int)(cl.sub_color[3]*255*0.4f) : (int)(cl.sub_color[3]*255));
+            else
+                strcpy(dim_col, has_karaoke ? "white@0.4" : "white");
+
+            {
+                std::string vnext = "[vtxt" + std::to_string(txt_idx++) + "]";
+                line() << vcur
+                       << "drawtext="
+                       << "fontfile=" << esc(g_font_path) << ":"
+                       << "text="     << esc(cl.text)     << ":"
+                       << "fontsize=" << font_sz           << ":"
+                       << "fontcolor=" << dim_col          << ":"
+                       << "borderw=3:bordercolor=black@0.7:"
+                       << "shadowx=2:shadowy=2:shadowcolor=black@0.5:"
+                       << "x=(w-text_w)/2:"
+                       << "y=" << y_e                     << ":"
+                       << "enable='between(t,"
+                       << std::fixed << std::setprecision(3)
+                       << fmaxf(0.f, cl.start - sub_offset) << ","
+                       << fmaxf(0.f, cl.end   - sub_offset) << ")'"
+                       << vnext;
+                vcur = vnext;
+            }
+
+            // Karaoke overlays: one bright drawtext per word timed to its exact window
+            if (has_karaoke) {
+                char hi_col[32];
+                if (cl.sub_color_override)
+                    snprintf(hi_col, sizeof(hi_col), "0x%02x%02x%02x%02x",
+                        (int)(cl.sub_color[0]*255), (int)(cl.sub_color[1]*255),
+                        (int)(cl.sub_color[2]*255), (int)(cl.sub_color[3]*255));
+                else
+                    strcpy(hi_col, "white");
+
+                for (auto* we : clip_words) {
+                    std::string vnext = "[vtxt" + std::to_string(txt_idx++) + "]";
+                    line() << vcur
+                           << "drawtext="
+                           << "fontfile=" << esc(g_font_path) << ":"
+                           << "text="     << esc(we->text)    << ":"
+                           << "fontsize=" << font_sz           << ":"
+                           << "fontcolor=" << hi_col           << ":"
+                           << "borderw=3:bordercolor=black@0.9:"
+                           << "shadowx=2:shadowy=2:shadowcolor=black@0.7:"
+                           << "x=(w-text_w)/2:"
+                           << "y=" << y_e                     << ":"
+                           << "enable='between(t,"
+                           << std::fixed << std::setprecision(3)
+                           << fmaxf(0.f, we->start - sub_offset) << ","
+                           << fmaxf(0.f, we->end   - sub_offset) << ")'"
+                           << vnext;
+                    vcur = vnext;
+                }
+            }
         }
-        if (!cl_ptr) continue;
-        const Clip& cl = *cl_ptr;
-
-        // Scale expressions (pixels)
-        std::string sw_expr = prop_expr(cl, "scale_x", (float)out_w, cl.scale_x);
-        std::string sh_expr = prop_expr(cl, "scale_y", (float)out_h, cl.scale_y);
-
-        std::string layer_tag = "[vlayer" + std::to_string(vi) + "]";
-        std::string layer_rgba = "[vlr" + std::to_string(vi) + "]";
-
-        // Scale to desired size
-        line() << "[" << vs.in_idx << ":v]"
-               << "scale=" << sw_expr << ":" << sh_expr
-               << ",format=rgba"
-               << layer_tag;
-
-        // Opacity via colorchannelmixer (only if not fully opaque / keyframed)
-        bool has_opa = (cl_ptr->ktracks.count("opacity") > 0 ||
-                        fabsf(cl.opacity - 1.f) > 0.01f);
-        std::string layer_in = layer_tag;
-        if (has_opa) {
-            std::string opa_expr = prop_expr(cl, "opacity", 1.f, cl.opacity);
-            std::string opa_tag  = "[vlopa" + std::to_string(vi) + "]";
-            line() << layer_tag
-                   << "colorchannelmixer=aa=" << opa_expr
-                   << opa_tag;
-            layer_in = opa_tag;
-        }
-
-        // Overlay position expressions (pixels from top-left corner of canvas,
-        // centred on pos_x * out_w, pos_y * out_h).
-        std::string x_expr = "(" + prop_expr(cl, "pos_x", (float)out_w, cl.pos_x) + "-iw/2)";
-        std::string y_expr = "(" + prop_expr(cl, "pos_y", (float)out_h, cl.pos_y) + "-ih/2)";
-
-        // Enable expression — only show while the clip is active.
-        float en_start = fmaxf(0.f, cl.start - vs.ss);
-        float en_end   = fmaxf(0.f, cl.end   - vs.ss);
-
-        std::string vnext = "[vov" + std::to_string(vi) + "]";
-        line() << vcur << layer_in
-               << "overlay=x=" << x_expr << ":y=" << y_expr
-               << ":format=auto"
-               << ":enable='between(t,"
-               << std::fixed << std::setprecision(3) << en_start << "," << en_end << ")'"
-               << vnext;
-        vcur = vnext;
-    }
-
-    // ── Subtitle drawtext chain ───────────────────────────────────────────────
-    int font_sz = (out_h >= 1500) ? 96 : 72;
-    int si = 0;
-    for (auto& [ti, ci] : state.subtitle_clip_indices()) {
-        const Track& tr = state.tracks[ti];
-        const Clip&  cl = tr.clips[ci];
-        if (!tr.visible || cl.text.empty()) continue;
-
-        // Y expression
-        std::string y_e;
-        if      (cl.sub_pos == 1) y_e = "(h-text_h)/2";
-        else if (cl.sub_pos == 2) y_e = "h*0.10";
-        else if (cl.sub_pos == 3) {
-            char yb[64]; snprintf(yb, sizeof(yb), "h*%.4f-text_h/2", (double)cl.sub_pos_y);
-            y_e = yb;
-        } else {
-            y_e = "h*0.88-text_h";
-        }
-
-        // Color
-        char col[32];
-        if (cl.sub_color_override)
-            snprintf(col, sizeof(col), "0x%02x%02x%02x%02x",
-                (int)(cl.sub_color[0]*255), (int)(cl.sub_color[1]*255),
-                (int)(cl.sub_color[2]*255), (int)(cl.sub_color[3]*255));
-        else
-            strcpy(col, "white");
-
-        std::string vnext = "[vsub" + std::to_string(si++) + "]";
-        line() << vcur
-               << "drawtext="
-               << "fontfile=" << esc(g_font_path) << ":"
-               << "text="     << esc(cl.text)     << ":"
-               << "fontsize=" << font_sz           << ":"
-               << "fontcolor=" << col              << ":"
-               << "borderw=3:bordercolor=black@0.7:"
-               << "shadowx=2:shadowy=2:shadowcolor=black@0.5:"
-               << "x=(w-text_w)/2:"
-               << "y=" << y_e                     << ":"
-               << "enable='between(t,"
-               << std::fixed << std::setprecision(3)
-               << fmaxf(0.f, cl.start - sub_offset) << ","
-               << fmaxf(0.f, cl.end   - sub_offset) << ")'"
-               << vnext;
-        vcur = vnext;
     }
     vout_label = vcur;
 
@@ -380,70 +423,88 @@ static std::vector<std::string> build_args(AppState& state) {
         default: break;
     }
 
-    // Collect all video track clips as separate inputs (ordered = layer order).
-    struct InSpec { std::string path; float ss=0.f; float to=-1.f; };
-    std::vector<VidSpec> vid_specs;
-    InSpec audio_in;
-
-    // Collect video clips across all tracks (in track order = z-order),
-    // deduplicated by path so the same file on two tracks uses one ffmpeg input.
-    for (auto& tr : state.tracks) {
-        for (auto& cl : tr.clips) {
-            if (cl.clip_type != ClipType::Video) continue;
-            if (cl.text.empty() || !fs::exists(cl.text)) continue;
-            // Dedup: skip if path already registered.
-            bool dup = false;
-            for (auto& v : vid_specs) if (v.path == cl.text) { dup=true; break; }
-            if (dup) continue;
-            VidSpec vs; vs.path = cl.text; vs.ss = cl.start; vs.to = cl.end;
-            vid_specs.push_back(vs);
-        }
-    }
-
+    // ── Collect unified layer list (bottom-to-top = background first) ────────
+    struct VidInput { std::string path; float ss=0.f, to=-1.f; int in_idx=-1; };
+    struct AudioIn  { std::string path; float ss=0.f, to=-1.f; };
+    std::vector<VidInput> vid_inputs;
+    std::vector<RLayer>   layers;
+    AudioIn audio_in;
     audio_in.path = state.audio_path;
-    for (auto& tr : state.tracks) {
-        bool found = false;
-        for (auto& cl : tr.clips) {
-            if (cl.clip_type != ClipType::Audio) continue;
-            if (cl.text.empty() || !fs::exists(cl.text)) continue;
-            audio_in.path = cl.text;
-            audio_in.ss   = cl.start;
-            audio_in.to   = cl.end;
-            found = true; break;
+
+    // Helper: find or register a video file; returns array index into vid_inputs.
+    auto get_vid_input = [&](const std::string& p, float ss, float to) -> int {
+        for (int i = 0; i < (int)vid_inputs.size(); ++i)
+            if (vid_inputs[i].path == p) return i;
+        VidInput vi; vi.path = p; vi.ss = ss; vi.to = to;
+        vid_inputs.push_back(vi);
+        return (int)vid_inputs.size() - 1;
+    };
+
+    for (int ti = (int)state.tracks.size() - 1; ti >= 0; --ti) {
+        for (int ci = 0; ci < (int)state.tracks[ti].clips.size(); ++ci) {
+            const Clip& cl = state.tracks[ti].clips[ci];
+            if (cl.clip_type == ClipType::Video) {
+                if (cl.text.empty() || !fs::exists(cl.text)) continue;
+                int arr_idx = get_vid_input(cl.text, cl.start, cl.end);
+                RLayer rl; rl.kind = RLayer::Vid;
+                rl.track_idx = ti; rl.clip_idx = ci;
+                rl.in_idx    = arr_idx;  // resolved to real ffmpeg idx below
+                layers.push_back(rl);
+            } else if (cl.clip_type == ClipType::Text   ||
+                       cl.clip_type == ClipType::Lyrics ||
+                       cl.clip_type == ClipType::Subtitle) {
+                RLayer rl; rl.kind = RLayer::Txt;
+                rl.track_idx = ti; rl.clip_idx = ci;
+                layers.push_back(rl);
+            } else if (cl.clip_type == ClipType::Audio) {
+                if (cl.text.empty() || !fs::exists(cl.text)) continue;
+                audio_in.path = cl.text;
+                audio_in.ss   = cl.start;
+                audio_in.to   = cl.end;
+            }
         }
-        if (found) break;
     }
+
     if (!audio_in.path.empty() && !fs::exists(audio_in.path)) audio_in.path.clear();
+    if (layers.empty() && audio_in.path.empty()) return {};
 
-    if (vid_specs.empty() && audio_in.path.empty()) return {};
-
-    // Assign input indices: video tracks first, then audio.
+    // Assign real ffmpeg input indices: video files first, then audio.
     int n_in = 0;
-    for (auto& vs : vid_specs) vs.in_idx = n_in++;
+    for (auto& vi : vid_inputs) vi.in_idx = n_in++;
     int aud_in = -1;
-    if (!audio_in.path.empty()) { aud_in = n_in++; }
+    if (!audio_in.path.empty()) aud_in = n_in++;
 
-    // Build flat ffmpeg input list (same order).
+    // Resolve layer in_idx from vid_inputs array index → actual ffmpeg index,
+    // and fill vid_ss for enable expression offset.
+    for (auto& rl : layers) {
+        if (rl.kind != RLayer::Vid) continue;
+        int arr = rl.in_idx;
+        rl.vid_ss = vid_inputs[arr].ss;
+        rl.in_idx = vid_inputs[arr].in_idx;
+    }
+
+    // Flat ffmpeg input list: all video files, then audio.
+    struct InSpec { std::string path; float ss=0.f, to=-1.f; };
     std::vector<InSpec> inputs;
-    for (auto& vs : vid_specs) inputs.push_back({vs.path, vs.ss, vs.to});
-    if (aud_in >= 0) inputs.push_back(audio_in);
+    for (auto& vi : vid_inputs) inputs.push_back({vi.path, vi.ss, vi.to});
+    if (aud_in >= 0) inputs.push_back({audio_in.path, audio_in.ss, audio_in.to});
 
-    // Subtitle offset = start of first video clip (or audio clip).
-    float sub_offset = (!vid_specs.empty() && vid_specs[0].ss > 0.001f)
-                     ? vid_specs[0].ss
+    // sub_offset: project time at which the rendered video begins
+    // (equals the -ss of the base video input, or audio start).
+    float sub_offset = (!vid_inputs.empty() && vid_inputs[0].ss > 0.001f)
+                     ? vid_inputs[0].ss
                      : (audio_in.ss > 0.001f ? audio_in.ss : 0.f);
 
-    // Output duration from primary video/audio clip.
     float out_duration = state.duration;
-    if (!vid_specs.empty() && vid_specs[0].to > 0.001f)
-        out_duration = vid_specs[0].to - vid_specs[0].ss;
+    if (!vid_inputs.empty() && vid_inputs[0].to > 0.001f)
+        out_duration = vid_inputs[0].to - vid_inputs[0].ss;
     else if (audio_in.to > 0.001f)
         out_duration = audio_in.to - audio_in.ss;
 
     // Write filter script
     std::string script = "/tmp/pms_filter.txt";
     std::string vout, aout;
-    if (!write_filter_script(state, script, vid_specs, aud_in,
+    if (!write_filter_script(state, script, layers, aud_in,
                              out_w, out_h, sub_offset, vout, aout))
         return {};
 

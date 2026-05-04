@@ -277,6 +277,25 @@ static std::vector<Clip> group_words(
     return out;
 }
 
+// Load the flat word list from words_json_path into AppState::words_cache.
+static void load_words_cache(AppState& state) {
+    state.words_cache.clear();
+    if (state.words_json_path.empty() || !fs::exists(state.words_json_path)) return;
+    std::ifstream f(state.words_json_path);
+    if (!f) return;
+    try {
+        auto j = nlohmann::json::parse(f);
+        for (auto& w : j) {
+            if (!w.contains("word") || !w.contains("start") || !w.contains("end")) continue;
+            WordEntry e;
+            e.text  = w["word"].get<std::string>();
+            e.start = w["start"].get<float>();
+            e.end   = w["end"].get<float>();
+            state.words_cache.push_back(std::move(e));
+        }
+    } catch (...) {}
+}
+
 // Load word JSON and apply current grouping mode.
 // Removes all Lyrics clips with matching source_id from ALL tracks, then
 // places fresh grouped clips on the "Lyrics" track.
@@ -546,6 +565,7 @@ static void import_file(AppState& state, const std::string& path) {
         state.segments_json_path = (outdir / (fp.stem().string() + "_segments.json")).string();
         state.vocals_path        = (outdir / "vocals.wav").string();
         state.out_wav            = state.vocals_path;
+        load_words_cache(state);
         apply_subtitle_mode(state);
     }
 
@@ -757,23 +777,60 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                 slot_y = p.y + h - 24.f - (text_rendered + 1) * slot_h;
 
             ImGui::PushFont(g_font_black);
-            ImGui::SetWindowFontScale(1.8f);
+            float fsz = ImGui::GetFontSize() * 1.8f;
             ImVec2 tsz = ImGui::CalcTextSize(show->text.c_str());
             float  tx  = p.x + (w - tsz.x) * 0.5f;
-            dl->AddText(ImGui::GetFont(), ImGui::GetFontSize() * 1.8f,
-                {tx+2.f, slot_y+2.f}, IM_COL32(0,0,0,180), show->text.c_str());
 
-            ImU32 tcol;
-            if (show->sub_color_override) {
-                float a = (active_ci >= 0) ? show->sub_color[3] : show->sub_color[3] * 0.5f;
-                tcol = IM_COL32((int)(show->sub_color[0]*255), (int)(show->sub_color[1]*255),
-                                (int)(show->sub_color[2]*255), (int)(a*255));
-            } else {
-                tcol = (active_ci >= 0) ? to_u32(Col::fg) : to_u32(Col::muted);
+            // Shadow pass
+            dl->AddText(ImGui::GetFont(), fsz, {tx+2.f, slot_y+2.f}, IM_COL32(0,0,0,180), show->text.c_str());
+
+            // Karaoke: per-word coloring when words_cache is available and clip is active.
+            // Falls back to solid color for selected-but-not-playing previews.
+            bool did_karaoke = false;
+            if (active_ci >= 0 && !state.words_cache.empty()) {
+                // Collect words that belong to this clip (their timestamps fall within clip range)
+                std::vector<const WordEntry*> clip_words;
+                for (auto& we : state.words_cache)
+                    if (we.end > show->start && we.start < show->end)
+                        clip_words.push_back(&we);
+
+                if (!clip_words.empty()) {
+                    did_karaoke = true;
+                    float cur_x = tx;
+                    for (int wi = 0; wi < (int)clip_words.size(); ++wi) {
+                        const WordEntry* we = clip_words[wi];
+                        bool is_active = state.playhead >= we->start && state.playhead < we->end;
+
+                        ImU32 wcol;
+                        if (show->sub_color_override) {
+                            float a = is_active ? show->sub_color[3] : show->sub_color[3] * 0.45f;
+                            wcol = IM_COL32((int)(show->sub_color[0]*255),
+                                            (int)(show->sub_color[1]*255),
+                                            (int)(show->sub_color[2]*255), (int)(a*255));
+                        } else {
+                            wcol = is_active ? IM_COL32(255,255,255,255) : IM_COL32(255,255,255,100);
+                        }
+
+                        std::string word_sp = we->text + (wi+1 < (int)clip_words.size() ? " " : "");
+                        ImVec2 wsz = ImGui::CalcTextSize(word_sp.c_str());
+                        dl->AddText(ImGui::GetFont(), fsz, {cur_x, slot_y}, wcol, word_sp.c_str());
+                        cur_x += wsz.x;
+                    }
+                }
             }
-            dl->AddText(ImGui::GetFont(), ImGui::GetFontSize() * 1.8f,
-                {tx, slot_y}, tcol, show->text.c_str());
-            ImGui::SetWindowFontScale(1.f);
+
+            if (!did_karaoke) {
+                ImU32 tcol;
+                if (show->sub_color_override) {
+                    float a = (active_ci >= 0) ? show->sub_color[3] : show->sub_color[3] * 0.5f;
+                    tcol = IM_COL32((int)(show->sub_color[0]*255), (int)(show->sub_color[1]*255),
+                                    (int)(show->sub_color[2]*255), (int)(a*255));
+                } else {
+                    tcol = (active_ci >= 0) ? to_u32(Col::fg) : to_u32(Col::muted);
+                }
+                dl->AddText(ImGui::GetFont(), fsz, {tx, slot_y}, tcol, show->text.c_str());
+            }
+
             ImGui::PopFont();
 
             if (show_ci >= 0 && slot_y >= p.y && slot_y + tsz.y <= p.y + h) {
@@ -2926,6 +2983,7 @@ void ui_studio(AppState& state) {
     static PipelineStage last_stage = PipelineStage::Idle;
     if (last_stage != PipelineStage::Done &&
         state.pipeline.stage == PipelineStage::Done) {
+        load_words_cache(state);
         if (state.pipeline_produces_subtitles)
             apply_subtitle_pipeline(state);
         else
