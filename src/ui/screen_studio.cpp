@@ -3540,7 +3540,7 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
                 zoom = fmaxf(20.f, fminf(zoom * (1.f + wheel * 0.1f), 4000.f));
                 float mouse_t = (mouse.x - origin.x - TL_LABEL_W + scroll) / old_zoom;
                 scroll = fmaxf(0.f, mouse_t * zoom - (mouse.x - origin.x - TL_LABEL_W));
-                scroll = fminf(scroll, fmaxf(0.f, tl_content_w - clip_area_w + 60.f));
+                scroll = fminf(scroll, fmaxf(0.f, dur * zoom - clip_area_w + 60.f));
             } else if (!in_track_body) {
                 // Plain scroll in ruler/header = horizontal pan only
                 scroll = fmaxf(0.f, scroll - wheel * 60.f);
@@ -3720,6 +3720,8 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
     static float s_track_drag_start_y = 0.f;
     static int   s_track_drag_insert  = -1;
     static int   drag_hot_gap = -1;  // insert-before index when dragging clip near a boundary
+    static float s_body_snap_held_start = -1.f;  // applied clip.start while snap-held; -1 = none
+    static float s_body_snap_held_cand  = -1.f;  // the snap candidate (for indicator line)
 
     // Box select state
     static bool  s_box_selecting = false;
@@ -4085,7 +4087,8 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
                         drag_track=ti; drag_clip=ci; drag_right=true; drag_left=false; drag_offset=0.f;
                     } else {
                         drag_track=ti; drag_clip=ci; drag_left=false; drag_right=false;
-                        drag_offset = mouse.x - orig_cx0;
+                        drag_offset = (mouse.x - origin.x - TL_LABEL_W + scroll) / zoom - clip.start;
+                        s_body_snap_held_start = -1.f; s_body_snap_held_cand = -1.f;
                     }
                 }
             }
@@ -4486,7 +4489,7 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
     if (drag_track>=0 && drag_clip>=0 && s_glass_drag==0 && ImGui::IsMouseDragging(0)) {
         Clip& dc = state.tracks[drag_track].clips[drag_clip];
         auto cands = build_snap_candidates(drag_track, drag_clip);
-        float new_t = (mouse.x - origin.x - TL_LABEL_W + scroll - drag_offset) / zoom;
+        float new_t = (mouse.x - origin.x - TL_LABEL_W + scroll) / zoom - drag_offset;
         // Helper: find transition-linked neighbour clip on same track (same-track adjacency only)
         auto linked_right = [&]() -> Clip* {
             auto& clips = state.tracks[drag_track].clips;
@@ -4522,16 +4525,32 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
             // Try snapping both edges; use whichever is closer to a candidate.
             float left_raw  = snap(new_t);
             float right_raw = left_raw + dur_clip;
-            float thresh = SNAP_PX / zoom;
-            float best_dt = thresh;
+            float thresh        = SNAP_PX / zoom;
+            float escape_thresh = 3.f / fps;
+            float best_dt    = thresh;
             float best_start = left_raw;
             s_snap_indicator = -1.f;
-            if (s_snap_enabled && !ImGui::GetIO().KeyCtrl) {
+            // Hysteresis: once snapped, hold until raw position escapes 2.5× the snap radius.
+            // Prevents flickering between two nearby candidates.
+            if (s_body_snap_held_start >= 0.f) {
+                if (fabsf(left_raw - s_body_snap_held_start) < escape_thresh) {
+                    best_start       = s_body_snap_held_start;
+                    s_snap_indicator = s_body_snap_held_cand;
+                } else {
+                    s_body_snap_held_start = -1.f;
+                    s_body_snap_held_cand  = -1.f;
+                }
+            }
+            if (s_body_snap_held_start < 0.f && s_snap_enabled && !ImGui::GetIO().KeyCtrl) {
                 for (float c : cands) {
                     float dl = fabsf(c - left_raw);
                     if (dl < best_dt) { best_dt = dl; best_start = c;           s_snap_indicator = c; }
                     float dr = fabsf(c - right_raw);
                     if (dr < best_dt) { best_dt = dr; best_start = c - dur_clip; s_snap_indicator = c; }
+                }
+                if (best_start != left_raw) {
+                    s_body_snap_held_start = best_start;
+                    s_body_snap_held_cand  = s_snap_indicator;
                 }
             }
             dc.start = fmaxf(0.f, best_start);
@@ -4609,6 +4628,7 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
         }
         drag_track=-1; drag_clip=-1; drag_left=false; drag_right=false;
         drag_hot_track=-1; drag_hot_gap=-1;
+        s_body_snap_held_start = -1.f; s_body_snap_held_cand = -1.f;
     }
 
     // Playhead
