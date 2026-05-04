@@ -182,7 +182,8 @@ bool audio_probe(const std::string& path, AudioMeta& meta) {
     if (avformat_find_stream_info(fmt_ctx, nullptr) < 0) {
         avformat_close_input(&fmt_ctx); return false;
     }
-    meta.duration_secs = (float)fmt_ctx->duration / (float)AV_TIME_BASE;
+    meta.duration_secs = (fmt_ctx->duration != AV_NOPTS_VALUE && fmt_ctx->duration > 0)
+                         ? (float)fmt_ctx->duration / (float)AV_TIME_BASE : 0.f;
     for (unsigned i = 0; i < fmt_ctx->nb_streams; ++i) {
         if (fmt_ctx->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_AUDIO) {
             meta.sample_rate = fmt_ctx->streams[i]->codecpar->sample_rate;

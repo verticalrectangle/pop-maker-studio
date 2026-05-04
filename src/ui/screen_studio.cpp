@@ -121,7 +121,8 @@ static void add_clip_to_track(AppState& state, int ti, const std::string& path, 
         state.video_loaded = true;
     } else if (ct == ClipType::Audio) {
         AudioMeta meta;
-        float dur = audio_probe(path, meta) ? meta.duration_secs : 4.f;
+        float dur = audio_probe(path, meta) ? meta.duration_secs : 0.f;
+        if (dur <= 0.f) dur = 4.f;
         cl.end = cl.start + dur;
     } else {
         cl.end = cl.start + 2.f;  // blank text clip — 2 s default
@@ -662,6 +663,11 @@ static void import_file(AppState& state, const std::string& path) {
         state.audio_path = path;
         audio_load(path);  // async — also probes container duration
         state.duration = audio_duration();
+        if (state.duration <= 0.f) {
+            AudioMeta meta{};
+            if (audio_probe(path, meta) && meta.duration_secs > 0.f)
+                state.duration = meta.duration_secs;
+        }
 
         // Add Audio track
         Track* at = nullptr;
@@ -679,7 +685,7 @@ static void import_file(AppState& state, const std::string& path) {
         at->clips.clear();
         Clip ac; ac.clip_type = ClipType::Audio;
         ac.source_id = path;
-        ac.start=0.f; ac.end=state.duration; ac.text=path;
+        ac.start=0.f; ac.end=(state.duration > 0.f ? state.duration : 4.f); ac.text=path;
         at->clips.push_back(ac);
     }
 
@@ -3831,13 +3837,13 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
                 if (wd && !wd->samples.empty()) {
                     float mid   = (cy0 + cy1) * 0.5f;
                     float half  = (cy1 - cy0) * 0.44f;
-                    float dt    = 1.f / WAVEFORM_FPS;
                     ImU32 wcol  = sel ? IM_COL32(0,0,0,160) : IM_COL32(255,255,255,120);
 
                     // Draw one vertical bar per screen pixel in visible range
                     for (float px = vis_x0; px < vis_x1; px += 1.f) {
-                        float t_source = clip.in_point + (px - cx0) / zoom;
-                        int   fi       = (int)(t_source / dt);
+                        float dt    = 1.f / WAVEFORM_FPS;
+                        float t_src = clip.in_point + (px - cx0) / zoom;
+                        int   fi    = (int)(t_src / dt);
                         if (fi < 0 || fi >= (int)wd->samples.size()) continue;
                         float amp = wd->samples[fi] * half;
                         if (amp < 1.f) amp = 1.f;
@@ -4140,7 +4146,9 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
         float new_t = (mouse.x - origin.x - TL_LABEL_W + scroll - drag_offset) / zoom;
         if (drag_left) {
             float t = edge_snap(snap(new_t), cands);
-            dc.start = fmaxf(0.f, fminf(t, dc.end - f1));
+            float new_start = fmaxf(0.f, fminf(t, dc.end - f1));
+            dc.in_point = fmaxf(0.f, dc.in_point + (new_start - dc.start));
+            dc.start = new_start;
         } else if (drag_right) {
             float et = (mouse.x - origin.x - TL_LABEL_W + scroll) / zoom;
             float t = edge_snap(snap(et), cands);
