@@ -2432,7 +2432,6 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
                             state.kf_sel_idx   = idx;
                             state.selected_track = ti;
                             state.selected_clip  = ci;
-                            state.panel_tab      = 0;
                         }
                     }
                 }
@@ -2493,7 +2492,6 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
                     s_edit_focus_next = (clip.clip_type==ClipType::Text || clip.clip_type==ClipType::Lyrics ||
                                          clip.clip_type==ClipType::Subtitle);
                     if (!state.playing) seek_to(state, clip.start);
-                    state.panel_tab = (clip.clip_type == ClipType::Lyrics) ? 4 : 0;
 
                     float orig_cx0 = origin.x+TL_LABEL_W+clip.start*zoom-scroll;
                     float orig_cx1 = origin.x+TL_LABEL_W+clip.end*zoom-scroll;
@@ -3815,8 +3813,16 @@ void ui_studio(AppState& state) {
         ImGui::PushStyleColor(ImGuiCol_Tab,       Col::bg_soft);
         ImGui::PushStyleColor(ImGuiCol_TabActive, Col::line);
         // Determine if a Lyrics clip is selected
+        // Lyrics tab visible if any clip in the selection is a Lyrics clip
         bool lyrics_selected = false;
-        if (state.selected_track >= 0 && state.selected_track < (int)state.tracks.size() &&
+        for (auto& [st, sc] : state.clip_selection) {
+            if (st < (int)state.tracks.size() && sc < (int)state.tracks[st].clips.size() &&
+                state.tracks[st].clips[sc].clip_type == ClipType::Lyrics)
+                { lyrics_selected = true; break; }
+        }
+        // Also check focus clip in case selection is empty
+        if (!lyrics_selected &&
+            state.selected_track >= 0 && state.selected_track < (int)state.tracks.size() &&
             state.selected_clip  >= 0 && state.selected_clip  < (int)state.tracks[state.selected_track].clips.size())
             lyrics_selected = state.tracks[state.selected_track].clips[state.selected_clip].clip_type == ClipType::Lyrics;
 
