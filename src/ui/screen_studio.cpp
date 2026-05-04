@@ -3720,6 +3720,7 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
     static float s_track_drag_start_y = 0.f;
     static int   s_track_drag_insert  = -1;
     static int   drag_hot_gap = -1;  // insert-before index when dragging clip near a boundary
+    static bool  s_drag_moved = false; // true once IsMouseDragging fired — gates cross-track drop
     static float s_body_snap_held_start = -1.f;  // applied clip.start while snap-held; -1 = none
     static float s_body_snap_held_cand  = -1.f;  // the snap candidate (for indicator line)
 
@@ -4487,6 +4488,7 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
     if (drag_track>=0 && drag_clip>=0 && (drag_left||drag_right))
         ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
     if (drag_track>=0 && drag_clip>=0 && s_glass_drag==0 && ImGui::IsMouseDragging(0)) {
+        s_drag_moved = true;
         Clip& dc = state.tracks[drag_track].clips[drag_clip];
         auto cands = build_snap_candidates(drag_track, drag_clip);
         float new_t = (mouse.x - origin.x - TL_LABEL_W + scroll) / zoom - drag_offset;
@@ -4612,7 +4614,7 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
                 state.selected_track = drag_hot_gap;
                 state.selected_clip  = 0;
                 history_push(state, "Move clip to new track");
-            } else if (!drag_left && !drag_right &&
+            } else if (!drag_left && !drag_right && s_drag_moved &&
                 drag_hot_track >= 0 && drag_hot_track != drag_track) {
                 Clip moved = state.tracks[drag_track].clips[drag_clip];
                 state.tracks[drag_track].clips.erase(
@@ -4642,6 +4644,7 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
         }
         drag_track=-1; drag_clip=-1; drag_left=false; drag_right=false;
         drag_hot_track=-1; drag_hot_gap=-1;
+        s_drag_moved = false;
         s_body_snap_held_start = -1.f; s_body_snap_held_cand = -1.f;
     }
 
