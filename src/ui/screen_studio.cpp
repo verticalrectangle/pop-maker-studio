@@ -5054,27 +5054,33 @@ void ui_studio(AppState& state) {
         g_dropped_file.clear();
     }
 
-    // Proxy ready → upgrade from still to proxy for each registered slot.
+    // Per-slot video open/upgrade — handles three states:
+    //   1. Already a full proxy (fps > 0)  → nothing to do
+    //   2. Proxy ready but slot not open   → open proxy directly (covers split/moved clips)
+    //   3. No proxy yet, slot not open     → open still as placeholder
     for (int slot = 0; slot < MAX_VIDEO_TRACKS; ++slot) {
         const std::string& key = state.proxy_paths[slot];
         if (key.empty()) continue;
-        if (!video_is_open(slot) || video_info(slot).fps > 0.0) continue;
+        if (video_info(slot).fps > 0.0) continue;  // already fully open
+
         std::string src = source_from_key(key);
-        if (!proxy_is_ready(src)) continue;
-
-        ProxyInfo pi;
-        if (!proxy_load(src, pi)) continue;
-        video_open_proxy(slot, pi);
-
-        if (slot == 0) {
-            state.proxy_ready = true;
-            float pd = (float)video_info(0).duration;
-            if (pd > 0.f) {
-                for (auto& tr : state.tracks)
-                    for (auto& cl : tr.clips)
-                        if (cl.clip_type == ClipType::Video && cl.text == src && cl.end < pd)
-                            cl.end = pd;
+        if (proxy_is_ready(src)) {
+            ProxyInfo pi;
+            if (!proxy_load(src, pi)) continue;
+            video_open_proxy(slot, pi);
+            if (slot == 0) {
+                state.proxy_ready = true;
+                float pd = (float)video_info(0).duration;
+                if (pd > 0.f) {
+                    for (auto& tr : state.tracks)
+                        for (auto& cl : tr.clips)
+                            if (cl.clip_type == ClipType::Video && cl.text == src && cl.end < pd)
+                                cl.end = pd;
+                }
             }
+        } else if (!video_is_open(slot)) {
+            // Proxy not ready yet — show the still thumbnail while it generates.
+            video_open_still(slot, proxy_still_path(src));
         }
     }
 
