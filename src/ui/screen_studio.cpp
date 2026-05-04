@@ -4093,6 +4093,16 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
                         drag_offset = (mouse.x - origin.x - TL_LABEL_W + scroll) / zoom - clip.start;
                         s_body_snap_held_start = -1.f; s_body_snap_held_cand = -1.f;
                     }
+                    // Backfill out_point if it wasn't set at drop time (old project files, etc).
+                    // This is a one-time probe per clip; fine to call on the click frame.
+                    if ((drag_left || drag_right) && clip.out_point <= 0.f && !clip.text.empty()) {
+                        if (clip.clip_type == ClipType::Video)
+                            clip.out_point = video_probe_duration(clip.text);
+                        else if (clip.clip_type == ClipType::Audio) {
+                            AudioMeta meta;
+                            if (audio_probe(clip.text, meta)) clip.out_point = meta.duration_secs;
+                        }
+                    }
                 }
             }
 
