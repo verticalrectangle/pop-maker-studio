@@ -2231,6 +2231,11 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
     static int   s_track_drag_insert  = -1;
     static int   drag_hot_gap = -1;  // insert-before index when dragging clip near a boundary
 
+    // Box select state
+    static bool  s_box_selecting = false;
+    static ImVec2 s_box_start    = {0.f, 0.f};
+    static bool  s_clip_hit      = false;  // did mousedown land on a clip this frame?
+
     // Context menu state
     static int ctx_track = -1, ctx_clip = -1;
     static bool open_clip_ctx = false, open_track_ctx = false, open_tl_ctx = false;
@@ -2301,6 +2306,7 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
             if (ImGui::IsMouseClicked(0) && in_label) {
                 state.selected_track  = ti;
                 state.selected_clip   = -1;
+                state.clip_selection.clear();
                 state.panel_tab       = 0;
                 s_track_drag_src      = ti;
                 s_track_drag_start_y  = mouse.y;
@@ -2343,7 +2349,7 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
             float vis_x0 = fmaxf(cx0, origin.x+TL_LABEL_W);
             float vis_x1 = fminf(cx1, origin.x+total_w);
             float cy0 = track_y+3.f, cy1 = track_y+TL_TRACK_H-3.f;
-            bool sel = (state.selected_track==ti && state.selected_clip==ci);
+            bool sel = state.clip_selection.count({ti, ci}) > 0;
 
             ImVec4 clip_fill = (clip.clip_type==ClipType::Lyrics)   ? Col::clip_lyrics
                              : (clip.clip_type==ClipType::Subtitle) ? Col::clip_subtitle
@@ -2446,6 +2452,38 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
             // Left click to select / drag
             if (ImGui::IsMouseClicked(0) && !ImGui::IsAnyItemActive()) {
                 if (mouse.y>=cy0 && mouse.y<=cy1 && mouse.x>=vis_x0 && mouse.x<=vis_x1) {
+                    s_clip_hit = true;
+                    auto key = std::make_pair(ti, ci);
+                    bool ctrl  = ImGui::GetIO().KeyCtrl;
+                    bool shift = ImGui::GetIO().KeyShift;
+
+                    if (ctrl) {
+                        // Toggle this clip in/out of selection
+                        if (state.clip_selection.count(key))
+                            state.clip_selection.erase(key);
+                        else
+                            state.clip_selection.insert(key);
+                    } else if (shift && state.selected_track >= 0 && state.selected_clip >= 0) {
+                        // Range select: collect all clips between focus and this clip by start time
+                        struct TL { float start; int ti, ci; };
+                        std::vector<TL> all;
+                        for (int t2=0; t2<(int)state.tracks.size(); ++t2)
+                            for (int c2=0; c2<(int)state.tracks[t2].clips.size(); ++c2)
+                                all.push_back({state.tracks[t2].clips[c2].start, t2, c2});
+                        std::sort(all.begin(), all.end(), [](const TL& a, const TL& b){ return a.start < b.start; });
+                        float t_focus = state.tracks[state.selected_track].clips[state.selected_clip].start;
+                        float t_click = clip.start;
+                        float t_lo = fminf(t_focus, t_click), t_hi = fmaxf(t_focus, t_click);
+                        for (auto& e : all)
+                            if (e.start >= t_lo && e.start <= t_hi)
+                                state.clip_selection.insert({e.ti, e.ci});
+                    } else {
+                        // Plain click — clear and select only this clip
+                        state.clip_selection.clear();
+                        state.clip_selection.insert(key);
+                    }
+
+                    // Always update focus clip
                     state.selected_track = ti;
                     state.selected_clip  = ci;
                     strncpy(s_edit_buf, clip.text.c_str(), sizeof(s_edit_buf)-1);
@@ -2540,6 +2578,70 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
         dl->AddText({origin.x + 8.f, gy0 + (TL_TRACK_H - ImGui::GetTextLineHeight()) * 0.5f},
                     IM_COL32(255, 255, 255, 255),
                     state.tracks[s_track_drag_src].name.c_str());
+    }
+
+    // ── Box select ───────────────────────────────────────────────────────────
+    {
+        bool in_body = mouse.x > origin.x+TL_LABEL_W && mouse.x < origin.x+total_w &&
+                       mouse.y > origin.y+TL_RULER_H  && mouse.y < origin.y+total_h;
+        bool ldown  = ImGui::IsMouseDown(0);
+        bool lclick = ImGui::IsMouseClicked(0);
+
+        // Start box select when clicking empty body space (no clip was hit)
+        if (lclick && in_body && !s_clip_hit && !ImGui::IsAnyItemActive()) {
+            s_box_selecting = true;
+            s_box_start     = mouse;
+            if (!ImGui::GetIO().KeyCtrl && !ImGui::GetIO().KeyShift) {
+                state.clip_selection.clear();
+                state.selected_track = -1;
+                state.selected_clip  = -1;
+            }
+        }
+        s_clip_hit = false; // reset for next frame
+
+        if (s_box_selecting) {
+            if (ldown) {
+                // Draw rubber-band rect
+                float bx0 = fminf(s_box_start.x, mouse.x);
+                float bx1 = fmaxf(s_box_start.x, mouse.x);
+                float by0 = fminf(s_box_start.y, mouse.y);
+                float by1 = fmaxf(s_box_start.y, mouse.y);
+                dl->AddRectFilled({bx0,by0},{bx1,by1}, IM_COL32(120,200,255,30));
+                dl->AddRect({bx0,by0},{bx1,by1}, IM_COL32(120,200,255,180), 0.f, 0, 1.f);
+
+                // Live update selection while dragging
+                float t0 = (bx0 - origin.x - TL_LABEL_W + scroll) / zoom;
+                float t1 = (bx1 - origin.x - TL_LABEL_W + scroll) / zoom;
+                int   tr0 = (int)((by0 - origin.y - TL_RULER_H) / TL_TRACK_H);
+                int   tr1 = (int)((by1 - origin.y - TL_RULER_H) / TL_TRACK_H);
+
+                if (!ImGui::GetIO().KeyCtrl) state.clip_selection.clear();
+                for (int t2=0; t2<(int)state.tracks.size(); ++t2) {
+                    if (t2 < tr0 || t2 > tr1) continue;
+                    for (int c2=0; c2<(int)state.tracks[t2].clips.size(); ++c2) {
+                        const Clip& bc = state.tracks[t2].clips[c2];
+                        if (bc.end > t0 && bc.start < t1)
+                            state.clip_selection.insert({t2, c2});
+                    }
+                }
+            } else {
+                // Released — finalise, update focus to first selected clip
+                s_box_selecting = false;
+                if (!state.clip_selection.empty()) {
+                    auto first = *state.clip_selection.begin();
+                    state.selected_track = first.first;
+                    state.selected_clip  = first.second;
+                }
+            }
+        }
+
+        // Escape clears selection
+        if (ImGui::IsKeyPressed(ImGuiKey_Escape) && s_rename_track < 0) {
+            state.clip_selection.clear();
+            state.selected_track = -1;
+            state.selected_clip  = -1;
+            s_box_selecting = false;
+        }
     }
 
     // ── Past-end dim overlay ──────────────────────────────────────────────────

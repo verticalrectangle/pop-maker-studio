@@ -193,6 +193,9 @@ struct AppState {
     std::string kf_sel_prop;
     int         kf_sel_idx   = -1;
 
+    // multi-clip selection — set of (track_idx, clip_idx)
+    std::set<std::pair<int,int>> clip_selection;
+
     // expanded clips in timeline (track_idx, clip_idx)
     std::set<std::pair<int,int>> expanded_clips;
 
