@@ -1619,6 +1619,162 @@ static void panel_clip(AppState& state, float w) {
     }
 }
 
+// ── Right panel: Lyrics tab ───────────────────────────────────────────────────
+
+static void panel_lyrics(AppState& state, float w) {
+    if (state.selected_track < 0 || state.selected_track >= (int)state.tracks.size()) return;
+    Track& track = state.tracks[state.selected_track];
+    if (state.selected_clip < 0 || state.selected_clip >= (int)track.clips.size()) return;
+    Clip& clip = track.clips[state.selected_clip];
+
+    ImGui::Dummy({0.f, 8.f});
+
+    // ── Clip info ─────────────────────────────────────────────────────────────
+    ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+    char tlabel[80];
+    snprintf(tlabel, sizeof(tlabel), "%s  ·  clip %d of %d",
+        track.name.c_str(), state.selected_clip + 1, (int)track.clips.size());
+    ImGui::TextUnformatted(tlabel);
+    ImGui::PopStyleColor();
+    ImGui::Dummy({0.f, 4.f}); ui_separator(); ImGui::Dummy({0.f, 8.f});
+
+    // Word count and duration from words_cache
+    if (!state.words_cache.empty()) {
+        int wcount = 0;
+        for (auto& we : state.words_cache)
+            if (we.end > clip.start && we.start < clip.end) ++wcount;
+
+        float dur = clip.end - clip.start;
+        int dur_s = (int)dur, dur_cs = (int)((dur - dur_s) * 100);
+        char info[80];
+        snprintf(info, sizeof(info), "%d word%s  ·  %d.%02ds",
+            wcount, wcount == 1 ? "" : "s", dur_s, dur_cs);
+        ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+        ImGui::TextUnformatted(info);
+        ImGui::PopStyleColor();
+        ImGui::Dummy({0.f, 8.f});
+    }
+
+    // ── Karaoke toggle ────────────────────────────────────────────────────────
+    ui_label("Highlight"); ImGui::Dummy({0.f, 4.f});
+    {
+        bool k = clip.karaoke;
+        if (ui_btn("Karaoke", k, true)) {
+            clip.karaoke = !clip.karaoke;
+            history_push(state, clip.karaoke ? "Karaoke on" : "Karaoke off");
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::BeginTooltip();
+            ImGui::TextUnformatted("Per-word highlight as lyrics play");
+            ImGui::EndTooltip();
+        }
+    }
+
+    ImGui::Dummy({0.f, 12.f}); ui_separator(); ImGui::Dummy({0.f, 8.f});
+
+    // ── Grouping mode ─────────────────────────────────────────────────────────
+    ui_label("Grouping"); ImGui::Dummy({0.f, 4.f});
+
+    if (!state.words_json_path.empty() && fs::exists(state.words_json_path)) {
+        struct ModeBtn { SubtitleMode m; const char* label; const char* tip; };
+        static const ModeBtn modes[] = {
+            {SubtitleMode::Word,    "Word",    "One clip per word"},
+            {SubtitleMode::Phrase,  "Phrase",  "Group by short pauses (>0.3s)"},
+            {SubtitleMode::Line,    "Line",    "Group by breath gaps (>0.8s)"},
+            {SubtitleMode::Karaoke, "Karaoke", "Line groups with per-word highlight"},
+            {SubtitleMode::Segment, "Segment", "WhisperX sentence boundaries"},
+            {SubtitleMode::CustomN, "Custom",  "N words per clip"},
+        };
+        for (auto& mb : modes) {
+            bool sel = state.subtitle_mode == mb.m;
+            if (ui_btn(mb.label, sel, true)) state.subtitle_mode = mb.m;
+            if (ImGui::IsItemHovered()) {
+                ImGui::BeginTooltip(); ImGui::TextUnformatted(mb.tip); ImGui::EndTooltip();
+            }
+            ImGui::SameLine(0.f, 4.f);
+        }
+        ImGui::NewLine();
+
+        if (state.subtitle_mode == SubtitleMode::CustomN) {
+            ImGui::Dummy({0.f, 4.f});
+            ImGui::PushStyleColor(ImGuiCol_FrameBg, Col::bg_soft);
+            ImGui::PushStyleColor(ImGuiCol_Border,  Col::line);
+            ImGui::SetNextItemWidth(80.f);
+            int n = state.subtitle_n;
+            if (ImGui::InputInt("words/clip##cnl", &n))
+                state.subtitle_n = (n < 1) ? 1 : (n > 20) ? 20 : n;
+            ImGui::PopStyleColor(2);
+        }
+
+        ImGui::Dummy({0.f, 8.f});
+        if (ui_btn("Apply grouping", true, true)) {
+            apply_subtitle_mode(state);
+            const char* mname =
+                state.subtitle_mode == SubtitleMode::Word    ? "Word"    :
+                state.subtitle_mode == SubtitleMode::Phrase  ? "Phrase"  :
+                state.subtitle_mode == SubtitleMode::Line    ? "Line"    :
+                state.subtitle_mode == SubtitleMode::Karaoke ? "Karaoke" :
+                state.subtitle_mode == SubtitleMode::Segment ? "Segment" : "Custom";
+            history_push(state, std::string("Grouping — ") + mname);
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::BeginTooltip();
+            ImGui::TextUnformatted("Re-bucket all Lyrics clips from saved word JSON");
+            ImGui::EndTooltip();
+        }
+    } else {
+        ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+        ImGui::TextWrapped("Run ML Processing on an audio clip to generate word JSON.");
+        ImGui::PopStyleColor();
+    }
+
+    // ── Position / color (same as Clip tab) ──────────────────────────────────
+    ImGui::Dummy({0.f, 12.f}); ui_separator(); ImGui::Dummy({0.f, 8.f});
+    ui_label("Position"); ImGui::Dummy({0.f, 4.f});
+
+    static const struct { int v; const char* l; } pos_btns[] = {
+        {2,"Top"},{1,"Center"},{0,"Bottom"},{3,"Custom"}
+    };
+    for (auto& pb : pos_btns) {
+        if (ui_btn(pb.l, clip.sub_pos == pb.v, true)) {
+            clip.sub_pos = pb.v;
+            history_push(state, "Subtitle position");
+        }
+        ImGui::SameLine(0.f, 4.f);
+    }
+    ImGui::NewLine();
+    if (clip.sub_pos == 3) {
+        ImGui::Dummy({0.f, 4.f});
+        ImGui::PushStyleColor(ImGuiCol_FrameBg,    Col::bg_soft);
+        ImGui::PushStyleColor(ImGuiCol_Border,     Col::line);
+        ImGui::PushStyleColor(ImGuiCol_SliderGrab, Col::fg);
+        ImGui::SetNextItemWidth(w - 16.f);
+        if (ImGui::SliderFloat("##lyric_y", &clip.sub_pos_y, 0.f, 1.f, "Y  %.2f"))
+            history_push(state, "Subtitle position Y");
+        ImGui::PopStyleColor(3);
+    }
+
+    ImGui::Dummy({0.f, 8.f});
+    ui_label("Color"); ImGui::Dummy({0.f, 4.f});
+    ImGui::PushStyleColor(ImGuiCol_FrameBg, Col::bg_soft);
+    ImGui::PushStyleColor(ImGuiCol_Border,  Col::line);
+    {
+        bool ov = clip.sub_color_override;
+        if (ui_btn(ov ? "Custom" : "White", ov, true)) {
+            clip.sub_color_override = !clip.sub_color_override;
+            history_push(state, "Subtitle color override");
+        }
+        if (clip.sub_color_override) {
+            ImGui::Dummy({0.f, 4.f});
+            ImGui::SetNextItemWidth(w - 16.f);
+            ImGui::ColorEdit4("##lyric_col", clip.sub_color,
+                ImGuiColorEditFlags_NoLabel | ImGuiColorEditFlags_AlphaBar);
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Subtitle color");
+        }
+    }
+    ImGui::PopStyleColor(2);
+}
+
 // ── Right panel: Animation tab ───────────────────────────────────────────────
 
 static const struct { AnimStyle style; const char* name; const char* desc; const char* tag; } STYLES[] = {
@@ -2297,7 +2453,7 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
                     s_edit_focus_next = (clip.clip_type==ClipType::Text || clip.clip_type==ClipType::Lyrics ||
                                          clip.clip_type==ClipType::Subtitle);
                     if (!state.playing) seek_to(state, clip.start);
-                    state.panel_tab = 0;  // switch to Clip tab
+                    state.panel_tab = (clip.clip_type == ClipType::Lyrics) ? 4 : 0;
 
                     float orig_cx0 = origin.x+TL_LABEL_W+clip.start*zoom-scroll;
                     float orig_cx1 = origin.x+TL_LABEL_W+clip.end*zoom-scroll;
@@ -3554,11 +3710,20 @@ void ui_studio(AppState& state) {
         ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {12.f, 6.f});
         ImGui::PushStyleColor(ImGuiCol_Tab,       Col::bg_soft);
         ImGui::PushStyleColor(ImGuiCol_TabActive, Col::line);
+        // Determine if a Lyrics clip is selected
+        bool lyrics_selected = false;
+        if (state.selected_track >= 0 && state.selected_track < (int)state.tracks.size() &&
+            state.selected_clip  >= 0 && state.selected_clip  < (int)state.tracks[state.selected_track].clips.size())
+            lyrics_selected = state.tracks[state.selected_track].clips[state.selected_clip].clip_type == ClipType::Lyrics;
+
+        if (!lyrics_selected && state.panel_tab == 4) state.panel_tab = 0;
+
         if (ImGui::BeginTabBar("##panel_tabs")) {
-            if (ImGui::BeginTabItem("Clip"))    { state.panel_tab=0; ImGui::EndTabItem(); }
-            if (ImGui::BeginTabItem("Animation"))   { state.panel_tab=1; ImGui::EndTabItem(); }
-            if (ImGui::BeginTabItem("Export"))  { state.panel_tab=2; ImGui::EndTabItem(); }
-            if (ImGui::BeginTabItem("History")) { state.panel_tab=3; ImGui::EndTabItem(); }
+            if (ImGui::BeginTabItem("Clip"))      { state.panel_tab=0; ImGui::EndTabItem(); }
+            if (ImGui::BeginTabItem("Animation")) { state.panel_tab=1; ImGui::EndTabItem(); }
+            if (ImGui::BeginTabItem("Export"))    { state.panel_tab=2; ImGui::EndTabItem(); }
+            if (ImGui::BeginTabItem("History"))   { state.panel_tab=3; ImGui::EndTabItem(); }
+            if (lyrics_selected && ImGui::BeginTabItem("Lyrics")) { state.panel_tab=4; ImGui::EndTabItem(); }
             ImGui::EndTabBar();
         }
         ImGui::PopStyleColor(2);
@@ -3570,6 +3735,7 @@ void ui_studio(AppState& state) {
         if      (state.panel_tab == 0) panel_clip(state, pw);
         else if (state.panel_tab == 1) panel_animation(state, pw);
         else if (state.panel_tab == 2) panel_export(state, pw);
+        else if (state.panel_tab == 4) panel_lyrics(state, pw);
         else                           panel_history(state, pw);
         ImGui::EndChild();
     }
