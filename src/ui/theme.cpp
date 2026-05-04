@@ -19,11 +19,11 @@ void theme_apply() {
     cfg.FontDataOwnedByAtlas = false;
 
     g_font_regular = io.Fonts->AddFontFromMemoryTTF(
-        (void*)inter_regular_ttf, (int)inter_regular_ttf_size, 14.f, &cfg);
+        (void*)inter_regular_ttf, (int)inter_regular_ttf_size, 16.f, &cfg);
     g_font_bold = io.Fonts->AddFontFromMemoryTTF(
-        (void*)inter_bold_ttf, (int)inter_bold_ttf_size, 14.f, &cfg);
+        (void*)inter_bold_ttf, (int)inter_bold_ttf_size, 16.f, &cfg);
     g_font_black = io.Fonts->AddFontFromMemoryTTF(
-        (void*)inter_black_ttf, (int)inter_black_ttf_size, 14.f, &cfg);
+        (void*)inter_black_ttf, (int)inter_black_ttf_size, 16.f, &cfg);
 
     io.Fonts->Build();
 

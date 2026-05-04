@@ -601,7 +601,7 @@ static void draw_pipeline_strip(AppState& state, float w) {
 
     ImDrawList* dl = ImGui::GetWindowDrawList();
     ImVec2 p = ImGui::GetCursorScreenPos();
-    float  h = 28.f;
+    float  h = 32.f;
 
     dl->AddRectFilled(p, {p.x + w, p.y + h}, to_u32(Col::bg_soft));
     dl->AddLine({p.x, p.y + h}, {p.x + w, p.y + h}, to_u32(Col::line));
@@ -1175,7 +1175,7 @@ static void panel_clip(AppState& state, float w) {
                 { sel_row = i; break; }
 
         static int s_srt_last_row = -1;
-        float row_h  = 20.f;
+        float row_h  = 22.f;
         float list_h = fminf(180.f, n_total * row_h + 6.f);
         ImGui::PushStyleColor(ImGuiCol_ChildBg, Col::bg_soft);
         ImGui::BeginChild("##srt_list", {0.f, list_h}, false);
@@ -1602,7 +1602,7 @@ static void panel_animation(AppState& state, float w) {
     ui_label("Animation style"); ImGui::Dummy({0.f, 8.f});
 
     float card_w = (w - 20.f) * 0.5f;
-    float card_h = 72.f;
+    float card_h = 82.f;
 
     for (int i = 0; i < 8; ++i) {
         if (i % 2 == 1) ImGui::SameLine(0.f, 8.f);
@@ -1858,9 +1858,9 @@ static void panel_export(AppState& state, float w) {
 
 // ── Timeline constants ────────────────────────────────────────────────────────
 
-static constexpr float TL_LABEL_W = 110.f;
-static constexpr float TL_TRACK_H = 36.f;
-static constexpr float TL_RULER_H = 20.f;
+static constexpr float TL_LABEL_W = 120.f;
+static constexpr float TL_TRACK_H = 42.f;
+static constexpr float TL_RULER_H = 24.f;
 
 // ── Timeline ──────────────────────────────────────────────────────────────────
 
