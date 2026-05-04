@@ -3720,10 +3720,10 @@ void ui_studio(AppState& state) {
 
         if (ImGui::BeginTabBar("##panel_tabs")) {
             if (ImGui::BeginTabItem("Clip"))      { state.panel_tab=0; ImGui::EndTabItem(); }
+            if (lyrics_selected && ImGui::BeginTabItem("Lyrics")) { state.panel_tab=4; ImGui::EndTabItem(); }
             if (ImGui::BeginTabItem("Animation")) { state.panel_tab=1; ImGui::EndTabItem(); }
             if (ImGui::BeginTabItem("Export"))    { state.panel_tab=2; ImGui::EndTabItem(); }
             if (ImGui::BeginTabItem("History"))   { state.panel_tab=3; ImGui::EndTabItem(); }
-            if (lyrics_selected && ImGui::BeginTabItem("Lyrics")) { state.panel_tab=4; ImGui::EndTabItem(); }
             ImGui::EndTabBar();
         }
         ImGui::PopStyleColor(2);
