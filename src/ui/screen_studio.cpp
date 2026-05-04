@@ -4511,11 +4511,24 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
         bool left_locked  = (dc.clip_type == ClipType::Video &&
                              linked_left() != nullptr);
 
+        // Slot key is keyed by clip.start. When start changes during drag, update
+        // proxy_paths in-place so gc_video_slots doesn't close/reopen every frame.
+        float old_dc_start = dc.start;
+        auto sync_proxy_key = [&]() {
+            if (dc.clip_type != ClipType::Video || dc.text.empty()) return;
+            if (dc.start == old_dc_start) return;
+            std::string old_key = clip_slot_key(dc.text, old_dc_start);
+            std::string new_key = clip_slot_key(dc.text, dc.start);
+            for (int i = 0; i < MAX_VIDEO_TRACKS; ++i)
+                if (state.proxy_paths[i] == old_key) { state.proxy_paths[i] = new_key; break; }
+        };
+
         if (drag_left && !left_locked) {
             float t = edge_snap(snap(new_t), cands);
             float new_start = fmaxf(0.f, fminf(t, dc.end - f1));
             dc.in_point = fmaxf(0.f, dc.in_point + (new_start - dc.start));
             dc.start = new_start;
+            sync_proxy_key();
         } else if (drag_right && !right_locked) {
             float et = (mouse.x - origin.x - TL_LABEL_W + scroll) / zoom;
             float t = edge_snap(snap(et), cands);
@@ -4555,6 +4568,7 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
             }
             dc.start = fmaxf(0.f, best_start);
             dc.end   = dc.start + dur_clip;
+            sync_proxy_key();
             // Co-move transition-linked neighbours
             if (Clip* nb = linked_right()) { float d = nb->end - nb->start; nb->start = dc.end;   nb->end = nb->start + d; }
             if (Clip* nb = linked_left())  { float d = nb->end - nb->start; nb->end   = dc.start; nb->start = fmaxf(0.f, nb->end - d); }
