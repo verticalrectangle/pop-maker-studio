@@ -1659,7 +1659,7 @@ static void panel_lyrics(AppState& state, float w) {
     ui_label("Highlight"); ImGui::Dummy({0.f, 4.f});
     {
         bool k = clip.karaoke;
-        if (ui_btn("Karaoke", k, true)) {
+        if (ui_btn("Karaoke##hl", k, true)) {
             clip.karaoke = !clip.karaoke;
             history_push(state, clip.karaoke ? "Karaoke on" : "Karaoke off");
         }
