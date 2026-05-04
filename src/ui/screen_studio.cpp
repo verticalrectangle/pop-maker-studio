@@ -268,6 +268,14 @@ static std::vector<Clip> group_words(
         break;
     }
 
+    case SubtitleMode::Karaoke: {
+        // Same grouping as Line (split on breath gaps > 0.8 s) but each clip
+        // carries karaoke=true so preview and render do per-word highlighting.
+        auto lines = group_words(words, SubtitleMode::Line, custom_n);
+        for (auto& c : lines) c.karaoke = true;
+        return lines;
+    }
+
     case SubtitleMode::Segment:
         // Handled separately via segments JSON — fall back to Line grouping
         // if segment data isn't available.
@@ -787,7 +795,7 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
             // Karaoke: per-word coloring when words_cache is available and clip is active.
             // Falls back to solid color for selected-but-not-playing previews.
             bool did_karaoke = false;
-            if (active_ci >= 0 && !state.words_cache.empty()) {
+            if (active_ci >= 0 && show->karaoke && !state.words_cache.empty()) {
                 // Collect words that belong to this clip (their timestamps fall within clip range)
                 std::vector<const WordEntry*> clip_words;
                 for (auto& we : state.words_cache)
@@ -1117,6 +1125,7 @@ static void panel_clip(AppState& state, float w) {
                     {SubtitleMode::Word,    "Word",    "One clip per word"},
                     {SubtitleMode::Phrase,  "Phrase",  "Group by short pauses (>0.3s)"},
                     {SubtitleMode::Line,    "Line",    "Group by breath gaps (>0.8s)"},
+                    {SubtitleMode::Karaoke, "Karaoke", "Line groups with per-word highlight"},
                     {SubtitleMode::Segment, "Segment", "WhisperX sentence boundaries"},
                     {SubtitleMode::CustomN, "Custom",  "N words per clip"},
                 };
@@ -1148,6 +1157,7 @@ static void panel_clip(AppState& state, float w) {
                         state.subtitle_mode == SubtitleMode::Word    ? "Word"    :
                         state.subtitle_mode == SubtitleMode::Phrase  ? "Phrase"  :
                         state.subtitle_mode == SubtitleMode::Line    ? "Line"    :
+                        state.subtitle_mode == SubtitleMode::Karaoke ? "Karaoke" :
                         state.subtitle_mode == SubtitleMode::Segment ? "Segment" : "Custom";
                     history_push(state, std::string("Grouping — ") + mname);
                 }
@@ -2651,6 +2661,7 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
                     {SubtitleMode::Word,    "Word-by-word"},
                     {SubtitleMode::Phrase,  "Phrase  (pauses >0.3s)"},
                     {SubtitleMode::Line,    "Line  (gaps >0.8s)"},
+                    {SubtitleMode::Karaoke, "Karaoke  (line + per-word highlight)"},
                     {SubtitleMode::Segment, "Segment  (sentence)"},
                     {SubtitleMode::CustomN, "Custom N words"},
                 };

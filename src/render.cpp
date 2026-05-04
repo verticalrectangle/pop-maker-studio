@@ -316,11 +316,13 @@ static bool write_filter_script(
                 y_e = "h*0.88-text_h";
             }
 
-            // Collect words from cache that belong to this clip
+            // Per-word karaoke overlays only for clips created in Karaoke grouping mode
             std::vector<const WordEntry*> clip_words;
-            for (auto& we : state.words_cache)
-                if (we.end > cl.start && we.start < cl.end)
-                    clip_words.push_back(&we);
+            if (cl.karaoke) {
+                for (auto& we : state.words_cache)
+                    if (we.end > cl.start && we.start < cl.end)
+                        clip_words.push_back(&we);
+            }
 
             bool has_karaoke = !clip_words.empty();
 

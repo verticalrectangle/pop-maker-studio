@@ -57,6 +57,7 @@ struct Clip {
     float transition_out = 0.f;   // crossfade out duration in seconds (video, applied on render)
 
     // subtitle-only overrides
+    bool  karaoke   = false;   // per-word highlight enabled (Karaoke grouping mode)
     int   sub_pos   = 0;       // 0=bottom 1=center 2=top 3=custom Y
     float sub_pos_y = 0.85f;   // custom Y fraction from top (0=top, 1=bottom)
     float sub_color[4] = {1.f, 1.f, 1.f, 1.f};  // RGBA
@@ -134,6 +135,7 @@ enum class SubtitleMode {
     Line,       // split on breath gaps   > 0.8 s
     Segment,    // WhisperX sentence segments
     CustomN,    // user-defined N words per clip
+    Karaoke,    // line-grouped clips with per-word highlight enabled
 };
 
 // ── Central app state ─────────────────────────────────────────────────────────
