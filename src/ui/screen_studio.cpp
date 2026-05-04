@@ -972,7 +972,19 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                 } else if (in_trans_in && prev_cl) {
                     float t = std::fmaxf(0.f, std::fminf(1.f,
                         (state.playhead - active->start) / fmaxf(prev_cl->transition_post, 1e-5f)));
-                    draw_vid_clip(active, state.playhead, t);
+                    if (prev_cl->transition_type == TransitionType::Dissolve) {
+                        // Draw clip A's last frame at 1-t so alpha_A + alpha_B = 1 at cut
+                        draw_vid_clip(prev_cl, std::fminf(state.playhead, prev_cl->end - 1e-4f), 1.f - t);
+                        draw_vid_clip(active,  state.playhead, t);
+                    } else if (prev_cl->transition_type == TransitionType::FadeBlack) {
+                        // Black at cut is intentional; clip B fades in from 0
+                        draw_vid_clip(active, state.playhead, t);
+                    } else { // DipWhite: white overlay fades out, clip B fades in
+                        float white_a = 1.f - t;
+                        if (white_a > 0.01f)
+                            dl->AddRectFilled(p, {p.x+w, p.y+h}, IM_COL32(255,255,255,(int)(white_a*255.f)));
+                        draw_vid_clip(active, state.playhead, t);
+                    }
                 } else {
                     draw_vid_clip(active, state.playhead, 1.f);
                 }
