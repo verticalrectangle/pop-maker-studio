@@ -4,6 +4,7 @@
 #include <fstream>
 #include <sstream>
 #include <iomanip>
+#include <map>
 #include <thread>
 #include <atomic>
 #include <vector>
@@ -239,6 +240,32 @@ static bool write_filter_script(
     line() << "color=c=black:s=" << out_w << "x" << out_h << ":r=" << state.fps << "[vbase]";
     std::string vcur = "[vbase]";
 
+    // ── Build transition info map (keyed by track_idx, clip_idx) ─────────────
+    // For each video clip: does it fade out to the next? does it fade in from the previous?
+    struct TransInfo {
+        bool  is_out = false;  // this clip has transition_out to next
+        bool  is_in  = false;  // previous clip has transition into this
+        float dur    = 0.f;    // transition duration
+        TransitionType type = TransitionType::None;
+    };
+    std::map<std::pair<int,int>, TransInfo> trans_map;
+    for (int ti = 0; ti < (int)state.tracks.size(); ++ti) {
+        const auto& clips = state.tracks[ti].clips;
+        for (int ci = 0; ci + 1 < (int)clips.size(); ++ci) {
+            const Clip& A = clips[ci];
+            const Clip& B = clips[ci + 1];
+            if (A.clip_type != ClipType::Video || B.clip_type != ClipType::Video) continue;
+            if (A.transition_type == TransitionType::None || A.transition_out <= 0.f) continue;
+            float dur = A.transition_out;
+            trans_map[{ti, ci}].is_out = true;
+            trans_map[{ti, ci}].dur    = dur;
+            trans_map[{ti, ci}].type   = A.transition_type;
+            trans_map[{ti, ci + 1}].is_in = true;
+            trans_map[{ti, ci + 1}].dur   = dur;
+            trans_map[{ti, ci + 1}].type  = A.transition_type;
+        }
+    }
+
     // ── Process all layers bottom-to-top ─────────────────────────────────────
     for (const RLayer& rl : layers) {
         const Track& tr = state.tracks[rl.track_idx];
@@ -269,16 +296,48 @@ static bool write_filter_script(
                        << scaled_tag;
             }
 
-            // Optional opacity
-            bool has_opa = (cl.ktracks.count("opacity") > 0 ||
-                            fabsf(cl.opacity - 1.f) > 0.01f);
-            if (has_opa) {
-                std::string opa_tag = "[vopa" + std::to_string(vid_idx) + "]";
-                line() << scaled_tag
-                       << "colorchannelmixer=aa="
-                       << prop_expr(cl, "opacity", 1.f, cl.opacity)
-                       << opa_tag;
-                layer_in = opa_tag;
+            // Opacity (static, keyframed, and/or transition fade)
+            {
+                auto tit = trans_map.find({rl.track_idx, rl.clip_idx});
+                bool has_trans = (tit != trans_map.end());
+                bool has_opa = has_trans ||
+                               cl.ktracks.count("opacity") > 0 ||
+                               fabsf(cl.opacity - 1.f) > 0.01f;
+                if (has_opa) {
+                    std::string base_opa = prop_expr(cl, "opacity", 1.f, cl.opacity);
+                    std::string aa_expr  = base_opa;
+
+                    if (has_trans) {
+                        const TransInfo& ti2 = tit->second;
+                        float dur = ti2.dur;
+                        // en1 = clip end relative to vid_ss
+                        float en1 = fmaxf(0.f, cl.end - rl.vid_ss);
+
+                        if (ti2.is_out) {
+                            // Fade out: multiply by (1 - clamp((t-(en1-dur))/dur, 0, 1))
+                            char fade[128];
+                            snprintf(fade, sizeof(fade),
+                                "(1-clip((t-%.3f)/%.3f\\,0\\,1))",
+                                (double)(en1 - dur), (double)(dur > 0.f ? dur : 1e-5f));
+                            aa_expr = "(" + aa_expr + "*" + fade + ")";
+                        }
+                        if (ti2.is_in) {
+                            // Fade in: multiply by clamp((t-en0)/dur, 0, 1)
+                            float en0 = fmaxf(0.f, cl.start - rl.vid_ss);
+                            char fade[128];
+                            snprintf(fade, sizeof(fade),
+                                "clip((t-%.3f)/%.3f\\,0\\,1)",
+                                (double)en0, (double)(dur > 0.f ? dur : 1e-5f));
+                            aa_expr = "(" + aa_expr + "*" + fade + ")";
+                        }
+                    }
+
+                    std::string opa_tag = "[vopa" + std::to_string(vid_idx) + "]";
+                    line() << scaled_tag
+                           << "colorchannelmixer=aa=" << aa_expr
+                           << opa_tag;
+                    layer_in = opa_tag;
+                }
             }
 
             // Effect clip filters — color grade, blur, vignette
@@ -355,6 +414,35 @@ static bool write_filter_script(
                    << vnext;
             vcur = vnext;
             ++vid_idx;
+
+            // DipWhite: overlay a white fill that peaks at transition midpoint
+            {
+                auto tit2 = trans_map.find({rl.track_idx, rl.clip_idx});
+                if (tit2 != trans_map.end() && tit2->second.is_out &&
+                    tit2->second.type == TransitionType::DipWhite) {
+                    float dur = tit2->second.dur;
+                    float t_start = en1 - dur;  // transition start in output time
+                    // alpha = 1 - |clamp((t-t_start)/dur, 0, 1) - 0.5| * 2
+                    char wexpr[256];
+                    snprintf(wexpr, sizeof(wexpr),
+                        "(1-abs(clip((t-%.3f)/%.3f\\,0\\,1)-0.5)*2)",
+                        (double)t_start, (double)(dur > 0.f ? dur : 1e-5f));
+                    std::string w_src  = "[wfill"  + std::to_string(vid_idx) + "]";
+                    std::string w_opa  = "[wopa"   + std::to_string(vid_idx) + "]";
+                    std::string w_next = "[wov"    + std::to_string(vid_idx) + "]";
+                    line() << "color=c=white:s=" << out_w << "x" << out_h
+                           << ":r=" << state.fps << w_src;
+                    line() << w_src << "colorchannelmixer=aa=" << wexpr << w_opa;
+                    line() << vcur << w_opa
+                           << "overlay=format=auto"
+                           << ":enable='between(t,"
+                           << std::fixed << std::setprecision(3)
+                           << t_start << "," << en1 << ")'"
+                           << w_next;
+                    vcur = w_next;
+                    ++vid_idx;
+                }
+            }
 
         } else { // Txt
             if (cl.text.empty()) continue;

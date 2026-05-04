@@ -6,7 +6,7 @@
 // ── Binary serialization helpers ──────────────────────────────────────────────
 
 static const uint32_t MAGIC   = 0x534D5001u; // "PMS\x01"
-static const uint32_t VERSION = 5u;
+static const uint32_t VERSION = 6u;
 
 struct Writer {
     std::ofstream f;
@@ -106,6 +106,7 @@ static void write_clip(Writer& w, const Clip& c) {
     w.pod(c.karaoke_highlight_color[2]); w.pod(c.karaoke_highlight_color[3]);
     w.pod(c.pos_x); w.pod(c.pos_y); w.pod(c.scale_x); w.pod(c.scale_y); w.pod(c.rotation);
     w.pod((uint8_t)c.clip_style);
+    w.pod((uint8_t)c.transition_type);
     // Effect fields
     w.pod((uint8_t)c.fx_color_on); w.pod(c.fx_brightness); w.pod(c.fx_contrast);
     w.pod(c.fx_saturation); w.pod(c.fx_hue);
@@ -122,7 +123,7 @@ static void write_clip(Writer& w, const Clip& c) {
     for (auto& we : c.words) write_wordentry(w, we);
 }
 
-static Clip read_clip(Reader& r) {
+static Clip read_clip(Reader& r, uint32_t version) {
     Clip c;
     c.clip_type  = (ClipType)r.pod<uint8_t>();
     c.start      = r.pod<float>();
@@ -144,6 +145,7 @@ static Clip read_clip(Reader& r) {
     c.scale_x    = r.pod<float>(); c.scale_y  = r.pod<float>();
     c.rotation   = r.pod<float>();
     c.clip_style = (AnimStyle)r.pod<uint8_t>();
+    if (version >= 6u) c.transition_type = (TransitionType)r.pod<uint8_t>();
     // Effect fields
     c.fx_color_on   = (bool)r.pod<uint8_t>(); c.fx_brightness = r.pod<float>();
     c.fx_contrast   = r.pod<float>(); c.fx_saturation = r.pod<float>();
@@ -175,14 +177,14 @@ static void write_track(Writer& w, const Track& t) {
     for (auto& c : t.clips) write_clip(w, c);
 }
 
-static Track read_track(Reader& r) {
+static Track read_track(Reader& r, uint32_t version) {
     Track t;
     t.name    = r.str();
     t.visible = (bool)r.pod<uint8_t>(); t.muted = (bool)r.pod<uint8_t>();
     t.sub_row = r.pod<int>();
     uint32_t nc = r.pod<uint32_t>();
     for (uint32_t i = 0; i < nc && r.ok; ++i)
-        t.clips.push_back(read_clip(r));
+        t.clips.push_back(read_clip(r, version));
     return t;
 }
 
@@ -266,7 +268,7 @@ bool project_load(AppState& state, const std::string& path) {
     // Tracks
     uint32_t nt = r.pod<uint32_t>();
     for (uint32_t i = 0; i < nt && r.ok; ++i)
-        state.tracks.push_back(read_track(r));
+        state.tracks.push_back(read_track(r, version));
 
     // Selection / view
     state.selected_track = r.pod<int>(); state.selected_clip = r.pod<int>();

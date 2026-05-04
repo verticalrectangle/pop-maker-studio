@@ -41,6 +41,10 @@ enum class AnimStyle {
     None   // sentinel: inherit project default (state.style)
 };
 
+// ── Transition type ───────────────────────────────────────────────────────────
+
+enum class TransitionType { None, Dissolve, FadeBlack, DipWhite };
+
 // ── Output format ─────────────────────────────────────────────────────────────
 
 enum class OutputFormat { Vertical, Horizontal, Square };
@@ -67,7 +71,8 @@ struct Clip {
     float volume         = 1.f;   // audio gain multiplier (0–2)
     float speed          = 1.f;   // playback speed (0.25–4)
     float opacity        = 1.f;   // video opacity (0–1)
-    float transition_out = 0.f;   // crossfade out duration in seconds (video, applied on render)
+    float          transition_out  = 0.f;               // transition duration in seconds
+    TransitionType transition_type = TransitionType::None; // transition to next clip on same track
 
     // fade in/out — opacity ramp applied at render & preview when no manual opacity KFs exist
     float fade_in  = 0.f;   // seconds from clip start to full opacity

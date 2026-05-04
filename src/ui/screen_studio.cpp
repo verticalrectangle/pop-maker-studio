@@ -851,66 +851,139 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
 
         // ── Video clip ─────────────────────────────────────────────────────────
         {
+            // Helper: draw a video clip at a given playhead time with alpha multiplier.
+            auto draw_vid_clip = [&](const Clip* cl_ptr, float at_time, float alpha_mul) {
+                if (!cl_ptr) return;
+                int slot = slot_for_video(const_cast<AppState&>(state), cl_ptr->text);
+                uintptr_t tex = (slot >= 0 && video_is_open(slot))
+                    ? video_get_texture(slot, (double)(at_time + lookahead)) : 0;
+                if (!tex) return;
+                float px    = cl_ptr->eval_prop("pos_x",    at_time);
+                float py    = cl_ptr->eval_prop("pos_y",    at_time);
+                float sx    = cl_ptr->eval_prop("scale_x",  at_time);
+                float sy    = cl_ptr->eval_prop("scale_y",  at_time);
+                float rot   = cl_ptr->eval_prop("rotation", at_time);
+                float alpha = cl_ptr->eval_prop("opacity",  at_time) * alpha_mul;
+                VideoInfo vi = video_info(slot);
+                float fit_w = w, fit_h = h;
+                if (vi.width > 0 && vi.height > 0) {
+                    float vid_asp = (float)vi.width / (float)vi.height;
+                    float can_asp = w / h;
+                    if (vid_asp > can_asp) { fit_w = w; fit_h = w / vid_asp; }
+                    else                   { fit_h = h; fit_w = h * vid_asp; }
+                }
+                float cx = p.x + px * w, cy = p.y + py * h;
+                float hw = fit_w * sx * 0.5f, hh = fit_h * sy * 0.5f;
+                float rad = rot * 3.14159265f / 180.f;
+                float cos_r = cosf(rad), sin_r = sinf(rad);
+                auto rot_pt = [&](float ox, float oy) -> ImVec2 {
+                    return { cx + ox*cos_r - oy*sin_r, cy + ox*sin_r + oy*cos_r };
+                };
+                EffectAccum vid_fx = collect_effects(state, at_time, ti);
+                uintptr_t display_tex = tex;
+                if (vid_fx.any_color || vid_fx.any_blur) {
+                    display_tex = fx_apply(tex,
+                        vid_fx.brightness, vid_fx.contrast,
+                        vid_fx.saturation, vid_fx.hue,
+                        vid_fx.blur);
+                }
+                ImU32 col = IM_COL32(255, 255, 255, (int)(std::fmaxf(0.f, std::fminf(1.f, alpha)) * 255.f));
+                dl->AddImageQuad(ImTextureRef((ImTextureID)display_tex),
+                    rot_pt(-hw,-hh), rot_pt(hw,-hh), rot_pt(hw,hh), rot_pt(-hw,hh),
+                    {0,0}, {1,0}, {1,1}, {0,1}, col);
+                if (vid_fx.any_vignette && vid_fx.vignette > 0.01f) {
+                    float vx0=cx-hw, vy0=cy-hh, vx1=cx+hw, vy1=cy+hh;
+                    ImU32 vig = IM_COL32(0,0,0,(int)(vid_fx.vignette*210.f));
+                    float vw=vx1-vx0, vh=vy1-vy0;
+                    dl->AddRectFilledMultiColor({vx0,vy0},{vx0+vw*0.4f,vy1},vig,IM_COL32(0,0,0,0),IM_COL32(0,0,0,0),vig);
+                    dl->AddRectFilledMultiColor({vx0+vw*0.6f,vy0},{vx1,vy1},IM_COL32(0,0,0,0),vig,vig,IM_COL32(0,0,0,0));
+                    dl->AddRectFilledMultiColor({vx0,vy0},{vx1,vy0+vh*0.3f},vig,vig,IM_COL32(0,0,0,0),IM_COL32(0,0,0,0));
+                    dl->AddRectFilledMultiColor({vx0,vy0+vh*0.7f},{vx1,vy1},IM_COL32(0,0,0,0),IM_COL32(0,0,0,0),vig,vig);
+                }
+            };
+
+            // Find the active video clip and check for transitions
             const Clip* active = nullptr;
-            for (auto& cl : track.clips)
+            int active_ci = -1;
+            for (int ci = 0; ci < (int)track.clips.size(); ++ci) {
+                auto& cl = track.clips[ci];
                 if (cl.clip_type == ClipType::Video &&
                     state.playhead >= cl.start && state.playhead < cl.end)
-                    { active = &cl; break; }
+                    { active = &cl; active_ci = ci; break; }
+            }
+
+            // Check if incoming clip has a transition that started before its start
+            if (!active) {
+                for (int ci = 0; ci < (int)track.clips.size(); ++ci) {
+                    auto& cl = track.clips[ci];
+                    if (cl.clip_type != ClipType::Video) continue;
+                    if (ci == 0) continue;
+                    const Clip& prev = track.clips[ci - 1];
+                    if (prev.clip_type != ClipType::Video) continue;
+                    float dur = prev.transition_out;
+                    if (prev.transition_type == TransitionType::None || dur <= 0.f) continue;
+                    // Playhead in [prev.end - dur/2 .. prev.end] for FadeBlack/DipWhite
+                    if (state.playhead >= prev.end - dur * 0.5f && state.playhead < prev.end) {
+                        active = &cl; active_ci = ci; break;
+                    }
+                }
+            }
+
             if (active) {
-                int slot = slot_for_video(const_cast<AppState&>(state), active->text);
-                uintptr_t tex = (slot >= 0 && video_is_open(slot))
-                    ? video_get_texture(slot, (double)(state.playhead + lookahead)) : 0;
-                if (tex) {
-                    float px    = active->eval_prop("pos_x",    state.playhead);
-                    float py    = active->eval_prop("pos_y",    state.playhead);
-                    float sx    = active->eval_prop("scale_x",  state.playhead);
-                    float sy    = active->eval_prop("scale_y",  state.playhead);
-                    float rot   = active->eval_prop("rotation", state.playhead);
-                    float alpha = active->eval_prop("opacity",  state.playhead);
+                // Check outgoing transition: is playhead in last transition_out seconds?
+                bool in_trans_out = (active->transition_type != TransitionType::None &&
+                                     active->transition_out > 0.f &&
+                                     state.playhead >= active->end - active->transition_out);
+                const Clip* next_cl = nullptr;
+                if (in_trans_out && active_ci + 1 < (int)track.clips.size()) {
+                    const Clip& nc = track.clips[active_ci + 1];
+                    if (nc.clip_type == ClipType::Video) next_cl = &nc;
+                }
 
-                    // Letterbox: fit video's native aspect into the canvas
-                    VideoInfo vi = video_info(slot);
-                    float fit_w = w, fit_h = h;
-                    if (vi.width > 0 && vi.height > 0) {
-                        float vid_asp = (float)vi.width / (float)vi.height;
-                        float can_asp = w / h;
-                        if (vid_asp > can_asp) { fit_w = w;           fit_h = w / vid_asp; }
-                        else                   { fit_h = h;           fit_w = h * vid_asp; }
+                // Check incoming transition: is playhead in first transition_out seconds of next?
+                bool in_trans_in = false;
+                const Clip* prev_cl = nullptr;
+                if (!in_trans_out && active_ci > 0) {
+                    const Clip& pc = track.clips[active_ci - 1];
+                    if (pc.clip_type == ClipType::Video &&
+                        pc.transition_type != TransitionType::None &&
+                        pc.transition_out > 0.f &&
+                        state.playhead < active->start + pc.transition_out) {
+                        in_trans_in = true;
+                        prev_cl = &pc;
                     }
+                }
 
-                    float cx = p.x + px * w,  cy = p.y + py * h;
-                    float hw = fit_w * sx * 0.5f, hh = fit_h * sy * 0.5f;
-                    float rad   = rot * 3.14159265f / 180.f;
-                    float cos_r = cosf(rad), sin_r = sinf(rad);
-                    auto rot_pt = [&](float ox, float oy) -> ImVec2 {
-                        return { cx + ox*cos_r - oy*sin_r, cy + ox*sin_r + oy*cos_r };
-                    };
-                    // Apply GPU color grade + blur via Effect clips above this track
-                    EffectAccum vid_fx = collect_effects(state, state.playhead, ti);
-                    uintptr_t display_tex = tex;
-                    if (vid_fx.any_color || vid_fx.any_blur) {
-                        display_tex = fx_apply(tex,
-                            vid_fx.brightness, vid_fx.contrast,
-                            vid_fx.saturation, vid_fx.hue,
-                            vid_fx.blur);
+                if (in_trans_out && next_cl) {
+                    float D = active->transition_out;
+                    float t_in_trans = (state.playhead - (active->end - D)) / D; // 0→1
+                    t_in_trans = std::fmaxf(0.f, std::fminf(1.f, t_in_trans));
+
+                    if (active->transition_type == TransitionType::Dissolve) {
+                        draw_vid_clip(active,  state.playhead, 1.f - t_in_trans);
+                        draw_vid_clip(next_cl, state.playhead, t_in_trans);
+                    } else if (active->transition_type == TransitionType::FadeBlack) {
+                        float a_out = (t_in_trans < 0.5f) ? (1.f - t_in_trans * 2.f) : 0.f;
+                        float b_in  = (t_in_trans >= 0.5f) ? ((t_in_trans - 0.5f) * 2.f) : 0.f;
+                        draw_vid_clip(active,  state.playhead, a_out);
+                        draw_vid_clip(next_cl, state.playhead, b_in);
+                    } else { // DipWhite
+                        float a_out = (t_in_trans < 0.5f) ? (1.f - t_in_trans * 2.f) : 0.f;
+                        float b_in  = (t_in_trans >= 0.5f) ? ((t_in_trans - 0.5f) * 2.f) : 0.f;
+                        draw_vid_clip(active,  state.playhead, a_out);
+                        if (active->transition_type == TransitionType::DipWhite) {
+                            float white_a = 1.f - fabsf(t_in_trans - 0.5f) * 2.f;
+                            dl->AddRectFilled(p, {p.x+w, p.y+h}, IM_COL32(255,255,255,(int)(white_a*255.f)));
+                        }
+                        draw_vid_clip(next_cl, state.playhead, b_in);
                     }
-
-                    ImU32 col = IM_COL32(255, 255, 255, (int)(alpha * 255.f));
-                    dl->AddImageQuad(ImTextureRef((ImTextureID)display_tex),
-                        rot_pt(-hw,-hh), rot_pt(hw,-hh), rot_pt(hw,hh), rot_pt(-hw,hh),
-                        {0,0}, {1,0}, {1,1}, {0,1}, col);
-
-                    // Vignette overlay (GPU doesn't composite this into the video quad —
-                    // draw it as a gradient rect on top in screen space)
-                    if (vid_fx.any_vignette && vid_fx.vignette > 0.01f) {
-                        float vx0=cx-hw, vy0=cy-hh, vx1=cx+hw, vy1=cy+hh;
-                        ImU32 vig = IM_COL32(0,0,0,(int)(vid_fx.vignette*210.f));
-                        float vw=vx1-vx0, vh=vy1-vy0;
-                        dl->AddRectFilledMultiColor({vx0,vy0},{vx0+vw*0.4f,vy1},vig,IM_COL32(0,0,0,0),IM_COL32(0,0,0,0),vig);
-                        dl->AddRectFilledMultiColor({vx0+vw*0.6f,vy0},{vx1,vy1},IM_COL32(0,0,0,0),vig,vig,IM_COL32(0,0,0,0));
-                        dl->AddRectFilledMultiColor({vx0,vy0},{vx1,vy0+vh*0.3f},vig,vig,IM_COL32(0,0,0,0),IM_COL32(0,0,0,0));
-                        dl->AddRectFilledMultiColor({vx0,vy0+vh*0.7f},{vx1,vy1},IM_COL32(0,0,0,0),IM_COL32(0,0,0,0),vig,vig);
-                    }
+                } else if (in_trans_in && prev_cl) {
+                    float D = prev_cl->transition_out;
+                    float t_in_trans = (state.playhead - active->start) / D;
+                    t_in_trans = std::fmaxf(0.f, std::fminf(1.f, t_in_trans));
+                    draw_vid_clip(active, state.playhead, t_in_trans);
+                } else {
+                    draw_vid_clip(active, state.playhead, 1.f);
                 }
             }
         }
@@ -2141,26 +2214,9 @@ static void panel_clip(AppState& state, float w) {
             ImGui::NewLine(); ImGui::Dummy({0.f, 4.f});
         }
 
-        if (ImGui::CollapsingHeader("Transition / Fade")) {
+        if (ImGui::CollapsingHeader("Fade")) {
             ImGui::Dummy({0.f, 4.f});
             section_fade(state, clip, w);
-            ImGui::Dummy({0.f, 6.f});
-            ImGui::PushStyleColor(ImGuiCol_SliderGrab, Col::fg);
-            ImGui::PushStyleColor(ImGuiCol_FrameBg,    Col::bg_soft);
-            ImGui::SetNextItemWidth(w - 16.f);
-            ImGui::SliderFloat("Crossfade out##vt", &clip.transition_out, 0.f, 2.f, "%.2fs");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Transition");
-            ImGui::PopStyleColor(2);
-            ImGui::Dummy({0.f, 4.f});
-            struct TP { float f; const char* l; };
-            TP tpresets[] = {{0.f,"None"},{0.5f,"0.5s"},{1.f,"1s"},{2.f,"2s"}};
-            for (auto& tp : tpresets) {
-                if (ui_btn(tp.l, fabsf(clip.transition_out - tp.f) < 0.01f, true)) { clip.transition_out = tp.f; history_push(state, "Transition"); }
-                ImGui::SameLine(0.f, 4.f);
-            }
-            ImGui::NewLine();
-            ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
-            ImGui::TextUnformatted("Crossfade applied on render"); ImGui::PopStyleColor();
             ImGui::Dummy({0.f, 4.f});
         }
 
@@ -3610,6 +3666,11 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
     static int ctx_track = -1, ctx_clip = -1;
     static bool open_clip_ctx = false, open_track_ctx = false, open_tl_ctx = false;
 
+    // Transition handle state
+    static int   s_trans_track = -1, s_trans_left_ci = -1;
+    static ImVec2 s_trans_popup_pos = {0.f, 0.f};
+    bool s_trans_hit_this_frame = false;  // transition diamond was clicked — suppress clip selection
+
     // Clip all track drawing to the scrollable area (below ruler, above add-track row)
     dl->PushClipRect({origin.x, track_area_top}, {origin.x+total_w, track_area_bot}, true);
 
@@ -3904,21 +3965,8 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
                 }
             }
 
-            // Transition out indicator — diagonal slash at right edge of video clips
-            if (clip.clip_type == ClipType::Video && clip.transition_out > 0.f) {
-                float trans_px = fminf(clip.transition_out * zoom, cx1 - cx0);
-                float tx = vis_x1 - trans_px;
-                if (tx < vis_x1 && tx >= vis_x0) {
-                    dl->AddTriangleFilled(
-                        {tx, cy0}, {vis_x1, cy0}, {vis_x1, cy1},
-                        IM_COL32(255,255,255,40));
-                    dl->AddLine({tx, cy0}, {vis_x1, cy1},
-                        IM_COL32(255,255,255,130));
-                }
-            }
-
             // Left click to select / drag
-            if (ImGui::IsMouseClicked(0)) {
+            if (!s_trans_hit_this_frame && ImGui::IsMouseClicked(0)) {
                 if (mouse.y>=cy0 && mouse.y<=cy1 && mouse.x>=vis_x0 && mouse.x<=vis_x1) {
                     s_clip_hit = true;
                     auto key = std::make_pair(ti, ci);
@@ -3990,6 +4038,38 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
             mouse.x >= origin.x+TL_LABEL_W && mouse.x <= origin.x+total_w) {
             open_tl_ctx = true;
             ImGui::OpenPopup("##tl_ctx");
+        }
+
+        // Transition handles — diamond at cut points between adjacent video clips
+        for (int ci = 0; ci + 1 < (int)track.clips.size(); ++ci) {
+            const Clip& a = track.clips[ci];
+            const Clip& b = track.clips[ci + 1];
+            if (a.clip_type != ClipType::Video || b.clip_type != ClipType::Video) continue;
+            float gap = b.start - a.end;
+            if (fabsf(gap) > 0.5f) continue;  // only adjacent/overlapping clips
+            float cut_x = origin.x + TL_LABEL_W + a.end * zoom - scroll;
+            if (cut_x < origin.x + TL_LABEL_W || cut_x > origin.x + total_w) continue;
+            float mid_y  = track_y + TL_TRACK_H * 0.5f;
+            float r_half = 7.f;
+            bool has_trans = (a.transition_type != TransitionType::None && a.transition_out > 0.f);
+            ImU32 dia_col = has_trans ? IM_COL32(255,200,60,230) : IM_COL32(200,200,200,160);
+            ImVec2 pts[4] = {
+                {cut_x,          mid_y - r_half},
+                {cut_x + r_half, mid_y},
+                {cut_x,          mid_y + r_half},
+                {cut_x - r_half, mid_y}
+            };
+            dl->AddConvexPolyFilled(pts, 4, has_trans ? IM_COL32(255,200,60,60) : IM_COL32(200,200,200,30));
+            dl->AddPolyline(pts, 4, dia_col, ImDrawFlags_Closed, 1.5f);
+            // Hit test
+            bool dia_hov = fabsf(mouse.x - cut_x) + fabsf(mouse.y - mid_y) <= r_half + 3.f;
+            if (dia_hov && ImGui::IsMouseClicked(0)) {
+                s_trans_track         = ti;
+                s_trans_left_ci       = ci;
+                s_trans_popup_pos     = {cut_x - 80.f, mid_y + r_half + 4.f};
+                s_trans_hit_this_frame = true;
+                ImGui::OpenPopup("##trans_picker");
+            }
         }
 
         track_y += TL_TRACK_H;
@@ -4133,6 +4213,51 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
             state.selected_clip  = -1;
             s_box_selecting = false;
         }
+    }
+
+    // ── Transition picker popup ───────────────────────────────────────────────
+    ImGui::SetNextWindowPos(s_trans_popup_pos, ImGuiCond_Appearing);
+    ImGui::SetNextWindowSize({200.f, 0.f}, ImGuiCond_Appearing);
+    if (ImGui::BeginPopup("##trans_picker")) {
+        if (s_trans_track >= 0 && s_trans_left_ci >= 0 &&
+            s_trans_track < (int)state.tracks.size() &&
+            s_trans_left_ci < (int)state.tracks[s_trans_track].clips.size()) {
+            Clip& tc = state.tracks[s_trans_track].clips[s_trans_left_ci];
+
+            // Type selector
+            struct TBtn { TransitionType t; const char* l; };
+            TBtn btns[] = {
+                {TransitionType::None,     "None"},
+                {TransitionType::Dissolve, "Dissolve"},
+                {TransitionType::FadeBlack,"Fade Black"},
+                {TransitionType::DipWhite, "Dip White"},
+            };
+            ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {4.f, 4.f});
+            for (auto& b : btns) {
+                bool sel = (tc.transition_type == b.t);
+                if (sel) ImGui::PushStyleColor(ImGuiCol_Button, to_u32(Col::fg));
+                if (ImGui::Button(b.l, {ImGui::GetContentRegionAvail().x, 0.f})) {
+                    tc.transition_type = b.t;
+                    if (b.t != TransitionType::None && tc.transition_out <= 0.f)
+                        tc.transition_out = 0.5f;
+                    history_push(state, "Transition");
+                }
+                if (sel) ImGui::PopStyleColor();
+            }
+            ImGui::PopStyleVar();
+
+            // Duration slider (only shown when a transition is set)
+            if (tc.transition_type != TransitionType::None) {
+                ImGui::Dummy({0.f, 4.f});
+                ImGui::PushStyleColor(ImGuiCol_SliderGrab, to_u32(Col::fg));
+                ImGui::PushStyleColor(ImGuiCol_FrameBg,    to_u32(Col::bg_soft));
+                ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+                ImGui::SliderFloat("##tdur", &tc.transition_out, 0.05f, 2.f, "%.2fs");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Transition");
+                ImGui::PopStyleColor(2);
+            }
+        }
+        ImGui::EndPopup();
     }
 
     // ── Past-end dim overlay ──────────────────────────────────────────────────
