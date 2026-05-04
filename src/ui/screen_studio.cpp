@@ -308,7 +308,7 @@ static void apply_subtitle_mode(AppState& state) {
                 if (t.name == "Lyrics") { lyrics = &t; break; }
             if (!lyrics) {
                 state.tracks.insert(state.tracks.begin(), Track{});
-                lyrics = &state.tracks[0];
+                lyrics = &state.tracks.front();
                 lyrics->name = "Lyrics";
             }
             lyrics->clips.clear();
@@ -345,7 +345,7 @@ static void apply_subtitle_mode(AppState& state) {
             if (t.name == "Lyrics") { lyrics = &t; break; }
         if (!lyrics) {
             state.tracks.insert(state.tracks.begin(), Track{});
-            lyrics = &state.tracks[0];
+            lyrics = &state.tracks.front();
             lyrics->name = "Lyrics";
         }
         lyrics->clips = grouped;
@@ -373,7 +373,7 @@ static void apply_subtitle_pipeline(AppState& state) {
             if (t.name == "Subtitles") { tr = &t; break; }
         if (!tr) {
             state.tracks.insert(state.tracks.begin(), Track{});
-            tr = &state.tracks[0];
+            tr = &state.tracks.front();
             tr->name = "Subtitles";
         }
         tr->clips.clear();
@@ -483,8 +483,8 @@ static void import_file(AppState& state, const std::string& path) {
         float vprobed = video_probe_duration(path);
         if (vprobed > 0.f) state.duration = vprobed;
 
-        state.tracks.push_back({});
-        Track& vt = state.tracks.back();
+        state.tracks.insert(state.tracks.begin(), Track{});
+        Track& vt = state.tracks.front();
         char vname[32];
         snprintf(vname, sizeof(vname), "Track %d", (int)state.tracks.size());
         vt.name = vname;
@@ -524,8 +524,8 @@ static void import_file(AppState& state, const std::string& path) {
             if (!t.clips.empty() && t.clips[0].clip_type == ClipType::Audio &&
                 t.clips[0].source_id == path) { at=&t; break; }
         if (!at) {
-            state.tracks.push_back({});
-            at = &state.tracks.back();
+            state.tracks.insert(state.tracks.begin(), Track{});
+            at = &state.tracks.front();
             char aname[32];
             snprintf(aname, sizeof(aname), "Track %d", (int)state.tracks.size());
             at->name = aname;
@@ -651,55 +651,56 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
     dl->AddRectFilled(p, {p.x+w, p.y+h},
         state.video_loaded ? IM_COL32(0,0,0,255) : to_u32(Col::accent_dark), 2.f);
 
-    // Composite all video layers bottom-to-top (tracks array order = bottom first).
+    // Composite all layers bottom-to-top in a single z-order pass.
+    // Track index 0 = topmost (frontmost), so iterate high→low to draw bottom first.
     {
         float lookahead = ImGui::GetIO().DeltaTime;
-        for (int ti = 0; ti < (int)state.tracks.size(); ++ti) {
+        for (int ti = (int)state.tracks.size() - 1; ti >= 0; --ti) {
             const Track& tr = state.tracks[ti];
             if (!tr.visible) continue;
 
-            // Find the active Video clip at the current playhead on this track.
+            // Find the active clip at the current playhead on this track.
             const Clip* active = nullptr;
             for (auto& cl : tr.clips)
-                if (cl.clip_type == ClipType::Video &&
-                    state.playhead >= cl.start && state.playhead < cl.end)
+                if (state.playhead >= cl.start && state.playhead < cl.end)
                     { active=&cl; break; }
             if (!active) continue;
 
-            int slot = slot_for_video(const_cast<AppState&>(state), active->text);
-            if (slot < 0 || !video_is_open(slot)) continue;
+            if (active->clip_type == ClipType::Video) {
+                int slot = slot_for_video(const_cast<AppState&>(state), active->text);
+                if (slot < 0 || !video_is_open(slot)) continue;
 
-            uintptr_t tex = video_get_texture(slot, (double)(state.playhead + lookahead));
-            if (!tex) continue;
+                uintptr_t tex = video_get_texture(slot, (double)(state.playhead + lookahead));
+                if (!tex) continue;
 
-            float px    = active->eval_prop("pos_x",    state.playhead);
-            float py    = active->eval_prop("pos_y",    state.playhead);
-            float sx    = active->eval_prop("scale_x",  state.playhead);
-            float sy    = active->eval_prop("scale_y",  state.playhead);
-            float rot   = active->eval_prop("rotation", state.playhead);
-            float alpha = active->eval_prop("opacity",  state.playhead);
+                float px    = active->eval_prop("pos_x",    state.playhead);
+                float py    = active->eval_prop("pos_y",    state.playhead);
+                float sx    = active->eval_prop("scale_x",  state.playhead);
+                float sy    = active->eval_prop("scale_y",  state.playhead);
+                float rot   = active->eval_prop("rotation", state.playhead);
+                float alpha = active->eval_prop("opacity",  state.playhead);
 
-            // Layer centre in screen-space.
-            float cx = p.x + px * w;
-            float cy = p.y + py * h;
-            float hw = w * sx * 0.5f;
-            float hh = h * sy * 0.5f;
+                float cx = p.x + px * w;
+                float cy = p.y + py * h;
+                float hw = w * sx * 0.5f;
+                float hh = h * sy * 0.5f;
 
-            float rad   = rot * 3.14159265f / 180.f;
-            float cos_r = cosf(rad), sin_r = sinf(rad);
-            auto rot_pt = [&](float ox, float oy) -> ImVec2 {
-                return { cx + ox*cos_r - oy*sin_r, cy + ox*sin_r + oy*cos_r };
-            };
+                float rad   = rot * 3.14159265f / 180.f;
+                float cos_r = cosf(rad), sin_r = sinf(rad);
+                auto rot_pt = [&](float ox, float oy) -> ImVec2 {
+                    return { cx + ox*cos_r - oy*sin_r, cy + ox*sin_r + oy*cos_r };
+                };
 
-            ImVec2 q0 = rot_pt(-hw, -hh);  // top-left
-            ImVec2 q1 = rot_pt( hw, -hh);  // top-right
-            ImVec2 q2 = rot_pt( hw,  hh);  // bottom-right
-            ImVec2 q3 = rot_pt(-hw,  hh);  // bottom-left
+                ImVec2 q0 = rot_pt(-hw, -hh);
+                ImVec2 q1 = rot_pt( hw, -hh);
+                ImVec2 q2 = rot_pt( hw,  hh);
+                ImVec2 q3 = rot_pt(-hw,  hh);
 
-            ImU32 col = IM_COL32(255, 255, 255, (int)(alpha * 255.f));
-            dl->AddImageQuad(ImTextureRef((ImTextureID)tex),
-                q0, q1, q2, q3,
-                {0,0}, {1,0}, {1,1}, {0,1}, col);
+                ImU32 col = IM_COL32(255, 255, 255, (int)(alpha * 255.f));
+                dl->AddImageQuad(ImTextureRef((ImTextureID)tex),
+                    q0, q1, q2, q3,
+                    {0,0}, {1,0}, {1,1}, {0,1}, col);
+            }
         }
     }
     dl->AddRect(p, {p.x+w, p.y+h}, to_u32(Col::line), 2.f);
@@ -740,7 +741,7 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
         return;
     }
 
-    // Active subtitle clips — stack vertically from bottom
+    // Text/subtitle clips — drawn in z-order (bottom-to-top, matching video pass above).
     // Drag state: raw mouse detection, no ImGui widget (avoids backward-cursor assert)
     static int   s_drag_ti   = -1, s_drag_ci   = -1;
     static bool  s_dragging  = false;
@@ -749,7 +750,7 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
     bool   lclick = ImGui::IsMouseClicked(0);
 
     int rendered = 0;
-    for (int ti = 0; ti < (int)state.tracks.size(); ++ti) {
+    for (int ti = (int)state.tracks.size() - 1; ti >= 0; --ti) {
         auto& track = state.tracks[ti];
         if (!track.visible) continue;
 
@@ -2034,6 +2035,11 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
     static int  s_rename_track = -1;
     static char s_rename_buf[64] = {};
     static bool s_rename_focus = false;
+    static int   s_track_drag_src    = -1;
+    static bool  s_track_dragging    = false;
+    static float s_track_drag_start_y = 0.f;
+    static int   s_track_drag_insert  = -1;
+    static int   drag_hot_gap = -1;  // insert-before index when dragging clip near a boundary
 
     // Context menu state
     static int ctx_track = -1, ctx_clip = -1;
@@ -2103,11 +2109,15 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
             dl->AddText({origin.x+8.f, track_y+(TL_TRACK_H-13.f)*0.5f},
                 to_u32(track_sel ? Col::fg : Col::muted), track.name.c_str());
             if (ImGui::IsMouseClicked(0) && in_label) {
-                state.selected_track = ti;
-                state.selected_clip  = -1;
-                state.panel_tab      = 0;
+                state.selected_track  = ti;
+                state.selected_clip   = -1;
+                state.panel_tab       = 0;
+                s_track_drag_src      = ti;
+                s_track_drag_start_y  = mouse.y;
+                s_track_dragging      = false;
             }
-            if (ImGui::IsMouseDoubleClicked(0) && in_label) {
+            if (ImGui::IsMouseDoubleClicked(0) && in_label && !s_track_dragging) {
+                s_track_drag_src = -1;
                 s_rename_track = ti;
                 strncpy(s_rename_buf, track.name.c_str(), sizeof(s_rename_buf)-1);
                 s_rename_buf[sizeof(s_rename_buf)-1] = '\0';
@@ -2290,6 +2300,58 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
         track_y += TL_TRACK_H;
     }
 
+    // ── Track reorder drag ────────────────────────────────────────────────────
+    if (s_track_drag_src >= 0) {
+        if (ImGui::IsMouseDown(0)) {
+            if (!s_track_dragging && fabsf(mouse.y - s_track_drag_start_y) > 4.f)
+                s_track_dragging = true;
+            if (s_track_dragging) {
+                ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
+                float rel = mouse.y - (origin.y + TL_RULER_H);
+                int   ins = (int)roundf(rel / TL_TRACK_H);
+                s_track_drag_insert = std::clamp(ins, 0, (int)state.tracks.size());
+            }
+        } else {
+            if (s_track_dragging && s_track_drag_insert >= 0) {
+                int src = s_track_drag_src;
+                int dst = s_track_drag_insert;
+                if (dst > src) dst--;
+                if (dst != src && dst >= 0 && dst < (int)state.tracks.size()) {
+                    Track moved = std::move(state.tracks[src]);
+                    state.tracks.erase(state.tracks.begin() + src);
+                    state.tracks.insert(state.tracks.begin() + dst, std::move(moved));
+                    if      (state.selected_track == src)                                       state.selected_track = dst;
+                    else if (src < dst && state.selected_track > src && state.selected_track <= dst) state.selected_track--;
+                    else if (src > dst && state.selected_track >= dst && state.selected_track < src) state.selected_track++;
+                    history_push(state, "Reorder track");
+                }
+            }
+            s_track_drag_src    = -1;
+            s_track_dragging    = false;
+            s_track_drag_insert = -1;
+        }
+    }
+
+    if (s_track_dragging && s_track_drag_src >= 0 &&
+        s_track_drag_src < (int)state.tracks.size()) {
+        // Insert line
+        float ins_y = origin.y + TL_RULER_H + s_track_drag_insert * TL_TRACK_H;
+        dl->AddLine({origin.x, ins_y}, {origin.x + total_w, ins_y},
+                    IM_COL32(120, 200, 255, 220), 2.f);
+        dl->AddCircleFilled({origin.x + 5.f, ins_y}, 4.f, IM_COL32(120, 200, 255, 220));
+
+        // Ghost label following cursor
+        float gy0 = mouse.y - TL_TRACK_H * 0.5f;
+        float gy1 = gy0 + TL_TRACK_H;
+        dl->AddRectFilled({origin.x, gy0}, {origin.x + TL_LABEL_W, gy1},
+                          IM_COL32(20, 20, 20, 230), 3.f);
+        dl->AddRect({origin.x, gy0}, {origin.x + TL_LABEL_W, gy1},
+                    IM_COL32(120, 200, 255, 200), 3.f, 0, 1.5f);
+        dl->AddText({origin.x + 8.f, gy0 + (TL_TRACK_H - ImGui::GetTextLineHeight()) * 0.5f},
+                    IM_COL32(255, 255, 255, 255),
+                    state.tracks[s_track_drag_src].name.c_str());
+    }
+
     // ── Past-end dim overlay ──────────────────────────────────────────────────
     {
         float end_x = origin.x + TL_LABEL_W + dur * zoom - scroll;
@@ -2346,17 +2408,45 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
             dc.end   = dc.start + dur_clip;
             // Track which row the mouse is hovering for cross-track transfer.
             // hot == tracks.size() means below all tracks → "New Track" ghost row.
+            // drag_hot_gap >= 0 means between two existing tracks → insert new track there.
             float ruler_bottom = origin.y + TL_RULER_H;
-            int hot = (int)((mouse.y - ruler_bottom) / TL_TRACK_H);
             int n_tracks = (int)state.tracks.size();
-            drag_hot_track = (hot >= 0 && hot <= n_tracks) ? hot : -1;
+            const float GAP_PX = 8.f;
+            drag_hot_gap = -1;
+            for (int gi = 1; gi < n_tracks; ++gi) {
+                float boundary_y = ruler_bottom + gi * TL_TRACK_H;
+                if (fabsf(mouse.y - boundary_y) < GAP_PX) {
+                    drag_hot_gap = gi;
+                    break;
+                }
+            }
+            if (drag_hot_gap >= 0) {
+                drag_hot_track = -1;
+            } else {
+                int hot = (int)((mouse.y - ruler_bottom) / TL_TRACK_H);
+                drag_hot_track = (hot >= 0 && hot <= n_tracks) ? hot : -1;
+            }
         }
     } else {
         s_snap_indicator = -1.f;
     }
     if (ImGui::IsMouseReleased(0)) {
         if (drag_track >= 0 && drag_clip >= 0) {
-            if (!drag_left && !drag_right &&
+            if (!drag_left && !drag_right && drag_hot_gap >= 0) {
+                // Drop into gap between tracks — insert new track there
+                Clip moved = state.tracks[drag_track].clips[drag_clip];
+                state.tracks[drag_track].clips.erase(
+                    state.tracks[drag_track].clips.begin() + drag_clip);
+                Track nt;
+                char name[32];
+                snprintf(name, sizeof(name), "Track %d", (int)state.tracks.size() + 1);
+                nt.name = name;
+                nt.clips.push_back(moved);
+                state.tracks.insert(state.tracks.begin() + drag_hot_gap, std::move(nt));
+                state.selected_track = drag_hot_gap;
+                state.selected_clip  = 0;
+                history_push(state, "Move clip to new track");
+            } else if (!drag_left && !drag_right &&
                 drag_hot_track >= 0 && drag_hot_track != drag_track) {
                 Clip moved = state.tracks[drag_track].clips[drag_clip];
                 state.tracks[drag_track].clips.erase(
@@ -2384,7 +2474,8 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
                 history_push(state, act);
             }
         }
-        drag_track=-1; drag_clip=-1; drag_left=false; drag_right=false; drag_hot_track=-1;
+        drag_track=-1; drag_clip=-1; drag_left=false; drag_right=false;
+        drag_hot_track=-1; drag_hot_gap=-1;
     }
 
     // Playhead
@@ -2422,6 +2513,18 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
         }
     }
 
+    // ── Between-track gap ghost (insert new track between two existing ones) ────
+    if (drag_track >= 0 && drag_clip >= 0 && !drag_left && !drag_right &&
+        drag_hot_gap >= 0 && drag_hot_gap < (int)state.tracks.size()) {
+        float gap_y = origin.y + TL_RULER_H + drag_hot_gap * TL_TRACK_H;
+        dl->AddLine({origin.x, gap_y}, {origin.x + total_w, gap_y},
+                    IM_COL32(120, 200, 255, 220), 2.f);
+        dl->AddCircleFilled({origin.x + 5.f, gap_y}, 4.f, IM_COL32(120, 200, 255, 220));
+        float lh = ImGui::GetTextLineHeight();
+        dl->AddText({origin.x + 14.f, gap_y - lh - 3.f},
+                    IM_COL32(120, 200, 255, 200), "New Track");
+    }
+
     // ── New-track ghost row (shown when dragging below all tracks) ────────────
     if (drag_track >= 0 && drag_clip >= 0 && !drag_left && !drag_right &&
         drag_hot_track == (int)state.tracks.size() &&
@@ -2456,7 +2559,7 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
     if (add_hov && ImGui::IsMouseClicked(0)) {
         Track t;
         char name[32]; snprintf(name,sizeof(name),"Track %d",(int)state.tracks.size()+1);
-        t.name=name; state.tracks.push_back(t);
+        t.name=name; state.tracks.insert(state.tracks.begin(), std::move(t));
     }
 
     // ── Context menus ─────────────────────────────────────────────────────────
@@ -2657,7 +2760,7 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
         if (ImGui::MenuItem("Add Track")) {
             Track t;
             char n[32]; snprintf(n,sizeof(n),"Track %d",(int)state.tracks.size()+1);
-            t.name=n; state.tracks.push_back(t);
+            t.name=n; state.tracks.insert(state.tracks.begin(), std::move(t));
             history_push(state, "Add Track");
         }
         ImGui::EndPopup();
@@ -2845,7 +2948,7 @@ void ui_studio(AppState& state) {
             Clip ac; ac.clip_type = ClipType::Audio;
             ac.start = 0.f; ac.end = dur; ac.text = state.extract_wav_path;
             at.clips.push_back(ac);
-            state.tracks.push_back(at);
+            state.tracks.insert(state.tracks.begin(), std::move(at));
             history_push(state, "Extract audio from video");
         }
         state.extract_wav_path.clear();
