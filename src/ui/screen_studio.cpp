@@ -3874,8 +3874,8 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
 
                     // Draw one vertical bar per screen pixel in visible range
                     for (float px = vis_x0; px < vis_x1; px += 1.f) {
-                        float t_abs = clip.start + (px - (origin.x+TL_LABEL_W) + scroll) / zoom;
-                        int   fi    = (int)(t_abs / dt);
+                        float t_source = clip.in_point + (px - cx0) / zoom;
+                        int   fi       = (int)(t_source / dt);
                         if (fi < 0 || fi >= (int)wd->samples.size()) continue;
                         float amp = wd->samples[fi] * half;
                         if (amp < 1.f) amp = 1.f;
@@ -3953,7 +3953,7 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
             }
 
             // Left click to select / drag
-            if (ImGui::IsMouseClicked(0) && !ImGui::IsAnyItemActive()) {
+            if (ImGui::IsMouseClicked(0)) {
                 if (mouse.y>=cy0 && mouse.y<=cy1 && mouse.x>=vis_x0 && mouse.x<=vis_x1) {
                     s_clip_hit = true;
                     auto key = std::make_pair(ti, ci);
