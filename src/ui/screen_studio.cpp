@@ -1399,6 +1399,7 @@ static void draw_clip_header(AppState& state, Clip& clip, Track& track, float w)
         float cut = state.playhead;
         if (cut > clip.start + 0.02f && cut < clip.end - 0.02f) {
             Clip right = clip; clip.end = cut; right.start = cut;
+            right.in_point += (cut - clip.start) * clip.speed;
             track.clips.insert(track.clips.begin() + state.selected_clip + 1, right);
             history_push(state, "Split clip");
         }
@@ -4774,6 +4775,7 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
                 float cut = state.playhead;
                 if (cut > cc->start+0.02f && cut < cc->end-0.02f) {
                     Clip right = *cc; cc->end = cut; right.start = cut;
+                    right.in_point += (cut - cc->start) * cc->speed;
                     ct->clips.insert(ct->clips.begin()+ci+1, right);
                     history_push(state, "Split clip");
                 }
@@ -4970,6 +4972,7 @@ static void handle_shortcuts(AppState& state) {
         float cut = state.playhead;
         if (cut > clip.start + f_dt && cut < clip.end - f_dt) {
             Clip right = clip; clip.end = cut; right.start = cut;
+            right.in_point += (cut - clip.start) * clip.speed;
             track.clips.insert(track.clips.begin()+state.selected_clip+1, right);
             history_push(state, "Split clip");
         }
@@ -5281,6 +5284,7 @@ void ui_studio(AppState& state) {
                 float cut = state.playhead;
                 if (cut>c.start+0.02f && cut<c.end-0.02f) {
                     Clip r=c; c.end=cut; r.start=cut;
+                    r.in_point += (cut - c.start) * c.speed;
                     t.clips.insert(t.clips.begin()+state.selected_clip+1, r);
                     history_push(state, "Split clip");
                 }
