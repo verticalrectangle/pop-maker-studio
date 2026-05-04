@@ -121,7 +121,8 @@ static void add_clip_to_track(AppState& state, int ti, const std::string& path, 
     if (ct == ClipType::Video) {
         float dur = video_probe_duration(path);
         if (dur <= 0.f) dur = 4.f;
-        cl.end = cl.start + dur;
+        cl.end       = cl.start + dur;
+        cl.out_point = dur;  // source duration — trim handles clamp to this
         int slot = slot_for_video(state, clip_slot_key(path, cl.start), path);
         proxy_start(path);
         if (slot >= 0) {
@@ -136,7 +137,8 @@ static void add_clip_to_track(AppState& state, int ti, const std::string& path, 
         AudioMeta meta;
         float dur = audio_probe(path, meta) ? meta.duration_secs : 0.f;
         if (dur <= 0.f) dur = 4.f;
-        cl.end = cl.start + dur;
+        cl.end       = cl.start + dur;
+        cl.out_point = dur;  // source duration — trim handles clamp to this
         audio_source_ensure(path);
     } else {
         cl.end = cl.start + 2.f;  // blank text clip — 2 s default
@@ -4528,14 +4530,22 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
 
         if (drag_left && !left_locked) {
             float t = edge_snap(snap(new_t), cands);
-            float new_start = fmaxf(0.f, fminf(t, dc.end - f1));
+            // Hard stop: can't pull left past where in_point would go negative
+            // (source_time = in_point + (tl - start)*speed; at tl=new_start, that = 0 when new_start = start - in_point/speed)
+            float src_floor = (dc.out_point > 0.f)
+                ? dc.start - dc.in_point / fmaxf(0.01f, dc.speed) : 0.f;
+            float new_start = fmaxf(src_floor, fmaxf(0.f, fminf(t, dc.end - f1)));
             dc.in_point = fmaxf(0.f, dc.in_point + (new_start - dc.start));
             dc.start = new_start;
             sync_proxy_key();
         } else if (drag_right && !right_locked) {
             float et = (mouse.x - origin.x - TL_LABEL_W + scroll) / zoom;
             float t = edge_snap(snap(et), cands);
-            dc.end = fmaxf(dc.start + f1, t);
+            // Hard stop: source_time at right edge = in_point + (end-start)*speed; cap at out_point
+            float max_end = (dc.out_point > 0.f)
+                ? dc.start + (dc.out_point - dc.in_point) / fmaxf(0.01f, dc.speed)
+                : t;  // no source duration known — unclamped (old clips / text)
+            dc.end = fmaxf(dc.start + f1, fminf(t, max_end));
         } else if (!drag_left && !drag_right) {
             float dur_clip = dc.end - dc.start;
             // Try snapping both edges; use whichever is closer to a candidate.
