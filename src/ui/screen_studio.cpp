@@ -4276,18 +4276,19 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
     {
         ImVec2 row_tl = {origin.x,           track_y};
         ImVec2 row_br = {origin.x + total_w,  track_y + TL_TRACK_H};
-        bool add_hov = mouse.y >= track_y && mouse.y < track_y + TL_TRACK_H &&
-                       mouse.x >= origin.x && mouse.x <= origin.x + total_w;
+        bool add_hov       = mouse.y >= track_y && mouse.y < track_y + TL_TRACK_H &&
+                             mouse.x >= origin.x && mouse.x <= origin.x + total_w;
+        bool add_label_hov = add_hov && mouse.x < origin.x + TL_LABEL_W;
         dl->AddRectFilled(row_tl, {origin.x + TL_LABEL_W, track_y + TL_TRACK_H},
-                          to_u32(add_hov ? Col::bg_soft_hov : Col::bg_soft));
+                          to_u32(add_label_hov ? Col::bg_soft_hov : Col::bg_soft));
         dl->AddRectFilled({origin.x + TL_LABEL_W, track_y}, row_br, to_u32(Col::bg));
         dl->AddLine(row_tl, {origin.x + total_w, track_y}, to_u32(Col::line));
         dl->AddLine({origin.x + TL_LABEL_W, track_y}, {origin.x + TL_LABEL_W, track_y + TL_TRACK_H},
                     to_u32(Col::line));
         float lh = ImGui::GetTextLineHeight();
         dl->AddText({origin.x + 8.f, track_y + (TL_TRACK_H - lh) * 0.5f},
-                    to_u32(add_hov ? Col::fg : Col::muted), "+ Add Track");
-        if (add_hov && ImGui::IsMouseClicked(0)) {
+                    to_u32(add_label_hov ? Col::fg : Col::muted), "+ Add Track");
+        if (add_label_hov && ImGui::IsMouseClicked(0)) {
             Track t;
             char name[32]; snprintf(name, sizeof(name), "Track %d", (int)state.tracks.size() + 1);
             t.name = name; state.tracks.insert(state.tracks.begin(), std::move(t));
