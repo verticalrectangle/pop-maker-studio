@@ -3819,18 +3819,8 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
                     to_u32(sel ? Col::bg : Col::fg), clip.text.c_str());
                 ImGui::PopClipRect();
             } else if (clip.clip_type==ClipType::Audio || clip.clip_type==ClipType::Video) {
-                // For video clips, only draw waveform if no Audio clip overlaps (audio not extracted yet)
-                bool show_wave = true;
-                if (clip.clip_type==ClipType::Video) {
-                    for (auto& tr2 : state.tracks)
-                        for (auto& cl2 : tr2.clips)
-                            if (cl2.clip_type==ClipType::Audio &&
-                                cl2.end > clip.start && cl2.start < clip.end)
-                                { show_wave = false; break; }
-                }
-
                 const std::string& wave_path = clip.text;
-                const WaveformData* wd = show_wave && !wave_path.empty()
+                const WaveformData* wd = !wave_path.empty()
                     ? waveform_get(wave_path) : nullptr;
 
                 ImGui::PushClipRect({vis_x0,cy0},{vis_x1,cy1},true);
