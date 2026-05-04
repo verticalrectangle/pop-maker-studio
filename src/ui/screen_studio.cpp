@@ -3475,15 +3475,22 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
 
     if (in_tl) {
         float wheel = ImGui::GetIO().MouseWheel;
-        if (ImGui::GetIO().KeyCtrl && fabsf(wheel) > 0.f) {
-            float old_zoom = zoom;
-            zoom = fmaxf(20.f, fminf(zoom * (1.f + wheel * 0.1f), 4000.f));
-            float mouse_t = (mouse.x - origin.x - TL_LABEL_W + scroll) / old_zoom;
-            scroll = fmaxf(0.f, mouse_t * zoom - (mouse.x - origin.x - TL_LABEL_W));
-        } else if (fabsf(wheel) > 0.f) {
-            scroll = fmaxf(0.f, scroll - wheel * 60.f);
+        if (fabsf(wheel) > 0.f) {
+            bool in_track_body = mouse.y >= origin.y + TL_RULER_H && mouse.y < origin.y + total_h;
+            if (ImGui::GetIO().KeyCtrl) {
+                // Ctrl+scroll = zoom (anchor under cursor)
+                float old_zoom = zoom;
+                zoom = fmaxf(20.f, fminf(zoom * (1.f + wheel * 0.1f), 4000.f));
+                float mouse_t = (mouse.x - origin.x - TL_LABEL_W + scroll) / old_zoom;
+                scroll = fmaxf(0.f, mouse_t * zoom - (mouse.x - origin.x - TL_LABEL_W));
+                scroll = fminf(scroll, fmaxf(0.f, tl_content_w - clip_area_w + 60.f));
+            } else if (!in_track_body) {
+                // Plain scroll in ruler/header = horizontal pan only
+                scroll = fmaxf(0.f, scroll - wheel * 60.f);
+                scroll = fminf(scroll, fmaxf(0.f, tl_content_w - clip_area_w + 60.f));
+            }
+            // Plain scroll in track body is handled by the vertical scroll block below
         }
-        scroll = fminf(scroll, fmaxf(0.f, tl_content_w - clip_area_w + 60.f));
     }
 
     // Background
@@ -3966,7 +3973,8 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
             }
 
             // Left click to select / drag
-            if (!s_trans_hit_this_frame && ImGui::IsMouseClicked(0)) {
+            bool any_popup = ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
+            if (!s_trans_hit_this_frame && !any_popup && ImGui::IsMouseClicked(0)) {
                 if (mouse.y>=cy0 && mouse.y<=cy1 && mouse.x>=vis_x0 && mouse.x<=vis_x1) {
                     s_clip_hit = true;
                     auto key = std::make_pair(ti, ci);
@@ -4052,15 +4060,19 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
             float mid_y  = track_y + TL_TRACK_H * 0.5f;
             float r_half = 7.f;
             bool has_trans = (a.transition_type != TransitionType::None && a.transition_out > 0.f);
-            ImU32 dia_col = has_trans ? IM_COL32(255,200,60,230) : IM_COL32(200,200,200,160);
             ImVec2 pts[4] = {
                 {cut_x,          mid_y - r_half},
                 {cut_x + r_half, mid_y},
                 {cut_x,          mid_y + r_half},
                 {cut_x - r_half, mid_y}
             };
-            dl->AddConvexPolyFilled(pts, 4, has_trans ? IM_COL32(255,200,60,60) : IM_COL32(200,200,200,30));
-            dl->AddPolyline(pts, 4, dia_col, ImDrawFlags_Closed, 1.5f);
+            if (has_trans) {
+                dl->AddConvexPolyFilled(pts, 4, IM_COL32(255,200,60,80));
+                dl->AddPolyline(pts, 4, IM_COL32(255,200,60,230), ImDrawFlags_Closed, 1.5f);
+            } else {
+                dl->AddConvexPolyFilled(pts, 4, IM_COL32(18,18,18,230));
+                dl->AddPolyline(pts, 4, IM_COL32(210,210,210,220), ImDrawFlags_Closed, 1.5f);
+            }
             // Hit test
             bool dia_hov = fabsf(mouse.x - cut_x) + fabsf(mouse.y - mid_y) <= r_half + 3.f;
             if (dia_hov && ImGui::IsMouseClicked(0)) {
@@ -4216,7 +4228,14 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
     }
 
     // ── Transition picker popup ───────────────────────────────────────────────
-    ImGui::SetNextWindowPos(s_trans_popup_pos, ImGuiCond_Appearing);
+    {
+        ImVec2 disp = ImGui::GetIO().DisplaySize;
+        constexpr float PW = 200.f, PH = 160.f;
+        ImVec2 pp = s_trans_popup_pos;
+        pp.x = fmaxf(4.f, fminf(pp.x, disp.x - PW - 4.f));
+        pp.y = fmaxf(4.f, fminf(pp.y, disp.y - PH - 4.f));
+        ImGui::SetNextWindowPos(pp, ImGuiCond_Appearing);
+    }
     ImGui::SetNextWindowSize({200.f, 0.f}, ImGuiCond_Appearing);
     if (ImGui::BeginPopup("##trans_picker")) {
         if (s_trans_track >= 0 && s_trans_left_ci >= 0 &&
@@ -4288,15 +4307,42 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
         Clip& dc = state.tracks[drag_track].clips[drag_clip];
         auto cands = build_snap_candidates(drag_track, drag_clip);
         float new_t = (mouse.x - origin.x - TL_LABEL_W + scroll - drag_offset) / zoom;
+        // Helper: find transition-linked neighbour clip on same track (same-track adjacency only)
+        auto linked_right = [&]() -> Clip* {
+            auto& clips = state.tracks[drag_track].clips;
+            if (drag_clip + 1 >= (int)clips.size()) return nullptr;
+            Clip& nb = clips[drag_clip + 1];
+            if (nb.clip_type != ClipType::Video) return nullptr;
+            return (dc.transition_type != TransitionType::None) ? &nb : nullptr;
+        };
+        auto linked_left = [&]() -> Clip* {
+            if (drag_clip <= 0) return nullptr;
+            Clip& nb = state.tracks[drag_track].clips[drag_clip - 1];
+            if (nb.clip_type != ClipType::Video) return nullptr;
+            return (nb.transition_type != TransitionType::None) ? &nb : nullptr;
+        };
+
         if (drag_left) {
             float t = edge_snap(snap(new_t), cands);
             float new_start = fmaxf(0.f, fminf(t, dc.end - f1));
             dc.in_point = fmaxf(0.f, dc.in_point + (new_start - dc.start));
             dc.start = new_start;
+            // If left-linked: keep left neighbour's end flush with our start
+            if (Clip* nb = linked_left()) {
+                float nb_dur = nb->end - nb->start;
+                nb->end   = dc.start;
+                nb->start = fmaxf(0.f, nb->end - nb_dur);
+            }
         } else if (drag_right) {
             float et = (mouse.x - origin.x - TL_LABEL_W + scroll) / zoom;
             float t = edge_snap(snap(et), cands);
             dc.end = fmaxf(dc.start + f1, t);
+            // If right-linked: keep right neighbour's start flush with our end
+            if (Clip* nb = linked_right()) {
+                float nb_dur = nb->end - nb->start;
+                nb->start = dc.end;
+                nb->end   = nb->start + nb_dur;
+            }
         } else {
             float dur_clip = dc.end - dc.start;
             // Try snapping both edges; use whichever is closer to a candidate.
@@ -4316,6 +4362,9 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
             }
             dc.start = fmaxf(0.f, best_start);
             dc.end   = dc.start + dur_clip;
+            // Co-move transition-linked neighbours
+            if (Clip* nb = linked_right()) { float d = nb->end - nb->start; nb->start = dc.end;   nb->end = nb->start + d; }
+            if (Clip* nb = linked_left())  { float d = nb->end - nb->start; nb->end   = dc.start; nb->start = fmaxf(0.f, nb->end - d); }
             // Track which row the mouse is hovering for cross-track transfer.
             // hot == tracks.size() means below all tracks → "New Track" ghost row.
             // drag_hot_gap >= 0 means between two existing tracks → insert new track there.
@@ -4396,7 +4445,8 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
     }
 
     // Click ruler to seek (frame-snapped + edge-snapped, Ctrl bypasses both)
-    if ((ImGui::IsMouseClicked(0)||ImGui::IsMouseDragging(0)) && drag_track<0) {
+    bool any_popup_global = ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
+    if (!any_popup_global && (ImGui::IsMouseClicked(0)||ImGui::IsMouseDragging(0)) && drag_track<0) {
         if (mouse.y>=origin.y && mouse.y<=origin.y+TL_RULER_H &&
             mouse.x>=origin.x+TL_LABEL_W && mouse.x<=origin.x+total_w) {
             float raw = (mouse.x - origin.x - TL_LABEL_W + scroll) / zoom;
@@ -5581,7 +5631,8 @@ void ui_studio(AppState& state) {
     // ── Timeline panel ────────────────────────────────────────────────────────
     ImGui::PushStyleColor(ImGuiCol_ChildBg, Col::bg);
     ImGui::PushStyleColor(ImGuiCol_Border,  Col::line);
-    if (ImGui::BeginChild("##tl_zone", {win_w, tl_h}, ImGuiChildFlags_Borders)) {
+    if (ImGui::BeginChild("##tl_zone", {win_w, tl_h}, ImGuiChildFlags_Borders,
+            ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {
         // Header bar
         ImDrawList* tl_dl = ImGui::GetWindowDrawList();
         ImVec2 hdr_tl = ImGui::GetCursorScreenPos();
