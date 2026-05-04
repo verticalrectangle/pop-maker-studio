@@ -906,8 +906,10 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                 if (!cl_ptr) return;
                 int slot = slot_for_video(const_cast<AppState&>(state),
                                clip_slot_key(cl_ptr->text, cl_ptr->start), cl_ptr->text);
+                // Map timeline time → source file time via clip's in_point and speed.
+                float src_t = cl_ptr->in_point + (at_time - cl_ptr->start) * cl_ptr->speed;
                 uintptr_t tex = (slot >= 0 && video_is_open(slot))
-                    ? video_get_texture(slot, (double)(at_time + lookahead)) : 0;
+                    ? video_get_texture(slot, (double)(src_t + lookahead)) : 0;
                 if (!tex) return;
                 float px    = cl_ptr->eval_prop("pos_x",    at_time);
                 float py    = cl_ptr->eval_prop("pos_y",    at_time);
@@ -5134,39 +5136,26 @@ void ui_studio(AppState& state) {
     }
     last_stage = state.pipeline.stage;
 
-    // Main buffer volume — driven by the Video clip at the playhead (embedded audio gain).
-    // Audio clips handle their own volume in the callback.
+    // Push clip snapshots to audio system every frame.
+    // The callback reads these to position audio correctly — no separate volume hack needed.
     {
-        float vol = 1.f;
-        for (auto& tr : state.tracks) {
-            if (tr.muted) { vol = 0.f; break; }
-            for (auto& cl : tr.clips) {
-                if (cl.clip_type != ClipType::Video) continue;
-                if (state.playhead >= cl.start && state.playhead < cl.end) {
-                    vol = cl.volume; break;
-                }
-            }
-        }
-        audio_set_volume(vol);
-    }
-
-    // Push clip snapshot to audio system every frame.
-    {
-        std::vector<AudioClipDesc> descs;
+        std::vector<AudioClipDesc> vdescs, adescs;
         for (auto& tr : state.tracks) {
             if (tr.muted) continue;
             for (auto& cl : tr.clips) {
-                if (cl.clip_type != ClipType::Audio || cl.text.empty()) continue;
+                if (cl.text.empty()) continue;
                 AudioClipDesc d;
-                d.tl_start = cl.start; d.tl_end   = cl.end;
-                d.in_point = cl.in_point; d.speed  = cl.speed;
-                d.volume   = cl.volume;   d.pan    = cl.pan;
+                d.tl_start = cl.start;    d.tl_end   = cl.end;
+                d.in_point = cl.in_point; d.speed    = cl.speed;
+                d.volume   = cl.volume;   d.pan      = cl.pan;
                 d.fade_in  = cl.fade_in;  d.fade_out = cl.fade_out;
                 d.path     = cl.text;
-                descs.push_back(d);
+                if      (cl.clip_type == ClipType::Video) vdescs.push_back(d);
+                else if (cl.clip_type == ClipType::Audio) adescs.push_back(d);
             }
         }
-        audio_clips_update(descs);
+        video_audio_clips_update(vdescs);
+        audio_clips_update(adescs);
     }
 
     if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_H))

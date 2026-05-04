@@ -45,5 +45,8 @@ void audio_source_ensure(const std::string& path);
 // Push a fresh snapshot of all Audio clips — called every frame.
 void audio_clips_update(const std::vector<AudioClipDesc>& clips);
 
+// Push a fresh snapshot of all Video clips (for embedded audio) — called every frame.
+void video_audio_clips_update(const std::vector<AudioClipDesc>& clips);
+
 // Free all per-clip source buffers (call on project close / new project).
 void audio_clips_clear();

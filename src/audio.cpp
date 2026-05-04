@@ -55,8 +55,9 @@ struct ClipInfo {
 };
 
 static std::mutex            g_clip_mutex;
-static std::vector<SrcBuf>   g_src_bufs;  // guarded by g_clip_mutex
-static std::vector<ClipInfo> g_clips;     // guarded by g_clip_mutex
+static std::vector<SrcBuf>   g_src_bufs;   // guarded by g_clip_mutex
+static std::vector<ClipInfo> g_clips;      // Audio-track clips
+static std::vector<ClipInfo> g_vid_clips;  // Video-embedded clips (read from g_samples)
 
 // ── Audio callback ────────────────────────────────────────────────────────────
 
@@ -65,29 +66,53 @@ static void data_callback(ma_device* pDevice, void* pOutput, const void*, ma_uin
         memset(pOutput, 0, frameCount * pDevice->playback.channels * sizeof(float));
         return;
     }
-    float* out  = (float*)pOutput;
+    float* out = (float*)pOutput;
     size_t pos  = g_read_pos.load(std::memory_order_relaxed);
     size_t need = (size_t)frameCount * 2;
 
-    // Main audio buffer
-    size_t avail = (g_samples.size() > pos) ? (g_samples.size() - pos) : 0;
-    size_t copy  = (avail < need) ? avail : need;
-    float  vol   = g_volume;
-    for (size_t i = 0; i < copy; ++i)
-        out[i] = g_samples[pos + i] * vol;
-    if (copy < need)
-        memset(out + copy, 0, (need - copy) * sizeof(float));
-
-    // Always advance so g_read_pos tracks timeline time even without main audio
+    // Advance the timeline clock first — g_read_pos is our master clock, not a source cursor.
     g_read_pos.store(pos + need, std::memory_order_relaxed);
 
-    // Mix Audio clips
+    // Start with silence.
+    memset(out, 0, need * sizeof(float));
+
+    // Inline fade helper.
+    auto clip_fade = [](const ClipInfo& cl, float t) -> float {
+        float fade = 1.f;
+        float dt_in  = t - cl.tl_start;
+        float dt_out = cl.tl_end - t;
+        if (cl.fade_in  > 0.f && dt_in  < cl.fade_in)  fade = dt_in / cl.fade_in;
+        if (cl.fade_out > 0.f && dt_out < cl.fade_out) fade = std::fminf(fade, dt_out / cl.fade_out);
+        return fade;
+    };
+
     std::unique_lock<std::mutex> lk(g_clip_mutex, std::try_to_lock);
-    if (!lk.owns_lock() || g_clips.empty()) return;
+    if (!lk.owns_lock()) return;
 
     float t0 = (float)(pos / 2) / 44100.f;
+
     for (ma_uint32 f = 0; f < frameCount; ++f) {
         float t = t0 + (float)f / 44100.f;
+
+        // ── Video-embedded audio (from g_samples, clip-positioned) ────────────
+        // Silence in gaps; correct source offset inside each clip.
+        if (!g_samples.empty()) {
+            for (const auto& cl : g_vid_clips) {
+                if (t < cl.tl_start || t >= cl.tl_end) continue;
+                float src_t = cl.in_point + (t - cl.tl_start) * cl.speed;
+                size_t sp = (size_t)(src_t * 44100.f) * 2;
+                if (sp + 1 >= g_samples.size()) break;
+                float fade = clip_fade(cl, t);
+                float vol  = cl.volume * g_volume * fade;
+                float panL = cl.pan <= 0.f ? 1.f : (1.f - cl.pan);
+                float panR = cl.pan >= 0.f ? 1.f : (1.f + cl.pan);
+                out[f*2]   += g_samples[sp]   * vol * panL;
+                out[f*2+1] += g_samples[sp+1] * vol * panR;
+                break;  // at most one video clip active per moment
+            }
+        }
+
+        // ── Timeline Audio-track clips (from per-source PCM cache) ────────────
         for (const auto& cl : g_clips) {
             if (t < cl.tl_start || t >= cl.tl_end) continue;
             if (cl.buf_idx < 0 || cl.buf_idx >= (int)g_src_bufs.size()) continue;
@@ -96,19 +121,18 @@ static void data_callback(ma_device* pDevice, void* pOutput, const void*, ma_uin
             float src_t = cl.in_point + (t - cl.tl_start) * cl.speed;
             size_t sp = (size_t)(src_t * 44100.f) * 2;
             if (sp + 1 >= buf.size()) continue;
-            float fade = 1.f;
-            float dt_in  = t - cl.tl_start;
-            float dt_out = cl.tl_end - t;
-            if (cl.fade_in  > 0.f && dt_in  < cl.fade_in)  fade = dt_in  / cl.fade_in;
-            if (cl.fade_out > 0.f && dt_out < cl.fade_out) fade = std::fminf(fade, dt_out / cl.fade_out);
-            float sL = buf[sp]   * cl.volume * fade;
-            float sR = buf[sp+1] * cl.volume * fade;
+            float fade = clip_fade(cl, t);
+            float vol  = cl.volume * fade;
             float panL = cl.pan <= 0.f ? 1.f : (1.f - cl.pan);
             float panR = cl.pan >= 0.f ? 1.f : (1.f + cl.pan);
-            out[f*2]   = std::fminf(1.f, out[f*2]   + sL * panL);
-            out[f*2+1] = std::fminf(1.f, out[f*2+1] + sR * panR);
+            out[f*2]   += buf[sp]   * vol * panL;
+            out[f*2+1] += buf[sp+1] * vol * panR;
         }
     }
+
+    // Hard-clamp to prevent inter-clip summing from clipping.
+    for (size_t i = 0; i < need; ++i)
+        out[i] = std::fmaxf(-1.f, std::fminf(1.f, out[i]));
 }
 
 // ── Device init/shutdown ──────────────────────────────────────────────────────
@@ -319,8 +343,23 @@ void audio_clips_update(const std::vector<AudioClipDesc>& descs) {
     }
 }
 
+void video_audio_clips_update(const std::vector<AudioClipDesc>& descs) {
+    std::lock_guard<std::mutex> lk(g_clip_mutex);
+    g_vid_clips.clear();
+    for (const auto& d : descs) {
+        ClipInfo ci;
+        ci.tl_start = d.tl_start; ci.tl_end   = d.tl_end;
+        ci.in_point = d.in_point; ci.speed     = d.speed;
+        ci.volume   = d.volume;   ci.pan       = d.pan;
+        ci.fade_in  = d.fade_in;  ci.fade_out  = d.fade_out;
+        ci.buf_idx  = -1;  // Video clips read from g_samples, not g_src_bufs
+        g_vid_clips.push_back(ci);
+    }
+}
+
 void audio_clips_clear() {
     std::lock_guard<std::mutex> lk(g_clip_mutex);
     g_src_bufs.clear();
     g_clips.clear();
+    g_vid_clips.clear();
 }
