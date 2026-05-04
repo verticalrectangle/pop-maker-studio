@@ -1009,6 +1009,40 @@ static void panel_clip(AppState& state, float w) {
             ImGui::TextUnformatted("Push position + color to every clip from this source");
             ImGui::EndTooltip();
         }
+
+        // Apply to multi-selection
+        int sel_count = 0;
+        for (auto& [st, sc] : state.clip_selection) {
+            if (st == state.selected_track && sc == state.selected_clip) continue;
+            if (st < (int)state.tracks.size() && sc < (int)state.tracks[st].clips.size() &&
+                state.tracks[st].clips[sc].clip_type == clip.clip_type)
+                ++sel_count;
+        }
+        if (sel_count > 0) {
+            ImGui::SameLine(0.f, 6.f);
+            char slbl[48];
+            snprintf(slbl, sizeof(slbl), "Apply to %d selected##clip", sel_count);
+            if (ui_btn(slbl, false, true)) {
+                for (auto& [st, sc] : state.clip_selection) {
+                    if (st == state.selected_track && sc == state.selected_clip) continue;
+                    if (st >= (int)state.tracks.size() || sc >= (int)state.tracks[st].clips.size()) continue;
+                    Clip& tgt = state.tracks[st].clips[sc];
+                    if (tgt.clip_type != clip.clip_type) continue;
+                    tgt.karaoke            = clip.karaoke;
+                    tgt.sub_pos            = clip.sub_pos;
+                    tgt.sub_pos_y          = clip.sub_pos_y;
+                    tgt.sub_color_override = clip.sub_color_override;
+                    memcpy(tgt.sub_color, clip.sub_color, sizeof(clip.sub_color));
+                }
+                history_push(state, "Apply style to selected clips");
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::BeginTooltip();
+                ImGui::TextUnformatted("Push position, color and karaoke flag to selected clips");
+                ImGui::EndTooltip();
+            }
+        }
+
         ImGui::Dummy({0.f, 8.f});
     }
 
@@ -1705,92 +1739,41 @@ static void panel_lyrics(AppState& state, float w) {
             ImGui::TextUnformatted("Re-bucket all Lyrics clips from saved word JSON");
             ImGui::EndTooltip();
         }
+
+        // Apply grouping to selected clips only
+        int sel_lyrics = 0;
+        for (auto& [st, sc] : state.clip_selection) {
+            if (st == state.selected_track && sc == state.selected_clip) continue;
+            if (st < (int)state.tracks.size() && sc < (int)state.tracks[st].clips.size() &&
+                state.tracks[st].clips[sc].clip_type == ClipType::Lyrics)
+                ++sel_lyrics;
+        }
+        if (sel_lyrics > 0) {
+            ImGui::SameLine(0.f, 6.f);
+            char glbl[56];
+            snprintf(glbl, sizeof(glbl), "Apply to %d selected##grp", sel_lyrics);
+            if (ui_btn(glbl, false, true)) {
+                // Apply karaoke flag (set by Karaoke mode) to selected clips
+                bool is_karaoke = state.subtitle_mode == SubtitleMode::Karaoke;
+                for (auto& [st, sc] : state.clip_selection) {
+                    if (st == state.selected_track && sc == state.selected_clip) continue;
+                    if (st >= (int)state.tracks.size() || sc >= (int)state.tracks[st].clips.size()) continue;
+                    Clip& tgt = state.tracks[st].clips[sc];
+                    if (tgt.clip_type != ClipType::Lyrics) continue;
+                    tgt.karaoke = is_karaoke;
+                }
+                history_push(state, "Apply grouping mode to selected");
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::BeginTooltip();
+                ImGui::TextUnformatted("Apply current grouping mode to selected Lyrics clips");
+                ImGui::EndTooltip();
+            }
+        }
     } else {
         ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
         ImGui::TextWrapped("Run ML Processing on an audio clip to generate word JSON.");
         ImGui::PopStyleColor();
-    }
-
-    // ── Position / color (same as Clip tab) ──────────────────────────────────
-    ImGui::Dummy({0.f, 12.f}); ui_separator(); ImGui::Dummy({0.f, 8.f});
-    ui_label("Position"); ImGui::Dummy({0.f, 4.f});
-
-    static const struct { int v; const char* l; } pos_btns[] = {
-        {2,"Top"},{1,"Center"},{0,"Bottom"},{3,"Custom"}
-    };
-    for (auto& pb : pos_btns) {
-        if (ui_btn(pb.l, clip.sub_pos == pb.v, true)) {
-            clip.sub_pos = pb.v;
-            history_push(state, "Subtitle position");
-        }
-        ImGui::SameLine(0.f, 4.f);
-    }
-    ImGui::NewLine();
-    if (clip.sub_pos == 3) {
-        ImGui::Dummy({0.f, 4.f});
-        ImGui::PushStyleColor(ImGuiCol_FrameBg,    Col::bg_soft);
-        ImGui::PushStyleColor(ImGuiCol_Border,     Col::line);
-        ImGui::PushStyleColor(ImGuiCol_SliderGrab, Col::fg);
-        ImGui::SetNextItemWidth(w - 16.f);
-        if (ImGui::SliderFloat("##lyric_y", &clip.sub_pos_y, 0.f, 1.f, "Y  %.2f"))
-            history_push(state, "Subtitle position Y");
-        ImGui::PopStyleColor(3);
-    }
-
-    ImGui::Dummy({0.f, 8.f});
-    ui_label("Color"); ImGui::Dummy({0.f, 4.f});
-    ImGui::PushStyleColor(ImGuiCol_FrameBg, Col::bg_soft);
-    ImGui::PushStyleColor(ImGuiCol_Border,  Col::line);
-    {
-        bool ov = clip.sub_color_override;
-        if (ui_btn(ov ? "Custom" : "White", ov, true)) {
-            clip.sub_color_override = !clip.sub_color_override;
-            history_push(state, "Subtitle color override");
-        }
-        if (clip.sub_color_override) {
-            ImGui::Dummy({0.f, 4.f});
-            ImGui::SetNextItemWidth(w - 16.f);
-            ImGui::ColorEdit4("##lyric_col", clip.sub_color,
-                ImGuiColorEditFlags_NoLabel | ImGuiColorEditFlags_AlphaBar);
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Subtitle color");
-        }
-    }
-    ImGui::PopStyleColor(2);
-
-    // ── Apply style to selected Lyrics clips ─────────────────────────────────
-    // Count how many other Lyrics clips are in the selection
-    int sel_lyrics = 0;
-    for (auto& [st, sc] : state.clip_selection) {
-        if (st == state.selected_track && sc == state.selected_clip) continue;
-        if (st < (int)state.tracks.size() && sc < (int)state.tracks[st].clips.size() &&
-            state.tracks[st].clips[sc].clip_type == ClipType::Lyrics)
-            ++sel_lyrics;
-    }
-
-    if (sel_lyrics > 0) {
-        ImGui::Dummy({0.f, 12.f}); ui_separator(); ImGui::Dummy({0.f, 8.f});
-        char btn_lbl[48];
-        snprintf(btn_lbl, sizeof(btn_lbl), "Apply to %d selected clip%s",
-            sel_lyrics, sel_lyrics == 1 ? "" : "s");
-        if (ui_btn(btn_lbl, true, true)) {
-            for (auto& [st, sc] : state.clip_selection) {
-                if (st == state.selected_track && sc == state.selected_clip) continue;
-                if (st >= (int)state.tracks.size() || sc >= (int)state.tracks[st].clips.size()) continue;
-                Clip& tgt = state.tracks[st].clips[sc];
-                if (tgt.clip_type != ClipType::Lyrics) continue;
-                tgt.karaoke            = clip.karaoke;
-                tgt.sub_pos            = clip.sub_pos;
-                tgt.sub_pos_y          = clip.sub_pos_y;
-                tgt.sub_color_override = clip.sub_color_override;
-                std::copy(std::begin(clip.sub_color), std::end(clip.sub_color), std::begin(tgt.sub_color));
-            }
-            history_push(state, "Apply style to selected clips");
-        }
-        if (ImGui::IsItemHovered()) {
-            ImGui::BeginTooltip();
-            ImGui::TextUnformatted("Copy position, color and karaoke flag to all selected Lyrics clips");
-            ImGui::EndTooltip();
-        }
     }
 }
 
