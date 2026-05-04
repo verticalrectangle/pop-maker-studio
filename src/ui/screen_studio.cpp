@@ -5134,8 +5134,9 @@ void ui_studio(AppState& state) {
 
     // Timeline height — user-draggable, default auto
     float tl_h_auto  = fminf(200.f, TL_RULER_H + ((int)state.tracks.size()+2) * TL_TRACK_H);
+    static const float TL_MIN_H = TL_RULER_H + 4 * TL_TRACK_H;
     float tl_h       = (state.tl_h_frac > 0.f)
-                        ? fmaxf(60.f, fminf(avail_h * 0.7f, state.tl_h_frac * avail_h))
+                        ? fmaxf(TL_MIN_H, fminf(avail_h * 0.7f, state.tl_h_frac * avail_h))
                         : tl_h_auto;
     float body_h     = avail_h - tl_h;
 
