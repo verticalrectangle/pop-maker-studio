@@ -6,7 +6,7 @@
 // ── Binary serialization helpers ──────────────────────────────────────────────
 
 static const uint32_t MAGIC   = 0x534D5001u; // "PMS\x01"
-static const uint32_t VERSION = 6u;
+static const uint32_t VERSION = 7u;
 
 struct Writer {
     std::ofstream f;
@@ -94,7 +94,7 @@ static void write_clip(Writer& w, const Clip& c) {
     w.pod((uint8_t)c.clip_type);
     w.pod(c.start); w.pod(c.end);
     w.str(c.text); w.str(c.source_id);
-    w.pod(c.volume); w.pod(c.speed); w.pod(c.opacity); w.pod(c.transition_out);
+    w.pod(c.volume); w.pod(c.speed); w.pod(c.opacity); w.pod(c.transition_pre);
     w.pod(c.fade_in); w.pod(c.fade_out);
     w.pod(c.in_point); w.pod(c.out_point);
     w.pod(c.pan); w.pod(c.blend_mode);
@@ -106,7 +106,7 @@ static void write_clip(Writer& w, const Clip& c) {
     w.pod(c.karaoke_highlight_color[2]); w.pod(c.karaoke_highlight_color[3]);
     w.pod(c.pos_x); w.pod(c.pos_y); w.pod(c.scale_x); w.pod(c.scale_y); w.pod(c.rotation);
     w.pod((uint8_t)c.clip_style);
-    w.pod((uint8_t)c.transition_type);
+    w.pod((uint8_t)c.transition_type); w.pod(c.transition_post);
     // Effect fields
     w.pod((uint8_t)c.fx_color_on); w.pod(c.fx_brightness); w.pod(c.fx_contrast);
     w.pod(c.fx_saturation); w.pod(c.fx_hue);
@@ -130,7 +130,7 @@ static Clip read_clip(Reader& r, uint32_t version) {
     c.end        = r.pod<float>();
     c.text       = r.str(); c.source_id = r.str();
     c.volume     = r.pod<float>(); c.speed = r.pod<float>();
-    c.opacity    = r.pod<float>(); c.transition_out = r.pod<float>();
+    c.opacity    = r.pod<float>(); c.transition_pre = r.pod<float>();
     c.fade_in    = r.pod<float>(); c.fade_out = r.pod<float>();
     c.in_point   = r.pod<float>(); c.out_point = r.pod<float>();
     c.pan        = r.pod<float>(); c.blend_mode = r.pod<int>();
@@ -145,7 +145,11 @@ static Clip read_clip(Reader& r, uint32_t version) {
     c.scale_x    = r.pod<float>(); c.scale_y  = r.pod<float>();
     c.rotation   = r.pod<float>();
     c.clip_style = (AnimStyle)r.pod<uint8_t>();
-    if (version >= 6u) c.transition_type = (TransitionType)r.pod<uint8_t>();
+    if (version >= 6u) {
+        c.transition_type = (TransitionType)r.pod<uint8_t>();
+        if (version >= 7u) c.transition_post = r.pod<float>();
+        else               c.transition_post = c.transition_pre; // v6: symmetric fallback
+    }
     // Effect fields
     c.fx_color_on   = (bool)r.pod<uint8_t>(); c.fx_brightness = r.pod<float>();
     c.fx_contrast   = r.pod<float>(); c.fx_saturation = r.pod<float>();

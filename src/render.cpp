@@ -243,9 +243,10 @@ static bool write_filter_script(
     // ── Build transition info map (keyed by track_idx, clip_idx) ─────────────
     // For each video clip: does it fade out to the next? does it fade in from the previous?
     struct TransInfo {
-        bool  is_out = false;  // this clip has transition_out to next
-        bool  is_in  = false;  // previous clip has transition into this
-        float dur    = 0.f;    // transition duration
+        bool  is_out = false;
+        bool  is_in  = false;
+        float pre    = 0.f;   // fade duration inside outgoing clip
+        float post   = 0.f;   // fade duration inside incoming clip
         TransitionType type = TransitionType::None;
     };
     std::map<std::pair<int,int>, TransInfo> trans_map;
@@ -255,14 +256,16 @@ static bool write_filter_script(
             const Clip& A = clips[ci];
             const Clip& B = clips[ci + 1];
             if (A.clip_type != ClipType::Video || B.clip_type != ClipType::Video) continue;
-            if (A.transition_type == TransitionType::None || A.transition_out <= 0.f) continue;
-            float dur = A.transition_out;
+            if (A.transition_type == TransitionType::None) continue;
+            if (A.transition_pre <= 0.f && A.transition_post <= 0.f) continue;
             trans_map[{ti, ci}].is_out = true;
-            trans_map[{ti, ci}].dur    = dur;
+            trans_map[{ti, ci}].pre    = A.transition_pre;
+            trans_map[{ti, ci}].post   = A.transition_post;
             trans_map[{ti, ci}].type   = A.transition_type;
-            trans_map[{ti, ci + 1}].is_in = true;
-            trans_map[{ti, ci + 1}].dur   = dur;
-            trans_map[{ti, ci + 1}].type  = A.transition_type;
+            trans_map[{ti, ci+1}].is_in = true;
+            trans_map[{ti, ci+1}].pre   = A.transition_pre;
+            trans_map[{ti, ci+1}].post  = A.transition_post;
+            trans_map[{ti, ci+1}].type  = A.transition_type;
         }
     }
 
@@ -309,25 +312,23 @@ static bool write_filter_script(
 
                     if (has_trans) {
                         const TransInfo& ti2 = tit->second;
-                        float dur = ti2.dur;
-                        // en1 = clip end relative to vid_ss
-                        float en1 = fmaxf(0.f, cl.end - rl.vid_ss);
+                        float en1 = fmaxf(0.f, cl.end   - rl.vid_ss);
+                        float en0 = fmaxf(0.f, cl.start - rl.vid_ss);
 
-                        if (ti2.is_out) {
-                            // Fade out: multiply by (1 - clamp((t-(en1-dur))/dur, 0, 1))
+                        if (ti2.is_out && ti2.pre > 0.f) {
+                            // Fade out over transition_pre seconds before cut
                             char fade[128];
                             snprintf(fade, sizeof(fade),
                                 "(1-clip((t-%.3f)/%.3f\\,0\\,1))",
-                                (double)(en1 - dur), (double)(dur > 0.f ? dur : 1e-5f));
+                                (double)(en1 - ti2.pre), (double)ti2.pre);
                             aa_expr = "(" + aa_expr + "*" + fade + ")";
                         }
-                        if (ti2.is_in) {
-                            // Fade in: multiply by clamp((t-en0)/dur, 0, 1)
-                            float en0 = fmaxf(0.f, cl.start - rl.vid_ss);
+                        if (ti2.is_in && ti2.post > 0.f) {
+                            // Fade in over transition_post seconds after cut
                             char fade[128];
                             snprintf(fade, sizeof(fade),
                                 "clip((t-%.3f)/%.3f\\,0\\,1)",
-                                (double)en0, (double)(dur > 0.f ? dur : 1e-5f));
+                                (double)en0, (double)ti2.post);
                             aa_expr = "(" + aa_expr + "*" + fade + ")";
                         }
                     }
@@ -420,13 +421,18 @@ static bool write_filter_script(
                 auto tit2 = trans_map.find({rl.track_idx, rl.clip_idx});
                 if (tit2 != trans_map.end() && tit2->second.is_out &&
                     tit2->second.type == TransitionType::DipWhite) {
-                    float dur = tit2->second.dur;
-                    float t_start = en1 - dur;  // transition start in output time
-                    // alpha = 1 - |clamp((t-t_start)/dur, 0, 1) - 0.5| * 2
+                    float pre  = tit2->second.pre;
+                    float post = tit2->second.post;
+                    float total = pre + post;
+                    float t_start = en1 - pre;
+                    // alpha peaks at the cut point (t = en1)
                     char wexpr[256];
                     snprintf(wexpr, sizeof(wexpr),
-                        "(1-abs(clip((t-%.3f)/%.3f\\,0\\,1)-0.5)*2)",
-                        (double)t_start, (double)(dur > 0.f ? dur : 1e-5f));
+                        "(1-abs(clip((t-%.3f)/%.3f\\,0\\,1)-%.3f)*%.3f)",
+                        (double)t_start,
+                        (double)(total > 0.f ? total : 1e-5f),
+                        (double)(total > 0.f ? pre / total : 0.5),
+                        (double)(total > 0.f ? total / fmaxf(pre, post) : 2.0));
                     std::string w_src  = "[wfill"  + std::to_string(vid_idx) + "]";
                     std::string w_opa  = "[wopa"   + std::to_string(vid_idx) + "]";
                     std::string w_next = "[wov"    + std::to_string(vid_idx) + "]";

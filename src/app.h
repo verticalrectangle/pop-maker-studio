@@ -71,7 +71,8 @@ struct Clip {
     float volume         = 1.f;   // audio gain multiplier (0–2)
     float speed          = 1.f;   // playback speed (0.25–4)
     float opacity        = 1.f;   // video opacity (0–1)
-    float          transition_out  = 0.f;               // transition duration in seconds
+    float          transition_pre  = 0.f;               // seconds the transition extends into this clip (before cut)
+    float          transition_post = 0.f;               // seconds the transition extends into the next clip (after cut)
     TransitionType transition_type = TransitionType::None; // transition to next clip on same track
 
     // fade in/out — opacity ramp applied at render & preview when no manual opacity KFs exist

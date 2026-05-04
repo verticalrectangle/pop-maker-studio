@@ -913,75 +913,66 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
             }
 
             // Check if incoming clip has a transition that started before its start
+            // Also show incoming clip B when playhead is inside its transition_post zone
+            // (clip B hasn't started in [active] loop above, but needs to be visible)
             if (!active) {
-                for (int ci = 0; ci < (int)track.clips.size(); ++ci) {
-                    auto& cl = track.clips[ci];
-                    if (cl.clip_type != ClipType::Video) continue;
-                    if (ci == 0) continue;
+                for (int ci = 1; ci < (int)track.clips.size(); ++ci) {
                     const Clip& prev = track.clips[ci - 1];
-                    if (prev.clip_type != ClipType::Video) continue;
-                    float dur = prev.transition_out;
-                    if (prev.transition_type == TransitionType::None || dur <= 0.f) continue;
-                    // Playhead in [prev.end - dur/2 .. prev.end] for FadeBlack/DipWhite
-                    if (state.playhead >= prev.end - dur * 0.5f && state.playhead < prev.end) {
-                        active = &cl; active_ci = ci; break;
-                    }
+                    const Clip& cl   = track.clips[ci];
+                    if (prev.clip_type != ClipType::Video || cl.clip_type != ClipType::Video) continue;
+                    if (prev.transition_type == TransitionType::None || prev.transition_post <= 0.f) continue;
+                    if (state.playhead >= cl.start && state.playhead < cl.start + prev.transition_post)
+                        { active = &track.clips[ci]; active_ci = ci; break; }
                 }
             }
 
             if (active) {
-                // Check outgoing transition: is playhead in last transition_out seconds?
                 bool in_trans_out = (active->transition_type != TransitionType::None &&
-                                     active->transition_out > 0.f &&
-                                     state.playhead >= active->end - active->transition_out);
+                                     active->transition_pre > 0.f &&
+                                     state.playhead >= active->end - active->transition_pre);
                 const Clip* next_cl = nullptr;
                 if (in_trans_out && active_ci + 1 < (int)track.clips.size()) {
                     const Clip& nc = track.clips[active_ci + 1];
                     if (nc.clip_type == ClipType::Video) next_cl = &nc;
                 }
 
-                // Check incoming transition: is playhead in first transition_out seconds of next?
                 bool in_trans_in = false;
                 const Clip* prev_cl = nullptr;
                 if (!in_trans_out && active_ci > 0) {
                     const Clip& pc = track.clips[active_ci - 1];
                     if (pc.clip_type == ClipType::Video &&
                         pc.transition_type != TransitionType::None &&
-                        pc.transition_out > 0.f &&
-                        state.playhead < active->start + pc.transition_out) {
+                        pc.transition_post > 0.f &&
+                        state.playhead < active->start + pc.transition_post) {
                         in_trans_in = true;
                         prev_cl = &pc;
                     }
                 }
 
                 if (in_trans_out && next_cl) {
-                    float D = active->transition_out;
-                    float t_in_trans = (state.playhead - (active->end - D)) / D; // 0→1
-                    t_in_trans = std::fmaxf(0.f, std::fminf(1.f, t_in_trans));
+                    // t_a: 0→1 over [end-pre .. end], t_b: 0→1 over [end .. end+post]
+                    float pre = active->transition_pre, post = active->transition_post;
+                    float cut = active->end;
+                    float t_a = std::fmaxf(0.f, std::fminf(1.f, (state.playhead - (cut - pre)) / fmaxf(pre, 1e-5f)));
+                    float t_b = std::fmaxf(0.f, std::fminf(1.f, (state.playhead - cut) / fmaxf(post, 1e-5f)));
 
                     if (active->transition_type == TransitionType::Dissolve) {
-                        draw_vid_clip(active,  state.playhead, 1.f - t_in_trans);
-                        draw_vid_clip(next_cl, state.playhead, t_in_trans);
+                        draw_vid_clip(active,  state.playhead, 1.f - t_a);
+                        draw_vid_clip(next_cl, state.playhead, t_b > 0.f ? t_b : t_a); // blend once cut passes
                     } else if (active->transition_type == TransitionType::FadeBlack) {
-                        float a_out = (t_in_trans < 0.5f) ? (1.f - t_in_trans * 2.f) : 0.f;
-                        float b_in  = (t_in_trans >= 0.5f) ? ((t_in_trans - 0.5f) * 2.f) : 0.f;
-                        draw_vid_clip(active,  state.playhead, a_out);
-                        draw_vid_clip(next_cl, state.playhead, b_in);
+                        draw_vid_clip(active,  state.playhead, 1.f - t_a);
+                        draw_vid_clip(next_cl, state.playhead, t_b);
                     } else { // DipWhite
-                        float a_out = (t_in_trans < 0.5f) ? (1.f - t_in_trans * 2.f) : 0.f;
-                        float b_in  = (t_in_trans >= 0.5f) ? ((t_in_trans - 0.5f) * 2.f) : 0.f;
-                        draw_vid_clip(active,  state.playhead, a_out);
-                        if (active->transition_type == TransitionType::DipWhite) {
-                            float white_a = 1.f - fabsf(t_in_trans - 0.5f) * 2.f;
+                        draw_vid_clip(active, state.playhead, 1.f - t_a);
+                        float white_a = t_a * (1.f - t_b);
+                        if (white_a > 0.01f)
                             dl->AddRectFilled(p, {p.x+w, p.y+h}, IM_COL32(255,255,255,(int)(white_a*255.f)));
-                        }
-                        draw_vid_clip(next_cl, state.playhead, b_in);
+                        draw_vid_clip(next_cl, state.playhead, t_b);
                     }
                 } else if (in_trans_in && prev_cl) {
-                    float D = prev_cl->transition_out;
-                    float t_in_trans = (state.playhead - active->start) / D;
-                    t_in_trans = std::fmaxf(0.f, std::fminf(1.f, t_in_trans));
-                    draw_vid_clip(active, state.playhead, t_in_trans);
+                    float t = std::fmaxf(0.f, std::fminf(1.f,
+                        (state.playhead - active->start) / fmaxf(prev_cl->transition_post, 1e-5f)));
+                    draw_vid_clip(active, state.playhead, t);
                 } else {
                     draw_vid_clip(active, state.playhead, 1.f);
                 }
@@ -3673,10 +3664,14 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
     static int ctx_track = -1, ctx_clip = -1;
     static bool open_clip_ctx = false, open_track_ctx = false, open_tl_ctx = false;
 
-    // Transition handle state
-    static int   s_trans_track = -1, s_trans_left_ci = -1;
+    // Transition glass state
+    static int    s_trans_track = -1, s_trans_left_ci = -1;
     static ImVec2 s_trans_popup_pos = {0.f, 0.f};
-    bool s_trans_hit_this_frame = false;  // transition diamond was clicked — suppress clip selection
+    static int    s_glass_drag = 0;   // 0=none 1=left-handle 2=right-handle 3=body
+    static float  s_glass_drag_ref_x = 0.f;
+    static float  s_glass_drag_ref_pre = 0.f, s_glass_drag_ref_post = 0.f;
+    static float  s_glass_drag_ref_start = 0.f;
+    bool s_trans_hit_this_frame = false;
 
     // Clip all track drawing to the scrollable area (below ruler, above add-track row)
     dl->PushClipRect({origin.x, track_area_top}, {origin.x+total_w, track_area_bot}, true);
@@ -4048,39 +4043,157 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
             ImGui::OpenPopup("##tl_ctx");
         }
 
-        // Transition handles — diamond at cut points between adjacent video clips
+        // Transition glass — drawn at every adjacent video clip cut point
         for (int ci = 0; ci + 1 < (int)track.clips.size(); ++ci) {
-            const Clip& a = track.clips[ci];
-            const Clip& b = track.clips[ci + 1];
+            Clip& a = track.clips[ci];
+            Clip& b = track.clips[ci + 1];
             if (a.clip_type != ClipType::Video || b.clip_type != ClipType::Video) continue;
-            float gap = b.start - a.end;
-            if (fabsf(gap) > 0.5f) continue;  // only adjacent/overlapping clips
-            float cut_x = origin.x + TL_LABEL_W + a.end * zoom - scroll;
-            if (cut_x < origin.x + TL_LABEL_W || cut_x > origin.x + total_w) continue;
-            float mid_y  = track_y + TL_TRACK_H * 0.5f;
-            float r_half = 7.f;
-            bool has_trans = (a.transition_type != TransitionType::None && a.transition_out > 0.f);
-            ImVec2 pts[4] = {
-                {cut_x,          mid_y - r_half},
-                {cut_x + r_half, mid_y},
-                {cut_x,          mid_y + r_half},
-                {cut_x - r_half, mid_y}
-            };
-            if (has_trans) {
-                dl->AddConvexPolyFilled(pts, 4, IM_COL32(255,200,60,80));
-                dl->AddPolyline(pts, 4, IM_COL32(255,200,60,230), ImDrawFlags_Closed, 1.5f);
+            if (fabsf(b.start - a.end) > 0.5f) continue;
+
+            float cut_x   = origin.x + TL_LABEL_W + a.end   * zoom - scroll;
+            float cy0     = track_y + 2.f;
+            float cy1     = track_y + TL_TRACK_H - 2.f;
+            float mid_y   = (cy0 + cy1) * 0.5f;
+            bool  has_trans = (a.transition_type != TransitionType::None);
+            bool  this_glass_active = (s_trans_track == ti && s_trans_left_ci == ci);
+
+            if (!has_trans) {
+                // Diamond affordance: click to add a transition
+                float r = 7.f;
+                ImVec2 pts[4] = {{cut_x,cut_x-r},{cut_x+r,mid_y},{cut_x,mid_y+r},{cut_x-r,mid_y}};
+                pts[0] = {cut_x, mid_y - r};
+                pts[1] = {cut_x + r, mid_y};
+                pts[2] = {cut_x, mid_y + r};
+                pts[3] = {cut_x - r, mid_y};
+                bool hov = fabsf(mouse.x - cut_x) + fabsf(mouse.y - mid_y) <= r + 3.f;
+                dl->AddConvexPolyFilled(pts, 4, IM_COL32(18,18,18,220));
+                dl->AddPolyline(pts, 4, hov ? IM_COL32(255,255,255,230) : IM_COL32(210,210,210,200),
+                                ImDrawFlags_Closed, 1.5f);
+                if (hov && ImGui::IsMouseClicked(0)) {
+                    s_trans_track    = ti; s_trans_left_ci = ci;
+                    s_trans_popup_pos = {cut_x - 80.f, cy0 - 8.f};
+                    s_trans_hit_this_frame = true;
+                    ImGui::OpenPopup("##trans_picker");
+                }
+                if (hov) ImGui::SetTooltip("Add transition");
             } else {
-                dl->AddConvexPolyFilled(pts, 4, IM_COL32(18,18,18,230));
-                dl->AddPolyline(pts, 4, IM_COL32(210,210,210,220), ImDrawFlags_Closed, 1.5f);
+                // Glass block
+                float pre_px  = a.transition_pre  * zoom;
+                float post_px = a.transition_post * zoom;
+                float gx0 = cut_x - pre_px;
+                float gx1 = cut_x + post_px;
+                float vis_gx0 = fmaxf(gx0, origin.x + TL_LABEL_W);
+                float vis_gx1 = fminf(gx1, origin.x + total_w);
+
+                // Glass fill + border
+                ImU32 glass_fill   = IM_COL32(130,190,255,55);
+                ImU32 glass_border = this_glass_active
+                    ? IM_COL32(160,210,255,255) : IM_COL32(130,190,255,200);
+                dl->AddRectFilled({vis_gx0, cy0}, {vis_gx1, cy1}, glass_fill, 3.f);
+                // Diagonal lines inside glass to suggest blend
+                dl->PushClipRect({vis_gx0,cy0},{vis_gx1,cy1}, true);
+                float step = 10.f;
+                float gh   = cy1 - cy0;
+                for (float ox = gx0 - gh; ox < gx1 + gh; ox += step)
+                    dl->AddLine({ox, cy0}, {ox + gh, cy1}, IM_COL32(160,210,255,30), 1.f);
+                dl->PopClipRect();
+                dl->AddRect({vis_gx0, cy0}, {vis_gx1, cy1}, glass_border, 3.f, 0, 1.5f);
+
+                // Edge drag handles
+                float hw = 5.f;
+                auto draw_handle = [&](float hx, bool hov_h) {
+                    ImU32 hc = hov_h ? IM_COL32(255,255,255,255) : IM_COL32(160,210,255,230);
+                    dl->AddRectFilled({hx-hw, cy0+2.f}, {hx+hw, cy1-2.f}, hc, 2.f);
+                };
+
+                float handle_tol = hw + 4.f;
+                bool in_glass = mouse.y >= cy0 && mouse.y <= cy1 &&
+                                mouse.x >= vis_gx0 && mouse.x <= vis_gx1;
+                bool hov_left  = in_glass && fabsf(mouse.x - gx0) <= handle_tol && s_glass_drag == 0;
+                bool hov_right = in_glass && fabsf(mouse.x - gx1) <= handle_tol && !hov_left && s_glass_drag == 0;
+                bool hov_body  = in_glass && !hov_left && !hov_right;
+
+                if (gx0 >= origin.x + TL_LABEL_W) draw_handle(gx0, hov_left);
+                if (gx1 <= origin.x + total_w)     draw_handle(gx1, hov_right);
+
+                // Cursor
+                if (hov_left || hov_right || (s_glass_drag == 1 && this_glass_active) ||
+                    (s_glass_drag == 2 && this_glass_active))
+                    ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+
+                // Tooltip
+                if (hov_body && s_glass_drag == 0) {
+                    const char* tname = (a.transition_type == TransitionType::Dissolve)  ? "Dissolve"
+                                      : (a.transition_type == TransitionType::FadeBlack) ? "Fade to Black"
+                                      : "Dip to White";
+                    ImGui::SetTooltip("%s  %.2fs | %.2fs", tname, a.transition_pre, a.transition_post);
+                }
+
+                // Mouse down — start drag or open picker
+                if (ImGui::IsMouseClicked(0) && in_glass) {
+                    s_trans_track    = ti; s_trans_left_ci = ci;
+                    s_trans_hit_this_frame = true;
+                    s_glass_drag_ref_x    = mouse.x;
+                    s_glass_drag_ref_pre  = a.transition_pre;
+                    s_glass_drag_ref_post = a.transition_post;
+                    s_glass_drag_ref_start = a.start;
+                    if (hov_left)       s_glass_drag = 1;
+                    else if (hov_right) s_glass_drag = 2;
+                    else                s_glass_drag = 3;
+                }
+
+                // Right-click removes transition
+                if (ImGui::IsMouseClicked(1) && in_glass) {
+                    a.transition_type = TransitionType::None;
+                    a.transition_pre  = 0.f; a.transition_post = 0.f;
+                    s_glass_drag = 0;
+                    s_trans_track = -1; s_trans_left_ci = -1;
+                    history_push(state, "Remove transition");
+                    s_trans_hit_this_frame = true;
+                }
             }
-            // Hit test
-            bool dia_hov = fabsf(mouse.x - cut_x) + fabsf(mouse.y - mid_y) <= r_half + 3.f;
-            if (dia_hov && ImGui::IsMouseClicked(0)) {
-                s_trans_track         = ti;
-                s_trans_left_ci       = ci;
-                s_trans_popup_pos     = {cut_x - 80.f, mid_y + r_half + 4.f};
-                s_trans_hit_this_frame = true;
-                ImGui::OpenPopup("##trans_picker");
+        }
+
+        // Glass drag update (runs once per frame, outside clip loop)
+        if (s_glass_drag != 0 && s_trans_track == ti &&
+            s_trans_left_ci >= 0 && s_trans_left_ci < (int)track.clips.size()) {
+            Clip& a = track.clips[s_trans_left_ci];
+            Clip* b_ptr = (s_trans_left_ci + 1 < (int)track.clips.size())
+                          ? &track.clips[s_trans_left_ci + 1] : nullptr;
+            float dx = (mouse.x - s_glass_drag_ref_x) / zoom;
+
+            if (ImGui::IsMouseDragging(0)) {
+                if (s_glass_drag == 1) {
+                    // Left handle → adjust pre (drag left = more pre)
+                    float new_pre = fmaxf(0.01f, fminf(s_glass_drag_ref_pre - dx,
+                                                       a.end - a.start - 0.05f));
+                    a.transition_pre = new_pre;
+                } else if (s_glass_drag == 2) {
+                    // Right handle → adjust post
+                    float new_post = fmaxf(0.01f, fminf(s_glass_drag_ref_post + dx,
+                                                        b_ptr ? (b_ptr->end - b_ptr->start - 0.05f) : 10.f));
+                    a.transition_post = new_post;
+                } else {
+                    // Body drag → move linked pair
+                    float new_start = fmaxf(0.f, s_glass_drag_ref_start + dx);
+                    float dur_a = a.end - a.start;
+                    a.start = new_start; a.end = new_start + dur_a;
+                    if (b_ptr) {
+                        float dur_b = b_ptr->end - b_ptr->start;
+                        b_ptr->start = a.end; b_ptr->end = a.end + dur_b;
+                    }
+                }
+            }
+            // Single click (no meaningful drag) on glass body → open type picker
+            if (ImGui::IsMouseReleased(0)) {
+                if (s_glass_drag == 3 && fabsf(mouse.x - s_glass_drag_ref_x) < 4.f) {
+                    float cut_x2 = origin.x + TL_LABEL_W + a.end * zoom - scroll;
+                    s_trans_popup_pos = {cut_x2 - 80.f, track_y - 8.f};
+                    ImGui::OpenPopup("##trans_picker");
+                } else if (s_glass_drag != 3) {
+                    history_push(state, "Adjust transition");
+                }
+                s_glass_drag = 0;
             }
         }
 
@@ -4243,13 +4356,11 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
             s_trans_left_ci < (int)state.tracks[s_trans_track].clips.size()) {
             Clip& tc = state.tracks[s_trans_track].clips[s_trans_left_ci];
 
-            // Type selector
             struct TBtn { TransitionType t; const char* l; };
             TBtn btns[] = {
-                {TransitionType::None,     "None"},
                 {TransitionType::Dissolve, "Dissolve"},
-                {TransitionType::FadeBlack,"Fade Black"},
-                {TransitionType::DipWhite, "Dip White"},
+                {TransitionType::FadeBlack,"Fade to Black"},
+                {TransitionType::DipWhite, "Dip to White"},
             };
             ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {4.f, 4.f});
             for (auto& b : btns) {
@@ -4257,24 +4368,25 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
                 if (sel) ImGui::PushStyleColor(ImGuiCol_Button, to_u32(Col::fg));
                 if (ImGui::Button(b.l, {ImGui::GetContentRegionAvail().x, 0.f})) {
                     tc.transition_type = b.t;
-                    if (b.t != TransitionType::None && tc.transition_out <= 0.f)
-                        tc.transition_out = 0.5f;
+                    if (tc.transition_pre  <= 0.f) tc.transition_pre  = 0.25f;
+                    if (tc.transition_post <= 0.f) tc.transition_post = 0.25f;
                     history_push(state, "Transition");
+                    ImGui::CloseCurrentPopup();
                 }
                 if (sel) ImGui::PopStyleColor();
             }
-            ImGui::PopStyleVar();
-
-            // Duration slider (only shown when a transition is set)
+            ImGui::Dummy({0.f, 2.f});
             if (tc.transition_type != TransitionType::None) {
-                ImGui::Dummy({0.f, 4.f});
-                ImGui::PushStyleColor(ImGuiCol_SliderGrab, to_u32(Col::fg));
-                ImGui::PushStyleColor(ImGuiCol_FrameBg,    to_u32(Col::bg_soft));
-                ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-                ImGui::SliderFloat("##tdur", &tc.transition_out, 0.05f, 2.f, "%.2fs");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Transition");
-                ImGui::PopStyleColor(2);
+                ImGui::Separator();
+                ImGui::Dummy({0.f, 2.f});
+                if (ImGui::Button("Remove", {ImGui::GetContentRegionAvail().x, 0.f})) {
+                    tc.transition_type = TransitionType::None;
+                    tc.transition_pre  = 0.f; tc.transition_post = 0.f;
+                    history_push(state, "Remove transition");
+                    ImGui::CloseCurrentPopup();
+                }
             }
+            ImGui::PopStyleVar();
         }
         ImGui::EndPopup();
     }
@@ -4322,28 +4434,22 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
             return (nb.transition_type != TransitionType::None) ? &nb : nullptr;
         };
 
-        if (drag_left) {
+        // Inner edges (shared with a transition) are locked — only outer edges trim
+        bool right_locked = (dc.clip_type == ClipType::Video &&
+                             dc.transition_type != TransitionType::None);
+        bool left_locked  = (dc.clip_type == ClipType::Video &&
+                             linked_left() != nullptr);
+
+        if (drag_left && !left_locked) {
             float t = edge_snap(snap(new_t), cands);
             float new_start = fmaxf(0.f, fminf(t, dc.end - f1));
             dc.in_point = fmaxf(0.f, dc.in_point + (new_start - dc.start));
             dc.start = new_start;
-            // If left-linked: keep left neighbour's end flush with our start
-            if (Clip* nb = linked_left()) {
-                float nb_dur = nb->end - nb->start;
-                nb->end   = dc.start;
-                nb->start = fmaxf(0.f, nb->end - nb_dur);
-            }
-        } else if (drag_right) {
+        } else if (drag_right && !right_locked) {
             float et = (mouse.x - origin.x - TL_LABEL_W + scroll) / zoom;
             float t = edge_snap(snap(et), cands);
             dc.end = fmaxf(dc.start + f1, t);
-            // If right-linked: keep right neighbour's start flush with our end
-            if (Clip* nb = linked_right()) {
-                float nb_dur = nb->end - nb->start;
-                nb->start = dc.end;
-                nb->end   = nb->start + nb_dur;
-            }
-        } else {
+        } else if (!drag_left && !drag_right) {
             float dur_clip = dc.end - dc.start;
             // Try snapping both edges; use whichever is closer to a candidate.
             float left_raw  = snap(new_t);
