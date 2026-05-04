@@ -5132,12 +5132,11 @@ void ui_studio(AppState& state) {
                         state.pipeline.stage != PipelineStage::Error) ? 28.f : 0.f;
     float avail_h    = win_h - menubar_h - body_top - pipeline_h - 2.f;
 
-    // Timeline height — user-draggable, default auto
-    float tl_h_auto  = fminf(200.f, TL_RULER_H + ((int)state.tracks.size()+2) * TL_TRACK_H);
+    // Timeline height — user-draggable, defaults to minimum on first open
     static const float TL_MIN_H = TL_RULER_H + 4 * TL_TRACK_H;
     float tl_h       = (state.tl_h_frac > 0.f)
                         ? fmaxf(TL_MIN_H, fminf(avail_h * 0.7f, state.tl_h_frac * avail_h))
-                        : tl_h_auto;
+                        : TL_MIN_H;
     float body_h     = avail_h - tl_h;
 
     // Right panel width — user-draggable, default auto
