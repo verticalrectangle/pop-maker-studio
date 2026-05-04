@@ -4,13 +4,28 @@
 #include <GLFW/glfw3.h>
 #include <cstdio>
 #include <cstdlib>
+#include <cstddef>
 #include <string>
 #include <filesystem>
+
+#if defined(__APPLE__)
+#  include <mach-o/getsect.h>
+#  include <mach-o/ldsyms.h>
+#elif defined(PYTHON_EMBED_CARRAY)
+#  include "python311_embedded.h"
+#else
+// Linux / ELF — symbols injected by objcopy
+extern "C" {
+    extern const unsigned char _binary_python311_tar_gz_start[];
+    extern const unsigned char _binary_python311_tar_gz_end[];
+}
+#endif
 
 #include "app.h"
 #include "globals.h"
 #include "ml_pipeline_embedded.h"
 #include "ml_prefetch_embedded.h"
+#include "ml_setup_embedded.h"
 
 namespace fs = std::filesystem;
 
@@ -18,6 +33,8 @@ namespace fs = std::filesystem;
 std::string g_dropped_file;
 std::string g_pipeline_script;
 std::string g_prefetch_script;
+std::string g_setup_script;
+std::string g_managed_dir;
 
 static void glfw_drop_callback(GLFWwindow*, int count, const char** paths) {
     if (count > 0)
@@ -90,11 +107,49 @@ bool models_detect() {
     return whisper_ok && demucs_ok;
 }
 
+const unsigned char* python311_tar_data() {
+#if defined(__APPLE__)
+    unsigned long sz = 0;
+    return (const unsigned char*)getsectiondata(&_mh_execute_header,
+                                                "__DATA", "__python_tar", &sz);
+#elif defined(PYTHON_EMBED_CARRAY)
+    return python311_zip;
+#else
+    return _binary_python311_tar_gz_start;
+#endif
+}
+
+size_t python311_tar_size() {
+#if defined(__APPLE__)
+    unsigned long sz = 0;
+    getsectiondata(&_mh_execute_header, "__DATA", "__python_tar", &sz);
+    return (size_t)sz;
+#elif defined(PYTHON_EMBED_CARRAY)
+    return (size_t)python311_zip_size;
+#else
+    return (size_t)(_binary_python311_tar_gz_end - _binary_python311_tar_gz_start);
+#endif
+}
+
+std::string managed_python_detect() {
+    const char* home = getenv("HOME");
+    if (!home) return "";
+    fs::path py = fs::path(home) / ".local" / "share" / "pop-maker-studio"
+                                 / "venv" / "bin" / "python3";
+    return fs::exists(py) ? py.string() : "";
+}
+
 int main(int, char**) {
+    // Set managed dir
+    if (const char* home = getenv("HOME"))
+        g_managed_dir = (fs::path(home) / ".local" / "share" / "pop-maker-studio").string();
+
     g_pipeline_script = extract_embedded(ml_pipeline_py,  ml_pipeline_py_size,
                                           "pop_maker_ml_pipeline.py");
     g_prefetch_script = extract_embedded(ml_prefetch_py,  ml_prefetch_py_size,
                                           "pop_maker_ml_prefetch.py");
+    g_setup_script    = extract_embedded(ml_setup_py,     ml_setup_py_size,
+                                          "pop_maker_ml_setup.py");
 
     glfwSetErrorCallback(glfw_error_callback);
     if (!glfwInit()) return 1;
@@ -123,6 +178,9 @@ int main(int, char**) {
     AppState state;
     app_init(state);
     state.models_ready = models_detect();
+    // Prefer managed venv over hardcoded default if it exists
+    if (auto mp = managed_python_detect(); !mp.empty())
+        state.python_path = mp;
 
     while (!glfwWindowShouldClose(window)) {
         glfwPollEvents();

@@ -1,26 +1,26 @@
 #!/usr/bin/env python3
 """
 Pop Maker Studio — model prefetch script.
-Downloads Whisper and Demucs weights on first run.
-Prints progress lines that the host app parses.
+Downloads faster-whisper large-v3 and Demucs htdemucs weights.
+Prints structured progress lines parsed by the host app.
 """
-import sys, os
+import sys
 
 def log(msg):
     print(msg, flush=True)
 
 log("STAGE:whisper")
-log("Downloading Whisper large-v2 model…")
+log("Downloading faster-whisper large-v3…")
 try:
-    import whisper
-    whisper.load_model("large-v2")
+    from faster_whisper import WhisperModel
+    WhisperModel("large-v3", device="cpu", compute_type="int8")
     log("OK:whisper")
 except Exception as e:
     log(f"ERROR:whisper:{e}")
     sys.exit(1)
 
 log("STAGE:demucs")
-log("Downloading Demucs htdemucs model…")
+log("Downloading Demucs htdemucs…")
 try:
     from demucs.pretrained import get_model
     get_model("htdemucs")

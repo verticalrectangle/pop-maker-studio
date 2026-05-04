@@ -211,12 +211,27 @@ struct AppState {
     bool models_ready   = false;  // whisper + demucs weights detected on disk
     bool models_skipped = false;  // user chose "Skip for now" on setup screen
 
-    // model download subprocess
+    // first-run multi-stage setup
+    enum class SetupStage {
+        Idle,
+        PythonExtract,  // extracting embedded Python 3.11 tarball
+        PipInstall,     // pip install whisperx demucs
+        ModelDL,        // downloading model weights
+        Done,
+        Error
+    };
+    SetupStage  setup_stage    = SetupStage::Idle;
+    bool        setup_running  = false;
+    float       setup_progress = 0.f;   // 0–1 within current stage
+    std::string setup_message;
+    std::string setup_error_msg;
+
+    // re-download modal (from Help menu — skips Python/pip, just re-runs prefetch)
     bool        model_dl_running  = false;
     bool        model_dl_done     = false;
     bool        model_dl_error    = false;
-    float       model_dl_progress = 0.f;   // 0–1
-    std::string model_dl_stage;            // "whisper" | "demucs"
+    float       model_dl_progress = 0.f;
+    std::string model_dl_stage;
     std::string model_dl_message;
     std::string model_dl_error_msg;
     bool        show_model_dl_modal = false;
