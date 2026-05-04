@@ -6,7 +6,7 @@
 // ── Binary serialization helpers ──────────────────────────────────────────────
 
 static const uint32_t MAGIC   = 0x534D5001u; // "PMS\x01"
-static const uint32_t VERSION = 4u;
+static const uint32_t VERSION = 5u;
 
 struct Writer {
     std::ofstream f;
@@ -232,6 +232,9 @@ bool project_save(const AppState& state, const std::string& path) {
     // UI
     w.pod(state.panel_tab);
 
+    // Project settings (v5)
+    w.pod(state.fps);
+
     return w.ok;
 }
 
@@ -289,6 +292,9 @@ bool project_load(AppState& state, const std::string& path) {
 
     // UI
     state.panel_tab = r.pod<int>();
+
+    // Project settings (v5)
+    if (version >= 5u) state.fps = r.pod<int>();
 
     return r.ok;
 }

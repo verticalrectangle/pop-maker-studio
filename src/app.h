@@ -245,6 +245,9 @@ struct AppState {
     float tl_zoom     = 80.f;
     float tl_v_scroll = 0.f;   // vertical scroll offset in the track area (pixels)
 
+    // project settings
+    int          fps         = 30;              // 24 / 30 / 60
+
     // style
     AnimStyle    style       = AnimStyle::Block;
     int          font_weight = 900;

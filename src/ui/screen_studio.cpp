@@ -81,7 +81,7 @@ static void toggle_play(AppState& state) {
 
 static float tl_fps(const AppState& state) {
     return (state.proxy_ready && video_info(0).fps > 0.0)
-           ? (float)video_info(0).fps : 30.f;
+           ? (float)video_info(0).fps : (float)state.fps;
 }
 
 static int slot_for_video(AppState& state, const std::string& path); // forward decl
@@ -3200,17 +3200,25 @@ static void panel_animation(AppState& state, float w) {
     }
 }
 
-// ── Right panel: Export tab ───────────────────────────────────────────────────
+// ── Right panel: Project tab ──────────────────────────────────────────────────
 
-static void panel_export(AppState& state, float w) {
+static void panel_project(AppState& state, float w) {
     ImGui::Dummy({0.f, 8.f});
-    ui_label("Output format"); ImGui::Dummy({0.f, 8.f});
+    ui_label("Frame rate"); ImGui::Dummy({0.f, 6.f});
+    for (int f : {24, 30, 60}) {
+        char lbl[8]; snprintf(lbl, sizeof(lbl), "%d fps", f);
+        if (ui_btn(lbl, state.fps == f, true)) state.fps = f;
+        ImGui::SameLine(0.f, 4.f);
+    }
+    ImGui::NewLine();
+    ImGui::Dummy({0.f, 12.f}); ui_separator(); ImGui::Dummy({0.f, 8.f});
 
-    struct Fmt { OutputFormat fmt; const char* name; const char* ratio; const char* res; float sw, sh; };
+    ui_label("Output format"); ImGui::Dummy({0.f, 8.f});
+    struct Fmt { OutputFormat fmt; const char* name; const char* ratio; float sw, sh; };
     Fmt fmts[] = {
-        {OutputFormat::Vertical,   "TikTok / Reels", "9:16", "1080×1920", 24.f, 42.f},
-        {OutputFormat::Horizontal, "YouTube",        "16:9", "1920×1080", 54.f, 30.f},
-        {OutputFormat::Square,     "Instagram",      "1:1",  "1080×1080", 36.f, 36.f},
+        {OutputFormat::Vertical,   "TikTok / Reels", "9:16", 24.f, 42.f},
+        {OutputFormat::Horizontal, "YouTube",        "16:9", 54.f, 30.f},
+        {OutputFormat::Square,     "Instagram",      "1:1",  36.f, 36.f},
     };
     float fw = (w - 16.f) / 3.f;
     for (int i = 0; i < 3; ++i) {
@@ -3218,7 +3226,7 @@ static void panel_export(AppState& state, float w) {
         bool sel = state.format == fmts[i].fmt;
         ImGui::PushStyleColor(ImGuiCol_ChildBg, sel ? Col::bg_soft_hov : Col::bg_soft);
         ImGui::PushStyleColor(ImGuiCol_Border,  sel ? Col::fg : Col::line);
-        char fid[8]; snprintf(fid, sizeof(fid), "##f%d", i);
+        char fid[8]; snprintf(fid, sizeof(fid), "##pf%d", i);
         if (ImGui::BeginChild(fid, {fw, 80.f}, ImGuiChildFlags_Borders)) {
             ImVec2 sp = ImGui::GetCursorScreenPos();
             float cx = (fw - fmts[i].sw) * 0.5f;
@@ -3242,8 +3250,12 @@ static void panel_export(AppState& state, float w) {
         }
         ImGui::PopStyleColor(2);
     }
+}
 
-    ImGui::Dummy({0.f, 12.f}); ui_separator(); ImGui::Dummy({0.f, 8.f});
+// ── Right panel: Export tab ───────────────────────────────────────────────────
+
+static void panel_export(AppState& state, float w) {
+    ImGui::Dummy({0.f, 8.f});
 
     // Advanced settings (collapsible)
     ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
@@ -4951,6 +4963,22 @@ void ui_studio(AppState& state) {
             ImGui::EndMenu();
         }
 
+        // Export button — far right of menu bar
+        {
+            float btn_w = 80.f;
+            float avail = ImGui::GetContentRegionAvail().x;
+            if (avail > btn_w)
+                ImGui::SetCursorPosX(ImGui::GetCursorPosX() + avail - btn_w);
+            ImGui::PushStyleColor(ImGuiCol_Button,        Col::fg);
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, Col::bg_soft_hov);
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive,  Col::line);
+            ImGui::PushStyleColor(ImGuiCol_Text,          Col::bg);
+            ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {10.f, 2.f});
+            if (ImGui::Button("Export")) state.panel_tab = 2;
+            ImGui::PopStyleVar();
+            ImGui::PopStyleColor(4);
+        }
+
         ImGui::EndMenuBar();
     }
 
@@ -5358,7 +5386,7 @@ void ui_studio(AppState& state) {
             if (lyrics_selected && ImGui::BeginTabItem("Lyrics")) { state.panel_tab=4; ImGui::EndTabItem(); }
             if (ImGui::BeginTabItem("Animation")) { state.panel_tab=1; ImGui::EndTabItem(); }
             if (ImGui::BeginTabItem("FX"))        { state.panel_tab=5; ImGui::EndTabItem(); }
-            if (ImGui::BeginTabItem("Export"))    { state.panel_tab=2; ImGui::EndTabItem(); }
+            if (ImGui::BeginTabItem("Project"))   { state.panel_tab=6; ImGui::EndTabItem(); }
             if (ImGui::BeginTabItem("History"))   { state.panel_tab=3; ImGui::EndTabItem(); }
             ImGui::EndTabBar();
         }
@@ -5382,6 +5410,7 @@ void ui_studio(AppState& state) {
         else if (state.panel_tab == 2)     panel_export(state, pw);
         else if (state.panel_tab == 4)     panel_lyrics(state, pw);
         else if (state.panel_tab == 5)     panel_fx_library(state, pw);
+        else if (state.panel_tab == 6)     panel_project(state, pw);
         else                               panel_history(state, pw);
         ImGui::EndChild();
     }

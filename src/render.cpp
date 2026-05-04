@@ -236,7 +236,7 @@ static bool write_filter_script(
     bool base_done = false;  // true once first video overlay is composited
 
     // ── Black canvas base ─────────────────────────────────────────────────────
-    line() << "color=c=black:s=" << out_w << "x" << out_h << ":r=30[vbase]";
+    line() << "color=c=black:s=" << out_w << "x" << out_h << ":r=" << state.fps << "[vbase]";
     std::string vcur = "[vbase]";
 
     // ── Process all layers bottom-to-top ─────────────────────────────────────
