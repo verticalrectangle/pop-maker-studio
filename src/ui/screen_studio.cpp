@@ -651,77 +651,6 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
     dl->AddRectFilled(p, {p.x+w, p.y+h},
         state.video_loaded ? IM_COL32(0,0,0,255) : to_u32(Col::accent_dark), 2.f);
 
-    // Composite all layers bottom-to-top in a single z-order pass.
-    // Track index 0 = topmost (frontmost), so iterate high→low to draw bottom first.
-    {
-        float lookahead = ImGui::GetIO().DeltaTime;
-        for (int ti = (int)state.tracks.size() - 1; ti >= 0; --ti) {
-            const Track& tr = state.tracks[ti];
-            if (!tr.visible) continue;
-
-            // Find the active clip at the current playhead on this track.
-            const Clip* active = nullptr;
-            for (auto& cl : tr.clips)
-                if (state.playhead >= cl.start && state.playhead < cl.end)
-                    { active=&cl; break; }
-            if (!active) continue;
-
-            if (active->clip_type == ClipType::Video) {
-                int slot = slot_for_video(const_cast<AppState&>(state), active->text);
-                if (slot < 0 || !video_is_open(slot)) continue;
-
-                uintptr_t tex = video_get_texture(slot, (double)(state.playhead + lookahead));
-                if (!tex) continue;
-
-                float px    = active->eval_prop("pos_x",    state.playhead);
-                float py    = active->eval_prop("pos_y",    state.playhead);
-                float sx    = active->eval_prop("scale_x",  state.playhead);
-                float sy    = active->eval_prop("scale_y",  state.playhead);
-                float rot   = active->eval_prop("rotation", state.playhead);
-                float alpha = active->eval_prop("opacity",  state.playhead);
-
-                float cx = p.x + px * w;
-                float cy = p.y + py * h;
-                float hw = w * sx * 0.5f;
-                float hh = h * sy * 0.5f;
-
-                float rad   = rot * 3.14159265f / 180.f;
-                float cos_r = cosf(rad), sin_r = sinf(rad);
-                auto rot_pt = [&](float ox, float oy) -> ImVec2 {
-                    return { cx + ox*cos_r - oy*sin_r, cy + ox*sin_r + oy*cos_r };
-                };
-
-                ImVec2 q0 = rot_pt(-hw, -hh);
-                ImVec2 q1 = rot_pt( hw, -hh);
-                ImVec2 q2 = rot_pt( hw,  hh);
-                ImVec2 q3 = rot_pt(-hw,  hh);
-
-                ImU32 col = IM_COL32(255, 255, 255, (int)(alpha * 255.f));
-                dl->AddImageQuad(ImTextureRef((ImTextureID)tex),
-                    q0, q1, q2, q3,
-                    {0,0}, {1,0}, {1,1}, {0,1}, col);
-            }
-        }
-    }
-    dl->AddRect(p, {p.x+w, p.y+h}, to_u32(Col::line), 2.f);
-    // Format label
-    {
-        const char* fmt_lbl = state.format == OutputFormat::Vertical   ? "9:16" :
-                              state.format == OutputFormat::Horizontal  ? "16:9" : "1:1";
-        dl->AddText({p.x+6.f, p.y+6.f}, to_u32(Col::dim), fmt_lbl);
-    }
-
-    // Corner marks
-    float cm = 10.f; ImU32 cc = to_u32(Col::muted);
-    dl->AddLine(p,             {p.x+cm, p.y},       cc);
-    dl->AddLine(p,             {p.x, p.y+cm},       cc);
-    dl->AddLine({p.x+w, p.y}, {p.x+w-cm, p.y},     cc);
-    dl->AddLine({p.x+w, p.y}, {p.x+w, p.y+cm},     cc);
-    dl->AddLine({p.x, p.y+h}, {p.x+cm, p.y+h},     cc);
-    dl->AddLine({p.x, p.y+h}, {p.x, p.y+h-cm},     cc);
-    dl->AddLine({p.x+w,p.y+h},{p.x+w-cm,p.y+h},    cc);
-    dl->AddLine({p.x+w,p.y+h},{p.x+w,p.y+h-cm},    cc);
-
     // Empty state prompt
     if (state.tracks.empty()) {
         ImGui::PushFont(g_font_bold);
@@ -738,124 +667,162 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
         ImVec2 ssz = ImGui::CalcTextSize(sub);
         dl->AddText({p.x + (w - ssz.x) * 0.5f, p.y + h * 0.5f + 8.f},
             to_u32(Col::dim), sub);
+
+        dl->AddRect(p, {p.x+w, p.y+h}, to_u32(Col::line), 2.f);
         return;
     }
 
-    // Text/subtitle clips — drawn in z-order (bottom-to-top, matching video pass above).
-    // Drag state: raw mouse detection, no ImGui widget (avoids backward-cursor assert)
+    // Unified z-order pass: track index 0 = frontmost, so iterate high→low (background first).
+    // Each track draws whichever clip type is active — video and text are interleaved correctly.
     static int   s_drag_ti   = -1, s_drag_ci   = -1;
     static bool  s_dragging  = false;
-    ImVec2 mpos = ImGui::GetIO().MousePos;
-    bool   ldown = ImGui::IsMouseDown(0);
+    ImVec2 mpos  = ImGui::GetIO().MousePos;
+    bool   ldown  = ImGui::IsMouseDown(0);
     bool   lclick = ImGui::IsMouseClicked(0);
 
-    int rendered = 0;
+    float lookahead = ImGui::GetIO().DeltaTime;
+    int text_rendered = 0;
+
     for (int ti = (int)state.tracks.size() - 1; ti >= 0; --ti) {
         auto& track = state.tracks[ti];
         if (!track.visible) continue;
 
-        // Find active Text clip on this track.
-        const Clip* active = nullptr;
-        int active_ci = -1;
-        for (int ci = 0; ci < (int)track.clips.size(); ++ci) {
-            if (track.clips[ci].clip_type != ClipType::Text     &&
-                track.clips[ci].clip_type != ClipType::Lyrics   &&
-                track.clips[ci].clip_type != ClipType::Subtitle) continue;
-            if (state.playhead >= track.clips[ci].start &&
-                state.playhead <  track.clips[ci].end) {
-                active = &track.clips[ci];
-                active_ci = ci;
-                break;
-            }
-        }
-        const Clip* show = active;
-        int show_ci = active_ci;
-        if (!show && state.selected_track == ti && state.selected_clip >= 0 &&
-            state.selected_clip < (int)track.clips.size() &&
-            (track.clips[state.selected_clip].clip_type == ClipType::Text     ||
-             track.clips[state.selected_clip].clip_type == ClipType::Lyrics   ||
-             track.clips[state.selected_clip].clip_type == ClipType::Subtitle)) {
-            show    = &track.clips[state.selected_clip];
-            show_ci = state.selected_clip;
-        }
-        if (!show) { ++rendered; continue; }
+        // ── Video clip ─────────────────────────────────────────────────────────
+        {
+            const Clip* active = nullptr;
+            for (auto& cl : track.clips)
+                if (cl.clip_type == ClipType::Video &&
+                    state.playhead >= cl.start && state.playhead < cl.end)
+                    { active = &cl; break; }
+            if (active) {
+                int slot = slot_for_video(const_cast<AppState&>(state), active->text);
+                uintptr_t tex = (slot >= 0 && video_is_open(slot))
+                    ? video_get_texture(slot, (double)(state.playhead + lookahead)) : 0;
+                if (tex) {
+                    float px    = active->eval_prop("pos_x",    state.playhead);
+                    float py    = active->eval_prop("pos_y",    state.playhead);
+                    float sx    = active->eval_prop("scale_x",  state.playhead);
+                    float sy    = active->eval_prop("scale_y",  state.playhead);
+                    float rot   = active->eval_prop("rotation", state.playhead);
+                    float alpha = active->eval_prop("opacity",  state.playhead);
 
-        // Determine Y position from per-clip override
-        float slot_h = 40.f;
-        float slot_y;
-        if (show->sub_pos == 1) {
-            slot_y = p.y + h * 0.5f - slot_h * 0.5f;
-        } else if (show->sub_pos == 2) {
-            slot_y = p.y + 24.f + rendered * slot_h;
-        } else if (show->sub_pos == 3) {
-            slot_y = p.y + show->sub_pos_y * h - slot_h * 0.5f;
-        } else {
-            slot_y = p.y + h - 24.f - (rendered + 1) * slot_h;
-        }
-
-        ImGui::PushFont(g_font_black);
-        ImGui::SetWindowFontScale(1.8f);
-        ImVec2 tsz = ImGui::CalcTextSize(show->text.c_str());
-        float  tx  = p.x + (w - tsz.x) * 0.5f;
-        dl->AddText(ImGui::GetFont(), ImGui::GetFontSize() * 1.8f,
-            {tx+2.f, slot_y+2.f}, IM_COL32(0,0,0,180), show->text.c_str());
-
-        ImU32 tcol;
-        if (show->sub_color_override) {
-            float alpha = (active_ci >= 0) ? show->sub_color[3] : show->sub_color[3] * 0.5f;
-            tcol = IM_COL32(
-                (int)(show->sub_color[0]*255), (int)(show->sub_color[1]*255),
-                (int)(show->sub_color[2]*255), (int)(alpha*255));
-        } else {
-            tcol = (active_ci >= 0) ? to_u32(Col::fg) : to_u32(Col::muted);
-        }
-        dl->AddText(ImGui::GetFont(), ImGui::GetFontSize() * 1.8f,
-            {tx, slot_y}, tcol, show->text.c_str());
-        ImGui::SetWindowFontScale(1.f);
-        ImGui::PopFont();
-
-        // Drag handle — raw mouse hit detection, no ImGui widget calls
-        if (show_ci >= 0 && slot_y >= p.y && slot_y + tsz.y <= p.y + h) {
-            float pad = 8.f;
-            bool in_handle = mpos.x >= tx - pad && mpos.x <= tx + tsz.x + pad &&
-                             mpos.y >= slot_y - pad && mpos.y <= slot_y + tsz.y + pad;
-            bool is_this_drag = (s_drag_ti == ti && s_drag_ci == show_ci);
-
-            if (in_handle || (is_this_drag && ldown))
-                ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
-
-            if (in_handle && lclick) {
-                s_drag_ti = ti;
-                s_drag_ci = show_ci;
-            }
-
-            if (is_this_drag && ldown) {
-                s_dragging = true;
-                Clip& mc = state.tracks[ti].clips[show_ci];
-                float new_y = (mpos.y - p.y) / h;
-                mc.sub_pos   = 3;
-                mc.sub_pos_y = fmaxf(0.02f, fminf(0.98f, new_y));
-            }
-
-            // Dot indicator when hoverable
-            if (in_handle && !ldown) {
-                float mid_x = tx + tsz.x * 0.5f;
-                for (int d = -1; d <= 1; ++d)
-                    dl->AddCircleFilled({mid_x + d*6.f, slot_y - 6.f},
-                        2.f, to_u32(Col::muted));
+                    float cx = p.x + px * w,  cy = p.y + py * h;
+                    float hw = w * sx * 0.5f, hh = h * sy * 0.5f;
+                    float rad   = rot * 3.14159265f / 180.f;
+                    float cos_r = cosf(rad), sin_r = sinf(rad);
+                    auto rot_pt = [&](float ox, float oy) -> ImVec2 {
+                        return { cx + ox*cos_r - oy*sin_r, cy + ox*sin_r + oy*cos_r };
+                    };
+                    ImU32 col = IM_COL32(255, 255, 255, (int)(alpha * 255.f));
+                    dl->AddImageQuad(ImTextureRef((ImTextureID)tex),
+                        rot_pt(-hw,-hh), rot_pt(hw,-hh), rot_pt(hw,hh), rot_pt(-hw,hh),
+                        {0,0}, {1,0}, {1,1}, {0,1}, col);
+                }
             }
         }
 
-        ++rendered;
+        // ── Text / subtitle clip ───────────────────────────────────────────────
+        {
+            const Clip* active = nullptr;
+            int active_ci = -1;
+            for (int ci = 0; ci < (int)track.clips.size(); ++ci) {
+                auto ct = track.clips[ci].clip_type;
+                if (ct != ClipType::Text && ct != ClipType::Lyrics && ct != ClipType::Subtitle)
+                    continue;
+                if (state.playhead >= track.clips[ci].start &&
+                    state.playhead <  track.clips[ci].end)
+                    { active = &track.clips[ci]; active_ci = ci; break; }
+            }
+            const Clip* show = active;
+            int show_ci = active_ci;
+            if (!show && state.selected_track == ti && state.selected_clip >= 0 &&
+                state.selected_clip < (int)track.clips.size()) {
+                auto ct = track.clips[state.selected_clip].clip_type;
+                if (ct == ClipType::Text || ct == ClipType::Lyrics || ct == ClipType::Subtitle) {
+                    show    = &track.clips[state.selected_clip];
+                    show_ci = state.selected_clip;
+                }
+            }
+            if (!show) { ++text_rendered; continue; }
+
+            float slot_h = 40.f;
+            float slot_y;
+            if (show->sub_pos == 1)
+                slot_y = p.y + h * 0.5f - slot_h * 0.5f;
+            else if (show->sub_pos == 2)
+                slot_y = p.y + 24.f + text_rendered * slot_h;
+            else if (show->sub_pos == 3)
+                slot_y = p.y + show->sub_pos_y * h - slot_h * 0.5f;
+            else
+                slot_y = p.y + h - 24.f - (text_rendered + 1) * slot_h;
+
+            ImGui::PushFont(g_font_black);
+            ImGui::SetWindowFontScale(1.8f);
+            ImVec2 tsz = ImGui::CalcTextSize(show->text.c_str());
+            float  tx  = p.x + (w - tsz.x) * 0.5f;
+            dl->AddText(ImGui::GetFont(), ImGui::GetFontSize() * 1.8f,
+                {tx+2.f, slot_y+2.f}, IM_COL32(0,0,0,180), show->text.c_str());
+
+            ImU32 tcol;
+            if (show->sub_color_override) {
+                float a = (active_ci >= 0) ? show->sub_color[3] : show->sub_color[3] * 0.5f;
+                tcol = IM_COL32((int)(show->sub_color[0]*255), (int)(show->sub_color[1]*255),
+                                (int)(show->sub_color[2]*255), (int)(a*255));
+            } else {
+                tcol = (active_ci >= 0) ? to_u32(Col::fg) : to_u32(Col::muted);
+            }
+            dl->AddText(ImGui::GetFont(), ImGui::GetFontSize() * 1.8f,
+                {tx, slot_y}, tcol, show->text.c_str());
+            ImGui::SetWindowFontScale(1.f);
+            ImGui::PopFont();
+
+            if (show_ci >= 0 && slot_y >= p.y && slot_y + tsz.y <= p.y + h) {
+                float pad = 8.f;
+                bool in_handle = mpos.x >= tx - pad && mpos.x <= tx + tsz.x + pad &&
+                                 mpos.y >= slot_y - pad && mpos.y <= slot_y + tsz.y + pad;
+                bool is_this_drag = (s_drag_ti == ti && s_drag_ci == show_ci);
+
+                if (in_handle || (is_this_drag && ldown))
+                    ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
+                if (in_handle && lclick) { s_drag_ti = ti; s_drag_ci = show_ci; }
+                if (is_this_drag && ldown) {
+                    s_dragging = true;
+                    Clip& mc = state.tracks[ti].clips[show_ci];
+                    float new_y = (mpos.y - p.y) / h;
+                    mc.sub_pos   = 3;
+                    mc.sub_pos_y = fmaxf(0.02f, fminf(0.98f, new_y));
+                }
+                if (in_handle && !ldown) {
+                    float mid_x = tx + tsz.x * 0.5f;
+                    for (int d = -1; d <= 1; ++d)
+                        dl->AddCircleFilled({mid_x + d*6.f, slot_y - 6.f}, 2.f, to_u32(Col::muted));
+                }
+            }
+            ++text_rendered;
+        }
     }
 
-    // Commit drag on mouse release
     if (s_dragging && !ldown) {
         history_push(state, "Subtitle position Y");
-        s_dragging = false;
-        s_drag_ti  = -1;
-        s_drag_ci  = -1;
+        s_dragging = false; s_drag_ti = -1; s_drag_ci = -1;
     }
+
+    // Border and chrome drawn last so they sit on top of all content
+    dl->AddRect(p, {p.x+w, p.y+h}, to_u32(Col::line), 2.f);
+    {
+        const char* fmt_lbl = state.format == OutputFormat::Vertical   ? "9:16" :
+                              state.format == OutputFormat::Horizontal  ? "16:9" : "1:1";
+        dl->AddText({p.x+6.f, p.y+6.f}, to_u32(Col::dim), fmt_lbl);
+    }
+    float cm = 10.f; ImU32 cc = to_u32(Col::muted);
+    dl->AddLine(p,             {p.x+cm, p.y},       cc);
+    dl->AddLine(p,             {p.x, p.y+cm},       cc);
+    dl->AddLine({p.x+w, p.y}, {p.x+w-cm, p.y},     cc);
+    dl->AddLine({p.x+w, p.y}, {p.x+w, p.y+cm},     cc);
+    dl->AddLine({p.x, p.y+h}, {p.x+cm, p.y+h},     cc);
+    dl->AddLine({p.x, p.y+h}, {p.x, p.y+h-cm},     cc);
+    dl->AddLine({p.x+w,p.y+h},{p.x+w-cm,p.y+h},    cc);
+    dl->AddLine({p.x+w,p.y+h},{p.x+w,p.y+h-cm},    cc);
 }
 
 // ── Right panel: History tab ──────────────────────────────────────────────────
