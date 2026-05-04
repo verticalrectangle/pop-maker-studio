@@ -3577,8 +3577,8 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
     // Tracks
     // Vertical scroll: mouse wheel in the track body area
     float track_area_top = origin.y + TL_RULER_H;
-    float track_area_bot = origin.y + total_h - TL_TRACK_H;  // above pinned add-track row
-    float tracks_total_h = (int)state.tracks.size() * TL_TRACK_H;
+    float track_area_bot = origin.y + total_h;
+    float tracks_total_h = ((int)state.tracks.size() + 1) * TL_TRACK_H;  // +1 for add-track row
     float max_v_scroll   = fmaxf(0.f, tracks_total_h - (track_area_bot - track_area_top));
     if (ImGui::IsMouseHoveringRect({origin.x, track_area_top}, {origin.x+total_w, track_area_bot})) {
         float wheel = ImGui::GetIO().MouseWheel;
@@ -3996,6 +3996,29 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
         track_y += TL_TRACK_H;
     }
 
+    // "+ Add Track" — scrolls with the track list as the last row
+    {
+        ImVec2 row_tl = {origin.x,           track_y};
+        ImVec2 row_br = {origin.x + total_w,  track_y + TL_TRACK_H};
+        bool add_hov = !s_ghost_path.empty() ? false :
+                       (mouse.y >= track_y && mouse.y < track_y + TL_TRACK_H &&
+                        mouse.x >= origin.x && mouse.x <= origin.x + total_w);
+        dl->AddRectFilled(row_tl, {origin.x + TL_LABEL_W, track_y + TL_TRACK_H},
+                          to_u32(add_hov ? Col::bg_soft_hov : Col::bg_soft));
+        dl->AddRectFilled({origin.x + TL_LABEL_W, track_y}, row_br, to_u32(Col::bg));
+        dl->AddLine(row_tl, {origin.x + total_w, track_y}, to_u32(Col::line));
+        dl->AddLine({origin.x + TL_LABEL_W, track_y}, {origin.x + TL_LABEL_W, track_y + TL_TRACK_H},
+                    to_u32(Col::line));
+        float lh = ImGui::GetTextLineHeight();
+        dl->AddText({origin.x + 8.f, track_y + (TL_TRACK_H - lh) * 0.5f},
+                    to_u32(add_hov ? Col::fg : Col::muted), "+ Add Track");
+        if (add_hov && ImGui::IsMouseClicked(0)) {
+            Track t;
+            char name[32]; snprintf(name, sizeof(name), "Track %d", (int)state.tracks.size() + 1);
+            t.name = name; state.tracks.insert(state.tracks.begin(), std::move(t));
+        }
+    }
+
     dl->PopClipRect();  // end scrollable track area clip
 
     // ── OS-file ghost drop preview ────────────────────────────────────────────
@@ -4397,32 +4420,6 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
         track_y += TL_TRACK_H;  // push "+ Add Track" down so they don't overlap
     }
 
-    // "+ Add Track" row — styled to match existing track rows, pinned at bottom
-    float add_row_y = origin.y + total_h - TL_TRACK_H;
-    ImVec2 add_row_tl = {origin.x, add_row_y};
-    ImVec2 add_row_br = {origin.x + total_w, origin.y + total_h};
-    bool add_hov = !s_ghost_path.empty() ? false :
-                   (mouse.y >= add_row_y && mouse.y < origin.y + total_h &&
-                    mouse.x >= origin.x   && mouse.x <= origin.x + total_w);
-    // Label column background — matches track row style
-    dl->AddRectFilled(add_row_tl, {origin.x + TL_LABEL_W, origin.y + total_h},
-                      to_u32(add_hov ? Col::bg_soft_hov : Col::bg_soft));
-    // Clip area background
-    dl->AddRectFilled({origin.x + TL_LABEL_W, add_row_y}, add_row_br, to_u32(Col::bg));
-    // Top separator
-    dl->AddLine({origin.x, add_row_y}, {origin.x + total_w, add_row_y}, to_u32(Col::line));
-    // Vertical label divider
-    dl->AddLine({origin.x + TL_LABEL_W, add_row_y}, {origin.x + TL_LABEL_W, origin.y + total_h},
-                to_u32(Col::line));
-    // "+ Add Track" label, same position/color as track names
-    float lh = ImGui::GetTextLineHeight();
-    dl->AddText({origin.x + 8.f, add_row_y + (TL_TRACK_H - lh) * 0.5f},
-                to_u32(add_hov ? Col::fg : Col::muted), "+ Add Track");
-    if (add_hov && ImGui::IsMouseClicked(0)) {
-        Track t;
-        char name[32]; snprintf(name,sizeof(name),"Track %d",(int)state.tracks.size()+1);
-        t.name=name; state.tracks.insert(state.tracks.begin(), std::move(t));
-    }
 
     // ── Context menus ─────────────────────────────────────────────────────────
 
