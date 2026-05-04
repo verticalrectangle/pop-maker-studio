@@ -4397,16 +4397,28 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
         track_y += TL_TRACK_H;  // push "+ Add Track" down so they don't overlap
     }
 
-    // "+ Add Track" — pinned to the bottom of the timeline area so it's always visible
+    // "+ Add Track" row — styled to match existing track rows, pinned at bottom
     float add_row_y = origin.y + total_h - TL_TRACK_H;
-    dl->AddRectFilled({origin.x, add_row_y}, {origin.x+total_w, origin.y+total_h}, to_u32(Col::bg));
-    dl->AddLine({origin.x, add_row_y}, {origin.x+total_w, add_row_y}, to_u32(Col::line));
-    ImVec2 add_p = {origin.x+8.f, add_row_y+6.f};
-    ImVec2 mp = ImGui::GetIO().MousePos;
-    bool add_hov = mp.y>=add_row_y && mp.y<origin.y+total_h &&
-                   mp.x>=origin.x && mp.x<=origin.x+total_w;
-    dl->AddText(add_p, to_u32((add_hov && s_ghost_path.empty()) ? Col::fg : Col::muted), "+ Add Track");
-    if (add_hov && s_ghost_path.empty() && ImGui::IsMouseClicked(0)) {
+    ImVec2 add_row_tl = {origin.x, add_row_y};
+    ImVec2 add_row_br = {origin.x + total_w, origin.y + total_h};
+    bool add_hov = !s_ghost_path.empty() ? false :
+                   (mouse.y >= add_row_y && mouse.y < origin.y + total_h &&
+                    mouse.x >= origin.x   && mouse.x <= origin.x + total_w);
+    // Label column background — matches track row style
+    dl->AddRectFilled(add_row_tl, {origin.x + TL_LABEL_W, origin.y + total_h},
+                      to_u32(add_hov ? Col::bg_soft_hov : Col::bg_soft));
+    // Clip area background
+    dl->AddRectFilled({origin.x + TL_LABEL_W, add_row_y}, add_row_br, to_u32(Col::bg));
+    // Top separator
+    dl->AddLine({origin.x, add_row_y}, {origin.x + total_w, add_row_y}, to_u32(Col::line));
+    // Vertical label divider
+    dl->AddLine({origin.x + TL_LABEL_W, add_row_y}, {origin.x + TL_LABEL_W, origin.y + total_h},
+                to_u32(Col::line));
+    // "+ Add Track" label, same position/color as track names
+    float lh = ImGui::GetTextLineHeight();
+    dl->AddText({origin.x + 8.f, add_row_y + (TL_TRACK_H - lh) * 0.5f},
+                to_u32(add_hov ? Col::fg : Col::muted), "+ Add Track");
+    if (add_hov && ImGui::IsMouseClicked(0)) {
         Track t;
         char name[32]; snprintf(name,sizeof(name),"Track %d",(int)state.tracks.size()+1);
         t.name=name; state.tracks.insert(state.tracks.begin(), std::move(t));
