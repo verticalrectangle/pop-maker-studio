@@ -12,6 +12,8 @@
 #include "history.h"
 #include "proxy.h"
 #include "waveform.h"
+#include "project.h"
+#include "fx_shader.h"
 #include <imgui.h>
 #include <imgui_internal.h>
 #include "json.hpp"
@@ -49,6 +51,8 @@ static std::string fmt_time_short(float s) {
 // Re-anchor wall-clock playback whenever the playhead is moved.
 // Delays the wall clock by audio_latency() so that the video frame and the
 // audio sample at position t both become visible/audible at the same moment.
+static double s_scrub_until = 0.0;
+
 static void seek_to(AppState& state, float t) {
     t = roundf(t * 30.f) / 30.f;
     state.playhead = t;
@@ -56,6 +60,10 @@ static void seek_to(AppState& state, float t) {
     if (state.playing) {
         state.play_start_pos  = t;
         state.play_start_wall = std::chrono::steady_clock::now();
+    } else {
+        // Brief audio blip so user hears where the playhead landed.
+        audio_play();
+        s_scrub_until = ImGui::GetTime() + 0.08;
     }
 }
 
@@ -409,7 +417,11 @@ static void apply_subtitle_mode(AppState& state) {
         }
     }
 
-    auto stamp = [&](Clip& c){ c.clip_type = ClipType::Lyrics; c.source_id = src; };
+    auto stamp = [&](Clip& c){
+        c.clip_type = ClipType::Lyrics;
+        c.source_id = src;
+        c.sub_pos   = 1;          // center
+    };
 
     // For Segment mode, read _segments.json instead
     if (state.subtitle_mode == SubtitleMode::Segment &&
@@ -497,6 +509,8 @@ static void apply_subtitle_pipeline(AppState& state) {
             Clip c;
             c.clip_type = ClipType::Subtitle;
             c.source_id = src;
+            c.sub_pos   = 3;      // custom Y — slightly below center
+            c.sub_pos_y = 0.62f;
             c.text  = seg["text"].get<std::string>();
             c.start = seg["start"].get<float>();
             c.end   = seg["end"].get<float>();
@@ -838,10 +852,32 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                     auto rot_pt = [&](float ox, float oy) -> ImVec2 {
                         return { cx + ox*cos_r - oy*sin_r, cy + ox*sin_r + oy*cos_r };
                     };
+                    // Apply GPU color grade + blur via Effect clips above this track
+                    EffectAccum vid_fx = collect_effects(state, state.playhead, ti);
+                    uintptr_t display_tex = tex;
+                    if (vid_fx.any_color || vid_fx.any_blur) {
+                        display_tex = fx_apply(tex,
+                            vid_fx.brightness, vid_fx.contrast,
+                            vid_fx.saturation, vid_fx.hue,
+                            vid_fx.blur);
+                    }
+
                     ImU32 col = IM_COL32(255, 255, 255, (int)(alpha * 255.f));
-                    dl->AddImageQuad(ImTextureRef((ImTextureID)tex),
+                    dl->AddImageQuad(ImTextureRef((ImTextureID)display_tex),
                         rot_pt(-hw,-hh), rot_pt(hw,-hh), rot_pt(hw,hh), rot_pt(-hw,hh),
                         {0,0}, {1,0}, {1,1}, {0,1}, col);
+
+                    // Vignette overlay (GPU doesn't composite this into the video quad —
+                    // draw it as a gradient rect on top in screen space)
+                    if (vid_fx.any_vignette && vid_fx.vignette > 0.01f) {
+                        float vx0=cx-hw, vy0=cy-hh, vx1=cx+hw, vy1=cy+hh;
+                        ImU32 vig = IM_COL32(0,0,0,(int)(vid_fx.vignette*210.f));
+                        float vw=vx1-vx0, vh=vy1-vy0;
+                        dl->AddRectFilledMultiColor({vx0,vy0},{vx0+vw*0.4f,vy1},vig,IM_COL32(0,0,0,0),IM_COL32(0,0,0,0),vig);
+                        dl->AddRectFilledMultiColor({vx0+vw*0.6f,vy0},{vx1,vy1},IM_COL32(0,0,0,0),vig,vig,IM_COL32(0,0,0,0));
+                        dl->AddRectFilledMultiColor({vx0,vy0},{vx1,vy0+vh*0.3f},vig,vig,IM_COL32(0,0,0,0),IM_COL32(0,0,0,0));
+                        dl->AddRectFilledMultiColor({vx0,vy0+vh*0.7f},{vx1,vy1},IM_COL32(0,0,0,0),IM_COL32(0,0,0,0),vig,vig);
+                    }
                 }
             }
         }
@@ -892,12 +928,18 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
             float fade_in  = fminf(0.25f, clip_dur * 0.3f);
             float fade_out = fminf(0.25f, clip_dur * 0.2f);
 
+            // Accumulated effect from Effect clips on tracks above this one
+            EffectAccum text_fx = collect_effects(state, state.playhead, ti);
+
             float anim_dx    = 0.f;
             float anim_dy    = 0.f;
             float anim_alpha = 1.f;
 
+            AnimStyle eff_style = (show->clip_style != AnimStyle::None)
+                                  ? show->clip_style : state.style;
+
             if (active_ci >= 0) {  // only animate when actively playing
-                switch (state.style) {
+                switch (eff_style) {
                     case AnimStyle::Fade: {
                         if (local_t < fade_in)
                             anim_alpha = local_t / fade_in;
@@ -941,12 +983,18 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                 }
             }
 
+            // Apply effect clip overrides
+            if (text_fx.any_text) {
+                anim_alpha *= text_fx.opacity_mul;
+                fsz        *= text_fx.scale_mul;
+            }
+
             float tx_anim  = tx + anim_dx;
             float ty_anim  = slot_y + anim_dy;
             ImU32 shad_col = IM_COL32(0, 0, 0, (int)(180.f * anim_alpha));
 
             // Block style: filled box behind text
-            if (state.style == AnimStyle::Block && active_ci >= 0) {
+            if (eff_style == AnimStyle::Block && active_ci >= 0) {
                 float pad_x = 8.f, pad_y = 4.f;
                 dl->AddRectFilled(
                     {tx_anim - pad_x, ty_anim - pad_y},
@@ -998,7 +1046,7 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                     float a = ((active_ci >= 0) ? show->sub_color[3] : show->sub_color[3] * 0.5f) * anim_alpha;
                     tcol = IM_COL32((int)(show->sub_color[0]*255), (int)(show->sub_color[1]*255),
                                     (int)(show->sub_color[2]*255), (int)(a*255));
-                } else if (state.style == AnimStyle::Block && active_ci >= 0) {
+                } else if (eff_style == AnimStyle::Block && active_ci >= 0) {
                     tcol = to_u32(Col::bg);  // dark text on white block
                 } else {
                     float a = (active_ci >= 0) ? anim_alpha : anim_alpha * 0.5f;
@@ -1961,6 +2009,384 @@ static void panel_lyrics(AppState& state, float w) {
     }
 }
 
+// ── FX preset helpers ─────────────────────────────────────────────────────────
+
+static void preset_apply(Clip& clip, const EffectPreset& p) {
+    clip.fx_color_on    = p.fx_color_on;
+    clip.fx_brightness  = p.fx_brightness;
+    clip.fx_contrast    = p.fx_contrast;
+    clip.fx_saturation  = p.fx_saturation;
+    clip.fx_hue         = p.fx_hue;
+    clip.fx_blur_on     = p.fx_blur_on;
+    clip.fx_blur        = p.fx_blur;
+    clip.fx_vignette_on = p.fx_vignette_on;
+    clip.fx_vignette    = p.fx_vignette;
+    clip.fx_text_on     = p.fx_text_on;
+    clip.fx_opacity_mul = p.fx_opacity_mul;
+    clip.fx_scale_mul   = p.fx_scale_mul;
+}
+
+static EffectPreset preset_from_clip(const Clip& clip, const std::string& name) {
+    EffectPreset p;
+    p.name           = name;
+    p.category       = PresetCategory::User;
+    p.fx_color_on    = clip.fx_color_on;
+    p.fx_brightness  = clip.fx_brightness;
+    p.fx_contrast    = clip.fx_contrast;
+    p.fx_saturation  = clip.fx_saturation;
+    p.fx_hue         = clip.fx_hue;
+    p.fx_blur_on     = clip.fx_blur_on;
+    p.fx_blur        = clip.fx_blur;
+    p.fx_vignette_on = clip.fx_vignette_on;
+    p.fx_vignette    = clip.fx_vignette;
+    p.fx_text_on     = clip.fx_text_on;
+    p.fx_opacity_mul = clip.fx_opacity_mul;
+    p.fx_scale_mul   = clip.fx_scale_mul;
+    return p;
+}
+
+// Color swatch for a preset card — derived from its dominant effect.
+static ImU32 preset_swatch(const EffectPreset& p) {
+    if (p.fx_blur_on  && !p.fx_color_on && !p.fx_vignette_on)
+        return IM_COL32(80, 140, 220, 200);   // blue-ish for blur
+    if (p.fx_vignette_on && !p.fx_color_on && !p.fx_blur_on)
+        return IM_COL32(40, 40, 60, 220);     // near-black for vignette
+    if (!p.fx_color_on)
+        return IM_COL32(90, 90, 110, 200);    // grey for mixed/none
+    // Rough tint from hue + saturation
+    float h = fmodf(p.fx_hue + 360.f, 360.f);
+    float s = p.fx_saturation;
+    if (s < 0.05f) return IM_COL32(110, 110, 110, 220);  // desaturated
+    int hi = (int)(h / 60.f) % 6;
+    static const ImU32 hue_cols[6] = {
+        IM_COL32(220,80,80,200), IM_COL32(200,160,60,200), IM_COL32(100,200,70,200),
+        IM_COL32(60,180,200,200), IM_COL32(80,100,220,200), IM_COL32(180,70,200,200)
+    };
+    return hue_cols[hi];
+}
+
+// ── Right panel: FX Library tab ──────────────────────────────────────────────
+
+static void panel_fx_library(AppState& state, float w) {
+    ImGui::Dummy({0.f, 8.f});
+
+    ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(200,160,255,255));
+    ImGui::TextUnformatted("FX Library");
+    ImGui::PopStyleColor();
+    ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+    ImGui::TextWrapped("Click to apply to selected Effect clip. Drag to timeline to create one.");
+    ImGui::PopStyleColor();
+    ImGui::Dummy({0.f, 8.f});
+
+    // Determine if an Effect clip is currently selected (for click-to-apply).
+    bool has_fx_clip = (state.selected_track >= 0 &&
+                        state.selected_track < (int)state.tracks.size() &&
+                        state.selected_clip  >= 0 &&
+                        state.selected_clip  < (int)state.tracks[state.selected_track].clips.size() &&
+                        state.tracks[state.selected_track].clips[state.selected_clip].clip_type == ClipType::Effect);
+
+    float card_w  = (w - 12.f) * 0.5f;  // 2-column grid
+    float card_h  = 54.f;
+    float swatch_w = 8.f;
+
+    auto draw_preset_card = [&](const EffectPreset& p, int unique_id) {
+        ImGui::PushID(unique_id);
+        ImVec2 cp = ImGui::GetCursorScreenPos();
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+
+        bool hov = ImGui::IsMouseHoveringRect(cp, {cp.x + card_w, cp.y + card_h});
+        ImU32 bg  = hov ? to_u32(Col::bg_soft_hov) : to_u32(Col::bg_soft);
+        ImU32 brd = hov ? IM_COL32(180,130,255,180) : to_u32(Col::line);
+
+        dl->AddRectFilled(cp, {cp.x+card_w, cp.y+card_h}, bg, 4.f);
+        dl->AddRect(cp, {cp.x+card_w, cp.y+card_h}, brd, 4.f);
+        // Left color swatch strip
+        dl->AddRectFilled(cp, {cp.x+swatch_w, cp.y+card_h}, preset_swatch(p), 4.f);
+
+        // Name + badge line
+        float tx = cp.x + swatch_w + 8.f;
+        float ty = cp.y + 10.f;
+        ImGui::PushFont(g_font_bold);
+        dl->AddText(ImGui::GetFont(), 13.f, {tx, ty}, IM_COL32(230,230,230,255), p.name.c_str());
+        ImGui::PopFont();
+
+        // Mini badges for active effects
+        float bx = tx, by = cp.y + 30.f;
+        auto badge = [&](const char* lbl, ImU32 col) {
+            ImVec2 ts = ImGui::CalcTextSize(lbl);
+            float bw = ts.x + 8.f, bh = ts.y + 4.f;
+            dl->AddRectFilled({bx,by},{bx+bw,by+bh}, col, 3.f);
+            dl->AddText({bx+4.f,by+2.f}, IM_COL32(255,255,255,220), lbl);
+            bx += bw + 4.f;
+        };
+        if (p.fx_color_on)    badge("Col", IM_COL32(80,140,220,180));
+        if (p.fx_blur_on)     badge("Blur",IM_COL32(60,120,180,180));
+        if (p.fx_vignette_on) badge("Vig", IM_COL32(60,60,90,200));
+        if (p.fx_text_on)     badge("Txt", IM_COL32(100,80,160,200));
+
+        // Invisible button over the card for click and drag-drop
+        ImGui::SetCursorScreenPos(cp);
+        ImGui::InvisibleButton("##card", {card_w, card_h});
+        bool clicked = ImGui::IsItemClicked(0);
+
+        // Drag-drop source — payload is index into the combined preset list
+        if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
+            ImGui::SetDragDropPayload("FX_PRESET", &unique_id, sizeof(int));
+            ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(200,160,255,255));
+            ImGui::TextUnformatted(p.name.c_str());
+            ImGui::PopStyleColor();
+            ImGui::TextUnformatted("Drop onto timeline track");
+            ImGui::EndDragDropSource();
+        }
+
+        ImGui::PopID();
+
+        if (clicked) {
+            if (has_fx_clip) {
+                preset_apply(state.tracks[state.selected_track].clips[state.selected_clip], p);
+                history_push(state, "Apply preset: " + p.name);
+            } else {
+                // Find topmost track or create one, add Effect clip at playhead
+                if (state.tracks.empty()) {
+                    Track t; t.name = "FX"; state.tracks.push_back(t);
+                }
+                Clip cl;
+                cl.clip_type = ClipType::Effect;
+                cl.start     = state.playhead;
+                cl.end       = state.playhead + 2.f;
+                preset_apply(cl, p);
+                state.tracks[0].clips.push_back(cl);
+                state.selected_track = 0;
+                state.selected_clip  = (int)state.tracks[0].clips.size() - 1;
+                history_push(state, "Add Effect: " + p.name);
+            }
+        }
+    };
+
+    // Combined preset list: built-ins first, then user presets.
+    // Index 0..N-1 = built-ins, N.. = user.
+    int builtin_count = (int)g_builtin_presets.size();
+
+    auto draw_section = [&](const char* label, PresetCategory cat) {
+        ui_separator();
+        ImGui::Dummy({0.f, 4.f});
+        ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+        ImGui::TextUnformatted(label);
+        ImGui::PopStyleColor();
+        ImGui::Dummy({0.f, 4.f});
+
+        bool col_left = true;
+        float base_x = ImGui::GetCursorScreenPos().x;
+        ImVec2 left_cursor = ImGui::GetCursorPos();
+
+        for (int i = 0; i < (int)g_builtin_presets.size(); ++i) {
+            if (g_builtin_presets[i].category != cat) continue;
+            if (!col_left) {
+                ImGui::SameLine(0.f, 8.f);
+            }
+            draw_preset_card(g_builtin_presets[i], i);
+            if (!col_left) ImGui::Dummy({0.f, 4.f});
+            col_left = !col_left;
+        }
+        if (!col_left) ImGui::Dummy({0.f, 4.f});
+        ImGui::Dummy({0.f, 4.f});
+        (void)base_x; (void)left_cursor;
+    };
+
+    draw_section("Color",    PresetCategory::Color);
+    draw_section("Blur",     PresetCategory::Blur);
+    draw_section("Vignette", PresetCategory::Vignette);
+    draw_section("Combo",    PresetCategory::Combo);
+
+    // User presets section
+    if (!state.user_presets.empty()) {
+        ui_separator();
+        ImGui::Dummy({0.f, 4.f});
+        ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+        ImGui::TextUnformatted("My Presets");
+        ImGui::PopStyleColor();
+        ImGui::Dummy({0.f, 4.f});
+
+        bool col_left = true;
+        for (int i = 0; i < (int)state.user_presets.size(); ++i) {
+            if (!col_left) ImGui::SameLine(0.f, 8.f);
+            draw_preset_card(state.user_presets[i], builtin_count + i);
+
+            // Right-click to delete user preset
+            if (ImGui::BeginPopupContextItem(("##userpctx" + std::to_string(i)).c_str())) {
+                if (ImGui::MenuItem("Delete preset")) {
+                    state.user_presets.erase(state.user_presets.begin() + i);
+                    presets_save_user(state.user_presets);
+                    ImGui::CloseCurrentPopup();
+                }
+                ImGui::EndPopup();
+            }
+            if (!col_left) ImGui::Dummy({0.f, 4.f});
+            col_left = !col_left;
+        }
+        if (!col_left) ImGui::Dummy({0.f, 4.f});
+    }
+
+    ImGui::Dummy({0.f, 16.f});
+}
+
+// ── Right panel: Effect tab ───────────────────────────────────────────────────
+
+static void panel_effect(AppState& state, float w) {
+    if (state.selected_track < 0 || state.selected_track >= (int)state.tracks.size()) return;
+    Track& track = state.tracks[state.selected_track];
+    if (state.selected_clip < 0 || state.selected_clip >= (int)track.clips.size()) return;
+    Clip& clip = track.clips[state.selected_clip];
+
+    ImGui::Dummy({0.f, 8.f});
+
+    // Header
+    ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(200,160,255,255));
+    ImGui::TextUnformatted("Effect Clip");
+    ImGui::PopStyleColor();
+    int n_below = (int)state.tracks.size() - state.selected_track - 1;
+    char info[128];
+    snprintf(info, sizeof(info), "%s  ·  %.2fs – %.2fs  ·  %d track%s below",
+        track.name.c_str(), clip.start, clip.end, n_below, n_below==1?"":"s");
+    ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+    ImGui::TextWrapped("%s", info);
+    ImGui::PopStyleColor();
+    ImGui::Dummy({0.f, 4.f}); ui_separator(); ImGui::Dummy({0.f, 8.f});
+
+    ImGui::PushStyleColor(ImGuiCol_SliderGrab,      IM_COL32(180,130,255,255));
+    ImGui::PushStyleColor(ImGuiCol_SliderGrabActive,IM_COL32(210,170,255,255));
+    ImGui::PushStyleColor(ImGuiCol_FrameBg,         Col::bg_soft);
+    ImGui::PushStyleColor(ImGuiCol_CheckMark,       IM_COL32(180,130,255,255));
+
+    auto fx_reset_btn = [&](const char* id, float* v, float def) {
+        ImGui::SameLine(0.f, 6.f);
+        char lbl[16]; snprintf(lbl, sizeof(lbl), "R##%s", id);
+        if (ui_btn(lbl, false, true)) { *v = def; history_push(state, "Effect: reset"); }
+    };
+    float sw = w - 72.f;  // slider width leaving room for label + reset
+
+    // ── Color Grade ───────────────────────────────────────────────────────────
+    bool cg = clip.fx_color_on;
+    if (ImGui::Checkbox("Color Grade##fx", &cg)) {
+        clip.fx_color_on = cg;
+        history_push(state, "Effect: color grade");
+    }
+    if (clip.fx_color_on) {
+        ImGui::Dummy({0.f, 4.f});
+        ImGui::SetNextItemWidth(sw); ImGui::SliderFloat("Brightness##fx",&clip.fx_brightness,-1.f,1.f,"%.2f");
+        if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Effect: brightness");
+        fx_reset_btn("br", &clip.fx_brightness, 0.f);
+
+        ImGui::SetNextItemWidth(sw); ImGui::SliderFloat("Contrast##fx",  &clip.fx_contrast, 0.5f,2.f,"%.2f");
+        if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Effect: contrast");
+        fx_reset_btn("co", &clip.fx_contrast, 1.f);
+
+        ImGui::SetNextItemWidth(sw); ImGui::SliderFloat("Saturation##fx",&clip.fx_saturation,0.f,2.f,"%.2f");
+        if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Effect: saturation");
+        fx_reset_btn("sa", &clip.fx_saturation, 1.f);
+
+        ImGui::SetNextItemWidth(sw); ImGui::SliderFloat("Hue##fx",       &clip.fx_hue,-180.f,180.f,"%.0f\xc2\xb0");
+        if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Effect: hue");
+        fx_reset_btn("hu", &clip.fx_hue, 0.f);
+        ImGui::Dummy({0.f, 4.f});
+    }
+
+    ImGui::Dummy({0.f, 4.f}); ui_separator(); ImGui::Dummy({0.f, 4.f});
+
+    // ── Blur ──────────────────────────────────────────────────────────────────
+    bool bl = clip.fx_blur_on;
+    if (ImGui::Checkbox("Blur##fx", &bl)) {
+        clip.fx_blur_on = bl;
+        history_push(state, "Effect: blur");
+    }
+    if (clip.fx_blur_on) {
+        ImGui::Dummy({0.f, 4.f});
+        ImGui::SetNextItemWidth(sw); ImGui::SliderFloat("Radius##fx", &clip.fx_blur, 0.f, 20.f, "%.1f px");
+        if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Effect: blur radius");
+        fx_reset_btn("bl", &clip.fx_blur, 0.f);
+        ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+        ImGui::TextUnformatted("Live preview shows badge — rendered on export");
+        ImGui::PopStyleColor();
+        ImGui::Dummy({0.f, 4.f});
+    }
+
+    ImGui::Dummy({0.f, 4.f}); ui_separator(); ImGui::Dummy({0.f, 4.f});
+
+    // ── Vignette ──────────────────────────────────────────────────────────────
+    bool vi = clip.fx_vignette_on;
+    if (ImGui::Checkbox("Vignette##fx", &vi)) {
+        clip.fx_vignette_on = vi;
+        history_push(state, "Effect: vignette");
+    }
+    if (clip.fx_vignette_on) {
+        ImGui::Dummy({0.f, 4.f});
+        ImGui::SetNextItemWidth(sw); ImGui::SliderFloat("Strength##fx", &clip.fx_vignette, 0.f, 1.f, "%.2f");
+        if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Effect: vignette strength");
+        fx_reset_btn("vi", &clip.fx_vignette, 0.f);
+        ImGui::Dummy({0.f, 4.f});
+    }
+
+    ImGui::Dummy({0.f, 4.f}); ui_separator(); ImGui::Dummy({0.f, 4.f});
+
+    // ── Text Overrides ────────────────────────────────────────────────────────
+    bool tx = clip.fx_text_on;
+    if (ImGui::Checkbox("Text Overrides##fx", &tx)) {
+        clip.fx_text_on = tx;
+        history_push(state, "Effect: text overrides");
+    }
+    if (clip.fx_text_on) {
+        ImGui::Dummy({0.f, 4.f});
+        ImGui::SetNextItemWidth(sw); ImGui::SliderFloat("Opacity mul##fx",&clip.fx_opacity_mul,0.f,1.f,"%.2f");
+        if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Effect: opacity mul");
+        fx_reset_btn("op", &clip.fx_opacity_mul, 1.f);
+
+        ImGui::SetNextItemWidth(sw); ImGui::SliderFloat("Scale mul##fx",  &clip.fx_scale_mul,0.5f,2.f,"%.2f");
+        if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Effect: scale mul");
+        fx_reset_btn("sc", &clip.fx_scale_mul, 1.f);
+        ImGui::Dummy({0.f, 4.f});
+    }
+
+    ImGui::PopStyleColor(4);
+
+    ImGui::Dummy({0.f, 8.f}); ui_separator(); ImGui::Dummy({0.f, 6.f});
+    ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+    ImGui::TextWrapped("Effects stack — multiple Effect clips at the same time compound (brightness adds, contrast/saturation multiply, blur adds).");
+    ImGui::PopStyleColor();
+
+    ImGui::Dummy({0.f, 12.f}); ui_separator(); ImGui::Dummy({0.f, 8.f});
+
+    // ── Save as Preset ────────────────────────────────────────────────────────
+    static char s_preset_name[64] = {};
+    static bool s_naming = false;
+    if (!s_naming) {
+        if (ui_btn("Save as Preset", false, true)) {
+            s_naming = true;
+            s_preset_name[0] = '\0';
+        }
+    } else {
+        ImGui::SetNextItemWidth(w - 80.f);
+        bool enter = ImGui::InputText("##pname", s_preset_name, sizeof(s_preset_name),
+                                      ImGuiInputTextFlags_EnterReturnsTrue);
+        ImGui::SameLine();
+        if (ui_btn("Save", true, true) || enter) {
+            if (s_preset_name[0] != '\0') {
+                state.user_presets.push_back(preset_from_clip(clip, s_preset_name));
+                presets_save_user(state.user_presets);
+            }
+            s_naming = false;
+        }
+        ImGui::SameLine();
+        if (ui_btn("X", false, true)) s_naming = false;
+    }
+
+    ImGui::Dummy({0.f, 4.f});
+    if (ui_btn("Delete clip", false, true)) {
+        track.clips.erase(track.clips.begin() + state.selected_clip);
+        state.selected_clip = -1;
+        history_push(state, "Delete effect clip");
+    }
+}
+
 // ── Right panel: Animation tab ───────────────────────────────────────────────
 
 static const struct { AnimStyle style; const char* name; const char* desc; const char* tag; } STYLES[] = {
@@ -1976,7 +2402,29 @@ static const struct { AnimStyle style; const char* name; const char* desc; const
 
 static void panel_animation(AppState& state, float w) {
     ImGui::Dummy({0.f, 8.f});
-    ui_label("Animation style"); ImGui::Dummy({0.f, 8.f});
+
+    // Resolve focused clip (single selection or primary)
+    Clip* focused_clip = nullptr;
+    if (state.selected_track >= 0 && state.selected_clip >= 0 &&
+        state.selected_track < (int)state.tracks.size() &&
+        state.selected_clip  < (int)state.tracks[state.selected_track].clips.size()) {
+        focused_clip = &state.tracks[state.selected_track].clips[state.selected_clip];
+    }
+
+    // The "active" style shown in cards: clip override if set, else project default
+    AnimStyle active_style = focused_clip
+        ? (focused_clip->clip_style != AnimStyle::None ? focused_clip->clip_style : state.style)
+        : state.style;
+    bool clip_has_override = focused_clip && focused_clip->clip_style != AnimStyle::None;
+
+    ui_label("Animation style");
+    if (focused_clip) {
+        ImGui::SameLine();
+        ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+        ImGui::TextUnformatted(clip_has_override ? " (clip)" : " (project)");
+        ImGui::PopStyleColor();
+    }
+    ImGui::Dummy({0.f, 8.f});
 
     float card_w = (w - 20.f) * 0.5f;
     float card_h = 82.f;
@@ -1984,7 +2432,7 @@ static void panel_animation(AppState& state, float w) {
     for (int i = 0; i < 8; ++i) {
         if (i % 2 == 1) ImGui::SameLine(0.f, 8.f);
         const auto& sc = STYLES[i];
-        bool sel = state.style == sc.style;
+        bool sel = active_style == sc.style;
 
         ImGui::PushStyleColor(ImGuiCol_ChildBg, sel ? Col::bg_soft_hov : Col::bg_soft);
         ImGui::PushStyleColor(ImGuiCol_Border,  sel ? Col::fg : Col::line);
@@ -2027,11 +2475,51 @@ static void panel_animation(AppState& state, float w) {
         }
         ImGui::EndChild();
         if (ImGui::IsItemClicked()) {
-            state.style = sc.style;
+            if (focused_clip) {
+                focused_clip->clip_style = sc.style;
+            } else {
+                state.style = sc.style;
+            }
             history_push(state, std::string("Style — ") + sc.name);
         }
         ImGui::PopStyleColor(2);
         if (i % 2 == 1 && i < 7) ImGui::Dummy({0.f, 4.f});
+    }
+
+    // Apply / reset row
+    ImGui::Dummy({0.f, 8.f});
+    if (focused_clip) {
+        if (clip_has_override && ui_btn("Use project default", false, false)) {
+            focused_clip->clip_style = AnimStyle::None;
+            history_push(state, "Reset clip style");
+        }
+        if (clip_has_override) ImGui::SameLine(0.f, 6.f);
+    }
+
+    // Apply to selected clips
+    int n_sel = (int)state.clip_selection.size();
+    if (n_sel > 1) {
+        char slbl[48]; snprintf(slbl, sizeof(slbl), "Apply to %d selected##anim", n_sel);
+        if (ui_btn(slbl, false, false)) {
+            for (auto& [ti, ci] : state.clip_selection) {
+                if (ti < (int)state.tracks.size() && ci < (int)state.tracks[ti].clips.size())
+                    state.tracks[ti].clips[ci].clip_style = active_style;
+            }
+            history_push(state, "Style — apply to selected");
+        }
+        ImGui::SameLine(0.f, 6.f);
+    }
+
+    // Apply to all text/lyrics clips
+    if (ui_btn("Apply to all##anim", false, false)) {
+        for (auto& tr : state.tracks)
+            for (auto& cl : tr.clips)
+                if (cl.clip_type == ClipType::Text || cl.clip_type == ClipType::Lyrics ||
+                    cl.clip_type == ClipType::Subtitle)
+                    cl.clip_style = active_style;
+        // Also set as project default
+        state.style = active_style;
+        history_push(state, std::string("Style — apply all — ") + STYLES[0].name);
     }
 
     ImGui::Dummy({0.f, 12.f}); ui_separator(); ImGui::Dummy({0.f, 8.f});
@@ -2618,6 +3106,46 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
             to_u32(row_hov ? Col::bg_soft_hov : Col::bg_soft));
         dl->AddLine({origin.x, row_br.y}, {origin.x+total_w, row_br.y}, to_u32(Col::line));
 
+        // FX preset drag-drop target on the clip area of this row
+        {
+            ImVec2 drop_tl = {origin.x + TL_LABEL_W, track_y};
+            ImVec2 drop_br = {origin.x + total_w,     track_y + TL_TRACK_H};
+            ImGui::SetCursorScreenPos(drop_tl);
+            ImGui::InvisibleButton(("##fxdrop" + std::to_string(ti)).c_str(),
+                                   {drop_br.x - drop_tl.x, drop_br.y - drop_tl.y});
+            if (ImGui::BeginDragDropTarget()) {
+                if (const ImGuiPayload* pay = ImGui::AcceptDragDropPayload("FX_PRESET")) {
+                    int idx = *(const int*)pay->Data;
+                    const EffectPreset* preset = nullptr;
+                    int bn = (int)g_builtin_presets.size();
+                    if (idx < bn) preset = &g_builtin_presets[idx];
+                    else if (idx - bn < (int)state.user_presets.size())
+                        preset = &state.user_presets[idx - bn];
+                    if (preset) {
+                        // Place clip at cursor time position
+                        float drop_x = ImGui::GetMousePos().x - (origin.x + TL_LABEL_W);
+                        float drop_t = (drop_x + scroll) / zoom;
+                        drop_t = fmaxf(0.f, drop_t);
+                        Clip cl;
+                        cl.clip_type = ClipType::Effect;
+                        cl.start     = drop_t;
+                        cl.end       = drop_t + 2.f;
+                        preset_apply(cl, *preset);
+                        state.tracks[ti].clips.push_back(cl);
+                        state.selected_track = ti;
+                        state.selected_clip  = (int)state.tracks[ti].clips.size() - 1;
+                        s_drop_flash_track = ti;
+                        s_drop_flash_t     = 0.6f;
+                        history_push(state, "Drop Effect preset: " + preset->name);
+                    }
+                }
+                // Highlight the row while dragging over it
+                dl->AddRectFilled(drop_tl, drop_br, IM_COL32(180,130,255,40));
+                dl->AddRect(drop_tl, drop_br, IM_COL32(180,130,255,180), 2.f);
+                ImGui::EndDragDropTarget();
+            }
+        }
+
         // Drop flash — briefly illuminate the row that just received a drop.
         if (s_drop_flash_t > 0.f && s_drop_flash_track == ti) {
             float alpha = s_drop_flash_t / 0.6f;  // 1→0 linear fade
@@ -2718,6 +3246,42 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
             float cy0 = track_y+3.f, cy1 = track_y+TL_TRACK_H-3.f;
             bool sel = state.clip_selection.count({ti, ci}) > 0;
 
+            if (clip.clip_type == ClipType::Effect) {
+                // Effect clip — translucent purple adjustment-layer bar
+                ImU32 fx_fill   = sel ? IM_COL32(160,100,255,200) : IM_COL32(120,80,220,110);
+                ImU32 fx_border = sel ? IM_COL32(200,160,255,255) : IM_COL32(160,110,255,200);
+                dl->AddRectFilled({vis_x0,cy0},{vis_x1,cy1}, fx_fill, 2.f);
+                dl->AddRect({vis_x0,cy0},{vis_x1,cy1}, fx_border, 2.f, 0, 1.5f);
+
+                ImGui::PushClipRect({vis_x0,cy0},{vis_x1,cy1},true);
+                ImU32 lbl_col = IM_COL32(220,190,255,240);
+                float ly = cy0 + (cy1-cy0-13.f)*0.5f;
+                dl->AddText({vis_x0+5.f, ly}, lbl_col, "FX");
+                float bx = vis_x0 + 28.f;
+                if (clip.fx_color_on    && bx+28.f<vis_x1) { dl->AddText({bx,ly},lbl_col,"Col"); bx+=28.f; }
+                if (clip.fx_blur_on     && bx+30.f<vis_x1) { dl->AddText({bx,ly},lbl_col,"Blur");bx+=32.f; }
+                if (clip.fx_vignette_on && bx+24.f<vis_x1) { dl->AddText({bx,ly},lbl_col,"Vig"); bx+=28.f; }
+                if (clip.fx_text_on     && bx+22.f<vis_x1) { dl->AddText({bx,ly},lbl_col,"Txt"); }
+                // Down-arrow scope indicator at right edge
+                if (vis_x1-vis_x0 > 30.f) {
+                    float ax=vis_x1-12.f, ay=cy0+(cy1-cy0)*0.35f;
+                    dl->AddTriangleFilled({ax-5.f,ay},{ax+5.f,ay},{ax,ay+7.f},IM_COL32(220,190,255,180));
+                }
+                ImGui::PopClipRect();
+
+                // Active-time glow on tracks below
+                if (state.playhead >= clip.start && state.playhead < clip.end) {
+                    float gx = origin.x + TL_LABEL_W;
+                    for (int gti = ti+1; gti < (int)state.tracks.size(); ++gti) {
+                        float gty = (track_area_top - state.tl_v_scroll)
+                                  + gti * TL_TRACK_H;
+                        if (gty+TL_TRACK_H < track_area_top || gty > track_area_bot) continue;
+                        dl->AddRectFilled({gx,gty},{gx+2.f,gty+TL_TRACK_H},
+                                          IM_COL32(160,110,255,80));
+                    }
+                }
+            } else {
+
             ImVec4 clip_fill = (clip.clip_type==ClipType::Lyrics)   ? Col::clip_lyrics
                              : (clip.clip_type==ClipType::Subtitle) ? Col::clip_subtitle
                              : (clip.clip_type==ClipType::Text)     ? Col::clip_sub
@@ -2779,7 +3343,9 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
                 ImGui::PopClipRect();
             }
 
-            // Edge handles
+            } // end else (non-Effect clips)
+
+            // Edge handles — common to all clip types
             const float ew     = 6.f;   // drawn width
             const float ew_hit = 12.f;  // hit zone width
             if (sel) {
@@ -3271,6 +3837,7 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
             bool ext_busy = state.extract_running;
             if (ext_busy) ImGui::BeginDisabled();
             if (ImGui::MenuItem(ext_busy ? "Extracting audio…" : "Extract audio as track")) {
+                state.extract_source_track = ctx_track;
                 extract_audio_start(state, cc->text);
             }
             if (ext_busy) ImGui::EndDisabled();
@@ -3409,6 +3976,9 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
                     "Audio", "*.wav *.mp3 *.m4a *.flac *.aac");
                 if (!p.empty()) add_clip_to_track(state, ti, p, ClipType::Audio);
             }
+            if (ImGui::MenuItem("Add Effect Clip")) {
+                add_clip_to_track(state, ti, "", ClipType::Effect);
+            }
             ImGui::Separator();
         }
 
@@ -3477,6 +4047,26 @@ static void handle_shortcuts(AppState& state) {
         history_redo(state); return;
     }
 
+    // ── Save / Open ───────────────────────────────────────────────────────────
+    if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_S)) {
+        if (state.project_path.empty())
+            state.project_path = filepicker_save("Save project", "PMS Project", "*.pms");
+        if (!state.project_path.empty()) project_save(state, state.project_path);
+        return;
+    }
+    if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_S)) {
+        std::string p = filepicker_save("Save project as", "PMS Project", "*.pms");
+        if (!p.empty()) { state.project_path = p; project_save(state, p); }
+        return;
+    }
+    if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_N)) {
+        transcribe_cancel(); history_clear();
+        audio_shutdown(); video_close();
+        state = AppState{}; state.splash_timer = 0.f;
+        audio_init();
+        return;
+    }
+
     // ── Playback ──────────────────────────────────────────────────────────────
     float fps    = tl_fps(state);
     float f_dt   = fps > 0.f ? 1.f / fps : 1.f / 30.f;
@@ -3534,6 +4124,12 @@ void ui_studio(AppState& state) {
     ImGuiIO& io   = ImGui::GetIO();
     float    win_w = io.DisplaySize.x;
     float    win_h = io.DisplaySize.y;
+
+    // Stop scrub audio once the blip window expires.
+    if (s_scrub_until > 0.0 && ImGui::GetTime() >= s_scrub_until && !state.playing) {
+        audio_pause();
+        s_scrub_until = 0.0;
+    }
 
     handle_shortcuts(state);
 
@@ -3629,7 +4225,7 @@ void ui_studio(AppState& state) {
         s_was_loading = loading;
     }
 
-    // Extract audio done → add Audio track
+    // Extract audio done → add Audio track directly below the source video track
     if (state.extract_done) {
         state.extract_done = false;
         if (!state.extract_wav_path.empty() && fs::exists(state.extract_wav_path)) {
@@ -3640,7 +4236,13 @@ void ui_studio(AppState& state) {
             Clip ac; ac.clip_type = ClipType::Audio;
             ac.start = 0.f; ac.end = dur; ac.text = state.extract_wav_path;
             at.clips.push_back(ac);
-            state.tracks.insert(state.tracks.begin(), std::move(at));
+            // Insert directly below the source video track; fall back to bottom
+            int insert_pos = (int)state.tracks.size();
+            if (state.extract_source_track >= 0 &&
+                state.extract_source_track < (int)state.tracks.size())
+                insert_pos = state.extract_source_track + 1;
+            state.tracks.insert(state.tracks.begin() + insert_pos, std::move(at));
+            state.extract_source_track = -1;
             history_push(state, "Extract audio from video");
         }
         state.extract_wav_path.clear();
@@ -3694,6 +4296,38 @@ void ui_studio(AppState& state) {
         ImGui::SameLine(0.f, 24.f);
 
         if (ImGui::BeginMenu("File")) {
+            if (ImGui::MenuItem("New Project", "Ctrl+N")) {
+                transcribe_cancel();
+                history_clear();
+                state = AppState{};
+                state.splash_timer = 0.f;
+                audio_shutdown(); audio_init();
+                video_close();
+            }
+            if (ImGui::MenuItem("Open Project…", "Ctrl+Shift+O")) {
+                std::string picked = filepicker_open("Open project", "PMS Project", "*.pms");
+                if (!picked.empty()) {
+                    AppState loaded;
+                    if (project_load(loaded, picked)) {
+                        transcribe_cancel(); history_clear();
+                        audio_shutdown(); video_close();
+                        state = std::move(loaded);
+                        state.project_path = picked;
+                        audio_init();
+                        if (!state.audio_path.empty()) audio_load(state.audio_path.c_str());
+                    }
+                }
+            }
+            if (ImGui::MenuItem("Save Project", "Ctrl+S")) {
+                if (state.project_path.empty())
+                    state.project_path = filepicker_save("Save project", "PMS Project", "*.pms");
+                if (!state.project_path.empty()) project_save(state, state.project_path);
+            }
+            if (ImGui::MenuItem("Save Project As…", "Ctrl+Shift+S")) {
+                std::string p = filepicker_save("Save project as", "PMS Project", "*.pms");
+                if (!p.empty()) { state.project_path = p; project_save(state, p); }
+            }
+            ImGui::Separator();
             if (ImGui::MenuItem("Import Audio / Video…", "Ctrl+O")) {
                 std::string picked = filepicker_open(
                     "Import audio or video",
@@ -3723,15 +4357,6 @@ void ui_studio(AppState& state) {
             ImGui::Separator();
             if (ImGui::MenuItem("Settings…"))
                 state.show_settings_modal = true;
-            ImGui::Separator();
-            if (ImGui::MenuItem("Close project")) {
-                transcribe_cancel();
-                history_clear();
-                state = AppState{};
-                state.splash_timer = 0.f;  // don't re-show splash
-                audio_shutdown(); audio_init();
-                video_close();
-            }
             ImGui::EndMenu();
         }
 
@@ -3934,8 +4559,8 @@ void ui_studio(AppState& state) {
         float sw, sh;
         if (aw / ah > asp_w / asp_h) { sh = ah; sw = sh * asp_w / asp_h; }
         else                          { sw = aw; sh = sw * asp_h / asp_w; }
-        float ox = (aw - sw) * 0.5f;
-        float oy = (ah - sh) * 0.5f;
+        float ox = roundf((aw - sw) * 0.5f);
+        float oy = roundf((ah - sh) * 0.5f);
         ImGui::SetCursorPos({ox, oy});
         ImVec2 stage_p = ImGui::GetCursorScreenPos();
         ImGui::Dummy({sw, sh});
@@ -4220,6 +4845,7 @@ void ui_studio(AppState& state) {
             if (ImGui::BeginTabItem("Clip"))      { state.panel_tab=0; ImGui::EndTabItem(); }
             if (lyrics_selected && ImGui::BeginTabItem("Lyrics")) { state.panel_tab=4; ImGui::EndTabItem(); }
             if (ImGui::BeginTabItem("Animation")) { state.panel_tab=1; ImGui::EndTabItem(); }
+            if (ImGui::BeginTabItem("FX"))        { state.panel_tab=5; ImGui::EndTabItem(); }
             if (ImGui::BeginTabItem("Export"))    { state.panel_tab=2; ImGui::EndTabItem(); }
             if (ImGui::BeginTabItem("History"))   { state.panel_tab=3; ImGui::EndTabItem(); }
             ImGui::EndTabBar();
@@ -4230,11 +4856,21 @@ void ui_studio(AppState& state) {
         ImGui::BeginChild("##panel_scroll", {0.f, 0.f});
         ImGui::SetCursorPosX(8.f);
         float pw = props_w - 16.f;
-        if      (state.panel_tab == 0) panel_clip(state, pw);
-        else if (state.panel_tab == 1) panel_animation(state, pw);
-        else if (state.panel_tab == 2) panel_export(state, pw);
-        else if (state.panel_tab == 4) panel_lyrics(state, pw);
-        else                           panel_history(state, pw);
+
+        // Route to effect panel when an Effect clip is focused
+        bool focused_is_effect = (state.selected_track >= 0 &&
+            state.selected_track < (int)state.tracks.size() &&
+            state.selected_clip  >= 0 &&
+            state.selected_clip  < (int)state.tracks[state.selected_track].clips.size() &&
+            state.tracks[state.selected_track].clips[state.selected_clip].clip_type == ClipType::Effect);
+
+        if      (focused_is_effect)        panel_effect(state, pw);
+        else if (state.panel_tab == 0)     panel_clip(state, pw);
+        else if (state.panel_tab == 1)     panel_animation(state, pw);
+        else if (state.panel_tab == 2)     panel_export(state, pw);
+        else if (state.panel_tab == 4)     panel_lyrics(state, pw);
+        else if (state.panel_tab == 5)     panel_fx_library(state, pw);
+        else                               panel_history(state, pw);
         ImGui::EndChild();
     }
     ImGui::EndChild();

@@ -75,3 +75,67 @@ std::string filepicker_open(const char* title,
     return "";
 #endif
 }
+
+std::string filepicker_save(const char* title,
+                             const char* filter_name,
+                             const char* filter_patterns)
+{
+#if defined(__APPLE__)
+    char cmd[1024];
+    snprintf(cmd, sizeof(cmd),
+        "osascript -e 'POSIX path of (choose file name with prompt \"%s\")' 2>/dev/null",
+        title);
+    FILE* p = popen(cmd, "r");
+    if (!p) return "";
+    char buf[4096] = {};
+    fgets(buf, sizeof(buf), p);
+    pclose(p);
+    std::string result(buf);
+    while (!result.empty() && (result.back() == '\n' || result.back() == '\r'))
+        result.pop_back();
+    return result;
+
+#elif defined(_WIN32)
+    (void)title; (void)filter_name; (void)filter_patterns;
+    return "";
+
+#else
+    char cmd[2048];
+    snprintf(cmd, sizeof(cmd),
+        "zenity --file-selection --save --confirm-overwrite --title='%s' "
+        "--file-filter='%s | %s' 2>/dev/null",
+        title, filter_name, filter_patterns);
+    FILE* p = popen(cmd, "r");
+    if (p) {
+        char buf[4096] = {};
+        fgets(buf, sizeof(buf), p);
+        int ret = pclose(p);
+        if (ret == 0 && buf[0] != '\0') {
+            std::string result(buf);
+            while (!result.empty() &&
+                   (result.back() == '\n' || result.back() == '\r'))
+                result.pop_back();
+            if (!result.empty()) return result;
+        }
+    }
+
+    snprintf(cmd, sizeof(cmd),
+        "kdialog --getsavefilename . '%s' --title '%s' 2>/dev/null",
+        filter_patterns, title);
+    p = popen(cmd, "r");
+    if (p) {
+        char buf[4096] = {};
+        fgets(buf, sizeof(buf), p);
+        int ret = pclose(p);
+        if (ret == 0 && buf[0] != '\0') {
+            std::string result(buf);
+            while (!result.empty() &&
+                   (result.back() == '\n' || result.back() == '\r'))
+                result.pop_back();
+            if (!result.empty()) return result;
+        }
+    }
+
+    return "";
+#endif
+}

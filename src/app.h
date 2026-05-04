@@ -1,4 +1,5 @@
 #pragma once
+#include "presets.h"
 #include <string>
 #include <vector>
 #include <chrono>
@@ -32,10 +33,22 @@ struct PropTrack {
 
 static const int MAX_VIDEO_TRACKS = 8;
 
+// ── Animation style ───────────────────────────────────────────────────────────
+
+enum class AnimStyle {
+    Fade, Glitch, Typewriter, Bounce, Scale,
+    Slide, Stack, Block,
+    None   // sentinel: inherit project default (state.style)
+};
+
+// ── Output format ─────────────────────────────────────────────────────────────
+
+enum class OutputFormat { Vertical, Horizontal, Square };
+
 // ── Track / clip data model ───────────────────────────────────────────────────
 
 // Each clip carries its own type so any track can hold mixed content.
-enum class ClipType { Text, Lyrics, Subtitle, Video, Audio };
+enum class ClipType { Text, Lyrics, Subtitle, Video, Audio, Effect };
 
 struct WordEntry {
     std::string text;
@@ -70,6 +83,23 @@ struct Clip {
     float scale_y  = 1.f;
     float rotation = 0.f;    // degrees, clockwise
 
+    // per-clip animation style (None = inherit project default)
+    AnimStyle   clip_style = AnimStyle::None;
+
+    // Effect clip properties (ClipType::Effect only)
+    bool  fx_color_on    = false;
+    float fx_brightness  = 0.f;
+    float fx_contrast    = 1.f;
+    float fx_saturation  = 1.f;
+    float fx_hue         = 0.f;
+    bool  fx_blur_on     = false;
+    float fx_blur        = 0.f;
+    bool  fx_vignette_on = false;
+    float fx_vignette    = 0.f;
+    bool  fx_text_on     = false;
+    float fx_opacity_mul = 1.f;
+    float fx_scale_mul   = 1.f;
+
     // keyframe tracks — keyed by property name string
     // empty = use the matching static field above
     std::unordered_map<std::string, PropTrack> ktracks;
@@ -85,6 +115,23 @@ struct Track {
     bool              visible = true;
     bool              muted   = false;
     int               sub_row = 0;
+};
+
+// ── Effect accumulator ────────────────────────────────────────────────────────
+
+struct EffectAccum {
+    float brightness  = 0.f;
+    float contrast    = 1.f;
+    float saturation  = 1.f;
+    float hue         = 0.f;
+    float blur        = 0.f;
+    float vignette    = 0.f;
+    float opacity_mul = 1.f;
+    float scale_mul   = 1.f;
+    bool  any_color   = false;
+    bool  any_blur    = false;
+    bool  any_vignette= false;
+    bool  any_text    = false;
 };
 
 // ── Pipeline state ────────────────────────────────────────────────────────────
@@ -110,13 +157,6 @@ struct RenderSettings {
 };
 
 // ── Render state ──────────────────────────────────────────────────────────────
-
-enum class OutputFormat { Vertical, Horizontal, Square };
-
-enum class AnimStyle {
-    Fade, Glitch, Typewriter, Bounce, Scale,
-    Slide, Stack, Block
-};
 
 struct RenderStatus {
     bool        running      = false;
@@ -145,6 +185,7 @@ struct AppState {
     float splash_timer = 1.6f;  // counts down from launch; studio shows when <= 0
 
     // files
+    std::string project_path;   // path of the .pms file last saved/loaded (empty = unsaved)
     std::string audio_path;
     std::string vocals_path;
     std::string words_json_path;    // <stem>_words.json
@@ -225,9 +266,10 @@ struct AppState {
     float tl_h_frac = 0.f;   // timeline height as fraction of body height (0 = auto)
 
     // audio extraction (ffmpeg demux, no ML)
-    bool        extract_running  = false;
-    bool        extract_done     = false;
+    bool        extract_running      = false;
+    bool        extract_done         = false;
     std::string extract_wav_path;
+    int         extract_source_track = -1;  // track index of the video clip that was extracted
 
     // venv python
     std::string python_path = "/home/alexis/dev/song2subs/venv/bin/python";
@@ -267,8 +309,11 @@ struct AppState {
     int          subtitle_n    = 3;   // words per clip for CustomN mode
     bool         pipeline_produces_subtitles = false;  // true = TranscribeOnly → Subtitle clips
 
-    // right panel active tab: 0=Clip, 1=Style, 2=Export, 3=History
+    // right panel active tab: 0=Clip, 1=Animation, 2=Export, 3=History, 4=Lyrics, 5=FX Library
     int panel_tab = 0;
+
+    // user-created effect presets (persisted to ~/.config/pop-maker-studio/presets.json)
+    std::vector<EffectPreset> user_presets;
 
     std::vector<std::pair<int,int>> subtitle_clip_indices() const;
 };
@@ -278,3 +323,6 @@ struct AppState {
 void app_init(AppState& state);
 void app_frame(AppState& state);
 void app_shutdown(AppState& state);
+
+// Accumulate all Effect clips on tracks above below_track_idx that are active at time t.
+EffectAccum collect_effects(const AppState& state, float t, int below_track_idx);

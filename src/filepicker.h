@@ -8,3 +8,9 @@
 std::string filepicker_open(const char* title,
                              const char* filter_name,
                              const char* filter_patterns);
+
+// Save-as file picker. Returns the chosen path (with extension appended if needed)
+// or empty string if cancelled.
+std::string filepicker_save(const char* title,
+                             const char* filter_name,
+                             const char* filter_patterns);

@@ -3,6 +3,8 @@
 #include "video.h"
 #include "transcribe.h"
 #include "render.h"
+#include "fx_shader.h"
+#include "presets.h"
 #include "ui/theme.h"
 #include "ui/screens.h"
 #include <imgui.h>
@@ -97,11 +99,43 @@ std::vector<std::pair<int,int>> AppState::subtitle_clip_indices() const {
     return out;
 }
 
+EffectAccum collect_effects(const AppState& state, float t, int below_track_idx) {
+    EffectAccum acc;
+    for (int ti = 0; ti < below_track_idx && ti < (int)state.tracks.size(); ++ti) {
+        for (auto& cl : state.tracks[ti].clips) {
+            if (cl.clip_type != ClipType::Effect) continue;
+            if (t < cl.start || t >= cl.end) continue;
+            if (cl.fx_color_on) {
+                acc.brightness += cl.fx_brightness;
+                acc.contrast   *= cl.fx_contrast;
+                acc.saturation *= cl.fx_saturation;
+                acc.hue        += cl.fx_hue;
+                acc.any_color   = true;
+            }
+            if (cl.fx_blur_on) {
+                acc.blur     += cl.fx_blur;
+                acc.any_blur  = true;
+            }
+            if (cl.fx_vignette_on) {
+                acc.vignette     = fminf(1.f, acc.vignette + cl.fx_vignette);
+                acc.any_vignette = true;
+            }
+            if (cl.fx_text_on) {
+                acc.opacity_mul *= cl.fx_opacity_mul;
+                acc.scale_mul   *= cl.fx_scale_mul;
+                acc.any_text     = true;
+            }
+        }
+    }
+    return acc;
+}
+
 void app_init(AppState& state) {
     theme_apply();
     audio_init();
     render_init_fonts();
-    (void)state;
+    fx_shader_init();
+    state.user_presets = presets_load_user();
 }
 
 void app_frame(AppState& state) {
@@ -159,5 +193,6 @@ void app_shutdown(AppState& state) {
     audio_shutdown();
     video_close();
     transcribe_cancel();
+    fx_shader_shutdown();
     (void)state;
 }

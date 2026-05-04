@@ -44,6 +44,9 @@ set(SOURCES
     src/ui/screen_setup.cpp
     src/ui/screen_studio.cpp
     src/ui/theme.cpp
+    src/project.cpp
+    src/fx_shader.cpp
+    src/presets.cpp
 )
 
 add_executable(pop-maker-studio ${SOURCES} ${IMGUI_SOURCES})
