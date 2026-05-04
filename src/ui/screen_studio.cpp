@@ -84,7 +84,19 @@ static float tl_fps(const AppState& state) {
            ? (float)video_info(0).fps : (float)state.fps;
 }
 
-static int slot_for_video(AppState& state, const std::string& path); // forward decl
+static int slot_for_video(AppState& state, const std::string& key, const std::string& src); // forward decl
+
+// Composite slot key: source_path + '\x01' + clip start time.
+// Two clips with the same source but different start times get independent decoders.
+static std::string clip_slot_key(const std::string& src, float start) {
+    char buf[32]; snprintf(buf, sizeof(buf), "\x01%.6f", start);
+    return src + buf;
+}
+// Extract source path from composite key (or return key as-is for legacy callers).
+static std::string source_from_key(const std::string& key) {
+    auto pos = key.find('\x01');
+    return pos == std::string::npos ? key : key.substr(0, pos);
+}
 
 // Track index the mouse is hovering over in the timeline — updated by draw_timeline
 // each frame so the drop handler can target a specific lane.
@@ -110,7 +122,7 @@ static void add_clip_to_track(AppState& state, int ti, const std::string& path, 
         float dur = video_probe_duration(path);
         if (dur <= 0.f) dur = 4.f;
         cl.end = cl.start + dur;
-        int slot = slot_for_video(state, path);
+        int slot = slot_for_video(state, clip_slot_key(path, cl.start), path);
         proxy_start(path);
         if (slot >= 0) {
             video_open_still(slot, proxy_still_path(path));
@@ -125,6 +137,7 @@ static void add_clip_to_track(AppState& state, int ti, const std::string& path, 
         float dur = audio_probe(path, meta) ? meta.duration_secs : 0.f;
         if (dur <= 0.f) dur = 4.f;
         cl.end = cl.start + dur;
+        audio_source_ensure(path);
     } else {
         cl.end = cl.start + 2.f;  // blank text clip — 2 s default
     }
@@ -146,15 +159,52 @@ static void add_clip_to_track(AppState& state, int ti, const std::string& path, 
                          ct==ClipType::Audio ? "audio" : "text") + " clip");
 }
 
-// Proxy slot for a video file: reuse if already registered, else claim next free.
-// O(MAX_VIDEO_TRACKS) scan — effectively O(1).  Returns -1 when all slots full.
-static int slot_for_video(AppState& state, const std::string& path) {
-    if (path.empty()) return -1;
+// Proxy slot keyed by composite key (source_path + clip start).
+// Each clip instance gets its own decoder so same-source clips don't fight.
+// Returns -1 when all slots full.
+static int slot_for_video(AppState& state, const std::string& key, const std::string& /*src*/) {
+    if (key.empty()) return -1;
     for (int i = 0; i < MAX_VIDEO_TRACKS; ++i)
-        if (state.proxy_paths[i] == path) return i;
+        if (state.proxy_paths[i] == key) return i;
     for (int i = 0; i < MAX_VIDEO_TRACKS; ++i)
-        if (state.proxy_paths[i].empty()) { state.proxy_paths[i] = path; return i; }
+        if (state.proxy_paths[i].empty()) { state.proxy_paths[i] = key; return i; }
     return -1;
+}
+
+// Release slots whose clip no longer exists on any track.
+static void gc_video_slots(AppState& state) {
+    std::set<std::string> live;
+    for (auto& tr : state.tracks)
+        for (auto& cl : tr.clips)
+            if (cl.clip_type == ClipType::Video && !cl.text.empty())
+                live.insert(clip_slot_key(cl.text, cl.start));
+    for (int i = 0; i < MAX_VIDEO_TRACKS; ++i) {
+        if (!state.proxy_paths[i].empty() && !live.count(state.proxy_paths[i])) {
+            video_close(i);
+            state.proxy_paths[i].clear();
+        }
+    }
+}
+
+// Open stills/proxies for all video clips after project load.
+static void reopen_video_slots(AppState& state) {
+    for (auto& tr : state.tracks) {
+        for (auto& cl : tr.clips) {
+            if (cl.clip_type != ClipType::Video || cl.text.empty()) continue;
+            std::string key = clip_slot_key(cl.text, cl.start);
+            int slot = slot_for_video(state, key, cl.text);
+            if (slot < 0) continue;
+            proxy_start(cl.text);
+            video_open_still(slot, proxy_still_path(cl.text));
+            if (proxy_is_ready(cl.text)) {
+                ProxyInfo pi;
+                if (proxy_load(cl.text, pi)) {
+                    video_open_proxy(slot, pi);
+                    if (slot == 0) state.proxy_ready = true;
+                }
+            }
+        }
+    }
 }
 
 // Maximum timeline position covered by any clip across all tracks.
@@ -641,8 +691,8 @@ static void import_file(AppState& state, const std::string& path) {
         vc.start=0.f; vc.end=state.duration; vc.text=path;
         vt.clips.push_back(vc);
 
-        // Claim or reuse proxy slot for this file path.
-        int slot = slot_for_video(state, path);
+        // Claim or reuse proxy slot for this clip instance.
+        int slot = slot_for_video(state, clip_slot_key(path, 0.f), path);
         state.proxy_ready = false;
 
         // Start proxy generation (no-op if proxy already exists on disk).
@@ -854,7 +904,8 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
             // Helper: draw a video clip at a given playhead time with alpha multiplier.
             auto draw_vid_clip = [&](const Clip* cl_ptr, float at_time, float alpha_mul) {
                 if (!cl_ptr) return;
-                int slot = slot_for_video(const_cast<AppState&>(state), cl_ptr->text);
+                int slot = slot_for_video(const_cast<AppState&>(state),
+                               clip_slot_key(cl_ptr->text, cl_ptr->start), cl_ptr->text);
                 uintptr_t tex = (slot >= 0 && video_is_open(slot))
                     ? video_get_texture(slot, (double)(at_time + lookahead)) : 0;
                 if (!tex) return;
@@ -4874,7 +4925,7 @@ static void handle_shortcuts(AppState& state) {
     }
     if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_N)) {
         transcribe_cancel(); history_clear();
-        audio_shutdown(); video_close();
+        audio_shutdown(); audio_clips_clear(); video_close();
         state = AppState{}; state.splash_timer = 0.f;
         audio_init();
         return;
@@ -5001,29 +5052,32 @@ void ui_studio(AppState& state) {
         g_dropped_file.clear();
     }
 
-    // Proxy ready → upgrade from still to proxy for each registered file path.
+    // Proxy ready → upgrade from still to proxy for each registered slot.
     for (int slot = 0; slot < MAX_VIDEO_TRACKS; ++slot) {
-        const std::string& vpath = state.proxy_paths[slot];
-        if (vpath.empty()) continue;
-        if (!video_is_open(slot) || video_info(slot).fps > 0.0) continue; // still or already proxy
-        if (!proxy_is_ready(vpath)) continue;
+        const std::string& key = state.proxy_paths[slot];
+        if (key.empty()) continue;
+        if (!video_is_open(slot) || video_info(slot).fps > 0.0) continue;
+        std::string src = source_from_key(key);
+        if (!proxy_is_ready(src)) continue;
 
         ProxyInfo pi;
-        if (!proxy_load(vpath, pi)) continue;
+        if (!proxy_load(src, pi)) continue;
         video_open_proxy(slot, pi);
 
         if (slot == 0) {
             state.proxy_ready = true;
             float pd = (float)video_info(0).duration;
             if (pd > 0.f) {
-                // Extend all video clips for this file to match corrected duration.
                 for (auto& tr : state.tracks)
                     for (auto& cl : tr.clips)
-                        if (cl.clip_type == ClipType::Video && cl.text == vpath && cl.end < pd)
+                        if (cl.clip_type == ClipType::Video && cl.text == src && cl.end < pd)
                             cl.end = pd;
             }
         }
     }
+
+    // GC slots whose clips have been deleted or moved.
+    gc_video_slots(state);
 
     // Audio just finished loading while playing — start from current playhead
     {
@@ -5080,19 +5134,39 @@ void ui_studio(AppState& state) {
     }
     last_stage = state.pipeline.stage;
 
-    // Per-clip volume — find the audio/video clip covering the playhead and apply its gain
+    // Main buffer volume — driven by the Video clip at the playhead (embedded audio gain).
+    // Audio clips handle their own volume in the callback.
     {
         float vol = 1.f;
         for (auto& tr : state.tracks) {
             if (tr.muted) { vol = 0.f; break; }
             for (auto& cl : tr.clips) {
-                if (cl.clip_type == ClipType::Text || cl.clip_type == ClipType::Lyrics) continue;
+                if (cl.clip_type != ClipType::Video) continue;
                 if (state.playhead >= cl.start && state.playhead < cl.end) {
                     vol = cl.volume; break;
                 }
             }
         }
         audio_set_volume(vol);
+    }
+
+    // Push clip snapshot to audio system every frame.
+    {
+        std::vector<AudioClipDesc> descs;
+        for (auto& tr : state.tracks) {
+            if (tr.muted) continue;
+            for (auto& cl : tr.clips) {
+                if (cl.clip_type != ClipType::Audio || cl.text.empty()) continue;
+                AudioClipDesc d;
+                d.tl_start = cl.start; d.tl_end   = cl.end;
+                d.in_point = cl.in_point; d.speed  = cl.speed;
+                d.volume   = cl.volume;   d.pan    = cl.pan;
+                d.fade_in  = cl.fade_in;  d.fade_out = cl.fade_out;
+                d.path     = cl.text;
+                descs.push_back(d);
+            }
+        }
+        audio_clips_update(descs);
     }
 
     if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_H))
@@ -5114,7 +5188,7 @@ void ui_studio(AppState& state) {
                 history_clear();
                 state = AppState{};
                 state.splash_timer = 0.f;
-                audio_shutdown(); audio_init();
+                audio_shutdown(); audio_clips_clear(); audio_init();
                 video_close();
             }
             if (ImGui::MenuItem("Open Project…", "Ctrl+Shift+O")) {
@@ -5123,11 +5197,17 @@ void ui_studio(AppState& state) {
                     AppState loaded;
                     if (project_load(loaded, picked)) {
                         transcribe_cancel(); history_clear();
-                        audio_shutdown(); video_close();
+                        audio_shutdown(); audio_clips_clear(); video_close();
                         state = std::move(loaded);
                         state.project_path = picked;
                         audio_init();
                         if (!state.audio_path.empty()) audio_load(state.audio_path.c_str());
+                        reopen_video_slots(state);
+                        // Ensure sources for all Audio clips
+                        for (auto& tr : state.tracks)
+                            for (auto& cl : tr.clips)
+                                if (cl.clip_type == ClipType::Audio && !cl.text.empty())
+                                    audio_source_ensure(cl.text);
                     }
                 }
             }
