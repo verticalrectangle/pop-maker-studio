@@ -2106,26 +2106,6 @@ static void panel_clip(AppState& state, float w) {
             ImGui::Dummy({0.f, 4.f});
         }
 
-        if (ImGui::CollapsingHeader("Trim")) {
-            ImGui::Dummy({0.f, 4.f});
-            ImGui::PushStyleColor(ImGuiCol_SliderGrab, Col::fg);
-            ImGui::PushStyleColor(ImGuiCol_FrameBg,    Col::bg_soft);
-            ImGui::SetNextItemWidth(w - 16.f);
-            ImGui::SliderFloat("In point##ip",  &clip.in_point,  0.f, fmaxf(0.f, clip.end - clip.start), "%.2fs");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "In point");
-            ImGui::Dummy({0.f, 2.f});
-            float op_val = (clip.out_point < 0.f) ? (clip.end - clip.start) : clip.out_point;
-            ImGui::SetNextItemWidth(w - 16.f);
-            if (ImGui::SliderFloat("Out point##op", &op_val, clip.in_point, clip.end - clip.start + 60.f, "%.2fs")) {
-                clip.out_point = op_val;
-            }
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Out point");
-            ImGui::SameLine();
-            if (ui_btn("Reset##opr", false, true)) { clip.out_point = -1.f; history_push(state, "Reset out point"); }
-            ImGui::PopStyleColor(2);
-            ImGui::Dummy({0.f, 4.f});
-        }
-
         if (ImGui::CollapsingHeader("Playback")) {
             ImGui::Dummy({0.f, 4.f});
             ImGui::PushStyleColor(ImGuiCol_SliderGrab, Col::fg);
@@ -2296,24 +2276,6 @@ static void panel_clip(AppState& state, float w) {
                 ImGui::SameLine(0.f, 4.f);
             }
             ImGui::NewLine(); ImGui::Dummy({0.f, 4.f});
-        }
-
-        if (ImGui::CollapsingHeader("Trim")) {
-            ImGui::Dummy({0.f, 4.f});
-            ImGui::PushStyleColor(ImGuiCol_SliderGrab, Col::fg);
-            ImGui::PushStyleColor(ImGuiCol_FrameBg,    Col::bg_soft);
-            ImGui::SetNextItemWidth(w - 16.f);
-            ImGui::SliderFloat("In point##aip",  &clip.in_point,  0.f, fmaxf(0.f, clip.end - clip.start), "%.2fs");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "In point");
-            float aop = (clip.out_point < 0.f) ? (clip.end - clip.start) : clip.out_point;
-            ImGui::SetNextItemWidth(w - 16.f);
-            if (ImGui::SliderFloat("Out point##aop", &aop, clip.in_point, clip.end - clip.start + 60.f, "%.2fs"))
-                clip.out_point = aop;
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Out point");
-            ImGui::SameLine();
-            if (ui_btn("Reset##aopr", false, true)) { clip.out_point = -1.f; history_push(state, "Reset out point"); }
-            ImGui::PopStyleColor(2);
-            ImGui::Dummy({0.f, 4.f});
         }
 
         if (ImGui::CollapsingHeader("Fade")) {
