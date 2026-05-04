@@ -106,6 +106,10 @@ static int s_tl_hover_track = -1;
 static float s_drop_flash_t     = 0.f;  // countdown in seconds
 static int   s_drop_flash_track = -1;   // track index that received the drop (-1 = new track)
 
+// Source duration cache — keyed by file path, populated once at drop time.
+// Used by trim handles to clamp clips to their source length.
+static std::unordered_map<std::string, float> s_source_durations;
+
 
 // Add a clip of the given type to an existing track, probing duration as needed.
 static void add_clip_to_track(AppState& state, int ti, const std::string& path, ClipType ct) {
@@ -121,8 +125,8 @@ static void add_clip_to_track(AppState& state, int ti, const std::string& path, 
     if (ct == ClipType::Video) {
         float dur = video_probe_duration(path);
         if (dur <= 0.f) dur = 4.f;
-        cl.end       = cl.start + dur;
-        cl.out_point = dur;  // source duration — trim handles clamp to this
+        cl.end = cl.start + dur;
+        s_source_durations[path] = dur;
         int slot = slot_for_video(state, clip_slot_key(path, cl.start), path);
         proxy_start(path);
         if (slot >= 0) {
@@ -137,8 +141,8 @@ static void add_clip_to_track(AppState& state, int ti, const std::string& path, 
         AudioMeta meta;
         float dur = audio_probe(path, meta) ? meta.duration_secs : 0.f;
         if (dur <= 0.f) dur = 4.f;
-        cl.end       = cl.start + dur;
-        cl.out_point = dur;  // source duration — trim handles clamp to this
+        cl.end = cl.start + dur;
+        s_source_durations[path] = dur;
         audio_source_ensure(path);
     } else {
         cl.end = cl.start + 2.f;  // blank text clip — 2 s default
@@ -4093,15 +4097,17 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
                         drag_offset = (mouse.x - origin.x - TL_LABEL_W + scroll) / zoom - clip.start;
                         s_body_snap_held_start = -1.f; s_body_snap_held_cand = -1.f;
                     }
-                    // Backfill out_point if it wasn't set at drop time (old project files, etc).
-                    // This is a one-time probe per clip; fine to call on the click frame.
-                    if ((drag_left || drag_right) && clip.out_point <= 0.f && !clip.text.empty()) {
+                    // Populate the source duration cache on first grab if not already known.
+                    if ((drag_left || drag_right) && !clip.text.empty() &&
+                        s_source_durations.find(clip.text) == s_source_durations.end()) {
+                        float dur = 0.f;
                         if (clip.clip_type == ClipType::Video)
-                            clip.out_point = video_probe_duration(clip.text);
+                            dur = video_probe_duration(clip.text);
                         else if (clip.clip_type == ClipType::Audio) {
                             AudioMeta meta;
-                            if (audio_probe(clip.text, meta)) clip.out_point = meta.duration_secs;
+                            if (audio_probe(clip.text, meta)) dur = meta.duration_secs;
                         }
+                        if (dur > 0.f) s_source_durations[clip.text] = dur;
                     }
                 }
             }
@@ -4538,11 +4544,14 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
                 if (state.proxy_paths[i] == old_key) { state.proxy_paths[i] = new_key; break; }
         };
 
+        // Look up source duration once for this drag update (0 = unknown, no clamp).
+        auto src_dur_it = s_source_durations.find(dc.text);
+        float src_dur = (src_dur_it != s_source_durations.end()) ? src_dur_it->second : 0.f;
+
         if (drag_left && !left_locked) {
             float t = edge_snap(snap(new_t), cands);
-            // Hard stop: can't pull left past where in_point would go negative
-            // (source_time = in_point + (tl - start)*speed; at tl=new_start, that = 0 when new_start = start - in_point/speed)
-            float src_floor = (dc.out_point > 0.f)
+            // Hard stop: source_time = in_point + (tl - start)*speed; floor is where in_point hits 0.
+            float src_floor = (src_dur > 0.f)
                 ? dc.start - dc.in_point / fmaxf(0.01f, dc.speed) : 0.f;
             float new_start = fmaxf(src_floor, fmaxf(0.f, fminf(t, dc.end - f1)));
             dc.in_point = fmaxf(0.f, dc.in_point + (new_start - dc.start));
@@ -4551,10 +4560,10 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
         } else if (drag_right && !right_locked) {
             float et = (mouse.x - origin.x - TL_LABEL_W + scroll) / zoom;
             float t = edge_snap(snap(et), cands);
-            // Hard stop: source_time at right edge = in_point + (end-start)*speed; cap at out_point
-            float max_end = (dc.out_point > 0.f)
-                ? dc.start + (dc.out_point - dc.in_point) / fmaxf(0.01f, dc.speed)
-                : t;  // no source duration known — unclamped (old clips / text)
+            // Hard stop: source_time at right edge = in_point + (end-start)*speed; cap at src_dur.
+            float max_end = (src_dur > 0.f)
+                ? dc.start + (src_dur - dc.in_point) / fmaxf(0.01f, dc.speed)
+                : t;
             dc.end = fmaxf(dc.start + f1, fminf(t, max_end));
         } else if (!drag_left && !drag_right) {
             float dur_clip = dc.end - dc.start;
