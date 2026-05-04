@@ -1655,23 +1655,6 @@ static void panel_lyrics(AppState& state, float w) {
         ImGui::Dummy({0.f, 8.f});
     }
 
-    // ── Karaoke toggle ────────────────────────────────────────────────────────
-    ui_label("Highlight"); ImGui::Dummy({0.f, 4.f});
-    {
-        bool k = clip.karaoke;
-        if (ui_btn("Karaoke##hl", k, true)) {
-            clip.karaoke = !clip.karaoke;
-            history_push(state, clip.karaoke ? "Karaoke on" : "Karaoke off");
-        }
-        if (ImGui::IsItemHovered()) {
-            ImGui::BeginTooltip();
-            ImGui::TextUnformatted("Per-word highlight as lyrics play");
-            ImGui::EndTooltip();
-        }
-    }
-
-    ImGui::Dummy({0.f, 12.f}); ui_separator(); ImGui::Dummy({0.f, 8.f});
-
     // ── Grouping mode ─────────────────────────────────────────────────────────
     ui_label("Grouping"); ImGui::Dummy({0.f, 4.f});
 
@@ -1773,6 +1756,42 @@ static void panel_lyrics(AppState& state, float w) {
         }
     }
     ImGui::PopStyleColor(2);
+
+    // ── Apply style to selected Lyrics clips ─────────────────────────────────
+    // Count how many other Lyrics clips are in the selection
+    int sel_lyrics = 0;
+    for (auto& [st, sc] : state.clip_selection) {
+        if (st == state.selected_track && sc == state.selected_clip) continue;
+        if (st < (int)state.tracks.size() && sc < (int)state.tracks[st].clips.size() &&
+            state.tracks[st].clips[sc].clip_type == ClipType::Lyrics)
+            ++sel_lyrics;
+    }
+
+    if (sel_lyrics > 0) {
+        ImGui::Dummy({0.f, 12.f}); ui_separator(); ImGui::Dummy({0.f, 8.f});
+        char btn_lbl[48];
+        snprintf(btn_lbl, sizeof(btn_lbl), "Apply to %d selected clip%s",
+            sel_lyrics, sel_lyrics == 1 ? "" : "s");
+        if (ui_btn(btn_lbl, true, true)) {
+            for (auto& [st, sc] : state.clip_selection) {
+                if (st == state.selected_track && sc == state.selected_clip) continue;
+                if (st >= (int)state.tracks.size() || sc >= (int)state.tracks[st].clips.size()) continue;
+                Clip& tgt = state.tracks[st].clips[sc];
+                if (tgt.clip_type != ClipType::Lyrics) continue;
+                tgt.karaoke            = clip.karaoke;
+                tgt.sub_pos            = clip.sub_pos;
+                tgt.sub_pos_y          = clip.sub_pos_y;
+                tgt.sub_color_override = clip.sub_color_override;
+                std::copy(std::begin(clip.sub_color), std::end(clip.sub_color), std::begin(tgt.sub_color));
+            }
+            history_push(state, "Apply style to selected clips");
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::BeginTooltip();
+            ImGui::TextUnformatted("Copy position, color and karaoke flag to all selected Lyrics clips");
+            ImGui::EndTooltip();
+        }
+    }
 }
 
 // ── Right panel: Animation tab ───────────────────────────────────────────────
