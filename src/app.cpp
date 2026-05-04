@@ -74,7 +74,15 @@ float Clip::eval_prop(const std::string& name, float playhead) const {
     if (name == "scale_x")   return scale_x;
     if (name == "scale_y")   return scale_y;
     if (name == "rotation")  return rotation;
-    if (name == "opacity")   return opacity;
+    if (name == "opacity") {
+        float base = opacity;
+        float dur  = end - start;
+        if (fade_in  > 0.f && t < fade_in)
+            base *= (t / fade_in);
+        if (fade_out > 0.f && dur > 0.f && t > dur - fade_out)
+            base *= ((dur - t) / fade_out);
+        return fmaxf(0.f, fminf(1.f, base));
+    }
     if (name == "volume")    return volume;
     if (name == "sub_pos_y") return sub_pos_y;
     return 0.f;

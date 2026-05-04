@@ -69,12 +69,31 @@ struct Clip {
     float opacity        = 1.f;   // video opacity (0–1)
     float transition_out = 0.f;   // crossfade out duration in seconds (video, applied on render)
 
+    // fade in/out — opacity ramp applied at render & preview when no manual opacity KFs exist
+    float fade_in  = 0.f;   // seconds from clip start to full opacity
+    float fade_out = 0.f;   // seconds before clip end to begin fade to zero
+
+    // source trim (Video/Audio) — which portion of the source file plays
+    float in_point  = 0.f;    // seconds into source file to begin playback
+    float out_point = -1.f;   // seconds into source file to end (-1 = until end of source)
+
+    // stereo pan: -1=full left, 0=center, +1=full right (Video embedded audio + Audio clips)
+    float pan = 0.f;
+
+    // blend mode for video compositing: 0=Normal 1=Multiply 2=Screen 3=Overlay
+    int blend_mode = 0;
+
     // subtitle-only overrides
-    bool  karaoke   = false;   // per-word highlight enabled (Karaoke grouping mode)
+    bool  karaoke   = false;   // per-word highlight enabled; available on Phrase/Line/Segment/CustomN
     int   sub_pos   = 0;       // 0=bottom 1=center 2=top 3=custom Y
     float sub_pos_y = 0.85f;   // custom Y fraction from top (0=top, 1=bottom)
-    float sub_color[4] = {1.f, 1.f, 1.f, 1.f};  // RGBA
+    int   sub_anchor_h = 1;    // horizontal anchor: 0=left 1=center 2=right
+    float sub_color[4] = {1.f, 1.f, 1.f, 1.f};  // RGBA base / unspoken color
     bool  sub_color_override = false;
+    float karaoke_highlight_color[4] = {1.f, 0.85f, 0.1f, 1.f};  // active word color
+
+    // per-clip word list for deep lyrics editing (populated by apply_subtitle_mode)
+    std::vector<WordEntry> words;
 
     // per-clip transform (video clips; fractions of canvas size)
     float pos_x    = 0.5f;   // 0=left edge, 1=right edge (centre default)

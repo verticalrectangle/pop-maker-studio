@@ -6,7 +6,7 @@
 // ── Binary serialization helpers ──────────────────────────────────────────────
 
 static const uint32_t MAGIC   = 0x534D5001u; // "PMS\x01"
-static const uint32_t VERSION = 3u;
+static const uint32_t VERSION = 4u;
 
 struct Writer {
     std::ofstream f;
@@ -82,15 +82,28 @@ static PropTrack read_proptrack(Reader& r) {
 
 // ── Clip ──────────────────────────────────────────────────────────────────────
 
+static void write_wordentry(Writer& w, const WordEntry& we) {
+    w.str(we.text); w.pod(we.start); w.pod(we.end);
+}
+static WordEntry read_wordentry(Reader& r) {
+    WordEntry we; we.text = r.str(); we.start = r.pod<float>(); we.end = r.pod<float>();
+    return we;
+}
+
 static void write_clip(Writer& w, const Clip& c) {
     w.pod((uint8_t)c.clip_type);
     w.pod(c.start); w.pod(c.end);
     w.str(c.text); w.str(c.source_id);
     w.pod(c.volume); w.pod(c.speed); w.pod(c.opacity); w.pod(c.transition_out);
+    w.pod(c.fade_in); w.pod(c.fade_out);
+    w.pod(c.in_point); w.pod(c.out_point);
+    w.pod(c.pan); w.pod(c.blend_mode);
     w.pod((uint8_t)c.karaoke);
-    w.pod(c.sub_pos); w.pod(c.sub_pos_y);
+    w.pod(c.sub_pos); w.pod(c.sub_pos_y); w.pod(c.sub_anchor_h);
     w.pod(c.sub_color[0]); w.pod(c.sub_color[1]); w.pod(c.sub_color[2]); w.pod(c.sub_color[3]);
     w.pod((uint8_t)c.sub_color_override);
+    w.pod(c.karaoke_highlight_color[0]); w.pod(c.karaoke_highlight_color[1]);
+    w.pod(c.karaoke_highlight_color[2]); w.pod(c.karaoke_highlight_color[3]);
     w.pod(c.pos_x); w.pod(c.pos_y); w.pod(c.scale_x); w.pod(c.scale_y); w.pod(c.rotation);
     w.pod((uint8_t)c.clip_style);
     // Effect fields
@@ -103,6 +116,10 @@ static void write_clip(Writer& w, const Clip& c) {
     uint32_t nk = (uint32_t)c.ktracks.size();
     w.pod(nk);
     for (auto& [key, pt] : c.ktracks) { w.str(key); write_proptrack(w, pt); }
+    // per-clip word list
+    uint32_t nw = (uint32_t)c.words.size();
+    w.pod(nw);
+    for (auto& we : c.words) write_wordentry(w, we);
 }
 
 static Clip read_clip(Reader& r) {
@@ -113,11 +130,16 @@ static Clip read_clip(Reader& r) {
     c.text       = r.str(); c.source_id = r.str();
     c.volume     = r.pod<float>(); c.speed = r.pod<float>();
     c.opacity    = r.pod<float>(); c.transition_out = r.pod<float>();
+    c.fade_in    = r.pod<float>(); c.fade_out = r.pod<float>();
+    c.in_point   = r.pod<float>(); c.out_point = r.pod<float>();
+    c.pan        = r.pod<float>(); c.blend_mode = r.pod<int>();
     c.karaoke    = (bool)r.pod<uint8_t>();
-    c.sub_pos    = r.pod<int>(); c.sub_pos_y = r.pod<float>();
+    c.sub_pos    = r.pod<int>(); c.sub_pos_y = r.pod<float>(); c.sub_anchor_h = r.pod<int>();
     c.sub_color[0]=r.pod<float>(); c.sub_color[1]=r.pod<float>();
     c.sub_color[2]=r.pod<float>(); c.sub_color[3]=r.pod<float>();
     c.sub_color_override = (bool)r.pod<uint8_t>();
+    c.karaoke_highlight_color[0]=r.pod<float>(); c.karaoke_highlight_color[1]=r.pod<float>();
+    c.karaoke_highlight_color[2]=r.pod<float>(); c.karaoke_highlight_color[3]=r.pod<float>();
     c.pos_x      = r.pod<float>(); c.pos_y    = r.pod<float>();
     c.scale_x    = r.pod<float>(); c.scale_y  = r.pod<float>();
     c.rotation   = r.pod<float>();
@@ -136,6 +158,10 @@ static Clip read_clip(Reader& r) {
         std::string key = r.str();
         c.ktracks[key] = read_proptrack(r);
     }
+    // per-clip word list
+    uint32_t nw = r.pod<uint32_t>();
+    for (uint32_t i = 0; i < nw && r.ok; ++i)
+        c.words.push_back(read_wordentry(r));
     return c;
 }
 
