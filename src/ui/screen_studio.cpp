@@ -4152,6 +4152,8 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
                     if (hov_left)       s_glass_drag = 1;
                     else if (hov_right) s_glass_drag = 2;
                     else                s_glass_drag = 3;
+                    // Cancel any clip drag the clip loop already registered this frame
+                    drag_track = -1; drag_clip = -1; drag_left = false; drag_right = false;
                 }
 
                 // Right-click removes transition
@@ -4427,7 +4429,7 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
     // Drag handling (frame-snapped + edge-snapped, Ctrl bypasses both)
     if (drag_track>=0 && drag_clip>=0 && (drag_left||drag_right))
         ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
-    if (drag_track>=0 && drag_clip>=0 && ImGui::IsMouseDragging(0)) {
+    if (drag_track>=0 && drag_clip>=0 && s_glass_drag==0 && ImGui::IsMouseDragging(0)) {
         Clip& dc = state.tracks[drag_track].clips[drag_clip];
         auto cands = build_snap_candidates(drag_track, drag_clip);
         float new_t = (mouse.x - origin.x - TL_LABEL_W + scroll - drag_offset) / zoom;
