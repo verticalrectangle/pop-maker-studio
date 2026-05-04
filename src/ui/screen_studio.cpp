@@ -94,22 +94,15 @@ static int s_tl_hover_track = -1;
 static float s_drop_flash_t     = 0.f;  // countdown in seconds
 static int   s_drop_flash_track = -1;   // track index that received the drop (-1 = new track)
 
-// Ghost file drop — OS file is held while user positions it in the timeline
-static std::string s_ghost_path;
-static ClipType    s_ghost_type    = ClipType::Audio;
-static float       s_ghost_dur     = 4.f;
-static float       s_ghost_cursor_t = 0.f;  // timeline time at current cursor, updated each frame
 
 // Add a clip of the given type to an existing track, probing duration as needed.
-// start_t < 0 means use state.playhead (default).
-static void add_clip_to_track(AppState& state, int ti, const std::string& path, ClipType ct,
-                               float start_t = -1.f) {
+static void add_clip_to_track(AppState& state, int ti, const std::string& path, ClipType ct) {
     if (ti < 0 || ti >= (int)state.tracks.size()) return;
     Track& tr = state.tracks[ti];
 
     Clip cl;
     cl.clip_type = ct;
-    cl.start     = (start_t >= 0.f) ? start_t : state.playhead;
+    cl.start     = state.playhead;
     cl.text      = path;
     cl.source_id = path;
 
@@ -3918,8 +3911,8 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
                 }
             }
 
-            // Left click to select / drag (suppressed while ghost drop is active)
-            if (s_ghost_path.empty() && ImGui::IsMouseClicked(0)) {
+            // Left click to select / drag
+            if (ImGui::IsMouseClicked(0)) {
                 if (mouse.y>=cy0 && mouse.y<=cy1 && mouse.x>=vis_x0 && mouse.x<=vis_x1) {
                     s_clip_hit = true;
                     auto key = std::make_pair(ti, ci);
@@ -4000,9 +3993,8 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
     {
         ImVec2 row_tl = {origin.x,           track_y};
         ImVec2 row_br = {origin.x + total_w,  track_y + TL_TRACK_H};
-        bool add_hov = !s_ghost_path.empty() ? false :
-                       (mouse.y >= track_y && mouse.y < track_y + TL_TRACK_H &&
-                        mouse.x >= origin.x && mouse.x <= origin.x + total_w);
+        bool add_hov = mouse.y >= track_y && mouse.y < track_y + TL_TRACK_H &&
+                       mouse.x >= origin.x && mouse.x <= origin.x + total_w;
         dl->AddRectFilled(row_tl, {origin.x + TL_LABEL_W, track_y + TL_TRACK_H},
                           to_u32(add_hov ? Col::bg_soft_hov : Col::bg_soft));
         dl->AddRectFilled({origin.x + TL_LABEL_W, track_y}, row_br, to_u32(Col::bg));
@@ -4020,88 +4012,6 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
     }
 
     dl->PopClipRect();  // end scrollable track area clip
-
-    // ── OS-file ghost drop preview ────────────────────────────────────────────
-    // While a file has been dropped but not yet placed, show a semi-transparent
-    // clip block that follows the cursor so the user can pick the exact track/time.
-    if (!s_ghost_path.empty()) {
-        s_ghost_cursor_t = fmaxf(0.f, (mouse.x - origin.x - TL_LABEL_W + scroll) / zoom);
-
-        bool in_area = mouse.x >= origin.x + TL_LABEL_W && mouse.x <= origin.x + total_w &&
-                       mouse.y >= track_area_top && mouse.y <= track_area_bot;
-
-        ImU32 ghost_fill   = (s_ghost_type == ClipType::Video)
-                             ? IM_COL32(80, 120, 220, 70) : IM_COL32(60, 180, 80, 70);
-        ImU32 ghost_border = (s_ghost_type == ClipType::Video)
-                             ? IM_COL32(100, 160, 255, 220) : IM_COL32(80, 220, 100, 220);
-
-        dl->PushClipRect({origin.x + TL_LABEL_W, track_area_top},
-                         {origin.x + total_w,     track_area_bot}, true);
-
-        if (in_area && s_tl_hover_track >= 0 && s_tl_hover_track < (int)state.tracks.size()) {
-            float row_top = track_area_top + s_tl_hover_track * TL_TRACK_H - state.tl_v_scroll;
-            float gx0 = fmaxf(origin.x + TL_LABEL_W,
-                               origin.x + TL_LABEL_W + s_ghost_cursor_t * zoom - scroll);
-            float gx1 = fminf(origin.x + total_w,
-                               origin.x + TL_LABEL_W + (s_ghost_cursor_t + s_ghost_dur) * zoom - scroll);
-            float gy0 = row_top + 3.f, gy1 = row_top + TL_TRACK_H - 3.f;
-
-            // Highlight hovered track row border
-            dl->AddRect({origin.x, row_top}, {origin.x + total_w, row_top + TL_TRACK_H},
-                        ghost_border, 0.f, 0, 1.5f);
-
-            if (gx1 > gx0) {
-                dl->AddRectFilled({gx0, gy0}, {gx1, gy1}, ghost_fill, 3.f);
-                dl->AddRect({gx0, gy0}, {gx1, gy1}, ghost_border, 3.f, 0, 1.5f);
-                // Filename label inside ghost
-                std::string label = fs::path(s_ghost_path).filename().string();
-                ImVec2 tpos = {gx0 + 5.f, gy0 + (gy1 - gy0 - ImGui::GetTextLineHeight()) * 0.5f};
-                if (tpos.x + 10.f < gx1)
-                    dl->AddText(tpos, IM_COL32(255, 255, 255, 200), label.c_str());
-            }
-        } else {
-            // Not over any track — show a "new track" hint row below existing tracks
-            float hint_y = track_area_top + (float)state.tracks.size() * TL_TRACK_H - state.tl_v_scroll;
-            hint_y = fmaxf(track_area_top, fminf(hint_y, track_area_bot - TL_TRACK_H));
-            dl->AddRectFilled({origin.x, hint_y}, {origin.x + total_w, hint_y + TL_TRACK_H},
-                              IM_COL32(255, 255, 255, 8));
-            dl->AddRect({origin.x, hint_y}, {origin.x + total_w, hint_y + TL_TRACK_H},
-                        IM_COL32(255, 255, 255, 60), 0.f, 0, 1.f);
-            std::string hint_label = "Drop here — new track at start";
-            float lh = ImGui::GetTextLineHeight();
-            dl->AddText({origin.x + 8.f, hint_y + (TL_TRACK_H - lh) * 0.5f},
-                        IM_COL32(255, 255, 255, 120), hint_label.c_str());
-        }
-
-        dl->PopClipRect();
-
-        ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
-
-        // Click to place — only respond to clicks inside the timeline drawing area
-        bool in_tl = mouse.x >= origin.x && mouse.x <= origin.x + total_w &&
-                     mouse.y >= origin.y && mouse.y <= origin.y + total_h;
-        if (in_tl && ImGui::IsMouseClicked(0)) {
-            if (in_area && s_tl_hover_track >= 0 && s_tl_hover_track < (int)state.tracks.size()) {
-                add_clip_to_track(state, s_tl_hover_track, s_ghost_path, s_ghost_type, s_ghost_cursor_t);
-                if (s_ghost_type != ClipType::Video && state.audio_path.empty()) {
-                    state.audio_path = s_ghost_path;
-                    audio_load(s_ghost_path);
-                    if (state.duration <= 0.f) state.duration = audio_duration();
-                }
-                s_drop_flash_track = s_tl_hover_track;
-            } else if (in_area || state.tracks.empty()) {
-                // No hover track but inside the track body, or empty timeline — new top track
-                import_file(state, s_ghost_path);
-                s_drop_flash_track = (int)state.tracks.size() - 1;
-            }
-            s_drop_flash_t = 0.6f;
-            s_ghost_path.clear();
-        }
-
-        // Escape to cancel
-        if (ImGui::IsKeyPressed(ImGuiKey_Escape))
-            s_ghost_path.clear();
-    }
 
     // ── Track reorder drag ────────────────────────────────────────────────────
     if (s_track_drag_src >= 0) {
@@ -4163,7 +4073,7 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
         bool lclick = ImGui::IsMouseClicked(0);
 
         // Start box select when clicking empty body space (no clip was hit)
-        if (lclick && in_body && !s_clip_hit && !ImGui::IsAnyItemActive() && s_ghost_path.empty()) {
+        if (lclick && in_body && !s_clip_hit && !ImGui::IsAnyItemActive()) {
             s_box_selecting = true;
             s_box_start     = mouse;
             if (!ImGui::GetIO().KeyCtrl && !ImGui::GetIO().KeyShift) {
@@ -4771,19 +4681,21 @@ void ui_studio(AppState& state) {
             }
         } else if (is_audio_file(dp)) {
             bool is_vid = (ext==".mp4"||ext==".mov"||ext==".mkv"||ext==".avi"||ext==".webm");
-            s_ghost_type = is_vid ? ClipType::Video : ClipType::Audio;
-            s_ghost_path = dp;
+            ClipType drop_ct = is_vid ? ClipType::Video : ClipType::Audio;
 
-            // Probe duration synchronously for ghost block width
-            if (is_vid) {
-                float vd = video_probe_duration(dp);
-                s_ghost_dur = (vd > 0.f) ? vd : 4.f;
+            if (s_tl_hover_track >= 0 && s_tl_hover_track < (int)state.tracks.size()) {
+                add_clip_to_track(state, s_tl_hover_track, dp, drop_ct);
+                if (state.audio_path.empty()) {
+                    state.audio_path = dp;
+                    audio_load(dp);
+                    if (state.duration <= 0.f) state.duration = audio_duration();
+                }
+                s_drop_flash_track = s_tl_hover_track;
             } else {
-                AudioMeta meta{};
-                float d = (audio_probe(dp, meta) && meta.duration_secs > 0.f)
-                          ? meta.duration_secs : 4.f;
-                s_ghost_dur = d;
+                import_file(state, dp);
+                s_drop_flash_track = (int)state.tracks.size() - 1;
             }
+            s_drop_flash_t = 0.6f;
         }
         g_dropped_file.clear();
     }
