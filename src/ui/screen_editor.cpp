@@ -73,7 +73,10 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
     int rendered = 0;
     for (int ti = 0; ti < (int)state.tracks.size(); ++ti) {
         auto& track = state.tracks[ti];
-        if (track.type != TrackType::Subtitle || !track.visible) continue;
+        bool has_text = !track.clips.empty() &&
+            std::any_of(track.clips.begin(), track.clips.end(),
+                [](const Clip& c){ return c.clip_type == ClipType::Text; });
+        if (!has_text || !track.visible) continue;
 
         // Find active clip for this track at current playhead
         const Clip* active = nullptr;
@@ -146,7 +149,7 @@ static void draw_properties(AppState& state, float w) {
     ui_separator();
     ImGui::Dummy({0.f, 8.f});
 
-    if (track.type == TrackType::Subtitle) {
+    if (clip.clip_type == ClipType::Text) {
         // Text edit
         ui_label("Text");
         ImGui::Dummy({0.f, 4.f});
@@ -235,7 +238,7 @@ static void draw_properties(AppState& state, float w) {
     } else {
         // Non-subtitle track — just show path/name
         ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
-        const char* tname = track.type == TrackType::Audio ? "Audio clip" : "Video clip";
+        const char* tname = clip.clip_type == ClipType::Audio ? "Audio clip" : "Video clip";
         ImGui::TextUnformatted(tname);
         ImGui::Dummy({0.f, 4.f});
         ImGui::TextWrapped("%s", clip.text.empty() ? "(no path)" : clip.text.c_str());
@@ -380,7 +383,7 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
                 to_u32(selected ? Col::fg : Col::line), 2.f);
 
             // Clip text
-            if (track.type == TrackType::Subtitle && !clip.text.empty()) {
+            if (clip.clip_type == ClipType::Text && !clip.text.empty()) {
                 ImVec2 tsz = ImGui::CalcTextSize(clip.text.c_str());
                 if (tsz.x < (cx1 - cx0) - 8.f) {
                     ImGui::PushClipRect({cx0, cy0}, {cx1, cy1}, true);
@@ -388,7 +391,7 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
                         to_u32(text_col), clip.text.c_str());
                     ImGui::PopClipRect();
                 }
-            } else if (track.type == TrackType::Audio) {
+            } else if (clip.clip_type == ClipType::Audio) {
                 // Simple waveform bars
                 int bars = (int)((cx1 - cx0) / 3.f);
                 for (int b = 0; b < bars; ++b) {
@@ -399,7 +402,7 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
                     float ht  = amp * (cy1 - cy0 - 6.f) * 0.5f;
                     dl->AddLine({bx, mid - ht}, {bx, mid + ht}, to_u32(Col::muted));
                 }
-            } else if (track.type == TrackType::Video) {
+            } else if (clip.clip_type == ClipType::Video) {
                 dl->AddText({cx0 + 4.f, cy0 + 3.f},
                     to_u32(text_col), clip.text.empty() ? "Video" : clip.text.c_str());
             }
@@ -420,7 +423,7 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
                     // Sync edit buffer
                     strncpy(s_edit_buf, clip.text.c_str(), sizeof(s_edit_buf) - 1);
                     s_edit_buf[sizeof(s_edit_buf)-1] = '\0';
-                    s_edit_focus_next = (track.type == TrackType::Subtitle);
+                    s_edit_focus_next = (clip.clip_type == ClipType::Text);
 
                     // Seek to clip start
                     state.playhead = clip.start;
@@ -504,7 +507,6 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
         if (mp.y >= track_y && mp.y <= track_y + TL_TRACK_H &&
             mp.x >= origin.x && mp.x <= origin.x + TL_LABEL_W + 80.f) {
             Track t;
-            t.type = TrackType::Subtitle;
             char name[32];
             snprintf(name, sizeof(name), "Track %d", (int)state.tracks.size() + 1);
             t.name = name;
@@ -581,12 +583,12 @@ void ui_screen_editor(AppState& state) {
                 // Add a video track if none exists
                 bool has_vid = false;
                 for (auto& t : state.tracks)
-                    if (t.type == TrackType::Video) { has_vid = true; break; }
+                    for (auto& c : t.clips) if (c.clip_type == ClipType::Video) { has_vid = true; break; }
                 if (!has_vid) {
                     Track vt;
-                    vt.type = TrackType::Video;
                     vt.name = "Video";
                     Clip vc;
+                    vc.clip_type = ClipType::Video;
                     vc.start = 0.f;
                     vc.end   = state.duration > 0.f ? state.duration : 300.f;
                     vc.text  = picked;
@@ -604,20 +606,18 @@ void ui_screen_editor(AppState& state) {
             state.video_path.clear();
             state.tracks.erase(
                 std::remove_if(state.tracks.begin(), state.tracks.end(),
-                    [](const Track& t){ return t.type == TrackType::Video; }),
+                    [](const Track& t){
+                        return !t.clips.empty() && t.clips[0].clip_type == ClipType::Video;
+                    }),
                 state.tracks.end());
         }
     }
 
     ImGui::SameLine(0.f, 12.f);
-    if (ui_btn("+ Subtitle Track", false, true)) {
+    if (ui_btn("+ Track", false, true)) {
         Track t;
-        t.type = TrackType::Subtitle;
         char name[32];
-        int count = 0;
-        for (auto& tr : state.tracks)
-            if (tr.type == TrackType::Subtitle) ++count;
-        snprintf(name, sizeof(name), "Sub %d", count + 1);
+        snprintf(name, sizeof(name), "Track %d", (int)state.tracks.size() + 1);
         t.name = name;
         state.tracks.push_back(t);
     }

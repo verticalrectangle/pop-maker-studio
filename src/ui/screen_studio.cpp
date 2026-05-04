@@ -79,6 +79,10 @@ static int slot_for_video(AppState& state, const std::string& path); // forward 
 // each frame so the drop handler can target a specific lane.
 static int s_tl_hover_track = -1;
 
+// Drop flash — highlight the target track row for ~0.5 s after a file lands.
+static float s_drop_flash_t     = 0.f;  // countdown in seconds
+static int   s_drop_flash_track = -1;   // track index that received the drop (-1 = new track)
+
 // Add a clip of the given type to an existing track, probing duration as needed.
 static void add_clip_to_track(AppState& state, int ti, const std::string& path, ClipType ct) {
     if (ti < 0 || ti >= (int)state.tracks.size()) return;
@@ -88,6 +92,7 @@ static void add_clip_to_track(AppState& state, int ti, const std::string& path, 
     cl.clip_type = ct;
     cl.start     = state.playhead;
     cl.text      = path;
+    cl.source_id = path;
 
     if (ct == ClipType::Video) {
         float dur = video_probe_duration(path);
@@ -153,6 +158,53 @@ static bool is_audio_file(const std::string& path) {
     for (auto& c : ext) c = (char)tolower((unsigned char)c);
     return ext==".wav"||ext==".mp3"||ext==".m4a"||
            ext==".flac"||ext==".mp4"||ext==".mov"||ext==".aac";
+}
+
+// Parse an SRT file into a list of Text clips.
+static std::vector<Clip> parse_srt(const std::string& path) {
+    std::vector<Clip> out;
+    std::ifstream f(path);
+    if (!f) return out;
+
+    auto parse_ts = [](const std::string& s) -> float {
+        // HH:MM:SS,mmm
+        int h=0, m=0, sec=0, ms=0;
+        sscanf(s.c_str(), "%d:%d:%d,%d", &h, &m, &sec, &ms);
+        return h*3600.f + m*60.f + sec + ms*0.001f;
+    };
+
+    std::string line;
+    while (std::getline(f, line)) {
+        // Strip carriage return for Windows-encoded SRTs
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+
+        // Look for timecode line: HH:MM:SS,mmm --> HH:MM:SS,mmm
+        float t0 = 0.f, t1 = 0.f;
+        char buf0[32]={}, buf1[32]={};
+        if (sscanf(line.c_str(), "%31[^-]-->%31s", buf0, buf1) == 2) {
+            t0 = parse_ts(std::string(buf0));
+            t1 = parse_ts(std::string(buf1));
+
+            // Collect text lines until blank
+            std::string text;
+            while (std::getline(f, line)) {
+                if (!line.empty() && line.back() == '\r') line.pop_back();
+                if (line.empty()) break;
+                if (!text.empty()) text += ' ';
+                text += line;
+            }
+            if (!text.empty()) {
+                Clip c;
+                c.clip_type = ClipType::Subtitle;
+                c.source_id = path;
+                c.start     = t0;
+                c.end       = t1;
+                c.text      = text;
+                out.push_back(c);
+            }
+        }
+    }
+    return out;
 }
 
 // ── Subtitle grouping ─────────────────────────────────────────────────────────
@@ -225,9 +277,23 @@ static std::vector<Clip> group_words(
     return out;
 }
 
-// Load word JSON and apply current grouping mode to the Lyrics track.
+// Load word JSON and apply current grouping mode.
+// Removes all Lyrics clips with matching source_id from ALL tracks, then
+// places fresh grouped clips on the "Lyrics" track.
 static void apply_subtitle_mode(AppState& state) {
     if (state.words_json_path.empty()) return;
+    const std::string src = state.audio_path;
+
+    // Remove all Lyrics clips from this source across all tracks
+    if (!src.empty()) {
+        for (auto& t : state.tracks) {
+            t.clips.erase(std::remove_if(t.clips.begin(), t.clips.end(),
+                [&](const Clip& c){ return c.clip_type == ClipType::Lyrics && c.source_id == src; }),
+                t.clips.end());
+        }
+    }
+
+    auto stamp = [&](Clip& c){ c.clip_type = ClipType::Lyrics; c.source_id = src; };
 
     // For Segment mode, read _segments.json instead
     if (state.subtitle_mode == SubtitleMode::Segment &&
@@ -237,14 +303,12 @@ static void apply_subtitle_mode(AppState& state) {
         if (!f) return;
         try {
             auto j = nlohmann::json::parse(f);
-            // Find or create Lyrics track
             Track* lyrics = nullptr;
             for (auto& t : state.tracks)
                 if (t.name == "Lyrics") { lyrics = &t; break; }
             if (!lyrics) {
                 state.tracks.insert(state.tracks.begin(), Track{});
                 lyrics = &state.tracks[0];
-                lyrics->type = TrackType::Subtitle;
                 lyrics->name = "Lyrics";
             }
             lyrics->clips.clear();
@@ -253,6 +317,7 @@ static void apply_subtitle_mode(AppState& state) {
                 c.text  = seg["text"].get<std::string>();
                 c.start = seg["start"].get<float>();
                 c.end   = seg["end"].get<float>();
+                stamp(c);
                 lyrics->clips.push_back(c);
             }
         } catch (...) {}
@@ -273,6 +338,7 @@ static void apply_subtitle_mode(AppState& state) {
             raw.push_back(c);
         }
         auto grouped = group_words(raw, state.subtitle_mode, state.subtitle_n);
+        for (auto& c : grouped) stamp(c);
 
         Track* lyrics = nullptr;
         for (auto& t : state.tracks)
@@ -280,10 +346,46 @@ static void apply_subtitle_mode(AppState& state) {
         if (!lyrics) {
             state.tracks.insert(state.tracks.begin(), Track{});
             lyrics = &state.tracks[0];
-            lyrics->type = TrackType::Subtitle;
             lyrics->name = "Lyrics";
         }
         lyrics->clips = grouped;
+    } catch (...) {}
+}
+
+// Load segments JSON and populate a "Subtitles" track with ClipType::Subtitle clips.
+static void apply_subtitle_pipeline(AppState& state) {
+    if (state.segments_json_path.empty()) return;
+    std::ifstream f(state.segments_json_path);
+    if (!f) return;
+    const std::string src = state.audio_path;
+    // Remove existing Subtitle clips from this source across all tracks
+    if (!src.empty()) {
+        for (auto& t : state.tracks) {
+            t.clips.erase(std::remove_if(t.clips.begin(), t.clips.end(),
+                [&](const Clip& c){ return c.clip_type == ClipType::Subtitle && c.source_id == src; }),
+                t.clips.end());
+        }
+    }
+    try {
+        auto j = nlohmann::json::parse(f);
+        Track* tr = nullptr;
+        for (auto& t : state.tracks)
+            if (t.name == "Subtitles") { tr = &t; break; }
+        if (!tr) {
+            state.tracks.insert(state.tracks.begin(), Track{});
+            tr = &state.tracks[0];
+            tr->name = "Subtitles";
+        }
+        tr->clips.clear();
+        for (auto& seg : j) {
+            Clip c;
+            c.clip_type = ClipType::Subtitle;
+            c.source_id = src;
+            c.text  = seg["text"].get<std::string>();
+            c.start = seg["start"].get<float>();
+            c.end   = seg["end"].get<float>();
+            tr->clips.push_back(c);
+        }
     } catch (...) {}
 }
 
@@ -381,18 +483,13 @@ static void import_file(AppState& state, const std::string& path) {
         float vprobed = video_probe_duration(path);
         if (vprobed > 0.f) state.duration = vprobed;
 
-        // Each import creates its own video track (= its own compositor layer).
-        // Count existing video tracks to generate the right name.
-        int vid_count = 0;
-        for (auto& t : state.tracks) if (t.type == TrackType::Video) vid_count++;
-
         state.tracks.push_back({});
         Track& vt = state.tracks.back();
-        vt.type = TrackType::Video;
         char vname[32];
-        snprintf(vname, sizeof(vname), vid_count == 0 ? "Video" : "Video %d", vid_count + 1);
+        snprintf(vname, sizeof(vname), "Track %d", (int)state.tracks.size());
         vt.name = vname;
         Clip vc; vc.clip_type = ClipType::Video;
+        vc.source_id = path;
         vc.start=0.f; vc.end=state.duration; vc.text=path;
         vt.clips.push_back(vc);
 
@@ -422,12 +519,20 @@ static void import_file(AppState& state, const std::string& path) {
 
         // Add Audio track
         Track* at = nullptr;
+        // Reuse a track that already holds this exact audio file
         for (auto& t : state.tracks)
-            if (t.type==TrackType::Audio && t.name=="Audio") { at=&t; break; }
-        if (!at) { state.tracks.push_back({}); at=&state.tracks.back(); }
-        at->type = TrackType::Audio; at->name = "Audio";
+            if (!t.clips.empty() && t.clips[0].clip_type == ClipType::Audio &&
+                t.clips[0].source_id == path) { at=&t; break; }
+        if (!at) {
+            state.tracks.push_back({});
+            at = &state.tracks.back();
+            char aname[32];
+            snprintf(aname, sizeof(aname), "Track %d", (int)state.tracks.size());
+            at->name = aname;
+        }
         at->clips.clear();
         Clip ac; ac.clip_type = ClipType::Audio;
+        ac.source_id = path;
         ac.start=0.f; ac.end=state.duration; ac.text=path;
         at->clips.push_back(ac);
     }
@@ -464,12 +569,20 @@ static void kick_pipeline(AppState& state, const std::string& path, PipelineMode
     state.vocals_path        = vocals_out;
     state.out_wav            = vocals_out;
 
-    if (mode != PipelineMode::SeparateOnly) {
-        // Add placeholder Lyrics track while processing
-        bool has_lyrics = false;
-        for (auto& t : state.tracks) if (t.name=="Lyrics") { has_lyrics=true; break; }
-        if (!has_lyrics) {
-            Track ph; ph.type=TrackType::Subtitle; ph.name="Lyrics";
+    state.pipeline_produces_subtitles = (mode == PipelineMode::TranscribeOnly);
+
+    if (mode == PipelineMode::Both) {
+        bool has = false;
+        for (auto& t : state.tracks) if (t.name=="Lyrics") { has=true; break; }
+        if (!has) {
+            Track ph; ph.name="Lyrics";
+            state.tracks.insert(state.tracks.begin(), std::move(ph));
+        }
+    } else if (mode == PipelineMode::TranscribeOnly) {
+        bool has = false;
+        for (auto& t : state.tracks) if (t.name=="Subtitles") { has=true; break; }
+        if (!has) {
+            Track ph; ph.name="Subtitles";
             state.tracks.insert(state.tracks.begin(), std::move(ph));
         }
     }
@@ -644,7 +757,9 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
         const Clip* active = nullptr;
         int active_ci = -1;
         for (int ci = 0; ci < (int)track.clips.size(); ++ci) {
-            if (track.clips[ci].clip_type != ClipType::Text) continue;
+            if (track.clips[ci].clip_type != ClipType::Text     &&
+                track.clips[ci].clip_type != ClipType::Lyrics   &&
+                track.clips[ci].clip_type != ClipType::Subtitle) continue;
             if (state.playhead >= track.clips[ci].start &&
                 state.playhead <  track.clips[ci].end) {
                 active = &track.clips[ci];
@@ -656,7 +771,9 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
         int show_ci = active_ci;
         if (!show && state.selected_track == ti && state.selected_clip >= 0 &&
             state.selected_clip < (int)track.clips.size() &&
-            track.clips[state.selected_clip].clip_type == ClipType::Text) {
+            (track.clips[state.selected_clip].clip_type == ClipType::Text     ||
+             track.clips[state.selected_clip].clip_type == ClipType::Lyrics   ||
+             track.clips[state.selected_clip].clip_type == ClipType::Subtitle)) {
             show    = &track.clips[state.selected_clip];
             show_ci = state.selected_clip;
         }
@@ -740,96 +857,6 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
     }
 }
 
-// ── Right panel: Track tab ────────────────────────────────────────────────────
-
-static void panel_track(AppState& state, float w) {
-    if (state.selected_track < 0 || state.selected_track >= (int)state.tracks.size()) {
-        ImGui::Dummy({0.f, 24.f});
-        ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
-        const char* hint = "Click a track label to select it";
-        ImGui::SetCursorPosX((w - ImGui::CalcTextSize(hint).x) * 0.5f);
-        ImGui::TextUnformatted(hint);
-        ImGui::PopStyleColor();
-        return;
-    }
-
-    Track& track = state.tracks[state.selected_track];
-
-    ImGui::Dummy({0.f, 8.f});
-    ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
-    const char* type_tag =
-        track.type == TrackType::Subtitle ? "Subtitle" :
-        track.type == TrackType::Audio    ? "Audio"    : "Video";
-    char header[80];
-    snprintf(header, sizeof(header), "Track — %s  ·  %s", track.name.c_str(), type_tag);
-    ImGui::TextUnformatted(header);
-    ImGui::PopStyleColor();
-    ImGui::Dummy({0.f, 4.f}); ui_separator(); ImGui::Dummy({0.f, 8.f});
-
-    // Show grouping controls on any track whose clips are Text type (e.g. Lyrics).
-    bool is_text_track = !track.clips.empty() &&
-                         track.clips[0].clip_type == ClipType::Text;
-    if (is_text_track &&
-        !state.words_json_path.empty() && fs::exists(state.words_json_path)) {
-
-        ui_label("Subtitle grouping"); ImGui::Dummy({0.f, 4.f});
-
-        struct ModeBtn { SubtitleMode m; const char* label; const char* tip; };
-        ModeBtn modes[] = {
-            {SubtitleMode::Word,    "Word",    "One clip per word"},
-            {SubtitleMode::Phrase,  "Phrase",  "Group by short pauses (>0.3s)"},
-            {SubtitleMode::Line,    "Line",    "Group by breath gaps (>0.8s)"},
-            {SubtitleMode::Segment, "Segment", "WhisperX sentence boundaries"},
-            {SubtitleMode::CustomN, "Custom",  "N words per clip"},
-        };
-        for (auto& mb : modes) {
-            bool sel = state.subtitle_mode == mb.m;
-            if (ui_btn(mb.label, sel, true)) state.subtitle_mode = mb.m;
-            if (ImGui::IsItemHovered()) {
-                ImGui::BeginTooltip(); ImGui::TextUnformatted(mb.tip); ImGui::EndTooltip();
-            }
-            ImGui::SameLine(0.f, 4.f);
-        }
-        ImGui::NewLine();
-
-        if (state.subtitle_mode == SubtitleMode::CustomN) {
-            ImGui::Dummy({0.f, 4.f});
-            ImGui::PushStyleColor(ImGuiCol_FrameBg, Col::bg_soft);
-            ImGui::PushStyleColor(ImGuiCol_Border,  Col::line);
-            ImGui::SetNextItemWidth(80.f);
-            int n = state.subtitle_n;
-            if (ImGui::InputInt("words/clip##tn", &n))
-                state.subtitle_n = (n < 1) ? 1 : (n > 20) ? 20 : n;
-            ImGui::PopStyleColor(2);
-        }
-
-        ImGui::Dummy({0.f, 8.f});
-        if (ui_btn("Apply grouping", true, true)) {
-            apply_subtitle_mode(state);
-            const char* mode_name =
-                state.subtitle_mode == SubtitleMode::Word    ? "Word"    :
-                state.subtitle_mode == SubtitleMode::Phrase  ? "Phrase"  :
-                state.subtitle_mode == SubtitleMode::Line    ? "Line"    :
-                state.subtitle_mode == SubtitleMode::Segment ? "Segment" : "Custom";
-            history_push(state, std::string("Grouping — ") + mode_name);
-        }
-        if (ImGui::IsItemHovered()) {
-            ImGui::BeginTooltip();
-            ImGui::TextUnformatted("Re-build this track from saved word JSON");
-            ImGui::EndTooltip();
-        }
-
-    } else if (is_text_track) {
-        ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
-        ImGui::TextWrapped("Run ML Processing on an audio clip first to generate word-level JSON, then grouping controls will appear here.");
-        ImGui::PopStyleColor();
-    } else {
-        ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
-        ImGui::TextUnformatted("Click a clip on this track to edit it.");
-        ImGui::PopStyleColor();
-    }
-}
-
 // ── Right panel: History tab ──────────────────────────────────────────────────
 
 static void panel_history(AppState& state, float /*w*/) {
@@ -901,9 +928,13 @@ static void panel_clip(AppState& state, float w) {
 
     Track& track = state.tracks[state.selected_track];
 
-    // ── Track face — track selected, no clip — delegate to panel_track ────────
+    // ── Track face — track selected, no clip ──────────────────────────────────
     if (state.selected_clip < 0 || state.selected_clip >= (int)track.clips.size()) {
-        panel_track(state, w);
+        ImGui::Dummy({0.f, 24.f});
+        ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+        ImGui::SetCursorPosX((w - ImGui::CalcTextSize("Click a clip to edit it").x) * 0.5f);
+        ImGui::TextUnformatted("Click a clip to edit it");
+        ImGui::PopStyleColor();
         return;
     }
 
@@ -918,7 +949,37 @@ static void panel_clip(AppState& state, float w) {
     ImGui::PopStyleColor();
     ImGui::Dummy({0.f, 4.f}); ui_separator(); ImGui::Dummy({0.f, 8.f});
 
-    if (clip.clip_type == ClipType::Text) {
+    // Helper: copy position + color from this clip to all clips with same source_id + type
+    auto propagate_style = [&]() {
+        if (clip.source_id.empty()) return;
+        int count = 0;
+        for (auto& t : state.tracks)
+            for (auto& c : t.clips)
+                if (c.clip_type == clip.clip_type && c.source_id == clip.source_id && &c != &clip) {
+                    c.sub_pos            = clip.sub_pos;
+                    c.sub_pos_y          = clip.sub_pos_y;
+                    c.sub_color_override = clip.sub_color_override;
+                    memcpy(c.sub_color, clip.sub_color, sizeof(clip.sub_color));
+                    ++count;
+                }
+        if (count > 0) history_push(state, "Apply style to all");
+    };
+
+    if ((clip.clip_type == ClipType::Lyrics || clip.clip_type == ClipType::Subtitle) &&
+        !clip.source_id.empty()) {
+        const char* btn_lbl = clip.clip_type == ClipType::Lyrics
+            ? "Apply style to all Lyrics clips"
+            : "Apply style to all Subtitle clips";
+        if (ui_btn(btn_lbl, false, true)) propagate_style();
+        if (ImGui::IsItemHovered()) {
+            ImGui::BeginTooltip();
+            ImGui::TextUnformatted("Push position + color to every clip from this source");
+            ImGui::EndTooltip();
+        }
+        ImGui::Dummy({0.f, 8.f});
+    }
+
+    if (clip.clip_type == ClipType::Text || clip.clip_type == ClipType::Lyrics) {
         // ── Text ─────────────────────────────────────────────────────────────
         ui_label("Text"); ImGui::Dummy({0.f, 4.f});
         if (s_edit_focus_next) { ImGui::SetKeyboardFocusHere(); s_edit_focus_next = false; }
@@ -977,6 +1038,8 @@ static void panel_clip(AppState& state, float w) {
 
         ImGui::Dummy({0.f, 12.f}); ui_separator(); ImGui::Dummy({0.f, 8.f});
 
+        ImGui::Dummy({0.f, 8.f}); ui_separator(); ImGui::Dummy({0.f, 8.f});
+
         // ── Position override ─────────────────────────────────────────────────
         ui_label("Position"); ImGui::Dummy({0.f, 4.f});
         struct PosBtn { int v; const char* label; };
@@ -1017,6 +1080,225 @@ static void panel_clip(AppState& state, float w) {
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Subtitle color");
         }
         ImGui::PopStyleColor();
+
+        // ── Lyrics grouping controls (Lyrics clips only) ──────────────────
+        if (clip.clip_type == ClipType::Lyrics) {
+            ImGui::Dummy({0.f, 12.f}); ui_separator(); ImGui::Dummy({0.f, 8.f});
+            ui_label("Lyrics grouping"); ImGui::Dummy({0.f, 4.f});
+
+            if (!state.words_json_path.empty() && fs::exists(state.words_json_path)) {
+                struct ModeBtn { SubtitleMode m; const char* label; const char* tip; };
+                static const ModeBtn modes[] = {
+                    {SubtitleMode::Word,    "Word",    "One clip per word"},
+                    {SubtitleMode::Phrase,  "Phrase",  "Group by short pauses (>0.3s)"},
+                    {SubtitleMode::Line,    "Line",    "Group by breath gaps (>0.8s)"},
+                    {SubtitleMode::Segment, "Segment", "WhisperX sentence boundaries"},
+                    {SubtitleMode::CustomN, "Custom",  "N words per clip"},
+                };
+                for (auto& mb : modes) {
+                    bool sel = state.subtitle_mode == mb.m;
+                    if (ui_btn(mb.label, sel, true)) state.subtitle_mode = mb.m;
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::BeginTooltip(); ImGui::TextUnformatted(mb.tip); ImGui::EndTooltip();
+                    }
+                    ImGui::SameLine(0.f, 4.f);
+                }
+                ImGui::NewLine();
+
+                if (state.subtitle_mode == SubtitleMode::CustomN) {
+                    ImGui::Dummy({0.f, 4.f});
+                    ImGui::PushStyleColor(ImGuiCol_FrameBg, Col::bg_soft);
+                    ImGui::PushStyleColor(ImGuiCol_Border,  Col::line);
+                    ImGui::SetNextItemWidth(80.f);
+                    int n = state.subtitle_n;
+                    if (ImGui::InputInt("words/clip##cn", &n))
+                        state.subtitle_n = (n < 1) ? 1 : (n > 20) ? 20 : n;
+                    ImGui::PopStyleColor(2);
+                }
+
+                ImGui::Dummy({0.f, 8.f});
+                if (ui_btn("Apply grouping", true, true)) {
+                    apply_subtitle_mode(state);
+                    const char* mname =
+                        state.subtitle_mode == SubtitleMode::Word    ? "Word"    :
+                        state.subtitle_mode == SubtitleMode::Phrase  ? "Phrase"  :
+                        state.subtitle_mode == SubtitleMode::Line    ? "Line"    :
+                        state.subtitle_mode == SubtitleMode::Segment ? "Segment" : "Custom";
+                    history_push(state, std::string("Grouping — ") + mname);
+                }
+                if (ImGui::IsItemHovered()) {
+                    ImGui::BeginTooltip();
+                    ImGui::TextUnformatted("Re-bucket all Lyrics clips from saved word JSON");
+                    ImGui::EndTooltip();
+                }
+            } else {
+                ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+                ImGui::TextWrapped("Run ML Processing on an audio clip to generate word JSON, then grouping controls appear here.");
+                ImGui::PopStyleColor();
+            }
+        }
+
+    } else if (clip.clip_type == ClipType::Subtitle) {
+        // ── SRT editor — shows all clips sharing this source_id across all tracks ──
+
+        // Build cross-track list sorted by start time
+        struct SRTEntry { int ti, ci; };
+        std::vector<SRTEntry> entries;
+        for (int ti2 = 0; ti2 < (int)state.tracks.size(); ++ti2)
+            for (int ci2 = 0; ci2 < (int)state.tracks[ti2].clips.size(); ++ci2) {
+                const Clip& c2 = state.tracks[ti2].clips[ci2];
+                if (c2.clip_type == ClipType::Subtitle &&
+                    (clip.source_id.empty() || c2.source_id == clip.source_id))
+                    entries.push_back({ti2, ci2});
+            }
+        std::sort(entries.begin(), entries.end(), [&](const SRTEntry& a, const SRTEntry& b){
+            return state.tracks[a.ti].clips[a.ci].start <
+                   state.tracks[b.ti].clips[b.ci].start;
+        });
+
+        int n_total = (int)entries.size();
+        char info[64];
+        snprintf(info, sizeof(info), "%d clips", n_total);
+        if (!clip.source_id.empty()) {
+            std::string fn = fs::path(clip.source_id).filename().string();
+            snprintf(info, sizeof(info), "%d clips  ·  %s", n_total, fn.c_str());
+        }
+        ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+        ImGui::TextUnformatted(info);
+        ImGui::PopStyleColor();
+        ImGui::Dummy({0.f, 6.f});
+
+        // Find which row index is currently selected
+        int sel_row = -1;
+        for (int i = 0; i < n_total; ++i)
+            if (entries[i].ti == state.selected_track && entries[i].ci == state.selected_clip)
+                { sel_row = i; break; }
+
+        static int s_srt_last_row = -1;
+        float row_h  = 20.f;
+        float list_h = fminf(180.f, n_total * row_h + 6.f);
+        ImGui::PushStyleColor(ImGuiCol_ChildBg, Col::bg_soft);
+        ImGui::BeginChild("##srt_list", {0.f, list_h}, false);
+        for (int i = 0; i < n_total; ++i) {
+            const SRTEntry& e  = entries[i];
+            Clip& sc           = state.tracks[e.ti].clips[e.ci];
+            bool  is_sel       = (i == sel_row);
+
+            if (is_sel && s_srt_last_row != i) ImGui::SetScrollHereY(0.5f);
+
+            ImGui::PushStyleColor(ImGuiCol_Text, is_sel ? Col::fg : Col::muted);
+            char row_id[32]; snprintf(row_id, sizeof(row_id), "##srt%d", i);
+            if (ImGui::Selectable(row_id, is_sel, 0, {0.f, row_h})) {
+                state.selected_track = e.ti;
+                state.selected_clip  = e.ci;
+                strncpy(s_edit_buf, sc.text.c_str(), sizeof(s_edit_buf)-1);
+                s_edit_buf[sizeof(s_edit_buf)-1] = '\0';
+                seek_to(state, sc.start);
+            }
+            ImGui::SameLine(0.f, 4.f);
+            std::string preview = sc.text.size() > 34 ? sc.text.substr(0, 32) + "…" : sc.text;
+            char rowlbl[96];
+            snprintf(rowlbl, sizeof(rowlbl), "%2d  %s  %s", i+1,
+                fmt_time(sc.start).c_str(), preview.c_str());
+            ImGui::TextUnformatted(rowlbl);
+            ImGui::PopStyleColor();
+        }
+        s_srt_last_row = sel_row;
+        ImGui::EndChild();
+        ImGui::PopStyleColor();
+
+        ImGui::Dummy({0.f, 8.f}); ui_separator(); ImGui::Dummy({0.f, 8.f});
+
+        // Edit controls for the currently selected clip
+        if (sel_row >= 0) {
+            Clip& sc = state.tracks[entries[sel_row].ti].clips[entries[sel_row].ci];
+
+            ui_label("Text"); ImGui::Dummy({0.f, 4.f});
+            if (s_edit_focus_next) { ImGui::SetKeyboardFocusHere(); s_edit_focus_next = false; }
+            ImGui::PushStyleColor(ImGuiCol_FrameBg, Col::bg_soft);
+            ImGui::PushStyleColor(ImGuiCol_Border,  Col::line);
+            ImGui::SetNextItemWidth(w - 16.f);
+            if (ImGui::InputText("##srt_text", s_edit_buf, sizeof(s_edit_buf),
+                    ImGuiInputTextFlags_EnterReturnsTrue))
+                sc.text = s_edit_buf;
+            if (ImGui::IsItemDeactivated()) {
+                if (sc.text != s_edit_buf) history_push(state, "Edit subtitle text");
+                sc.text = s_edit_buf;
+            }
+            ImGui::PopStyleColor(2);
+
+            ImGui::Dummy({0.f, 8.f});
+            ui_label("Timing"); ImGui::Dummy({0.f, 4.f});
+            float half = (w - 24.f) * 0.5f;
+            ImGui::PushStyleColor(ImGuiCol_FrameBg, Col::bg_soft);
+            ImGui::PushStyleColor(ImGuiCol_Border,  Col::line);
+            ImGui::BeginGroup();
+            ImGui::PushStyleColor(ImGuiCol_Text, Col::muted); ImGui::TextUnformatted("Start"); ImGui::PopStyleColor();
+            ImGui::SetNextItemWidth(half);
+            float ss = sc.start;
+            if (ImGui::InputFloat("##srt_s", &ss, 0.01f, 0.1f, "%.3f"))
+                if (ss < sc.end - 0.01f) { sc.start = fmaxf(0.f, ss); history_push(state, "Subtitle timing"); }
+            ImGui::EndGroup();
+            ImGui::SameLine(0.f, 8.f);
+            ImGui::BeginGroup();
+            ImGui::PushStyleColor(ImGuiCol_Text, Col::muted); ImGui::TextUnformatted("End"); ImGui::PopStyleColor();
+            ImGui::SetNextItemWidth(half);
+            float se = sc.end;
+            if (ImGui::InputFloat("##srt_e", &se, 0.01f, 0.1f, "%.3f"))
+                if (se > sc.start + 0.01f) { sc.end = se; history_push(state, "Subtitle timing"); }
+            ImGui::EndGroup();
+            ImGui::PopStyleColor(2);
+
+            ImGui::Dummy({0.f, 6.f});
+            bool nudged = false;
+            if (ui_btn("-100ms", false, true)) { sc.start-=0.1f; sc.end-=0.1f; if(sc.start<0.f){sc.end-=sc.start;sc.start=0.f;} nudged=true; }
+            ImGui::SameLine(0.f, 4.f);
+            if (ui_btn("-10ms",  false, true)) { sc.start-=0.01f; sc.end-=0.01f; nudged=true; }
+            ImGui::SameLine(0.f, 4.f);
+            if (ui_btn("+10ms",  false, true)) { sc.start+=0.01f; sc.end+=0.01f; nudged=true; }
+            ImGui::SameLine(0.f, 4.f);
+            if (ui_btn("+100ms", false, true)) { sc.start+=0.1f;  sc.end+=0.1f;  nudged=true; }
+            if (nudged) history_push(state, "Nudge subtitle");
+
+            ImGui::Dummy({0.f, 10.f});
+            if (ui_btn("+ Add below", false, true)) {
+                Clip nc; nc.clip_type = ClipType::Subtitle;
+                nc.source_id = sc.source_id;
+                nc.start = sc.end; nc.end = sc.end + 2.f;
+                Track& target_track = state.tracks[entries[sel_row].ti];
+                int ins = entries[sel_row].ci + 1;
+                target_track.clips.insert(target_track.clips.begin() + ins, nc);
+                state.selected_clip = ins;
+                strncpy(s_edit_buf, "", 1);
+                s_edit_focus_next = true;
+                history_push(state, "Add subtitle");
+            }
+            ImGui::SameLine(0.f, 4.f);
+            if (ui_btn("Delete", false, true)) {
+                Track& del_track = state.tracks[entries[sel_row].ti];
+                del_track.clips.erase(del_track.clips.begin() + entries[sel_row].ci);
+                // Reselect: next row in the same source
+                int new_row = std::min(sel_row, n_total - 2);
+                if (new_row >= 0 && new_row < n_total - 1) {
+                    state.selected_track = entries[new_row].ti;
+                    state.selected_clip  = entries[new_row].ci;
+                    // Adjust ci if we deleted from same track before it
+                    if (entries[sel_row].ti == entries[new_row].ti &&
+                        entries[sel_row].ci  <  entries[new_row].ci)
+                        state.selected_clip--;
+                    if (state.selected_clip >= 0 &&
+                        state.selected_clip < (int)state.tracks[state.selected_track].clips.size()) {
+                        strncpy(s_edit_buf,
+                            state.tracks[state.selected_track].clips[state.selected_clip].text.c_str(),
+                            sizeof(s_edit_buf)-1);
+                        s_edit_buf[sizeof(s_edit_buf)-1] = '\0';
+                    }
+                } else {
+                    state.selected_clip = -1;
+                }
+                history_push(state, "Delete subtitle");
+            }
+        }
 
     } else {
         // ── Audio / Video clip ────────────────────────────────────────────────
@@ -1220,9 +1502,21 @@ static void panel_clip(AppState& state, float w) {
 
         // ML Processing
         ui_label("ML Processing"); ImGui::Dummy({0.f, 6.f});
-        bool busy     = transcribe_running();
-        bool has_path = !clip.text.empty();
+        bool busy      = transcribe_running();
+        bool has_path  = !clip.text.empty();
+        bool ml_avail  = state.models_ready;
 
+        if (!ml_avail && !busy) {
+            ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+            ImGui::TextWrapped("Lyric extraction models not installed.");
+            ImGui::PopStyleColor();
+            ImGui::Dummy({0.f, 2.f});
+            if (ui_btn("Download Models…", false, true))
+                state.show_model_dl_modal = true;
+            ImGui::Dummy({0.f, 4.f});
+        }
+
+        if (!ml_avail) ImGui::BeginDisabled();
         if (busy) {
             float bar_w = w - 16.f;
             ImVec2 bp = ImGui::GetCursorScreenPos();
@@ -1260,7 +1554,7 @@ static void panel_clip(AppState& state, float w) {
                 kick_pipeline(state, clip.text, PipelineMode::TranscribeOnly);
             if (ImGui::IsItemHovered()) {
                 ImGui::BeginTooltip();
-                ImGui::TextUnformatted("Transcribe only → Lyrics track");
+                ImGui::TextUnformatted("Transcribe only → Subtitles track");
                 ImGui::EndTooltip();
             }
             ImGui::Dummy({0.f, 2.f});
@@ -1279,6 +1573,7 @@ static void panel_clip(AppState& state, float w) {
             }
             if (!has_path) ImGui::EndDisabled();
         }
+        if (!ml_avail) ImGui::EndDisabled();
     }
 
     ImGui::Dummy({0.f, 12.f}); ui_separator(); ImGui::Dummy({0.f, 8.f});
@@ -1289,7 +1584,7 @@ static void panel_clip(AppState& state, float w) {
     }
 }
 
-// ── Right panel: Style tab ────────────────────────────────────────────────────
+// ── Right panel: Animation tab ───────────────────────────────────────────────
 
 static const struct { AnimStyle style; const char* name; const char* desc; const char* tag; } STYLES[] = {
     {AnimStyle::Fade,       "Fade",       "Opacity in/out — clean",         "soft"  },
@@ -1302,7 +1597,7 @@ static const struct { AnimStyle style; const char* name; const char* desc; const
     {AnimStyle::Block,      "Block",      "White fill — high contrast",     "sharp" },
 };
 
-static void panel_style(AppState& state, float w) {
+static void panel_animation(AppState& state, float w) {
     ImGui::Dummy({0.f, 8.f});
     ui_label("Animation style"); ImGui::Dummy({0.f, 8.f});
 
@@ -1577,6 +1872,10 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
     float& scroll       = state.tl_scroll;
     float tl_content_w  = dur * zoom;
 
+    // Tick drop flash timer
+    if (s_drop_flash_t > 0.f)
+        s_drop_flash_t -= ImGui::GetIO().DeltaTime;
+
     ImVec2 mouse = ImGui::GetIO().MousePos;
     bool in_tl = mouse.x >= origin.x && mouse.x <= origin.x + total_w &&
                  mouse.y >= origin.y && mouse.y <= origin.y + total_h;
@@ -1607,12 +1906,68 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
         return roundf(t * fps) / fps;
     };
 
+    // ── Edge / playhead snapping ──────────────────────────────────────────────
+    static bool s_snap_enabled = true;
+    static float s_snap_indicator = -1.f;  // time of active snap line, -1 = none
+
+    // Build candidate list (all clip edges + playhead), excluding one clip.
+    auto build_snap_candidates = [&](int ex_ti, int ex_ci) -> std::vector<float> {
+        std::vector<float> cands;
+        cands.push_back(state.playhead);
+        cands.push_back(0.f);
+        for (int ti = 0; ti < (int)state.tracks.size(); ++ti)
+            for (int ci = 0; ci < (int)state.tracks[ti].clips.size(); ++ci) {
+                if (ti == ex_ti && ci == ex_ci) continue;
+                cands.push_back(state.tracks[ti].clips[ci].start);
+                cands.push_back(state.tracks[ti].clips[ci].end);
+            }
+        return cands;
+    };
+
+    // Try to snap t to a nearby candidate; returns snapped value and sets indicator.
+    // threshold_px: snap radius in screen pixels.
+    const float SNAP_PX = 8.f;
+    auto edge_snap = [&](float t, const std::vector<float>& cands) -> float {
+        if (!s_snap_enabled || ImGui::GetIO().KeyCtrl) { s_snap_indicator = -1.f; return t; }
+        float best_dt = SNAP_PX / zoom;
+        float result  = t;
+        for (float c : cands) {
+            float dt = fabsf(c - t);
+            if (dt < best_dt) { best_dt = dt; result = c; }
+        }
+        s_snap_indicator = (result != t) ? result : -1.f;
+        return result;
+    };
+
     // ── Ruler ─────────────────────────────────────────────────────────────────
     float ruler_y = origin.y;
-    dl->AddRectFilled({origin.x+TL_LABEL_W, ruler_y},
+    dl->AddRectFilled({origin.x, ruler_y},
         {origin.x+total_w, ruler_y+TL_RULER_H}, to_u32(Col::bg_soft));
     dl->AddLine({origin.x, ruler_y+TL_RULER_H},
         {origin.x+total_w, ruler_y+TL_RULER_H}, to_u32(Col::line));
+
+    // Snap toggle button in label column of ruler
+    {
+        const char* lbl = s_snap_enabled ? "⊿ Snap" : "  Snap";
+        ImVec2 btn_min = {origin.x + 4.f, ruler_y + 2.f};
+        ImVec2 btn_max = {origin.x + TL_LABEL_W - 4.f, ruler_y + TL_RULER_H - 2.f};
+        bool hov = mouse.x >= btn_min.x && mouse.x <= btn_max.x &&
+                   mouse.y >= btn_min.y && mouse.y <= btn_max.y;
+        ImU32 btn_col = s_snap_enabled
+            ? IM_COL32(120, 200, 255, hov ? 180 : 120)
+            : to_u32(hov ? Col::line_hover : Col::line);
+        dl->AddRectFilled(btn_min, btn_max, IM_COL32(0,0,0,0));
+        dl->AddRect(btn_min, btn_max, btn_col, 3.f);
+        ImU32 txt_col = s_snap_enabled
+            ? IM_COL32(120, 200, 255, 255)
+            : to_u32(Col::muted);
+        float tw = ImGui::CalcTextSize(lbl).x;
+        float th = ImGui::CalcTextSize(lbl).y;
+        dl->AddText({btn_min.x + ((btn_max.x-btn_min.x)-tw)*0.5f,
+                     btn_min.y + ((btn_max.y-btn_min.y)-th)*0.5f}, txt_col, lbl);
+        if (hov && ImGui::IsMouseClicked(0))
+            s_snap_enabled = !s_snap_enabled;
+    }
 
     // Adaptive tick ladder {major_interval_secs, subdivisions}.
     // Selected so that major ticks are always ≥ 80 px apart.
@@ -1675,6 +2030,10 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
     static int   drag_track = -1, drag_clip = -1;
     static float drag_offset = 0.f;
     static bool  drag_left = false, drag_right = false;
+    static int drag_hot_track = -1;  // track under mouse during body drag
+    static int  s_rename_track = -1;
+    static char s_rename_buf[64] = {};
+    static bool s_rename_focus = false;
 
     // Context menu state
     static int ctx_track = -1, ctx_clip = -1;
@@ -1691,16 +2050,69 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
             to_u32(row_hov ? Col::bg_soft_hov : Col::bg_soft));
         dl->AddLine({origin.x, row_br.y}, {origin.x+total_w, row_br.y}, to_u32(Col::line));
 
-        // Track label — left-click selects the track (clears clip selection)
+        // Drop flash — briefly illuminate the row that just received a drop.
+        if (s_drop_flash_t > 0.f && s_drop_flash_track == ti) {
+            float alpha = s_drop_flash_t / 0.6f;  // 1→0 linear fade
+            // Pulse: quick bright flash then fade
+            float pulse = alpha > 0.7f ? (1.f - alpha) / 0.3f : 1.f;
+            ImU32 flash_col = IM_COL32(120, 200, 255, (int)(pulse * alpha * 120));
+            dl->AddRectFilled(row_tl, row_br, flash_col, 2.f);
+            dl->AddRect(row_tl, row_br, IM_COL32(120, 200, 255, (int)(alpha * 200)), 2.f);
+        }
+
+        // Cross-track drag ghost — show target landing zone
+        if (drag_hot_track == ti && drag_track >= 0 && drag_clip >= 0 &&
+            drag_hot_track != drag_track && !drag_left && !drag_right &&
+            drag_track < (int)state.tracks.size() &&
+            drag_clip  < (int)state.tracks[drag_track].clips.size()) {
+            const Clip& gc = state.tracks[drag_track].clips[drag_clip];
+            float gx0 = fmaxf(origin.x+TL_LABEL_W, origin.x+TL_LABEL_W+gc.start*zoom-scroll);
+            float gx1 = fminf(origin.x+total_w,     origin.x+TL_LABEL_W+gc.end*zoom-scroll);
+            float gy0 = track_y+3.f, gy1 = track_y+TL_TRACK_H-3.f;
+            if (gx1 > gx0) {
+                dl->AddRectFilled({gx0,gy0},{gx1,gy1}, IM_COL32(255,255,255,35), 2.f);
+                dl->AddRect({gx0,gy0},{gx1,gy1}, IM_COL32(255,255,255,160), 2.f, 0, 1.5f);
+            }
+        }
+
+        // Track label — single click selects, double-click renames
         bool track_sel = state.selected_track == ti;
-        dl->AddText({origin.x+8.f, track_y+(TL_TRACK_H-13.f)*0.5f},
-            to_u32(track_sel ? Col::fg : Col::muted), track.name.c_str());
-        if (ImGui::IsMouseClicked(0) &&
-            mouse.x >= origin.x+2.f && mouse.x < origin.x+TL_LABEL_W-20.f &&
-            mouse.y >= track_y && mouse.y < track_y+TL_TRACK_H) {
-            state.selected_track = ti;
-            state.selected_clip  = -1;
-            state.panel_tab      = 2;  // Track tab
+        bool in_label = mouse.x >= origin.x+2.f && mouse.x < origin.x+TL_LABEL_W-20.f &&
+                        mouse.y >= track_y && mouse.y < track_y+TL_TRACK_H;
+
+        if (s_rename_track == ti) {
+            // Inline rename field
+            ImGui::SetCursorScreenPos({origin.x+4.f, track_y+(TL_TRACK_H-18.f)*0.5f});
+            ImGui::SetNextItemWidth(TL_LABEL_W - 26.f);
+            ImGui::PushStyleColor(ImGuiCol_FrameBg, Col::bg_soft);
+            ImGui::PushStyleColor(ImGuiCol_Border,  Col::fg);
+            if (s_rename_focus) { ImGui::SetKeyboardFocusHere(); s_rename_focus = false; }
+            bool committed = ImGui::InputText("##rename", s_rename_buf, sizeof(s_rename_buf),
+                ImGuiInputTextFlags_EnterReturnsTrue);
+            if (committed || (ImGui::IsItemDeactivated() && !ImGui::IsKeyPressed(ImGuiKey_Escape))) {
+                std::string newname(s_rename_buf);
+                if (!newname.empty() && newname != track.name) {
+                    track.name = newname;
+                    history_push(state, "Rename track");
+                }
+                s_rename_track = -1;
+            }
+            if (ImGui::IsKeyPressed(ImGuiKey_Escape)) s_rename_track = -1;
+            ImGui::PopStyleColor(2);
+        } else {
+            dl->AddText({origin.x+8.f, track_y+(TL_TRACK_H-13.f)*0.5f},
+                to_u32(track_sel ? Col::fg : Col::muted), track.name.c_str());
+            if (ImGui::IsMouseClicked(0) && in_label) {
+                state.selected_track = ti;
+                state.selected_clip  = -1;
+                state.panel_tab      = 0;
+            }
+            if (ImGui::IsMouseDoubleClicked(0) && in_label) {
+                s_rename_track = ti;
+                strncpy(s_rename_buf, track.name.c_str(), sizeof(s_rename_buf)-1);
+                s_rename_buf[sizeof(s_rename_buf)-1] = '\0';
+                s_rename_focus = true;
+            }
         }
 
         // Visibility dot
@@ -1733,16 +2145,19 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
             float cy0 = track_y+3.f, cy1 = track_y+TL_TRACK_H-3.f;
             bool sel = (state.selected_track==ti && state.selected_clip==ci);
 
-            ImVec4 clip_fill = (clip.clip_type==ClipType::Text)  ? Col::clip_sub
-                             : (clip.clip_type==ClipType::Audio) ? Col::clip_audio
-                                                                 : Col::clip_video;
+            ImVec4 clip_fill = (clip.clip_type==ClipType::Lyrics)   ? Col::clip_lyrics
+                             : (clip.clip_type==ClipType::Subtitle) ? Col::clip_subtitle
+                             : (clip.clip_type==ClipType::Text)     ? Col::clip_sub
+                             : (clip.clip_type==ClipType::Audio)    ? Col::clip_audio
+                                                                     : Col::clip_video;
             dl->AddRectFilled({vis_x0,cy0},{vis_x1,cy1},
                 to_u32(sel ? Col::fg : clip_fill), 2.f);
             dl->AddRect({vis_x0,cy0},{vis_x1,cy1},
                 to_u32(sel ? Col::fg : Col::line), 2.f);
 
             // Clip label / waveform
-            if (clip.clip_type==ClipType::Text && !clip.text.empty()) {
+            if ((clip.clip_type==ClipType::Text || clip.clip_type==ClipType::Lyrics ||
+                 clip.clip_type==ClipType::Subtitle) && !clip.text.empty()) {
                 ImGui::PushClipRect({vis_x0,cy0},{vis_x1,cy1},true);
                 dl->AddText({vis_x0+4.f, cy0+(cy1-cy0-13.f)*0.5f},
                     to_u32(sel ? Col::bg : Col::fg), clip.text.c_str());
@@ -1835,7 +2250,8 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
                     state.selected_clip  = ci;
                     strncpy(s_edit_buf, clip.text.c_str(), sizeof(s_edit_buf)-1);
                     s_edit_buf[sizeof(s_edit_buf)-1] = '\0';
-                    s_edit_focus_next = (clip.clip_type==ClipType::Text);
+                    s_edit_focus_next = (clip.clip_type==ClipType::Text || clip.clip_type==ClipType::Lyrics ||
+                                         clip.clip_type==ClipType::Subtitle);
                     if (!state.playing) seek_to(state, clip.start);
                     state.panel_tab = 0;  // switch to Clip tab
 
@@ -1895,30 +2311,80 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
         }
     }
 
-    // Drag handling (frame-snapped, Ctrl bypasses)
+    // Drag handling (frame-snapped + edge-snapped, Ctrl bypasses both)
     if (drag_track>=0 && drag_clip>=0 && (drag_left||drag_right))
         ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
     if (drag_track>=0 && drag_clip>=0 && ImGui::IsMouseDragging(0)) {
         Clip& dc = state.tracks[drag_track].clips[drag_clip];
+        auto cands = build_snap_candidates(drag_track, drag_clip);
         float new_t = (mouse.x - origin.x - TL_LABEL_W + scroll - drag_offset) / zoom;
         if (drag_left) {
-            dc.start = fmaxf(0.f, fminf(snap(new_t), dc.end - f1));
+            float t = edge_snap(snap(new_t), cands);
+            dc.start = fmaxf(0.f, fminf(t, dc.end - f1));
         } else if (drag_right) {
             float et = (mouse.x - origin.x - TL_LABEL_W + scroll) / zoom;
-            dc.end = fmaxf(dc.start + f1, snap(et));
+            float t = edge_snap(snap(et), cands);
+            dc.end = fmaxf(dc.start + f1, t);
         } else {
             float dur_clip = dc.end - dc.start;
-            dc.start = fmaxf(0.f, snap(new_t));
+            // Try snapping both edges; use whichever is closer to a candidate.
+            float left_raw  = snap(new_t);
+            float right_raw = left_raw + dur_clip;
+            float thresh = SNAP_PX / zoom;
+            float best_dt = thresh;
+            float best_start = left_raw;
+            s_snap_indicator = -1.f;
+            if (s_snap_enabled && !ImGui::GetIO().KeyCtrl) {
+                for (float c : cands) {
+                    float dl = fabsf(c - left_raw);
+                    if (dl < best_dt) { best_dt = dl; best_start = c;           s_snap_indicator = c; }
+                    float dr = fabsf(c - right_raw);
+                    if (dr < best_dt) { best_dt = dr; best_start = c - dur_clip; s_snap_indicator = c; }
+                }
+            }
+            dc.start = fmaxf(0.f, best_start);
             dc.end   = dc.start + dur_clip;
+            // Track which row the mouse is hovering for cross-track transfer.
+            // hot == tracks.size() means below all tracks → "New Track" ghost row.
+            float ruler_bottom = origin.y + TL_RULER_H;
+            int hot = (int)((mouse.y - ruler_bottom) / TL_TRACK_H);
+            int n_tracks = (int)state.tracks.size();
+            drag_hot_track = (hot >= 0 && hot <= n_tracks) ? hot : -1;
         }
+    } else {
+        s_snap_indicator = -1.f;
     }
     if (ImGui::IsMouseReleased(0)) {
         if (drag_track >= 0 && drag_clip >= 0) {
-            const char* act = drag_left  ? "Trim clip start" :
-                              drag_right ? "Trim clip end"   : "Move clip";
-            history_push(state, act);
+            if (!drag_left && !drag_right &&
+                drag_hot_track >= 0 && drag_hot_track != drag_track) {
+                Clip moved = state.tracks[drag_track].clips[drag_clip];
+                state.tracks[drag_track].clips.erase(
+                    state.tracks[drag_track].clips.begin() + drag_clip);
+                if (drag_hot_track == (int)state.tracks.size()) {
+                    // Drop below all tracks — create new track
+                    Track nt;
+                    char name[32];
+                    snprintf(name, sizeof(name), "Track %d", (int)state.tracks.size() + 1);
+                    nt.name = name;
+                    nt.clips.push_back(moved);
+                    state.tracks.push_back(nt);
+                    state.selected_track = (int)state.tracks.size() - 1;
+                    state.selected_clip  = 0;
+                    history_push(state, "Move clip to new track");
+                } else {
+                    state.tracks[drag_hot_track].clips.push_back(moved);
+                    state.selected_track = drag_hot_track;
+                    state.selected_clip  = (int)state.tracks[drag_hot_track].clips.size() - 1;
+                    history_push(state, "Move clip to track");
+                }
+            } else {
+                const char* act = drag_left  ? "Trim clip start" :
+                                  drag_right ? "Trim clip end"   : "Move clip";
+                history_push(state, act);
+            }
         }
-        drag_track=-1; drag_clip=-1; drag_left=false; drag_right=false;
+        drag_track=-1; drag_clip=-1; drag_left=false; drag_right=false; drag_hot_track=-1;
     }
 
     // Playhead
@@ -1928,13 +2394,57 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
         dl->AddTriangleFilled({ph_x-5.f,origin.y},{ph_x+5.f,origin.y},{ph_x,origin.y+10.f},to_u32(Col::fg));
     }
 
-    // Click ruler to seek (frame-snapped, Ctrl bypasses)
+    // Click ruler to seek (frame-snapped + edge-snapped, Ctrl bypasses both)
     if ((ImGui::IsMouseClicked(0)||ImGui::IsMouseDragging(0)) && drag_track<0) {
         if (mouse.y>=origin.y && mouse.y<=origin.y+TL_RULER_H &&
             mouse.x>=origin.x+TL_LABEL_W && mouse.x<=origin.x+total_w) {
-            float t = (mouse.x - origin.x - TL_LABEL_W + scroll) / zoom;
-            seek_to(state, snap(fmaxf(0.f, fminf(t, dur))));
+            float raw = (mouse.x - origin.x - TL_LABEL_W + scroll) / zoom;
+            auto cands = build_snap_candidates(drag_track, drag_clip);
+            // For ruler seek, snap to clip edges (exclude playhead from candidates)
+            std::vector<float> edge_cands;
+            for (int ti = 0; ti < (int)state.tracks.size(); ++ti)
+                for (auto& cl : state.tracks[ti].clips) {
+                    edge_cands.push_back(cl.start);
+                    edge_cands.push_back(cl.end);
+                }
+            edge_cands.push_back(0.f);
+            float t = edge_snap(snap(fmaxf(0.f, fminf(raw, dur))), edge_cands);
+            seek_to(state, t);
         }
+    }
+
+    // ── Snap indicator line ───────────────────────────────────────────────────
+    if (s_snap_indicator >= 0.f) {
+        float sx = origin.x + TL_LABEL_W + s_snap_indicator * zoom - scroll;
+        if (sx >= origin.x + TL_LABEL_W && sx <= origin.x + total_w) {
+            dl->AddLine({sx, origin.y + TL_RULER_H}, {sx, origin.y + total_h},
+                        IM_COL32(120, 200, 255, 200), 1.f);
+        }
+    }
+
+    // ── New-track ghost row (shown when dragging below all tracks) ────────────
+    if (drag_track >= 0 && drag_clip >= 0 && !drag_left && !drag_right &&
+        drag_hot_track == (int)state.tracks.size() &&
+        drag_track < (int)state.tracks.size() &&
+        drag_clip  < (int)state.tracks[drag_track].clips.size()) {
+        ImVec2 gr_tl = {origin.x,           track_y};
+        ImVec2 gr_br = {origin.x + total_w,  track_y + TL_TRACK_H};
+        // Dashed outline row
+        dl->AddRectFilled(gr_tl, gr_br, IM_COL32(255,255,255,8));
+        dl->AddRect(gr_tl, gr_br, IM_COL32(255,255,255,60), 0.f, 0, 1.f);
+        // "New Track" label
+        dl->AddText({origin.x + 8.f, track_y + (TL_TRACK_H - ImGui::GetTextLineHeight()) * 0.5f},
+                    IM_COL32(255,255,255,100), "New Track");
+        // Clip ghost
+        const Clip& gc = state.tracks[drag_track].clips[drag_clip];
+        float gx0 = fmaxf(origin.x+TL_LABEL_W, origin.x+TL_LABEL_W+gc.start*zoom-scroll);
+        float gx1 = fminf(origin.x+total_w,     origin.x+TL_LABEL_W+gc.end*zoom-scroll);
+        float gy0 = track_y + 3.f, gy1 = track_y + TL_TRACK_H - 3.f;
+        if (gx1 > gx0) {
+            dl->AddRectFilled({gx0,gy0},{gx1,gy1}, IM_COL32(255,255,255,35), 2.f);
+            dl->AddRect({gx0,gy0},{gx1,gy1}, IM_COL32(255,255,255,160), 2.f, 0, 1.5f);
+        }
+        track_y += TL_TRACK_H;  // push "+ Add Track" down so they don't overlap
     }
 
     // "+ Add Track" row
@@ -1942,10 +2452,10 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
     ImVec2 mp = ImGui::GetIO().MousePos;
     bool add_hov = mp.y>=track_y && mp.y<track_y+TL_TRACK_H &&
                    mp.x>=origin.x && mp.x<=origin.x+total_w;
-    dl->AddText(add_p, to_u32(add_hov ? Col::fg : Col::muted), "+ Add Subtitle Track");
+    dl->AddText(add_p, to_u32(add_hov ? Col::fg : Col::muted), "+ Add Track");
     if (add_hov && ImGui::IsMouseClicked(0)) {
-        Track t; t.type=TrackType::Subtitle;
-        char name[32]; snprintf(name,sizeof(name),"Sub %d",(int)state.tracks.size()+1);
+        Track t;
+        char name[32]; snprintf(name,sizeof(name),"Track %d",(int)state.tracks.size()+1);
         t.name=name; state.tracks.push_back(t);
     }
 
@@ -1976,7 +2486,7 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
         // ── ML Processing — Audio & Video clips ──────────────────────────────
         if (cc && (cc->clip_type==ClipType::Audio || cc->clip_type==ClipType::Video)) {
             bool busy = transcribe_running();
-            if (busy) ImGui::BeginDisabled();
+            if (busy || !state.models_ready) ImGui::BeginDisabled();
             if (ImGui::BeginMenu("ML Processing")) {
                 if (ImGui::MenuItem("Extract Lyrics  (separate + transcribe)")) {
                     state.audio_path = cc->text;
@@ -1991,12 +2501,16 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
                 }
                 ImGui::EndMenu();
             }
-            if (busy) ImGui::EndDisabled();
+            if (busy || !state.models_ready) ImGui::EndDisabled();
+            if (!state.models_ready) {
+                if (ImGui::MenuItem("Download Lyric Extraction Models…"))
+                    state.show_model_dl_modal = true;
+            }
             ImGui::Separator();
         }
 
         // ── Subtitle clips ────────────────────────────────────────────────────
-        if (cc && cc->clip_type==ClipType::Text) {
+        if (cc && (cc->clip_type==ClipType::Text || cc->clip_type==ClipType::Lyrics)) {
             if (ImGui::MenuItem("Edit text")) {
                 state.panel_tab = 0;
                 s_edit_focus_next = true;
@@ -2123,11 +2637,9 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
                 ct->visible = !ct->visible;
                 history_push(state, "Track visibility");
             }
-            if (ct->type != TrackType::Subtitle) {  // mute only makes sense on audio/video tracks
-                if (ImGui::MenuItem(ct->muted ? "Unmute" : "Mute")) {
-                    ct->muted = !ct->muted;
-                    history_push(state, "Track mute");
-                }
+            if (ImGui::MenuItem(ct->muted ? "Unmute" : "Mute")) {
+                ct->muted = !ct->muted;
+                history_push(state, "Track mute");
             }
         }
         ImGui::Separator();
@@ -2142,23 +2654,11 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
 
     if (ImGui::BeginPopup("##tl_ctx")) {
         open_tl_ctx = false;
-        if (ImGui::MenuItem("Add Subtitle Track")) {
-            Track t; t.type=TrackType::Subtitle;
-            char n[32]; snprintf(n,sizeof(n),"Sub %d",(int)state.tracks.size()+1);
+        if (ImGui::MenuItem("Add Track")) {
+            Track t;
+            char n[32]; snprintf(n,sizeof(n),"Track %d",(int)state.tracks.size()+1);
             t.name=n; state.tracks.push_back(t);
-            history_push(state, "Add Subtitle Track");
-        }
-        if (ImGui::MenuItem("Add Audio Track")) {
-            Track t; t.type=TrackType::Audio;
-            char n[32]; snprintf(n,sizeof(n),"Audio %d",(int)state.tracks.size()+1);
-            t.name=n; state.tracks.push_back(t);
-            history_push(state, "Add Audio Track");
-        }
-        if (ImGui::MenuItem("Add Video Track")) {
-            Track t; t.type=TrackType::Video;
-            char n[32]; snprintf(n,sizeof(n),"Video %d",(int)state.tracks.size()+1);
-            t.name=n; state.tracks.push_back(t);
-            history_push(state, "Add Video Track");
+            history_push(state, "Add Track");
         }
         ImGui::EndPopup();
     }
@@ -2248,29 +2748,51 @@ void ui_studio(AppState& state) {
         if (pe > 0.01f) state.duration = pe;
     }
 
-    // Handle OS drop — add to hovered track if over one, else create new track.
+    // Handle OS drop — SRT, audio, or video.
     extern std::string g_dropped_file;
-    if (!g_dropped_file.empty() && is_audio_file(g_dropped_file)) {
+    if (!g_dropped_file.empty()) {
         const std::string& dp = g_dropped_file;
         fs::path fp(dp);
         std::string ext = fp.extension().string();
         for (auto& c : ext) c = (char)tolower((unsigned char)c);
-        bool is_vid = (ext==".mp4"||ext==".mov"||ext==".mkv"||ext==".avi"||ext==".webm");
-        ClipType drop_ct = is_vid ? ClipType::Video : ClipType::Audio;
 
-        if (s_tl_hover_track >= 0 &&
-            s_tl_hover_track < (int)state.tracks.size()) {
-            // Drop onto an existing track — just add the clip there.
-            add_clip_to_track(state, s_tl_hover_track, dp, drop_ct);
-            // If it's a video/audio file and no audio loaded yet, seed it.
-            if (state.audio_path.empty()) {
-                state.audio_path = dp;
-                audio_load(dp);
-                if (state.duration <= 0.f) state.duration = audio_duration();
+        if (ext == ".srt") {
+            // Parse SRT and place clips on hovered track or a new track.
+            auto clips = parse_srt(dp);
+            if (!clips.empty()) {
+                int target = -1;
+                if (s_tl_hover_track >= 0 && s_tl_hover_track < (int)state.tracks.size()) {
+                    target = s_tl_hover_track;
+                    Track& tr = state.tracks[target];
+                    tr.clips.insert(tr.clips.end(), clips.begin(), clips.end());
+                } else {
+                    Track t;
+                    t.name = fp.stem().string();
+                    t.clips = clips;
+                    state.tracks.insert(state.tracks.begin(), std::move(t));
+                    target = 0;
+                }
+                s_drop_flash_track = target;
+                s_drop_flash_t     = 0.6f;
+                history_push(state, "Import SRT \"" + fp.filename().string() + "\"");
             }
-        } else {
-            // Drop on empty space — original behaviour (create new track).
-            import_file(state, dp);
+        } else if (is_audio_file(dp)) {
+            bool is_vid = (ext==".mp4"||ext==".mov"||ext==".mkv"||ext==".avi"||ext==".webm");
+            ClipType drop_ct = is_vid ? ClipType::Video : ClipType::Audio;
+
+            if (s_tl_hover_track >= 0 && s_tl_hover_track < (int)state.tracks.size()) {
+                add_clip_to_track(state, s_tl_hover_track, dp, drop_ct);
+                if (state.audio_path.empty()) {
+                    state.audio_path = dp;
+                    audio_load(dp);
+                    if (state.duration <= 0.f) state.duration = audio_duration();
+                }
+                s_drop_flash_track = s_tl_hover_track;
+            } else {
+                import_file(state, dp);
+                s_drop_flash_track = (int)state.tracks.size() - 1;
+            }
+            s_drop_flash_t = 0.6f;
         }
         g_dropped_file.clear();
     }
@@ -2317,7 +2839,6 @@ void ui_studio(AppState& state) {
         state.extract_done = false;
         if (!state.extract_wav_path.empty() && fs::exists(state.extract_wav_path)) {
             Track at;
-            at.type = TrackType::Audio;
             at.name = fs::path(state.extract_wav_path).stem().string();
             AudioMeta meta;
             float dur = audio_probe(state.extract_wav_path, meta) ? meta.duration_secs : state.duration;
@@ -2334,7 +2855,10 @@ void ui_studio(AppState& state) {
     static PipelineStage last_stage = PipelineStage::Idle;
     if (last_stage != PipelineStage::Done &&
         state.pipeline.stage == PipelineStage::Done) {
-        apply_subtitle_mode(state);
+        if (state.pipeline_produces_subtitles)
+            apply_subtitle_pipeline(state);
+        else
+            apply_subtitle_mode(state);
         save_all_srts(state);
         std::string stem = state.audio_path.empty() ? "audio"
             : fs::path(state.audio_path).stem().string();
@@ -2348,7 +2872,7 @@ void ui_studio(AppState& state) {
         for (auto& tr : state.tracks) {
             if (tr.muted) { vol = 0.f; break; }
             for (auto& cl : tr.clips) {
-                if (cl.clip_type == ClipType::Text) continue;
+                if (cl.clip_type == ClipType::Text || cl.clip_type == ClipType::Lyrics) continue;
                 if (state.playhead >= cl.start && state.playhead < cl.end) {
                     vol = cl.volume; break;
                 }
@@ -2358,7 +2882,7 @@ void ui_studio(AppState& state) {
     }
 
     if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_H))
-        state.panel_tab = 4;
+        state.panel_tab = 3;
 
     // ── Menu bar ─────────────────────────────────────────────────────────────
     if (ImGui::BeginMenuBar()) {
@@ -2398,6 +2922,9 @@ void ui_studio(AppState& state) {
             }
             if (!has_tracks) ImGui::EndDisabled();
             ImGui::Separator();
+            if (ImGui::MenuItem("Settings…"))
+                state.show_settings_modal = true;
+            ImGui::Separator();
             if (ImGui::MenuItem("Close project")) {
                 transcribe_cancel();
                 history_clear();
@@ -2422,23 +2949,11 @@ void ui_studio(AppState& state) {
         }
 
         if (ImGui::BeginMenu("Track")) {
-            if (ImGui::MenuItem("Add Subtitle Track")) {
-                Track t; t.type=TrackType::Subtitle;
-                char n[32]; snprintf(n,sizeof(n),"Sub %d",(int)state.tracks.size()+1);
+            if (ImGui::MenuItem("Add Track")) {
+                Track t;
+                char n[32]; snprintf(n,sizeof(n),"Track %d",(int)state.tracks.size()+1);
                 t.name=n; state.tracks.push_back(t);
-                history_push(state, "Add Subtitle Track");
-            }
-            if (ImGui::MenuItem("Add Audio Track")) {
-                Track t; t.type=TrackType::Audio;
-                char n[32]; snprintf(n,sizeof(n),"Audio %d",(int)state.tracks.size()+1);
-                t.name=n; state.tracks.push_back(t);
-                history_push(state, "Add Audio Track");
-            }
-            if (ImGui::MenuItem("Add Video Track")) {
-                Track t; t.type=TrackType::Video;
-                char n[32]; snprintf(n,sizeof(n),"Video %d",(int)state.tracks.size()+1);
-                t.name=n; state.tracks.push_back(t);
-                history_push(state, "Add Video Track");
+                history_push(state, "Add Track");
             }
             ImGui::EndMenu();
         }
@@ -2487,11 +3002,102 @@ void ui_studio(AppState& state) {
                 }
             }
             ImGui::Separator();
-            if (ImGui::MenuItem("History", "Ctrl+Shift+H")) state.panel_tab = 4;
+            if (ImGui::MenuItem("History", "Ctrl+Shift+H")) state.panel_tab = 3;
+            ImGui::EndMenu();
+        }
+
+        if (ImGui::BeginMenu("Help")) {
+            bool already = state.models_ready;
+            if (already) ImGui::BeginDisabled();
+            if (ImGui::MenuItem("Download Lyric Extraction Models…"))
+                state.show_model_dl_modal = true;
+            if (already) ImGui::EndDisabled();
             ImGui::EndMenu();
         }
 
         ImGui::EndMenuBar();
+    }
+
+    ui_model_download_modal(state);
+
+    // ── Settings modal ────────────────────────────────────────────────────────
+    if (state.show_settings_modal) {
+        ImGui::OpenPopup("##settings_modal");
+        ImVec2 center = ImGui::GetMainViewport()->GetCenter();
+        ImGui::SetNextWindowPos(center, ImGuiCond_Always, {0.5f, 0.5f});
+        ImGui::SetNextWindowSize({480.f, 0.f});
+        ImGui::PushStyleColor(ImGuiCol_PopupBg, to_u32(Col::bg));
+        ImGui::PushStyleColor(ImGuiCol_Border,  to_u32(Col::line));
+
+        if (ImGui::BeginPopupModal("##settings_modal", nullptr,
+                ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize)) {
+
+            ImGui::Dummy({0.f, 12.f});
+            ImGui::SetCursorPosX(ImGui::GetStyle().WindowPadding.x + 8.f);
+            ImGui::PushFont(g_font_bold);
+            ImGui::TextUnformatted("Settings");
+            ImGui::PopFont();
+
+            ImGui::Dummy({0.f, 12.f});
+            ui_separator();
+            ImGui::Dummy({0.f, 10.f});
+
+
+            // ── Python path ───────────────────────────────────────────────────
+            ui_label("Python path");
+            ImGui::Dummy({0.f, 4.f});
+            ImGui::SetCursorPosX(ImGui::GetStyle().WindowPadding.x + 8.f);
+            static char s_python_buf[512] = {};
+            static bool s_python_init = false;
+            if (!s_python_init) {
+                snprintf(s_python_buf, sizeof(s_python_buf), "%s", state.python_path.c_str());
+                s_python_init = true;
+            }
+            ImGui::PushStyleColor(ImGuiCol_FrameBg, Col::bg_soft);
+            ImGui::PushStyleColor(ImGuiCol_Border,  Col::line);
+            ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - 16.f);
+            if (ImGui::InputText("##python_path", s_python_buf, sizeof(s_python_buf),
+                    ImGuiInputTextFlags_EnterReturnsTrue))
+                state.python_path = s_python_buf;
+            if (ImGui::IsItemDeactivated())
+                state.python_path = s_python_buf;
+            ImGui::PopStyleColor(2);
+
+            ImGui::Dummy({0.f, 12.f});
+            ui_separator();
+            ImGui::Dummy({0.f, 10.f});
+
+            // ── Lyric extraction models ───────────────────────────────────────
+            ui_label("Lyric extraction models");
+            ImGui::Dummy({0.f, 4.f});
+            ImGui::SetCursorPosX(ImGui::GetStyle().WindowPadding.x + 8.f);
+            if (state.models_ready) {
+                ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(100, 220, 130, 255));
+                ImGui::TextUnformatted("Installed");
+                ImGui::PopStyleColor();
+            } else {
+                ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+                ImGui::TextUnformatted("Not installed");
+                ImGui::PopStyleColor();
+                ImGui::SameLine(0.f, 12.f);
+                if (ui_btn("Download…", false, true)) {
+                    state.show_settings_modal = false;
+                    state.show_model_dl_modal = true;
+                    ImGui::CloseCurrentPopup();
+                }
+            }
+
+            ImGui::Dummy({0.f, 16.f});
+            ImGui::SetCursorPosX(ImGui::GetStyle().WindowPadding.x + 8.f);
+            if (ui_btn("Close", false, false)) {
+                state.show_settings_modal = false;
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::Dummy({0.f, 8.f});
+
+            ImGui::EndPopup();
+        }
+        ImGui::PopStyleColor(2);
     }
 
     // ── Body layout ──────────────────────────────────────────────────────────
@@ -2810,10 +3416,9 @@ void ui_studio(AppState& state) {
         ImGui::PushStyleColor(ImGuiCol_TabActive, Col::line);
         if (ImGui::BeginTabBar("##panel_tabs")) {
             if (ImGui::BeginTabItem("Clip"))    { state.panel_tab=0; ImGui::EndTabItem(); }
-            if (ImGui::BeginTabItem("Style"))   { state.panel_tab=1; ImGui::EndTabItem(); }
-            if (ImGui::BeginTabItem("Track"))   { state.panel_tab=2; ImGui::EndTabItem(); }
-            if (ImGui::BeginTabItem("Export"))  { state.panel_tab=3; ImGui::EndTabItem(); }
-            if (ImGui::BeginTabItem("History")) { state.panel_tab=4; ImGui::EndTabItem(); }
+            if (ImGui::BeginTabItem("Animation"))   { state.panel_tab=1; ImGui::EndTabItem(); }
+            if (ImGui::BeginTabItem("Export"))  { state.panel_tab=2; ImGui::EndTabItem(); }
+            if (ImGui::BeginTabItem("History")) { state.panel_tab=3; ImGui::EndTabItem(); }
             ImGui::EndTabBar();
         }
         ImGui::PopStyleColor(2);
@@ -2823,9 +3428,8 @@ void ui_studio(AppState& state) {
         ImGui::SetCursorPosX(8.f);
         float pw = props_w - 16.f;
         if      (state.panel_tab == 0) panel_clip(state, pw);
-        else if (state.panel_tab == 1) panel_style(state, pw);
-        else if (state.panel_tab == 2) panel_track(state, pw);
-        else if (state.panel_tab == 3) panel_export(state, pw);
+        else if (state.panel_tab == 1) panel_animation(state, pw);
+        else if (state.panel_tab == 2) panel_export(state, pw);
         else                           panel_history(state, pw);
         ImGui::EndChild();
     }

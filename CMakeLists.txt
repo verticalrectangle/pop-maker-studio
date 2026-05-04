@@ -40,6 +40,7 @@ set(SOURCES
     src/proxy.cpp
     src/blender_export.cpp
     src/ui/screen_splash.cpp
+    src/ui/screen_setup.cpp
     src/ui/screen_studio.cpp
     src/ui/theme.cpp
 )
@@ -93,12 +94,32 @@ add_custom_target(embed_font DEPENDS ${CMAKE_BINARY_DIR}/inter_font.h)
 add_dependencies(pop-maker-studio embed_font)
 target_include_directories(pop-maker-studio PRIVATE ${CMAKE_BINARY_DIR})
 
-# Copy ml_pipeline.py next to the binary so the app can find it
-add_custom_command(TARGET pop-maker-studio POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy
-        ${CMAKE_SOURCE_DIR}/ml_pipeline.py
-        $<TARGET_FILE_DIR:pop-maker-studio>/ml_pipeline.py
+# Embed ml_pipeline.py as a compiled byte array
+add_custom_command(
+    OUTPUT ${CMAKE_BINARY_DIR}/ml_pipeline_embedded.h
+    COMMAND ${CMAKE_COMMAND}
+        -DINPUT=${CMAKE_SOURCE_DIR}/ml_pipeline.py
+        -DVAR=ml_pipeline_py
+        -DOUTPUT=${CMAKE_BINARY_DIR}/ml_pipeline_embedded.h
+        -P ${CMAKE_SOURCE_DIR}/cmake/EmbedFile.cmake
+    DEPENDS ${CMAKE_SOURCE_DIR}/ml_pipeline.py
+    COMMENT "Embedding ml_pipeline.py"
 )
+add_custom_target(embed_pipeline DEPENDS ${CMAKE_BINARY_DIR}/ml_pipeline_embedded.h)
+add_dependencies(pop-maker-studio embed_pipeline)
+
+# Embed ml_prefetch.py as a compiled byte array
+add_custom_command(
+    OUTPUT ${CMAKE_BINARY_DIR}/ml_prefetch_embedded.h
+    COMMAND ${CMAKE_COMMAND}
+        -DINPUT=${CMAKE_SOURCE_DIR}/ml_prefetch.py
+        -DVAR=ml_prefetch_py
+        -DOUTPUT=${CMAKE_BINARY_DIR}/ml_prefetch_embedded.h
+        -P ${CMAKE_SOURCE_DIR}/cmake/EmbedFile.cmake
+    DEPENDS ${CMAKE_SOURCE_DIR}/ml_prefetch.py
+    COMMENT "Embedding ml_prefetch.py"
+)
+add_custom_target(embed_prefetch DEPENDS ${CMAKE_BINARY_DIR}/ml_prefetch_embedded.h)
+add_dependencies(pop-maker-studio embed_prefetch)
 
 install(TARGETS pop-maker-studio DESTINATION bin)
-install(FILES ml_pipeline.py DESTINATION bin)

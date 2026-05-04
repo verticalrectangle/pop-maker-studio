@@ -85,7 +85,9 @@ std::vector<std::pair<int,int>> AppState::subtitle_clip_indices() const {
     for (int ti = 0; ti < (int)tracks.size(); ++ti) {
         if (!tracks[ti].visible) continue;
         for (int ci = 0; ci < (int)tracks[ti].clips.size(); ++ci)
-            if (tracks[ti].clips[ci].clip_type == ClipType::Text)
+            if (tracks[ti].clips[ci].clip_type == ClipType::Text     ||
+                tracks[ti].clips[ci].clip_type == ClipType::Lyrics   ||
+                tracks[ti].clips[ci].clip_type == ClipType::Subtitle)
                 out.push_back({ti, ci});
     }
     std::sort(out.begin(), out.end(), [&](auto& a, auto& b){
@@ -142,6 +144,8 @@ void app_frame(AppState& state) {
     if (state.splash_timer > 0.f) {
         state.splash_timer -= io.DeltaTime;
         ui_splash(state);
+    } else if (!state.models_ready && !state.models_skipped) {
+        ui_setup(state);
     } else {
         ui_studio(state);
     }

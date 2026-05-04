@@ -29,7 +29,6 @@ static void load_words_json(const std::string& path, AppState& state) {
             state.tracks.end());
 
         Track lyrics;
-        lyrics.type = TrackType::Subtitle;
         lyrics.name = "Lyrics";
 
         for (auto& w : j) {

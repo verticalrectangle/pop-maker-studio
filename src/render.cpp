@@ -351,7 +351,8 @@ static bool write_filter_script(
         for (auto& tr : state.tracks) {
             if (tr.muted) continue;
             for (auto& cl : tr.clips) {
-                if (cl.clip_type == ClipType::Text) continue;
+                if (cl.clip_type == ClipType::Text  || cl.clip_type == ClipType::Lyrics ||
+                    cl.clip_type == ClipType::Subtitle) continue;
                 vol = cl.volume; goto vol_done;
             }
         }

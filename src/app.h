@@ -34,16 +34,15 @@ static const int MAX_VIDEO_TRACKS = 8;
 
 // ── Track / clip data model ───────────────────────────────────────────────────
 
-enum class TrackType { Subtitle, Audio, Video };  // track display hint / default drop type
-
 // Each clip carries its own type so any track can hold mixed content.
-enum class ClipType { Text, Video, Audio };
+enum class ClipType { Text, Lyrics, Subtitle, Video, Audio };
 
 struct Clip {
     ClipType    clip_type = ClipType::Text;  // Text/Video/Audio — independent of track type
     float       start = 0.f;
     float       end   = 0.f;
     std::string text;
+    std::string source_id;  // file path or audio path that produced this clip; groups related clips
 
     // per-clip overrides (Tier 1)
     float volume         = 1.f;   // audio gain multiplier (0–2)
@@ -74,7 +73,6 @@ struct Clip {
 };
 
 struct Track {
-    TrackType         type;
     std::string       name;
     std::vector<Clip> clips;
     bool              visible = true;
@@ -209,11 +207,27 @@ struct AppState {
     // venv python
     std::string python_path = "/home/alexis/dev/song2subs/venv/bin/python";
 
+    // model availability
+    bool models_ready   = false;  // whisper + demucs weights detected on disk
+    bool models_skipped = false;  // user chose "Skip for now" on setup screen
+
+    // model download subprocess
+    bool        model_dl_running  = false;
+    bool        model_dl_done     = false;
+    bool        model_dl_error    = false;
+    float       model_dl_progress = 0.f;   // 0–1
+    std::string model_dl_stage;            // "whisper" | "demucs"
+    std::string model_dl_message;
+    std::string model_dl_error_msg;
+    bool        show_model_dl_modal = false;
+    bool        show_settings_modal = false;
+
     // subtitle grouping
     SubtitleMode subtitle_mode = SubtitleMode::Word;
     int          subtitle_n    = 3;   // words per clip for CustomN mode
+    bool         pipeline_produces_subtitles = false;  // true = TranscribeOnly → Subtitle clips
 
-    // right panel active tab: 0=Clip, 1=Style, 2=Track, 3=Export, 4=History
+    // right panel active tab: 0=Clip, 1=Style, 2=Export, 3=History
     int panel_tab = 0;
 
     std::vector<std::pair<int,int>> subtitle_clip_indices() const;
