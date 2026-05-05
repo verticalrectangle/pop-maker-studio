@@ -248,16 +248,23 @@ static void cpu_apply_datamosh(uint8_t* px, uint8_t* ghost, int w, int h,
     float effective_decay = decay * (1.f - intensity * 0.75f);
     effective_decay = fmaxf(0.05f, effective_decay);
 
-    // Bleedback: ramp effective_decay toward 1.0 over the tail of the clip so the
-    // subject reasserts itself through the mosh by the end of the brick.
+    // Bleedback: compute how much to blend the clean source back into the mash output.
+    // Ramping effective_decay alone doesn't work — ghost updates from the mashed px,
+    // so it converges to the mosh, not reality. Instead we save original pixels and
+    // blend the final output back toward them in a third pass.
+    float bleedback_amount = 0.f;
     if (bleedback > 0.01f && clip_duration > 0.01f && t_in_clip > 0.f) {
         float ramp_start = clip_duration * (1.f - fminf(1.f, bleedback) * 0.6f);
         if (t_in_clip > ramp_start) {
             float ramp_t = (t_in_clip - ramp_start) / (clip_duration - ramp_start);
-            ramp_t = fminf(1.f, ramp_t);
-            effective_decay = effective_decay + (1.f - effective_decay) * ramp_t * bleedback;
+            bleedback_amount = fminf(1.f, ramp_t) * bleedback;
         }
     }
+
+    // Save clean source pixels before mosh so Pass 3 can blend back toward them.
+    static std::vector<uint8_t> s_orig;
+    if (bleedback_amount > 0.01f)
+        s_orig.assign(px, px + (size_t)w * h * 3);
 
     // ── Pass 1: per-block SAD → mosh or pass ─────────────────────────────────
     for (int by = 0; by < nby; ++by) {
@@ -309,13 +316,20 @@ static void cpu_apply_datamosh(uint8_t* px, uint8_t* ghost, int w, int h,
     }
 
     // ── Pass 2: update ghost ──────────────────────────────────────────────────
-    // Ghost lerps toward the mashed output (px) using intensity-bent decay.
     float keep = 1.f - effective_decay;
     int n = w * h;
     for (int i = 0; i < n; ++i) {
         ghost[i*3+0] = cu8((int)(ghost[i*3+0] * keep + px[i*3+0] * effective_decay + 0.5f));
         ghost[i*3+1] = cu8((int)(ghost[i*3+1] * keep + px[i*3+1] * effective_decay + 0.5f));
         ghost[i*3+2] = cu8((int)(ghost[i*3+2] * keep + px[i*3+2] * effective_decay + 0.5f));
+    }
+
+    // ── Pass 3: bleedback — blend mash output back toward clean source ────────
+    if (bleedback_amount > 0.01f) {
+        float keep_mosh = 1.f - bleedback_amount;
+        int np = w * h * 3;
+        for (int i = 0; i < np; ++i)
+            px[i] = cu8((int)(px[i] * keep_mosh + s_orig[i] * bleedback_amount + 0.5f));
     }
 }
 
