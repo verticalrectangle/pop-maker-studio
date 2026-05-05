@@ -594,9 +594,42 @@ static void upload_jpeg(GLuint* tex, int* tex_w, int* tex_h, bool* tex_rgba,
     if (tex_rgba) *tex_rgba = want_rgba;
 }
 
-// ── Internal: seed ghost buffer from a specific source time ──────────────────
-// Reads the JPEG frame at src_t from the proxy and copies its pixels into
-// pv.ghost_buf. Called once on cold init so mosh always starts from clip.start.
+// ── Internal: decode one proxy frame by index into a caller-supplied RGB buffer ─
+
+static bool read_proxy_pixels(PreviewState& pv, int idx, std::vector<uint8_t>& out_rgb,
+                               int& out_w, int& out_h) {
+    int max_idx = (int)pv.proxy.offsets.size() - 1;
+    idx = std::max(0, std::min(idx, max_idx));
+
+    uint64_t offset = pv.proxy.offsets[(size_t)idx];
+    size_t frame_sz = 0;
+    if ((size_t)idx + 1 < pv.proxy.offsets.size()) {
+        frame_sz = (size_t)(pv.proxy.offsets[(size_t)idx + 1] - offset);
+    } else {
+        fseeko(pv.mjpeg_file, (off_t)offset, SEEK_SET);
+        long cur = ftell(pv.mjpeg_file); fseeko(pv.mjpeg_file, 0, SEEK_END);
+        long end = ftell(pv.mjpeg_file);
+        frame_sz = (end > cur) ? (size_t)(end - cur) : 0;
+    }
+    if (frame_sz == 0) return false;
+
+    std::vector<uint8_t> buf(frame_sz);
+    fseeko(pv.mjpeg_file, (off_t)offset, SEEK_SET);
+    if (fread(buf.data(), 1, frame_sz, pv.mjpeg_file) == 0) return false;
+
+    int w, h, ch;
+    uint8_t* pixels = stbi_load_from_memory(buf.data(), (int)frame_sz, &w, &h, &ch, 3);
+    if (!pixels) return false;
+    out_w = w; out_h = h;
+    out_rgb.assign(pixels, pixels + (size_t)w * h * 3);
+    stbi_image_free(pixels);
+    return true;
+}
+
+// ── Internal: seed + warm-up ghost from clip anchor frame ────────────────────
+// Seeds ghost from the frame at src_t, then runs WARMUP_FRAMES mosh passes
+// using successive real proxy frames so the ghost arrives dirty and mosh is
+// full-strength on the very first rendered frame.
 
 static void seed_ghost_from_src_time(PreviewState& pv, float src_t) {
     if (pv.ghost_w <= 0 || pv.ghost_h <= 0) return;
@@ -609,29 +642,24 @@ static void seed_ghost_from_src_time(PreviewState& pv, float src_t) {
         : (int)((double)src_t * pv.proxy.fps);
     seed_idx = std::max(0, std::min(seed_idx, (int)pv.proxy.offsets.size() - 1));
 
-    uint64_t offset = pv.proxy.offsets[(size_t)seed_idx];
-    bool is_last = ((size_t)seed_idx + 1 >= pv.proxy.offsets.size());
-    size_t frame_sz = 0;
-    if (!is_last) {
-        frame_sz = (size_t)(pv.proxy.offsets[(size_t)seed_idx + 1] - offset);
-    } else {
-        fseeko(pv.mjpeg_file, (off_t)offset, SEEK_SET);
-        long cur = ftell(pv.mjpeg_file); fseeko(pv.mjpeg_file, 0, SEEK_END);
-        long end = ftell(pv.mjpeg_file);
-        frame_sz = (end > cur) ? (size_t)(end - cur) : 0;
+    // Seed ghost from anchor frame
+    std::vector<uint8_t> px; int w = 0, h = 0;
+    if (!read_proxy_pixels(pv, seed_idx, px, w, h)) return;
+    if (w != pv.ghost_w || h != pv.ghost_h) return;
+    memcpy(pv.ghost_buf.data(), px.data(), (size_t)w * h * 3);
+
+    // Warm-up: run mosh passes on successive real frames so the ghost
+    // accumulates genuine divergence before the first visible frame.
+    const int WARMUP_FRAMES = 5;
+    for (int i = 1; i <= WARMUP_FRAMES; ++i) {
+        std::vector<uint8_t> next_px; int nw = 0, nh = 0;
+        if (!read_proxy_pixels(pv, seed_idx + i, next_px, nw, nh)) break;
+        if (nw != pv.ghost_w || nh != pv.ghost_h) break;
+        cpu_apply_datamosh(next_px.data(), pv.ghost_buf.data(), w, h,
+                           pv.pixel_fx.datamosh_intensity,
+                           pv.pixel_fx.datamosh_decay,
+                           pv.pixel_fx.datamosh_block_size);
     }
-    if (frame_sz == 0) return;
-
-    std::vector<uint8_t> buf(frame_sz);
-    fseeko(pv.mjpeg_file, (off_t)offset, SEEK_SET);
-    if (fread(buf.data(), 1, frame_sz, pv.mjpeg_file) == 0) return;
-
-    int w, h, ch;
-    uint8_t* pixels = stbi_load_from_memory(buf.data(), (int)frame_sz, &w, &h, &ch, 3);
-    if (!pixels) return;
-    if (w == pv.ghost_w && h == pv.ghost_h)
-        memcpy(pv.ghost_buf.data(), pixels, (size_t)w * h * 3);
-    stbi_image_free(pixels);
 }
 
 // ── Internal: read one JPEG frame from a proxy at frame_idx ──────────────────
