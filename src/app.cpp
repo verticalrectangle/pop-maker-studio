@@ -138,6 +138,43 @@ EffectAccum collect_effects(const AppState& state, float t, int below_track_idx)
     return acc;
 }
 
+CreativeFXAccum collect_creative_fx(const AppState& state, float t, int below_track_idx) {
+    CreativeFXAccum acc;
+    for (int ti = 0; ti < below_track_idx && ti < (int)state.tracks.size(); ++ti) {
+        for (auto& cl : state.tracks[ti].clips) {
+            if (cl.clip_type != ClipType::Effect) continue;
+            if (cl.fx_type == FXType::Adjustment)  continue;
+            if (t < cl.start || t >= cl.end)       continue;
+            switch (cl.fx_type) {
+                case FXType::Glitch:
+                    acc.glitch_on     = true;
+                    acc.glitch_chroma = fmaxf(acc.glitch_chroma, cl.fx_glitch_chroma);
+                    acc.glitch_jitter = fmaxf(acc.glitch_jitter, cl.fx_glitch_jitter);
+                    break;
+                case FXType::ZoomPunch:
+                    acc.zoom_on       = true;
+                    acc.zoom_strength = fmaxf(acc.zoom_strength, cl.fx_zoom_strength);
+                    acc.zoom_decay    = fmaxf(acc.zoom_decay,    cl.fx_zoom_decay);
+                    acc.zoom_shake    = fmaxf(acc.zoom_shake,    cl.fx_zoom_shake);
+                    break;
+                case FXType::LightLeak:
+                    acc.leak_on        = true;
+                    acc.leak_intensity = fmaxf(acc.leak_intensity, cl.fx_leak_intensity);
+                    acc.leak_speed     = fmaxf(acc.leak_speed,     cl.fx_leak_speed);
+                    break;
+                case FXType::VHS:
+                    acc.vhs_on       = true;
+                    acc.vhs_noise    = fmaxf(acc.vhs_noise,    cl.fx_vhs_noise);
+                    acc.vhs_bleed    = fmaxf(acc.vhs_bleed,    cl.fx_vhs_bleed);
+                    acc.vhs_tracking = fmaxf(acc.vhs_tracking, cl.fx_vhs_tracking);
+                    break;
+                default: break;
+            }
+        }
+    }
+    return acc;
+}
+
 void app_init(AppState& state) {
     theme_apply();
     audio_init();

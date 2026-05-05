@@ -899,7 +899,11 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
     bool   lclick = ImGui::IsMouseClicked(0);
 
     float lookahead = ImGui::GetIO().DeltaTime;
+    float t_anim    = (float)ImGui::GetTime();
     int text_rendered = 0;
+
+    // Collect global creative FX (for full-frame overlay effects like LightLeak)
+    CreativeFXAccum global_cfx = collect_creative_fx(state, state.playhead, (int)state.tracks.size());
 
     for (int ti = (int)state.tracks.size() - 1; ti >= 0; --ti) {
         auto& track = state.tracks[ti];
@@ -939,6 +943,7 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                     return { cx + ox*cos_r - oy*sin_r, cy + ox*sin_r + oy*cos_r };
                 };
                 EffectAccum vid_fx = collect_effects(state, at_time, ti);
+                CreativeFXAccum cfx = collect_creative_fx(state, at_time, ti);
                 uintptr_t display_tex = tex;
                 if (vid_fx.any_color || vid_fx.any_blur) {
                     display_tex = fx_apply(tex,
@@ -946,6 +951,33 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                         vid_fx.saturation, vid_fx.hue,
                         vid_fx.blur);
                 }
+                if (cfx.glitch_on)
+                    display_tex = fx_apply_glitch(display_tex, cfx.glitch_chroma, cfx.glitch_jitter, t_anim);
+                if (cfx.vhs_on)
+                    display_tex = fx_apply_vhs(display_tex, cfx.vhs_noise, cfx.vhs_bleed, cfx.vhs_tracking, t_anim);
+
+                // ZoomPunch — scale spike on each beat, decaying exponentially
+                if (cfx.zoom_on && !state.beats.empty()) {
+                    float punch = 0.f;
+                    float decay = fmaxf(0.05f, cfx.zoom_decay);
+                    for (float bt : state.beats) {
+                        if (bt <= at_time) {
+                            float elapsed = at_time - bt;
+                            punch = fmaxf(punch, cfx.zoom_strength * expf(-elapsed / decay));
+                        }
+                    }
+                    if (punch > 0.001f) {
+                        float sf = 1.f + punch;
+                        hw *= sf; hh *= sf;
+                        if (cfx.zoom_shake > 0.f) {
+                            float tf = floorf(t_anim * 60.f);
+                            float sa = cfx.zoom_shake * punch * w * 0.025f;
+                            cx += sinf(tf * 127.1f) * sa;
+                            cy += cosf(tf * 311.7f) * sa;
+                        }
+                    }
+                }
+
                 ImU32 col = IM_COL32(255, 255, 255, (int)(std::fmaxf(0.f, std::fminf(1.f, alpha)) * 255.f));
                 dl->AddImageQuad(ImTextureRef((ImTextureID)display_tex),
                     rot_pt(-hw,-hh), rot_pt(hw,-hh), rot_pt(hw,hh), rot_pt(-hw,hh),
@@ -1254,6 +1286,41 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
     if (s_dragging && !ldown) {
         history_push(state, "Subtitle position Y");
         s_dragging = false; s_drag_ti = -1; s_drag_ci = -1;
+    }
+
+    // ── LightLeak overlay ─────────────────────────────────────────────────────
+    if (global_cfx.leak_on && global_cfx.leak_intensity > 0.01f) {
+        float amp = 1.f;
+        if (!state.amplitude_envelope.empty() && state.envelope_fps > 0.f) {
+            int fi = (int)(state.playhead * state.envelope_fps);
+            fi = fi < 0 ? 0 : (fi >= (int)state.amplitude_envelope.size() ? (int)state.amplitude_envelope.size()-1 : fi);
+            amp = 0.3f + state.amplitude_envelope[fi] * 0.7f;
+        }
+        float base_a = global_cfx.leak_intensity * amp;
+
+        // Blob 1 — warm orange, top area, drifts left-right
+        float a1  = t_anim * global_cfx.leak_speed * 0.13f;
+        float bx1 = p.x + w * (0.55f + 0.3f * sinf(a1));
+        float by1 = p.y + h * (0.08f + 0.06f * cosf(a1 * 0.7f));
+        float r1  = w * (0.45f + 0.08f * sinf(a1 * 1.3f));
+        ImU32 hot1 = IM_COL32(255, 155, 50, (int)(base_a * 115.f));
+        ImU32 hot0 = IM_COL32(255, 120, 20, 0);
+        dl->AddRectFilledMultiColor({bx1-r1, by1-r1*0.5f}, {bx1+r1, by1+r1*0.5f}, hot0, hot1, hot0, hot0);
+
+        // Blob 2 — pink, bottom-left
+        float a2  = t_anim * global_cfx.leak_speed * 0.09f + 1.5f;
+        float bx2 = p.x + w * (0.12f + 0.12f * cosf(a2));
+        float by2 = p.y + h * (0.72f + 0.12f * sinf(a2 * 0.8f));
+        float r2  = w * (0.38f + 0.07f * cosf(a2 * 1.1f));
+        ImU32 pnk = IM_COL32(255, 75, 135, (int)(base_a * 90.f));
+        ImU32 pnk0= IM_COL32(200, 55, 95, 0);
+        dl->AddRectFilledMultiColor({bx2-r2, by2-r2*0.5f}, {bx2+r2, by2+r2*0.5f}, pnk0, pnk0, pnk, pnk0);
+
+        // Streak — horizontal lens flare across top third
+        float fx  = p.x + w * (0.25f + 0.35f * sinf(t_anim * global_cfx.leak_speed * 0.05f));
+        ImU32 fl  = IM_COL32(255, 225, 170, (int)(base_a * 65.f));
+        ImU32 fl0 = IM_COL32(255, 210, 140, 0);
+        dl->AddRectFilledMultiColor({p.x, p.y}, {fx+w*0.25f, p.y+h*0.15f}, fl0, fl, fl0, fl0);
     }
 
     // Border and chrome drawn last so they sit on top of all content

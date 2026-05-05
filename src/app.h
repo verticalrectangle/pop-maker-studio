@@ -179,6 +179,28 @@ struct Track {
     int               sub_row = 0;
 };
 
+// ── Creative FX accumulator ───────────────────────────────────────────────────
+
+struct CreativeFXAccum {
+    bool  glitch_on      = false;
+    float glitch_chroma  = 0.f;
+    float glitch_jitter  = 0.f;
+
+    bool  zoom_on        = false;
+    float zoom_strength  = 0.f;
+    float zoom_decay     = 0.15f;
+    float zoom_shake     = 0.f;
+
+    bool  leak_on        = false;
+    float leak_intensity = 0.f;
+    float leak_speed     = 1.f;
+
+    bool  vhs_on         = false;
+    float vhs_noise      = 0.f;
+    float vhs_bleed      = 0.f;
+    float vhs_tracking   = 0.f;
+};
+
 // ── Effect accumulator ────────────────────────────────────────────────────────
 
 struct EffectAccum {
@@ -390,4 +412,5 @@ void app_frame(AppState& state);
 void app_shutdown(AppState& state);
 
 // Accumulate all Effect clips on tracks above below_track_idx that are active at time t.
-EffectAccum collect_effects(const AppState& state, float t, int below_track_idx);
+EffectAccum      collect_effects     (const AppState& state, float t, int below_track_idx);
+CreativeFXAccum  collect_creative_fx (const AppState& state, float t, int below_track_idx);
