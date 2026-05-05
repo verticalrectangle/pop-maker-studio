@@ -2571,22 +2571,39 @@ static void panel_clip(AppState& state, float w) {
 
             // ── Status indicator ──────────────────────────────────────────────
             if (status == BgRemoveStatus::Processing) {
-                // Amber progress bar — unmissable
                 ImVec2 bp = ImGui::GetCursorScreenPos();
                 ImU32  amber = IM_COL32(255, 165, 0, 255);
                 ImU32  amber_dim = IM_COL32(255, 165, 0, 60);
-                bgdl->AddRectFilled(bp, {bp.x+bar_w, bp.y+6.f}, amber_dim, 3.f);
-                float fill = fmaxf(0.04f, clip.bg_remove_progress);
-                bgdl->AddRectFilled(bp, {bp.x+bar_w*fill, bp.y+6.f}, amber, 3.f);
-                ImGui::Dummy({0.f, 10.f});
-                char pct[64];
-                snprintf(pct, sizeof(pct), "Removing background…  %d%%", (int)(fill * 100.f));
-                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, 0.65f, 0.f, 1.f));
-                ImGui::TextUnformatted(pct);
-                ImGui::PopStyleColor();
-                ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
-                ImGui::TextWrapped("Please wait. This processes every frame using the AI model.");
-                ImGui::PopStyleColor();
+
+                if (clip.bg_remove_progress < 0.f) {
+                    // Indeterminate bounce — model downloading
+                    float t = fmodf((float)ImGui::GetTime() * 0.6f, 1.f);
+                    float seg = bar_w * 0.35f;
+                    float x0 = bp.x + (bar_w - seg) * t;
+                    bgdl->AddRectFilled(bp, {bp.x+bar_w, bp.y+6.f}, amber_dim, 3.f);
+                    bgdl->AddRectFilled({x0, bp.y}, {x0+seg, bp.y+6.f}, amber, 3.f);
+                    ImGui::Dummy({0.f, 10.f});
+                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, 0.65f, 0.f, 1.f));
+                    ImGui::TextUnformatted("Downloading AI model…");
+                    ImGui::PopStyleColor();
+                    ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+                    ImGui::TextWrapped("First run only (~180 MB). Please wait.");
+                    ImGui::PopStyleColor();
+                } else {
+                    // Determinate progress
+                    float fill = fmaxf(0.01f, fminf(1.f, clip.bg_remove_progress));
+                    bgdl->AddRectFilled(bp, {bp.x+bar_w, bp.y+6.f}, amber_dim, 3.f);
+                    bgdl->AddRectFilled(bp, {bp.x+bar_w*fill, bp.y+6.f}, amber, 3.f);
+                    ImGui::Dummy({0.f, 10.f});
+                    char pct[64];
+                    snprintf(pct, sizeof(pct), "Removing background…  %d%%", (int)(fill * 100.f));
+                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, 0.65f, 0.f, 1.f));
+                    ImGui::TextUnformatted(pct);
+                    ImGui::PopStyleColor();
+                    ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+                    ImGui::TextWrapped("Please wait. This processes every frame using the AI model.");
+                    ImGui::PopStyleColor();
+                }
                 ImGui::Dummy({0.f, 4.f});
 
             } else if (status == BgRemoveStatus::Ready) {
