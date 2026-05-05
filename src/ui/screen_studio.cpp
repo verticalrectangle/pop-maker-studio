@@ -3533,22 +3533,38 @@ static void panel_fx_creative(AppState& state, float w) {
         ImDrawList* dl = ImGui::GetWindowDrawList();
 
         bool hov = ImGui::IsMouseHoveringRect(cp, {cp.x+card_w, cp.y+card_h});
-        ImU32 bg  = hov ? IM_COL32(28,28,42,245) : IM_COL32(18,18,30,220);
-        dl->AddRectFilled(cp, {cp.x+card_w, cp.y+card_h}, bg, 5.f);
-        dl->AddRectFilled(cp, {cp.x+5.f, cp.y+card_h}, fc.accent, 5.f);  // accent strip
-        dl->AddRect(cp, {cp.x+card_w, cp.y+card_h},
-                    hov ? fc.accent : IM_COL32(50,50,70,255), 5.f, 0, hov ? 1.5f : 1.f);
 
-        float tx = cp.x + 14.f;
+        // Preview texture as card background
+        uintptr_t prev_tex = video_fx_preview_texture(fc.type, (float)ImGui::GetTime());
+        if (prev_tex) {
+            dl->AddImageRounded((ImTextureID)(uintptr_t)prev_tex,
+                                cp, {cp.x+card_w, cp.y+card_h},
+                                {0,0}, {1,1},
+                                hov ? IM_COL32(255,255,255,210) : IM_COL32(255,255,255,160),
+                                5.f);
+        } else {
+            dl->AddRectFilled(cp, {cp.x+card_w, cp.y+card_h}, IM_COL32(18,18,30,220), 5.f);
+        }
+
+        // Dark scrim at bottom for text legibility
+        dl->AddRectFilled({cp.x, cp.y+card_h-34.f}, {cp.x+card_w, cp.y+card_h},
+                          IM_COL32(0,0,0,185), 5.f);
+
+        // Border — accent on hover, subtle otherwise
+        dl->AddRect(cp, {cp.x+card_w, cp.y+card_h},
+                    hov ? fc.accent : IM_COL32(60,60,80,200), 5.f, 0, hov ? 2.f : 1.f);
+
+        // Name + tagline over scrim
+        float tx = cp.x + 10.f;
         ImGui::PushFont(g_font_bold);
-        dl->AddText(ImGui::GetFont(), 14.f, {tx, cp.y+12.f}, fc.accent, fc.name);
+        dl->AddText(ImGui::GetFont(), 13.f, {tx, cp.y+card_h-28.f}, fc.accent, fc.name);
         ImGui::PopFont();
-        dl->AddText({tx, cp.y+33.f}, IM_COL32(150,150,170,200), fc.tagline);
+        dl->AddText({tx, cp.y+card_h-14.f}, IM_COL32(180,180,190,200), fc.tagline);
 
         if (hov) {
             const char* al = "+ Add";
             ImVec2 sz = ImGui::CalcTextSize(al);
-            dl->AddText({cp.x+card_w-sz.x-10.f, cp.y+12.f}, IM_COL32(255,255,255,180), al);
+            dl->AddText({cp.x+card_w-sz.x-10.f, cp.y+card_h-28.f}, IM_COL32(255,255,255,220), al);
         }
 
         ImGui::SetCursorScreenPos(cp);

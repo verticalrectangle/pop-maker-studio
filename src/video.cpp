@@ -19,6 +19,8 @@ extern "C" {
 
 #include <cstdio>
 #include <cstring>
+#include <cmath>
+#include <array>
 #include <vector>
 
 // ── CPU pixel FX helpers ──────────────────────────────────────────────────────
@@ -1047,4 +1049,182 @@ VideoFrame* video_decode_frame_at(double seconds) {
     av_packet_free(&pkt);
     av_frame_free(&frm);
     return result;
+}
+
+// ── FX preview thumbnails ─────────────────────────────────────────────────────
+// One 80×45 RGB texture per FXType, generated from synthetic source pixels.
+// Animated types (Glitch, VHS) regenerate every frame — at 3600 pixels each
+// that's negligible CPU cost. All others generate once and cache.
+
+static const int FXP_W = 80, FXP_H = 45;
+static const int FXP_N = 8;  // number of FXType enum values
+
+struct FXPrev { GLuint tex = 0; bool animated = false; };
+static std::array<FXPrev, FXP_N> s_fxp;
+static std::vector<uint8_t> s_fxp_src;      // base source image (RGB)
+static std::vector<uint8_t> s_fxp_src_ck;   // chroma key source (RGB, green bg)
+
+static void fxp_make_sources() {
+    s_fxp_src.resize(FXP_W * FXP_H * 3);
+    s_fxp_src_ck.resize(FXP_W * FXP_H * 3);
+    for (int y = 0; y < FXP_H; ++y) {
+        for (int x = 0; x < FXP_W; ++x) {
+            float fx = (float)x / (FXP_W - 1);
+            float fy = (float)y / (FXP_H - 1);
+            // Warm portrait-ish gradient — skin tones left, cool blue right,
+            // bright highlight top-centre, darker bottom.
+            float warm = 1.f - fx * 0.7f;
+            float lum  = 0.55f + 0.35f * (1.f - fy) + 0.18f * expf(-((fx-0.45f)*(fx-0.45f)*14.f + fy*fy*8.f));
+            uint8_t r = cu8((int)(255.f * fminf(1.f, lum * (0.82f + 0.22f * warm))));
+            uint8_t g = cu8((int)(255.f * fminf(1.f, lum * (0.62f + 0.10f * warm))));
+            uint8_t b = cu8((int)(255.f * fminf(1.f, lum * (0.38f + 0.28f * (1.f - warm)))));
+            // Subtle horizontal banding for displacement effects to bite into
+            if ((y / 6) % 2 == 0) { r = cu8(r - 12); g = cu8(g - 8); b = cu8(b - 6); }
+            size_t i = ((size_t)y * FXP_W + x) * 3;
+            s_fxp_src[i+0] = r; s_fxp_src[i+1] = g; s_fxp_src[i+2] = b;
+            // Chroma key source: right 55% is pure green screen, left is the subject
+            if (fx > 0.45f) {
+                s_fxp_src_ck[i+0] = 20;  s_fxp_src_ck[i+1] = 200; s_fxp_src_ck[i+2] = 40;
+            } else {
+                s_fxp_src_ck[i+0] = r; s_fxp_src_ck[i+1] = g; s_fxp_src_ck[i+2] = b;
+            }
+        }
+    }
+}
+
+static void fxp_upload(FXPrev& pv, const std::vector<uint8_t>& px) {
+    if (!pv.tex) {
+        glGenTextures(1, &pv.tex);
+        glBindTexture(GL_TEXTURE_2D, pv.tex);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    } else {
+        glBindTexture(GL_TEXTURE_2D, pv.tex);
+    }
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, FXP_W, FXP_H, 0,
+                 GL_RGB, GL_UNSIGNED_BYTE, px.data());
+}
+
+uintptr_t video_fx_preview_texture(FXType ft, float t) {
+    int idx = (int)ft;
+    if (idx < 0 || idx >= FXP_N) return 0;
+
+    if (s_fxp_src.empty()) fxp_make_sources();
+
+    FXPrev& pv = s_fxp[idx];
+    bool need = !pv.tex || pv.animated;
+    if (!need) return (uintptr_t)pv.tex;
+
+    std::vector<uint8_t> px;
+
+    switch (ft) {
+        case FXType::Adjustment: {
+            px = s_fxp_src;
+            cpu_apply_grade(px.data(), FXP_W, FXP_H, 0.06f, 1.45f, 1.7f, 0.f);
+            break;
+        }
+        case FXType::ChromaKey: {
+            // Show the key with right side keyed → dark checkerboard
+            px.resize(FXP_W * FXP_H * 3);
+            std::vector<uint8_t> rgba(FXP_W * FXP_H * 4);
+            cpu_apply_chroma_key(s_fxp_src_ck.data(), rgba.data(),
+                                 FXP_W, FXP_H, 0.f, 1.f, 0.f, 0.28f, 0.12f);
+            for (int y = 0; y < FXP_H; ++y) {
+                for (int x = 0; x < FXP_W; ++x) {
+                    size_t i = ((size_t)y * FXP_W + x);
+                    uint8_t a = rgba[i*4+3];
+                    if (a < 200) {
+                        // Checkerboard for transparent area
+                        bool chk = ((x / 6) + (y / 6)) % 2 == 0;
+                        px[i*3+0] = chk ? 80 : 50;
+                        px[i*3+1] = chk ? 80 : 50;
+                        px[i*3+2] = chk ? 80 : 50;
+                    } else {
+                        px[i*3+0] = rgba[i*4+0];
+                        px[i*3+1] = rgba[i*4+1];
+                        px[i*3+2] = rgba[i*4+2];
+                    }
+                }
+            }
+            break;
+        }
+        case FXType::Glitch: {
+            px = s_fxp_src;
+            cpu_apply_glitch(px.data(), FXP_W, FXP_H, 12.f, 0.7f, t);
+            cpu_apply_corruption(px.data(), FXP_W, FXP_H, 0.55f, t);
+            pv.animated = true;
+            break;
+        }
+        case FXType::ZoomPunch: {
+            // Static zoom-in crop — shows scale spike at peak
+            px.resize(FXP_W * FXP_H * 3);
+            float scale = 1.22f;
+            float cx_f = FXP_W * 0.5f, cy_f = FXP_H * 0.5f;
+            for (int y = 0; y < FXP_H; ++y) {
+                for (int x = 0; x < FXP_W; ++x) {
+                    int sx = (int)((x - cx_f) / scale + cx_f);
+                    int sy = (int)((y - cy_f) / scale + cy_f);
+                    sx = sx < 0 ? 0 : sx >= FXP_W ? FXP_W-1 : sx;
+                    sy = sy < 0 ? 0 : sy >= FXP_H ? FXP_H-1 : sy;
+                    size_t di = ((size_t)y*FXP_W+x)*3, si = ((size_t)sy*FXP_W+sx)*3;
+                    px[di+0] = s_fxp_src[si+0];
+                    px[di+1] = s_fxp_src[si+1];
+                    px[di+2] = s_fxp_src[si+2];
+                }
+            }
+            break;
+        }
+        case FXType::LUT: {
+            // Simulate a teal-orange cinematic grade — warm shadows, cool highlights
+            px = s_fxp_src;
+            cpu_apply_grade(px.data(), FXP_W, FXP_H, -0.04f, 1.25f, 0.75f, 18.f);
+            break;
+        }
+        case FXType::LightLeak: {
+            // Source + warm additive flare blob upper-right
+            px = s_fxp_src;
+            for (int y = 0; y < FXP_H; ++y) {
+                for (int x = 0; x < FXP_W; ++x) {
+                    float dx = ((float)x - FXP_W * 0.78f) / (FXP_W * 0.35f);
+                    float dy = ((float)y - FXP_H * 0.18f) / (FXP_H * 0.45f);
+                    float r2  = dx*dx + dy*dy;
+                    float flr = fmaxf(0.f, 1.f - r2) * 0.82f;
+                    size_t i  = ((size_t)y*FXP_W+x)*3;
+                    px[i+0] = cu8((int)(px[i+0] + 255.f * flr * 0.88f));
+                    px[i+1] = cu8((int)(px[i+1] + 255.f * flr * 0.35f));
+                    px[i+2] = cu8((int)(px[i+2] + 255.f * flr * 0.05f));
+                }
+            }
+            break;
+        }
+        case FXType::VHS: {
+            px = s_fxp_src;
+            cpu_apply_vhs(px.data(), FXP_W, FXP_H, 0.65f, 9.f, 0.55f, t);
+            pv.animated = true;
+            break;
+        }
+        case FXType::Datamosh: {
+            // Ghost = source shifted right; mosh against current source
+            std::vector<uint8_t> ghost(FXP_W * FXP_H * 3);
+            for (int y = 0; y < FXP_H; ++y) {
+                for (int x = 0; x < FXP_W; ++x) {
+                    int gx = (x + 10) % FXP_W;
+                    size_t di = ((size_t)y*FXP_W+x)*3, si = ((size_t)y*FXP_W+gx)*3;
+                    ghost[di+0] = s_fxp_src[si+0];
+                    ghost[di+1] = s_fxp_src[si+1];
+                    ghost[di+2] = s_fxp_src[si+2];
+                }
+            }
+            px = s_fxp_src;
+            cpu_apply_datamosh(px.data(), ghost.data(), FXP_W, FXP_H,
+                               0.85f, 0.08f, 8, 0.f, 0.f, 0.f);
+            break;
+        }
+        default: px = s_fxp_src; break;
+    }
+
+    fxp_upload(pv, px);
+    return (uintptr_t)pv.tex;
 }
