@@ -473,16 +473,13 @@ struct PreviewState {
     VideoInfo info = {};
     PixelFX   pixel_fx;
     bool      pixel_fx_dirty = false;
-    // Datamosh ghost buffer + snapshot cache for scrub-accurate playhead-driven mosh
+    // Datamosh ghost buffer
     std::vector<uint8_t> ghost_buf;        // RGB, ghost_w * ghost_h * 3
     int                  ghost_w         = 0;
     int                  ghost_h         = 0;
     float                ghost_clip_start = -999.f; // tracks which clip owns the ghost
     int                  ghost_frame_idx  = -1;     // proxy frame the ghost currently represents
-    int                  ghost_seed_idx   = -1;     // proxy frame of brick start (anchor)
-
-    struct GhostSnap { int frame_idx; std::vector<uint8_t> buf; };
-    std::vector<GhostSnap> ghost_snaps;  // sparse snapshots every SNAPSHOT_INTERVAL frames
+    int                  ghost_seed_idx   = -1;     // proxy frame of clip start (anchor)
 };
 
 static PreviewState g_pv[MAX_VIDEO_TRACKS];
@@ -633,88 +630,30 @@ static bool read_proxy_pixels(PreviewState& pv, int idx, std::vector<uint8_t>& o
     return true;
 }
 
-static const int SNAPSHOT_INTERVAL = 10;
-static const int MAX_SNAPSHOTS     = 30;
+// ── Internal: seed ghost from a specific proxy frame index ───────────────────
+// One JPEG decode + memcpy — used for cold init and seek re-seeding.
 
-// ── Internal: advance ghost forward from its current frame to target_frame ───
-// Saves snapshots every SNAPSHOT_INTERVAL frames as it goes so future seeks
-// from any nearby point cost at most SNAPSHOT_INTERVAL-1 mosh passes.
-
-static void advance_ghost_to(PreviewState& pv, int target_frame) {
-    int from = pv.ghost_frame_idx;
-    for (int i = from + 1; i <= target_frame; ++i) {
-        std::vector<uint8_t> px; int w = 0, h = 0;
-        if (!read_proxy_pixels(pv, i, px, w, h)) break;
-        if (w != pv.ghost_w || h != pv.ghost_h) break;
-        cpu_apply_datamosh(px.data(), pv.ghost_buf.data(), w, h,
-                           pv.pixel_fx.datamosh_intensity,
-                           pv.pixel_fx.datamosh_decay,
-                           pv.pixel_fx.datamosh_block_size);
-        pv.ghost_frame_idx = i;
-        // Save snapshot at interval boundaries
-        int rel = i - pv.ghost_seed_idx;
-        if (rel > 0 && rel % SNAPSHOT_INTERVAL == 0 &&
-            (int)pv.ghost_snaps.size() < MAX_SNAPSHOTS) {
-            bool have = false;
-            for (auto& s : pv.ghost_snaps) if (s.frame_idx == i) { have = true; break; }
-            if (!have) pv.ghost_snaps.push_back({i, pv.ghost_buf});
-        }
-    }
+static void seed_ghost_from_frame(PreviewState& pv, int frame_idx) {
+    if (pv.ghost_w <= 0 || pv.ghost_h <= 0) return;
+    frame_idx = std::max(0, std::min(frame_idx, (int)pv.proxy.offsets.size() - 1));
+    std::vector<uint8_t> px; int w = 0, h = 0;
+    if (!read_proxy_pixels(pv, frame_idx, px, w, h)) return;
+    if (w != pv.ghost_w || h != pv.ghost_h) return;
+    memcpy(pv.ghost_buf.data(), px.data(), (size_t)w * h * 3);
+    pv.ghost_seed_idx  = frame_idx;
+    pv.ghost_frame_idx = frame_idx;
 }
 
-// ── Internal: seek ghost to target_frame using nearest snapshot ───────────────
-// Finds the closest cached snapshot at or before target_frame, restores it,
-// then calls advance_ghost_to() for the remaining frames (≤ SNAPSHOT_INTERVAL-1).
-
-static void seek_ghost_to(PreviewState& pv, int target_frame) {
-    // Find best snapshot ≤ target_frame
-    PreviewState::GhostSnap* best = nullptr;
-    for (auto& s : pv.ghost_snaps)
-        if (s.frame_idx <= target_frame)
-            if (!best || s.frame_idx > best->frame_idx) best = &s;
-
-    if (best) {
-        pv.ghost_buf       = best->buf;
-        pv.ghost_frame_idx = best->frame_idx;
-    } else {
-        // No snapshot before target — fall back to seed frame
-        pv.ghost_buf       = pv.ghost_snaps.empty() ? pv.ghost_buf : pv.ghost_snaps[0].buf;
-        pv.ghost_frame_idx = pv.ghost_seed_idx;
-    }
-    advance_ghost_to(pv, target_frame);
-}
-
-// ── Internal: seed + warm-up ghost from clip anchor frame ────────────────────
-// Seeds ghost from the frame at src_t, builds initial snapshot cache via
-// warm-up passes so mosh is full-strength on the first visible frame and
-// any immediate scrub is already covered by a nearby snapshot.
+// ── Internal: seed ghost from clip anchor time ────────────────────────────────
 
 static void seed_ghost_from_src_time(PreviewState& pv, float src_t) {
     if (pv.ghost_w <= 0 || pv.ghost_h <= 0) return;
     if (pv.proxy.offsets.empty() || !pv.mjpeg_file) return;
-
-    int64_t num = pv.proxy.fps_num;
-    int64_t den = pv.proxy.fps_den;
+    int64_t num = pv.proxy.fps_num, den = pv.proxy.fps_den;
     int seed_idx = (num > 0 && den > 0)
         ? (int)((int64_t)((double)src_t * (double)num) / den)
         : (int)((double)src_t * pv.proxy.fps);
-    seed_idx = std::max(0, std::min(seed_idx, (int)pv.proxy.offsets.size() - 1));
-
-    // Seed ghost from anchor frame
-    std::vector<uint8_t> px; int w = 0, h = 0;
-    if (!read_proxy_pixels(pv, seed_idx, px, w, h)) return;
-    if (w != pv.ghost_w || h != pv.ghost_h) return;
-    memcpy(pv.ghost_buf.data(), px.data(), (size_t)w * h * 3);
-
-    pv.ghost_seed_idx  = seed_idx;
-    pv.ghost_frame_idx = seed_idx;
-    pv.ghost_snaps.clear();
-    pv.ghost_snaps.push_back({seed_idx, pv.ghost_buf});  // snapshot at anchor
-
-    // Warm-up: advance through real frames, building snapshot cache as we go.
-    // Ghost arrives dirty; future seeks within this range cost ≤ SNAPSHOT_INTERVAL passes.
-    const int WARMUP_FRAMES = SNAPSHOT_INTERVAL * 2;
-    advance_ghost_to(pv, seed_idx + WARMUP_FRAMES);
+    seed_ghost_from_frame(pv, seed_idx);
 }
 
 // ── Internal: read one JPEG frame from a proxy at frame_idx ──────────────────
@@ -752,7 +691,7 @@ static uintptr_t decode_proxy_frame(PreviewState& pv, int frame_idx) {
             if (pv.tex_w > 0 && pv.tex_h > 0) {
                 pv.ghost_w = pv.tex_w; pv.ghost_h = pv.tex_h;
                 pv.ghost_buf.assign((size_t)pv.ghost_w * pv.ghost_h * 3, 0);
-                pv.ghost_snaps.clear(); pv.ghost_frame_idx = -1; pv.ghost_seed_idx = -1;
+                pv.ghost_frame_idx = -1; pv.ghost_seed_idx = -1;
             }
         }
 
@@ -760,14 +699,13 @@ static uintptr_t decode_proxy_frame(PreviewState& pv, int frame_idx) {
             bool ghost_cold = pv.ghost_seed_idx < 0 ||
                               (pv.ghost_buf[0] == 0 && pv.ghost_buf[1] == 0 && pv.ghost_buf[2] == 0);
             if (ghost_cold) {
-                // Cold init — seed from anchor frame and build initial snapshot cache
                 seed_ghost_from_src_time(pv, pv.pixel_fx.datamosh_src_at_start);
             } else if (frame_idx != pv.ghost_frame_idx + 1 && frame_idx != pv.ghost_frame_idx) {
-                // Playhead jumped (scrub/seek) — restore nearest snapshot and advance
-                seek_ghost_to(pv, frame_idx);
+                // Scrub/seek: re-seed ghost from the frame just before the target so
+                // datamosh runs against real inter-frame motion and the effect shows
+                // immediately — one JPEG decode, no history replay.
+                seed_ghost_from_frame(pv, frame_idx - 1);
             }
-            // Continuous forward play: ghost is already at frame_idx-1, upload_jpeg
-            // will run datamosh and advance it to frame_idx naturally.
         }
     }
 
@@ -869,7 +807,6 @@ void video_set_pixel_fx(int track_id, const PixelFX& fx) {
         pv.ghost_clip_start = fx.datamosh_clip_start;
         if (!pv.ghost_buf.empty())
             std::fill(pv.ghost_buf.begin(), pv.ghost_buf.end(), 0);
-        pv.ghost_snaps.clear();
         pv.ghost_frame_idx = -1;
         pv.ghost_seed_idx  = -1;
     }
