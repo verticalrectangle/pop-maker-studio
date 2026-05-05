@@ -731,12 +731,13 @@ static uintptr_t decode_proxy_frame(PreviewState& pv, int frame_idx) {
                 seed_ghost_from_src_time(pv, pv.pixel_fx.datamosh_src_at_start);
             } else {
                 int jump = frame_idx - pv.ghost_frame_idx;
-                if (jump < 0 || jump > 8) {
-                    // Large backward/forward jump (real scrub) — instant re-seed.
+                if (jump < 0) {
+                    // Backward — unambiguously a scrub. Re-seed instantly.
                     seed_ghost_from_frame(pv, frame_idx - 1);
                 } else if (jump > 1) {
-                    // Small forward skip (playback frame drop) — drive ghost through
-                    // the missing frames so it stays continuous. At most 7 passes.
+                    // Forward skip of any size — fill sequentially. Bounded by real
+                    // time: playhead can't advance faster than wall clock, so this
+                    // never spins more than a handful of decodes per frame.
                     for (int f = pv.ghost_frame_idx + 1; f < frame_idx; ++f) {
                         std::vector<uint8_t> px; int fw = 0, fh = 0;
                         if (!read_proxy_pixels(pv, f, px, fw, fh)) break;
