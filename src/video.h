@@ -85,7 +85,8 @@ struct PixelFX {
     float datamosh_intensity  = 0.6f;
     float datamosh_decay      = 0.08f;
     int   datamosh_block_size = 16;
-    float datamosh_clip_start = -1.f;  // clip.start — ghost resets when this changes
+    float datamosh_clip_start   = -1.f;  // effect clip timeline start — ghost resets when this changes
+    float datamosh_src_at_start = 0.f;   // video source time (src_t) at effect clip start — used to seed ghost
 
     float time         = 0.f;   // animation time (ImGui::GetTime())
 
@@ -105,6 +106,7 @@ struct PixelFX {
                datamosh_on == o.datamosh_on && datamosh_intensity == o.datamosh_intensity &&
                datamosh_decay == o.datamosh_decay && datamosh_block_size == o.datamosh_block_size &&
                datamosh_clip_start == o.datamosh_clip_start &&
+               datamosh_src_at_start == o.datamosh_src_at_start &&
                time       == o.time;
     }
 };

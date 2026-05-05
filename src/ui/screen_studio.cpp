@@ -947,7 +947,9 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                     pfx.datamosh_intensity  = cfx.datamosh_intensity;
                     pfx.datamosh_decay      = cfx.datamosh_decay;
                     pfx.datamosh_block_size = cfx.datamosh_block_size;
-                    pfx.datamosh_clip_start = cfx.datamosh_clip_start;
+                    pfx.datamosh_clip_start   = cfx.datamosh_clip_start;
+                    pfx.datamosh_src_at_start = cl_ptr->in_point +
+                        (cfx.datamosh_clip_start - cl_ptr->start) * cl_ptr->speed;
                     pfx.time          = t_anim;
                     video_set_pixel_fx(slot, pfx);
                 }

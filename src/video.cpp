@@ -233,25 +233,21 @@ static void cpu_apply_datamosh(uint8_t* px, uint8_t* ghost, int w, int h,
                                 float intensity, float decay, int bs) {
     if (!ghost || w <= 0 || h <= 0) return;
 
-    // Cold ghost: seed from current frame then fall through into the mosh pass.
-    // SAD will be ~0 everywhere (ghost == current), so no blocks mosh — output is
-    // clean. The ghost lerp pass at the end warms it up for the next frame.
-    bool ghost_cold = (ghost[0] == 0 && ghost[1] == 0 && ghost[2] == 0);
-    if (ghost_cold)
-        memcpy(ghost, px, (size_t)w * h * 3);
-
     int nbx = (w + bs - 1) / bs;
     int nby = (h + bs - 1) / bs;
 
-    // Motion threshold: SAD/channel that counts as "motion".
-    // At intensity=0 nothing moshs. At intensity=1 even static areas mosh.
-    // Range 0–30 covers typical inter-frame differences for slow/fast content.
-    float threshold = 30.f * (1.f - intensity) + 1.f;
+    // Fixed motion threshold — catches real inter-frame motion, ignores static areas.
+    // Intensity no longer controls what moshs; it controls HOW DEEP the mosh goes.
+    const float threshold = 15.f;
+
+    // Intensity bends the effective decay: low intensity → ghost tracks current quickly
+    // (short trails, mild mosh); high intensity → ghost persists long (deep chaos).
+    float effective_decay = decay * (1.f - intensity * 0.85f);
+    effective_decay = fmaxf(0.005f, effective_decay);
 
     // ── Pass 1: per-block SAD → mosh or pass ─────────────────────────────────
     for (int by = 0; by < nby; ++by) {
         for (int bx = 0; bx < nbx; ++bx) {
-            // Compute mean SAD per channel across the block
             uint32_t sad = 0;
             int count = 0;
             for (int py = 0; py < bs; ++py) {
@@ -269,16 +265,16 @@ static void cpu_apply_datamosh(uint8_t* px, uint8_t* ghost, int w, int h,
 
             if (mean_sad < threshold) continue;  // static block — let current frame through
 
-            // Motion block — substitute ghost (stuck P-frame reference)
-            // At high intensity also displace the source block to simulate wrong
-            // motion vector, and split chroma channels for the color-zone look.
+            // Motion block — substitute ghost (stuck P-frame reference).
+            // Displacement simulates wrong motion vector; chroma twist scales with
+            // both motion strength and intensity for the colour-zone separation look.
             float motion_norm = fminf(1.f, mean_sad / 128.f);  // 0..1
-            int disp_x = (int)(motion_norm * intensity * (float)nbx * 0.25f);
-            int disp_y = (int)(motion_norm * intensity * (float)nby * 0.15f);
+            int disp_x = (int)(motion_norm * (float)nbx * 0.2f);
+            int disp_y = (int)(motion_norm * (float)nby * 0.12f);
             int sbx = ((bx + disp_x) % nbx + nbx) % nbx;
             int sby = ((by + disp_y) % nby + nby) % nby;
-            // Chroma twist scales with motion — faster motion = more channel split
-            int twist = (int)(motion_norm * intensity * (float)bs * 0.4f);
+            // Twist driven by both motion and intensity — more intensity = wider split
+            int twist = (int)((motion_norm * 0.4f + intensity * 0.6f) * (float)bs * 0.55f);
 
             for (int py = 0; py < bs; ++py) {
                 int dy  = by  * bs + py; if (dy >= h) break;
@@ -298,10 +294,8 @@ static void cpu_apply_datamosh(uint8_t* px, uint8_t* ghost, int w, int h,
     }
 
     // ── Pass 2: update ghost ──────────────────────────────────────────────────
-    // Ghost lerps toward the mashed output (px).
-    // High decay → ghost tracks current quickly → short trails, cleaner mosh.
-    // Low decay  → ghost persists long → deep smear, compounding chaos.
-    float keep = 1.f - decay;
+    // Ghost lerps toward the mashed output (px) using intensity-bent decay.
+    float keep = 1.f - effective_decay;
     int n = w * h;
     for (int i = 0; i < n; ++i) {
         ghost[i*3+0] = cu8((int)(ghost[i*3+0] * keep + px[i*3+0] * decay + 0.5f));
@@ -600,6 +594,46 @@ static void upload_jpeg(GLuint* tex, int* tex_w, int* tex_h, bool* tex_rgba,
     if (tex_rgba) *tex_rgba = want_rgba;
 }
 
+// ── Internal: seed ghost buffer from a specific source time ──────────────────
+// Reads the JPEG frame at src_t from the proxy and copies its pixels into
+// pv.ghost_buf. Called once on cold init so mosh always starts from clip.start.
+
+static void seed_ghost_from_src_time(PreviewState& pv, float src_t) {
+    if (pv.ghost_w <= 0 || pv.ghost_h <= 0) return;
+    if (pv.proxy.offsets.empty() || !pv.mjpeg_file) return;
+
+    int64_t num = pv.proxy.fps_num;
+    int64_t den = pv.proxy.fps_den;
+    int seed_idx = (num > 0 && den > 0)
+        ? (int)((int64_t)((double)src_t * (double)num) / den)
+        : (int)((double)src_t * pv.proxy.fps);
+    seed_idx = std::max(0, std::min(seed_idx, (int)pv.proxy.offsets.size() - 1));
+
+    uint64_t offset = pv.proxy.offsets[(size_t)seed_idx];
+    bool is_last = ((size_t)seed_idx + 1 >= pv.proxy.offsets.size());
+    size_t frame_sz = 0;
+    if (!is_last) {
+        frame_sz = (size_t)(pv.proxy.offsets[(size_t)seed_idx + 1] - offset);
+    } else {
+        fseeko(pv.mjpeg_file, (off_t)offset, SEEK_SET);
+        long cur = ftell(pv.mjpeg_file); fseeko(pv.mjpeg_file, 0, SEEK_END);
+        long end = ftell(pv.mjpeg_file);
+        frame_sz = (end > cur) ? (size_t)(end - cur) : 0;
+    }
+    if (frame_sz == 0) return;
+
+    std::vector<uint8_t> buf(frame_sz);
+    fseeko(pv.mjpeg_file, (off_t)offset, SEEK_SET);
+    if (fread(buf.data(), 1, frame_sz, pv.mjpeg_file) == 0) return;
+
+    int w, h, ch;
+    uint8_t* pixels = stbi_load_from_memory(buf.data(), (int)frame_sz, &w, &h, &ch, 3);
+    if (!pixels) return;
+    if (w == pv.ghost_w && h == pv.ghost_h)
+        memcpy(pv.ghost_buf.data(), pixels, (size_t)w * h * 3);
+    stbi_image_free(pixels);
+}
+
 // ── Internal: read one JPEG frame from a proxy at frame_idx ──────────────────
 
 static uintptr_t decode_proxy_frame(PreviewState& pv, int frame_idx) {
@@ -626,14 +660,19 @@ static uintptr_t decode_proxy_frame(PreviewState& pv, int frame_idx) {
 
     // Manage ghost buffer for datamosh — init on first use or dimension change
     if (pv.pixel_fx.datamosh_on) {
-        // We need to know frame dims before decode to size ghost; use tex dims if known.
-        // ghost_buf sized after first decode when tex_w/tex_h are available.
         if (pv.ghost_w != pv.tex_w || pv.ghost_h != pv.tex_h) {
             if (pv.tex_w > 0 && pv.tex_h > 0) {
                 pv.ghost_w = pv.tex_w; pv.ghost_h = pv.tex_h;
                 pv.ghost_buf.assign((size_t)pv.ghost_w * pv.ghost_h * 3, 0);
                 pv.ghost_last_tick = -999.f;
+                seed_ghost_from_src_time(pv, pv.pixel_fx.datamosh_src_at_start);
             }
+        } else {
+            // Ghost cold after a clip-start reset — re-seed from the anchor frame
+            bool ghost_cold = !pv.ghost_buf.empty() &&
+                              pv.ghost_buf[0] == 0 && pv.ghost_buf[1] == 0 && pv.ghost_buf[2] == 0;
+            if (ghost_cold)
+                seed_ghost_from_src_time(pv, pv.pixel_fx.datamosh_src_at_start);
         }
     }
 
@@ -642,10 +681,12 @@ static uintptr_t decode_proxy_frame(PreviewState& pv, int frame_idx) {
     upload_jpeg(&pv.tex, &pv.tex_w, &pv.tex_h, &pv.tex_rgba, s_buf.data(), got, &pv.pixel_fx,
                 ghost_ptr, pv.ghost_w, pv.ghost_h);
 
-    // After first successful decode, size ghost to match actual frame if not yet sized
+    // After first successful decode, size ghost to match actual frame if not yet sized,
+    // then immediately seed it from the clip-start frame so mosh is live from frame 2.
     if (pv.pixel_fx.datamosh_on && pv.ghost_w == 0 && pv.tex_w > 0) {
         pv.ghost_w = pv.tex_w; pv.ghost_h = pv.tex_h;
         pv.ghost_buf.assign((size_t)pv.ghost_w * pv.ghost_h * 3, 0);
+        seed_ghost_from_src_time(pv, pv.pixel_fx.datamosh_src_at_start);
     }
 
     return pv.tex ? (uintptr_t)pv.tex : 0;
