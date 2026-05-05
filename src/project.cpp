@@ -6,7 +6,7 @@
 // ── Binary serialization helpers ──────────────────────────────────────────────
 
 static const uint32_t MAGIC   = 0x534D5001u; // "PMS\x01"
-static const uint32_t VERSION = 9u;
+static const uint32_t VERSION = 10u;
 
 struct Writer {
     std::ofstream f;
@@ -114,6 +114,13 @@ static void write_clip(Writer& w, const Clip& c) {
     w.pod((uint8_t)c.fx_vignette_on); w.pod(c.fx_vignette);
     w.pod((uint8_t)c.fx_text_on); w.pod(c.fx_opacity_mul); w.pod(c.fx_scale_mul);
     w.pod((uint8_t)c.muted);
+    // Creative FX (v10)
+    w.pod((uint8_t)c.fx_type);
+    w.pod(c.fx_glitch_chroma); w.pod(c.fx_glitch_jitter);
+    w.pod(c.fx_zoom_strength); w.pod(c.fx_zoom_decay); w.pod(c.fx_zoom_shake);
+    w.str(c.fx_lut_path);
+    w.pod(c.fx_leak_intensity); w.pod(c.fx_leak_speed);
+    w.pod(c.fx_vhs_noise); w.pod(c.fx_vhs_bleed); w.pod(c.fx_vhs_tracking);
     // ktracks
     uint32_t nk = (uint32_t)c.ktracks.size();
     w.pod(nk);
@@ -160,6 +167,16 @@ static Clip read_clip(Reader& r, uint32_t version) {
     c.fx_text_on    = (bool)r.pod<uint8_t>();
     c.fx_opacity_mul= r.pod<float>(); c.fx_scale_mul = r.pod<float>();
     if (version >= 8u) c.muted = (bool)r.pod<uint8_t>();
+    if (version >= 10u) {
+        c.fx_type         = (FXType)r.pod<uint8_t>();
+        c.fx_glitch_chroma = r.pod<float>(); c.fx_glitch_jitter  = r.pod<float>();
+        c.fx_zoom_strength = r.pod<float>(); c.fx_zoom_decay      = r.pod<float>();
+        c.fx_zoom_shake    = r.pod<float>();
+        c.fx_lut_path      = r.str();
+        c.fx_leak_intensity= r.pod<float>(); c.fx_leak_speed      = r.pod<float>();
+        c.fx_vhs_noise     = r.pod<float>(); c.fx_vhs_bleed       = r.pod<float>();
+        c.fx_vhs_tracking  = r.pod<float>();
+    }
     // ktracks
     uint32_t nk = r.pod<uint32_t>();
     for (uint32_t i = 0; i < nk && r.ok; ++i) {

@@ -1346,8 +1346,66 @@ static const char* clip_type_name(ClipType ct) {
         case ClipType::Subtitle: return "SUBTITLE";
         case ClipType::Video:    return "VIDEO";
         case ClipType::Audio:    return "AUDIO";
-        default:                 return "EFFECT";
+        default:                 return "ADJUST";
     }
+}
+
+static ImU32 fx_type_accent(FXType ft) {
+    switch (ft) {
+        case FXType::Glitch:    return IM_COL32(0,210,220,255);
+        case FXType::ZoomPunch: return IM_COL32(255,135,40,255);
+        case FXType::LUT:       return IM_COL32(255,205,55,255);
+        case FXType::LightLeak: return IM_COL32(255,90,160,255);
+        case FXType::VHS:       return IM_COL32(110,195,95,255);
+        default:                return IM_COL32(120,80,220,255);
+    }
+}
+static const char* fx_type_name(FXType ft) {
+    switch (ft) {
+        case FXType::Glitch:    return "GLITCH";
+        case FXType::ZoomPunch: return "ZOOM";
+        case FXType::LUT:       return "LUT";
+        case FXType::LightLeak: return "LEAK";
+        case FXType::VHS:       return "VHS";
+        default:                return "ADJUST";
+    }
+}
+static const char* fx_type_display(FXType ft) {
+    switch (ft) {
+        case FXType::Glitch:    return "Glitch";
+        case FXType::ZoomPunch: return "Zoom Punch";
+        case FXType::LUT:       return "LUT Grade";
+        case FXType::LightLeak: return "Light Leak";
+        case FXType::VHS:       return "VHS";
+        default:                return "Adjustment";
+    }
+}
+
+static ImU32 clip_badge_color(const Clip& c) {
+    if (c.clip_type == ClipType::Effect) return fx_type_accent(c.fx_type);
+    return clip_type_badge_color(c.clip_type);
+}
+static const char* clip_display_name(const Clip& c) {
+    if (c.clip_type == ClipType::Effect) return fx_type_name(c.fx_type);
+    return clip_type_name(c.clip_type);
+}
+
+struct FxBrickColors { ImU32 fill, border, label; };
+static FxBrickColors fx_brick_colors(FXType ft, bool sel) {
+    int r, g, b;
+    switch (ft) {
+        case FXType::Glitch:    r=0,   g=190, b=200; break;
+        case FXType::ZoomPunch: r=220, g=110, b=20;  break;
+        case FXType::LUT:       r=210, g=175, b=30;  break;
+        case FXType::LightLeak: r=220, g=70,  b=145; break;
+        case FXType::VHS:       r=85,  g=170, b=70;  break;
+        default:                r=120, g=80,  b=220; break;
+    }
+    if (sel) {
+        int rb = (int)fminf(r*1.25f,255), gb2 = (int)fminf(g*1.25f,255), bb = (int)fminf(b*1.25f,255);
+        return { IM_COL32(r,g,b,210), IM_COL32(rb,gb2,bb,255), IM_COL32(240,240,255,240) };
+    }
+    return { IM_COL32(r/4,g/4,b/4,130), IM_COL32(r*2/3,g*2/3,b*2/3,200), IM_COL32(r,g,b,220) };
 }
 
 static void draw_clip_header(AppState& state, Clip& clip, Track& track, float w) {
@@ -1356,11 +1414,11 @@ static void draw_clip_header(AppState& state, Clip& clip, Track& track, float w)
 
     // Type badge
     ImVec2 bp = ImGui::GetCursorScreenPos();
-    const char* tname = clip_type_name(clip.clip_type);
+    const char* tname = clip_display_name(clip);
     ImVec2 tsz = ImGui::CalcTextSize(tname);
     float bpad = 6.f, bh = tsz.y + 6.f;
     float bw = tsz.x + bpad * 2.f;
-    ImU32 bcol = clip_type_badge_color(clip.clip_type);
+    ImU32 bcol = clip_badge_color(clip);
     dl->AddRectFilled(bp, {bp.x+bw, bp.y+bh}, bcol, 3.f);
     dl->AddText({bp.x+bpad, bp.y+3.f}, IM_COL32(255,255,255,255), tname);
 
@@ -2707,25 +2765,26 @@ static ImU32 preset_swatch(const EffectPreset& p) {
     return hue_cols[hi];
 }
 
-// ── Right panel: FX Library tab ──────────────────────────────────────────────
+// ── Right panel: Adjustment Library tab ──────────────────────────────────────
 
-static void panel_fx_library(AppState& state, float w) {
+static void panel_adjustment_library(AppState& state, float w) {
     ImGui::Dummy({0.f, 8.f});
 
     ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(200,160,255,255));
-    ImGui::TextUnformatted("FX Library");
+    ImGui::TextUnformatted("Adjustment Library");
     ImGui::PopStyleColor();
     ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
-    ImGui::TextWrapped("Click to apply to selected Effect clip. Drag to timeline to create one.");
+    ImGui::TextWrapped("Click to apply to selected Adjustment clip. Drag to timeline to create one.");
     ImGui::PopStyleColor();
     ImGui::Dummy({0.f, 8.f});
 
-    // Determine if an Effect clip is currently selected (for click-to-apply).
+    // Determine if an Adjustment clip is currently selected (for click-to-apply).
     bool has_fx_clip = (state.selected_track >= 0 &&
                         state.selected_track < (int)state.tracks.size() &&
                         state.selected_clip  >= 0 &&
                         state.selected_clip  < (int)state.tracks[state.selected_track].clips.size() &&
-                        state.tracks[state.selected_track].clips[state.selected_clip].clip_type == ClipType::Effect);
+                        state.tracks[state.selected_track].clips[state.selected_clip].clip_type == ClipType::Effect &&
+                        state.tracks[state.selected_track].clips[state.selected_clip].fx_type == FXType::Adjustment);
 
     float card_w  = (w - 12.f) * 0.5f;  // 2-column grid
     float card_h  = 54.f;
@@ -2788,19 +2847,20 @@ static void panel_fx_library(AppState& state, float w) {
                 preset_apply(state.tracks[state.selected_track].clips[state.selected_clip], p);
                 history_push(state, "Apply preset: " + p.name);
             } else {
-                // Find topmost track or create one, add Effect clip at playhead
+                // Find topmost track or create one, add Adjustment clip at playhead
                 if (state.tracks.empty()) {
-                    Track t; t.name = "FX"; state.tracks.push_back(t);
+                    Track t; t.name = "Adjust"; state.tracks.push_back(t);
                 }
                 Clip cl;
                 cl.clip_type = ClipType::Effect;
+                cl.fx_type   = FXType::Adjustment;
                 cl.start     = state.playhead;
                 cl.end       = state.playhead + 2.f;
                 preset_apply(cl, p);
                 state.tracks[0].clips.push_back(cl);
                 state.selected_track = 0;
                 state.selected_clip  = (int)state.tracks[0].clips.size() - 1;
-                history_push(state, "Add Effect: " + p.name);
+                history_push(state, "Add Adjustment: " + p.name);
             }
         }
     };
@@ -2874,7 +2934,7 @@ static void panel_fx_library(AppState& state, float w) {
 
 // ── Right panel: Effect tab ───────────────────────────────────────────────────
 
-static void panel_effect(AppState& state, float w) {
+static void panel_adjustment(AppState& state, float w) {
     if (state.selected_track < 0 || state.selected_track >= (int)state.tracks.size()) return;
     Track& track = state.tracks[state.selected_track];
     if (state.selected_clip < 0 || state.selected_clip >= (int)track.clips.size()) return;
@@ -2884,7 +2944,7 @@ static void panel_effect(AppState& state, float w) {
 
     // Header
     ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(200,160,255,255));
-    ImGui::TextUnformatted("Effect Clip");
+    ImGui::TextUnformatted("Adjustment Clip");
     ImGui::PopStyleColor();
     int n_below = (int)state.tracks.size() - state.selected_track - 1;
     char info[128];
@@ -2992,7 +3052,7 @@ static void panel_effect(AppState& state, float w) {
 
     ImGui::Dummy({0.f, 8.f}); ui_separator(); ImGui::Dummy({0.f, 6.f});
     ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
-    ImGui::TextWrapped("Effects stack — multiple Effect clips at the same time compound (brightness adds, contrast/saturation multiply, blur adds).");
+    ImGui::TextWrapped("Adjustments stack — multiple Adjustment clips at the same time compound (brightness adds, contrast/saturation multiply, blur adds).");
     ImGui::PopStyleColor();
 
     ImGui::Dummy({0.f, 12.f}); ui_separator(); ImGui::Dummy({0.f, 8.f});
@@ -3335,6 +3395,210 @@ static void panel_animation(AppState& state, float w) {
     }
 
     if (anim_locked) ImGui::EndDisabled();
+}
+
+// ── Right panel: Creative FX library ─────────────────────────────────────────
+
+static void panel_fx_creative(AppState& state, float w) {
+    ImGui::Dummy({0.f, 8.f});
+    ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(180,240,255,255));
+    ImGui::TextUnformatted("FX");
+    ImGui::PopStyleColor();
+    ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+    ImGui::TextWrapped("Creative effects. Click to add at playhead on the top track.");
+    ImGui::PopStyleColor();
+    ImGui::Dummy({0.f, 8.f});
+
+    struct FXCard { FXType type; const char* name; const char* tagline; ImU32 accent; };
+    static const FXCard CARDS[] = {
+        {FXType::Glitch,    "Glitch",      "RGB split  ·  row corruption  ·  digital tear",    IM_COL32(0,210,220,255)},
+        {FXType::ZoomPunch, "Zoom Punch",  "Beat-synced scale spike  ·  shake",                IM_COL32(255,135,40,255)},
+        {FXType::LUT,       "LUT Grade",   "Load any .cube file  ·  cinematic color grade",    IM_COL32(255,205,55,255)},
+        {FXType::LightLeak, "Light Leak",  "Film flare  ·  amplitude-driven  ·  Screen blend", IM_COL32(255,90,160,255)},
+        {FXType::VHS,       "VHS",         "Chroma bleed  ·  grain  ·  tracking glitch",       IM_COL32(110,195,95,255)},
+    };
+
+    float card_w = w - 8.f;
+    float card_h = 72.f;
+
+    for (int i = 0; i < 5; ++i) {
+        const FXCard& fc = CARDS[i];
+        ImGui::PushID(i + 9000);
+        ImVec2 cp = ImGui::GetCursorScreenPos();
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+
+        bool hov = ImGui::IsMouseHoveringRect(cp, {cp.x+card_w, cp.y+card_h});
+        ImU32 bg  = hov ? IM_COL32(28,28,42,245) : IM_COL32(18,18,30,220);
+        dl->AddRectFilled(cp, {cp.x+card_w, cp.y+card_h}, bg, 5.f);
+        dl->AddRectFilled(cp, {cp.x+5.f, cp.y+card_h}, fc.accent, 5.f);  // accent strip
+        dl->AddRect(cp, {cp.x+card_w, cp.y+card_h},
+                    hov ? fc.accent : IM_COL32(50,50,70,255), 5.f, 0, hov ? 1.5f : 1.f);
+
+        float tx = cp.x + 14.f;
+        ImGui::PushFont(g_font_bold);
+        dl->AddText(ImGui::GetFont(), 14.f, {tx, cp.y+12.f}, fc.accent, fc.name);
+        ImGui::PopFont();
+        dl->AddText({tx, cp.y+33.f}, IM_COL32(150,150,170,200), fc.tagline);
+
+        if (hov) {
+            const char* al = "+ Add";
+            ImVec2 sz = ImGui::CalcTextSize(al);
+            dl->AddText({cp.x+card_w-sz.x-10.f, cp.y+12.f}, IM_COL32(255,255,255,180), al);
+        }
+
+        ImGui::SetCursorScreenPos(cp);
+        ImGui::InvisibleButton("##fxcard", {card_w, card_h});
+        if (ImGui::IsItemClicked()) {
+            if (state.tracks.empty()) {
+                Track t; t.name = "FX"; state.tracks.push_back(t);
+            }
+            Clip cl;
+            cl.clip_type = ClipType::Effect;
+            cl.fx_type   = fc.type;
+            cl.start     = state.playhead;
+            cl.end       = state.playhead + 5.f;
+            state.tracks[0].clips.push_back(cl);
+            state.selected_track = 0;
+            state.selected_clip  = (int)state.tracks[0].clips.size() - 1;
+            history_push(state, std::string("Add FX: ") + fc.name);
+        }
+
+        ImGui::Dummy({0.f, 5.f});
+        ImGui::PopID();
+    }
+}
+
+// ── Right panel: Creative FX clip controls ────────────────────────────────────
+
+static void panel_fx_clip(AppState& state, float w) {
+    if (state.selected_track < 0 || state.selected_track >= (int)state.tracks.size()) return;
+    Track& track = state.tracks[state.selected_track];
+    if (state.selected_clip < 0 || state.selected_clip >= (int)track.clips.size()) return;
+    Clip& clip = track.clips[state.selected_clip];
+
+    ImGui::Dummy({0.f, 8.f});
+
+    ImU32 ac = fx_type_accent(clip.fx_type);
+    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(ac));
+    ImGui::TextUnformatted(fx_type_display(clip.fx_type));
+    ImGui::PopStyleColor();
+
+    int n_below = (int)state.tracks.size() - state.selected_track - 1;
+    char info[128];
+    snprintf(info, sizeof(info), "%s  ·  %.2fs – %.2fs  ·  %d track%s below",
+        track.name.c_str(), clip.start, clip.end, n_below, n_below==1?"":"s");
+    ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+    ImGui::TextWrapped("%s", info);
+    ImGui::PopStyleColor();
+    ImGui::Dummy({0.f, 4.f}); ui_separator(); ImGui::Dummy({0.f, 8.f});
+
+    ImGui::PushStyleColor(ImGuiCol_SliderGrab,       ac);
+    ImGui::PushStyleColor(ImGuiCol_SliderGrabActive, ac);
+    ImGui::PushStyleColor(ImGuiCol_FrameBg,          Col::bg_soft);
+    float sw = w - 16.f;
+
+    switch (clip.fx_type) {
+        case FXType::Glitch:
+            ui_label("Chroma Shift");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##gchroma", &clip.fx_glitch_chroma, 0.f, 30.f, "%.1f px");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Glitch: chroma shift");
+            ImGui::Dummy({0.f, 4.f});
+            ui_label("Row Jitter");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##gjitter", &clip.fx_glitch_jitter, 0.f, 1.f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Glitch: row jitter");
+            break;
+
+        case FXType::ZoomPunch:
+            ui_label("Punch Strength");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##zstr", &clip.fx_zoom_strength, 0.f, 0.5f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "ZoomPunch: strength");
+            ImGui::Dummy({0.f, 4.f});
+            ui_label("Decay");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##zdec", &clip.fx_zoom_decay, 0.05f, 0.5f, "%.2fs");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "ZoomPunch: decay");
+            ImGui::Dummy({0.f, 4.f});
+            ui_label("Shake");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##zshk", &clip.fx_zoom_shake, 0.f, 1.f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "ZoomPunch: shake");
+            if (state.beats.empty()) {
+                ImGui::Dummy({0.f, 6.f});
+                ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+                ImGui::TextWrapped("No beats loaded — run Beat Sync first for music-driven punches.");
+                ImGui::PopStyleColor();
+            }
+            break;
+
+        case FXType::LUT:
+            ui_label("LUT File (.cube)");
+            ImGui::PushStyleColor(ImGuiCol_Text, clip.fx_lut_path.empty() ? Col::muted : Col::fg);
+            ImGui::TextWrapped("%s", clip.fx_lut_path.empty() ? "(none)" : clip.fx_lut_path.c_str());
+            ImGui::PopStyleColor();
+            ImGui::Dummy({0.f, 4.f});
+            if (ui_btn("Browse…", false, true)) {
+                std::string p = filepicker_open("LUT file", "CUBE file", "*.cube");
+                if (!p.empty()) { clip.fx_lut_path = p; history_push(state, "LUT: set file"); }
+            }
+            ImGui::Dummy({0.f, 8.f});
+            ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+            ImGui::TextWrapped("Standard 3D .cube LUTs — thousands of free packs available online.");
+            ImGui::PopStyleColor();
+            break;
+
+        case FXType::LightLeak:
+            ui_label("Intensity");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##lint", &clip.fx_leak_intensity, 0.f, 1.f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "LightLeak: intensity");
+            ImGui::Dummy({0.f, 4.f});
+            ui_label("Speed");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##lspd", &clip.fx_leak_speed, 0.f, 4.f, "%.2f\xc3\x97");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "LightLeak: speed");
+            if (state.amplitude_envelope.empty()) {
+                ImGui::Dummy({0.f, 6.f});
+                ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+                ImGui::TextWrapped("No amplitude data — run Analyse Amplitude for music-driven intensity.");
+                ImGui::PopStyleColor();
+            }
+            break;
+
+        case FXType::VHS:
+            ui_label("Noise");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##vnoi", &clip.fx_vhs_noise, 0.f, 1.f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "VHS: noise");
+            ImGui::Dummy({0.f, 4.f});
+            ui_label("Chroma Bleed");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##vble", &clip.fx_vhs_bleed, 0.f, 20.f, "%.1f px");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "VHS: chroma bleed");
+            ImGui::Dummy({0.f, 4.f});
+            ui_label("Tracking Glitch");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##vtrk", &clip.fx_vhs_tracking, 0.f, 1.f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "VHS: tracking");
+            break;
+
+        default: break;
+    }
+
+    ImGui::PopStyleColor(3);
+
+    ImGui::Dummy({0.f, 12.f}); ui_separator(); ImGui::Dummy({0.f, 8.f});
+    if (track.locked) ImGui::BeginDisabled();
+    if (ui_btn("Delete clip", false, true)) {
+        if (track.locked) ImGui::EndDisabled();
+        track.clips.erase(track.clips.begin() + state.selected_clip);
+        state.selected_clip = -1;
+        history_push(state, "Delete FX clip");
+        return;
+    }
+    if (track.locked) ImGui::EndDisabled();
 }
 
 // ── Right panel: Project tab ──────────────────────────────────────────────────
@@ -3979,25 +4243,26 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
             bool sel = state.clip_selection.count({ti, ci}) > 0;
 
             if (clip.clip_type == ClipType::Effect) {
-                // Effect clip — translucent purple adjustment-layer bar
-                ImU32 fx_fill   = sel ? IM_COL32(160,100,255,200) : IM_COL32(120,80,220,110);
-                ImU32 fx_border = sel ? IM_COL32(200,160,255,255) : IM_COL32(160,110,255,200);
-                dl->AddRectFilled({vis_x0,cy0},{vis_x1,cy1}, fx_fill, 2.f);
-                dl->AddRect({vis_x0,cy0},{vis_x1,cy1}, fx_border, 2.f, 0, 1.5f);
+                FxBrickColors fbc = fx_brick_colors(clip.fx_type, sel);
+                dl->AddRectFilled({vis_x0,cy0},{vis_x1,cy1}, fbc.fill, 2.f);
+                dl->AddRect({vis_x0,cy0},{vis_x1,cy1}, fbc.border, 2.f, 0, 1.5f);
 
                 ImGui::PushClipRect({vis_x0,cy0},{vis_x1,cy1},true);
-                ImU32 lbl_col = IM_COL32(220,190,255,240);
                 float ly = cy0 + (cy1-cy0-13.f)*0.5f;
-                dl->AddText({vis_x0+5.f, ly}, lbl_col, "FX");
-                float bx = vis_x0 + 28.f;
-                if (clip.fx_color_on    && bx+28.f<vis_x1) { dl->AddText({bx,ly},lbl_col,"Col"); bx+=28.f; }
-                if (clip.fx_blur_on     && bx+30.f<vis_x1) { dl->AddText({bx,ly},lbl_col,"Blur");bx+=32.f; }
-                if (clip.fx_vignette_on && bx+24.f<vis_x1) { dl->AddText({bx,ly},lbl_col,"Vig"); bx+=28.f; }
-                if (clip.fx_text_on     && bx+22.f<vis_x1) { dl->AddText({bx,ly},lbl_col,"Txt"); }
+                const char* fx_lbl = fx_type_name(clip.fx_type);
+                dl->AddText({vis_x0+5.f, ly}, fbc.label, fx_lbl);
+                // Adjustment-only mini badges
+                if (clip.fx_type == FXType::Adjustment) {
+                    float bx = vis_x0 + 38.f;
+                    if (clip.fx_color_on    && bx+28.f<vis_x1) { dl->AddText({bx,ly},fbc.label,"Col"); bx+=28.f; }
+                    if (clip.fx_blur_on     && bx+30.f<vis_x1) { dl->AddText({bx,ly},fbc.label,"Blur");bx+=32.f; }
+                    if (clip.fx_vignette_on && bx+24.f<vis_x1) { dl->AddText({bx,ly},fbc.label,"Vig"); bx+=28.f; }
+                    if (clip.fx_text_on     && bx+22.f<vis_x1) { dl->AddText({bx,ly},fbc.label,"Txt"); }
+                }
                 // Down-arrow scope indicator at right edge
                 if (vis_x1-vis_x0 > 30.f) {
                     float ax=vis_x1-12.f, ay=cy0+(cy1-cy0)*0.35f;
-                    dl->AddTriangleFilled({ax-5.f,ay},{ax+5.f,ay},{ax,ay+7.f},IM_COL32(220,190,255,180));
+                    dl->AddTriangleFilled({ax-5.f,ay},{ax+5.f,ay},{ax,ay+7.f},fbc.label);
                 }
                 ImGui::PopClipRect();
 
@@ -5030,7 +5295,7 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
                     "Audio", "*.wav *.mp3 *.m4a *.flac *.aac");
                 if (!p.empty()) add_clip_to_track(state, ti, p, ClipType::Audio);
             }
-            if (ImGui::MenuItem("Add Effect Clip")) {
+            if (ImGui::MenuItem("Add Adjustment Clip")) {
                 add_clip_to_track(state, ti, "", ClipType::Effect);
             }
             ImGui::Separator();
@@ -5941,7 +6206,8 @@ void ui_studio(AppState& state) {
             if (ImGui::BeginTabItem("Clip"))      { state.panel_tab=0; ImGui::EndTabItem(); }
             if (lyrics_selected && ImGui::BeginTabItem("Lyrics")) { state.panel_tab=4; ImGui::EndTabItem(); }
             if (ImGui::BeginTabItem("Animation")) { state.panel_tab=1; ImGui::EndTabItem(); }
-            if (ImGui::BeginTabItem("FX"))        { state.panel_tab=5; ImGui::EndTabItem(); }
+            if (ImGui::BeginTabItem("Adjust"))    { state.panel_tab=5; ImGui::EndTabItem(); }
+            if (ImGui::BeginTabItem("FX"))        { state.panel_tab=7; ImGui::EndTabItem(); }
             if (ImGui::BeginTabItem("Project"))   { state.panel_tab=6; ImGui::EndTabItem(); }
             if (ImGui::BeginTabItem("History"))   { state.panel_tab=3; ImGui::EndTabItem(); }
             ImGui::EndTabBar();
@@ -5953,19 +6219,24 @@ void ui_studio(AppState& state) {
         ImGui::SetCursorPosX(8.f);
         float pw = props_w - 16.f;
 
-        // Route to effect panel when an Effect clip is focused
-        bool focused_is_effect = (state.selected_track >= 0 &&
+        // Route based on selected clip type, then panel tab
+        bool has_fx_sel = (state.selected_track >= 0 &&
             state.selected_track < (int)state.tracks.size() &&
             state.selected_clip  >= 0 &&
             state.selected_clip  < (int)state.tracks[state.selected_track].clips.size() &&
             state.tracks[state.selected_track].clips[state.selected_clip].clip_type == ClipType::Effect);
+        bool focused_is_adjustment = has_fx_sel &&
+            state.tracks[state.selected_track].clips[state.selected_clip].fx_type == FXType::Adjustment;
+        bool focused_is_fx = has_fx_sel && !focused_is_adjustment;
 
-        if      (focused_is_effect)        panel_effect(state, pw);
+        if      (focused_is_adjustment)    panel_adjustment(state, pw);
+        else if (focused_is_fx)            panel_fx_clip(state, pw);
         else if (state.panel_tab == 0)     panel_clip(state, pw);
         else if (state.panel_tab == 1)     panel_animation(state, pw);
         else if (state.panel_tab == 2)     panel_export(state, pw);
         else if (state.panel_tab == 4)     panel_lyrics(state, pw);
-        else if (state.panel_tab == 5)     panel_fx_library(state, pw);
+        else if (state.panel_tab == 5)     panel_adjustment_library(state, pw);
+        else if (state.panel_tab == 7)     panel_fx_creative(state, pw);
         else if (state.panel_tab == 6)     panel_project(state, pw);
         else                               panel_history(state, pw);
         ImGui::EndChild();

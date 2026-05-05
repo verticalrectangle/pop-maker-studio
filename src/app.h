@@ -41,6 +41,17 @@ enum class AnimStyle {
     None   // sentinel: inherit project default (state.style)
 };
 
+// ── Creative FX type ─────────────────────────────────────────────────────────
+
+enum class FXType {
+    Adjustment,   // brightness / contrast / blur / vignette (classic adjustment layer)
+    Glitch,       // RGB channel split + row jitter
+    ZoomPunch,    // beat-synced scale spike + shake
+    LUT,          // 3D LUT color grade from .cube file
+    LightLeak,    // procedural film-light flare synced to amplitude envelope
+    VHS,          // chroma bleed + grain + tracking glitch
+};
+
 // ── Transition type ───────────────────────────────────────────────────────────
 
 enum class TransitionType { None, Dissolve, FadeBlack, DipWhite };
@@ -125,6 +136,30 @@ struct Clip {
     bool  fx_text_on     = false;
     float fx_opacity_mul = 1.f;
     float fx_scale_mul   = 1.f;
+
+    // Creative FX (only active when fx_type != Adjustment)
+    FXType      fx_type          = FXType::Adjustment;
+
+    // Glitch
+    float       fx_glitch_chroma = 8.f;   // RGB channel spread in pixels
+    float       fx_glitch_jitter = 0.3f;  // row-shift intensity (0–1)
+
+    // ZoomPunch
+    float       fx_zoom_strength = 0.08f; // peak scale-up fraction (0–0.5)
+    float       fx_zoom_decay    = 0.15f; // seconds to settle back (0.05–0.5)
+    float       fx_zoom_shake    = 0.3f;  // random positional shake (0–1)
+
+    // LUT
+    std::string fx_lut_path;              // absolute path to .cube file
+
+    // LightLeak
+    float       fx_leak_intensity = 0.6f; // blend opacity (0–1)
+    float       fx_leak_speed     = 1.f;  // flare animation speed (0–4)
+
+    // VHS
+    float       fx_vhs_noise      = 0.3f; // static grain density (0–1)
+    float       fx_vhs_bleed      = 8.f;  // chroma bleed pixels (0–20)
+    float       fx_vhs_tracking   = 0.2f; // tracking glitch warp (0–1)
 
     // keyframe tracks — keyed by property name string
     // empty = use the matching static field above
