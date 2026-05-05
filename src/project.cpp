@@ -6,7 +6,7 @@
 // ── Binary serialization helpers ──────────────────────────────────────────────
 
 static const uint32_t MAGIC   = 0x534D5001u; // "PMS\x01"
-static const uint32_t VERSION = 10u;
+static const uint32_t VERSION = 11u;
 
 struct Writer {
     std::ofstream f;
@@ -121,6 +121,12 @@ static void write_clip(Writer& w, const Clip& c) {
     w.str(c.fx_lut_path);
     w.pod(c.fx_leak_intensity); w.pod(c.fx_leak_speed);
     w.pod(c.fx_vhs_noise); w.pod(c.fx_vhs_bleed); w.pod(c.fx_vhs_tracking);
+    // v11: datamosh + glitch corruption + chroma key brick
+    w.pod(c.fx_glitch_corruption); w.pod(c.fx_glitch_corruption_bleed);
+    w.pod(c.fx_datamosh_intensity); w.pod(c.fx_datamosh_decay);
+    w.pod(c.fx_datamosh_block_size); w.pod(c.fx_datamosh_bleedback);
+    w.pod(c.fx_chroma_key_r); w.pod(c.fx_chroma_key_g); w.pod(c.fx_chroma_key_b);
+    w.pod(c.fx_chroma_key_threshold); w.pod(c.fx_chroma_key_softness);
     // ktracks
     uint32_t nk = (uint32_t)c.ktracks.size();
     w.pod(nk);
@@ -176,6 +182,19 @@ static Clip read_clip(Reader& r, uint32_t version) {
         c.fx_leak_intensity= r.pod<float>(); c.fx_leak_speed      = r.pod<float>();
         c.fx_vhs_noise     = r.pod<float>(); c.fx_vhs_bleed       = r.pod<float>();
         c.fx_vhs_tracking  = r.pod<float>();
+    }
+    if (version >= 11u) {
+        c.fx_glitch_corruption      = r.pod<float>();
+        c.fx_glitch_corruption_bleed= r.pod<float>();
+        c.fx_datamosh_intensity     = r.pod<float>();
+        c.fx_datamosh_decay         = r.pod<float>();
+        c.fx_datamosh_block_size    = r.pod<int>();
+        c.fx_datamosh_bleedback     = r.pod<float>();
+        c.fx_chroma_key_r           = r.pod<float>();
+        c.fx_chroma_key_g           = r.pod<float>();
+        c.fx_chroma_key_b           = r.pod<float>();
+        c.fx_chroma_key_threshold   = r.pod<float>();
+        c.fx_chroma_key_softness    = r.pod<float>();
     }
     // ktracks
     uint32_t nk = r.pod<uint32_t>();

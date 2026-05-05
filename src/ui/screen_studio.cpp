@@ -928,22 +928,12 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                     pfx.saturation    = vid_fx.saturation;
                     pfx.hue_deg       = vid_fx.hue;
                     pfx.blur_sigma    = vid_fx.blur;
-                    // ChromaKey brick overrides legacy per-clip chroma key when present.
-                    if (cfx.chroma_key_on) {
-                        pfx.chroma_key_on        = true;
-                        pfx.chroma_key_r         = cfx.chroma_key_r;
-                        pfx.chroma_key_g         = cfx.chroma_key_g;
-                        pfx.chroma_key_b         = cfx.chroma_key_b;
-                        pfx.chroma_key_threshold = cfx.chroma_key_threshold;
-                        pfx.chroma_key_softness  = cfx.chroma_key_softness;
-                    } else {
-                        pfx.chroma_key_on        = cl_ptr->chroma_key_on;
-                        pfx.chroma_key_r         = cl_ptr->chroma_key_r;
-                        pfx.chroma_key_g         = cl_ptr->chroma_key_g;
-                        pfx.chroma_key_b         = cl_ptr->chroma_key_b;
-                        pfx.chroma_key_threshold = cl_ptr->chroma_key_threshold;
-                        pfx.chroma_key_softness  = cl_ptr->chroma_key_softness;
-                    }
+                    pfx.chroma_key_on        = cfx.chroma_key_on;
+                    pfx.chroma_key_r         = cfx.chroma_key_r;
+                    pfx.chroma_key_g         = cfx.chroma_key_g;
+                    pfx.chroma_key_b         = cfx.chroma_key_b;
+                    pfx.chroma_key_threshold = cfx.chroma_key_threshold;
+                    pfx.chroma_key_softness  = cfx.chroma_key_softness;
                     pfx.glitch_on          = cfx.glitch_on;
                     pfx.glitch_chroma      = cfx.glitch_chroma;
                     pfx.glitch_jitter      = cfx.glitch_jitter;

@@ -142,14 +142,6 @@ struct Clip {
     // Creative FX (only active when fx_type != Adjustment)
     FXType      fx_type          = FXType::Adjustment;
 
-    // Chroma key
-    bool        chroma_key_on        = false;
-    float       chroma_key_r         = 0.f;   // key color [0,1]
-    float       chroma_key_g         = 1.f;
-    float       chroma_key_b         = 0.f;
-    float       chroma_key_threshold = 0.30f; // chroma distance fully keyed
-    float       chroma_key_softness  = 0.15f; // ramp width above threshold
-
     // ChromaKey brick
     float       fx_chroma_key_r         = 0.f;
     float       fx_chroma_key_g         = 1.f;
