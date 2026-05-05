@@ -85,6 +85,7 @@ struct PixelFX {
     float datamosh_intensity  = 0.6f;
     float datamosh_decay      = 0.08f;
     int   datamosh_block_size = 16;
+    float datamosh_clip_start = -1.f;  // clip.start — ghost resets when this changes
 
     float time         = 0.f;   // animation time (ImGui::GetTime())
 
@@ -103,6 +104,7 @@ struct PixelFX {
                vhs_bleed  == o.vhs_bleed  && vhs_tracking == o.vhs_tracking &&
                datamosh_on == o.datamosh_on && datamosh_intensity == o.datamosh_intensity &&
                datamosh_decay == o.datamosh_decay && datamosh_block_size == o.datamosh_block_size &&
+               datamosh_clip_start == o.datamosh_clip_start &&
                time       == o.time;
     }
 };

@@ -233,13 +233,12 @@ static void cpu_apply_datamosh(uint8_t* px, uint8_t* ghost, int w, int h,
                                 float intensity, float decay, int bs) {
     if (!ghost || w <= 0 || h <= 0) return;
 
-    // First-call init: if ghost is all zeros, seed it from current frame and exit.
-    // This avoids an all-black first frame where every block reads as "motion".
+    // Cold ghost: seed from current frame then fall through into the mosh pass.
+    // SAD will be ~0 everywhere (ghost == current), so no blocks mosh — output is
+    // clean. The ghost lerp pass at the end warms it up for the next frame.
     bool ghost_cold = (ghost[0] == 0 && ghost[1] == 0 && ghost[2] == 0);
-    if (ghost_cold) {
+    if (ghost_cold)
         memcpy(ghost, px, (size_t)w * h * 3);
-        return;
-    }
 
     int nbx = (w + bs - 1) / bs;
     int nby = (h + bs - 1) / bs;
@@ -477,11 +476,12 @@ struct PreviewState {
     VideoInfo info = {};
     PixelFX   pixel_fx;
     bool      pixel_fx_dirty = false;
-    // Datamosh ghost buffer — updated on wall-clock timer, not playhead
-    std::vector<uint8_t> ghost_buf;   // RGB, ghost_w * ghost_h * 3
+    // Datamosh ghost buffer — reset whenever the active clip's start time changes
+    std::vector<uint8_t> ghost_buf;        // RGB, ghost_w * ghost_h * 3
     int                  ghost_w = 0;
     int                  ghost_h = 0;
-    float                ghost_last_tick = -999.f;
+    float                ghost_last_tick  = -999.f;
+    float                ghost_clip_start = -999.f; // tracks which clip owns the ghost
 };
 
 static PreviewState g_pv[MAX_VIDEO_TRACKS];
@@ -731,6 +731,13 @@ VideoInfo video_info(int track_id) {
 void video_set_pixel_fx(int track_id, const PixelFX& fx) {
     if (track_id < 0 || track_id >= MAX_VIDEO_TRACKS) return;
     auto& pv = g_pv[track_id];
+    // Reset ghost when the datamosh clip changes (moved, replaced, or turned off/on).
+    // This ensures mosh always starts fresh from the clip's start frame.
+    if (fx.datamosh_clip_start != pv.ghost_clip_start) {
+        pv.ghost_clip_start = fx.datamosh_clip_start;
+        if (!pv.ghost_buf.empty())
+            std::fill(pv.ghost_buf.begin(), pv.ghost_buf.end(), 0);
+    }
     // Animated effects (glitch/VHS) always re-decode since time advances each frame.
     // Static effects (grade/blur) re-decode only when params change.
     if (!(pv.pixel_fx == fx)) {

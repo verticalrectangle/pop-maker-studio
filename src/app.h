@@ -209,6 +209,7 @@ struct CreativeFXAccum {
     float datamosh_intensity  = 0.6f;
     float datamosh_decay      = 0.08f;
     int   datamosh_block_size = 16;
+    float datamosh_clip_start = -1.f;  // start time of the active datamosh clip
 
     bool  zoom_on        = false;
     float zoom_strength  = 0.f;
