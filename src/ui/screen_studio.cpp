@@ -2870,8 +2870,9 @@ static void panel_adjustment_library(AppState& state, float w) {
                         state.tracks[state.selected_track].clips[state.selected_clip].clip_type == ClipType::Effect &&
                         state.tracks[state.selected_track].clips[state.selected_clip].fx_type == FXType::Adjustment);
 
-    float card_w = (w - 12.f) * 0.5f;  // 2-column grid
-    float card_h = 64.f;
+    float card_w  = w - 8.f;  // single column like FX cards
+    float card_h  = 80.f;
+    float thumb_w = card_h * (108.f / 192.f);
 
     auto draw_preset_card = [&](const EffectPreset& p, int unique_id) {
         ImGui::PushID(unique_id);
@@ -2880,7 +2881,11 @@ static void panel_adjustment_library(AppState& state, float w) {
 
         bool hov = ImGui::IsMouseHoveringRect(cp, {cp.x + card_w, cp.y + card_h});
 
-        // Preview texture as card background
+        // Card background
+        dl->AddRectFilled(cp, {cp.x+card_w, cp.y+card_h},
+                          hov ? IM_COL32(28,28,40,255) : IM_COL32(18,18,28,255), 5.f);
+
+        // Portrait thumbnail on the left
         uintptr_t prev_tex = video_adj_preview_texture(unique_id,
             p.fx_color_on ? p.fx_brightness : 0.f,
             p.fx_color_on ? p.fx_contrast   : 1.f,
@@ -2890,26 +2895,20 @@ static void panel_adjustment_library(AppState& state, float w) {
             p.fx_vignette_on ? p.fx_vignette : 0.f);
         if (prev_tex) {
             dl->AddImageRounded((ImTextureID)(uintptr_t)prev_tex,
-                                cp, {cp.x+card_w, cp.y+card_h},
+                                cp, {cp.x+thumb_w, cp.y+card_h},
                                 {0,0}, {1,1},
-                                hov ? IM_COL32(255,255,255,210) : IM_COL32(255,255,255,160),
-                                4.f);
-        } else {
-            dl->AddRectFilled(cp, {cp.x+card_w, cp.y+card_h}, IM_COL32(18,18,30,220), 4.f);
+                                hov ? IM_COL32(255,255,255,230) : IM_COL32(255,255,255,190),
+                                5.f, ImDrawFlags_RoundCornersLeft);
         }
-
-        // Dark scrim at bottom
-        dl->AddRectFilled({cp.x, cp.y+card_h-26.f}, {cp.x+card_w, cp.y+card_h},
-                          IM_COL32(0,0,0,185), 4.f);
 
         // Border
         dl->AddRect(cp, {cp.x+card_w, cp.y+card_h},
-                    hov ? IM_COL32(255,255,255,200) : IM_COL32(60,60,80,200), 4.f, 0, hov ? 2.f : 1.f);
+                    hov ? IM_COL32(255,255,255,200) : IM_COL32(60,60,80,200), 5.f, 0, hov ? 2.f : 1.f);
 
-        // Name over scrim
+        // Name to the right of thumbnail
+        float tx = cp.x + thumb_w + 10.f;
         ImGui::PushFont(g_font_bold);
-        dl->AddText(ImGui::GetFont(), 12.f, {cp.x+8.f, cp.y+card_h-20.f},
-                    IM_COL32(255,255,255,240), p.name.c_str());
+        dl->AddText(ImGui::GetFont(), 13.f, {tx, cp.y+14.f}, IM_COL32(255,255,255,240), p.name.c_str());
         ImGui::PopFont();
 
         // Invisible button over the card for click and drag-drop
@@ -2961,22 +2960,12 @@ static void panel_adjustment_library(AppState& state, float w) {
         ImGui::PopStyleColor();
         ImGui::Dummy({0.f, 4.f});
 
-        bool col_left = true;
-        float base_x = ImGui::GetCursorScreenPos().x;
-        ImVec2 left_cursor = ImGui::GetCursorPos();
-
         for (int i = 0; i < (int)g_builtin_presets.size(); ++i) {
             if (g_builtin_presets[i].category != cat) continue;
-            if (!col_left) {
-                ImGui::SameLine(0.f, 8.f);
-            }
             draw_preset_card(g_builtin_presets[i], i);
-            if (!col_left) ImGui::Dummy({0.f, 4.f});
-            col_left = !col_left;
+            ImGui::Dummy({0.f, 4.f});
         }
-        if (!col_left) ImGui::Dummy({0.f, 4.f});
         ImGui::Dummy({0.f, 4.f});
-        (void)base_x; (void)left_cursor;
     };
 
     draw_section("Color",    PresetCategory::Color);
@@ -2993,11 +2982,8 @@ static void panel_adjustment_library(AppState& state, float w) {
         ImGui::PopStyleColor();
         ImGui::Dummy({0.f, 4.f});
 
-        bool col_left = true;
         for (int i = 0; i < (int)state.user_presets.size(); ++i) {
-            if (!col_left) ImGui::SameLine(0.f, 8.f);
             draw_preset_card(state.user_presets[i], builtin_count + i);
-
             // Right-click to delete user preset
             if (ImGui::BeginPopupContextItem(("##userpctx" + std::to_string(i)).c_str())) {
                 if (ImGui::MenuItem("Delete preset")) {
@@ -3007,10 +2993,8 @@ static void panel_adjustment_library(AppState& state, float w) {
                 }
                 ImGui::EndPopup();
             }
-            if (!col_left) ImGui::Dummy({0.f, 4.f});
-            col_left = !col_left;
+            ImGui::Dummy({0.f, 4.f});
         }
-        if (!col_left) ImGui::Dummy({0.f, 4.f});
     }
 
     ImGui::Dummy({0.f, 16.f});
@@ -3502,8 +3486,9 @@ static void panel_fx_creative(AppState& state, float w) {
         {FXType::Datamosh,  "Datamosh",    "Temporal ghost  ·  multi-key chaos  ·  total mosh",   IM_COL32(255,60,100,255)},
     };
 
-    float card_w = w - 8.f;
-    float card_h = 72.f;
+    float card_w  = w - 8.f;
+    float card_h  = 96.f;
+    float thumb_w = card_h * (108.f / 192.f);  // portrait thumbnail width at card height
 
     for (int i = 0; i < 7; ++i) {
         const FXCard& fc = CARDS[i];
@@ -3513,37 +3498,36 @@ static void panel_fx_creative(AppState& state, float w) {
 
         bool hov = ImGui::IsMouseHoveringRect(cp, {cp.x+card_w, cp.y+card_h});
 
-        // Preview texture as card background
+        // Card background
+        dl->AddRectFilled(cp, {cp.x+card_w, cp.y+card_h},
+                          hov ? IM_COL32(28,28,40,255) : IM_COL32(18,18,28,255), 5.f);
+
+        // Portrait thumbnail on the left
         uintptr_t prev_tex = video_fx_preview_texture(fc.type, (float)ImGui::GetTime());
         if (prev_tex) {
             dl->AddImageRounded((ImTextureID)(uintptr_t)prev_tex,
-                                cp, {cp.x+card_w, cp.y+card_h},
+                                cp, {cp.x+thumb_w, cp.y+card_h},
                                 {0,0}, {1,1},
-                                hov ? IM_COL32(255,255,255,210) : IM_COL32(255,255,255,160),
-                                5.f);
-        } else {
-            dl->AddRectFilled(cp, {cp.x+card_w, cp.y+card_h}, IM_COL32(18,18,30,220), 5.f);
+                                hov ? IM_COL32(255,255,255,230) : IM_COL32(255,255,255,190),
+                                5.f, ImDrawFlags_RoundCornersLeft);
         }
 
-        // Dark scrim at bottom for text legibility
-        dl->AddRectFilled({cp.x, cp.y+card_h-34.f}, {cp.x+card_w, cp.y+card_h},
-                          IM_COL32(0,0,0,185), 5.f);
-
-        // Border — white on hover, subtle otherwise
+        // Border
         dl->AddRect(cp, {cp.x+card_w, cp.y+card_h},
                     hov ? IM_COL32(255,255,255,200) : IM_COL32(60,60,80,200), 5.f, 0, hov ? 2.f : 1.f);
 
-        // Name + tagline over scrim
-        float tx = cp.x + 10.f;
+        // Name + tagline to the right of thumbnail
+        float tx = cp.x + thumb_w + 10.f;
         ImGui::PushFont(g_font_bold);
-        dl->AddText(ImGui::GetFont(), 13.f, {tx, cp.y+card_h-28.f}, IM_COL32(255,255,255,240), fc.name);
+        dl->AddText(ImGui::GetFont(), 13.f, {tx, cp.y+14.f}, IM_COL32(255,255,255,240), fc.name);
         ImGui::PopFont();
-        dl->AddText({tx, cp.y+card_h-14.f}, IM_COL32(180,180,190,200), fc.tagline);
+        // Wrap tagline manually at card_w
+        dl->AddText({tx, cp.y+33.f}, IM_COL32(160,160,170,200), fc.tagline);
 
         if (hov) {
             const char* al = "+ Add";
             ImVec2 sz = ImGui::CalcTextSize(al);
-            dl->AddText({cp.x+card_w-sz.x-10.f, cp.y+card_h-28.f}, IM_COL32(255,255,255,220), al);
+            dl->AddText({cp.x+card_w-sz.x-10.f, cp.y+card_h-18.f}, IM_COL32(255,255,255,200), al);
         }
 
         ImGui::SetCursorScreenPos(cp);

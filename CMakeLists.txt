@@ -98,6 +98,18 @@ add_custom_target(embed_font DEPENDS ${CMAKE_BINARY_DIR}/inter_font.h)
 add_dependencies(pop-maker-studio embed_font)
 target_include_directories(pop-maker-studio PRIVATE ${CMAKE_BINARY_DIR})
 
+# Embed portrait preview photo as raw RGB
+add_custom_command(
+    OUTPUT ${CMAKE_BINARY_DIR}/portrait_preview.h
+    COMMAND ${CMAKE_SOURCE_DIR}/scripts/embed_portrait.sh
+            ${CMAKE_SOURCE_DIR}/assets/imgs/portrait.jpg
+            ${CMAKE_BINARY_DIR}/portrait_preview.h
+    DEPENDS ${CMAKE_SOURCE_DIR}/assets/imgs/portrait.jpg
+    COMMENT "Embedding portrait preview image"
+)
+add_custom_target(embed_portrait DEPENDS ${CMAKE_BINARY_DIR}/portrait_preview.h)
+add_dependencies(pop-maker-studio embed_portrait)
+
 # Embed ml_pipeline.py as a compiled byte array
 add_custom_command(
     OUTPUT ${CMAKE_BINARY_DIR}/ml_pipeline_embedded.h

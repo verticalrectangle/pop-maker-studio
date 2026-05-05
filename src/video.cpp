@@ -1052,45 +1052,29 @@ VideoFrame* video_decode_frame_at(double seconds) {
 }
 
 // ── FX preview thumbnails ─────────────────────────────────────────────────────
-// One 80×45 RGB texture per FXType, generated from synthetic source pixels.
-// Animated types (Glitch, VHS) regenerate every frame — at 3600 pixels each
-// that's negligible CPU cost. All others generate once and cache.
+// Source image: portrait_preview.h — 108×192 portrait RGB, embedded at build time
+// from assets/imgs/portrait.jpg (center-cropped 9:16, Lanczos-scaled).
+// Animated types (Glitch, VHS) regenerate every frame — 20,736 pixels, negligible.
 
-static const int FXP_W = 80, FXP_H = 45;
+#include "portrait_preview.h"
+
+static const int FXP_W = portrait_preview_w;   // 108
+static const int FXP_H = portrait_preview_h;   // 192
 static const int FXP_N = 8;  // number of FXType enum values
 
 struct FXPrev { GLuint tex = 0; bool animated = false; };
 static std::array<FXPrev, FXP_N> s_fxp;
 static std::vector<uint8_t> s_fxp_src;      // base source image (RGB)
-static std::vector<uint8_t> s_fxp_src_ck;   // chroma key source (RGB, green bg)
+static std::vector<uint8_t> s_fxp_src_ck;   // chroma key source (right half = green)
 
 static void fxp_make_sources() {
-    s_fxp_src.resize(FXP_W * FXP_H * 3);
-    s_fxp_src_ck.resize(FXP_W * FXP_H * 3);
+    s_fxp_src.assign(portrait_preview_rgb, portrait_preview_rgb + portrait_preview_size);
+    // Chroma key source: composite a green screen over the right 55% of the photo
+    s_fxp_src_ck = s_fxp_src;
     for (int y = 0; y < FXP_H; ++y) {
-        for (int x = 0; x < FXP_W; ++x) {
-            float fx = (float)x / (FXP_W - 1);
-            float fy = (float)y / (FXP_H - 1);
-            // Cool cinematic base: deep blue-purple shadows, bright blue-white highlight
-            // top-centre, teal mid-tones — clean enough for every effect to read clearly.
-            float lum = 0.18f + 0.55f * (1.f - fy)
-                      + 0.30f * expf(-((fx-0.48f)*(fx-0.48f)*10.f + fy*fy*6.f));
-            float r = lum * (0.30f + 0.38f * (1.f - fx));
-            float g = lum * (0.42f + 0.28f * (1.f - fy * 0.6f));
-            float b = lum * (0.78f + 0.22f * fx);
-            // Horizontal banding so displacement/corruption effects have edges to bite
-            if ((y / 7) % 2 == 0) { r *= 0.82f; g *= 0.85f; b *= 0.88f; }
-            uint8_t ur = cu8((int)(255.f * fminf(1.f, r)));
-            uint8_t ug = cu8((int)(255.f * fminf(1.f, g)));
-            uint8_t ub = cu8((int)(255.f * fminf(1.f, b)));
+        for (int x = (int)(FXP_W * 0.45f); x < FXP_W; ++x) {
             size_t i = ((size_t)y * FXP_W + x) * 3;
-            s_fxp_src[i+0] = ur; s_fxp_src[i+1] = ug; s_fxp_src[i+2] = ub;
-            // Chroma key source: right 55% is pure green screen, left is the subject
-            if (fx > 0.45f) {
-                s_fxp_src_ck[i+0] = 20;  s_fxp_src_ck[i+1] = 200; s_fxp_src_ck[i+2] = 40;
-            } else {
-                s_fxp_src_ck[i+0] = ur; s_fxp_src_ck[i+1] = ug; s_fxp_src_ck[i+2] = ub;
-            }
+            s_fxp_src_ck[i+0] = 20; s_fxp_src_ck[i+1] = 200; s_fxp_src_ck[i+2] = 40;
         }
     }
 }
