@@ -140,6 +140,7 @@ struct Track {
     std::vector<Clip> clips;
     bool              visible = true;
     bool              muted   = false;
+    bool              locked  = false;  // when true, blocks all clip edits on this track
     int               sub_row = 0;
 };
 

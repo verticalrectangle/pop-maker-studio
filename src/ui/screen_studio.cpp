@@ -1384,6 +1384,7 @@ static void draw_clip_header(AppState& state, Clip& clip, Track& track, float w)
 
     // Nudge strip
     ImGui::Dummy({0.f, 4.f});
+    if (track.locked) ImGui::BeginDisabled();
     struct NudgeBtn { float dt; const char* lbl; };
     static const NudgeBtn nudges[] = {{-1.f,"-1s"},{-0.1f,"-100ms"},{-0.01f,"-10ms"},
                                       {0.01f,"+10ms"},{0.1f,"+100ms"},{1.f,"+1s"}};
@@ -1422,8 +1423,10 @@ static void draw_clip_header(AppState& state, Clip& clip, Track& track, float w)
         track.clips.erase(track.clips.begin() + state.selected_clip);
         state.selected_clip = -1;
         history_push(state, "Delete clip");
+        if (track.locked) ImGui::EndDisabled();
         return;
     }
+    if (track.locked) ImGui::EndDisabled();
 
     ImGui::Dummy({0.f, 8.f}); ui_separator();
 }
@@ -1767,6 +1770,13 @@ static void panel_clip(AppState& state, float w) {
     draw_clip_header(state, clip, track, w);
     // draw_clip_header may delete the clip (Delete button) — check again
     if (state.selected_clip < 0 || state.selected_clip >= (int)track.clips.size()) return;
+
+    if (track.locked) {
+        ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+        ImGui::TextUnformatted("Track is locked");
+        ImGui::PopStyleColor();
+        return;
+    }
 
     ImGui::Dummy({0.f, 4.f});
 
@@ -2471,6 +2481,13 @@ static void panel_lyrics(AppState& state, float w) {
 
     ImGui::Dummy({0.f, 8.f});
 
+    if (track.locked) {
+        ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+        ImGui::TextUnformatted("Track is locked");
+        ImGui::PopStyleColor();
+        return;
+    }
+
     // ── Clip info ─────────────────────────────────────────────────────────────
     ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
     char tlabel[80];
@@ -3028,6 +3045,11 @@ static const struct { AnimStyle style; const char* name; const char* desc; const
 static void panel_animation(AppState& state, float w) {
     ImGui::Dummy({0.f, 8.f});
 
+    bool anim_locked = state.selected_track >= 0 &&
+                       state.selected_track < (int)state.tracks.size() &&
+                       state.tracks[state.selected_track].locked;
+    if (anim_locked) ImGui::BeginDisabled();
+
     // Resolve focused clip (single selection or primary)
     Clip* focused_clip = nullptr;
     if (state.selected_track >= 0 && state.selected_clip >= 0 &&
@@ -3311,6 +3333,8 @@ static void panel_animation(AppState& state, float w) {
             ImGui::PopStyleColor();
         }
     }
+
+    if (anim_locked) ImGui::EndDisabled();
 }
 
 // ── Right panel: Project tab ──────────────────────────────────────────────────
@@ -3829,7 +3853,7 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
 
         // Track label — single click selects, double-click renames
         bool track_sel = state.selected_track == ti;
-        bool in_label = mouse.x >= origin.x+2.f && mouse.x < origin.x+TL_LABEL_W-38.f &&
+        bool in_label = mouse.x >= origin.x+2.f && mouse.x < origin.x+TL_LABEL_W-54.f &&
                         mouse.y >= track_y && mouse.y < track_y+TL_TRACK_H;
 
         if (s_rename_track == ti) {
@@ -3872,7 +3896,7 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
             }
         }
 
-        // Track icon buttons — eye (visible) and speaker (mute) — right side of label
+        // Track icon buttons — lock · mute · eye — right side of label
         float btn_y  = track_y + TL_TRACK_H * 0.5f;
         // Eye button
         ImVec2 eye_c = {origin.x + TL_LABEL_W - 13.f, btn_y};
@@ -3888,6 +3912,24 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
             if (hov && ImGui::IsMouseClicked(0)) {
                 track.visible = !track.visible;
                 history_push(state, "Toggle track visibility");
+            }
+        }
+        // Lock button (padlock icon)
+        ImVec2 lock_c = {origin.x + TL_LABEL_W - 45.f, btn_y};
+        {
+            bool hov  = fabsf(mouse.x-lock_c.x)<8.f && fabsf(mouse.y-lock_c.y)<8.f;
+            ImU32 lc  = track.locked ? IM_COL32(255,200,60,240) : to_u32(Col::dim);
+            // Shackle arc
+            dl->AddRect({lock_c.x-3.f, lock_c.y-1.f}, {lock_c.x+3.f, lock_c.y+4.f}, lc, 1.f, 0, 1.2f);
+            if (track.locked)  // closed shackle
+                dl->AddRect({lock_c.x-3.f, lock_c.y-4.f}, {lock_c.x+3.f, lock_c.y}, lc, 2.f,
+                    ImDrawFlags_RoundCornersTop, 1.2f);
+            else               // open shackle — right side lifted
+                dl->AddBezierQuadratic({lock_c.x-3.f, lock_c.y-1.f},
+                    {lock_c.x-3.f, lock_c.y-5.f}, {lock_c.x+3.f, lock_c.y-5.f}, lc, 1.2f);
+            if (hov && ImGui::IsMouseClicked(0)) {
+                track.locked = !track.locked;
+                history_push(state, track.locked ? "Lock track" : "Unlock track");
             }
         }
         // Mute button (speaker icon)
@@ -4023,6 +4065,18 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
                 ImGui::PopClipRect();
             }
 
+            // Locked track — diagonal stripe overlay over the clip body
+            if (track.locked) {
+                dl->PushClipRect({vis_x0,cy0},{vis_x1,cy1},true);
+                ImU32 sc   = IM_COL32(255,255,255,55);
+                float h    = cy1 - cy0;
+                float step = 8.f;
+                float span = (vis_x1 - vis_x0) + h;
+                for (float d = -h; d < span; d += step)
+                    dl->AddLine({vis_x0 + d, cy0}, {vis_x0 + d + h, cy1}, sc, 1.2f);
+                dl->PopClipRect();
+            }
+
             // Per-clip mute icon — small crossed speaker at top-right of brick
             if (clip.muted && vis_x1 - vis_x0 > 16.f) {
                 float ix = vis_x1 - 10.f, iy = cy0 + 7.f;
@@ -4086,7 +4140,7 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
                 }
             }
 
-            // Left click to select / drag
+            // Left click to select / drag (drag is blocked on locked tracks)
             bool any_popup = ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
             if (!s_trans_hit_this_frame && !any_popup && ImGui::IsMouseClicked(0)) {
                 if (mouse.y>=cy0 && mouse.y<=cy1 && mouse.x>=vis_x0 && mouse.x<=vis_x1) {
@@ -4132,14 +4186,16 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
 
                     float orig_cx0 = origin.x+TL_LABEL_W+clip.start*zoom-scroll;
                     float orig_cx1 = origin.x+TL_LABEL_W+clip.end*zoom-scroll;
-                    if (mouse.x <= orig_cx0+ew_hit) {
-                        drag_track=ti; drag_clip=ci; drag_left=true; drag_right=false; drag_offset=0.f;
-                    } else if (mouse.x >= orig_cx1-ew_hit) {
-                        drag_track=ti; drag_clip=ci; drag_right=true; drag_left=false; drag_offset=0.f;
-                    } else {
-                        drag_track=ti; drag_clip=ci; drag_left=false; drag_right=false;
-                        drag_offset = (mouse.x - origin.x - TL_LABEL_W + scroll) / zoom - clip.start;
-                        s_body_snap_held_start = -1.f; s_body_snap_held_cand = -1.f;
+                    if (!track.locked) {  // locked tracks: select only, no drag/trim
+                        if (mouse.x <= orig_cx0+ew_hit) {
+                            drag_track=ti; drag_clip=ci; drag_left=true; drag_right=false; drag_offset=0.f;
+                        } else if (mouse.x >= orig_cx1-ew_hit) {
+                            drag_track=ti; drag_clip=ci; drag_right=true; drag_left=false; drag_offset=0.f;
+                        } else {
+                            drag_track=ti; drag_clip=ci; drag_left=false; drag_right=false;
+                            drag_offset = (mouse.x - origin.x - TL_LABEL_W + scroll) / zoom - clip.start;
+                            s_body_snap_held_start = -1.f; s_body_snap_held_cand = -1.f;
+                        }
                     }
                     // Populate the source duration cache on first grab if not already known.
                     if ((drag_left || drag_right) && !clip.text.empty() &&
@@ -4887,6 +4943,8 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
             ImGui::Separator();
         }
 
+        bool trk_locked = ct && ct->locked;
+        if (trk_locked) ImGui::BeginDisabled();
         if (ImGui::MenuItem("Split at playhead", "S")) {
             if (valid) {
                 float cut = state.playhead;
@@ -4905,6 +4963,7 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
                 history_push(state, "Duplicate clip");
             }
         }
+        if (trk_locked) ImGui::EndDisabled();
         ImGui::Separator();
         if (ImGui::MenuItem("Seek to clip start")) {
             if (valid) { seek_to(state, cc->start); }
@@ -4913,6 +4972,7 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
             if (valid) { seek_to(state, cc->end); }
         }
         ImGui::Separator();
+        if (trk_locked) ImGui::BeginDisabled();
         if (valid) {
             const char* mute_lbl = cc->muted ? "Unmute clip" : "Mute clip";
             if (ImGui::MenuItem(mute_lbl)) {
@@ -4928,6 +4988,7 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
                 history_push(state, "Delete clip");
             }
         }
+        if (trk_locked) ImGui::EndDisabled();
         ImGui::EndPopup();
     }
 
@@ -5091,6 +5152,8 @@ static void handle_shortcuts(AppState& state) {
     Track& track = state.tracks[state.selected_track];
     if (state.selected_clip>=(int)track.clips.size()) return;
     Clip& clip = track.clips[state.selected_clip];
+
+    if (track.locked) return;
 
     if (ImGui::IsKeyPressed(ImGuiKey_S) ||
         ImGui::IsKeyChordPressed(ImGuiMod_Ctrl|ImGuiKey_B)) {
