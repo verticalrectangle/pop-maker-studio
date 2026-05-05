@@ -928,12 +928,22 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                     pfx.saturation    = vid_fx.saturation;
                     pfx.hue_deg       = vid_fx.hue;
                     pfx.blur_sigma    = vid_fx.blur;
-                    pfx.chroma_key_on        = cl_ptr->chroma_key_on;
-                    pfx.chroma_key_r         = cl_ptr->chroma_key_r;
-                    pfx.chroma_key_g         = cl_ptr->chroma_key_g;
-                    pfx.chroma_key_b         = cl_ptr->chroma_key_b;
-                    pfx.chroma_key_threshold = cl_ptr->chroma_key_threshold;
-                    pfx.chroma_key_softness  = cl_ptr->chroma_key_softness;
+                    // ChromaKey brick overrides legacy per-clip chroma key when present.
+                    if (cfx.chroma_key_on) {
+                        pfx.chroma_key_on        = true;
+                        pfx.chroma_key_r         = cfx.chroma_key_r;
+                        pfx.chroma_key_g         = cfx.chroma_key_g;
+                        pfx.chroma_key_b         = cfx.chroma_key_b;
+                        pfx.chroma_key_threshold = cfx.chroma_key_threshold;
+                        pfx.chroma_key_softness  = cfx.chroma_key_softness;
+                    } else {
+                        pfx.chroma_key_on        = cl_ptr->chroma_key_on;
+                        pfx.chroma_key_r         = cl_ptr->chroma_key_r;
+                        pfx.chroma_key_g         = cl_ptr->chroma_key_g;
+                        pfx.chroma_key_b         = cl_ptr->chroma_key_b;
+                        pfx.chroma_key_threshold = cl_ptr->chroma_key_threshold;
+                        pfx.chroma_key_softness  = cl_ptr->chroma_key_softness;
+                    }
                     pfx.glitch_on          = cfx.glitch_on;
                     pfx.glitch_chroma      = cfx.glitch_chroma;
                     pfx.glitch_jitter      = cfx.glitch_jitter;
@@ -1446,12 +1456,13 @@ static const char* clip_type_name(ClipType ct) {
 
 static ImU32 fx_type_accent(FXType ft) {
     switch (ft) {
-        case FXType::Glitch:    return IM_COL32(0,210,220,255);
-        case FXType::ZoomPunch: return IM_COL32(255,135,40,255);
-        case FXType::LUT:       return IM_COL32(255,205,55,255);
-        case FXType::LightLeak: return IM_COL32(255,90,160,255);
-        case FXType::VHS:       return IM_COL32(110,195,95,255);
-        case FXType::Datamosh:  return IM_COL32(255,60,100,255);
+        case FXType::Glitch:     return IM_COL32(0,210,220,255);
+        case FXType::ZoomPunch:  return IM_COL32(255,135,40,255);
+        case FXType::LUT:        return IM_COL32(255,205,55,255);
+        case FXType::LightLeak:  return IM_COL32(255,90,160,255);
+        case FXType::VHS:        return IM_COL32(110,195,95,255);
+        case FXType::Datamosh:   return IM_COL32(255,60,100,255);
+        case FXType::ChromaKey:  return IM_COL32(50,220,120,255);
         default:                return IM_COL32(120,80,220,255);
     }
 }
@@ -1463,6 +1474,7 @@ static const char* fx_type_name(FXType ft) {
         case FXType::LightLeak: return "LEAK";
         case FXType::VHS:       return "VHS";
         case FXType::Datamosh:  return "MOSH";
+        case FXType::ChromaKey: return "KEY";
         default:                return "ADJUST";
     }
 }
@@ -1474,6 +1486,7 @@ static const char* fx_type_display(FXType ft) {
         case FXType::LightLeak: return "Light Leak";
         case FXType::VHS:       return "VHS";
         case FXType::Datamosh:  return "Datamosh";
+        case FXType::ChromaKey: return "Chroma Key";
         default:                return "Adjustment";
     }
 }
@@ -2434,42 +2447,6 @@ static void panel_clip(AppState& state, float w) {
                 ImGui::SameLine(0.f, 4.f);
             }
             ImGui::NewLine(); ImGui::Dummy({0.f, 4.f});
-        }
-
-        if (ImGui::CollapsingHeader("Chroma Key")) {
-            ImGui::Dummy({0.f, 4.f});
-            ImGui::Checkbox("Enable##ckon", &clip.chroma_key_on);
-            if (clip.chroma_key_on) {
-                ImGui::Dummy({0.f, 4.f});
-                ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
-                ImGui::TextUnformatted("Key color");
-                ImGui::PopStyleColor();
-                ImGui::Dummy({0.f, 2.f});
-                float col3[3] = { clip.chroma_key_r, clip.chroma_key_g, clip.chroma_key_b };
-                ImGui::SetNextItemWidth(w - 16.f);
-                if (ImGui::ColorEdit3("##ckcolor", col3, ImGuiColorEditFlags_NoInputs |
-                                                         ImGuiColorEditFlags_PickerHueWheel)) {
-                    clip.chroma_key_r = col3[0];
-                    clip.chroma_key_g = col3[1];
-                    clip.chroma_key_b = col3[2];
-                }
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Chroma key: color");
-                ImGui::Dummy({0.f, 6.f});
-                ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
-                ImGui::TextUnformatted("Threshold");
-                ImGui::PopStyleColor();
-                ImGui::SetNextItemWidth(w - 16.f);
-                ImGui::SliderFloat("##ckthresh", &clip.chroma_key_threshold, 0.f, 1.f, "%.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Chroma key: threshold");
-                ImGui::Dummy({0.f, 4.f});
-                ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
-                ImGui::TextUnformatted("Softness");
-                ImGui::PopStyleColor();
-                ImGui::SetNextItemWidth(w - 16.f);
-                ImGui::SliderFloat("##cksoftness", &clip.chroma_key_softness, 0.f, 0.5f, "%.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Chroma key: softness");
-            }
-            ImGui::Dummy({0.f, 4.f});
         }
 
         if (ImGui::CollapsingHeader("Fade")) {
@@ -3537,18 +3514,19 @@ static void panel_fx_creative(AppState& state, float w) {
 
     struct FXCard { FXType type; const char* name; const char* tagline; ImU32 accent; };
     static const FXCard CARDS[] = {
-        {FXType::Glitch,    "Glitch",      "RGB split  ·  row corruption  ·  digital tear",    IM_COL32(0,210,220,255)},
-        {FXType::ZoomPunch, "Zoom Punch",  "Beat-synced scale spike  ·  shake",                IM_COL32(255,135,40,255)},
-        {FXType::LUT,       "LUT Grade",   "Load any .cube file  ·  cinematic color grade",    IM_COL32(255,205,55,255)},
-        {FXType::LightLeak, "Light Leak",  "Film flare  ·  amplitude-driven  ·  Screen blend", IM_COL32(255,90,160,255)},
-        {FXType::VHS,       "VHS",         "Chroma bleed  ·  grain  ·  tracking glitch",       IM_COL32(110,195,95,255)},
-        {FXType::Datamosh,  "Datamosh",    "Temporal ghost  ·  multi-key chaos  ·  total mosh", IM_COL32(255,60,100,255)},
+        {FXType::ChromaKey, "Chroma Key",  "Color-range keyer  ·  green screen  ·  compositing", IM_COL32(50,220,120,255)},
+        {FXType::Glitch,    "Glitch",      "RGB split  ·  row corruption  ·  digital tear",       IM_COL32(0,210,220,255)},
+        {FXType::ZoomPunch, "Zoom Punch",  "Beat-synced scale spike  ·  shake",                   IM_COL32(255,135,40,255)},
+        {FXType::LUT,       "LUT Grade",   "Load any .cube file  ·  cinematic color grade",       IM_COL32(255,205,55,255)},
+        {FXType::LightLeak, "Light Leak",  "Film flare  ·  amplitude-driven  ·  Screen blend",    IM_COL32(255,90,160,255)},
+        {FXType::VHS,       "VHS",         "Chroma bleed  ·  grain  ·  tracking glitch",          IM_COL32(110,195,95,255)},
+        {FXType::Datamosh,  "Datamosh",    "Temporal ghost  ·  multi-key chaos  ·  total mosh",   IM_COL32(255,60,100,255)},
     };
 
     float card_w = w - 8.f;
     float card_h = 72.f;
 
-    for (int i = 0; i < 6; ++i) {
+    for (int i = 0; i < 7; ++i) {
         const FXCard& fc = CARDS[i];
         ImGui::PushID(i + 9000);
         ImVec2 cp = ImGui::GetCursorScreenPos();
@@ -3747,6 +3725,31 @@ static void panel_fx_clip(AppState& state, float w) {
             ImGui::SetNextItemWidth(sw2);
             ImGui::SliderFloat("##dmbb", &clip.fx_datamosh_bleedback, 0.f, 1.f, "%.2f");
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Datamosh: bleed back");
+            break;
+        }
+
+        case FXType::ChromaKey: {
+            float sw2 = w - 16.f;
+            ui_label("Key Color");
+            float col3[3] = { clip.fx_chroma_key_r, clip.fx_chroma_key_g, clip.fx_chroma_key_b };
+            ImGui::SetNextItemWidth(sw2);
+            if (ImGui::ColorEdit3("##ckbcol", col3, ImGuiColorEditFlags_NoInputs |
+                                                     ImGuiColorEditFlags_PickerHueWheel)) {
+                clip.fx_chroma_key_r = col3[0];
+                clip.fx_chroma_key_g = col3[1];
+                clip.fx_chroma_key_b = col3[2];
+            }
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Chroma Key: color");
+            ImGui::Dummy({0.f, 4.f});
+            ui_label("Threshold");
+            ImGui::SetNextItemWidth(sw2);
+            ImGui::SliderFloat("##ckbthresh", &clip.fx_chroma_key_threshold, 0.f, 1.f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Chroma Key: threshold");
+            ImGui::Dummy({0.f, 4.f});
+            ui_label("Softness");
+            ImGui::SetNextItemWidth(sw2);
+            ImGui::SliderFloat("##ckbsoft", &clip.fx_chroma_key_softness, 0.f, 0.5f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Chroma Key: softness");
             break;
         }
 

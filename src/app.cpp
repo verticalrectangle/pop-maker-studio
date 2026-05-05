@@ -179,6 +179,14 @@ CreativeFXAccum collect_creative_fx(const AppState& state, float t, int below_tr
                     acc.datamosh_bleedback     = cl.fx_datamosh_bleedback;
                     acc.datamosh_clip_duration = cl.end - cl.start;
                     break;
+                case FXType::ChromaKey:
+                    acc.chroma_key_on        = true;
+                    acc.chroma_key_r         = cl.fx_chroma_key_r;
+                    acc.chroma_key_g         = cl.fx_chroma_key_g;
+                    acc.chroma_key_b         = cl.fx_chroma_key_b;
+                    acc.chroma_key_threshold = cl.fx_chroma_key_threshold;
+                    acc.chroma_key_softness  = cl.fx_chroma_key_softness;
+                    break;
                 default: break;
             }
         }

@@ -51,6 +51,7 @@ enum class FXType {
     LightLeak,    // procedural film-light flare synced to amplitude envelope
     VHS,          // chroma bleed + grain + tracking glitch
     Datamosh,     // temporal ghost buffer + multi-key chroma chaos
+    ChromaKey,    // color-range keyer — compositing brick
 };
 
 // ── Transition type ───────────────────────────────────────────────────────────
@@ -149,6 +150,13 @@ struct Clip {
     float       chroma_key_threshold = 0.30f; // chroma distance fully keyed
     float       chroma_key_softness  = 0.15f; // ramp width above threshold
 
+    // ChromaKey brick
+    float       fx_chroma_key_r         = 0.f;
+    float       fx_chroma_key_g         = 1.f;
+    float       fx_chroma_key_b         = 0.f;
+    float       fx_chroma_key_threshold = 0.30f;
+    float       fx_chroma_key_softness  = 0.15f;
+
     // Glitch
     float       fx_glitch_chroma     = 8.f;   // RGB channel spread in pixels
     float       fx_glitch_jitter     = 0.3f;  // row-shift intensity (0–1)
@@ -199,6 +207,14 @@ struct Track {
 // ── Creative FX accumulator ───────────────────────────────────────────────────
 
 struct CreativeFXAccum {
+    // ChromaKey
+    bool  chroma_key_on        = false;
+    float chroma_key_r         = 0.f;
+    float chroma_key_g         = 1.f;
+    float chroma_key_b         = 0.f;
+    float chroma_key_threshold = 0.30f;
+    float chroma_key_softness  = 0.15f;
+
     bool  glitch_on         = false;
     float glitch_chroma     = 0.f;
     float glitch_jitter     = 0.f;
