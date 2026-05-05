@@ -3010,8 +3010,8 @@ static void panel_adjustment(AppState& state, float w) {
 
     ImGui::Dummy({0.f, 8.f});
 
-    // Header
-    ImGui::TextUnformatted("Adjustment Clip");
+    // Header — same style as panel_fx_clip
+    ImGui::TextUnformatted("Adjustment");
     int n_below = (int)state.tracks.size() - state.selected_track - 1;
     char info[128];
     snprintf(info, sizeof(info), "%s  ·  %.2fs – %.2fs  ·  %d track%s below",
@@ -3127,7 +3127,7 @@ static void panel_adjustment(AppState& state, float w) {
     static char s_preset_name[64] = {};
     static bool s_naming = false;
     if (!s_naming) {
-        if (ui_btn("Save as Preset", false, true)) {
+        if (ui_btn("Save as new preset", false, true)) {
             s_naming = true;
             s_preset_name[0] = '\0';
         }
@@ -3138,7 +3138,7 @@ static void panel_adjustment(AppState& state, float w) {
         ImGui::SameLine();
         if (ui_btn("Save", true, true) || enter) {
             if (s_preset_name[0] != '\0') {
-                state.user_presets.push_back(preset_from_clip(clip, s_preset_name));
+                state.user_presets.insert(state.user_presets.begin(), preset_from_clip(clip, s_preset_name));
                 presets_save_user(state.user_presets);
             }
             s_naming = false;
@@ -4888,6 +4888,12 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
         bool ldown  = ImGui::IsMouseDown(0);
         bool lclick = ImGui::IsMouseClicked(0);
 
+        // Deselect on click in the label column below all tracks or on empty body space
+        bool in_label_empty = lclick && !ImGui::IsAnyItemActive() &&
+                              mouse.x >= origin.x && mouse.x < origin.x+TL_LABEL_W &&
+                              mouse.y > origin.y+TL_RULER_H && mouse.y < origin.y+total_h &&
+                              (s_tl_hover_track < 0 || s_tl_hover_track >= (int)state.tracks.size());
+
         // Start box select when clicking empty body space (no clip was hit)
         if (lclick && in_body && !s_clip_hit && !ImGui::IsAnyItemActive()) {
             s_box_selecting = true;
@@ -4897,6 +4903,10 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
                 state.selected_track = -1;
                 state.selected_clip  = -1;
             }
+        } else if (in_label_empty) {
+            state.clip_selection.clear();
+            state.selected_track = -1;
+            state.selected_clip  = -1;
         }
         s_clip_hit = false; // reset for next frame
 
