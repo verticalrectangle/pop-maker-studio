@@ -242,8 +242,10 @@ static void cpu_apply_datamosh(uint8_t* px, uint8_t* ghost, int w, int h,
 
     // Intensity bends the effective decay: low intensity → ghost tracks current quickly
     // (short trails, mild mosh); high intensity → ghost persists long (deep chaos).
-    float effective_decay = decay * (1.f - intensity * 0.85f);
-    effective_decay = fmaxf(0.005f, effective_decay);
+    // Floor at 0.08 so the ghost always bleeds in some real content — prevents runaway
+    // feedback where total divergence locks every block into white-noise substitution.
+    float effective_decay = decay * (1.f - intensity * 0.75f);
+    effective_decay = fmaxf(0.08f, effective_decay);
 
     // ── Pass 1: per-block SAD → mosh or pass ─────────────────────────────────
     for (int by = 0; by < nby; ++by) {
@@ -263,7 +265,8 @@ static void cpu_apply_datamosh(uint8_t* px, uint8_t* ghost, int w, int h,
             }
             float mean_sad = count > 0 ? (float)sad / (float)(count * 3) : 0.f;
 
-            if (mean_sad < threshold) continue;  // static block — let current frame through
+            if (mean_sad < threshold) continue;   // static — let current frame through
+            if (mean_sad > 80.f)     continue;   // fully diverged — heal with real content
 
             // Motion block — substitute ghost (stuck P-frame reference).
             // Displacement simulates wrong motion vector; chroma twist scales with
@@ -474,7 +477,6 @@ struct PreviewState {
     std::vector<uint8_t> ghost_buf;        // RGB, ghost_w * ghost_h * 3
     int                  ghost_w         = 0;
     int                  ghost_h         = 0;
-    float                ghost_last_tick  = -999.f;
     float                ghost_clip_start = -999.f; // tracks which clip owns the ghost
     int                  ghost_frame_idx  = -1;     // proxy frame the ghost currently represents
     int                  ghost_seed_idx   = -1;     // proxy frame of brick start (anchor)
