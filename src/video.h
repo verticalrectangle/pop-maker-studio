@@ -49,6 +49,65 @@ uintptr_t video_get_texture(int track_id, double playhead);
 // Thumbnail for the scrub bar hover — always uses track 0's proxy.
 uintptr_t video_get_thumbnail(double t, int* out_w, int* out_h);
 
+// CPU pixel FX — set before video_get_texture(); applied during MJPEG decode.
+// Call once per slot per render frame; all processing happens on the decoded pixels.
+struct PixelFX {
+    // Color grade (adjustment layer)
+    float brightness  = 0.f;   // additive shift  (-1..+1)
+    float contrast    = 1.f;   // scale around 0.5 (0..3)
+    float saturation  = 1.f;   // mix luma↔color  (0..3)
+    float hue_deg     = 0.f;   // Rodrigues rotation degrees
+    float blur_sigma  = 0.f;   // Gaussian sigma (box-blur approximation)
+
+    // Chroma key
+    bool  chroma_key_on        = false;
+    float chroma_key_r         = 0.f;
+    float chroma_key_g         = 1.f;
+    float chroma_key_b         = 0.f;
+    float chroma_key_threshold = 0.30f;
+    float chroma_key_softness  = 0.15f;
+
+    // Glitch
+    bool  glitch_on         = false;
+    float glitch_chroma     = 0.f;
+    float glitch_jitter     = 0.f;
+    float glitch_corruption       = 0.f;
+    float glitch_corruption_bleed = 0.f;
+
+    // VHS
+    bool  vhs_on       = false;
+    float vhs_noise    = 0.f;
+    float vhs_bleed    = 0.f;
+    float vhs_tracking = 0.f;
+
+    // Datamosh — always dirty (time-driven like glitch/VHS)
+    bool  datamosh_on         = false;
+    float datamosh_intensity  = 0.6f;
+    float datamosh_decay      = 0.08f;
+    int   datamosh_block_size = 16;
+
+    float time         = 0.f;   // animation time (ImGui::GetTime())
+
+    bool operator==(const PixelFX& o) const {
+        return brightness == o.brightness && contrast   == o.contrast  &&
+               saturation == o.saturation && hue_deg   == o.hue_deg   &&
+               blur_sigma == o.blur_sigma &&
+               chroma_key_on == o.chroma_key_on && chroma_key_r == o.chroma_key_r &&
+               chroma_key_g == o.chroma_key_g && chroma_key_b == o.chroma_key_b &&
+               chroma_key_threshold == o.chroma_key_threshold &&
+               chroma_key_softness  == o.chroma_key_softness  &&
+               glitch_on  == o.glitch_on  && glitch_chroma == o.glitch_chroma &&
+               glitch_jitter == o.glitch_jitter && glitch_corruption == o.glitch_corruption &&
+               glitch_corruption_bleed == o.glitch_corruption_bleed &&
+               vhs_on     == o.vhs_on     && vhs_noise  == o.vhs_noise &&
+               vhs_bleed  == o.vhs_bleed  && vhs_tracking == o.vhs_tracking &&
+               datamosh_on == o.datamosh_on && datamosh_intensity == o.datamosh_intensity &&
+               datamosh_decay == o.datamosh_decay && datamosh_block_size == o.datamosh_block_size &&
+               time       == o.time;
+    }
+};
+void video_set_pixel_fx(int track_id, const PixelFX& fx);
+
 // Probe original video container for duration without full stream scan.
 // Reads container header only — safe to call on the main thread, < 100 ms.
 float video_probe_duration(const std::string& path);

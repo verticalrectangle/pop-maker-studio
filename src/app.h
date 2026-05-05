@@ -50,6 +50,7 @@ enum class FXType {
     LUT,          // 3D LUT color grade from .cube file
     LightLeak,    // procedural film-light flare synced to amplitude envelope
     VHS,          // chroma bleed + grain + tracking glitch
+    Datamosh,     // temporal ghost buffer + multi-key chroma chaos
 };
 
 // ── Transition type ───────────────────────────────────────────────────────────
@@ -140,9 +141,24 @@ struct Clip {
     // Creative FX (only active when fx_type != Adjustment)
     FXType      fx_type          = FXType::Adjustment;
 
+    // Chroma key
+    bool        chroma_key_on        = false;
+    float       chroma_key_r         = 0.f;   // key color [0,1]
+    float       chroma_key_g         = 1.f;
+    float       chroma_key_b         = 0.f;
+    float       chroma_key_threshold = 0.30f; // chroma distance fully keyed
+    float       chroma_key_softness  = 0.15f; // ramp width above threshold
+
     // Glitch
-    float       fx_glitch_chroma = 8.f;   // RGB channel spread in pixels
-    float       fx_glitch_jitter = 0.3f;  // row-shift intensity (0–1)
+    float       fx_glitch_chroma     = 8.f;   // RGB channel spread in pixels
+    float       fx_glitch_jitter     = 0.3f;  // row-shift intensity (0–1)
+    float       fx_glitch_corruption       = 0.2f;  // JPEG block corruption intensity (0–1)
+    float       fx_glitch_corruption_bleed = 0.f;   // 0=noise only, 1=transparent holes
+
+    // Datamosh
+    float       fx_datamosh_intensity  = 0.6f;  // ghost blend strength (0–1)
+    float       fx_datamosh_decay      = 0.08f; // ghost self-feed rate (0–1, higher = more chaos)
+    int         fx_datamosh_block_size = 16;    // MCU block size in pixels (8/16/32)
 
     // ZoomPunch
     float       fx_zoom_strength = 0.08f; // peak scale-up fraction (0–0.5)
@@ -182,9 +198,17 @@ struct Track {
 // ── Creative FX accumulator ───────────────────────────────────────────────────
 
 struct CreativeFXAccum {
-    bool  glitch_on      = false;
-    float glitch_chroma  = 0.f;
-    float glitch_jitter  = 0.f;
+    bool  glitch_on         = false;
+    float glitch_chroma     = 0.f;
+    float glitch_jitter     = 0.f;
+    float glitch_corruption       = 0.f;
+    float glitch_corruption_bleed = 0.f;
+
+    // Datamosh
+    bool  datamosh_on         = false;
+    float datamosh_intensity  = 0.6f;
+    float datamosh_decay      = 0.08f;
+    int   datamosh_block_size = 16;
 
     bool  zoom_on        = false;
     float zoom_strength  = 0.f;

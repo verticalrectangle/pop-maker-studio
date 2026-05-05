@@ -147,9 +147,11 @@ CreativeFXAccum collect_creative_fx(const AppState& state, float t, int below_tr
             if (t < cl.start || t >= cl.end)       continue;
             switch (cl.fx_type) {
                 case FXType::Glitch:
-                    acc.glitch_on     = true;
-                    acc.glitch_chroma = fmaxf(acc.glitch_chroma, cl.fx_glitch_chroma);
-                    acc.glitch_jitter = fmaxf(acc.glitch_jitter, cl.fx_glitch_jitter);
+                    acc.glitch_on         = true;
+                    acc.glitch_chroma     = fmaxf(acc.glitch_chroma,     cl.fx_glitch_chroma);
+                    acc.glitch_jitter     = fmaxf(acc.glitch_jitter,     cl.fx_glitch_jitter);
+                    acc.glitch_corruption       = fmaxf(acc.glitch_corruption,       cl.fx_glitch_corruption);
+                    acc.glitch_corruption_bleed = fmaxf(acc.glitch_corruption_bleed, cl.fx_glitch_corruption_bleed);
                     break;
                 case FXType::ZoomPunch:
                     acc.zoom_on       = true;
@@ -167,6 +169,12 @@ CreativeFXAccum collect_creative_fx(const AppState& state, float t, int below_tr
                     acc.vhs_noise    = fmaxf(acc.vhs_noise,    cl.fx_vhs_noise);
                     acc.vhs_bleed    = fmaxf(acc.vhs_bleed,    cl.fx_vhs_bleed);
                     acc.vhs_tracking = fmaxf(acc.vhs_tracking, cl.fx_vhs_tracking);
+                    break;
+                case FXType::Datamosh:
+                    acc.datamosh_on         = true;
+                    acc.datamosh_intensity  = fmaxf(acc.datamosh_intensity,  cl.fx_datamosh_intensity);
+                    acc.datamosh_decay      = fmaxf(acc.datamosh_decay,      cl.fx_datamosh_decay);
+                    acc.datamosh_block_size = cl.fx_datamosh_block_size;
                     break;
                 default: break;
             }

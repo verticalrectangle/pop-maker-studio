@@ -355,40 +355,112 @@ static bool write_filter_script(
                     char en[80];
                     snprintf(en, sizeof(en), "between(t,%.3f,%.3f)", (double)en0, (double)en1);
 
-                    if (fc.fx_color_on) {
-                        std::string ntag = "[vfx" + std::to_string(fx_idx++) + "]";
-                        char eq[256];
-                        snprintf(eq, sizeof(eq),
-                            "eq=brightness=%.3f:contrast=%.3f:saturation=%.3f:enable='%s'",
-                            (double)fc.fx_brightness, (double)fc.fx_contrast,
-                            (double)fc.fx_saturation, en);
-                        line() << layer_in << eq << ntag;
-                        layer_in = ntag;
-                        if (fabsf(fc.fx_hue) > 0.5f) {
-                            std::string htag = "[vfx" + std::to_string(fx_idx++) + "]";
-                            char hue[160];
-                            snprintf(hue, sizeof(hue),
-                                "hue=h=%.1f:enable='%s'", (double)fc.fx_hue, en);
-                            line() << layer_in << hue << htag;
-                            layer_in = htag;
+                    // ── Adjustment layer FX ───────────────────────────────
+                    if (fc.fx_type == FXType::Adjustment) {
+                        if (fc.fx_color_on) {
+                            std::string ntag = "[vfx" + std::to_string(fx_idx++) + "]";
+                            char eq[256];
+                            snprintf(eq, sizeof(eq),
+                                "eq=brightness=%.3f:contrast=%.3f:saturation=%.3f:enable='%s'",
+                                (double)fc.fx_brightness, (double)fc.fx_contrast,
+                                (double)fc.fx_saturation, en);
+                            line() << layer_in << eq << ntag;
+                            layer_in = ntag;
+                            if (fabsf(fc.fx_hue) > 0.5f) {
+                                std::string htag = "[vfx" + std::to_string(fx_idx++) + "]";
+                                char hue[160];
+                                snprintf(hue, sizeof(hue),
+                                    "hue=h=%.1f:enable='%s'", (double)fc.fx_hue, en);
+                                line() << layer_in << hue << htag;
+                                layer_in = htag;
+                            }
+                        }
+                        if (fc.fx_blur_on && fc.fx_blur > 0.1f) {
+                            std::string ntag = "[vfx" + std::to_string(fx_idx++) + "]";
+                            char blur[160];
+                            snprintf(blur, sizeof(blur),
+                                "gblur=sigma=%.1f:enable='%s'", (double)fc.fx_blur, en);
+                            line() << layer_in << blur << ntag;
+                            layer_in = ntag;
+                        }
+                        if (fc.fx_vignette_on && fc.fx_vignette > 0.01f) {
+                            std::string ntag = "[vfx" + std::to_string(fx_idx++) + "]";
+                            char vig[160];
+                            snprintf(vig, sizeof(vig),
+                                "vignette=angle=%.4f:enable='%s'",
+                                (double)(fc.fx_vignette * 3.14159265f * 0.5f), en);
+                            line() << layer_in << vig << ntag;
+                            layer_in = ntag;
                         }
                     }
-                    if (fc.fx_blur_on && fc.fx_blur > 0.1f) {
+
+                    // ── Creative FX (rendered as closest FFmpeg approximation) ─
+                    if (fc.fx_type == FXType::Glitch && fc.fx_glitch_chroma >= 0.1f) {
+                        // RGB channel split via rgbashift (R right, B left)
+                        int cr = (int)(fc.fx_glitch_chroma + 0.5f);
                         std::string ntag = "[vfx" + std::to_string(fx_idx++) + "]";
-                        char blur[160];
-                        snprintf(blur, sizeof(blur),
-                            "gblur=sigma=%.1f:enable='%s'", (double)fc.fx_blur, en);
-                        line() << layer_in << blur << ntag;
+                        char flt[200];
+                        snprintf(flt, sizeof(flt),
+                            "rgbashift=rh=%d:bh=%d:enable='%s'", cr, -cr, en);
+                        line() << layer_in << flt << ntag;
                         layer_in = ntag;
                     }
-                    if (fc.fx_vignette_on && fc.fx_vignette > 0.01f) {
-                        std::string ntag = "[vfx" + std::to_string(fx_idx++) + "]";
-                        char vig[160];
-                        snprintf(vig, sizeof(vig),
-                            "vignette=angle=%.4f:enable='%s'",
-                            (double)(fc.fx_vignette * 3.14159265f * 0.5f), en);
-                        line() << layer_in << vig << ntag;
-                        layer_in = ntag;
+                    if (fc.fx_type == FXType::VHS) {
+                        // Chroma bleed: R drifts right, B drifts left (less)
+                        int bleed   = (int)(fc.fx_vhs_bleed + 0.5f);
+                        int bleed_b = (int)(fc.fx_vhs_bleed * 0.4f + 0.5f);
+                        if (bleed > 0) {
+                            std::string ntag = "[vfx" + std::to_string(fx_idx++) + "]";
+                            char flt[200];
+                            snprintf(flt, sizeof(flt),
+                                "rgbashift=rh=%d:bh=%d:enable='%s'", bleed, -bleed_b, en);
+                            line() << layer_in << flt << ntag;
+                            layer_in = ntag;
+                        }
+                        // Grain: temporal noise, strength mapped to noise seed range
+                        if (fc.fx_vhs_noise >= 0.01f) {
+                            int ns = (int)(fc.fx_vhs_noise * 60.f + 0.5f);
+                            std::string ntag = "[vfx" + std::to_string(fx_idx++) + "]";
+                            char flt[200];
+                            snprintf(flt, sizeof(flt),
+                                "noise=c0s=%d:c0f=t+u:enable='%s'", ns, en);
+                            line() << layer_in << flt << ntag;
+                            layer_in = ntag;
+                        }
+                    }
+                    // ZoomPunch: scale spike per beat rendered via scale+crop chain
+                    if (fc.fx_type == FXType::ZoomPunch && !state.beats.empty() &&
+                        fc.fx_zoom_strength > 0.001f) {
+                        // Build max-of-decays expression over all beats in the clip window
+                        std::string zoom_e = "0";
+                        float str   = fc.fx_zoom_strength;
+                        float decay = fmaxf(0.05f, fc.fx_zoom_decay);
+                        for (float bt : state.beats) {
+                            if (bt < fc.start || bt >= fc.end) continue;
+                            // Time relative to clip's ffmpeg input start
+                            float bt_rel = fmaxf(0.f, bt - rl.vid_ss);
+                            char term[128];
+                            snprintf(term, sizeof(term),
+                                "if(gte(t,%.3f),%.4f*exp(-(t-%.3f)/%.4f),0)",
+                                (double)bt_rel, (double)str, (double)bt_rel, (double)decay);
+                            zoom_e = "max(" + zoom_e + "," + term + ")";
+                        }
+                        if (zoom_e != "0") {
+                            // Scale up from centre then crop back to canvas
+                            std::string stag = "[vfx" + std::to_string(fx_idx++) + "]";
+                            std::string ctag = "[vfx" + std::to_string(fx_idx++) + "]";
+                            char scale_f[512];
+                            snprintf(scale_f, sizeof(scale_f),
+                                "scale=iw*(1+%s):ih*(1+%s):eval=frame:enable='%s'",
+                                zoom_e.c_str(), zoom_e.c_str(), en);
+                            line() << layer_in << scale_f << stag;
+                            char crop_f[128];
+                            snprintf(crop_f, sizeof(crop_f),
+                                "crop=%d:%d:(iw-%d)/2:(ih-%d)/2:enable='%s'",
+                                out_w, out_h, out_w, out_h, en);
+                            line() << stag << crop_f << ctag;
+                            layer_in = ctag;
+                        }
                     }
                 }
             }

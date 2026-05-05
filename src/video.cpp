@@ -21,18 +21,467 @@ extern "C" {
 #include <cstring>
 #include <vector>
 
+// ── CPU pixel FX helpers ──────────────────────────────────────────────────────
+
+static inline uint32_t uhash(uint32_t x) {
+    x ^= x >> 17; x *= 0xbf324c81u;
+    x ^= x >> 11; x *= 0x68e31da4u;
+    x ^= x >> 14; return x;
+}
+static inline int   cx(int v, int w) { return v < 0 ? 0 : v >= w ? w-1 : v; }
+static inline uint8_t cu8(int v)     { return (uint8_t)(v < 0 ? 0 : v > 255 ? 255 : v); }
+
+static void cpu_apply_glitch(uint8_t* px, int w, int h,
+                             float chroma_px, float jitter, float time) {
+    int chroma = (int)(chroma_px + 0.5f);
+    uint32_t t1 = (uint32_t)(time * 12.f);
+    uint32_t t2 = (uint32_t)(time * 8.f);
+    static std::vector<uint8_t> s_row;
+    s_row.resize((size_t)w * 3);
+    for (int y = 0; y < h; ++y) {
+        uint8_t* row = px + (size_t)y * w * 3;
+        memcpy(s_row.data(), row, (size_t)w * 3);
+        int jshift = 0;
+        if (jitter > 0.01f) {
+            float rnd = (float)(uhash((uint32_t)y ^ (t1 * 7u)) & 0xFFFF) / 65535.f;
+            if (rnd > 1.f - jitter * 0.4f) {
+                float rnd2 = (float)(uhash((uint32_t)y ^ (t2 * 3u)) & 0xFFFF) / 65535.f;
+                jshift = (int)((rnd2 - 0.5f) * jitter * 0.12f * (float)w);
+            }
+        }
+        for (int x = 0; x < w; ++x) {
+            int gx_ = cx(x + jshift, w);
+            row[x*3+0] = s_row[cx(gx_ + chroma, w)*3+0];
+            row[x*3+1] = s_row[gx_*3+1];
+            row[x*3+2] = s_row[cx(gx_ - chroma, w)*3+2];
+        }
+    }
+}
+
+// Output is 4-channel RGBA. Keying in chroma space separates colour from luminance
+// so the key distance is independent of scene brightness. Spill suppression blends
+// the dominant key channel toward its neighbours on semi-transparent edge pixels.
+static void cpu_apply_chroma_key(
+    const uint8_t* rgb, uint8_t* rgba, int w, int h,
+    float kr, float kg, float kb, float threshold, float softness)
+{
+    float lum_k = 0.299f*kr + 0.587f*kg + 0.114f*kb;
+    float ck_r  = kr - lum_k;
+    float ck_g  = kg - lum_k;
+    float ck_b  = kb - lum_k;
+    float soft  = fmaxf(0.001f, softness);
+    bool  green_key = (kg > kr && kg > kb);
+    bool  blue_key  = (kb > kr && kb > kg);
+
+    int n = w * h;
+    for (int i = 0; i < n; ++i) {
+        float r = rgb[i*3+0] * (1.f/255.f);
+        float g = rgb[i*3+1] * (1.f/255.f);
+        float b = rgb[i*3+2] * (1.f/255.f);
+
+        float lum  = 0.299f*r + 0.587f*g + 0.114f*b;
+        float cp_r = r - lum, cp_g = g - lum, cp_b = b - lum;
+
+        float dist = sqrtf((cp_r-ck_r)*(cp_r-ck_r) +
+                           (cp_g-ck_g)*(cp_g-ck_g) +
+                           (cp_b-ck_b)*(cp_b-ck_b));
+
+        // smoothstep: 0 = fully keyed out, 1 = fully opaque
+        float t     = (dist - threshold) / soft;
+        float alpha = t <= 0.f ? 0.f : t >= 1.f ? 1.f : t*t*(3.f - 2.f*t);
+
+        // Spill suppression: on semi-transparent pixels blend the dominant key
+        // channel toward the average of the other two channels
+        float out_r = r, out_g = g, out_b = b;
+        if (alpha < 1.f) {
+            float spill = 1.f - alpha;
+            if (green_key) {
+                float avg = (out_r + out_b) * 0.5f;
+                out_g = out_g + spill * (avg - out_g);
+            } else if (blue_key) {
+                float avg = (out_r + out_g) * 0.5f;
+                out_b = out_b + spill * (avg - out_b);
+            }
+        }
+
+        rgba[i*4+0] = cu8((int)(out_r * 255.f + 0.5f));
+        rgba[i*4+1] = cu8((int)(out_g * 255.f + 0.5f));
+        rgba[i*4+2] = cu8((int)(out_b * 255.f + 0.5f));
+        rgba[i*4+3] = cu8((int)(alpha  * 255.f + 0.5f));
+    }
+}
+
+// alpha_out: optional w*h byte array — when provided, corrupted regions are written
+// with alpha < 255 so the layer beneath bleeds through in proportion to `bleed`.
+// Noise bands punch hardest (full sev), displacement bands half as much, DC blocks fully.
+static void cpu_apply_corruption(uint8_t* px, int w, int h, float intensity, float time,
+                                  uint8_t* alpha_out = nullptr, float bleed = 0.f) {
+    if (intensity < 0.01f) return;
+    uint32_t fseed = (uint32_t)(time * 10.f);
+
+    if (alpha_out && bleed > 0.f)
+        memset(alpha_out, 0xFF, (size_t)w * h);
+
+    static std::vector<uint8_t> tmp;
+    tmp.assign(px, px + (size_t)w * h * 3);
+
+    // ── Pass 1: restart-interval bands ───────────────────────────────────────────
+    const int INTERVAL_H = 48;
+    int n_iv = (h + INTERVAL_H - 1) / INTERVAL_H;
+
+    for (int iv = 0; iv < n_iv; ++iv) {
+        uint32_t ivh = uhash((uint32_t)iv * 7331u ^ fseed * 104729u);
+        float rv     = (float)(ivh & 0xFFFF) / 65536.f;
+        if (rv >= intensity * 0.9f) continue;
+
+        float sev = 1.f - rv / (intensity * 0.9f);
+        uint32_t sh = uhash(ivh ^ 0x13579BDFu);
+
+        int y0 = iv * INTERVAL_H;
+        int y1 = y0 + INTERVAL_H; if (y1 > h) y1 = h;
+
+        bool noise_band = sev > 0.55f && (sh & 1u) == 0u;
+
+        if (noise_band) {
+            uint32_t ns = uhash(ivh ^ 0xDEADBEEFu);
+            // Noise bands lose all structure → maximum bleed-through
+            uint8_t band_a = (uint8_t)(255.f * fmaxf(0.f, 1.f - bleed * sev));
+            for (int y = y0; y < y1; ++y) {
+                uint8_t* row = px + (size_t)y * w * 3;
+                for (int x = 0; x < w; ++x) {
+                    uint32_t nh = uhash((uint32_t)(x + y * w) ^ ns);
+                    uint8_t lum = (uint8_t)(nh & 0xFF);
+                    int cr = (int)lum + (int)((int8_t)((nh >> 8)  & 0xFF)) / 4;
+                    int cg = (int)lum + (int)((int8_t)((nh >> 16) & 0xFF)) / 4;
+                    int cb = (int)lum + (int)((int8_t)((nh >> 24) & 0xFF)) / 4;
+                    row[x*3+0] = cu8(cr);
+                    row[x*3+1] = cu8(cg);
+                    row[x*3+2] = cu8(cb);
+                    if (alpha_out && bleed > 0.f)
+                        alpha_out[(size_t)y * w + x] = band_a;
+                }
+            }
+        } else {
+            // Displacement bands still carry image data → partial bleed
+            uint8_t band_a = (uint8_t)(255.f * fmaxf(0.f, 1.f - bleed * sev * 0.5f));
+            int src_row = (int)(((float)((sh >> 1) & 0xFFFF) / 65536.f) * (float)h);
+            int chroma  = (int)(((float)((sh >> 17) & 0x7FFFu) / 32767.f - 0.5f)
+                                * intensity * 60.f);
+            for (int y = y0; y < y1; ++y) {
+                uint8_t* row = px + (size_t)y * w * 3;
+                int sy = ((src_row + (y - y0)) % h + h) % h;
+                for (int x = 0; x < w; ++x) {
+                    row[x*3+0] = tmp[(size_t)sy * w * 3 + cx(x + chroma,     w) * 3 + 0];
+                    row[x*3+1] = tmp[(size_t)sy * w * 3 + cx(x,              w) * 3 + 1];
+                    row[x*3+2] = tmp[(size_t)sy * w * 3 + cx(x - chroma / 2, w) * 3 + 2];
+                    if (alpha_out && bleed > 0.f)
+                        alpha_out[(size_t)y * w + x] = band_a;
+                }
+            }
+        }
+    }
+
+    // ── Pass 2: scattered 8×8 DC-only blocks ─────────────────────────────────────
+    // DC-only blocks are flat wrong color — best candidates for full bleed-through
+    const int BS = 8;
+    int nbx = (w + BS - 1) / BS;
+    int nby = (h + BS - 1) / BS;
+    uint8_t dc_a = (uint8_t)(255.f * fmaxf(0.f, 1.f - bleed));
+    for (int by = 0; by < nby; ++by) {
+        for (int bx = 0; bx < nbx; ++bx) {
+            uint32_t bh = uhash(uhash((uint32_t)bx * 1619u ^ (uint32_t)by * 31337u)
+                                ^ (fseed ^ 0x55667788u));
+            if ((float)(bh & 0xFFFF) / 65536.f >= intensity * 0.35f) continue;
+            int sbx = (int)((float)((bh >> 16) & 0xFFFF) / 65536.f * (float)nbx);
+            int sby = (int)(uhash(bh ^ 0xABCDu) % (uint32_t)nby);
+            int sx  = cx(sbx * BS, w), sy = cx(sby * BS, h);
+            uint8_t qr = tmp[(size_t)sy * w * 3 + sx * 3 + 0] & 0xC0;
+            uint8_t qg = tmp[(size_t)sy * w * 3 + sx * 3 + 1] & 0xC0;
+            uint8_t qb = tmp[(size_t)sy * w * 3 + sx * 3 + 2] & 0xC0;
+            qr |= qr >> 2; qr |= qr >> 4;
+            qg |= qg >> 2; qg |= qg >> 4;
+            qb |= qb >> 2; qb |= qb >> 4;
+            for (int py = 0; py < BS; ++py) {
+                int dy = by * BS + py; if (dy >= h) break;
+                for (int px_ = 0; px_ < BS; ++px_) {
+                    int dx = bx * BS + px_; if (dx >= w) break;
+                    px[(size_t)dy * w * 3 + dx * 3 + 0] = qr;
+                    px[(size_t)dy * w * 3 + dx * 3 + 1] = qg;
+                    px[(size_t)dy * w * 3 + dx * 3 + 2] = qb;
+                    if (alpha_out && bleed > 0.f)
+                        alpha_out[(size_t)dy * w + dx] = dc_a;
+                }
+            }
+        }
+    }
+}
+
+// Datamosh — motion-detection driven P-frame simulation on JPEG proxy frames.
+//
+// Real datamosh corrupts interframe codec references so P-frame motion vectors
+// apply to the wrong source frame, causing moving areas to smear while static
+// areas stay clean. We replicate that using SAD (sum of absolute differences)
+// per block between current frame and ghost:
+//
+//   HIGH SAD (motion detected) → keep ghost block (smear trail, like a stuck P-frame)
+//   LOW  SAD (static area)     → pass current frame through normally
+//
+// The ghost buffer then self-feeds on the mashed output so corruption compounds
+// frame over frame — even on a still image it keeps generating motion.
+// Ghost initialises from the first frame so there's no black-frame flash.
+static void cpu_apply_datamosh(uint8_t* px, uint8_t* ghost, int w, int h,
+                                float intensity, float decay, int bs) {
+    if (!ghost || w <= 0 || h <= 0) return;
+
+    // First-call init: if ghost is all zeros, seed it from current frame and exit.
+    // This avoids an all-black first frame where every block reads as "motion".
+    bool ghost_cold = (ghost[0] == 0 && ghost[1] == 0 && ghost[2] == 0);
+    if (ghost_cold) {
+        memcpy(ghost, px, (size_t)w * h * 3);
+        return;
+    }
+
+    int nbx = (w + bs - 1) / bs;
+    int nby = (h + bs - 1) / bs;
+
+    // Motion threshold: SAD/channel that counts as "motion".
+    // At intensity=0 nothing moshs. At intensity=1 even static areas mosh.
+    // Range 0–30 covers typical inter-frame differences for slow/fast content.
+    float threshold = 30.f * (1.f - intensity) + 1.f;
+
+    // ── Pass 1: per-block SAD → mosh or pass ─────────────────────────────────
+    for (int by = 0; by < nby; ++by) {
+        for (int bx = 0; bx < nbx; ++bx) {
+            // Compute mean SAD per channel across the block
+            uint32_t sad = 0;
+            int count = 0;
+            for (int py = 0; py < bs; ++py) {
+                int y = by * bs + py; if (y >= h) break;
+                for (int px_ = 0; px_ < bs; ++px_) {
+                    int x = bx * bs + px_; if (x >= w) break;
+                    size_t i = (size_t)y * w * 3 + x * 3;
+                    sad += (uint32_t)abs((int)px[i+0] - (int)ghost[i+0]);
+                    sad += (uint32_t)abs((int)px[i+1] - (int)ghost[i+1]);
+                    sad += (uint32_t)abs((int)px[i+2] - (int)ghost[i+2]);
+                    count++;
+                }
+            }
+            float mean_sad = count > 0 ? (float)sad / (float)(count * 3) : 0.f;
+
+            if (mean_sad < threshold) continue;  // static block — let current frame through
+
+            // Motion block — substitute ghost (stuck P-frame reference)
+            // At high intensity also displace the source block to simulate wrong
+            // motion vector, and split chroma channels for the color-zone look.
+            float motion_norm = fminf(1.f, mean_sad / 128.f);  // 0..1
+            int disp_x = (int)(motion_norm * intensity * (float)nbx * 0.25f);
+            int disp_y = (int)(motion_norm * intensity * (float)nby * 0.15f);
+            int sbx = ((bx + disp_x) % nbx + nbx) % nbx;
+            int sby = ((by + disp_y) % nby + nby) % nby;
+            // Chroma twist scales with motion — faster motion = more channel split
+            int twist = (int)(motion_norm * intensity * (float)bs * 0.4f);
+
+            for (int py = 0; py < bs; ++py) {
+                int dy  = by  * bs + py; if (dy >= h) break;
+                int gsy = sby * bs + py; if (gsy >= h) gsy = h - 1;
+                for (int px_ = 0; px_ < bs; ++px_) {
+                    int dx  = bx  * bs + px_; if (dx >= w) break;
+                    int gsx = sbx * bs + px_; if (gsx >= w) gsx = w - 1;
+                    // R ahead in scan direction, B behind — colour-zone separation
+                    int gsr = cx(gsx + twist,     w);
+                    int gsb = cx(gsx - twist / 2, w);
+                    px[(size_t)dy * w * 3 + dx * 3 + 0] = ghost[(size_t)gsy * w * 3 + gsr * 3 + 0];
+                    px[(size_t)dy * w * 3 + dx * 3 + 1] = ghost[(size_t)gsy * w * 3 + gsx * 3 + 1];
+                    px[(size_t)dy * w * 3 + dx * 3 + 2] = ghost[(size_t)gsy * w * 3 + gsb * 3 + 2];
+                }
+            }
+        }
+    }
+
+    // ── Pass 2: update ghost ──────────────────────────────────────────────────
+    // Ghost lerps toward the mashed output (px).
+    // High decay → ghost tracks current quickly → short trails, cleaner mosh.
+    // Low decay  → ghost persists long → deep smear, compounding chaos.
+    float keep = 1.f - decay;
+    int n = w * h;
+    for (int i = 0; i < n; ++i) {
+        ghost[i*3+0] = cu8((int)(ghost[i*3+0] * keep + px[i*3+0] * decay + 0.5f));
+        ghost[i*3+1] = cu8((int)(ghost[i*3+1] * keep + px[i*3+1] * decay + 0.5f));
+        ghost[i*3+2] = cu8((int)(ghost[i*3+2] * keep + px[i*3+2] * decay + 0.5f));
+    }
+}
+
+static void cpu_apply_vhs(uint8_t* px, int w, int h,
+                          float noise, float bleed_px, float tracking, float time) {
+    int bleed   = (int)(bleed_px + 0.5f);
+    int bleed_b = (int)(bleed_px * 0.4f + 0.5f);
+    float track_y_f = fmodf(time * 0.17f + 0.3f, 1.f);
+    int   track_y   = (int)(track_y_f * (float)h);
+    int   track_bw  = (int)(0.04f * (float)h) + 1;
+    uint32_t t_nx = (uint32_t)(fmodf(time * 37.3f, 1.f) * 65535.f);
+    uint32_t t_ny = (uint32_t)(fmodf(time * 19.7f, 1.f) * 65535.f);
+    uint32_t t_tr = (uint32_t)(time * 7.f);
+    static std::vector<uint8_t> s_row;
+    s_row.resize((size_t)w * 3);
+    for (int y = 0; y < h; ++y) {
+        uint8_t* row = px + (size_t)y * w * 3;
+        memcpy(s_row.data(), row, (size_t)w * 3);
+        int tshift = 0;
+        if (tracking > 0.01f) {
+            int dist = abs(y - track_y);
+            if (dist < track_bw) {
+                float band = 1.f - (float)dist / (float)track_bw;
+                float rnd  = (float)(uhash(t_tr * 7u) & 0xFFFF) / 65535.f - 0.5f;
+                tshift = (int)(band * tracking * 0.06f * rnd * (float)w);
+            }
+        }
+        float scan = 1.f - 0.06f * fabsf(sinf((float)y * 3.14159f));
+        for (int x = 0; x < w; ++x) {
+            int sx = cx(x + tshift, w);
+            int r  = s_row[cx(sx + bleed,   w)*3+0];
+            int g  = s_row[sx*3+1];
+            int b  = s_row[cx(sx - bleed_b, w)*3+2];
+            if (noise > 0.01f) {
+                uint32_t h_ = uhash((uint32_t)(x + y * w) ^ (t_nx * 0x100u + t_ny));
+                int grain = (int)(((float)(h_ & 0xFF) / 255.f - 0.5f) * noise * 63.75f);
+                r += grain; g += grain; b += grain;
+            }
+            row[x*3+0] = cu8((int)((float)r * scan));
+            row[x*3+1] = cu8((int)((float)g * scan));
+            row[x*3+2] = cu8((int)((float)b * scan));
+        }
+    }
+}
+
+// ── Color grade (single float pass) ──────────────────────────────────────────
+
+static void cpu_apply_grade(uint8_t* px, int w, int h,
+                            float brightness, float contrast,
+                            float saturation, float hue_deg) {
+    bool do_hue = fabsf(hue_deg) > 0.1f;
+    float hm[9] = {1,0,0, 0,1,0, 0,0,1};
+    if (do_hue) {
+        float rad = hue_deg * 3.14159265f / 180.f;
+        float c = cosf(rad), s = sinf(rad);
+        float sq3 = 0.57735026919f;
+        float ic = (1.f - c) / 3.f;
+        hm[0] = c+ic;      hm[1] = ic+sq3*s;  hm[2] = ic-sq3*s;
+        hm[3] = ic-sq3*s;  hm[4] = c+ic;      hm[5] = ic+sq3*s;
+        hm[6] = ic+sq3*s;  hm[7] = ic-sq3*s;  hm[8] = c+ic;
+    }
+    int n = w * h;
+    for (int i = 0; i < n; ++i) {
+        float r = px[i*3+0] * (1.f/255.f);
+        float g = px[i*3+1] * (1.f/255.f);
+        float b = px[i*3+2] * (1.f/255.f);
+        // Brightness (additive) → Contrast (around grey) → Saturation → Hue
+        r += brightness; g += brightness; b += brightness;
+        r = (r - 0.5f) * contrast + 0.5f;
+        g = (g - 0.5f) * contrast + 0.5f;
+        b = (b - 0.5f) * contrast + 0.5f;
+        float lum = r*0.299f + g*0.587f + b*0.114f;
+        r = lum + saturation * (r - lum);
+        g = lum + saturation * (g - lum);
+        b = lum + saturation * (b - lum);
+        if (do_hue) {
+            float nr = hm[0]*r + hm[1]*g + hm[2]*b;
+            float ng = hm[3]*r + hm[4]*g + hm[5]*b;
+            float nb = hm[6]*r + hm[7]*g + hm[8]*b;
+            r = nr; g = ng; b = nb;
+        }
+        px[i*3+0] = cu8((int)(r * 255.f + 0.5f));
+        px[i*3+1] = cu8((int)(g * 255.f + 0.5f));
+        px[i*3+2] = cu8((int)(b * 255.f + 0.5f));
+    }
+}
+
+// ── Blur — 3-pass box blur approximating Gaussian in O(w·h) ──────────────────
+
+static void box_blur_h(const uint8_t* src, uint8_t* dst, int w, int h, int r) {
+    int sz = 2 * r + 1;
+    for (int y = 0; y < h; ++y) {
+        const uint8_t* sr = src + (size_t)y * w * 3;
+        uint8_t*       dr = dst + (size_t)y * w * 3;
+        int ar = 0, ag = 0, ab = 0;
+        for (int i = -r; i <= r; ++i) {
+            int xi = i < 0 ? 0 : i >= w ? w-1 : i;
+            ar += sr[xi*3]; ag += sr[xi*3+1]; ab += sr[xi*3+2];
+        }
+        for (int x = 0; x < w; ++x) {
+            dr[x*3] = (uint8_t)(ar / sz); dr[x*3+1] = (uint8_t)(ag / sz); dr[x*3+2] = (uint8_t)(ab / sz);
+            int xl = x - r;     if (xl < 0)  xl = 0;
+            int xr = x + r + 1; if (xr >= w) xr = w-1;
+            ar += sr[xr*3] - sr[xl*3];
+            ag += sr[xr*3+1] - sr[xl*3+1];
+            ab += sr[xr*3+2] - sr[xl*3+2];
+        }
+    }
+}
+
+static void box_blur_v(const uint8_t* src, uint8_t* dst, int w, int h, int r) {
+    int sz = 2 * r + 1;
+    for (int x = 0; x < w; ++x) {
+        int ar = 0, ag = 0, ab = 0;
+        for (int i = -r; i <= r; ++i) {
+            int yi = i < 0 ? 0 : i >= h ? h-1 : i;
+            ar += src[(size_t)yi*w*3 + x*3];
+            ag += src[(size_t)yi*w*3 + x*3+1];
+            ab += src[(size_t)yi*w*3 + x*3+2];
+        }
+        for (int y = 0; y < h; ++y) {
+            dst[(size_t)y*w*3 + x*3]   = (uint8_t)(ar / sz);
+            dst[(size_t)y*w*3 + x*3+1] = (uint8_t)(ag / sz);
+            dst[(size_t)y*w*3 + x*3+2] = (uint8_t)(ab / sz);
+            int yt = y - r;     if (yt < 0)  yt = 0;
+            int yb = y + r + 1; if (yb >= h) yb = h-1;
+            ar += src[(size_t)yb*w*3 + x*3]   - src[(size_t)yt*w*3 + x*3];
+            ag += src[(size_t)yb*w*3 + x*3+1] - src[(size_t)yt*w*3 + x*3+1];
+            ab += src[(size_t)yb*w*3 + x*3+2] - src[(size_t)yt*w*3 + x*3+2];
+        }
+    }
+}
+
+static void cpu_apply_blur(uint8_t* px, int w, int h, float sigma) {
+    // 3 box-blur passes converge to a Gaussian — O(18·w·h) regardless of sigma
+    float wf = sqrtf(12.f * sigma * sigma / 3.f + 1.f);
+    int wl = (int)wf; if (wl % 2 == 0) wl--;
+    int wu = wl + 2;
+    int m = (int)roundf((12.f * sigma * sigma
+                         - 3.f*(float)(wl*wl) - 12.f*(float)wl - 9.f)
+                        / (-4.f*(float)wl - 4.f));
+    int sizes[3];
+    for (int i = 0; i < 3; ++i) sizes[i] = (i < m) ? wu : wl;
+
+    static std::vector<uint8_t> tmp;
+    tmp.resize((size_t)w * h * 3);
+    for (int pass = 0; pass < 3; ++pass) {
+        int r = sizes[pass] / 2;
+        box_blur_h(px, tmp.data(), w, h, r);
+        box_blur_v(tmp.data(), px,  w, h, r);
+    }
+}
+
+
 // ── Preview state ─────────────────────────────────────────────────────────────
 
 struct PreviewState {
     FILE*     mjpeg_file     = nullptr;
     ProxyInfo proxy          = {};
     int       last_frame_idx = -1;
-    GLuint    tex    = 0;
-    int       tex_w  = 0;
-    int       tex_h  = 0;
+    GLuint    tex      = 0;
+    int       tex_w    = 0;
+    int       tex_h    = 0;
+    bool      tex_rgba = false;
     bool      is_proxy = false;
     bool      is_open  = false;
     VideoInfo info = {};
+    PixelFX   pixel_fx;
+    bool      pixel_fx_dirty = false;
+    // Datamosh ghost buffer — updated on wall-clock timer, not playhead
+    std::vector<uint8_t> ghost_buf;   // RGB, ghost_w * ghost_h * 3
+    int                  ghost_w = 0;
+    int                  ghost_h = 0;
+    float                ghost_last_tick = -999.f;
 };
 
 static PreviewState g_pv[MAX_VIDEO_TRACKS];
@@ -45,12 +494,48 @@ static struct ThumbState {
     int    last_frame_idx = -1;
 } g_th;
 
-// Upload a JPEG buffer into a GL texture slot.
-static void upload_jpeg(GLuint* tex, int* tex_w, int* tex_h,
-                        const uint8_t* buf, size_t sz) {
+// Upload a JPEG buffer into a GL texture slot, optionally applying CPU pixel FX.
+// tex_rgba: in/out — tracks whether the current GL texture is RGBA or RGB.
+static void upload_jpeg(GLuint* tex, int* tex_w, int* tex_h, bool* tex_rgba,
+                        const uint8_t* buf, size_t sz,
+                        const PixelFX* pfx = nullptr,
+                        uint8_t* ghost = nullptr, int ghost_w = 0, int ghost_h = 0) {
     int w, h, ch;
     uint8_t* pixels = stbi_load_from_memory(buf, (int)sz, &w, &h, &ch, 3);
     if (!pixels) return;
+
+    bool do_corr_bleed = pfx && pfx->glitch_on &&
+                         pfx->glitch_corruption >= 0.01f &&
+                         pfx->glitch_corruption_bleed > 0.01f;
+    bool want_rgba = (pfx && pfx->chroma_key_on) || do_corr_bleed;
+
+    static std::vector<uint8_t> s_corr_alpha;  // w*h alpha mask from corruption bleed
+
+    if (pfx) {
+        bool need_grade = fabsf(pfx->brightness) > 0.005f || fabsf(pfx->contrast - 1.f) > 0.005f ||
+                          fabsf(pfx->saturation - 1.f) > 0.005f || fabsf(pfx->hue_deg) > 0.1f;
+        if (need_grade)
+            cpu_apply_grade(pixels, w, h, pfx->brightness, pfx->contrast, pfx->saturation, pfx->hue_deg);
+        if (pfx->blur_sigma > 0.1f)
+            cpu_apply_blur(pixels, w, h, pfx->blur_sigma);
+        if (pfx->glitch_on && (pfx->glitch_chroma >= 0.1f || pfx->glitch_jitter >= 0.01f))
+            cpu_apply_glitch(pixels, w, h, pfx->glitch_chroma, pfx->glitch_jitter, pfx->time);
+        if (pfx->glitch_on && pfx->glitch_corruption >= 0.01f) {
+            if (do_corr_bleed) {
+                s_corr_alpha.resize((size_t)w * h);
+                cpu_apply_corruption(pixels, w, h, pfx->glitch_corruption, pfx->time,
+                                     s_corr_alpha.data(), pfx->glitch_corruption_bleed);
+            } else {
+                cpu_apply_corruption(pixels, w, h, pfx->glitch_corruption, pfx->time);
+            }
+        }
+        if (pfx->vhs_on && (pfx->vhs_noise >= 0.01f || pfx->vhs_bleed >= 0.1f || pfx->vhs_tracking >= 0.01f))
+            cpu_apply_vhs(pixels, w, h, pfx->vhs_noise, pfx->vhs_bleed, pfx->vhs_tracking, pfx->time);
+        if (pfx->datamosh_on && ghost && ghost_w == w && ghost_h == h)
+            cpu_apply_datamosh(pixels, ghost, w, h,
+                               pfx->datamosh_intensity, pfx->datamosh_decay,
+                               pfx->datamosh_block_size);
+    }
 
     if (*tex == 0) {
         glGenTextures(1, tex);
@@ -63,16 +548,56 @@ static void upload_jpeg(GLuint* tex, int* tex_w, int* tex_h,
         glBindTexture(GL_TEXTURE_2D, *tex);
     }
 
-    if (w != *tex_w || h != *tex_h) {
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, w, h, 0,
-                     GL_RGB, GL_UNSIGNED_BYTE, pixels);
-        *tex_w = w; *tex_h = h;
+    bool format_changed = tex_rgba && (*tex_rgba != want_rgba);
+    bool size_changed   = (w != *tex_w || h != *tex_h);
+
+    if (want_rgba) {
+        static std::vector<uint8_t> s_rgba;
+        s_rgba.resize((size_t)w * h * 4);
+        int n = w * h;
+
+        bool ck = pfx && pfx->chroma_key_on;
+        if (ck) {
+            // Chroma key → RGBA; then multiply by corruption bleed alpha if both active
+            cpu_apply_chroma_key(pixels, s_rgba.data(), w, h,
+                                 pfx->chroma_key_r, pfx->chroma_key_g, pfx->chroma_key_b,
+                                 pfx->chroma_key_threshold, pfx->chroma_key_softness);
+            if (do_corr_bleed) {
+                for (int i = 0; i < n; ++i)
+                    s_rgba[i*4+3] = (uint8_t)((int)s_rgba[i*4+3] * (int)s_corr_alpha[i] / 255);
+            }
+        } else {
+            // Corruption bleed only — copy RGB from processed pixels, alpha from mask
+            for (int i = 0; i < n; ++i) {
+                s_rgba[i*4+0] = pixels[i*3+0];
+                s_rgba[i*4+1] = pixels[i*3+1];
+                s_rgba[i*4+2] = pixels[i*3+2];
+                s_rgba[i*4+3] = s_corr_alpha[i];
+            }
+        }
+
+        if (size_changed || format_changed) {
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0,
+                         GL_RGBA, GL_UNSIGNED_BYTE, s_rgba.data());
+        } else {
+            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h,
+                            GL_RGBA, GL_UNSIGNED_BYTE, s_rgba.data());
+        }
     } else {
-        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h,
-                        GL_RGB, GL_UNSIGNED_BYTE, pixels);
+        if (size_changed || format_changed) {
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, w, h, 0,
+                         GL_RGB, GL_UNSIGNED_BYTE, pixels);
+        } else {
+            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h,
+                            GL_RGB, GL_UNSIGNED_BYTE, pixels);
+        }
     }
+
     glBindTexture(GL_TEXTURE_2D, 0);
     stbi_image_free(pixels);
+
+    *tex_w = w; *tex_h = h;
+    if (tex_rgba) *tex_rgba = want_rgba;
 }
 
 // ── Internal: read one JPEG frame from a proxy at frame_idx ──────────────────
@@ -99,7 +624,30 @@ static uintptr_t decode_proxy_frame(PreviewState& pv, int frame_idx) {
     size_t got = fread(s_buf.data(), 1, frame_sz, pv.mjpeg_file);
     if (got == 0) return pv.tex ? (uintptr_t)pv.tex : 0;
 
-    upload_jpeg(&pv.tex, &pv.tex_w, &pv.tex_h, s_buf.data(), got);
+    // Manage ghost buffer for datamosh — init on first use or dimension change
+    if (pv.pixel_fx.datamosh_on) {
+        // We need to know frame dims before decode to size ghost; use tex dims if known.
+        // ghost_buf sized after first decode when tex_w/tex_h are available.
+        if (pv.ghost_w != pv.tex_w || pv.ghost_h != pv.tex_h) {
+            if (pv.tex_w > 0 && pv.tex_h > 0) {
+                pv.ghost_w = pv.tex_w; pv.ghost_h = pv.tex_h;
+                pv.ghost_buf.assign((size_t)pv.ghost_w * pv.ghost_h * 3, 0);
+                pv.ghost_last_tick = -999.f;
+            }
+        }
+    }
+
+    uint8_t* ghost_ptr = (pv.pixel_fx.datamosh_on && pv.ghost_w > 0)
+                         ? pv.ghost_buf.data() : nullptr;
+    upload_jpeg(&pv.tex, &pv.tex_w, &pv.tex_h, &pv.tex_rgba, s_buf.data(), got, &pv.pixel_fx,
+                ghost_ptr, pv.ghost_w, pv.ghost_h);
+
+    // After first successful decode, size ghost to match actual frame if not yet sized
+    if (pv.pixel_fx.datamosh_on && pv.ghost_w == 0 && pv.tex_w > 0) {
+        pv.ghost_w = pv.tex_w; pv.ghost_h = pv.tex_h;
+        pv.ghost_buf.assign((size_t)pv.ghost_w * pv.ghost_h * 3, 0);
+    }
+
     return pv.tex ? (uintptr_t)pv.tex : 0;
 }
 
@@ -130,7 +678,7 @@ void video_open_still(int track_id, const std::string& jpeg_path) {
     fclose(f);
 
     upload_jpeg(&g_pv[track_id].tex, &g_pv[track_id].tex_w, &g_pv[track_id].tex_h,
-                buf.data(), (size_t)sz);
+                &g_pv[track_id].tex_rgba, buf.data(), (size_t)sz);
     g_pv[track_id].is_open  = true;
     g_pv[track_id].is_proxy = false;
 }
@@ -180,6 +728,17 @@ VideoInfo video_info(int track_id) {
     return g_pv[track_id].info;
 }
 
+void video_set_pixel_fx(int track_id, const PixelFX& fx) {
+    if (track_id < 0 || track_id >= MAX_VIDEO_TRACKS) return;
+    auto& pv = g_pv[track_id];
+    // Animated effects (glitch/VHS) always re-decode since time advances each frame.
+    // Static effects (grade/blur) re-decode only when params change.
+    if (!(pv.pixel_fx == fx)) {
+        pv.pixel_fx = fx;
+        pv.pixel_fx_dirty = true;
+    }
+}
+
 uintptr_t video_get_texture(int track_id, double playhead) {
     if (track_id < 0 || track_id >= MAX_VIDEO_TRACKS) return 0;
     PreviewState& pv = g_pv[track_id];
@@ -203,9 +762,10 @@ uintptr_t video_get_texture(int track_id, double playhead) {
         frame_idx = (int)pv.proxy.offsets.size() - 1;
     if (frame_idx < 0) frame_idx = 0;
 
-    if (frame_idx == pv.last_frame_idx && pv.tex)
+    if (frame_idx == pv.last_frame_idx && pv.tex && !pv.pixel_fx_dirty)
         return (uintptr_t)pv.tex;
 
+    pv.pixel_fx_dirty = false;
     pv.last_frame_idx = frame_idx;
     return decode_proxy_frame(pv, frame_idx);
 }
@@ -258,7 +818,7 @@ uintptr_t video_get_thumbnail(double t, int* out_w, int* out_h) {
     size_t got = fread(s_th_buf.data(), 1, frame_sz, pv.mjpeg_file);
     if (got == 0) return g_th.tex ? (uintptr_t)g_th.tex : 0;
 
-    upload_jpeg(&g_th.tex, &g_th.tex_w, &g_th.tex_h, s_th_buf.data(), got);
+    upload_jpeg(&g_th.tex, &g_th.tex_w, &g_th.tex_h, nullptr, s_th_buf.data(), got);
 
     if (out_w) *out_w = g_th.tex_w;
     if (out_h) *out_h = g_th.tex_h;

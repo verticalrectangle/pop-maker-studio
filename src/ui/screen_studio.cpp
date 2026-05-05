@@ -13,7 +13,6 @@
 #include "proxy.h"
 #include "waveform.h"
 #include "project.h"
-#include "fx_shader.h"
 #include <imgui.h>
 #include <imgui_internal.h>
 #include "json.hpp"
@@ -918,6 +917,40 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                                clip_slot_key(cl_ptr->text, cl_ptr->start), cl_ptr->text);
                 // Map timeline time → source file time via clip's in_point and speed.
                 float src_t = cl_ptr->in_point + (at_time - cl_ptr->start) * cl_ptr->speed;
+
+                // Collect FX before decode so all CPU pixel FX are baked into the frame.
+                EffectAccum     vid_fx = collect_effects    (state, at_time, ti);
+                CreativeFXAccum cfx    = collect_creative_fx(state, at_time, ti);
+                if (slot >= 0) {
+                    PixelFX pfx;
+                    pfx.brightness    = vid_fx.brightness;
+                    pfx.contrast      = vid_fx.contrast;
+                    pfx.saturation    = vid_fx.saturation;
+                    pfx.hue_deg       = vid_fx.hue;
+                    pfx.blur_sigma    = vid_fx.blur;
+                    pfx.chroma_key_on        = cl_ptr->chroma_key_on;
+                    pfx.chroma_key_r         = cl_ptr->chroma_key_r;
+                    pfx.chroma_key_g         = cl_ptr->chroma_key_g;
+                    pfx.chroma_key_b         = cl_ptr->chroma_key_b;
+                    pfx.chroma_key_threshold = cl_ptr->chroma_key_threshold;
+                    pfx.chroma_key_softness  = cl_ptr->chroma_key_softness;
+                    pfx.glitch_on          = cfx.glitch_on;
+                    pfx.glitch_chroma      = cfx.glitch_chroma;
+                    pfx.glitch_jitter      = cfx.glitch_jitter;
+                    pfx.glitch_corruption       = cfx.glitch_corruption;
+                    pfx.glitch_corruption_bleed = cfx.glitch_corruption_bleed;
+                    pfx.vhs_on        = cfx.vhs_on;
+                    pfx.vhs_noise     = cfx.vhs_noise;
+                    pfx.vhs_bleed     = cfx.vhs_bleed;
+                    pfx.vhs_tracking  = cfx.vhs_tracking;
+                    pfx.datamosh_on         = cfx.datamosh_on;
+                    pfx.datamosh_intensity  = cfx.datamosh_intensity;
+                    pfx.datamosh_decay      = cfx.datamosh_decay;
+                    pfx.datamosh_block_size = cfx.datamosh_block_size;
+                    pfx.time          = t_anim;
+                    video_set_pixel_fx(slot, pfx);
+                }
+
                 uintptr_t tex = (slot >= 0 && video_is_open(slot))
                     ? video_get_texture(slot, (double)(src_t + lookahead)) : 0;
                 if (!tex) return;
@@ -942,19 +975,7 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                 auto rot_pt = [&](float ox, float oy) -> ImVec2 {
                     return { cx + ox*cos_r - oy*sin_r, cy + ox*sin_r + oy*cos_r };
                 };
-                EffectAccum vid_fx = collect_effects(state, at_time, ti);
-                CreativeFXAccum cfx = collect_creative_fx(state, at_time, ti);
                 uintptr_t display_tex = tex;
-                if (vid_fx.any_color || vid_fx.any_blur) {
-                    display_tex = fx_apply(tex,
-                        vid_fx.brightness, vid_fx.contrast,
-                        vid_fx.saturation, vid_fx.hue,
-                        vid_fx.blur);
-                }
-                if (cfx.glitch_on)
-                    display_tex = fx_apply_glitch(display_tex, cfx.glitch_chroma, cfx.glitch_jitter, t_anim);
-                if (cfx.vhs_on)
-                    display_tex = fx_apply_vhs(display_tex, cfx.vhs_noise, cfx.vhs_bleed, cfx.vhs_tracking, t_anim);
 
                 // ZoomPunch — scale spike on each beat, decaying exponentially
                 if (cfx.zoom_on && !state.beats.empty()) {
@@ -1424,6 +1445,7 @@ static ImU32 fx_type_accent(FXType ft) {
         case FXType::LUT:       return IM_COL32(255,205,55,255);
         case FXType::LightLeak: return IM_COL32(255,90,160,255);
         case FXType::VHS:       return IM_COL32(110,195,95,255);
+        case FXType::Datamosh:  return IM_COL32(255,60,100,255);
         default:                return IM_COL32(120,80,220,255);
     }
 }
@@ -1434,6 +1456,7 @@ static const char* fx_type_name(FXType ft) {
         case FXType::LUT:       return "LUT";
         case FXType::LightLeak: return "LEAK";
         case FXType::VHS:       return "VHS";
+        case FXType::Datamosh:  return "MOSH";
         default:                return "ADJUST";
     }
 }
@@ -1444,6 +1467,7 @@ static const char* fx_type_display(FXType ft) {
         case FXType::LUT:       return "LUT Grade";
         case FXType::LightLeak: return "Light Leak";
         case FXType::VHS:       return "VHS";
+        case FXType::Datamosh:  return "Datamosh";
         default:                return "Adjustment";
     }
 }
@@ -1460,14 +1484,8 @@ static const char* clip_display_name(const Clip& c) {
 struct FxBrickColors { ImU32 fill, border, label; };
 static FxBrickColors fx_brick_colors(FXType ft, bool sel) {
     int r, g, b;
-    switch (ft) {
-        case FXType::Glitch:    r=0,   g=190, b=200; break;
-        case FXType::ZoomPunch: r=220, g=110, b=20;  break;
-        case FXType::LUT:       r=210, g=175, b=30;  break;
-        case FXType::LightLeak: r=220, g=70,  b=145; break;
-        case FXType::VHS:       r=85,  g=170, b=70;  break;
-        default:                r=120, g=80,  b=220; break;
-    }
+    if (ft == FXType::Adjustment) { r=100; g=80;  b=200; }  // muted violet
+    else                          { r=210; g=110; b=30;  }  // warm amber
     if (sel) {
         int rb = (int)fminf(r*1.25f,255), gb2 = (int)fminf(g*1.25f,255), bb = (int)fminf(b*1.25f,255);
         return { IM_COL32(r,g,b,210), IM_COL32(rb,gb2,bb,255), IM_COL32(240,240,255,240) };
@@ -2412,6 +2430,42 @@ static void panel_clip(AppState& state, float w) {
             ImGui::NewLine(); ImGui::Dummy({0.f, 4.f});
         }
 
+        if (ImGui::CollapsingHeader("Chroma Key")) {
+            ImGui::Dummy({0.f, 4.f});
+            ImGui::Checkbox("Enable##ckon", &clip.chroma_key_on);
+            if (clip.chroma_key_on) {
+                ImGui::Dummy({0.f, 4.f});
+                ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+                ImGui::TextUnformatted("Key color");
+                ImGui::PopStyleColor();
+                ImGui::Dummy({0.f, 2.f});
+                float col3[3] = { clip.chroma_key_r, clip.chroma_key_g, clip.chroma_key_b };
+                ImGui::SetNextItemWidth(w - 16.f);
+                if (ImGui::ColorEdit3("##ckcolor", col3, ImGuiColorEditFlags_NoInputs |
+                                                         ImGuiColorEditFlags_PickerHueWheel)) {
+                    clip.chroma_key_r = col3[0];
+                    clip.chroma_key_g = col3[1];
+                    clip.chroma_key_b = col3[2];
+                }
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Chroma key: color");
+                ImGui::Dummy({0.f, 6.f});
+                ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+                ImGui::TextUnformatted("Threshold");
+                ImGui::PopStyleColor();
+                ImGui::SetNextItemWidth(w - 16.f);
+                ImGui::SliderFloat("##ckthresh", &clip.chroma_key_threshold, 0.f, 1.f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Chroma key: threshold");
+                ImGui::Dummy({0.f, 4.f});
+                ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+                ImGui::TextUnformatted("Softness");
+                ImGui::PopStyleColor();
+                ImGui::SetNextItemWidth(w - 16.f);
+                ImGui::SliderFloat("##cksoftness", &clip.chroma_key_softness, 0.f, 0.5f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Chroma key: softness");
+            }
+            ImGui::Dummy({0.f, 4.f});
+        }
+
         if (ImGui::CollapsingHeader("Fade")) {
             ImGui::Dummy({0.f, 4.f});
             section_fade(state, clip, w);
@@ -2914,19 +2968,18 @@ static void panel_adjustment_library(AppState& state, float w) {
                 preset_apply(state.tracks[state.selected_track].clips[state.selected_clip], p);
                 history_push(state, "Apply preset: " + p.name);
             } else {
-                // Find topmost track or create one, add Adjustment clip at playhead
-                if (state.tracks.empty()) {
-                    Track t; t.name = "Adjust"; state.tracks.push_back(t);
-                }
+                // Always create a new track above everything for the adjustment clip
                 Clip cl;
                 cl.clip_type = ClipType::Effect;
                 cl.fx_type   = FXType::Adjustment;
                 cl.start     = state.playhead;
                 cl.end       = state.playhead + 2.f;
                 preset_apply(cl, p);
-                state.tracks[0].clips.push_back(cl);
+                Track nt; nt.name = "Adjust";
+                nt.clips.push_back(cl);
+                state.tracks.insert(state.tracks.begin(), std::move(nt));
                 state.selected_track = 0;
-                state.selected_clip  = (int)state.tracks[0].clips.size() - 1;
+                state.selected_clip  = 0;
                 history_push(state, "Add Adjustment: " + p.name);
             }
         }
@@ -3483,12 +3536,13 @@ static void panel_fx_creative(AppState& state, float w) {
         {FXType::LUT,       "LUT Grade",   "Load any .cube file  ·  cinematic color grade",    IM_COL32(255,205,55,255)},
         {FXType::LightLeak, "Light Leak",  "Film flare  ·  amplitude-driven  ·  Screen blend", IM_COL32(255,90,160,255)},
         {FXType::VHS,       "VHS",         "Chroma bleed  ·  grain  ·  tracking glitch",       IM_COL32(110,195,95,255)},
+        {FXType::Datamosh,  "Datamosh",    "Temporal ghost  ·  multi-key chaos  ·  total mosh", IM_COL32(255,60,100,255)},
     };
 
     float card_w = w - 8.f;
     float card_h = 72.f;
 
-    for (int i = 0; i < 5; ++i) {
+    for (int i = 0; i < 6; ++i) {
         const FXCard& fc = CARDS[i];
         ImGui::PushID(i + 9000);
         ImVec2 cp = ImGui::GetCursorScreenPos();
@@ -3516,17 +3570,16 @@ static void panel_fx_creative(AppState& state, float w) {
         ImGui::SetCursorScreenPos(cp);
         ImGui::InvisibleButton("##fxcard", {card_w, card_h});
         if (ImGui::IsItemClicked()) {
-            if (state.tracks.empty()) {
-                Track t; t.name = "FX"; state.tracks.push_back(t);
-            }
             Clip cl;
             cl.clip_type = ClipType::Effect;
             cl.fx_type   = fc.type;
             cl.start     = state.playhead;
             cl.end       = state.playhead + 5.f;
-            state.tracks[0].clips.push_back(cl);
+            Track nt; nt.name = fc.name;
+            nt.clips.push_back(cl);
+            state.tracks.insert(state.tracks.begin(), std::move(nt));
             state.selected_track = 0;
-            state.selected_clip  = (int)state.tracks[0].clips.size() - 1;
+            state.selected_clip  = 0;
             history_push(state, std::string("Add FX: ") + fc.name);
         }
 
@@ -3575,6 +3628,16 @@ static void panel_fx_clip(AppState& state, float w) {
             ImGui::SetNextItemWidth(sw);
             ImGui::SliderFloat("##gjitter", &clip.fx_glitch_jitter, 0.f, 1.f, "%.2f");
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Glitch: row jitter");
+            ImGui::Dummy({0.f, 4.f});
+            ui_label("Block Corruption");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##gcorrupt", &clip.fx_glitch_corruption, 0.f, 1.f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Glitch: block corruption");
+            ImGui::Dummy({0.f, 4.f});
+            ui_label("Layer Bleed");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##gbleed", &clip.fx_glitch_corruption_bleed, 0.f, 1.f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Glitch: layer bleed");
             break;
 
         case FXType::ZoomPunch:
@@ -3650,6 +3713,31 @@ static void panel_fx_clip(AppState& state, float w) {
             ImGui::SliderFloat("##vtrk", &clip.fx_vhs_tracking, 0.f, 1.f, "%.2f");
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "VHS: tracking");
             break;
+
+        case FXType::Datamosh: {
+            float sw2 = w - 16.f;
+            ui_label("Intensity");
+            ImGui::SetNextItemWidth(sw2);
+            ImGui::SliderFloat("##dmint", &clip.fx_datamosh_intensity, 0.f, 1.f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Datamosh: intensity");
+            ImGui::Dummy({0.f, 4.f});
+            ui_label("Decay");
+            ImGui::SetNextItemWidth(sw2);
+            ImGui::SliderFloat("##dmdec", &clip.fx_datamosh_decay, 0.01f, 0.5f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Datamosh: decay");
+            ImGui::Dummy({0.f, 4.f});
+            ui_label("Block Size");
+            ImGui::SetNextItemWidth(sw2);
+            int bs = clip.fx_datamosh_block_size;
+            struct BSP { int v; const char* l; };
+            BSP bsps[] = {{8,"8px"},{16,"16px"},{32,"32px"}};
+            for (auto& p : bsps) {
+                if (ui_btn(p.l, bs == p.v, true)) { clip.fx_datamosh_block_size = p.v; history_push(state, "Datamosh: block size"); }
+                ImGui::SameLine(0.f, 4.f);
+            }
+            ImGui::NewLine();
+            break;
+        }
 
         default: break;
     }
@@ -4080,8 +4168,9 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
     static bool  s_track_dragging    = false;
     static float s_track_drag_start_y = 0.f;
     static int   s_track_drag_insert  = -1;
-    static int   drag_hot_gap = -1;  // insert-before index when dragging clip near a boundary
-    static bool  s_drag_moved = false; // true once IsMouseDragging fired — gates cross-track drop
+    static int   drag_hot_gap = -1;
+    static bool  s_drag_moved = false;
+    static float drag_origin_start = 0.f, drag_origin_end = 0.f;
     static float s_body_snap_held_start = -1.f;  // applied clip.start while snap-held; -1 = none
     static float s_body_snap_held_cand  = -1.f;  // the snap candidate (for indicator line)
 
@@ -4519,6 +4608,8 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
                     float orig_cx0 = origin.x+TL_LABEL_W+clip.start*zoom-scroll;
                     float orig_cx1 = origin.x+TL_LABEL_W+clip.end*zoom-scroll;
                     if (!track.locked) {  // locked tracks: select only, no drag/trim
+                        drag_origin_start = clip.start;
+                        drag_origin_end   = clip.end;
                         if (mouse.x <= orig_cx0+ew_hit) {
                             drag_track=ti; drag_clip=ci; drag_left=true; drag_right=false; drag_offset=0.f;
                         } else if (mouse.x >= orig_cx1-ew_hit) {
@@ -4986,7 +5077,6 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
 
         if (drag_left && !left_locked) {
             float t = edge_snap(snap(new_t), cands);
-            // Hard stop: source_time = in_point + (tl - start)*speed; floor is where in_point hits 0.
             float src_floor = (src_dur > 0.f)
                 ? dc.start - dc.in_point / fmaxf(0.01f, dc.speed) : 0.f;
             float new_start = fmaxf(src_floor, fmaxf(0.f, fminf(t, dc.end - f1)));
@@ -4996,7 +5086,6 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
         } else if (drag_right && !right_locked) {
             float et = (mouse.x - origin.x - TL_LABEL_W + scroll) / zoom;
             float t = edge_snap(snap(et), cands);
-            // Hard stop: source_time at right edge = in_point + (end-start)*speed; cap at src_dur.
             float max_end = (src_dur > 0.f)
                 ? dc.start + (src_dur - dc.in_point) / fmaxf(0.01f, dc.speed)
                 : t;
@@ -5097,15 +5186,53 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
                     state.selected_clip  = 0;
                     history_push(state, "Move clip to new track");
                 } else {
-                    state.tracks[drag_hot_track].clips.push_back(moved);
-                    state.selected_track = drag_hot_track;
-                    state.selected_clip  = (int)state.tracks[drag_hot_track].clips.size() - 1;
-                    history_push(state, "Move clip to track");
+                    // Abort drop if it would overlap anything on the target track
+                    float dur = moved.end - moved.start;
+                    bool overlaps = false;
+                    for (const Clip& oc : state.tracks[drag_hot_track].clips)
+                        if (moved.start < oc.end && moved.start + dur > oc.start) { overlaps = true; break; }
+                    if (overlaps) {
+                        // Put clip back on its original track at its original position
+                        moved.start = drag_origin_start;
+                        moved.end   = drag_origin_end;
+                        state.tracks[drag_track].clips.insert(
+                            state.tracks[drag_track].clips.begin() + drag_clip, moved);
+                        state.selected_track = drag_track;
+                        state.selected_clip  = drag_clip;
+                    } else {
+                        state.tracks[drag_hot_track].clips.push_back(moved);
+                        state.selected_track = drag_hot_track;
+                        state.selected_clip  = (int)state.tracks[drag_hot_track].clips.size() - 1;
+                        history_push(state, "Move clip to track");
+                    }
                 }
             } else {
-                const char* act = drag_left  ? "Trim clip start" :
-                                  drag_right ? "Trim clip end"   : "Move clip";
-                history_push(state, act);
+                // Body drag on same track — snap back if overlapping any other clip
+                Clip& moved_clip = state.tracks[drag_track].clips[drag_clip];
+                bool overlaps = false;
+                if (!drag_left && !drag_right) {
+                    for (int ci = 0; ci < (int)state.tracks[drag_track].clips.size(); ++ci) {
+                        if (ci == drag_clip) continue;
+                        const Clip& oc = state.tracks[drag_track].clips[ci];
+                        if (moved_clip.start < oc.end && moved_clip.end > oc.start) { overlaps = true; break; }
+                    }
+                }
+                if (overlaps) {
+                    // Restore proxy key if it changed during drag
+                    if (moved_clip.clip_type == ClipType::Video && !moved_clip.text.empty()
+                        && moved_clip.start != drag_origin_start) {
+                        std::string old_key = clip_slot_key(moved_clip.text, moved_clip.start);
+                        std::string new_key = clip_slot_key(moved_clip.text, drag_origin_start);
+                        for (int i = 0; i < MAX_VIDEO_TRACKS; ++i)
+                            if (state.proxy_paths[i] == old_key) { state.proxy_paths[i] = new_key; break; }
+                    }
+                    moved_clip.start = drag_origin_start;
+                    moved_clip.end   = drag_origin_end;
+                } else {
+                    const char* act = drag_left  ? "Trim clip start" :
+                                      drag_right ? "Trim clip end"   : "Move clip";
+                    history_push(state, act);
+                }
             }
         }
         drag_track=-1; drag_clip=-1; drag_left=false; drag_right=false;
