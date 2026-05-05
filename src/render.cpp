@@ -1,5 +1,7 @@
 #include "render.h"
 #include "inter_font.h"   // inter_black_ttf[], inter_black_ttf_size
+#include "bg_remove.h"
+#include "globals.h"
 
 #include <fstream>
 #include <sstream>
@@ -204,9 +206,11 @@ static std::string prop_expr(const Clip& cl, const std::string& prop,
 // bottom-to-top (index 0 = background, last = frontmost).
 struct RLayer {
     enum Kind { Vid, Txt } kind;
-    int track_idx, clip_idx;
-    int   in_idx  = -1;   // Vid: ffmpeg input index
-    float vid_ss  = 0.f;  // Vid: -ss seek of that input (for enable expr)
+    int   track_idx, clip_idx;
+    int   in_idx      = -1;   // Vid: ffmpeg input index
+    float vid_ss      = 0.f;  // Vid: -ss seek of that input (for enable expr)
+    int   mask_in_idx = -1;   // >= 0 if this layer has bg_remove hires masks
+    float mask_fps    = 30.f; // fps of the mask image sequence
 };
 
 // ── Filter-complex script writer ──────────────────────────────────────────────
@@ -339,6 +343,18 @@ static bool write_filter_script(
                            << opa_tag;
                     layer_in = opa_tag;
                 }
+            }
+
+            // BG remove alphamerge — extract alpha from hires mask sequence, merge.
+            if (rl.mask_in_idx >= 0) {
+                std::string alpha_tag  = "[valpha" + std::to_string(vid_idx) + "]";
+                std::string masked_tag = "[vbgm"   + std::to_string(vid_idx) + "]";
+                line() << "[" << rl.mask_in_idx << ":v]"
+                       << "scale=" << out_w << ":" << out_h << ":flags=bilinear,"
+                       << "extractplanes=a"
+                       << alpha_tag;
+                line() << layer_in << alpha_tag << "alphamerge" << masked_tag;
+                layer_in = masked_tag;
             }
 
             // Effect clip filters — color grade, blur, vignette
@@ -892,11 +908,50 @@ static std::vector<std::string> build_args(AppState& state) {
         rl.in_idx = vid_inputs[arr].in_idx;
     }
 
-    // Flat ffmpeg input list: all video files, then audio streams.
-    struct InSpec { std::string path; float ss=0.f, to=-1.f; };
+    // ── BG remove hires masks (runs synchronously here in render thread) ────────
+    struct MaskSpec { std::string dir; float fps; };
+    std::map<std::string, MaskSpec> hires_masks;  // keyed by video_path
+    for (auto& rl : layers) {
+        if (rl.kind != RLayer::Vid) continue;
+        const Clip& cl = state.tracks[rl.track_idx].clips[rl.clip_idx];
+        if (!cl.bg_remove_on || cl.text.empty()) continue;
+        if (hires_masks.count(cl.text)) continue;
+        std::string hdir = bg_remove_hires_dir(cl.text);
+        bg_remove_run_hires(cl.text, hdir, state.python_path, g_rembg_script);
+        float fps = bg_remove_read_fps(hdir);
+        hires_masks[cl.text] = {hdir, fps};
+    }
+
+    // Assign mask sequence input indices (after video/audio).
+    for (auto& rl : layers) {
+        if (rl.kind != RLayer::Vid) continue;
+        const Clip& cl = state.tracks[rl.track_idx].clips[rl.clip_idx];
+        if (!cl.bg_remove_on || cl.text.empty()) continue;
+        auto it = hires_masks.find(cl.text);
+        if (it == hires_masks.end()) continue;
+        if (!fs::exists(it->second.dir + "/fps.txt")) continue;
+        rl.mask_in_idx = n_in++;
+        rl.mask_fps    = it->second.fps;
+    }
+
+    // Flat ffmpeg input list: all video files, then audio streams, then mask sequences.
+    struct InSpec { std::string path; float ss=0.f, to=-1.f;
+                    bool is_img_seq=false; float img_fps=30.f; };
     std::vector<InSpec> inputs;
     for (auto& vi : vid_inputs) inputs.push_back({vi.path, vi.ss, vi.to});
     for (auto& ai : audio_ins)  inputs.push_back({ai.path, ai.ss, ai.to});
+    // Mask sequences: one entry per unique video with bg_remove, in the order assigned above.
+    for (auto& rl : layers) {
+        if (rl.kind != RLayer::Vid || rl.mask_in_idx < 0) continue;
+        const Clip& cl = state.tracks[rl.track_idx].clips[rl.clip_idx];
+        auto it = hires_masks.find(cl.text);
+        if (it == hires_masks.end()) continue;
+        std::string seq_path = it->second.dir + "/%06d.png";
+        // Avoid duplicate entries (multiple clips from same video share one proxy).
+        bool dup = false;
+        for (auto& inp : inputs) { if (inp.path == seq_path) { dup = true; break; } }
+        if (!dup) inputs.push_back({seq_path, 0.f, -1.f, true, it->second.fps});
+    }
 
     // sub_offset: project time at which the rendered video begins.
     float sub_offset = (!vid_inputs.empty() && vid_inputs[0].ss > 0.001f)
@@ -926,8 +981,14 @@ static std::vector<std::string> build_args(AppState& state) {
     a.push_back("-y");
 
     for (auto& inp : inputs) {
-        if (inp.ss > 0.001f) { a.push_back("-ss"); a.push_back(std::to_string(inp.ss)); }
-        if (inp.to > 0.001f) { a.push_back("-to"); a.push_back(std::to_string(inp.to)); }
+        if (inp.is_img_seq) {
+            char fps_buf[32]; snprintf(fps_buf, sizeof(fps_buf), "%.6g", (double)inp.img_fps);
+            a.push_back("-f");         a.push_back("image2");
+            a.push_back("-framerate"); a.push_back(fps_buf);
+        } else {
+            if (inp.ss > 0.001f) { a.push_back("-ss"); a.push_back(std::to_string(inp.ss)); }
+            if (inp.to > 0.001f) { a.push_back("-to"); a.push_back(std::to_string(inp.to)); }
+        }
         a.push_back("-i"); a.push_back(inp.path);
     }
 

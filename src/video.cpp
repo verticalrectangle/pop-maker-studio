@@ -504,6 +504,12 @@ struct PreviewState {
     float                ghost_clip_start = -999.f; // tracks which clip owns the ghost
     int                  ghost_frame_idx  = -1;     // proxy frame the ghost currently represents
     int                  ghost_seed_idx   = -1;     // proxy frame of clip start (anchor)
+    // BG remove mask cache (one frame at a time)
+    std::string          bg_mask_dir;
+    int                  bg_mask_frame   = -1;
+    int                  bg_mask_w       = 0;
+    int                  bg_mask_h       = 0;
+    std::vector<uint8_t> bg_mask_alpha;             // w*h alpha values
 };
 
 static PreviewState g_pv[MAX_VIDEO_TRACKS];
@@ -518,10 +524,13 @@ static struct ThumbState {
 
 // Upload a JPEG buffer into a GL texture slot, optionally applying CPU pixel FX.
 // tex_rgba: in/out — tracks whether the current GL texture is RGBA or RGB.
+// bg_mask: pre-loaded alpha channel (w*h bytes, 0=transparent 255=opaque) or nullptr.
 static void upload_jpeg(GLuint* tex, int* tex_w, int* tex_h, bool* tex_rgba,
                         const uint8_t* buf, size_t sz,
                         const PixelFX* pfx = nullptr,
-                        uint8_t* ghost = nullptr, int ghost_w = 0, int ghost_h = 0) {
+                        uint8_t* ghost = nullptr, int ghost_w = 0, int ghost_h = 0,
+                        const uint8_t* bg_mask = nullptr, int bg_mask_w = 0, int bg_mask_h = 0,
+                        float bg_softness = 0.f) {
     int w, h, ch;
     uint8_t* pixels = stbi_load_from_memory(buf, (int)sz, &w, &h, &ch, 3);
     if (!pixels) return;
@@ -529,7 +538,8 @@ static void upload_jpeg(GLuint* tex, int* tex_w, int* tex_h, bool* tex_rgba,
     bool do_corr_bleed = pfx && pfx->glitch_on &&
                          pfx->glitch_corruption >= 0.01f &&
                          pfx->glitch_corruption_bleed > 0.01f;
-    bool want_rgba = (pfx && pfx->chroma_key_on) || do_corr_bleed;
+    bool bg_active = (bg_mask != nullptr && bg_mask_w > 0 && bg_mask_h > 0);
+    bool want_rgba = (pfx && pfx->chroma_key_on) || do_corr_bleed || bg_active;
 
     static std::vector<uint8_t> s_corr_alpha;  // w*h alpha mask from corruption bleed
 
@@ -590,6 +600,16 @@ static void upload_jpeg(GLuint* tex, int* tex_w, int* tex_h, bool* tex_rgba,
             if (do_corr_bleed) {
                 for (int i = 0; i < n; ++i)
                     s_rgba[i*4+3] = (uint8_t)((int)s_rgba[i*4+3] * (int)s_corr_alpha[i] / 255);
+            }
+        } else if (bg_active && bg_mask_w == w && bg_mask_h == h) {
+            // BG remove: apply rembg alpha channel to source pixels
+            for (int i = 0; i < n; ++i) {
+                s_rgba[i*4+0] = pixels[i*3+0];
+                s_rgba[i*4+1] = pixels[i*3+1];
+                s_rgba[i*4+2] = pixels[i*3+2];
+                float a = bg_mask[i] / 255.f;
+                if (bg_softness > 0.01f) a = powf(a, 1.f + bg_softness * 3.f);
+                s_rgba[i*4+3] = (uint8_t)(a * 255.f + 0.5f);
             }
         } else {
             // Corruption bleed only — copy RGB from processed pixels, alpha from mask
@@ -756,8 +776,39 @@ static uintptr_t decode_proxy_frame(PreviewState& pv, int frame_idx) {
 
     uint8_t* ghost_ptr = (pv.pixel_fx.datamosh_on && pv.ghost_w > 0)
                          ? pv.ghost_buf.data() : nullptr;
+
+    // Load bg_remove mask for this frame (cached — only reads disk on frame change).
+    if (pv.pixel_fx.bg_remove_on && !pv.pixel_fx.bg_remove_mask_dir.empty()) {
+        bool need = (frame_idx != pv.bg_mask_frame) ||
+                    (pv.pixel_fx.bg_remove_mask_dir != pv.bg_mask_dir);
+        if (need) {
+            pv.bg_mask_dir   = pv.pixel_fx.bg_remove_mask_dir;
+            pv.bg_mask_frame = frame_idx;
+            pv.bg_mask_alpha.clear();
+            pv.bg_mask_w = pv.bg_mask_h = 0;
+            char fname[32]; snprintf(fname, sizeof(fname), "%06d.png", frame_idx);
+            std::string mp = pv.bg_mask_dir + "/" + fname;
+            int mw, mh, mc;
+            uint8_t* mask = stbi_load(mp.c_str(), &mw, &mh, &mc, 4);
+            if (mask) {
+                int n = mw * mh;
+                pv.bg_mask_alpha.resize((size_t)n);
+                for (int i = 0; i < n; ++i) pv.bg_mask_alpha[i] = mask[i*4+3];
+                pv.bg_mask_w = mw; pv.bg_mask_h = mh;
+                stbi_image_free(mask);
+            }
+        }
+    } else if (!pv.pixel_fx.bg_remove_on) {
+        pv.bg_mask_alpha.clear();
+        pv.bg_mask_w = pv.bg_mask_h = 0;
+    }
+
+    const uint8_t* bg_ptr = (pv.pixel_fx.bg_remove_on && !pv.bg_mask_alpha.empty())
+                            ? pv.bg_mask_alpha.data() : nullptr;
+
     upload_jpeg(&pv.tex, &pv.tex_w, &pv.tex_h, &pv.tex_rgba, s_buf.data(), got, &pv.pixel_fx,
-                ghost_ptr, pv.ghost_w, pv.ghost_h);
+                ghost_ptr, pv.ghost_w, pv.ghost_h,
+                bg_ptr, pv.bg_mask_w, pv.bg_mask_h, pv.pixel_fx.bg_remove_softness);
 
     // Track which frame the ghost now represents after datamosh ran
     if (pv.pixel_fx.datamosh_on && pv.ghost_w > 0)

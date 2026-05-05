@@ -28,6 +28,7 @@ extern "C" {
 #include "ml_setup_embedded.h"
 #include "beat_detect_embedded.h"
 #include "envelope_extract_embedded.h"
+#include "rembg_remove_embedded.h"
 
 namespace fs = std::filesystem;
 
@@ -38,6 +39,7 @@ std::string g_prefetch_script;
 std::string g_setup_script;
 std::string g_beat_detect_script;
 std::string g_envelope_script;
+std::string g_rembg_script;
 std::string g_managed_dir;
 
 static void glfw_drop_callback(GLFWwindow*, int count, const char** paths) {
@@ -158,6 +160,8 @@ int main(int, char**) {
                                           "pop_maker_beat_detect.py");
     g_envelope_script    = extract_embedded(envelope_extract_py, envelope_extract_py_size,
                                           "pop_maker_envelope_extract.py");
+    g_rembg_script       = extract_embedded(rembg_remove_py,  rembg_remove_py_size,
+                                          "pop_maker_rembg_remove.py");
 
     glfwSetErrorCallback(glfw_error_callback);
     if (!glfwInit()) return 1;

@@ -3,6 +3,7 @@
 #include <cstdint>
 #include "proxy.h"
 #include "app.h"
+#include "bg_remove.h"
 
 // Video preview — two separate paths:
 //
@@ -91,6 +92,11 @@ struct PixelFX {
     float datamosh_t_in_clip      = 0.f;   // seconds since clip start (for bleedback ramp)
     float datamosh_clip_duration  = 0.f;   // total clip duration (for bleedback ramp)
 
+    // Remove Background
+    bool        bg_remove_on       = false;
+    std::string bg_remove_mask_dir;
+    float       bg_remove_softness = 0.1f;
+
     float time         = 0.f;   // animation time (ImGui::GetTime())
 
     bool operator==(const PixelFX& o) const {
@@ -113,6 +119,9 @@ struct PixelFX {
                datamosh_bleedback == o.datamosh_bleedback &&
                datamosh_t_in_clip == o.datamosh_t_in_clip &&
                datamosh_clip_duration == o.datamosh_clip_duration &&
+               bg_remove_on == o.bg_remove_on &&
+               bg_remove_mask_dir == o.bg_remove_mask_dir &&
+               bg_remove_softness == o.bg_remove_softness &&
                time       == o.time;
     }
 };

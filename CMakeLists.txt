@@ -40,6 +40,7 @@ set(SOURCES
     src/proxy.cpp
     src/waveform.cpp
     src/blender_export.cpp
+    src/bg_remove.cpp
     src/ui/screen_splash.cpp
     src/ui/screen_setup.cpp
     src/ui/screen_studio.cpp
@@ -165,6 +166,20 @@ add_custom_command(
 )
 add_custom_target(embed_beat_detect DEPENDS ${CMAKE_BINARY_DIR}/beat_detect_embedded.h)
 add_dependencies(pop-maker-studio embed_beat_detect)
+
+# Embed rembg_remove.py
+add_custom_command(
+    OUTPUT ${CMAKE_BINARY_DIR}/rembg_remove_embedded.h
+    COMMAND ${CMAKE_COMMAND}
+        -DINPUT=${CMAKE_SOURCE_DIR}/rembg_remove.py
+        -DVAR=rembg_remove_py
+        -DOUTPUT=${CMAKE_BINARY_DIR}/rembg_remove_embedded.h
+        -P ${CMAKE_SOURCE_DIR}/cmake/EmbedFile.cmake
+    DEPENDS ${CMAKE_SOURCE_DIR}/rembg_remove.py
+    COMMENT "Embedding rembg_remove.py"
+)
+add_custom_target(embed_rembg DEPENDS ${CMAKE_BINARY_DIR}/rembg_remove_embedded.h)
+add_dependencies(pop-maker-studio embed_rembg)
 
 # Embed envelope_extract.py
 add_custom_command(

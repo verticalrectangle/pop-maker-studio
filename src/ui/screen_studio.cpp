@@ -4,6 +4,7 @@
 #include "app.h"
 #include "audio.h"
 #include "video.h"
+#include "bg_remove.h"
 #include "transcribe.h"
 #include "filepicker.h"
 #include "globals.h"
@@ -953,6 +954,10 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                     pfx.datamosh_bleedback     = cfx.datamosh_bleedback;
                     pfx.datamosh_t_in_clip     = at_time - cfx.datamosh_clip_start;
                     pfx.datamosh_clip_duration = cfx.datamosh_clip_duration;
+                    pfx.bg_remove_on       = cl_ptr->bg_remove_on &&
+                                             cl_ptr->bg_remove_status == BgRemoveStatus::Ready;
+                    pfx.bg_remove_mask_dir = cl_ptr->bg_remove_mask_dir;
+                    pfx.bg_remove_softness = cl_ptr->bg_remove_softness;
                     pfx.time          = t_anim;
                     video_set_pixel_fx(slot, pfx);
                 }
@@ -2506,14 +2511,117 @@ static void panel_clip(AppState& state, float w) {
                 if (ui_btn("Extract Subtitles", false, true)) kick_pipeline(state, clip.text, PipelineMode::TranscribeOnly);
                 ImGui::Dummy({0.f, 2.f});
                 if (ui_btn("Separate Vocals", false, true)) kick_pipeline(state, clip.text, PipelineMode::SeparateOnly);
-                ImGui::Dummy({0.f, 2.f});
-                ImGui::BeginDisabled();
-                ui_btn("Remove Background  (rembg)", false, true);
-                ImGui::EndDisabled();
                 if (!has_path) ImGui::EndDisabled();
             }
             if (!ml_avail) ImGui::EndDisabled();
             ImGui::Dummy({0.f, 4.f});
+        }
+
+        if (ImGui::CollapsingHeader("Remove Background")) {
+            ImGui::Dummy({0.f, 6.f});
+            ImDrawList* bgdl = ImGui::GetWindowDrawList();
+            float bar_w = w - 16.f;
+
+            auto status = clip.bg_remove_status;
+
+            // ── Toggle ────────────────────────────────────────────────────────
+            bool tog = clip.bg_remove_on;
+            if (ImGui::Checkbox("Enable##bgr", &tog)) {
+                clip.bg_remove_on = tog;
+                history_push(state, "Remove Background");
+            }
+            ImGui::Dummy({0.f, 6.f});
+
+            // ── Status indicator ──────────────────────────────────────────────
+            if (status == BgRemoveStatus::Processing) {
+                // Amber progress bar — unmissable
+                ImVec2 bp = ImGui::GetCursorScreenPos();
+                ImU32  amber = IM_COL32(255, 165, 0, 255);
+                ImU32  amber_dim = IM_COL32(255, 165, 0, 60);
+                bgdl->AddRectFilled(bp, {bp.x+bar_w, bp.y+6.f}, amber_dim, 3.f);
+                float fill = fmaxf(0.04f, clip.bg_remove_progress);
+                bgdl->AddRectFilled(bp, {bp.x+bar_w*fill, bp.y+6.f}, amber, 3.f);
+                ImGui::Dummy({0.f, 10.f});
+                char pct[64];
+                snprintf(pct, sizeof(pct), "Removing background…  %d%%", (int)(fill * 100.f));
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, 0.65f, 0.f, 1.f));
+                ImGui::TextUnformatted(pct);
+                ImGui::PopStyleColor();
+                ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+                ImGui::TextWrapped("Please wait. This processes every frame using the AI model.");
+                ImGui::PopStyleColor();
+                ImGui::Dummy({0.f, 4.f});
+
+            } else if (status == BgRemoveStatus::Ready) {
+                // Green ready indicator
+                ImVec2 bp = ImGui::GetCursorScreenPos();
+                bgdl->AddRectFilled(bp, {bp.x+bar_w, bp.y+6.f}, IM_COL32(40, 200, 80, 255), 3.f);
+                ImGui::Dummy({0.f, 10.f});
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.25f, 0.85f, 0.4f, 1.f));
+                ImGui::TextUnformatted("Ready");
+                ImGui::PopStyleColor();
+                ImGui::Dummy({0.f, 6.f});
+                // Softness slider only when ready
+                ImGui::PushStyleColor(ImGuiCol_Text, Col::muted); ImGui::TextUnformatted("Edge softness"); ImGui::PopStyleColor();
+                ImGui::PushStyleColor(ImGuiCol_SliderGrab, Col::fg);
+                ImGui::PushStyleColor(ImGuiCol_FrameBg,    Col::bg_soft);
+                ImGui::SetNextItemWidth(bar_w);
+                if (ImGui::SliderFloat("##bgrsoft", &clip.bg_remove_softness, 0.f, 1.f, "%.2f"))
+                    history_push(state, "BG Softness");
+                ImGui::PopStyleColor(2);
+                ImGui::Dummy({0.f, 4.f});
+                // Re-run button
+                if (ui_btn("Re-run", false, true)) {
+                    extern std::string g_rembg_script;
+                    bg_remove_start(state, state.selected_track, state.selected_clip,
+                                    state.python_path, g_rembg_script);
+                }
+
+            } else if (status == BgRemoveStatus::Error) {
+                // Red error indicator
+                ImVec2 bp = ImGui::GetCursorScreenPos();
+                bgdl->AddRectFilled(bp, {bp.x+bar_w, bp.y+6.f}, IM_COL32(220, 60, 60, 255), 3.f);
+                ImGui::Dummy({0.f, 10.f});
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.3f, 0.3f, 1.f));
+                ImGui::TextUnformatted("Failed");
+                ImGui::PopStyleColor();
+                if (!clip.bg_remove_error.empty()) {
+                    ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+                    std::string err = clip.bg_remove_error;
+                    if (err.size() > 120) err = err.substr(0, 117) + "...";
+                    ImGui::TextWrapped("%s", err.c_str());
+                    ImGui::PopStyleColor();
+                }
+                ImGui::Dummy({0.f, 4.f});
+                if (ui_btn("Retry", false, true)) {
+                    extern std::string g_rembg_script;
+                    bg_remove_start(state, state.selected_track, state.selected_clip,
+                                    state.python_path, g_rembg_script);
+                }
+
+            } else {
+                // Idle — show Process button
+                bool proxy_ok = !clip.text.empty() && proxy_is_ready(clip.text);
+                if (!proxy_ok) {
+                    ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+                    ImGui::TextWrapped("Waiting for video proxy to finish before processing.");
+                    ImGui::PopStyleColor();
+                    ImGui::Dummy({0.f, 4.f});
+                }
+                if (!proxy_ok || !clip.bg_remove_on) ImGui::BeginDisabled();
+                if (ui_btn("Process  (removes background via AI)", false, true)) {
+                    extern std::string g_rembg_script;
+                    bg_remove_start(state, state.selected_track, state.selected_clip,
+                                    state.python_path, g_rembg_script);
+                }
+                if (!proxy_ok || !clip.bg_remove_on) ImGui::EndDisabled();
+                if (!clip.bg_remove_on) {
+                    ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+                    ImGui::TextWrapped("Enable the toggle above to start.");
+                    ImGui::PopStyleColor();
+                }
+                ImGui::Dummy({0.f, 4.f});
+            }
         }
     }
 
@@ -5727,6 +5835,9 @@ void ui_studio(AppState& state) {
 
     // GC slots whose clips have been deleted or moved.
     gc_video_slots(state);
+
+    // Poll background removal jobs.
+    bg_remove_poll(state);
 
     // Audio just finished loading while playing — start from current playhead
     {

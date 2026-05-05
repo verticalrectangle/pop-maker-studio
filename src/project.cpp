@@ -1,12 +1,12 @@
 #include "project.h"
 #include <fstream>
-#include <cstring>
 #include <cstdint>
+#include <filesystem>
 
 // ── Binary serialization helpers ──────────────────────────────────────────────
 
 static const uint32_t MAGIC   = 0x534D5001u; // "PMS\x01"
-static const uint32_t VERSION = 11u;
+static const uint32_t VERSION = 12u;
 
 struct Writer {
     std::ofstream f;
@@ -127,6 +127,9 @@ static void write_clip(Writer& w, const Clip& c) {
     w.pod(c.fx_datamosh_block_size); w.pod(c.fx_datamosh_bleedback);
     w.pod(c.fx_chroma_key_r); w.pod(c.fx_chroma_key_g); w.pod(c.fx_chroma_key_b);
     w.pod(c.fx_chroma_key_threshold); w.pod(c.fx_chroma_key_softness);
+    // v12: remove background
+    w.pod((uint8_t)c.bg_remove_on); w.pod(c.bg_remove_softness);
+    w.str(c.bg_remove_mask_dir);
     // ktracks
     uint32_t nk = (uint32_t)c.ktracks.size();
     w.pod(nk);
@@ -195,6 +198,17 @@ static Clip read_clip(Reader& r, uint32_t version) {
         c.fx_chroma_key_b           = r.pod<float>();
         c.fx_chroma_key_threshold   = r.pod<float>();
         c.fx_chroma_key_softness    = r.pod<float>();
+    }
+    if (version >= 12u) {
+        c.bg_remove_on       = (bool)r.pod<uint8_t>();
+        c.bg_remove_softness = r.pod<float>();
+        c.bg_remove_mask_dir = r.str();
+        // Restore Ready status if the mask directory exists on disk
+        if (c.bg_remove_on && !c.bg_remove_mask_dir.empty()) {
+            namespace fs = std::filesystem;
+            c.bg_remove_status = fs::exists(c.bg_remove_mask_dir + "/fps.txt")
+                                  ? BgRemoveStatus::Ready : BgRemoveStatus::Idle;
+        }
     }
     // ktracks
     uint32_t nk = r.pod<uint32_t>();

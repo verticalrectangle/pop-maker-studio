@@ -90,4 +90,15 @@ except subprocess.CalledProcessError as e:
     log(f"ERROR:demucs:{e}")
     sys.exit(1)
 
+# ── Step 4: rembg ─────────────────────────────────────────────────────────────
+
+log("STAGE:rembg")
+log("Installing rembg…")
+try:
+    run_pip("rembg[gpu]" if cv and cv[0] >= 11 else "rembg")
+    log("OK:rembg")
+except subprocess.CalledProcessError as e:
+    log(f"ERROR:rembg:{e}")
+    sys.exit(1)
+
 log("DONE")

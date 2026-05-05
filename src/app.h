@@ -41,6 +41,10 @@ enum class AnimStyle {
     None   // sentinel: inherit project default (state.style)
 };
 
+// ── Background removal status ─────────────────────────────────────────────────
+
+enum class BgRemoveStatus { Idle, Processing, Ready, Error };
+
 // ── Creative FX type ─────────────────────────────────────────────────────────
 
 enum class FXType {
@@ -177,6 +181,14 @@ struct Clip {
     float       fx_vhs_noise      = 0.3f; // static grain density (0–1)
     float       fx_vhs_bleed      = 8.f;  // chroma bleed pixels (0–20)
     float       fx_vhs_tracking   = 0.2f; // tracking glitch warp (0–1)
+
+    // Remove Background
+    bool          bg_remove_on       = false;
+    float         bg_remove_softness = 0.1f;   // edge feather (0=hard)
+    std::string   bg_remove_mask_dir;           // proxy-res PNG masks (empty = not processed)
+    BgRemoveStatus bg_remove_status  = BgRemoveStatus::Idle;
+    float         bg_remove_progress = 0.f;
+    std::string   bg_remove_error;
 
     // keyframe tracks — keyed by property name string
     // empty = use the matching static field above
