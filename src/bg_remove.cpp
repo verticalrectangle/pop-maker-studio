@@ -216,18 +216,24 @@ bool bg_remove_run_hires(const std::string& video_path,
 
 // ── rembg package install ─────────────────────────────────────────────────────
 
-static std::atomic<int>  s_rembg_ok{-1};        // -1=unknown 0=no 1=yes
+static std::atomic<int>  s_rembg_ok{-1};        // -1=unknown/-2=checking 0=no 1=yes
 static std::atomic<int>  s_install_status{0};   // 0=idle 1=running 2=done 3=failed
 static std::string       s_install_error;
 static std::mutex        s_install_mu;
 
 bool rembg_is_installed(const std::string& python_path) {
     int cached = s_rembg_ok.load();
-    if (cached >= 0) return cached == 1;
-    std::string cmd = "\"" + python_path + "\" -c \"import rembg\" 2>/dev/null";
-    int ret = system(cmd.c_str());
-    s_rembg_ok.store(ret == 0 ? 1 : 0);
-    return ret == 0;
+    if (cached == 1)  return true;
+    if (cached == 0)  return false;
+    if (cached == -2) return false;  // async check in flight — treat as not yet known
+    // Kick off async check so we never block the main thread.
+    s_rembg_ok.store(-2);
+    std::thread([python_path]() {
+        std::string cmd = "\"" + python_path + "\" -c \"import rembg\" 2>/dev/null";
+        int ret = system(cmd.c_str());
+        s_rembg_ok.store(ret == 0 ? 1 : 0);
+    }).detach();
+    return false;
 }
 
 void rembg_install_reset() {
@@ -252,7 +258,8 @@ void rembg_install_start(const std::string& python_path) {
                 s_install_error = out.size() > 300 ? out.substr(out.size() - 300) : out;
                 s_install_status.store(3);
             } else {
-                rembg_install_reset();
+                // Mark as installed immediately — async verify will confirm on next check.
+                s_rembg_ok.store(1);
                 s_install_status.store(2);
             }
         } else {

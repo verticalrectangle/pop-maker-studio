@@ -2524,18 +2524,16 @@ static void panel_clip(AppState& state, float w) {
 
             // ── rembg install gate ────────────────────────────────────────────
             auto inst = rembg_install_status();
-            if (!rembg_is_installed(state.python_path)) {
+            bool rembg_ok = rembg_is_installed(state.python_path);
+            if (!rembg_ok) {
                 if (inst == RembgInstallStatus::Running) {
-                    float spin = fmodf((float)ImGui::GetTime() * 1.5f, 1.f);
+                    float t = fmodf((float)ImGui::GetTime() * 0.8f, 1.f);
                     ImVec2 bp = ImGui::GetCursorScreenPos();
-                    bgdl->AddRectFilled(bp, {bp.x+bar_w*spin, bp.y+4.f}, IM_COL32(255,165,0,180), 2.f);
+                    bgdl->AddRectFilled(bp, {bp.x+bar_w, bp.y+4.f}, IM_COL32(255,165,0,40), 2.f);
+                    bgdl->AddRectFilled({bp.x+bar_w*t, bp.y}, {bp.x+bar_w*fminf(1.f,t+0.3f), bp.y+4.f}, IM_COL32(255,165,0,220), 2.f);
                     ImGui::Dummy({0.f, 8.f});
                     ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f,0.65f,0.f,1.f));
                     ImGui::TextUnformatted("Installing rembg…");
-                    ImGui::PopStyleColor();
-                } else if (inst == RembgInstallStatus::Done) {
-                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.25f,0.85f,0.4f,1.f));
-                    ImGui::TextUnformatted("Installed — ready to use.");
                     ImGui::PopStyleColor();
                 } else if (inst == RembgInstallStatus::Failed) {
                     ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f,0.3f,0.3f,1.f));
@@ -2552,16 +2550,16 @@ static void panel_clip(AppState& state, float w) {
                     if (ui_btn("Retry install", false, true)) rembg_install_start(state.python_path);
                 } else {
                     ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
-                    ImGui::TextWrapped("rembg is not installed. It's a small package (~5 MB) needed to remove backgrounds.");
+                    ImGui::TextWrapped("rembg is not installed. It's a small package needed to remove backgrounds.");
                     ImGui::PopStyleColor();
                     ImGui::Dummy({0.f,4.f});
                     if (ui_btn("Install rembg", false, true)) rembg_install_start(state.python_path);
                 }
                 ImGui::Dummy({0.f, 4.f});
-                return;
             }
 
             auto status = clip.bg_remove_status;
+            if (!rembg_ok) ImGui::BeginDisabled();
 
             // ── Toggle ────────────────────────────────────────────────────────
             bool tog = clip.bg_remove_on;
@@ -2661,6 +2659,7 @@ static void panel_clip(AppState& state, float w) {
                 }
                 ImGui::Dummy({0.f, 4.f});
             }
+            if (!rembg_ok) ImGui::EndDisabled();
         }
     }
 
