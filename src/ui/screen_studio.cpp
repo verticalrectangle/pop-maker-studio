@@ -2483,7 +2483,7 @@ static void panel_clip(AppState& state, float w) {
                 ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
                 ImGui::TextWrapped("Models not installed.");
                 ImGui::PopStyleColor();
-                if (ui_btn("Download Models…", false, true)) state.show_model_dl_modal = true;
+                if (ui_btn("Set Up AI Features", false, true)) state.show_model_dl_modal = true;
                 ImGui::Dummy({0.f, 4.f});
             }
             if (!ml_avail) ImGui::BeginDisabled();
@@ -2521,6 +2521,45 @@ static void panel_clip(AppState& state, float w) {
             ImGui::Dummy({0.f, 6.f});
             ImDrawList* bgdl = ImGui::GetWindowDrawList();
             float bar_w = w - 16.f;
+
+            // ── rembg install gate ────────────────────────────────────────────
+            auto inst = rembg_install_status();
+            if (!rembg_is_installed(state.python_path)) {
+                if (inst == RembgInstallStatus::Running) {
+                    float spin = fmodf((float)ImGui::GetTime() * 1.5f, 1.f);
+                    ImVec2 bp = ImGui::GetCursorScreenPos();
+                    bgdl->AddRectFilled(bp, {bp.x+bar_w*spin, bp.y+4.f}, IM_COL32(255,165,0,180), 2.f);
+                    ImGui::Dummy({0.f, 8.f});
+                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f,0.65f,0.f,1.f));
+                    ImGui::TextUnformatted("Installing rembg…");
+                    ImGui::PopStyleColor();
+                } else if (inst == RembgInstallStatus::Done) {
+                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.25f,0.85f,0.4f,1.f));
+                    ImGui::TextUnformatted("Installed — ready to use.");
+                    ImGui::PopStyleColor();
+                } else if (inst == RembgInstallStatus::Failed) {
+                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f,0.3f,0.3f,1.f));
+                    ImGui::TextUnformatted("Install failed.");
+                    ImGui::PopStyleColor();
+                    std::string ie = rembg_install_error();
+                    if (!ie.empty()) {
+                        ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+                        if (ie.size() > 120) ie = ie.substr(ie.size()-120);
+                        ImGui::TextWrapped("%s", ie.c_str());
+                        ImGui::PopStyleColor();
+                    }
+                    ImGui::Dummy({0.f,4.f});
+                    if (ui_btn("Retry install", false, true)) rembg_install_start(state.python_path);
+                } else {
+                    ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+                    ImGui::TextWrapped("rembg is not installed. It's a small package (~5 MB) needed to remove backgrounds.");
+                    ImGui::PopStyleColor();
+                    ImGui::Dummy({0.f,4.f});
+                    if (ui_btn("Install rembg", false, true)) rembg_install_start(state.python_path);
+                }
+                ImGui::Dummy({0.f, 4.f});
+                return;
+            }
 
             auto status = clip.bg_remove_status;
 
@@ -2695,7 +2734,7 @@ static void panel_clip(AppState& state, float w) {
                 ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
                 ImGui::TextWrapped("Models not installed.");
                 ImGui::PopStyleColor();
-                if (ui_btn("Download Models…", false, true)) state.show_model_dl_modal = true;
+                if (ui_btn("Set Up AI Features", false, true)) state.show_model_dl_modal = true;
                 ImGui::Dummy({0.f, 4.f});
             }
             if (!ml_avail) ImGui::BeginDisabled();
@@ -5462,7 +5501,7 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
             }
             if (busy || !state.models_ready) ImGui::EndDisabled();
             if (!state.models_ready) {
-                if (ImGui::MenuItem("Download Lyric Extraction Models…"))
+                if (ImGui::MenuItem("Set Up AI Features…"))
                     state.show_model_dl_modal = true;
             }
             ImGui::Separator();
@@ -6074,7 +6113,7 @@ void ui_studio(AppState& state) {
         if (ImGui::BeginMenu("Help")) {
             bool already = state.models_ready;
             if (already) ImGui::BeginDisabled();
-            if (ImGui::MenuItem("Download Lyric Extraction Models…"))
+            if (ImGui::MenuItem("Set Up AI Features…"))
                 state.show_model_dl_modal = true;
             if (already) ImGui::EndDisabled();
             ImGui::EndMenu();

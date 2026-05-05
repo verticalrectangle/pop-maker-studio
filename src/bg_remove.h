@@ -31,3 +31,15 @@ std::string bg_remove_proxy_dir(const std::string& video_path);
 
 // Read fps.txt written by the script; returns 30.0 on failure.
 float bg_remove_read_fps(const std::string& mask_dir);
+
+// ── rembg package install ─────────────────────────────────────────────────────
+
+// Returns true if rembg is importable in python_path. Cached after first check;
+// call rembg_install_reset() to force re-check (e.g. after install completes).
+bool rembg_is_installed(const std::string& python_path);
+void rembg_install_reset();
+
+enum class RembgInstallStatus { Idle, Running, Done, Failed };
+void              rembg_install_start(const std::string& python_path);
+RembgInstallStatus rembg_install_status();
+std::string       rembg_install_error();

@@ -213,3 +213,66 @@ bool bg_remove_run_hires(const std::string& video_path,
     int ret = system(cmd.str().c_str());
     return (ret == 0);
 }
+
+// ── rembg package install ─────────────────────────────────────────────────────
+
+static std::atomic<int>  s_rembg_ok{-1};        // -1=unknown 0=no 1=yes
+static std::atomic<int>  s_install_status{0};   // 0=idle 1=running 2=done 3=failed
+static std::string       s_install_error;
+static std::mutex        s_install_mu;
+
+bool rembg_is_installed(const std::string& python_path) {
+    int cached = s_rembg_ok.load();
+    if (cached >= 0) return cached == 1;
+    std::string cmd = "\"" + python_path + "\" -c \"import rembg\" 2>/dev/null";
+    int ret = system(cmd.c_str());
+    s_rembg_ok.store(ret == 0 ? 1 : 0);
+    return ret == 0;
+}
+
+void rembg_install_reset() {
+    s_rembg_ok.store(-1);
+}
+
+void rembg_install_start(const std::string& python_path) {
+    if (s_install_status.load() == 1) return;
+    s_install_status.store(1);
+    { std::lock_guard<std::mutex> lk(s_install_mu); s_install_error.clear(); }
+
+    std::thread([python_path]() {
+        std::string cmd = "\"" + python_path + "\" -m pip install --progress-bar off rembg 2>&1";
+        FILE* pipe = popen(cmd.c_str(), "r");
+        std::string out;
+        if (pipe) {
+            char buf[256];
+            while (fgets(buf, sizeof(buf), pipe)) out += buf;
+            int ret = pclose(pipe);
+            if (ret != 0) {
+                std::lock_guard<std::mutex> lk(s_install_mu);
+                s_install_error = out.size() > 300 ? out.substr(out.size() - 300) : out;
+                s_install_status.store(3);
+            } else {
+                rembg_install_reset();
+                s_install_status.store(2);
+            }
+        } else {
+            std::lock_guard<std::mutex> lk(s_install_mu);
+            s_install_error = "popen failed";
+            s_install_status.store(3);
+        }
+    }).detach();
+}
+
+RembgInstallStatus rembg_install_status() {
+    switch (s_install_status.load()) {
+        case 1: return RembgInstallStatus::Running;
+        case 2: return RembgInstallStatus::Done;
+        case 3: return RembgInstallStatus::Failed;
+        default: return RembgInstallStatus::Idle;
+    }
+}
+
+std::string rembg_install_error() {
+    std::lock_guard<std::mutex> lk(s_install_mu);
+    return s_install_error;
+}
