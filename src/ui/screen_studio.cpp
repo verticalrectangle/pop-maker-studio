@@ -950,6 +950,9 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                     pfx.datamosh_clip_start   = cfx.datamosh_clip_start;
                     pfx.datamosh_src_at_start = cl_ptr->in_point +
                         (cfx.datamosh_clip_start - cl_ptr->start) * cl_ptr->speed;
+                    pfx.datamosh_bleedback     = cfx.datamosh_bleedback;
+                    pfx.datamosh_t_in_clip     = at_time - cfx.datamosh_clip_start;
+                    pfx.datamosh_clip_duration = cfx.datamosh_clip_duration;
                     pfx.time          = t_anim;
                     video_set_pixel_fx(slot, pfx);
                 }
@@ -3739,6 +3742,11 @@ static void panel_fx_clip(AppState& state, float w) {
                 ImGui::SameLine(0.f, 4.f);
             }
             ImGui::NewLine();
+            ImGui::Dummy({0.f, 4.f});
+            ui_label("Bleed Back");
+            ImGui::SetNextItemWidth(sw2);
+            ImGui::SliderFloat("##dmbb", &clip.fx_datamosh_bleedback, 0.f, 1.f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Datamosh: bleed back");
             break;
         }
 

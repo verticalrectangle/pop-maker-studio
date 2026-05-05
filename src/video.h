@@ -85,8 +85,11 @@ struct PixelFX {
     float datamosh_intensity  = 0.6f;
     float datamosh_decay      = 0.08f;
     int   datamosh_block_size = 16;
-    float datamosh_clip_start   = -1.f;  // effect clip timeline start — ghost resets when this changes
-    float datamosh_src_at_start = 0.f;   // video source time (src_t) at effect clip start — used to seed ghost
+    float datamosh_clip_start     = -1.f;  // effect clip timeline start — ghost resets when this changes
+    float datamosh_src_at_start   = 0.f;   // video source time (src_t) at effect clip start — used to seed ghost
+    float datamosh_bleedback      = 0.f;   // 0=off, 1=full bleedback at clip tail
+    float datamosh_t_in_clip      = 0.f;   // seconds since clip start (for bleedback ramp)
+    float datamosh_clip_duration  = 0.f;   // total clip duration (for bleedback ramp)
 
     float time         = 0.f;   // animation time (ImGui::GetTime())
 
@@ -107,6 +110,9 @@ struct PixelFX {
                datamosh_decay == o.datamosh_decay && datamosh_block_size == o.datamosh_block_size &&
                datamosh_clip_start == o.datamosh_clip_start &&
                datamosh_src_at_start == o.datamosh_src_at_start &&
+               datamosh_bleedback == o.datamosh_bleedback &&
+               datamosh_t_in_clip == o.datamosh_t_in_clip &&
+               datamosh_clip_duration == o.datamosh_clip_duration &&
                time       == o.time;
     }
 };

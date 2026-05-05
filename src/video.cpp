@@ -230,7 +230,8 @@ static void cpu_apply_corruption(uint8_t* px, int w, int h, float intensity, flo
 // frame over frame — even on a still image it keeps generating motion.
 // Ghost initialises from the first frame so there's no black-frame flash.
 static void cpu_apply_datamosh(uint8_t* px, uint8_t* ghost, int w, int h,
-                                float intensity, float decay, int bs) {
+                                float intensity, float decay, int bs,
+                                float bleedback, float t_in_clip, float clip_duration) {
     if (!ghost || w <= 0 || h <= 0) return;
 
     int nbx = (w + bs - 1) / bs;
@@ -246,6 +247,17 @@ static void cpu_apply_datamosh(uint8_t* px, uint8_t* ghost, int w, int h,
     // feedback where total divergence locks every block into white-noise substitution.
     float effective_decay = decay * (1.f - intensity * 0.75f);
     effective_decay = fmaxf(0.05f, effective_decay);
+
+    // Bleedback: ramp effective_decay toward 1.0 over the tail of the clip so the
+    // subject reasserts itself through the mosh by the end of the brick.
+    if (bleedback > 0.01f && clip_duration > 0.01f && t_in_clip > 0.f) {
+        float ramp_start = clip_duration * (1.f - fminf(1.f, bleedback) * 0.6f);
+        if (t_in_clip > ramp_start) {
+            float ramp_t = (t_in_clip - ramp_start) / (clip_duration - ramp_start);
+            ramp_t = fminf(1.f, ramp_t);
+            effective_decay = effective_decay + (1.f - effective_decay) * ramp_t * bleedback;
+        }
+    }
 
     // ── Pass 1: per-block SAD → mosh or pass ─────────────────────────────────
     for (int by = 0; by < nby; ++by) {
@@ -532,7 +544,10 @@ static void upload_jpeg(GLuint* tex, int* tex_w, int* tex_h, bool* tex_rgba,
         if (pfx->datamosh_on && ghost && ghost_w == w && ghost_h == h)
             cpu_apply_datamosh(pixels, ghost, w, h,
                                pfx->datamosh_intensity, pfx->datamosh_decay,
-                               pfx->datamosh_block_size);
+                               pfx->datamosh_block_size,
+                               pfx->datamosh_bleedback,
+                               pfx->datamosh_t_in_clip,
+                               pfx->datamosh_clip_duration);
     }
 
     if (*tex == 0) {
@@ -715,7 +730,10 @@ static uintptr_t decode_proxy_frame(PreviewState& pv, int frame_idx) {
                         cpu_apply_datamosh(px.data(), pv.ghost_buf.data(), fw, fh,
                                            pv.pixel_fx.datamosh_intensity,
                                            pv.pixel_fx.datamosh_decay,
-                                           pv.pixel_fx.datamosh_block_size);
+                                           pv.pixel_fx.datamosh_block_size,
+                                           pv.pixel_fx.datamosh_bleedback,
+                                           pv.pixel_fx.datamosh_t_in_clip,
+                                           pv.pixel_fx.datamosh_clip_duration);
                     }
                 }
                 // jump == 1 or jump == 0: falls through, upload_jpeg handles it.

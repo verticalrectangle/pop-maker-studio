@@ -159,6 +159,7 @@ struct Clip {
     float       fx_datamosh_intensity  = 0.6f;  // ghost blend strength (0–1)
     float       fx_datamosh_decay      = 0.08f; // ghost self-feed rate (0–1, higher = more chaos)
     int         fx_datamosh_block_size = 16;    // MCU block size in pixels (8/16/32)
+    float       fx_datamosh_bleedback  = 0.f;   // subject reasserts at tail (0=off, 1=full)
 
     // ZoomPunch
     float       fx_zoom_strength = 0.08f; // peak scale-up fraction (0–0.5)
@@ -205,11 +206,13 @@ struct CreativeFXAccum {
     float glitch_corruption_bleed = 0.f;
 
     // Datamosh
-    bool  datamosh_on         = false;
-    float datamosh_intensity  = 0.6f;
-    float datamosh_decay      = 0.08f;
-    int   datamosh_block_size = 16;
-    float datamosh_clip_start = -1.f;  // start time of the active datamosh clip
+    bool  datamosh_on            = false;
+    float datamosh_intensity     = 0.6f;
+    float datamosh_decay         = 0.08f;
+    int   datamosh_block_size    = 16;
+    float datamosh_clip_start    = -1.f;  // start time of the active datamosh clip
+    float datamosh_bleedback     = 0.f;
+    float datamosh_clip_duration = 0.f;
 
     bool  zoom_on        = false;
     float zoom_strength  = 0.f;
