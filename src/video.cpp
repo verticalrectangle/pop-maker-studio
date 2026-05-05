@@ -238,14 +238,14 @@ static void cpu_apply_datamosh(uint8_t* px, uint8_t* ghost, int w, int h,
 
     // Fixed motion threshold — catches real inter-frame motion, ignores static areas.
     // Intensity no longer controls what moshs; it controls HOW DEEP the mosh goes.
-    const float threshold = 15.f;
+    const float threshold = 8.f;
 
     // Intensity bends the effective decay: low intensity → ghost tracks current quickly
     // (short trails, mild mosh); high intensity → ghost persists long (deep chaos).
-    // Floor at 0.08 so the ghost always bleeds in some real content — prevents runaway
+    // Floor at 0.05 so the ghost always bleeds in some real content — prevents runaway
     // feedback where total divergence locks every block into white-noise substitution.
     float effective_decay = decay * (1.f - intensity * 0.75f);
-    effective_decay = fmaxf(0.08f, effective_decay);
+    effective_decay = fmaxf(0.05f, effective_decay);
 
     // ── Pass 1: per-block SAD → mosh or pass ─────────────────────────────────
     for (int by = 0; by < nby; ++by) {
@@ -266,7 +266,7 @@ static void cpu_apply_datamosh(uint8_t* px, uint8_t* ghost, int w, int h,
             float mean_sad = count > 0 ? (float)sad / (float)(count * 3) : 0.f;
 
             if (mean_sad < threshold) continue;   // static — let current frame through
-            if (mean_sad > 80.f)     continue;   // fully diverged — heal with real content
+            if (mean_sad > 180.f)    continue;   // fully diverged — heal with real content
 
             // Motion block — substitute ghost (stuck P-frame reference).
             // Displacement simulates wrong motion vector; chroma twist scales with
@@ -301,9 +301,9 @@ static void cpu_apply_datamosh(uint8_t* px, uint8_t* ghost, int w, int h,
     float keep = 1.f - effective_decay;
     int n = w * h;
     for (int i = 0; i < n; ++i) {
-        ghost[i*3+0] = cu8((int)(ghost[i*3+0] * keep + px[i*3+0] * decay + 0.5f));
-        ghost[i*3+1] = cu8((int)(ghost[i*3+1] * keep + px[i*3+1] * decay + 0.5f));
-        ghost[i*3+2] = cu8((int)(ghost[i*3+2] * keep + px[i*3+2] * decay + 0.5f));
+        ghost[i*3+0] = cu8((int)(ghost[i*3+0] * keep + px[i*3+0] * effective_decay + 0.5f));
+        ghost[i*3+1] = cu8((int)(ghost[i*3+1] * keep + px[i*3+1] * effective_decay + 0.5f));
+        ghost[i*3+2] = cu8((int)(ghost[i*3+2] * keep + px[i*3+2] * effective_decay + 0.5f));
     }
 }
 
