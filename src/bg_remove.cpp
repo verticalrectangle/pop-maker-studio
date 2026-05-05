@@ -64,15 +64,17 @@ static void run_job(std::shared_ptr<JobData> data,
         << "--input  \"" << input_path  << "\" "
         << "--output \"" << output_dir  << "\" 2>&1";
 
+    fprintf(stderr, "[bg_remove] cmd: %s\n", cmd.str().c_str());
     FILE* pipe = popen(cmd.str().c_str(), "r");
     if (!pipe) {
         std::lock_guard<std::mutex> lk(data->mu);
-        data->error_msg = "Failed to launch rembg_remove.py";
+        data->error_msg = "popen failed — could not launch: " + cmd.str();
         data->status.store(2);
         return;
     }
 
     char buf[512];
+    std::string last_lines;  // accumulate non-JSON output for error reporting
     while (fgets(buf, sizeof(buf), pipe)) {
         std::string line(buf);
         if (!line.empty() && line.back() == '\n') line.pop_back();
@@ -83,16 +85,32 @@ static void run_job(std::shared_ptr<JobData> data,
             float p = 0.f;
             sscanf(line.c_str() + pp + 11, "%f", &p);
             data->progress.store(p);
+            continue;
         }
-        // {"error": "..."}
+        // {"done": true}
+        if (line.find("\"done\"") != std::string::npos) continue;
+
+        // {"error": "..."} — structured error from script
         auto ep = line.find("\"error\":");
         if (ep != std::string::npos) {
             std::lock_guard<std::mutex> lk(data->mu);
             data->error_msg = line;
+            continue;
+        }
+
+        // Unstructured output (tracebacks, import errors, etc.) — keep last 400 chars
+        if (!line.empty()) {
+            last_lines += line + "\n";
+            if (last_lines.size() > 400) last_lines = last_lines.substr(last_lines.size() - 400);
         }
     }
 
     int ret = pclose(pipe);
+    if (ret != 0) {
+        std::lock_guard<std::mutex> lk(data->mu);
+        if (data->error_msg.empty())
+            data->error_msg = last_lines.empty() ? "Script exited with error (no output)" : last_lines;
+    }
     data->status.store(ret == 0 ? 1 : 2);
 }
 

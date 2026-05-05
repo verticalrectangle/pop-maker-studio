@@ -110,7 +110,13 @@ bool models_detect() {
         }
     }
 
-    return whisper_ok && demucs_ok;
+    if (!whisper_ok || !demucs_ok) return false;
+
+    // rembg: check that the package is importable in the managed venv.
+    std::string py = managed_python_detect();
+    if (py.empty()) return false;
+    int ret = system((py + " -c \"import rembg\" 2>/dev/null").c_str());
+    return ret == 0;
 }
 
 const unsigned char* python311_tar_data() {
