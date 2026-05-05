@@ -700,11 +700,25 @@ static uintptr_t decode_proxy_frame(PreviewState& pv, int frame_idx) {
                               (pv.ghost_buf[0] == 0 && pv.ghost_buf[1] == 0 && pv.ghost_buf[2] == 0);
             if (ghost_cold) {
                 seed_ghost_from_src_time(pv, pv.pixel_fx.datamosh_src_at_start);
-            } else if (frame_idx != pv.ghost_frame_idx + 1 && frame_idx != pv.ghost_frame_idx) {
-                // Scrub/seek: re-seed ghost from the frame just before the target so
-                // datamosh runs against real inter-frame motion and the effect shows
-                // immediately — one JPEG decode, no history replay.
-                seed_ghost_from_frame(pv, frame_idx - 1);
+            } else {
+                int jump = frame_idx - pv.ghost_frame_idx;
+                if (jump < 0 || jump > 8) {
+                    // Large backward/forward jump (real scrub) — instant re-seed.
+                    seed_ghost_from_frame(pv, frame_idx - 1);
+                } else if (jump > 1) {
+                    // Small forward skip (playback frame drop) — drive ghost through
+                    // the missing frames so it stays continuous. At most 7 passes.
+                    for (int f = pv.ghost_frame_idx + 1; f < frame_idx; ++f) {
+                        std::vector<uint8_t> px; int fw = 0, fh = 0;
+                        if (!read_proxy_pixels(pv, f, px, fw, fh)) break;
+                        if (fw != pv.ghost_w || fh != pv.ghost_h) break;
+                        cpu_apply_datamosh(px.data(), pv.ghost_buf.data(), fw, fh,
+                                           pv.pixel_fx.datamosh_intensity,
+                                           pv.pixel_fx.datamosh_decay,
+                                           pv.pixel_fx.datamosh_block_size);
+                    }
+                }
+                // jump == 1 or jump == 0: falls through, upload_jpeg handles it.
             }
         }
     }
