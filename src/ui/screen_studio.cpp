@@ -2849,34 +2849,14 @@ static EffectPreset preset_from_clip(const Clip& clip, const std::string& name) 
     return p;
 }
 
-// Color swatch for a preset card — derived from its dominant effect.
-static ImU32 preset_swatch(const EffectPreset& p) {
-    if (p.fx_blur_on  && !p.fx_color_on && !p.fx_vignette_on)
-        return IM_COL32(80, 140, 220, 200);   // blue-ish for blur
-    if (p.fx_vignette_on && !p.fx_color_on && !p.fx_blur_on)
-        return IM_COL32(40, 40, 60, 220);     // near-black for vignette
-    if (!p.fx_color_on)
-        return IM_COL32(90, 90, 110, 200);    // grey for mixed/none
-    // Rough tint from hue + saturation
-    float h = fmodf(p.fx_hue + 360.f, 360.f);
-    float s = p.fx_saturation;
-    if (s < 0.05f) return IM_COL32(110, 110, 110, 220);  // desaturated
-    int hi = (int)(h / 60.f) % 6;
-    static const ImU32 hue_cols[6] = {
-        IM_COL32(220,80,80,200), IM_COL32(200,160,60,200), IM_COL32(100,200,70,200),
-        IM_COL32(60,180,200,200), IM_COL32(80,100,220,200), IM_COL32(180,70,200,200)
-    };
-    return hue_cols[hi];
-}
+
 
 // ── Right panel: Adjustment Library tab ──────────────────────────────────────
 
 static void panel_adjustment_library(AppState& state, float w) {
     ImGui::Dummy({0.f, 8.f});
 
-    ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(200,160,255,255));
     ImGui::TextUnformatted("Adjustment Library");
-    ImGui::PopStyleColor();
     ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
     ImGui::TextWrapped("Click to apply to selected Adjustment clip. Drag to timeline to create one.");
     ImGui::PopStyleColor();
@@ -2890,9 +2870,8 @@ static void panel_adjustment_library(AppState& state, float w) {
                         state.tracks[state.selected_track].clips[state.selected_clip].clip_type == ClipType::Effect &&
                         state.tracks[state.selected_track].clips[state.selected_clip].fx_type == FXType::Adjustment);
 
-    float card_w  = (w - 12.f) * 0.5f;  // 2-column grid
-    float card_h  = 54.f;
-    float swatch_w = 8.f;
+    float card_w = (w - 12.f) * 0.5f;  // 2-column grid
+    float card_h = 64.f;
 
     auto draw_preset_card = [&](const EffectPreset& p, int unique_id) {
         ImGui::PushID(unique_id);
@@ -2900,34 +2879,38 @@ static void panel_adjustment_library(AppState& state, float w) {
         ImDrawList* dl = ImGui::GetWindowDrawList();
 
         bool hov = ImGui::IsMouseHoveringRect(cp, {cp.x + card_w, cp.y + card_h});
-        ImU32 bg  = hov ? to_u32(Col::bg_soft_hov) : to_u32(Col::bg_soft);
-        ImU32 brd = hov ? IM_COL32(180,130,255,180) : to_u32(Col::line);
 
-        dl->AddRectFilled(cp, {cp.x+card_w, cp.y+card_h}, bg, 4.f);
-        dl->AddRect(cp, {cp.x+card_w, cp.y+card_h}, brd, 4.f);
-        // Left color swatch strip
-        dl->AddRectFilled(cp, {cp.x+swatch_w, cp.y+card_h}, preset_swatch(p), 4.f);
+        // Preview texture as card background
+        uintptr_t prev_tex = video_adj_preview_texture(unique_id,
+            p.fx_color_on ? p.fx_brightness : 0.f,
+            p.fx_color_on ? p.fx_contrast   : 1.f,
+            p.fx_color_on ? p.fx_saturation : 1.f,
+            p.fx_color_on ? p.fx_hue        : 0.f,
+            p.fx_blur_on     ? p.fx_blur     : 0.f,
+            p.fx_vignette_on ? p.fx_vignette : 0.f);
+        if (prev_tex) {
+            dl->AddImageRounded((ImTextureID)(uintptr_t)prev_tex,
+                                cp, {cp.x+card_w, cp.y+card_h},
+                                {0,0}, {1,1},
+                                hov ? IM_COL32(255,255,255,210) : IM_COL32(255,255,255,160),
+                                4.f);
+        } else {
+            dl->AddRectFilled(cp, {cp.x+card_w, cp.y+card_h}, IM_COL32(18,18,30,220), 4.f);
+        }
 
-        // Name + badge line
-        float tx = cp.x + swatch_w + 8.f;
-        float ty = cp.y + 10.f;
+        // Dark scrim at bottom
+        dl->AddRectFilled({cp.x, cp.y+card_h-26.f}, {cp.x+card_w, cp.y+card_h},
+                          IM_COL32(0,0,0,185), 4.f);
+
+        // Border
+        dl->AddRect(cp, {cp.x+card_w, cp.y+card_h},
+                    hov ? IM_COL32(255,255,255,200) : IM_COL32(60,60,80,200), 4.f, 0, hov ? 2.f : 1.f);
+
+        // Name over scrim
         ImGui::PushFont(g_font_bold);
-        dl->AddText(ImGui::GetFont(), 13.f, {tx, ty}, IM_COL32(230,230,230,255), p.name.c_str());
+        dl->AddText(ImGui::GetFont(), 12.f, {cp.x+8.f, cp.y+card_h-20.f},
+                    IM_COL32(255,255,255,240), p.name.c_str());
         ImGui::PopFont();
-
-        // Mini badges for active effects
-        float bx = tx, by = cp.y + 30.f;
-        auto badge = [&](const char* lbl, ImU32 col) {
-            ImVec2 ts = ImGui::CalcTextSize(lbl);
-            float bw = ts.x + 8.f, bh = ts.y + 4.f;
-            dl->AddRectFilled({bx,by},{bx+bw,by+bh}, col, 3.f);
-            dl->AddText({bx+4.f,by+2.f}, IM_COL32(255,255,255,220), lbl);
-            bx += bw + 4.f;
-        };
-        if (p.fx_color_on)    badge("Col", IM_COL32(80,140,220,180));
-        if (p.fx_blur_on)     badge("Blur",IM_COL32(60,120,180,180));
-        if (p.fx_vignette_on) badge("Vig", IM_COL32(60,60,90,200));
-        if (p.fx_text_on)     badge("Txt", IM_COL32(100,80,160,200));
 
         // Invisible button over the card for click and drag-drop
         ImGui::SetCursorScreenPos(cp);
@@ -2937,9 +2920,7 @@ static void panel_adjustment_library(AppState& state, float w) {
         // Drag-drop source — payload is index into the combined preset list
         if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
             ImGui::SetDragDropPayload("FX_PRESET", &unique_id, sizeof(int));
-            ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(200,160,255,255));
             ImGui::TextUnformatted(p.name.c_str());
-            ImGui::PopStyleColor();
             ImGui::TextUnformatted("Drop onto timeline track");
             ImGui::EndDragDropSource();
         }
@@ -3046,9 +3027,7 @@ static void panel_adjustment(AppState& state, float w) {
     ImGui::Dummy({0.f, 8.f});
 
     // Header
-    ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(200,160,255,255));
     ImGui::TextUnformatted("Adjustment Clip");
-    ImGui::PopStyleColor();
     int n_below = (int)state.tracks.size() - state.selected_track - 1;
     char info[128];
     snprintf(info, sizeof(info), "%s  ·  %.2fs – %.2fs  ·  %d track%s below",
@@ -3550,14 +3529,14 @@ static void panel_fx_creative(AppState& state, float w) {
         dl->AddRectFilled({cp.x, cp.y+card_h-34.f}, {cp.x+card_w, cp.y+card_h},
                           IM_COL32(0,0,0,185), 5.f);
 
-        // Border — accent on hover, subtle otherwise
+        // Border — white on hover, subtle otherwise
         dl->AddRect(cp, {cp.x+card_w, cp.y+card_h},
-                    hov ? fc.accent : IM_COL32(60,60,80,200), 5.f, 0, hov ? 2.f : 1.f);
+                    hov ? IM_COL32(255,255,255,200) : IM_COL32(60,60,80,200), 5.f, 0, hov ? 2.f : 1.f);
 
         // Name + tagline over scrim
         float tx = cp.x + 10.f;
         ImGui::PushFont(g_font_bold);
-        dl->AddText(ImGui::GetFont(), 13.f, {tx, cp.y+card_h-28.f}, fc.accent, fc.name);
+        dl->AddText(ImGui::GetFont(), 13.f, {tx, cp.y+card_h-28.f}, IM_COL32(255,255,255,240), fc.name);
         ImGui::PopFont();
         dl->AddText({tx, cp.y+card_h-14.f}, IM_COL32(180,180,190,200), fc.tagline);
 
@@ -3599,9 +3578,7 @@ static void panel_fx_clip(AppState& state, float w) {
     ImGui::Dummy({0.f, 8.f});
 
     ImU32 ac = fx_type_accent(clip.fx_type);
-    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(ac));
     ImGui::TextUnformatted(fx_type_display(clip.fx_type));
-    ImGui::PopStyleColor();
 
     int n_below = (int)state.tracks.size() - state.selected_track - 1;
     char info[128];

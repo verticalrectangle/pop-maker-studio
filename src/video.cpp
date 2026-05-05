@@ -1071,22 +1071,25 @@ static void fxp_make_sources() {
         for (int x = 0; x < FXP_W; ++x) {
             float fx = (float)x / (FXP_W - 1);
             float fy = (float)y / (FXP_H - 1);
-            // Warm portrait-ish gradient — skin tones left, cool blue right,
-            // bright highlight top-centre, darker bottom.
-            float warm = 1.f - fx * 0.7f;
-            float lum  = 0.55f + 0.35f * (1.f - fy) + 0.18f * expf(-((fx-0.45f)*(fx-0.45f)*14.f + fy*fy*8.f));
-            uint8_t r = cu8((int)(255.f * fminf(1.f, lum * (0.82f + 0.22f * warm))));
-            uint8_t g = cu8((int)(255.f * fminf(1.f, lum * (0.62f + 0.10f * warm))));
-            uint8_t b = cu8((int)(255.f * fminf(1.f, lum * (0.38f + 0.28f * (1.f - warm)))));
-            // Subtle horizontal banding for displacement effects to bite into
-            if ((y / 6) % 2 == 0) { r = cu8(r - 12); g = cu8(g - 8); b = cu8(b - 6); }
+            // Cool cinematic base: deep blue-purple shadows, bright blue-white highlight
+            // top-centre, teal mid-tones — clean enough for every effect to read clearly.
+            float lum = 0.18f + 0.55f * (1.f - fy)
+                      + 0.30f * expf(-((fx-0.48f)*(fx-0.48f)*10.f + fy*fy*6.f));
+            float r = lum * (0.30f + 0.38f * (1.f - fx));
+            float g = lum * (0.42f + 0.28f * (1.f - fy * 0.6f));
+            float b = lum * (0.78f + 0.22f * fx);
+            // Horizontal banding so displacement/corruption effects have edges to bite
+            if ((y / 7) % 2 == 0) { r *= 0.82f; g *= 0.85f; b *= 0.88f; }
+            uint8_t ur = cu8((int)(255.f * fminf(1.f, r)));
+            uint8_t ug = cu8((int)(255.f * fminf(1.f, g)));
+            uint8_t ub = cu8((int)(255.f * fminf(1.f, b)));
             size_t i = ((size_t)y * FXP_W + x) * 3;
-            s_fxp_src[i+0] = r; s_fxp_src[i+1] = g; s_fxp_src[i+2] = b;
+            s_fxp_src[i+0] = ur; s_fxp_src[i+1] = ug; s_fxp_src[i+2] = ub;
             // Chroma key source: right 55% is pure green screen, left is the subject
             if (fx > 0.45f) {
                 s_fxp_src_ck[i+0] = 20;  s_fxp_src_ck[i+1] = 200; s_fxp_src_ck[i+2] = 40;
             } else {
-                s_fxp_src_ck[i+0] = r; s_fxp_src_ck[i+1] = g; s_fxp_src_ck[i+2] = b;
+                s_fxp_src_ck[i+0] = ur; s_fxp_src_ck[i+1] = ug; s_fxp_src_ck[i+2] = ub;
             }
         }
     }
@@ -1227,4 +1230,57 @@ uintptr_t video_fx_preview_texture(FXType ft, float t) {
 
     fxp_upload(pv, px);
     return (uintptr_t)pv.tex;
+}
+
+// ── Adjustment preset preview textures ───────────────────────────────────────
+// Keyed by unique_id in a small fixed-size cache. LRU eviction not needed —
+// the preset list is static at runtime; we just keep one texture per preset.
+
+static const int ADJ_PREV_MAX = 64;
+struct AdjPrev { int id = -1; GLuint tex = 0; };
+static std::array<AdjPrev, ADJ_PREV_MAX> s_adj_prev;
+static int s_adj_prev_next = 0;
+
+uintptr_t video_adj_preview_texture(int unique_id,
+                                     float brightness, float contrast,
+                                     float saturation, float hue,
+                                     float blur, float vignette) {
+    if (s_fxp_src.empty()) fxp_make_sources();
+
+    // Find existing slot
+    for (auto& ap : s_adj_prev) {
+        if (ap.id == unique_id) return (uintptr_t)ap.tex;
+    }
+
+    // Claim next slot (ring)
+    AdjPrev& ap = s_adj_prev[s_adj_prev_next % ADJ_PREV_MAX];
+    s_adj_prev_next++;
+    ap.id = unique_id;
+
+    std::vector<uint8_t> px = s_fxp_src;
+
+    if (contrast != 1.f || brightness != 0.f || saturation != 1.f || fabsf(hue) > 0.1f)
+        cpu_apply_grade(px.data(), FXP_W, FXP_H, brightness, contrast, saturation, hue);
+    if (blur > 0.1f)
+        cpu_apply_blur(px.data(), FXP_W, FXP_H, blur * 2.f);
+    if (vignette > 0.01f) {
+        float cx_f = FXP_W * 0.5f, cy_f = FXP_H * 0.5f;
+        float rad   = fmaxf(cx_f, cy_f);
+        for (int y = 0; y < FXP_H; ++y) {
+            for (int x = 0; x < FXP_W; ++x) {
+                float dx = (x - cx_f) / rad, dy = (y - cy_f) / rad;
+                float d  = fminf(1.f, sqrtf(dx*dx + dy*dy));
+                float vig = d * d * vignette;
+                size_t i = ((size_t)y*FXP_W+x)*3;
+                px[i+0] = cu8((int)(px[i+0] * (1.f - vig)));
+                px[i+1] = cu8((int)(px[i+1] * (1.f - vig)));
+                px[i+2] = cu8((int)(px[i+2] * (1.f - vig)));
+            }
+        }
+    }
+
+    FXPrev tmp;
+    fxp_upload(tmp, px);
+    ap.tex = tmp.tex;
+    return (uintptr_t)ap.tex;
 }

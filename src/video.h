@@ -122,6 +122,13 @@ void video_set_pixel_fx(int track_id, const PixelFX& fx);
 // Animated types (Glitch, VHS) regenerate each frame; others cached after first call.
 uintptr_t video_fx_preview_texture(FXType ft, float t);
 
+// Adjustment preset preview — 80×45 GL texture showing the grade applied to source.
+// Keyed by unique_id; regenerated whenever called (caller caches by id if desired).
+uintptr_t video_adj_preview_texture(int unique_id,
+                                     float brightness, float contrast,
+                                     float saturation, float hue,
+                                     float blur, float vignette);
+
 // Probe original video container for duration without full stream scan.
 // Reads container header only — safe to call on the main thread, < 100 ms.
 float video_probe_duration(const std::string& path);
