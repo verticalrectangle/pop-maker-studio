@@ -82,9 +82,9 @@ try:
     opts.intra_op_num_threads = os.cpu_count() or 8
     opts.inter_op_num_threads = 1
     opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-    session = new_session("u2netp", sess_options=opts)
+    session = new_session("u2net_human_seg", sess_options=opts)
 except Exception:
-    session = new_session("silueta")
+    session = new_session("u2net_human_seg")
 try:
     dummy = Image.new("RGB", (32, 32), (0, 255, 0))
     remove(dummy, session=session)
@@ -125,14 +125,26 @@ with tempfile.TemporaryDirectory() as tmpdir:
     frames = sorted(Path(tmpdir).glob("*.jpg"))
     total = max(1, len(frames))
 
+    from PIL import ImageFilter
+
     with open(mjpeg_path, "wb") as mjpeg_f:
         for i, fp in enumerate(frames):
             try:
-                img    = Image.open(fp)
-                result = remove(img, session=session)
-                alpha  = result.getchannel("A")
-                buf    = io.BytesIO()
-                alpha.save(buf, format="JPEG", quality=90)
+                img = Image.open(fp).convert("RGB")
+                orig_w, orig_h = img.size
+
+                # 2× supersample: feed double-res to model so the 320×320 alpha is
+                # bilinearly upscaled to 2× then Lanczos-downsampled back — sharper
+                # and smoother edges than upsampling directly from 320×320.
+                img_2x = img.resize((orig_w * 2, orig_h * 2), Image.LANCZOS)
+                result = remove(img_2x, session=session)
+                alpha  = result.getchannel("A").resize((orig_w, orig_h), Image.LANCZOS)
+
+                # Smooth model noise without blurring real edges.
+                alpha = alpha.filter(ImageFilter.GaussianBlur(radius=0.7))
+
+                buf = io.BytesIO()
+                alpha.save(buf, format="JPEG", quality=95)
                 mjpeg_f.write(buf.getvalue())
                 mjpeg_f.flush()
             except Exception as e:
