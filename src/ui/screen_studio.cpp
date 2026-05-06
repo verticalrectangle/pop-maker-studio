@@ -861,6 +861,321 @@ static void draw_pipeline_strip(AppState& state, float w) {
     ImGui::Dummy({w, h});
 }
 
+// ── Transform box overlay ─────────────────────────────────────────────────────
+// Drawn after all track content for the selected clip.
+// Video clips: 8 scale handles + move interior + rotation handle.
+// Text/subtitle/lyrics clips: column rect with edge handles for width + move.
+// Keyframes are NOT written on drag — caller must explicitly add via the
+// Animation panel.  History is pushed once on mouse-up.
+
+enum class TxHandle {
+    None,
+    Move,
+    ScaleNW, ScaleN, ScaleNE,
+    ScaleE,  ScaleSE, ScaleS,
+    ScaleSW, ScaleW,
+    Rotate,
+    // Text-specific
+    TextLeft, TextRight
+};
+
+struct TxState {
+    TxHandle handle    = TxHandle::None;
+    int      track_idx = -1;
+    int      clip_idx  = -1;
+    // values at drag start
+    float    start_mx = 0.f, start_my = 0.f;
+    float    start_px = 0.f, start_py = 0.f;
+    float    start_sx = 0.f, start_sy = 0.f;
+    float    start_rot = 0.f;
+    float    start_wrap_w = 0.f;
+    bool     dirty = false;
+};
+static TxState s_tx;
+
+static void draw_transform_box(AppState& state, ImDrawList* dl,
+                                ImVec2 p, float w, float h) {
+    if (state.selected_track < 0 || state.selected_clip < 0) return;
+    if (state.selected_track >= (int)state.tracks.size()) return;
+    Track& tr = state.tracks[state.selected_track];
+    if (state.selected_clip >= (int)tr.clips.size()) return;
+    Clip& cl = tr.clips[state.selected_clip];
+
+    ImVec2 mpos  = ImGui::GetIO().MousePos;
+    bool   ldown  = ImGui::IsMouseDown(0);
+    bool   lclick = ImGui::IsMouseClicked(0);
+
+    // Only draw when mouse is inside the preview (or drag is active)
+    bool in_preview = mpos.x >= p.x && mpos.x <= p.x+w &&
+                      mpos.y >= p.y && mpos.y <= p.y+h;
+    bool drag_active = (s_tx.handle != TxHandle::None);
+    if (!in_preview && !drag_active) return;
+
+    const float HR = 5.f;   // handle radius
+    const float ROT_DIST = 28.f;
+
+    ImU32 box_col  = IM_COL32(255, 255, 255, 100);
+    ImU32 hdl_col  = IM_COL32(255, 255, 255, 220);
+    ImU32 hdl_hov  = IM_COL32(100, 180, 255, 255);
+    ImU32 snap_col = IM_COL32(100, 180, 255, 160);
+
+    auto hit_handle = [&](ImVec2 hpos) -> bool {
+        return fabsf(mpos.x - hpos.x) <= HR + 3.f &&
+               fabsf(mpos.y - hpos.y) <= HR + 3.f;
+    };
+    auto draw_handle = [&](ImVec2 hpos, TxHandle ht) {
+        bool hov = hit_handle(hpos);
+        ImU32 c = (hov || s_tx.handle == ht) ? hdl_hov : hdl_col;
+        dl->AddRectFilled({hpos.x-HR, hpos.y-HR}, {hpos.x+HR, hpos.y+HR}, c, 1.f);
+        dl->AddRect      ({hpos.x-HR, hpos.y-HR}, {hpos.x+HR, hpos.y+HR},
+                           IM_COL32(0,0,0,160), 1.f);
+        if (hov && lclick && s_tx.handle == TxHandle::None) {
+            s_tx.handle    = ht;
+            s_tx.track_idx = state.selected_track;
+            s_tx.clip_idx  = state.selected_clip;
+            s_tx.start_mx  = mpos.x; s_tx.start_my = mpos.y;
+            s_tx.start_px  = cl.pos_x;    s_tx.start_py  = cl.pos_y;
+            s_tx.start_sx  = cl.scale_x;  s_tx.start_sy  = cl.scale_y;
+            s_tx.start_rot = cl.rotation;
+            s_tx.start_wrap_w = cl.sub_wrap_w;
+            s_tx.dirty     = false;
+        }
+    };
+
+    // ── Video clip box ────────────────────────────────────────────────────────
+    if (cl.clip_type == ClipType::Video) {
+        int slot = -1;
+        for (int s = 0; s < MAX_VIDEO_TRACKS; ++s)
+            if (state.proxy_paths[s] == cl.text) { slot = s; break; }
+
+        float px   = cl.eval_prop("pos_x",   state.playhead) * w + p.x;
+        float py   = cl.eval_prop("pos_y",   state.playhead) * h + p.y;
+        float sx   = cl.eval_prop("scale_x", state.playhead);
+        float sy   = cl.eval_prop("scale_y", state.playhead);
+
+        float fit_w = w, fit_h = h;
+        if (slot >= 0 && video_info(slot).width > 0) {
+            float va = (float)video_info(slot).width / (float)video_info(slot).height;
+            float ca = w / h;
+            if (va > ca) { fit_w = w;         fit_h = w / va; }
+            else         { fit_h = h;         fit_w = h * va; }
+        }
+        float hw = fit_w * sx * 0.5f;
+        float hh = fit_h * sy * 0.5f;
+
+        // Box corners (no rotation for simplicity — rotation handle only)
+        float bx0 = px - hw, bx1 = px + hw;
+        float by0 = py - hh, by1 = py + hh;
+
+        // Draw dashed box
+        ImU32 dc = box_col;
+        float dash = 6.f;
+        for (float x = bx0; x < bx1; x += dash*2)
+            dl->AddLine({x, by0}, {fminf(x+dash, bx1), by0}, dc);
+        for (float x = bx0; x < bx1; x += dash*2)
+            dl->AddLine({x, by1}, {fminf(x+dash, bx1), by1}, dc);
+        for (float y = by0; y < by1; y += dash*2)
+            dl->AddLine({bx0, y}, {bx0, fminf(y+dash, by1)}, dc);
+        for (float y = by0; y < by1; y += dash*2)
+            dl->AddLine({bx1, y}, {bx1, fminf(y+dash, by1)}, dc);
+
+        float mx = (bx0 + bx1) * 0.5f;
+        float my = (by0 + by1) * 0.5f;
+
+        // Rotation handle
+        ImVec2 rot_pos = {mx, by0 - ROT_DIST};
+        dl->AddLine({mx, by0}, rot_pos, IM_COL32(255,255,255,80));
+        dl->AddCircleFilled(rot_pos, HR + 1.f, IM_COL32(0,0,0,120));
+        dl->AddCircle(rot_pos, HR + 1.f, hdl_col);
+        if ((hit_handle(rot_pos) || s_tx.handle == TxHandle::Rotate) && lclick &&
+            s_tx.handle == TxHandle::None) {
+            s_tx.handle = TxHandle::Rotate;
+            s_tx.track_idx = state.selected_track; s_tx.clip_idx = state.selected_clip;
+            s_tx.start_mx = mpos.x; s_tx.start_my = mpos.y;
+            s_tx.start_rot = cl.rotation; s_tx.dirty = false;
+        }
+
+        // Scale + move handles
+        draw_handle({bx0, by0}, TxHandle::ScaleNW);
+        draw_handle({mx,  by0}, TxHandle::ScaleN);
+        draw_handle({bx1, by0}, TxHandle::ScaleNE);
+        draw_handle({bx1, my},  TxHandle::ScaleE);
+        draw_handle({bx1, by1}, TxHandle::ScaleSE);
+        draw_handle({mx,  by1}, TxHandle::ScaleS);
+        draw_handle({bx0, by1}, TxHandle::ScaleSW);
+        draw_handle({bx0, my},  TxHandle::ScaleW);
+
+        // Interior move hit
+        bool in_interior = mpos.x > bx0+HR*2 && mpos.x < bx1-HR*2 &&
+                           mpos.y > by0+HR*2 && mpos.y < by1-HR*2;
+        if (in_interior) {
+            ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
+            if (lclick && s_tx.handle == TxHandle::None) {
+                s_tx.handle    = TxHandle::Move;
+                s_tx.track_idx = state.selected_track;
+                s_tx.clip_idx  = state.selected_clip;
+                s_tx.start_mx  = mpos.x; s_tx.start_my = mpos.y;
+                s_tx.start_px  = cl.pos_x; s_tx.start_py = cl.pos_y;
+                s_tx.dirty     = false;
+            }
+        }
+
+        // Apply drag
+        if (drag_active && s_tx.track_idx == state.selected_track &&
+            s_tx.clip_idx == state.selected_clip) {
+            float dmx = mpos.x - s_tx.start_mx;
+            float dmy = mpos.y - s_tx.start_my;
+            Clip& mc = state.tracks[s_tx.track_idx].clips[s_tx.clip_idx];
+            switch (s_tx.handle) {
+                case TxHandle::Move:
+                    mc.pos_x = fmaxf(0.f, fminf(1.f, s_tx.start_px + dmx / w));
+                    mc.pos_y = fmaxf(0.f, fminf(1.f, s_tx.start_py + dmy / h));
+                    break;
+                case TxHandle::Rotate: {
+                    float cx2 = px, cy2 = py;
+                    float ang0 = atan2f(s_tx.start_my - cy2, s_tx.start_mx - cx2);
+                    float ang1 = atan2f(mpos.y        - cy2, mpos.x        - cx2);
+                    mc.rotation = fmodf(s_tx.start_rot + (ang1 - ang0) * 180.f / 3.14159f, 360.f);
+                    break;
+                }
+                case TxHandle::ScaleNW: case TxHandle::ScaleN: case TxHandle::ScaleNE:
+                case TxHandle::ScaleSW: case TxHandle::ScaleS: case TxHandle::ScaleSE: {
+                    float ds = 1.f + dmy / (fit_h * s_tx.start_sy * 0.5f) *
+                               (s_tx.handle == TxHandle::ScaleNW ||
+                                s_tx.handle == TxHandle::ScaleN  ||
+                                s_tx.handle == TxHandle::ScaleNE ? -1.f : 1.f);
+                    mc.scale_x = fmaxf(0.05f, s_tx.start_sx * ds);
+                    mc.scale_y = fmaxf(0.05f, s_tx.start_sy * ds);
+                    break;
+                }
+                case TxHandle::ScaleE: case TxHandle::ScaleW: {
+                    float ds = 1.f + dmx / (fit_w * s_tx.start_sx * 0.5f) *
+                               (s_tx.handle == TxHandle::ScaleW ? -1.f : 1.f);
+                    mc.scale_x = fmaxf(0.05f, s_tx.start_sx * ds);
+                    break;
+                }
+                default: break;
+            }
+            s_tx.dirty = true;
+
+            // Snap guides — canvas center
+            float snap_thr = 6.f;
+            float cx3 = mc.pos_x * w + p.x;
+            float cy3 = mc.pos_y * h + p.y;
+            if (s_tx.handle == TxHandle::Move) {
+                if (fabsf(cx3 - (p.x + w*0.5f)) < snap_thr) {
+                    mc.pos_x = 0.5f;
+                    dl->AddLine({p.x+w*0.5f, p.y}, {p.x+w*0.5f, p.y+h}, snap_col);
+                }
+                if (fabsf(cy3 - (p.y + h*0.5f)) < snap_thr) {
+                    mc.pos_y = 0.5f;
+                    dl->AddLine({p.x, p.y+h*0.5f}, {p.x+w, p.y+h*0.5f}, snap_col);
+                }
+            }
+        }
+    }
+
+    // ── Text / subtitle / lyrics box ─────────────────────────────────────────
+    if (cl.clip_type == ClipType::Text || cl.clip_type == ClipType::Subtitle ||
+        cl.clip_type == ClipType::Lyrics) {
+        float col_w  = cl.sub_wrap_w * w;
+        float col_cx = cl.sub_pos_x  * w + p.x;
+        float col_x0 = col_cx - col_w * 0.5f;
+        float col_x1 = col_cx + col_w * 0.5f;
+        // Row height — approximate
+        float row_h = ImGui::GetFontSize() * 1.8f * 1.25f;
+        float col_cy = cl.sub_pos_y  * h + p.y;
+        float col_y0 = col_cy - row_h * 0.5f;
+        float col_y1 = col_cy + row_h * 0.5f;
+
+        // Dashed rect
+        ImU32 dc = box_col;
+        float dash = 6.f;
+        for (float x = col_x0; x < col_x1; x += dash*2)
+            dl->AddLine({x, col_y0}, {fminf(x+dash, col_x1), col_y0}, dc);
+        for (float x = col_x0; x < col_x1; x += dash*2)
+            dl->AddLine({x, col_y1}, {fminf(x+dash, col_x1), col_y1}, dc);
+        for (float y = col_y0; y < col_y1; y += dash*2)
+            dl->AddLine({col_x0, y}, {col_x0, fminf(y+dash, col_y1)}, dc);
+        for (float y = col_y0; y < col_y1; y += dash*2)
+            dl->AddLine({col_x1, y}, {col_x1, fminf(y+dash, col_y1)}, dc);
+
+        // Left/right edge handles for wrap width
+        draw_handle({col_x0, col_cy}, TxHandle::TextLeft);
+        draw_handle({col_x1, col_cy}, TxHandle::TextRight);
+
+        // Interior move
+        bool in_interior = mpos.x > col_x0+HR*2 && mpos.x < col_x1-HR*2 &&
+                           mpos.y > col_y0       && mpos.y < col_y1;
+        if (in_interior) {
+            ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
+            if (lclick && s_tx.handle == TxHandle::None) {
+                s_tx.handle       = TxHandle::Move;
+                s_tx.track_idx    = state.selected_track;
+                s_tx.clip_idx     = state.selected_clip;
+                s_tx.start_mx     = mpos.x; s_tx.start_my = mpos.y;
+                s_tx.start_px     = cl.sub_pos_x;
+                s_tx.start_py     = cl.sub_pos_y;
+                s_tx.start_wrap_w = cl.sub_wrap_w;
+                s_tx.dirty        = false;
+            }
+        }
+
+        // Apply drag
+        if (drag_active && s_tx.track_idx == state.selected_track &&
+            s_tx.clip_idx == state.selected_clip) {
+            float dmx = mpos.x - s_tx.start_mx;
+            float dmy = mpos.y - s_tx.start_my;
+            Clip& mc = state.tracks[s_tx.track_idx].clips[s_tx.clip_idx];
+            switch (s_tx.handle) {
+                case TxHandle::Move:
+                    mc.sub_pos   = 3;
+                    mc.sub_pos_x = fmaxf(0.02f, fminf(0.98f, s_tx.start_px + dmx / w));
+                    mc.sub_pos_y = fmaxf(0.02f, fminf(0.98f, s_tx.start_py + dmy / h));
+                    break;
+                case TxHandle::TextLeft: {
+                    float new_x0 = col_x0 + dmx;
+                    float new_w  = col_x1 - new_x0;
+                    mc.sub_wrap_w = fmaxf(0.1f, fminf(1.f, new_w / w));
+                    mc.sub_pos_x  = (new_x0 + new_w * 0.5f - p.x) / w;
+                    mc.sub_pos_x  = fmaxf(0.02f, fminf(0.98f, mc.sub_pos_x));
+                    break;
+                }
+                case TxHandle::TextRight: {
+                    float new_x1 = col_x1 + dmx;
+                    float new_w  = new_x1 - col_x0;
+                    mc.sub_wrap_w = fmaxf(0.1f, fminf(1.f, new_w / w));
+                    mc.sub_pos_x  = (col_x0 + new_w * 0.5f - p.x) / w;
+                    mc.sub_pos_x  = fmaxf(0.02f, fminf(0.98f, mc.sub_pos_x));
+                    break;
+                }
+                default: break;
+            }
+            s_tx.dirty = true;
+
+            // Snap X center to canvas center
+            if (s_tx.handle == TxHandle::Move) {
+                float snap_thr = 6.f;
+                float cx3 = mc.sub_pos_x * w + p.x;
+                if (fabsf(cx3 - (p.x + w*0.5f)) < snap_thr) {
+                    mc.sub_pos_x = 0.5f;
+                    dl->AddLine({p.x+w*0.5f, p.y}, {p.x+w*0.5f, p.y+h}, snap_col);
+                }
+            }
+        }
+    }
+
+    // Release drag → push history once
+    if (!ldown && s_tx.handle != TxHandle::None) {
+        if (s_tx.dirty) {
+            const char* act = (s_tx.handle == TxHandle::Move)   ? "Move clip" :
+                              (s_tx.handle == TxHandle::Rotate)  ? "Rotate clip" : "Scale clip";
+            history_push(state, act);
+        }
+        s_tx = TxState{};
+    }
+}
+
 // ── Preview ───────────────────────────────────────────────────────────────────
 
 static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
@@ -1410,6 +1725,9 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
         ImU32 fl0 = IM_COL32(255, 210, 140, 0);
         dl->AddRectFilledMultiColor({p.x, p.y}, {fx+w*0.25f, p.y+h*0.15f}, fl0, fl, fl0, fl0);
     }
+
+    // Transform box overlay — drawn above content, below border chrome
+    draw_transform_box(state, dl, p, w, h);
 
     // Border and chrome drawn last so they sit on top of all content
     dl->AddRect(p, {p.x+w, p.y+h}, to_u32(Col::line), 2.f);
