@@ -6185,6 +6185,11 @@ void ui_studio(AppState& state) {
         }
 
         if (ImGui::BeginMenu("Help")) {
+            if (ImGui::MenuItem("Getting Started…")) {
+                state.show_tutorial = true;
+                state.tutorial_step = 0;
+            }
+            ImGui::Separator();
             bool already = state.models_ready;
             if (already) ImGui::BeginDisabled();
             if (ImGui::MenuItem("Set Up AI Features…"))
@@ -6742,4 +6747,103 @@ void ui_studio(AppState& state) {
     }
     ImGui::EndChild();
     ImGui::PopStyleColor(2);
+
+    // ── Tutorial floating panel ───────────────────────────────────────────────
+    if (state.show_tutorial && state.tutorial_step < 5) {
+        // Auto-advance conditions
+        if (state.tutorial_step == 0) {
+            bool has_video = false;
+            for (auto& tr : state.tracks)
+                for (auto& cl : tr.clips)
+                    if (cl.clip_type == ClipType::Video) { has_video = true; break; }
+            if (has_video) state.tutorial_step = 1;
+        }
+        if (state.tutorial_step == 2 && !state.beats.empty())
+            state.tutorial_step = 3;
+        if (state.tutorial_step == 3) {
+            for (auto& tr : state.tracks)
+                for (auto& cl : tr.clips)
+                    if (cl.bg_remove_status == BgRemoveStatus::Ready)
+                        state.tutorial_step = 4;
+        }
+
+        struct TutStep { const char* title; const char* body; bool manual_next; };
+        static const TutStep steps[5] = {
+            { "1 / 5 — Drop footage",
+              "Drag a video file onto the timeline.\nIt will appear as a clip on a new track.",
+              false },
+            { "2 / 5 — Trim your clip",
+              "Drag the edges of a clip to trim it.\nPress S to split at the playhead.\nPress Next when you're happy with the length.",
+              true },
+            { "3 / 5 — Sync to beats",
+              "Click the Detect Beats button in the ML\nProcessing bar. Once done, beat markers\nappear on the timeline ruler — hold Shift\nand drag clips to snap them to beats.",
+              false },
+            { "4 / 5 — Remove background",
+              "Select a video clip, open the Clip tab,\nscroll to Remove Background and click Run.\nThe mask streams in as frames process.",
+              false },
+            { "5 / 5 — Export",
+              "Click the Export button in the top-right\ncorner, choose your format, and render\nto MP4. That's it — you're done!",
+              true },
+        };
+
+        const TutStep& step = steps[state.tutorial_step];
+        float panel_w = 280.f;
+        float margin  = 24.f;
+        ImGui::SetNextWindowPos({win_w - panel_w - margin, menubar_h + margin},
+                                ImGuiCond_Always);
+        ImGui::SetNextWindowSize({panel_w, 0.f}, ImGuiCond_Always);
+        ImGui::PushStyleColor(ImGuiCol_WindowBg, to_u32(Col::bg));
+        ImGui::PushStyleColor(ImGuiCol_Border,   to_u32(Col::line));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {14.f, 12.f});
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 6.f);
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {6.f, 6.f});
+
+        ImGui::Begin("##tutorial_panel", nullptr,
+            ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+            ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
+            ImGuiWindowFlags_NoBringToFrontOnFocus);
+
+        ImGui::PushFont(g_font_bold);
+        ImGui::TextUnformatted("Getting Started");
+        ImGui::PopFont();
+        ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+        ImGui::TextUnformatted(step.title);
+        ImGui::PopStyleColor();
+        ImGui::Dummy({0.f, 4.f});
+        ImGui::TextWrapped("%s", step.body);
+        ImGui::Dummy({0.f, 8.f});
+
+        float btn_w = (panel_w - 28.f - 6.f) * 0.5f;
+        ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {0.f, 3.f});
+        ImGui::SetNextItemWidth(btn_w);
+        if (ImGui::Button("Skip tutorial##tut_skip", {btn_w, 0.f}))
+            state.show_tutorial = false;
+        ImGui::PopStyleVar();
+        ImGui::PopStyleColor();
+        ImGui::SameLine(0.f, 6.f);
+        ImGui::PushStyleColor(ImGuiCol_Button,        Col::fg);
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, Col::bg_soft_hov);
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive,  Col::line);
+        ImGui::PushStyleColor(ImGuiCol_Text,          Col::bg);
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {0.f, 3.f});
+        bool last_step = (state.tutorial_step == 4);
+        if (step.manual_next || last_step) {
+            const char* lbl = last_step ? "Done##tut_done" : "Next##tut_next";
+            if (ImGui::Button(lbl, {btn_w, 0.f})) {
+                if (last_step) state.show_tutorial = false;
+                else           state.tutorial_step++;
+            }
+        } else {
+            ImGui::BeginDisabled();
+            ImGui::Button("Next##tut_next_dis", {btn_w, 0.f});
+            ImGui::EndDisabled();
+        }
+        ImGui::PopStyleVar();
+        ImGui::PopStyleColor(4);
+
+        ImGui::End();
+        ImGui::PopStyleVar(3);
+        ImGui::PopStyleColor(2);
+    }
 }

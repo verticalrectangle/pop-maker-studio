@@ -445,6 +445,10 @@ struct AppState {
     bool        show_model_dl_modal = false;
     bool        show_settings_modal = false;
 
+    // tutorial
+    bool show_tutorial  = false;
+    int  tutorial_step  = 0;   // 0-4 = steps 1-5; >=5 = finished
+
     // subtitle grouping
     SubtitleMode subtitle_mode = SubtitleMode::Word;
     int          subtitle_n    = 3;   // words per clip for CustomN mode
