@@ -1338,8 +1338,11 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
     bool in_preview_area = mpos.x >= p.x && mpos.x <= p.x+w &&
                            mpos.y >= p.y && mpos.y <= p.y+h;
     if (lclick && in_preview_area && s_tx.handle == TxHandle::None) {
-        int hit_ti = -1, hit_ci = -1;
-        for (int ti = 0; ti < (int)state.tracks.size() && hit_ti < 0; ++ti) {
+        // Collect all hits, then pick smallest bounding area (most specific target).
+        // Z-order (track index, lower = frontmost) breaks ties between equal-size hits.
+        struct HitCandidate { int ti, ci; float area; };
+        std::vector<HitCandidate> hits;
+        for (int ti = 0; ti < (int)state.tracks.size(); ++ti) {
             auto& tr = state.tracks[ti];
             if (!tr.visible) continue;
             for (int ci = 0; ci < (int)tr.clips.size(); ++ci) {
@@ -1363,30 +1366,37 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                     float hw2 = fw*csx*0.5f, hh2 = fh*csy*0.5f;
                     if (mpos.x >= cpx-hw2 && mpos.x <= cpx+hw2 &&
                         mpos.y >= cpy-hh2 && mpos.y <= cpy+hh2) {
-                        hit_ti = ti; hit_ci = ci; break;
+                        hits.push_back({ti, ci, hw2*hh2*4.f});
                     }
                 } else if (cl.clip_type == ClipType::Text ||
                            cl.clip_type == ClipType::Subtitle ||
                            cl.clip_type == ClipType::Lyrics) {
                     float col_w  = cl.sub_wrap_w * w;
                     float col_cx = cl.sub_pos_x  * w + p.x;
-                    float row_h2 = ImGui::GetFontSize() * 1.8f * 1.5f;
+                    float eff_fsz2 = cl.font_size > 0.f ? cl.font_size * h
+                                                        : ImGui::GetFontSize() * 1.8f;
+                    float row_h2 = eff_fsz2 * 1.5f;
                     float col_cy = cl.sub_pos_y  * h + p.y;
                     if (mpos.x >= col_cx - col_w*0.5f && mpos.x <= col_cx + col_w*0.5f &&
                         mpos.y >= col_cy - row_h2*0.5f && mpos.y <= col_cy + row_h2*0.5f) {
-                        hit_ti = ti; hit_ci = ci; break;
+                        hits.push_back({ti, ci, col_w * row_h2});
                     }
                 }
             }
         }
-        if (hit_ti >= 0) {
+        // Sort: smallest area first, then lowest track index (frontmost) as tiebreaker
+        std::sort(hits.begin(), hits.end(), [](const HitCandidate& a, const HitCandidate& b) {
+            if (a.area != b.area) return a.area < b.area;
+            return a.ti < b.ti;
+        });
+        if (!hits.empty()) {
+            int hit_ti = hits[0].ti, hit_ci = hits[0].ci;
             if (state.selected_track != hit_ti || state.selected_clip != hit_ci) {
                 state.selected_track = hit_ti;
                 state.selected_clip  = hit_ci;
                 state.request_scroll_to_clip = true;
             }
         } else {
-            // Click on empty space — deselect
             state.selected_track = -1;
             state.selected_clip  = -1;
         }
