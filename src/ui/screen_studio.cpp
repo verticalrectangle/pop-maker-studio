@@ -2569,6 +2569,13 @@ static void panel_clip(AppState& state, float w) {
             }
             ImGui::Dummy({0.f, 6.f});
 
+            // ── Auto-scrub while processing ───────────────────────────────────
+            if (status == BgRemoveStatus::Processing && clip.bg_remove_progress > 0.f) {
+                float dur = clip.end - clip.start;
+                if (dur > 0.f)
+                    state.playhead = clip.start + clip.bg_remove_progress * dur;
+            }
+
             // ── Status indicator ──────────────────────────────────────────────
             if (status == BgRemoveStatus::Processing) {
                 ImVec2 bp = ImGui::GetCursorScreenPos();
