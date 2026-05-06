@@ -4700,6 +4700,206 @@ static void panel_project(AppState& state, float w) {
 
 // ── Right panel: Export tab ───────────────────────────────────────────────────
 
+static void draw_export_modal(AppState& state) {
+    if (!state.show_export_modal) return;
+    ImGui::OpenPopup("##export_modal");
+    ImVec2 center = ImGui::GetMainViewport()->GetCenter();
+    ImGui::SetNextWindowPos(center, ImGuiCond_Always, {0.5f, 0.5f});
+    ImGui::SetNextWindowSize({560.f, 0.f});
+    ImGui::PushStyleColor(ImGuiCol_PopupBg, to_u32(Col::bg));
+    ImGui::PushStyleColor(ImGuiCol_Border,  to_u32(Col::line));
+
+    if (ImGui::BeginPopupModal("##export_modal", nullptr,
+            ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize)) {
+        float pw = ImGui::GetContentRegionAvail().x - 8.f;
+
+        ImGui::Dummy({0.f, 12.f});
+        ImGui::SetCursorPosX(ImGui::GetStyle().WindowPadding.x + 8.f);
+        ImGui::PushFont(g_font_bold);
+        ImGui::TextUnformatted("Export");
+        ImGui::PopFont();
+
+        ImGui::Dummy({0.f, 10.f}); ui_separator(); ImGui::Dummy({0.f, 8.f});
+
+        // ── What will be rendered ─────────────────────────────────────────────
+        ImGui::SetCursorPosX(ImGui::GetStyle().WindowPadding.x + 8.f);
+        ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+        ImGui::TextUnformatted("What will be rendered");
+        ImGui::PopStyleColor();
+        ImGui::Dummy({0.f, 6.f});
+
+        bool any_active = false;
+        for (int ti = 0; ti < (int)state.tracks.size(); ++ti) {
+            const auto& tr = state.tracks[ti];
+            // Count active clips
+            int n_clips = 0, n_muted = 0;
+            std::string ctype;
+            for (auto& cl : tr.clips) {
+                ++n_clips;
+                if (cl.muted) ++n_muted;
+                if (ctype.empty()) {
+                    switch (cl.clip_type) {
+                        case ClipType::Video:    ctype = "Video";    break;
+                        case ClipType::Audio:    ctype = "Audio";    break;
+                        case ClipType::Text:     ctype = "Text";     break;
+                        case ClipType::Subtitle: ctype = "Subtitle"; break;
+                        case ClipType::Lyrics:   ctype = "Lyrics";   break;
+                        case ClipType::Effect:   ctype = "Effect";   break;
+                        default:                 ctype = "Clip";     break;
+                    }
+                }
+            }
+            if (n_clips == 0) continue;
+
+            bool excluded = !tr.visible || tr.muted;
+            if (!excluded) any_active = true;
+
+            ImGui::SetCursorPosX(ImGui::GetStyle().WindowPadding.x + 8.f);
+            if (excluded) ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+            else          ImGui::PushStyleColor(ImGuiCol_Text, Col::fg);
+
+            char row[128];
+            snprintf(row, sizeof(row), "%s  —  %s  —  %d clip%s",
+                tr.name.empty() ? "(unnamed)" : tr.name.c_str(),
+                ctype.c_str(), n_clips, n_clips == 1 ? "" : "s");
+            ImGui::TextUnformatted(row);
+            ImGui::PopStyleColor();
+
+            if (excluded) {
+                ImGui::SameLine(0.f, 6.f);
+                ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+                ImGui::TextUnformatted(!tr.visible ? "[hidden]" : "[muted]");
+                ImGui::PopStyleColor();
+            } else if (n_muted > 0) {
+                ImGui::SameLine(0.f, 6.f);
+                ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+                char mb[32]; snprintf(mb, sizeof(mb), "[%d clip%s muted]", n_muted, n_muted==1?"":"s");
+                ImGui::TextUnformatted(mb);
+                ImGui::PopStyleColor();
+            }
+        }
+
+        if (state.tracks.empty()) {
+            ImGui::SetCursorPosX(ImGui::GetStyle().WindowPadding.x + 8.f);
+            ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+            ImGui::TextUnformatted("No tracks yet.");
+            ImGui::PopStyleColor();
+        }
+
+        ImGui::Dummy({0.f, 10.f}); ui_separator(); ImGui::Dummy({0.f, 8.f});
+
+        // ── Settings ──────────────────────────────────────────────────────────
+        ImGui::SetCursorPosX(ImGui::GetStyle().WindowPadding.x + 8.f);
+        ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+        ImGui::TextUnformatted("Settings");
+        ImGui::PopStyleColor();
+        ImGui::Dummy({0.f, 6.f});
+
+        ImGui::SetCursorPosX(ImGui::GetStyle().WindowPadding.x + 8.f);
+        ImGui::PushStyleColor(ImGuiCol_SliderGrab, Col::fg);
+        ImGui::PushStyleColor(ImGuiCol_FrameBg,    Col::bg_soft);
+        ImGui::SetNextItemWidth(pw - 16.f);
+        ImGui::SliderInt("##crf_m", &state.render_settings.crf, 0, 51, "Quality CRF %d");
+        ImGui::PopStyleColor(2);
+
+        ImGui::Dummy({0.f, 6.f});
+        ImGui::SetCursorPosX(ImGui::GetStyle().WindowPadding.x + 8.f);
+        for (int abr : {128, 192, 320}) {
+            char lbl[12]; snprintf(lbl, sizeof(lbl), "%dk##m", abr);
+            if (ui_btn(lbl, state.render_settings.audio_bitrate == abr, true))
+                state.render_settings.audio_bitrate = abr;
+            ImGui::SameLine(0.f, 4.f);
+        }
+        ImGui::NewLine();
+        ImGui::SetCursorPosX(ImGui::GetStyle().WindowPadding.x + 8.f);
+        const char* presets_m[] = {"ultrafast","fast","medium","slow","veryslow"};
+        for (auto& ps : presets_m) {
+            char plbl[24]; snprintf(plbl, sizeof(plbl), "%s##m", ps);
+            if (ui_btn(plbl, state.render_settings.preset == ps, true))
+                state.render_settings.preset = ps;
+            ImGui::SameLine(0.f, 4.f);
+        }
+        ImGui::NewLine();
+
+        ImGui::Dummy({0.f, 10.f}); ui_separator(); ImGui::Dummy({0.f, 8.f});
+
+        // ── Progress and action ───────────────────────────────────────────────
+        float bar_w = pw - 16.f;
+        ImGui::SetCursorPosX(ImGui::GetStyle().WindowPadding.x + 8.f);
+        ImVec2 bp = ImGui::GetCursorScreenPos();
+        ImGui::GetWindowDrawList()->AddRectFilled(bp, {bp.x+bar_w, bp.y+4.f}, to_u32(Col::line), 2.f);
+        ImGui::GetWindowDrawList()->AddRectFilled(bp, {bp.x+bar_w*state.render.progress, bp.y+4.f},
+                                                   to_u32(Col::fg), 2.f);
+        ImGui::Dummy({0.f, 8.f});
+
+        ImGui::SetCursorPosX(ImGui::GetStyle().WindowPadding.x + 8.f);
+        char pct[16]; snprintf(pct, sizeof(pct), "%d%%", (int)(state.render.progress*100.f));
+        ImGui::PushFont(g_font_bold); ImGui::SetWindowFontScale(1.4f);
+        ImGui::TextUnformatted(pct);
+        ImGui::SetWindowFontScale(1.f); ImGui::PopFont();
+        ImGui::SameLine(0.f, 8.f);
+        ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+        ImGui::TextUnformatted(state.render.running ? state.render.stage.c_str() : "Ready");
+        ImGui::PopStyleColor();
+
+        ImGui::Dummy({0.f, 8.f});
+        ImGui::SetCursorPosX(ImGui::GetStyle().WindowPadding.x + 8.f);
+        if (state.render.running) {
+            if (ui_btn("Cancel render", false, false)) render_cancel();
+        } else {
+            ImGui::BeginDisabled(!any_active);
+            if (ui_btn("Start render  ->", true, false)) {
+                state.render_done = false;
+                if (!state.audio_path.empty()) {
+                    fs::path audio(state.audio_path);
+                    fs::path outdir = audio.parent_path() / audio.stem();
+                    fs::create_directories(outdir);
+                    state.out_mp4 = (outdir / (audio.stem().string() + ".mp4")).string();
+                    state.out_srt = (outdir / (audio.stem().string() + ".srt")).string();
+                }
+                render_start(state);
+            }
+            ImGui::EndDisabled();
+        }
+        ImGui::SameLine(0.f, 8.f);
+        if (!state.render.running) {
+            if (ui_btn("Close", false, false)) {
+                state.show_export_modal = false;
+                ImGui::CloseCurrentPopup();
+            }
+        }
+
+        // Downloads (shown after render completes)
+        if (state.render_done || !state.out_mp4.empty()) {
+            ImGui::Dummy({0.f, 8.f}); ui_separator(); ImGui::Dummy({0.f, 6.f});
+            ImGui::SetCursorPosX(ImGui::GetStyle().WindowPadding.x + 8.f);
+            struct Dl2 { const char* tag; const char* name; std::string path; bool ok; };
+            Dl2 dls[] = {
+                {".MP4", "Lyric video", state.out_mp4, state.render_done && !state.out_mp4.empty()},
+                {".WAV", "Vocals stem", state.out_wav, !state.out_wav.empty() && fs::exists(state.out_wav)},
+                {".SRT", "Subtitles",   state.out_srt, !state.out_srt.empty() && fs::exists(state.out_srt)},
+            };
+            for (auto& dl : dls) {
+                if (!dl.ok) ImGui::BeginDisabled();
+                char did[32]; snprintf(did, sizeof(did), "%s %s##dlm", dl.tag, dl.name);
+                if (ui_btn(did, false, true)) {
+                    std::string cmd = "xdg-open \"" + fs::path(dl.path).parent_path().string() + "\"";
+                    system(cmd.c_str());
+                }
+                if (!dl.ok) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
+            }
+        }
+
+        ImGui::Dummy({0.f, 12.f});
+        ImGui::EndPopup();
+    }
+    ImGui::PopStyleColor(2);
+
+    if (!ImGui::IsPopupOpen("##export_modal"))
+        state.show_export_modal = false;
+}
+
 static void panel_export(AppState& state, float w) {
     ImGui::Dummy({0.f, 8.f});
 
@@ -6918,26 +7118,33 @@ void ui_studio(AppState& state) {
             ImGui::EndMenu();
         }
 
-        // Export button — far right of menu bar
+        // Project + Export buttons — far right of menu bar
         {
-            float btn_w = 80.f;
+            float btn_export_w = 80.f;
+            float btn_proj_w   = 70.f;
             float avail = ImGui::GetContentRegionAvail().x;
-            if (avail > btn_w)
-                ImGui::SetCursorPosX(ImGui::GetCursorPosX() + avail - btn_w);
+            float total_btns = btn_proj_w + 6.f + btn_export_w;
+            if (avail > total_btns)
+                ImGui::SetCursorPosX(ImGui::GetCursorPosX() + avail - total_btns);
+
+            ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {10.f, 2.f});
+            if (ImGui::Button("Project")) state.panel_tab = 6;
+            ImGui::SameLine(0.f, 6.f);
+
             ImGui::PushStyleColor(ImGuiCol_Button,        Col::fg);
             ImGui::PushStyleColor(ImGuiCol_ButtonHovered, Col::bg_soft_hov);
             ImGui::PushStyleColor(ImGuiCol_ButtonActive,  Col::line);
             ImGui::PushStyleColor(ImGuiCol_Text,          Col::bg);
-            ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {10.f, 2.f});
-            if (ImGui::Button("Export")) state.panel_tab = 2;
-            ImGui::PopStyleVar();
+            if (ImGui::Button("Export")) state.show_export_modal = true;
             ImGui::PopStyleColor(4);
+            ImGui::PopStyleVar();
         }
 
         ImGui::EndMenuBar();
     }
 
     ui_model_download_modal(state);
+    draw_export_modal(state);
 
     // ── Settings modal ────────────────────────────────────────────────────────
     if (state.show_settings_modal) {

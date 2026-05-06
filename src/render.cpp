@@ -238,7 +238,6 @@ static bool write_filter_script(
     int vid_idx  = 0;   // counter for unique filter labels
     int txt_idx  = 0;
     int fx_idx   = 0;   // counter for effect filter labels
-    bool base_done = false;  // true once first video overlay is composited
 
     // ── Black canvas base ─────────────────────────────────────────────────────
     line() << "color=c=black:s=" << out_w << "x" << out_h << ":r=" << state.fps << "[vbase]";
@@ -280,27 +279,52 @@ static bool write_filter_script(
         if (!tr.visible) continue;
 
         if (rl.kind == RLayer::Vid) {
-            std::string scaled_tag = "[vsc"  + std::to_string(vid_idx) + "]";
-            std::string layer_in   = scaled_tag;
+            std::string layer_in;
 
-            if (!base_done) {
-                // Bottom-most video: scale+pad to fill canvas (letterbox).
+            // Step 1: Letterbox-fit preserving AR (no padding — keeps actual video dims).
+            // All layers go through the same pipeline so transforms are always respected.
+            {
+                std::string fit_tag = "[vfit" + std::to_string(vid_idx) + "]";
                 line() << "[" << rl.in_idx << ":v]"
                        << "scale=" << out_w << ":" << out_h
-                       << ":force_original_aspect_ratio=decrease,"
-                       << "pad=" << out_w << ":" << out_h
-                       << ":(ow-iw)/2:(oh-ih)/2:color=black,"
-                       << "setsar=1,format=rgba"
-                       << scaled_tag;
-                base_done = true;
-            } else {
-                // Upper video layers: scale to user-specified size.
-                std::string sw = prop_expr(cl, "scale_x", (float)out_w, cl.scale_x);
-                std::string sh = prop_expr(cl, "scale_y", (float)out_h, cl.scale_y);
-                line() << "[" << rl.in_idx << ":v]"
-                       << "scale=" << sw << ":" << sh
-                       << ",format=rgba"
-                       << scaled_tag;
+                       << ":force_original_aspect_ratio=decrease"
+                       << ",setsar=1,format=rgba"
+                       << fit_tag;
+                layer_in = fit_tag;
+            }
+
+            // Step 2: User scale relative to the letterbox-fitted size (KF-aware).
+            {
+                bool has_sx_kf = cl.ktracks.count("scale_x") > 0;
+                bool has_sy_kf = cl.ktracks.count("scale_y") > 0;
+                bool need_scale = has_sx_kf || has_sy_kf ||
+                                  fabsf(cl.scale_x - 1.f) > 0.001f ||
+                                  fabsf(cl.scale_y - 1.f) > 0.001f;
+                if (need_scale) {
+                    std::string sx = prop_expr(cl, "scale_x", 1.f, cl.scale_x);
+                    std::string sy = prop_expr(cl, "scale_y", 1.f, cl.scale_y);
+                    std::string scl_tag = "[vscl" + std::to_string(vid_idx) + "]";
+                    line() << layer_in
+                           << "scale=iw*(" << sx << "):ih*(" << sy << "):eval=frame"
+                           << scl_tag;
+                    layer_in = scl_tag;
+                }
+            }
+
+            // Step 3: Rotation in degrees → radians for ffmpeg rotate filter (KF-aware).
+            {
+                bool has_rot_kf = cl.ktracks.count("rotation") > 0;
+                bool need_rot = has_rot_kf || fabsf(cl.rotation) > 0.001f;
+                if (need_rot) {
+                    std::string rot_e = prop_expr(cl, "rotation",
+                                                  (float)(M_PI / 180.0), cl.rotation);
+                    std::string rot_tag = "[vrot" + std::to_string(vid_idx) + "]";
+                    line() << layer_in
+                           << "rotate=" << rot_e
+                           << ":fillcolor=black@0:ow=iw:oh=ih:eval=frame"
+                           << rot_tag;
+                    layer_in = rot_tag;
+                }
             }
 
             // Opacity (static, keyframed, and/or transition fade)
@@ -338,7 +362,7 @@ static bool write_filter_script(
                     }
 
                     std::string opa_tag = "[vopa" + std::to_string(vid_idx) + "]";
-                    line() << scaled_tag
+                    line() << layer_in
                            << "colorchannelmixer=aa=" << aa_expr
                            << opa_tag;
                     layer_in = opa_tag;
@@ -481,13 +505,10 @@ static bool write_filter_script(
                 }
             }
 
-            // Position (base fills canvas at 0,0; upper layers use pos_x/pos_y)
-            std::string x_e = base_done && vid_idx > 0
-                ? "(" + prop_expr(cl, "pos_x", (float)out_w, cl.pos_x) + "-iw/2)"
-                : "0";
-            std::string y_e = base_done && vid_idx > 0
-                ? "(" + prop_expr(cl, "pos_y", (float)out_h, cl.pos_y) + "-ih/2)"
-                : "0";
+            // Position — all layers use pos_x/pos_y; eval=frame when KFs animate it.
+            std::string x_e = "(" + prop_expr(cl, "pos_x", (float)out_w, cl.pos_x) + "-iw/2)";
+            std::string y_e = "(" + prop_expr(cl, "pos_y", (float)out_h, cl.pos_y) + "-ih/2)";
+            bool has_pos_kf = cl.ktracks.count("pos_x") > 0 || cl.ktracks.count("pos_y") > 0;
 
             // Enable window
             float en0 = fmaxf(0.f, cl.start - rl.vid_ss);
@@ -497,6 +518,7 @@ static bool write_filter_script(
             line() << vcur << layer_in
                    << "overlay=x=" << x_e << ":y=" << y_e
                    << ":format=auto"
+                   << (has_pos_kf ? ":eval=frame" : "")
                    << ":enable='between(t,"
                    << std::fixed << std::setprecision(3)
                    << en0 << "," << en1 << ")'"

@@ -447,6 +447,7 @@ struct AppState {
     std::string model_dl_error_msg;
     bool        show_model_dl_modal = false;
     bool        show_settings_modal = false;
+    bool        show_export_modal   = false;
 
     // tutorial
     bool show_tutorial  = false;
