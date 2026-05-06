@@ -30,6 +30,8 @@ No internet required. No uploads. Everything runs on your machine.
   - 2× supersampling + Lanczos downsample + σ=0.7 Gaussian for edge quality
   - Mask stored as streaming grayscale MJPEG, updates canvas in real-time while processing
   - Per-clip brick — each brick can have independent bg removal
+  - **Bounding box crop** — "Limit area" rectangle zeroes alpha outside L/R/T/B bounds; fixes complex backgrounds with nearby objects
+- **Noise reduction** — noisereduce spectral gating, one-click room noise cleanup before transcription
 
 ### Creative Effects (FX tab)
 - **Color grading** — brightness, contrast, saturation, hue
@@ -45,23 +47,16 @@ No internet required. No uploads. Everything runs on your machine.
 - **Eight animation styles** — Fade, Glitch, Typewriter, Bounce, Scale, Slide, Stack, Block
 - **Grouping modes** — Word / Phrase / Line / Segment / Custom N words
 - **All outputs on pipeline completion** — `_words.json`, `_segments.json`, `vocals.wav`, `instrumental.wav`, multiple SRT formats
+- **Subtitle position per clip** — override vertical slot (bottom / center / top / custom Y%) per clip
+- **Subtitle color + opacity per clip** — override global white per word or phrase
 
 ### Export
 - **MP4 render** — H.264/AAC, subtitle overlay burned in, background-removed clips composited
 - **Blender export** — generates `.py` script for lyric-video-blender addon
 - **Format presets** — 9:16, 16:9, 1:1
 
----
-
-## Up Next
-
-| Feature | Notes |
-|---|---|
-| **Bounding box for bg removal** | Let user draw a rect around subject — anything outside zeroed from alpha. Fixes complex backgrounds where the model grabs nearby objects like shelves or chairs. |
-| **Tutorial / first project** | Guided walkthrough: drop footage → trim → beat sync → bg remove → export. Uses one of the artist's own tracks as the creative brief. Floating step panel, not a locked wizard. |
-| **Subtitle position per clip** | Override vertical slot per clip — bottom / center / top / custom Y percentage. |
-| **Subtitle color + opacity per clip** | Override global white per word or phrase. |
-| **Noise reduction** | `noisereduce` — one-click room noise cleanup before transcription. Improves WhisperX accuracy on rough recordings. |
+### Onboarding
+- **Tutorial / first project** — floating step panel (Help → Getting Started): drop footage → trim → beat sync → bg remove → export; auto-advances on state detection
 
 ---
 
