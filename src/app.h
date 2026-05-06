@@ -189,6 +189,12 @@ struct Clip {
     BgRemoveStatus bg_remove_status  = BgRemoveStatus::Idle;
     float         bg_remove_progress = 0.f;
     std::string   bg_remove_error;
+    // Bounding box — crop mask to a rectangular area (0=left/top, 1=right/bottom)
+    bool          bg_remove_box_on   = false;
+    float         bg_remove_box_l    = 0.f;
+    float         bg_remove_box_r    = 1.f;
+    float         bg_remove_box_t    = 0.f;
+    float         bg_remove_box_b    = 1.f;
 
     // keyframe tracks — keyed by property name string
     // empty = use the matching static field above

@@ -96,6 +96,11 @@ struct PixelFX {
     bool        bg_remove_on       = false;
     std::string bg_remove_mask_dir;
     float       bg_remove_softness = 0.1f;
+    bool        bg_remove_box_on   = false;
+    float       bg_remove_box_l    = 0.f;
+    float       bg_remove_box_r    = 1.f;
+    float       bg_remove_box_t    = 0.f;
+    float       bg_remove_box_b    = 1.f;
 
     float time         = 0.f;   // animation time (ImGui::GetTime())
 
@@ -122,6 +127,9 @@ struct PixelFX {
                bg_remove_on == o.bg_remove_on &&
                bg_remove_mask_dir == o.bg_remove_mask_dir &&
                bg_remove_softness == o.bg_remove_softness &&
+               bg_remove_box_on == o.bg_remove_box_on &&
+               bg_remove_box_l == o.bg_remove_box_l && bg_remove_box_r == o.bg_remove_box_r &&
+               bg_remove_box_t == o.bg_remove_box_t && bg_remove_box_b == o.bg_remove_box_b &&
                time       == o.time;
     }
 };

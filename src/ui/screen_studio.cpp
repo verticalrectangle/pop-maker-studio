@@ -958,6 +958,11 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                                              cl_ptr->bg_remove_status == BgRemoveStatus::Ready;
                     pfx.bg_remove_mask_dir = cl_ptr->bg_remove_mask_dir;
                     pfx.bg_remove_softness = cl_ptr->bg_remove_softness;
+                    pfx.bg_remove_box_on   = cl_ptr->bg_remove_box_on;
+                    pfx.bg_remove_box_l    = cl_ptr->bg_remove_box_l;
+                    pfx.bg_remove_box_r    = cl_ptr->bg_remove_box_r;
+                    pfx.bg_remove_box_t    = cl_ptr->bg_remove_box_t;
+                    pfx.bg_remove_box_b    = cl_ptr->bg_remove_box_b;
                     pfx.time          = t_anim;
                     video_set_pixel_fx(slot, pfx);
                 }
@@ -2642,6 +2647,41 @@ static void panel_clip(AppState& state, float w) {
                 if (ImGui::SliderFloat("##bgrsoft", &clip.bg_remove_softness, 0.f, 1.f, "%.2f"))
                     history_push(state, "BG Softness");
                 ImGui::PopStyleColor(2);
+                ImGui::Dummy({0.f, 6.f});
+                // Bounding box
+                bool box_tog = clip.bg_remove_box_on;
+                if (ImGui::Checkbox("Limit area##bgrbox", &box_tog)) {
+                    clip.bg_remove_box_on = box_tog;
+                    history_push(state, "BG Box");
+                }
+                if (clip.bg_remove_box_on) {
+                    ImGui::PushStyleColor(ImGuiCol_SliderGrab, Col::fg);
+                    ImGui::PushStyleColor(ImGuiCol_FrameBg,    Col::bg_soft);
+                    ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+                    float half_w = (bar_w - 4.f) * 0.5f;
+                    ImGui::TextUnformatted("Left"); ImGui::PopStyleColor();
+                    ImGui::SetNextItemWidth(half_w);
+                    if (ImGui::SliderFloat("##bgrl", &clip.bg_remove_box_l, 0.f, clip.bg_remove_box_r - 0.01f, "%.2f"))
+                        history_push(state, "BG Box");
+                    ImGui::SameLine(0.f, 4.f);
+                    ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+                    ImGui::TextUnformatted("Right"); ImGui::PopStyleColor();
+                    ImGui::SetNextItemWidth(half_w);
+                    if (ImGui::SliderFloat("##bgrr", &clip.bg_remove_box_r, clip.bg_remove_box_l + 0.01f, 1.f, "%.2f"))
+                        history_push(state, "BG Box");
+                    ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+                    ImGui::TextUnformatted("Top"); ImGui::PopStyleColor();
+                    ImGui::SetNextItemWidth(half_w);
+                    if (ImGui::SliderFloat("##bgrt", &clip.bg_remove_box_t, 0.f, clip.bg_remove_box_b - 0.01f, "%.2f"))
+                        history_push(state, "BG Box");
+                    ImGui::SameLine(0.f, 4.f);
+                    ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+                    ImGui::TextUnformatted("Bottom"); ImGui::PopStyleColor();
+                    ImGui::SetNextItemWidth(half_w);
+                    if (ImGui::SliderFloat("##bgrb", &clip.bg_remove_box_b, clip.bg_remove_box_t + 0.01f, 1.f, "%.2f"))
+                        history_push(state, "BG Box");
+                    ImGui::PopStyleColor(2);
+                }
                 ImGui::Dummy({0.f, 4.f});
                 // Re-run button
                 if (ui_btn("Re-run", false, true)) {

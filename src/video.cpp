@@ -870,6 +870,18 @@ static uintptr_t decode_proxy_frame(PreviewState& pv, int frame_idx) {
                             memcpy(pv.bg_mask_alpha.data(), dec, (size_t)mw * mh);
                             pv.bg_mask_w = mw; pv.bg_mask_h = mh;
                             stbi_image_free(dec);
+
+                            // Apply bounding box: zero alpha outside the user-defined rect.
+                            if (pv.pixel_fx.bg_remove_box_on && mw > 0 && mh > 0) {
+                                int xl = (int)(pv.pixel_fx.bg_remove_box_l * mw);
+                                int xr = (int)(pv.pixel_fx.bg_remove_box_r * mw);
+                                int yt = (int)(pv.pixel_fx.bg_remove_box_t * mh);
+                                int yb = (int)(pv.pixel_fx.bg_remove_box_b * mh);
+                                for (int y = 0; y < mh; ++y)
+                                    for (int x = 0; x < mw; ++x)
+                                        if (x < xl || x >= xr || y < yt || y >= yb)
+                                            pv.bg_mask_alpha[(size_t)y * mw + x] = 0;
+                            }
                         }
                     }
                 }
