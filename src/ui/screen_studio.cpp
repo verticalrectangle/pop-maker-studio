@@ -861,6 +861,108 @@ static void draw_pipeline_strip(AppState& state, float w) {
     ImGui::Dummy({w, h});
 }
 
+// ── Frame snapshot ────────────────────────────────────────────────────────────
+// Extracts a single frame from the source video at the current playhead using
+// ffmpeg, composites any active text clips via drawtext, saves as PNG next to
+// the source file. Runs in a detached thread; result posted back via AppState.
+
+static void snapshot_thread(AppState* state_ptr, std::string src_path,
+                             double src_t, std::string out_path,
+                             std::string drawtext_chain) {
+    // Step 1: extract raw frame
+    char cmd[4096];
+    if (drawtext_chain.empty()) {
+        snprintf(cmd, sizeof(cmd),
+            "ffmpeg -y -ss %.4f -i \"%s\" -frames:v 1 -q:v 2 \"%s\" 2>/dev/null",
+            src_t, src_path.c_str(), out_path.c_str());
+    } else {
+        snprintf(cmd, sizeof(cmd),
+            "ffmpeg -y -ss %.4f -i \"%s\" -frames:v 1 -vf \"%s\" -q:v 2 \"%s\" 2>/dev/null",
+            src_t, src_path.c_str(), drawtext_chain.c_str(), out_path.c_str());
+    }
+    int ret = system(cmd);
+    state_ptr->snapshot_running = false;
+    if (ret == 0) {
+        namespace fs = std::filesystem;
+        state_ptr->snapshot_msg   = "Saved " + fs::path(out_path).filename().string();
+        state_ptr->snapshot_msg_t = ImGui::GetTime();
+        std::string folder = fs::path(out_path).parent_path().string();
+        system(("xdg-open \"" + folder + "\" &").c_str());
+    } else {
+        state_ptr->snapshot_msg   = "Snapshot failed";
+        state_ptr->snapshot_msg_t = ImGui::GetTime();
+    }
+}
+
+static void snapshot_start(AppState& state) {
+    if (state.snapshot_running) return;
+
+    // Find active video clip at playhead
+    std::string src_path;
+    double src_t = 0.0;
+    for (auto& tr : state.tracks) {
+        for (auto& cl : tr.clips) {
+            if (cl.clip_type != ClipType::Video) continue;
+            if (state.playhead < cl.start || state.playhead >= cl.end) continue;
+            src_path = cl.text;
+            src_t    = cl.in_point + (state.playhead - cl.start) * cl.speed;
+            break;
+        }
+        if (!src_path.empty()) break;
+    }
+    if (src_path.empty()) return;
+
+    // Build output path: <stem>_frame_<MM>m<SS>s<mmm>ms.png
+    namespace fs = std::filesystem;
+    int total_ms = (int)(state.playhead * 1000.f);
+    int ms = total_ms % 1000, ss = (total_ms / 1000) % 60, mm = total_ms / 60000;
+    char ts[32]; snprintf(ts, sizeof(ts), "%02dm%02ds%03dms", mm, ss, ms);
+    std::string stem = fs::path(src_path).stem().string();
+    std::string dir  = fs::path(src_path).parent_path().string();
+    std::string out  = dir + "/" + stem + "_frame_" + ts + ".png";
+
+    // Build drawtext chain for active text clips
+    const std::string& g_font_path = render_font_path();
+    std::string chain;
+    auto esc_ff = [](const std::string& s) {
+        std::string r;
+        for (char c : s) {
+            if (c == '\'' || c == '\\' || c == ':') r += '\\';
+            r += c;
+        }
+        return r;
+    };
+    for (auto& tr : state.tracks) {
+        for (auto& cl : tr.clips) {
+            if (cl.clip_type != ClipType::Text &&
+                cl.clip_type != ClipType::Subtitle &&
+                cl.clip_type != ClipType::Lyrics) continue;
+            if (state.playhead < cl.start || state.playhead >= cl.end) continue;
+            if (cl.text.empty()) continue;
+            char y_expr[64];
+            if (cl.sub_pos == 1)      snprintf(y_expr, sizeof(y_expr), "(h-text_h)/2");
+            else if (cl.sub_pos == 2) snprintf(y_expr, sizeof(y_expr), "h*0.10");
+            else if (cl.sub_pos == 3) snprintf(y_expr, sizeof(y_expr), "h*%.4f-text_h/2", (double)cl.sub_pos_y);
+            else                      snprintf(y_expr, sizeof(y_expr), "h*0.88-text_h");
+            char x_expr[64];
+            snprintf(x_expr, sizeof(x_expr), "w*%.4f-text_w/2", (double)cl.sub_pos_x);
+            std::string entry = std::string("drawtext=") +
+                "fontfile=" + esc_ff(g_font_path) + ":" +
+                "text="     + esc_ff(cl.text)     + ":" +
+                "fontsize=72:fontcolor=white:" +
+                "borderw=3:bordercolor=black@0.7:" +
+                "shadowx=2:shadowy=2:shadowcolor=black@0.5:" +
+                "x=" + x_expr + ":y=" + y_expr;
+            if (!chain.empty()) chain += ",";
+            chain += entry;
+        }
+    }
+
+    state.snapshot_running = true;
+    std::thread t(snapshot_thread, &state, src_path, src_t, out, chain);
+    t.detach();
+}
+
 // ── Transform box overlay ─────────────────────────────────────────────────────
 // Drawn after all track content for the selected clip.
 // Video clips: 8 scale handles + move interior + rotation handle.
@@ -1212,6 +1314,65 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
     ImVec2 mpos  = ImGui::GetIO().MousePos;
     bool   ldown  = ImGui::IsMouseDown(0);
     bool   lclick = ImGui::IsMouseClicked(0);
+
+    // Click-to-select: hit-test frontmost clip under cursor on left click.
+    // Iterate 0→n (frontmost first); first hit wins.
+    bool in_preview_area = mpos.x >= p.x && mpos.x <= p.x+w &&
+                           mpos.y >= p.y && mpos.y <= p.y+h;
+    if (lclick && in_preview_area && s_tx.handle == TxHandle::None) {
+        int hit_ti = -1, hit_ci = -1;
+        for (int ti = 0; ti < (int)state.tracks.size() && hit_ti < 0; ++ti) {
+            auto& tr = state.tracks[ti];
+            if (!tr.visible) continue;
+            for (int ci = 0; ci < (int)tr.clips.size(); ++ci) {
+                auto& cl = tr.clips[ci];
+                if (state.playhead < cl.start || state.playhead >= cl.end) continue;
+                if (cl.clip_type == ClipType::Video) {
+                    int slot = -1;
+                    std::string key = clip_slot_key(cl.text, cl.start);
+                    for (int s = 0; s < MAX_VIDEO_TRACKS; ++s)
+                        if (state.proxy_paths[s] == key) { slot = s; break; }
+                    float cpx = cl.eval_prop("pos_x",   state.playhead) * w + p.x;
+                    float cpy = cl.eval_prop("pos_y",   state.playhead) * h + p.y;
+                    float csx = cl.eval_prop("scale_x", state.playhead);
+                    float csy = cl.eval_prop("scale_y", state.playhead);
+                    float fw = w, fh = h;
+                    if (slot >= 0 && video_info(slot).width > 0) {
+                        float va = (float)video_info(slot).width / video_info(slot).height;
+                        float ca = w / h;
+                        if (va > ca) { fw = w; fh = w/va; } else { fh = h; fw = h*va; }
+                    }
+                    float hw2 = fw*csx*0.5f, hh2 = fh*csy*0.5f;
+                    if (mpos.x >= cpx-hw2 && mpos.x <= cpx+hw2 &&
+                        mpos.y >= cpy-hh2 && mpos.y <= cpy+hh2) {
+                        hit_ti = ti; hit_ci = ci; break;
+                    }
+                } else if (cl.clip_type == ClipType::Text ||
+                           cl.clip_type == ClipType::Subtitle ||
+                           cl.clip_type == ClipType::Lyrics) {
+                    float col_w  = cl.sub_wrap_w * w;
+                    float col_cx = cl.sub_pos_x  * w + p.x;
+                    float row_h2 = ImGui::GetFontSize() * 1.8f * 1.5f;
+                    float col_cy = cl.sub_pos_y  * h + p.y;
+                    if (mpos.x >= col_cx - col_w*0.5f && mpos.x <= col_cx + col_w*0.5f &&
+                        mpos.y >= col_cy - row_h2*0.5f && mpos.y <= col_cy + row_h2*0.5f) {
+                        hit_ti = ti; hit_ci = ci; break;
+                    }
+                }
+            }
+        }
+        if (hit_ti >= 0) {
+            if (state.selected_track != hit_ti || state.selected_clip != hit_ci) {
+                state.selected_track = hit_ti;
+                state.selected_clip  = hit_ci;
+                state.request_scroll_to_clip = true;
+            }
+        } else {
+            // Click on empty space — deselect
+            state.selected_track = -1;
+            state.selected_clip  = -1;
+        }
+    }
 
     float lookahead = ImGui::GetIO().DeltaTime;
     float t_anim    = (float)ImGui::GetTime();
@@ -1745,6 +1906,58 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
     dl->AddLine({p.x, p.y+h}, {p.x, p.y+h-cm},     cc);
     dl->AddLine({p.x+w,p.y+h},{p.x+w-cm,p.y+h},    cc);
     dl->AddLine({p.x+w,p.y+h},{p.x+w,p.y+h-cm},    cc);
+
+    // Snapshot button — top-right corner, only when a video clip is at the playhead
+    {
+        bool has_video_at_play = false;
+        for (auto& tr : state.tracks)
+            for (auto& cl : tr.clips)
+                if (cl.clip_type == ClipType::Video &&
+                    cl.start <= state.playhead && cl.end > state.playhead &&
+                    !cl.source_id.empty())
+                    has_video_at_play = true;
+
+        const char* snap_lbl = state.snapshot_running ? "..." : "[o]";
+        ImVec2 slsz = ImGui::GetFont()->CalcTextSizeA(ImGui::GetFontSize(), FLT_MAX, -1.f, snap_lbl);
+        float  btn_pad = 4.f;
+        float  btn_w = slsz.x + btn_pad * 2.f;
+        float  btn_h = slsz.y + btn_pad * 2.f;
+        ImVec2 btn_tl = {p.x + w - btn_w - 6.f, p.y + 6.f};
+        ImVec2 btn_br = {btn_tl.x + btn_w, btn_tl.y + btn_h};
+
+        bool snap_hov = mpos.x >= btn_tl.x && mpos.x <= btn_br.x &&
+                        mpos.y >= btn_tl.y && mpos.y <= btn_br.y;
+        bool snap_ena = has_video_at_play && !state.snapshot_running;
+
+        ImU32 btn_bg  = snap_hov && snap_ena ? IM_COL32(70, 70, 70, 200) : IM_COL32(30, 30, 30, 180);
+        ImU32 lbl_col = snap_ena ? to_u32(Col::fg) : to_u32(Col::dim);
+
+        dl->AddRectFilled(btn_tl, btn_br, btn_bg, 3.f);
+        dl->AddRect(btn_tl, btn_br, to_u32(Col::line), 3.f);
+        dl->AddText({btn_tl.x + btn_pad, btn_tl.y + btn_pad}, lbl_col, snap_lbl);
+
+        if (snap_hov && snap_ena && lclick)
+            snapshot_start(state);
+    }
+
+    // Snapshot flash message — bottom-center, fades after 3 s
+    if (!state.snapshot_msg.empty()) {
+        double elapsed = ImGui::GetTime() - state.snapshot_msg_t;
+        float  alpha   = elapsed < 2.0 ? 1.f : (float)(1.0 - (elapsed - 2.0) / 1.0);
+        if (alpha <= 0.f) {
+            state.snapshot_msg.clear();
+        } else {
+            alpha = std::min(alpha, 1.f);
+            const char* msg = state.snapshot_msg.c_str();
+            ImVec2 msz = ImGui::GetFont()->CalcTextSizeA(ImGui::GetFontSize(), FLT_MAX, -1.f, msg);
+            float  pad = 5.f;
+            ImVec2 mtl = {p.x + (w - msz.x) * 0.5f - pad, p.y + h - msz.y - 14.f};
+            ImVec2 mbr = {mtl.x + msz.x + pad * 2.f, mtl.y + msz.y + pad};
+            dl->AddRectFilled(mtl, mbr, IM_COL32(20, 20, 20, (int)(alpha * 200.f)), 3.f);
+            dl->AddText({mtl.x + pad, mtl.y + pad * 0.5f},
+                        IM_COL32(220, 220, 220, (int)(alpha * 255.f)), msg);
+        }
+    }
 }
 
 // ── Right panel: History tab ──────────────────────────────────────────────────
@@ -4604,6 +4817,29 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
     float& zoom         = state.tl_zoom;
     float& scroll       = state.tl_scroll;
     float tl_content_w  = dur * zoom;
+
+    // Scroll to bring selected clip into view (triggered by preview click-to-select)
+    if (state.request_scroll_to_clip &&
+        state.selected_track >= 0 && state.selected_clip >= 0 &&
+        state.selected_track < (int)state.tracks.size()) {
+        state.request_scroll_to_clip = false;
+        auto& cl = state.tracks[state.selected_track].clips[state.selected_clip];
+        // Horizontal: ensure clip start is visible with some margin
+        float clip_px  = cl.start * zoom;
+        float clip_px1 = cl.end   * zoom;
+        float margin   = 40.f;
+        if (clip_px - scroll < margin)
+            scroll = fmaxf(0.f, clip_px - margin);
+        else if (clip_px1 - scroll > clip_area_w - margin)
+            scroll = clip_px1 - clip_area_w + margin;
+        // Vertical: ensure track row is visible
+        float track_top = state.selected_track * TL_TRACK_H;
+        float vis_h     = total_h - TL_RULER_H;
+        if (track_top < state.tl_v_scroll)
+            state.tl_v_scroll = track_top;
+        else if (track_top + TL_TRACK_H > state.tl_v_scroll + vis_h)
+            state.tl_v_scroll = track_top + TL_TRACK_H - vis_h;
+    }
 
     // Tick drop flash timer
     if (s_drop_flash_t > 0.f)

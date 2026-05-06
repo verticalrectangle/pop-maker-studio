@@ -451,6 +451,14 @@ struct AppState {
     bool show_tutorial  = false;
     int  tutorial_step  = 0;   // 0-4 = steps 1-5; >=5 = finished
 
+    // scroll-to-clip request (set by preview click, consumed by draw_timeline)
+    bool request_scroll_to_clip = false;
+
+    // frame snapshot
+    bool        snapshot_running = false;
+    std::string snapshot_msg;      // shown in preview corner after save
+    double      snapshot_msg_t = 0.0;  // ImGui::GetTime() when message was set
+
     // noise reduction
     bool        noise_reduce_running  = false;
     float       noise_reduce_progress = 0.f;
