@@ -588,7 +588,10 @@ static bool write_filter_script(
                     fx_scale   *= fc.fx_scale_mul;
                 }
             }
-            int effective_font_sz = (int)(font_sz * fx_scale + 0.5f);
+            int clip_font_sz = cl.font_size > 0.f
+                               ? (int)(cl.font_size * out_h + 0.5f)
+                               : font_sz;
+            int effective_font_sz = (int)(clip_font_sz * fx_scale + 0.5f);
 
             // Alpha modifier (multiplied into fontcolor alpha)
             std::string alpha_mod = "1";
@@ -823,7 +826,7 @@ static bool write_filter_script(
                            << "drawtext="
                            << "fontfile=" << esc(g_font_path) << ":"
                            << "text="     << esc(we->text)    << ":"
-                           << "fontsize=" << font_sz           << ":"
+                           << "fontsize=" << clip_font_sz      << ":"
                            << "fontcolor=" << hi_col           << ":"
                            << "borderw=3:bordercolor=black@0.9:"
                            << "shadowx=2:shadowy=2:shadowcolor=black@0.7:"

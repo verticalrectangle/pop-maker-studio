@@ -6,7 +6,7 @@
 // ── Binary serialization helpers ──────────────────────────────────────────────
 
 static const uint32_t MAGIC   = 0x534D5001u; // "PMS\x01"
-static const uint32_t VERSION = 13u;
+static const uint32_t VERSION = 14u;
 
 struct Writer {
     std::ofstream f;
@@ -132,6 +132,8 @@ static void write_clip(Writer& w, const Clip& c) {
     w.str(c.bg_remove_mask_dir);
     // v13: text position X + wrap width
     w.pod(c.sub_pos_x); w.pod(c.sub_wrap_w);
+    // v14: per-clip font size
+    w.pod(c.font_size);
     // ktracks
     uint32_t nk = (uint32_t)c.ktracks.size();
     w.pod(nk);
@@ -214,6 +216,9 @@ static Clip read_clip(Reader& r, uint32_t version) {
     if (version >= 13u) {
         c.sub_pos_x  = r.pod<float>();
         c.sub_wrap_w = r.pod<float>();
+    }
+    if (version >= 14u) {
+        c.font_size = r.pod<float>();
     }
     // ktracks
     uint32_t nk = r.pod<uint32_t>();

@@ -978,7 +978,7 @@ enum class TxHandle {
     ScaleSW, ScaleW,
     Rotate,
     // Text-specific
-    TextLeft, TextRight
+    TextLeft, TextRight, TextTop, TextBot
 };
 
 struct TxState {
@@ -990,7 +990,8 @@ struct TxState {
     float    start_px = 0.f, start_py = 0.f;
     float    start_sx = 0.f, start_sy = 0.f;
     float    start_rot = 0.f;
-    float    start_wrap_w = 0.f;
+    float    start_wrap_w   = 0.f;
+    float    start_font_size = 0.f;
     bool     dirty = false;
 };
 static TxState s_tx;
@@ -1039,7 +1040,9 @@ static void draw_transform_box(AppState& state, ImDrawList* dl,
             s_tx.start_px  = cl.pos_x;    s_tx.start_py  = cl.pos_y;
             s_tx.start_sx  = cl.scale_x;  s_tx.start_sy  = cl.scale_y;
             s_tx.start_rot = cl.rotation;
-            s_tx.start_wrap_w = cl.sub_wrap_w;
+            s_tx.start_wrap_w    = cl.sub_wrap_w;
+            s_tx.start_font_size = cl.font_size > 0.f ? cl.font_size
+                                   : ImGui::GetFontSize() * 1.8f / h;
             s_tx.dirty     = false;
         }
     };
@@ -1184,8 +1187,8 @@ static void draw_transform_box(AppState& state, ImDrawList* dl,
         float col_cx = cl.sub_pos_x  * w + p.x;
         float col_x0 = col_cx - col_w * 0.5f;
         float col_x1 = col_cx + col_w * 0.5f;
-        // Row height — approximate
-        float row_h = ImGui::GetFontSize() * 1.8f * 1.25f;
+        float eff_fsz = cl.font_size > 0.f ? cl.font_size * h : ImGui::GetFontSize() * 1.8f;
+        float row_h  = eff_fsz * 1.25f;
         float col_cy = cl.sub_pos_y  * h + p.y;
         float col_y0 = col_cy - row_h * 0.5f;
         float col_y1 = col_cy + row_h * 0.5f;
@@ -1202,9 +1205,11 @@ static void draw_transform_box(AppState& state, ImDrawList* dl,
         for (float y = col_y0; y < col_y1; y += dash*2)
             dl->AddLine({col_x1, y}, {col_x1, fminf(y+dash, col_y1)}, dc);
 
-        // Left/right edge handles for wrap width
+        // Left/right edge handles for wrap width; top/bottom for font size
         draw_handle({col_x0, col_cy}, TxHandle::TextLeft);
         draw_handle({col_x1, col_cy}, TxHandle::TextRight);
+        draw_handle({col_cx, col_y0}, TxHandle::TextTop);
+        draw_handle({col_cx, col_y1}, TxHandle::TextBot);
 
         // Interior move
         bool in_interior = mpos.x > col_x0+HR*2 && mpos.x < col_x1-HR*2 &&
@@ -1216,9 +1221,11 @@ static void draw_transform_box(AppState& state, ImDrawList* dl,
                 s_tx.track_idx    = state.selected_track;
                 s_tx.clip_idx     = state.selected_clip;
                 s_tx.start_mx     = mpos.x; s_tx.start_my = mpos.y;
-                s_tx.start_px     = cl.sub_pos_x;
-                s_tx.start_py     = cl.sub_pos_y;
-                s_tx.start_wrap_w = cl.sub_wrap_w;
+                s_tx.start_px        = cl.sub_pos_x;
+                s_tx.start_py        = cl.sub_pos_y;
+                s_tx.start_wrap_w    = cl.sub_wrap_w;
+                s_tx.start_font_size = cl.font_size > 0.f ? cl.font_size
+                                       : ImGui::GetFontSize() * 1.8f / h;
                 s_tx.dirty        = false;
             }
         }
@@ -1251,6 +1258,15 @@ static void draw_transform_box(AppState& state, ImDrawList* dl,
                     mc.sub_pos_x  = fmaxf(0.02f, fminf(0.98f, mc.sub_pos_x));
                     break;
                 }
+                case TxHandle::TextTop:
+                    // drag up = negative dmy = larger font
+                    mc.font_size = fmaxf(0.01f, fminf(0.5f,
+                        s_tx.start_font_size - dmy / h));
+                    break;
+                case TxHandle::TextBot:
+                    mc.font_size = fmaxf(0.01f, fminf(0.5f,
+                        s_tx.start_font_size + dmy / h));
+                    break;
                 default: break;
             }
             s_tx.dirty = true;
@@ -1270,8 +1286,10 @@ static void draw_transform_box(AppState& state, ImDrawList* dl,
     // Release drag → push history once
     if (!ldown && s_tx.handle != TxHandle::None) {
         if (s_tx.dirty) {
-            const char* act = (s_tx.handle == TxHandle::Move)   ? "Move clip" :
-                              (s_tx.handle == TxHandle::Rotate)  ? "Rotate clip" : "Scale clip";
+            const char* act = (s_tx.handle == TxHandle::Move)    ? "Move clip"      :
+                              (s_tx.handle == TxHandle::Rotate)   ? "Rotate clip"    :
+                              (s_tx.handle == TxHandle::TextTop ||
+                               s_tx.handle == TxHandle::TextBot)  ? "Font size"      : "Scale clip";
             history_push(state, act);
         }
         s_tx = TxState{};
@@ -1621,7 +1639,8 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
 
             ImGui::PushFont(g_font_black);
             ImFont* txt_font = ImGui::GetFont();
-            float fsz    = ImGui::GetFontSize() * 1.8f;
+            float fsz    = show->font_size > 0.f ? show->font_size * h
+                                                  : ImGui::GetFontSize() * 1.8f;
             float line_h = fsz * 1.25f;
 
             // Word-wrap: break text into lines that fit sub_wrap_w * canvas width
@@ -2454,6 +2473,20 @@ static void section_position(AppState& state, Clip& clip, float w) {
     if (ImGui::SliderFloat("##sub_wrap", &clip.sub_wrap_w, 0.1f, 1.f, "%.2f"))
         if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Wrap width");
     if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Wrap width");
+
+    ImGui::Dummy({0.f, 4.f});
+    ImGui::PushStyleColor(ImGuiCol_Text, Col::muted); ImGui::TextUnformatted("Font size"); ImGui::PopStyleColor();
+    ImGui::SetNextItemWidth(bar_w - 52.f);
+    // stored as fraction of canvas height; expose as 1–50 percent
+    float fs_pct = clip.font_size > 0.f ? clip.font_size * 100.f : 0.f;
+    if (ImGui::SliderFloat("##font_sz", &fs_pct, 1.f, 50.f, "%.1f%%")) {
+        clip.font_size = fs_pct / 100.f;
+    }
+    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Font size");
+    ImGui::SameLine(0.f, 4.f);
+    if (ui_btn("Reset##fs", clip.font_size == 0.f, true)) {
+        clip.font_size = 0.f; history_push(state, "Font size");
+    }
 
     ImGui::PopStyleColor(2);
 }
