@@ -4756,7 +4756,6 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
                     s_edit_buf[sizeof(s_edit_buf)-1] = '\0';
                     s_edit_focus_next = (clip.clip_type==ClipType::Text || clip.clip_type==ClipType::Lyrics ||
                                          clip.clip_type==ClipType::Subtitle);
-                    if (!state.playing) seek_to(state, clip.start);
 
                     float orig_cx0 = origin.x+TL_LABEL_W+clip.start*zoom-scroll;
                     float orig_cx1 = origin.x+TL_LABEL_W+clip.end*zoom-scroll;
