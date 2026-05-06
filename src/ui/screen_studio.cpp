@@ -2569,14 +2569,24 @@ static void panel_clip(AppState& state, float w) {
             }
             ImGui::Dummy({0.f, 6.f});
 
-            // ── Auto-scrub playhead while processing ──────────────────────────
+            // ── Auto-scrub while processing; snap to start when done ──────────
+            static BgRemoveStatus s_prev_bgr_status = BgRemoveStatus::Idle;
+            static int            s_prev_bgr_clip   = -1;
+            int cur_clip = state.selected_clip;
+
             if (status == BgRemoveStatus::Processing && clip.bg_remove_progress > 0.f) {
                 float dur = clip.end - clip.start;
                 if (dur > 0.f) {
                     float t = fminf(clip.bg_remove_progress, 0.99f);
                     state.playhead = clip.start + t * dur;
                 }
+            } else if (status == BgRemoveStatus::Ready &&
+                       s_prev_bgr_status == BgRemoveStatus::Processing &&
+                       s_prev_bgr_clip == cur_clip) {
+                seek_to(state, clip.start);
             }
+            s_prev_bgr_status = status;
+            s_prev_bgr_clip   = cur_clip;
 
             // ── Status indicator ──────────────────────────────────────────────
             if (status == BgRemoveStatus::Processing) {
