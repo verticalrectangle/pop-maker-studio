@@ -82,9 +82,9 @@ try:
     opts.intra_op_num_threads = os.cpu_count() or 8
     opts.inter_op_num_threads = 1
     opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-    session = new_session("u2net_human_seg", sess_options=opts)
+    session = new_session("isnet-general-use", sess_options=opts)
 except Exception:
-    session = new_session("u2net_human_seg")
+    session = new_session("isnet-general-use")
 try:
     dummy = Image.new("RGB", (32, 32), (0, 255, 0))
     remove(dummy, session=session)
