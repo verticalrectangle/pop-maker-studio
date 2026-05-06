@@ -5,6 +5,7 @@
 #include "audio.h"
 #include "video.h"
 #include "bg_remove.h"
+#include "noise_reduce.h"
 #include "transcribe.h"
 #include "filepicker.h"
 #include "globals.h"
@@ -2519,6 +2520,61 @@ static void panel_clip(AppState& state, float w) {
                 if (!has_path) ImGui::EndDisabled();
             }
             if (!ml_avail) ImGui::EndDisabled();
+            ImGui::Dummy({0.f, 4.f});
+        }
+
+        if (ImGui::CollapsingHeader("Noise Reduction")) {
+            ImGui::Dummy({0.f, 4.f});
+            float bar_w = w - 16.f;
+            extern std::string g_noise_reduce_script;
+            bool nr_installed = noise_reduce_is_installed(state.python_path);
+            bool nr_running   = state.noise_reduce_running;
+            bool has_path     = !clip.text.empty();
+
+            if (!nr_installed) {
+                ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+                ImGui::TextWrapped("Requires noisereduce + soundfile:\npip install noisereduce soundfile");
+                ImGui::PopStyleColor();
+            } else if (nr_running) {
+                ImVec2 bp = ImGui::GetCursorScreenPos();
+                ImDrawList* nrdl = ImGui::GetWindowDrawList();
+                float t = fmodf((float)ImGui::GetTime() * 0.8f, 1.f);
+                float p = state.noise_reduce_progress;
+                nrdl->AddRectFilled(bp, {bp.x+bar_w, bp.y+4.f}, to_u32(Col::line), 2.f);
+                if (p > 0.f)
+                    nrdl->AddRectFilled(bp, {bp.x+bar_w*p, bp.y+4.f}, to_u32(Col::fg), 2.f);
+                else
+                    nrdl->AddRectFilled({bp.x+bar_w*t, bp.y}, {bp.x+bar_w*fminf(1.f,t+0.3f), bp.y+4.f}, to_u32(Col::fg), 2.f);
+                ImGui::Dummy({0.f, 8.f});
+                ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+                ImGui::TextUnformatted("Reducing noise…");
+                ImGui::PopStyleColor();
+            } else {
+                if (!state.noise_reduce_output.empty()) {
+                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.25f, 0.85f, 0.4f, 1.f));
+                    ImGui::TextWrapped("Done — denoised file set as audio source.");
+                    ImGui::PopStyleColor();
+                    ImGui::Dummy({0.f, 4.f});
+                }
+                if (!state.noise_reduce_error.empty()) {
+                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.3f, 0.3f, 1.f));
+                    std::string e = state.noise_reduce_error;
+                    if (e.size() > 120) e = e.substr(0, 117) + "...";
+                    ImGui::TextWrapped("%s", e.c_str());
+                    ImGui::PopStyleColor();
+                    ImGui::Dummy({0.f, 4.f});
+                }
+                if (!has_path) ImGui::BeginDisabled();
+                if (ui_btn("Reduce Noise", false, true)) {
+                    state.noise_reduce_error.clear();
+                    noise_reduce_start(state, clip.text,
+                                       state.python_path, g_noise_reduce_script);
+                }
+                if (!has_path) ImGui::EndDisabled();
+                ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+                ImGui::TextWrapped("Removes room hum, AC and mic self-noise before transcription.");
+                ImGui::PopStyleColor();
+            }
             ImGui::Dummy({0.f, 4.f});
         }
 
@@ -5951,6 +6007,16 @@ void ui_studio(AppState& state) {
 
     // Poll background removal jobs.
     bg_remove_poll(state);
+
+    // Poll noise reduction — on completion, set denoised WAV as playback source.
+    {
+        bool was_running = state.noise_reduce_running;
+        noise_reduce_poll(state);
+        if (was_running && !state.noise_reduce_running && !state.noise_reduce_output.empty()) {
+            state.audio_path = state.noise_reduce_output;
+            audio_load(state.audio_path);
+        }
+    }
 
     // Audio just finished loading while playing — start from current playhead
     {

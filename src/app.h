@@ -449,6 +449,12 @@ struct AppState {
     bool show_tutorial  = false;
     int  tutorial_step  = 0;   // 0-4 = steps 1-5; >=5 = finished
 
+    // noise reduction
+    bool        noise_reduce_running  = false;
+    float       noise_reduce_progress = 0.f;
+    std::string noise_reduce_output;   // path to denoised WAV once done
+    std::string noise_reduce_error;
+
     // subtitle grouping
     SubtitleMode subtitle_mode = SubtitleMode::Word;
     int          subtitle_n    = 3;   // words per clip for CustomN mode

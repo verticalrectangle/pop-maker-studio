@@ -41,6 +41,7 @@ set(SOURCES
     src/waveform.cpp
     src/blender_export.cpp
     src/bg_remove.cpp
+    src/noise_reduce.cpp
     src/ui/screen_splash.cpp
     src/ui/screen_setup.cpp
     src/ui/screen_studio.cpp
@@ -180,6 +181,20 @@ add_custom_command(
 )
 add_custom_target(embed_rembg DEPENDS ${CMAKE_BINARY_DIR}/rembg_remove_embedded.h)
 add_dependencies(pop-maker-studio embed_rembg)
+
+# Embed noise_reduce.py
+add_custom_command(
+    OUTPUT ${CMAKE_BINARY_DIR}/noise_reduce_embedded.h
+    COMMAND ${CMAKE_COMMAND}
+        -DINPUT=${CMAKE_SOURCE_DIR}/noise_reduce.py
+        -DVAR=noise_reduce_py
+        -DOUTPUT=${CMAKE_BINARY_DIR}/noise_reduce_embedded.h
+        -P ${CMAKE_SOURCE_DIR}/cmake/EmbedFile.cmake
+    DEPENDS ${CMAKE_SOURCE_DIR}/noise_reduce.py
+    COMMENT "Embedding noise_reduce.py"
+)
+add_custom_target(embed_noise_reduce DEPENDS ${CMAKE_BINARY_DIR}/noise_reduce_embedded.h)
+add_dependencies(pop-maker-studio embed_noise_reduce)
 
 # Embed envelope_extract.py
 add_custom_command(
