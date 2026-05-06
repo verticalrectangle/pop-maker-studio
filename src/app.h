@@ -111,6 +111,8 @@ struct Clip {
     bool  karaoke   = false;   // per-word highlight enabled; available on Phrase/Line/Segment/CustomN
     int   sub_pos   = 0;       // 0=bottom 1=center 2=top 3=custom Y
     float sub_pos_y = 0.85f;   // custom Y fraction from top (0=top, 1=bottom)
+    float sub_pos_x = 0.5f;    // horizontal center fraction (0=left, 1=right)
+    float sub_wrap_w = 0.85f;  // text column width as fraction of canvas width (word wrap)
     int   sub_anchor_h = 1;    // horizontal anchor: 0=left 1=center 2=right
     float sub_color[4] = {1.f, 1.f, 1.f, 1.f};  // RGBA base / unspoken color
     bool  sub_color_override = false;

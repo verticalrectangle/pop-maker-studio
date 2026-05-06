@@ -6,7 +6,7 @@
 // ── Binary serialization helpers ──────────────────────────────────────────────
 
 static const uint32_t MAGIC   = 0x534D5001u; // "PMS\x01"
-static const uint32_t VERSION = 12u;
+static const uint32_t VERSION = 13u;
 
 struct Writer {
     std::ofstream f;
@@ -130,6 +130,8 @@ static void write_clip(Writer& w, const Clip& c) {
     // v12: remove background
     w.pod((uint8_t)c.bg_remove_on); w.pod(c.bg_remove_softness);
     w.str(c.bg_remove_mask_dir);
+    // v13: text position X + wrap width
+    w.pod(c.sub_pos_x); w.pod(c.sub_wrap_w);
     // ktracks
     uint32_t nk = (uint32_t)c.ktracks.size();
     w.pod(nk);
@@ -203,12 +205,15 @@ static Clip read_clip(Reader& r, uint32_t version) {
         c.bg_remove_on       = (bool)r.pod<uint8_t>();
         c.bg_remove_softness = r.pod<float>();
         c.bg_remove_mask_dir = r.str();
-        // Restore Ready status if the mask directory exists on disk
         if (c.bg_remove_on && !c.bg_remove_mask_dir.empty()) {
             namespace fs = std::filesystem;
             c.bg_remove_status = fs::exists(c.bg_remove_mask_dir + "/fps.txt")
                                   ? BgRemoveStatus::Ready : BgRemoveStatus::Idle;
         }
+    }
+    if (version >= 13u) {
+        c.sub_pos_x  = r.pod<float>();
+        c.sub_wrap_w = r.pod<float>();
     }
     // ktracks
     uint32_t nk = r.pod<uint32_t>();

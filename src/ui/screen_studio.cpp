@@ -873,17 +873,16 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
     // Empty state prompt
     if (state.tracks.empty()) {
         ImGui::PushFont(g_font_bold);
-        ImGui::SetWindowFontScale(1.3f);
+        float hint_sz = ImGui::GetFontSize() * 1.3f;
         const char* hint = "Drop a file to start";
-        ImVec2 hsz = ImGui::CalcTextSize(hint);
-        dl->AddText(ImGui::GetFont(), ImGui::GetFontSize() * 1.3f,
+        ImVec2 hsz = ImGui::GetFont()->CalcTextSizeA(hint_sz, FLT_MAX, -1.f, hint);
+        dl->AddText(ImGui::GetFont(), hint_sz,
             {p.x + (w - hsz.x) * 0.5f, p.y + h * 0.5f - hsz.y},
             to_u32(Col::muted), hint);
-        ImGui::SetWindowFontScale(1.f);
         ImGui::PopFont();
 
-        const char* sub = "or  File → Import Audio";
-        ImVec2 ssz = ImGui::CalcTextSize(sub);
+        const char* sub = "or  File \xe2\x86\x92 Import Audio";
+        ImVec2 ssz = ImGui::GetFont()->CalcTextSizeA(ImGui::GetFontSize(), FLT_MAX, -1.f, sub);
         dl->AddText({p.x + (w - ssz.x) * 0.5f, p.y + h * 0.5f + 8.f},
             to_u32(Col::dim), sub);
 
@@ -1144,29 +1143,57 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
             }
             if (!show) { ++text_rendered; continue; }
 
-            float slot_h = 40.f;
+            ImGui::PushFont(g_font_black);
+            ImFont* txt_font = ImGui::GetFont();
+            float fsz    = ImGui::GetFontSize() * 1.8f;
+            float line_h = fsz * 1.25f;
+
+            // Word-wrap: break text into lines that fit sub_wrap_w * canvas width
+            float max_line_w = fmaxf(40.f, show->sub_wrap_w * w);
+            std::vector<std::string> txt_lines;
+            {
+                const char* src = show->text.c_str();
+                const char* wp  = src;
+                std::string cur;
+                while (true) {
+                    const char* ep = wp;
+                    while (*ep && *ep != ' ') ++ep;
+                    std::string word(wp, ep);
+                    std::string test = cur.empty() ? word : cur + " " + word;
+                    if (!cur.empty() &&
+                        txt_font->CalcTextSizeA(fsz, FLT_MAX, -1.f, test.c_str()).x > max_line_w) {
+                        txt_lines.push_back(cur);
+                        cur = word;
+                    } else {
+                        cur = test;
+                    }
+                    if (!*ep) break;
+                    wp = ep + 1;
+                }
+                if (!cur.empty()) txt_lines.push_back(cur);
+                if (txt_lines.empty()) txt_lines.push_back("");
+            }
+
+            float block_h = txt_lines.size() * line_h;
+
+            // Vertical slot positioning (uses block_h so multi-line is centred correctly)
+            float slot_h = fmaxf(40.f, block_h);
             float slot_y;
             if (show->sub_pos == 1)
-                slot_y = p.y + h * 0.5f - slot_h * 0.5f;
+                slot_y = p.y + h * 0.5f - block_h * 0.5f;
             else if (show->sub_pos == 2)
                 slot_y = p.y + 24.f + text_rendered * slot_h;
             else if (show->sub_pos == 3)
-                slot_y = p.y + show->sub_pos_y * h - slot_h * 0.5f;
+                slot_y = p.y + show->sub_pos_y * h - block_h * 0.5f;
             else
-                slot_y = p.y + h - 24.f - (text_rendered + 1) * slot_h;
+                slot_y = p.y + h - 24.f - block_h - text_rendered * slot_h;
 
-            ImGui::PushFont(g_font_black);
-            float fsz = ImGui::GetFontSize() * 1.8f;
-            ImVec2 tsz = ImGui::CalcTextSize(show->text.c_str());
-            float  tx  = p.x + (w - tsz.x) * 0.5f;
-
-            // Kinetic typography: compute per-style animation offsets
-            float local_t  = state.playhead - show->start;  // clip-relative time
+            // Kinetic typography
+            float local_t  = state.playhead - show->start;
             float clip_dur = show->end - show->start;
             float fade_in  = fminf(0.25f, clip_dur * 0.3f);
             float fade_out = fminf(0.25f, clip_dur * 0.2f);
 
-            // Accumulated effect from Effect clips on tracks above this one
             EffectAccum text_fx = collect_effects(state, state.playhead, ti);
 
             float anim_dx    = 0.f;
@@ -1176,145 +1203,168 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
             AnimStyle eff_style = (show->clip_style != AnimStyle::None)
                                   ? show->clip_style : state.style;
 
-            if (active_ci >= 0) {  // only animate when actively playing
+            if (active_ci >= 0) {
                 switch (eff_style) {
-                    case AnimStyle::Fade: {
-                        if (local_t < fade_in)
-                            anim_alpha = local_t / fade_in;
+                    case AnimStyle::Fade:
+                        if (local_t < fade_in)       anim_alpha = local_t / fade_in;
                         else if (local_t > clip_dur - fade_out)
-                            anim_alpha = (clip_dur - local_t) / fade_out;
+                                                      anim_alpha = (clip_dur - local_t) / fade_out;
                         break;
-                    }
                     case AnimStyle::Glitch: {
                         float decay = fmaxf(0.f, 1.f - local_t / 0.5f);
                         anim_dx = sinf(local_t * 97.f + sinf(local_t * 53.f) * 31.f) * 12.f * decay;
                         break;
                     }
-                    case AnimStyle::Typewriter: {
+                    case AnimStyle::Typewriter:
                         if (local_t < fade_in) {
                             anim_alpha = local_t / fade_in;
                             anim_dy    = (fade_in - local_t) / fade_in * (-8.f);
                         }
                         break;
-                    }
                     case AnimStyle::Bounce: {
-                        float bounce_dur = fminf(0.6f, clip_dur);
-                        if (local_t < bounce_dur) {
-                            float p2 = local_t / bounce_dur;
+                        float bd = fminf(0.6f, clip_dur);
+                        if (local_t < bd) {
+                            float p2 = local_t / bd;
                             anim_dy = sinf(p2 * 3.14159f) * (-60.f) * expf(-p2 * 4.f);
                         }
                         break;
                     }
-                    case AnimStyle::Slide: {
+                    case AnimStyle::Slide:
                         if (local_t < fade_in)
                             anim_dx = (local_t / fade_in - 1.f) * w * 0.6f;
                         else if (local_t > clip_dur - fade_out)
                             anim_dx = ((local_t - (clip_dur - fade_out)) / fade_out) * w * 0.6f;
                         break;
-                    }
-                    case AnimStyle::Stack: {
+                    case AnimStyle::Stack:
                         if (local_t < fade_in)
                             anim_dy = (1.f - local_t / fade_in) * 80.f;
                         break;
-                    }
                     default: break;
                 }
             }
 
-            // Apply effect clip overrides
             if (text_fx.any_text) {
                 anim_alpha *= text_fx.opacity_mul;
                 fsz        *= text_fx.scale_mul;
+                line_h      = fsz * 1.25f;
+                block_h     = txt_lines.size() * line_h;
             }
 
-            float tx_anim  = tx + anim_dx;
+            float block_cx = p.x + show->sub_pos_x * w;  // horizontal center of text column
             float ty_anim  = slot_y + anim_dy;
             ImU32 shad_col = IM_COL32(0, 0, 0, (int)(180.f * anim_alpha));
 
-            // Block style: filled box behind text
-            if (eff_style == AnimStyle::Block && active_ci >= 0) {
-                float pad_x = 8.f, pad_y = 4.f;
-                dl->AddRectFilled(
-                    {tx_anim - pad_x, ty_anim - pad_y},
-                    {tx_anim + tsz.x + pad_x, ty_anim + tsz.y + pad_y},
-                    to_u32(Col::fg), 2.f);
-            }
-
-            // Shadow pass
-            dl->AddText(ImGui::GetFont(), fsz, {tx_anim+2.f, ty_anim+2.f}, shad_col, show->text.c_str());
-
-            // Karaoke: per-word coloring when words_cache is available and clip is active.
-            // Falls back to solid color for selected-but-not-playing previews.
-            bool did_karaoke = false;
-            if (active_ci >= 0 && show->karaoke && !state.words_cache.empty()) {
-                std::vector<const WordEntry*> clip_words;
+            // Collect karaoke words once for use across lines
+            std::vector<const WordEntry*> clip_words;
+            bool has_karaoke = (active_ci >= 0 && show->karaoke && !state.words_cache.empty());
+            if (has_karaoke) {
                 for (auto& we : state.words_cache)
                     if (we.end > show->start && we.start < show->end)
                         clip_words.push_back(&we);
+                if (clip_words.empty()) has_karaoke = false;
+            }
+            int kw_idx = 0;  // word cursor across lines
 
-                if (!clip_words.empty()) {
-                    did_karaoke = true;
-                    float cur_x = tx_anim;
-                    for (int wi = 0; wi < (int)clip_words.size(); ++wi) {
-                        const WordEntry* we = clip_words[wi];
-                        bool is_active = state.playhead >= we->start && state.playhead < we->end;
+            // Block style: bounding box behind entire block
+            float block_max_w = 0.f;
+            for (auto& ln : txt_lines)
+                block_max_w = fmaxf(block_max_w, txt_font->CalcTextSizeA(fsz, FLT_MAX, -1.f, ln.c_str()).x);
+            if (eff_style == AnimStyle::Block && active_ci >= 0) {
+                float pad_x = 8.f, pad_y = 4.f;
+                float bx0 = block_cx - block_max_w * 0.5f - pad_x + anim_dx;
+                dl->AddRectFilled(
+                    {bx0, ty_anim - pad_y},
+                    {bx0 + block_max_w + pad_x * 2.f, ty_anim + block_h + pad_y},
+                    to_u32(Col::fg), 2.f);
+            }
+
+            // Render each line
+            for (int li = 0; li < (int)txt_lines.size(); ++li) {
+                const std::string& ln = txt_lines[li];
+                ImVec2 lsz = txt_font->CalcTextSizeA(fsz, FLT_MAX, -1.f, ln.c_str());
+                float lx   = block_cx - lsz.x * 0.5f + anim_dx;
+                float ly   = ty_anim + li * line_h;
+
+                // Shadow
+                dl->AddText(txt_font, fsz, {lx + 2.f, ly + 2.f}, shad_col, ln.c_str());
+
+                if (has_karaoke) {
+                    // Render words on this line with per-word colour
+                    // Split line back into words, advance kw_idx to match
+                    const char* lp = ln.c_str();
+                    float cur_x = lx;
+                    while (*lp) {
+                        const char* ep = lp;
+                        while (*ep && *ep != ' ') ++ep;
+                        std::string lword(lp, ep);
+                        bool has_space = (*ep == ' ');
+                        std::string lword_sp = lword + (has_space ? " " : "");
+
+                        // Find matching karaoke word
+                        bool is_active_word = false;
+                        if (kw_idx < (int)clip_words.size()) {
+                            const WordEntry* we = clip_words[kw_idx];
+                            is_active_word = (state.playhead >= we->start && state.playhead < we->end);
+                            ++kw_idx;
+                        }
 
                         ImU32 wcol;
                         if (show->sub_color_override) {
-                            float a = (is_active ? show->sub_color[3] : show->sub_color[3] * 0.45f) * anim_alpha;
-                            wcol = IM_COL32((int)(show->sub_color[0]*255),
-                                            (int)(show->sub_color[1]*255),
+                            float a = (is_active_word ? show->sub_color[3] : show->sub_color[3] * 0.45f) * anim_alpha;
+                            wcol = IM_COL32((int)(show->sub_color[0]*255), (int)(show->sub_color[1]*255),
                                             (int)(show->sub_color[2]*255), (int)(a*255));
                         } else {
-                            wcol = is_active ? IM_COL32(255,255,255,(int)(255*anim_alpha))
-                                             : IM_COL32(255,255,255,(int)(100*anim_alpha));
+                            wcol = is_active_word ? IM_COL32(255,255,255,(int)(255*anim_alpha))
+                                                  : IM_COL32(255,255,255,(int)(100*anim_alpha));
                         }
-
-                        std::string word_sp = we->text + (wi+1 < (int)clip_words.size() ? " " : "");
-                        ImVec2 wsz = ImGui::CalcTextSize(word_sp.c_str());
-                        dl->AddText(ImGui::GetFont(), fsz, {cur_x, ty_anim}, wcol, word_sp.c_str());
-                        cur_x += wsz.x;
+                        float word_w = txt_font->CalcTextSizeA(fsz, FLT_MAX, -1.f, lword_sp.c_str()).x;
+                        dl->AddText(txt_font, fsz, {cur_x, ly}, wcol, lword_sp.c_str());
+                        cur_x += word_w;
+                        lp = has_space ? ep + 1 : ep;
                     }
-                }
-            }
-
-            if (!did_karaoke) {
-                ImU32 tcol;
-                if (show->sub_color_override) {
-                    float a = ((active_ci >= 0) ? show->sub_color[3] : show->sub_color[3] * 0.5f) * anim_alpha;
-                    tcol = IM_COL32((int)(show->sub_color[0]*255), (int)(show->sub_color[1]*255),
-                                    (int)(show->sub_color[2]*255), (int)(a*255));
-                } else if (eff_style == AnimStyle::Block && active_ci >= 0) {
-                    tcol = to_u32(Col::bg);  // dark text on white block
                 } else {
-                    float a = (active_ci >= 0) ? anim_alpha : anim_alpha * 0.5f;
-                    tcol = IM_COL32(255, 255, 255, (int)(255.f * a));
+                    ImU32 tcol;
+                    if (show->sub_color_override) {
+                        float a = ((active_ci >= 0) ? show->sub_color[3] : show->sub_color[3] * 0.5f) * anim_alpha;
+                        tcol = IM_COL32((int)(show->sub_color[0]*255), (int)(show->sub_color[1]*255),
+                                        (int)(show->sub_color[2]*255), (int)(a*255));
+                    } else if (eff_style == AnimStyle::Block && active_ci >= 0) {
+                        tcol = to_u32(Col::bg);
+                    } else {
+                        float a = (active_ci >= 0) ? anim_alpha : anim_alpha * 0.5f;
+                        tcol = IM_COL32(255, 255, 255, (int)(255.f * a));
+                    }
+                    dl->AddText(txt_font, fsz, {lx, ly}, tcol, ln.c_str());
                 }
-                dl->AddText(ImGui::GetFont(), fsz, {tx_anim, ty_anim}, tcol, show->text.c_str());
             }
 
             ImGui::PopFont();
 
-            if (show_ci >= 0 && slot_y >= p.y && slot_y + tsz.y <= p.y + h) {
-                float pad = 8.f;
-                bool in_handle = mpos.x >= tx_anim - pad && mpos.x <= tx_anim + tsz.x + pad &&
-                                 mpos.y >= ty_anim - pad && mpos.y <= ty_anim + tsz.y + pad;
+            // Drag handle: covers entire block, moves position
+            {
+                float bx0 = block_cx - block_max_w * 0.5f - 8.f;
+                float bx1 = block_cx + block_max_w * 0.5f + 8.f;
+                float by0 = ty_anim - 8.f;
+                float by1 = ty_anim + block_h + 8.f;
+                bool in_handle = mpos.x >= bx0 && mpos.x <= bx1 &&
+                                 mpos.y >= by0 && mpos.y <= by1;
                 bool is_this_drag = (s_drag_ti == ti && s_drag_ci == show_ci);
 
                 if (in_handle || (is_this_drag && ldown))
-                    ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
+                    ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
                 if (in_handle && lclick) { s_drag_ti = ti; s_drag_ci = show_ci; }
                 if (is_this_drag && ldown) {
                     s_dragging = true;
                     Clip& mc = state.tracks[ti].clips[show_ci];
-                    float new_y = (mpos.y - p.y) / h;
                     mc.sub_pos   = 3;
-                    mc.sub_pos_y = fmaxf(0.02f, fminf(0.98f, new_y));
+                    mc.sub_pos_x = fmaxf(0.02f, fminf(0.98f, (mpos.x - p.x) / w));
+                    mc.sub_pos_y = fmaxf(0.02f, fminf(0.98f, (mpos.y - p.y) / h));
                 }
                 if (in_handle && !ldown) {
-                    float mid_x = tx_anim + tsz.x * 0.5f;
+                    // Drag hint dots
+                    float mid_x = block_cx;
                     for (int d = -1; d <= 1; ++d)
-                        dl->AddCircleFilled({mid_x + d*6.f, ty_anim - 6.f}, 2.f, to_u32(Col::muted));
+                        dl->AddCircleFilled({mid_x + d*6.f, ty_anim - 8.f}, 2.f, to_u32(Col::muted));
                 }
             }
             ++text_rendered;
@@ -1322,7 +1372,7 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
     }
 
     if (s_dragging && !ldown) {
-        history_push(state, "Subtitle position Y");
+        history_push(state, "Subtitle position");
         s_dragging = false; s_drag_ti = -1; s_drag_ci = -1;
     }
 
@@ -1838,8 +1888,13 @@ static void draw_word_strip(AppState& state, Clip& clip, float w) {
 // ── Shared section helpers ────────────────────────────────────────────────────
 
 static void section_position(AppState& state, Clip& clip, float w) {
+    float bar_w = w - 16.f;
+    ImGui::PushStyleColor(ImGuiCol_SliderGrab, Col::fg);
+    ImGui::PushStyleColor(ImGuiCol_FrameBg,    Col::bg_soft);
+
+    // Vertical preset buttons + custom Y slider
     struct PosBtn { int v; const char* label; };
-    PosBtn pbtns[] = {{0,"Bottom"},{1,"Center"},{2,"Top"},{3,"Custom Y"}};
+    PosBtn pbtns[] = {{0,"Bottom"},{1,"Center"},{2,"Top"}};
     for (auto& pb : pbtns) {
         if (ui_btn(pb.label, clip.sub_pos == pb.v, true)) {
             clip.sub_pos = pb.v; history_push(state, "Position");
@@ -1847,27 +1902,29 @@ static void section_position(AppState& state, Clip& clip, float w) {
         ImGui::SameLine(0.f, 4.f);
     }
     ImGui::NewLine();
-    if (clip.sub_pos == 3) {
-        ImGui::Dummy({0.f, 4.f});
-        ImGui::PushStyleColor(ImGuiCol_SliderGrab, Col::fg);
-        ImGui::PushStyleColor(ImGuiCol_FrameBg, Col::bg_soft);
-        ImGui::SetNextItemWidth(w - 16.f);
-        ImGui::SliderFloat("##sub_y", &clip.sub_pos_y, 0.f, 1.f, "Y  %.2f");
-        if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Position Y");
-        ImGui::PopStyleColor(2);
-    }
     ImGui::Dummy({0.f, 4.f});
-    ImGui::PushStyleColor(ImGuiCol_Text, Col::muted); ImGui::TextUnformatted("Horizontal"); ImGui::PopStyleColor();
-    ImGui::Dummy({0.f, 2.f});
-    struct HBtn { int v; const char* l; };
-    HBtn hbtns[] = {{0,"Left"},{1,"Center"},{2,"Right"}};
-    for (auto& hb : hbtns) {
-        if (ui_btn(hb.l, clip.sub_anchor_h == hb.v, true)) {
-            clip.sub_anchor_h = hb.v; history_push(state, "H anchor");
-        }
-        ImGui::SameLine(0.f, 4.f);
+    ImGui::PushStyleColor(ImGuiCol_Text, Col::muted); ImGui::TextUnformatted("Y"); ImGui::PopStyleColor();
+    ImGui::SetNextItemWidth(bar_w);
+    if (ImGui::SliderFloat("##sub_y", &clip.sub_pos_y, 0.f, 1.f, "%.2f")) {
+        clip.sub_pos = 3;
     }
-    ImGui::NewLine();
+    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Position Y");
+
+    ImGui::Dummy({0.f, 4.f});
+    ImGui::PushStyleColor(ImGuiCol_Text, Col::muted); ImGui::TextUnformatted("X"); ImGui::PopStyleColor();
+    ImGui::SetNextItemWidth(bar_w);
+    if (ImGui::SliderFloat("##sub_x", &clip.sub_pos_x, 0.f, 1.f, "%.2f"))
+        if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Position X");
+    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Position X");
+
+    ImGui::Dummy({0.f, 4.f});
+    ImGui::PushStyleColor(ImGuiCol_Text, Col::muted); ImGui::TextUnformatted("Wrap width"); ImGui::PopStyleColor();
+    ImGui::SetNextItemWidth(bar_w);
+    if (ImGui::SliderFloat("##sub_wrap", &clip.sub_wrap_w, 0.1f, 1.f, "%.2f"))
+        if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Wrap width");
+    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Wrap width");
+
+    ImGui::PopStyleColor(2);
 }
 
 static void section_color(AppState& state, Clip& clip, float w) {

@@ -718,45 +718,85 @@ static bool write_filter_script(
                     strcpy(dim_col, has_karaoke ? "white@0.4" : "white");
             }
 
-            // Build final x/y expressions combining base position and anim offsets
-            std::string x_final = "(w-text_w)/2";
-            if (x_off != "0") x_final = "(" + x_final + "+" + x_off + ")";
-            std::string y_final = y_e;
-            if (y_off != "0") y_final = "(" + y_final + "+" + y_off + ")";
+            // Word-wrap: break text into lines at sub_wrap_w * out_w pixels.
+            // Use approximate character width (0.55 * font_size) since we don't
+            // have ImGui font metrics here. Matches preview well for Inter Black.
+            float max_line_px = cl.sub_wrap_w * (float)out_w;
+            float char_w_approx = effective_font_sz * 0.55f;
+            std::vector<std::string> render_lines;
+            {
+                const char* src = cl.text.c_str();
+                const char* wp  = src;
+                std::string cur;
+                while (true) {
+                    const char* ep = wp;
+                    while (*ep && *ep != ' ') ++ep;
+                    std::string word(wp, ep);
+                    std::string test = cur.empty() ? word : cur + " " + word;
+                    if (!cur.empty() && test.size() * char_w_approx > max_line_px) {
+                        render_lines.push_back(cur);
+                        cur = word;
+                    } else {
+                        cur = test;
+                    }
+                    if (!*ep) break;
+                    wp = ep + 1;
+                }
+                if (!cur.empty()) render_lines.push_back(cur);
+                if (render_lines.empty()) render_lines.push_back("");
+            }
+            float line_h_px = effective_font_sz * 1.25f;
 
-            // Block style: insert drawbox pass before drawtext
+            // x expression: centre at sub_pos_x fraction of canvas width
+            char x_base_buf[64];
+            snprintf(x_base_buf, sizeof(x_base_buf), "(w*%.4f-text_w/2)", (double)cl.sub_pos_x);
+            std::string x_base = x_base_buf;
+            std::string x_final = x_off == "0" ? x_base : "(" + x_base + "+" + x_off + ")";
+
+            // Apply effect opacity
+            std::string final_alpha = alpha_mod;
+            if (fx_opacity < 0.999f) {
+                char fa[64];
+                if (alpha_mod == "1")
+                    snprintf(fa, sizeof(fa), "%.4f", (double)fx_opacity);
+                else
+                    snprintf(fa, sizeof(fa), "(%.4f)*(%s)", (double)fx_opacity, alpha_mod.c_str());
+                final_alpha = fa;
+            }
+
+            // Block style: insert drawbox pass before drawtext lines
             if (!box_prefix.empty()) {
                 std::string vnext = "[vtxt" + std::to_string(txt_idx++) + "]";
                 line() << vcur << box_prefix << vnext;
                 vcur = vnext;
             }
 
-            {
+            // Emit one drawtext per wrapped line
+            for (int li = 0; li < (int)render_lines.size(); ++li) {
                 std::string vnext = "[vtxt" + std::to_string(txt_idx++) + "]";
                 auto& ln = line();
-                // Apply effect opacity to alpha_mod
-                std::string final_alpha = alpha_mod;
-                if (fx_opacity < 0.999f) {
-                    char fa[64];
-                    if (alpha_mod == "1")
-                        snprintf(fa, sizeof(fa), "%.4f", (double)fx_opacity);
-                    else
-                        snprintf(fa, sizeof(fa), "(%.4f)*(%s)", (double)fx_opacity, alpha_mod.c_str());
-                    final_alpha = fa;
-                }
+
+                // y for this line = base_y + line_index * line_height + y_off
+                char y_line_buf[256];
+                if (y_off == "0")
+                    snprintf(y_line_buf, sizeof(y_line_buf), "(%s+%.1f)",
+                             y_e.c_str(), (double)(li * line_h_px));
+                else
+                    snprintf(y_line_buf, sizeof(y_line_buf), "(%s+%.1f+(%s))",
+                             y_e.c_str(), (double)(li * line_h_px), y_off.c_str());
 
                 ln << vcur
                    << "drawtext="
-                   << "fontfile=" << esc(g_font_path) << ":"
-                   << "text="     << esc(cl.text)     << ":"
-                   << "fontsize=" << effective_font_sz << ":"
-                   << "fontcolor=" << dim_col          << ":"
+                   << "fontfile=" << esc(g_font_path)       << ":"
+                   << "text="     << esc(render_lines[li])   << ":"
+                   << "fontsize=" << effective_font_sz        << ":"
+                   << "fontcolor=" << dim_col                 << ":"
                    << "borderw=3:bordercolor=black@0.7:"
                    << "shadowx=2:shadowy=2:shadowcolor=black@0.5:"
-                   << "x=" << x_final                 << ":"
-                   << "y=" << y_final                 << ":";
+                   << "x=" << x_final                        << ":"
+                   << "y=" << y_line_buf                     << ":";
                 if (final_alpha != "1")
-                    ln << "alpha=" << final_alpha      << ":";
+                    ln << "alpha=" << final_alpha             << ":";
                 if (eff_style == AnimStyle::Block)
                     ln << "fontcolor=black:borderw=0:shadowx=0:shadowy=0:";
                 ln << "enable='between(t,"
