@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
 Pop Maker Studio — background removal script.
-Processes every frame of a video (MJPEG proxy or original) with rembg and
-writes per-frame RGBA PNG masks to output_dir.
+Processes frames of a video (MJPEG proxy or original) with rembg and writes
+alpha-channel frames as a streaming MJPEG (bg_masks.mjpeg) to output_dir.
 
 Usage:
     rembg_remove.py --input <video_path> --output <dir>
@@ -13,9 +13,9 @@ Progress is reported as JSON lines to stdout:
     {"done": true}
     {"error": "message"}
 """
-import sys, os, json, subprocess
+import sys, os, json, subprocess, io
 
-# ── Option 5: maximise CPU use before ORT loads ───────────────────────────────
+# ── Maximise CPU use before ORT loads ────────────────────────────────────────
 _cpus = str(os.cpu_count() or 4)
 os.environ.setdefault("OMP_NUM_THREADS",      _cpus)
 os.environ.setdefault("OPENBLAS_NUM_THREADS", _cpus)
@@ -32,8 +32,12 @@ def get_arg(key):
             return args[idx + 1]
     return None
 
-input_path = get_arg("--input")
-output_dir = get_arg("--output")
+input_path      = get_arg("--input")
+output_dir      = get_arg("--output")
+start_time      = float(get_arg("--start_time")  or "0")
+duration        = float(get_arg("--duration")    or "0")
+start_frame_arg = get_arg("--start_frame")
+num_frames_arg  = get_arg("--num_frames")
 
 if not input_path or not output_dir:
     log({"error": "Missing --input or --output"}); sys.exit(1)
@@ -49,7 +53,7 @@ except ImportError as e:
 
 os.makedirs(output_dir, exist_ok=True)
 
-# ── Probe fps ─────────────────────────────────────────────────────────────────
+# ── Probe fps (for fps.txt used by hires render path) ────────────────────────
 fps = 30.0
 try:
     probe = subprocess.run(
@@ -70,7 +74,7 @@ except Exception:
 with open(os.path.join(output_dir, "fps.txt"), "w") as f:
     f.write(f"{fps:.6f}\n")
 
-# ── Warmup: force model download before any frame progress is reported ─────────
+# ── Warmup: force model download before any frame progress is reported ────────
 log({"progress": -1})
 try:
     import onnxruntime as ort
@@ -89,21 +93,50 @@ except Exception as e:
 
 import tempfile
 from pathlib import Path
+
+# start_frame: proxy frame index of the first mask frame, passed from C++ so it
+# uses the exact same integer arithmetic as video_get_texture.
+if start_frame_arg is not None:
+    start_frame = int(start_frame_arg)
+else:
+    start_frame = round(start_time * fps) if fps > 0 else 0
+
+# Write start_frame.txt so C++ knows the mapping without parsing filenames.
+with open(os.path.join(output_dir, "start_frame.txt"), "w") as f:
+    f.write(f"{start_frame}\n")
+
+mjpeg_path = os.path.join(output_dir, "bg_masks.mjpeg")
+
 with tempfile.TemporaryDirectory() as tmpdir:
-    subprocess.run(
-        ["ffmpeg", "-i", input_path, "-f", "image2",
-         os.path.join(tmpdir, "%06d.jpg")],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-    )
+    # Use frame-number selection (not time-based seeking) so the first extracted
+    # frame is exactly proxy frame start_frame, regardless of fps metadata in the proxy.
+    ffmpeg_cmd = ["ffmpeg", "-i", input_path]
+    if start_frame_arg is not None and num_frames_arg is not None:
+        end_frame = start_frame + int(num_frames_arg) - 1
+        ffmpeg_cmd += ["-vf", f"select='between(n,{start_frame},{end_frame})'",
+                       "-vsync", "vfr"]
+    elif start_time > 0.001:
+        ffmpeg_cmd += ["-ss", f"{start_time:.6f}"]
+        if duration > 0.001:
+            ffmpeg_cmd += ["-t", f"{duration:.6f}"]
+    ffmpeg_cmd += ["-f", "image2", os.path.join(tmpdir, "%06d.jpg")]
+    subprocess.run(ffmpeg_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
     frames = sorted(Path(tmpdir).glob("*.jpg"))
     total = max(1, len(frames))
-    for i, fp in enumerate(frames):
-        try:
-            img = Image.open(fp)
-            result = remove(img, session=session)
-            result.save(os.path.join(output_dir, f"{i:06d}.png"), "PNG")
-        except Exception as e:
-            log({"error": f"frame {i}: {e}"})
-        log({"progress": (i + 1) / total})
+
+    with open(mjpeg_path, "wb") as mjpeg_f:
+        for i, fp in enumerate(frames):
+            try:
+                img    = Image.open(fp)
+                result = remove(img, session=session)
+                alpha  = result.getchannel("A")
+                buf    = io.BytesIO()
+                alpha.save(buf, format="JPEG", quality=90)
+                mjpeg_f.write(buf.getvalue())
+                mjpeg_f.flush()
+            except Exception as e:
+                log({"error": f"frame {i}: {e}"})
+            log({"progress": (i + 1) / total})
 
 log({"done": True})

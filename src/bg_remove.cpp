@@ -57,12 +57,20 @@ static void run_job(std::shared_ptr<JobData> data,
                     const std::string& python_path,
                     const std::string& rembg_script,
                     const std::string& input_path,
-                    const std::string& output_dir) {
+                    const std::string& output_dir,
+                    float start_time,
+                    float duration,
+                    int start_frame,
+                    int num_frames) {
     std::ostringstream cmd;
     cmd << "\"" << python_path   << "\" "
         << "\"" << rembg_script  << "\" "
         << "--input  \"" << input_path  << "\" "
-        << "--output \"" << output_dir  << "\" 2>&1";
+        << "--output \"" << output_dir  << "\" "
+        << "--start_time " << start_time << " "
+        << "--duration "   << duration   << " "
+        << "--start_frame " << start_frame << " "
+        << "--num_frames "  << num_frames  << " 2>&1";
 
     fprintf(stderr, "[bg_remove] cmd: %s\n", cmd.str().c_str());
     FILE* pipe = popen(cmd.str().c_str(), "r");
@@ -138,6 +146,12 @@ void bg_remove_start(AppState& state, int track_idx, int clip_idx,
     clip.bg_remove_progress = 0.f;
     clip.bg_remove_error.clear();
 
+    // Remove stale mask MJPEG so C++ picks up a fresh file on re-run.
+    if (fs::exists(mdir)) {
+        fs::remove(mdir + "/bg_masks.mjpeg");
+        fs::remove(mdir + "/start_frame.txt");
+    }
+
     // Cancel any existing job for this mask dir.
     {
         std::lock_guard<std::mutex> lk(g_jobs_mu);
@@ -150,9 +164,29 @@ void bg_remove_start(AppState& state, int track_idx, int clip_idx,
 
     auto data = std::make_shared<JobData>();
 
+    float start_time = clip.in_point;
+    float duration   = (clip.end - clip.start) * clip.speed;
+
+    // Compute start_frame and num_frames using the proxy's real fps (probed from the
+    // original video), matching the exact integer arithmetic used in video_get_texture.
+    // Passing both to Python lets it use frame-number selection (select filter) instead
+    // of time-based seeking, which is frame-accurate regardless of fps metadata in the proxy.
+    int start_frame = 0, num_frames = 0;
+    {
+        ProxyInfo pinfo;
+        if (proxy_load(clip.text, pinfo) && pinfo.fps_num > 0 && pinfo.fps_den > 0) {
+            start_frame = (int)((int64_t)(start_time * (double)pinfo.fps_num) / pinfo.fps_den);
+            num_frames  = (int)((int64_t)(duration   * (double)pinfo.fps_num) / pinfo.fps_den) + 1;
+        } else if (pinfo.fps > 0.0) {
+            start_frame = (int)(start_time * pinfo.fps);
+            num_frames  = (int)(duration   * pinfo.fps) + 1;
+        }
+    }
+
     BgJob job;
     job.data   = data;
-    job.thread = std::thread(run_job, data, python_path, rembg_script, mjpeg, mdir);
+    job.thread = std::thread(run_job, data, python_path, rembg_script, mjpeg, mdir,
+                             start_time, duration, start_frame, num_frames);
     job.thread.detach();
 
     {

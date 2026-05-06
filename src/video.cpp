@@ -504,12 +504,17 @@ struct PreviewState {
     float                ghost_clip_start = -999.f; // tracks which clip owns the ghost
     int                  ghost_frame_idx  = -1;     // proxy frame the ghost currently represents
     int                  ghost_seed_idx   = -1;     // proxy frame of clip start (anchor)
-    // BG remove mask cache (one frame at a time)
-    std::string          bg_mask_dir;
+    // BG remove mask MJPEG (streamed, one grayscale-alpha JPEG per frame)
+    FILE*                bg_mjpeg_file        = nullptr;
+    std::vector<uint64_t> bg_mjpeg_offsets;            // SOI byte offsets
+    int                  bg_mjpeg_start_frame = 0;     // proxy frame_idx of mask frame 0
+    long                 bg_mjpeg_scanned_sz  = 0;     // how many bytes we've scanned so far
+    std::string          bg_mjpeg_dir;                 // last seen mask_dir
+    // Decoded alpha for the current frame
     int                  bg_mask_frame   = -1;
     int                  bg_mask_w       = 0;
     int                  bg_mask_h       = 0;
-    std::vector<uint8_t> bg_mask_alpha;             // w*h alpha values
+    std::vector<uint8_t> bg_mask_alpha;                // w*h alpha values
 };
 
 static PreviewState g_pv[MAX_VIDEO_TRACKS];
@@ -703,6 +708,51 @@ static void seed_ghost_from_src_time(PreviewState& pv, float src_t) {
     seed_ghost_from_frame(pv, seed_idx);
 }
 
+// ── BG mask MJPEG helpers ─────────────────────────────────────────────────────
+
+// Incrementally scan bg_masks.mjpeg for new SOI markers since last scan.
+static void bg_mjpeg_scan(PreviewState& pv) {
+    if (!pv.bg_mjpeg_file) return;
+    fseeko(pv.bg_mjpeg_file, 0, SEEK_END);
+    long file_sz = ftell(pv.bg_mjpeg_file);
+    if (file_sz <= pv.bg_mjpeg_scanned_sz) return;
+
+    // Start 2 bytes before last scanned position to catch markers spanning chunks.
+    long scan_from = pv.bg_mjpeg_scanned_sz > 2 ? pv.bg_mjpeg_scanned_sz - 2 : 0;
+    long to_scan   = file_sz - scan_from;
+    fseeko(pv.bg_mjpeg_file, scan_from, SEEK_SET);
+
+    std::vector<uint8_t> buf((size_t)to_scan);
+    size_t got = fread(buf.data(), 1, (size_t)to_scan, pv.bg_mjpeg_file);
+    for (size_t i = 0; i + 2 < got; ++i) {
+        if (buf[i] == 0xFF && buf[i+1] == 0xD8 && buf[i+2] == 0xFF) {
+            long abs = scan_from + (long)i;
+            // Avoid duplicate if we re-scanned the last 2 bytes of a previous chunk.
+            if (pv.bg_mjpeg_offsets.empty() || abs > (long)pv.bg_mjpeg_offsets.back())
+                pv.bg_mjpeg_offsets.push_back((uint64_t)abs);
+        }
+    }
+    pv.bg_mjpeg_scanned_sz = file_sz;
+}
+
+// Open (or reopen) the mask MJPEG for a given mask_dir; read start_frame.txt.
+static void bg_mjpeg_open(PreviewState& pv, const std::string& mdir) {
+    if (pv.bg_mjpeg_file) { fclose(pv.bg_mjpeg_file); pv.bg_mjpeg_file = nullptr; }
+    pv.bg_mjpeg_offsets.clear();
+    pv.bg_mjpeg_scanned_sz  = 0;
+    pv.bg_mjpeg_start_frame = 0;
+    pv.bg_mjpeg_dir         = mdir;
+    pv.bg_mask_frame        = -1;
+    pv.bg_mask_alpha.clear();
+    pv.bg_mask_w = pv.bg_mask_h = 0;
+
+    FILE* sf = fopen((mdir + "/start_frame.txt").c_str(), "r");
+    if (sf) { fscanf(sf, "%d", &pv.bg_mjpeg_start_frame); fclose(sf); }
+
+    pv.bg_mjpeg_file = fopen((mdir + "/bg_masks.mjpeg").c_str(), "rb");
+    if (pv.bg_mjpeg_file) bg_mjpeg_scan(pv);
+}
+
 // ── Internal: read one JPEG frame from a proxy at frame_idx ──────────────────
 
 static uintptr_t decode_proxy_frame(PreviewState& pv, int frame_idx) {
@@ -777,28 +827,58 @@ static uintptr_t decode_proxy_frame(PreviewState& pv, int frame_idx) {
     uint8_t* ghost_ptr = (pv.pixel_fx.datamosh_on && pv.ghost_w > 0)
                          ? pv.ghost_buf.data() : nullptr;
 
-    // Load bg_remove mask for this frame (cached — only reads disk on frame change).
+    // Load bg_remove mask for this frame from the streaming mask MJPEG.
     if (pv.pixel_fx.bg_remove_on && !pv.pixel_fx.bg_remove_mask_dir.empty()) {
-        bool need = (frame_idx != pv.bg_mask_frame) ||
-                    (pv.pixel_fx.bg_remove_mask_dir != pv.bg_mask_dir);
+        const std::string& mdir = pv.pixel_fx.bg_remove_mask_dir;
+
+        // (Re)open if mask dir changed.
+        if (mdir != pv.bg_mjpeg_dir)
+            bg_mjpeg_open(pv, mdir);
+        else
+            bg_mjpeg_scan(pv);  // pick up newly appended frames
+
+        int mask_idx = frame_idx - pv.bg_mjpeg_start_frame;
+        bool need    = (frame_idx != pv.bg_mask_frame);
         if (need) {
-            pv.bg_mask_dir   = pv.pixel_fx.bg_remove_mask_dir;
             pv.bg_mask_frame = frame_idx;
             pv.bg_mask_alpha.clear();
             pv.bg_mask_w = pv.bg_mask_h = 0;
-            char fname[32]; snprintf(fname, sizeof(fname), "%06d.png", frame_idx);
-            std::string mp = pv.bg_mask_dir + "/" + fname;
-            int mw, mh, mc;
-            uint8_t* mask = stbi_load(mp.c_str(), &mw, &mh, &mc, 4);
-            if (mask) {
-                int n = mw * mh;
-                pv.bg_mask_alpha.resize((size_t)n);
-                for (int i = 0; i < n; ++i) pv.bg_mask_alpha[i] = mask[i*4+3];
-                pv.bg_mask_w = mw; pv.bg_mask_h = mh;
-                stbi_image_free(mask);
+
+            if (pv.bg_mjpeg_file && mask_idx >= 0 &&
+                mask_idx < (int)pv.bg_mjpeg_offsets.size()) {
+                uint64_t off     = pv.bg_mjpeg_offsets[(size_t)mask_idx];
+                bool     is_last = ((size_t)mask_idx + 1 >= pv.bg_mjpeg_offsets.size());
+                size_t   fsz     = 0;
+                if (!is_last) {
+                    fsz = (size_t)(pv.bg_mjpeg_offsets[(size_t)mask_idx + 1] - off);
+                } else {
+                    fseeko(pv.bg_mjpeg_file, 0, SEEK_END);
+                    long end = ftell(pv.bg_mjpeg_file);
+                    fsz = (end > (long)off) ? (size_t)(end - off) : 0;
+                }
+                if (fsz > 0) {
+                    static std::vector<uint8_t> s_mbuf;
+                    s_mbuf.resize(fsz);
+                    fseeko(pv.bg_mjpeg_file, (off_t)off, SEEK_SET);
+                    size_t got = fread(s_mbuf.data(), 1, fsz, pv.bg_mjpeg_file);
+                    if (got > 0) {
+                        int mw, mh, mc;
+                        uint8_t* dec = stbi_load_from_memory(
+                            s_mbuf.data(), (int)got, &mw, &mh, &mc, 1);
+                        if (dec) {
+                            pv.bg_mask_alpha.resize((size_t)mw * mh);
+                            memcpy(pv.bg_mask_alpha.data(), dec, (size_t)mw * mh);
+                            pv.bg_mask_w = mw; pv.bg_mask_h = mh;
+                            stbi_image_free(dec);
+                        }
+                    }
+                }
             }
         }
     } else if (!pv.pixel_fx.bg_remove_on) {
+        if (pv.bg_mjpeg_file) { fclose(pv.bg_mjpeg_file); pv.bg_mjpeg_file = nullptr; }
+        pv.bg_mjpeg_offsets.clear();
+        pv.bg_mjpeg_dir.clear();
         pv.bg_mask_alpha.clear();
         pv.bg_mask_w = pv.bg_mask_h = 0;
     }
@@ -820,12 +900,16 @@ static uintptr_t decode_proxy_frame(PreviewState& pv, int frame_idx) {
 // ── Preview API ───────────────────────────────────────────────────────────────
 
 static void close_slot(PreviewState& pv) {
-    if (pv.mjpeg_file) { fclose(pv.mjpeg_file); pv.mjpeg_file = nullptr; }
-    if (pv.tex)        { glDeleteTextures(1, &pv.tex); pv.tex = 0; }
+    if (pv.mjpeg_file)    { fclose(pv.mjpeg_file);    pv.mjpeg_file    = nullptr; }
+    if (pv.bg_mjpeg_file) { fclose(pv.bg_mjpeg_file); pv.bg_mjpeg_file = nullptr; }
+    if (pv.tex)           { glDeleteTextures(1, &pv.tex); pv.tex = 0; }
     pv.tex_w = pv.tex_h = 0;
     pv.last_frame_idx = -1;
     pv.is_open = pv.is_proxy = false;
     pv.proxy = {}; pv.info = {};
+    pv.bg_mjpeg_offsets.clear();
+    pv.bg_mjpeg_dir.clear();
+    pv.bg_mask_alpha.clear();
 }
 
 void video_open_still(int track_id, const std::string& jpeg_path) {
