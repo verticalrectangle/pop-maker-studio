@@ -13,7 +13,8 @@ pkg_check_modules(AVCODEC  REQUIRED libavcodec)
 pkg_check_modules(AVFORMAT REQUIRED libavformat)
 pkg_check_modules(AVUTIL   REQUIRED libavutil)
 pkg_check_modules(SWRESAMPLE REQUIRED libswresample)
-pkg_check_modules(SWSCALE  REQUIRED libswscale)
+pkg_check_modules(SWSCALE   REQUIRED libswscale)
+pkg_check_modules(FREETYPE  REQUIRED freetype2)
 
 # ── ImGui ─────────────────────────────────────────────────────────────────────
 set(IMGUI_DIR ${CMAKE_SOURCE_DIR}/vendor/imgui)
@@ -24,6 +25,7 @@ set(IMGUI_SOURCES
     ${IMGUI_DIR}/imgui_widgets.cpp
     ${IMGUI_DIR}/backends/imgui_impl_glfw.cpp
     ${IMGUI_DIR}/backends/imgui_impl_opengl3.cpp
+    ${IMGUI_DIR}/misc/freetype/imgui_freetype.cpp
 )
 
 # ── Sources ───────────────────────────────────────────────────────────────────
@@ -57,6 +59,7 @@ target_include_directories(pop-maker-studio PRIVATE
     src
     ${IMGUI_DIR}
     ${IMGUI_DIR}/backends
+    ${IMGUI_DIR}/misc/freetype
     ${CMAKE_SOURCE_DIR}/vendor
     ${GLFW_INCLUDE_DIRS}
     ${AVCODEC_INCLUDE_DIRS}
@@ -64,6 +67,7 @@ target_include_directories(pop-maker-studio PRIVATE
     ${AVUTIL_INCLUDE_DIRS}
     ${SWRESAMPLE_INCLUDE_DIRS}
     ${SWSCALE_INCLUDE_DIRS}
+    ${FREETYPE_INCLUDE_DIRS}
 )
 
 target_link_libraries(pop-maker-studio PRIVATE
@@ -74,6 +78,7 @@ target_link_libraries(pop-maker-studio PRIVATE
     ${AVUTIL_LIBRARIES}
     ${SWRESAMPLE_LIBRARIES}
     ${SWSCALE_LIBRARIES}
+    ${FREETYPE_LIBRARIES}
     dl pthread
 )
 
