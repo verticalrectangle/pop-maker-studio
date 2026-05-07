@@ -1095,10 +1095,9 @@ static std::vector<std::string> build_args(AppState& state) {
 }
 
 // ── Snapshot arg builder ──────────────────────────────────────────────────────
-// Builds the ffmpeg argument list for a single-frame PNG capture at snap_t.
-// All inputs are seeked to snap_t so t=0 in the filter corresponds to snap_t.
-// Video transform KFs are evaluated statically at snap_t (eval_at).
-// Text animation lt is computed as snap_t - cl.start at t=0 (via negative clip_t0).
+// No input seeking — the filter runs from t=0 with standard expressions.
+// An output-side -ss snap_t discards frames until exactly t=snap_t, so all
+// enable windows, lt animation offsets, and KF expressions are correct.
 
 static std::vector<std::string> build_snapshot_args(AppState& state,
                                                      float snap_t,
@@ -1110,14 +1109,14 @@ static std::vector<std::string> build_snapshot_args(AppState& state,
         default: break;
     }
 
-    struct VidInput { std::string path; float ss = 0.f; int in_idx = -1; };
+    struct VidInput { std::string path; int in_idx = -1; };
     std::vector<VidInput> vid_inputs;
     std::vector<RLayer>   layers;
 
     auto get_vid_input = [&](const std::string& p) -> int {
         for (int i = 0; i < (int)vid_inputs.size(); ++i)
             if (vid_inputs[i].path == p) return i;
-        VidInput vi; vi.path = p; vi.ss = snap_t;
+        VidInput vi; vi.path = p;
         vid_inputs.push_back(vi);
         return (int)vid_inputs.size() - 1;
     };
@@ -1148,16 +1147,18 @@ static std::vector<std::string> build_snapshot_args(AppState& state,
     int n_in = 0;
     for (auto& vi : vid_inputs) vi.in_idx = n_in++;
 
+    // vid_ss = 0: no input seeking, so enable expressions use project-absolute times
     for (auto& rl : layers) {
         if (rl.kind != RLayer::Vid) continue;
-        rl.vid_ss  = snap_t;
-        rl.in_idx  = vid_inputs[rl.in_idx].in_idx;
+        rl.vid_ss = 0.f;
+        rl.in_idx = vid_inputs[rl.in_idx].in_idx;
     }
 
     std::string script = "/tmp/pms_snap_filter.txt";
     std::string vout, aout;
+    // sub_offset=0, snap_eval_t=-1: standard filter, t=snap_t at the captured frame
     if (!write_filter_script(state, script, layers, {}, {},
-                             out_w, out_h, snap_t, vout, aout, snap_t))
+                             out_w, out_h, 0.f, vout, aout))
         return {};
 
     std::vector<std::string> a;
@@ -1166,14 +1167,14 @@ static std::vector<std::string> build_snapshot_args(AppState& state,
     a.push_back("-loglevel"); a.push_back("error");
     a.push_back("-y");
 
-    for (auto& vi : vid_inputs) {
-        if (vi.ss > 0.001f) { a.push_back("-ss"); a.push_back(std::to_string(vi.ss)); }
-        a.push_back("-i"); a.push_back(vi.path);
-    }
+    for (auto& vi : vid_inputs)
+        { a.push_back("-i"); a.push_back(vi.path); }
 
     a.push_back("-filter_complex_script"); a.push_back(script);
     a.push_back("-map"); a.push_back(vout);
     a.push_back("-an");
+    // Output-side seek: ffmpeg decodes from t=0 and discards until exactly snap_t
+    a.push_back("-ss"); a.push_back(std::to_string(snap_t));
     a.push_back("-vframes"); a.push_back("1");
     a.push_back("-f"); a.push_back("image2");
     a.push_back(out_path);
