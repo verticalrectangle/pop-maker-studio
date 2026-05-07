@@ -330,7 +330,7 @@ static bool write_filter_script(
                     std::string rot_tag = "[vrot" + std::to_string(vid_idx) + "]";
                     line() << layer_in
                            << "rotate=" << rot_e
-                           << ":fillcolor=black@0:ow=iw:oh=ih:eval=frame"
+                           << ":fillcolor=black@0:ow=iw:oh=ih"
                            << rot_tag;
                     layer_in = rot_tag;
                 }
@@ -1310,10 +1310,20 @@ void render_snapshot_start(AppState& state, float snap_t) {
     state.snapshot_running = true;
 
     std::thread([&state, args, out]() {
+        // Write args to log so errors can be diagnosed
+        {
+            std::ofstream log("/tmp/pms_snap_cmd.txt");
+            for (auto& s : args) log << s << " ";
+            log << "\n";
+        }
+
         pid_t pid = fork();
         if (pid == 0) {
+            // Keep stderr → /tmp/pms_snap_err.txt for diagnostics
+            int errfd = open("/tmp/pms_snap_err.txt", O_WRONLY|O_CREAT|O_TRUNC, 0644);
+            if (errfd >= 0) { dup2(errfd, STDERR_FILENO); close(errfd); }
             int devnull = open("/dev/null", O_WRONLY);
-            if (devnull >= 0) { dup2(devnull, STDOUT_FILENO); dup2(devnull, STDERR_FILENO); close(devnull); }
+            if (devnull >= 0) { dup2(devnull, STDOUT_FILENO); close(devnull); }
             std::vector<char*> av;
             for (auto& s : args) av.push_back(const_cast<char*>(s.c_str()));
             av.push_back(nullptr);
