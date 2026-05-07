@@ -457,9 +457,10 @@ struct AppState {
     bool request_scroll_to_clip = false;
 
     // frame snapshot
-    bool        snapshot_running = false;
-    std::string snapshot_msg;      // shown in preview corner after save
-    double      snapshot_msg_t = 0.0;  // ImGui::GetTime() when message was set
+    bool        snapshot_running  = false;
+    std::string snapshot_msg;           // shown in preview corner after save
+    double      snapshot_msg_t    = 0.0; // ImGui::GetTime() when message was set
+    bool        snapshot_msg_new  = false; // render thread sets; UI stamps time
 
     // noise reduction
     bool        noise_reduce_running  = false;

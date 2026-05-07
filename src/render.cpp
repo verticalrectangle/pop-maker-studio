@@ -104,8 +104,16 @@ static std::string esc(const std::string& s) {
 // `bias` is added to `t` before evaluation (e.g. clip.start when -ss is used).
 // `scale` multiplies the output value (e.g. out_w for pos_x → pixel X).
 static std::string prop_expr(const Clip& cl, const std::string& prop,
-                              float scale_factor, float default_val = -999.f)
+                              float scale_factor, float default_val = -999.f,
+                              float eval_at = -1.f)
 {
+    // Snapshot mode: evaluate at a specific timeline time → constant output.
+    if (eval_at >= 0.f) {
+        float v = cl.eval_prop(prop, eval_at);
+        char buf[32]; snprintf(buf, sizeof(buf), "%.4f", (double)(v * scale_factor));
+        return buf;
+    }
+
     auto it = cl.ktracks.find(prop);
     bool has_kf = (it != cl.ktracks.end() && !it->second.empty());
 
@@ -224,7 +232,8 @@ static bool write_filter_script(
     int out_w, int out_h,
     float sub_offset,
     std::string& vout_label,
-    std::string& aout_label)
+    std::string& aout_label,
+    float snap_eval_t = -1.f)             // >= 0 → snapshot mode: eval KFs at this time
 {
     std::ostringstream fc;
     bool first = true;
@@ -301,8 +310,8 @@ static bool write_filter_script(
                                   fabsf(cl.scale_x - 1.f) > 0.001f ||
                                   fabsf(cl.scale_y - 1.f) > 0.001f;
                 if (need_scale) {
-                    std::string sx = prop_expr(cl, "scale_x", 1.f, cl.scale_x);
-                    std::string sy = prop_expr(cl, "scale_y", 1.f, cl.scale_y);
+                    std::string sx = prop_expr(cl, "scale_x", 1.f, cl.scale_x, snap_eval_t);
+                    std::string sy = prop_expr(cl, "scale_y", 1.f, cl.scale_y, snap_eval_t);
                     std::string scl_tag = "[vscl" + std::to_string(vid_idx) + "]";
                     line() << layer_in
                            << "scale=iw*(" << sx << "):ih*(" << sy << "):eval=frame"
@@ -317,7 +326,7 @@ static bool write_filter_script(
                 bool need_rot = has_rot_kf || fabsf(cl.rotation) > 0.001f;
                 if (need_rot) {
                     std::string rot_e = prop_expr(cl, "rotation",
-                                                  (float)(M_PI / 180.0), cl.rotation);
+                                                  (float)(M_PI / 180.0), cl.rotation, snap_eval_t);
                     std::string rot_tag = "[vrot" + std::to_string(vid_idx) + "]";
                     line() << layer_in
                            << "rotate=" << rot_e
@@ -335,7 +344,7 @@ static bool write_filter_script(
                                cl.ktracks.count("opacity") > 0 ||
                                fabsf(cl.opacity - 1.f) > 0.01f;
                 if (has_opa) {
-                    std::string base_opa = prop_expr(cl, "opacity", 1.f, cl.opacity);
+                    std::string base_opa = prop_expr(cl, "opacity", 1.f, cl.opacity, snap_eval_t);
                     std::string aa_expr  = base_opa;
 
                     if (has_trans) {
@@ -506,8 +515,8 @@ static bool write_filter_script(
             }
 
             // Position — all layers use pos_x/pos_y; eval=frame when KFs animate it.
-            std::string x_e = "(" + prop_expr(cl, "pos_x", (float)out_w, cl.pos_x) + "-iw/2)";
-            std::string y_e = "(" + prop_expr(cl, "pos_y", (float)out_h, cl.pos_y) + "-ih/2)";
+            std::string x_e = "(" + prop_expr(cl, "pos_x", (float)out_w, cl.pos_x, snap_eval_t) + "-iw/2)";
+            std::string y_e = "(" + prop_expr(cl, "pos_y", (float)out_h, cl.pos_y, snap_eval_t) + "-ih/2)";
             bool has_pos_kf = cl.ktracks.count("pos_x") > 0 || cl.ktracks.count("pos_y") > 0;
 
             // Enable window
@@ -585,8 +594,11 @@ static bool write_filter_script(
             bool has_karaoke = !clip_words.empty();
 
             // Kinetic typography: per-style x/y/alpha modifiers
-            // `lt` = clip-relative time = t - clip_t0 (where clip_t0 = cl.start - sub_offset)
-            float clip_t0 = fmaxf(0.f, cl.start - sub_offset);
+            // `lt` = clip-relative time = t - clip_t0 (where clip_t0 = cl.start - sub_offset).
+            // In snapshot mode sub_offset=snap_t, so clip_t0 may be negative; at t=0 lt=snap_t-cl.start.
+            float clip_t0 = (snap_eval_t >= 0.f)
+                            ? (cl.start - sub_offset)
+                            : fmaxf(0.f, cl.start - sub_offset);
             float clip_dur = fmaxf(0.01f, cl.end - cl.start);
             float fade_in  = fminf(0.25f, clip_dur * 0.3f);
             float fade_out = fminf(0.25f, clip_dur * 0.2f);
@@ -1082,6 +1094,92 @@ static std::vector<std::string> build_args(AppState& state) {
     return a;
 }
 
+// ── Snapshot arg builder ──────────────────────────────────────────────────────
+// Builds the ffmpeg argument list for a single-frame PNG capture at snap_t.
+// All inputs are seeked to snap_t so t=0 in the filter corresponds to snap_t.
+// Video transform KFs are evaluated statically at snap_t (eval_at).
+// Text animation lt is computed as snap_t - cl.start at t=0 (via negative clip_t0).
+
+static std::vector<std::string> build_snapshot_args(AppState& state,
+                                                     float snap_t,
+                                                     const std::string& out_path) {
+    int out_w = 1080, out_h = 1920;
+    switch (state.format) {
+        case OutputFormat::Horizontal: out_w = 1920; out_h = 1080; break;
+        case OutputFormat::Square:     out_w = 1080; out_h = 1080; break;
+        default: break;
+    }
+
+    struct VidInput { std::string path; float ss = 0.f; int in_idx = -1; };
+    std::vector<VidInput> vid_inputs;
+    std::vector<RLayer>   layers;
+
+    auto get_vid_input = [&](const std::string& p) -> int {
+        for (int i = 0; i < (int)vid_inputs.size(); ++i)
+            if (vid_inputs[i].path == p) return i;
+        VidInput vi; vi.path = p; vi.ss = snap_t;
+        vid_inputs.push_back(vi);
+        return (int)vid_inputs.size() - 1;
+    };
+
+    for (int ti = (int)state.tracks.size() - 1; ti >= 0; --ti) {
+        if (!state.tracks[ti].visible) continue;
+        for (int ci = 0; ci < (int)state.tracks[ti].clips.size(); ++ci) {
+            const Clip& cl = state.tracks[ti].clips[ci];
+            if (cl.clip_type == ClipType::Effect) continue;
+            if (cl.clip_type == ClipType::Video) {
+                if (cl.text.empty() || !fs::exists(cl.text)) continue;
+                int arr_idx = get_vid_input(cl.text);
+                RLayer rl; rl.kind = RLayer::Vid;
+                rl.track_idx = ti; rl.clip_idx = ci;
+                rl.in_idx    = arr_idx;
+                layers.push_back(rl);
+            } else if (cl.clip_type == ClipType::Text   ||
+                       cl.clip_type == ClipType::Lyrics ||
+                       cl.clip_type == ClipType::Subtitle) {
+                RLayer rl; rl.kind = RLayer::Txt;
+                rl.track_idx = ti; rl.clip_idx = ci;
+                layers.push_back(rl);
+            }
+        }
+    }
+    if (layers.empty()) return {};
+
+    int n_in = 0;
+    for (auto& vi : vid_inputs) vi.in_idx = n_in++;
+
+    for (auto& rl : layers) {
+        if (rl.kind != RLayer::Vid) continue;
+        rl.vid_ss  = snap_t;
+        rl.in_idx  = vid_inputs[rl.in_idx].in_idx;
+    }
+
+    std::string script = "/tmp/pms_snap_filter.txt";
+    std::string vout, aout;
+    if (!write_filter_script(state, script, layers, {}, {},
+                             out_w, out_h, snap_t, vout, aout, snap_t))
+        return {};
+
+    std::vector<std::string> a;
+    a.push_back("ffmpeg");
+    a.push_back("-hide_banner");
+    a.push_back("-loglevel"); a.push_back("error");
+    a.push_back("-y");
+
+    for (auto& vi : vid_inputs) {
+        if (vi.ss > 0.001f) { a.push_back("-ss"); a.push_back(std::to_string(vi.ss)); }
+        a.push_back("-i"); a.push_back(vi.path);
+    }
+
+    a.push_back("-filter_complex_script"); a.push_back(script);
+    a.push_back("-map"); a.push_back(vout);
+    a.push_back("-an");
+    a.push_back("-vframes"); a.push_back("1");
+    a.push_back("-f"); a.push_back("image2");
+    a.push_back(out_path);
+    return a;
+}
+
 // ── Render thread ─────────────────────────────────────────────────────────────
 
 void render_start(AppState& state) {
@@ -1176,6 +1274,65 @@ void render_cancel() {
     g_cancel.store(true);
     pid_t pid = g_ffmpeg_pid.load();
     if (pid > 0) kill(pid, SIGTERM);
+}
+
+// ── Frame snapshot ────────────────────────────────────────────────────────────
+// Renders one PNG frame at snap_t using the full filter pipeline.
+
+void render_snapshot_start(AppState& state, float snap_t) {
+    if (state.snapshot_running) return;
+
+    // Build output path: <stem>_frame_<MM>m<SS>s<mmm>ms.png next to first audio/video file
+    std::string base_path = state.audio_path;
+    if (base_path.empty()) {
+        for (auto& tr : state.tracks)
+            for (auto& cl : tr.clips)
+                if (cl.clip_type == ClipType::Video && !cl.text.empty())
+                    { base_path = cl.text; goto found_base; }
+    }
+    found_base:
+    if (base_path.empty()) return;
+
+    int total_ms = (int)(snap_t * 1000.f);
+    int ms = total_ms % 1000, ss = (total_ms / 1000) % 60, mm = total_ms / 60000;
+    char ts[32]; snprintf(ts, sizeof(ts), "%02dm%02ds%03dms", mm, ss, ms);
+    std::string stem  = fs::path(base_path).stem().string();
+    std::string dir   = fs::path(base_path).parent_path().string();
+    std::string out   = dir + "/" + stem + "_frame_" + ts + ".png";
+
+    auto args = build_snapshot_args(state, snap_t, out);
+    if (args.empty()) {
+        state.snapshot_msg     = "Snapshot failed — no active clips";
+        state.snapshot_msg_new = true;
+        return;
+    }
+
+    state.snapshot_running = true;
+
+    std::thread([&state, args, out]() {
+        pid_t pid = fork();
+        if (pid == 0) {
+            int devnull = open("/dev/null", O_WRONLY);
+            if (devnull >= 0) { dup2(devnull, STDOUT_FILENO); dup2(devnull, STDERR_FILENO); close(devnull); }
+            std::vector<char*> av;
+            for (auto& s : args) av.push_back(const_cast<char*>(s.c_str()));
+            av.push_back(nullptr);
+            execvp("ffmpeg", av.data());
+            _exit(127);
+        }
+        int wstat = 0;
+        if (pid > 0) waitpid(pid, &wstat, 0);
+        state.snapshot_running = false;
+        bool ok = pid > 0 && WIFEXITED(wstat) && WEXITSTATUS(wstat) == 0;
+        if (ok) {
+            state.snapshot_msg = "Saved " + fs::path(out).filename().string();
+            std::string folder = fs::path(out).parent_path().string();
+            system(("xdg-open \"" + folder + "\" &").c_str());
+        } else {
+            state.snapshot_msg = "Snapshot failed";
+        }
+        state.snapshot_msg_new = true;
+    }).detach();
 }
 
 // ── Extract raw audio from video ──────────────────────────────────────────────

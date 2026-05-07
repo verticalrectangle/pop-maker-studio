@@ -861,108 +861,6 @@ static void draw_pipeline_strip(AppState& state, float w) {
     ImGui::Dummy({w, h});
 }
 
-// ── Frame snapshot ────────────────────────────────────────────────────────────
-// Extracts a single frame from the source video at the current playhead using
-// ffmpeg, composites any active text clips via drawtext, saves as PNG next to
-// the source file. Runs in a detached thread; result posted back via AppState.
-
-static void snapshot_thread(AppState* state_ptr, std::string src_path,
-                             double src_t, std::string out_path,
-                             std::string drawtext_chain) {
-    // Step 1: extract raw frame
-    char cmd[4096];
-    if (drawtext_chain.empty()) {
-        snprintf(cmd, sizeof(cmd),
-            "ffmpeg -y -ss %.4f -i \"%s\" -frames:v 1 -q:v 2 \"%s\" 2>/dev/null",
-            src_t, src_path.c_str(), out_path.c_str());
-    } else {
-        snprintf(cmd, sizeof(cmd),
-            "ffmpeg -y -ss %.4f -i \"%s\" -frames:v 1 -vf \"%s\" -q:v 2 \"%s\" 2>/dev/null",
-            src_t, src_path.c_str(), drawtext_chain.c_str(), out_path.c_str());
-    }
-    int ret = system(cmd);
-    state_ptr->snapshot_running = false;
-    if (ret == 0) {
-        namespace fs = std::filesystem;
-        state_ptr->snapshot_msg   = "Saved " + fs::path(out_path).filename().string();
-        state_ptr->snapshot_msg_t = ImGui::GetTime();
-        std::string folder = fs::path(out_path).parent_path().string();
-        system(("xdg-open \"" + folder + "\" &").c_str());
-    } else {
-        state_ptr->snapshot_msg   = "Snapshot failed";
-        state_ptr->snapshot_msg_t = ImGui::GetTime();
-    }
-}
-
-static void snapshot_start(AppState& state) {
-    if (state.snapshot_running) return;
-
-    // Find active video clip at playhead
-    std::string src_path;
-    double src_t = 0.0;
-    for (auto& tr : state.tracks) {
-        for (auto& cl : tr.clips) {
-            if (cl.clip_type != ClipType::Video) continue;
-            if (state.playhead < cl.start || state.playhead >= cl.end) continue;
-            src_path = cl.text;
-            src_t    = cl.in_point + (state.playhead - cl.start) * cl.speed;
-            break;
-        }
-        if (!src_path.empty()) break;
-    }
-    if (src_path.empty()) return;
-
-    // Build output path: <stem>_frame_<MM>m<SS>s<mmm>ms.png
-    namespace fs = std::filesystem;
-    int total_ms = (int)(state.playhead * 1000.f);
-    int ms = total_ms % 1000, ss = (total_ms / 1000) % 60, mm = total_ms / 60000;
-    char ts[32]; snprintf(ts, sizeof(ts), "%02dm%02ds%03dms", mm, ss, ms);
-    std::string stem = fs::path(src_path).stem().string();
-    std::string dir  = fs::path(src_path).parent_path().string();
-    std::string out  = dir + "/" + stem + "_frame_" + ts + ".png";
-
-    // Build drawtext chain for active text clips
-    const std::string& g_font_path = render_font_path();
-    std::string chain;
-    auto esc_ff = [](const std::string& s) {
-        std::string r;
-        for (char c : s) {
-            if (c == '\'' || c == '\\' || c == ':') r += '\\';
-            r += c;
-        }
-        return r;
-    };
-    for (auto& tr : state.tracks) {
-        for (auto& cl : tr.clips) {
-            if (cl.clip_type != ClipType::Text &&
-                cl.clip_type != ClipType::Subtitle &&
-                cl.clip_type != ClipType::Lyrics) continue;
-            if (state.playhead < cl.start || state.playhead >= cl.end) continue;
-            if (cl.text.empty()) continue;
-            char y_expr[64];
-            if (cl.sub_pos == 1)      snprintf(y_expr, sizeof(y_expr), "(h-text_h)/2");
-            else if (cl.sub_pos == 2) snprintf(y_expr, sizeof(y_expr), "h*0.10");
-            else if (cl.sub_pos == 3) snprintf(y_expr, sizeof(y_expr), "h*%.4f-text_h/2", (double)cl.sub_pos_y);
-            else                      snprintf(y_expr, sizeof(y_expr), "h*0.88-text_h");
-            char x_expr[64];
-            snprintf(x_expr, sizeof(x_expr), "w*%.4f-text_w/2", (double)cl.sub_pos_x);
-            std::string entry = std::string("drawtext=") +
-                "fontfile=" + esc_ff(g_font_path) + ":" +
-                "text="     + esc_ff(cl.text)     + ":" +
-                "fontsize=72:fontcolor=white:" +
-                "borderw=3:bordercolor=black@0.7:" +
-                "shadowx=2:shadowy=2:shadowcolor=black@0.5:" +
-                "x=" + x_expr + ":y=" + y_expr;
-            if (!chain.empty()) chain += ",";
-            chain += entry;
-        }
-    }
-
-    state.snapshot_running = true;
-    std::thread t(snapshot_thread, &state, src_path, src_t, out, chain);
-    t.detach();
-}
-
 // ── Transform box overlay ─────────────────────────────────────────────────────
 // Drawn after all track content for the selected clip.
 // Video clips: 8 scale handles + move interior + rotation handle.
@@ -1966,7 +1864,13 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
         dl->AddText({btn_tl.x + btn_pad, btn_tl.y + btn_pad}, lbl_col, snap_lbl);
 
         if (snap_hov && snap_ena && lclick)
-            snapshot_start(state);
+            render_snapshot_start(state, state.playhead);
+    }
+
+    // Stamp time when render thread signals a new snapshot message
+    if (state.snapshot_msg_new) {
+        state.snapshot_msg_t   = ImGui::GetTime();
+        state.snapshot_msg_new = false;
     }
 
     // Snapshot flash message — bottom-center, fades after 3 s
@@ -4791,34 +4695,36 @@ static void draw_export_modal(AppState& state) {
         // ── Settings ──────────────────────────────────────────────────────────
         ImGui::SetCursorPosX(ImGui::GetStyle().WindowPadding.x + 8.f);
         ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
-        ImGui::TextUnformatted("Settings");
+        ImGui::TextUnformatted("Quality");
         ImGui::PopStyleColor();
         ImGui::Dummy({0.f, 6.f});
 
+        // 4 quality preset buttons that map to CRF values
+        struct QPreset { const char* label; int crf; };
+        static constexpr QPreset kQPresets[] = {
+            {"Draft", 28}, {"Balanced", 23}, {"Quality", 18}, {"Master", 12}
+        };
         ImGui::SetCursorPosX(ImGui::GetStyle().WindowPadding.x + 8.f);
-        ImGui::PushStyleColor(ImGuiCol_SliderGrab, Col::fg);
-        ImGui::PushStyleColor(ImGuiCol_FrameBg,    Col::bg_soft);
-        ImGui::SetNextItemWidth(pw - 16.f);
-        ImGui::SliderInt("##crf_m", &state.render_settings.crf, 0, 51, "Quality CRF %d");
-        ImGui::PopStyleColor(2);
-
-        ImGui::Dummy({0.f, 6.f});
-        ImGui::SetCursorPosX(ImGui::GetStyle().WindowPadding.x + 8.f);
-        for (int abr : {128, 192, 320}) {
-            char lbl[12]; snprintf(lbl, sizeof(lbl), "%dk##m", abr);
-            if (ui_btn(lbl, state.render_settings.audio_bitrate == abr, true))
-                state.render_settings.audio_bitrate = abr;
+        for (auto& qp : kQPresets) {
+            char id[32]; snprintf(id, sizeof(id), "%s##qm", qp.label);
+            if (ui_btn(id, state.render_settings.crf == qp.crf, true))
+                state.render_settings.crf = qp.crf;
             ImGui::SameLine(0.f, 4.f);
         }
         ImGui::NewLine();
+
+        ImGui::Dummy({0.f, 8.f});
         ImGui::SetCursorPosX(ImGui::GetStyle().WindowPadding.x + 8.f);
-        const char* presets_m[] = {"ultrafast","fast","medium","slow","veryslow"};
-        for (auto& ps : presets_m) {
-            char plbl[24]; snprintf(plbl, sizeof(plbl), "%s##m", ps);
-            if (ui_btn(plbl, state.render_settings.preset == ps, true))
-                state.render_settings.preset = ps;
-            ImGui::SameLine(0.f, 4.f);
-        }
+        ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+        ImGui::TextUnformatted("Encode speed");
+        ImGui::PopStyleColor();
+        ImGui::Dummy({0.f, 6.f});
+        ImGui::SetCursorPosX(ImGui::GetStyle().WindowPadding.x + 8.f);
+        if (ui_btn("Fast##spm", state.render_settings.preset == "fast", true))
+            state.render_settings.preset = "fast";
+        ImGui::SameLine(0.f, 4.f);
+        if (ui_btn("Slow##spm", state.render_settings.preset == "slow", true))
+            state.render_settings.preset = "slow";
         ImGui::NewLine();
 
         ImGui::Dummy({0.f, 10.f}); ui_separator(); ImGui::Dummy({0.f, 8.f});
@@ -4913,50 +4819,27 @@ static void panel_export(AppState& state, float w) {
     if (adv_open) {
         ImGui::Dummy({0.f, 6.f});
 
-        // CRF
-        ui_label("Quality (CRF)"); ImGui::Dummy({0.f, 4.f});
-        ImGui::PushStyleColor(ImGuiCol_SliderGrab, Col::fg);
-        ImGui::PushStyleColor(ImGuiCol_FrameBg,    Col::bg_soft);
-        ImGui::SetNextItemWidth(w - 16.f);
-        ImGui::SliderInt("##crf", &state.render_settings.crf, 0, 51, "CRF %d");
-        ImGui::PopStyleColor(2);
-        ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
-        ImGui::TextUnformatted("18 = near-lossless  ·  23 = default  ·  28 = smaller file");
-        ImGui::PopStyleColor();
-
-        // Audio bitrate
-        ImGui::Dummy({0.f, 8.f}); ui_label("Audio bitrate"); ImGui::Dummy({0.f, 4.f});
-        for (int abr : {128, 192, 320}) {
-            char lbl[8]; snprintf(lbl, sizeof(lbl), "%dk", abr);
-            if (ui_btn(lbl, state.render_settings.audio_bitrate == abr, true))
-                state.render_settings.audio_bitrate = abr;
+        // Quality presets
+        ui_label("Quality"); ImGui::Dummy({0.f, 4.f});
+        struct QP { const char* lbl; int crf; };
+        static constexpr QP kQP[] = {{"Draft",28},{"Balanced",23},{"Quality",18},{"Master",12}};
+        for (auto& qp : kQP) {
+            if (ui_btn(qp.lbl, state.render_settings.crf == qp.crf, true))
+                state.render_settings.crf = qp.crf;
             ImGui::SameLine(0.f, 4.f);
         }
         ImGui::NewLine();
 
-        // Encode preset
+        // Encode speed
         ImGui::Dummy({0.f, 8.f}); ui_label("Encode speed"); ImGui::Dummy({0.f, 4.f});
-        const char* presets[] = {"ultrafast","fast","medium","slow","veryslow"};
-        for (auto& ps : presets) {
-            if (ui_btn(ps, state.render_settings.preset == ps, true))
-                state.render_settings.preset = ps;
-            ImGui::SameLine(0.f, 4.f);
-        }
-        ImGui::NewLine();
-        ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
-        ImGui::TextUnformatted("Slower = better compression, same quality.");
-        ImGui::PopStyleColor();
-
-        // Profile
-        ImGui::Dummy({0.f, 8.f}); ui_label("H.264 profile"); ImGui::Dummy({0.f, 4.f});
-        if (ui_btn("Main", !state.render_settings.high_profile, true))
-            state.render_settings.high_profile = false;
+        if (ui_btn("Fast", state.render_settings.preset == "fast", true))
+            state.render_settings.preset = "fast";
         ImGui::SameLine(0.f, 4.f);
-        if (ui_btn("High", state.render_settings.high_profile, true))
-            state.render_settings.high_profile = true;
+        if (ui_btn("Slow", state.render_settings.preset == "slow", true))
+            state.render_settings.preset = "slow";
         ImGui::NewLine();
         ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
-        ImGui::TextUnformatted("Main = max compatibility  ·  High = better compression");
+        ImGui::TextUnformatted("Slow = better compression, same quality.");
         ImGui::PopStyleColor();
 
         ImGui::Dummy({0.f, 4.f});
