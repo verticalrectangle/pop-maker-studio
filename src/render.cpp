@@ -634,8 +634,6 @@ static bool write_filter_script(
             std::string x_off = "0";
             // Y offset added to base y
             std::string y_off = "0";
-            // Extra border/box prefix filter chain inserts (appended after vcur before drawtext)
-            std::string box_prefix;
 
             switch (eff_style) {
                 case AnimStyle::Fade: {
@@ -720,15 +718,7 @@ static bool write_filter_script(
                     break;
                 }
                 case AnimStyle::Block: {
-                    // Draw a filled box behind text (handled as drawbox prefix)
-                    char buf[512];
-                    float en0 = clip_t0, en1 = fmaxf(0.f, cl.end - sub_offset);
-                    snprintf(buf, sizeof(buf),
-                        "drawbox=x=(w-text_w)/2-8:y=%s-4:w=text_w+16:h=text_h+8:"
-                        "color=white:t=fill:enable='between(t,%.3f,%.3f)'",
-                        y_e.c_str(), (double)en0, (double)en1);
-                    // We'll insert this as a separate pass before the drawtext
-                    box_prefix = buf;
+                    // Box drawn via drawtext box=1 option (text_w/text_h not available in drawbox)
                     break;
                 }
                 default: break;
@@ -802,13 +792,6 @@ static bool write_filter_script(
                 final_alpha = fa;
             }
 
-            // Block style: insert drawbox pass before drawtext lines
-            if (!box_prefix.empty()) {
-                std::string vnext = "[vtxt" + std::to_string(txt_idx++) + "]";
-                line() << vcur << box_prefix << vnext;
-                vcur = vnext;
-            }
-
             // Emit one drawtext per wrapped line
             for (int li = 0; li < (int)render_lines.size(); ++li) {
                 std::string vnext = "[vtxt" + std::to_string(txt_idx++) + "]";
@@ -836,7 +819,7 @@ static bool write_filter_script(
                 if (final_alpha != "1")
                     ln << "alpha=" << final_alpha             << ":";
                 if (eff_style == AnimStyle::Block)
-                    ln << "fontcolor=black:borderw=0:shadowx=0:shadowy=0:";
+                    ln << "box=1:boxcolor=white@1.0:boxborderw=8:fontcolor=black:borderw=0:shadowx=0:shadowy=0:";
                 ln << "enable='between(t,"
                    << std::fixed << std::setprecision(3)
                    << clip_t0 << ","
