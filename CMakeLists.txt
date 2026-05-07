@@ -82,6 +82,8 @@ target_link_libraries(pop-maker-studio PRIVATE
     dl pthread
 )
 
+target_compile_definitions(pop-maker-studio PRIVATE IMGUI_ENABLE_FREETYPE)
+
 target_compile_options(pop-maker-studio PRIVATE
     -Wall -Wextra -Wno-unused-parameter
     $<$<CONFIG:Release>:-O2>
