@@ -515,8 +515,9 @@ static bool write_filter_script(
             }
 
             // Position — all layers use pos_x/pos_y; eval=frame when KFs animate it.
-            std::string x_e = "(" + prop_expr(cl, "pos_x", (float)out_w, cl.pos_x, snap_eval_t) + "-iw/2)";
-            std::string y_e = "(" + prop_expr(cl, "pos_y", (float)out_h, cl.pos_y, snap_eval_t) + "-ih/2)";
+            // overlay filter uses overlay_w/overlay_h (not iw/ih) for the overlay input dimensions.
+            std::string x_e = "(" + prop_expr(cl, "pos_x", (float)out_w, cl.pos_x, snap_eval_t) + "-overlay_w/2)";
+            std::string y_e = "(" + prop_expr(cl, "pos_y", (float)out_h, cl.pos_y, snap_eval_t) + "-overlay_h/2)";
             bool has_pos_kf = cl.ktracks.count("pos_x") > 0 || cl.ktracks.count("pos_y") > 0;
 
             // Enable window
