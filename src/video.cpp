@@ -973,58 +973,79 @@ void video_close_export() {
     g_ex.info = {};
 }
 
+static VideoFrame* decode_and_rotate(AVFrame* frm) {
+    VideoFrame* vf = new VideoFrame();
+    vf->width  = g_ex.info.width;
+    vf->height = g_ex.info.height;
+    vf->data   = (uint8_t*)av_malloc((size_t)vf->width * vf->height * 4 + 64);
+    AVStream* st = g_ex.fmt_ctx->streams[g_ex.stream_idx];
+    vf->pts = frm->pts * av_q2d(st->time_base);
+    uint8_t* dst[1] = { vf->data };
+    int      lsz[1] = { vf->width * 4 };
+    sws_scale(g_ex.sws,
+        (const uint8_t* const*)frm->data, frm->linesize,
+        0, frm->height, dst, lsz);
+    if (g_ex.rotation != 0) {
+        int ow = vf->width, oh = vf->height;
+        int nw = (g_ex.rotation == 90 || g_ex.rotation == 270) ? oh : ow;
+        int nh = (g_ex.rotation == 90 || g_ex.rotation == 270) ? ow : oh;
+        uint8_t* rot = (uint8_t*)av_malloc((size_t)nw * nh * 4 + 64);
+        if (rot) {
+            for (int y = 0; y < oh; ++y) {
+                for (int x = 0; x < ow; ++x) {
+                    const uint8_t* s = vf->data + (y * ow + x) * 4;
+                    int dx, dy;
+                    if      (g_ex.rotation == 90)  { dx = oh-1-y; dy = x;      }
+                    else if (g_ex.rotation == 270) { dx = y;      dy = ow-1-x; }
+                    else                           { dx = ow-1-x; dy = oh-1-y; }
+                    uint8_t* d = rot + (dy * nw + dx) * 4;
+                    d[0]=s[0]; d[1]=s[1]; d[2]=s[2]; d[3]=s[3];
+                }
+            }
+            av_free(vf->data);
+            vf->data   = rot;
+            vf->width  = nw;
+            vf->height = nh;
+        }
+    }
+    return vf;
+}
+
 VideoFrame* video_decode_frame_at(double seconds) {
     if (!g_ex.fmt_ctx) return nullptr;
+
+    AVStream* st = g_ex.fmt_ctx->streams[g_ex.stream_idx];
+    double frame_dur = (g_ex.info.fps > 0.0) ? (1.0 / g_ex.info.fps) : (1.0 / 30.0);
 
     int64_t ts = (int64_t)(seconds * AV_TIME_BASE);
     av_seek_frame(g_ex.fmt_ctx, -1, ts, AVSEEK_FLAG_BACKWARD);
     avcodec_flush_buffers(g_ex.codec_ctx);
 
-    AVPacket* pkt = av_packet_alloc();
-    AVFrame*  frm = av_frame_alloc();
+    AVPacket*   pkt    = av_packet_alloc();
+    AVFrame*    frm    = av_frame_alloc();
     VideoFrame* result = nullptr;
 
-    while (av_read_frame(g_ex.fmt_ctx, pkt) >= 0 && !result) {
+    // AVSEEK_FLAG_BACKWARD lands on the keyframe before the target.
+    // Decode forward, keeping the last frame whose pts <= seconds.
+    // Stop as soon as we decode a frame past the target (we already have the right one).
+    bool done = false;
+    while (!done && av_read_frame(g_ex.fmt_ctx, pkt) >= 0) {
         if (pkt->stream_index != g_ex.stream_idx) { av_packet_unref(pkt); continue; }
         avcodec_send_packet(g_ex.codec_ctx, pkt);
         av_packet_unref(pkt);
-        while (avcodec_receive_frame(g_ex.codec_ctx, frm) == 0 && !result) {
-            result = new VideoFrame();
-            result->width  = g_ex.info.width;
-            result->height = g_ex.info.height;
-            result->data   = (uint8_t*)av_malloc(
-                (size_t)result->width * result->height * 4 + 64);
-            AVStream* st = g_ex.fmt_ctx->streams[g_ex.stream_idx];
-            result->pts = frm->pts * av_q2d(st->time_base);
-            uint8_t* dst[1] = { result->data };
-            int      lsz[1] = { result->width * 4 };
-            sws_scale(g_ex.sws,
-                (const uint8_t* const*)frm->data, frm->linesize,
-                0, frm->height, dst, lsz);
-            av_frame_unref(frm);
-
-            if (g_ex.rotation != 0) {
-                int ow = result->width, oh = result->height;
-                int nw = (g_ex.rotation == 90 || g_ex.rotation == 270) ? oh : ow;
-                int nh = (g_ex.rotation == 90 || g_ex.rotation == 270) ? ow : oh;
-                uint8_t* rot = (uint8_t*)av_malloc((size_t)nw * nh * 4 + 64);
-                if (rot) {
-                    for (int y = 0; y < oh; ++y) {
-                        for (int x = 0; x < ow; ++x) {
-                            const uint8_t* s = result->data + (y * ow + x) * 4;
-                            int dx, dy;
-                            if      (g_ex.rotation == 90)  { dx = oh-1-y; dy = x;    }
-                            else if (g_ex.rotation == 270) { dx = y;      dy = ow-1-x; }
-                            else                           { dx = ow-1-x; dy = oh-1-y; }
-                            uint8_t* d = rot + (dy * nw + dx) * 4;
-                            d[0]=s[0]; d[1]=s[1]; d[2]=s[2]; d[3]=s[3];
-                        }
-                    }
-                    av_free(result->data);
-                    result->data   = rot;
-                    result->width  = nw;
-                    result->height = nh;
-                }
+        while (!done && avcodec_receive_frame(g_ex.codec_ctx, frm) == 0) {
+            double pts = frm->pts * av_q2d(st->time_base);
+            if (pts > seconds + frame_dur * 0.5) {
+                // Overshot — the previous result is already the right frame.
+                av_frame_unref(frm);
+                done = true;
+            } else {
+                // This frame is at or before the target — keep it as best candidate.
+                if (result) { av_free(result->data); delete result; }
+                result = decode_and_rotate(frm);
+                av_frame_unref(frm);
+                // If pts is within half a frame of target, we're accurate enough.
+                if (pts >= seconds - frame_dur * 0.5) done = true;
             }
         }
     }
