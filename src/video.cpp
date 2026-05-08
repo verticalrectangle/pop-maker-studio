@@ -243,7 +243,12 @@ static void corrupt_jpeg_buf(uint8_t* buf, size_t sz, float intensity, uint32_t 
     uint32_t rng = seed ^ 0xDEADBEEFu;
     for (size_t i = 0; i < n_corrupt; ++i) {
         rng = rng * 1664525u + 1013904223u;
-        size_t pos = scan + (size_t)(rng >> 1) % scan_sz;
+        float u = (float)(rng >> 1) / (float)0x7FFFFFFFu;  // 0..1
+        // Square root bias: pulls positions toward the start of the scan
+        // so cascades run from near the top downward, distributing evenly.
+        float t = u * u;
+        size_t pos = scan + (size_t)(t * (float)scan_sz);
+        if (pos >= scan + scan_sz) pos = scan + scan_sz - 1;
         rng = rng * 1664525u + 1013904223u;
         buf[pos] = (uint8_t)(rng >> 24);
     }
