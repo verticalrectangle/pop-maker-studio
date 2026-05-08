@@ -237,7 +237,7 @@ static void corrupt_jpeg_buf(uint8_t* buf, size_t sz, float intensity, uint32_t 
     if (scan >= sz) return;
 
     size_t scan_sz = sz - scan;
-    size_t n_corrupt = (size_t)(scan_sz * intensity * 0.03f) + 1;
+    size_t n_corrupt = (size_t)(intensity * 20.f) + 1;
 
     uint32_t rng = seed ^ 0xDEADBEEFu;
     for (size_t i = 0; i < n_corrupt; ++i) {
