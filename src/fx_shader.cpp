@@ -194,7 +194,7 @@ void main() {
 }
 )glsl";
 
-// Datamosh: blend current frame with ghost ────────────────────────────────
+// Datamosh: block corruption + scanline drift + directional flow ──────────
 static const char* k_datamosh_frag = R"glsl(
 #version 330 core
 in vec2 v_uv;
@@ -205,14 +205,35 @@ uniform float u_intensity;
 uniform float u_bleedback;
 uniform float u_t_in_clip;
 uniform float u_clip_duration;
+uniform float u_block_size;
+uniform float u_tex_w;
+uniform float u_tex_h;
+uniform float u_time;
+
+float hash(float n) { return fract(sin(n) * 43758.5453123); }
 
 void main() {
-    vec4 src   = texture(u_src,   v_uv);
-    vec4 ghost = texture(u_ghost, v_uv);
     float bleed_ramp = (u_bleedback > 0.001 && u_clip_duration > 0.001)
         ? u_bleedback * clamp(u_t_in_clip / u_clip_duration, 0.0, 1.0) : 0.0;
-    float eff_intensity = u_intensity * (1.0 - bleed_ramp);
-    frag = mix(src, ghost, eff_intensity);
+    float eff = u_intensity * (1.0 - bleed_ramp);
+
+    // Slow oscillating flow bias shared across all corrupted bands.
+    float flow = sin(u_time * 0.3) * 0.12 * eff;
+
+    // ── Block-band corruption ────────────────────────────────────────────────
+    // Group rows into bands of block_size height so corruption looks chunky,
+    // not hairline. Updates ~8x/sec. At full intensity ~40% of bands corrupt.
+    float band    = floor(v_uv.y * u_tex_h / u_block_size);
+    float row_t   = floor(u_time * 8.0);
+    float row_rng = hash(band * 127.1 + row_t * 311.7);
+    if (row_rng > 1.0 - eff * 0.4) {
+        float dx = (hash(band * 419.2 + row_t) * 2.0 - 1.0) * 0.25 * eff + flow;
+        float dy = (hash(band * 513.3 + row_t) * 2.0 - 1.0) * 0.04 * eff;
+        frag = texture(u_ghost, clamp(v_uv + vec2(dx, dy), 0.0, 1.0));
+        return;
+    }
+
+    frag = texture(u_src, v_uv);
 }
 )glsl";
 
@@ -517,7 +538,7 @@ uintptr_t fx_apply(uintptr_t src_tex_in, int slot, int w, int h,
 
         ghost_ensure(w, h, cfx.datamosh_clip_start, cur);
 
-        // Step 1: blend(src, ghost) → pp[pslot]  (output result)
+        // Step 1: block-corrupt(src, ghost) → pp[pslot]  (output result)
         {
             int out_pp = pslot;
             glBindFramebuffer(GL_FRAMEBUFFER, g_pp.fbo[out_pp]);
@@ -533,12 +554,21 @@ uintptr_t fx_apply(uintptr_t src_tex_in, int slot, int w, int h,
             float t_in = cfx.datamosh_clip_start >= 0.f ? t - cfx.datamosh_clip_start : 0.f;
             glUniform1f(glGetUniformLocation(p, "u_t_in_clip"),     t_in);
             glUniform1f(glGetUniformLocation(p, "u_clip_duration"), cfx.datamosh_clip_duration);
+            glUniform1f(glGetUniformLocation(p, "u_block_size"),    (float)cfx.datamosh_block_size);
+            glUniform1f(glGetUniformLocation(p, "u_tex_w"),         (float)w);
+            glUniform1f(glGetUniformLocation(p, "u_tex_h"),         (float)h);
+            glUniform1f(glGetUniformLocation(p, "u_time"),          t);
             glDrawArrays(GL_TRIANGLES, 0, 3);
             cur = g_pp.tex[out_pp];
             pslot ^= 1;
         }
 
-        // Step 2: new_ghost = mix(ghost, src, decay) → pp[pslot]  (ghost is still readable)
+        // Step 2: new_ghost = mix(output, source, decay) → pp[pslot]
+        // Feeding the corrupted output back as ghost is what makes this true
+        // datamosh: corruption compounds into corruption each frame, just like
+        // a P-frame-only decoder with no I-frame reset.
+        // decay controls the source bleed (restoring force) — without it the
+        // image diverges to noise; with it the feedback loop stays stable.
         {
             int tmp_pp = pslot;
             glBindFramebuffer(GL_FRAMEBUFFER, g_pp.fbo[tmp_pp]);
@@ -547,12 +577,14 @@ uintptr_t fx_apply(uintptr_t src_tex_in, int slot, int w, int h,
             glUseProgram(p);
             glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, pre_mosh);
             glUniform1i(glGetUniformLocation(p, "u_src"), 0);
-            glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D, g_ghost.tex);
+            glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D, cur);
             glUniform1i(glGetUniformLocation(p, "u_ghost"), 1);
             glUniform1f(glGetUniformLocation(p, "u_decay"), cfx.datamosh_decay);
             glDrawArrays(GL_TRIANGLES, 0, 3);
 
-            // Step 3: blit new ghost to ghost FBO (overwrite ghost.tex with new value)
+            // Step 3: blit new ghost to ghost FBO — unbind ghost.tex first to
+            // avoid the GL feedback loop (same tex on unit 1 AND as FBO attachment)
+            glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D, 0);
             draw_pass(g_ghost.fbo, g_pp.tex[tmp_pp], w, h, g_prog.blit);
 
             pslot ^= 1;
