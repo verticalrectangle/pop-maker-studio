@@ -210,30 +210,38 @@ uniform float u_tex_w;
 uniform float u_tex_h;
 uniform float u_time;
 
-float hash(float n) { return fract(sin(n) * 43758.5453123); }
+float hash2(vec2 p) {
+    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
+}
+
+// Smooth value noise — bilinear interpolation over a hash lattice.
+float vnoise(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    vec2 u = f * f * (3.0 - 2.0 * f);
+    return mix(mix(hash2(i),                hash2(i + vec2(1.0, 0.0)), u.x),
+               mix(hash2(i + vec2(0.0,1.0)), hash2(i + vec2(1.0, 1.0)), u.x), u.y);
+}
 
 void main() {
     float bleed_ramp = (u_bleedback > 0.001 && u_clip_duration > 0.001)
         ? u_bleedback * clamp(u_t_in_clip / u_clip_duration, 0.0, 1.0) : 0.0;
     float eff = u_intensity * (1.0 - bleed_ramp);
 
-    // Slow oscillating flow bias shared across all corrupted bands.
-    float flow = sin(u_time * 0.3) * 0.12 * eff;
+    // Smooth noise field defines corrupted regions — organic shapes with no
+    // grid seams. u_block_size is the noise scale: small = fine grain,
+    // large = big blobs. Two octaves for variety; slow independent drift
+    // on each makes regions breathe and flow over time.
+    float scale = u_tex_w / u_block_size;
+    vec2  nc    = v_uv * scale;
+    float n     = vnoise(nc          + u_time * 0.08) * 0.65
+                + vnoise(nc * 2.1    + u_time * 0.13) * 0.35;
 
-    // ── Block-band corruption ────────────────────────────────────────────────
-    // Group rows into bands of block_size height so corruption looks chunky,
-    // not hairline. Updates ~8x/sec. At full intensity ~40% of bands corrupt.
-    float band    = floor(v_uv.y * u_tex_h / u_block_size);
-    float row_t   = floor(u_time * 8.0);
-    float row_rng = hash(band * 127.1 + row_t * 311.7);
-    if (row_rng > 1.0 - eff * 0.4) {
-        float dx = (hash(band * 419.2 + row_t) * 2.0 - 1.0) * 0.25 * eff + flow;
-        float dy = (hash(band * 513.3 + row_t) * 2.0 - 1.0) * 0.04 * eff;
-        frag = texture(u_ghost, clamp(v_uv + vec2(dx, dy), 0.0, 1.0));
-        return;
-    }
-
-    frag = texture(u_src, v_uv);
+    // Corrupted region: ghost at the same UV — temporal mismatch IS the effect.
+    // Old content sits at its correct spatial position, just from the wrong
+    // moment in time. No displacement. Moving subjects leave ghost traces
+    // exactly where they used to be.
+    frag = (n < eff) ? texture(u_ghost, v_uv) : texture(u_src, v_uv);
 }
 )glsl";
 
@@ -577,7 +585,7 @@ uintptr_t fx_apply(uintptr_t src_tex_in, int slot, int w, int h,
             glUseProgram(p);
             glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, pre_mosh);
             glUniform1i(glGetUniformLocation(p, "u_src"), 0);
-            glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D, cur);
+            glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D, g_ghost.tex);
             glUniform1i(glGetUniformLocation(p, "u_ghost"), 1);
             glUniform1f(glGetUniformLocation(p, "u_decay"), cfx.datamosh_decay);
             glDrawArrays(GL_TRIANGLES, 0, 3);
