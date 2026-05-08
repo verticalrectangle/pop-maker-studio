@@ -1659,6 +1659,11 @@ static bool gl_render_vid_clip(ImDrawList& dl, const Clip* cl, float at_time,
     VideoFrame* vf = video_decode_frame_at((double)src_t);
     if (!vf) return false;
 
+    // CPU datamosh — must happen before GL upload (same as proxy path)
+    CreativeFXAccum cfx = collect_creative_fx(state, at_time, ti);
+    if (cfx.datamosh_on && cfx.datamosh_intensity > 0.01f)
+        video_apply_datamosh(vf, cfx.datamosh_intensity, (float)src_t);
+
     glBindTexture(GL_TEXTURE_2D, tex_id);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, vf->width, vf->height, 0,
                  GL_RGBA, GL_UNSIGNED_BYTE, vf->data);
@@ -1667,7 +1672,6 @@ static bool gl_render_vid_clip(ImDrawList& dl, const Clip* cl, float at_time,
 
     // Apply GPU FX pipeline
     EffectAccum     ea  = collect_effects    (state, at_time, ti);
-    CreativeFXAccum cfx = collect_creative_fx(state, at_time, ti);
     uintptr_t draw_tex  = fx_apply((uintptr_t)tex_id, fx_slot, vid_w, vid_h, ea, cfx, at_time);
 
     // ZoomPunch — beat-synced scale spike, same logic as preview

@@ -151,3 +151,8 @@ void        video_free_frame(VideoFrame* f);  // av_free(data) + delete
 // Returns dimensions of the currently open export file (0,0 if none open).
 int video_export_width();
 int video_export_height();
+
+// Apply CPU JPEG datamosh corruption to an RGBA VideoFrame in-place.
+// Encodes to JPEG, corrupts scan bytes, decodes back.  Modifies vf->data.
+// Skips if intensity <= 0 or encode fails.
+void video_apply_datamosh(VideoFrame* vf, float intensity, float time_sec);

@@ -1064,6 +1064,42 @@ void video_free_frame(VideoFrame* f) {
 int video_export_width()  { return g_ex.info.width; }
 int video_export_height() { return g_ex.info.height; }
 
+void video_apply_datamosh(VideoFrame* vf, float intensity, float time_sec) {
+    if (!vf || !vf->data || intensity <= 0.f) return;
+    int W = vf->width, H = vf->height;
+
+    // Convert RGBA → RGB for JPEG encode
+    std::vector<uint8_t> rgb((size_t)W * H * 3);
+    for (int i = 0; i < W * H; ++i) {
+        rgb[i*3+0] = vf->data[i*4+0];
+        rgb[i*3+1] = vf->data[i*4+1];
+        rgb[i*3+2] = vf->data[i*4+2];
+    }
+
+    std::vector<uint8_t> jpeg;
+    auto cb = [](void* ctx, void* data, int sz) {
+        auto* v = (std::vector<uint8_t>*)ctx;
+        v->insert(v->end(), (uint8_t*)data, (uint8_t*)data + sz);
+    };
+    stbi_write_jpg_to_func(cb, &jpeg, W, H, 3, rgb.data(), 85);
+    if (jpeg.empty()) return;
+
+    corrupt_jpeg_buf(jpeg.data(), jpeg.size(), intensity, (uint32_t)(time_sec * 60.f));
+
+    int dw, dh, dch;
+    uint8_t* dec = stbi_load_from_memory(jpeg.data(), (int)jpeg.size(), &dw, &dh, &dch, 3);
+    if (!dec) return;
+
+    // Write decoded RGB back into the existing RGBA buffer
+    for (int i = 0; i < W * H; ++i) {
+        vf->data[i*4+0] = dec[i*3+0];
+        vf->data[i*4+1] = dec[i*3+1];
+        vf->data[i*4+2] = dec[i*3+2];
+        // alpha unchanged
+    }
+    stbi_image_free(dec);
+}
+
 // ── FX preview thumbnails ─────────────────────────────────────────────────────
 // Source image: portrait_preview.h — 108×192 portrait RGB, embedded at build time
 // from assets/imgs/portrait.jpg (center-cropped 9:16, Lanczos-scaled).
