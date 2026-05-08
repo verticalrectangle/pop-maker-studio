@@ -228,20 +228,33 @@ void main() {
         ? u_bleedback * clamp(u_t_in_clip / u_clip_duration, 0.0, 1.0) : 0.0;
     float eff = u_intensity * (1.0 - bleed_ramp);
 
-    // Smooth noise field defines corrupted regions — organic shapes with no
-    // grid seams. u_block_size is the noise scale: small = fine grain,
-    // large = big blobs. Two octaves for variety; slow independent drift
-    // on each makes regions breathe and flow over time.
+    // Coverage plateaus at 72% so intensity 1.0 never turns everything to
+    // ghost (that becomes a smooth trail, not datamosh). Extra intensity
+    // above the plateau goes into spatial displacement instead.
+    float coverage      = eff * 0.72;
+    float disp_strength = eff * eff * 0.12;  // quadratic: gentle at low, violent at high
+
+    // Corruption noise field — organic regions, no grid seams.
     float scale = u_tex_w / u_block_size;
     vec2  nc    = v_uv * scale;
-    float n     = vnoise(nc          + u_time * 0.08) * 0.65
-                + vnoise(nc * 2.1    + u_time * 0.13) * 0.35;
+    float n     = vnoise(nc       + u_time * 0.08) * 0.65
+                + vnoise(nc * 2.1 + u_time * 0.13) * 0.35;
 
-    // Corrupted region: ghost at the same UV — temporal mismatch IS the effect.
-    // Old content sits at its correct spatial position, just from the wrong
-    // moment in time. No displacement. Moving subjects leave ghost traces
-    // exactly where they used to be.
-    frag = (n < eff) ? texture(u_ghost, v_uv) : texture(u_src, v_uv);
+    if (n >= coverage) { frag = texture(u_src, v_uv); return; }
+
+    // Corrupted region: ghost sampled at a displaced UV.
+    // At low intensity displacement is near-zero — temporal mismatch (old
+    // content at correct position) dominates. As intensity rises the ghost
+    // is also pulled to spatially wrong positions, compounding the chaos.
+    // Separate coarser noise field for displacement so corrupted regions
+    // and displacement regions have independent organic shapes.
+    // Mostly horizontal (0.3 vertical scale) — mimics MPEG P-frame errors.
+    float dscale = u_tex_w / (u_block_size * 2.0);
+    vec2  dnc    = v_uv * dscale;
+    float dx = (vnoise(dnc + vec2(17.3, 0.0) + u_time * 0.06) * 2.0 - 1.0) * disp_strength;
+    float dy = (vnoise(dnc + vec2(0.0,  5.7) + u_time * 0.04) * 2.0 - 1.0) * disp_strength * 0.3;
+
+    frag = texture(u_ghost, clamp(v_uv + vec2(dx, dy), 0.0, 1.0));
 }
 )glsl";
 
