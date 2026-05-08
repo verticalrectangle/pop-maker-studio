@@ -194,13 +194,13 @@ void main() {
 }
 )glsl";
 
-// Datamosh: JPEG Huffman-error simulation ────────────────────────────────
-// Models what happens when you hex-corrupt a JPEG: the Huffman decoder
-// misreads the bitstream from the corruption point to the end of the scan
-// line, displacing everything to the right by a large per-row amount.
-// Y, Cb, Cr scans are independent — each channel gets its own corruption
-// onset and displacement, producing the characteristic R/G/B separation.
-// Feedback (output→ghost) compounds corruption across frames.
+// Datamosh: whole-frame warp field + per-channel bleed + feedback ─────────
+// No rows, no threshold, no selector — every pixel participates always.
+// Intensity controls warp magnitude and ghost mix ratio.
+// Three independent smooth warp fields (one per channel) produce the
+// organic R/G/B colour separation across the entire frame.
+// Feedback (output→ghost) compounds the warp each frame; old content
+// bleeds and pools the way it does in heavily datamoshed video.
 static const char* k_datamosh_frag = R"glsl(
 #version 330 core
 in vec2 v_uv;
@@ -212,6 +212,7 @@ uniform float u_bleedback;
 uniform float u_t_in_clip;
 uniform float u_clip_duration;
 uniform float u_block_size;
+uniform float u_tex_w;
 uniform float u_tex_h;
 uniform float u_time;
 
@@ -219,48 +220,49 @@ float hash2(vec2 p) {
     return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
 }
 
+float vnoise(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    vec2 u = f * f * (3.0 - 2.0 * f);
+    return mix(mix(hash2(i),                  hash2(i + vec2(1.0, 0.0)), u.x),
+               mix(hash2(i + vec2(0.0, 1.0)), hash2(i + vec2(1.0, 1.0)), u.x), u.y);
+}
+
+// Returns a 2D displacement vector from a slowly drifting noise field.
+// seed offsets each channel so they warp independently.
+vec2 warp_field(vec2 uv, float scale, float seed, float t) {
+    vec2 p = uv * scale;
+    float wx = vnoise(p + vec2(seed,        0.0) + t * 0.07) * 2.0 - 1.0;
+    float wy = vnoise(p + vec2(0.0, seed + 3.7) + t * 0.05) * 2.0 - 1.0;
+    return vec2(wx, wy);
+}
+
 void main() {
     float bleed_ramp = (u_bleedback > 0.001 && u_clip_duration > 0.001)
         ? u_bleedback * clamp(u_t_in_clip / u_clip_duration, 0.0, 1.0) : 0.0;
     float eff = u_intensity * (1.0 - bleed_ramp);
 
-    // Row band — u_block_size controls granularity (small=fine stripes, large=thick)
-    float row    = floor(v_uv.y * u_tex_h / u_block_size);
-    float t_slot = floor(u_time * 6.0);
+    // Warp scale — u_block_size as noise frequency: small=tight warp, large=big sweeps
+    float scale = u_tex_w / u_block_size;
 
-    // Per-channel random state — independent Y/Cb/Cr scan corruption.
-    // rng_X in [0,1]: if rng_X < eff this row's channel is corrupted.
-    // onset_X: x-position where the Huffman error starts (0=left edge, 1=right edge).
-    // Rows with low rng corrupt from far left; rows near eff corrupt near right.
-    float rng_r = hash2(vec2(row * 1.00, t_slot * 1.0));
-    float rng_g = hash2(vec2(row * 2.71, t_slot * 1.3));
-    float rng_b = hash2(vec2(row * 5.17, t_slot * 1.7));
-
-    float onset_r = (rng_r < eff) ? rng_r / eff : 2.0;
-    float onset_g = (rng_g < eff) ? rng_g / eff : 2.0;
-    float onset_b = (rng_b < eff) ? rng_b / eff : 2.0;
-
-    // Per-row per-channel displacement — large horizontal shift (±50% width).
-    // Tiny vertical drift added for realism.
-    float dx_r = (hash2(vec2(row * 3.10, t_slot * 2.3)) * 2.0 - 1.0) * 0.5;
-    float dx_g = (hash2(vec2(row * 4.73, t_slot * 0.9)) * 2.0 - 1.0) * 0.5;
-    float dx_b = (hash2(vec2(row * 6.31, t_slot * 1.5)) * 2.0 - 1.0) * 0.5;
-    float dy   = (hash2(vec2(row * 7.93, t_slot * 2.1)) * 2.0 - 1.0) * 0.02;
+    // Per-channel warp fields — independent seeds produce organic colour separation
+    // across the whole frame (not just at row boundaries).
+    // Magnitude grows with eff: subtle at low intensity, violent at high.
+    float mag = eff * eff * 0.35;
+    vec2 w_r = warp_field(v_uv, scale, 0.00, u_time) * mag;
+    vec2 w_g = warp_field(v_uv, scale, 5.27, u_time) * mag * 0.9;
+    vec2 w_b = warp_field(v_uv, scale, 11.3, u_time) * mag * 1.1;
 
     vec4 src = texture(u_src, v_uv);
 
-    // Each channel independently: clean source left of onset, ghost right of it.
-    float r = (v_uv.x > onset_r)
-        ? texture(u_ghost, clamp(vec2(v_uv.x + dx_r, v_uv.y + dy),       0.0, 1.0)).r
-        : src.r;
-    float g = (v_uv.x > onset_g)
-        ? texture(u_ghost, clamp(vec2(v_uv.x + dx_g, v_uv.y + dy * 0.7), 0.0, 1.0)).g
-        : src.g;
-    float b = (v_uv.x > onset_b)
-        ? texture(u_ghost, clamp(vec2(v_uv.x + dx_b, v_uv.y + dy * 1.3), 0.0, 1.0)).b
-        : src.b;
+    float r = texture(u_ghost, clamp(v_uv + w_r, 0.0, 1.0)).r;
+    float g = texture(u_ghost, clamp(v_uv + w_g, 0.0, 1.0)).g;
+    float b = texture(u_ghost, clamp(v_uv + w_b, 0.0, 1.0)).b;
 
-    frag = vec4(r, g, b, src.a);
+    // Mix source with warped ghost — at low intensity ghost is barely different
+    // from source so the warp is subtle; at high intensity heavy feedback has
+    // diverged the ghost far from source and the warp is destructive.
+    frag = vec4(mix(src.rgb, vec3(r, g, b), eff), src.a);
 }
 )glsl";
 
