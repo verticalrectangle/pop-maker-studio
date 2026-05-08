@@ -1,6 +1,19 @@
 #pragma once
+#include "app.h"
+#include <cstdint>
 
-// All visual FX are now CPU pixel operations in video.cpp.
-// These stubs keep app_init/app_shutdown call sites unchanged.
 void fx_shader_init();
 void fx_shader_shutdown();
+
+// Apply the GPU FX chain (grade, blur, vignette, chroma-key, glitch, VHS,
+// light-leak, datamosh) to src_tex and write the result into a stable per-slot
+// output texture.  Returns src_tex unchanged when no FX is active.
+//
+// slot:  0 .. MAX_VIDEO_TRACKS*2-1  — identifies which stable output buffer to use.
+//        Each slot has its own output texture that persists until the next
+//        fx_apply() call for that slot, making it safe to use in a deferred
+//        ImDrawList that is submitted later in the same frame.
+// w, h:  pixel dimensions of src_tex.
+// t:     animation time (seconds, e.g. clip-local or absolute playhead).
+uintptr_t fx_apply(uintptr_t src_tex, int slot, int w, int h,
+                   const EffectAccum& ea, const CreativeFXAccum& cfx, float t);

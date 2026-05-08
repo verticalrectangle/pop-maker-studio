@@ -10,6 +10,7 @@
 #include "filepicker.h"
 #include "globals.h"
 #include "render.h"
+#include "fx_shader.h"
 #include "blender_export.h"
 #include "history.h"
 #include "proxy.h"
@@ -1321,41 +1322,13 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                 // Map timeline time → source file time via clip's in_point and speed.
                 float src_t = cl_ptr->in_point + (at_time - cl_ptr->start) * cl_ptr->speed;
 
-                // Collect FX before decode so all CPU pixel FX are baked into the frame.
+                // Collect FX (used for both GPU shader pipeline and bg_remove CPU pass).
                 EffectAccum     vid_fx = collect_effects    (state, at_time, ti);
                 CreativeFXAccum cfx    = collect_creative_fx(state, at_time, ti);
                 if (slot >= 0) {
+                    // Pass only bg_remove to the CPU path; all other effects go through
+                    // the GPU shader pipeline (fx_apply) after video_get_texture().
                     PixelFX pfx;
-                    pfx.brightness    = vid_fx.brightness;
-                    pfx.contrast      = vid_fx.contrast;
-                    pfx.saturation    = vid_fx.saturation;
-                    pfx.hue_deg       = vid_fx.hue;
-                    pfx.blur_sigma    = vid_fx.blur;
-                    pfx.chroma_key_on        = cfx.chroma_key_on;
-                    pfx.chroma_key_r         = cfx.chroma_key_r;
-                    pfx.chroma_key_g         = cfx.chroma_key_g;
-                    pfx.chroma_key_b         = cfx.chroma_key_b;
-                    pfx.chroma_key_threshold = cfx.chroma_key_threshold;
-                    pfx.chroma_key_softness  = cfx.chroma_key_softness;
-                    pfx.glitch_on          = cfx.glitch_on;
-                    pfx.glitch_chroma      = cfx.glitch_chroma;
-                    pfx.glitch_jitter      = cfx.glitch_jitter;
-                    pfx.glitch_corruption       = cfx.glitch_corruption;
-                    pfx.glitch_corruption_bleed = cfx.glitch_corruption_bleed;
-                    pfx.vhs_on        = cfx.vhs_on;
-                    pfx.vhs_noise     = cfx.vhs_noise;
-                    pfx.vhs_bleed     = cfx.vhs_bleed;
-                    pfx.vhs_tracking  = cfx.vhs_tracking;
-                    pfx.datamosh_on         = cfx.datamosh_on;
-                    pfx.datamosh_intensity  = cfx.datamosh_intensity;
-                    pfx.datamosh_decay      = cfx.datamosh_decay;
-                    pfx.datamosh_block_size = cfx.datamosh_block_size;
-                    pfx.datamosh_clip_start   = cfx.datamosh_clip_start;
-                    pfx.datamosh_src_at_start = cl_ptr->in_point +
-                        (cfx.datamosh_clip_start - cl_ptr->start) * cl_ptr->speed;
-                    pfx.datamosh_bleedback     = cfx.datamosh_bleedback;
-                    pfx.datamosh_t_in_clip     = at_time - cfx.datamosh_clip_start;
-                    pfx.datamosh_clip_duration = cfx.datamosh_clip_duration;
                     pfx.bg_remove_on       = cl_ptr->bg_remove_on &&
                                              cl_ptr->bg_remove_status == BgRemoveStatus::Ready;
                     pfx.bg_remove_mask_dir = cl_ptr->bg_remove_mask_dir;
@@ -1365,13 +1338,21 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                     pfx.bg_remove_box_r    = cl_ptr->bg_remove_box_r;
                     pfx.bg_remove_box_t    = cl_ptr->bg_remove_box_t;
                     pfx.bg_remove_box_b    = cl_ptr->bg_remove_box_b;
-                    pfx.time          = t_anim;
+                    pfx.time               = t_anim;
                     video_set_pixel_fx(slot, pfx);
                 }
 
                 uintptr_t tex = (slot >= 0 && video_is_open(slot))
                     ? video_get_texture(slot, (double)(src_t + lookahead)) : 0;
                 if (!tex) return;
+
+                // GPU FX pipeline: grade, blur, vignette, chroma-key, glitch, VHS, leak, datamosh.
+                // bg_remove alpha was already applied CPU-side in upload_jpeg above.
+                if (slot >= 0) {
+                    VideoInfo vi_fx = video_info(slot);
+                    tex = fx_apply(tex, slot, vi_fx.width, vi_fx.height, vid_fx, cfx, t_anim);
+                }
+
                 float px    = cl_ptr->eval_prop("pos_x",    at_time);
                 float py    = cl_ptr->eval_prop("pos_y",    at_time);
                 float sx    = cl_ptr->eval_prop("scale_x",  at_time);
@@ -1393,8 +1374,6 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                 auto rot_pt = [&](float ox, float oy) -> ImVec2 {
                     return { cx + ox*cos_r - oy*sin_r, cy + ox*sin_r + oy*cos_r };
                 };
-                uintptr_t display_tex = tex;
-
                 // ZoomPunch — scale spike on each beat, decaying exponentially
                 if (cfx.zoom_on && !state.beats.empty()) {
                     float punch = 0.f;
@@ -1418,18 +1397,9 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                 }
 
                 ImU32 col = IM_COL32(255, 255, 255, (int)(std::fmaxf(0.f, std::fminf(1.f, alpha)) * 255.f));
-                dl->AddImageQuad(ImTextureRef((ImTextureID)display_tex),
+                dl->AddImageQuad(ImTextureRef((ImTextureID)tex),
                     rot_pt(-hw,-hh), rot_pt(hw,-hh), rot_pt(hw,hh), rot_pt(-hw,hh),
                     {0,0}, {1,0}, {1,1}, {0,1}, col);
-                if (vid_fx.any_vignette && vid_fx.vignette > 0.01f) {
-                    float vx0=cx-hw, vy0=cy-hh, vx1=cx+hw, vy1=cy+hh;
-                    ImU32 vig = IM_COL32(0,0,0,(int)(vid_fx.vignette*210.f));
-                    float vw=vx1-vx0, vh=vy1-vy0;
-                    dl->AddRectFilledMultiColor({vx0,vy0},{vx0+vw*0.4f,vy1},vig,IM_COL32(0,0,0,0),IM_COL32(0,0,0,0),vig);
-                    dl->AddRectFilledMultiColor({vx0+vw*0.6f,vy0},{vx1,vy1},IM_COL32(0,0,0,0),vig,vig,IM_COL32(0,0,0,0));
-                    dl->AddRectFilledMultiColor({vx0,vy0},{vx1,vy0+vh*0.3f},vig,vig,IM_COL32(0,0,0,0),IM_COL32(0,0,0,0));
-                    dl->AddRectFilledMultiColor({vx0,vy0+vh*0.7f},{vx1,vy1},IM_COL32(0,0,0,0),IM_COL32(0,0,0,0),vig,vig);
-                }
             };
 
             // Find the active video clip and check for transitions
