@@ -84,6 +84,7 @@ struct PixelFX {
     // Datamosh
     bool  datamosh_on        = false;
     float datamosh_intensity = 0.6f;
+    float datamosh_spread    = 0.3f;
 
     // Remove Background
     bool        bg_remove_on       = false;
@@ -111,6 +112,7 @@ struct PixelFX {
                vhs_on     == o.vhs_on     && vhs_noise  == o.vhs_noise &&
                vhs_bleed  == o.vhs_bleed  && vhs_tracking == o.vhs_tracking &&
                datamosh_on == o.datamosh_on && datamosh_intensity == o.datamosh_intensity &&
+               datamosh_spread == o.datamosh_spread &&
                bg_remove_on == o.bg_remove_on &&
                bg_remove_mask_dir == o.bg_remove_mask_dir &&
                bg_remove_softness == o.bg_remove_softness &&

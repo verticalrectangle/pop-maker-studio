@@ -1340,6 +1340,7 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                     pfx.bg_remove_box_b    = cl_ptr->bg_remove_box_b;
                     pfx.datamosh_on        = cfx.datamosh_on;
                     pfx.datamosh_intensity = cfx.datamosh_intensity;
+                    pfx.datamosh_spread    = cfx.datamosh_spread;
                     pfx.time               = t_anim;
                     video_set_pixel_fx(slot, pfx);
                 }
@@ -4456,6 +4457,11 @@ static void panel_fx_clip(AppState& state, float w) {
             ImGui::SetNextItemWidth(sw2);
             ImGui::SliderFloat("##dmint", &clip.fx_datamosh_intensity, 0.f, 1.f, "%.2f");
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Datamosh: intensity");
+            ImGui::Dummy({0.f, 4.f});
+            ui_label("Spread");
+            ImGui::SetNextItemWidth(sw2);
+            ImGui::SliderFloat("##dmspread", &clip.fx_datamosh_spread, 0.f, 1.f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Datamosh: spread");
             break;
         }
 

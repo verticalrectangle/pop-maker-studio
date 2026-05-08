@@ -173,6 +173,7 @@ CreativeFXAccum collect_creative_fx(const AppState& state, float t, int below_tr
                 case FXType::Datamosh:
                     acc.datamosh_on        = true;
                     acc.datamosh_intensity = fmaxf(acc.datamosh_intensity, cl.fx_datamosh_intensity);
+                    acc.datamosh_spread    = fmaxf(acc.datamosh_spread,    cl.fx_datamosh_spread);
                     break;
                 case FXType::ChromaKey:
                     acc.chroma_key_on        = true;

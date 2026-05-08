@@ -164,6 +164,7 @@ struct Clip {
 
     // Datamosh
     float       fx_datamosh_intensity  = 0.6f;
+    float       fx_datamosh_spread     = 0.3f;
 
     // ZoomPunch
     float       fx_zoom_strength = 0.08f; // peak scale-up fraction (0–0.5)
@@ -234,6 +235,7 @@ struct CreativeFXAccum {
     // Datamosh
     bool  datamosh_on        = false;
     float datamosh_intensity = 0.6f;
+    float datamosh_spread    = 0.3f;
 
     bool  zoom_on        = false;
     float zoom_strength  = 0.f;
