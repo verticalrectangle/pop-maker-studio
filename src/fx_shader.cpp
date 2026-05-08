@@ -194,6 +194,36 @@ void main() {
 }
 )glsl";
 
+// Datamosh color bleed — uses channel dominance as a corruption matte.
+// Neon/saturated pixels (JPEG decode artifacts) get R and B channels
+// dragged horizontally in opposite directions, creating a chroma-split
+// that makes the corruption look like a composited colour layer.
+// Clean/neutral pixels have low dominance and get no bleed at all.
+static const char* k_datamosh_frag = R"glsl(
+#version 330 core
+in vec2 v_uv;
+out vec4 frag;
+uniform sampler2D u_tex;
+uniform float u_spread;
+uniform float u_tex_w;
+
+void main() {
+    vec3 col = texture(u_tex, v_uv).rgb;
+
+    // Corruption matte: how saturated/extreme is this pixel?
+    float lo = min(col.r, min(col.g, col.b));
+    float hi = max(col.r, max(col.g, col.b));
+    float matte = smoothstep(0.25, 0.75, hi - lo);
+
+    // Horizontal chroma bleed — R forward, B back, G stays
+    float bleed = matte * u_spread * 40.0 / u_tex_w;
+    float r = texture(u_tex, v_uv + vec2( bleed,       0.0)).r;
+    float b = texture(u_tex, v_uv - vec2( bleed * 0.6, 0.0)).b;
+
+    frag = vec4(r, col.g, b, 1.0);
+}
+)glsl";
+
 // Simple blit (passthrough) ────────────────────────────────────────────────
 static const char* k_blit_frag = R"glsl(
 #version 330 core
@@ -241,7 +271,7 @@ static GLuint link_prog(const char* frag_src) {
 
 static struct {
     GLuint grade = 0, blur = 0, chroma_key = 0, glitch = 0;
-    GLuint vhs = 0, leak = 0, blit = 0;
+    GLuint vhs = 0, leak = 0, datamosh = 0, blit = 0;
 } g_prog;
 
 static GLuint g_vao = 0;  // empty VAO required by GL core profile
@@ -315,6 +345,7 @@ void fx_shader_init() {
     g_prog.glitch         = link_prog(k_glitch_frag);
     g_prog.vhs            = link_prog(k_vhs_frag);
     g_prog.leak           = link_prog(k_leak_frag);
+    g_prog.datamosh       = link_prog(k_datamosh_frag);
     g_prog.blit           = link_prog(k_blit_frag);
 
     glGenVertexArrays(1, &g_vao);
@@ -322,7 +353,7 @@ void fx_shader_init() {
 
 void fx_shader_shutdown() {
     for (auto p : { g_prog.grade, g_prog.blur, g_prog.chroma_key, g_prog.glitch,
-                    g_prog.vhs, g_prog.leak, g_prog.blit })
+                    g_prog.vhs, g_prog.leak, g_prog.datamosh, g_prog.blit })
         if (p) glDeleteProgram(p);
 
     if (g_pp.fbo[0]) { glDeleteFramebuffers(2, g_pp.fbo); glDeleteTextures(2, g_pp.tex); }
@@ -343,9 +374,10 @@ uintptr_t fx_apply(uintptr_t src_tex_in, int slot, int w, int h,
     bool need_glitch   = cfx.glitch_on   && (cfx.glitch_chroma >= 0.1f || cfx.glitch_jitter >= 0.01f);
     bool need_vhs      = cfx.vhs_on      && (cfx.vhs_noise >= 0.01f || cfx.vhs_bleed >= 0.1f || cfx.vhs_tracking >= 0.01f);
     bool need_leak     = cfx.leak_on     && cfx.leak_intensity > 0.01f;
+    bool need_datamosh = cfx.datamosh_on && cfx.datamosh_spread > 0.01f;
 
     if (!need_grade && !need_vig && !need_blur && !need_chroma &&
-        !need_glitch && !need_vhs && !need_leak)
+        !need_glitch && !need_vhs && !need_leak && !need_datamosh)
         return src_tex_in;
 
     if (w <= 0 || h <= 0) return src_tex_in;
@@ -437,6 +469,15 @@ uintptr_t fx_apply(uintptr_t src_tex_in, int slot, int w, int h,
         glUniform1f(glGetUniformLocation(p, "u_intensity"), cfx.leak_intensity);
         glUniform1f(glGetUniformLocation(p, "u_speed"),     cfx.leak_speed);
         glUniform1f(glGetUniformLocation(p, "u_time"),      t);
+        run1(p);
+    }
+
+    // ── Datamosh colour bleed ─────────────────────────────────────────────────
+    if (need_datamosh) {
+        GLuint p = g_prog.datamosh;
+        glUseProgram(p);
+        glUniform1f(glGetUniformLocation(p, "u_spread"), cfx.datamosh_spread);
+        glUniform1f(glGetUniformLocation(p, "u_tex_w"),  (float)w);
         run1(p);
     }
 

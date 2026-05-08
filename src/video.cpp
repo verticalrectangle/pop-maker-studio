@@ -223,10 +223,8 @@ static void cpu_apply_corruption(uint8_t* px, int w, int h, float intensity, flo
 
 // Corrupt JPEG scan data in place to produce real Huffman decoder artifacts.
 // intensity 0..1 — number of corrupted bytes (1 at 0, 21 at 1.0).
-// spread   0..1 — 0 = all corruptions clustered in one horizontal band,
-//                 1 = scattered across the full scan (full-frame chaos).
 // seed — time-varying so corruption animates on playback.
-static void corrupt_jpeg_buf(uint8_t* buf, size_t sz, float intensity, float spread, uint32_t seed) {
+static void corrupt_jpeg_buf(uint8_t* buf, size_t sz, float intensity, uint32_t seed) {
     // Find SOS marker (0xFF 0xDA)
     size_t sos = sz;
     for (size_t i = 0; i + 1 < sz; ++i) {
@@ -243,24 +241,9 @@ static void corrupt_jpeg_buf(uint8_t* buf, size_t sz, float intensity, float spr
     size_t n_corrupt = (size_t)(intensity * 20.f) + 1;
 
     uint32_t rng = seed ^ 0xDEADBEEFu;
-
-    // Band centre: drifts slowly with time so it moves down the frame over time.
-    rng = rng * 1664525u + 1013904223u;
-    float band_centre = (float)(rng >> 1) / (float)0x7FFFFFFFu;  // 0..1
-
-    // Band half-width: spread=0 → tight band (5% of scan), spread=1 → full scan.
-    float half_width = 0.025f + spread * 0.475f;
-
-    float lo = band_centre - half_width;
-    float hi = band_centre + half_width;
-
     for (size_t i = 0; i < n_corrupt; ++i) {
-        // Pick a position within [lo, hi] mapped onto scan_sz, wrapping at edges.
         rng = rng * 1664525u + 1013904223u;
-        float t = lo + ((float)(rng >> 1) / (float)0x7FFFFFFFu) * (hi - lo);
-        t = t - floorf(t);  // wrap 0..1
-        size_t pos = scan + (size_t)(t * (float)scan_sz);
-        if (pos >= scan + scan_sz) pos = scan + scan_sz - 1;
+        size_t pos = scan + (size_t)(rng >> 1) % scan_sz;
         rng = rng * 1664525u + 1013904223u;
         buf[pos] = (uint8_t)(rng >> 24);
     }
@@ -642,8 +625,7 @@ static uintptr_t decode_proxy_frame(PreviewState& pv, int frame_idx) {
     // Datamosh: corrupt JPEG bytes before decode for real Huffman decoder artifacts
     if (pv.pixel_fx.datamosh_on && pv.pixel_fx.datamosh_intensity > 0.01f) {
         uint32_t seed = (uint32_t)(pv.pixel_fx.time * 60.f);
-        corrupt_jpeg_buf(s_buf.data(), got, pv.pixel_fx.datamosh_intensity,
-                         pv.pixel_fx.datamosh_spread, seed);
+        corrupt_jpeg_buf(s_buf.data(), got, pv.pixel_fx.datamosh_intensity, seed);
     }
 
     // Load bg_remove mask for this frame from the streaming mask MJPEG.
@@ -1165,7 +1147,7 @@ uintptr_t video_fx_preview_texture(FXType ft, float t) {
                                    s_fxp_src.data(), 85);
             if (!s_jpeg_preview.empty()) {
                 corrupt_jpeg_buf(s_jpeg_preview.data(), s_jpeg_preview.size(),
-                                 0.75f, 0.4f, (uint32_t)(t * 60.f));
+                                 0.75f, (uint32_t)(t * 60.f));
                 int w2, h2, ch2;
                 uint8_t* dec = stbi_load_from_memory(
                     s_jpeg_preview.data(), (int)s_jpeg_preview.size(), &w2, &h2, &ch2, 3);
