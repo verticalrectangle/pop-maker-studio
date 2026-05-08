@@ -15,6 +15,7 @@ extern "C" {
 #include <libavformat/avformat.h>
 #include <libavcodec/avcodec.h>
 #include <libavutil/imgutils.h>
+#include <libavutil/display.h>
 #include <libswscale/swscale.h>
 }
 
@@ -940,7 +941,15 @@ bool video_open_export(const std::string& path) {
 
     // Detect container rotation (phone portrait videos store raw as landscape + rotate tag).
     g_ex.rotation = 0;
-    {
+    for (int i = 0; i < st->codecpar->nb_coded_side_data; ++i) {
+        const AVPacketSideData& sd = st->codecpar->coded_side_data[i];
+        if (sd.type == AV_PKT_DATA_DISPLAYMATRIX && sd.size >= 9 * (int)sizeof(int32_t)) {
+            double angle = -av_display_rotation_get((const int32_t*)sd.data);
+            int rot = ((int)round(angle) % 360 + 360) % 360;
+            if (rot == 90 || rot == 180 || rot == 270) { g_ex.rotation = rot; break; }
+        }
+    }
+    if (g_ex.rotation == 0) {
         AVDictionaryEntry* e = av_dict_get(st->metadata, "rotate", nullptr, 0);
         if (e) {
             int rot = ((atoi(e->value) % 360) + 360) % 360;
