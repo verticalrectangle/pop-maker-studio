@@ -2,6 +2,19 @@
 #include "inter_font.h"   // inter_black_ttf[], inter_black_ttf_size
 #include "bg_remove.h"
 #include "globals.h"
+#include "overlay_renderer.h"
+#include "video.h"
+
+#define GL_GLEXT_PROTOTYPES
+#include <GL/gl.h>
+#include <GL/glext.h>
+#include <imgui_impl_opengl3.h>
+
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmissing-field-initializers"
+#include "stb_image_write.h"
+#pragma GCC diagnostic pop
 
 #include <fstream>
 #include <sstream>
@@ -1373,4 +1386,674 @@ void extract_audio_start(AppState& state, const std::string& video_path) {
         state.extract_running = false;
         state.extract_done    = ok;
     }).detach();
+}
+
+// ── GL shared state — forward declarations used by snapshot + export ─────────
+
+static struct GlExport {
+    bool    active        = false;
+    GLuint  fbo           = 0;
+    GLuint  color_tex     = 0;
+    GLuint  vid_tex[MAX_VIDEO_TRACKS * 2] = {};
+    int     out_w         = 0;
+    int     out_h         = 0;
+    int     current_frame = 0;
+    int     total_frames  = 0;
+    float   fps_f         = 30.f;
+    int     pipe_write    = -1;
+    pid_t   ffmpeg_pid    = 0;
+    std::vector<uint8_t> pixel_buf;
+    std::string cur_vid_path;
+} g_gl_ex;
+
+static void gl_cleanup_export();
+static bool gl_render_vid_clip(ImDrawList& dl, const Clip* cl, float at_time,
+                                float alpha_mul, GLuint tex_id,
+                                float W, float H, const AppState& state);
+
+// ── GL snapshot — identical to preview ───────────────────────────────────────
+
+void render_snapshot_gl(AppState& state, float snap_t) {
+    if (state.snapshot_running) return;
+
+    // Build output path (same logic as render_snapshot_start)
+    std::string base_path = state.audio_path;
+    if (base_path.empty()) {
+        for (auto& tr : state.tracks)
+            for (auto& cl : tr.clips)
+                if (cl.clip_type == ClipType::Video && !cl.text.empty())
+                    { base_path = cl.text; goto snap_found_base; }
+    }
+    snap_found_base:
+    if (base_path.empty()) {
+        state.snapshot_msg     = "Snapshot failed — no media loaded";
+        state.snapshot_msg_new = true;
+        return;
+    }
+
+    int total_ms = (int)(snap_t * 1000.f);
+    int ms = total_ms % 1000, ss = (total_ms / 1000) % 60, mm = total_ms / 60000;
+    char ts[32]; snprintf(ts, sizeof(ts), "%02dm%02ds%03dms", mm, ss, ms);
+    std::string stem = fs::path(base_path).stem().string();
+    std::string dir  = fs::path(base_path).parent_path().string();
+    std::string out  = dir + "/" + stem + "_frame_" + ts + ".png";
+
+    int out_w = 1080, out_h = 1920;
+    switch (state.format) {
+        case OutputFormat::Horizontal: out_w = 1920; out_h = 1080; break;
+        case OutputFormat::Square:     out_w = 1080; out_h = 1080; break;
+        default: break;
+    }
+    float W = (float)out_w, H = (float)out_h;
+    float t = snap_t;
+
+    // ── Create temporary FBO ──────────────────────────────────────────────────
+    GLuint fbo = 0, col_tex = 0;
+    glGenFramebuffers(1, &fbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+    glGenTextures(1, &col_tex);
+    glBindTexture(GL_TEXTURE_2D, col_tex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, out_w, out_h, 0,
+                 GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                           GL_TEXTURE_2D, col_tex, 0);
+    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+        glDeleteFramebuffers(1, &fbo);
+        glDeleteTextures(1, &col_tex);
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        state.snapshot_msg     = "Snapshot failed — FBO error";
+        state.snapshot_msg_new = true;
+        return;
+    }
+
+    // Per-track video textures for this snapshot (freed at end)
+    GLuint vid_texs[MAX_VIDEO_TRACKS * 2] = {};
+    glGenTextures(MAX_VIDEO_TRACKS * 2, vid_texs);
+    for (int i = 0; i < MAX_VIDEO_TRACKS * 2; ++i) {
+        glBindTexture(GL_TEXTURE_2D, vid_texs[i]);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    }
+    glBindTexture(GL_TEXTURE_2D, 0);
+
+    // ── Render into FBO ───────────────────────────────────────────────────────
+    GLint prev_fbo = 0; glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prev_fbo);
+    GLint prev_vp[4]; glGetIntegerv(GL_VIEWPORT, prev_vp);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+    glViewport(0, 0, out_w, out_h);
+    glClearColor(0.f, 0.f, 0.f, 1.f);
+    glClear(GL_COLOR_BUFFER_BIT);
+
+    ImDrawList dl(ImGui::GetDrawListSharedData());
+    dl._ResetForNewFrame();
+    dl.PushClipRect({0.f, 0.f}, {W, H});
+    dl.PushTexture(ImGui::GetIO().Fonts->TexRef);
+
+    // Reuse the same video-clip rendering path as render_tick_gl
+    std::string snap_vid_path;
+    for (int ti = (int)state.tracks.size() - 1; ti >= 0; --ti) {
+        const auto& track = state.tracks[ti];
+        if (!track.visible) continue;
+        int slot_pri = ti % MAX_VIDEO_TRACKS;
+        int slot_sec = MAX_VIDEO_TRACKS + slot_pri;
+
+        const Clip* active = nullptr; int active_ci = -1;
+        for (int ci = 0; ci < (int)track.clips.size(); ++ci) {
+            auto& cl = track.clips[ci];
+            if (cl.clip_type == ClipType::Video && t >= cl.start && t < cl.end)
+                { active = &cl; active_ci = ci; break; }
+        }
+        if (!active) {
+            for (int ci = 1; ci < (int)track.clips.size(); ++ci) {
+                const Clip& prev = track.clips[ci - 1];
+                const Clip& cl   = track.clips[ci];
+                if (prev.clip_type != ClipType::Video || cl.clip_type != ClipType::Video) continue;
+                if (prev.transition_type == TransitionType::None || prev.transition_post <= 0.f) continue;
+                if (t >= cl.start && t < cl.start + prev.transition_post)
+                    { active = &track.clips[ci]; active_ci = ci; break; }
+            }
+        }
+        if (!active) continue;
+
+        // Temporarily redirect the global export path cache to our local string
+        std::string saved_path = g_gl_ex.cur_vid_path;
+        g_gl_ex.cur_vid_path = snap_vid_path;
+
+        bool in_trans_out = (active->transition_type != TransitionType::None &&
+                             active->transition_pre > 0.f &&
+                             t >= active->end - active->transition_pre);
+        const Clip* next_cl = nullptr;
+        if (in_trans_out && active_ci + 1 < (int)track.clips.size()) {
+            const Clip& nc = track.clips[active_ci + 1];
+            if (nc.clip_type == ClipType::Video) next_cl = &nc;
+        }
+        bool in_trans_in = false; const Clip* prev_cl = nullptr;
+        if (!in_trans_out && active_ci > 0) {
+            const Clip& pc = track.clips[active_ci - 1];
+            if (pc.clip_type == ClipType::Video &&
+                pc.transition_type != TransitionType::None &&
+                pc.transition_post > 0.f &&
+                t < active->start + pc.transition_post)
+                { in_trans_in = true; prev_cl = &pc; }
+        }
+
+        if (in_trans_out && next_cl) {
+            float pre = active->transition_pre, post = active->transition_post, cut = active->end;
+            float t_a = fmaxf(0.f, fminf(1.f, (t-(cut-pre))/fmaxf(pre,1e-5f)));
+            float t_b = fmaxf(0.f, fminf(1.f, (t-cut)/fmaxf(post,1e-5f)));
+            if (active->transition_type == TransitionType::Dissolve) {
+                gl_render_vid_clip(dl, active, t, 1.f-t_a, vid_texs[slot_pri], W, H, state);
+                g_gl_ex.cur_vid_path.clear();
+                gl_render_vid_clip(dl, next_cl, t, t_b>0.f?t_b:t_a, vid_texs[slot_sec], W, H, state);
+            } else if (active->transition_type == TransitionType::FadeBlack) {
+                gl_render_vid_clip(dl, active, t, 1.f-t_a, vid_texs[slot_pri], W, H, state);
+                g_gl_ex.cur_vid_path.clear();
+                gl_render_vid_clip(dl, next_cl, t, t_b, vid_texs[slot_sec], W, H, state);
+            } else {
+                gl_render_vid_clip(dl, active, t, 1.f-t_a, vid_texs[slot_pri], W, H, state);
+                float wa = t_a*(1.f-t_b);
+                if (wa > 0.01f)
+                    dl.AddRectFilled({0,0},{W,H},IM_COL32(255,255,255,(int)(wa*255)));
+                g_gl_ex.cur_vid_path.clear();
+                gl_render_vid_clip(dl, next_cl, t, t_b, vid_texs[slot_sec], W, H, state);
+            }
+        } else if (in_trans_in && prev_cl) {
+            float tf = fmaxf(0.f, fminf(1.f,
+                (t-active->start)/fmaxf(prev_cl->transition_post,1e-5f)));
+            if (prev_cl->transition_type == TransitionType::Dissolve) {
+                gl_render_vid_clip(dl, prev_cl, fminf(t,prev_cl->end-1e-4f),
+                                   1.f-tf, vid_texs[slot_sec], W, H, state);
+                g_gl_ex.cur_vid_path.clear();
+                gl_render_vid_clip(dl, active, t, tf, vid_texs[slot_pri], W, H, state);
+            } else if (prev_cl->transition_type == TransitionType::FadeBlack) {
+                gl_render_vid_clip(dl, active, t, tf, vid_texs[slot_pri], W, H, state);
+            } else {
+                float wa = 1.f-tf;
+                if (wa > 0.01f)
+                    dl.AddRectFilled({0,0},{W,H},IM_COL32(255,255,255,(int)(wa*255)));
+                gl_render_vid_clip(dl, active, t, tf, vid_texs[slot_pri], W, H, state);
+            }
+        } else {
+            gl_render_vid_clip(dl, active, t, 1.f, vid_texs[slot_pri], W, H, state);
+        }
+
+        snap_vid_path = g_gl_ex.cur_vid_path;
+        g_gl_ex.cur_vid_path = saved_path;
+    }
+    video_close_export();
+
+    draw_text_overlays(&dl, state, t, {0.f, 0.f}, W, H);
+    dl.PopTexture();
+    dl.PopClipRect();
+
+    ImDrawData dd;
+    dd.DisplayPos = {0,0}; dd.DisplaySize = {W,H}; dd.FramebufferScale = {1,1};
+    dd.Textures = &ImGui::GetPlatformIO().Textures;
+    dd.AddDrawList(&dl);
+    ImGui_ImplOpenGL3_RenderDrawData(&dd);
+
+    // ── Read back + vertical flip ─────────────────────────────────────────────
+    std::vector<uint8_t> raw((size_t)out_w * out_h * 4);
+    glReadPixels(0, 0, out_w, out_h, GL_RGBA, GL_UNSIGNED_BYTE, raw.data());
+    std::vector<uint8_t> flipped((size_t)out_w * out_h * 4);
+    int rb = out_w * 4;
+    for (int y = 0; y < out_h; ++y)
+        memcpy(flipped.data() + (size_t)y*rb, raw.data() + (size_t)(out_h-1-y)*rb, rb);
+
+    // ── Restore GL state ──────────────────────────────────────────────────────
+    glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)prev_fbo);
+    glViewport(prev_vp[0], prev_vp[1], prev_vp[2], prev_vp[3]);
+    glDeleteFramebuffers(1, &fbo);
+    glDeleteTextures(1, &col_tex);
+    glDeleteTextures(MAX_VIDEO_TRACKS * 2, vid_texs);
+
+    // ── Save PNG (synchronous, small file — fine on main thread) ─────────────
+    state.snapshot_running = true;
+    bool ok = stbi_write_png(out.c_str(), out_w, out_h, 4, flipped.data(), rb) != 0;
+    state.snapshot_running = false;
+    if (ok) {
+        state.snapshot_msg = "Saved " + fs::path(out).filename().string();
+        system(("xdg-open \"" + dir + "\" &").c_str());
+    } else {
+        state.snapshot_msg = "Snapshot failed — PNG write error";
+    }
+    state.snapshot_msg_new = true;
+}
+
+// ── GL-based export ───────────────────────────────────────────────────────────
+// One export frame is rendered per call to render_tick_gl(), driven from app_frame()
+// on the main/GL thread. Each frame is decoded from the original source files via
+// libavcodec, composited via ImDrawList into an offscreen FBO, read back with
+// glReadPixels, and piped as rawvideo RGBA to ffmpeg for H.264 encoding.
+
+static void gl_cleanup_export() {
+    if (g_gl_ex.fbo)       { glDeleteFramebuffers(1, &g_gl_ex.fbo);       g_gl_ex.fbo       = 0; }
+    if (g_gl_ex.color_tex) { glDeleteTextures(1, &g_gl_ex.color_tex);     g_gl_ex.color_tex = 0; }
+    glDeleteTextures(MAX_VIDEO_TRACKS * 2, g_gl_ex.vid_tex);
+    memset(g_gl_ex.vid_tex, 0, sizeof(g_gl_ex.vid_tex));
+    video_close_export();
+    g_gl_ex.cur_vid_path.clear();
+    g_gl_ex.pixel_buf.clear();
+    g_gl_ex.active = false;
+}
+
+// Decode a video clip frame, upload to a GL texture, and AddImageQuad to dl.
+// Returns false if the clip has no file or decode fails.
+static bool gl_render_vid_clip(ImDrawList& dl, const Clip* cl, float at_time,
+                                float alpha_mul, GLuint tex_id,
+                                float W, float H, const AppState& state)
+{
+    if (!cl || cl->text.empty()) return false;
+    float src_t = cl->in_point + (at_time - cl->start) * cl->speed;
+
+    if (g_gl_ex.cur_vid_path != cl->text) {
+        if (!video_open_export(cl->text)) return false;
+        g_gl_ex.cur_vid_path = cl->text;
+    }
+    VideoFrame* vf = video_decode_frame_at((double)src_t);
+    if (!vf) return false;
+
+    glBindTexture(GL_TEXTURE_2D, tex_id);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, vf->width, vf->height, 0,
+                 GL_RGBA, GL_UNSIGNED_BYTE, vf->data);
+    int vid_w = vf->width, vid_h = vf->height;
+    video_free_frame(vf);
+
+    float px    = cl->eval_prop("pos_x",    at_time);
+    float py    = cl->eval_prop("pos_y",    at_time);
+    float sx    = cl->eval_prop("scale_x",  at_time);
+    float sy    = cl->eval_prop("scale_y",  at_time);
+    float rot   = cl->eval_prop("rotation", at_time);
+    float alpha = cl->eval_prop("opacity",  at_time) * alpha_mul;
+
+    float fit_w = W, fit_h = H;
+    if (vid_w > 0 && vid_h > 0) {
+        float vid_asp = (float)vid_w / (float)vid_h;
+        float can_asp = W / H;
+        if (vid_asp > can_asp) { fit_w = W; fit_h = W / vid_asp; }
+        else                   { fit_h = H; fit_w = H * vid_asp; }
+    }
+    float cx = px * W, cy = py * H;
+    float hw = fit_w * sx * 0.5f, hh = fit_h * sy * 0.5f;
+    float rad = rot * 3.14159265f / 180.f;
+    float cos_r = cosf(rad), sin_r = sinf(rad);
+    auto rot_pt = [&](float ox, float oy) -> ImVec2 {
+        return { cx + ox*cos_r - oy*sin_r, cy + ox*sin_r + oy*cos_r };
+    };
+    ImU32 col = IM_COL32(255, 255, 255, (int)(fmaxf(0.f, fminf(1.f, alpha)) * 255.f));
+    dl.AddImageQuad(ImTextureRef((ImTextureID)(uintptr_t)tex_id),
+        rot_pt(-hw,-hh), rot_pt(hw,-hh), rot_pt(hw,hh), rot_pt(-hw,hh),
+        {0,0}, {1,0}, {1,1}, {0,1}, col);
+
+    (void)state;  // state reserved for future FX
+    return true;
+}
+
+void render_start_gl(AppState& state) {
+    g_cancel.store(false);
+
+    int out_w = 1080, out_h = 1920;
+    switch (state.format) {
+        case OutputFormat::Horizontal: out_w = 1920; out_h = 1080; break;
+        case OutputFormat::Square:     out_w = 1080; out_h = 1080; break;
+        default: break;
+    }
+    int fps          = state.fps;
+    int total_frames = (int)(state.duration * fps + 0.5f);
+    if (total_frames <= 0 || state.out_mp4.empty()) return;
+
+    // ── Create FBO ────────────────────────────────────────────────────────────
+    GLuint fbo = 0, col_tex = 0;
+    glGenFramebuffers(1, &fbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+
+    glGenTextures(1, &col_tex);
+    glBindTexture(GL_TEXTURE_2D, col_tex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, out_w, out_h, 0,
+                 GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                           GL_TEXTURE_2D, col_tex, 0);
+
+    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+        glDeleteFramebuffers(1, &fbo);
+        glDeleteTextures(1, &col_tex);
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        state.render.stage = "Error: FBO setup failed";
+        return;
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+    // ── Create per-track video textures ───────────────────────────────────────
+    GLuint vid_texs[MAX_VIDEO_TRACKS * 2] = {};
+    glGenTextures(MAX_VIDEO_TRACKS * 2, vid_texs);
+    for (int i = 0; i < MAX_VIDEO_TRACKS * 2; ++i) {
+        glBindTexture(GL_TEXTURE_2D, vid_texs[i]);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    }
+    glBindTexture(GL_TEXTURE_2D, 0);
+
+    // ── Collect audio inputs ──────────────────────────────────────────────────
+    struct AudioIn { std::string path; float vol = 1.f; };
+    std::vector<AudioIn> audio_ins;
+    if (!state.audio_path.empty())
+        audio_ins.push_back({state.audio_path, 1.f});
+    for (int ti = (int)state.tracks.size() - 1; ti >= 0; --ti) {
+        for (auto& cl : state.tracks[ti].clips) {
+            if (cl.clip_type != ClipType::Audio || cl.text.empty()) continue;
+            if (!fs::exists(cl.text)) continue;
+            float vol = state.tracks[ti].muted ? 0.f : cl.volume;
+            bool found = false;
+            for (auto& ai : audio_ins)
+                if (ai.path == cl.text) { found = true; break; }
+            if (!found) audio_ins.push_back({cl.text, vol});
+        }
+    }
+
+    // ── Build ffmpeg command ──────────────────────────────────────────────────
+    // Input 0: rawvideo from stdin (RGBA)
+    // Input 1..N: audio files
+    std::vector<std::string> args;
+    args.push_back("ffmpeg"); args.push_back("-hide_banner"); args.push_back("-y");
+    args.push_back("-f");       args.push_back("rawvideo");
+    args.push_back("-pix_fmt"); args.push_back("rgba");
+    args.push_back("-s");       args.push_back(std::to_string(out_w) + "x" + std::to_string(out_h));
+    args.push_back("-r");       args.push_back(std::to_string(fps));
+    args.push_back("-i");       args.push_back("pipe:0");
+    for (auto& ai : audio_ins) {
+        args.push_back("-i"); args.push_back(ai.path);
+    }
+    args.push_back("-map"); args.push_back("0:v");
+    if (!audio_ins.empty()) {
+        if (audio_ins.size() == 1) {
+            args.push_back("-map"); args.push_back("1:a");
+        } else {
+            std::string fc;
+            for (int i = 0; i < (int)audio_ins.size(); ++i) {
+                if (audio_ins[i].vol != 1.f) {
+                    char buf[64];
+                    snprintf(buf, sizeof(buf), "[%d:a]volume=%.3f", i + 1, (double)audio_ins[i].vol);
+                    fc += buf;
+                } else {
+                    char buf[32]; snprintf(buf, sizeof(buf), "[%d:a]", i + 1);
+                    fc += buf;
+                }
+            }
+            char mixbuf[64];
+            snprintf(mixbuf, sizeof(mixbuf), "amix=inputs=%d[aout]", (int)audio_ins.size());
+            fc += mixbuf;
+            args.push_back("-filter_complex"); args.push_back(fc);
+            args.push_back("-map"); args.push_back("[aout]");
+        }
+    }
+    args.push_back("-c:v");     args.push_back("libx264");
+    args.push_back("-pix_fmt"); args.push_back("yuv420p");
+    args.push_back("-crf");     args.push_back(std::to_string(state.render_settings.crf));
+    args.push_back("-preset");  args.push_back(state.render_settings.preset);
+    if (state.render_settings.high_profile) {
+        args.push_back("-profile:v"); args.push_back("high");
+    }
+    if (!audio_ins.empty()) {
+        args.push_back("-c:a");  args.push_back("aac");
+        args.push_back("-b:a");  args.push_back(std::to_string(state.render_settings.audio_bitrate) + "k");
+    }
+    args.push_back("-shortest");
+    args.push_back(state.out_mp4);
+
+    // ── Fork ffmpeg ───────────────────────────────────────────────────────────
+    int stdin_pipe[2];
+    if (pipe(stdin_pipe) != 0) {
+        glDeleteFramebuffers(1, &fbo);
+        glDeleteTextures(1, &col_tex);
+        glDeleteTextures(MAX_VIDEO_TRACKS * 2, vid_texs);
+        state.render.stage = "Error: pipe()";
+        return;
+    }
+    pid_t pid = fork();
+    if (pid < 0) {
+        close(stdin_pipe[0]); close(stdin_pipe[1]);
+        glDeleteFramebuffers(1, &fbo);
+        glDeleteTextures(1, &col_tex);
+        glDeleteTextures(MAX_VIDEO_TRACKS * 2, vid_texs);
+        state.render.stage = "Error: fork()";
+        return;
+    }
+    if (pid == 0) {
+        dup2(stdin_pipe[0], STDIN_FILENO);
+        close(stdin_pipe[0]); close(stdin_pipe[1]);
+        int devnull = open("/dev/null", O_WRONLY);
+        if (devnull >= 0) { dup2(devnull, STDOUT_FILENO); dup2(devnull, STDERR_FILENO); close(devnull); }
+        std::vector<char*> av;
+        for (auto& s : args) av.push_back(const_cast<char*>(s.c_str()));
+        av.push_back(nullptr);
+        execvp("ffmpeg", av.data());
+        _exit(127);
+    }
+    close(stdin_pipe[0]);
+
+    // ── Store GL export state ─────────────────────────────────────────────────
+    g_gl_ex.active        = true;
+    g_gl_ex.fbo           = fbo;
+    g_gl_ex.color_tex     = col_tex;
+    memcpy(g_gl_ex.vid_tex, vid_texs, sizeof(vid_texs));
+    g_gl_ex.out_w         = out_w;
+    g_gl_ex.out_h         = out_h;
+    g_gl_ex.current_frame = 0;
+    g_gl_ex.total_frames  = total_frames;
+    g_gl_ex.fps_f         = (float)fps;
+    g_gl_ex.pipe_write    = stdin_pipe[1];
+    g_gl_ex.ffmpeg_pid    = pid;
+    g_gl_ex.pixel_buf.resize((size_t)out_w * out_h * 4);
+    g_gl_ex.cur_vid_path.clear();
+    g_ffmpeg_pid.store(pid);
+
+    state.render.running      = true;
+    state.render.progress     = 0.f;
+    state.render.frame        = 0;
+    state.render.total_frames = total_frames;
+    state.render.eta_secs     = 0.f;
+    state.render.stage        = "Encoding…";
+
+    if (!state.out_srt.empty())
+        render_export_srt(state, state.out_srt);
+}
+
+void render_tick_gl(AppState& state) {
+    if (!g_gl_ex.active) return;
+
+    if (g_cancel.load()) {
+        close(g_gl_ex.pipe_write); g_gl_ex.pipe_write = -1;
+        waitpid(g_gl_ex.ffmpeg_pid, nullptr, 0);
+        g_ffmpeg_pid.store(0);
+        gl_cleanup_export();
+        state.render.running = false;
+        state.render.stage   = "Cancelled";
+        return;
+    }
+
+    if (g_gl_ex.current_frame >= g_gl_ex.total_frames) {
+        close(g_gl_ex.pipe_write); g_gl_ex.pipe_write = -1;
+        int wstat = 0;
+        waitpid(g_gl_ex.ffmpeg_pid, &wstat, 0);
+        g_ffmpeg_pid.store(0);
+        bool ok = WIFEXITED(wstat) && WEXITSTATUS(wstat) == 0;
+        gl_cleanup_export();
+        state.render.running  = false;
+        state.render.progress = ok ? 1.f : state.render.progress;
+        state.render.stage    = ok ? "Done" : "Error — ffmpeg failed";
+        if (ok) state.render_done = true;
+        return;
+    }
+
+    float t = (float)g_gl_ex.current_frame / g_gl_ex.fps_f;
+    float W = (float)g_gl_ex.out_w;
+    float H = (float)g_gl_ex.out_h;
+
+    // Save previous GL state
+    GLint prev_fbo = 0;
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prev_fbo);
+    GLint prev_vp[4];
+    glGetIntegerv(GL_VIEWPORT, prev_vp);
+
+    // Bind export FBO
+    glBindFramebuffer(GL_FRAMEBUFFER, g_gl_ex.fbo);
+    glViewport(0, 0, g_gl_ex.out_w, g_gl_ex.out_h);
+    glClearColor(0.f, 0.f, 0.f, 1.f);
+    glClear(GL_COLOR_BUFFER_BIT);
+
+    // ── Build draw list ───────────────────────────────────────────────────────
+    ImDrawList dl(ImGui::GetDrawListSharedData());
+    dl._ResetForNewFrame();
+    dl.PushClipRect({0.f, 0.f}, {W, H});
+    dl.PushTexture(ImGui::GetIO().Fonts->TexRef);
+
+    // ── Render video clips (high→low track index = background first) ──────────
+    for (int ti = (int)state.tracks.size() - 1; ti >= 0; --ti) {
+        const auto& track = state.tracks[ti];
+        if (!track.visible) continue;
+
+        int slot_pri = ti % MAX_VIDEO_TRACKS;
+        int slot_sec = MAX_VIDEO_TRACKS + slot_pri;
+        GLuint tex_pri = g_gl_ex.vid_tex[slot_pri];
+        GLuint tex_sec = g_gl_ex.vid_tex[slot_sec];
+
+        const Clip* active = nullptr;
+        int active_ci = -1;
+        for (int ci = 0; ci < (int)track.clips.size(); ++ci) {
+            auto& cl = track.clips[ci];
+            if (cl.clip_type == ClipType::Video && t >= cl.start && t < cl.end)
+                { active = &cl; active_ci = ci; break; }
+        }
+        // Check incoming transition clip (visible before its own start time)
+        if (!active) {
+            for (int ci = 1; ci < (int)track.clips.size(); ++ci) {
+                const Clip& prev = track.clips[ci - 1];
+                const Clip& cl   = track.clips[ci];
+                if (prev.clip_type != ClipType::Video || cl.clip_type != ClipType::Video) continue;
+                if (prev.transition_type == TransitionType::None || prev.transition_post <= 0.f) continue;
+                if (t >= cl.start && t < cl.start + prev.transition_post)
+                    { active = &track.clips[ci]; active_ci = ci; break; }
+            }
+        }
+        if (!active) continue;
+
+        bool in_trans_out = (active->transition_type != TransitionType::None &&
+                             active->transition_pre > 0.f &&
+                             t >= active->end - active->transition_pre);
+        const Clip* next_cl = nullptr;
+        if (in_trans_out && active_ci + 1 < (int)track.clips.size()) {
+            const Clip& nc = track.clips[active_ci + 1];
+            if (nc.clip_type == ClipType::Video) next_cl = &nc;
+        }
+        bool in_trans_in = false;
+        const Clip* prev_cl = nullptr;
+        if (!in_trans_out && active_ci > 0) {
+            const Clip& pc = track.clips[active_ci - 1];
+            if (pc.clip_type == ClipType::Video &&
+                pc.transition_type != TransitionType::None &&
+                pc.transition_post > 0.f &&
+                t < active->start + pc.transition_post) {
+                in_trans_in = true;
+                prev_cl = &pc;
+            }
+        }
+
+        if (in_trans_out && next_cl) {
+            float pre  = active->transition_pre, post = active->transition_post;
+            float cut  = active->end;
+            float t_a  = fmaxf(0.f, fminf(1.f, (t - (cut - pre))  / fmaxf(pre,  1e-5f)));
+            float t_b  = fmaxf(0.f, fminf(1.f, (t - cut)          / fmaxf(post, 1e-5f)));
+
+            if (active->transition_type == TransitionType::Dissolve) {
+                gl_render_vid_clip(dl, active,  t, 1.f - t_a, tex_pri, W, H, state);
+                g_gl_ex.cur_vid_path.clear();  // force reopen for second clip
+                gl_render_vid_clip(dl, next_cl, t, t_b > 0.f ? t_b : t_a, tex_sec, W, H, state);
+            } else if (active->transition_type == TransitionType::FadeBlack) {
+                gl_render_vid_clip(dl, active,  t, 1.f - t_a, tex_pri, W, H, state);
+                g_gl_ex.cur_vid_path.clear();
+                gl_render_vid_clip(dl, next_cl, t, t_b, tex_sec, W, H, state);
+            } else { // DipWhite
+                gl_render_vid_clip(dl, active, t, 1.f - t_a, tex_pri, W, H, state);
+                float white_a = t_a * (1.f - t_b);
+                if (white_a > 0.01f)
+                    dl.AddRectFilled({0.f, 0.f}, {W, H},
+                                     IM_COL32(255,255,255,(int)(white_a * 255.f)));
+                g_gl_ex.cur_vid_path.clear();
+                gl_render_vid_clip(dl, next_cl, t, t_b, tex_sec, W, H, state);
+            }
+        } else if (in_trans_in && prev_cl) {
+            float tf = fmaxf(0.f, fminf(1.f,
+                (t - active->start) / fmaxf(prev_cl->transition_post, 1e-5f)));
+            if (prev_cl->transition_type == TransitionType::Dissolve) {
+                gl_render_vid_clip(dl, prev_cl, fminf(t, prev_cl->end - 1e-4f),
+                                   1.f - tf, tex_sec, W, H, state);
+                g_gl_ex.cur_vid_path.clear();
+                gl_render_vid_clip(dl, active, t, tf, tex_pri, W, H, state);
+            } else if (prev_cl->transition_type == TransitionType::FadeBlack) {
+                gl_render_vid_clip(dl, active, t, tf, tex_pri, W, H, state);
+            } else { // DipWhite
+                float white_a = 1.f - tf;
+                if (white_a > 0.01f)
+                    dl.AddRectFilled({0.f, 0.f}, {W, H},
+                                     IM_COL32(255,255,255,(int)(white_a * 255.f)));
+                gl_render_vid_clip(dl, active, t, tf, tex_pri, W, H, state);
+            }
+        } else {
+            gl_render_vid_clip(dl, active, t, 1.f, tex_pri, W, H, state);
+        }
+    }
+
+    // ── Render text overlays ──────────────────────────────────────────────────
+    draw_text_overlays(&dl, state, t, {0.f, 0.f}, W, H);
+
+    // Finalise draw list
+    dl.PopTexture();
+    dl.PopClipRect();
+
+    // ── Submit draw list to GL ────────────────────────────────────────────────
+    ImDrawData dd;
+    dd.DisplayPos        = {0.f, 0.f};
+    dd.DisplaySize       = {W, H};
+    dd.FramebufferScale  = {1.f, 1.f};
+    dd.Textures          = &ImGui::GetPlatformIO().Textures;
+    dd.AddDrawList(&dl);
+    ImGui_ImplOpenGL3_RenderDrawData(&dd);
+
+    // ── Read pixels and send to ffmpeg (vertical flip: GL is bottom-up) ───────
+    int row_bytes = g_gl_ex.out_w * 4;
+    std::vector<uint8_t> raw(g_gl_ex.pixel_buf.size());
+    glReadPixels(0, 0, g_gl_ex.out_w, g_gl_ex.out_h,
+                 GL_RGBA, GL_UNSIGNED_BYTE, raw.data());
+    for (int y = 0; y < g_gl_ex.out_h; ++y) {
+        int src_y = g_gl_ex.out_h - 1 - y;
+        memcpy(g_gl_ex.pixel_buf.data() + (size_t)y * row_bytes,
+               raw.data() + (size_t)src_y * row_bytes, row_bytes);
+    }
+    // Write full frame; handle partial writes
+    const uint8_t* buf = g_gl_ex.pixel_buf.data();
+    size_t total = (size_t)g_gl_ex.out_w * g_gl_ex.out_h * 4;
+    while (total > 0) {
+        ssize_t n = write(g_gl_ex.pipe_write, buf, total);
+        if (n <= 0) break;
+        buf   += n;
+        total -= (size_t)n;
+    }
+
+    // ── Restore GL state ──────────────────────────────────────────────────────
+    glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)prev_fbo);
+    glViewport(prev_vp[0], prev_vp[1], prev_vp[2], prev_vp[3]);
+
+    // ── Update progress ───────────────────────────────────────────────────────
+    ++g_gl_ex.current_frame;
+    state.render.frame    = g_gl_ex.current_frame;
+    state.render.progress = (float)g_gl_ex.current_frame / (float)g_gl_ex.total_frames;
 }

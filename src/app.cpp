@@ -241,6 +241,9 @@ void app_frame(AppState& state) {
         }
     }
 
+    // Drive one export frame per app frame (GL calls must be on main thread).
+    render_tick_gl(state);
+
     if (state.splash_timer > 0.f) {
         state.splash_timer -= io.DeltaTime;
         ui_splash(state);

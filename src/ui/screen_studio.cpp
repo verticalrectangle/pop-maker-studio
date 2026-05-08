@@ -1548,7 +1548,7 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
             ImGui::PushFont(g_font_black);
             ImFont* txt_font = ImGui::GetFont();
             float fsz    = show->font_size > 0.f ? show->font_size * h
-                                                  : ImGui::GetFontSize() * 1.8f;
+                                                  : h * 0.055f;
             float line_h = fsz * 1.25f;
 
             // Word-wrap: break text into lines that fit sub_wrap_w * canvas width
@@ -1864,7 +1864,7 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
         dl->AddText({btn_tl.x + btn_pad, btn_tl.y + btn_pad}, lbl_col, snap_lbl);
 
         if (snap_hov && snap_ena && lclick)
-            render_snapshot_start(state, state.playhead);
+            render_snapshot_gl(state, state.playhead);
     }
 
     // Stamp time when render thread signals a new snapshot message
@@ -4763,7 +4763,7 @@ static void draw_export_modal(AppState& state) {
                     state.out_mp4 = (outdir / (audio.stem().string() + ".mp4")).string();
                     state.out_srt = (outdir / (audio.stem().string() + ".srt")).string();
                 }
-                render_start(state);
+                render_start_gl(state);
             }
             ImGui::EndDisabled();
         }
@@ -4879,7 +4879,7 @@ static void panel_export(AppState& state, float w) {
                 state.out_mp4 = (outdir / (audio.stem().string() + ".mp4")).string();
                 state.out_srt = (outdir / (audio.stem().string() + ".srt")).string();
             }
-            render_start(state);
+            render_start_gl(state);
         }
     }
 

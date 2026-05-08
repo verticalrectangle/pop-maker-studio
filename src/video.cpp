@@ -1198,6 +1198,15 @@ VideoFrame* video_decode_frame_at(double seconds) {
     return result;
 }
 
+void video_free_frame(VideoFrame* f) {
+    if (!f) return;
+    av_free(f->data);
+    delete f;
+}
+
+int video_export_width()  { return g_ex.info.width; }
+int video_export_height() { return g_ex.info.height; }
+
 // ── FX preview thumbnails ─────────────────────────────────────────────────────
 // Source image: portrait_preview.h — 108×192 portrait RGB, embedded at build time
 // from assets/imgs/portrait.jpg (center-cropped 9:16, Lanczos-scaled).

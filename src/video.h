@@ -155,6 +155,10 @@ float video_probe_duration(const std::string& path);
 bool  video_open_export(const std::string& path);
 void  video_close_export();
 
-// Frame-accurate single-frame decode.  Caller must av_free(result->data)
-// and delete result when done.
+// Frame-accurate single-frame decode.  Caller must call video_free_frame().
 VideoFrame* video_decode_frame_at(double seconds);
+void        video_free_frame(VideoFrame* f);  // av_free(data) + delete
+
+// Returns dimensions of the currently open export file (0,0 if none open).
+int video_export_width();
+int video_export_height();
