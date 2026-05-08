@@ -267,7 +267,12 @@ void main() {
 }
 )glsl";
 
-// Datamosh ghost update: mix ghost toward current frame ───────────────────
+// Datamosh ghost update ───────────────────────────────────────────────────
+// Source bleed rate scales with (1 - eff) so at full intensity the ghost
+// is pure output feedback with zero source dilution. As intensity drops
+// the source floods back in at the decay rate, clearing the corruption.
+// decay controls how fast the effect clears when intensity is lowered —
+// not a constant suppression of the corruption at full intensity.
 static const char* k_datamosh_update_frag = R"glsl(
 #version 330 core
 in vec2 v_uv;
@@ -275,11 +280,12 @@ out vec4 frag;
 uniform sampler2D u_src;
 uniform sampler2D u_ghost;
 uniform float u_decay;
+uniform float u_eff;
 
 void main() {
     vec4 src   = texture(u_src,   v_uv);
     vec4 ghost = texture(u_ghost, v_uv);
-    frag = mix(ghost, src, u_decay);
+    frag = mix(ghost, src, u_decay * (1.0 - u_eff));
 }
 )glsl";
 
@@ -610,6 +616,7 @@ uintptr_t fx_apply(uintptr_t src_tex_in, int slot, int w, int h,
             glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D, cur);
             glUniform1i(glGetUniformLocation(p, "u_ghost"), 1);
             glUniform1f(glGetUniformLocation(p, "u_decay"), cfx.datamosh_decay);
+            glUniform1f(glGetUniformLocation(p, "u_eff"),   cfx.datamosh_intensity);
             glDrawArrays(GL_TRIANGLES, 0, 3);
 
             // Step 3: blit new ghost to ghost FBO — unbind ghost.tex first to
