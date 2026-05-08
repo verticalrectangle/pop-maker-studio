@@ -118,15 +118,15 @@ static const char* k_glitch_frag = R"glsl(
 in vec2 v_uv;
 out vec4 frag;
 uniform sampler2D u_tex;
-uniform float u_chroma;   // chroma offset as fraction of width
-uniform float u_jitter;   // row-jitter intensity 0..1
+uniform float u_chroma;    // chroma offset as fraction of width
+uniform float u_jitter;    // row-jitter intensity 0..1
 uniform float u_time;
+uniform float u_tex_h;     // texture height in pixels (avoids textureSize driver bugs)
 
 float hash(float n) { return fract(sin(n) * 43758.5453); }
 
 void main() {
-    ivec2 sz = textureSize(u_tex, 0);
-    float y_id = floor(v_uv.y * float(sz.y));
+    float y_id = floor(v_uv.y * u_tex_h);
     float rnd = hash(y_id + floor(u_time * 12.0) * 31.7);
     float jshift = 0.0;
     if (u_jitter > 0.01 && rnd > 1.0 - u_jitter * 0.4) {
@@ -419,14 +419,16 @@ uintptr_t fx_apply(uintptr_t src_tex_in, int slot, int w, int h,
         !need_glitch && !need_vhs && !need_leak && !need_datamosh)
         return src_tex_in;
 
-    pp_ensure(w, h);
-    out_ensure(slot, w, h);
+    if (w <= 0 || h <= 0) return src_tex_in;
 
-    // Save GL state
+    // Save GL state BEFORE pp_ensure/out_ensure touch FBO bindings
     GLint prev_fbo = 0;
     glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prev_fbo);
     GLint prev_vp[4];
     glGetIntegerv(GL_VIEWPORT, prev_vp);
+
+    pp_ensure(w, h);
+    out_ensure(slot, w, h);
 
     glBindVertexArray(g_vao);
 
@@ -484,6 +486,7 @@ uintptr_t fx_apply(uintptr_t src_tex_in, int slot, int w, int h,
         glUniform1f(glGetUniformLocation(p, "u_chroma"), cfx.glitch_chroma / (float)w);
         glUniform1f(glGetUniformLocation(p, "u_jitter"), cfx.glitch_jitter);
         glUniform1f(glGetUniformLocation(p, "u_time"),   t);
+        glUniform1f(glGetUniformLocation(p, "u_tex_h"),  (float)h);
         run1(p);
     }
 
