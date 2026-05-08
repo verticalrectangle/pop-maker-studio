@@ -194,7 +194,13 @@ void main() {
 }
 )glsl";
 
-// Datamosh: block corruption + scanline drift + directional flow ──────────
+// Datamosh: JPEG Huffman-error simulation ────────────────────────────────
+// Models what happens when you hex-corrupt a JPEG: the Huffman decoder
+// misreads the bitstream from the corruption point to the end of the scan
+// line, displacing everything to the right by a large per-row amount.
+// Y, Cb, Cr scans are independent — each channel gets its own corruption
+// onset and displacement, producing the characteristic R/G/B separation.
+// Feedback (output→ghost) compounds corruption across frames.
 static const char* k_datamosh_frag = R"glsl(
 #version 330 core
 in vec2 v_uv;
@@ -206,7 +212,6 @@ uniform float u_bleedback;
 uniform float u_t_in_clip;
 uniform float u_clip_duration;
 uniform float u_block_size;
-uniform float u_tex_w;
 uniform float u_tex_h;
 uniform float u_time;
 
@@ -214,47 +219,48 @@ float hash2(vec2 p) {
     return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
 }
 
-// Smooth value noise — bilinear interpolation over a hash lattice.
-float vnoise(vec2 p) {
-    vec2 i = floor(p);
-    vec2 f = fract(p);
-    vec2 u = f * f * (3.0 - 2.0 * f);
-    return mix(mix(hash2(i),                hash2(i + vec2(1.0, 0.0)), u.x),
-               mix(hash2(i + vec2(0.0,1.0)), hash2(i + vec2(1.0, 1.0)), u.x), u.y);
-}
-
 void main() {
     float bleed_ramp = (u_bleedback > 0.001 && u_clip_duration > 0.001)
         ? u_bleedback * clamp(u_t_in_clip / u_clip_duration, 0.0, 1.0) : 0.0;
     float eff = u_intensity * (1.0 - bleed_ramp);
 
-    // Coverage plateaus at 72% so intensity 1.0 never turns everything to
-    // ghost (that becomes a smooth trail, not datamosh). Extra intensity
-    // above the plateau goes into spatial displacement instead.
-    float coverage      = eff * 0.72;
-    float disp_strength = eff * eff * 0.12;  // quadratic: gentle at low, violent at high
+    // Row band — u_block_size controls granularity (small=fine stripes, large=thick)
+    float row    = floor(v_uv.y * u_tex_h / u_block_size);
+    float t_slot = floor(u_time * 6.0);
 
-    // Corruption noise field — organic regions, no grid seams.
-    float scale = u_tex_w / u_block_size;
-    vec2  nc    = v_uv * scale;
-    float n     = vnoise(nc       + u_time * 0.08) * 0.65
-                + vnoise(nc * 2.1 + u_time * 0.13) * 0.35;
+    // Per-channel random state — independent Y/Cb/Cr scan corruption.
+    // rng_X in [0,1]: if rng_X < eff this row's channel is corrupted.
+    // onset_X: x-position where the Huffman error starts (0=left edge, 1=right edge).
+    // Rows with low rng corrupt from far left; rows near eff corrupt near right.
+    float rng_r = hash2(vec2(row * 1.00, t_slot * 1.0));
+    float rng_g = hash2(vec2(row * 2.71, t_slot * 1.3));
+    float rng_b = hash2(vec2(row * 5.17, t_slot * 1.7));
 
-    if (n >= coverage) { frag = texture(u_src, v_uv); return; }
+    float onset_r = (rng_r < eff) ? rng_r / eff : 2.0;
+    float onset_g = (rng_g < eff) ? rng_g / eff : 2.0;
+    float onset_b = (rng_b < eff) ? rng_b / eff : 2.0;
 
-    // Corrupted region: ghost sampled at a displaced UV.
-    // At low intensity displacement is near-zero — temporal mismatch (old
-    // content at correct position) dominates. As intensity rises the ghost
-    // is also pulled to spatially wrong positions, compounding the chaos.
-    // Separate coarser noise field for displacement so corrupted regions
-    // and displacement regions have independent organic shapes.
-    // Mostly horizontal (0.3 vertical scale) — mimics MPEG P-frame errors.
-    float dscale = u_tex_w / (u_block_size * 2.0);
-    vec2  dnc    = v_uv * dscale;
-    float dx = (vnoise(dnc + vec2(17.3, 0.0) + u_time * 0.06) * 2.0 - 1.0) * disp_strength;
-    float dy = (vnoise(dnc + vec2(0.0,  5.7) + u_time * 0.04) * 2.0 - 1.0) * disp_strength * 0.3;
+    // Per-row per-channel displacement — large horizontal shift (±50% width).
+    // Tiny vertical drift added for realism.
+    float dx_r = (hash2(vec2(row * 3.10, t_slot * 2.3)) * 2.0 - 1.0) * 0.5;
+    float dx_g = (hash2(vec2(row * 4.73, t_slot * 0.9)) * 2.0 - 1.0) * 0.5;
+    float dx_b = (hash2(vec2(row * 6.31, t_slot * 1.5)) * 2.0 - 1.0) * 0.5;
+    float dy   = (hash2(vec2(row * 7.93, t_slot * 2.1)) * 2.0 - 1.0) * 0.02;
 
-    frag = texture(u_ghost, clamp(v_uv + vec2(dx, dy), 0.0, 1.0));
+    vec4 src = texture(u_src, v_uv);
+
+    // Each channel independently: clean source left of onset, ghost right of it.
+    float r = (v_uv.x > onset_r)
+        ? texture(u_ghost, clamp(vec2(v_uv.x + dx_r, v_uv.y + dy),       0.0, 1.0)).r
+        : src.r;
+    float g = (v_uv.x > onset_g)
+        ? texture(u_ghost, clamp(vec2(v_uv.x + dx_g, v_uv.y + dy * 0.7), 0.0, 1.0)).g
+        : src.g;
+    float b = (v_uv.x > onset_b)
+        ? texture(u_ghost, clamp(vec2(v_uv.x + dx_b, v_uv.y + dy * 1.3), 0.0, 1.0)).b
+        : src.b;
+
+    frag = vec4(r, g, b, src.a);
 }
 )glsl";
 
@@ -598,7 +604,7 @@ uintptr_t fx_apply(uintptr_t src_tex_in, int slot, int w, int h,
             glUseProgram(p);
             glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, pre_mosh);
             glUniform1i(glGetUniformLocation(p, "u_src"), 0);
-            glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D, g_ghost.tex);
+            glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D, cur);
             glUniform1i(glGetUniformLocation(p, "u_ghost"), 1);
             glUniform1f(glGetUniformLocation(p, "u_decay"), cfx.datamosh_decay);
             glDrawArrays(GL_TRIANGLES, 0, 3);
