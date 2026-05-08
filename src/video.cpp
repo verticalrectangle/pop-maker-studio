@@ -1068,12 +1068,25 @@ void video_apply_datamosh(VideoFrame* vf, float intensity, float time_sec) {
     if (!vf || !vf->data || intensity <= 0.f) return;
     int W = vf->width, H = vf->height;
 
-    // Convert RGBA → RGB for JPEG encode
-    std::vector<uint8_t> rgb((size_t)W * H * 3);
-    for (int i = 0; i < W * H; ++i) {
-        rgb[i*3+0] = vf->data[i*4+0];
-        rgb[i*3+1] = vf->data[i*4+1];
-        rgb[i*3+2] = vf->data[i*4+2];
+    // stbi_write_jpg produces no restart markers, so a single corruption near the
+    // start of the scan cascades through the entire image → solid black.
+    // Work at proxy scale (~540px wide) so JPEG scan size matches what the proxy
+    // corruption was tuned for; nearest-neighbour upscale preserves block artifacts.
+    const int TARGET_W = 540;
+    int sw = (W > TARGET_W) ? TARGET_W : W;
+    int sh = (sw == W) ? H : (int)((float)H * sw / W + 0.5f);
+    if (sh < 1) sh = 1;
+
+    // Downscale RGBA → small RGB via nearest-neighbour
+    std::vector<uint8_t> small((size_t)sw * sh * 3);
+    for (int y = 0; y < sh; ++y) {
+        int sy = (int)((float)y / sh * H);
+        for (int x = 0; x < sw; ++x) {
+            int sx = (int)((float)x / sw * W);
+            const uint8_t* s = vf->data + (sy * W + sx) * 4;
+            uint8_t* d = small.data() + (y * sw + x) * 3;
+            d[0]=s[0]; d[1]=s[1]; d[2]=s[2];
+        }
     }
 
     std::vector<uint8_t> jpeg;
@@ -1081,7 +1094,7 @@ void video_apply_datamosh(VideoFrame* vf, float intensity, float time_sec) {
         auto* v = (std::vector<uint8_t>*)ctx;
         v->insert(v->end(), (uint8_t*)data, (uint8_t*)data + sz);
     };
-    stbi_write_jpg_to_func(cb, &jpeg, W, H, 3, rgb.data(), 85);
+    stbi_write_jpg_to_func(cb, &jpeg, sw, sh, 3, small.data(), 85);
     if (jpeg.empty()) return;
 
     corrupt_jpeg_buf(jpeg.data(), jpeg.size(), intensity, (uint32_t)(time_sec * 60.f));
@@ -1090,12 +1103,17 @@ void video_apply_datamosh(VideoFrame* vf, float intensity, float time_sec) {
     uint8_t* dec = stbi_load_from_memory(jpeg.data(), (int)jpeg.size(), &dw, &dh, &dch, 3);
     if (!dec) return;
 
-    // Write decoded RGB back into the existing RGBA buffer
-    for (int i = 0; i < W * H; ++i) {
-        vf->data[i*4+0] = dec[i*3+0];
-        vf->data[i*4+1] = dec[i*3+1];
-        vf->data[i*4+2] = dec[i*3+2];
-        // alpha unchanged
+    // Upscale corrupted small image back into original RGBA buffer (nearest-neighbour)
+    for (int y = 0; y < H; ++y) {
+        int sy = (int)((float)y / H * dh);
+        if (sy >= dh) sy = dh - 1;
+        for (int x = 0; x < W; ++x) {
+            int sx = (int)((float)x / W * dw);
+            if (sx >= dw) sx = dw - 1;
+            const uint8_t* s = dec + (sy * dw + sx) * 3;
+            uint8_t* d = vf->data + (y * W + x) * 4;
+            d[0]=s[0]; d[1]=s[1]; d[2]=s[2];
+        }
     }
     stbi_image_free(dec);
 }
