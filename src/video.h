@@ -81,16 +81,9 @@ struct PixelFX {
     float vhs_bleed    = 0.f;
     float vhs_tracking = 0.f;
 
-    // Datamosh — always dirty (time-driven like glitch/VHS)
-    bool  datamosh_on         = false;
-    float datamosh_intensity  = 0.6f;
-    float datamosh_decay      = 0.08f;
-    int   datamosh_block_size = 16;
-    float datamosh_clip_start     = -1.f;  // effect clip timeline start — ghost resets when this changes
-    float datamosh_src_at_start   = 0.f;   // video source time (src_t) at effect clip start — used to seed ghost
-    float datamosh_bleedback      = 0.f;   // 0=off, 1=full bleedback at clip tail
-    float datamosh_t_in_clip      = 0.f;   // seconds since clip start (for bleedback ramp)
-    float datamosh_clip_duration  = 0.f;   // total clip duration (for bleedback ramp)
+    // Datamosh
+    bool  datamosh_on        = false;
+    float datamosh_intensity = 0.6f;
 
     // Remove Background
     bool        bg_remove_on       = false;
@@ -118,12 +111,6 @@ struct PixelFX {
                vhs_on     == o.vhs_on     && vhs_noise  == o.vhs_noise &&
                vhs_bleed  == o.vhs_bleed  && vhs_tracking == o.vhs_tracking &&
                datamosh_on == o.datamosh_on && datamosh_intensity == o.datamosh_intensity &&
-               datamosh_decay == o.datamosh_decay && datamosh_block_size == o.datamosh_block_size &&
-               datamosh_clip_start == o.datamosh_clip_start &&
-               datamosh_src_at_start == o.datamosh_src_at_start &&
-               datamosh_bleedback == o.datamosh_bleedback &&
-               datamosh_t_in_clip == o.datamosh_t_in_clip &&
-               datamosh_clip_duration == o.datamosh_clip_duration &&
                bg_remove_on == o.bg_remove_on &&
                bg_remove_mask_dir == o.bg_remove_mask_dir &&
                bg_remove_softness == o.bg_remove_softness &&

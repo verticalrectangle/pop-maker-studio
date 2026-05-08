@@ -171,13 +171,8 @@ CreativeFXAccum collect_creative_fx(const AppState& state, float t, int below_tr
                     acc.vhs_tracking = fmaxf(acc.vhs_tracking, cl.fx_vhs_tracking);
                     break;
                 case FXType::Datamosh:
-                    acc.datamosh_on            = true;
-                    acc.datamosh_intensity     = fmaxf(acc.datamosh_intensity,  cl.fx_datamosh_intensity);
-                    acc.datamosh_decay         = fmaxf(acc.datamosh_decay,      cl.fx_datamosh_decay);
-                    acc.datamosh_block_size    = cl.fx_datamosh_block_size;
-                    acc.datamosh_clip_start    = cl.start;
-                    acc.datamosh_bleedback     = cl.fx_datamosh_bleedback;
-                    acc.datamosh_clip_duration = cl.end - cl.start;
+                    acc.datamosh_on        = true;
+                    acc.datamosh_intensity = fmaxf(acc.datamosh_intensity, cl.fx_datamosh_intensity);
                     break;
                 case FXType::ChromaKey:
                     acc.chroma_key_on        = true;

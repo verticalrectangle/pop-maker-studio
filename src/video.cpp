@@ -8,6 +8,9 @@
 #include "stb_image.h"
 #pragma GCC diagnostic pop
 
+// ── stb_image_write — JPEG encode for datamosh preview ───────────────────────
+#include "stb_image_write.h"
+
 extern "C" {
 #include <libavformat/avformat.h>
 #include <libavcodec/avcodec.h>
@@ -218,117 +221,31 @@ static void cpu_apply_corruption(uint8_t* px, int w, int h, float intensity, flo
     }
 }
 
-// Datamosh — motion-detection driven P-frame simulation on JPEG proxy frames.
-//
-// Real datamosh corrupts interframe codec references so P-frame motion vectors
-// apply to the wrong source frame, causing moving areas to smear while static
-// areas stay clean. We replicate that using SAD (sum of absolute differences)
-// per block between current frame and ghost:
-//
-//   HIGH SAD (motion detected) → keep ghost block (smear trail, like a stuck P-frame)
-//   LOW  SAD (static area)     → pass current frame through normally
-//
-// The ghost buffer then self-feeds on the mashed output so corruption compounds
-// frame over frame — even on a still image it keeps generating motion.
-// Ghost initialises from the first frame so there's no black-frame flash.
-static void cpu_apply_datamosh(uint8_t* px, uint8_t* ghost, int w, int h,
-                                float intensity, float decay, int bs,
-                                float bleedback, float t_in_clip, float clip_duration) {
-    if (!ghost || w <= 0 || h <= 0) return;
-
-    int nbx = (w + bs - 1) / bs;
-    int nby = (h + bs - 1) / bs;
-
-    // Fixed motion threshold — catches real inter-frame motion, ignores static areas.
-    // Intensity no longer controls what moshs; it controls HOW DEEP the mosh goes.
-    const float threshold = 8.f;
-
-    // Intensity bends the effective decay: low intensity → ghost tracks current quickly
-    // (short trails, mild mosh); high intensity → ghost persists long (deep chaos).
-    // Floor at 0.05 so the ghost always bleeds in some real content — prevents runaway
-    // feedback where total divergence locks every block into white-noise substitution.
-    float effective_decay = decay * (1.f - intensity * 0.75f);
-    effective_decay = fmaxf(0.05f, effective_decay);
-
-    // Bleedback: organic block-level healing via ghost convergence.
-    // Two levers driven by the same ramp:
-    //   1. effective_decay ramps toward 1.0 — ghost learns the real frame faster
-    //   2. upper SAD threshold ramps DOWN — diverged blocks that were skipped
-    //      (ghost too smeared to use) now get replaced by real content instead,
-    //      so blocks heal one by one rather than crossfading as a flat layer.
-    float bleedback_amount = 0.f;
-    if (bleedback > 0.01f && clip_duration > 0.01f && t_in_clip > 0.f) {
-        float ramp_start = clip_duration * (1.f - fminf(1.f, bleedback) * 0.6f);
-        if (t_in_clip > ramp_start) {
-            float ramp_t = (t_in_clip - ramp_start) / (clip_duration - ramp_start);
-            bleedback_amount = fminf(1.f, ramp_t) * bleedback;
-        }
+// Corrupt JPEG scan data in place to produce real Huffman decoder artifacts.
+// Intensity 0..1 controls corruption density. Seed produces time-varying corruption.
+static void corrupt_jpeg_buf(uint8_t* buf, size_t sz, float intensity, uint32_t seed) {
+    // Find SOS marker (0xFF 0xDA)
+    size_t sos = sz;
+    for (size_t i = 0; i + 1 < sz; ++i) {
+        if (buf[i] == 0xFF && buf[i+1] == 0xDA) { sos = i; break; }
     }
-    if (bleedback_amount > 0.01f)
-        effective_decay = effective_decay + (1.f - effective_decay) * bleedback_amount;
+    if (sos >= sz || sos + 3 >= sz) return;
 
-    // Upper threshold for Pass 1: ramps 180→15 so progressively more smeared
-    // blocks get healed by the real frame instead of substituting ghost pixels.
-    float upper_thresh = 180.f - (180.f - 15.f) * bleedback_amount;
+    // Skip past SOS header: marker (2) + length field (2 bytes) + header bytes
+    size_t hlen = ((size_t)buf[sos+2] << 8) | buf[sos+3];
+    size_t scan = sos + 2 + hlen;
+    if (scan >= sz) return;
 
-    // ── Pass 1: per-block SAD → mosh or pass ─────────────────────────────────
-    for (int by = 0; by < nby; ++by) {
-        for (int bx = 0; bx < nbx; ++bx) {
-            uint32_t sad = 0;
-            int count = 0;
-            for (int py = 0; py < bs; ++py) {
-                int y = by * bs + py; if (y >= h) break;
-                for (int px_ = 0; px_ < bs; ++px_) {
-                    int x = bx * bs + px_; if (x >= w) break;
-                    size_t i = (size_t)y * w * 3 + x * 3;
-                    sad += (uint32_t)abs((int)px[i+0] - (int)ghost[i+0]);
-                    sad += (uint32_t)abs((int)px[i+1] - (int)ghost[i+1]);
-                    sad += (uint32_t)abs((int)px[i+2] - (int)ghost[i+2]);
-                    count++;
-                }
-            }
-            float mean_sad = count > 0 ? (float)sad / (float)(count * 3) : 0.f;
+    size_t scan_sz = sz - scan;
+    size_t n_corrupt = (size_t)(scan_sz * intensity * 0.03f) + 1;
 
-            if (mean_sad < threshold)     continue;  // static — let current frame through
-            if (mean_sad > upper_thresh)  continue;  // diverged — heal with real content
-
-            // Motion block — substitute ghost (stuck P-frame reference).
-            // Displacement simulates wrong motion vector; chroma twist scales with
-            // both motion strength and intensity for the colour-zone separation look.
-            float motion_norm = fminf(1.f, mean_sad / 128.f);  // 0..1
-            int disp_x = (int)(motion_norm * (float)nbx * 0.2f);
-            int disp_y = (int)(motion_norm * (float)nby * 0.12f);
-            int sbx = ((bx + disp_x) % nbx + nbx) % nbx;
-            int sby = ((by + disp_y) % nby + nby) % nby;
-            // Twist driven by both motion and intensity — more intensity = wider split
-            int twist = (int)((motion_norm * 0.4f + intensity * 0.6f) * (float)bs * 0.55f);
-
-            for (int py = 0; py < bs; ++py) {
-                int dy  = by  * bs + py; if (dy >= h) break;
-                int gsy = sby * bs + py; if (gsy >= h) gsy = h - 1;
-                for (int px_ = 0; px_ < bs; ++px_) {
-                    int dx  = bx  * bs + px_; if (dx >= w) break;
-                    int gsx = sbx * bs + px_; if (gsx >= w) gsx = w - 1;
-                    // R ahead in scan direction, B behind — colour-zone separation
-                    int gsr = cx(gsx + twist,     w);
-                    int gsb = cx(gsx - twist / 2, w);
-                    px[(size_t)dy * w * 3 + dx * 3 + 0] = ghost[(size_t)gsy * w * 3 + gsr * 3 + 0];
-                    px[(size_t)dy * w * 3 + dx * 3 + 1] = ghost[(size_t)gsy * w * 3 + gsx * 3 + 1];
-                    px[(size_t)dy * w * 3 + dx * 3 + 2] = ghost[(size_t)gsy * w * 3 + gsb * 3 + 2];
-                }
-            }
-        }
+    uint32_t rng = seed ^ 0xDEADBEEFu;
+    for (size_t i = 0; i < n_corrupt; ++i) {
+        rng = rng * 1664525u + 1013904223u;
+        size_t pos = scan + (size_t)(rng >> 1) % scan_sz;
+        rng = rng * 1664525u + 1013904223u;
+        buf[pos] = (uint8_t)(rng >> 24);
     }
-
-    // ── Pass 2: update ghost ──────────────────────────────────────────────────
-    float keep = 1.f - effective_decay;
-    int n = w * h;
-    for (int i = 0; i < n; ++i) {
-        ghost[i*3+0] = cu8((int)(ghost[i*3+0] * keep + px[i*3+0] * effective_decay + 0.5f));
-        ghost[i*3+1] = cu8((int)(ghost[i*3+1] * keep + px[i*3+1] * effective_decay + 0.5f));
-        ghost[i*3+2] = cu8((int)(ghost[i*3+2] * keep + px[i*3+2] * effective_decay + 0.5f));
-    }
-
 }
 
 static void cpu_apply_vhs(uint8_t* px, int w, int h,
@@ -497,13 +414,6 @@ struct PreviewState {
     VideoInfo info = {};
     PixelFX   pixel_fx;
     bool      pixel_fx_dirty = false;
-    // Datamosh ghost buffer
-    std::vector<uint8_t> ghost_buf;        // RGB, ghost_w * ghost_h * 3
-    int                  ghost_w         = 0;
-    int                  ghost_h         = 0;
-    float                ghost_clip_start = -999.f; // tracks which clip owns the ghost
-    int                  ghost_frame_idx  = -1;     // proxy frame the ghost currently represents
-    int                  ghost_seed_idx   = -1;     // proxy frame of clip start (anchor)
     // BG remove mask MJPEG (streamed, one grayscale-alpha JPEG per frame)
     FILE*                bg_mjpeg_file        = nullptr;
     std::vector<uint64_t> bg_mjpeg_offsets;            // SOI byte offsets
@@ -533,7 +443,6 @@ static struct ThumbState {
 static void upload_jpeg(GLuint* tex, int* tex_w, int* tex_h, bool* tex_rgba,
                         const uint8_t* buf, size_t sz,
                         const PixelFX* pfx = nullptr,
-                        uint8_t* ghost = nullptr, int ghost_w = 0, int ghost_h = 0,
                         const uint8_t* bg_mask = nullptr, int bg_mask_w = 0, int bg_mask_h = 0,
                         float bg_softness = 0.f) {
     int w, h, ch;
@@ -568,13 +477,6 @@ static void upload_jpeg(GLuint* tex, int* tex_w, int* tex_h, bool* tex_rgba,
         }
         if (pfx->vhs_on && (pfx->vhs_noise >= 0.01f || pfx->vhs_bleed >= 0.1f || pfx->vhs_tracking >= 0.01f))
             cpu_apply_vhs(pixels, w, h, pfx->vhs_noise, pfx->vhs_bleed, pfx->vhs_tracking, pfx->time);
-        if (pfx->datamosh_on && ghost && ghost_w == w && ghost_h == h)
-            cpu_apply_datamosh(pixels, ghost, w, h,
-                               pfx->datamosh_intensity, pfx->datamosh_decay,
-                               pfx->datamosh_block_size,
-                               pfx->datamosh_bleedback,
-                               pfx->datamosh_t_in_clip,
-                               pfx->datamosh_clip_duration);
     }
 
     if (*tex == 0) {
@@ -650,64 +552,6 @@ static void upload_jpeg(GLuint* tex, int* tex_w, int* tex_h, bool* tex_rgba,
     if (tex_rgba) *tex_rgba = want_rgba;
 }
 
-// ── Internal: decode one proxy frame by index into a caller-supplied RGB buffer ─
-
-static bool read_proxy_pixels(PreviewState& pv, int idx, std::vector<uint8_t>& out_rgb,
-                               int& out_w, int& out_h) {
-    int max_idx = (int)pv.proxy.offsets.size() - 1;
-    idx = std::max(0, std::min(idx, max_idx));
-
-    uint64_t offset = pv.proxy.offsets[(size_t)idx];
-    size_t frame_sz = 0;
-    if ((size_t)idx + 1 < pv.proxy.offsets.size()) {
-        frame_sz = (size_t)(pv.proxy.offsets[(size_t)idx + 1] - offset);
-    } else {
-        fseeko(pv.mjpeg_file, (off_t)offset, SEEK_SET);
-        long cur = ftell(pv.mjpeg_file); fseeko(pv.mjpeg_file, 0, SEEK_END);
-        long end = ftell(pv.mjpeg_file);
-        frame_sz = (end > cur) ? (size_t)(end - cur) : 0;
-    }
-    if (frame_sz == 0) return false;
-
-    std::vector<uint8_t> buf(frame_sz);
-    fseeko(pv.mjpeg_file, (off_t)offset, SEEK_SET);
-    if (fread(buf.data(), 1, frame_sz, pv.mjpeg_file) == 0) return false;
-
-    int w, h, ch;
-    uint8_t* pixels = stbi_load_from_memory(buf.data(), (int)frame_sz, &w, &h, &ch, 3);
-    if (!pixels) return false;
-    out_w = w; out_h = h;
-    out_rgb.assign(pixels, pixels + (size_t)w * h * 3);
-    stbi_image_free(pixels);
-    return true;
-}
-
-// ── Internal: seed ghost from a specific proxy frame index ───────────────────
-// One JPEG decode + memcpy — used for cold init and seek re-seeding.
-
-static void seed_ghost_from_frame(PreviewState& pv, int frame_idx) {
-    if (pv.ghost_w <= 0 || pv.ghost_h <= 0) return;
-    frame_idx = std::max(0, std::min(frame_idx, (int)pv.proxy.offsets.size() - 1));
-    std::vector<uint8_t> px; int w = 0, h = 0;
-    if (!read_proxy_pixels(pv, frame_idx, px, w, h)) return;
-    if (w != pv.ghost_w || h != pv.ghost_h) return;
-    memcpy(pv.ghost_buf.data(), px.data(), (size_t)w * h * 3);
-    pv.ghost_seed_idx  = frame_idx;
-    pv.ghost_frame_idx = frame_idx;
-}
-
-// ── Internal: seed ghost from clip anchor time ────────────────────────────────
-
-static void seed_ghost_from_src_time(PreviewState& pv, float src_t) {
-    if (pv.ghost_w <= 0 || pv.ghost_h <= 0) return;
-    if (pv.proxy.offsets.empty() || !pv.mjpeg_file) return;
-    int64_t num = pv.proxy.fps_num, den = pv.proxy.fps_den;
-    int seed_idx = (num > 0 && den > 0)
-        ? (int)((int64_t)((double)src_t * (double)num) / den)
-        : (int)((double)src_t * pv.proxy.fps);
-    seed_ghost_from_frame(pv, seed_idx);
-}
-
 // ── BG mask MJPEG helpers ─────────────────────────────────────────────────────
 
 // Incrementally scan bg_masks.mjpeg for new SOI markers since last scan.
@@ -777,55 +621,11 @@ static uintptr_t decode_proxy_frame(PreviewState& pv, int frame_idx) {
     size_t got = fread(s_buf.data(), 1, frame_sz, pv.mjpeg_file);
     if (got == 0) return pv.tex ? (uintptr_t)pv.tex : 0;
 
-    if (pv.pixel_fx.datamosh_on) {
-        // Size ghost on first decode (dimensions only known after first STB decode)
-        if (pv.ghost_w == 0 && pv.tex_w > 0) {
-            pv.ghost_w = pv.tex_w; pv.ghost_h = pv.tex_h;
-            pv.ghost_buf.assign((size_t)pv.ghost_w * pv.ghost_h * 3, 0);
-        }
-        // Re-size if proxy dimensions changed
-        if (pv.ghost_w != pv.tex_w || pv.ghost_h != pv.tex_h) {
-            if (pv.tex_w > 0 && pv.tex_h > 0) {
-                pv.ghost_w = pv.tex_w; pv.ghost_h = pv.tex_h;
-                pv.ghost_buf.assign((size_t)pv.ghost_w * pv.ghost_h * 3, 0);
-                pv.ghost_frame_idx = -1; pv.ghost_seed_idx = -1;
-            }
-        }
-
-        if (pv.ghost_w > 0) {
-            bool ghost_cold = pv.ghost_seed_idx < 0 ||
-                              (pv.ghost_buf[0] == 0 && pv.ghost_buf[1] == 0 && pv.ghost_buf[2] == 0);
-            if (ghost_cold) {
-                seed_ghost_from_src_time(pv, pv.pixel_fx.datamosh_src_at_start);
-            } else {
-                int jump = frame_idx - pv.ghost_frame_idx;
-                if (jump < 0) {
-                    // Backward — unambiguously a scrub. Re-seed instantly.
-                    seed_ghost_from_frame(pv, frame_idx - 1);
-                } else if (jump > 1) {
-                    // Forward skip of any size — fill sequentially. Bounded by real
-                    // time: playhead can't advance faster than wall clock, so this
-                    // never spins more than a handful of decodes per frame.
-                    for (int f = pv.ghost_frame_idx + 1; f < frame_idx; ++f) {
-                        std::vector<uint8_t> px; int fw = 0, fh = 0;
-                        if (!read_proxy_pixels(pv, f, px, fw, fh)) break;
-                        if (fw != pv.ghost_w || fh != pv.ghost_h) break;
-                        cpu_apply_datamosh(px.data(), pv.ghost_buf.data(), fw, fh,
-                                           pv.pixel_fx.datamosh_intensity,
-                                           pv.pixel_fx.datamosh_decay,
-                                           pv.pixel_fx.datamosh_block_size,
-                                           pv.pixel_fx.datamosh_bleedback,
-                                           pv.pixel_fx.datamosh_t_in_clip,
-                                           pv.pixel_fx.datamosh_clip_duration);
-                    }
-                }
-                // jump == 1 or jump == 0: falls through, upload_jpeg handles it.
-            }
-        }
+    // Datamosh: corrupt JPEG bytes before decode for real Huffman decoder artifacts
+    if (pv.pixel_fx.datamosh_on && pv.pixel_fx.datamosh_intensity > 0.01f) {
+        uint32_t seed = (uint32_t)(pv.pixel_fx.time * 60.f);
+        corrupt_jpeg_buf(s_buf.data(), got, pv.pixel_fx.datamosh_intensity, seed);
     }
-
-    uint8_t* ghost_ptr = (pv.pixel_fx.datamosh_on && pv.ghost_w > 0)
-                         ? pv.ghost_buf.data() : nullptr;
 
     // Load bg_remove mask for this frame from the streaming mask MJPEG.
     if (pv.pixel_fx.bg_remove_on && !pv.pixel_fx.bg_remove_mask_dir.empty()) {
@@ -899,12 +699,7 @@ static uintptr_t decode_proxy_frame(PreviewState& pv, int frame_idx) {
                             ? pv.bg_mask_alpha.data() : nullptr;
 
     upload_jpeg(&pv.tex, &pv.tex_w, &pv.tex_h, &pv.tex_rgba, s_buf.data(), got, &pv.pixel_fx,
-                ghost_ptr, pv.ghost_w, pv.ghost_h,
                 bg_ptr, pv.bg_mask_w, pv.bg_mask_h, pv.pixel_fx.bg_remove_softness);
-
-    // Track which frame the ghost now represents after datamosh ran
-    if (pv.pixel_fx.datamosh_on && pv.ghost_w > 0)
-        pv.ghost_frame_idx = frame_idx;
 
     return pv.tex ? (uintptr_t)pv.tex : 0;
 }
@@ -993,16 +788,7 @@ VideoInfo video_info(int track_id) {
 void video_set_pixel_fx(int track_id, const PixelFX& fx) {
     if (track_id < 0 || track_id >= MAX_VIDEO_TRACKS) return;
     auto& pv = g_pv[track_id];
-    // Reset ghost when the datamosh clip changes (moved, replaced, or turned off/on).
-    // This ensures mosh always starts fresh from the clip's start frame.
-    if (fx.datamosh_clip_start != pv.ghost_clip_start) {
-        pv.ghost_clip_start = fx.datamosh_clip_start;
-        if (!pv.ghost_buf.empty())
-            std::fill(pv.ghost_buf.begin(), pv.ghost_buf.end(), 0);
-        pv.ghost_frame_idx = -1;
-        pv.ghost_seed_idx  = -1;
-    }
-    // Animated effects (glitch/VHS) always re-decode since time advances each frame.
+    // Animated effects (glitch/VHS/datamosh) always re-decode since time advances each frame.
     // Static effects (grade/blur) re-decode only when params change.
     if (!(pv.pixel_fx == fx)) {
         pv.pixel_fx = fx;
@@ -1349,20 +1135,31 @@ uintptr_t video_fx_preview_texture(FXType ft, float t) {
             break;
         }
         case FXType::Datamosh: {
-            // Ghost = source shifted right; mosh against current source
-            std::vector<uint8_t> ghost(FXP_W * FXP_H * 3);
-            for (int y = 0; y < FXP_H; ++y) {
-                for (int x = 0; x < FXP_W; ++x) {
-                    int gx = (x + 10) % FXP_W;
-                    size_t di = ((size_t)y*FXP_W+x)*3, si = ((size_t)y*FXP_W+gx)*3;
-                    ghost[di+0] = s_fxp_src[si+0];
-                    ghost[di+1] = s_fxp_src[si+1];
-                    ghost[di+2] = s_fxp_src[si+2];
+            // Encode → corrupt → decode to show real JPEG scan-data corruption
+            static std::vector<uint8_t> s_jpeg_preview;
+            s_jpeg_preview.clear();
+            auto jpeg_cb = [](void* ctx, void* data, int sz) {
+                auto* v = (std::vector<uint8_t>*)ctx;
+                v->insert(v->end(), (uint8_t*)data, (uint8_t*)data + sz);
+            };
+            stbi_write_jpg_to_func(jpeg_cb, &s_jpeg_preview, FXP_W, FXP_H, 3,
+                                   s_fxp_src.data(), 85);
+            if (!s_jpeg_preview.empty()) {
+                corrupt_jpeg_buf(s_jpeg_preview.data(), s_jpeg_preview.size(),
+                                 0.75f, (uint32_t)(t * 60.f));
+                int w2, h2, ch2;
+                uint8_t* dec = stbi_load_from_memory(
+                    s_jpeg_preview.data(), (int)s_jpeg_preview.size(), &w2, &h2, &ch2, 3);
+                if (dec) {
+                    px.assign(dec, dec + FXP_W * FXP_H * 3);
+                    stbi_image_free(dec);
+                } else {
+                    px = s_fxp_src;
                 }
+            } else {
+                px = s_fxp_src;
             }
-            px = s_fxp_src;
-            cpu_apply_datamosh(px.data(), ghost.data(), FXP_W, FXP_H,
-                               0.85f, 0.08f, 8, 0.f, 0.f, 0.f);
+            pv.animated = true;
             break;
         }
         default: px = s_fxp_src; break;

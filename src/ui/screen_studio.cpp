@@ -1338,6 +1338,8 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                     pfx.bg_remove_box_r    = cl_ptr->bg_remove_box_r;
                     pfx.bg_remove_box_t    = cl_ptr->bg_remove_box_t;
                     pfx.bg_remove_box_b    = cl_ptr->bg_remove_box_b;
+                    pfx.datamosh_on        = cfx.datamosh_on;
+                    pfx.datamosh_intensity = cfx.datamosh_intensity;
                     pfx.time               = t_anim;
                     video_set_pixel_fx(slot, pfx);
                 }
@@ -4454,27 +4456,6 @@ static void panel_fx_clip(AppState& state, float w) {
             ImGui::SetNextItemWidth(sw2);
             ImGui::SliderFloat("##dmint", &clip.fx_datamosh_intensity, 0.f, 1.f, "%.2f");
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Datamosh: intensity");
-            ImGui::Dummy({0.f, 4.f});
-            ui_label("Decay");
-            ImGui::SetNextItemWidth(sw2);
-            ImGui::SliderFloat("##dmdec", &clip.fx_datamosh_decay, 0.01f, 0.5f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Datamosh: decay");
-            ImGui::Dummy({0.f, 4.f});
-            ui_label("Block Size");
-            ImGui::SetNextItemWidth(sw2);
-            int bs = clip.fx_datamosh_block_size;
-            struct BSP { int v; const char* l; };
-            BSP bsps[] = {{8,"8px"},{16,"16px"},{32,"32px"}};
-            for (auto& p : bsps) {
-                if (ui_btn(p.l, bs == p.v, true)) { clip.fx_datamosh_block_size = p.v; history_push(state, "Datamosh: block size"); }
-                ImGui::SameLine(0.f, 4.f);
-            }
-            ImGui::NewLine();
-            ImGui::Dummy({0.f, 4.f});
-            ui_label("Bleed Back");
-            ImGui::SetNextItemWidth(sw2);
-            ImGui::SliderFloat("##dmbb", &clip.fx_datamosh_bleedback, 0.f, 1.f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Datamosh: bleed back");
             break;
         }
 

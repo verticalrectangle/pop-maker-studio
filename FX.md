@@ -82,12 +82,7 @@ Collected by `collect_creative_fx(state, t, below_track_idx)`.
 | `glitch_corruption` | 0.0 | Block corruption amount |
 | `glitch_corruption_bleed` | 0.0 | Corruption horizontal bleed |
 | `datamosh_on` | false | |
-| `datamosh_intensity` | 0.6 | Fraction of noise field that shows ghost |
-| `datamosh_decay` | 0.08 | How fast ghost tracks source (restoring force) |
-| `datamosh_block_size` | 16 | Noise scale in pixels — small = fine grain, large = blobs |
-| `datamosh_clip_start` | −1 | Timeline start of active datamosh clip; ghost resets on change |
-| `datamosh_bleedback` | 0.0 | Subject reasserts at clip tail (0 = off) |
-| `datamosh_clip_duration` | 0.0 | Used to compute bleedback ramp |
+| `datamosh_intensity` | 0.6 | JPEG scan corruption density (0 = off, 1 = heavy) |
 | `zoom_on` | false | |
 | `zoom_strength` | 0.0 | Beat-synced scale spike magnitude |
 | `zoom_decay` | 0.15 | Exponential decay rate of punch |
@@ -162,43 +157,21 @@ Two procedural light blobs (warm orange + cool magenta) at fixed UV positions, a
 ---
 
 ### Datamosh
-**Passes**: three steps  
-**Fires when**: `need_datamosh`
+**Implementation**: CPU-side JPEG buffer corruption  
+**Fires when**: `pfx.datamosh_on && pfx.datamosh_intensity > 0.01f` (in `decode_proxy_frame`)
 
 #### How it works
 
-Datamosh simulates a P-frame-only MPEG decoder: old reference frames corrupt new ones. The key is a **persistent ghost texture** (`g_ghost`) that slowly accumulates source frames over time.
+Datamosh corrupts the actual JPEG-encoded bytes before the decoder sees them. A real JPEG decoder (stb_image) encounters corrupted Huffman entropy data and loses sync mid-scan, producing extreme DCT coefficient values. Because JPEG stores image data in YCbCr color space, corrupted luma (Y) and chroma (Cb/Cr) produce the vivid neon green, pink, and cyan block patterns characteristic of datamoshed video.
 
-**Step 1 — display pass** (`k_datamosh_frag`):  
-A smooth two-octave value noise field decides, per pixel, whether to show ghost or source:
+**`corrupt_jpeg_buf(buf, sz, intensity, seed)`** in `video.cpp`:  
+1. Find the SOS (Start Of Scan) marker `0xFF 0xDA` in the JPEG bitstream.
+2. Skip the SOS header (2-byte length field + component table).
+3. Scatter `scan_size * intensity * 0.03` random byte replacements through the scan data using an LCG seeded by `seed`.
 
-```
-n = vnoise(uv * scale + time*0.08) * 0.65
-  + vnoise(uv * scale * 2.1 + time*0.13) * 0.35
+The corruption happens in `decode_proxy_frame()` by modifying `s_buf` (the raw JPEG bytes read from the proxy file) in place before passing to `upload_jpeg → stbi_load_from_memory`. `seed` is `(uint32_t)(pfx.time * 60.f)` so corruption animates on playback but is deterministic for the same time position.
 
-output = (n < intensity) ? ghost[uv] : source[uv]
-```
-
-Ghost is sampled at the **same UV as source** — no displacement. The datamosh effect comes entirely from the ghost containing genuinely old content. Moving subjects leave their old position visible in ghost regions while their new position shows through in clean regions.
-
-`block_size` controls noise scale: small → fine grain, large → big organic blobs.
-
-**Step 2 — ghost update** (`k_datamosh_update_frag`):  
-```
-new_ghost = mix(ghost, source, decay)
-```
-`decay` (0.01–0.5) is the restoring force. Low decay = ghost holds old content for many seconds. High decay = ghost quickly converges to source = effect fades. Default 0.08 = ghost half-life of ~8 seconds at 60fps.
-
-**Step 3 — ghost commit**:  
-New ghost blitted to `g_ghost.fbo`. The ghost texture is unbound from its sampler unit before this blit to avoid a GL feedback loop (same texture as both FBO attachment and sampler input is undefined behavior).
-
-#### Ghost lifecycle
-
-`ghost_ensure()` manages one global ghost buffer, keyed by `cfx.datamosh_clip_start` (the timeline position of the active datamosh effect clip). When the key changes (different clip active, or first activation) the ghost resets and is seeded with the current source frame. This means:
-
-- First frame after activation: ghost = source → no visible effect yet
-- After a few seconds of playback: ghost has genuinely old content → effect is dramatic
-- Scrubbing within the same clip: ghost persists, shows whatever it accumulated
+**No ghost buffer, no GPU state, no feedback loop** — the effect is entirely stateless. Every frame decode is independent.
 
 ---
 
@@ -309,7 +282,7 @@ fx_register(my_descriptor);
 
 ## Known constraints
 
-- One datamosh ghost buffer globally — two simultaneous datamosh clips on different tracks share state (last writer wins).
+- Datamosh is stateless (CPU JPEG corruption) — no ghost buffer, no cross-track shared state.
 - `bg_remove` (background removal) is CPU-only — it reads PNG alpha masks generated offline and cannot move to the GPU until mask generation is GPU-accelerated.
 - Slot count is `MAX_VIDEO_TRACKS * 2` (currently 16). Adding tracks beyond 8 requires bumping this constant.
 - All shaders target GLSL 3.30 core for compatibility with old integrated GPUs. No `textureSize`, no `gl_FragDepth`, no integer atomics.

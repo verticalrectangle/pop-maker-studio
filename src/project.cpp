@@ -123,8 +123,10 @@ static void write_clip(Writer& w, const Clip& c) {
     w.pod(c.fx_vhs_noise); w.pod(c.fx_vhs_bleed); w.pod(c.fx_vhs_tracking);
     // v11: datamosh + glitch corruption + chroma key brick
     w.pod(c.fx_glitch_corruption); w.pod(c.fx_glitch_corruption_bleed);
-    w.pod(c.fx_datamosh_intensity); w.pod(c.fx_datamosh_decay);
-    w.pod(c.fx_datamosh_block_size); w.pod(c.fx_datamosh_bleedback);
+    w.pod(c.fx_datamosh_intensity);
+    w.pod(0.08f);   // was datamosh_decay  (removed)
+    w.pod((int)16); // was datamosh_block_size (removed)
+    w.pod(0.0f);    // was datamosh_bleedback (removed)
     w.pod(c.fx_chroma_key_r); w.pod(c.fx_chroma_key_g); w.pod(c.fx_chroma_key_b);
     w.pod(c.fx_chroma_key_threshold); w.pod(c.fx_chroma_key_softness);
     // v12: remove background
@@ -193,10 +195,10 @@ static Clip read_clip(Reader& r, uint32_t version) {
     if (version >= 11u) {
         c.fx_glitch_corruption      = r.pod<float>();
         c.fx_glitch_corruption_bleed= r.pod<float>();
-        c.fx_datamosh_intensity     = r.pod<float>();
-        c.fx_datamosh_decay         = r.pod<float>();
-        c.fx_datamosh_block_size    = r.pod<int>();
-        c.fx_datamosh_bleedback     = r.pod<float>();
+        c.fx_datamosh_intensity = r.pod<float>();
+        r.pod<float>();  // was datamosh_decay (removed)
+        r.pod<int>();    // was datamosh_block_size (removed)
+        r.pod<float>();  // was datamosh_bleedback (removed)
         c.fx_chroma_key_r           = r.pod<float>();
         c.fx_chroma_key_g           = r.pod<float>();
         c.fx_chroma_key_b           = r.pod<float>();
