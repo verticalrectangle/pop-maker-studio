@@ -908,6 +908,7 @@ static struct ExportState {
     AVCodecContext*  codec_ctx  = nullptr;
     SwsContext*      sws        = nullptr;
     int              stream_idx = -1;
+    int              rotation   = 0;   // degrees CW to apply to decoded frames (0/90/180/270)
     VideoInfo        info       = {};
 } g_ex;
 
@@ -936,6 +937,16 @@ bool video_open_export(const std::string& path) {
     g_ex.info.height   = g_ex.codec_ctx->height;
     g_ex.info.duration = (double)g_ex.fmt_ctx->duration / AV_TIME_BASE;
     g_ex.info.fps      = av_q2d(st->avg_frame_rate);
+
+    // Detect container rotation (phone portrait videos store raw as landscape + rotate tag).
+    g_ex.rotation = 0;
+    {
+        AVDictionaryEntry* e = av_dict_get(st->metadata, "rotate", nullptr, 0);
+        if (e) {
+            int rot = ((atoi(e->value) % 360) + 360) % 360;
+            if (rot == 90 || rot == 180 || rot == 270) g_ex.rotation = rot;
+        }
+    }
 
     g_ex.sws = sws_getContext(
         g_ex.info.width, g_ex.info.height, g_ex.codec_ctx->pix_fmt,
@@ -982,6 +993,30 @@ VideoFrame* video_decode_frame_at(double seconds) {
                 (const uint8_t* const*)frm->data, frm->linesize,
                 0, frm->height, dst, lsz);
             av_frame_unref(frm);
+
+            if (g_ex.rotation != 0) {
+                int ow = result->width, oh = result->height;
+                int nw = (g_ex.rotation == 90 || g_ex.rotation == 270) ? oh : ow;
+                int nh = (g_ex.rotation == 90 || g_ex.rotation == 270) ? ow : oh;
+                uint8_t* rot = (uint8_t*)av_malloc((size_t)nw * nh * 4 + 64);
+                if (rot) {
+                    for (int y = 0; y < oh; ++y) {
+                        for (int x = 0; x < ow; ++x) {
+                            const uint8_t* s = result->data + (y * ow + x) * 4;
+                            int dx, dy;
+                            if      (g_ex.rotation == 90)  { dx = oh-1-y; dy = x;    }
+                            else if (g_ex.rotation == 270) { dx = y;      dy = ow-1-x; }
+                            else                           { dx = ow-1-x; dy = oh-1-y; }
+                            uint8_t* d = rot + (dy * nw + dx) * 4;
+                            d[0]=s[0]; d[1]=s[1]; d[2]=s[2]; d[3]=s[3];
+                        }
+                    }
+                    av_free(result->data);
+                    result->data   = rot;
+                    result->width  = nw;
+                    result->height = nh;
+                }
+            }
         }
     }
 
