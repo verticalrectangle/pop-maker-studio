@@ -228,12 +228,12 @@ float vnoise(vec2 p) {
                mix(hash2(i + vec2(0.0, 1.0)), hash2(i + vec2(1.0, 1.0)), u.x), u.y);
 }
 
-// Returns a 2D displacement vector from a slowly drifting noise field.
+// Returns a 2D displacement vector from a drifting noise field.
 // seed offsets each channel so they warp independently.
 vec2 warp_field(vec2 uv, float scale, float seed, float t) {
     vec2 p = uv * scale;
-    float wx = vnoise(p + vec2(seed,        0.0) + t * 0.07) * 2.0 - 1.0;
-    float wy = vnoise(p + vec2(0.0, seed + 3.7) + t * 0.05) * 2.0 - 1.0;
+    float wx = vnoise(p + vec2(seed,        0.0) + t * 0.4) * 2.0 - 1.0;
+    float wy = vnoise(p + vec2(0.0, seed + 3.7) + t * 0.3) * 2.0 - 1.0;
     return vec2(wx, wy);
 }
 
@@ -245,24 +245,25 @@ void main() {
     // Warp scale — u_block_size as noise frequency: small=tight warp, large=big sweeps
     float scale = u_tex_w / u_block_size;
 
-    // Per-channel warp fields — independent seeds produce organic colour separation
-    // across the whole frame (not just at row boundaries).
-    // Magnitude grows with eff: subtle at low intensity, violent at high.
-    float mag = eff * eff * 0.35;
+    // Linear magnitude — mid-intensity does real damage, not quadratic taper.
+    float mag = eff * 0.4;
+
+    // Per-channel warp fields with fast evolution so corruption visibly moves.
+    // Independent seeds produce organic R/G/B separation across the whole frame.
     vec2 w_r = warp_field(v_uv, scale, 0.00, u_time) * mag;
     vec2 w_g = warp_field(v_uv, scale, 5.27, u_time) * mag * 0.9;
     vec2 w_b = warp_field(v_uv, scale, 11.3, u_time) * mag * 1.1;
 
-    vec4 src = texture(u_src, v_uv);
-
+    // Output is pure warped ghost — no source dilution.
+    // Source only re-enters via the ghost update's decay each frame.
+    // Without this, the mix always pulls output back toward clean image
+    // and the feedback loop can never compound into real corruption.
     float r = texture(u_ghost, clamp(v_uv + w_r, 0.0, 1.0)).r;
     float g = texture(u_ghost, clamp(v_uv + w_g, 0.0, 1.0)).g;
     float b = texture(u_ghost, clamp(v_uv + w_b, 0.0, 1.0)).b;
 
-    // Mix source with warped ghost — at low intensity ghost is barely different
-    // from source so the warp is subtle; at high intensity heavy feedback has
-    // diverged the ghost far from source and the warp is destructive.
-    frag = vec4(mix(src.rgb, vec3(r, g, b), eff), src.a);
+    vec4 src = texture(u_src, v_uv);
+    frag = vec4(r, g, b, src.a);
 }
 )glsl";
 
