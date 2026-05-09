@@ -723,7 +723,8 @@ static void import_file(AppState& state, const std::string& path) {
         // audio_load probes duration from the container header synchronously
         // before spawning its background decode thread — use that as the
         // primary duration source since it works on all formats.
-        audio_load(path);
+        audio_load(path);          // async — probes duration + starts device
+        audio_source_ensure(path); // also load into per-clip buffer for clip playback
         state.duration = audio_duration();
         // video_probe_duration is a faster path that works when the container
         // header carries duration; use it only as an override if it succeeds.
@@ -761,7 +762,8 @@ static void import_file(AppState& state, const std::string& path) {
         }
     } else {
         state.audio_path = path;
-        audio_load(path);  // async — also probes container duration
+        audio_load(path);          // async — probes duration + starts device
+        audio_source_ensure(path); // also load into per-clip buffer for clip playback
         state.duration = audio_duration();
         if (state.duration <= 0.f) {
             AudioMeta meta{};
