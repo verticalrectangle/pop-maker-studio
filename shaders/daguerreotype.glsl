@@ -6,6 +6,7 @@ uniform float u_tone;
 uniform float u_vignette;
 uniform float u_scratch;
 uniform float u_time;
+uniform float u_strength;
 float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1,311.7)))*43758.5453); }
 void main() {
     vec4 col = texture(u_tex, v_uv);
@@ -27,5 +28,5 @@ void main() {
     toned += scratch * 0.4;
     // Silver plate texture noise
     float plate = hash(v_uv * 500.0) * 0.04 - 0.02;
-    frag = vec4(clamp(toned + plate, 0.0, 1.0), col.a);
+    frag = vec4(clamp(mix(col.rgb, toned + plate, u_strength), 0.0, 1.0), col.a);
 }

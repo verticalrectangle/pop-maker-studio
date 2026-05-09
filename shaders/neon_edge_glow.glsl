@@ -7,6 +7,7 @@ uniform float u_tex_h;
 uniform float u_threshold;
 uniform float u_glow;
 uniform float u_hue;
+uniform float u_strength;
 void main() {
     vec2 px = vec2(1.0/u_tex_w, 1.0/u_tex_h);
     // Sobel edge detection
@@ -37,5 +38,5 @@ void main() {
         bloom += neon_col * edge / (r * r + 1.0);
     }
     result += bloom * u_glow * 0.3;
-    frag = vec4(clamp(result, 0.0, 1.0), col.a);
+    frag = vec4(clamp(mix(col.rgb, result, u_strength), 0.0, 1.0), col.a);
 }

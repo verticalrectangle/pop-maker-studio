@@ -19,6 +19,7 @@
             break;
         case FXType::Duotone:
             cfx.duotone_on = true;
+            cfx.duotone_strength = 1.0f;
             cfx.duotone_shadow_r = 0.05f;
             cfx.duotone_shadow_g = 0.02f;
             cfx.duotone_shadow_b = 0.2f;
@@ -37,6 +38,7 @@
             break;
         case FXType::NightVision:
             cfx.night_vision_on = true;
+            cfx.night_vision_strength = 1.0f;
             cfx.night_vision_noise = 0.3f;
             cfx.night_vision_gain = 1.2f;
             break;
@@ -58,6 +60,7 @@
             break;
         case FXType::Posterize:
             cfx.posterize_on = true;
+            cfx.posterize_strength = 1.0f;
             cfx.posterize_levels = 4.0f;
             break;
         case FXType::Halftone:
@@ -80,6 +83,7 @@
             break;
         case FXType::CRT:
             cfx.crt_on = true;
+            cfx.crt_strength = 1.0f;
             cfx.crt_curvature = 0.4f;
             cfx.crt_glow = 0.3f;
             break;
@@ -95,6 +99,7 @@
             break;
         case FXType::Lomo:
             cfx.lomo_on = true;
+            cfx.lomo_strength = 1.0f;
             cfx.lomo_vignette = 0.85f;
             cfx.lomo_saturation = 1.8f;
             cfx.lomo_fade = 0.1f;
@@ -119,6 +124,7 @@
             break;
         case FXType::Kaleidoscope:
             cfx.kaleidoscope_on = true;
+            cfx.kaleidoscope_strength = 1.0f;
             cfx.kaleidoscope_segments = 8.0f;
             cfx.kaleidoscope_rotation = 0.0f;
             cfx.kaleidoscope_zoom = 0.55f;
@@ -140,6 +146,7 @@
             break;
         case FXType::BarrelWarp:
             cfx.barrel_warp_on = true;
+            cfx.barrel_warp_strength = 1.0f;
             cfx.barrel_warp_k1 = 0.4f;
             cfx.barrel_warp_k2 = 0.1f;
             cfx.barrel_warp_scale = 0.9f;
@@ -188,17 +195,20 @@
             break;
         case FXType::OilPaint:
             cfx.oil_paint_on = true;
+            cfx.oil_paint_strength = 1.0f;
             cfx.oil_paint_radius = 4.0f;
             cfx.oil_paint_sharpness = 8.0f;
             break;
         case FXType::StainedGlass:
             cfx.stained_glass_on = true;
+            cfx.stained_glass_strength = 1.0f;
             cfx.stained_glass_cell_size = 18.0f;
             cfx.stained_glass_border = 0.08f;
             cfx.stained_glass_saturation = 1.6f;
             break;
         case FXType::NeonEdgeGlow:
             cfx.neon_edge_glow_on = true;
+            cfx.neon_edge_glow_strength = 1.0f;
             cfx.neon_edge_glow_threshold = 0.15f;
             cfx.neon_edge_glow_glow = 0.8f;
             cfx.neon_edge_glow_hue = 0.55f;
@@ -234,30 +244,35 @@
             break;
         case FXType::Watercolor:
             cfx.watercolor_on = true;
+            cfx.watercolor_strength = 1.0f;
             cfx.watercolor_bleeding = 0.018f;
             cfx.watercolor_paper = 0.5f;
             cfx.watercolor_saturation = 1.4f;
             break;
         case FXType::ComicDots:
             cfx.comic_dots_on = true;
+            cfx.comic_dots_strength = 1.0f;
             cfx.comic_dots_dot_size = 4.0f;
             cfx.comic_dots_ink_threshold = 0.12f;
             cfx.comic_dots_color_levels = 4.0f;
             break;
         case FXType::Crosshatch:
             cfx.crosshatch_on = true;
+            cfx.crosshatch_strength = 1.0f;
             cfx.crosshatch_density = 6.0f;
             cfx.crosshatch_thickness = 0.5f;
             cfx.crosshatch_angle = 0.0f;
             break;
         case FXType::Daguerreotype:
             cfx.daguerreotype_on = true;
+            cfx.daguerreotype_strength = 1.0f;
             cfx.daguerreotype_tone = 0.5f;
             cfx.daguerreotype_vignette = 0.9f;
             cfx.daguerreotype_scratch = 0.4f;
             break;
         case FXType::Super8Film:
             cfx.super8_film_on = true;
+            cfx.super8_film_strength = 1.0f;
             cfx.super8_film_grain = 0.6f;
             cfx.super8_film_gate = 0.4f;
             cfx.super8_film_fade = 0.5f;
@@ -270,11 +285,13 @@
             break;
         case FXType::XRay:
             cfx.x_ray_on = true;
+            cfx.x_ray_strength = 1.0f;
             cfx.x_ray_contrast = 1.8f;
             cfx.x_ray_blue_tint = 0.6f;
             break;
         case FXType::BitCrush:
             cfx.bit_crush_on = true;
+            cfx.bit_crush_strength = 1.0f;
             cfx.bit_crush_levels = 6.0f;
             cfx.bit_crush_dither = 0.4f;
             break;
@@ -285,6 +302,7 @@
             break;
         case FXType::DitherBayer:
             cfx.dither_bayer_on = true;
+            cfx.dither_bayer_strength = 1.0f;
             cfx.dither_bayer_levels = 3.0f;
             cfx.dither_bayer_scale = 2.0f;
             cfx.dither_bayer_color = 0.4f;
@@ -320,6 +338,7 @@
             break;
         case FXType::Pointillist:
             cfx.pointillist_on = true;
+            cfx.pointillist_strength = 1.0f;
             cfx.pointillist_dot_size = 5.0f;
             cfx.pointillist_scatter = 0.4f;
             break;
@@ -337,21 +356,22 @@
             break;
         case FXType::MirrorFold:
             cfx.mirror_fold_on = true;
+            cfx.mirror_fold_strength = 1.0f;
             cfx.mirror_fold_axis = 0.5f;
             cfx.mirror_fold_vertical = 0.0f;
-            cfx.mirror_fold_blend = 0.0f;
             break;
         case FXType::EchoTrails:
             cfx.echo_trails_on = true;
+            cfx.echo_trails_strength = 1.0f;
             cfx.echo_trails_offset = 0.025f;
             cfx.echo_trails_fade = 0.55f;
             cfx.echo_trails_angle = 45.0f;
             break;
         case FXType::GradientMap:
             cfx.gradient_map_on = true;
+            cfx.gradient_map_strength = 1.0f;
             cfx.gradient_map_hue1 = 0.65f;
             cfx.gradient_map_hue2 = 0.12f;
-            cfx.gradient_map_mix_orig = 0.0f;
             break;
         case FXType::CrossProcess:
             cfx.cross_process_on = true;
@@ -378,18 +398,21 @@
             break;
         case FXType::Technicolor:
             cfx.technicolor_on = true;
+            cfx.technicolor_strength = 1.0f;
             cfx.technicolor_saturation = 2.0f;
             cfx.technicolor_contrast = 1.3f;
             cfx.technicolor_warmth = 0.35f;
             break;
         case FXType::IceCrystal:
             cfx.ice_crystal_on = true;
+            cfx.ice_crystal_strength = 1.0f;
             cfx.ice_crystal_scale = 8.0f;
             cfx.ice_crystal_refract = 0.04f;
             cfx.ice_crystal_tint = 0.35f;
             break;
         case FXType::Kodachrome:
             cfx.kodachrome_on = true;
+            cfx.kodachrome_strength = 1.0f;
             cfx.kodachrome_saturation = 1.5f;
             cfx.kodachrome_reds = 0.5f;
             cfx.kodachrome_shadows = 0.4f;
@@ -420,12 +443,14 @@
             break;
         case FXType::WarholPop:
             cfx.warhol_pop_on = true;
+            cfx.warhol_pop_strength = 1.0f;
             cfx.warhol_pop_levels = 4.0f;
             cfx.warhol_pop_hue_shift = 0.25f;
             cfx.warhol_pop_saturation = 2.5f;
             break;
         case FXType::InfraredFilm:
             cfx.infrared_film_on = true;
+            cfx.infrared_film_strength = 1.0f;
             cfx.infrared_film_channel_mix = 0.8f;
             cfx.infrared_film_glow = 0.5f;
             cfx.infrared_film_contrast = 1.4f;
@@ -450,12 +475,13 @@
             break;
         case FXType::PixelMosaic:
             cfx.pixel_mosaic_on = true;
+            cfx.pixel_mosaic_strength = 1.0f;
             cfx.pixel_mosaic_block_size = 16.0f;
             cfx.pixel_mosaic_color_steps = 6.0f;
-            cfx.pixel_mosaic_mix_orig = 0.0f;
             break;
         case FXType::ThermalMap:
             cfx.thermal_map_on = true;
+            cfx.thermal_map_strength = 1.0f;
             cfx.thermal_map_cold_hue = 0.65f;
             cfx.thermal_map_hot_hue = 0.08f;
             cfx.thermal_map_contrast = 1.6f;
@@ -477,6 +503,7 @@
             break;
         case FXType::Risograph:
             cfx.risograph_on = true;
+            cfx.risograph_strength = 1.0f;
             cfx.risograph_hue1 = 0.58f;
             cfx.risograph_hue2 = 0.02f;
             cfx.risograph_dot_size = 3.0f;
@@ -485,6 +512,7 @@
             break;
         case FXType::VintageNegative:
             cfx.vintage_negative_on = true;
+            cfx.vintage_negative_strength = 1.0f;
             cfx.vintage_negative_orange_mask = 0.55f;
             cfx.vintage_negative_contrast = 1.3f;
             cfx.vintage_negative_grain = 0.12f;
@@ -492,10 +520,10 @@
             break;
         case FXType::PencilSketch:
             cfx.pencil_sketch_on = true;
+            cfx.pencil_sketch_strength = 1.0f;
             cfx.pencil_sketch_line_str = 2.5f;
             cfx.pencil_sketch_paper_tone = 0.95f;
             cfx.pencil_sketch_hatching = 0.4f;
-            cfx.pencil_sketch_mix_orig = 0.0f;
             break;
         case FXType::CrtBarrel:
             cfx.crt_barrel_on = true;
@@ -527,6 +555,7 @@
             break;
         case FXType::MirrorTunnel:
             cfx.mirror_tunnel_on = true;
+            cfx.mirror_tunnel_strength = 1.0f;
             cfx.mirror_tunnel_depth = 5.0f;
             cfx.mirror_tunnel_rotation = 0.12f;
             cfx.mirror_tunnel_zoom = 0.65f;
@@ -543,6 +572,7 @@
             break;
         case FXType::ZoneSystemBw:
             cfx.zone_system_bw_on = true;
+            cfx.zone_system_bw_strength = 1.0f;
             cfx.zone_system_bw_zones = 6.0f;
             cfx.zone_system_bw_contrast = 1.8f;
             cfx.zone_system_bw_grain = 0.08f;
@@ -559,6 +589,7 @@
             break;
         case FXType::ContourMap:
             cfx.contour_map_on = true;
+            cfx.contour_map_strength = 1.0f;
             cfx.contour_map_levels = 8.0f;
             cfx.contour_map_line_width = 0.04f;
             cfx.contour_map_line_hue = 0.35f;
@@ -573,6 +604,7 @@
             break;
         case FXType::AsciiArt:
             cfx.ascii_art_on = true;
+            cfx.ascii_art_strength = 1.0f;
             cfx.ascii_art_char_size = 10.0f;
             cfx.ascii_art_fg_r = 0.0f;
             cfx.ascii_art_fg_g = 1.0f;
@@ -581,6 +613,7 @@
             break;
         case FXType::DnaHelix:
             cfx.dna_helix_on = true;
+            cfx.dna_helix_strength = 1.0f;
             cfx.dna_helix_grid_scale = 12.0f;
             cfx.dna_helix_wave_amp = 0.5f;
             cfx.dna_helix_line_width = 0.05f;

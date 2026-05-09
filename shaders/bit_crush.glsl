@@ -6,6 +6,7 @@ uniform float u_tex_w;
 uniform float u_tex_h;
 uniform float u_levels;
 uniform float u_dither;
+uniform float u_strength;
 void main() {
     vec4 col = texture(u_tex, v_uv);
     // 4x4 Bayer matrix for dithering
@@ -20,5 +21,5 @@ void main() {
     float step_size = 1.0 / max(u_levels - 1.0, 1.0);
     vec3 dithered = col.rgb + threshold * step_size * u_dither;
     vec3 crushed = floor(dithered / step_size + 0.5) * step_size;
-    frag = vec4(clamp(crushed, 0.0, 1.0), col.a);
+    frag = vec4(clamp(mix(col.rgb, crushed, u_strength), 0.0, 1.0), col.a);
 }

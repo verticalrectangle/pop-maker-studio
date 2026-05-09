@@ -6,6 +6,7 @@ uniform float u_levels;
 uniform float u_line_width;
 uniform float u_line_hue;
 uniform float u_fill_sat;
+uniform float u_strength;
 vec3 hue2rgb(float h) {
     vec4 K = vec4(1.0,2.0/3.0,1.0/3.0,3.0);
     return clamp(abs(fract(h+K.xyz)*6.0-K.www)-K.xxx, 0.0, 1.0);
@@ -24,5 +25,5 @@ void main() {
     fill_col *= (0.3 + 0.7 * level);
     vec3 line_col = hue2rgb(u_line_hue) * 0.8;
     vec3 result = mix(fill_col, line_col, line);
-    frag = vec4(clamp(result, 0.0, 1.0), col.a);
+    frag = vec4(clamp(mix(col.rgb, result, u_strength), 0.0, 1.0), col.a);
 }

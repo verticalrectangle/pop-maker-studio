@@ -11,7 +11,7 @@
         }
     }
 
-    if (cfx.film_grain_on && cfx.film_grain_amount > 0.01f) {
+    if (cfx.film_grain_on) {
         GLuint p = g_gen_progs[(int)FXType::FilmGrain];
         if (p) {
             glUseProgram(p);
@@ -49,13 +49,14 @@
         }
     }
 
-    if (cfx.duotone_on && cfx.duotone_shadow_r > 0.01f) {
+    if (cfx.duotone_on && cfx.duotone_strength > 0.01f) {
         GLuint p = g_gen_progs[(int)FXType::Duotone];
         if (p) {
             glUseProgram(p);
             glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
             glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
             glUniform1f(glGetUniformLocation(p, "u_time"),  t);
+            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.duotone_strength);
             glUniform1f(glGetUniformLocation(p, "u_shadow_r"), cfx.duotone_shadow_r);
             glUniform1f(glGetUniformLocation(p, "u_shadow_g"), cfx.duotone_shadow_g);
             glUniform1f(glGetUniformLocation(p, "u_shadow_b"), cfx.duotone_shadow_b);
@@ -91,20 +92,21 @@
         }
     }
 
-    if (cfx.night_vision_on && cfx.night_vision_noise > 0.01f) {
+    if (cfx.night_vision_on && cfx.night_vision_strength > 0.01f) {
         GLuint p = g_gen_progs[(int)FXType::NightVision];
         if (p) {
             glUseProgram(p);
             glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
             glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
             glUniform1f(glGetUniformLocation(p, "u_time"),  t);
+            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.night_vision_strength);
             glUniform1f(glGetUniformLocation(p, "u_noise"), cfx.night_vision_noise);
             glUniform1f(glGetUniformLocation(p, "u_gain"), cfx.night_vision_gain);
             run1(p);
         }
     }
 
-    if (cfx.old_film_on && cfx.old_film_sepia > 0.01f) {
+    if (cfx.old_film_on) {
         GLuint p = g_gen_progs[(int)FXType::OldFilm];
         if (p) {
             glUseProgram(p);
@@ -131,7 +133,7 @@
         }
     }
 
-    if (cfx.rgb_split_on && cfx.rgb_split_amount > 0.01f) {
+    if (cfx.rgb_split_on) {
         GLuint p = g_gen_progs[(int)FXType::RGBSplit];
         if (p) {
             glUseProgram(p);
@@ -144,13 +146,14 @@
         }
     }
 
-    if (cfx.posterize_on) {
+    if (cfx.posterize_on && cfx.posterize_strength > 0.01f) {
         GLuint p = g_gen_progs[(int)FXType::Posterize];
         if (p) {
             glUseProgram(p);
             glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
             glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
             glUniform1f(glGetUniformLocation(p, "u_time"),  t);
+            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.posterize_strength);
             glUniform1f(glGetUniformLocation(p, "u_levels"), cfx.posterize_levels);
             run1(p);
         }
@@ -206,13 +209,14 @@
         }
     }
 
-    if (cfx.crt_on && cfx.crt_curvature > 0.01f) {
+    if (cfx.crt_on && cfx.crt_strength > 0.01f) {
         GLuint p = g_gen_progs[(int)FXType::CRT];
         if (p) {
             glUseProgram(p);
             glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
             glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
             glUniform1f(glGetUniformLocation(p, "u_time"),  t);
+            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.crt_strength);
             glUniform1f(glGetUniformLocation(p, "u_curvature"), cfx.crt_curvature);
             glUniform1f(glGetUniformLocation(p, "u_glow"), cfx.crt_glow);
             run1(p);
@@ -232,7 +236,7 @@
         }
     }
 
-    if (cfx.glitch_block_on && cfx.glitch_block_amount > 0.01f) {
+    if (cfx.glitch_block_on) {
         GLuint p = g_gen_progs[(int)FXType::GlitchBlock];
         if (p) {
             glUseProgram(p);
@@ -245,13 +249,14 @@
         }
     }
 
-    if (cfx.lomo_on && cfx.lomo_vignette > 0.01f) {
+    if (cfx.lomo_on && cfx.lomo_strength > 0.01f) {
         GLuint p = g_gen_progs[(int)FXType::Lomo];
         if (p) {
             glUseProgram(p);
             glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
             glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
             glUniform1f(glGetUniformLocation(p, "u_time"),  t);
+            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.lomo_strength);
             glUniform1f(glGetUniformLocation(p, "u_vignette"), cfx.lomo_vignette);
             glUniform1f(glGetUniformLocation(p, "u_saturation"), cfx.lomo_saturation);
             glUniform1f(glGetUniformLocation(p, "u_fade"), cfx.lomo_fade);
@@ -272,7 +277,7 @@
         }
     }
 
-    if (cfx.ripple_on && cfx.ripple_amplitude > 0.01f) {
+    if (cfx.ripple_on) {
         GLuint p = g_gen_progs[(int)FXType::Ripple];
         if (p) {
             glUseProgram(p);
@@ -286,7 +291,7 @@
         }
     }
 
-    if (cfx.wave_warp_on && cfx.wave_warp_amplitude > 0.01f) {
+    if (cfx.wave_warp_on) {
         GLuint p = g_gen_progs[(int)FXType::WaveWarp];
         if (p) {
             glUseProgram(p);
@@ -301,13 +306,14 @@
         }
     }
 
-    if (cfx.kaleidoscope_on) {
+    if (cfx.kaleidoscope_on && cfx.kaleidoscope_strength > 0.01f) {
         GLuint p = g_gen_progs[(int)FXType::Kaleidoscope];
         if (p) {
             glUseProgram(p);
             glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
             glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
             glUniform1f(glGetUniformLocation(p, "u_time"),  t);
+            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.kaleidoscope_strength);
             glUniform1f(glGetUniformLocation(p, "u_segments"), cfx.kaleidoscope_segments);
             glUniform1f(glGetUniformLocation(p, "u_rotation"), cfx.kaleidoscope_rotation);
             glUniform1f(glGetUniformLocation(p, "u_zoom"), cfx.kaleidoscope_zoom);
@@ -315,7 +321,7 @@
         }
     }
 
-    if (cfx.zoom_blur_rad_on && cfx.zoom_blur_rad_amount > 0.01f) {
+    if (cfx.zoom_blur_rad_on) {
         GLuint p = g_gen_progs[(int)FXType::ZoomBlurRad];
         if (p) {
             glUseProgram(p);
@@ -329,7 +335,7 @@
         }
     }
 
-    if (cfx.spin_blur_on && cfx.spin_blur_angle > 0.01f) {
+    if (cfx.spin_blur_on) {
         GLuint p = g_gen_progs[(int)FXType::SpinBlur];
         if (p) {
             glUseProgram(p);
@@ -341,7 +347,7 @@
         }
     }
 
-    if (cfx.heat_haze_on && cfx.heat_haze_intensity > 0.01f) {
+    if (cfx.heat_haze_on) {
         GLuint p = g_gen_progs[(int)FXType::HeatHaze];
         if (p) {
             glUseProgram(p);
@@ -354,13 +360,14 @@
         }
     }
 
-    if (cfx.barrel_warp_on) {
+    if (cfx.barrel_warp_on && cfx.barrel_warp_strength > 0.01f) {
         GLuint p = g_gen_progs[(int)FXType::BarrelWarp];
         if (p) {
             glUseProgram(p);
             glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
             glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
             glUniform1f(glGetUniformLocation(p, "u_time"),  t);
+            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.barrel_warp_strength);
             glUniform1f(glGetUniformLocation(p, "u_k1"), cfx.barrel_warp_k1);
             glUniform1f(glGetUniformLocation(p, "u_k2"), cfx.barrel_warp_k2);
             glUniform1f(glGetUniformLocation(p, "u_scale"), cfx.barrel_warp_scale);
@@ -368,7 +375,7 @@
         }
     }
 
-    if (cfx.anamorphic_streak_on && cfx.anamorphic_streak_length > 0.01f) {
+    if (cfx.anamorphic_streak_on) {
         GLuint p = g_gen_progs[(int)FXType::AnamorphicStreak];
         if (p) {
             glUseProgram(p);
@@ -382,7 +389,7 @@
         }
     }
 
-    if (cfx.starburst_spike_on && cfx.starburst_spike_length > 0.01f) {
+    if (cfx.starburst_spike_on) {
         GLuint p = g_gen_progs[(int)FXType::StarburstSpike];
         if (p) {
             glUseProgram(p);
@@ -396,7 +403,7 @@
         }
     }
 
-    if (cfx.god_rays_on && cfx.god_rays_intensity > 0.01f) {
+    if (cfx.god_rays_on) {
         GLuint p = g_gen_progs[(int)FXType::GodRays];
         if (p) {
             glUseProgram(p);
@@ -411,7 +418,7 @@
         }
     }
 
-    if (cfx.aurora_borealis_on && cfx.aurora_borealis_intensity > 0.01f) {
+    if (cfx.aurora_borealis_on) {
         GLuint p = g_gen_progs[(int)FXType::AuroraBorealis];
         if (p) {
             glUseProgram(p);
@@ -425,7 +432,7 @@
         }
     }
 
-    if (cfx.bokeh_dream_on && cfx.bokeh_dream_radius > 0.01f) {
+    if (cfx.bokeh_dream_on) {
         GLuint p = g_gen_progs[(int)FXType::BokehDream];
         if (p) {
             glUseProgram(p);
@@ -439,7 +446,7 @@
         }
     }
 
-    if (cfx.prism_disperse_on && cfx.prism_disperse_spread > 0.01f) {
+    if (cfx.prism_disperse_on) {
         GLuint p = g_gen_progs[(int)FXType::PrismDisperse];
         if (p) {
             glUseProgram(p);
@@ -452,7 +459,7 @@
         }
     }
 
-    if (cfx.film_burn_on && cfx.film_burn_intensity > 0.01f) {
+    if (cfx.film_burn_on) {
         GLuint p = g_gen_progs[(int)FXType::FilmBurn];
         if (p) {
             glUseProgram(p);
@@ -466,26 +473,28 @@
         }
     }
 
-    if (cfx.oil_paint_on) {
+    if (cfx.oil_paint_on && cfx.oil_paint_strength > 0.01f) {
         GLuint p = g_gen_progs[(int)FXType::OilPaint];
         if (p) {
             glUseProgram(p);
             glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
             glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
             glUniform1f(glGetUniformLocation(p, "u_time"),  t);
+            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.oil_paint_strength);
             glUniform1f(glGetUniformLocation(p, "u_radius"), cfx.oil_paint_radius);
             glUniform1f(glGetUniformLocation(p, "u_sharpness"), cfx.oil_paint_sharpness);
             run1(p);
         }
     }
 
-    if (cfx.stained_glass_on && cfx.stained_glass_border > 0.01f) {
+    if (cfx.stained_glass_on && cfx.stained_glass_strength > 0.01f) {
         GLuint p = g_gen_progs[(int)FXType::StainedGlass];
         if (p) {
             glUseProgram(p);
             glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
             glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
             glUniform1f(glGetUniformLocation(p, "u_time"),  t);
+            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.stained_glass_strength);
             glUniform1f(glGetUniformLocation(p, "u_cell_size"), cfx.stained_glass_cell_size);
             glUniform1f(glGetUniformLocation(p, "u_border"), cfx.stained_glass_border);
             glUniform1f(glGetUniformLocation(p, "u_saturation"), cfx.stained_glass_saturation);
@@ -493,13 +502,14 @@
         }
     }
 
-    if (cfx.neon_edge_glow_on && cfx.neon_edge_glow_threshold > 0.01f) {
+    if (cfx.neon_edge_glow_on && cfx.neon_edge_glow_strength > 0.01f) {
         GLuint p = g_gen_progs[(int)FXType::NeonEdgeGlow];
         if (p) {
             glUseProgram(p);
             glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
             glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
             glUniform1f(glGetUniformLocation(p, "u_time"),  t);
+            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.neon_edge_glow_strength);
             glUniform1f(glGetUniformLocation(p, "u_threshold"), cfx.neon_edge_glow_threshold);
             glUniform1f(glGetUniformLocation(p, "u_glow"), cfx.neon_edge_glow_glow);
             glUniform1f(glGetUniformLocation(p, "u_hue"), cfx.neon_edge_glow_hue);
@@ -507,7 +517,7 @@
         }
     }
 
-    if (cfx.cyberpunk_grade_on && cfx.cyberpunk_grade_shadow_teal > 0.01f) {
+    if (cfx.cyberpunk_grade_on) {
         GLuint p = g_gen_progs[(int)FXType::CyberpunkGrade];
         if (p) {
             glUseProgram(p);
@@ -521,7 +531,7 @@
         }
     }
 
-    if (cfx.matrix_rain_on && cfx.matrix_rain_density > 0.01f) {
+    if (cfx.matrix_rain_on) {
         GLuint p = g_gen_progs[(int)FXType::MatrixRain];
         if (p) {
             glUseProgram(p);
@@ -535,7 +545,7 @@
         }
     }
 
-    if (cfx.pixel_sort_on && cfx.pixel_sort_threshold > 0.01f) {
+    if (cfx.pixel_sort_on) {
         GLuint p = g_gen_progs[(int)FXType::PixelSort];
         if (p) {
             glUseProgram(p);
@@ -549,7 +559,7 @@
         }
     }
 
-    if (cfx.solarize_on && cfx.solarize_threshold > 0.01f) {
+    if (cfx.solarize_on && cfx.solarize_strength > 0.01f) {
         GLuint p = g_gen_progs[(int)FXType::Solarize];
         if (p) {
             glUseProgram(p);
@@ -562,7 +572,7 @@
         }
     }
 
-    if (cfx.double_ghost_on && cfx.double_ghost_offset > 0.01f) {
+    if (cfx.double_ghost_on) {
         GLuint p = g_gen_progs[(int)FXType::DoubleGhost];
         if (p) {
             glUseProgram(p);
@@ -576,13 +586,14 @@
         }
     }
 
-    if (cfx.watercolor_on && cfx.watercolor_bleeding > 0.01f) {
+    if (cfx.watercolor_on && cfx.watercolor_strength > 0.01f) {
         GLuint p = g_gen_progs[(int)FXType::Watercolor];
         if (p) {
             glUseProgram(p);
             glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
             glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
             glUniform1f(glGetUniformLocation(p, "u_time"),  t);
+            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.watercolor_strength);
             glUniform1f(glGetUniformLocation(p, "u_bleeding"), cfx.watercolor_bleeding);
             glUniform1f(glGetUniformLocation(p, "u_paper"), cfx.watercolor_paper);
             glUniform1f(glGetUniformLocation(p, "u_saturation"), cfx.watercolor_saturation);
@@ -590,13 +601,14 @@
         }
     }
 
-    if (cfx.comic_dots_on && cfx.comic_dots_ink_threshold > 0.01f) {
+    if (cfx.comic_dots_on && cfx.comic_dots_strength > 0.01f) {
         GLuint p = g_gen_progs[(int)FXType::ComicDots];
         if (p) {
             glUseProgram(p);
             glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
             glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
             glUniform1f(glGetUniformLocation(p, "u_time"),  t);
+            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.comic_dots_strength);
             glUniform1f(glGetUniformLocation(p, "u_dot_size"), cfx.comic_dots_dot_size);
             glUniform1f(glGetUniformLocation(p, "u_ink_threshold"), cfx.comic_dots_ink_threshold);
             glUniform1f(glGetUniformLocation(p, "u_color_levels"), cfx.comic_dots_color_levels);
@@ -604,13 +616,14 @@
         }
     }
 
-    if (cfx.crosshatch_on) {
+    if (cfx.crosshatch_on && cfx.crosshatch_strength > 0.01f) {
         GLuint p = g_gen_progs[(int)FXType::Crosshatch];
         if (p) {
             glUseProgram(p);
             glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
             glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
             glUniform1f(glGetUniformLocation(p, "u_time"),  t);
+            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.crosshatch_strength);
             glUniform1f(glGetUniformLocation(p, "u_density"), cfx.crosshatch_density);
             glUniform1f(glGetUniformLocation(p, "u_thickness"), cfx.crosshatch_thickness);
             glUniform1f(glGetUniformLocation(p, "u_angle"), cfx.crosshatch_angle);
@@ -618,13 +631,14 @@
         }
     }
 
-    if (cfx.daguerreotype_on && cfx.daguerreotype_tone > 0.01f) {
+    if (cfx.daguerreotype_on && cfx.daguerreotype_strength > 0.01f) {
         GLuint p = g_gen_progs[(int)FXType::Daguerreotype];
         if (p) {
             glUseProgram(p);
             glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
             glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
             glUniform1f(glGetUniformLocation(p, "u_time"),  t);
+            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.daguerreotype_strength);
             glUniform1f(glGetUniformLocation(p, "u_tone"), cfx.daguerreotype_tone);
             glUniform1f(glGetUniformLocation(p, "u_vignette"), cfx.daguerreotype_vignette);
             glUniform1f(glGetUniformLocation(p, "u_scratch"), cfx.daguerreotype_scratch);
@@ -632,13 +646,14 @@
         }
     }
 
-    if (cfx.super8_film_on && cfx.super8_film_grain > 0.01f) {
+    if (cfx.super8_film_on && cfx.super8_film_strength > 0.01f) {
         GLuint p = g_gen_progs[(int)FXType::Super8Film];
         if (p) {
             glUseProgram(p);
             glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
             glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
             glUniform1f(glGetUniformLocation(p, "u_time"),  t);
+            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.super8_film_strength);
             glUniform1f(glGetUniformLocation(p, "u_grain"), cfx.super8_film_grain);
             glUniform1f(glGetUniformLocation(p, "u_gate"), cfx.super8_film_gate);
             glUniform1f(glGetUniformLocation(p, "u_fade"), cfx.super8_film_fade);
@@ -646,7 +661,7 @@
         }
     }
 
-    if (cfx.vhs_dropout_on && cfx.vhs_dropout_density > 0.01f) {
+    if (cfx.vhs_dropout_on && cfx.vhs_dropout_strength > 0.01f) {
         GLuint p = g_gen_progs[(int)FXType::VHSDrop];
         if (p) {
             glUseProgram(p);
@@ -660,33 +675,35 @@
         }
     }
 
-    if (cfx.x_ray_on && cfx.x_ray_blue_tint > 0.01f) {
+    if (cfx.x_ray_on && cfx.x_ray_strength > 0.01f) {
         GLuint p = g_gen_progs[(int)FXType::XRay];
         if (p) {
             glUseProgram(p);
             glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
             glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
             glUniform1f(glGetUniformLocation(p, "u_time"),  t);
+            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.x_ray_strength);
             glUniform1f(glGetUniformLocation(p, "u_contrast"), cfx.x_ray_contrast);
             glUniform1f(glGetUniformLocation(p, "u_blue_tint"), cfx.x_ray_blue_tint);
             run1(p);
         }
     }
 
-    if (cfx.bit_crush_on && cfx.bit_crush_dither > 0.01f) {
+    if (cfx.bit_crush_on && cfx.bit_crush_strength > 0.01f) {
         GLuint p = g_gen_progs[(int)FXType::BitCrush];
         if (p) {
             glUseProgram(p);
             glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
             glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
             glUniform1f(glGetUniformLocation(p, "u_time"),  t);
+            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.bit_crush_strength);
             glUniform1f(glGetUniformLocation(p, "u_levels"), cfx.bit_crush_levels);
             glUniform1f(glGetUniformLocation(p, "u_dither"), cfx.bit_crush_dither);
             run1(p);
         }
     }
 
-    if (cfx.tv_static_on && cfx.tv_static_amount > 0.01f) {
+    if (cfx.tv_static_on) {
         GLuint p = g_gen_progs[(int)FXType::TVStatic];
         if (p) {
             glUseProgram(p);
@@ -699,13 +716,14 @@
         }
     }
 
-    if (cfx.dither_bayer_on && cfx.dither_bayer_color > 0.01f) {
+    if (cfx.dither_bayer_on && cfx.dither_bayer_strength > 0.01f) {
         GLuint p = g_gen_progs[(int)FXType::DitherBayer];
         if (p) {
             glUseProgram(p);
             glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
             glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
             glUniform1f(glGetUniformLocation(p, "u_time"),  t);
+            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.dither_bayer_strength);
             glUniform1f(glGetUniformLocation(p, "u_levels"), cfx.dither_bayer_levels);
             glUniform1f(glGetUniformLocation(p, "u_scale"), cfx.dither_bayer_scale);
             glUniform1f(glGetUniformLocation(p, "u_color"), cfx.dither_bayer_color);
@@ -726,7 +744,7 @@
         }
     }
 
-    if (cfx.horror_grade_on && cfx.horror_grade_desat > 0.01f) {
+    if (cfx.horror_grade_on) {
         GLuint p = g_gen_progs[(int)FXType::HorrorGrade];
         if (p) {
             glUseProgram(p);
@@ -740,7 +758,7 @@
         }
     }
 
-    if (cfx.split_toning_on && cfx.split_toning_shadow_hue > 0.01f) {
+    if (cfx.split_toning_on && cfx.split_toning_strength > 0.01f) {
         GLuint p = g_gen_progs[(int)FXType::SplitToning];
         if (p) {
             glUseProgram(p);
@@ -754,7 +772,7 @@
         }
     }
 
-    if (cfx.desert_gold_on && cfx.desert_gold_warmth > 0.01f) {
+    if (cfx.desert_gold_on) {
         GLuint p = g_gen_progs[(int)FXType::DesertGold];
         if (p) {
             glUseProgram(p);
@@ -768,7 +786,7 @@
         }
     }
 
-    if (cfx.emboss_relief_on && cfx.emboss_relief_angle > 0.01f) {
+    if (cfx.emboss_relief_on) {
         GLuint p = g_gen_progs[(int)FXType::EmbossRelief];
         if (p) {
             glUseProgram(p);
@@ -782,13 +800,14 @@
         }
     }
 
-    if (cfx.pointillist_on && cfx.pointillist_scatter > 0.01f) {
+    if (cfx.pointillist_on && cfx.pointillist_strength > 0.01f) {
         GLuint p = g_gen_progs[(int)FXType::Pointillist];
         if (p) {
             glUseProgram(p);
             glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
             glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
             glUniform1f(glGetUniformLocation(p, "u_time"),  t);
+            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.pointillist_strength);
             glUniform1f(glGetUniformLocation(p, "u_dot_size"), cfx.pointillist_dot_size);
             glUniform1f(glGetUniformLocation(p, "u_scatter"), cfx.pointillist_scatter);
             run1(p);
@@ -809,7 +828,7 @@
         }
     }
 
-    if (cfx.frosted_glass_on && cfx.frosted_glass_blur > 0.01f) {
+    if (cfx.frosted_glass_on) {
         GLuint p = g_gen_progs[(int)FXType::FrostedGlass];
         if (p) {
             glUseProgram(p);
@@ -823,27 +842,28 @@
         }
     }
 
-    if (cfx.mirror_fold_on && cfx.mirror_fold_axis > 0.01f) {
+    if (cfx.mirror_fold_on && cfx.mirror_fold_strength > 0.01f) {
         GLuint p = g_gen_progs[(int)FXType::MirrorFold];
         if (p) {
             glUseProgram(p);
             glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
             glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
             glUniform1f(glGetUniformLocation(p, "u_time"),  t);
+            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.mirror_fold_strength);
             glUniform1f(glGetUniformLocation(p, "u_axis"), cfx.mirror_fold_axis);
             glUniform1f(glGetUniformLocation(p, "u_vertical"), cfx.mirror_fold_vertical);
-            glUniform1f(glGetUniformLocation(p, "u_blend"), cfx.mirror_fold_blend);
             run1(p);
         }
     }
 
-    if (cfx.echo_trails_on && cfx.echo_trails_offset > 0.01f) {
+    if (cfx.echo_trails_on && cfx.echo_trails_strength > 0.01f) {
         GLuint p = g_gen_progs[(int)FXType::EchoTrails];
         if (p) {
             glUseProgram(p);
             glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
             glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
             glUniform1f(glGetUniformLocation(p, "u_time"),  t);
+            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.echo_trails_strength);
             glUniform1f(glGetUniformLocation(p, "u_offset"), cfx.echo_trails_offset);
             glUniform1f(glGetUniformLocation(p, "u_fade"), cfx.echo_trails_fade);
             glUniform1f(glGetUniformLocation(p, "u_angle"), cfx.echo_trails_angle);
@@ -851,16 +871,16 @@
         }
     }
 
-    if (cfx.gradient_map_on && cfx.gradient_map_hue1 > 0.01f) {
+    if (cfx.gradient_map_on && cfx.gradient_map_strength > 0.01f) {
         GLuint p = g_gen_progs[(int)FXType::GradientMap];
         if (p) {
             glUseProgram(p);
             glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
             glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
             glUniform1f(glGetUniformLocation(p, "u_time"),  t);
+            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.gradient_map_strength);
             glUniform1f(glGetUniformLocation(p, "u_hue1"), cfx.gradient_map_hue1);
             glUniform1f(glGetUniformLocation(p, "u_hue2"), cfx.gradient_map_hue2);
-            glUniform1f(glGetUniformLocation(p, "u_mix_orig"), cfx.gradient_map_mix_orig);
             run1(p);
         }
     }
@@ -878,7 +898,7 @@
         }
     }
 
-    if (cfx.plasma_field_on && cfx.plasma_field_speed > 0.01f) {
+    if (cfx.plasma_field_on) {
         GLuint p = g_gen_progs[(int)FXType::PlasmaField];
         if (p) {
             glUseProgram(p);
@@ -892,7 +912,7 @@
         }
     }
 
-    if (cfx.fire_edge_on && cfx.fire_edge_intensity > 0.01f) {
+    if (cfx.fire_edge_on) {
         GLuint p = g_gen_progs[(int)FXType::FireEdge];
         if (p) {
             glUseProgram(p);
@@ -906,7 +926,7 @@
         }
     }
 
-    if (cfx.laser_grid_on && cfx.laser_grid_hue > 0.01f) {
+    if (cfx.laser_grid_on) {
         GLuint p = g_gen_progs[(int)FXType::LaserGrid];
         if (p) {
             glUseProgram(p);
@@ -920,13 +940,14 @@
         }
     }
 
-    if (cfx.technicolor_on && cfx.technicolor_warmth > 0.01f) {
+    if (cfx.technicolor_on && cfx.technicolor_strength > 0.01f) {
         GLuint p = g_gen_progs[(int)FXType::Technicolor];
         if (p) {
             glUseProgram(p);
             glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
             glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
             glUniform1f(glGetUniformLocation(p, "u_time"),  t);
+            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.technicolor_strength);
             glUniform1f(glGetUniformLocation(p, "u_saturation"), cfx.technicolor_saturation);
             glUniform1f(glGetUniformLocation(p, "u_contrast"), cfx.technicolor_contrast);
             glUniform1f(glGetUniformLocation(p, "u_warmth"), cfx.technicolor_warmth);
@@ -934,13 +955,14 @@
         }
     }
 
-    if (cfx.ice_crystal_on && cfx.ice_crystal_refract > 0.01f) {
+    if (cfx.ice_crystal_on && cfx.ice_crystal_strength > 0.01f) {
         GLuint p = g_gen_progs[(int)FXType::IceCrystal];
         if (p) {
             glUseProgram(p);
             glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
             glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
             glUniform1f(glGetUniformLocation(p, "u_time"),  t);
+            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.ice_crystal_strength);
             glUniform1f(glGetUniformLocation(p, "u_scale"), cfx.ice_crystal_scale);
             glUniform1f(glGetUniformLocation(p, "u_refract"), cfx.ice_crystal_refract);
             glUniform1f(glGetUniformLocation(p, "u_tint"), cfx.ice_crystal_tint);
@@ -948,13 +970,14 @@
         }
     }
 
-    if (cfx.kodachrome_on && cfx.kodachrome_reds > 0.01f) {
+    if (cfx.kodachrome_on && cfx.kodachrome_strength > 0.01f) {
         GLuint p = g_gen_progs[(int)FXType::Kodachrome];
         if (p) {
             glUseProgram(p);
             glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
             glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
             glUniform1f(glGetUniformLocation(p, "u_time"),  t);
+            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.kodachrome_strength);
             glUniform1f(glGetUniformLocation(p, "u_saturation"), cfx.kodachrome_saturation);
             glUniform1f(glGetUniformLocation(p, "u_reds"), cfx.kodachrome_reds);
             glUniform1f(glGetUniformLocation(p, "u_shadows"), cfx.kodachrome_shadows);
@@ -990,7 +1013,7 @@
         }
     }
 
-    if (cfx.digital_noise_on && cfx.digital_noise_amount > 0.01f) {
+    if (cfx.digital_noise_on) {
         GLuint p = g_gen_progs[(int)FXType::DigitalNoise];
         if (p) {
             glUseProgram(p);
@@ -1004,7 +1027,7 @@
         }
     }
 
-    if (cfx.color_dodge_on && cfx.color_dodge_amount > 0.01f) {
+    if (cfx.color_dodge_on) {
         GLuint p = g_gen_progs[(int)FXType::ColorDodge];
         if (p) {
             glUseProgram(p);
@@ -1018,13 +1041,14 @@
         }
     }
 
-    if (cfx.warhol_pop_on && cfx.warhol_pop_hue_shift > 0.01f) {
+    if (cfx.warhol_pop_on && cfx.warhol_pop_strength > 0.01f) {
         GLuint p = g_gen_progs[(int)FXType::WarholPop];
         if (p) {
             glUseProgram(p);
             glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
             glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
             glUniform1f(glGetUniformLocation(p, "u_time"),  t);
+            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.warhol_pop_strength);
             glUniform1f(glGetUniformLocation(p, "u_levels"), cfx.warhol_pop_levels);
             glUniform1f(glGetUniformLocation(p, "u_hue_shift"), cfx.warhol_pop_hue_shift);
             glUniform1f(glGetUniformLocation(p, "u_saturation"), cfx.warhol_pop_saturation);
@@ -1032,13 +1056,14 @@
         }
     }
 
-    if (cfx.infrared_film_on && cfx.infrared_film_channel_mix > 0.01f) {
+    if (cfx.infrared_film_on && cfx.infrared_film_strength > 0.01f) {
         GLuint p = g_gen_progs[(int)FXType::InfraredFilm];
         if (p) {
             glUseProgram(p);
             glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
             glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
             glUniform1f(glGetUniformLocation(p, "u_time"),  t);
+            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.infrared_film_strength);
             glUniform1f(glGetUniformLocation(p, "u_channel_mix"), cfx.infrared_film_channel_mix);
             glUniform1f(glGetUniformLocation(p, "u_glow"), cfx.infrared_film_glow);
             glUniform1f(glGetUniformLocation(p, "u_contrast"), cfx.infrared_film_contrast);
@@ -1046,7 +1071,7 @@
         }
     }
 
-    if (cfx.scanline_color_on && cfx.scanline_color_intensity > 0.01f) {
+    if (cfx.scanline_color_on) {
         GLuint p = g_gen_progs[(int)FXType::ScanlineColor];
         if (p) {
             glUseProgram(p);
@@ -1060,7 +1085,7 @@
         }
     }
 
-    if (cfx.data_corrupt_on && cfx.data_corrupt_density > 0.01f) {
+    if (cfx.data_corrupt_on) {
         GLuint p = g_gen_progs[(int)FXType::DataCorrupt];
         if (p) {
             glUseProgram(p);
@@ -1074,7 +1099,7 @@
         }
     }
 
-    if (cfx.long_exposure_on && cfx.long_exposure_threshold > 0.01f) {
+    if (cfx.long_exposure_on) {
         GLuint p = g_gen_progs[(int)FXType::LongExposure];
         if (p) {
             glUseProgram(p);
@@ -1088,27 +1113,28 @@
         }
     }
 
-    if (cfx.pixel_mosaic_on) {
+    if (cfx.pixel_mosaic_on && cfx.pixel_mosaic_strength > 0.01f) {
         GLuint p = g_gen_progs[(int)FXType::PixelMosaic];
         if (p) {
             glUseProgram(p);
             glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
             glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
             glUniform1f(glGetUniformLocation(p, "u_time"),  t);
+            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.pixel_mosaic_strength);
             glUniform1f(glGetUniformLocation(p, "u_block_size"), cfx.pixel_mosaic_block_size);
             glUniform1f(glGetUniformLocation(p, "u_color_steps"), cfx.pixel_mosaic_color_steps);
-            glUniform1f(glGetUniformLocation(p, "u_mix_orig"), cfx.pixel_mosaic_mix_orig);
             run1(p);
         }
     }
 
-    if (cfx.thermal_map_on && cfx.thermal_map_cold_hue > 0.01f) {
+    if (cfx.thermal_map_on && cfx.thermal_map_strength > 0.01f) {
         GLuint p = g_gen_progs[(int)FXType::ThermalMap];
         if (p) {
             glUseProgram(p);
             glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
             glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
             glUniform1f(glGetUniformLocation(p, "u_time"),  t);
+            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.thermal_map_strength);
             glUniform1f(glGetUniformLocation(p, "u_cold_hue"), cfx.thermal_map_cold_hue);
             glUniform1f(glGetUniformLocation(p, "u_hot_hue"), cfx.thermal_map_hot_hue);
             glUniform1f(glGetUniformLocation(p, "u_contrast"), cfx.thermal_map_contrast);
@@ -1117,7 +1143,7 @@
         }
     }
 
-    if (cfx.tilt_shift_on && cfx.tilt_shift_focus_y > 0.01f) {
+    if (cfx.tilt_shift_on) {
         GLuint p = g_gen_progs[(int)FXType::TiltShift];
         if (p) {
             glUseProgram(p);
@@ -1132,7 +1158,7 @@
         }
     }
 
-    if (cfx.raindrop_refract_on && cfx.raindrop_refract_refract_str > 0.01f) {
+    if (cfx.raindrop_refract_on) {
         GLuint p = g_gen_progs[(int)FXType::RaindropRefract];
         if (p) {
             glUseProgram(p);
@@ -1147,13 +1173,14 @@
         }
     }
 
-    if (cfx.risograph_on && cfx.risograph_hue1 > 0.01f) {
+    if (cfx.risograph_on && cfx.risograph_strength > 0.01f) {
         GLuint p = g_gen_progs[(int)FXType::Risograph];
         if (p) {
             glUseProgram(p);
             glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
             glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
             glUniform1f(glGetUniformLocation(p, "u_time"),  t);
+            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.risograph_strength);
             glUniform1f(glGetUniformLocation(p, "u_hue1"), cfx.risograph_hue1);
             glUniform1f(glGetUniformLocation(p, "u_hue2"), cfx.risograph_hue2);
             glUniform1f(glGetUniformLocation(p, "u_dot_size"), cfx.risograph_dot_size);
@@ -1163,13 +1190,14 @@
         }
     }
 
-    if (cfx.vintage_negative_on && cfx.vintage_negative_orange_mask > 0.01f) {
+    if (cfx.vintage_negative_on && cfx.vintage_negative_strength > 0.01f) {
         GLuint p = g_gen_progs[(int)FXType::VintageNegative];
         if (p) {
             glUseProgram(p);
             glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
             glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
             glUniform1f(glGetUniformLocation(p, "u_time"),  t);
+            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.vintage_negative_strength);
             glUniform1f(glGetUniformLocation(p, "u_orange_mask"), cfx.vintage_negative_orange_mask);
             glUniform1f(glGetUniformLocation(p, "u_contrast"), cfx.vintage_negative_contrast);
             glUniform1f(glGetUniformLocation(p, "u_grain"), cfx.vintage_negative_grain);
@@ -1178,22 +1206,22 @@
         }
     }
 
-    if (cfx.pencil_sketch_on && cfx.pencil_sketch_hatching > 0.01f) {
+    if (cfx.pencil_sketch_on && cfx.pencil_sketch_strength > 0.01f) {
         GLuint p = g_gen_progs[(int)FXType::PencilSketch];
         if (p) {
             glUseProgram(p);
             glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
             glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
             glUniform1f(glGetUniformLocation(p, "u_time"),  t);
+            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.pencil_sketch_strength);
             glUniform1f(glGetUniformLocation(p, "u_line_str"), cfx.pencil_sketch_line_str);
             glUniform1f(glGetUniformLocation(p, "u_paper_tone"), cfx.pencil_sketch_paper_tone);
             glUniform1f(glGetUniformLocation(p, "u_hatching"), cfx.pencil_sketch_hatching);
-            glUniform1f(glGetUniformLocation(p, "u_mix_orig"), cfx.pencil_sketch_mix_orig);
             run1(p);
         }
     }
 
-    if (cfx.crt_barrel_on && cfx.crt_barrel_distort > 0.01f) {
+    if (cfx.crt_barrel_on) {
         GLuint p = g_gen_progs[(int)FXType::CrtBarrel];
         if (p) {
             glUseProgram(p);
@@ -1208,7 +1236,7 @@
         }
     }
 
-    if (cfx.rgb_split_wave_on && cfx.rgb_split_wave_amplitude > 0.01f) {
+    if (cfx.rgb_split_wave_on) {
         GLuint p = g_gen_progs[(int)FXType::RgbSplitWave];
         if (p) {
             glUseProgram(p);
@@ -1223,7 +1251,7 @@
         }
     }
 
-    if (cfx.golden_hour_on && cfx.golden_hour_warmth > 0.01f) {
+    if (cfx.golden_hour_on) {
         GLuint p = g_gen_progs[(int)FXType::GoldenHour];
         if (p) {
             glUseProgram(p);
@@ -1238,7 +1266,7 @@
         }
     }
 
-    if (cfx.neon_sign_on && cfx.neon_sign_bg_darken > 0.01f) {
+    if (cfx.neon_sign_on) {
         GLuint p = g_gen_progs[(int)FXType::NeonSign];
         if (p) {
             glUseProgram(p);
@@ -1253,13 +1281,14 @@
         }
     }
 
-    if (cfx.mirror_tunnel_on && cfx.mirror_tunnel_rotation > 0.01f) {
+    if (cfx.mirror_tunnel_on && cfx.mirror_tunnel_strength > 0.01f) {
         GLuint p = g_gen_progs[(int)FXType::MirrorTunnel];
         if (p) {
             glUseProgram(p);
             glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
             glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
             glUniform1f(glGetUniformLocation(p, "u_time"),  t);
+            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.mirror_tunnel_strength);
             glUniform1f(glGetUniformLocation(p, "u_depth"), cfx.mirror_tunnel_depth);
             glUniform1f(glGetUniformLocation(p, "u_rotation"), cfx.mirror_tunnel_rotation);
             glUniform1f(glGetUniformLocation(p, "u_zoom"), cfx.mirror_tunnel_zoom);
@@ -1268,7 +1297,7 @@
         }
     }
 
-    if (cfx.liquid_chrome_on && cfx.liquid_chrome_flow > 0.01f) {
+    if (cfx.liquid_chrome_on) {
         GLuint p = g_gen_progs[(int)FXType::LiquidChrome];
         if (p) {
             glUseProgram(p);
@@ -1285,13 +1314,14 @@
         }
     }
 
-    if (cfx.zone_system_bw_on && cfx.zone_system_bw_grain > 0.01f) {
+    if (cfx.zone_system_bw_on && cfx.zone_system_bw_strength > 0.01f) {
         GLuint p = g_gen_progs[(int)FXType::ZoneSystemBw];
         if (p) {
             glUseProgram(p);
             glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
             glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
             glUniform1f(glGetUniformLocation(p, "u_time"),  t);
+            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.zone_system_bw_strength);
             glUniform1f(glGetUniformLocation(p, "u_zones"), cfx.zone_system_bw_zones);
             glUniform1f(glGetUniformLocation(p, "u_contrast"), cfx.zone_system_bw_contrast);
             glUniform1f(glGetUniformLocation(p, "u_grain"), cfx.zone_system_bw_grain);
@@ -1301,7 +1331,7 @@
         }
     }
 
-    if (cfx.glitter_dust_on && cfx.glitter_dust_color_var > 0.01f) {
+    if (cfx.glitter_dust_on) {
         GLuint p = g_gen_progs[(int)FXType::GlitterDust];
         if (p) {
             glUseProgram(p);
@@ -1317,13 +1347,14 @@
         }
     }
 
-    if (cfx.contour_map_on && cfx.contour_map_line_hue > 0.01f) {
+    if (cfx.contour_map_on && cfx.contour_map_strength > 0.01f) {
         GLuint p = g_gen_progs[(int)FXType::ContourMap];
         if (p) {
             glUseProgram(p);
             glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
             glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
             glUniform1f(glGetUniformLocation(p, "u_time"),  t);
+            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.contour_map_strength);
             glUniform1f(glGetUniformLocation(p, "u_levels"), cfx.contour_map_levels);
             glUniform1f(glGetUniformLocation(p, "u_line_width"), cfx.contour_map_line_width);
             glUniform1f(glGetUniformLocation(p, "u_line_hue"), cfx.contour_map_line_hue);
@@ -1332,7 +1363,7 @@
         }
     }
 
-    if (cfx.film_halation_on && cfx.film_halation_red_shift > 0.01f) {
+    if (cfx.film_halation_on && cfx.film_halation_strength > 0.01f) {
         GLuint p = g_gen_progs[(int)FXType::FilmHalation];
         if (p) {
             glUseProgram(p);
@@ -1347,13 +1378,14 @@
         }
     }
 
-    if (cfx.ascii_art_on && cfx.ascii_art_fg_g > 0.01f) {
+    if (cfx.ascii_art_on && cfx.ascii_art_strength > 0.01f) {
         GLuint p = g_gen_progs[(int)FXType::AsciiArt];
         if (p) {
             glUseProgram(p);
             glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
             glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
             glUniform1f(glGetUniformLocation(p, "u_time"),  t);
+            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.ascii_art_strength);
             glUniform1f(glGetUniformLocation(p, "u_char_size"), cfx.ascii_art_char_size);
             glUniform1f(glGetUniformLocation(p, "u_fg_r"), cfx.ascii_art_fg_r);
             glUniform1f(glGetUniformLocation(p, "u_fg_g"), cfx.ascii_art_fg_g);
@@ -1363,13 +1395,14 @@
         }
     }
 
-    if (cfx.dna_helix_on && cfx.dna_helix_hue > 0.01f) {
+    if (cfx.dna_helix_on && cfx.dna_helix_strength > 0.01f) {
         GLuint p = g_gen_progs[(int)FXType::DnaHelix];
         if (p) {
             glUseProgram(p);
             glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
             glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
             glUniform1f(glGetUniformLocation(p, "u_time"),  t);
+            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.dna_helix_strength);
             glUniform1f(glGetUniformLocation(p, "u_grid_scale"), cfx.dna_helix_grid_scale);
             glUniform1f(glGetUniformLocation(p, "u_wave_amp"), cfx.dna_helix_wave_amp);
             glUniform1f(glGetUniformLocation(p, "u_line_width"), cfx.dna_helix_line_width);
@@ -1380,7 +1413,7 @@
         }
     }
 
-    if (cfx.double_exposure_on && cfx.double_exposure_desaturate2 > 0.01f) {
+    if (cfx.double_exposure_on) {
         GLuint p = g_gen_progs[(int)FXType::DoubleExposure];
         if (p) {
             glUseProgram(p);

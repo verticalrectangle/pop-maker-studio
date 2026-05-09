@@ -1,6 +1,6 @@
 {
   "_comment": "Pop Maker Studio \u2014 generated effects registry. Run tools/codegen_effects.py after changes.",
-  "project_version": 21,
+  "project_version": 22,
   "effects": [
     {
       "id": "pixelate",
@@ -129,6 +129,14 @@
       "shader": "shaders/duotone.glsl",
       "params": [
         {
+          "name": "strength",
+          "label": "Strength",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 1.0,
+          "fmt": "%.2f"
+        },
+        {
           "name": "shadow_r",
           "label": "Shadow R",
           "min": 0.0,
@@ -248,6 +256,14 @@
       "description": "Amplified green channel  \u00b7  phosphor noise  \u00b7  vignette",
       "shader": "shaders/night_vision.glsl",
       "params": [
+        {
+          "name": "strength",
+          "label": "Strength",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 1.0,
+          "fmt": "%.2f"
+        },
         {
           "name": "noise",
           "label": "Static",
@@ -385,6 +401,14 @@
       "shader": "shaders/posterize.glsl",
       "params": [
         {
+          "name": "strength",
+          "label": "Strength",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 1.0,
+          "fmt": "%.2f"
+        },
+        {
           "name": "levels",
           "label": "Color Levels",
           "min": 2.0,
@@ -521,6 +545,14 @@
       "shader": "shaders/crt.glsl",
       "params": [
         {
+          "name": "strength",
+          "label": "Strength",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 1.0,
+          "fmt": "%.2f"
+        },
+        {
           "name": "curvature",
           "label": "Curvature",
           "min": 0.0,
@@ -616,6 +648,14 @@
       "description": "Vignetted  \u00b7  saturated lo-fi  \u00b7  light leaks  \u00b7  toy camera",
       "shader": "shaders/lomo.glsl",
       "params": [
+        {
+          "name": "strength",
+          "label": "Strength",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 1.0,
+          "fmt": "%.2f"
+        },
         {
           "name": "vignette",
           "label": "Vignette",
@@ -777,6 +817,14 @@
       "shader": "shaders/kaleidoscope.glsl",
       "params": [
         {
+          "name": "strength",
+          "label": "Strength",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 1.0,
+          "fmt": "%.2f"
+        },
+        {
           "name": "segments",
           "label": "Segments",
           "default": 8.0,
@@ -912,6 +960,14 @@
       ],
       "shader": "shaders/barrel_warp.glsl",
       "params": [
+        {
+          "name": "strength",
+          "label": "Strength",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 1.0,
+          "fmt": "%.2f"
+        },
         {
           "name": "k1",
           "label": "Barrel",
@@ -1233,6 +1289,14 @@
       "shader": "shaders/oil_paint.glsl",
       "params": [
         {
+          "name": "strength",
+          "label": "Strength",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 1.0,
+          "fmt": "%.2f"
+        },
+        {
           "name": "radius",
           "label": "Brush",
           "default": 4.0,
@@ -1264,6 +1328,14 @@
       ],
       "shader": "shaders/stained_glass.glsl",
       "params": [
+        {
+          "name": "strength",
+          "label": "Strength",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 1.0,
+          "fmt": "%.2f"
+        },
         {
           "name": "cell_size",
           "label": "Cell Size",
@@ -1304,6 +1376,14 @@
       ],
       "shader": "shaders/neon_edge_glow.glsl",
       "params": [
+        {
+          "name": "strength",
+          "label": "Strength",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 1.0,
+          "fmt": "%.2f"
+        },
         {
           "name": "threshold",
           "label": "Threshold",
@@ -1537,6 +1617,14 @@
       "shader": "shaders/watercolor.glsl",
       "params": [
         {
+          "name": "strength",
+          "label": "Strength",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 1.0,
+          "fmt": "%.2f"
+        },
+        {
           "name": "bleeding",
           "label": "Bleeding",
           "default": 0.018,
@@ -1576,6 +1664,14 @@
       ],
       "shader": "shaders/comic_dots.glsl",
       "params": [
+        {
+          "name": "strength",
+          "label": "Strength",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 1.0,
+          "fmt": "%.2f"
+        },
         {
           "name": "dot_size",
           "label": "Dot Size",
@@ -1617,6 +1713,14 @@
       "shader": "shaders/crosshatch.glsl",
       "params": [
         {
+          "name": "strength",
+          "label": "Strength",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 1.0,
+          "fmt": "%.2f"
+        },
+        {
           "name": "density",
           "label": "Density",
           "default": 6.0,
@@ -1657,6 +1761,14 @@
       "shader": "shaders/daguerreotype.glsl",
       "params": [
         {
+          "name": "strength",
+          "label": "Strength",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 1.0,
+          "fmt": "%.2f"
+        },
+        {
           "name": "tone",
           "label": "Tone",
           "default": 0.5,
@@ -1696,6 +1808,14 @@
       ],
       "shader": "shaders/super8_film.glsl",
       "params": [
+        {
+          "name": "strength",
+          "label": "Strength",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 1.0,
+          "fmt": "%.2f"
+        },
         {
           "name": "grain",
           "label": "Grain",
@@ -1777,6 +1897,14 @@
       "shader": "shaders/x_ray.glsl",
       "params": [
         {
+          "name": "strength",
+          "label": "Strength",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 1.0,
+          "fmt": "%.2f"
+        },
+        {
           "name": "contrast",
           "label": "Contrast",
           "default": 1.8,
@@ -1808,6 +1936,14 @@
       ],
       "shader": "shaders/bit_crush.glsl",
       "params": [
+        {
+          "name": "strength",
+          "label": "Strength",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 1.0,
+          "fmt": "%.2f"
+        },
         {
           "name": "levels",
           "label": "Levels",
@@ -1872,6 +2008,14 @@
       ],
       "shader": "shaders/dither_bayer.glsl",
       "params": [
+        {
+          "name": "strength",
+          "label": "Strength",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 1.0,
+          "fmt": "%.2f"
+        },
         {
           "name": "levels",
           "label": "Levels",
@@ -2105,6 +2249,14 @@
       "shader": "shaders/pointillist.glsl",
       "params": [
         {
+          "name": "strength",
+          "label": "Strength",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 1.0,
+          "fmt": "%.2f"
+        },
+        {
           "name": "dot_size",
           "label": "Dot Size",
           "default": 5.0,
@@ -2217,6 +2369,14 @@
       "shader": "shaders/mirror_fold.glsl",
       "params": [
         {
+          "name": "strength",
+          "label": "Strength",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 1.0,
+          "fmt": "%.2f"
+        },
+        {
           "name": "axis",
           "label": "Axis",
           "default": 0.5,
@@ -2231,14 +2391,6 @@
           "min": 0.0,
           "max": 1.0,
           "fmt": "%.0f"
-        },
-        {
-          "name": "blend",
-          "label": "Blend",
-          "default": 0.0,
-          "min": 0.0,
-          "max": 1.0,
-          "fmt": "%.2f"
         }
       ]
     },
@@ -2256,6 +2408,14 @@
       ],
       "shader": "shaders/echo_trails.glsl",
       "params": [
+        {
+          "name": "strength",
+          "label": "Strength",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 1.0,
+          "fmt": "%.2f"
+        },
         {
           "name": "offset",
           "label": "Offset",
@@ -2297,6 +2457,14 @@
       "shader": "shaders/gradient_map.glsl",
       "params": [
         {
+          "name": "strength",
+          "label": "Strength",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 1.0,
+          "fmt": "%.2f"
+        },
+        {
           "name": "hue1",
           "label": "Shadow Hue",
           "default": 0.65,
@@ -2308,14 +2476,6 @@
           "name": "hue2",
           "label": "Highlight Hue",
           "default": 0.12,
-          "min": 0.0,
-          "max": 1.0,
-          "fmt": "%.2f"
-        },
-        {
-          "name": "mix_orig",
-          "label": "Mix Original",
-          "default": 0.0,
           "min": 0.0,
           "max": 1.0,
           "fmt": "%.2f"
@@ -2489,6 +2649,14 @@
       "shader": "shaders/technicolor.glsl",
       "params": [
         {
+          "name": "strength",
+          "label": "Strength",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 1.0,
+          "fmt": "%.2f"
+        },
+        {
           "name": "saturation",
           "label": "Saturation",
           "default": 2.0,
@@ -2529,6 +2697,14 @@
       "shader": "shaders/ice_crystal.glsl",
       "params": [
         {
+          "name": "strength",
+          "label": "Strength",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 1.0,
+          "fmt": "%.2f"
+        },
+        {
           "name": "scale",
           "label": "Scale",
           "default": 8.0,
@@ -2568,6 +2744,14 @@
       ],
       "shader": "shaders/kodachrome.glsl",
       "params": [
+        {
+          "name": "strength",
+          "label": "Strength",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 1.0,
+          "fmt": "%.2f"
+        },
         {
           "name": "saturation",
           "label": "Saturation",
@@ -2769,6 +2953,14 @@
       "shader": "shaders/warhol_pop.glsl",
       "params": [
         {
+          "name": "strength",
+          "label": "Strength",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 1.0,
+          "fmt": "%.2f"
+        },
+        {
           "name": "levels",
           "label": "Levels",
           "default": 4.0,
@@ -2808,6 +3000,14 @@
       ],
       "shader": "shaders/infrared_film.glsl",
       "params": [
+        {
+          "name": "strength",
+          "label": "Strength",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 1.0,
+          "fmt": "%.2f"
+        },
         {
           "name": "channel_mix",
           "label": "IR Mix",
@@ -2959,6 +3159,16 @@
       "label": "Pixel Mosaic",
       "params": [
         {
+          "name": "strength",
+          "label": "Strength",
+          "type": "float",
+          "min": 0,
+          "max": 1,
+          "default": 1.0,
+          "step": 0.01,
+          "fmt": "%.2f"
+        },
+        {
           "name": "block_size",
           "label": "Block Size",
           "type": "float",
@@ -2977,16 +3187,6 @@
           "default": 6,
           "step": 1,
           "fmt": "%.0f"
-        },
-        {
-          "name": "mix_orig",
-          "label": "Mix Original",
-          "type": "float",
-          "min": 0,
-          "max": 1,
-          "default": 0.0,
-          "step": 0.01,
-          "fmt": "%.2f"
         }
       ],
       "shader": "shaders/pixel_mosaic.glsl",
@@ -3004,6 +3204,14 @@
       "id": "thermal_map",
       "label": "Thermal Camera",
       "params": [
+        {
+          "name": "strength",
+          "label": "Strength",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 1.0,
+          "fmt": "%.2f"
+        },
         {
           "name": "cold_hue",
           "label": "Cold Hue",
@@ -3174,6 +3382,14 @@
       "label": "Risograph Print",
       "params": [
         {
+          "name": "strength",
+          "label": "Strength",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 1.0,
+          "fmt": "%.2f"
+        },
+        {
           "name": "hue1",
           "label": "Ink 1 Hue",
           "type": "float",
@@ -3240,6 +3456,14 @@
       "label": "Vintage Negative",
       "params": [
         {
+          "name": "strength",
+          "label": "Strength",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 1.0,
+          "fmt": "%.2f"
+        },
+        {
           "name": "orange_mask",
           "label": "Orange Mask",
           "type": "float",
@@ -3297,6 +3521,16 @@
       "label": "Pencil Sketch",
       "params": [
         {
+          "name": "strength",
+          "label": "Strength",
+          "type": "float",
+          "min": 0,
+          "max": 1,
+          "default": 1.0,
+          "step": 0.01,
+          "fmt": "%.2f"
+        },
+        {
           "name": "line_str",
           "label": "Line Strength",
           "type": "float",
@@ -3323,16 +3557,6 @@
           "min": 0,
           "max": 1,
           "default": 0.4,
-          "step": 0.01,
-          "fmt": "%.2f"
-        },
-        {
-          "name": "mix_orig",
-          "label": "Mix Color",
-          "type": "float",
-          "min": 0,
-          "max": 1,
-          "default": 0.0,
           "step": 0.01,
           "fmt": "%.2f"
         }
@@ -3578,6 +3802,14 @@
       "label": "Mirror Tunnel",
       "params": [
         {
+          "name": "strength",
+          "label": "Strength",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 1.0,
+          "fmt": "%.2f"
+        },
+        {
           "name": "depth",
           "label": "Depth",
           "type": "float",
@@ -3711,6 +3943,14 @@
       "id": "zone_system_bw",
       "label": "Zone System B&W",
       "params": [
+        {
+          "name": "strength",
+          "label": "Strength",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 1.0,
+          "fmt": "%.2f"
+        },
         {
           "name": "zones",
           "label": "Zones",
@@ -3846,6 +4086,14 @@
       "label": "Contour Map",
       "params": [
         {
+          "name": "strength",
+          "label": "Strength",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 1.0,
+          "fmt": "%.2f"
+        },
+        {
           "name": "levels",
           "label": "Levels",
           "type": "float",
@@ -3958,6 +4206,14 @@
       "label": "ASCII Art",
       "params": [
         {
+          "name": "strength",
+          "label": "Strength",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 1.0,
+          "fmt": "%.2f"
+        },
+        {
           "name": "char_size",
           "label": "Char Size",
           "type": "float",
@@ -4023,6 +4279,14 @@
       "id": "dna_helix",
       "label": "DNA Helix Grid",
       "params": [
+        {
+          "name": "strength",
+          "label": "Strength",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 1.0,
+          "fmt": "%.2f"
+        },
         {
           "name": "grid_scale",
           "label": "Grid Scale",

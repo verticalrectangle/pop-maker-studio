@@ -5,6 +5,7 @@ uniform sampler2D u_tex;
 uniform float u_saturation;
 uniform float u_contrast;
 uniform float u_warmth;
+uniform float u_strength;
 void main() {
     vec4 col = texture(u_tex, v_uv);
     float lum = dot(col.rgb, vec3(0.299, 0.587, 0.114));
@@ -19,5 +20,5 @@ void main() {
     float r = texture(u_tex, clamp(v_uv + vec2(0.002, 0.0), 0.0, 1.0)).r;
     float lum2 = dot(sat, vec3(0.299, 0.587, 0.114));
     sat.r = mix(sat.r, pow(r * (1.0 + u_warmth*0.3), 0.9), 0.3);
-    frag = vec4(clamp(sat, 0.0, 1.0), col.a);
+    frag = vec4(clamp(mix(col.rgb, sat, u_strength), 0.0, 1.0), col.a);
 }

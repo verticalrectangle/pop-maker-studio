@@ -6,7 +6,7 @@ uniform float u_tex_w;
 uniform float u_tex_h;
 uniform float u_block_size;
 uniform float u_color_steps;
-uniform float u_mix_orig;
+uniform float u_strength;
 void main() {
     vec2 px = vec2(u_tex_w, u_tex_h);
     vec2 block = floor(v_uv * px / u_block_size) * u_block_size / px;
@@ -15,5 +15,5 @@ void main() {
     vec4 c = texture(u_tex, clamp(center, 0.0, 1.0));
     // Quantize to color_steps levels
     c.rgb = floor(c.rgb * u_color_steps + 0.5) / u_color_steps;
-    frag = vec4(mix(c.rgb, orig.rgb, u_mix_orig), orig.a);
+    frag = vec4(mix(orig.rgb, c.rgb, u_strength), orig.a);
 }

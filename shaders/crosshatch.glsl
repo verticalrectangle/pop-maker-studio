@@ -7,6 +7,7 @@ uniform float u_tex_h;
 uniform float u_density;
 uniform float u_thickness;
 uniform float u_angle;
+uniform float u_strength;
 void main() {
     const float DEG2RAD = 0.017453293;
     vec4 col = texture(u_tex, v_uv);
@@ -33,5 +34,5 @@ void main() {
     vec3 result = vec3(paper) * (1.0 - ink * 0.9);
     // Faint original color show-through
     result = mix(result, result * (col.rgb * 0.4 + 0.7), 0.25);
-    frag = vec4(clamp(result, 0.0, 1.0), col.a);
+    frag = vec4(clamp(mix(col.rgb, result, u_strength), 0.0, 1.0), col.a);
 }

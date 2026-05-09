@@ -4,7 +4,7 @@ out vec4 frag;
 uniform sampler2D u_tex;
 uniform float u_axis;
 uniform float u_vertical;
-uniform float u_blend;
+uniform float u_strength;
 void main() {
     vec2 uv = v_uv;
     vec2 mirrored = uv;
@@ -17,5 +17,5 @@ void main() {
     }
     vec4 orig = texture(u_tex, clamp(uv, 0.0, 1.0));
     vec4 fold = texture(u_tex, clamp(mirrored, 0.0, 1.0));
-    frag = mix(fold, orig, u_blend);
+    frag = mix(orig, fold, u_strength);
 }

@@ -9,6 +9,7 @@ uniform float u_contrast;
 uniform float u_grain;
 uniform float u_paper_white;
 uniform float u_time;
+uniform float u_strength;
 float hash(vec2 p) { return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453); }
 void main() {
     vec4 col = texture(u_tex, v_uv);
@@ -24,5 +25,5 @@ void main() {
     lum = clamp(lum + g, 0.0, 1.0);
     // Paper: white point + very slight warm tint
     vec3 result = mix(vec3(0.04, 0.035, 0.03), vec3(u_paper_white, u_paper_white*0.99, u_paper_white*0.96), lum);
-    frag = vec4(result, col.a);
+    frag = vec4(mix(col.rgb, result, u_strength), col.a);
 }

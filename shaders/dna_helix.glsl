@@ -8,6 +8,7 @@ uniform float u_line_width;
 uniform float u_hue;
 uniform float u_bg_darken;
 uniform float u_time;
+uniform float u_strength;
 vec3 hue2rgb(float h) {
     vec4 K = vec4(1.0,2.0/3.0,1.0/3.0,3.0);
     return clamp(abs(fract(h+K.xyz)*6.0-K.www)-K.xxx, 0.0, 1.0);
@@ -39,5 +40,5 @@ void main() {
     vec3 line_col = hue2rgb(hv);
     vec3 bg = col.rgb * (1.0 - u_bg_darken * 0.5);
     vec3 result = mix(bg, line_col, overlay);
-    frag = vec4(clamp(result, 0.0, 1.0), col.a);
+    frag = vec4(clamp(mix(col.rgb, result, u_strength), 0.0, 1.0), col.a);
 }

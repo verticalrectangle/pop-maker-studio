@@ -78,12 +78,14 @@ out vec4 frag;
 uniform sampler2D u_tex;
 uniform float u_shadow_r, u_shadow_g, u_shadow_b;
 uniform float u_highlight_r, u_highlight_g, u_highlight_b;
+uniform float u_strength;
 void main() {
     vec4 col = texture(u_tex, v_uv);
     float luma = dot(col.rgb, vec3(0.299, 0.587, 0.114));
     vec3 shadow    = vec3(u_shadow_r,    u_shadow_g,    u_shadow_b);
     vec3 highlight = vec3(u_highlight_r, u_highlight_g, u_highlight_b);
-    frag = vec4(mix(shadow, highlight, luma), col.a);
+    vec3 duotone_result = mix(shadow, highlight, luma);
+    frag = vec4(mix(col.rgb, duotone_result, u_strength), col.a);
 }
 )glsl";
 
@@ -150,6 +152,7 @@ uniform sampler2D u_tex;
 uniform float u_time;
 uniform float u_noise;
 uniform float u_gain;
+uniform float u_strength;
 float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
 void main() {
     vec4 col = texture(u_tex, v_uv);
@@ -160,7 +163,8 @@ void main() {
     vec2 d = v_uv - 0.5;
     float vig = 1.0 - smoothstep(0.3, 0.75, length(d) * 1.3);
     float g = clamp(luma + n, 0.0, 1.0) * vig;
-    frag = vec4(g * 0.15, g, g * 0.08, col.a);
+    vec3 nv_result = vec3(g * 0.15, g, g * 0.08);
+    frag = vec4(mix(col.rgb, nv_result, u_strength), col.a);
 }
 )glsl";
 
@@ -247,11 +251,12 @@ in vec2 v_uv;
 out vec4 frag;
 uniform sampler2D u_tex;
 uniform float u_levels;
+uniform float u_strength;
 void main() {
     vec4 col = texture(u_tex, v_uv);
     float n = max(2.0, u_levels);
     vec3 p = floor(col.rgb * n + 0.5) / n;
-    frag = vec4(p, col.a);
+    frag = vec4(mix(col.rgb, p, u_strength), col.a);
 }
 )glsl";
 
@@ -348,7 +353,9 @@ uniform sampler2D u_tex;
 uniform float u_tex_h;
 uniform float u_curvature;
 uniform float u_glow;
+uniform float u_strength;
 void main() {
+    vec4 orig = texture(u_tex, v_uv);
     // Barrel warp
     vec2 p = v_uv * 2.0 - 1.0;
     p += p * p.yx * p.yx * u_curvature * 0.3;
@@ -367,6 +374,7 @@ void main() {
     // Screen-edge vignette
     vec2 edge = smoothstep(0.0, 0.05, warped) * smoothstep(1.0, 0.95, warped);
     col.rgb *= edge.x * edge.y;
+    col.rgb = mix(orig.rgb, col.rgb, u_strength);
     frag = col;
 }
 )glsl";
@@ -431,6 +439,7 @@ uniform sampler2D u_tex;
 uniform float u_vignette;
 uniform float u_saturation;
 uniform float u_fade;
+uniform float u_strength;
 void main() {
     vec4 col = texture(u_tex, v_uv);
     // Saturation boost
@@ -441,7 +450,8 @@ void main() {
     // Vignette
     vec2 d = (v_uv - 0.5) * vec2(1.0, 1.4);
     float vig = 1.0 - smoothstep(0.3, 0.75, length(d)) * u_vignette;
-    frag = vec4(sat * vig, col.a);
+    vec3 lomo_result = sat * vig;
+    frag = vec4(mix(col.rgb, lomo_result, u_strength), col.a);
 }
 )glsl";
 
@@ -508,6 +518,7 @@ uniform sampler2D u_tex;
 uniform float u_segments;
 uniform float u_rotation;
 uniform float u_zoom;
+uniform float u_strength;
 void main() {
     const float PI = 3.14159265;
     vec2 c = vec2(0.5, 0.5);
@@ -520,7 +531,9 @@ void main() {
     vec2 uv = c + vec2(cos(angle), sin(angle)) * radius;
     // Mirror-tile so out-of-bounds regions fold back rather than clamp to edges
     uv = abs(fract(uv * 0.5) * 2.0 - 1.0);
-    frag = texture(u_tex, uv);
+    vec4 orig = texture(u_tex, v_uv);
+    vec4 effect = texture(u_tex, uv);
+    frag = vec4(mix(orig.rgb, effect.rgb, u_strength), orig.a);
 }
 )glsl";
 
@@ -599,12 +612,15 @@ uniform sampler2D u_tex;
 uniform float u_k1;
 uniform float u_k2;
 uniform float u_scale;
+uniform float u_strength;
 void main() {
     vec2 d = (v_uv - 0.5) / u_scale;
     float r2 = dot(d, d);
     float distort = 1.0 + u_k1 * r2 + u_k2 * r2 * r2;
     vec2 uv = d * distort + 0.5;
-    frag = texture(u_tex, clamp(uv, 0.0, 1.0));
+    vec4 orig = texture(u_tex, v_uv);
+    vec4 warped = texture(u_tex, clamp(uv, 0.0, 1.0));
+    frag = vec4(mix(orig.rgb, warped.rgb, u_strength), orig.a);
 }
 )glsl";
 
@@ -854,6 +870,7 @@ uniform float u_tex_w;
 uniform float u_tex_h;
 uniform float u_radius;
 uniform float u_sharpness;
+uniform float u_strength;
 void main() {
     // Kuwahara filter: pick quadrant with minimum variance
     vec2 px = vec2(1.0/u_tex_w, 1.0/u_tex_h);
@@ -882,7 +899,8 @@ void main() {
     }
     // Slight sharpness boost
     vec3 orig = texture(u_tex, v_uv).rgb;
-    frag = vec4(clamp(result + (result - orig) * (u_sharpness * 0.05), 0.0, 1.0), 1.0);
+    vec3 oil_result = clamp(result + (result - orig) * (u_sharpness * 0.05), 0.0, 1.0);
+    frag = vec4(mix(orig, oil_result, u_strength), 1.0);
 }
 )glsl";
 
@@ -896,6 +914,7 @@ uniform float u_tex_h;
 uniform float u_cell_size;
 uniform float u_border;
 uniform float u_saturation;
+uniform float u_strength;
 float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1,311.7)))*43758.5453); }
 void main() {
     vec2 uv_px = v_uv * vec2(u_tex_w, u_tex_h);
@@ -932,7 +951,8 @@ void main() {
     float lum = dot(cell_col, vec3(0.299, 0.587, 0.114));
     cell_col = mix(vec3(lum), cell_col, u_saturation);
     vec3 result = cell_col * border_mask;
-    frag = vec4(clamp(result, 0.0, 1.0), 1.0);
+    vec4 orig = texture(u_tex, v_uv);
+    frag = vec4(clamp(mix(orig.rgb, result, u_strength), 0.0, 1.0), orig.a);
 }
 )glsl";
 
@@ -946,6 +966,7 @@ uniform float u_tex_h;
 uniform float u_threshold;
 uniform float u_glow;
 uniform float u_hue;
+uniform float u_strength;
 void main() {
     vec2 px = vec2(1.0/u_tex_w, 1.0/u_tex_h);
     // Sobel edge detection
@@ -976,7 +997,7 @@ void main() {
         bloom += neon_col * edge / (r * r + 1.0);
     }
     result += bloom * u_glow * 0.3;
-    frag = vec4(clamp(result, 0.0, 1.0), col.a);
+    frag = vec4(clamp(mix(col.rgb, result, u_strength), 0.0, 1.0), col.a);
 }
 )glsl";
 
@@ -1142,6 +1163,7 @@ uniform float u_tex_h;
 uniform float u_bleeding;
 uniform float u_paper;
 uniform float u_saturation;
+uniform float u_strength;
 float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1,311.7)))*43758.5453); }
 void main() {
     vec2 px = vec2(1.0/u_tex_w, 1.0/u_tex_h);
@@ -1166,7 +1188,7 @@ void main() {
     wash = mix(vec3(lum), wash, u_saturation) * paper_tex;
     // Slight edge darkening (wet paper bloom)
     vec4 orig = texture(u_tex, v_uv);
-    frag = vec4(clamp(wash, 0.0, 1.0), orig.a);
+    frag = vec4(clamp(mix(orig.rgb, wash, u_strength), 0.0, 1.0), orig.a);
 }
 )glsl";
 
@@ -1180,6 +1202,7 @@ uniform float u_tex_h;
 uniform float u_dot_size;
 uniform float u_ink_threshold;
 uniform float u_color_levels;
+uniform float u_strength;
 void main() {
     vec2 px = vec2(1.0/u_tex_w, 1.0/u_tex_h);
     // Snap to dot grid
@@ -1200,7 +1223,8 @@ void main() {
              -texture(u_tex, v_uv - vec2(0,  px.y)).rgb;
     float edge = clamp((length(gx)+length(gy) - u_ink_threshold) * 8.0, 0.0, 1.0);
     vec3 result = mix(vec3(1.0), cell_col, in_dot) * (1.0 - edge);
-    frag = vec4(clamp(result, 0.0, 1.0), 1.0);
+    vec4 orig = texture(u_tex, v_uv);
+    frag = vec4(clamp(mix(orig.rgb, result, u_strength), 0.0, 1.0), orig.a);
 }
 )glsl";
 
@@ -1214,6 +1238,7 @@ uniform float u_tex_h;
 uniform float u_density;
 uniform float u_thickness;
 uniform float u_angle;
+uniform float u_strength;
 void main() {
     const float DEG2RAD = 0.017453293;
     vec4 col = texture(u_tex, v_uv);
@@ -1240,7 +1265,7 @@ void main() {
     vec3 result = vec3(paper) * (1.0 - ink * 0.9);
     // Faint original color show-through
     result = mix(result, result * (col.rgb * 0.4 + 0.7), 0.25);
-    frag = vec4(clamp(result, 0.0, 1.0), col.a);
+    frag = vec4(clamp(mix(col.rgb, result, u_strength), 0.0, 1.0), col.a);
 }
 )glsl";
 
@@ -1253,6 +1278,7 @@ uniform float u_tone;
 uniform float u_vignette;
 uniform float u_scratch;
 uniform float u_time;
+uniform float u_strength;
 float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1,311.7)))*43758.5453); }
 void main() {
     vec4 col = texture(u_tex, v_uv);
@@ -1274,7 +1300,7 @@ void main() {
     toned += scratch * 0.4;
     // Silver plate texture noise
     float plate = hash(v_uv * 500.0) * 0.04 - 0.02;
-    frag = vec4(clamp(toned + plate, 0.0, 1.0), col.a);
+    frag = vec4(clamp(mix(col.rgb, toned + plate, u_strength), 0.0, 1.0), col.a);
 }
 )glsl";
 
@@ -1287,6 +1313,7 @@ uniform float u_grain;
 uniform float u_gate;
 uniform float u_fade;
 uniform float u_time;
+uniform float u_strength;
 float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1,311.7)))*43758.5453); }
 void main() {
     // Gate weave: horizontal shift per frame
@@ -1306,7 +1333,8 @@ void main() {
     float frame_v = smoothstep(0.0, 0.04, v_uv.y) * smoothstep(1.0, 0.96, v_uv.y);
     float frame_h = smoothstep(0.0, 0.03, v_uv.x) * smoothstep(1.0, 0.97, v_uv.x);
     warm *= frame_v * frame_h;
-    frag = vec4(clamp(warm, 0.0, 1.0), col.a);
+    vec4 exact_orig = texture(u_tex, v_uv);
+    frag = vec4(clamp(mix(exact_orig.rgb, warm, u_strength), 0.0, 1.0), exact_orig.a);
 }
 )glsl";
 
@@ -1348,6 +1376,7 @@ out vec4 frag;
 uniform sampler2D u_tex;
 uniform float u_contrast;
 uniform float u_blue_tint;
+uniform float u_strength;
 void main() {
     vec4 col = texture(u_tex, v_uv);
     float lum = dot(col.rgb, vec3(0.299, 0.587, 0.114));
@@ -1362,7 +1391,7 @@ void main() {
         inv
     );
     xray = mix(vec3(inv), xray, u_blue_tint);
-    frag = vec4(clamp(xray, 0.0, 1.0), col.a);
+    frag = vec4(clamp(mix(col.rgb, xray, u_strength), 0.0, 1.0), col.a);
 }
 )glsl";
 
@@ -1375,6 +1404,7 @@ uniform float u_tex_w;
 uniform float u_tex_h;
 uniform float u_levels;
 uniform float u_dither;
+uniform float u_strength;
 void main() {
     vec4 col = texture(u_tex, v_uv);
     // 4x4 Bayer matrix for dithering
@@ -1389,7 +1419,7 @@ void main() {
     float step_size = 1.0 / max(u_levels - 1.0, 1.0);
     vec3 dithered = col.rgb + threshold * step_size * u_dither;
     vec3 crushed = floor(dithered / step_size + 0.5) * step_size;
-    frag = vec4(clamp(crushed, 0.0, 1.0), col.a);
+    frag = vec4(clamp(mix(col.rgb, crushed, u_strength), 0.0, 1.0), col.a);
 }
 )glsl";
 
@@ -1434,6 +1464,7 @@ uniform float u_tex_h;
 uniform float u_levels;
 uniform float u_scale;
 uniform float u_color;
+uniform float u_strength;
 void main() {
     vec4 col = texture(u_tex, v_uv);
     float lum = dot(col.rgb, vec3(0.299, 0.587, 0.114));
@@ -1463,7 +1494,7 @@ void main() {
     float quant = floor(dith_lum / step_sz + 0.5) * step_sz;
     // Color dither or monochrome
     vec3 result = mix(vec3(quant), col.rgb * quant / max(lum, 0.001), u_color);
-    frag = vec4(clamp(result, 0.0, 1.0), col.a);
+    frag = vec4(clamp(mix(col.rgb, result, u_strength), 0.0, 1.0), col.a);
 }
 )glsl";
 
@@ -1613,6 +1644,7 @@ uniform float u_tex_w;
 uniform float u_tex_h;
 uniform float u_dot_size;
 uniform float u_scatter;
+uniform float u_strength;
 float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1,311.7)))*43758.5453); }
 void main() {
     vec2 px = vec2(1.0/u_tex_w, 1.0/u_tex_h);
@@ -1650,7 +1682,8 @@ void main() {
     float r = (1.0 - cell_lum * 0.7) * px.x * sz * 0.55;
     vec2 local = v_uv - best_center;
     result = (length(local) < r) ? cell_color : vec3(0.95);
-    frag = vec4(clamp(result, 0.0, 1.0), 1.0);
+    vec4 orig = texture(u_tex, v_uv);
+    frag = vec4(clamp(mix(orig.rgb, result, u_strength), 0.0, 1.0), orig.a);
 }
 )glsl";
 
@@ -1726,7 +1759,7 @@ out vec4 frag;
 uniform sampler2D u_tex;
 uniform float u_axis;
 uniform float u_vertical;
-uniform float u_blend;
+uniform float u_strength;
 void main() {
     vec2 uv = v_uv;
     vec2 mirrored = uv;
@@ -1739,7 +1772,7 @@ void main() {
     }
     vec4 orig = texture(u_tex, clamp(uv, 0.0, 1.0));
     vec4 fold = texture(u_tex, clamp(mirrored, 0.0, 1.0));
-    frag = mix(fold, orig, u_blend);
+    frag = mix(orig, fold, u_strength);
 }
 )glsl";
 
@@ -1751,6 +1784,7 @@ uniform sampler2D u_tex;
 uniform float u_offset;
 uniform float u_fade;
 uniform float u_angle;
+uniform float u_strength;
 void main() {
     const float DEG2RAD = 0.017453293;
     float a = u_angle * DEG2RAD;
@@ -1766,7 +1800,7 @@ void main() {
         result.rgb = 1.0 - (1.0 - result.rgb) * (1.0 - echo.rgb * w);
         w *= u_fade;
     }
-    frag = vec4(clamp(result.rgb, 0.0, 1.0), col.a);
+    frag = vec4(clamp(mix(col.rgb, result.rgb, u_strength), 0.0, 1.0), col.a);
 }
 )glsl";
 
@@ -1777,7 +1811,7 @@ out vec4 frag;
 uniform sampler2D u_tex;
 uniform float u_hue1;
 uniform float u_hue2;
-uniform float u_mix_orig;
+uniform float u_strength;
 void main() {
     vec4 col = texture(u_tex, v_uv);
     float lum = dot(col.rgb, vec3(0.299, 0.587, 0.114));
@@ -1788,7 +1822,7 @@ void main() {
     vec3 c1 = clamp(p1 - K.xxx, 0.0, 1.0);
     vec3 c2 = clamp(p2 - K.xxx, 0.0, 1.0);
     vec3 mapped = mix(c1, c2, lum);
-    vec3 result = mix(mapped, col.rgb, u_mix_orig);
+    vec3 result = mix(col.rgb, mapped, u_strength);
     frag = vec4(clamp(result, 0.0, 1.0), col.a);
 }
 )glsl";
@@ -1930,6 +1964,7 @@ uniform sampler2D u_tex;
 uniform float u_saturation;
 uniform float u_contrast;
 uniform float u_warmth;
+uniform float u_strength;
 void main() {
     vec4 col = texture(u_tex, v_uv);
     float lum = dot(col.rgb, vec3(0.299, 0.587, 0.114));
@@ -1944,7 +1979,7 @@ void main() {
     float r = texture(u_tex, clamp(v_uv + vec2(0.002, 0.0), 0.0, 1.0)).r;
     float lum2 = dot(sat, vec3(0.299, 0.587, 0.114));
     sat.r = mix(sat.r, pow(r * (1.0 + u_warmth*0.3), 0.9), 0.3);
-    frag = vec4(clamp(sat, 0.0, 1.0), col.a);
+    frag = vec4(clamp(mix(col.rgb, sat, u_strength), 0.0, 1.0), col.a);
 }
 )glsl";
 
@@ -1958,6 +1993,7 @@ uniform float u_tex_h;
 uniform float u_scale;
 uniform float u_refract;
 uniform float u_tint;
+uniform float u_strength;
 float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1,311.7)))*43758.5453); }
 void main() {
     vec2 uv_sc = v_uv * vec2(u_tex_w, u_tex_h) / u_scale;
@@ -1987,7 +2023,8 @@ void main() {
     vec3 ice_tint = mix(sample_col, sample_col * vec3(0.7, 0.85, 1.2), u_tint);
     // Bright borders
     ice_tint += border * 0.5 * vec3(0.8, 0.9, 1.0);
-    frag = vec4(clamp(ice_tint, 0.0, 1.0), 1.0);
+    vec4 orig = texture(u_tex, v_uv);
+    frag = vec4(clamp(mix(orig.rgb, ice_tint, u_strength), 0.0, 1.0), orig.a);
 }
 )glsl";
 
@@ -1999,6 +2036,7 @@ uniform sampler2D u_tex;
 uniform float u_saturation;
 uniform float u_reds;
 uniform float u_shadows;
+uniform float u_strength;
 void main() {
     vec4 col = texture(u_tex, v_uv);
     float lum = dot(col.rgb, vec3(0.299, 0.587, 0.114));
@@ -2014,7 +2052,7 @@ void main() {
     sat = sat + gold * shadow_mask * u_shadows;
     // Slight blue desaturation (Kodachrome tends toward warm)
     sat.b = mix(sat.b, sat.b * 0.85, u_reds * 0.3);
-    frag = vec4(clamp(sat, 0.0, 1.0), col.a);
+    frag = vec4(clamp(mix(col.rgb, sat, u_strength), 0.0, 1.0), col.a);
 }
 )glsl";
 
@@ -2145,6 +2183,7 @@ uniform sampler2D u_tex;
 uniform float u_levels;
 uniform float u_hue_shift;
 uniform float u_saturation;
+uniform float u_strength;
 void main() {
     vec4 col = texture(u_tex, v_uv);
     float lum = dot(col.rgb, vec3(0.299, 0.587, 0.114));
@@ -2160,7 +2199,7 @@ void main() {
     // Mix: posterized hue with saturated original
     vec3 pop = hue_col * quant_lum;
     vec3 result = mix(sat_orig, pop, 0.65);
-    frag = vec4(clamp(result, 0.0, 1.0), col.a);
+    frag = vec4(clamp(mix(col.rgb, result, u_strength), 0.0, 1.0), col.a);
 }
 )glsl";
 
@@ -2174,6 +2213,7 @@ uniform float u_tex_h;
 uniform float u_channel_mix;
 uniform float u_glow;
 uniform float u_contrast;
+uniform float u_strength;
 void main() {
     vec4 col = texture(u_tex, v_uv);
     // IR: green channel reads as infrared (foliage glows white)
@@ -2200,7 +2240,7 @@ void main() {
     ir_val = min(ir_val + glow_acc * u_glow * 0.3, 1.0);
     // Slight warm tone
     vec3 result = vec3(ir_val * 1.02, ir_val * 0.99, ir_val * 0.92);
-    frag = vec4(clamp(result, 0.0, 1.0), col.a);
+    frag = vec4(clamp(mix(col.rgb, result, u_strength), 0.0, 1.0), col.a);
 }
 )glsl";
 
@@ -2308,7 +2348,7 @@ uniform float u_tex_w;
 uniform float u_tex_h;
 uniform float u_block_size;
 uniform float u_color_steps;
-uniform float u_mix_orig;
+uniform float u_strength;
 void main() {
     vec2 px = vec2(u_tex_w, u_tex_h);
     vec2 block = floor(v_uv * px / u_block_size) * u_block_size / px;
@@ -2317,7 +2357,7 @@ void main() {
     vec4 c = texture(u_tex, clamp(center, 0.0, 1.0));
     // Quantize to color_steps levels
     c.rgb = floor(c.rgb * u_color_steps + 0.5) / u_color_steps;
-    frag = vec4(mix(c.rgb, orig.rgb, u_mix_orig), orig.a);
+    frag = vec4(mix(orig.rgb, c.rgb, u_strength), orig.a);
 }
 )glsl";
 
@@ -2331,6 +2371,7 @@ uniform float u_cold_hue;
 uniform float u_hot_hue;
 uniform float u_contrast;
 uniform float u_scanlines;
+uniform float u_strength;
 vec3 hue2rgb(float h) {
     vec4 K = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
     return clamp(abs(fract(h + K.xyz)*6.0 - K.www) - K.xxx, 0.0, 1.0);
@@ -2352,7 +2393,7 @@ void main() {
         thermal = mix(hue2rgb(u_hot_hue), vec3(1.0, 1.0, 0.9), (heat-0.75)*4.0);
     // Faint scan lines
     float scan = 1.0 - u_scanlines * 0.5 * (0.5 + 0.5*sin(v_uv.y * u_tex_h * 3.14159));
-    frag = vec4(clamp(thermal * scan, 0.0, 1.0), col.a);
+    frag = vec4(clamp(mix(col.rgb, thermal * scan, u_strength), 0.0, 1.0), col.a);
 }
 )glsl";
 
@@ -2442,6 +2483,7 @@ uniform float u_hue2;
 uniform float u_dot_size;
 uniform float u_misreg;
 uniform float u_paper;
+uniform float u_strength;
 vec3 hue2rgb(float h) {
     vec4 K = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
     return clamp(abs(fract(h + K.xyz)*6.0 - K.www) - K.xxx, 0.0, 1.0);
@@ -2469,7 +2511,8 @@ void main() {
     // Multiply where both inks overlap
     float overlap = dot1 * dot2;
     result = mix(result, ink1 * ink2, overlap * 0.6);
-    frag = vec4(clamp(result, 0.0, 1.0), col1.a);
+    vec4 orig = texture(u_tex, v_uv);
+    frag = vec4(clamp(mix(orig.rgb, result, u_strength), 0.0, 1.0), orig.a);
 }
 )glsl";
 
@@ -2484,6 +2527,7 @@ uniform float u_orange_mask;
 uniform float u_contrast;
 uniform float u_grain;
 uniform float u_time;
+uniform float u_strength;
 float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1,311.7)))*43758.5453); }
 void main() {
     vec4 col = texture(u_tex, v_uv);
@@ -2498,7 +2542,7 @@ void main() {
     // Film grain
     vec2 npx = floor(v_uv * vec2(u_tex_w, u_tex_h));
     float g = (hash(npx + vec2(u_time * 23.1, u_time * 17.7)) - 0.5) * u_grain * 0.3;
-    frag = vec4(clamp(neg + g, 0.0, 1.0), col.a);
+    frag = vec4(clamp(mix(col.rgb, neg + g, u_strength), 0.0, 1.0), col.a);
 }
 )glsl";
 
@@ -2512,7 +2556,7 @@ uniform float u_tex_h;
 uniform float u_line_str;
 uniform float u_paper_tone;
 uniform float u_hatching;
-uniform float u_mix_orig;
+uniform float u_strength;
 void main() {
     vec2 px = vec2(1.0/u_tex_w, 1.0/u_tex_h);
     // Sobel edge detection
@@ -2533,7 +2577,7 @@ void main() {
     vec3 paper = vec3(u_paper_tone, u_paper_tone * 0.97, u_paper_tone * 0.92);
     vec3 result = mix(paper, vec3(0.1, 0.08, 0.05), sketch);
     vec4 orig = texture(u_tex, v_uv);
-    frag = vec4(clamp(mix(result, orig.rgb, u_mix_orig), 0.0, 1.0), orig.a);
+    frag = vec4(clamp(mix(orig.rgb, result, u_strength), 0.0, 1.0), orig.a);
 }
 )glsl";
 
@@ -2698,6 +2742,7 @@ uniform float u_depth;
 uniform float u_rotation;
 uniform float u_zoom;
 uniform float u_time;
+uniform float u_strength;
 void main() {
     vec2 uv = v_uv - 0.5;
     int maxSteps = int(u_depth);
@@ -2711,7 +2756,9 @@ void main() {
         angle_acc += 0.2 + u_rotation * 0.3;
     }
     uv += 0.5;
-    frag = texture(u_tex, clamp(uv, 0.0, 1.0));
+    vec4 orig = texture(u_tex, v_uv);
+    vec4 effect = texture(u_tex, clamp(uv, 0.0, 1.0));
+    frag = vec4(mix(orig.rgb, effect.rgb, u_strength), orig.a);
 }
 )glsl";
 
@@ -2764,6 +2811,7 @@ uniform float u_contrast;
 uniform float u_grain;
 uniform float u_paper_white;
 uniform float u_time;
+uniform float u_strength;
 float hash(vec2 p) { return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453); }
 void main() {
     vec4 col = texture(u_tex, v_uv);
@@ -2779,7 +2827,7 @@ void main() {
     lum = clamp(lum + g, 0.0, 1.0);
     // Paper: white point + very slight warm tint
     vec3 result = mix(vec3(0.04, 0.035, 0.03), vec3(u_paper_white, u_paper_white*0.99, u_paper_white*0.96), lum);
-    frag = vec4(result, col.a);
+    frag = vec4(mix(col.rgb, result, u_strength), col.a);
 }
 )glsl";
 
@@ -2848,6 +2896,7 @@ uniform float u_levels;
 uniform float u_line_width;
 uniform float u_line_hue;
 uniform float u_fill_sat;
+uniform float u_strength;
 vec3 hue2rgb(float h) {
     vec4 K = vec4(1.0,2.0/3.0,1.0/3.0,3.0);
     return clamp(abs(fract(h+K.xyz)*6.0-K.www)-K.xxx, 0.0, 1.0);
@@ -2866,7 +2915,7 @@ void main() {
     fill_col *= (0.3 + 0.7 * level);
     vec3 line_col = hue2rgb(u_line_hue) * 0.8;
     vec3 result = mix(fill_col, line_col, line);
-    frag = vec4(clamp(result, 0.0, 1.0), col.a);
+    frag = vec4(clamp(mix(col.rgb, result, u_strength), 0.0, 1.0), col.a);
 }
 )glsl";
 
@@ -2918,6 +2967,7 @@ uniform float u_fg_r;
 uniform float u_fg_g;
 uniform float u_fg_b;
 uniform float u_bg_dark;
+uniform float u_strength;
 float hash(vec2 p) { return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453); }
 // Approximate ASCII char density from luminance using procedural patterns
 float char_pattern(vec2 cell_uv, float density) {
@@ -2948,7 +2998,7 @@ void main() {
     vec3 fg = vec3(u_fg_r, u_fg_g, u_fg_b);
     vec3 bg = orig.rgb * (1.0 - u_bg_dark);
     vec3 result = mix(bg, fg * (0.3 + lum * 0.7), on);
-    frag = vec4(clamp(result, 0.0, 1.0), orig.a);
+    frag = vec4(clamp(mix(orig.rgb, result, u_strength), 0.0, 1.0), orig.a);
 }
 )glsl";
 
@@ -2963,6 +3013,7 @@ uniform float u_line_width;
 uniform float u_hue;
 uniform float u_bg_darken;
 uniform float u_time;
+uniform float u_strength;
 vec3 hue2rgb(float h) {
     vec4 K = vec4(1.0,2.0/3.0,1.0/3.0,3.0);
     return clamp(abs(fract(h+K.xyz)*6.0-K.www)-K.xxx, 0.0, 1.0);
@@ -2994,7 +3045,7 @@ void main() {
     vec3 line_col = hue2rgb(hv);
     vec3 bg = col.rgb * (1.0 - u_bg_darken * 0.5);
     vec3 result = mix(bg, line_col, overlay);
-    frag = vec4(clamp(result, 0.0, 1.0), col.a);
+    frag = vec4(clamp(mix(col.rgb, result, u_strength), 0.0, 1.0), col.a);
 }
 )glsl";
 

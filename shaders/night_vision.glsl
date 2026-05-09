@@ -5,6 +5,7 @@ uniform sampler2D u_tex;
 uniform float u_time;
 uniform float u_noise;
 uniform float u_gain;
+uniform float u_strength;
 float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
 void main() {
     vec4 col = texture(u_tex, v_uv);
@@ -15,5 +16,6 @@ void main() {
     vec2 d = v_uv - 0.5;
     float vig = 1.0 - smoothstep(0.3, 0.75, length(d) * 1.3);
     float g = clamp(luma + n, 0.0, 1.0) * vig;
-    frag = vec4(g * 0.15, g, g * 0.08, col.a);
+    vec3 nv_result = vec3(g * 0.15, g, g * 0.08);
+    frag = vec4(mix(col.rgb, nv_result, u_strength), col.a);
 }

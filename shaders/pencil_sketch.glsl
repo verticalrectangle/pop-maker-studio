@@ -7,7 +7,7 @@ uniform float u_tex_h;
 uniform float u_line_str;
 uniform float u_paper_tone;
 uniform float u_hatching;
-uniform float u_mix_orig;
+uniform float u_strength;
 void main() {
     vec2 px = vec2(1.0/u_tex_w, 1.0/u_tex_h);
     // Sobel edge detection
@@ -28,5 +28,5 @@ void main() {
     vec3 paper = vec3(u_paper_tone, u_paper_tone * 0.97, u_paper_tone * 0.92);
     vec3 result = mix(paper, vec3(0.1, 0.08, 0.05), sketch);
     vec4 orig = texture(u_tex, v_uv);
-    frag = vec4(clamp(mix(result, orig.rgb, u_mix_orig), 0.0, 1.0), orig.a);
+    frag = vec4(clamp(mix(orig.rgb, result, u_strength), 0.0, 1.0), orig.a);
 }

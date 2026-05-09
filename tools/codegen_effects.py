@@ -95,11 +95,11 @@ def main():
     for e in effects:
         eid = e["id"]
         cond_parts = [f'cfx.{eid}_on']
-        # Add non-zero check using the first non-hidden param that starts at 0 but has a non-trivial default
+        # Only add secondary guard when there's a dedicated 'strength' param (min=0)
         for p in e["params"]:
             if p.get("hidden"): continue
-            if p["min"] == 0.0 and float(p.get("default", 0)) > 0.01:
-                cond_parts.append(f'cfx.{eid}_{p["name"]} > 0.01f')
+            if p["name"] == "strength" and float(p["min"]) == 0.0:
+                cond_parts.append(f'cfx.{eid}_strength > 0.01f')
                 break
         cond = " && ".join(cond_parts)
         lines.append(f'    if ({cond}) {{')

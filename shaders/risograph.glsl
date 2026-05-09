@@ -9,6 +9,7 @@ uniform float u_hue2;
 uniform float u_dot_size;
 uniform float u_misreg;
 uniform float u_paper;
+uniform float u_strength;
 vec3 hue2rgb(float h) {
     vec4 K = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
     return clamp(abs(fract(h + K.xyz)*6.0 - K.www) - K.xxx, 0.0, 1.0);
@@ -36,5 +37,6 @@ void main() {
     // Multiply where both inks overlap
     float overlap = dot1 * dot2;
     result = mix(result, ink1 * ink2, overlap * 0.6);
-    frag = vec4(clamp(result, 0.0, 1.0), col1.a);
+    vec4 orig = texture(u_tex, v_uv);
+    frag = vec4(clamp(mix(orig.rgb, result, u_strength), 0.0, 1.0), orig.a);
 }

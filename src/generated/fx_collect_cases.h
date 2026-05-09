@@ -24,6 +24,7 @@
         case FXType::Duotone:
             acc.duotone_on = true;
             acc.any_gen_fx = true;
+            acc.duotone_strength = fmaxf(acc.duotone_strength, cl.fx_duotone_strength);
             acc.duotone_shadow_r = fmaxf(acc.duotone_shadow_r, cl.fx_duotone_shadow_r);
             acc.duotone_shadow_g = fmaxf(acc.duotone_shadow_g, cl.fx_duotone_shadow_g);
             acc.duotone_shadow_b = fmaxf(acc.duotone_shadow_b, cl.fx_duotone_shadow_b);
@@ -45,6 +46,7 @@
         case FXType::NightVision:
             acc.night_vision_on = true;
             acc.any_gen_fx = true;
+            acc.night_vision_strength = fmaxf(acc.night_vision_strength, cl.fx_night_vision_strength);
             acc.night_vision_noise = fmaxf(acc.night_vision_noise, cl.fx_night_vision_noise);
             acc.night_vision_gain = fmaxf(acc.night_vision_gain, cl.fx_night_vision_gain);
             break;
@@ -70,6 +72,7 @@
         case FXType::Posterize:
             acc.posterize_on = true;
             acc.any_gen_fx = true;
+            acc.posterize_strength = fmaxf(acc.posterize_strength, cl.fx_posterize_strength);
             acc.posterize_levels = fmaxf(acc.posterize_levels, cl.fx_posterize_levels);
             break;
         case FXType::Halftone:
@@ -97,6 +100,7 @@
         case FXType::CRT:
             acc.crt_on = true;
             acc.any_gen_fx = true;
+            acc.crt_strength = fmaxf(acc.crt_strength, cl.fx_crt_strength);
             acc.crt_curvature = fmaxf(acc.crt_curvature, cl.fx_crt_curvature);
             acc.crt_glow = fmaxf(acc.crt_glow, cl.fx_crt_glow);
             break;
@@ -115,6 +119,7 @@
         case FXType::Lomo:
             acc.lomo_on = true;
             acc.any_gen_fx = true;
+            acc.lomo_strength = fmaxf(acc.lomo_strength, cl.fx_lomo_strength);
             acc.lomo_vignette = fmaxf(acc.lomo_vignette, cl.fx_lomo_vignette);
             acc.lomo_saturation = fmaxf(acc.lomo_saturation, cl.fx_lomo_saturation);
             acc.lomo_fade = fmaxf(acc.lomo_fade, cl.fx_lomo_fade);
@@ -143,6 +148,7 @@
         case FXType::Kaleidoscope:
             acc.kaleidoscope_on = true;
             acc.any_gen_fx = true;
+            acc.kaleidoscope_strength = fmaxf(acc.kaleidoscope_strength, cl.fx_kaleidoscope_strength);
             acc.kaleidoscope_segments = fmaxf(acc.kaleidoscope_segments, cl.fx_kaleidoscope_segments);
             acc.kaleidoscope_rotation = fmaxf(acc.kaleidoscope_rotation, cl.fx_kaleidoscope_rotation);
             acc.kaleidoscope_zoom = fmaxf(acc.kaleidoscope_zoom, cl.fx_kaleidoscope_zoom);
@@ -168,6 +174,7 @@
         case FXType::BarrelWarp:
             acc.barrel_warp_on = true;
             acc.any_gen_fx = true;
+            acc.barrel_warp_strength = fmaxf(acc.barrel_warp_strength, cl.fx_barrel_warp_strength);
             acc.barrel_warp_k1 = fmaxf(acc.barrel_warp_k1, cl.fx_barrel_warp_k1);
             acc.barrel_warp_k2 = fmaxf(acc.barrel_warp_k2, cl.fx_barrel_warp_k2);
             acc.barrel_warp_scale = fmaxf(acc.barrel_warp_scale, cl.fx_barrel_warp_scale);
@@ -224,12 +231,14 @@
         case FXType::OilPaint:
             acc.oil_paint_on = true;
             acc.any_gen_fx = true;
+            acc.oil_paint_strength = fmaxf(acc.oil_paint_strength, cl.fx_oil_paint_strength);
             acc.oil_paint_radius = fmaxf(acc.oil_paint_radius, cl.fx_oil_paint_radius);
             acc.oil_paint_sharpness = fmaxf(acc.oil_paint_sharpness, cl.fx_oil_paint_sharpness);
             break;
         case FXType::StainedGlass:
             acc.stained_glass_on = true;
             acc.any_gen_fx = true;
+            acc.stained_glass_strength = fmaxf(acc.stained_glass_strength, cl.fx_stained_glass_strength);
             acc.stained_glass_cell_size = fmaxf(acc.stained_glass_cell_size, cl.fx_stained_glass_cell_size);
             acc.stained_glass_border = fmaxf(acc.stained_glass_border, cl.fx_stained_glass_border);
             acc.stained_glass_saturation = fmaxf(acc.stained_glass_saturation, cl.fx_stained_glass_saturation);
@@ -237,6 +246,7 @@
         case FXType::NeonEdgeGlow:
             acc.neon_edge_glow_on = true;
             acc.any_gen_fx = true;
+            acc.neon_edge_glow_strength = fmaxf(acc.neon_edge_glow_strength, cl.fx_neon_edge_glow_strength);
             acc.neon_edge_glow_threshold = fmaxf(acc.neon_edge_glow_threshold, cl.fx_neon_edge_glow_threshold);
             acc.neon_edge_glow_glow = fmaxf(acc.neon_edge_glow_glow, cl.fx_neon_edge_glow_glow);
             acc.neon_edge_glow_hue = fmaxf(acc.neon_edge_glow_hue, cl.fx_neon_edge_glow_hue);
@@ -278,6 +288,7 @@
         case FXType::Watercolor:
             acc.watercolor_on = true;
             acc.any_gen_fx = true;
+            acc.watercolor_strength = fmaxf(acc.watercolor_strength, cl.fx_watercolor_strength);
             acc.watercolor_bleeding = fmaxf(acc.watercolor_bleeding, cl.fx_watercolor_bleeding);
             acc.watercolor_paper = fmaxf(acc.watercolor_paper, cl.fx_watercolor_paper);
             acc.watercolor_saturation = fmaxf(acc.watercolor_saturation, cl.fx_watercolor_saturation);
@@ -285,6 +296,7 @@
         case FXType::ComicDots:
             acc.comic_dots_on = true;
             acc.any_gen_fx = true;
+            acc.comic_dots_strength = fmaxf(acc.comic_dots_strength, cl.fx_comic_dots_strength);
             acc.comic_dots_dot_size = fmaxf(acc.comic_dots_dot_size, cl.fx_comic_dots_dot_size);
             acc.comic_dots_ink_threshold = fmaxf(acc.comic_dots_ink_threshold, cl.fx_comic_dots_ink_threshold);
             acc.comic_dots_color_levels = fmaxf(acc.comic_dots_color_levels, cl.fx_comic_dots_color_levels);
@@ -292,6 +304,7 @@
         case FXType::Crosshatch:
             acc.crosshatch_on = true;
             acc.any_gen_fx = true;
+            acc.crosshatch_strength = fmaxf(acc.crosshatch_strength, cl.fx_crosshatch_strength);
             acc.crosshatch_density = fmaxf(acc.crosshatch_density, cl.fx_crosshatch_density);
             acc.crosshatch_thickness = fmaxf(acc.crosshatch_thickness, cl.fx_crosshatch_thickness);
             acc.crosshatch_angle = fmaxf(acc.crosshatch_angle, cl.fx_crosshatch_angle);
@@ -299,6 +312,7 @@
         case FXType::Daguerreotype:
             acc.daguerreotype_on = true;
             acc.any_gen_fx = true;
+            acc.daguerreotype_strength = fmaxf(acc.daguerreotype_strength, cl.fx_daguerreotype_strength);
             acc.daguerreotype_tone = fmaxf(acc.daguerreotype_tone, cl.fx_daguerreotype_tone);
             acc.daguerreotype_vignette = fmaxf(acc.daguerreotype_vignette, cl.fx_daguerreotype_vignette);
             acc.daguerreotype_scratch = fmaxf(acc.daguerreotype_scratch, cl.fx_daguerreotype_scratch);
@@ -306,6 +320,7 @@
         case FXType::Super8Film:
             acc.super8_film_on = true;
             acc.any_gen_fx = true;
+            acc.super8_film_strength = fmaxf(acc.super8_film_strength, cl.fx_super8_film_strength);
             acc.super8_film_grain = fmaxf(acc.super8_film_grain, cl.fx_super8_film_grain);
             acc.super8_film_gate = fmaxf(acc.super8_film_gate, cl.fx_super8_film_gate);
             acc.super8_film_fade = fmaxf(acc.super8_film_fade, cl.fx_super8_film_fade);
@@ -320,12 +335,14 @@
         case FXType::XRay:
             acc.x_ray_on = true;
             acc.any_gen_fx = true;
+            acc.x_ray_strength = fmaxf(acc.x_ray_strength, cl.fx_x_ray_strength);
             acc.x_ray_contrast = fmaxf(acc.x_ray_contrast, cl.fx_x_ray_contrast);
             acc.x_ray_blue_tint = fmaxf(acc.x_ray_blue_tint, cl.fx_x_ray_blue_tint);
             break;
         case FXType::BitCrush:
             acc.bit_crush_on = true;
             acc.any_gen_fx = true;
+            acc.bit_crush_strength = fmaxf(acc.bit_crush_strength, cl.fx_bit_crush_strength);
             acc.bit_crush_levels = fmaxf(acc.bit_crush_levels, cl.fx_bit_crush_levels);
             acc.bit_crush_dither = fmaxf(acc.bit_crush_dither, cl.fx_bit_crush_dither);
             break;
@@ -338,6 +355,7 @@
         case FXType::DitherBayer:
             acc.dither_bayer_on = true;
             acc.any_gen_fx = true;
+            acc.dither_bayer_strength = fmaxf(acc.dither_bayer_strength, cl.fx_dither_bayer_strength);
             acc.dither_bayer_levels = fmaxf(acc.dither_bayer_levels, cl.fx_dither_bayer_levels);
             acc.dither_bayer_scale = fmaxf(acc.dither_bayer_scale, cl.fx_dither_bayer_scale);
             acc.dither_bayer_color = fmaxf(acc.dither_bayer_color, cl.fx_dither_bayer_color);
@@ -379,6 +397,7 @@
         case FXType::Pointillist:
             acc.pointillist_on = true;
             acc.any_gen_fx = true;
+            acc.pointillist_strength = fmaxf(acc.pointillist_strength, cl.fx_pointillist_strength);
             acc.pointillist_dot_size = fmaxf(acc.pointillist_dot_size, cl.fx_pointillist_dot_size);
             acc.pointillist_scatter = fmaxf(acc.pointillist_scatter, cl.fx_pointillist_scatter);
             break;
@@ -399,13 +418,14 @@
         case FXType::MirrorFold:
             acc.mirror_fold_on = true;
             acc.any_gen_fx = true;
+            acc.mirror_fold_strength = fmaxf(acc.mirror_fold_strength, cl.fx_mirror_fold_strength);
             acc.mirror_fold_axis = fmaxf(acc.mirror_fold_axis, cl.fx_mirror_fold_axis);
             acc.mirror_fold_vertical = fmaxf(acc.mirror_fold_vertical, cl.fx_mirror_fold_vertical);
-            acc.mirror_fold_blend = fmaxf(acc.mirror_fold_blend, cl.fx_mirror_fold_blend);
             break;
         case FXType::EchoTrails:
             acc.echo_trails_on = true;
             acc.any_gen_fx = true;
+            acc.echo_trails_strength = fmaxf(acc.echo_trails_strength, cl.fx_echo_trails_strength);
             acc.echo_trails_offset = fmaxf(acc.echo_trails_offset, cl.fx_echo_trails_offset);
             acc.echo_trails_fade = fmaxf(acc.echo_trails_fade, cl.fx_echo_trails_fade);
             acc.echo_trails_angle = fmaxf(acc.echo_trails_angle, cl.fx_echo_trails_angle);
@@ -413,9 +433,9 @@
         case FXType::GradientMap:
             acc.gradient_map_on = true;
             acc.any_gen_fx = true;
+            acc.gradient_map_strength = fmaxf(acc.gradient_map_strength, cl.fx_gradient_map_strength);
             acc.gradient_map_hue1 = fmaxf(acc.gradient_map_hue1, cl.fx_gradient_map_hue1);
             acc.gradient_map_hue2 = fmaxf(acc.gradient_map_hue2, cl.fx_gradient_map_hue2);
-            acc.gradient_map_mix_orig = fmaxf(acc.gradient_map_mix_orig, cl.fx_gradient_map_mix_orig);
             break;
         case FXType::CrossProcess:
             acc.cross_process_on = true;
@@ -447,6 +467,7 @@
         case FXType::Technicolor:
             acc.technicolor_on = true;
             acc.any_gen_fx = true;
+            acc.technicolor_strength = fmaxf(acc.technicolor_strength, cl.fx_technicolor_strength);
             acc.technicolor_saturation = fmaxf(acc.technicolor_saturation, cl.fx_technicolor_saturation);
             acc.technicolor_contrast = fmaxf(acc.technicolor_contrast, cl.fx_technicolor_contrast);
             acc.technicolor_warmth = fmaxf(acc.technicolor_warmth, cl.fx_technicolor_warmth);
@@ -454,6 +475,7 @@
         case FXType::IceCrystal:
             acc.ice_crystal_on = true;
             acc.any_gen_fx = true;
+            acc.ice_crystal_strength = fmaxf(acc.ice_crystal_strength, cl.fx_ice_crystal_strength);
             acc.ice_crystal_scale = fmaxf(acc.ice_crystal_scale, cl.fx_ice_crystal_scale);
             acc.ice_crystal_refract = fmaxf(acc.ice_crystal_refract, cl.fx_ice_crystal_refract);
             acc.ice_crystal_tint = fmaxf(acc.ice_crystal_tint, cl.fx_ice_crystal_tint);
@@ -461,6 +483,7 @@
         case FXType::Kodachrome:
             acc.kodachrome_on = true;
             acc.any_gen_fx = true;
+            acc.kodachrome_strength = fmaxf(acc.kodachrome_strength, cl.fx_kodachrome_strength);
             acc.kodachrome_saturation = fmaxf(acc.kodachrome_saturation, cl.fx_kodachrome_saturation);
             acc.kodachrome_reds = fmaxf(acc.kodachrome_reds, cl.fx_kodachrome_reds);
             acc.kodachrome_shadows = fmaxf(acc.kodachrome_shadows, cl.fx_kodachrome_shadows);
@@ -496,6 +519,7 @@
         case FXType::WarholPop:
             acc.warhol_pop_on = true;
             acc.any_gen_fx = true;
+            acc.warhol_pop_strength = fmaxf(acc.warhol_pop_strength, cl.fx_warhol_pop_strength);
             acc.warhol_pop_levels = fmaxf(acc.warhol_pop_levels, cl.fx_warhol_pop_levels);
             acc.warhol_pop_hue_shift = fmaxf(acc.warhol_pop_hue_shift, cl.fx_warhol_pop_hue_shift);
             acc.warhol_pop_saturation = fmaxf(acc.warhol_pop_saturation, cl.fx_warhol_pop_saturation);
@@ -503,6 +527,7 @@
         case FXType::InfraredFilm:
             acc.infrared_film_on = true;
             acc.any_gen_fx = true;
+            acc.infrared_film_strength = fmaxf(acc.infrared_film_strength, cl.fx_infrared_film_strength);
             acc.infrared_film_channel_mix = fmaxf(acc.infrared_film_channel_mix, cl.fx_infrared_film_channel_mix);
             acc.infrared_film_glow = fmaxf(acc.infrared_film_glow, cl.fx_infrared_film_glow);
             acc.infrared_film_contrast = fmaxf(acc.infrared_film_contrast, cl.fx_infrared_film_contrast);
@@ -531,13 +556,14 @@
         case FXType::PixelMosaic:
             acc.pixel_mosaic_on = true;
             acc.any_gen_fx = true;
+            acc.pixel_mosaic_strength = fmaxf(acc.pixel_mosaic_strength, cl.fx_pixel_mosaic_strength);
             acc.pixel_mosaic_block_size = fmaxf(acc.pixel_mosaic_block_size, cl.fx_pixel_mosaic_block_size);
             acc.pixel_mosaic_color_steps = fmaxf(acc.pixel_mosaic_color_steps, cl.fx_pixel_mosaic_color_steps);
-            acc.pixel_mosaic_mix_orig = fmaxf(acc.pixel_mosaic_mix_orig, cl.fx_pixel_mosaic_mix_orig);
             break;
         case FXType::ThermalMap:
             acc.thermal_map_on = true;
             acc.any_gen_fx = true;
+            acc.thermal_map_strength = fmaxf(acc.thermal_map_strength, cl.fx_thermal_map_strength);
             acc.thermal_map_cold_hue = fmaxf(acc.thermal_map_cold_hue, cl.fx_thermal_map_cold_hue);
             acc.thermal_map_hot_hue = fmaxf(acc.thermal_map_hot_hue, cl.fx_thermal_map_hot_hue);
             acc.thermal_map_contrast = fmaxf(acc.thermal_map_contrast, cl.fx_thermal_map_contrast);
@@ -562,6 +588,7 @@
         case FXType::Risograph:
             acc.risograph_on = true;
             acc.any_gen_fx = true;
+            acc.risograph_strength = fmaxf(acc.risograph_strength, cl.fx_risograph_strength);
             acc.risograph_hue1 = fmaxf(acc.risograph_hue1, cl.fx_risograph_hue1);
             acc.risograph_hue2 = fmaxf(acc.risograph_hue2, cl.fx_risograph_hue2);
             acc.risograph_dot_size = fmaxf(acc.risograph_dot_size, cl.fx_risograph_dot_size);
@@ -571,6 +598,7 @@
         case FXType::VintageNegative:
             acc.vintage_negative_on = true;
             acc.any_gen_fx = true;
+            acc.vintage_negative_strength = fmaxf(acc.vintage_negative_strength, cl.fx_vintage_negative_strength);
             acc.vintage_negative_orange_mask = fmaxf(acc.vintage_negative_orange_mask, cl.fx_vintage_negative_orange_mask);
             acc.vintage_negative_contrast = fmaxf(acc.vintage_negative_contrast, cl.fx_vintage_negative_contrast);
             acc.vintage_negative_grain = fmaxf(acc.vintage_negative_grain, cl.fx_vintage_negative_grain);
@@ -579,10 +607,10 @@
         case FXType::PencilSketch:
             acc.pencil_sketch_on = true;
             acc.any_gen_fx = true;
+            acc.pencil_sketch_strength = fmaxf(acc.pencil_sketch_strength, cl.fx_pencil_sketch_strength);
             acc.pencil_sketch_line_str = fmaxf(acc.pencil_sketch_line_str, cl.fx_pencil_sketch_line_str);
             acc.pencil_sketch_paper_tone = fmaxf(acc.pencil_sketch_paper_tone, cl.fx_pencil_sketch_paper_tone);
             acc.pencil_sketch_hatching = fmaxf(acc.pencil_sketch_hatching, cl.fx_pencil_sketch_hatching);
-            acc.pencil_sketch_mix_orig = fmaxf(acc.pencil_sketch_mix_orig, cl.fx_pencil_sketch_mix_orig);
             break;
         case FXType::CrtBarrel:
             acc.crt_barrel_on = true;
@@ -619,6 +647,7 @@
         case FXType::MirrorTunnel:
             acc.mirror_tunnel_on = true;
             acc.any_gen_fx = true;
+            acc.mirror_tunnel_strength = fmaxf(acc.mirror_tunnel_strength, cl.fx_mirror_tunnel_strength);
             acc.mirror_tunnel_depth = fmaxf(acc.mirror_tunnel_depth, cl.fx_mirror_tunnel_depth);
             acc.mirror_tunnel_rotation = fmaxf(acc.mirror_tunnel_rotation, cl.fx_mirror_tunnel_rotation);
             acc.mirror_tunnel_zoom = fmaxf(acc.mirror_tunnel_zoom, cl.fx_mirror_tunnel_zoom);
@@ -637,6 +666,7 @@
         case FXType::ZoneSystemBw:
             acc.zone_system_bw_on = true;
             acc.any_gen_fx = true;
+            acc.zone_system_bw_strength = fmaxf(acc.zone_system_bw_strength, cl.fx_zone_system_bw_strength);
             acc.zone_system_bw_zones = fmaxf(acc.zone_system_bw_zones, cl.fx_zone_system_bw_zones);
             acc.zone_system_bw_contrast = fmaxf(acc.zone_system_bw_contrast, cl.fx_zone_system_bw_contrast);
             acc.zone_system_bw_grain = fmaxf(acc.zone_system_bw_grain, cl.fx_zone_system_bw_grain);
@@ -655,6 +685,7 @@
         case FXType::ContourMap:
             acc.contour_map_on = true;
             acc.any_gen_fx = true;
+            acc.contour_map_strength = fmaxf(acc.contour_map_strength, cl.fx_contour_map_strength);
             acc.contour_map_levels = fmaxf(acc.contour_map_levels, cl.fx_contour_map_levels);
             acc.contour_map_line_width = fmaxf(acc.contour_map_line_width, cl.fx_contour_map_line_width);
             acc.contour_map_line_hue = fmaxf(acc.contour_map_line_hue, cl.fx_contour_map_line_hue);
@@ -671,6 +702,7 @@
         case FXType::AsciiArt:
             acc.ascii_art_on = true;
             acc.any_gen_fx = true;
+            acc.ascii_art_strength = fmaxf(acc.ascii_art_strength, cl.fx_ascii_art_strength);
             acc.ascii_art_char_size = fmaxf(acc.ascii_art_char_size, cl.fx_ascii_art_char_size);
             acc.ascii_art_fg_r = fmaxf(acc.ascii_art_fg_r, cl.fx_ascii_art_fg_r);
             acc.ascii_art_fg_g = fmaxf(acc.ascii_art_fg_g, cl.fx_ascii_art_fg_g);
@@ -680,6 +712,7 @@
         case FXType::DnaHelix:
             acc.dna_helix_on = true;
             acc.any_gen_fx = true;
+            acc.dna_helix_strength = fmaxf(acc.dna_helix_strength, cl.fx_dna_helix_strength);
             acc.dna_helix_grid_scale = fmaxf(acc.dna_helix_grid_scale, cl.fx_dna_helix_grid_scale);
             acc.dna_helix_wave_amp = fmaxf(acc.dna_helix_wave_amp, cl.fx_dna_helix_wave_amp);
             acc.dna_helix_line_width = fmaxf(acc.dna_helix_line_width, cl.fx_dna_helix_line_width);

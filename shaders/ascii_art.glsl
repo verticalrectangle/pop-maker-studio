@@ -9,6 +9,7 @@ uniform float u_fg_r;
 uniform float u_fg_g;
 uniform float u_fg_b;
 uniform float u_bg_dark;
+uniform float u_strength;
 float hash(vec2 p) { return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453); }
 // Approximate ASCII char density from luminance using procedural patterns
 float char_pattern(vec2 cell_uv, float density) {
@@ -39,5 +40,5 @@ void main() {
     vec3 fg = vec3(u_fg_r, u_fg_g, u_fg_b);
     vec3 bg = orig.rgb * (1.0 - u_bg_dark);
     vec3 result = mix(bg, fg * (0.3 + lum * 0.7), on);
-    frag = vec4(clamp(result, 0.0, 1.0), orig.a);
+    frag = vec4(clamp(mix(orig.rgb, result, u_strength), 0.0, 1.0), orig.a);
 }

@@ -5,7 +5,9 @@ uniform sampler2D u_tex;
 uniform float u_tex_h;
 uniform float u_curvature;
 uniform float u_glow;
+uniform float u_strength;
 void main() {
+    vec4 orig = texture(u_tex, v_uv);
     // Barrel warp
     vec2 p = v_uv * 2.0 - 1.0;
     p += p * p.yx * p.yx * u_curvature * 0.3;
@@ -24,5 +26,6 @@ void main() {
     // Screen-edge vignette
     vec2 edge = smoothstep(0.0, 0.05, warped) * smoothstep(1.0, 0.95, warped);
     col.rgb *= edge.x * edge.y;
+    col.rgb = mix(orig.rgb, col.rgb, u_strength);
     frag = col;
 }

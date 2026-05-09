@@ -6,6 +6,7 @@ uniform float u_tex_w;
 uniform float u_tex_h;
 uniform float u_radius;
 uniform float u_sharpness;
+uniform float u_strength;
 void main() {
     // Kuwahara filter: pick quadrant with minimum variance
     vec2 px = vec2(1.0/u_tex_w, 1.0/u_tex_h);
@@ -34,5 +35,6 @@ void main() {
     }
     // Slight sharpness boost
     vec3 orig = texture(u_tex, v_uv).rgb;
-    frag = vec4(clamp(result + (result - orig) * (u_sharpness * 0.05), 0.0, 1.0), 1.0);
+    vec3 oil_result = clamp(result + (result - orig) * (u_sharpness * 0.05), 0.0, 1.0);
+    frag = vec4(mix(orig, oil_result, u_strength), 1.0);
 }

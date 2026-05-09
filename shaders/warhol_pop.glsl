@@ -5,6 +5,7 @@ uniform sampler2D u_tex;
 uniform float u_levels;
 uniform float u_hue_shift;
 uniform float u_saturation;
+uniform float u_strength;
 void main() {
     vec4 col = texture(u_tex, v_uv);
     float lum = dot(col.rgb, vec3(0.299, 0.587, 0.114));
@@ -20,5 +21,5 @@ void main() {
     // Mix: posterized hue with saturated original
     vec3 pop = hue_col * quant_lum;
     vec3 result = mix(sat_orig, pop, 0.65);
-    frag = vec4(clamp(result, 0.0, 1.0), col.a);
+    frag = vec4(clamp(mix(col.rgb, result, u_strength), 0.0, 1.0), col.a);
 }

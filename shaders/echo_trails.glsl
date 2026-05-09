@@ -5,6 +5,7 @@ uniform sampler2D u_tex;
 uniform float u_offset;
 uniform float u_fade;
 uniform float u_angle;
+uniform float u_strength;
 void main() {
     const float DEG2RAD = 0.017453293;
     float a = u_angle * DEG2RAD;
@@ -20,5 +21,5 @@ void main() {
         result.rgb = 1.0 - (1.0 - result.rgb) * (1.0 - echo.rgb * w);
         w *= u_fade;
     }
-    frag = vec4(clamp(result.rgb, 0.0, 1.0), col.a);
+    frag = vec4(clamp(mix(col.rgb, result.rgb, u_strength), 0.0, 1.0), col.a);
 }

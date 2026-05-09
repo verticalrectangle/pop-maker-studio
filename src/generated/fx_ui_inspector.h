@@ -38,6 +38,11 @@
             break;
 
         case FXType::Duotone:
+            ui_label("Strength");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##gen_duotone_strength", &clip.fx_duotone_strength, 0.0f, 1.0f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Duotone: Strength");
+            ImGui::Dummy({0.f, 4.f});
             ui_label("Shadow R");
             ImGui::SetNextItemWidth(sw);
             ImGui::SliderFloat("##gen_duotone_shadow_r", &clip.fx_duotone_shadow_r, 0.0f, 1.0f, "%.2f");
@@ -89,6 +94,11 @@
             break;
 
         case FXType::NightVision:
+            ui_label("Strength");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##gen_night_vision_strength", &clip.fx_night_vision_strength, 0.0f, 1.0f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Night Vision: Strength");
+            ImGui::Dummy({0.f, 4.f});
             ui_label("Static");
             ImGui::SetNextItemWidth(sw);
             ImGui::SliderFloat("##gen_night_vision_noise", &clip.fx_night_vision_noise, 0.0f, 1.0f, "%.2f");
@@ -142,6 +152,11 @@
             break;
 
         case FXType::Posterize:
+            ui_label("Strength");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##gen_posterize_strength", &clip.fx_posterize_strength, 0.0f, 1.0f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Posterize: Strength");
+            ImGui::Dummy({0.f, 4.f});
             ui_label("Color Levels");
             ImGui::SetNextItemWidth(sw);
             ImGui::SliderFloat("##gen_posterize_levels", &clip.fx_posterize_levels, 2.0f, 16.0f, "%.0f");
@@ -187,6 +202,11 @@
             break;
 
         case FXType::CRT:
+            ui_label("Strength");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##gen_crt_strength", &clip.fx_crt_strength, 0.0f, 1.0f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "CRT: Strength");
+            ImGui::Dummy({0.f, 4.f});
             ui_label("Curvature");
             ImGui::SetNextItemWidth(sw);
             ImGui::SliderFloat("##gen_crt_curvature", &clip.fx_crt_curvature, 0.0f, 1.0f, "%.2f");
@@ -223,6 +243,11 @@
             break;
 
         case FXType::Lomo:
+            ui_label("Strength");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##gen_lomo_strength", &clip.fx_lomo_strength, 0.0f, 1.0f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Lomo: Strength");
+            ImGui::Dummy({0.f, 4.f});
             ui_label("Vignette");
             ImGui::SetNextItemWidth(sw);
             ImGui::SliderFloat("##gen_lomo_vignette", &clip.fx_lomo_vignette, 0.0f, 1.0f, "%.2f");
@@ -291,6 +316,11 @@
             break;
 
         case FXType::Kaleidoscope:
+            ui_label("Strength");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##gen_kaleidoscope_strength", &clip.fx_kaleidoscope_strength, 0.0f, 1.0f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Kaleidoscope: Strength");
+            ImGui::Dummy({0.f, 4.f});
             ui_label("Segments");
             ImGui::SetNextItemWidth(sw);
             ImGui::SliderFloat("##gen_kaleidoscope_segments", &clip.fx_kaleidoscope_segments, 2.0f, 16.0f, "%.0f");
@@ -344,6 +374,11 @@
             break;
 
         case FXType::BarrelWarp:
+            ui_label("Strength");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##gen_barrel_warp_strength", &clip.fx_barrel_warp_strength, 0.0f, 1.0f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Barrel Warp: Strength");
+            ImGui::Dummy({0.f, 4.f});
             ui_label("Barrel");
             ImGui::SetNextItemWidth(sw);
             ImGui::SliderFloat("##gen_barrel_warp_k1", &clip.fx_barrel_warp_k1, -1.0f, 1.0f, "%.2f");
@@ -480,6 +515,11 @@
             break;
 
         case FXType::OilPaint:
+            ui_label("Strength");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##gen_oil_paint_strength", &clip.fx_oil_paint_strength, 0.0f, 1.0f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Oil Paint: Strength");
+            ImGui::Dummy({0.f, 4.f});
             ui_label("Brush");
             ImGui::SetNextItemWidth(sw);
             ImGui::SliderFloat("##gen_oil_paint_radius", &clip.fx_oil_paint_radius, 1.0f, 8.0f, "%.0f");
@@ -492,6 +532,11 @@
             break;
 
         case FXType::StainedGlass:
+            ui_label("Strength");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##gen_stained_glass_strength", &clip.fx_stained_glass_strength, 0.0f, 1.0f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Stained Glass: Strength");
+            ImGui::Dummy({0.f, 4.f});
             ui_label("Cell Size");
             ImGui::SetNextItemWidth(sw);
             ImGui::SliderFloat("##gen_stained_glass_cell_size", &clip.fx_stained_glass_cell_size, 4.0f, 48.0f, "%.0f");
@@ -509,6 +554,11 @@
             break;
 
         case FXType::NeonEdgeGlow:
+            ui_label("Strength");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##gen_neon_edge_glow_strength", &clip.fx_neon_edge_glow_strength, 0.0f, 1.0f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Neon Edges: Strength");
+            ImGui::Dummy({0.f, 4.f});
             ui_label("Threshold");
             ImGui::SetNextItemWidth(sw);
             ImGui::SliderFloat("##gen_neon_edge_glow_threshold", &clip.fx_neon_edge_glow_threshold, 0.0f, 0.5f, "%.2f");
@@ -606,6 +656,11 @@
             break;
 
         case FXType::Watercolor:
+            ui_label("Strength");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##gen_watercolor_strength", &clip.fx_watercolor_strength, 0.0f, 1.0f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Watercolor: Strength");
+            ImGui::Dummy({0.f, 4.f});
             ui_label("Bleeding");
             ImGui::SetNextItemWidth(sw);
             ImGui::SliderFloat("##gen_watercolor_bleeding", &clip.fx_watercolor_bleeding, 0.0f, 0.06f, "%.3f");
@@ -623,6 +678,11 @@
             break;
 
         case FXType::ComicDots:
+            ui_label("Strength");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##gen_comic_dots_strength", &clip.fx_comic_dots_strength, 0.0f, 1.0f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Comic Book: Strength");
+            ImGui::Dummy({0.f, 4.f});
             ui_label("Dot Size");
             ImGui::SetNextItemWidth(sw);
             ImGui::SliderFloat("##gen_comic_dots_dot_size", &clip.fx_comic_dots_dot_size, 1.0f, 10.0f, "%.0f");
@@ -640,6 +700,11 @@
             break;
 
         case FXType::Crosshatch:
+            ui_label("Strength");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##gen_crosshatch_strength", &clip.fx_crosshatch_strength, 0.0f, 1.0f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Crosshatch: Strength");
+            ImGui::Dummy({0.f, 4.f});
             ui_label("Density");
             ImGui::SetNextItemWidth(sw);
             ImGui::SliderFloat("##gen_crosshatch_density", &clip.fx_crosshatch_density, 2.0f, 20.0f, "%.0f");
@@ -657,6 +722,11 @@
             break;
 
         case FXType::Daguerreotype:
+            ui_label("Strength");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##gen_daguerreotype_strength", &clip.fx_daguerreotype_strength, 0.0f, 1.0f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Daguerreotype: Strength");
+            ImGui::Dummy({0.f, 4.f});
             ui_label("Tone");
             ImGui::SetNextItemWidth(sw);
             ImGui::SliderFloat("##gen_daguerreotype_tone", &clip.fx_daguerreotype_tone, 0.0f, 1.0f, "%.2f");
@@ -674,6 +744,11 @@
             break;
 
         case FXType::Super8Film:
+            ui_label("Strength");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##gen_super8_film_strength", &clip.fx_super8_film_strength, 0.0f, 1.0f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Super 8: Strength");
+            ImGui::Dummy({0.f, 4.f});
             ui_label("Grain");
             ImGui::SetNextItemWidth(sw);
             ImGui::SliderFloat("##gen_super8_film_grain", &clip.fx_super8_film_grain, 0.0f, 1.5f, "%.1f");
@@ -708,6 +783,11 @@
             break;
 
         case FXType::XRay:
+            ui_label("Strength");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##gen_x_ray_strength", &clip.fx_x_ray_strength, 0.0f, 1.0f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "X-Ray: Strength");
+            ImGui::Dummy({0.f, 4.f});
             ui_label("Contrast");
             ImGui::SetNextItemWidth(sw);
             ImGui::SliderFloat("##gen_x_ray_contrast", &clip.fx_x_ray_contrast, 0.5f, 4.0f, "%.1f");
@@ -720,6 +800,11 @@
             break;
 
         case FXType::BitCrush:
+            ui_label("Strength");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##gen_bit_crush_strength", &clip.fx_bit_crush_strength, 0.0f, 1.0f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Bit Crush: Strength");
+            ImGui::Dummy({0.f, 4.f});
             ui_label("Levels");
             ImGui::SetNextItemWidth(sw);
             ImGui::SliderFloat("##gen_bit_crush_levels", &clip.fx_bit_crush_levels, 2.0f, 32.0f, "%.0f");
@@ -744,6 +829,11 @@
             break;
 
         case FXType::DitherBayer:
+            ui_label("Strength");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##gen_dither_bayer_strength", &clip.fx_dither_bayer_strength, 0.0f, 1.0f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Dither: Strength");
+            ImGui::Dummy({0.f, 4.f});
             ui_label("Levels");
             ImGui::SetNextItemWidth(sw);
             ImGui::SliderFloat("##gen_dither_bayer_levels", &clip.fx_dither_bayer_levels, 1.0f, 8.0f, "%.0f");
@@ -841,6 +931,11 @@
             break;
 
         case FXType::Pointillist:
+            ui_label("Strength");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##gen_pointillist_strength", &clip.fx_pointillist_strength, 0.0f, 1.0f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Pointillism: Strength");
+            ImGui::Dummy({0.f, 4.f});
             ui_label("Dot Size");
             ImGui::SetNextItemWidth(sw);
             ImGui::SliderFloat("##gen_pointillist_dot_size", &clip.fx_pointillist_dot_size, 2.0f, 14.0f, "%.0f");
@@ -887,6 +982,11 @@
             break;
 
         case FXType::MirrorFold:
+            ui_label("Strength");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##gen_mirror_fold_strength", &clip.fx_mirror_fold_strength, 0.0f, 1.0f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Mirror Fold: Strength");
+            ImGui::Dummy({0.f, 4.f});
             ui_label("Axis");
             ImGui::SetNextItemWidth(sw);
             ImGui::SliderFloat("##gen_mirror_fold_axis", &clip.fx_mirror_fold_axis, 0.0f, 1.0f, "%.2f");
@@ -896,14 +996,14 @@
             ImGui::SetNextItemWidth(sw);
             ImGui::SliderFloat("##gen_mirror_fold_vertical", &clip.fx_mirror_fold_vertical, 0.0f, 1.0f, "%.0f");
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Mirror Fold: Vertical");
-            ImGui::Dummy({0.f, 4.f});
-            ui_label("Blend");
-            ImGui::SetNextItemWidth(sw);
-            ImGui::SliderFloat("##gen_mirror_fold_blend", &clip.fx_mirror_fold_blend, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Mirror Fold: Blend");
             break;
 
         case FXType::EchoTrails:
+            ui_label("Strength");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##gen_echo_trails_strength", &clip.fx_echo_trails_strength, 0.0f, 1.0f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Echo Trails: Strength");
+            ImGui::Dummy({0.f, 4.f});
             ui_label("Offset");
             ImGui::SetNextItemWidth(sw);
             ImGui::SliderFloat("##gen_echo_trails_offset", &clip.fx_echo_trails_offset, 0.0f, 0.1f, "%.3f");
@@ -921,6 +1021,11 @@
             break;
 
         case FXType::GradientMap:
+            ui_label("Strength");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##gen_gradient_map_strength", &clip.fx_gradient_map_strength, 0.0f, 1.0f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Gradient Map: Strength");
+            ImGui::Dummy({0.f, 4.f});
             ui_label("Shadow Hue");
             ImGui::SetNextItemWidth(sw);
             ImGui::SliderFloat("##gen_gradient_map_hue1", &clip.fx_gradient_map_hue1, 0.0f, 1.0f, "%.2f");
@@ -930,11 +1035,6 @@
             ImGui::SetNextItemWidth(sw);
             ImGui::SliderFloat("##gen_gradient_map_hue2", &clip.fx_gradient_map_hue2, 0.0f, 1.0f, "%.2f");
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Gradient Map: Highlight Hue");
-            ImGui::Dummy({0.f, 4.f});
-            ui_label("Mix Original");
-            ImGui::SetNextItemWidth(sw);
-            ImGui::SliderFloat("##gen_gradient_map_mix_orig", &clip.fx_gradient_map_mix_orig, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Gradient Map: Mix Original");
             break;
 
         case FXType::CrossProcess:
@@ -1001,6 +1101,11 @@
             break;
 
         case FXType::Technicolor:
+            ui_label("Strength");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##gen_technicolor_strength", &clip.fx_technicolor_strength, 0.0f, 1.0f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Technicolor: Strength");
+            ImGui::Dummy({0.f, 4.f});
             ui_label("Saturation");
             ImGui::SetNextItemWidth(sw);
             ImGui::SliderFloat("##gen_technicolor_saturation", &clip.fx_technicolor_saturation, 1.0f, 4.0f, "%.1f");
@@ -1018,6 +1123,11 @@
             break;
 
         case FXType::IceCrystal:
+            ui_label("Strength");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##gen_ice_crystal_strength", &clip.fx_ice_crystal_strength, 0.0f, 1.0f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Ice Crystal: Strength");
+            ImGui::Dummy({0.f, 4.f});
             ui_label("Scale");
             ImGui::SetNextItemWidth(sw);
             ImGui::SliderFloat("##gen_ice_crystal_scale", &clip.fx_ice_crystal_scale, 2.0f, 20.0f, "%.0f");
@@ -1035,6 +1145,11 @@
             break;
 
         case FXType::Kodachrome:
+            ui_label("Strength");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##gen_kodachrome_strength", &clip.fx_kodachrome_strength, 0.0f, 1.0f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Kodachrome: Strength");
+            ImGui::Dummy({0.f, 4.f});
             ui_label("Saturation");
             ImGui::SetNextItemWidth(sw);
             ImGui::SliderFloat("##gen_kodachrome_saturation", &clip.fx_kodachrome_saturation, 0.5f, 3.0f, "%.1f");
@@ -1120,6 +1235,11 @@
             break;
 
         case FXType::WarholPop:
+            ui_label("Strength");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##gen_warhol_pop_strength", &clip.fx_warhol_pop_strength, 0.0f, 1.0f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Pop Art: Strength");
+            ImGui::Dummy({0.f, 4.f});
             ui_label("Levels");
             ImGui::SetNextItemWidth(sw);
             ImGui::SliderFloat("##gen_warhol_pop_levels", &clip.fx_warhol_pop_levels, 2.0f, 8.0f, "%.0f");
@@ -1137,6 +1257,11 @@
             break;
 
         case FXType::InfraredFilm:
+            ui_label("Strength");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##gen_infrared_film_strength", &clip.fx_infrared_film_strength, 0.0f, 1.0f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Infrared: Strength");
+            ImGui::Dummy({0.f, 4.f});
             ui_label("IR Mix");
             ImGui::SetNextItemWidth(sw);
             ImGui::SliderFloat("##gen_infrared_film_channel_mix", &clip.fx_infrared_film_channel_mix, 0.0f, 1.0f, "%.2f");
@@ -1205,6 +1330,11 @@
             break;
 
         case FXType::PixelMosaic:
+            ui_label("Strength");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##gen_pixel_mosaic_strength", &clip.fx_pixel_mosaic_strength, 0.0f, 1.0f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Pixel Mosaic: Strength");
+            ImGui::Dummy({0.f, 4.f});
             ui_label("Block Size");
             ImGui::SetNextItemWidth(sw);
             ImGui::SliderFloat("##gen_pixel_mosaic_block_size", &clip.fx_pixel_mosaic_block_size, 2.0f, 64.0f, "%.0f");
@@ -1214,14 +1344,14 @@
             ImGui::SetNextItemWidth(sw);
             ImGui::SliderFloat("##gen_pixel_mosaic_color_steps", &clip.fx_pixel_mosaic_color_steps, 2.0f, 16.0f, "%.0f");
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Pixel Mosaic: Color Steps");
-            ImGui::Dummy({0.f, 4.f});
-            ui_label("Mix Original");
-            ImGui::SetNextItemWidth(sw);
-            ImGui::SliderFloat("##gen_pixel_mosaic_mix_orig", &clip.fx_pixel_mosaic_mix_orig, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Pixel Mosaic: Mix Original");
             break;
 
         case FXType::ThermalMap:
+            ui_label("Strength");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##gen_thermal_map_strength", &clip.fx_thermal_map_strength, 0.0f, 1.0f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Thermal Camera: Strength");
+            ImGui::Dummy({0.f, 4.f});
             ui_label("Cold Hue");
             ImGui::SetNextItemWidth(sw);
             ImGui::SliderFloat("##gen_thermal_map_cold_hue", &clip.fx_thermal_map_cold_hue, 0.0f, 1.0f, "%.2f");
@@ -1288,6 +1418,11 @@
             break;
 
         case FXType::Risograph:
+            ui_label("Strength");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##gen_risograph_strength", &clip.fx_risograph_strength, 0.0f, 1.0f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Risograph Print: Strength");
+            ImGui::Dummy({0.f, 4.f});
             ui_label("Ink 1 Hue");
             ImGui::SetNextItemWidth(sw);
             ImGui::SliderFloat("##gen_risograph_hue1", &clip.fx_risograph_hue1, 0.0f, 1.0f, "%.2f");
@@ -1315,6 +1450,11 @@
             break;
 
         case FXType::VintageNegative:
+            ui_label("Strength");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##gen_vintage_negative_strength", &clip.fx_vintage_negative_strength, 0.0f, 1.0f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Vintage Negative: Strength");
+            ImGui::Dummy({0.f, 4.f});
             ui_label("Orange Mask");
             ImGui::SetNextItemWidth(sw);
             ImGui::SliderFloat("##gen_vintage_negative_orange_mask", &clip.fx_vintage_negative_orange_mask, 0.0f, 1.0f, "%.2f");
@@ -1337,6 +1477,11 @@
             break;
 
         case FXType::PencilSketch:
+            ui_label("Strength");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##gen_pencil_sketch_strength", &clip.fx_pencil_sketch_strength, 0.0f, 1.0f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Pencil Sketch: Strength");
+            ImGui::Dummy({0.f, 4.f});
             ui_label("Line Strength");
             ImGui::SetNextItemWidth(sw);
             ImGui::SliderFloat("##gen_pencil_sketch_line_str", &clip.fx_pencil_sketch_line_str, 0.5f, 5.0f, "%.1f");
@@ -1351,11 +1496,6 @@
             ImGui::SetNextItemWidth(sw);
             ImGui::SliderFloat("##gen_pencil_sketch_hatching", &clip.fx_pencil_sketch_hatching, 0.0f, 1.0f, "%.2f");
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Pencil Sketch: Hatching");
-            ImGui::Dummy({0.f, 4.f});
-            ui_label("Mix Color");
-            ImGui::SetNextItemWidth(sw);
-            ImGui::SliderFloat("##gen_pencil_sketch_mix_orig", &clip.fx_pencil_sketch_mix_orig, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Pencil Sketch: Mix Color");
             break;
 
         case FXType::CrtBarrel:
@@ -1447,6 +1587,11 @@
             break;
 
         case FXType::MirrorTunnel:
+            ui_label("Strength");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##gen_mirror_tunnel_strength", &clip.fx_mirror_tunnel_strength, 0.0f, 1.0f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Mirror Tunnel: Strength");
+            ImGui::Dummy({0.f, 4.f});
             ui_label("Depth");
             ImGui::SetNextItemWidth(sw);
             ImGui::SliderFloat("##gen_mirror_tunnel_depth", &clip.fx_mirror_tunnel_depth, 1.0f, 12.0f, "%.1f");
@@ -1501,6 +1646,11 @@
             break;
 
         case FXType::ZoneSystemBw:
+            ui_label("Strength");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##gen_zone_system_bw_strength", &clip.fx_zone_system_bw_strength, 0.0f, 1.0f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Zone System B&W: Strength");
+            ImGui::Dummy({0.f, 4.f});
             ui_label("Zones");
             ImGui::SetNextItemWidth(sw);
             ImGui::SliderFloat("##gen_zone_system_bw_zones", &clip.fx_zone_system_bw_zones, 3.0f, 10.0f, "%.0f");
@@ -1555,6 +1705,11 @@
             break;
 
         case FXType::ContourMap:
+            ui_label("Strength");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##gen_contour_map_strength", &clip.fx_contour_map_strength, 0.0f, 1.0f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Contour Map: Strength");
+            ImGui::Dummy({0.f, 4.f});
             ui_label("Levels");
             ImGui::SetNextItemWidth(sw);
             ImGui::SliderFloat("##gen_contour_map_levels", &clip.fx_contour_map_levels, 3.0f, 20.0f, "%.0f");
@@ -1599,6 +1754,11 @@
             break;
 
         case FXType::AsciiArt:
+            ui_label("Strength");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##gen_ascii_art_strength", &clip.fx_ascii_art_strength, 0.0f, 1.0f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "ASCII Art: Strength");
+            ImGui::Dummy({0.f, 4.f});
             ui_label("Char Size");
             ImGui::SetNextItemWidth(sw);
             ImGui::SliderFloat("##gen_ascii_art_char_size", &clip.fx_ascii_art_char_size, 4.0f, 24.0f, "%.0f");
@@ -1626,6 +1786,11 @@
             break;
 
         case FXType::DnaHelix:
+            ui_label("Strength");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##gen_dna_helix_strength", &clip.fx_dna_helix_strength, 0.0f, 1.0f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "DNA Helix Grid: Strength");
+            ImGui::Dummy({0.f, 4.f});
             ui_label("Grid Scale");
             ImGui::SetNextItemWidth(sw);
             ImGui::SliderFloat("##gen_dna_helix_grid_scale", &clip.fx_dna_helix_grid_scale, 5.0f, 30.0f, "%.1f");
