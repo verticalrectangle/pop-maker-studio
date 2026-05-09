@@ -4909,6 +4909,68 @@ static constexpr float TL_LABEL_W = 120.f;
 static constexpr float TL_TRACK_H = 42.f;
 static constexpr float TL_RULER_H = 24.f;
 
+// ── Conflict predicate ────────────────────────────────────────────────────────
+// Returns true if clips a and b cannot coexist on the same track.
+// Effect clips never conflict with non-Effect clips (glass system).
+static bool clips_conflict(const Clip& a, const Clip& b) {
+    if (a.clip_type == ClipType::Effect || b.clip_type == ClipType::Effect)
+        if (a.clip_type != b.clip_type) return false;
+    return a.start < b.end && a.end > b.start;
+}
+
+// ── Timeline state ────────────────────────────────────────────────────────────
+struct TlState {
+    // Clip drag (single focus clip)
+    int   drag_track  = -1, drag_clip = -1;
+    float drag_offset = 0.f;
+    bool  drag_left = false, drag_right = false;
+    int   drag_hot_track = -1, drag_hot_gap = -1;
+    bool  drag_moved = false;
+    float drag_origin_start = 0.f, drag_origin_end = 0.f;
+
+    // Multi-clip drag: origins of all selected clips captured at drag start
+    struct Origin { int ti, ci; float start, end; };
+    std::vector<Origin> drag_multi;
+
+    // Snap
+    bool  snap_enabled        = true;
+    float snap_indicator      = -1.f;
+    float body_snap_held_start = -1.f;
+    float body_snap_held_cand  = -1.f;
+
+    // Track rename
+    int  rename_track = -1;
+    char rename_buf[64] = {};
+    bool rename_focus = false;
+
+    // Track reorder drag
+    int   track_drag_src     = -1;
+    bool  track_dragging     = false;
+    float track_drag_start_y = 0.f;
+    int   track_drag_insert  = -1;
+
+    // Box select
+    bool   box_selecting = false;
+    ImVec2 box_start     = {0.f, 0.f};
+    bool   clip_hit      = false;
+
+    // Context menus
+    int  ctx_track = -1, ctx_clip = -1;
+    bool open_clip_ctx = false, open_track_ctx = false, open_tl_ctx = false;
+
+    // Transition glass
+    int    trans_track = -1, trans_left_ci = -1;
+    ImVec2 trans_popup_pos = {0.f, 0.f};
+    int    glass_drag = 0;
+    float  glass_drag_ref_x = 0.f;
+    float  glass_drag_ref_pre = 0.f, glass_drag_ref_post = 0.f;
+    float  glass_drag_ref_start = 0.f;
+
+    // Ruler seek drag
+    bool ruler_drag = false;
+};
+static TlState g_tl;
+
 // ── Timeline ──────────────────────────────────────────────────────────────────
 
 static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h) {
@@ -4984,8 +5046,6 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
     };
 
     // ── Edge / playhead snapping ──────────────────────────────────────────────
-    static bool s_snap_enabled = true;
-    static float s_snap_indicator = -1.f;  // time of active snap line, -1 = none
 
     // Build candidate list (all clip edges + playhead), excluding one clip.
     auto build_snap_candidates = [&](int ex_ti, int ex_ci) -> std::vector<float> {
@@ -5001,6 +5061,10 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
         for (float bt : state.beats) cands.push_back(bt);
         return cands;
     };
+
+    // Snap state aliases (needed before the per-track statics block below)
+    auto& s_snap_enabled   = g_tl.snap_enabled;
+    auto& s_snap_indicator = g_tl.snap_indicator;
 
     // Try to snap t to a nearby candidate; returns snapped value and sets indicator.
     // threshold_px: snap radius in screen pixels.
@@ -5128,39 +5192,43 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
 
     float track_y = track_area_top - state.tl_v_scroll;
     s_tl_hover_track = -1;  // reset each frame; set below as we scan rows
-    static int   drag_track = -1, drag_clip = -1;
-    static float drag_offset = 0.f;
-    static bool  drag_left = false, drag_right = false;
-    static int drag_hot_track = -1;  // track under mouse during body drag
-    static int  s_rename_track = -1;
-    static char s_rename_buf[64] = {};
-    static bool s_rename_focus = false;
-    static int   s_track_drag_src    = -1;
-    static bool  s_track_dragging    = false;
-    static float s_track_drag_start_y = 0.f;
-    static int   s_track_drag_insert  = -1;
-    static int   drag_hot_gap = -1;
-    static bool  s_drag_moved = false;
-    static float drag_origin_start = 0.f, drag_origin_end = 0.f;
-    static float s_body_snap_held_start = -1.f;  // applied clip.start while snap-held; -1 = none
-    static float s_body_snap_held_cand  = -1.f;  // the snap candidate (for indicator line)
 
-    // Box select state
-    static bool  s_box_selecting = false;
-    static ImVec2 s_box_start    = {0.f, 0.f};
-    static bool  s_clip_hit      = false;  // did mousedown land on a clip this frame?
-
-    // Context menu state
-    static int ctx_track = -1, ctx_clip = -1;
-    static bool open_clip_ctx = false, open_track_ctx = false, open_tl_ctx = false;
-
-    // Transition glass state
-    static int    s_trans_track = -1, s_trans_left_ci = -1;
-    static ImVec2 s_trans_popup_pos = {0.f, 0.f};
-    static int    s_glass_drag = 0;   // 0=none 1=left-handle 2=right-handle 3=body
-    static float  s_glass_drag_ref_x = 0.f;
-    static float  s_glass_drag_ref_pre = 0.f, s_glass_drag_ref_post = 0.f;
-    static float  s_glass_drag_ref_start = 0.f;
+    // Unpack g_tl into short aliases for readability inside this function
+    auto& drag_track       = g_tl.drag_track;
+    auto& drag_clip        = g_tl.drag_clip;
+    auto& drag_offset      = g_tl.drag_offset;
+    auto& drag_left        = g_tl.drag_left;
+    auto& drag_right       = g_tl.drag_right;
+    auto& drag_hot_track   = g_tl.drag_hot_track;
+    auto& drag_hot_gap     = g_tl.drag_hot_gap;
+    auto& s_drag_moved     = g_tl.drag_moved;
+    auto& drag_origin_start= g_tl.drag_origin_start;
+    auto& drag_origin_end  = g_tl.drag_origin_end;
+    auto& s_body_snap_held_start = g_tl.body_snap_held_start;
+    auto& s_body_snap_held_cand  = g_tl.body_snap_held_cand;
+    auto& s_rename_track   = g_tl.rename_track;
+    auto& s_rename_buf     = g_tl.rename_buf;
+    auto& s_rename_focus   = g_tl.rename_focus;
+    auto& s_track_drag_src = g_tl.track_drag_src;
+    auto& s_track_dragging = g_tl.track_dragging;
+    auto& s_track_drag_start_y = g_tl.track_drag_start_y;
+    auto& s_track_drag_insert  = g_tl.track_drag_insert;
+    auto& s_box_selecting  = g_tl.box_selecting;
+    auto& s_box_start      = g_tl.box_start;
+    auto& s_clip_hit       = g_tl.clip_hit;
+    auto& ctx_track        = g_tl.ctx_track;
+    auto& ctx_clip         = g_tl.ctx_clip;
+    auto& open_clip_ctx    = g_tl.open_clip_ctx;
+    auto& open_track_ctx   = g_tl.open_track_ctx;
+    auto& open_tl_ctx      = g_tl.open_tl_ctx;
+    auto& s_trans_track    = g_tl.trans_track;
+    auto& s_trans_left_ci  = g_tl.trans_left_ci;
+    auto& s_trans_popup_pos= g_tl.trans_popup_pos;
+    auto& s_glass_drag     = g_tl.glass_drag;
+    auto& s_glass_drag_ref_x    = g_tl.glass_drag_ref_x;
+    auto& s_glass_drag_ref_pre  = g_tl.glass_drag_ref_pre;
+    auto& s_glass_drag_ref_post = g_tl.glass_drag_ref_post;
+    auto& s_glass_drag_ref_start= g_tl.glass_drag_ref_start;
     bool s_trans_hit_this_frame = false;
 
     // Clip all track drawing to the scrollable area (below ruler, above add-track row)
@@ -5583,12 +5651,23 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
                         drag_origin_end   = clip.end;
                         if (mouse.x <= orig_cx0+ew_hit) {
                             drag_track=ti; drag_clip=ci; drag_left=true; drag_right=false; drag_offset=0.f;
+                            g_tl.drag_multi.clear();
                         } else if (mouse.x >= orig_cx1-ew_hit) {
                             drag_track=ti; drag_clip=ci; drag_right=true; drag_left=false; drag_offset=0.f;
+                            g_tl.drag_multi.clear();
                         } else {
                             drag_track=ti; drag_clip=ci; drag_left=false; drag_right=false;
                             drag_offset = (mouse.x - origin.x - TL_LABEL_W + scroll) / zoom - clip.start;
                             s_body_snap_held_start = -1.f; s_body_snap_held_cand = -1.f;
+                            // Capture origins for all selected clips (multi-drag)
+                            g_tl.drag_multi.clear();
+                            for (auto& [stc, stci] : state.clip_selection) {
+                                if (stc < (int)state.tracks.size() &&
+                                    stci < (int)state.tracks[stc].clips.size()) {
+                                    auto& sc = state.tracks[stc].clips[stci];
+                                    g_tl.drag_multi.push_back({stc, stci, sc.start, sc.end});
+                                }
+                            }
                         }
                     }
                     // Populate the source duration cache on first grab if not already known.
@@ -6107,6 +6186,18 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
             dc.start = fmaxf(0.f, best_start);
             dc.end   = dc.start + dur_clip;
             sync_proxy_key();
+            // Co-move all other selected clips by the same delta
+            if (g_tl.drag_multi.size() > 1) {
+                float delta = dc.start - drag_origin_start;
+                for (auto& orig : g_tl.drag_multi) {
+                    if (orig.ti == drag_track && orig.ci == drag_clip) continue;
+                    if (orig.ti >= (int)state.tracks.size()) continue;
+                    if (orig.ci >= (int)state.tracks[orig.ti].clips.size()) continue;
+                    Clip& oc = state.tracks[orig.ti].clips[orig.ci];
+                    oc.start = fmaxf(0.f, orig.start + delta);
+                    oc.end   = oc.start + (orig.end - orig.start);
+                }
+            }
             // Co-move transition-linked neighbours
             if (Clip* nb = linked_right()) { float d = nb->end - nb->start; nb->start = dc.end;   nb->end = nb->start + d; }
             if (Clip* nb = linked_left())  { float d = nb->end - nb->start; nb->end   = dc.start; nb->start = fmaxf(0.f, nb->end - d); }
@@ -6196,18 +6287,35 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
                     }
                 }
             } else {
-                // Body drag on same track — snap back if overlapping any other clip
-                Clip& moved_clip = state.tracks[drag_track].clips[drag_clip];
+                // Body drag on same track — validate with conflict predicate, restore on conflict
                 bool overlaps = false;
                 if (!drag_left && !drag_right) {
-                    for (int ci = 0; ci < (int)state.tracks[drag_track].clips.size(); ++ci) {
-                        if (ci == drag_clip) continue;
-                        const Clip& oc = state.tracks[drag_track].clips[ci];
-                        if (moved_clip.start < oc.end && moved_clip.end > oc.start) { overlaps = true; break; }
+                    // Check the focus clip and all multi-drag clips for conflicts
+                    auto check_clip_conflicts = [&](int chk_ti, int chk_ci) -> bool {
+                        if (chk_ti >= (int)state.tracks.size()) return false;
+                        const Clip& mc = state.tracks[chk_ti].clips[chk_ci];
+                        for (int ci2 = 0; ci2 < (int)state.tracks[chk_ti].clips.size(); ++ci2) {
+                            if (ci2 == chk_ci) continue;
+                            // Skip other multi-drag clips (they moved together, no relative conflict)
+                            bool in_multi = false;
+                            for (auto& orig : g_tl.drag_multi)
+                                if (orig.ti == chk_ti && orig.ci == ci2) { in_multi = true; break; }
+                            if (in_multi) continue;
+                            if (clips_conflict(mc, state.tracks[chk_ti].clips[ci2])) return true;
+                        }
+                        return false;
+                    };
+                    if (check_clip_conflicts(drag_track, drag_clip)) overlaps = true;
+                    if (!overlaps) {
+                        for (auto& orig : g_tl.drag_multi) {
+                            if (orig.ti == drag_track && orig.ci == drag_clip) continue;
+                            if (check_clip_conflicts(orig.ti, orig.ci)) { overlaps = true; break; }
+                        }
                     }
                 }
                 if (overlaps) {
-                    // Restore proxy key if it changed during drag
+                    // Restore focus clip
+                    Clip& moved_clip = state.tracks[drag_track].clips[drag_clip];
                     if (moved_clip.clip_type == ClipType::Video && !moved_clip.text.empty()
                         && moved_clip.start != drag_origin_start) {
                         std::string old_key = clip_slot_key(moved_clip.text, moved_clip.start);
@@ -6217,6 +6325,14 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
                     }
                     moved_clip.start = drag_origin_start;
                     moved_clip.end   = drag_origin_end;
+                    // Restore all other multi-drag clips
+                    for (auto& orig : g_tl.drag_multi) {
+                        if (orig.ti == drag_track && orig.ci == drag_clip) continue;
+                        if (orig.ti >= (int)state.tracks.size()) continue;
+                        if (orig.ci >= (int)state.tracks[orig.ti].clips.size()) continue;
+                        state.tracks[orig.ti].clips[orig.ci].start = orig.start;
+                        state.tracks[orig.ti].clips[orig.ci].end   = orig.end;
+                    }
                 } else {
                     const char* act = drag_left  ? "Trim clip start" :
                                       drag_right ? "Trim clip end"   : "Move clip";
@@ -6229,6 +6345,7 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
         drag_hot_track=-1; drag_hot_gap=-1;
         s_drag_moved = false;
         s_body_snap_held_start = -1.f; s_body_snap_held_cand = -1.f;
+        g_tl.drag_multi.clear();
     }
 
     // Playhead
@@ -6239,7 +6356,7 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
     }
 
     // Click/drag ruler to seek. Once grabbed, mouse can roam outside the ruler strip.
-    static bool s_ruler_drag = false;
+    auto& s_ruler_drag = g_tl.ruler_drag;
     bool any_popup_global = ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
     if (ImGui::IsMouseReleased(0)) s_ruler_drag = false;
     if (!any_popup_global && drag_track < 0) {
