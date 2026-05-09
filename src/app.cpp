@@ -107,8 +107,6 @@ std::vector<std::pair<int,int>> AppState::subtitle_clip_indices() const {
     return out;
 }
 
-static bool track_is_glass_at(const AppState& state, int fx_ti, float t);
-
 static void accum_effect_clip(EffectAccum& acc, const Clip& cl) {
     if (cl.fx_color_on) {
         acc.brightness += cl.fx_brightness;
@@ -132,61 +130,51 @@ static void accum_effect_clip(EffectAccum& acc, const Clip& cl) {
     }
 }
 
-EffectAccum collect_effects(const AppState& state, float t, int below_track_idx) {
-    EffectAccum acc;
-    for (int ti = 0; ti < below_track_idx && ti < (int)state.tracks.size(); ++ti) {
-        if (track_is_glass_at(state, ti, t)) continue;
-        for (auto& cl : state.tracks[ti].clips) {
-            if (cl.clip_type != ClipType::Effect) continue;
-            if (t < cl.start || t >= cl.end) continue;
-            accum_effect_clip(acc, cl);
-        }
-    }
-    return acc;
-}
-
-EffectAccum collect_glass_effects(const AppState& state, float t, int video_track_idx) {
-    EffectAccum acc;
-    int fx_ti = video_track_idx - 1;
-    if (fx_ti < 0 || fx_ti >= (int)state.tracks.size()) return acc;
-    if (!track_is_glass_at(state, fx_ti, t)) return acc;
-    for (auto& cl : state.tracks[fx_ti].clips) {
-        if (cl.clip_type != ClipType::Effect) continue;
-        if (t < cl.start || t >= cl.end) continue;
-        accum_effect_clip(acc, cl);
-    }
-    return acc;
-}
-
-// Returns true if FX clips on track fx_ti are glass (directly above active video/audio) at time t.
-static bool track_is_glass_at(const AppState& state, int fx_ti, float t) {
-    int below = fx_ti + 1;
-    if (below >= (int)state.tracks.size()) return false;
-    for (auto& cl : state.tracks[below].clips) {
-        if (cl.clip_type != ClipType::Video && cl.clip_type != ClipType::Audio) continue;
-        if (t >= cl.start && t < cl.end) return true;
-    }
-    return false;
-}
-
+// An FX clip is glass if it overlaps a Video/Audio clip on the same track.
 bool fx_clip_is_glass(const AppState& state, int fx_ti, const Clip& fx_cl) {
-    int below = fx_ti + 1;
-    if (below >= (int)state.tracks.size()) return false;
-    for (auto& cl : state.tracks[below].clips) {
+    if (fx_ti < 0 || fx_ti >= (int)state.tracks.size()) return false;
+    for (auto& cl : state.tracks[fx_ti].clips) {
         if (cl.clip_type != ClipType::Video && cl.clip_type != ClipType::Audio) continue;
         if (fx_cl.start < cl.end && fx_cl.end > cl.start) return true;
     }
     return false;
 }
 
+// Global adjustment FX: clips on tracks above below_track_idx that are NOT glass.
+EffectAccum collect_effects(const AppState& state, float t, int below_track_idx) {
+    EffectAccum acc;
+    for (int ti = 0; ti < below_track_idx && ti < (int)state.tracks.size(); ++ti) {
+        for (auto& cl : state.tracks[ti].clips) {
+            if (cl.clip_type != ClipType::Effect) continue;
+            if (t < cl.start || t >= cl.end) continue;
+            if (fx_clip_is_glass(state, ti, cl)) continue; // glass: applied pre-composite per video clip
+            accum_effect_clip(acc, cl);
+        }
+    }
+    return acc;
+}
+
+// Glass adjustment FX: Effect clips on the same track as the video clip that overlap it.
+EffectAccum collect_glass_effects(const AppState& state, float t, int video_track_idx) {
+    EffectAccum acc;
+    if (video_track_idx < 0 || video_track_idx >= (int)state.tracks.size()) return acc;
+    for (auto& cl : state.tracks[video_track_idx].clips) {
+        if (cl.clip_type != ClipType::Effect) continue;
+        if (t < cl.start || t >= cl.end) continue;
+        if (!fx_clip_is_glass(state, video_track_idx, cl)) continue;
+        accum_effect_clip(acc, cl);
+    }
+    return acc;
+}
+
 CreativeFXAccum collect_creative_fx(const AppState& state, float t, int below_track_idx) {
     CreativeFXAccum acc;
     for (int ti = 0; ti < below_track_idx && ti < (int)state.tracks.size(); ++ti) {
-        if (track_is_glass_at(state, ti, t)) continue; // glass FX: handled per-clip separately
         for (auto& cl : state.tracks[ti].clips) {
             if (cl.clip_type != ClipType::Effect) continue;
             if (cl.fx_type == FXType::Adjustment)  continue;
             if (t < cl.start || t >= cl.end)       continue;
+            if (fx_clip_is_glass(state, ti, cl))   continue; // glass: applied pre-composite
             switch (cl.fx_type) {
                 case FXType::Glitch:
                     acc.glitch_on         = true;
@@ -234,15 +222,15 @@ CreativeFXAccum collect_creative_fx(const AppState& state, float t, int below_tr
     return acc;
 }
 
+// Glass creative FX: Effect clips on the same track as the video clip that overlap it.
 CreativeFXAccum collect_glass_fx(const AppState& state, float t, int video_track_idx) {
     CreativeFXAccum acc;
-    int fx_ti = video_track_idx - 1;
-    if (fx_ti < 0 || fx_ti >= (int)state.tracks.size()) return acc;
-    if (!track_is_glass_at(state, fx_ti, t)) return acc;
-    for (auto& cl : state.tracks[fx_ti].clips) {
+    if (video_track_idx < 0 || video_track_idx >= (int)state.tracks.size()) return acc;
+    for (auto& cl : state.tracks[video_track_idx].clips) {
         if (cl.clip_type != ClipType::Effect) continue;
         if (cl.fx_type == FXType::Adjustment)  continue;
         if (t < cl.start || t >= cl.end)       continue;
+        if (!fx_clip_is_glass(state, video_track_idx, cl)) continue;
         switch (cl.fx_type) {
             case FXType::Glitch:
                 acc.glitch_on         = true;

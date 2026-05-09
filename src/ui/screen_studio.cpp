@@ -4912,16 +4912,11 @@ static constexpr float TL_RULER_H = 24.f;
 // ── Conflict predicate ────────────────────────────────────────────────────────
 // Returns true if clips a and b cannot coexist on the same track.
 // Returns true if clips a and b cannot coexist on the same track.
-// Effect clips conflict with Video/Audio — they must live on their own track
-// so the glass system (which is track-index-based) works correctly.
-// Effect clips can coexist with other Effect clips as long as they don't overlap in time.
+// FX bricks overlay clips on the same track — they never conflict.
+// Non-FX clips conflict if they overlap in time.
 static bool clips_conflict(const Clip& a, const Clip& b) {
-    bool a_fx  = (a.clip_type == ClipType::Effect);
-    bool b_fx  = (b.clip_type == ClipType::Effect);
-    bool a_vid = (a.clip_type == ClipType::Video || a.clip_type == ClipType::Audio);
-    bool b_vid = (b.clip_type == ClipType::Video || b.clip_type == ClipType::Audio);
-    if ((a_fx && b_vid) || (b_fx && a_vid)) return true;   // FX ↔ Video: always incompatible
-    return a.start < b.end && a.end > b.start;              // everything else: time overlap
+    if (a.clip_type == ClipType::Effect || b.clip_type == ClipType::Effect) return false;
+    return a.start < b.end && a.end > b.start;
 }
 
 // ── Timeline state ────────────────────────────────────────────────────────────
@@ -5431,173 +5426,19 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
             ImGui::OpenPopup("##track_ctx");
         }
 
-        // Clips
+        // Clips — two passes so FX bricks render on top of video clips.
+        // Interaction lambda runs for both passes; FX pass runs second so
+        // FX selection takes priority over video clips when they overlap.
         bool clip_ctx_opened_this_frame = false;
-        for (int ci = 0; ci < (int)track.clips.size(); ++ci) {
-            Clip& clip = track.clips[ci];
-            float cx0 = origin.x+TL_LABEL_W+clip.start*zoom-scroll;
-            float cx1 = origin.x+TL_LABEL_W+clip.end*zoom-scroll;
-            if (cx1 < origin.x+TL_LABEL_W || cx0 > origin.x+total_w) continue;
-            float vis_x0 = fmaxf(cx0, origin.x+TL_LABEL_W);
-            float vis_x1 = fminf(cx1, origin.x+total_w);
-            float cy0 = track_y+3.f, cy1 = track_y+TL_TRACK_H-3.f;
-            bool sel = state.clip_selection.count({ti, ci}) > 0;
 
-            if (clip.clip_type == ClipType::Effect) {
-                bool is_glass = fx_clip_is_glass(state, ti, clip);
-                FxBrickColors fbc = fx_brick_colors(clip.fx_type, sel);
-
-                // Glass bricks: lighter fill, frosted diagonal lines, cyan accent border
-                ImU32 fill_col   = is_glass
-                    ? IM_COL32(
-                        (int)(((fbc.fill>>0)&0xFF)*0.55f + 100),
-                        (int)(((fbc.fill>>8)&0xFF)*0.55f + 100),
-                        (int)(((fbc.fill>>16)&0xFF)*0.55f + 100), 180)
-                    : fbc.fill;
-                ImU32 border_col = is_glass
-                    ? IM_COL32(130, 210, 255, sel ? 255 : 200)
-                    : fbc.border;
-
-                dl->AddRectFilled({vis_x0,cy0},{vis_x1,cy1}, fill_col, 2.f);
-                // Glass texture: sparse diagonal lines
-                if (is_glass) {
-                    dl->PushClipRect({vis_x0,cy0},{vis_x1,cy1},true);
-                    float gh = cy1 - cy0;
-                    for (float ox = vis_x0 - gh; ox < vis_x1 + gh; ox += 10.f)
-                        dl->AddLine({ox, cy0}, {ox + gh, cy1},
-                                    IM_COL32(160, 220, 255, 28), 1.f);
-                    dl->PopClipRect();
-                }
-                dl->AddRect({vis_x0,cy0},{vis_x1,cy1}, border_col, 2.f, 0, is_glass ? 2.f : 1.5f);
-
-                ImGui::PushClipRect({vis_x0,cy0},{vis_x1,cy1},true);
-                float ly = cy0 + (cy1-cy0-13.f)*0.5f;
-                const char* fx_lbl = fx_type_name(clip.fx_type);
-                dl->AddText({vis_x0+5.f, ly}, fbc.label, fx_lbl);
-                // Adjustment-only mini badges
-                if (clip.fx_type == FXType::Adjustment) {
-                    float bx = vis_x0 + 38.f;
-                    if (clip.fx_color_on    && bx+28.f<vis_x1) { dl->AddText({bx,ly},fbc.label,"Col"); bx+=28.f; }
-                    if (clip.fx_blur_on     && bx+30.f<vis_x1) { dl->AddText({bx,ly},fbc.label,"Blur");bx+=32.f; }
-                    if (clip.fx_vignette_on && bx+24.f<vis_x1) { dl->AddText({bx,ly},fbc.label,"Vig"); bx+=28.f; }
-                    if (clip.fx_text_on     && bx+22.f<vis_x1) { dl->AddText({bx,ly},fbc.label,"Txt"); }
-                }
-                // Scope indicator: ↓ for global, ⊂ arrow for glass (clips down to one video)
-                if (vis_x1-vis_x0 > 30.f) {
-                    float ax=vis_x1-12.f, ay=cy0+(cy1-cy0)*0.35f;
-                    if (is_glass) {
-                        // Two small arrows pointing into a box → "clip-specific"
-                        dl->AddTriangleFilled({ax-5.f,ay},{ax+5.f,ay},{ax,ay+6.f},
-                                              IM_COL32(130,210,255,220));
-                        dl->AddLine({ax, ay+6.f},{ax, ay+10.f},
-                                    IM_COL32(130,210,255,180), 1.5f);
-                    } else {
-                        dl->AddTriangleFilled({ax-5.f,ay},{ax+5.f,ay},{ax,ay+7.f},fbc.label);
-                    }
-                }
-                ImGui::PopClipRect();
-
-                // Active-time glow: glass = only the track directly below, global = all tracks below
-                if (state.playhead >= clip.start && state.playhead < clip.end) {
-                    float gx = origin.x + TL_LABEL_W;
-                    int gti_start = is_glass ? ti+1 : ti+1;
-                    int gti_end   = is_glass ? ti+2 : (int)state.tracks.size();
-                    for (int gti = gti_start; gti < gti_end; ++gti) {
-                        float gty = (track_area_top - state.tl_v_scroll)
-                                  + gti * TL_TRACK_H;
-                        if (gty+TL_TRACK_H < track_area_top || gty > track_area_bot) continue;
-                        ImU32 glow_col = is_glass
-                            ? IM_COL32(80, 180, 255, 90)
-                            : IM_COL32(160, 110, 255, 80);
-                        dl->AddRectFilled({gx,gty},{gx+2.f,gty+TL_TRACK_H}, glow_col);
-                    }
-                }
-            } else {
-
-            ImVec4 clip_fill = (clip.clip_type==ClipType::Lyrics)   ? Col::clip_lyrics
-                             : (clip.clip_type==ClipType::Subtitle) ? Col::clip_subtitle
-                             : (clip.clip_type==ClipType::Text)     ? Col::clip_sub
-                             : (clip.clip_type==ClipType::Audio)    ? Col::clip_audio
-                                                                     : Col::clip_video;
-            dl->AddRectFilled({vis_x0,cy0},{vis_x1,cy1},
-                to_u32(sel ? Col::fg : clip_fill), 2.f);
-            dl->AddRect({vis_x0,cy0},{vis_x1,cy1},
-                to_u32(sel ? Col::fg : Col::line), 2.f);
-
-
-            // Clip label / waveform
-            if ((clip.clip_type==ClipType::Text || clip.clip_type==ClipType::Lyrics ||
-                 clip.clip_type==ClipType::Subtitle) && !clip.text.empty()) {
-                ImGui::PushClipRect({vis_x0,cy0},{vis_x1,cy1},true);
-                dl->AddText({vis_x0+4.f, cy0+(cy1-cy0-13.f)*0.5f},
-                    to_u32(sel ? Col::bg : Col::fg), clip.text.c_str());
-                ImGui::PopClipRect();
-            } else if (clip.clip_type==ClipType::Audio || clip.clip_type==ClipType::Video) {
-                const std::string& wave_path = clip.text;
-                const WaveformData* wd = !wave_path.empty()
-                    ? waveform_get(wave_path) : nullptr;
-
-                ImGui::PushClipRect({vis_x0,cy0},{vis_x1,cy1},true);
-
-                // Filename label at top of brick
-                if (clip.clip_type==ClipType::Video) {
-                    dl->AddText({vis_x0+4.f, cy0+3.f},
-                        to_u32(sel?Col::bg:Col::fg),
-                        clip.text.empty()?"Video":fs::path(clip.text).filename().string().c_str());
-                }
-
-                if (wd && !wd->samples.empty()) {
-                    float mid   = (cy0 + cy1) * 0.5f;
-                    float half  = (cy1 - cy0) * 0.44f;
-                    ImU32 wcol  = sel ? IM_COL32(0,0,0,160) : IM_COL32(255,255,255,120);
-
-                    // Draw one vertical bar per screen pixel in visible range
-                    for (float px = vis_x0; px < vis_x1; px += 1.f) {
-                        float dt    = 1.f / WAVEFORM_FPS;
-                        float t_src = clip.in_point + (px - cx0) / zoom;
-                        int   fi    = (int)(t_src / dt);
-                        if (fi < 0 || fi >= (int)wd->samples.size()) continue;
-                        float amp = wd->samples[fi] * half;
-                        if (amp < 1.f) amp = 1.f;
-                        dl->AddLine({px, mid-amp}, {px, mid+amp}, wcol);
-                    }
-                }
-
-                ImGui::PopClipRect();
-            }
-
-            // Locked track — diagonal stripe overlay over the clip body
-            if (track.locked) {
-                dl->PushClipRect({vis_x0,cy0},{vis_x1,cy1},true);
-                ImU32 sc   = IM_COL32(255,255,255,55);
-                float h    = cy1 - cy0;
-                float step = 8.f;
-                float span = (vis_x1 - vis_x0) + h;
-                for (float d = -h; d < span; d += step)
-                    dl->AddLine({vis_x0 + d, cy0}, {vis_x0 + d + h, cy1}, sc, 1.2f);
-                dl->PopClipRect();
-            }
-
-            // Per-clip mute icon — small crossed speaker at top-right of brick
-            if (clip.muted && vis_x1 - vis_x0 > 16.f) {
-                float ix = vis_x1 - 10.f, iy = cy0 + 7.f;
-                ImU32 ic = IM_COL32(255, 80, 80, 220);
-                dl->AddRectFilled({ix-3.f, iy-2.f}, {ix-1.f, iy+2.f}, ic);
-                dl->AddTriangleFilled({ix-1.f,iy-3.f},{ix-1.f,iy+3.f},{ix+3.f,iy}, ic);
-                dl->AddLine({ix+1.f,iy-3.f},{ix+4.f,iy+2.f}, ic, 1.2f);
-                dl->AddLine({ix+4.f,iy-3.f},{ix+1.f,iy+2.f}, ic, 1.2f);
-            }
-
-            } // end else (non-Effect clips)
-
-            // Edge handles — common to all clip types
-            const float ew     = 6.f;   // drawn width
-            const float ew_hit = 12.f;  // hit zone width
+        auto clip_interact = [&](int ci, Clip& clip, float vis_x0, float vis_x1, float cy0, float cy1, bool sel) {
+            const float ew = 6.f, ew_hit = 12.f;
+            // Edge handles
             if (sel) {
                 dl->AddRectFilled({vis_x0,cy0},{vis_x0+ew,cy1},to_u32(Col::muted),1.f);
                 dl->AddRectFilled({vis_x1-ew,cy0},{vis_x1,cy1},to_u32(Col::muted),1.f);
             }
-            // Resize cursor — show on hover even before clicking
+            // Resize cursor
             {
                 float orig_cx0h = origin.x+TL_LABEL_W+clip.start*zoom-scroll;
                 float orig_cx1h = origin.x+TL_LABEL_W+clip.end*zoom-scroll;
@@ -5606,11 +5447,10 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
                 if (in_clip && (mouse.x <= orig_cx0h+ew_hit || mouse.x >= orig_cx1h-ew_hit))
                     ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
             }
-
-            // Keyframe diamond markers — drawn for all keyframed properties
+            // Keyframe diamond markers
             if (!clip.ktracks.empty()) {
                 float kf_mid_y = (cy0 + cy1) * 0.5f;
-                float d = 4.f;  // half-size of diamond
+                float d = 4.f;
                 for (auto& [pname, pt] : clip.ktracks) {
                     for (auto& kf : pt.keys) {
                         float kx = origin.x + TL_LABEL_W + (clip.start + kf.time) * zoom - scroll;
@@ -5625,7 +5465,6 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
                         dl->AddQuadFilled(
                             {kx, kf_mid_y-d}, {kx+d, kf_mid_y},
                             {kx, kf_mid_y+d}, {kx-d, kf_mid_y}, kc);
-                        // Click to select keyframe
                         if (ImGui::IsMouseClicked(0) &&
                             fabsf(mouse.x - kx) < d+2.f &&
                             fabsf(mouse.y - kf_mid_y) < d+2.f) {
@@ -5640,8 +5479,7 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
                     }
                 }
             }
-
-            // Left click to select / drag (drag is blocked on locked tracks)
+            // Left click — select / drag
             bool any_popup = ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
             if (!s_trans_hit_this_frame && !any_popup && ImGui::IsMouseClicked(0)) {
                 if (mouse.y>=cy0 && mouse.y<=cy1 && mouse.x>=vis_x0 && mouse.x<=vis_x1) {
@@ -5649,15 +5487,12 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
                     auto key = std::make_pair(ti, ci);
                     bool ctrl  = ImGui::GetIO().KeyCtrl;
                     bool shift = ImGui::GetIO().KeyShift;
-
                     if (ctrl) {
-                        // Toggle this clip in/out of selection
                         if (state.clip_selection.count(key))
                             state.clip_selection.erase(key);
                         else
                             state.clip_selection.insert(key);
                     } else if (shift && state.selected_track >= 0 && state.selected_clip >= 0) {
-                        // Range select: collect all clips between focus and this clip by start time
                         struct TL { float start; int ti, ci; };
                         std::vector<TL> all;
                         for (int t2=0; t2<(int)state.tracks.size(); ++t2)
@@ -5671,22 +5506,18 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
                             if (e.start >= t_lo && e.start <= t_hi)
                                 state.clip_selection.insert({e.ti, e.ci});
                     } else {
-                        // Plain click — clear and select only this clip
                         state.clip_selection.clear();
                         state.clip_selection.insert(key);
                     }
-
-                    // Always update focus clip
                     state.selected_track = ti;
                     state.selected_clip  = ci;
                     strncpy(s_edit_buf, clip.text.c_str(), sizeof(s_edit_buf)-1);
                     s_edit_buf[sizeof(s_edit_buf)-1] = '\0';
                     s_edit_focus_next = (clip.clip_type==ClipType::Text || clip.clip_type==ClipType::Lyrics ||
                                          clip.clip_type==ClipType::Subtitle);
-
                     float orig_cx0 = origin.x+TL_LABEL_W+clip.start*zoom-scroll;
                     float orig_cx1 = origin.x+TL_LABEL_W+clip.end*zoom-scroll;
-                    if (!track.locked) {  // locked tracks: select only, no drag/trim
+                    if (!track.locked) {
                         drag_origin_start = clip.start;
                         drag_origin_end   = clip.end;
                         if (mouse.x <= orig_cx0+ew_hit) {
@@ -5699,7 +5530,6 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
                             drag_track=ti; drag_clip=ci; drag_left=false; drag_right=false;
                             drag_offset = (mouse.x - origin.x - TL_LABEL_W + scroll) / zoom - clip.start;
                             s_body_snap_held_start = -1.f; s_body_snap_held_cand = -1.f;
-                            // Capture origins for all selected clips (multi-drag)
                             g_tl.drag_multi.clear();
                             for (auto& [stc, stci] : state.clip_selection) {
                                 if (stc < (int)state.tracks.size() &&
@@ -5710,7 +5540,6 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
                             }
                         }
                     }
-                    // Populate the source duration cache on first grab if not already known.
                     if ((drag_left || drag_right) && !clip.text.empty() &&
                         s_source_durations.find(clip.text) == s_source_durations.end()) {
                         float dur = 0.f;
@@ -5724,8 +5553,7 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
                     }
                 }
             }
-
-            // Right-click clip context
+            // Right-click context
             if (!clip_ctx_opened_this_frame && ImGui::IsMouseClicked(1) &&
                 mouse.y>=cy0 && mouse.y<=cy1 && mouse.x>=vis_x0 && mouse.x<=vis_x1) {
                 ctx_track = ti; ctx_clip = ci;
@@ -5734,6 +5562,153 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
                 clip_ctx_opened_this_frame = true;
                 ImGui::OpenPopup("##clip_ctx");
             }
+        }; // end clip_interact
+
+        // ── Pass 1: non-FX clips ─────────────────────────────────────────────
+        for (int ci = 0; ci < (int)track.clips.size(); ++ci) {
+            Clip& clip = track.clips[ci];
+            if (clip.clip_type == ClipType::Effect) continue;
+            float cx0 = origin.x+TL_LABEL_W+clip.start*zoom-scroll;
+            float cx1 = origin.x+TL_LABEL_W+clip.end*zoom-scroll;
+            if (cx1 < origin.x+TL_LABEL_W || cx0 > origin.x+total_w) continue;
+            float vis_x0 = fmaxf(cx0, origin.x+TL_LABEL_W);
+            float vis_x1 = fminf(cx1, origin.x+total_w);
+            float cy0 = track_y+3.f, cy1 = track_y+TL_TRACK_H-3.f;
+            bool sel = state.clip_selection.count({ti, ci}) > 0;
+
+            ImVec4 clip_fill = (clip.clip_type==ClipType::Lyrics)   ? Col::clip_lyrics
+                             : (clip.clip_type==ClipType::Subtitle) ? Col::clip_subtitle
+                             : (clip.clip_type==ClipType::Text)     ? Col::clip_sub
+                             : (clip.clip_type==ClipType::Audio)    ? Col::clip_audio
+                                                                     : Col::clip_video;
+            dl->AddRectFilled({vis_x0,cy0},{vis_x1,cy1},
+                to_u32(sel ? Col::fg : clip_fill), 2.f);
+            dl->AddRect({vis_x0,cy0},{vis_x1,cy1},
+                to_u32(sel ? Col::fg : Col::line), 2.f);
+
+            if ((clip.clip_type==ClipType::Text || clip.clip_type==ClipType::Lyrics ||
+                 clip.clip_type==ClipType::Subtitle) && !clip.text.empty()) {
+                ImGui::PushClipRect({vis_x0,cy0},{vis_x1,cy1},true);
+                dl->AddText({vis_x0+4.f, cy0+(cy1-cy0-13.f)*0.5f},
+                    to_u32(sel ? Col::bg : Col::fg), clip.text.c_str());
+                ImGui::PopClipRect();
+            } else if (clip.clip_type==ClipType::Audio || clip.clip_type==ClipType::Video) {
+                const std::string& wave_path = clip.text;
+                const WaveformData* wd = !wave_path.empty()
+                    ? waveform_get(wave_path) : nullptr;
+                ImGui::PushClipRect({vis_x0,cy0},{vis_x1,cy1},true);
+                if (clip.clip_type==ClipType::Video) {
+                    dl->AddText({vis_x0+4.f, cy0+3.f},
+                        to_u32(sel?Col::bg:Col::fg),
+                        clip.text.empty()?"Video":fs::path(clip.text).filename().string().c_str());
+                }
+                if (wd && !wd->samples.empty()) {
+                    float mid  = (cy0 + cy1) * 0.5f;
+                    float half = (cy1 - cy0) * 0.44f;
+                    ImU32 wcol = sel ? IM_COL32(0,0,0,160) : IM_COL32(255,255,255,120);
+                    for (float px = vis_x0; px < vis_x1; px += 1.f) {
+                        float t_src = clip.in_point + (px - cx0) / zoom;
+                        int   fi    = (int)(t_src * WAVEFORM_FPS);
+                        if (fi < 0 || fi >= (int)wd->samples.size()) continue;
+                        float amp = wd->samples[fi] * half;
+                        if (amp < 1.f) amp = 1.f;
+                        dl->AddLine({px, mid-amp}, {px, mid+amp}, wcol);
+                    }
+                }
+                ImGui::PopClipRect();
+            }
+
+            // Locked track stripe
+            if (track.locked) {
+                dl->PushClipRect({vis_x0,cy0},{vis_x1,cy1},true);
+                ImU32 sc = IM_COL32(255,255,255,55);
+                float h = cy1 - cy0, step = 8.f, span = (vis_x1 - vis_x0) + h;
+                for (float d = -h; d < span; d += step)
+                    dl->AddLine({vis_x0 + d, cy0}, {vis_x0 + d + h, cy1}, sc, 1.2f);
+                dl->PopClipRect();
+            }
+            // Per-clip mute icon
+            if (clip.muted && vis_x1 - vis_x0 > 16.f) {
+                float ix = vis_x1 - 10.f, iy = cy0 + 7.f;
+                ImU32 ic = IM_COL32(255, 80, 80, 220);
+                dl->AddRectFilled({ix-3.f, iy-2.f}, {ix-1.f, iy+2.f}, ic);
+                dl->AddTriangleFilled({ix-1.f,iy-3.f},{ix-1.f,iy+3.f},{ix+3.f,iy}, ic);
+                dl->AddLine({ix+1.f,iy-3.f},{ix+4.f,iy+2.f}, ic, 1.2f);
+                dl->AddLine({ix+4.f,iy-3.f},{ix+1.f,iy+2.f}, ic, 1.2f);
+            }
+
+            clip_interact(ci, clip, vis_x0, vis_x1, cy0, cy1, sel);
+        }
+
+        // ── Pass 2: FX bricks — rendered on top, interact last (wins on overlap) ──
+        for (int ci = 0; ci < (int)track.clips.size(); ++ci) {
+            Clip& clip = track.clips[ci];
+            if (clip.clip_type != ClipType::Effect) continue;
+            float cx0 = origin.x+TL_LABEL_W+clip.start*zoom-scroll;
+            float cx1 = origin.x+TL_LABEL_W+clip.end*zoom-scroll;
+            if (cx1 < origin.x+TL_LABEL_W || cx0 > origin.x+total_w) continue;
+            float vis_x0 = fmaxf(cx0, origin.x+TL_LABEL_W);
+            float vis_x1 = fminf(cx1, origin.x+total_w);
+            float cy0 = track_y+3.f, cy1 = track_y+TL_TRACK_H-3.f;
+            bool sel = state.clip_selection.count({ti, ci}) > 0;
+
+            bool is_glass = fx_clip_is_glass(state, ti, clip);
+            FxBrickColors fbc = fx_brick_colors(clip.fx_type, sel);
+
+            if (is_glass) {
+                // Glass brick: semi-transparent frosted overlay over the video clip below it.
+                ImU32 fill_col = IM_COL32(
+                    (int)(((fbc.fill>>0)&0xFF)*0.4f + 80),
+                    (int)(((fbc.fill>>8)&0xFF)*0.4f + 80),
+                    (int)(((fbc.fill>>16)&0xFF)*0.4f + 80), 160);
+                dl->AddRectFilled({vis_x0,cy0},{vis_x1,cy1}, fill_col, 2.f);
+                dl->PushClipRect({vis_x0,cy0},{vis_x1,cy1},true);
+                float gh = cy1 - cy0;
+                for (float ox = vis_x0 - gh; ox < vis_x1 + gh; ox += 9.f)
+                    dl->AddLine({ox, cy0}, {ox + gh, cy1}, IM_COL32(180, 230, 255, 30), 1.f);
+                dl->PopClipRect();
+                ImU32 border_col = IM_COL32(130, 210, 255, sel ? 255 : 210);
+                dl->AddRect({vis_x0,cy0},{vis_x1,cy1}, border_col, 2.f, 0, 2.f);
+            } else {
+                // Global FX brick: opaque, sits on its own track row.
+                dl->AddRectFilled({vis_x0,cy0},{vis_x1,cy1}, fbc.fill, 2.f);
+                dl->AddRect({vis_x0,cy0},{vis_x1,cy1}, fbc.border, 2.f, 0, 1.5f);
+
+                // Active glow on tracks below (scope indicator for global FX)
+                if (state.playhead >= clip.start && state.playhead < clip.end) {
+                    float gx = origin.x + TL_LABEL_W;
+                    for (int gti = ti+1; gti < (int)state.tracks.size(); ++gti) {
+                        float gty = (track_area_top - state.tl_v_scroll) + gti * TL_TRACK_H;
+                        if (gty+TL_TRACK_H < track_area_top || gty > track_area_bot) continue;
+                        dl->AddRectFilled({gx,gty},{gx+2.f,gty+TL_TRACK_H},
+                                          IM_COL32(160,110,255,80));
+                    }
+                }
+            }
+
+            ImGui::PushClipRect({vis_x0,cy0},{vis_x1,cy1},true);
+            float ly = cy0 + (cy1-cy0-13.f)*0.5f;
+            ImU32 lbl_col = is_glass ? IM_COL32(200, 240, 255, 255) : fbc.label;
+            dl->AddText({vis_x0+5.f, ly}, lbl_col, fx_type_name(clip.fx_type));
+            if (clip.fx_type == FXType::Adjustment) {
+                float bx = vis_x0 + 38.f;
+                if (clip.fx_color_on    && bx+28.f<vis_x1) { dl->AddText({bx,ly},lbl_col,"Col");  bx+=28.f; }
+                if (clip.fx_blur_on     && bx+30.f<vis_x1) { dl->AddText({bx,ly},lbl_col,"Blur"); bx+=32.f; }
+                if (clip.fx_vignette_on && bx+24.f<vis_x1) { dl->AddText({bx,ly},lbl_col,"Vig");  bx+=28.f; }
+                if (clip.fx_text_on     && bx+22.f<vis_x1) { dl->AddText({bx,ly},lbl_col,"Txt"); }
+            }
+            // Scope arrow
+            if (vis_x1-vis_x0 > 30.f) {
+                float ax=vis_x1-12.f, ay=cy0+(cy1-cy0)*0.35f;
+                if (is_glass)
+                    dl->AddTriangleFilled({ax-5.f,ay},{ax+5.f,ay},{ax,ay+6.f},
+                                          IM_COL32(130,210,255,220));
+                else
+                    dl->AddTriangleFilled({ax-5.f,ay},{ax+5.f,ay},{ax,ay+7.f},fbc.label);
+            }
+            ImGui::PopClipRect();
+
+            clip_interact(ci, clip, vis_x0, vis_x1, cy0, cy1, sel);
         }
 
         // Right-click empty timeline area (this track row, no clip hit)
