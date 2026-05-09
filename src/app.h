@@ -78,12 +78,6 @@ struct WordEntry {
     float end   = 0.f;
 };
 
-struct AttachedFX {
-    FXType             type   = FXType::Adjustment;
-    float              amount = 1.0f;
-    std::vector<float> params; // non-hidden params in registry order, at defaults
-};
-
 struct Clip {
     ClipType    clip_type = ClipType::Text;  // Text/Video/Audio — independent of track type
     float       start = 0.f;
@@ -210,9 +204,6 @@ struct Clip {
     // keyframe tracks — keyed by property name string
     // empty = use the matching static field above
     std::unordered_map<std::string, PropTrack> ktracks;
-
-    // FX attached directly to this clip (pre-composite, clip-specific)
-    std::vector<AttachedFX> attached_fx;
 
     // Evaluate named property at absolute timeline time `playhead`.
     // Falls back to the static field when no keyframes exist.
@@ -503,3 +494,8 @@ void app_shutdown(AppState& state);
 // Accumulate all Effect clips on tracks above below_track_idx that are active at time t.
 EffectAccum      collect_effects     (const AppState& state, float t, int below_track_idx);
 CreativeFXAccum  collect_creative_fx (const AppState& state, float t, int below_track_idx);
+// Glass FX/adjustments: bricks directly above a video/audio clip (clip-specific, pre-composite)
+EffectAccum      collect_glass_effects(const AppState& state, float t, int video_track_idx);
+CreativeFXAccum  collect_glass_fx    (const AppState& state, float t, int video_track_idx);
+// Visual check: does this FX clip sit directly above any video/audio clip (time overlap)?
+bool             fx_clip_is_glass    (const AppState& state, int fx_ti, const Clip& fx_cl);

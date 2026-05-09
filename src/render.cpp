@@ -5,7 +5,6 @@
 #include "overlay_renderer.h"
 #include "video.h"
 #include "fx_shader.h"
-#include "generated/fx_attached_accum.h"
 
 #define GL_GLEXT_PROTOTYPES
 #include <GL/gl.h>
@@ -1671,14 +1670,14 @@ static bool gl_render_vid_clip(ImDrawList& dl, const Clip* cl, float at_time,
     int vid_w = vf->width, vid_h = vf->height;
     video_free_frame(vf);
 
-    // Pre-composite: clip-attached FX applied to this clip's frame only.
+    // Pre-composite: glass FX/adjustments (track directly above this clip's track).
     uintptr_t cur_tex = (uintptr_t)tex_id;
-    if (!cl->attached_fx.empty()) {
-        CreativeFXAccum clip_cfx;
-        for (auto& afx : cl->attached_fx)
-            fx_accum_from_attached(clip_cfx, afx.type, afx.amount, afx.params);
-        if (clip_cfx.any_gen_fx)
-            cur_tex = fx_apply(cur_tex, fx_slot, vid_w, vid_h, {}, clip_cfx, at_time);
+    {
+        EffectAccum     glass_ea  = collect_glass_effects(state, at_time, ti);
+        CreativeFXAccum glass_cfx = collect_glass_fx     (state, at_time, ti);
+        if (glass_cfx.any_gen_fx || glass_ea.any_color || glass_ea.any_blur ||
+            glass_ea.any_vignette || glass_ea.any_text)
+            cur_tex = fx_apply(cur_tex, fx_slot, vid_w, vid_h, glass_ea, glass_cfx, at_time);
     }
     // Apply GPU FX pipeline
     EffectAccum     ea  = collect_effects    (state, at_time, ti);

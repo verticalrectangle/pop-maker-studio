@@ -6,7 +6,7 @@
 // ── Binary serialization helpers ──────────────────────────────────────────────
 
 static const uint32_t MAGIC   = 0x534D5001u; // "PMS\x01"
-static const uint32_t VERSION = 17u;
+static const uint32_t VERSION = 16u;
 
 struct Writer {
     std::ofstream f;
@@ -148,14 +148,6 @@ static void write_clip(Writer& w, const Clip& c) {
     uint32_t nw = (uint32_t)c.words.size();
     w.pod(nw);
     for (auto& we : c.words) write_wordentry(w, we);
-    // v17: attached FX
-    w.pod((uint32_t)c.attached_fx.size());
-    for (auto& afx : c.attached_fx) {
-        w.pod((uint32_t)afx.type);
-        w.pod(afx.amount);
-        w.pod((uint32_t)afx.params.size());
-        for (float v : afx.params) w.pod(v);
-    }
 }
 
 static Clip read_clip(Reader& r, uint32_t version) {
@@ -248,20 +240,6 @@ static Clip read_clip(Reader& r, uint32_t version) {
     uint32_t nw = r.pod<uint32_t>();
     for (uint32_t i = 0; i < nw && r.ok; ++i)
         c.words.push_back(read_wordentry(r));
-    // v17: attached FX
-    if (version >= 17u) {
-        uint32_t nafx = r.pod<uint32_t>();
-        for (uint32_t i = 0; i < nafx && r.ok; ++i) {
-            AttachedFX afx;
-            afx.type   = (FXType)r.pod<uint32_t>();
-            afx.amount = r.pod<float>();
-            uint32_t np = r.pod<uint32_t>();
-            afx.params.reserve(np);
-            for (uint32_t j = 0; j < np && r.ok; ++j)
-                afx.params.push_back(r.pod<float>());
-            c.attached_fx.push_back(std::move(afx));
-        }
-    }
     return c;
 }
 

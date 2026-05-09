@@ -107,40 +107,82 @@ std::vector<std::pair<int,int>> AppState::subtitle_clip_indices() const {
     return out;
 }
 
+static bool track_is_glass_at(const AppState& state, int fx_ti, float t);
+
+static void accum_effect_clip(EffectAccum& acc, const Clip& cl) {
+    if (cl.fx_color_on) {
+        acc.brightness += cl.fx_brightness;
+        acc.contrast   *= cl.fx_contrast;
+        acc.saturation *= cl.fx_saturation;
+        acc.hue        += cl.fx_hue;
+        acc.any_color   = true;
+    }
+    if (cl.fx_blur_on) {
+        acc.blur     += cl.fx_blur;
+        acc.any_blur  = true;
+    }
+    if (cl.fx_vignette_on) {
+        acc.vignette     = fminf(1.f, acc.vignette + cl.fx_vignette);
+        acc.any_vignette = true;
+    }
+    if (cl.fx_text_on) {
+        acc.opacity_mul *= cl.fx_opacity_mul;
+        acc.scale_mul   *= cl.fx_scale_mul;
+        acc.any_text     = true;
+    }
+}
+
 EffectAccum collect_effects(const AppState& state, float t, int below_track_idx) {
     EffectAccum acc;
     for (int ti = 0; ti < below_track_idx && ti < (int)state.tracks.size(); ++ti) {
+        if (track_is_glass_at(state, ti, t)) continue;
         for (auto& cl : state.tracks[ti].clips) {
             if (cl.clip_type != ClipType::Effect) continue;
             if (t < cl.start || t >= cl.end) continue;
-            if (cl.fx_color_on) {
-                acc.brightness += cl.fx_brightness;
-                acc.contrast   *= cl.fx_contrast;
-                acc.saturation *= cl.fx_saturation;
-                acc.hue        += cl.fx_hue;
-                acc.any_color   = true;
-            }
-            if (cl.fx_blur_on) {
-                acc.blur     += cl.fx_blur;
-                acc.any_blur  = true;
-            }
-            if (cl.fx_vignette_on) {
-                acc.vignette     = fminf(1.f, acc.vignette + cl.fx_vignette);
-                acc.any_vignette = true;
-            }
-            if (cl.fx_text_on) {
-                acc.opacity_mul *= cl.fx_opacity_mul;
-                acc.scale_mul   *= cl.fx_scale_mul;
-                acc.any_text     = true;
-            }
+            accum_effect_clip(acc, cl);
         }
     }
     return acc;
 }
 
+EffectAccum collect_glass_effects(const AppState& state, float t, int video_track_idx) {
+    EffectAccum acc;
+    int fx_ti = video_track_idx - 1;
+    if (fx_ti < 0 || fx_ti >= (int)state.tracks.size()) return acc;
+    if (!track_is_glass_at(state, fx_ti, t)) return acc;
+    for (auto& cl : state.tracks[fx_ti].clips) {
+        if (cl.clip_type != ClipType::Effect) continue;
+        if (t < cl.start || t >= cl.end) continue;
+        accum_effect_clip(acc, cl);
+    }
+    return acc;
+}
+
+// Returns true if FX clips on track fx_ti are glass (directly above active video/audio) at time t.
+static bool track_is_glass_at(const AppState& state, int fx_ti, float t) {
+    int below = fx_ti + 1;
+    if (below >= (int)state.tracks.size()) return false;
+    for (auto& cl : state.tracks[below].clips) {
+        if (cl.clip_type != ClipType::Video && cl.clip_type != ClipType::Audio) continue;
+        if (t >= cl.start && t < cl.end) return true;
+    }
+    return false;
+}
+
+bool fx_clip_is_glass(const AppState& state, int fx_ti, const Clip& fx_cl) {
+    int below = fx_ti + 1;
+    if (below >= (int)state.tracks.size()) return false;
+    for (auto& cl : state.tracks[below].clips) {
+        if (cl.clip_type != ClipType::Video && cl.clip_type != ClipType::Audio) continue;
+        if (fx_cl.start < cl.end && fx_cl.end > cl.start) return true;
+    }
+    return false;
+}
+
 CreativeFXAccum collect_creative_fx(const AppState& state, float t, int below_track_idx) {
     CreativeFXAccum acc;
     for (int ti = 0; ti < below_track_idx && ti < (int)state.tracks.size(); ++ti) {
+        if (track_is_glass_at(state, ti, t)) continue; // glass FX: handled per-clip separately
         for (auto& cl : state.tracks[ti].clips) {
             if (cl.clip_type != ClipType::Effect) continue;
             if (cl.fx_type == FXType::Adjustment)  continue;
@@ -187,6 +229,61 @@ CreativeFXAccum collect_creative_fx(const AppState& state, float t, int below_tr
 #include "generated/fx_collect_cases.h"
                     break;
             }
+        }
+    }
+    return acc;
+}
+
+CreativeFXAccum collect_glass_fx(const AppState& state, float t, int video_track_idx) {
+    CreativeFXAccum acc;
+    int fx_ti = video_track_idx - 1;
+    if (fx_ti < 0 || fx_ti >= (int)state.tracks.size()) return acc;
+    if (!track_is_glass_at(state, fx_ti, t)) return acc;
+    for (auto& cl : state.tracks[fx_ti].clips) {
+        if (cl.clip_type != ClipType::Effect) continue;
+        if (cl.fx_type == FXType::Adjustment)  continue;
+        if (t < cl.start || t >= cl.end)       continue;
+        switch (cl.fx_type) {
+            case FXType::Glitch:
+                acc.glitch_on         = true;
+                acc.glitch_chroma     = fmaxf(acc.glitch_chroma,     cl.fx_glitch_chroma);
+                acc.glitch_jitter     = fmaxf(acc.glitch_jitter,     cl.fx_glitch_jitter);
+                acc.glitch_corruption       = fmaxf(acc.glitch_corruption,       cl.fx_glitch_corruption);
+                acc.glitch_corruption_bleed = fmaxf(acc.glitch_corruption_bleed, cl.fx_glitch_corruption_bleed);
+                break;
+            case FXType::ZoomPunch:
+                acc.zoom_on       = true;
+                acc.zoom_strength = fmaxf(acc.zoom_strength, cl.fx_zoom_strength);
+                acc.zoom_decay    = fmaxf(acc.zoom_decay,    cl.fx_zoom_decay);
+                acc.zoom_shake    = fmaxf(acc.zoom_shake,    cl.fx_zoom_shake);
+                break;
+            case FXType::LightLeak:
+                acc.leak_on        = true;
+                acc.leak_intensity = fmaxf(acc.leak_intensity, cl.fx_leak_intensity);
+                acc.leak_speed     = fmaxf(acc.leak_speed,     cl.fx_leak_speed);
+                break;
+            case FXType::VHS:
+                acc.vhs_on       = true;
+                acc.vhs_noise    = fmaxf(acc.vhs_noise,    cl.fx_vhs_noise);
+                acc.vhs_bleed    = fmaxf(acc.vhs_bleed,    cl.fx_vhs_bleed);
+                acc.vhs_tracking = fmaxf(acc.vhs_tracking, cl.fx_vhs_tracking);
+                break;
+            case FXType::Datamosh:
+                acc.datamosh_on        = true;
+                acc.datamosh_intensity = fmaxf(acc.datamosh_intensity, cl.fx_datamosh_intensity);
+                acc.datamosh_spread    = fmaxf(acc.datamosh_spread,    cl.fx_datamosh_spread);
+                break;
+            case FXType::ChromaKey:
+                acc.chroma_key_on        = true;
+                acc.chroma_key_r         = cl.fx_chroma_key_r;
+                acc.chroma_key_g         = cl.fx_chroma_key_g;
+                acc.chroma_key_b         = cl.fx_chroma_key_b;
+                acc.chroma_key_threshold = cl.fx_chroma_key_threshold;
+                acc.chroma_key_softness  = cl.fx_chroma_key_softness;
+                break;
+            default:
+#include "generated/fx_collect_cases.h"
+                break;
         }
     }
     return acc;
