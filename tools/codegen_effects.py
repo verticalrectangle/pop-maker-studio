@@ -94,10 +94,12 @@ def main():
         lines.append(f'            acc.any_gen_fx = true;')
         lines.append(f'            acc.{eid}_amount = fmaxf(acc.{eid}_amount, cl.fx_{eid}_amount);')
         for p in e["params"]:
+            pmin = float(p["min"])
+            pmax = float(p["max"])
             lines.append(f'            {{')
             lines.append(f'                float _bi = cl.fx_{eid}_{p["name"]}_beat;')
             lines.append(f'                float _bv = cl.fx_{eid}_{p["name"]};')
-            lines.append(f'                acc.{eid}_{p["name"]} = fmaxf(acc.{eid}_{p["name"]}, (_bi > 0.001f) ? (_bv * _bi * _cl_beat_pulse) : _bv);')
+            lines.append(f'                acc.{eid}_{p["name"]} = fmaxf(acc.{eid}_{p["name"]}, (_bi > 0.001f) ? ({pmin}f + ({pmax}f - {pmin}f) * _bi * _cl_beat_pulse) : _bv);')
             lines.append(f'            }}')
         lines.append(f'            break;')
     write(os.path.join(GEN_DIR, "fx_collect_cases.h"), "\n".join(lines) + "\n")
