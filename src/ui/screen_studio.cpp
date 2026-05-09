@@ -7473,7 +7473,9 @@ void ui_studio(AppState& state) {
         } else if (!state.pipeline_is_separate_only) {
             // Both mode: has words + vocals
             load_words_cache(state);
-            apply_subtitle_mode(state);
+            // Skip apply_subtitle_mode when typography will regenerate from words_cache immediately after
+            if (!state.typo_generate_when_done)
+                apply_subtitle_mode(state);
             save_all_srts(state);
         }
         // SeparateOnly: no words, skip subtitle machinery entirely
