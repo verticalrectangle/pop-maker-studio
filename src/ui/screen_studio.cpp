@@ -1609,7 +1609,20 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                     show_ci = state.selected_clip;
                 }
             }
-            if (!show) { ++text_rendered; continue; }
+            if (!show) {
+                // Only count this track toward the stacking offset if it's actually a text track
+                // (has at least one Text/Lyrics/Subtitle clip). Pure video/audio/FX tracks must
+                // not shift the vertical slot, or large-font presets like Cyberpunk get pushed
+                // off-screen when multiple non-text tracks precede the Lyrics track.
+                bool has_text_clips = false;
+                for (auto& c : track.clips) {
+                    auto ct = c.clip_type;
+                    if (ct == ClipType::Text || ct == ClipType::Lyrics || ct == ClipType::Subtitle)
+                        { has_text_clips = true; break; }
+                }
+                if (has_text_clips) ++text_rendered;
+                continue;
+            }
 
             // Hover preview: temporarily render with the hovered preset's style.
             Clip hover_override;
@@ -1624,6 +1637,7 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                     hover_override.sub_pos_x          = hpr->sub_pos_x;
                     hover_override.sub_pos_y          = hpr->sub_pos_y;
                     hover_override.sub_wrap_w         = hpr->sub_wrap_w;
+                    hover_override.sub_anchor_h       = hpr->sub_anchor_h;
                     hover_override.sub_color_override = true;
                     memcpy(hover_override.sub_color, hpr->color, sizeof(hpr->color));
                     show = &hover_override;
