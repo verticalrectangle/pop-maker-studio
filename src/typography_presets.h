@@ -32,6 +32,10 @@ struct TypographyPreset {
     bool  karaoke      = false;
     AnimStyle style    = AnimStyle::None;
 
+    // Grouping tuning (0 = use mode default)
+    float pause_gap = 0.f;  // gap threshold in seconds to break a group
+    int   max_words = 0;    // hard cap on words per group (0 = no limit)
+
     // FX clips to auto-generate (max 3)
     TypoFXDesc fx[3]   = {};
     int        n_fx    = 0;
@@ -50,6 +54,7 @@ static const TypographyPreset g_typo_presets[] = {
         0.18f, 0.5f, 1, 0.5f, 1, 0.85f,
         {1.f, 1.f, 1.f, 1.f},
         true, false, AnimStyle::Block,
+        0.08f, 1,
         {}, 0
     },
 
@@ -61,6 +66,7 @@ static const TypographyPreset g_typo_presets[] = {
         0.18f, 0.5f, 1, 0.5f, 1, 0.85f,
         {1.f, 1.f, 1.f, 1.f},
         true, false, AnimStyle::Block,
+        0.08f, 1,
         {}, 0
     },
 
@@ -72,6 +78,7 @@ static const TypographyPreset g_typo_presets[] = {
         0.14f, 0.5f, 3, 0.5f, 1, 0.85f,
         {1.f, 0.1f, 0.9f, 1.f},
         true, false, AnimStyle::Scale,
+        0.12f, 1,
         { {FXType::ChromaticAberration, 0.8f} }, 1
     },
 
@@ -79,10 +86,11 @@ static const TypographyPreset g_typo_presets[] = {
         "Cyberpunk",
         "Monospace · cyan · glitch · bottom-left",
         "Hype",
-        SubtitleMode::Word, 1,
+        SubtitleMode::CustomN, 3,
         0.12f, 0.08f, 0, 0.88f, 0, 0.9f,
         {0.0f, 1.f, 0.95f, 1.f},
         true, false, AnimStyle::Glitch,
+        0.20f, 3,
         { {FXType::ChromaticAberration, 0.7f}, {FXType::Scanlines, 0.f} }, 2
     },
 
@@ -94,6 +102,7 @@ static const TypographyPreset g_typo_presets[] = {
         0.10f, 0.5f, 2, 0.15f, 1, 0.85f,
         {1.f, 0.95f, 0.0f, 1.f},
         true, false, AnimStyle::Block,
+        0.25f, 3,
         {}, 0
     },
 
@@ -107,6 +116,7 @@ static const TypographyPreset g_typo_presets[] = {
         0.08f, 0.5f, 1, 0.5f, 1, 0.80f,
         {1.f, 1.f, 1.f, 1.f},
         false, false, AnimStyle::Fade,
+        0.40f, 6,
         {}, 0
     },
 
@@ -118,6 +128,7 @@ static const TypographyPreset g_typo_presets[] = {
         0.06f, 0.12f, 1, 0.5f, 0, 0.75f,
         {0.85f, 0.82f, 0.78f, 1.f},
         false, false, AnimStyle::Fade,
+        0.50f, 5,
         {}, 0
     },
 
@@ -129,6 +140,7 @@ static const TypographyPreset g_typo_presets[] = {
         0.15f, 0.5f, 1, 0.5f, 1, 0.85f,
         {0.95f, 0.75f, 0.88f, 1.f},
         false, false, AnimStyle::Fade,
+        0.20f, 1,
         {}, 0
     },
 
@@ -140,6 +152,7 @@ static const TypographyPreset g_typo_presets[] = {
         0.07f, 0.5f, 1, 0.5f, 1, 0.80f,
         {0.96f, 0.91f, 0.78f, 1.f},
         false, false, AnimStyle::Fade,
+        0.60f, 6,
         { {FXType::FilmGrain, 0.f} }, 1
     },
 
@@ -151,6 +164,7 @@ static const TypographyPreset g_typo_presets[] = {
         0.055f, 0.5f, 0, 0.88f, 1, 0.85f,
         {1.f, 1.f, 1.f, 1.f},
         false, false, AnimStyle::Fade,
+        0.70f, 8,
         {}, 0
     },
 
@@ -164,6 +178,7 @@ static const TypographyPreset g_typo_presets[] = {
         0.20f, 0.5f, 1, 0.5f, 1, 0.92f,
         {1.f, 1.f, 1.f, 1.f},
         true, false, AnimStyle::Scale,
+        0.12f, 1,
         {}, 0
     },
 
@@ -175,6 +190,7 @@ static const TypographyPreset g_typo_presets[] = {
         0.11f, 0.05f, 1, 0.5f, 0, 0.92f,
         {1.f, 1.f, 1.f, 1.f},
         true, false, AnimStyle::Block,
+        0.45f, 5,
         {}, 0
     },
 
@@ -186,6 +202,7 @@ static const TypographyPreset g_typo_presets[] = {
         0.09f, 0.5f, 1, 0.5f, 1, 0.85f,
         {1.f, 1.f, 1.f, 1.f},
         false, false, AnimStyle::Glitch,
+        0.35f, 5,
         {}, 0
     },
 
@@ -197,6 +214,7 @@ static const TypographyPreset g_typo_presets[] = {
         0.07f, 0.5f, 1, 0.5f, 1, 0.75f,
         {1.f, 1.f, 1.f, 1.f},
         true, false, AnimStyle::Block,
+        0.80f, 10,
         {}, 0
     },
 
@@ -210,6 +228,7 @@ static const TypographyPreset g_typo_presets[] = {
         0.055f, 0.5f, 1, 0.5f, 1, 0.75f,
         {0.9f, 0.9f, 0.9f, 1.f},
         false, false, AnimStyle::Fade,
+        0.40f, 5,
         {}, 0
     },
 
@@ -221,6 +240,7 @@ static const TypographyPreset g_typo_presets[] = {
         0.07f, 0.5f, 0, 0.85f, 1, 0.82f,
         {1.f, 1.f, 1.f, 1.f},
         false, false, AnimStyle::Fade,
+        0.35f, 6,
         {}, 0
     },
 
@@ -232,6 +252,7 @@ static const TypographyPreset g_typo_presets[] = {
         0.16f, 0.5f, 1, 0.5f, 1, 0.88f,
         {1.f, 1.f, 1.f, 1.f},
         false, false, AnimStyle::Fade,
+        0.18f, 1,
         {}, 0
     },
 
@@ -243,6 +264,7 @@ static const TypographyPreset g_typo_presets[] = {
         0.08f, 0.5f, 1, 0.5f, 1, 0.85f,
         {1.f, 1.f, 1.f, 1.f},
         false, false, AnimStyle::Slide,
+        0.30f, 5,
         {}, 0
     },
 
@@ -254,6 +276,7 @@ static const TypographyPreset g_typo_presets[] = {
         0.065f, 0.5f, 0, 0.88f, 1, 0.85f,
         {0.7f, 0.7f, 0.7f, 1.f},
         false, true, AnimStyle::None,
+        0.50f, 8,
         {}, 0
     },
 
@@ -267,6 +290,7 @@ static const TypographyPreset g_typo_presets[] = {
         0.065f, 0.5f, 0, 0.88f, 1, 0.85f,
         {1.f, 1.f, 1.f, 1.f},
         false, false, AnimStyle::None,
+        0.60f, 7,
         { {FXType::VHS, 0.f} }, 1
     },
 
@@ -278,6 +302,7 @@ static const TypographyPreset g_typo_presets[] = {
         0.14f, 0.5f, 1, 0.5f, 1, 0.85f,
         {1.f, 0.05f, 0.7f, 1.f},
         true, false, AnimStyle::Scale,
+        0.15f, 1,
         { {FXType::ChromaticAberration, 0.6f} }, 1
     },
 
@@ -289,6 +314,7 @@ static const TypographyPreset g_typo_presets[] = {
         0.06f, 0.5f, 1, 0.5f, 1, 0.78f,
         {0.93f, 0.87f, 0.72f, 1.f},
         false, false, AnimStyle::Fade,
+        0.45f, 5,
         { {FXType::FilmGrain, 0.f} }, 1
     },
 };

@@ -226,6 +226,7 @@ struct Track {
     bool              visible = true;
     bool              muted   = false;
     bool              locked  = false;  // when true, blocks all clip edits on this track
+    bool              managed = false;  // owned by typography system — preset rewrites clips in-place
     int               sub_row = 0;
 };
 

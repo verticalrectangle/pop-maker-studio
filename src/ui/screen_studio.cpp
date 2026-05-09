@@ -285,28 +285,40 @@ static std::vector<Clip> parse_srt(const std::string& path) {
 // ── Subtitle grouping ─────────────────────────────────────────────────────────
 
 // Build clips from a flat list of words using the requested grouping mode.
+// pause_gap: override default gap threshold (0 = use mode default).
+// max_words: force a group break after this many words regardless of gap (0 = no limit).
 static std::vector<Clip> group_words(
     const std::vector<Clip>& words,
-    SubtitleMode mode, int custom_n)
+    SubtitleMode mode, int custom_n,
+    float pause_gap = 0.f, int max_words = 0)
 {
     if (words.empty()) return {};
     std::vector<Clip> out;
+
+    // Helper: append word to current group, flushing if max_words hit.
+    auto flush_if_full = [&](Clip& cur, int& wcount) {
+        if (max_words > 0 && wcount >= max_words) {
+            out.push_back(cur);
+            cur = Clip{};
+            wcount = 0;
+            return true;
+        }
+        return false;
+    };
 
     switch (mode) {
     case SubtitleMode::Word:
         return words;
 
     case SubtitleMode::Phrase: {
-        // Split when gap between words exceeds 0.3 s
-        Clip cur = words[0];
+        float thresh = (pause_gap > 0.f) ? pause_gap : 0.3f;
+        Clip cur = words[0]; int wc = 1;
         for (size_t i = 1; i < words.size(); ++i) {
             float gap = words[i].start - words[i-1].end;
-            if (gap > 0.3f) {
-                out.push_back(cur);
-                cur = words[i];
+            if (gap > thresh || (max_words > 0 && wc >= max_words)) {
+                out.push_back(cur); cur = words[i]; wc = 1;
             } else {
-                cur.text += " " + words[i].text;
-                cur.end   = words[i].end;
+                cur.text += " " + words[i].text; cur.end = words[i].end; ++wc;
             }
         }
         out.push_back(cur);
@@ -314,16 +326,14 @@ static std::vector<Clip> group_words(
     }
 
     case SubtitleMode::Line: {
-        // Split when gap exceeds 0.8 s (breath / phrase boundary)
-        Clip cur = words[0];
+        float thresh = (pause_gap > 0.f) ? pause_gap : 0.8f;
+        Clip cur = words[0]; int wc = 1;
         for (size_t i = 1; i < words.size(); ++i) {
             float gap = words[i].start - words[i-1].end;
-            if (gap > 0.8f) {
-                out.push_back(cur);
-                cur = words[i];
+            if (gap > thresh || (max_words > 0 && wc >= max_words)) {
+                out.push_back(cur); cur = words[i]; wc = 1;
             } else {
-                cur.text += " " + words[i].text;
-                cur.end   = words[i].end;
+                cur.text += " " + words[i].text; cur.end = words[i].end; ++wc;
             }
         }
         out.push_back(cur);
@@ -332,11 +342,11 @@ static std::vector<Clip> group_words(
 
     case SubtitleMode::CustomN: {
         int n = (custom_n < 1) ? 1 : custom_n;
+        if (max_words > 0 && max_words < n) n = max_words;
         for (size_t i = 0; i < words.size(); ) {
             Clip c = words[i++];
             for (int k = 1; k < n && i < words.size(); ++k, ++i) {
-                c.text += " " + words[i].text;
-                c.end   = words[i].end;
+                c.text += " " + words[i].text; c.end = words[i].end;
             }
             out.push_back(c);
         }
@@ -344,19 +354,18 @@ static std::vector<Clip> group_words(
     }
 
     case SubtitleMode::Karaoke: {
-        // Same grouping as Line (split on breath gaps > 0.8 s) but each clip
-        // carries karaoke=true so preview and render do per-word highlighting.
-        auto lines = group_words(words, SubtitleMode::Line, custom_n);
+        float thresh = (pause_gap > 0.f) ? pause_gap : 0.8f;
+        auto lines = group_words(words, SubtitleMode::Line, custom_n, thresh, max_words);
         for (auto& c : lines) c.karaoke = true;
         return lines;
     }
 
     case SubtitleMode::Segment:
-        // Handled separately via segments JSON — fall back to Line grouping
-        // if segment data isn't available.
-        return group_words(words, SubtitleMode::Line, custom_n);
+        return group_words(words, SubtitleMode::Line, custom_n, pause_gap, max_words);
     }
 
+    // Suppress unused-variable warning from the lambda (only used in old draft).
+    (void)flush_if_full;
     return out;
 }
 
@@ -3552,7 +3561,16 @@ static void generate_typography(AppState& state) {
             if (!cl.beats.empty()) { beat_ti = ti; beat_ci = ci; }
         }
 
-    // Clear previously generated typography clips and FX clips
+    // Find managed lyrics track for this source BEFORE clearing (save index).
+    int typo_ti = -1;
+    for (int i = 0; i < (int)state.tracks.size(); ++i) {
+        if (!state.tracks[i].managed) continue;
+        for (auto& c : state.tracks[i].clips)
+            if (c.clip_type == ClipType::Lyrics && c.source_id == src) { typo_ti = i; break; }
+        if (typo_ti >= 0) break;
+    }
+
+    // Clear previously generated typography clips and FX clips from all tracks.
     for (auto& t : state.tracks) {
         t.clips.erase(std::remove_if(t.clips.begin(), t.clips.end(),
             [&](const Clip& c) {
@@ -3561,14 +3579,14 @@ static void generate_typography(AppState& state) {
             }), t.clips.end());
     }
 
-    // Find or create "Typography" track (topmost)
-    Track* typo_track = nullptr;
-    for (auto& t : state.tracks) if (t.name == "Typography") { typo_track = &t; break; }
-    if (!typo_track) {
-        state.tracks.insert(state.tracks.begin(), Track{});
-        state.tracks.front().name = "Typography";
-        typo_track = &state.tracks.front();
+    // Create managed Lyrics track if none found.
+    if (typo_ti < 0) {
+        Track lt; lt.name = "Lyrics"; lt.managed = true;
+        state.tracks.insert(state.tracks.begin(), std::move(lt));
+        typo_ti = 0;
+        if (beat_ti >= 0) beat_ti++;  // index shifted by insert
     }
+    Track* typo_track = &state.tracks[typo_ti];
 
     // Build word clips
     auto stamp = [&](Clip& c) {
@@ -3631,7 +3649,7 @@ static void generate_typography(AppState& state) {
     if (raw.empty()) return;
 
     auto grouped = from_segments ? raw
-                                 : group_words(raw, grouping, pr->custom_n);
+                                 : group_words(raw, grouping, pr->custom_n, pr->pause_gap, pr->max_words);
 
     // Per-clip word data (for karaoke)
     std::vector<WordEntry> all_words;
@@ -3675,21 +3693,16 @@ static void generate_typography(AppState& state) {
     std::sort(typo_track->clips.begin(), typo_track->clips.end(),
               [](const Clip& a, const Clip& b){ return a.start < b.start; });
 
-    // Auto-generate FX clips above the typography track
-    // Find the track index of Typography
-    int typo_ti = -1;
-    for (int ti = 0; ti < (int)state.tracks.size(); ++ti)
-        if (&state.tracks[ti] == typo_track) { typo_ti = ti; break; }
-
+    // Auto-generate FX clips on a managed FX track directly above the lyrics track.
     if (typo_ti >= 0 && pr->n_fx > 0) {
-        // Find or create "Typography FX" track directly above
         Track* fx_track = nullptr;
         if (typo_ti + 1 < (int)state.tracks.size() &&
-            state.tracks[typo_ti + 1].name == "Typography FX")
+            state.tracks[typo_ti + 1].managed &&
+            state.tracks[typo_ti + 1].name == "Lyrics FX")
             fx_track = &state.tracks[typo_ti + 1];
         else {
-            state.tracks.insert(state.tracks.begin() + typo_ti + 1, Track{});
-            state.tracks[typo_ti + 1].name = "Typography FX";
+            Track ft; ft.name = "Lyrics FX"; ft.managed = true;
+            state.tracks.insert(state.tracks.begin() + typo_ti + 1, std::move(ft));
             fx_track = &state.tracks[typo_ti + 1];
         }
         // Clear old generated FX
@@ -5844,6 +5857,11 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
             if (ImGui::IsKeyPressed(ImGuiKey_Escape)) s_rename_track = -1;
             ImGui::PopStyleColor(2);
         } else {
+            // Managed track: amber left accent stripe
+            if (track.managed)
+                dl->AddRectFilled({origin.x, track_y+2.f},
+                                  {origin.x+3.f, track_y+TL_TRACK_H-2.f},
+                                  to_u32(Col::clip_lyrics));
             dl->AddText({origin.x+8.f, track_y+(TL_TRACK_H-13.f)*0.5f},
                 to_u32(track_sel ? Col::fg : Col::muted), track.name.c_str());
             if (ImGui::IsMouseClicked(0) && in_label) {
@@ -6028,13 +6046,15 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
                     if (!track.locked) {
                         drag_origin_start = clip.start;
                         drag_origin_end   = clip.end;
-                        if (mouse.x <= orig_cx0+ew_hit) {
+                        bool left_edge  = mouse.x <= orig_cx0+ew_hit;
+                        bool right_edge = mouse.x >= orig_cx1-ew_hit;
+                        if (left_edge) {
                             drag_track=ti; drag_clip=ci; drag_left=true; drag_right=false; drag_offset=0.f;
                             g_tl.drag_multi.clear();
-                        } else if (mouse.x >= orig_cx1-ew_hit) {
+                        } else if (right_edge) {
                             drag_track=ti; drag_clip=ci; drag_right=true; drag_left=false; drag_offset=0.f;
                             g_tl.drag_multi.clear();
-                        } else {
+                        } else if (!track.managed) {  // body move blocked on managed tracks
                             drag_track=ti; drag_clip=ci; drag_left=false; drag_right=false;
                             drag_offset = (mouse.x - origin.x - TL_LABEL_W + scroll) / zoom - clip.start;
                             s_body_snap_held_start = -1.f; s_body_snap_held_cand = -1.f;
@@ -7117,8 +7137,17 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
             ImGui::Separator();
         }
 
+        // Managed track controls
+        if (ct && ct->managed) {
+            if (ImGui::MenuItem("Detach from preset")) {
+                ct->managed = false;
+                history_push(state, "Detach track from preset");
+            }
+            ImGui::Separator();
+        }
+
         // ── Add clip to this track ────────────────────────────────────────────
-        if (valid) {
+        if (valid && (!ct || !ct->managed)) {
             if (ImGui::MenuItem("Add Text Clip")) {
                 add_clip_to_track(state, ti, "", ClipType::Text);
                 s_edit_focus_next = true;
@@ -7449,8 +7478,8 @@ void ui_studio(AppState& state) {
         }
         // SeparateOnly: no words, skip subtitle machinery entirely
 
-        // Add vocals stem to timeline if Demucs produced one
-        if (!state.vocals_path.empty() && fs::exists(state.vocals_path)) {
+        // Add vocals stem to timeline only for explicit "Separate vocals" runs
+        if (state.pipeline_is_separate_only && !state.vocals_path.empty() && fs::exists(state.vocals_path)) {
             bool already_present = false;
             for (auto& t : state.tracks)
                 for (auto& c : t.clips)
