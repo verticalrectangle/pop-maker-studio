@@ -3497,186 +3497,6 @@ static void panel_clip(AppState& state, float w) {
     }
 }
 
-// ── Right panel: Lyrics tab ───────────────────────────────────────────────────
-
-static void panel_lyrics(AppState& state, float w) {
-    if (state.selected_track < 0 || state.selected_track >= (int)state.tracks.size()) return;
-    Track& track = state.tracks[state.selected_track];
-    if (state.selected_clip < 0 || state.selected_clip >= (int)track.clips.size()) return;
-    Clip& clip = track.clips[state.selected_clip];
-
-    ImGui::Dummy({0.f, 8.f});
-
-    if (track.locked) {
-        ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
-        ImGui::TextUnformatted("Track is locked");
-        ImGui::PopStyleColor();
-        return;
-    }
-
-    // ── Clip info ─────────────────────────────────────────────────────────────
-    ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
-    char tlabel[80];
-    snprintf(tlabel, sizeof(tlabel), "%s  ·  clip %d of %d",
-        track.name.c_str(), state.selected_clip + 1, (int)track.clips.size());
-    ImGui::TextUnformatted(tlabel);
-    ImGui::PopStyleColor();
-    ImGui::Dummy({0.f, 4.f}); ui_separator(); ImGui::Dummy({0.f, 8.f});
-
-    // Word count and duration from words_cache
-    if (!state.words_cache.empty()) {
-        int wcount = 0;
-        for (auto& we : state.words_cache)
-            if (we.end > clip.start && we.start < clip.end) ++wcount;
-
-        float dur = clip.end - clip.start;
-        int dur_s = (int)dur, dur_cs = (int)((dur - dur_s) * 100);
-        char info[80];
-        snprintf(info, sizeof(info), "%d word%s  ·  %d.%02ds",
-            wcount, wcount == 1 ? "" : "s", dur_s, dur_cs);
-        ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
-        ImGui::TextUnformatted(info);
-        ImGui::PopStyleColor();
-        ImGui::Dummy({0.f, 8.f});
-    }
-
-    // ── Grouping mode ─────────────────────────────────────────────────────────
-    ui_label("Grouping"); ImGui::Dummy({0.f, 4.f});
-
-    if (!state.words_json_path.empty() && fs::exists(state.words_json_path)) {
-        // ── Grouping mode ─────────────────────────────────────────────────────
-        // Karaoke is now a per-clip toggle — not a grouping mode.
-        struct ModeBtn { SubtitleMode m; const char* label; const char* tip; };
-        static const ModeBtn modes[] = {
-            {SubtitleMode::Word,    "Word",    "One clip per word"},
-            {SubtitleMode::Phrase,  "Phrase",  "Group by short pauses (>0.3s)"},
-            {SubtitleMode::Line,    "Line",    "Group by breath gaps (>0.8s)"},
-            {SubtitleMode::Segment, "Segment", "WhisperX sentence boundaries"},
-            {SubtitleMode::CustomN, "Custom",  "N words per clip"},
-        };
-        for (auto& mb : modes) {
-            bool sel = (state.subtitle_mode == mb.m ||
-                       (mb.m == SubtitleMode::Line && state.subtitle_mode == SubtitleMode::Karaoke));
-            if (ui_btn(mb.label, sel, true)) state.subtitle_mode = mb.m;
-            if (ImGui::IsItemHovered()) {
-                ImGui::BeginTooltip(); ImGui::TextUnformatted(mb.tip); ImGui::EndTooltip();
-            }
-            ImGui::SameLine(0.f, 4.f);
-        }
-        ImGui::NewLine();
-
-        if (state.subtitle_mode == SubtitleMode::CustomN) {
-            ImGui::Dummy({0.f, 4.f});
-            ImGui::PushStyleColor(ImGuiCol_FrameBg, Col::bg_soft);
-            ImGui::PushStyleColor(ImGuiCol_Border,  Col::line);
-            ImGui::SetNextItemWidth(80.f);
-            int n = state.subtitle_n;
-            if (ImGui::InputInt("words/clip##cnl", &n))
-                state.subtitle_n = (n < 1) ? 1 : (n > 20) ? 20 : n;
-            ImGui::PopStyleColor(2);
-        }
-
-        // ── Karaoke toggle (not available for Word mode) ───────────────────
-        if (state.subtitle_mode != SubtitleMode::Word) {
-            ImGui::Dummy({0.f, 8.f}); ui_separator(); ImGui::Dummy({0.f, 6.f});
-            ui_label("Karaoke"); ImGui::Dummy({0.f, 4.f});
-
-            bool kar = clip.karaoke;
-            if (ImGui::Checkbox("Karaoke highlight##ltab", &kar)) {
-                clip.karaoke = kar;
-                history_push(state, "Karaoke toggle");
-            }
-            if (ImGui::IsItemHovered()) {
-                ImGui::BeginTooltip();
-                ImGui::TextUnformatted("Highlight each word as it plays");
-                ImGui::EndTooltip();
-            }
-
-            if (clip.karaoke) {
-                ImGui::Dummy({0.f, 6.f});
-                ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
-                ImGui::TextUnformatted("Base color"); ImGui::PopStyleColor();
-                ImGui::SetNextItemWidth(w - 16.f);
-                if (ImGui::ColorEdit4("##kar_base", clip.sub_color,
-                        ImGuiColorEditFlags_NoLabel | ImGuiColorEditFlags_AlphaBar))
-                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Karaoke base color");
-                ImGui::Dummy({0.f, 4.f});
-                ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
-                ImGui::TextUnformatted("Highlight color"); ImGui::PopStyleColor();
-                ImGui::SetNextItemWidth(w - 16.f);
-                if (ImGui::ColorEdit4("##kar_hl", clip.karaoke_highlight_color,
-                        ImGuiColorEditFlags_NoLabel | ImGuiColorEditFlags_AlphaBar))
-                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Karaoke highlight color");
-
-                ImGui::Dummy({0.f, 6.f});
-                if (ui_btn("Apply karaoke colors to all", false, true)) {
-                    for (auto& tr : state.tracks)
-                        for (auto& cl2 : tr.clips)
-                            if (cl2.clip_type == ClipType::Lyrics && &cl2 != &clip) {
-                                memcpy(cl2.sub_color, clip.sub_color, sizeof(clip.sub_color));
-                                memcpy(cl2.karaoke_highlight_color, clip.karaoke_highlight_color,
-                                       sizeof(clip.karaoke_highlight_color));
-                            }
-                    history_push(state, "Apply karaoke colors to all");
-                }
-            }
-        }
-
-        ImGui::Dummy({0.f, 8.f}); ui_separator(); ImGui::Dummy({0.f, 6.f});
-        if (ui_btn("Apply grouping", true, true)) {
-            apply_subtitle_mode(state);
-            const char* mname =
-                state.subtitle_mode == SubtitleMode::Word    ? "Word"    :
-                state.subtitle_mode == SubtitleMode::Phrase  ? "Phrase"  :
-                state.subtitle_mode == SubtitleMode::Line    ? "Line"    :
-                state.subtitle_mode == SubtitleMode::Karaoke ? "Karaoke" :
-                state.subtitle_mode == SubtitleMode::Segment ? "Segment" : "Custom";
-            history_push(state, std::string("Grouping — ") + mname);
-        }
-        if (ImGui::IsItemHovered()) {
-            ImGui::BeginTooltip();
-            ImGui::TextUnformatted("Re-bucket all Lyrics clips from saved word JSON");
-            ImGui::EndTooltip();
-        }
-
-        ImGui::Dummy({0.f, 4.f});
-        if (ui_btn("Apply to all Lyrics", false, true)) {
-            for (auto& tr : state.tracks)
-                for (auto& cl2 : tr.clips)
-                    if (cl2.clip_type == ClipType::Lyrics)
-                        cl2.karaoke = clip.karaoke;
-            history_push(state, "Apply karaoke to all Lyrics");
-        }
-
-        int sel_lyrics = 0;
-        for (auto& [st, sc] : state.clip_selection) {
-            if (st == state.selected_track && sc == state.selected_clip) continue;
-            if (st < (int)state.tracks.size() && sc < (int)state.tracks[st].clips.size() &&
-                state.tracks[st].clips[sc].clip_type == ClipType::Lyrics)
-                ++sel_lyrics;
-        }
-        if (sel_lyrics > 0) {
-            ImGui::SameLine(0.f, 6.f);
-            char glbl[56];
-            snprintf(glbl, sizeof(glbl), "Apply to %d selected##grp", sel_lyrics);
-            if (ui_btn(glbl, false, true)) {
-                for (auto& [st, sc] : state.clip_selection) {
-                    if (st == state.selected_track && sc == state.selected_clip) continue;
-                    if (st >= (int)state.tracks.size() || sc >= (int)state.tracks[st].clips.size()) continue;
-                    Clip& tgt = state.tracks[st].clips[sc];
-                    if (tgt.clip_type != ClipType::Lyrics) continue;
-                    tgt.karaoke = clip.karaoke;
-                }
-                history_push(state, "Apply karaoke to selected");
-            }
-        }
-    } else {
-        ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
-        ImGui::TextWrapped("Run ML Processing on an audio clip to generate word JSON.");
-        ImGui::PopStyleColor();
-    }
-}
-
 // ── Typography generator + panel ──────────────────────────────────────────────
 
 // Tag used on source_id of auto-generated FX clips so generate can find/clear them.
@@ -3706,12 +3526,17 @@ static void apply_typo_style(Clip& c, const TypographyPreset& pr, const AppState
 }
 
 static void generate_typography(AppState& state) {
-    if (state.words_json_path.empty() && state.segments_json_path.empty()) return;
+    // Need either cached words or JSON on disk
+    bool has_cache    = !state.words_cache.empty();
+    bool has_word_json = !state.words_json_path.empty() && fs::exists(state.words_json_path);
+    bool has_seg_json  = !state.segments_json_path.empty() && fs::exists(state.segments_json_path);
+    if (!has_cache && !has_word_json && !has_seg_json) return;
 
     const TypographyPreset* pr = typo_preset_by_id(state.typo_preset_id.c_str());
     if (!pr) pr = &g_typo_presets[0];
 
-    SubtitleMode grouping = state.typo_grouping;
+    // Grouping and word count come entirely from the preset — no user override.
+    SubtitleMode grouping = pr->grouping;
 
     const std::string src = state.audio_path;
     const std::string fx_tag = TYPO_FX_TAG + src;
@@ -3756,12 +3581,11 @@ static void generate_typography(AppState& state) {
     // Rave: random positions
     bool rave = (strcmp(pr->id, "rave") == 0);
 
-    // Load words
+    // Build raw word clips — prefer in-memory cache, fall back to JSON on disk.
     std::vector<Clip> raw;
     bool from_segments = false;
 
-    if (grouping == SubtitleMode::Segment && !state.segments_json_path.empty()
-        && fs::exists(state.segments_json_path)) {
+    if (grouping == SubtitleMode::Segment && has_seg_json) {
         std::ifstream f(state.segments_json_path);
         if (f) {
             try {
@@ -3778,26 +3602,33 @@ static void generate_typography(AppState& state) {
         }
     }
 
-    if (!from_segments && !state.words_json_path.empty() && fs::exists(state.words_json_path)) {
-        std::ifstream f(state.words_json_path);
-        if (f) {
-            try {
-                auto j = nlohmann::json::parse(f);
-                for (auto& w : j) {
-                    Clip c;
-                    c.text  = w["word"].get<std::string>();
-                    c.start = w["start"].get<float>();
-                    c.end   = w["end"].get<float>();
-                    raw.push_back(c);
-                }
-            } catch (...) {}
+    if (!from_segments) {
+        if (has_cache) {
+            for (auto& we : state.words_cache) {
+                Clip c; c.text = we.text; c.start = we.start; c.end = we.end;
+                raw.push_back(c);
+            }
+        } else if (has_word_json) {
+            std::ifstream f(state.words_json_path);
+            if (f) {
+                try {
+                    auto j = nlohmann::json::parse(f);
+                    for (auto& w : j) {
+                        Clip c;
+                        c.text  = w["word"].get<std::string>();
+                        c.start = w["start"].get<float>();
+                        c.end   = w["end"].get<float>();
+                        raw.push_back(c);
+                    }
+                } catch (...) {}
+            }
         }
     }
 
     if (raw.empty()) return;
 
     auto grouped = from_segments ? raw
-                                 : group_words(raw, grouping, state.typo_custom_n);
+                                 : group_words(raw, grouping, pr->custom_n);
 
     // Per-clip word data (for karaoke)
     std::vector<WordEntry> all_words;
@@ -4073,9 +3904,7 @@ static void panel_typography(AppState& state, float w) {
         ImGui::InvisibleButton(btn_id, {cell_w, cell_h});
         if (ImGui::IsItemClicked()) {
             state.typo_preset_id = pr.id;
-            state.typo_grouping  = pr.grouping;
-            state.typo_custom_n  = pr.custom_n;
-            typo_restyle_live(state);
+            generate_typography(state);
         }
 
         col_idx++;
@@ -4130,38 +3959,10 @@ static void panel_typography(AppState& state, float w) {
         }
 
         ImGui::Dummy({0.f, 8.f});
-        ui_label("Grouping override");
-        ImGui::Dummy({0.f, 4.f});
-        struct GrpBtn { SubtitleMode m; const char* label; };
-        static const GrpBtn grp_btns[] = {
-            {SubtitleMode::Word,    "Word"},
-            {SubtitleMode::Phrase,  "Phrase"},
-            {SubtitleMode::Line,    "Line"},
-            {SubtitleMode::Segment, "Sentence"},
-            {SubtitleMode::CustomN, "Custom N"},
-        };
-        for (auto& gb : grp_btns) {
-            bool sel = (state.typo_grouping == gb.m);
-            if (ui_btn(gb.label, sel, true)) state.typo_grouping = gb.m;
-            ImGui::SameLine(0.f, 4.f);
-        }
-        ImGui::NewLine();
-        if (state.typo_grouping == SubtitleMode::CustomN) {
-            ImGui::Dummy({0.f, 4.f});
-            ImGui::PushStyleColor(ImGuiCol_FrameBg, Col::bg_soft);
-            ImGui::SetNextItemWidth(80.f);
-            int n = state.typo_custom_n;
-            if (ImGui::InputInt("words##tyn", &n))
-                state.typo_custom_n = (n < 1) ? 1 : (n > 20) ? 20 : n;
-            ImGui::PopStyleColor();
-        }
-
-        ImGui::Dummy({0.f, 8.f});
-        if (ui_btn("Reset to preset defaults", false, true)) {
+        if (ui_btn("Reset font & color to preset", false, true)) {
             state.typo_font_size         = 0.f;
             state.typo_color[3]          = 0.f;
             state.typo_all_caps_override = false;
-            if (pr) { state.typo_grouping = pr->grouping; state.typo_custom_n = pr->custom_n; }
             typo_restyle_live(state);
         }
 
@@ -8251,25 +8052,24 @@ void ui_studio(AppState& state) {
         ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {12.f, 6.f});
         ImGui::PushStyleColor(ImGuiCol_Tab,       Col::bg_soft);
         ImGui::PushStyleColor(ImGuiCol_TabActive, Col::line);
-        // Determine if a Lyrics clip is selected
-        // Lyrics tab visible if any clip in the selection is a Lyrics clip
-        bool lyrics_selected = false;
-        for (auto& [st, sc] : state.clip_selection) {
-            if (st < (int)state.tracks.size() && sc < (int)state.tracks[st].clips.size() &&
-                state.tracks[st].clips[sc].clip_type == ClipType::Lyrics)
-                { lyrics_selected = true; break; }
+        // Auto-switch to Typography tab when a Lyrics/Text clip is newly selected.
+        {
+            static int s_last_sel_track = -1, s_last_sel_clip = -1;
+            int st = state.selected_track, sc = state.selected_clip;
+            if ((st != s_last_sel_track || sc != s_last_sel_clip) && st >= 0 && sc >= 0
+                && st < (int)state.tracks.size() && sc < (int)state.tracks[st].clips.size()) {
+                auto ct = state.tracks[st].clips[sc].clip_type;
+                if (ct == ClipType::Lyrics || ct == ClipType::Text || ct == ClipType::Subtitle)
+                    state.panel_tab = 8;
+            }
+            s_last_sel_track = st; s_last_sel_clip = sc;
         }
-        // Also check focus clip in case selection is empty
-        if (!lyrics_selected &&
-            state.selected_track >= 0 && state.selected_track < (int)state.tracks.size() &&
-            state.selected_clip  >= 0 && state.selected_clip  < (int)state.tracks[state.selected_track].clips.size())
-            lyrics_selected = state.tracks[state.selected_track].clips[state.selected_clip].clip_type == ClipType::Lyrics;
 
-        if (!lyrics_selected && state.panel_tab == 4) state.panel_tab = 0;
+        // Redirect stale Lyrics tab (4) to Typography (8).
+        if (state.panel_tab == 4) state.panel_tab = 8;
 
         if (ImGui::BeginTabBar("##panel_tabs")) {
             if (ImGui::BeginTabItem("Clip"))       { state.panel_tab=0; ImGui::EndTabItem(); }
-            if (lyrics_selected && ImGui::BeginTabItem("Lyrics")) { state.panel_tab=4; ImGui::EndTabItem(); }
             if (ImGui::BeginTabItem("Typography")) { state.panel_tab=8; ImGui::EndTabItem(); }
             if (ImGui::BeginTabItem("Animation"))  { state.panel_tab=1; ImGui::EndTabItem(); }
             if (ImGui::BeginTabItem("Adjust"))     { state.panel_tab=5; ImGui::EndTabItem(); }
@@ -8300,7 +8100,6 @@ void ui_studio(AppState& state) {
         else if (state.panel_tab == 0)     panel_clip(state, pw);
         else if (state.panel_tab == 1)     panel_animation(state, pw);
         else if (state.panel_tab == 2)     panel_export(state, pw);
-        else if (state.panel_tab == 4)     panel_lyrics(state, pw);
         else if (state.panel_tab == 8)     panel_typography(state, pw);
         else if (state.panel_tab == 5)     panel_adjustment_library(state, pw);
         else if (state.panel_tab == 7)     panel_fx_creative(state, pw);
