@@ -16,6 +16,7 @@
 #include "proxy.h"
 #include "waveform.h"
 #include "beat_detect.h"
+#include "typography_presets.h"
 #include "project.h"
 #include <imgui.h>
 #include <imgui_internal.h>
@@ -3650,6 +3651,439 @@ static void panel_lyrics(AppState& state, float w) {
         ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
         ImGui::TextWrapped("Run ML Processing on an audio clip to generate word JSON.");
         ImGui::PopStyleColor();
+    }
+}
+
+// ── Typography generator + panel ──────────────────────────────────────────────
+
+// Tag used on source_id of auto-generated FX clips so generate can find/clear them.
+static constexpr const char* TYPO_FX_TAG = "__typo_fx__";
+
+static void apply_typo_style(Clip& c, const TypographyPreset& pr, const AppState& state) {
+    float fs   = (state.typo_font_size  > 0.001f) ? state.typo_font_size  : pr.font_size;
+    bool  caps = state.typo_all_caps_override ? state.typo_all_caps : pr.all_caps;
+    bool  has_color_override = (state.typo_color[3] > 0.001f);
+
+    c.font_size         = fs;
+    c.sub_pos           = pr.sub_pos;
+    c.sub_pos_y         = pr.sub_pos_y;
+    c.sub_pos_x         = pr.sub_pos_x;
+    c.sub_anchor_h      = pr.sub_anchor_h;
+    c.sub_wrap_w        = pr.sub_wrap_w;
+    c.sub_color_override = true;
+    if (has_color_override)
+        memcpy(c.sub_color, state.typo_color, sizeof(c.sub_color));
+    else
+        memcpy(c.sub_color, pr.color, sizeof(c.sub_color));
+    c.karaoke           = pr.karaoke;
+    c.clip_style        = pr.style;
+    if (caps) {
+        for (auto& ch : c.text) ch = (char)toupper((unsigned char)ch);
+    }
+}
+
+static void generate_typography(AppState& state) {
+    if (state.words_json_path.empty() && state.segments_json_path.empty()) return;
+
+    const TypographyPreset* pr = typo_preset_by_id(state.typo_preset_id.c_str());
+    if (!pr) pr = &g_typo_presets[0];
+
+    SubtitleMode grouping = state.typo_grouping;
+
+    const std::string src = state.audio_path;
+    const std::string fx_tag = TYPO_FX_TAG + src;
+
+    // Find first analyzed audio/video clip for beat source
+    int beat_ti = -1, beat_ci = -1;
+    for (int ti = 0; ti < (int)state.tracks.size() && beat_ti < 0; ++ti)
+        for (int ci = 0; ci < (int)state.tracks[ti].clips.size() && beat_ti < 0; ++ci) {
+            auto& cl = state.tracks[ti].clips[ci];
+            if (!cl.beats.empty()) { beat_ti = ti; beat_ci = ci; }
+        }
+
+    // Clear previously generated typography clips and FX clips
+    for (auto& t : state.tracks) {
+        t.clips.erase(std::remove_if(t.clips.begin(), t.clips.end(),
+            [&](const Clip& c) {
+                return (c.clip_type == ClipType::Lyrics && c.source_id == src) ||
+                       (c.clip_type == ClipType::Effect && c.source_id == fx_tag);
+            }), t.clips.end());
+    }
+
+    // Find or create "Typography" track (topmost)
+    Track* typo_track = nullptr;
+    for (auto& t : state.tracks) if (t.name == "Typography") { typo_track = &t; break; }
+    if (!typo_track) {
+        state.tracks.insert(state.tracks.begin(), Track{});
+        state.tracks.front().name = "Typography";
+        typo_track = &state.tracks.front();
+    }
+
+    // Build word clips
+    auto stamp = [&](Clip& c) {
+        c.clip_type = ClipType::Lyrics;
+        c.source_id = src;
+        apply_typo_style(c, *pr, state);
+    };
+
+    // Strobe: alternate color per word
+    bool strobe = (strcmp(pr->id, "strobe") == 0);
+    int  strobe_idx = 0;
+
+    // Rave: random positions
+    bool rave = (strcmp(pr->id, "rave") == 0);
+
+    // Load words
+    std::vector<Clip> raw;
+    bool from_segments = false;
+
+    if (grouping == SubtitleMode::Segment && !state.segments_json_path.empty()
+        && fs::exists(state.segments_json_path)) {
+        std::ifstream f(state.segments_json_path);
+        if (f) {
+            try {
+                auto j = nlohmann::json::parse(f);
+                for (auto& seg : j) {
+                    Clip c;
+                    c.text  = seg["text"].get<std::string>();
+                    c.start = seg["start"].get<float>();
+                    c.end   = seg["end"].get<float>();
+                    raw.push_back(c);
+                }
+                from_segments = true;
+            } catch (...) {}
+        }
+    }
+
+    if (!from_segments && !state.words_json_path.empty() && fs::exists(state.words_json_path)) {
+        std::ifstream f(state.words_json_path);
+        if (f) {
+            try {
+                auto j = nlohmann::json::parse(f);
+                for (auto& w : j) {
+                    Clip c;
+                    c.text  = w["word"].get<std::string>();
+                    c.start = w["start"].get<float>();
+                    c.end   = w["end"].get<float>();
+                    raw.push_back(c);
+                }
+            } catch (...) {}
+        }
+    }
+
+    if (raw.empty()) return;
+
+    auto grouped = from_segments ? raw
+                                 : group_words(raw, grouping, state.typo_custom_n);
+
+    // Per-clip word data (for karaoke)
+    std::vector<WordEntry> all_words;
+    if (!from_segments && pr->karaoke) {
+        for (auto& w : raw) {
+            WordEntry we; we.text = w.text; we.start = w.start; we.end = w.end;
+            all_words.push_back(we);
+        }
+    }
+
+    typo_track->clips.clear();
+    for (int i = 0; i < (int)grouped.size(); ++i) {
+        Clip c = grouped[i];
+        stamp(c);
+
+        if (strobe && (strobe_idx++ % 2 == 1)) {
+            // invert: black text, white would need bg — just tint yellow for now
+            c.sub_color[0] = 0.f; c.sub_color[1] = 0.f; c.sub_color[2] = 0.f; c.sub_color[3] = 1.f;
+        }
+        if (rave) {
+            // pseudo-random position per clip
+            float hash = sinf((float)i * 127.1f + 311.7f) * 43758.5f;
+            hash = hash - floorf(hash);
+            float hash2 = sinf((float)i * 269.5f + 183.3f) * 43758.5f;
+            hash2 = hash2 - floorf(hash2);
+            c.sub_pos   = 3;
+            c.sub_pos_y = 0.15f + hash  * 0.7f;
+            c.sub_pos_x = 0.1f  + hash2 * 0.8f;
+        }
+
+        if (pr->karaoke && !all_words.empty()) {
+            c.words.clear();
+            for (auto& we : all_words)
+                if (we.start >= c.start - 0.001f && we.end <= c.end + 0.001f)
+                    c.words.push_back(we);
+        }
+
+        typo_track->clips.push_back(c);
+    }
+
+    std::sort(typo_track->clips.begin(), typo_track->clips.end(),
+              [](const Clip& a, const Clip& b){ return a.start < b.start; });
+
+    // Auto-generate FX clips above the typography track
+    // Find the track index of Typography
+    int typo_ti = -1;
+    for (int ti = 0; ti < (int)state.tracks.size(); ++ti)
+        if (&state.tracks[ti] == typo_track) { typo_ti = ti; break; }
+
+    if (typo_ti >= 0 && pr->n_fx > 0) {
+        // Find or create "Typography FX" track directly above
+        Track* fx_track = nullptr;
+        if (typo_ti + 1 < (int)state.tracks.size() &&
+            state.tracks[typo_ti + 1].name == "Typography FX")
+            fx_track = &state.tracks[typo_ti + 1];
+        else {
+            state.tracks.insert(state.tracks.begin() + typo_ti + 1, Track{});
+            state.tracks[typo_ti + 1].name = "Typography FX";
+            fx_track = &state.tracks[typo_ti + 1];
+        }
+        // Clear old generated FX
+        fx_track->clips.erase(std::remove_if(fx_track->clips.begin(), fx_track->clips.end(),
+            [&](const Clip& c){ return c.source_id == fx_tag; }), fx_track->clips.end());
+
+        float dur = raw.empty() ? 0.f : raw.back().end;
+        for (int fi = 0; fi < pr->n_fx; ++fi) {
+            const TypoFXDesc& fd = pr->fx[fi];
+            Clip fc;
+            fc.clip_type    = ClipType::Effect;
+            fc.fx_type      = fd.type;
+            fc.source_id    = fx_tag;
+            fc.start        = 0.f;
+            fc.end          = fmaxf(dur, 10.f);
+            fc.beat_src_track = beat_ti;
+            fc.beat_src_clip  = beat_ci;
+            // set default params + beat intensity on first beat-syncable param via hack:
+            // store beat_intensity in beat_decay as a signal, generator will apply per-type
+            switch (fd.type) {
+                case FXType::ChromaticAberration:
+                    fc.fx_chromatic_aberration_amount = 0.6f;
+                    break;
+                case FXType::FilmGrain:
+                    fc.fx_film_grain_amount    = 1.f;
+                    fc.fx_film_grain_intensity = fd.beat_intensity > 0.001f ? 0.8f : 0.35f;
+                    fc.fx_film_grain_size      = 1.2f;
+                    if (fd.beat_intensity > 0.001f)
+                        fc.fx_film_grain_intensity_beat = fd.beat_intensity;
+                    break;
+                case FXType::Scanlines:
+                    fc.fx_scanlines_amount  = 0.5f;
+                    fc.fx_scanlines_density = 0.5f;
+                    if (fd.beat_intensity > 0.001f)
+                        fc.fx_scanlines_density_beat = fd.beat_intensity;
+                    break;
+                case FXType::VHS:
+                    fc.fx_vhs_noise    = 0.35f;
+                    fc.fx_vhs_bleed    = 4.f;
+                    fc.fx_vhs_tracking = 0.15f;
+                    break;
+                default: break;
+            }
+            fx_track->clips.push_back(fc);
+        }
+    }
+
+    state.selected_track = -1;
+    state.selected_clip  = -1;
+    history_push(state, std::string("Generate typography — ") + pr->label);
+}
+
+// Live-update style on all existing generated typography clips (no re-grouping).
+static void typo_restyle_live(AppState& state) {
+    const TypographyPreset* pr = typo_preset_by_id(state.typo_preset_id.c_str());
+    if (!pr) return;
+    const std::string src = state.audio_path;
+    for (auto& t : state.tracks)
+        for (auto& c : t.clips)
+            if (c.clip_type == ClipType::Lyrics && c.source_id == src)
+                apply_typo_style(c, *pr, state);
+}
+
+static void panel_typography(AppState& state, float w) {
+    ImGui::Dummy({0.f, 8.f});
+
+    // ── Source status ─────────────────────────────────────────────────────────
+    bool has_words    = !state.words_json_path.empty() && fs::exists(state.words_json_path);
+    bool has_segments = !state.segments_json_path.empty() && fs::exists(state.segments_json_path);
+    bool has_source   = has_words || has_segments;
+
+    if (has_words) {
+        int nw = (int)state.words_cache.size();
+        ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(100, 220, 120, 255));
+        char buf[80];
+        snprintf(buf, sizeof(buf), "WhisperX  ·  %d words", nw);
+        ImGui::TextUnformatted(buf);
+        ImGui::PopStyleColor();
+    } else if (has_segments) {
+        ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(100, 180, 255, 255));
+        ImGui::TextUnformatted("SRT / segments");
+        ImGui::PopStyleColor();
+    } else {
+        ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+        ImGui::TextWrapped("Transcribe or import SRT to enable generation.");
+        ImGui::PopStyleColor();
+    }
+
+    ImGui::Dummy({0.f, 10.f}); ui_separator(); ImGui::Dummy({0.f, 8.f});
+
+    // ── Preset picker ─────────────────────────────────────────────────────────
+    ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+    ImGui::TextUnformatted("STYLE");
+    ImGui::PopStyleColor();
+    ImGui::Dummy({0.f, 4.f});
+
+    const char* cur_cat = nullptr;
+    float card_w = w - 16.f;
+
+    for (int i = 0; i < g_n_typo_presets; ++i) {
+        const TypographyPreset& pr = g_typo_presets[i];
+        bool selected = (state.typo_preset_id == pr.id);
+
+        // Category header
+        if (!cur_cat || strcmp(cur_cat, pr.category) != 0) {
+            if (cur_cat) ImGui::Dummy({0.f, 6.f});
+            ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+            ImGui::TextUnformatted(pr.category);
+            ImGui::PopStyleColor();
+            ImGui::Dummy({0.f, 2.f});
+            cur_cat = pr.category;
+        }
+
+        // Color swatch derived from preset palette
+        ImU32 swatch = IM_COL32(
+            (int)(pr.color[0]*180), (int)(pr.color[1]*180), (int)(pr.color[2]*180), 255);
+
+        ImGui::PushStyleColor(ImGuiCol_ChildBg,
+            selected ? IM_COL32(60,55,90,255) : IM_COL32(30,28,38,255));
+        ImGui::PushStyleColor(ImGuiCol_Border,
+            selected ? IM_COL32(140,100,255,255) : IM_COL32(55,52,68,255));
+        ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 6.f);
+        ImGui::PushStyleVar(ImGuiStyleVar_ChildBorderSize, selected ? 2.f : 1.f);
+
+        char child_id[64]; snprintf(child_id, sizeof(child_id), "typo_card_%s", pr.id);
+        if (ImGui::BeginChild(child_id, {card_w, 46.f}, true)) {
+            ImDrawList* dl = ImGui::GetWindowDrawList();
+            ImVec2 cp = ImGui::GetCursorScreenPos();
+            // swatch bar on left
+            dl->AddRectFilled({cp.x, cp.y}, {cp.x + 4.f, cp.y + 32.f}, swatch, 2.f);
+            ImGui::SetCursorScreenPos({cp.x + 10.f, cp.y});
+            ImGui::PushStyleColor(ImGuiCol_Text,
+                selected ? IM_COL32(255,255,255,255) : IM_COL32(210,205,230,255));
+            ImGui::TextUnformatted(pr.label);
+            ImGui::PopStyleColor();
+            ImGui::SetCursorScreenPos({cp.x + 10.f, cp.y + 18.f});
+            ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+            ImGui::TextUnformatted(pr.tagline);
+            ImGui::PopStyleColor();
+        }
+        ImGui::EndChild();
+        ImGui::PopStyleVar(2); ImGui::PopStyleColor(2);
+
+        if (ImGui::IsItemClicked()) {
+            state.typo_preset_id = pr.id;
+            // sync grouping to preset default
+            const TypographyPreset* pp = typo_preset_by_id(pr.id);
+            if (pp) {
+                state.typo_grouping  = pp->grouping;
+                state.typo_custom_n  = pp->custom_n;
+            }
+        }
+        ImGui::Dummy({0.f, 3.f});
+    }
+
+    ImGui::Dummy({0.f, 10.f}); ui_separator(); ImGui::Dummy({0.f, 8.f});
+
+    // ── Generate button ───────────────────────────────────────────────────────
+    if (!has_source) ImGui::BeginDisabled();
+    ImGui::PushStyleColor(ImGuiCol_Button,        IM_COL32(110, 70, 220, 255));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered,  IM_COL32(130, 90, 240, 255));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive,   IM_COL32(90,  50, 200, 255));
+    if (ImGui::Button("Generate##typo", {card_w, 32.f}))
+        generate_typography(state);
+    ImGui::PopStyleColor(3);
+    if (!has_source) ImGui::EndDisabled();
+
+    ImGui::Dummy({0.f, 10.f}); ui_separator(); ImGui::Dummy({0.f, 8.f});
+
+    // ── Tune section ──────────────────────────────────────────────────────────
+    ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+    ImGui::TextUnformatted("TUNE");
+    ImGui::PopStyleColor();
+    ImGui::Dummy({0.f, 4.f});
+
+    const TypographyPreset* pr = typo_preset_by_id(state.typo_preset_id.c_str());
+
+    // Grouping
+    ui_label("Grouping");
+    ImGui::Dummy({0.f, 4.f});
+    struct GrpBtn { SubtitleMode m; const char* label; };
+    static const GrpBtn grp_btns[] = {
+        {SubtitleMode::Word,    "One word"},
+        {SubtitleMode::Phrase,  "Phrases"},
+        {SubtitleMode::Line,    "Lines"},
+        {SubtitleMode::Segment, "Sentences"},
+        {SubtitleMode::CustomN, "Custom"},
+    };
+    for (auto& gb : grp_btns) {
+        bool sel = (state.typo_grouping == gb.m);
+        if (ui_btn(gb.label, sel, true)) state.typo_grouping = gb.m;
+        ImGui::SameLine(0.f, 4.f);
+    }
+    ImGui::NewLine();
+    if (state.typo_grouping == SubtitleMode::CustomN) {
+        ImGui::Dummy({0.f, 4.f});
+        ImGui::PushStyleColor(ImGuiCol_FrameBg, Col::bg_soft);
+        ImGui::SetNextItemWidth(80.f);
+        int n = state.typo_custom_n;
+        if (ImGui::InputInt("words##tyn", &n))
+            state.typo_custom_n = (n < 1) ? 1 : (n > 20) ? 20 : n;
+        ImGui::PopStyleColor();
+    }
+
+    ImGui::Dummy({0.f, 8.f});
+
+    // Font size
+    ui_label("Font Size");
+    float fs = (state.typo_font_size > 0.001f) ? state.typo_font_size : (pr ? pr->font_size : 0.09f);
+    ImGui::SetNextItemWidth(card_w);
+    ImGui::PushStyleColor(ImGuiCol_FrameBg, Col::bg_soft);
+    if (ImGui::SliderFloat("##tyfo", &fs, 0.03f, 0.30f, "%.2f")) {
+        state.typo_font_size = fs;
+        typo_restyle_live(state);
+    }
+    ImGui::PopStyleColor();
+
+    ImGui::Dummy({0.f, 8.f});
+
+    // Color
+    ui_label("Color");
+    float* col = (state.typo_color[3] > 0.001f) ? state.typo_color
+                 : (pr ? const_cast<float*>(pr->color) : state.typo_color);
+    ImGui::SetNextItemWidth(card_w);
+    if (ImGui::ColorEdit4("##tycol", col,
+            ImGuiColorEditFlags_NoLabel | ImGuiColorEditFlags_AlphaBar)) {
+        memcpy(state.typo_color, col, sizeof(state.typo_color));
+        typo_restyle_live(state);
+    }
+
+    ImGui::Dummy({0.f, 8.f});
+
+    // All caps toggle
+    bool caps = state.typo_all_caps_override ? state.typo_all_caps : (pr ? pr->all_caps : false);
+    if (ImGui::Checkbox("ALL CAPS##tycaps", &caps)) {
+        state.typo_all_caps_override = true;
+        state.typo_all_caps = caps;
+    }
+
+    ImGui::Dummy({0.f, 10.f}); ui_separator(); ImGui::Dummy({0.f, 8.f});
+
+    // Reset tune to preset defaults
+    if (ui_btn("Reset to preset defaults", false, true)) {
+        state.typo_font_size         = 0.f;
+        state.typo_color[3]          = 0.f;
+        state.typo_all_caps_override = false;
+        if (pr) {
+            state.typo_grouping = pr->grouping;
+            state.typo_custom_n = pr->custom_n;
+        }
+        typo_restyle_live(state);
     }
 }
 
@@ -7745,13 +8179,14 @@ void ui_studio(AppState& state) {
         if (!lyrics_selected && state.panel_tab == 4) state.panel_tab = 0;
 
         if (ImGui::BeginTabBar("##panel_tabs")) {
-            if (ImGui::BeginTabItem("Clip"))      { state.panel_tab=0; ImGui::EndTabItem(); }
+            if (ImGui::BeginTabItem("Clip"))       { state.panel_tab=0; ImGui::EndTabItem(); }
             if (lyrics_selected && ImGui::BeginTabItem("Lyrics")) { state.panel_tab=4; ImGui::EndTabItem(); }
-            if (ImGui::BeginTabItem("Animation")) { state.panel_tab=1; ImGui::EndTabItem(); }
-            if (ImGui::BeginTabItem("Adjust"))    { state.panel_tab=5; ImGui::EndTabItem(); }
-            if (ImGui::BeginTabItem("FX"))        { state.panel_tab=7; ImGui::EndTabItem(); }
-            if (ImGui::BeginTabItem("Project"))   { state.panel_tab=6; ImGui::EndTabItem(); }
-            if (ImGui::BeginTabItem("History"))   { state.panel_tab=3; ImGui::EndTabItem(); }
+            if (ImGui::BeginTabItem("Typography")) { state.panel_tab=8; ImGui::EndTabItem(); }
+            if (ImGui::BeginTabItem("Animation"))  { state.panel_tab=1; ImGui::EndTabItem(); }
+            if (ImGui::BeginTabItem("Adjust"))     { state.panel_tab=5; ImGui::EndTabItem(); }
+            if (ImGui::BeginTabItem("FX"))         { state.panel_tab=7; ImGui::EndTabItem(); }
+            if (ImGui::BeginTabItem("Project"))    { state.panel_tab=6; ImGui::EndTabItem(); }
+            if (ImGui::BeginTabItem("History"))    { state.panel_tab=3; ImGui::EndTabItem(); }
             ImGui::EndTabBar();
         }
         ImGui::PopStyleColor(2);
@@ -7777,6 +8212,7 @@ void ui_studio(AppState& state) {
         else if (state.panel_tab == 1)     panel_animation(state, pw);
         else if (state.panel_tab == 2)     panel_export(state, pw);
         else if (state.panel_tab == 4)     panel_lyrics(state, pw);
+        else if (state.panel_tab == 8)     panel_typography(state, pw);
         else if (state.panel_tab == 5)     panel_adjustment_library(state, pw);
         else if (state.panel_tab == 7)     panel_fx_creative(state, pw);
         else if (state.panel_tab == 6)     panel_project(state, pw);

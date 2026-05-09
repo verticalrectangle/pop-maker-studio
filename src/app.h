@@ -483,10 +483,20 @@ struct AppState {
     std::string noise_reduce_output;   // path to denoised WAV once done
     std::string noise_reduce_error;
 
-    // subtitle grouping
+    // subtitle grouping (legacy, kept for project compat)
     SubtitleMode subtitle_mode = SubtitleMode::Word;
-    int          subtitle_n    = 3;   // words per clip for CustomN mode
-    bool         pipeline_produces_subtitles = false;  // true = TranscribeOnly → Subtitle clips
+    int          subtitle_n    = 3;
+    bool         pipeline_produces_subtitles = false;
+
+    // typography
+    std::string  typo_preset_id  = "flash";   // active preset id
+    // tune overrides (-1 / 0 = use preset default)
+    float        typo_font_size  = 0.f;       // 0 = use preset
+    float        typo_color[4]   = {0.f,0.f,0.f,0.f}; // all-zero = use preset
+    bool         typo_all_caps_override = false;
+    bool         typo_all_caps   = false;
+    SubtitleMode typo_grouping   = SubtitleMode::Word; // mirrors preset until overridden
+    int          typo_custom_n   = 3;
 
     // right panel active tab: 0=Clip, 1=Animation, 2=Export, 3=History, 4=Lyrics, 5=FX Library
     int panel_tab = 0;
