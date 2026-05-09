@@ -7189,7 +7189,7 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
 
             if (disabled) ImGui::BeginDisabled();
             if (ImGui::MenuItem("Make lyric video")) {
-                kick_pipeline(state, cc->text, PipelineMode::TranscribeOnly);
+                kick_pipeline(state, cc->text, PipelineMode::Both);
                 state.typo_generate_when_done = true;
             }
             if (ImGui::MenuItem("Transcribe  (subtitles only)")) {
