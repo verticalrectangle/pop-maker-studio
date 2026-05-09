@@ -6,23 +6,25 @@
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Pixelate: Amount");
             ImGui::Dummy({0.f, 4.f});
             ui_label("Block Size");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_pixelate_size", &clip.fx_pixelate_size, 1.0f, 64.0f, "%.0f px");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Pixelate: Block Size");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_pixelate_size_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_pixelate_size", &clip.fx_pixelate_size, 1.0f, 64.0f, "%.0f px");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Pixelate: Block Size");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_pixelate_size")) {
                     clip.fx_pixelate_size_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Pixelate: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_pixelate_size_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_pixelate_size", &clip.fx_pixelate_size_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Pixelate: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_pixelate_size", &clip.fx_pixelate_size_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Pixelate: Beat Intensity");
+                }
             }
             break;
 
@@ -33,43 +35,47 @@
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Film Grain: Amount");
             ImGui::Dummy({0.f, 4.f});
             ui_label("Intensity");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_film_grain_intensity", &clip.fx_film_grain_intensity, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Film Grain: Intensity");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_film_grain_intensity_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_film_grain_intensity", &clip.fx_film_grain_intensity, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Film Grain: Intensity");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_film_grain_intensity")) {
                     clip.fx_film_grain_intensity_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Film Grain: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_film_grain_intensity_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_film_grain_intensity", &clip.fx_film_grain_intensity_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Film Grain: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_film_grain_intensity", &clip.fx_film_grain_intensity_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Film Grain: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Grain Size");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_film_grain_size", &clip.fx_film_grain_size, 0.5f, 4.0f, "%.1f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Film Grain: Grain Size");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_film_grain_size_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_film_grain_size", &clip.fx_film_grain_size, 0.5f, 4.0f, "%.1f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Film Grain: Grain Size");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_film_grain_size")) {
                     clip.fx_film_grain_size_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Film Grain: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_film_grain_size_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_film_grain_size", &clip.fx_film_grain_size_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Film Grain: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_film_grain_size", &clip.fx_film_grain_size_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Film Grain: Beat Intensity");
+                }
             }
             break;
 
@@ -80,23 +86,25 @@
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Scanlines: Amount");
             ImGui::Dummy({0.f, 4.f});
             ui_label("Line Density");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_scanlines_density", &clip.fx_scanlines_density, 1.0f, 6.0f, "%.1f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Scanlines: Line Density");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_scanlines_density_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_scanlines_density", &clip.fx_scanlines_density, 1.0f, 6.0f, "%.1f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Scanlines: Line Density");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_scanlines_density")) {
                     clip.fx_scanlines_density_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Scanlines: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_scanlines_density_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_scanlines_density", &clip.fx_scanlines_density_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Scanlines: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_scanlines_density", &clip.fx_scanlines_density_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Scanlines: Beat Intensity");
+                }
             }
             break;
 
@@ -114,123 +122,135 @@
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Duotone: Amount");
             ImGui::Dummy({0.f, 4.f});
             ui_label("Shadow R");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_duotone_shadow_r", &clip.fx_duotone_shadow_r, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Duotone: Shadow R");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_duotone_shadow_r_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_duotone_shadow_r", &clip.fx_duotone_shadow_r, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Duotone: Shadow R");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_duotone_shadow_r")) {
                     clip.fx_duotone_shadow_r_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Duotone: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_duotone_shadow_r_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_duotone_shadow_r", &clip.fx_duotone_shadow_r_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Duotone: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_duotone_shadow_r", &clip.fx_duotone_shadow_r_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Duotone: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Shadow G");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_duotone_shadow_g", &clip.fx_duotone_shadow_g, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Duotone: Shadow G");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_duotone_shadow_g_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_duotone_shadow_g", &clip.fx_duotone_shadow_g, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Duotone: Shadow G");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_duotone_shadow_g")) {
                     clip.fx_duotone_shadow_g_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Duotone: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_duotone_shadow_g_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_duotone_shadow_g", &clip.fx_duotone_shadow_g_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Duotone: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_duotone_shadow_g", &clip.fx_duotone_shadow_g_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Duotone: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Shadow B");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_duotone_shadow_b", &clip.fx_duotone_shadow_b, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Duotone: Shadow B");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_duotone_shadow_b_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_duotone_shadow_b", &clip.fx_duotone_shadow_b, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Duotone: Shadow B");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_duotone_shadow_b")) {
                     clip.fx_duotone_shadow_b_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Duotone: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_duotone_shadow_b_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_duotone_shadow_b", &clip.fx_duotone_shadow_b_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Duotone: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_duotone_shadow_b", &clip.fx_duotone_shadow_b_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Duotone: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Highlight R");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_duotone_highlight_r", &clip.fx_duotone_highlight_r, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Duotone: Highlight R");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_duotone_highlight_r_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_duotone_highlight_r", &clip.fx_duotone_highlight_r, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Duotone: Highlight R");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_duotone_highlight_r")) {
                     clip.fx_duotone_highlight_r_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Duotone: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_duotone_highlight_r_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_duotone_highlight_r", &clip.fx_duotone_highlight_r_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Duotone: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_duotone_highlight_r", &clip.fx_duotone_highlight_r_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Duotone: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Highlight G");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_duotone_highlight_g", &clip.fx_duotone_highlight_g, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Duotone: Highlight G");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_duotone_highlight_g_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_duotone_highlight_g", &clip.fx_duotone_highlight_g, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Duotone: Highlight G");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_duotone_highlight_g")) {
                     clip.fx_duotone_highlight_g_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Duotone: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_duotone_highlight_g_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_duotone_highlight_g", &clip.fx_duotone_highlight_g_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Duotone: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_duotone_highlight_g", &clip.fx_duotone_highlight_g_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Duotone: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Highlight B");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_duotone_highlight_b", &clip.fx_duotone_highlight_b, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Duotone: Highlight B");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_duotone_highlight_b_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_duotone_highlight_b", &clip.fx_duotone_highlight_b, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Duotone: Highlight B");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_duotone_highlight_b")) {
                     clip.fx_duotone_highlight_b_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Duotone: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_duotone_highlight_b_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_duotone_highlight_b", &clip.fx_duotone_highlight_b_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Duotone: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_duotone_highlight_b", &clip.fx_duotone_highlight_b_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Duotone: Beat Intensity");
+                }
             }
             break;
 
@@ -241,23 +261,25 @@
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Neon Glow: Amount");
             ImGui::Dummy({0.f, 4.f});
             ui_label("Glow Width");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_neon_glow_width", &clip.fx_neon_glow_width, 1.0f, 8.0f, "%.1f px");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Neon Glow: Glow Width");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_neon_glow_width_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_neon_glow_width", &clip.fx_neon_glow_width, 1.0f, 8.0f, "%.1f px");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Neon Glow: Glow Width");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_neon_glow_width")) {
                     clip.fx_neon_glow_width_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Neon Glow: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_neon_glow_width_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_neon_glow_width", &clip.fx_neon_glow_width_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Neon Glow: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_neon_glow_width", &clip.fx_neon_glow_width_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Neon Glow: Beat Intensity");
+                }
             }
             break;
 
@@ -275,43 +297,47 @@
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Night Vision: Amount");
             ImGui::Dummy({0.f, 4.f});
             ui_label("Static");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_night_vision_noise", &clip.fx_night_vision_noise, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Night Vision: Static");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_night_vision_noise_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_night_vision_noise", &clip.fx_night_vision_noise, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Night Vision: Static");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_night_vision_noise")) {
                     clip.fx_night_vision_noise_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Night Vision: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_night_vision_noise_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_night_vision_noise", &clip.fx_night_vision_noise_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Night Vision: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_night_vision_noise", &clip.fx_night_vision_noise_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Night Vision: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Gain");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_night_vision_gain", &clip.fx_night_vision_gain, 0.5f, 3.0f, "%.1f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Night Vision: Gain");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_night_vision_gain_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_night_vision_gain", &clip.fx_night_vision_gain, 0.5f, 3.0f, "%.1f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Night Vision: Gain");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_night_vision_gain")) {
                     clip.fx_night_vision_gain_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Night Vision: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_night_vision_gain_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_night_vision_gain", &clip.fx_night_vision_gain_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Night Vision: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_night_vision_gain", &clip.fx_night_vision_gain_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Night Vision: Beat Intensity");
+                }
             }
             break;
 
@@ -322,63 +348,69 @@
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Old Film: Amount");
             ImGui::Dummy({0.f, 4.f});
             ui_label("Sepia");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_old_film_sepia", &clip.fx_old_film_sepia, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Old Film: Sepia");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_old_film_sepia_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_old_film_sepia", &clip.fx_old_film_sepia, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Old Film: Sepia");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_old_film_sepia")) {
                     clip.fx_old_film_sepia_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Old Film: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_old_film_sepia_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_old_film_sepia", &clip.fx_old_film_sepia_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Old Film: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_old_film_sepia", &clip.fx_old_film_sepia_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Old Film: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Scratches");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_old_film_scratch", &clip.fx_old_film_scratch, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Old Film: Scratches");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_old_film_scratch_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_old_film_scratch", &clip.fx_old_film_scratch, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Old Film: Scratches");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_old_film_scratch")) {
                     clip.fx_old_film_scratch_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Old Film: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_old_film_scratch_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_old_film_scratch", &clip.fx_old_film_scratch_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Old Film: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_old_film_scratch", &clip.fx_old_film_scratch_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Old Film: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Flicker");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_old_film_flicker", &clip.fx_old_film_flicker, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Old Film: Flicker");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_old_film_flicker_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_old_film_flicker", &clip.fx_old_film_flicker, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Old Film: Flicker");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_old_film_flicker")) {
                     clip.fx_old_film_flicker_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Old Film: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_old_film_flicker_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_old_film_flicker", &clip.fx_old_film_flicker_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Old Film: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_old_film_flicker", &clip.fx_old_film_flicker_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Old Film: Beat Intensity");
+                }
             }
             break;
 
@@ -389,23 +421,25 @@
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Holographic: Amount");
             ImGui::Dummy({0.f, 4.f});
             ui_label("Speed");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_holographic_speed", &clip.fx_holographic_speed, 0.0f, 4.0f, "%.1f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Holographic: Speed");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_holographic_speed_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_holographic_speed", &clip.fx_holographic_speed, 0.0f, 4.0f, "%.1f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Holographic: Speed");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_holographic_speed")) {
                     clip.fx_holographic_speed_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Holographic: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_holographic_speed_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_holographic_speed", &clip.fx_holographic_speed_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Holographic: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_holographic_speed", &clip.fx_holographic_speed_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Holographic: Beat Intensity");
+                }
             }
             break;
 
@@ -416,43 +450,47 @@
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "RGB Split: Amount");
             ImGui::Dummy({0.f, 4.f});
             ui_label("Intensity");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_rgb_split_intensity", &clip.fx_rgb_split_intensity, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "RGB Split: Intensity");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_rgb_split_intensity_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_rgb_split_intensity", &clip.fx_rgb_split_intensity, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "RGB Split: Intensity");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_rgb_split_intensity")) {
                     clip.fx_rgb_split_intensity_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "RGB Split: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_rgb_split_intensity_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_rgb_split_intensity", &clip.fx_rgb_split_intensity_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "RGB Split: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_rgb_split_intensity", &clip.fx_rgb_split_intensity_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "RGB Split: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Speed");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_rgb_split_speed", &clip.fx_rgb_split_speed, 0.0f, 4.0f, "%.1f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "RGB Split: Speed");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_rgb_split_speed_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_rgb_split_speed", &clip.fx_rgb_split_speed, 0.0f, 4.0f, "%.1f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "RGB Split: Speed");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_rgb_split_speed")) {
                     clip.fx_rgb_split_speed_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "RGB Split: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_rgb_split_speed_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_rgb_split_speed", &clip.fx_rgb_split_speed_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "RGB Split: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_rgb_split_speed", &clip.fx_rgb_split_speed_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "RGB Split: Beat Intensity");
+                }
             }
             break;
 
@@ -463,23 +501,25 @@
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Posterize: Amount");
             ImGui::Dummy({0.f, 4.f});
             ui_label("Color Levels");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_posterize_levels", &clip.fx_posterize_levels, 2.0f, 16.0f, "%.0f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Posterize: Color Levels");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_posterize_levels_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_posterize_levels", &clip.fx_posterize_levels, 2.0f, 16.0f, "%.0f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Posterize: Color Levels");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_posterize_levels")) {
                     clip.fx_posterize_levels_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Posterize: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_posterize_levels_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_posterize_levels", &clip.fx_posterize_levels_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Posterize: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_posterize_levels", &clip.fx_posterize_levels_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Posterize: Beat Intensity");
+                }
             }
             break;
 
@@ -490,23 +530,25 @@
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Halftone: Amount");
             ImGui::Dummy({0.f, 4.f});
             ui_label("Dot Size");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_halftone_size", &clip.fx_halftone_size, 2.0f, 20.0f, "%.0f px");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Halftone: Dot Size");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_halftone_size_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_halftone_size", &clip.fx_halftone_size, 2.0f, 20.0f, "%.0f px");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Halftone: Dot Size");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_halftone_size")) {
                     clip.fx_halftone_size_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Halftone: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_halftone_size_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_halftone_size", &clip.fx_halftone_size_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Halftone: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_halftone_size", &clip.fx_halftone_size_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Halftone: Beat Intensity");
+                }
             }
             break;
 
@@ -531,23 +573,25 @@
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Color Burn: Amount");
             ImGui::Dummy({0.f, 4.f});
             ui_label("Hue Shift");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_color_burn_hue", &clip.fx_color_burn_hue, 0.0f, 360.0f, "%.0f°");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Color Burn: Hue Shift");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_color_burn_hue_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_color_burn_hue", &clip.fx_color_burn_hue, 0.0f, 360.0f, "%.0f°");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Color Burn: Hue Shift");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_color_burn_hue")) {
                     clip.fx_color_burn_hue_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Color Burn: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_color_burn_hue_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_color_burn_hue", &clip.fx_color_burn_hue_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Color Burn: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_color_burn_hue", &clip.fx_color_burn_hue_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Color Burn: Beat Intensity");
+                }
             }
             break;
 
@@ -558,43 +602,47 @@
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "CRT: Amount");
             ImGui::Dummy({0.f, 4.f});
             ui_label("Curvature");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_crt_curvature", &clip.fx_crt_curvature, 0.05f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "CRT: Curvature");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_crt_curvature_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_crt_curvature", &clip.fx_crt_curvature, 0.05f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "CRT: Curvature");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_crt_curvature")) {
                     clip.fx_crt_curvature_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "CRT: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_crt_curvature_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_crt_curvature", &clip.fx_crt_curvature_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "CRT: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_crt_curvature", &clip.fx_crt_curvature_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "CRT: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Phosphor");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_crt_glow", &clip.fx_crt_glow, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "CRT: Phosphor");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_crt_glow_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_crt_glow", &clip.fx_crt_glow, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "CRT: Phosphor");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_crt_glow")) {
                     clip.fx_crt_glow_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "CRT: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_crt_glow_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_crt_glow", &clip.fx_crt_glow_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "CRT: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_crt_glow", &clip.fx_crt_glow_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "CRT: Beat Intensity");
+                }
             }
             break;
 
@@ -605,23 +653,25 @@
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Sketch: Amount");
             ImGui::Dummy({0.f, 4.f});
             ui_label("Invert");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_sketch_invert", &clip.fx_sketch_invert, 0.0f, 1.0f, "%.0f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Sketch: Invert");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_sketch_invert_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_sketch_invert", &clip.fx_sketch_invert, 0.0f, 1.0f, "%.0f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Sketch: Invert");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_sketch_invert")) {
                     clip.fx_sketch_invert_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Sketch: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_sketch_invert_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_sketch_invert", &clip.fx_sketch_invert_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Sketch: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_sketch_invert", &clip.fx_sketch_invert_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Sketch: Beat Intensity");
+                }
             }
             break;
 
@@ -632,43 +682,47 @@
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Glitch Block: Amount");
             ImGui::Dummy({0.f, 4.f});
             ui_label("Intensity");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_glitch_block_intensity", &clip.fx_glitch_block_intensity, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Glitch Block: Intensity");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_glitch_block_intensity_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_glitch_block_intensity", &clip.fx_glitch_block_intensity, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Glitch Block: Intensity");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_glitch_block_intensity")) {
                     clip.fx_glitch_block_intensity_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Glitch Block: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_glitch_block_intensity_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_glitch_block_intensity", &clip.fx_glitch_block_intensity_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Glitch Block: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_glitch_block_intensity", &clip.fx_glitch_block_intensity_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Glitch Block: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Speed");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_glitch_block_speed", &clip.fx_glitch_block_speed, 0.0f, 4.0f, "%.1f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Glitch Block: Speed");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_glitch_block_speed_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_glitch_block_speed", &clip.fx_glitch_block_speed, 0.0f, 4.0f, "%.1f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Glitch Block: Speed");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_glitch_block_speed")) {
                     clip.fx_glitch_block_speed_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Glitch Block: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_glitch_block_speed_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_glitch_block_speed", &clip.fx_glitch_block_speed_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Glitch Block: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_glitch_block_speed", &clip.fx_glitch_block_speed_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Glitch Block: Beat Intensity");
+                }
             }
             break;
 
@@ -679,63 +733,69 @@
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Lomo: Amount");
             ImGui::Dummy({0.f, 4.f});
             ui_label("Vignette");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_lomo_vignette", &clip.fx_lomo_vignette, 0.1f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Lomo: Vignette");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_lomo_vignette_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_lomo_vignette", &clip.fx_lomo_vignette, 0.1f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Lomo: Vignette");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_lomo_vignette")) {
                     clip.fx_lomo_vignette_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Lomo: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_lomo_vignette_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_lomo_vignette", &clip.fx_lomo_vignette_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Lomo: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_lomo_vignette", &clip.fx_lomo_vignette_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Lomo: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Color Pop");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_lomo_saturation", &clip.fx_lomo_saturation, 0.8f, 2.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Lomo: Color Pop");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_lomo_saturation_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_lomo_saturation", &clip.fx_lomo_saturation, 0.8f, 2.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Lomo: Color Pop");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_lomo_saturation")) {
                     clip.fx_lomo_saturation_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Lomo: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_lomo_saturation_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_lomo_saturation", &clip.fx_lomo_saturation_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Lomo: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_lomo_saturation", &clip.fx_lomo_saturation_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Lomo: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Fade");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_lomo_fade", &clip.fx_lomo_fade, 0.0f, 0.5f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Lomo: Fade");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_lomo_fade_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_lomo_fade", &clip.fx_lomo_fade, 0.0f, 0.5f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Lomo: Fade");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_lomo_fade")) {
                     clip.fx_lomo_fade_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Lomo: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_lomo_fade_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_lomo_fade", &clip.fx_lomo_fade_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Lomo: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_lomo_fade", &clip.fx_lomo_fade_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Lomo: Beat Intensity");
+                }
             }
             break;
 
@@ -746,23 +806,25 @@
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Twirl: Amount");
             ImGui::Dummy({0.f, 4.f});
             ui_label("Radius");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_twirl_radius", &clip.fx_twirl_radius, 0.1f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Twirl: Radius");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_twirl_radius_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_twirl_radius", &clip.fx_twirl_radius, 0.1f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Twirl: Radius");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_twirl_radius")) {
                     clip.fx_twirl_radius_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Twirl: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_twirl_radius_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_twirl_radius", &clip.fx_twirl_radius_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Twirl: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_twirl_radius", &clip.fx_twirl_radius_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Twirl: Beat Intensity");
+                }
             }
             break;
 
@@ -773,63 +835,69 @@
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Ripple: Amount");
             ImGui::Dummy({0.f, 4.f});
             ui_label("Frequency");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_ripple_frequency", &clip.fx_ripple_frequency, 2.0f, 40.0f, "%.0f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Ripple: Frequency");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_ripple_frequency_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_ripple_frequency", &clip.fx_ripple_frequency, 2.0f, 40.0f, "%.0f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Ripple: Frequency");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_ripple_frequency")) {
                     clip.fx_ripple_frequency_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Ripple: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_ripple_frequency_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_ripple_frequency", &clip.fx_ripple_frequency_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Ripple: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_ripple_frequency", &clip.fx_ripple_frequency_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Ripple: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Amplitude");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_ripple_amplitude", &clip.fx_ripple_amplitude, 0.005f, 0.1f, "%.3f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Ripple: Amplitude");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_ripple_amplitude_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_ripple_amplitude", &clip.fx_ripple_amplitude, 0.005f, 0.1f, "%.3f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Ripple: Amplitude");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_ripple_amplitude")) {
                     clip.fx_ripple_amplitude_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Ripple: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_ripple_amplitude_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_ripple_amplitude", &clip.fx_ripple_amplitude_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Ripple: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_ripple_amplitude", &clip.fx_ripple_amplitude_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Ripple: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Speed");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_ripple_speed", &clip.fx_ripple_speed, 0.0f, 6.0f, "%.1f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Ripple: Speed");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_ripple_speed_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_ripple_speed", &clip.fx_ripple_speed, 0.0f, 6.0f, "%.1f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Ripple: Speed");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_ripple_speed")) {
                     clip.fx_ripple_speed_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Ripple: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_ripple_speed_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_ripple_speed", &clip.fx_ripple_speed_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Ripple: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_ripple_speed", &clip.fx_ripple_speed_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Ripple: Beat Intensity");
+                }
             }
             break;
 
@@ -840,83 +908,91 @@
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Wave Warp: Amount");
             ImGui::Dummy({0.f, 4.f});
             ui_label("Freq X");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_wave_warp_freq_x", &clip.fx_wave_warp_freq_x, 1.0f, 30.0f, "%.0f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Wave Warp: Freq X");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_wave_warp_freq_x_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_wave_warp_freq_x", &clip.fx_wave_warp_freq_x, 1.0f, 30.0f, "%.0f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Wave Warp: Freq X");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_wave_warp_freq_x")) {
                     clip.fx_wave_warp_freq_x_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Wave Warp: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_wave_warp_freq_x_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_wave_warp_freq_x", &clip.fx_wave_warp_freq_x_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Wave Warp: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_wave_warp_freq_x", &clip.fx_wave_warp_freq_x_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Wave Warp: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Freq Y");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_wave_warp_freq_y", &clip.fx_wave_warp_freq_y, 1.0f, 30.0f, "%.0f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Wave Warp: Freq Y");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_wave_warp_freq_y_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_wave_warp_freq_y", &clip.fx_wave_warp_freq_y, 1.0f, 30.0f, "%.0f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Wave Warp: Freq Y");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_wave_warp_freq_y")) {
                     clip.fx_wave_warp_freq_y_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Wave Warp: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_wave_warp_freq_y_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_wave_warp_freq_y", &clip.fx_wave_warp_freq_y_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Wave Warp: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_wave_warp_freq_y", &clip.fx_wave_warp_freq_y_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Wave Warp: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Amplitude");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_wave_warp_amplitude", &clip.fx_wave_warp_amplitude, 0.008f, 0.12f, "%.3f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Wave Warp: Amplitude");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_wave_warp_amplitude_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_wave_warp_amplitude", &clip.fx_wave_warp_amplitude, 0.008f, 0.12f, "%.3f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Wave Warp: Amplitude");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_wave_warp_amplitude")) {
                     clip.fx_wave_warp_amplitude_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Wave Warp: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_wave_warp_amplitude_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_wave_warp_amplitude", &clip.fx_wave_warp_amplitude_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Wave Warp: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_wave_warp_amplitude", &clip.fx_wave_warp_amplitude_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Wave Warp: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Speed");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_wave_warp_speed", &clip.fx_wave_warp_speed, 0.0f, 5.0f, "%.1f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Wave Warp: Speed");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_wave_warp_speed_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_wave_warp_speed", &clip.fx_wave_warp_speed, 0.0f, 5.0f, "%.1f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Wave Warp: Speed");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_wave_warp_speed")) {
                     clip.fx_wave_warp_speed_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Wave Warp: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_wave_warp_speed_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_wave_warp_speed", &clip.fx_wave_warp_speed_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Wave Warp: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_wave_warp_speed", &clip.fx_wave_warp_speed_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Wave Warp: Beat Intensity");
+                }
             }
             break;
 
@@ -927,63 +1003,69 @@
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Kaleidoscope: Amount");
             ImGui::Dummy({0.f, 4.f});
             ui_label("Segments");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_kaleidoscope_segments", &clip.fx_kaleidoscope_segments, 2.0f, 16.0f, "%.0f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Kaleidoscope: Segments");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_kaleidoscope_segments_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_kaleidoscope_segments", &clip.fx_kaleidoscope_segments, 2.0f, 16.0f, "%.0f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Kaleidoscope: Segments");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_kaleidoscope_segments")) {
                     clip.fx_kaleidoscope_segments_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Kaleidoscope: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_kaleidoscope_segments_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_kaleidoscope_segments", &clip.fx_kaleidoscope_segments_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Kaleidoscope: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_kaleidoscope_segments", &clip.fx_kaleidoscope_segments_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Kaleidoscope: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Rotation");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_kaleidoscope_rotation", &clip.fx_kaleidoscope_rotation, 0.0f, 6.28f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Kaleidoscope: Rotation");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_kaleidoscope_rotation_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_kaleidoscope_rotation", &clip.fx_kaleidoscope_rotation, 0.0f, 6.28f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Kaleidoscope: Rotation");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_kaleidoscope_rotation")) {
                     clip.fx_kaleidoscope_rotation_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Kaleidoscope: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_kaleidoscope_rotation_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_kaleidoscope_rotation", &clip.fx_kaleidoscope_rotation_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Kaleidoscope: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_kaleidoscope_rotation", &clip.fx_kaleidoscope_rotation_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Kaleidoscope: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Zoom");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_kaleidoscope_zoom", &clip.fx_kaleidoscope_zoom, 0.5f, 3.0f, "%.1f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Kaleidoscope: Zoom");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_kaleidoscope_zoom_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_kaleidoscope_zoom", &clip.fx_kaleidoscope_zoom, 0.5f, 3.0f, "%.1f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Kaleidoscope: Zoom");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_kaleidoscope_zoom")) {
                     clip.fx_kaleidoscope_zoom_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Kaleidoscope: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_kaleidoscope_zoom_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_kaleidoscope_zoom", &clip.fx_kaleidoscope_zoom_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Kaleidoscope: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_kaleidoscope_zoom", &clip.fx_kaleidoscope_zoom_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Kaleidoscope: Beat Intensity");
+                }
             }
             break;
 
@@ -994,63 +1076,69 @@
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Zoom Streak: Amount");
             ImGui::Dummy({0.f, 4.f});
             ui_label("Intensity");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_zoom_blur_rad_intensity", &clip.fx_zoom_blur_rad_intensity, 0.0f, 0.35f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Zoom Streak: Intensity");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_zoom_blur_rad_intensity_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_zoom_blur_rad_intensity", &clip.fx_zoom_blur_rad_intensity, 0.0f, 0.35f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Zoom Streak: Intensity");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_zoom_blur_rad_intensity")) {
                     clip.fx_zoom_blur_rad_intensity_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Zoom Streak: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_zoom_blur_rad_intensity_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_zoom_blur_rad_intensity", &clip.fx_zoom_blur_rad_intensity_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Zoom Streak: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_zoom_blur_rad_intensity", &clip.fx_zoom_blur_rad_intensity_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Zoom Streak: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Center X");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_zoom_blur_rad_cx", &clip.fx_zoom_blur_rad_cx, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Zoom Streak: Center X");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_zoom_blur_rad_cx_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_zoom_blur_rad_cx", &clip.fx_zoom_blur_rad_cx, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Zoom Streak: Center X");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_zoom_blur_rad_cx")) {
                     clip.fx_zoom_blur_rad_cx_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Zoom Streak: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_zoom_blur_rad_cx_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_zoom_blur_rad_cx", &clip.fx_zoom_blur_rad_cx_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Zoom Streak: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_zoom_blur_rad_cx", &clip.fx_zoom_blur_rad_cx_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Zoom Streak: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Center Y");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_zoom_blur_rad_cy", &clip.fx_zoom_blur_rad_cy, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Zoom Streak: Center Y");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_zoom_blur_rad_cy_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_zoom_blur_rad_cy", &clip.fx_zoom_blur_rad_cy, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Zoom Streak: Center Y");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_zoom_blur_rad_cy")) {
                     clip.fx_zoom_blur_rad_cy_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Zoom Streak: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_zoom_blur_rad_cy_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_zoom_blur_rad_cy", &clip.fx_zoom_blur_rad_cy_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Zoom Streak: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_zoom_blur_rad_cy", &clip.fx_zoom_blur_rad_cy_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Zoom Streak: Beat Intensity");
+                }
             }
             break;
 
@@ -1061,23 +1149,25 @@
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Spin Blur: Amount");
             ImGui::Dummy({0.f, 4.f});
             ui_label("Angle");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_spin_blur_angle", &clip.fx_spin_blur_angle, 0.01f, 0.3f, "%.3f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Spin Blur: Angle");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_spin_blur_angle_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_spin_blur_angle", &clip.fx_spin_blur_angle, 0.01f, 0.3f, "%.3f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Spin Blur: Angle");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_spin_blur_angle")) {
                     clip.fx_spin_blur_angle_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Spin Blur: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_spin_blur_angle_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_spin_blur_angle", &clip.fx_spin_blur_angle_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Spin Blur: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_spin_blur_angle", &clip.fx_spin_blur_angle_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Spin Blur: Beat Intensity");
+                }
             }
             break;
 
@@ -1088,43 +1178,47 @@
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Heat Haze: Amount");
             ImGui::Dummy({0.f, 4.f});
             ui_label("Intensity");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_heat_haze_intensity", &clip.fx_heat_haze_intensity, 0.0f, 2.0f, "%.1f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Heat Haze: Intensity");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_heat_haze_intensity_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_heat_haze_intensity", &clip.fx_heat_haze_intensity, 0.0f, 2.0f, "%.1f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Heat Haze: Intensity");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_heat_haze_intensity")) {
                     clip.fx_heat_haze_intensity_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Heat Haze: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_heat_haze_intensity_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_heat_haze_intensity", &clip.fx_heat_haze_intensity_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Heat Haze: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_heat_haze_intensity", &clip.fx_heat_haze_intensity_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Heat Haze: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Speed");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_heat_haze_speed", &clip.fx_heat_haze_speed, 0.0f, 4.0f, "%.1f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Heat Haze: Speed");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_heat_haze_speed_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_heat_haze_speed", &clip.fx_heat_haze_speed, 0.0f, 4.0f, "%.1f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Heat Haze: Speed");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_heat_haze_speed")) {
                     clip.fx_heat_haze_speed_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Heat Haze: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_heat_haze_speed_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_heat_haze_speed", &clip.fx_heat_haze_speed_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Heat Haze: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_heat_haze_speed", &clip.fx_heat_haze_speed_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Heat Haze: Beat Intensity");
+                }
             }
             break;
 
@@ -1135,63 +1229,69 @@
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Barrel Warp: Amount");
             ImGui::Dummy({0.f, 4.f});
             ui_label("Barrel");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_barrel_warp_k1", &clip.fx_barrel_warp_k1, 0.05f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Barrel Warp: Barrel");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_barrel_warp_k1_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_barrel_warp_k1", &clip.fx_barrel_warp_k1, 0.05f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Barrel Warp: Barrel");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_barrel_warp_k1")) {
                     clip.fx_barrel_warp_k1_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Barrel Warp: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_barrel_warp_k1_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_barrel_warp_k1", &clip.fx_barrel_warp_k1_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Barrel Warp: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_barrel_warp_k1", &clip.fx_barrel_warp_k1_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Barrel Warp: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Pincush");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_barrel_warp_k2", &clip.fx_barrel_warp_k2, 0.0f, 0.5f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Barrel Warp: Pincush");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_barrel_warp_k2_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_barrel_warp_k2", &clip.fx_barrel_warp_k2, 0.0f, 0.5f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Barrel Warp: Pincush");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_barrel_warp_k2")) {
                     clip.fx_barrel_warp_k2_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Barrel Warp: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_barrel_warp_k2_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_barrel_warp_k2", &clip.fx_barrel_warp_k2_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Barrel Warp: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_barrel_warp_k2", &clip.fx_barrel_warp_k2_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Barrel Warp: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Scale");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_barrel_warp_scale", &clip.fx_barrel_warp_scale, 0.5f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Barrel Warp: Scale");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_barrel_warp_scale_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_barrel_warp_scale", &clip.fx_barrel_warp_scale, 0.5f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Barrel Warp: Scale");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_barrel_warp_scale")) {
                     clip.fx_barrel_warp_scale_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Barrel Warp: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_barrel_warp_scale_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_barrel_warp_scale", &clip.fx_barrel_warp_scale_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Barrel Warp: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_barrel_warp_scale", &clip.fx_barrel_warp_scale_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Barrel Warp: Beat Intensity");
+                }
             }
             break;
 
@@ -1202,63 +1302,69 @@
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Anamorphic Flare: Amount");
             ImGui::Dummy({0.f, 4.f});
             ui_label("Threshold");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_anamorphic_streak_threshold", &clip.fx_anamorphic_streak_threshold, 0.3f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Anamorphic Flare: Threshold");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_anamorphic_streak_threshold_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_anamorphic_streak_threshold", &clip.fx_anamorphic_streak_threshold, 0.3f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Anamorphic Flare: Threshold");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_anamorphic_streak_threshold")) {
                     clip.fx_anamorphic_streak_threshold_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Anamorphic Flare: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_anamorphic_streak_threshold_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_anamorphic_streak_threshold", &clip.fx_anamorphic_streak_threshold_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Anamorphic Flare: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_anamorphic_streak_threshold", &clip.fx_anamorphic_streak_threshold_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Anamorphic Flare: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Length");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_anamorphic_streak_length", &clip.fx_anamorphic_streak_length, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Anamorphic Flare: Length");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_anamorphic_streak_length_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_anamorphic_streak_length", &clip.fx_anamorphic_streak_length, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Anamorphic Flare: Length");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_anamorphic_streak_length")) {
                     clip.fx_anamorphic_streak_length_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Anamorphic Flare: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_anamorphic_streak_length_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_anamorphic_streak_length", &clip.fx_anamorphic_streak_length_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Anamorphic Flare: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_anamorphic_streak_length", &clip.fx_anamorphic_streak_length_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Anamorphic Flare: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Intensity");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_anamorphic_streak_intensity", &clip.fx_anamorphic_streak_intensity, 0.0f, 3.0f, "%.1f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Anamorphic Flare: Intensity");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_anamorphic_streak_intensity_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_anamorphic_streak_intensity", &clip.fx_anamorphic_streak_intensity, 0.0f, 3.0f, "%.1f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Anamorphic Flare: Intensity");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_anamorphic_streak_intensity")) {
                     clip.fx_anamorphic_streak_intensity_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Anamorphic Flare: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_anamorphic_streak_intensity_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_anamorphic_streak_intensity", &clip.fx_anamorphic_streak_intensity_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Anamorphic Flare: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_anamorphic_streak_intensity", &clip.fx_anamorphic_streak_intensity_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Anamorphic Flare: Beat Intensity");
+                }
             }
             break;
 
@@ -1269,63 +1375,69 @@
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Starburst: Amount");
             ImGui::Dummy({0.f, 4.f});
             ui_label("Threshold");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_starburst_spike_threshold", &clip.fx_starburst_spike_threshold, 0.3f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Starburst: Threshold");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_starburst_spike_threshold_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_starburst_spike_threshold", &clip.fx_starburst_spike_threshold, 0.3f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Starburst: Threshold");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_starburst_spike_threshold")) {
                     clip.fx_starburst_spike_threshold_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Starburst: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_starburst_spike_threshold_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_starburst_spike_threshold", &clip.fx_starburst_spike_threshold_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Starburst: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_starburst_spike_threshold", &clip.fx_starburst_spike_threshold_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Starburst: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Length");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_starburst_spike_length", &clip.fx_starburst_spike_length, 0.05f, 0.6f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Starburst: Length");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_starburst_spike_length_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_starburst_spike_length", &clip.fx_starburst_spike_length, 0.05f, 0.6f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Starburst: Length");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_starburst_spike_length")) {
                     clip.fx_starburst_spike_length_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Starburst: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_starburst_spike_length_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_starburst_spike_length", &clip.fx_starburst_spike_length_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Starburst: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_starburst_spike_length", &clip.fx_starburst_spike_length_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Starburst: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Rays");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_starburst_spike_rays", &clip.fx_starburst_spike_rays, 4.0f, 12.0f, "%.0f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Starburst: Rays");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_starburst_spike_rays_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_starburst_spike_rays", &clip.fx_starburst_spike_rays, 4.0f, 12.0f, "%.0f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Starburst: Rays");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_starburst_spike_rays")) {
                     clip.fx_starburst_spike_rays_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Starburst: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_starburst_spike_rays_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_starburst_spike_rays", &clip.fx_starburst_spike_rays_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Starburst: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_starburst_spike_rays", &clip.fx_starburst_spike_rays_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Starburst: Beat Intensity");
+                }
             }
             break;
 
@@ -1336,83 +1448,91 @@
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "God Rays: Amount");
             ImGui::Dummy({0.f, 4.f});
             ui_label("Intensity");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_god_rays_intensity", &clip.fx_god_rays_intensity, 0.0f, 2.0f, "%.1f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "God Rays: Intensity");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_god_rays_intensity_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_god_rays_intensity", &clip.fx_god_rays_intensity, 0.0f, 2.0f, "%.1f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "God Rays: Intensity");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_god_rays_intensity")) {
                     clip.fx_god_rays_intensity_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "God Rays: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_god_rays_intensity_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_god_rays_intensity", &clip.fx_god_rays_intensity_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "God Rays: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_god_rays_intensity", &clip.fx_god_rays_intensity_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "God Rays: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Decay");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_god_rays_decay", &clip.fx_god_rays_decay, 0.7f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "God Rays: Decay");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_god_rays_decay_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_god_rays_decay", &clip.fx_god_rays_decay, 0.7f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "God Rays: Decay");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_god_rays_decay")) {
                     clip.fx_god_rays_decay_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "God Rays: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_god_rays_decay_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_god_rays_decay", &clip.fx_god_rays_decay_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "God Rays: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_god_rays_decay", &clip.fx_god_rays_decay_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "God Rays: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Source X");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_god_rays_cx", &clip.fx_god_rays_cx, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "God Rays: Source X");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_god_rays_cx_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_god_rays_cx", &clip.fx_god_rays_cx, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "God Rays: Source X");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_god_rays_cx")) {
                     clip.fx_god_rays_cx_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "God Rays: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_god_rays_cx_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_god_rays_cx", &clip.fx_god_rays_cx_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "God Rays: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_god_rays_cx", &clip.fx_god_rays_cx_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "God Rays: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Source Y");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_god_rays_cy", &clip.fx_god_rays_cy, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "God Rays: Source Y");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_god_rays_cy_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_god_rays_cy", &clip.fx_god_rays_cy, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "God Rays: Source Y");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_god_rays_cy")) {
                     clip.fx_god_rays_cy_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "God Rays: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_god_rays_cy_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_god_rays_cy", &clip.fx_god_rays_cy_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "God Rays: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_god_rays_cy", &clip.fx_god_rays_cy_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "God Rays: Beat Intensity");
+                }
             }
             break;
 
@@ -1423,63 +1543,69 @@
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Aurora: Amount");
             ImGui::Dummy({0.f, 4.f});
             ui_label("Intensity");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_aurora_borealis_intensity", &clip.fx_aurora_borealis_intensity, 0.0f, 2.0f, "%.1f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Aurora: Intensity");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_aurora_borealis_intensity_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_aurora_borealis_intensity", &clip.fx_aurora_borealis_intensity, 0.0f, 2.0f, "%.1f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Aurora: Intensity");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_aurora_borealis_intensity")) {
                     clip.fx_aurora_borealis_intensity_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Aurora: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_aurora_borealis_intensity_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_aurora_borealis_intensity", &clip.fx_aurora_borealis_intensity_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Aurora: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_aurora_borealis_intensity", &clip.fx_aurora_borealis_intensity_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Aurora: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Speed");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_aurora_borealis_speed", &clip.fx_aurora_borealis_speed, 0.0f, 2.0f, "%.1f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Aurora: Speed");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_aurora_borealis_speed_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_aurora_borealis_speed", &clip.fx_aurora_borealis_speed, 0.0f, 2.0f, "%.1f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Aurora: Speed");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_aurora_borealis_speed")) {
                     clip.fx_aurora_borealis_speed_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Aurora: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_aurora_borealis_speed_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_aurora_borealis_speed", &clip.fx_aurora_borealis_speed_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Aurora: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_aurora_borealis_speed", &clip.fx_aurora_borealis_speed_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Aurora: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Color Shift");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_aurora_borealis_color_shift", &clip.fx_aurora_borealis_color_shift, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Aurora: Color Shift");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_aurora_borealis_color_shift_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_aurora_borealis_color_shift", &clip.fx_aurora_borealis_color_shift, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Aurora: Color Shift");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_aurora_borealis_color_shift")) {
                     clip.fx_aurora_borealis_color_shift_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Aurora: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_aurora_borealis_color_shift_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_aurora_borealis_color_shift", &clip.fx_aurora_borealis_color_shift_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Aurora: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_aurora_borealis_color_shift", &clip.fx_aurora_borealis_color_shift_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Aurora: Beat Intensity");
+                }
             }
             break;
 
@@ -1490,63 +1616,69 @@
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Bokeh Dream: Amount");
             ImGui::Dummy({0.f, 4.f});
             ui_label("Radius");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_bokeh_dream_radius", &clip.fx_bokeh_dream_radius, 0.0f, 0.08f, "%.3f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Bokeh Dream: Radius");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_bokeh_dream_radius_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_bokeh_dream_radius", &clip.fx_bokeh_dream_radius, 0.0f, 0.08f, "%.3f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Bokeh Dream: Radius");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_bokeh_dream_radius")) {
                     clip.fx_bokeh_dream_radius_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Bokeh Dream: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_bokeh_dream_radius_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_bokeh_dream_radius", &clip.fx_bokeh_dream_radius_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Bokeh Dream: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_bokeh_dream_radius", &clip.fx_bokeh_dream_radius_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Bokeh Dream: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Threshold");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_bokeh_dream_threshold", &clip.fx_bokeh_dream_threshold, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Bokeh Dream: Threshold");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_bokeh_dream_threshold_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_bokeh_dream_threshold", &clip.fx_bokeh_dream_threshold, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Bokeh Dream: Threshold");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_bokeh_dream_threshold")) {
                     clip.fx_bokeh_dream_threshold_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Bokeh Dream: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_bokeh_dream_threshold_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_bokeh_dream_threshold", &clip.fx_bokeh_dream_threshold_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Bokeh Dream: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_bokeh_dream_threshold", &clip.fx_bokeh_dream_threshold_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Bokeh Dream: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Intensity");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_bokeh_dream_intensity", &clip.fx_bokeh_dream_intensity, 0.0f, 4.0f, "%.1f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Bokeh Dream: Intensity");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_bokeh_dream_intensity_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_bokeh_dream_intensity", &clip.fx_bokeh_dream_intensity, 0.0f, 4.0f, "%.1f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Bokeh Dream: Intensity");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_bokeh_dream_intensity")) {
                     clip.fx_bokeh_dream_intensity_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Bokeh Dream: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_bokeh_dream_intensity_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_bokeh_dream_intensity", &clip.fx_bokeh_dream_intensity_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Bokeh Dream: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_bokeh_dream_intensity", &clip.fx_bokeh_dream_intensity_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Bokeh Dream: Beat Intensity");
+                }
             }
             break;
 
@@ -1557,43 +1689,47 @@
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Prism: Amount");
             ImGui::Dummy({0.f, 4.f});
             ui_label("Spread");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_prism_disperse_spread", &clip.fx_prism_disperse_spread, 0.0f, 0.2f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Prism: Spread");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_prism_disperse_spread_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_prism_disperse_spread", &clip.fx_prism_disperse_spread, 0.0f, 0.2f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Prism: Spread");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_prism_disperse_spread")) {
                     clip.fx_prism_disperse_spread_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Prism: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_prism_disperse_spread_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_prism_disperse_spread", &clip.fx_prism_disperse_spread_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Prism: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_prism_disperse_spread", &clip.fx_prism_disperse_spread_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Prism: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Intensity");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_prism_disperse_intensity", &clip.fx_prism_disperse_intensity, 0.0f, 2.0f, "%.1f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Prism: Intensity");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_prism_disperse_intensity_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_prism_disperse_intensity", &clip.fx_prism_disperse_intensity, 0.0f, 2.0f, "%.1f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Prism: Intensity");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_prism_disperse_intensity")) {
                     clip.fx_prism_disperse_intensity_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Prism: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_prism_disperse_intensity_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_prism_disperse_intensity", &clip.fx_prism_disperse_intensity_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Prism: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_prism_disperse_intensity", &clip.fx_prism_disperse_intensity_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Prism: Beat Intensity");
+                }
             }
             break;
 
@@ -1604,63 +1740,69 @@
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Film Burn: Amount");
             ImGui::Dummy({0.f, 4.f});
             ui_label("Intensity");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_film_burn_intensity", &clip.fx_film_burn_intensity, 0.0f, 2.0f, "%.1f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Film Burn: Intensity");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_film_burn_intensity_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_film_burn_intensity", &clip.fx_film_burn_intensity, 0.0f, 2.0f, "%.1f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Film Burn: Intensity");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_film_burn_intensity")) {
                     clip.fx_film_burn_intensity_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Film Burn: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_film_burn_intensity_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_film_burn_intensity", &clip.fx_film_burn_intensity_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Film Burn: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_film_burn_intensity", &clip.fx_film_burn_intensity_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Film Burn: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Speed");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_film_burn_speed", &clip.fx_film_burn_speed, 0.0f, 3.0f, "%.1f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Film Burn: Speed");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_film_burn_speed_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_film_burn_speed", &clip.fx_film_burn_speed, 0.0f, 3.0f, "%.1f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Film Burn: Speed");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_film_burn_speed")) {
                     clip.fx_film_burn_speed_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Film Burn: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_film_burn_speed_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_film_burn_speed", &clip.fx_film_burn_speed_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Film Burn: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_film_burn_speed", &clip.fx_film_burn_speed_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Film Burn: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Edge");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_film_burn_edge", &clip.fx_film_burn_edge, 0.0f, 0.6f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Film Burn: Edge");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_film_burn_edge_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_film_burn_edge", &clip.fx_film_burn_edge, 0.0f, 0.6f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Film Burn: Edge");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_film_burn_edge")) {
                     clip.fx_film_burn_edge_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Film Burn: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_film_burn_edge_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_film_burn_edge", &clip.fx_film_burn_edge_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Film Burn: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_film_burn_edge", &clip.fx_film_burn_edge_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Film Burn: Beat Intensity");
+                }
             }
             break;
 
@@ -1671,43 +1813,47 @@
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Oil Paint: Amount");
             ImGui::Dummy({0.f, 4.f});
             ui_label("Brush");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_oil_paint_radius", &clip.fx_oil_paint_radius, 2.0f, 8.0f, "%.0f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Oil Paint: Brush");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_oil_paint_radius_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_oil_paint_radius", &clip.fx_oil_paint_radius, 2.0f, 8.0f, "%.0f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Oil Paint: Brush");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_oil_paint_radius")) {
                     clip.fx_oil_paint_radius_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Oil Paint: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_oil_paint_radius_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_oil_paint_radius", &clip.fx_oil_paint_radius_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Oil Paint: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_oil_paint_radius", &clip.fx_oil_paint_radius_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Oil Paint: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Sharpness");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_oil_paint_sharpness", &clip.fx_oil_paint_sharpness, 0.0f, 15.0f, "%.0f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Oil Paint: Sharpness");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_oil_paint_sharpness_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_oil_paint_sharpness", &clip.fx_oil_paint_sharpness, 0.0f, 15.0f, "%.0f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Oil Paint: Sharpness");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_oil_paint_sharpness")) {
                     clip.fx_oil_paint_sharpness_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Oil Paint: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_oil_paint_sharpness_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_oil_paint_sharpness", &clip.fx_oil_paint_sharpness_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Oil Paint: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_oil_paint_sharpness", &clip.fx_oil_paint_sharpness_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Oil Paint: Beat Intensity");
+                }
             }
             break;
 
@@ -1718,63 +1864,69 @@
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Stained Glass: Amount");
             ImGui::Dummy({0.f, 4.f});
             ui_label("Cell Size");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_stained_glass_cell_size", &clip.fx_stained_glass_cell_size, 4.0f, 48.0f, "%.0f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Stained Glass: Cell Size");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_stained_glass_cell_size_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_stained_glass_cell_size", &clip.fx_stained_glass_cell_size, 4.0f, 48.0f, "%.0f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Stained Glass: Cell Size");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_stained_glass_cell_size")) {
                     clip.fx_stained_glass_cell_size_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Stained Glass: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_stained_glass_cell_size_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_stained_glass_cell_size", &clip.fx_stained_glass_cell_size_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Stained Glass: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_stained_glass_cell_size", &clip.fx_stained_glass_cell_size_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Stained Glass: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Border");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_stained_glass_border", &clip.fx_stained_glass_border, 0.0f, 0.3f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Stained Glass: Border");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_stained_glass_border_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_stained_glass_border", &clip.fx_stained_glass_border, 0.0f, 0.3f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Stained Glass: Border");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_stained_glass_border")) {
                     clip.fx_stained_glass_border_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Stained Glass: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_stained_glass_border_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_stained_glass_border", &clip.fx_stained_glass_border_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Stained Glass: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_stained_glass_border", &clip.fx_stained_glass_border_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Stained Glass: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Saturation");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_stained_glass_saturation", &clip.fx_stained_glass_saturation, 0.5f, 3.0f, "%.1f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Stained Glass: Saturation");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_stained_glass_saturation_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_stained_glass_saturation", &clip.fx_stained_glass_saturation, 0.5f, 3.0f, "%.1f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Stained Glass: Saturation");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_stained_glass_saturation")) {
                     clip.fx_stained_glass_saturation_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Stained Glass: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_stained_glass_saturation_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_stained_glass_saturation", &clip.fx_stained_glass_saturation_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Stained Glass: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_stained_glass_saturation", &clip.fx_stained_glass_saturation_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Stained Glass: Beat Intensity");
+                }
             }
             break;
 
@@ -1785,63 +1937,69 @@
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Neon Edges: Amount");
             ImGui::Dummy({0.f, 4.f});
             ui_label("Threshold");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_neon_edge_glow_threshold", &clip.fx_neon_edge_glow_threshold, 0.0f, 0.5f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Neon Edges: Threshold");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_neon_edge_glow_threshold_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_neon_edge_glow_threshold", &clip.fx_neon_edge_glow_threshold, 0.0f, 0.5f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Neon Edges: Threshold");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_neon_edge_glow_threshold")) {
                     clip.fx_neon_edge_glow_threshold_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Neon Edges: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_neon_edge_glow_threshold_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_neon_edge_glow_threshold", &clip.fx_neon_edge_glow_threshold_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Neon Edges: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_neon_edge_glow_threshold", &clip.fx_neon_edge_glow_threshold_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Neon Edges: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Glow");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_neon_edge_glow_glow", &clip.fx_neon_edge_glow_glow, 0.2f, 2.0f, "%.1f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Neon Edges: Glow");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_neon_edge_glow_glow_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_neon_edge_glow_glow", &clip.fx_neon_edge_glow_glow, 0.2f, 2.0f, "%.1f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Neon Edges: Glow");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_neon_edge_glow_glow")) {
                     clip.fx_neon_edge_glow_glow_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Neon Edges: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_neon_edge_glow_glow_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_neon_edge_glow_glow", &clip.fx_neon_edge_glow_glow_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Neon Edges: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_neon_edge_glow_glow", &clip.fx_neon_edge_glow_glow_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Neon Edges: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Hue");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_neon_edge_glow_hue", &clip.fx_neon_edge_glow_hue, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Neon Edges: Hue");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_neon_edge_glow_hue_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_neon_edge_glow_hue", &clip.fx_neon_edge_glow_hue, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Neon Edges: Hue");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_neon_edge_glow_hue")) {
                     clip.fx_neon_edge_glow_hue_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Neon Edges: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_neon_edge_glow_hue_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_neon_edge_glow_hue", &clip.fx_neon_edge_glow_hue_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Neon Edges: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_neon_edge_glow_hue", &clip.fx_neon_edge_glow_hue_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Neon Edges: Beat Intensity");
+                }
             }
             break;
 
@@ -1852,63 +2010,69 @@
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Cyberpunk: Amount");
             ImGui::Dummy({0.f, 4.f});
             ui_label("Shadow Teal");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_cyberpunk_grade_shadow_teal", &clip.fx_cyberpunk_grade_shadow_teal, 0.0f, 1.0f, "%.1f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Cyberpunk: Shadow Teal");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_cyberpunk_grade_shadow_teal_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_cyberpunk_grade_shadow_teal", &clip.fx_cyberpunk_grade_shadow_teal, 0.0f, 1.0f, "%.1f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Cyberpunk: Shadow Teal");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_cyberpunk_grade_shadow_teal")) {
                     clip.fx_cyberpunk_grade_shadow_teal_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Cyberpunk: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_cyberpunk_grade_shadow_teal_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_cyberpunk_grade_shadow_teal", &clip.fx_cyberpunk_grade_shadow_teal_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Cyberpunk: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_cyberpunk_grade_shadow_teal", &clip.fx_cyberpunk_grade_shadow_teal_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Cyberpunk: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Hi Orange");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_cyberpunk_grade_hi_orange", &clip.fx_cyberpunk_grade_hi_orange, 0.0f, 1.0f, "%.1f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Cyberpunk: Hi Orange");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_cyberpunk_grade_hi_orange_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_cyberpunk_grade_hi_orange", &clip.fx_cyberpunk_grade_hi_orange, 0.0f, 1.0f, "%.1f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Cyberpunk: Hi Orange");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_cyberpunk_grade_hi_orange")) {
                     clip.fx_cyberpunk_grade_hi_orange_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Cyberpunk: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_cyberpunk_grade_hi_orange_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_cyberpunk_grade_hi_orange", &clip.fx_cyberpunk_grade_hi_orange_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Cyberpunk: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_cyberpunk_grade_hi_orange", &clip.fx_cyberpunk_grade_hi_orange_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Cyberpunk: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Contrast");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_cyberpunk_grade_contrast", &clip.fx_cyberpunk_grade_contrast, 1.0f, 2.5f, "%.1f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Cyberpunk: Contrast");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_cyberpunk_grade_contrast_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_cyberpunk_grade_contrast", &clip.fx_cyberpunk_grade_contrast, 1.0f, 2.5f, "%.1f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Cyberpunk: Contrast");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_cyberpunk_grade_contrast")) {
                     clip.fx_cyberpunk_grade_contrast_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Cyberpunk: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_cyberpunk_grade_contrast_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_cyberpunk_grade_contrast", &clip.fx_cyberpunk_grade_contrast_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Cyberpunk: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_cyberpunk_grade_contrast", &clip.fx_cyberpunk_grade_contrast_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Cyberpunk: Beat Intensity");
+                }
             }
             break;
 
@@ -1919,63 +2083,69 @@
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Matrix: Amount");
             ImGui::Dummy({0.f, 4.f});
             ui_label("Density");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_matrix_rain_density", &clip.fx_matrix_rain_density, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Matrix: Density");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_matrix_rain_density_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_matrix_rain_density", &clip.fx_matrix_rain_density, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Matrix: Density");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_matrix_rain_density")) {
                     clip.fx_matrix_rain_density_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Matrix: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_matrix_rain_density_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_matrix_rain_density", &clip.fx_matrix_rain_density_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Matrix: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_matrix_rain_density", &clip.fx_matrix_rain_density_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Matrix: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Speed");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_matrix_rain_speed", &clip.fx_matrix_rain_speed, 0.5f, 6.0f, "%.1f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Matrix: Speed");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_matrix_rain_speed_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_matrix_rain_speed", &clip.fx_matrix_rain_speed, 0.5f, 6.0f, "%.1f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Matrix: Speed");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_matrix_rain_speed")) {
                     clip.fx_matrix_rain_speed_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Matrix: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_matrix_rain_speed_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_matrix_rain_speed", &clip.fx_matrix_rain_speed_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Matrix: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_matrix_rain_speed", &clip.fx_matrix_rain_speed_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Matrix: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Mix");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_matrix_rain_green_mix", &clip.fx_matrix_rain_green_mix, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Matrix: Mix");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_matrix_rain_green_mix_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_matrix_rain_green_mix", &clip.fx_matrix_rain_green_mix, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Matrix: Mix");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_matrix_rain_green_mix")) {
                     clip.fx_matrix_rain_green_mix_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Matrix: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_matrix_rain_green_mix_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_matrix_rain_green_mix", &clip.fx_matrix_rain_green_mix_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Matrix: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_matrix_rain_green_mix", &clip.fx_matrix_rain_green_mix_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Matrix: Beat Intensity");
+                }
             }
             break;
 
@@ -1986,63 +2156,69 @@
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Pixel Sort: Amount");
             ImGui::Dummy({0.f, 4.f});
             ui_label("Threshold");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_pixel_sort_threshold", &clip.fx_pixel_sort_threshold, 0.0f, 0.9f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Pixel Sort: Threshold");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_pixel_sort_threshold_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_pixel_sort_threshold", &clip.fx_pixel_sort_threshold, 0.0f, 0.9f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Pixel Sort: Threshold");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_pixel_sort_threshold")) {
                     clip.fx_pixel_sort_threshold_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Pixel Sort: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_pixel_sort_threshold_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_pixel_sort_threshold", &clip.fx_pixel_sort_threshold_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Pixel Sort: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_pixel_sort_threshold", &clip.fx_pixel_sort_threshold_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Pixel Sort: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Intensity");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_pixel_sort_intensity", &clip.fx_pixel_sort_intensity, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Pixel Sort: Intensity");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_pixel_sort_intensity_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_pixel_sort_intensity", &clip.fx_pixel_sort_intensity, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Pixel Sort: Intensity");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_pixel_sort_intensity")) {
                     clip.fx_pixel_sort_intensity_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Pixel Sort: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_pixel_sort_intensity_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_pixel_sort_intensity", &clip.fx_pixel_sort_intensity_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Pixel Sort: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_pixel_sort_intensity", &clip.fx_pixel_sort_intensity_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Pixel Sort: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Direction");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_pixel_sort_direction", &clip.fx_pixel_sort_direction, 0.0f, 1.0f, "%.0f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Pixel Sort: Direction");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_pixel_sort_direction_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_pixel_sort_direction", &clip.fx_pixel_sort_direction, 0.0f, 1.0f, "%.0f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Pixel Sort: Direction");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_pixel_sort_direction")) {
                     clip.fx_pixel_sort_direction_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Pixel Sort: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_pixel_sort_direction_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_pixel_sort_direction", &clip.fx_pixel_sort_direction_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Pixel Sort: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_pixel_sort_direction", &clip.fx_pixel_sort_direction_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Pixel Sort: Beat Intensity");
+                }
             }
             break;
 
@@ -2053,23 +2229,25 @@
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Solarize: Amount");
             ImGui::Dummy({0.f, 4.f});
             ui_label("Threshold");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_solarize_threshold", &clip.fx_solarize_threshold, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Solarize: Threshold");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_solarize_threshold_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_solarize_threshold", &clip.fx_solarize_threshold, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Solarize: Threshold");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_solarize_threshold")) {
                     clip.fx_solarize_threshold_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Solarize: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_solarize_threshold_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_solarize_threshold", &clip.fx_solarize_threshold_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Solarize: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_solarize_threshold", &clip.fx_solarize_threshold_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Solarize: Beat Intensity");
+                }
             }
             break;
 
@@ -2080,63 +2258,69 @@
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Double Ghost: Amount");
             ImGui::Dummy({0.f, 4.f});
             ui_label("Offset");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_double_ghost_offset", &clip.fx_double_ghost_offset, 0.0f, 0.15f, "%.3f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Double Ghost: Offset");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_double_ghost_offset_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_double_ghost_offset", &clip.fx_double_ghost_offset, 0.0f, 0.15f, "%.3f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Double Ghost: Offset");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_double_ghost_offset")) {
                     clip.fx_double_ghost_offset_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Double Ghost: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_double_ghost_offset_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_double_ghost_offset", &clip.fx_double_ghost_offset_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Double Ghost: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_double_ghost_offset", &clip.fx_double_ghost_offset_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Double Ghost: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Opacity");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_double_ghost_opacity", &clip.fx_double_ghost_opacity, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Double Ghost: Opacity");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_double_ghost_opacity_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_double_ghost_opacity", &clip.fx_double_ghost_opacity, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Double Ghost: Opacity");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_double_ghost_opacity")) {
                     clip.fx_double_ghost_opacity_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Double Ghost: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_double_ghost_opacity_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_double_ghost_opacity", &clip.fx_double_ghost_opacity_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Double Ghost: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_double_ghost_opacity", &clip.fx_double_ghost_opacity_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Double Ghost: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Angle");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_double_ghost_angle", &clip.fx_double_ghost_angle, 0.0f, 90.0f, "%.0f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Double Ghost: Angle");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_double_ghost_angle_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_double_ghost_angle", &clip.fx_double_ghost_angle, 0.0f, 90.0f, "%.0f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Double Ghost: Angle");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_double_ghost_angle")) {
                     clip.fx_double_ghost_angle_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Double Ghost: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_double_ghost_angle_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_double_ghost_angle", &clip.fx_double_ghost_angle_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Double Ghost: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_double_ghost_angle", &clip.fx_double_ghost_angle_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Double Ghost: Beat Intensity");
+                }
             }
             break;
 
@@ -2147,63 +2331,69 @@
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Watercolor: Amount");
             ImGui::Dummy({0.f, 4.f});
             ui_label("Bleeding");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_watercolor_bleeding", &clip.fx_watercolor_bleeding, 0.003f, 0.05f, "%.3f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Watercolor: Bleeding");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_watercolor_bleeding_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_watercolor_bleeding", &clip.fx_watercolor_bleeding, 0.003f, 0.05f, "%.3f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Watercolor: Bleeding");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_watercolor_bleeding")) {
                     clip.fx_watercolor_bleeding_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Watercolor: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_watercolor_bleeding_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_watercolor_bleeding", &clip.fx_watercolor_bleeding_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Watercolor: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_watercolor_bleeding", &clip.fx_watercolor_bleeding_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Watercolor: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Paper");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_watercolor_paper", &clip.fx_watercolor_paper, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Watercolor: Paper");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_watercolor_paper_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_watercolor_paper", &clip.fx_watercolor_paper, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Watercolor: Paper");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_watercolor_paper")) {
                     clip.fx_watercolor_paper_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Watercolor: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_watercolor_paper_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_watercolor_paper", &clip.fx_watercolor_paper_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Watercolor: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_watercolor_paper", &clip.fx_watercolor_paper_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Watercolor: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Saturation");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_watercolor_saturation", &clip.fx_watercolor_saturation, 0.8f, 2.5f, "%.1f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Watercolor: Saturation");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_watercolor_saturation_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_watercolor_saturation", &clip.fx_watercolor_saturation, 0.8f, 2.5f, "%.1f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Watercolor: Saturation");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_watercolor_saturation")) {
                     clip.fx_watercolor_saturation_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Watercolor: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_watercolor_saturation_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_watercolor_saturation", &clip.fx_watercolor_saturation_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Watercolor: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_watercolor_saturation", &clip.fx_watercolor_saturation_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Watercolor: Beat Intensity");
+                }
             }
             break;
 
@@ -2214,63 +2404,69 @@
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Comic Book: Amount");
             ImGui::Dummy({0.f, 4.f});
             ui_label("Dot Size");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_comic_dots_dot_size", &clip.fx_comic_dots_dot_size, 1.0f, 10.0f, "%.0f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Comic Book: Dot Size");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_comic_dots_dot_size_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_comic_dots_dot_size", &clip.fx_comic_dots_dot_size, 1.0f, 10.0f, "%.0f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Comic Book: Dot Size");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_comic_dots_dot_size")) {
                     clip.fx_comic_dots_dot_size_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Comic Book: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_comic_dots_dot_size_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_comic_dots_dot_size", &clip.fx_comic_dots_dot_size_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Comic Book: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_comic_dots_dot_size", &clip.fx_comic_dots_dot_size_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Comic Book: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Ink");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_comic_dots_ink_threshold", &clip.fx_comic_dots_ink_threshold, 0.0f, 0.4f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Comic Book: Ink");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_comic_dots_ink_threshold_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_comic_dots_ink_threshold", &clip.fx_comic_dots_ink_threshold, 0.0f, 0.4f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Comic Book: Ink");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_comic_dots_ink_threshold")) {
                     clip.fx_comic_dots_ink_threshold_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Comic Book: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_comic_dots_ink_threshold_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_comic_dots_ink_threshold", &clip.fx_comic_dots_ink_threshold_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Comic Book: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_comic_dots_ink_threshold", &clip.fx_comic_dots_ink_threshold_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Comic Book: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Colors");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_comic_dots_color_levels", &clip.fx_comic_dots_color_levels, 2.0f, 8.0f, "%.0f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Comic Book: Colors");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_comic_dots_color_levels_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_comic_dots_color_levels", &clip.fx_comic_dots_color_levels, 2.0f, 8.0f, "%.0f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Comic Book: Colors");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_comic_dots_color_levels")) {
                     clip.fx_comic_dots_color_levels_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Comic Book: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_comic_dots_color_levels_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_comic_dots_color_levels", &clip.fx_comic_dots_color_levels_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Comic Book: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_comic_dots_color_levels", &clip.fx_comic_dots_color_levels_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Comic Book: Beat Intensity");
+                }
             }
             break;
 
@@ -2281,63 +2477,69 @@
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Crosshatch: Amount");
             ImGui::Dummy({0.f, 4.f});
             ui_label("Density");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_crosshatch_density", &clip.fx_crosshatch_density, 2.0f, 20.0f, "%.0f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Crosshatch: Density");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_crosshatch_density_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_crosshatch_density", &clip.fx_crosshatch_density, 2.0f, 20.0f, "%.0f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Crosshatch: Density");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_crosshatch_density")) {
                     clip.fx_crosshatch_density_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Crosshatch: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_crosshatch_density_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_crosshatch_density", &clip.fx_crosshatch_density_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Crosshatch: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_crosshatch_density", &clip.fx_crosshatch_density_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Crosshatch: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Thickness");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_crosshatch_thickness", &clip.fx_crosshatch_thickness, 0.15f, 0.8f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Crosshatch: Thickness");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_crosshatch_thickness_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_crosshatch_thickness", &clip.fx_crosshatch_thickness, 0.15f, 0.8f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Crosshatch: Thickness");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_crosshatch_thickness")) {
                     clip.fx_crosshatch_thickness_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Crosshatch: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_crosshatch_thickness_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_crosshatch_thickness", &clip.fx_crosshatch_thickness_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Crosshatch: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_crosshatch_thickness", &clip.fx_crosshatch_thickness_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Crosshatch: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Angle");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_crosshatch_angle", &clip.fx_crosshatch_angle, 0.0f, 90.0f, "%.0f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Crosshatch: Angle");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_crosshatch_angle_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_crosshatch_angle", &clip.fx_crosshatch_angle, 0.0f, 90.0f, "%.0f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Crosshatch: Angle");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_crosshatch_angle")) {
                     clip.fx_crosshatch_angle_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Crosshatch: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_crosshatch_angle_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_crosshatch_angle", &clip.fx_crosshatch_angle_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Crosshatch: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_crosshatch_angle", &clip.fx_crosshatch_angle_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Crosshatch: Beat Intensity");
+                }
             }
             break;
 
@@ -2348,63 +2550,69 @@
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Daguerreotype: Amount");
             ImGui::Dummy({0.f, 4.f});
             ui_label("Tone");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_daguerreotype_tone", &clip.fx_daguerreotype_tone, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Daguerreotype: Tone");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_daguerreotype_tone_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_daguerreotype_tone", &clip.fx_daguerreotype_tone, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Daguerreotype: Tone");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_daguerreotype_tone")) {
                     clip.fx_daguerreotype_tone_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Daguerreotype: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_daguerreotype_tone_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_daguerreotype_tone", &clip.fx_daguerreotype_tone_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Daguerreotype: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_daguerreotype_tone", &clip.fx_daguerreotype_tone_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Daguerreotype: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Vignette");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_daguerreotype_vignette", &clip.fx_daguerreotype_vignette, 0.1f, 2.0f, "%.1f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Daguerreotype: Vignette");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_daguerreotype_vignette_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_daguerreotype_vignette", &clip.fx_daguerreotype_vignette, 0.1f, 2.0f, "%.1f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Daguerreotype: Vignette");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_daguerreotype_vignette")) {
                     clip.fx_daguerreotype_vignette_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Daguerreotype: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_daguerreotype_vignette_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_daguerreotype_vignette", &clip.fx_daguerreotype_vignette_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Daguerreotype: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_daguerreotype_vignette", &clip.fx_daguerreotype_vignette_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Daguerreotype: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Scratch");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_daguerreotype_scratch", &clip.fx_daguerreotype_scratch, 0.02f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Daguerreotype: Scratch");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_daguerreotype_scratch_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_daguerreotype_scratch", &clip.fx_daguerreotype_scratch, 0.02f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Daguerreotype: Scratch");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_daguerreotype_scratch")) {
                     clip.fx_daguerreotype_scratch_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Daguerreotype: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_daguerreotype_scratch_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_daguerreotype_scratch", &clip.fx_daguerreotype_scratch_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Daguerreotype: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_daguerreotype_scratch", &clip.fx_daguerreotype_scratch_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Daguerreotype: Beat Intensity");
+                }
             }
             break;
 
@@ -2415,63 +2623,69 @@
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Super 8: Amount");
             ImGui::Dummy({0.f, 4.f});
             ui_label("Grain");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_super8_film_grain", &clip.fx_super8_film_grain, 0.05f, 1.5f, "%.1f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Super 8: Grain");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_super8_film_grain_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_super8_film_grain", &clip.fx_super8_film_grain, 0.05f, 1.5f, "%.1f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Super 8: Grain");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_super8_film_grain")) {
                     clip.fx_super8_film_grain_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Super 8: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_super8_film_grain_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_super8_film_grain", &clip.fx_super8_film_grain_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Super 8: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_super8_film_grain", &clip.fx_super8_film_grain_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Super 8: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Gate Weave");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_super8_film_gate", &clip.fx_super8_film_gate, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Super 8: Gate Weave");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_super8_film_gate_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_super8_film_gate", &clip.fx_super8_film_gate, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Super 8: Gate Weave");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_super8_film_gate")) {
                     clip.fx_super8_film_gate_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Super 8: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_super8_film_gate_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_super8_film_gate", &clip.fx_super8_film_gate_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Super 8: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_super8_film_gate", &clip.fx_super8_film_gate_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Super 8: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Fade");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_super8_film_fade", &clip.fx_super8_film_fade, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Super 8: Fade");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_super8_film_fade_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_super8_film_fade", &clip.fx_super8_film_fade, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Super 8: Fade");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_super8_film_fade")) {
                     clip.fx_super8_film_fade_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Super 8: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_super8_film_fade_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_super8_film_fade", &clip.fx_super8_film_fade_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Super 8: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_super8_film_fade", &clip.fx_super8_film_fade_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Super 8: Beat Intensity");
+                }
             }
             break;
 
@@ -2482,43 +2696,47 @@
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "VHS Dropout: Amount");
             ImGui::Dummy({0.f, 4.f});
             ui_label("Density");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_vhs_dropout_density", &clip.fx_vhs_dropout_density, 0.0f, 0.4f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "VHS Dropout: Density");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_vhs_dropout_density_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_vhs_dropout_density", &clip.fx_vhs_dropout_density, 0.0f, 0.4f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "VHS Dropout: Density");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_vhs_dropout_density")) {
                     clip.fx_vhs_dropout_density_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "VHS Dropout: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_vhs_dropout_density_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_vhs_dropout_density", &clip.fx_vhs_dropout_density_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "VHS Dropout: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_vhs_dropout_density", &clip.fx_vhs_dropout_density_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "VHS Dropout: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Speed");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_vhs_dropout_speed", &clip.fx_vhs_dropout_speed, 0.0f, 8.0f, "%.1f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "VHS Dropout: Speed");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_vhs_dropout_speed_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_vhs_dropout_speed", &clip.fx_vhs_dropout_speed, 0.0f, 8.0f, "%.1f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "VHS Dropout: Speed");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_vhs_dropout_speed")) {
                     clip.fx_vhs_dropout_speed_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "VHS Dropout: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_vhs_dropout_speed_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_vhs_dropout_speed", &clip.fx_vhs_dropout_speed_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "VHS Dropout: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_vhs_dropout_speed", &clip.fx_vhs_dropout_speed_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "VHS Dropout: Beat Intensity");
+                }
             }
             break;
 
@@ -2529,43 +2747,47 @@
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "X-Ray: Amount");
             ImGui::Dummy({0.f, 4.f});
             ui_label("Contrast");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_x_ray_contrast", &clip.fx_x_ray_contrast, 0.5f, 4.0f, "%.1f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "X-Ray: Contrast");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_x_ray_contrast_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_x_ray_contrast", &clip.fx_x_ray_contrast, 0.5f, 4.0f, "%.1f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "X-Ray: Contrast");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_x_ray_contrast")) {
                     clip.fx_x_ray_contrast_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "X-Ray: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_x_ray_contrast_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_x_ray_contrast", &clip.fx_x_ray_contrast_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "X-Ray: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_x_ray_contrast", &clip.fx_x_ray_contrast_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "X-Ray: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Blue Tint");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_x_ray_blue_tint", &clip.fx_x_ray_blue_tint, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "X-Ray: Blue Tint");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_x_ray_blue_tint_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_x_ray_blue_tint", &clip.fx_x_ray_blue_tint, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "X-Ray: Blue Tint");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_x_ray_blue_tint")) {
                     clip.fx_x_ray_blue_tint_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "X-Ray: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_x_ray_blue_tint_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_x_ray_blue_tint", &clip.fx_x_ray_blue_tint_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "X-Ray: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_x_ray_blue_tint", &clip.fx_x_ray_blue_tint_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "X-Ray: Beat Intensity");
+                }
             }
             break;
 
@@ -2576,43 +2798,47 @@
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Bit Crush: Amount");
             ImGui::Dummy({0.f, 4.f});
             ui_label("Levels");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_bit_crush_levels", &clip.fx_bit_crush_levels, 2.0f, 16.0f, "%.0f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Bit Crush: Levels");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_bit_crush_levels_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_bit_crush_levels", &clip.fx_bit_crush_levels, 2.0f, 16.0f, "%.0f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Bit Crush: Levels");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_bit_crush_levels")) {
                     clip.fx_bit_crush_levels_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Bit Crush: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_bit_crush_levels_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_bit_crush_levels", &clip.fx_bit_crush_levels_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Bit Crush: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_bit_crush_levels", &clip.fx_bit_crush_levels_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Bit Crush: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Dither");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_bit_crush_dither", &clip.fx_bit_crush_dither, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Bit Crush: Dither");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_bit_crush_dither_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_bit_crush_dither", &clip.fx_bit_crush_dither, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Bit Crush: Dither");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_bit_crush_dither")) {
                     clip.fx_bit_crush_dither_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Bit Crush: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_bit_crush_dither_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_bit_crush_dither", &clip.fx_bit_crush_dither_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Bit Crush: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_bit_crush_dither", &clip.fx_bit_crush_dither_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Bit Crush: Beat Intensity");
+                }
             }
             break;
 
@@ -2623,43 +2849,47 @@
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "TV Static: Amount");
             ImGui::Dummy({0.f, 4.f});
             ui_label("Intensity");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_tv_static_intensity", &clip.fx_tv_static_intensity, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "TV Static: Intensity");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_tv_static_intensity_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_tv_static_intensity", &clip.fx_tv_static_intensity, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "TV Static: Intensity");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_tv_static_intensity")) {
                     clip.fx_tv_static_intensity_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "TV Static: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_tv_static_intensity_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_tv_static_intensity", &clip.fx_tv_static_intensity_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "TV Static: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_tv_static_intensity", &clip.fx_tv_static_intensity_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "TV Static: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Color Mix");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_tv_static_color_mix", &clip.fx_tv_static_color_mix, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "TV Static: Color Mix");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_tv_static_color_mix_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_tv_static_color_mix", &clip.fx_tv_static_color_mix, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "TV Static: Color Mix");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_tv_static_color_mix")) {
                     clip.fx_tv_static_color_mix_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "TV Static: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_tv_static_color_mix_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_tv_static_color_mix", &clip.fx_tv_static_color_mix_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "TV Static: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_tv_static_color_mix", &clip.fx_tv_static_color_mix_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "TV Static: Beat Intensity");
+                }
             }
             break;
 
@@ -2670,63 +2900,69 @@
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Dither: Amount");
             ImGui::Dummy({0.f, 4.f});
             ui_label("Levels");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_dither_bayer_levels", &clip.fx_dither_bayer_levels, 1.0f, 8.0f, "%.0f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Dither: Levels");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_dither_bayer_levels_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_dither_bayer_levels", &clip.fx_dither_bayer_levels, 1.0f, 8.0f, "%.0f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Dither: Levels");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_dither_bayer_levels")) {
                     clip.fx_dither_bayer_levels_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Dither: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_dither_bayer_levels_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_dither_bayer_levels", &clip.fx_dither_bayer_levels_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Dither: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_dither_bayer_levels", &clip.fx_dither_bayer_levels_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Dither: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Scale");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_dither_bayer_scale", &clip.fx_dither_bayer_scale, 1.0f, 6.0f, "%.0f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Dither: Scale");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_dither_bayer_scale_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_dither_bayer_scale", &clip.fx_dither_bayer_scale, 1.0f, 6.0f, "%.0f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Dither: Scale");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_dither_bayer_scale")) {
                     clip.fx_dither_bayer_scale_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Dither: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_dither_bayer_scale_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_dither_bayer_scale", &clip.fx_dither_bayer_scale_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Dither: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_dither_bayer_scale", &clip.fx_dither_bayer_scale_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Dither: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Color");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_dither_bayer_color", &clip.fx_dither_bayer_color, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Dither: Color");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_dither_bayer_color_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_dither_bayer_color", &clip.fx_dither_bayer_color, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Dither: Color");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_dither_bayer_color")) {
                     clip.fx_dither_bayer_color_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Dither: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_dither_bayer_color_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_dither_bayer_color", &clip.fx_dither_bayer_color_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Dither: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_dither_bayer_color", &clip.fx_dither_bayer_color_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Dither: Beat Intensity");
+                }
             }
             break;
 
@@ -2737,23 +2973,25 @@
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Miami Vice: Amount");
             ImGui::Dummy({0.f, 4.f});
             ui_label("Saturation");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_miami_vice_saturation", &clip.fx_miami_vice_saturation, 0.5f, 3.0f, "%.1f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Miami Vice: Saturation");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_miami_vice_saturation_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_miami_vice_saturation", &clip.fx_miami_vice_saturation, 0.5f, 3.0f, "%.1f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Miami Vice: Saturation");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_miami_vice_saturation")) {
                     clip.fx_miami_vice_saturation_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Miami Vice: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_miami_vice_saturation_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_miami_vice_saturation", &clip.fx_miami_vice_saturation_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Miami Vice: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_miami_vice_saturation", &clip.fx_miami_vice_saturation_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Miami Vice: Beat Intensity");
+                }
             }
             break;
 
@@ -2764,63 +3002,69 @@
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Horror: Amount");
             ImGui::Dummy({0.f, 4.f});
             ui_label("Desaturate");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_horror_grade_desat", &clip.fx_horror_grade_desat, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Horror: Desaturate");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_horror_grade_desat_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_horror_grade_desat", &clip.fx_horror_grade_desat, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Horror: Desaturate");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_horror_grade_desat")) {
                     clip.fx_horror_grade_desat_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Horror: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_horror_grade_desat_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_horror_grade_desat", &clip.fx_horror_grade_desat_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Horror: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_horror_grade_desat", &clip.fx_horror_grade_desat_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Horror: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Red Boost");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_horror_grade_red", &clip.fx_horror_grade_red, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Horror: Red Boost");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_horror_grade_red_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_horror_grade_red", &clip.fx_horror_grade_red, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Horror: Red Boost");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_horror_grade_red")) {
                     clip.fx_horror_grade_red_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Horror: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_horror_grade_red_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_horror_grade_red", &clip.fx_horror_grade_red_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Horror: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_horror_grade_red", &clip.fx_horror_grade_red_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Horror: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Crush");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_horror_grade_crush", &clip.fx_horror_grade_crush, 0.0f, 0.4f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Horror: Crush");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_horror_grade_crush_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_horror_grade_crush", &clip.fx_horror_grade_crush, 0.0f, 0.4f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Horror: Crush");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_horror_grade_crush")) {
                     clip.fx_horror_grade_crush_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Horror: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_horror_grade_crush_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_horror_grade_crush", &clip.fx_horror_grade_crush_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Horror: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_horror_grade_crush", &clip.fx_horror_grade_crush_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Horror: Beat Intensity");
+                }
             }
             break;
 
@@ -2831,43 +3075,47 @@
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Split Tone: Amount");
             ImGui::Dummy({0.f, 4.f});
             ui_label("Shadow Hue");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_split_toning_shadow_hue", &clip.fx_split_toning_shadow_hue, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Split Tone: Shadow Hue");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_split_toning_shadow_hue_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_split_toning_shadow_hue", &clip.fx_split_toning_shadow_hue, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Split Tone: Shadow Hue");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_split_toning_shadow_hue")) {
                     clip.fx_split_toning_shadow_hue_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Split Tone: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_split_toning_shadow_hue_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_split_toning_shadow_hue", &clip.fx_split_toning_shadow_hue_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Split Tone: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_split_toning_shadow_hue", &clip.fx_split_toning_shadow_hue_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Split Tone: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Highlight Hue");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_split_toning_hi_hue", &clip.fx_split_toning_hi_hue, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Split Tone: Highlight Hue");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_split_toning_hi_hue_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_split_toning_hi_hue", &clip.fx_split_toning_hi_hue, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Split Tone: Highlight Hue");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_split_toning_hi_hue")) {
                     clip.fx_split_toning_hi_hue_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Split Tone: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_split_toning_hi_hue_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_split_toning_hi_hue", &clip.fx_split_toning_hi_hue_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Split Tone: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_split_toning_hi_hue", &clip.fx_split_toning_hi_hue_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Split Tone: Beat Intensity");
+                }
             }
             break;
 
@@ -2878,63 +3126,69 @@
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Desert Gold: Amount");
             ImGui::Dummy({0.f, 4.f});
             ui_label("Warmth");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_desert_gold_warmth", &clip.fx_desert_gold_warmth, 0.1f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Desert Gold: Warmth");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_desert_gold_warmth_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_desert_gold_warmth", &clip.fx_desert_gold_warmth, 0.1f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Desert Gold: Warmth");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_desert_gold_warmth")) {
                     clip.fx_desert_gold_warmth_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Desert Gold: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_desert_gold_warmth_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_desert_gold_warmth", &clip.fx_desert_gold_warmth_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Desert Gold: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_desert_gold_warmth", &clip.fx_desert_gold_warmth_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Desert Gold: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Fade");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_desert_gold_fade", &clip.fx_desert_gold_fade, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Desert Gold: Fade");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_desert_gold_fade_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_desert_gold_fade", &clip.fx_desert_gold_fade, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Desert Gold: Fade");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_desert_gold_fade")) {
                     clip.fx_desert_gold_fade_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Desert Gold: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_desert_gold_fade_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_desert_gold_fade", &clip.fx_desert_gold_fade_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Desert Gold: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_desert_gold_fade", &clip.fx_desert_gold_fade_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Desert Gold: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Haze");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_desert_gold_haze", &clip.fx_desert_gold_haze, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Desert Gold: Haze");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_desert_gold_haze_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_desert_gold_haze", &clip.fx_desert_gold_haze, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Desert Gold: Haze");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_desert_gold_haze")) {
                     clip.fx_desert_gold_haze_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Desert Gold: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_desert_gold_haze_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_desert_gold_haze", &clip.fx_desert_gold_haze_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Desert Gold: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_desert_gold_haze", &clip.fx_desert_gold_haze_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Desert Gold: Beat Intensity");
+                }
             }
             break;
 
@@ -2945,43 +3199,47 @@
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Emboss: Amount");
             ImGui::Dummy({0.f, 4.f});
             ui_label("Light Angle");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_emboss_relief_angle", &clip.fx_emboss_relief_angle, 0.0f, 360.0f, "%.0f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Emboss: Light Angle");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_emboss_relief_angle_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_emboss_relief_angle", &clip.fx_emboss_relief_angle, 0.0f, 360.0f, "%.0f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Emboss: Light Angle");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_emboss_relief_angle")) {
                     clip.fx_emboss_relief_angle_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Emboss: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_emboss_relief_angle_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_emboss_relief_angle", &clip.fx_emboss_relief_angle_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Emboss: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_emboss_relief_angle", &clip.fx_emboss_relief_angle_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Emboss: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Colorize");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_emboss_relief_colorize", &clip.fx_emboss_relief_colorize, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Emboss: Colorize");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_emboss_relief_colorize_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_emboss_relief_colorize", &clip.fx_emboss_relief_colorize, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Emboss: Colorize");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_emboss_relief_colorize")) {
                     clip.fx_emboss_relief_colorize_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Emboss: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_emboss_relief_colorize_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_emboss_relief_colorize", &clip.fx_emboss_relief_colorize_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Emboss: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_emboss_relief_colorize", &clip.fx_emboss_relief_colorize_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Emboss: Beat Intensity");
+                }
             }
             break;
 
@@ -2992,43 +3250,47 @@
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Pointillism: Amount");
             ImGui::Dummy({0.f, 4.f});
             ui_label("Dot Size");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_pointillist_dot_size", &clip.fx_pointillist_dot_size, 2.0f, 14.0f, "%.0f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Pointillism: Dot Size");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_pointillist_dot_size_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_pointillist_dot_size", &clip.fx_pointillist_dot_size, 2.0f, 14.0f, "%.0f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Pointillism: Dot Size");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_pointillist_dot_size")) {
                     clip.fx_pointillist_dot_size_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Pointillism: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_pointillist_dot_size_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_pointillist_dot_size", &clip.fx_pointillist_dot_size_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Pointillism: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_pointillist_dot_size", &clip.fx_pointillist_dot_size_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Pointillism: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Scatter");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_pointillist_scatter", &clip.fx_pointillist_scatter, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Pointillism: Scatter");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_pointillist_scatter_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_pointillist_scatter", &clip.fx_pointillist_scatter, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Pointillism: Scatter");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_pointillist_scatter")) {
                     clip.fx_pointillist_scatter_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Pointillism: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_pointillist_scatter_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_pointillist_scatter", &clip.fx_pointillist_scatter_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Pointillism: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_pointillist_scatter", &clip.fx_pointillist_scatter_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Pointillism: Beat Intensity");
+                }
             }
             break;
 
@@ -3039,43 +3301,47 @@
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Interlace: Amount");
             ImGui::Dummy({0.f, 4.f});
             ui_label("Intensity");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_interlace_glitch_intensity", &clip.fx_interlace_glitch_intensity, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Interlace: Intensity");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_interlace_glitch_intensity_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_interlace_glitch_intensity", &clip.fx_interlace_glitch_intensity, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Interlace: Intensity");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_interlace_glitch_intensity")) {
                     clip.fx_interlace_glitch_intensity_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Interlace: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_interlace_glitch_intensity_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_interlace_glitch_intensity", &clip.fx_interlace_glitch_intensity_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Interlace: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_interlace_glitch_intensity", &clip.fx_interlace_glitch_intensity_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Interlace: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Speed");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_interlace_glitch_speed", &clip.fx_interlace_glitch_speed, 0.0f, 6.0f, "%.1f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Interlace: Speed");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_interlace_glitch_speed_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_interlace_glitch_speed", &clip.fx_interlace_glitch_speed, 0.0f, 6.0f, "%.1f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Interlace: Speed");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_interlace_glitch_speed")) {
                     clip.fx_interlace_glitch_speed_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Interlace: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_interlace_glitch_speed_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_interlace_glitch_speed", &clip.fx_interlace_glitch_speed_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Interlace: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_interlace_glitch_speed", &clip.fx_interlace_glitch_speed_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Interlace: Beat Intensity");
+                }
             }
             break;
 
@@ -3086,63 +3352,69 @@
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Frosted Glass: Amount");
             ImGui::Dummy({0.f, 4.f});
             ui_label("Blur");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_frosted_glass_blur", &clip.fx_frosted_glass_blur, 0.003f, 0.05f, "%.3f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Frosted Glass: Blur");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_frosted_glass_blur_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_frosted_glass_blur", &clip.fx_frosted_glass_blur, 0.003f, 0.05f, "%.3f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Frosted Glass: Blur");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_frosted_glass_blur")) {
                     clip.fx_frosted_glass_blur_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Frosted Glass: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_frosted_glass_blur_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_frosted_glass_blur", &clip.fx_frosted_glass_blur_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Frosted Glass: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_frosted_glass_blur", &clip.fx_frosted_glass_blur_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Frosted Glass: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Noise");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_frosted_glass_noise", &clip.fx_frosted_glass_noise, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Frosted Glass: Noise");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_frosted_glass_noise_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_frosted_glass_noise", &clip.fx_frosted_glass_noise, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Frosted Glass: Noise");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_frosted_glass_noise")) {
                     clip.fx_frosted_glass_noise_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Frosted Glass: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_frosted_glass_noise_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_frosted_glass_noise", &clip.fx_frosted_glass_noise_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Frosted Glass: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_frosted_glass_noise", &clip.fx_frosted_glass_noise_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Frosted Glass: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Tint");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_frosted_glass_tint", &clip.fx_frosted_glass_tint, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Frosted Glass: Tint");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_frosted_glass_tint_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_frosted_glass_tint", &clip.fx_frosted_glass_tint, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Frosted Glass: Tint");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_frosted_glass_tint")) {
                     clip.fx_frosted_glass_tint_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Frosted Glass: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_frosted_glass_tint_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_frosted_glass_tint", &clip.fx_frosted_glass_tint_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Frosted Glass: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_frosted_glass_tint", &clip.fx_frosted_glass_tint_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Frosted Glass: Beat Intensity");
+                }
             }
             break;
 
@@ -3153,43 +3425,47 @@
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Mirror Fold: Amount");
             ImGui::Dummy({0.f, 4.f});
             ui_label("Axis");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_mirror_fold_axis", &clip.fx_mirror_fold_axis, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Mirror Fold: Axis");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_mirror_fold_axis_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_mirror_fold_axis", &clip.fx_mirror_fold_axis, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Mirror Fold: Axis");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_mirror_fold_axis")) {
                     clip.fx_mirror_fold_axis_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Mirror Fold: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_mirror_fold_axis_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_mirror_fold_axis", &clip.fx_mirror_fold_axis_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Mirror Fold: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_mirror_fold_axis", &clip.fx_mirror_fold_axis_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Mirror Fold: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Vertical");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_mirror_fold_vertical", &clip.fx_mirror_fold_vertical, 0.0f, 1.0f, "%.0f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Mirror Fold: Vertical");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_mirror_fold_vertical_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_mirror_fold_vertical", &clip.fx_mirror_fold_vertical, 0.0f, 1.0f, "%.0f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Mirror Fold: Vertical");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_mirror_fold_vertical")) {
                     clip.fx_mirror_fold_vertical_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Mirror Fold: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_mirror_fold_vertical_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_mirror_fold_vertical", &clip.fx_mirror_fold_vertical_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Mirror Fold: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_mirror_fold_vertical", &clip.fx_mirror_fold_vertical_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Mirror Fold: Beat Intensity");
+                }
             }
             break;
 
@@ -3200,63 +3476,69 @@
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Echo Trails: Amount");
             ImGui::Dummy({0.f, 4.f});
             ui_label("Offset");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_echo_trails_offset", &clip.fx_echo_trails_offset, 0.005f, 0.1f, "%.3f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Echo Trails: Offset");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_echo_trails_offset_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_echo_trails_offset", &clip.fx_echo_trails_offset, 0.005f, 0.1f, "%.3f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Echo Trails: Offset");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_echo_trails_offset")) {
                     clip.fx_echo_trails_offset_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Echo Trails: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_echo_trails_offset_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_echo_trails_offset", &clip.fx_echo_trails_offset_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Echo Trails: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_echo_trails_offset", &clip.fx_echo_trails_offset_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Echo Trails: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Fade");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_echo_trails_fade", &clip.fx_echo_trails_fade, 0.1f, 0.9f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Echo Trails: Fade");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_echo_trails_fade_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_echo_trails_fade", &clip.fx_echo_trails_fade, 0.1f, 0.9f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Echo Trails: Fade");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_echo_trails_fade")) {
                     clip.fx_echo_trails_fade_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Echo Trails: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_echo_trails_fade_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_echo_trails_fade", &clip.fx_echo_trails_fade_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Echo Trails: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_echo_trails_fade", &clip.fx_echo_trails_fade_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Echo Trails: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Angle");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_echo_trails_angle", &clip.fx_echo_trails_angle, 0.0f, 360.0f, "%.0f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Echo Trails: Angle");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_echo_trails_angle_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_echo_trails_angle", &clip.fx_echo_trails_angle, 0.0f, 360.0f, "%.0f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Echo Trails: Angle");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_echo_trails_angle")) {
                     clip.fx_echo_trails_angle_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Echo Trails: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_echo_trails_angle_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_echo_trails_angle", &clip.fx_echo_trails_angle_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Echo Trails: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_echo_trails_angle", &clip.fx_echo_trails_angle_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Echo Trails: Beat Intensity");
+                }
             }
             break;
 
@@ -3267,43 +3549,47 @@
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Gradient Map: Amount");
             ImGui::Dummy({0.f, 4.f});
             ui_label("Shadow Hue");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_gradient_map_hue1", &clip.fx_gradient_map_hue1, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Gradient Map: Shadow Hue");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_gradient_map_hue1_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_gradient_map_hue1", &clip.fx_gradient_map_hue1, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Gradient Map: Shadow Hue");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_gradient_map_hue1")) {
                     clip.fx_gradient_map_hue1_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Gradient Map: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_gradient_map_hue1_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_gradient_map_hue1", &clip.fx_gradient_map_hue1_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Gradient Map: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_gradient_map_hue1", &clip.fx_gradient_map_hue1_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Gradient Map: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Highlight Hue");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_gradient_map_hue2", &clip.fx_gradient_map_hue2, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Gradient Map: Highlight Hue");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_gradient_map_hue2_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_gradient_map_hue2", &clip.fx_gradient_map_hue2, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Gradient Map: Highlight Hue");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_gradient_map_hue2")) {
                     clip.fx_gradient_map_hue2_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Gradient Map: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_gradient_map_hue2_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_gradient_map_hue2", &clip.fx_gradient_map_hue2_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Gradient Map: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_gradient_map_hue2", &clip.fx_gradient_map_hue2_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Gradient Map: Beat Intensity");
+                }
             }
             break;
 
@@ -3314,23 +3600,25 @@
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Cross Process: Amount");
             ImGui::Dummy({0.f, 4.f});
             ui_label("Contrast");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_cross_process_contrast", &clip.fx_cross_process_contrast, 1.0f, 2.5f, "%.1f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Cross Process: Contrast");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_cross_process_contrast_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_cross_process_contrast", &clip.fx_cross_process_contrast, 1.0f, 2.5f, "%.1f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Cross Process: Contrast");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_cross_process_contrast")) {
                     clip.fx_cross_process_contrast_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Cross Process: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_cross_process_contrast_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_cross_process_contrast", &clip.fx_cross_process_contrast_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Cross Process: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_cross_process_contrast", &clip.fx_cross_process_contrast_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Cross Process: Beat Intensity");
+                }
             }
             break;
 
@@ -3341,63 +3629,69 @@
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Plasma: Amount");
             ImGui::Dummy({0.f, 4.f});
             ui_label("Scale");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_plasma_field_scale", &clip.fx_plasma_field_scale, 1.0f, 12.0f, "%.0f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Plasma: Scale");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_plasma_field_scale_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_plasma_field_scale", &clip.fx_plasma_field_scale, 1.0f, 12.0f, "%.0f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Plasma: Scale");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_plasma_field_scale")) {
                     clip.fx_plasma_field_scale_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Plasma: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_plasma_field_scale_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_plasma_field_scale", &clip.fx_plasma_field_scale_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Plasma: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_plasma_field_scale", &clip.fx_plasma_field_scale_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Plasma: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Speed");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_plasma_field_speed", &clip.fx_plasma_field_speed, 0.0f, 5.0f, "%.1f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Plasma: Speed");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_plasma_field_speed_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_plasma_field_speed", &clip.fx_plasma_field_speed, 0.0f, 5.0f, "%.1f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Plasma: Speed");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_plasma_field_speed")) {
                     clip.fx_plasma_field_speed_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Plasma: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_plasma_field_speed_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_plasma_field_speed", &clip.fx_plasma_field_speed_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Plasma: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_plasma_field_speed", &clip.fx_plasma_field_speed_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Plasma: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Mix");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_plasma_field_intensity", &clip.fx_plasma_field_intensity, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Plasma: Mix");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_plasma_field_intensity_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_plasma_field_intensity", &clip.fx_plasma_field_intensity, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Plasma: Mix");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_plasma_field_intensity")) {
                     clip.fx_plasma_field_intensity_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Plasma: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_plasma_field_intensity_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_plasma_field_intensity", &clip.fx_plasma_field_intensity_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Plasma: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_plasma_field_intensity", &clip.fx_plasma_field_intensity_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Plasma: Beat Intensity");
+                }
             }
             break;
 
@@ -3408,63 +3702,69 @@
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Fire Edge: Amount");
             ImGui::Dummy({0.f, 4.f});
             ui_label("Intensity");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_fire_edge_intensity", &clip.fx_fire_edge_intensity, 0.0f, 2.5f, "%.1f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Fire Edge: Intensity");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_fire_edge_intensity_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_fire_edge_intensity", &clip.fx_fire_edge_intensity, 0.0f, 2.5f, "%.1f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Fire Edge: Intensity");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_fire_edge_intensity")) {
                     clip.fx_fire_edge_intensity_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Fire Edge: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_fire_edge_intensity_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_fire_edge_intensity", &clip.fx_fire_edge_intensity_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Fire Edge: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_fire_edge_intensity", &clip.fx_fire_edge_intensity_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Fire Edge: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Speed");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_fire_edge_speed", &clip.fx_fire_edge_speed, 0.0f, 5.0f, "%.1f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Fire Edge: Speed");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_fire_edge_speed_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_fire_edge_speed", &clip.fx_fire_edge_speed, 0.0f, 5.0f, "%.1f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Fire Edge: Speed");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_fire_edge_speed")) {
                     clip.fx_fire_edge_speed_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Fire Edge: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_fire_edge_speed_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_fire_edge_speed", &clip.fx_fire_edge_speed_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Fire Edge: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_fire_edge_speed", &clip.fx_fire_edge_speed_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Fire Edge: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Height");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_fire_edge_height", &clip.fx_fire_edge_height, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Fire Edge: Height");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_fire_edge_height_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_fire_edge_height", &clip.fx_fire_edge_height, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Fire Edge: Height");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_fire_edge_height")) {
                     clip.fx_fire_edge_height_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Fire Edge: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_fire_edge_height_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_fire_edge_height", &clip.fx_fire_edge_height_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Fire Edge: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_fire_edge_height", &clip.fx_fire_edge_height_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Fire Edge: Beat Intensity");
+                }
             }
             break;
 
@@ -3475,63 +3775,69 @@
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Laser Grid: Amount");
             ImGui::Dummy({0.f, 4.f});
             ui_label("Grid Size");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_laser_grid_grid_size", &clip.fx_laser_grid_grid_size, 4.0f, 40.0f, "%.0f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Laser Grid: Grid Size");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_laser_grid_grid_size_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_laser_grid_grid_size", &clip.fx_laser_grid_grid_size, 4.0f, 40.0f, "%.0f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Laser Grid: Grid Size");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_laser_grid_grid_size")) {
                     clip.fx_laser_grid_grid_size_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Laser Grid: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_laser_grid_grid_size_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_laser_grid_grid_size", &clip.fx_laser_grid_grid_size_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Laser Grid: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_laser_grid_grid_size", &clip.fx_laser_grid_grid_size_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Laser Grid: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Hue");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_laser_grid_hue", &clip.fx_laser_grid_hue, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Laser Grid: Hue");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_laser_grid_hue_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_laser_grid_hue", &clip.fx_laser_grid_hue, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Laser Grid: Hue");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_laser_grid_hue")) {
                     clip.fx_laser_grid_hue_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Laser Grid: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_laser_grid_hue_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_laser_grid_hue", &clip.fx_laser_grid_hue_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Laser Grid: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_laser_grid_hue", &clip.fx_laser_grid_hue_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Laser Grid: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Intensity");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_laser_grid_intensity", &clip.fx_laser_grid_intensity, 0.0f, 2.0f, "%.1f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Laser Grid: Intensity");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_laser_grid_intensity_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_laser_grid_intensity", &clip.fx_laser_grid_intensity, 0.0f, 2.0f, "%.1f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Laser Grid: Intensity");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_laser_grid_intensity")) {
                     clip.fx_laser_grid_intensity_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Laser Grid: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_laser_grid_intensity_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_laser_grid_intensity", &clip.fx_laser_grid_intensity_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Laser Grid: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_laser_grid_intensity", &clip.fx_laser_grid_intensity_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Laser Grid: Beat Intensity");
+                }
             }
             break;
 
@@ -3542,63 +3848,69 @@
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Technicolor: Amount");
             ImGui::Dummy({0.f, 4.f});
             ui_label("Saturation");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_technicolor_saturation", &clip.fx_technicolor_saturation, 1.0f, 4.0f, "%.1f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Technicolor: Saturation");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_technicolor_saturation_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_technicolor_saturation", &clip.fx_technicolor_saturation, 1.0f, 4.0f, "%.1f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Technicolor: Saturation");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_technicolor_saturation")) {
                     clip.fx_technicolor_saturation_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Technicolor: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_technicolor_saturation_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_technicolor_saturation", &clip.fx_technicolor_saturation_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Technicolor: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_technicolor_saturation", &clip.fx_technicolor_saturation_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Technicolor: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Contrast");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_technicolor_contrast", &clip.fx_technicolor_contrast, 1.0f, 2.5f, "%.1f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Technicolor: Contrast");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_technicolor_contrast_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_technicolor_contrast", &clip.fx_technicolor_contrast, 1.0f, 2.5f, "%.1f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Technicolor: Contrast");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_technicolor_contrast")) {
                     clip.fx_technicolor_contrast_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Technicolor: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_technicolor_contrast_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_technicolor_contrast", &clip.fx_technicolor_contrast_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Technicolor: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_technicolor_contrast", &clip.fx_technicolor_contrast_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Technicolor: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Warmth");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_technicolor_warmth", &clip.fx_technicolor_warmth, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Technicolor: Warmth");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_technicolor_warmth_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_technicolor_warmth", &clip.fx_technicolor_warmth, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Technicolor: Warmth");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_technicolor_warmth")) {
                     clip.fx_technicolor_warmth_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Technicolor: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_technicolor_warmth_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_technicolor_warmth", &clip.fx_technicolor_warmth_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Technicolor: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_technicolor_warmth", &clip.fx_technicolor_warmth_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Technicolor: Beat Intensity");
+                }
             }
             break;
 
@@ -3609,63 +3921,69 @@
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Ice Crystal: Amount");
             ImGui::Dummy({0.f, 4.f});
             ui_label("Scale");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_ice_crystal_scale", &clip.fx_ice_crystal_scale, 2.0f, 20.0f, "%.0f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Ice Crystal: Scale");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_ice_crystal_scale_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_ice_crystal_scale", &clip.fx_ice_crystal_scale, 2.0f, 20.0f, "%.0f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Ice Crystal: Scale");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_ice_crystal_scale")) {
                     clip.fx_ice_crystal_scale_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Ice Crystal: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_ice_crystal_scale_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_ice_crystal_scale", &clip.fx_ice_crystal_scale_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Ice Crystal: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_ice_crystal_scale", &clip.fx_ice_crystal_scale_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Ice Crystal: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Refract");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_ice_crystal_refract", &clip.fx_ice_crystal_refract, 0.01f, 0.15f, "%.3f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Ice Crystal: Refract");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_ice_crystal_refract_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_ice_crystal_refract", &clip.fx_ice_crystal_refract, 0.01f, 0.15f, "%.3f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Ice Crystal: Refract");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_ice_crystal_refract")) {
                     clip.fx_ice_crystal_refract_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Ice Crystal: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_ice_crystal_refract_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_ice_crystal_refract", &clip.fx_ice_crystal_refract_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Ice Crystal: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_ice_crystal_refract", &clip.fx_ice_crystal_refract_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Ice Crystal: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Blue Tint");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_ice_crystal_tint", &clip.fx_ice_crystal_tint, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Ice Crystal: Blue Tint");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_ice_crystal_tint_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_ice_crystal_tint", &clip.fx_ice_crystal_tint, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Ice Crystal: Blue Tint");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_ice_crystal_tint")) {
                     clip.fx_ice_crystal_tint_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Ice Crystal: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_ice_crystal_tint_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_ice_crystal_tint", &clip.fx_ice_crystal_tint_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Ice Crystal: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_ice_crystal_tint", &clip.fx_ice_crystal_tint_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Ice Crystal: Beat Intensity");
+                }
             }
             break;
 
@@ -3676,63 +3994,69 @@
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Kodachrome: Amount");
             ImGui::Dummy({0.f, 4.f});
             ui_label("Saturation");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_kodachrome_saturation", &clip.fx_kodachrome_saturation, 0.8f, 3.0f, "%.1f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Kodachrome: Saturation");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_kodachrome_saturation_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_kodachrome_saturation", &clip.fx_kodachrome_saturation, 0.8f, 3.0f, "%.1f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Kodachrome: Saturation");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_kodachrome_saturation")) {
                     clip.fx_kodachrome_saturation_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Kodachrome: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_kodachrome_saturation_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_kodachrome_saturation", &clip.fx_kodachrome_saturation_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Kodachrome: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_kodachrome_saturation", &clip.fx_kodachrome_saturation_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Kodachrome: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Red Boost");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_kodachrome_reds", &clip.fx_kodachrome_reds, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Kodachrome: Red Boost");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_kodachrome_reds_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_kodachrome_reds", &clip.fx_kodachrome_reds, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Kodachrome: Red Boost");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_kodachrome_reds")) {
                     clip.fx_kodachrome_reds_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Kodachrome: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_kodachrome_reds_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_kodachrome_reds", &clip.fx_kodachrome_reds_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Kodachrome: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_kodachrome_reds", &clip.fx_kodachrome_reds_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Kodachrome: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Gold Shadow");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_kodachrome_shadows", &clip.fx_kodachrome_shadows, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Kodachrome: Gold Shadow");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_kodachrome_shadows_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_kodachrome_shadows", &clip.fx_kodachrome_shadows, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Kodachrome: Gold Shadow");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_kodachrome_shadows")) {
                     clip.fx_kodachrome_shadows_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Kodachrome: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_kodachrome_shadows_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_kodachrome_shadows", &clip.fx_kodachrome_shadows_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Kodachrome: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_kodachrome_shadows", &clip.fx_kodachrome_shadows_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Kodachrome: Beat Intensity");
+                }
             }
             break;
 
@@ -3743,43 +4067,47 @@
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Vortex: Amount");
             ImGui::Dummy({0.f, 4.f});
             ui_label("Scale");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_vortex_distort_scale", &clip.fx_vortex_distort_scale, 1.0f, 8.0f, "%.0f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Vortex: Scale");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_vortex_distort_scale_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_vortex_distort_scale", &clip.fx_vortex_distort_scale, 1.0f, 8.0f, "%.0f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Vortex: Scale");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_vortex_distort_scale")) {
                     clip.fx_vortex_distort_scale_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Vortex: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_vortex_distort_scale_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_vortex_distort_scale", &clip.fx_vortex_distort_scale_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Vortex: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_vortex_distort_scale", &clip.fx_vortex_distort_scale_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Vortex: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Speed");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_vortex_distort_speed", &clip.fx_vortex_distort_speed, 0.0f, 3.0f, "%.1f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Vortex: Speed");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_vortex_distort_speed_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_vortex_distort_speed", &clip.fx_vortex_distort_speed, 0.0f, 3.0f, "%.1f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Vortex: Speed");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_vortex_distort_speed")) {
                     clip.fx_vortex_distort_speed_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Vortex: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_vortex_distort_speed_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_vortex_distort_speed", &clip.fx_vortex_distort_speed_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Vortex: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_vortex_distort_speed", &clip.fx_vortex_distort_speed_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Vortex: Beat Intensity");
+                }
             }
             break;
 
@@ -3790,43 +4118,47 @@
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Sepia: Amount");
             ImGui::Dummy({0.f, 4.f});
             ui_label("Vignette");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_sepia_rich_vignette", &clip.fx_sepia_rich_vignette, 0.0f, 2.0f, "%.1f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Sepia: Vignette");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_sepia_rich_vignette_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_sepia_rich_vignette", &clip.fx_sepia_rich_vignette, 0.0f, 2.0f, "%.1f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Sepia: Vignette");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_sepia_rich_vignette")) {
                     clip.fx_sepia_rich_vignette_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Sepia: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_sepia_rich_vignette_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_sepia_rich_vignette", &clip.fx_sepia_rich_vignette_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Sepia: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_sepia_rich_vignette", &clip.fx_sepia_rich_vignette_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Sepia: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Contrast");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_sepia_rich_contrast", &clip.fx_sepia_rich_contrast, 0.5f, 2.0f, "%.1f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Sepia: Contrast");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_sepia_rich_contrast_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_sepia_rich_contrast", &clip.fx_sepia_rich_contrast, 0.5f, 2.0f, "%.1f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Sepia: Contrast");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_sepia_rich_contrast")) {
                     clip.fx_sepia_rich_contrast_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Sepia: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_sepia_rich_contrast_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_sepia_rich_contrast", &clip.fx_sepia_rich_contrast_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Sepia: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_sepia_rich_contrast", &clip.fx_sepia_rich_contrast_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Sepia: Beat Intensity");
+                }
             }
             break;
 
@@ -3837,63 +4169,69 @@
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Digital Noise: Amount");
             ImGui::Dummy({0.f, 4.f});
             ui_label("Intensity");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_digital_noise_intensity", &clip.fx_digital_noise_intensity, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Digital Noise: Intensity");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_digital_noise_intensity_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_digital_noise_intensity", &clip.fx_digital_noise_intensity, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Digital Noise: Intensity");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_digital_noise_intensity")) {
                     clip.fx_digital_noise_intensity_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Digital Noise: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_digital_noise_intensity_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_digital_noise_intensity", &clip.fx_digital_noise_intensity_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Digital Noise: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_digital_noise_intensity", &clip.fx_digital_noise_intensity_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Digital Noise: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Color Sep");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_digital_noise_color_sep", &clip.fx_digital_noise_color_sep, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Digital Noise: Color Sep");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_digital_noise_color_sep_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_digital_noise_color_sep", &clip.fx_digital_noise_color_sep, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Digital Noise: Color Sep");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_digital_noise_color_sep")) {
                     clip.fx_digital_noise_color_sep_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Digital Noise: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_digital_noise_color_sep_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_digital_noise_color_sep", &clip.fx_digital_noise_color_sep_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Digital Noise: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_digital_noise_color_sep", &clip.fx_digital_noise_color_sep_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Digital Noise: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Luma Bias");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_digital_noise_luma_bias", &clip.fx_digital_noise_luma_bias, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Digital Noise: Luma Bias");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_digital_noise_luma_bias_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_digital_noise_luma_bias", &clip.fx_digital_noise_luma_bias, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Digital Noise: Luma Bias");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_digital_noise_luma_bias")) {
                     clip.fx_digital_noise_luma_bias_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Digital Noise: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_digital_noise_luma_bias_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_digital_noise_luma_bias", &clip.fx_digital_noise_luma_bias_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Digital Noise: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_digital_noise_luma_bias", &clip.fx_digital_noise_luma_bias_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Digital Noise: Beat Intensity");
+                }
             }
             break;
 
@@ -3904,63 +4242,69 @@
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Color Dodge: Amount");
             ImGui::Dummy({0.f, 4.f});
             ui_label("Intensity");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_color_dodge_intensity", &clip.fx_color_dodge_intensity, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Color Dodge: Intensity");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_color_dodge_intensity_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_color_dodge_intensity", &clip.fx_color_dodge_intensity, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Color Dodge: Intensity");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_color_dodge_intensity")) {
                     clip.fx_color_dodge_intensity_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Color Dodge: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_color_dodge_intensity_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_color_dodge_intensity", &clip.fx_color_dodge_intensity_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Color Dodge: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_color_dodge_intensity", &clip.fx_color_dodge_intensity_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Color Dodge: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Dodge Hue");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_color_dodge_hue", &clip.fx_color_dodge_hue, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Color Dodge: Dodge Hue");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_color_dodge_hue_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_color_dodge_hue", &clip.fx_color_dodge_hue, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Color Dodge: Dodge Hue");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_color_dodge_hue")) {
                     clip.fx_color_dodge_hue_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Color Dodge: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_color_dodge_hue_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_color_dodge_hue", &clip.fx_color_dodge_hue_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Color Dodge: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_color_dodge_hue", &clip.fx_color_dodge_hue_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Color Dodge: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Glow");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_color_dodge_glow", &clip.fx_color_dodge_glow, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Color Dodge: Glow");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_color_dodge_glow_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_color_dodge_glow", &clip.fx_color_dodge_glow, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Color Dodge: Glow");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_color_dodge_glow")) {
                     clip.fx_color_dodge_glow_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Color Dodge: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_color_dodge_glow_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_color_dodge_glow", &clip.fx_color_dodge_glow_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Color Dodge: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_color_dodge_glow", &clip.fx_color_dodge_glow_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Color Dodge: Beat Intensity");
+                }
             }
             break;
 
@@ -3971,63 +4315,69 @@
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Pop Art: Amount");
             ImGui::Dummy({0.f, 4.f});
             ui_label("Levels");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_warhol_pop_levels", &clip.fx_warhol_pop_levels, 2.0f, 8.0f, "%.0f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Pop Art: Levels");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_warhol_pop_levels_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_warhol_pop_levels", &clip.fx_warhol_pop_levels, 2.0f, 8.0f, "%.0f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Pop Art: Levels");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_warhol_pop_levels")) {
                     clip.fx_warhol_pop_levels_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Pop Art: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_warhol_pop_levels_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_warhol_pop_levels", &clip.fx_warhol_pop_levels_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Pop Art: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_warhol_pop_levels", &clip.fx_warhol_pop_levels_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Pop Art: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Hue Shift");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_warhol_pop_hue_shift", &clip.fx_warhol_pop_hue_shift, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Pop Art: Hue Shift");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_warhol_pop_hue_shift_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_warhol_pop_hue_shift", &clip.fx_warhol_pop_hue_shift, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Pop Art: Hue Shift");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_warhol_pop_hue_shift")) {
                     clip.fx_warhol_pop_hue_shift_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Pop Art: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_warhol_pop_hue_shift_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_warhol_pop_hue_shift", &clip.fx_warhol_pop_hue_shift_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Pop Art: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_warhol_pop_hue_shift", &clip.fx_warhol_pop_hue_shift_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Pop Art: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Saturation");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_warhol_pop_saturation", &clip.fx_warhol_pop_saturation, 1.0f, 4.0f, "%.1f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Pop Art: Saturation");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_warhol_pop_saturation_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_warhol_pop_saturation", &clip.fx_warhol_pop_saturation, 1.0f, 4.0f, "%.1f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Pop Art: Saturation");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_warhol_pop_saturation")) {
                     clip.fx_warhol_pop_saturation_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Pop Art: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_warhol_pop_saturation_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_warhol_pop_saturation", &clip.fx_warhol_pop_saturation_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Pop Art: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_warhol_pop_saturation", &clip.fx_warhol_pop_saturation_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Pop Art: Beat Intensity");
+                }
             }
             break;
 
@@ -4038,63 +4388,69 @@
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Infrared: Amount");
             ImGui::Dummy({0.f, 4.f});
             ui_label("IR Mix");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_infrared_film_channel_mix", &clip.fx_infrared_film_channel_mix, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Infrared: IR Mix");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_infrared_film_channel_mix_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_infrared_film_channel_mix", &clip.fx_infrared_film_channel_mix, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Infrared: IR Mix");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_infrared_film_channel_mix")) {
                     clip.fx_infrared_film_channel_mix_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Infrared: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_infrared_film_channel_mix_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_infrared_film_channel_mix", &clip.fx_infrared_film_channel_mix_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Infrared: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_infrared_film_channel_mix", &clip.fx_infrared_film_channel_mix_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Infrared: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Glow");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_infrared_film_glow", &clip.fx_infrared_film_glow, 0.05f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Infrared: Glow");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_infrared_film_glow_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_infrared_film_glow", &clip.fx_infrared_film_glow, 0.05f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Infrared: Glow");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_infrared_film_glow")) {
                     clip.fx_infrared_film_glow_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Infrared: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_infrared_film_glow_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_infrared_film_glow", &clip.fx_infrared_film_glow_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Infrared: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_infrared_film_glow", &clip.fx_infrared_film_glow_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Infrared: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Contrast");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_infrared_film_contrast", &clip.fx_infrared_film_contrast, 0.5f, 3.0f, "%.1f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Infrared: Contrast");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_infrared_film_contrast_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_infrared_film_contrast", &clip.fx_infrared_film_contrast, 0.5f, 3.0f, "%.1f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Infrared: Contrast");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_infrared_film_contrast")) {
                     clip.fx_infrared_film_contrast_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Infrared: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_infrared_film_contrast_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_infrared_film_contrast", &clip.fx_infrared_film_contrast_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Infrared: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_infrared_film_contrast", &clip.fx_infrared_film_contrast_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Infrared: Beat Intensity");
+                }
             }
             break;
 
@@ -4105,63 +4461,69 @@
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "RGB Scanlines: Amount");
             ImGui::Dummy({0.f, 4.f});
             ui_label("Line Width");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_scanline_color_line_width", &clip.fx_scanline_color_line_width, 1.0f, 6.0f, "%.0f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "RGB Scanlines: Line Width");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_scanline_color_line_width_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_scanline_color_line_width", &clip.fx_scanline_color_line_width, 1.0f, 6.0f, "%.0f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "RGB Scanlines: Line Width");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_scanline_color_line_width")) {
                     clip.fx_scanline_color_line_width_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "RGB Scanlines: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_scanline_color_line_width_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_scanline_color_line_width", &clip.fx_scanline_color_line_width_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "RGB Scanlines: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_scanline_color_line_width", &clip.fx_scanline_color_line_width_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "RGB Scanlines: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Intensity");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_scanline_color_intensity", &clip.fx_scanline_color_intensity, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "RGB Scanlines: Intensity");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_scanline_color_intensity_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_scanline_color_intensity", &clip.fx_scanline_color_intensity, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "RGB Scanlines: Intensity");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_scanline_color_intensity")) {
                     clip.fx_scanline_color_intensity_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "RGB Scanlines: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_scanline_color_intensity_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_scanline_color_intensity", &clip.fx_scanline_color_intensity_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "RGB Scanlines: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_scanline_color_intensity", &clip.fx_scanline_color_intensity_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "RGB Scanlines: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("RGB Sep");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_scanline_color_rgb_sep", &clip.fx_scanline_color_rgb_sep, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "RGB Scanlines: RGB Sep");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_scanline_color_rgb_sep_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_scanline_color_rgb_sep", &clip.fx_scanline_color_rgb_sep, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "RGB Scanlines: RGB Sep");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_scanline_color_rgb_sep")) {
                     clip.fx_scanline_color_rgb_sep_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "RGB Scanlines: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_scanline_color_rgb_sep_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_scanline_color_rgb_sep", &clip.fx_scanline_color_rgb_sep_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "RGB Scanlines: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_scanline_color_rgb_sep", &clip.fx_scanline_color_rgb_sep_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "RGB Scanlines: Beat Intensity");
+                }
             }
             break;
 
@@ -4172,63 +4534,69 @@
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Data Corrupt: Amount");
             ImGui::Dummy({0.f, 4.f});
             ui_label("Density");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_data_corrupt_density", &clip.fx_data_corrupt_density, 0.0f, 0.5f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Data Corrupt: Density");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_data_corrupt_density_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_data_corrupt_density", &clip.fx_data_corrupt_density, 0.0f, 0.5f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Data Corrupt: Density");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_data_corrupt_density")) {
                     clip.fx_data_corrupt_density_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Data Corrupt: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_data_corrupt_density_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_data_corrupt_density", &clip.fx_data_corrupt_density_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Data Corrupt: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_data_corrupt_density", &clip.fx_data_corrupt_density_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Data Corrupt: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Block Size");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_data_corrupt_block_size", &clip.fx_data_corrupt_block_size, 2.0f, 24.0f, "%.0f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Data Corrupt: Block Size");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_data_corrupt_block_size_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_data_corrupt_block_size", &clip.fx_data_corrupt_block_size, 2.0f, 24.0f, "%.0f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Data Corrupt: Block Size");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_data_corrupt_block_size")) {
                     clip.fx_data_corrupt_block_size_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Data Corrupt: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_data_corrupt_block_size_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_data_corrupt_block_size", &clip.fx_data_corrupt_block_size_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Data Corrupt: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_data_corrupt_block_size", &clip.fx_data_corrupt_block_size_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Data Corrupt: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Intensity");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_data_corrupt_intensity", &clip.fx_data_corrupt_intensity, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Data Corrupt: Intensity");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_data_corrupt_intensity_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_data_corrupt_intensity", &clip.fx_data_corrupt_intensity, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Data Corrupt: Intensity");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_data_corrupt_intensity")) {
                     clip.fx_data_corrupt_intensity_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Data Corrupt: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_data_corrupt_intensity_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_data_corrupt_intensity", &clip.fx_data_corrupt_intensity_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Data Corrupt: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_data_corrupt_intensity", &clip.fx_data_corrupt_intensity_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Data Corrupt: Beat Intensity");
+                }
             }
             break;
 
@@ -4239,63 +4607,69 @@
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Long Exposure: Amount");
             ImGui::Dummy({0.f, 4.f});
             ui_label("Threshold");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_long_exposure_threshold", &clip.fx_long_exposure_threshold, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Long Exposure: Threshold");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_long_exposure_threshold_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_long_exposure_threshold", &clip.fx_long_exposure_threshold, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Long Exposure: Threshold");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_long_exposure_threshold")) {
                     clip.fx_long_exposure_threshold_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Long Exposure: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_long_exposure_threshold_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_long_exposure_threshold", &clip.fx_long_exposure_threshold_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Long Exposure: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_long_exposure_threshold", &clip.fx_long_exposure_threshold_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Long Exposure: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Trail");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_long_exposure_trail", &clip.fx_long_exposure_trail, 0.01f, 0.2f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Long Exposure: Trail");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_long_exposure_trail_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_long_exposure_trail", &clip.fx_long_exposure_trail, 0.01f, 0.2f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Long Exposure: Trail");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_long_exposure_trail")) {
                     clip.fx_long_exposure_trail_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Long Exposure: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_long_exposure_trail_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_long_exposure_trail", &clip.fx_long_exposure_trail_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Long Exposure: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_long_exposure_trail", &clip.fx_long_exposure_trail_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Long Exposure: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Glow");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_long_exposure_glow", &clip.fx_long_exposure_glow, 0.1f, 2.0f, "%.1f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Long Exposure: Glow");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_long_exposure_glow_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_long_exposure_glow", &clip.fx_long_exposure_glow, 0.1f, 2.0f, "%.1f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Long Exposure: Glow");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_long_exposure_glow")) {
                     clip.fx_long_exposure_glow_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Long Exposure: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_long_exposure_glow_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_long_exposure_glow", &clip.fx_long_exposure_glow_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Long Exposure: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_long_exposure_glow", &clip.fx_long_exposure_glow_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Long Exposure: Beat Intensity");
+                }
             }
             break;
 
@@ -4306,43 +4680,47 @@
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Pixel Mosaic: Amount");
             ImGui::Dummy({0.f, 4.f});
             ui_label("Block Size");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_pixel_mosaic_block_size", &clip.fx_pixel_mosaic_block_size, 2.0f, 64.0f, "%.0f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Pixel Mosaic: Block Size");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_pixel_mosaic_block_size_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_pixel_mosaic_block_size", &clip.fx_pixel_mosaic_block_size, 2.0f, 64.0f, "%.0f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Pixel Mosaic: Block Size");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_pixel_mosaic_block_size")) {
                     clip.fx_pixel_mosaic_block_size_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Pixel Mosaic: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_pixel_mosaic_block_size_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_pixel_mosaic_block_size", &clip.fx_pixel_mosaic_block_size_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Pixel Mosaic: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_pixel_mosaic_block_size", &clip.fx_pixel_mosaic_block_size_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Pixel Mosaic: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Color Steps");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_pixel_mosaic_color_steps", &clip.fx_pixel_mosaic_color_steps, 2.0f, 16.0f, "%.0f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Pixel Mosaic: Color Steps");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_pixel_mosaic_color_steps_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_pixel_mosaic_color_steps", &clip.fx_pixel_mosaic_color_steps, 2.0f, 16.0f, "%.0f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Pixel Mosaic: Color Steps");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_pixel_mosaic_color_steps")) {
                     clip.fx_pixel_mosaic_color_steps_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Pixel Mosaic: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_pixel_mosaic_color_steps_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_pixel_mosaic_color_steps", &clip.fx_pixel_mosaic_color_steps_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Pixel Mosaic: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_pixel_mosaic_color_steps", &clip.fx_pixel_mosaic_color_steps_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Pixel Mosaic: Beat Intensity");
+                }
             }
             break;
 
@@ -4353,83 +4731,91 @@
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Thermal Camera: Amount");
             ImGui::Dummy({0.f, 4.f});
             ui_label("Cold Hue");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_thermal_map_cold_hue", &clip.fx_thermal_map_cold_hue, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Thermal Camera: Cold Hue");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_thermal_map_cold_hue_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_thermal_map_cold_hue", &clip.fx_thermal_map_cold_hue, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Thermal Camera: Cold Hue");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_thermal_map_cold_hue")) {
                     clip.fx_thermal_map_cold_hue_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Thermal Camera: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_thermal_map_cold_hue_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_thermal_map_cold_hue", &clip.fx_thermal_map_cold_hue_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Thermal Camera: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_thermal_map_cold_hue", &clip.fx_thermal_map_cold_hue_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Thermal Camera: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Hot Hue");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_thermal_map_hot_hue", &clip.fx_thermal_map_hot_hue, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Thermal Camera: Hot Hue");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_thermal_map_hot_hue_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_thermal_map_hot_hue", &clip.fx_thermal_map_hot_hue, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Thermal Camera: Hot Hue");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_thermal_map_hot_hue")) {
                     clip.fx_thermal_map_hot_hue_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Thermal Camera: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_thermal_map_hot_hue_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_thermal_map_hot_hue", &clip.fx_thermal_map_hot_hue_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Thermal Camera: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_thermal_map_hot_hue", &clip.fx_thermal_map_hot_hue_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Thermal Camera: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Contrast");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_thermal_map_contrast", &clip.fx_thermal_map_contrast, 0.8f, 3.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Thermal Camera: Contrast");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_thermal_map_contrast_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_thermal_map_contrast", &clip.fx_thermal_map_contrast, 0.8f, 3.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Thermal Camera: Contrast");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_thermal_map_contrast")) {
                     clip.fx_thermal_map_contrast_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Thermal Camera: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_thermal_map_contrast_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_thermal_map_contrast", &clip.fx_thermal_map_contrast_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Thermal Camera: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_thermal_map_contrast", &clip.fx_thermal_map_contrast_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Thermal Camera: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Scanlines");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_thermal_map_scanlines", &clip.fx_thermal_map_scanlines, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Thermal Camera: Scanlines");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_thermal_map_scanlines_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_thermal_map_scanlines", &clip.fx_thermal_map_scanlines, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Thermal Camera: Scanlines");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_thermal_map_scanlines")) {
                     clip.fx_thermal_map_scanlines_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Thermal Camera: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_thermal_map_scanlines_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_thermal_map_scanlines", &clip.fx_thermal_map_scanlines_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Thermal Camera: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_thermal_map_scanlines", &clip.fx_thermal_map_scanlines_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Thermal Camera: Beat Intensity");
+                }
             }
             break;
 
@@ -4440,83 +4826,91 @@
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Tilt-Shift Miniature: Amount");
             ImGui::Dummy({0.f, 4.f});
             ui_label("Focus Center");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_tilt_shift_focus_y", &clip.fx_tilt_shift_focus_y, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Tilt-Shift Miniature: Focus Center");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_tilt_shift_focus_y_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_tilt_shift_focus_y", &clip.fx_tilt_shift_focus_y, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Tilt-Shift Miniature: Focus Center");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_tilt_shift_focus_y")) {
                     clip.fx_tilt_shift_focus_y_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Tilt-Shift Miniature: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_tilt_shift_focus_y_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_tilt_shift_focus_y", &clip.fx_tilt_shift_focus_y_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Tilt-Shift Miniature: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_tilt_shift_focus_y", &clip.fx_tilt_shift_focus_y_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Tilt-Shift Miniature: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Focus Band");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_tilt_shift_focus_band", &clip.fx_tilt_shift_focus_band, 0.02f, 0.5f, "%.3f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Tilt-Shift Miniature: Focus Band");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_tilt_shift_focus_band_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_tilt_shift_focus_band", &clip.fx_tilt_shift_focus_band, 0.02f, 0.5f, "%.3f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Tilt-Shift Miniature: Focus Band");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_tilt_shift_focus_band")) {
                     clip.fx_tilt_shift_focus_band_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Tilt-Shift Miniature: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_tilt_shift_focus_band_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_tilt_shift_focus_band", &clip.fx_tilt_shift_focus_band_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Tilt-Shift Miniature: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_tilt_shift_focus_band", &clip.fx_tilt_shift_focus_band_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Tilt-Shift Miniature: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Blur Radius");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_tilt_shift_blur_radius", &clip.fx_tilt_shift_blur_radius, 2.0f, 30.0f, "%.1f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Tilt-Shift Miniature: Blur Radius");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_tilt_shift_blur_radius_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_tilt_shift_blur_radius", &clip.fx_tilt_shift_blur_radius, 2.0f, 30.0f, "%.1f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Tilt-Shift Miniature: Blur Radius");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_tilt_shift_blur_radius")) {
                     clip.fx_tilt_shift_blur_radius_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Tilt-Shift Miniature: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_tilt_shift_blur_radius_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_tilt_shift_blur_radius", &clip.fx_tilt_shift_blur_radius_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Tilt-Shift Miniature: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_tilt_shift_blur_radius", &clip.fx_tilt_shift_blur_radius_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Tilt-Shift Miniature: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Saturation");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_tilt_shift_saturation", &clip.fx_tilt_shift_saturation, 1.0f, 3.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Tilt-Shift Miniature: Saturation");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_tilt_shift_saturation_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_tilt_shift_saturation", &clip.fx_tilt_shift_saturation, 1.0f, 3.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Tilt-Shift Miniature: Saturation");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_tilt_shift_saturation")) {
                     clip.fx_tilt_shift_saturation_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Tilt-Shift Miniature: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_tilt_shift_saturation_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_tilt_shift_saturation", &clip.fx_tilt_shift_saturation_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Tilt-Shift Miniature: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_tilt_shift_saturation", &clip.fx_tilt_shift_saturation_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Tilt-Shift Miniature: Beat Intensity");
+                }
             }
             break;
 
@@ -4527,63 +4921,69 @@
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Raindrops: Amount");
             ImGui::Dummy({0.f, 4.f});
             ui_label("Density");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_raindrop_refract_density", &clip.fx_raindrop_refract_density, 1.0f, 20.0f, "%.1f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Raindrops: Density");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_raindrop_refract_density_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_raindrop_refract_density", &clip.fx_raindrop_refract_density, 1.0f, 20.0f, "%.1f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Raindrops: Density");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_raindrop_refract_density")) {
                     clip.fx_raindrop_refract_density_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Raindrops: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_raindrop_refract_density_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_raindrop_refract_density", &clip.fx_raindrop_refract_density_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Raindrops: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_raindrop_refract_density", &clip.fx_raindrop_refract_density_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Raindrops: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Size");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_raindrop_refract_size", &clip.fx_raindrop_refract_size, 0.1f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Raindrops: Size");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_raindrop_refract_size_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_raindrop_refract_size", &clip.fx_raindrop_refract_size, 0.1f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Raindrops: Size");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_raindrop_refract_size")) {
                     clip.fx_raindrop_refract_size_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Raindrops: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_raindrop_refract_size_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_raindrop_refract_size", &clip.fx_raindrop_refract_size_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Raindrops: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_raindrop_refract_size", &clip.fx_raindrop_refract_size_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Raindrops: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Refraction");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_raindrop_refract_refract_str", &clip.fx_raindrop_refract_refract_str, 0.1f, 2.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Raindrops: Refraction");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_raindrop_refract_refract_str_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_raindrop_refract_refract_str", &clip.fx_raindrop_refract_refract_str, 0.1f, 2.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Raindrops: Refraction");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_raindrop_refract_refract_str")) {
                     clip.fx_raindrop_refract_refract_str_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Raindrops: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_raindrop_refract_refract_str_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_raindrop_refract_refract_str", &clip.fx_raindrop_refract_refract_str_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Raindrops: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_raindrop_refract_refract_str", &clip.fx_raindrop_refract_refract_str_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Raindrops: Beat Intensity");
+                }
             }
             break;
 
@@ -4594,103 +4994,113 @@
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Risograph Print: Amount");
             ImGui::Dummy({0.f, 4.f});
             ui_label("Ink 1 Hue");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_risograph_hue1", &clip.fx_risograph_hue1, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Risograph Print: Ink 1 Hue");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_risograph_hue1_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_risograph_hue1", &clip.fx_risograph_hue1, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Risograph Print: Ink 1 Hue");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_risograph_hue1")) {
                     clip.fx_risograph_hue1_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Risograph Print: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_risograph_hue1_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_risograph_hue1", &clip.fx_risograph_hue1_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Risograph Print: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_risograph_hue1", &clip.fx_risograph_hue1_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Risograph Print: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Ink 2 Hue");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_risograph_hue2", &clip.fx_risograph_hue2, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Risograph Print: Ink 2 Hue");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_risograph_hue2_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_risograph_hue2", &clip.fx_risograph_hue2, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Risograph Print: Ink 2 Hue");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_risograph_hue2")) {
                     clip.fx_risograph_hue2_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Risograph Print: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_risograph_hue2_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_risograph_hue2", &clip.fx_risograph_hue2_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Risograph Print: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_risograph_hue2", &clip.fx_risograph_hue2_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Risograph Print: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Dot Size");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_risograph_dot_size", &clip.fx_risograph_dot_size, 1.0f, 8.0f, "%.1f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Risograph Print: Dot Size");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_risograph_dot_size_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_risograph_dot_size", &clip.fx_risograph_dot_size, 1.0f, 8.0f, "%.1f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Risograph Print: Dot Size");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_risograph_dot_size")) {
                     clip.fx_risograph_dot_size_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Risograph Print: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_risograph_dot_size_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_risograph_dot_size", &clip.fx_risograph_dot_size_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Risograph Print: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_risograph_dot_size", &clip.fx_risograph_dot_size_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Risograph Print: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Mis-register");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_risograph_misreg", &clip.fx_risograph_misreg, 0.0f, 0.02f, "%.3f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Risograph Print: Mis-register");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_risograph_misreg_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_risograph_misreg", &clip.fx_risograph_misreg, 0.0f, 0.02f, "%.3f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Risograph Print: Mis-register");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_risograph_misreg")) {
                     clip.fx_risograph_misreg_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Risograph Print: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_risograph_misreg_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_risograph_misreg", &clip.fx_risograph_misreg_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Risograph Print: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_risograph_misreg", &clip.fx_risograph_misreg_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Risograph Print: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Paper Tone");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_risograph_paper", &clip.fx_risograph_paper, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Risograph Print: Paper Tone");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_risograph_paper_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_risograph_paper", &clip.fx_risograph_paper, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Risograph Print: Paper Tone");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_risograph_paper")) {
                     clip.fx_risograph_paper_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Risograph Print: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_risograph_paper_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_risograph_paper", &clip.fx_risograph_paper_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Risograph Print: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_risograph_paper", &clip.fx_risograph_paper_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Risograph Print: Beat Intensity");
+                }
             }
             break;
 
@@ -4701,63 +5111,69 @@
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Vintage Negative: Amount");
             ImGui::Dummy({0.f, 4.f});
             ui_label("Orange Mask");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_vintage_negative_orange_mask", &clip.fx_vintage_negative_orange_mask, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Vintage Negative: Orange Mask");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_vintage_negative_orange_mask_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_vintage_negative_orange_mask", &clip.fx_vintage_negative_orange_mask, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Vintage Negative: Orange Mask");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_vintage_negative_orange_mask")) {
                     clip.fx_vintage_negative_orange_mask_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Vintage Negative: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_vintage_negative_orange_mask_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_vintage_negative_orange_mask", &clip.fx_vintage_negative_orange_mask_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Vintage Negative: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_vintage_negative_orange_mask", &clip.fx_vintage_negative_orange_mask_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Vintage Negative: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Contrast");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_vintage_negative_contrast", &clip.fx_vintage_negative_contrast, 0.5f, 2.5f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Vintage Negative: Contrast");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_vintage_negative_contrast_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_vintage_negative_contrast", &clip.fx_vintage_negative_contrast, 0.5f, 2.5f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Vintage Negative: Contrast");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_vintage_negative_contrast")) {
                     clip.fx_vintage_negative_contrast_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Vintage Negative: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_vintage_negative_contrast_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_vintage_negative_contrast", &clip.fx_vintage_negative_contrast_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Vintage Negative: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_vintage_negative_contrast", &clip.fx_vintage_negative_contrast_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Vintage Negative: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Grain");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_vintage_negative_grain", &clip.fx_vintage_negative_grain, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Vintage Negative: Grain");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_vintage_negative_grain_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_vintage_negative_grain", &clip.fx_vintage_negative_grain, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Vintage Negative: Grain");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_vintage_negative_grain")) {
                     clip.fx_vintage_negative_grain_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Vintage Negative: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_vintage_negative_grain_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_vintage_negative_grain", &clip.fx_vintage_negative_grain_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Vintage Negative: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_vintage_negative_grain", &clip.fx_vintage_negative_grain_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Vintage Negative: Beat Intensity");
+                }
             }
             break;
 
@@ -4768,63 +5184,69 @@
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Pencil Sketch: Amount");
             ImGui::Dummy({0.f, 4.f});
             ui_label("Line Strength");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_pencil_sketch_line_str", &clip.fx_pencil_sketch_line_str, 0.5f, 5.0f, "%.1f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Pencil Sketch: Line Strength");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_pencil_sketch_line_str_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_pencil_sketch_line_str", &clip.fx_pencil_sketch_line_str, 0.5f, 5.0f, "%.1f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Pencil Sketch: Line Strength");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_pencil_sketch_line_str")) {
                     clip.fx_pencil_sketch_line_str_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Pencil Sketch: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_pencil_sketch_line_str_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_pencil_sketch_line_str", &clip.fx_pencil_sketch_line_str_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Pencil Sketch: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_pencil_sketch_line_str", &clip.fx_pencil_sketch_line_str_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Pencil Sketch: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Paper Tone");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_pencil_sketch_paper_tone", &clip.fx_pencil_sketch_paper_tone, 0.7f, 1.0f, "%.3f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Pencil Sketch: Paper Tone");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_pencil_sketch_paper_tone_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_pencil_sketch_paper_tone", &clip.fx_pencil_sketch_paper_tone, 0.7f, 1.0f, "%.3f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Pencil Sketch: Paper Tone");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_pencil_sketch_paper_tone")) {
                     clip.fx_pencil_sketch_paper_tone_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Pencil Sketch: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_pencil_sketch_paper_tone_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_pencil_sketch_paper_tone", &clip.fx_pencil_sketch_paper_tone_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Pencil Sketch: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_pencil_sketch_paper_tone", &clip.fx_pencil_sketch_paper_tone_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Pencil Sketch: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Hatching");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_pencil_sketch_hatching", &clip.fx_pencil_sketch_hatching, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Pencil Sketch: Hatching");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_pencil_sketch_hatching_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_pencil_sketch_hatching", &clip.fx_pencil_sketch_hatching, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Pencil Sketch: Hatching");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_pencil_sketch_hatching")) {
                     clip.fx_pencil_sketch_hatching_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Pencil Sketch: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_pencil_sketch_hatching_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_pencil_sketch_hatching", &clip.fx_pencil_sketch_hatching_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Pencil Sketch: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_pencil_sketch_hatching", &clip.fx_pencil_sketch_hatching_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Pencil Sketch: Beat Intensity");
+                }
             }
             break;
 
@@ -4835,83 +5257,91 @@
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "CRT Barrel: Amount");
             ImGui::Dummy({0.f, 4.f});
             ui_label("Distortion");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_crt_barrel_distort", &clip.fx_crt_barrel_distort, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "CRT Barrel: Distortion");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_crt_barrel_distort_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_crt_barrel_distort", &clip.fx_crt_barrel_distort, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "CRT Barrel: Distortion");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_crt_barrel_distort")) {
                     clip.fx_crt_barrel_distort_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "CRT Barrel: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_crt_barrel_distort_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_crt_barrel_distort", &clip.fx_crt_barrel_distort_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "CRT Barrel: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_crt_barrel_distort", &clip.fx_crt_barrel_distort_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "CRT Barrel: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Corner Dark");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_crt_barrel_corner_dark", &clip.fx_crt_barrel_corner_dark, 0.0f, 3.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "CRT Barrel: Corner Dark");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_crt_barrel_corner_dark_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_crt_barrel_corner_dark", &clip.fx_crt_barrel_corner_dark, 0.0f, 3.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "CRT Barrel: Corner Dark");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_crt_barrel_corner_dark")) {
                     clip.fx_crt_barrel_corner_dark_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "CRT Barrel: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_crt_barrel_corner_dark_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_crt_barrel_corner_dark", &clip.fx_crt_barrel_corner_dark_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "CRT Barrel: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_crt_barrel_corner_dark", &clip.fx_crt_barrel_corner_dark_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "CRT Barrel: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("RGB Shift");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_crt_barrel_rgb_shift", &clip.fx_crt_barrel_rgb_shift, 0.0f, 0.02f, "%.4f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "CRT Barrel: RGB Shift");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_crt_barrel_rgb_shift_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_crt_barrel_rgb_shift", &clip.fx_crt_barrel_rgb_shift, 0.0f, 0.02f, "%.4f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "CRT Barrel: RGB Shift");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_crt_barrel_rgb_shift")) {
                     clip.fx_crt_barrel_rgb_shift_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "CRT Barrel: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_crt_barrel_rgb_shift_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_crt_barrel_rgb_shift", &clip.fx_crt_barrel_rgb_shift_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "CRT Barrel: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_crt_barrel_rgb_shift", &clip.fx_crt_barrel_rgb_shift_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "CRT Barrel: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Scanlines");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_crt_barrel_scanline", &clip.fx_crt_barrel_scanline, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "CRT Barrel: Scanlines");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_crt_barrel_scanline_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_crt_barrel_scanline", &clip.fx_crt_barrel_scanline, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "CRT Barrel: Scanlines");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_crt_barrel_scanline")) {
                     clip.fx_crt_barrel_scanline_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "CRT Barrel: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_crt_barrel_scanline_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_crt_barrel_scanline", &clip.fx_crt_barrel_scanline_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "CRT Barrel: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_crt_barrel_scanline", &clip.fx_crt_barrel_scanline_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "CRT Barrel: Beat Intensity");
+                }
             }
             break;
 
@@ -4922,63 +5352,69 @@
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "RGB Wave Split: Amount");
             ImGui::Dummy({0.f, 4.f});
             ui_label("Amplitude");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_rgb_split_wave_amplitude", &clip.fx_rgb_split_wave_amplitude, 0.003f, 0.05f, "%.3f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "RGB Wave Split: Amplitude");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_rgb_split_wave_amplitude_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_rgb_split_wave_amplitude", &clip.fx_rgb_split_wave_amplitude, 0.003f, 0.05f, "%.3f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "RGB Wave Split: Amplitude");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_rgb_split_wave_amplitude")) {
                     clip.fx_rgb_split_wave_amplitude_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "RGB Wave Split: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_rgb_split_wave_amplitude_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_rgb_split_wave_amplitude", &clip.fx_rgb_split_wave_amplitude_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "RGB Wave Split: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_rgb_split_wave_amplitude", &clip.fx_rgb_split_wave_amplitude_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "RGB Wave Split: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Frequency");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_rgb_split_wave_frequency", &clip.fx_rgb_split_wave_frequency, 1.0f, 20.0f, "%.1f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "RGB Wave Split: Frequency");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_rgb_split_wave_frequency_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_rgb_split_wave_frequency", &clip.fx_rgb_split_wave_frequency, 1.0f, 20.0f, "%.1f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "RGB Wave Split: Frequency");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_rgb_split_wave_frequency")) {
                     clip.fx_rgb_split_wave_frequency_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "RGB Wave Split: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_rgb_split_wave_frequency_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_rgb_split_wave_frequency", &clip.fx_rgb_split_wave_frequency_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "RGB Wave Split: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_rgb_split_wave_frequency", &clip.fx_rgb_split_wave_frequency_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "RGB Wave Split: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Speed");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_rgb_split_wave_speed", &clip.fx_rgb_split_wave_speed, 0.0f, 10.0f, "%.1f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "RGB Wave Split: Speed");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_rgb_split_wave_speed_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_rgb_split_wave_speed", &clip.fx_rgb_split_wave_speed, 0.0f, 10.0f, "%.1f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "RGB Wave Split: Speed");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_rgb_split_wave_speed")) {
                     clip.fx_rgb_split_wave_speed_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "RGB Wave Split: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_rgb_split_wave_speed_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_rgb_split_wave_speed", &clip.fx_rgb_split_wave_speed_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "RGB Wave Split: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_rgb_split_wave_speed", &clip.fx_rgb_split_wave_speed_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "RGB Wave Split: Beat Intensity");
+                }
             }
             break;
 
@@ -4989,83 +5425,91 @@
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Golden Hour: Amount");
             ImGui::Dummy({0.f, 4.f});
             ui_label("Warmth");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_golden_hour_warmth", &clip.fx_golden_hour_warmth, 0.1f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Golden Hour: Warmth");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_golden_hour_warmth_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_golden_hour_warmth", &clip.fx_golden_hour_warmth, 0.1f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Golden Hour: Warmth");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_golden_hour_warmth")) {
                     clip.fx_golden_hour_warmth_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Golden Hour: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_golden_hour_warmth_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_golden_hour_warmth", &clip.fx_golden_hour_warmth_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Golden Hour: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_golden_hour_warmth", &clip.fx_golden_hour_warmth_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Golden Hour: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Glow");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_golden_hour_glow_str", &clip.fx_golden_hour_glow_str, 0.1f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Golden Hour: Glow");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_golden_hour_glow_str_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_golden_hour_glow_str", &clip.fx_golden_hour_glow_str, 0.1f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Golden Hour: Glow");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_golden_hour_glow_str")) {
                     clip.fx_golden_hour_glow_str_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Golden Hour: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_golden_hour_glow_str_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_golden_hour_glow_str", &clip.fx_golden_hour_glow_str_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Golden Hour: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_golden_hour_glow_str", &clip.fx_golden_hour_glow_str_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Golden Hour: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Shadow Lift");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_golden_hour_shadow_lift", &clip.fx_golden_hour_shadow_lift, 0.0f, 0.3f, "%.3f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Golden Hour: Shadow Lift");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_golden_hour_shadow_lift_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_golden_hour_shadow_lift", &clip.fx_golden_hour_shadow_lift, 0.0f, 0.3f, "%.3f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Golden Hour: Shadow Lift");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_golden_hour_shadow_lift")) {
                     clip.fx_golden_hour_shadow_lift_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Golden Hour: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_golden_hour_shadow_lift_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_golden_hour_shadow_lift", &clip.fx_golden_hour_shadow_lift_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Golden Hour: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_golden_hour_shadow_lift", &clip.fx_golden_hour_shadow_lift_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Golden Hour: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Vignette");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_golden_hour_vignette", &clip.fx_golden_hour_vignette, 0.1f, 2.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Golden Hour: Vignette");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_golden_hour_vignette_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_golden_hour_vignette", &clip.fx_golden_hour_vignette, 0.1f, 2.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Golden Hour: Vignette");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_golden_hour_vignette")) {
                     clip.fx_golden_hour_vignette_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Golden Hour: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_golden_hour_vignette_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_golden_hour_vignette", &clip.fx_golden_hour_vignette_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Golden Hour: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_golden_hour_vignette", &clip.fx_golden_hour_vignette_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Golden Hour: Beat Intensity");
+                }
             }
             break;
 
@@ -5076,83 +5520,91 @@
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Neon Sign: Amount");
             ImGui::Dummy({0.f, 4.f});
             ui_label("Edge Strength");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_neon_sign_edge_str", &clip.fx_neon_sign_edge_str, 1.0f, 10.0f, "%.1f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Neon Sign: Edge Strength");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_neon_sign_edge_str_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_neon_sign_edge_str", &clip.fx_neon_sign_edge_str, 1.0f, 10.0f, "%.1f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Neon Sign: Edge Strength");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_neon_sign_edge_str")) {
                     clip.fx_neon_sign_edge_str_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Neon Sign: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_neon_sign_edge_str_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_neon_sign_edge_str", &clip.fx_neon_sign_edge_str_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Neon Sign: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_neon_sign_edge_str", &clip.fx_neon_sign_edge_str_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Neon Sign: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Glow Radius");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_neon_sign_glow_radius", &clip.fx_neon_sign_glow_radius, 2.0f, 20.0f, "%.1f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Neon Sign: Glow Radius");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_neon_sign_glow_radius_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_neon_sign_glow_radius", &clip.fx_neon_sign_glow_radius, 2.0f, 20.0f, "%.1f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Neon Sign: Glow Radius");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_neon_sign_glow_radius")) {
                     clip.fx_neon_sign_glow_radius_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Neon Sign: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_neon_sign_glow_radius_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_neon_sign_glow_radius", &clip.fx_neon_sign_glow_radius_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Neon Sign: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_neon_sign_glow_radius", &clip.fx_neon_sign_glow_radius_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Neon Sign: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Hue Shift");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_neon_sign_hue_shift", &clip.fx_neon_sign_hue_shift, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Neon Sign: Hue Shift");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_neon_sign_hue_shift_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_neon_sign_hue_shift", &clip.fx_neon_sign_hue_shift, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Neon Sign: Hue Shift");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_neon_sign_hue_shift")) {
                     clip.fx_neon_sign_hue_shift_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Neon Sign: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_neon_sign_hue_shift_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_neon_sign_hue_shift", &clip.fx_neon_sign_hue_shift_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Neon Sign: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_neon_sign_hue_shift", &clip.fx_neon_sign_hue_shift_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Neon Sign: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("BG Darken");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_neon_sign_bg_darken", &clip.fx_neon_sign_bg_darken, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Neon Sign: BG Darken");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_neon_sign_bg_darken_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_neon_sign_bg_darken", &clip.fx_neon_sign_bg_darken, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Neon Sign: BG Darken");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_neon_sign_bg_darken")) {
                     clip.fx_neon_sign_bg_darken_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Neon Sign: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_neon_sign_bg_darken_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_neon_sign_bg_darken", &clip.fx_neon_sign_bg_darken_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Neon Sign: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_neon_sign_bg_darken", &clip.fx_neon_sign_bg_darken_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Neon Sign: Beat Intensity");
+                }
             }
             break;
 
@@ -5163,63 +5615,69 @@
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Mirror Tunnel: Amount");
             ImGui::Dummy({0.f, 4.f});
             ui_label("Depth");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_mirror_tunnel_depth", &clip.fx_mirror_tunnel_depth, 2.0f, 12.0f, "%.1f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Mirror Tunnel: Depth");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_mirror_tunnel_depth_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_mirror_tunnel_depth", &clip.fx_mirror_tunnel_depth, 2.0f, 12.0f, "%.1f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Mirror Tunnel: Depth");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_mirror_tunnel_depth")) {
                     clip.fx_mirror_tunnel_depth_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Mirror Tunnel: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_mirror_tunnel_depth_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_mirror_tunnel_depth", &clip.fx_mirror_tunnel_depth_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Mirror Tunnel: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_mirror_tunnel_depth", &clip.fx_mirror_tunnel_depth_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Mirror Tunnel: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Rotation");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_mirror_tunnel_rotation", &clip.fx_mirror_tunnel_rotation, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Mirror Tunnel: Rotation");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_mirror_tunnel_rotation_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_mirror_tunnel_rotation", &clip.fx_mirror_tunnel_rotation, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Mirror Tunnel: Rotation");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_mirror_tunnel_rotation")) {
                     clip.fx_mirror_tunnel_rotation_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Mirror Tunnel: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_mirror_tunnel_rotation_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_mirror_tunnel_rotation", &clip.fx_mirror_tunnel_rotation_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Mirror Tunnel: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_mirror_tunnel_rotation", &clip.fx_mirror_tunnel_rotation_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Mirror Tunnel: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Zoom");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_mirror_tunnel_zoom", &clip.fx_mirror_tunnel_zoom, 0.3f, 0.95f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Mirror Tunnel: Zoom");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_mirror_tunnel_zoom_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_mirror_tunnel_zoom", &clip.fx_mirror_tunnel_zoom, 0.3f, 0.95f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Mirror Tunnel: Zoom");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_mirror_tunnel_zoom")) {
                     clip.fx_mirror_tunnel_zoom_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Mirror Tunnel: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_mirror_tunnel_zoom_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_mirror_tunnel_zoom", &clip.fx_mirror_tunnel_zoom_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Mirror Tunnel: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_mirror_tunnel_zoom", &clip.fx_mirror_tunnel_zoom_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Mirror Tunnel: Beat Intensity");
+                }
             }
             break;
 
@@ -5230,103 +5688,113 @@
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Liquid Chrome: Amount");
             ImGui::Dummy({0.f, 4.f});
             ui_label("Flow");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_liquid_chrome_flow", &clip.fx_liquid_chrome_flow, 0.1f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Liquid Chrome: Flow");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_liquid_chrome_flow_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_liquid_chrome_flow", &clip.fx_liquid_chrome_flow, 0.1f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Liquid Chrome: Flow");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_liquid_chrome_flow")) {
                     clip.fx_liquid_chrome_flow_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Liquid Chrome: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_liquid_chrome_flow_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_liquid_chrome_flow", &clip.fx_liquid_chrome_flow_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Liquid Chrome: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_liquid_chrome_flow", &clip.fx_liquid_chrome_flow_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Liquid Chrome: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Metallic");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_liquid_chrome_metallic", &clip.fx_liquid_chrome_metallic, 0.1f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Liquid Chrome: Metallic");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_liquid_chrome_metallic_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_liquid_chrome_metallic", &clip.fx_liquid_chrome_metallic, 0.1f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Liquid Chrome: Metallic");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_liquid_chrome_metallic")) {
                     clip.fx_liquid_chrome_metallic_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Liquid Chrome: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_liquid_chrome_metallic_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_liquid_chrome_metallic", &clip.fx_liquid_chrome_metallic_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Liquid Chrome: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_liquid_chrome_metallic", &clip.fx_liquid_chrome_metallic_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Liquid Chrome: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Tint R");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_liquid_chrome_tint_r", &clip.fx_liquid_chrome_tint_r, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Liquid Chrome: Tint R");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_liquid_chrome_tint_r_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_liquid_chrome_tint_r", &clip.fx_liquid_chrome_tint_r, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Liquid Chrome: Tint R");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_liquid_chrome_tint_r")) {
                     clip.fx_liquid_chrome_tint_r_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Liquid Chrome: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_liquid_chrome_tint_r_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_liquid_chrome_tint_r", &clip.fx_liquid_chrome_tint_r_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Liquid Chrome: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_liquid_chrome_tint_r", &clip.fx_liquid_chrome_tint_r_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Liquid Chrome: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Tint G");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_liquid_chrome_tint_g", &clip.fx_liquid_chrome_tint_g, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Liquid Chrome: Tint G");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_liquid_chrome_tint_g_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_liquid_chrome_tint_g", &clip.fx_liquid_chrome_tint_g, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Liquid Chrome: Tint G");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_liquid_chrome_tint_g")) {
                     clip.fx_liquid_chrome_tint_g_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Liquid Chrome: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_liquid_chrome_tint_g_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_liquid_chrome_tint_g", &clip.fx_liquid_chrome_tint_g_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Liquid Chrome: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_liquid_chrome_tint_g", &clip.fx_liquid_chrome_tint_g_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Liquid Chrome: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Tint B");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_liquid_chrome_tint_b", &clip.fx_liquid_chrome_tint_b, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Liquid Chrome: Tint B");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_liquid_chrome_tint_b_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_liquid_chrome_tint_b", &clip.fx_liquid_chrome_tint_b, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Liquid Chrome: Tint B");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_liquid_chrome_tint_b")) {
                     clip.fx_liquid_chrome_tint_b_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Liquid Chrome: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_liquid_chrome_tint_b_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_liquid_chrome_tint_b", &clip.fx_liquid_chrome_tint_b_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Liquid Chrome: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_liquid_chrome_tint_b", &clip.fx_liquid_chrome_tint_b_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Liquid Chrome: Beat Intensity");
+                }
             }
             break;
 
@@ -5337,83 +5805,91 @@
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Zone System B&W: Amount");
             ImGui::Dummy({0.f, 4.f});
             ui_label("Zones");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_zone_system_bw_zones", &clip.fx_zone_system_bw_zones, 3.0f, 10.0f, "%.0f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Zone System B&W: Zones");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_zone_system_bw_zones_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_zone_system_bw_zones", &clip.fx_zone_system_bw_zones, 3.0f, 10.0f, "%.0f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Zone System B&W: Zones");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_zone_system_bw_zones")) {
                     clip.fx_zone_system_bw_zones_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Zone System B&W: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_zone_system_bw_zones_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_zone_system_bw_zones", &clip.fx_zone_system_bw_zones_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Zone System B&W: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_zone_system_bw_zones", &clip.fx_zone_system_bw_zones_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Zone System B&W: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Contrast");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_zone_system_bw_contrast", &clip.fx_zone_system_bw_contrast, 0.8f, 3.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Zone System B&W: Contrast");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_zone_system_bw_contrast_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_zone_system_bw_contrast", &clip.fx_zone_system_bw_contrast, 0.8f, 3.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Zone System B&W: Contrast");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_zone_system_bw_contrast")) {
                     clip.fx_zone_system_bw_contrast_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Zone System B&W: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_zone_system_bw_contrast_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_zone_system_bw_contrast", &clip.fx_zone_system_bw_contrast_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Zone System B&W: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_zone_system_bw_contrast", &clip.fx_zone_system_bw_contrast_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Zone System B&W: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Grain");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_zone_system_bw_grain", &clip.fx_zone_system_bw_grain, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Zone System B&W: Grain");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_zone_system_bw_grain_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_zone_system_bw_grain", &clip.fx_zone_system_bw_grain, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Zone System B&W: Grain");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_zone_system_bw_grain")) {
                     clip.fx_zone_system_bw_grain_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Zone System B&W: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_zone_system_bw_grain_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_zone_system_bw_grain", &clip.fx_zone_system_bw_grain_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Zone System B&W: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_zone_system_bw_grain", &clip.fx_zone_system_bw_grain_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Zone System B&W: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Paper White");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_zone_system_bw_paper_white", &clip.fx_zone_system_bw_paper_white, 0.85f, 1.0f, "%.3f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Zone System B&W: Paper White");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_zone_system_bw_paper_white_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_zone_system_bw_paper_white", &clip.fx_zone_system_bw_paper_white, 0.85f, 1.0f, "%.3f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Zone System B&W: Paper White");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_zone_system_bw_paper_white")) {
                     clip.fx_zone_system_bw_paper_white_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Zone System B&W: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_zone_system_bw_paper_white_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_zone_system_bw_paper_white", &clip.fx_zone_system_bw_paper_white_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Zone System B&W: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_zone_system_bw_paper_white", &clip.fx_zone_system_bw_paper_white_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Zone System B&W: Beat Intensity");
+                }
             }
             break;
 
@@ -5424,83 +5900,91 @@
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Glitter Dust: Amount");
             ImGui::Dummy({0.f, 4.f});
             ui_label("Density");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_glitter_dust_density", &clip.fx_glitter_dust_density, 100.0f, 2000.0f, "%.0f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Glitter Dust: Density");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_glitter_dust_density_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_glitter_dust_density", &clip.fx_glitter_dust_density, 100.0f, 2000.0f, "%.0f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Glitter Dust: Density");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_glitter_dust_density")) {
                     clip.fx_glitter_dust_density_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Glitter Dust: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_glitter_dust_density_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_glitter_dust_density", &clip.fx_glitter_dust_density_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Glitter Dust: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_glitter_dust_density", &clip.fx_glitter_dust_density_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Glitter Dust: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Size");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_glitter_dust_size", &clip.fx_glitter_dust_size, 0.2f, 2.0f, "%.1f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Glitter Dust: Size");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_glitter_dust_size_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_glitter_dust_size", &clip.fx_glitter_dust_size, 0.2f, 2.0f, "%.1f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Glitter Dust: Size");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_glitter_dust_size")) {
                     clip.fx_glitter_dust_size_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Glitter Dust: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_glitter_dust_size_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_glitter_dust_size", &clip.fx_glitter_dust_size_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Glitter Dust: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_glitter_dust_size", &clip.fx_glitter_dust_size_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Glitter Dust: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Sparkle");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_glitter_dust_sparkle", &clip.fx_glitter_dust_sparkle, 0.2f, 2.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Glitter Dust: Sparkle");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_glitter_dust_sparkle_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_glitter_dust_sparkle", &clip.fx_glitter_dust_sparkle, 0.2f, 2.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Glitter Dust: Sparkle");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_glitter_dust_sparkle")) {
                     clip.fx_glitter_dust_sparkle_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Glitter Dust: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_glitter_dust_sparkle_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_glitter_dust_sparkle", &clip.fx_glitter_dust_sparkle_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Glitter Dust: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_glitter_dust_sparkle", &clip.fx_glitter_dust_sparkle_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Glitter Dust: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Color Var");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_glitter_dust_color_var", &clip.fx_glitter_dust_color_var, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Glitter Dust: Color Var");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_glitter_dust_color_var_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_glitter_dust_color_var", &clip.fx_glitter_dust_color_var, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Glitter Dust: Color Var");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_glitter_dust_color_var")) {
                     clip.fx_glitter_dust_color_var_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Glitter Dust: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_glitter_dust_color_var_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_glitter_dust_color_var", &clip.fx_glitter_dust_color_var_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Glitter Dust: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_glitter_dust_color_var", &clip.fx_glitter_dust_color_var_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Glitter Dust: Beat Intensity");
+                }
             }
             break;
 
@@ -5511,83 +5995,91 @@
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Contour Map: Amount");
             ImGui::Dummy({0.f, 4.f});
             ui_label("Levels");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_contour_map_levels", &clip.fx_contour_map_levels, 3.0f, 20.0f, "%.0f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Contour Map: Levels");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_contour_map_levels_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_contour_map_levels", &clip.fx_contour_map_levels, 3.0f, 20.0f, "%.0f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Contour Map: Levels");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_contour_map_levels")) {
                     clip.fx_contour_map_levels_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Contour Map: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_contour_map_levels_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_contour_map_levels", &clip.fx_contour_map_levels_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Contour Map: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_contour_map_levels", &clip.fx_contour_map_levels_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Contour Map: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Line Width");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_contour_map_line_width", &clip.fx_contour_map_line_width, 0.01f, 0.15f, "%.3f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Contour Map: Line Width");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_contour_map_line_width_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_contour_map_line_width", &clip.fx_contour_map_line_width, 0.01f, 0.15f, "%.3f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Contour Map: Line Width");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_contour_map_line_width")) {
                     clip.fx_contour_map_line_width_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Contour Map: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_contour_map_line_width_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_contour_map_line_width", &clip.fx_contour_map_line_width_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Contour Map: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_contour_map_line_width", &clip.fx_contour_map_line_width_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Contour Map: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Line Hue");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_contour_map_line_hue", &clip.fx_contour_map_line_hue, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Contour Map: Line Hue");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_contour_map_line_hue_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_contour_map_line_hue", &clip.fx_contour_map_line_hue, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Contour Map: Line Hue");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_contour_map_line_hue")) {
                     clip.fx_contour_map_line_hue_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Contour Map: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_contour_map_line_hue_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_contour_map_line_hue", &clip.fx_contour_map_line_hue_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Contour Map: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_contour_map_line_hue", &clip.fx_contour_map_line_hue_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Contour Map: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Fill Sat");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_contour_map_fill_sat", &clip.fx_contour_map_fill_sat, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Contour Map: Fill Sat");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_contour_map_fill_sat_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_contour_map_fill_sat", &clip.fx_contour_map_fill_sat, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Contour Map: Fill Sat");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_contour_map_fill_sat")) {
                     clip.fx_contour_map_fill_sat_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Contour Map: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_contour_map_fill_sat_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_contour_map_fill_sat", &clip.fx_contour_map_fill_sat_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Contour Map: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_contour_map_fill_sat", &clip.fx_contour_map_fill_sat_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Contour Map: Beat Intensity");
+                }
             }
             break;
 
@@ -5598,63 +6090,69 @@
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Film Halation: Amount");
             ImGui::Dummy({0.f, 4.f});
             ui_label("Threshold");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_film_halation_threshold", &clip.fx_film_halation_threshold, 0.3f, 0.9f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Film Halation: Threshold");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_film_halation_threshold_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_film_halation_threshold", &clip.fx_film_halation_threshold, 0.3f, 0.9f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Film Halation: Threshold");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_film_halation_threshold")) {
                     clip.fx_film_halation_threshold_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Film Halation: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_film_halation_threshold_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_film_halation_threshold", &clip.fx_film_halation_threshold_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Film Halation: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_film_halation_threshold", &clip.fx_film_halation_threshold_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Film Halation: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Radius");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_film_halation_radius", &clip.fx_film_halation_radius, 2.0f, 20.0f, "%.1f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Film Halation: Radius");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_film_halation_radius_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_film_halation_radius", &clip.fx_film_halation_radius, 2.0f, 20.0f, "%.1f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Film Halation: Radius");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_film_halation_radius")) {
                     clip.fx_film_halation_radius_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Film Halation: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_film_halation_radius_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_film_halation_radius", &clip.fx_film_halation_radius_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Film Halation: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_film_halation_radius", &clip.fx_film_halation_radius_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Film Halation: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Red Shift");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_film_halation_red_shift", &clip.fx_film_halation_red_shift, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Film Halation: Red Shift");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_film_halation_red_shift_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_film_halation_red_shift", &clip.fx_film_halation_red_shift, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Film Halation: Red Shift");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_film_halation_red_shift")) {
                     clip.fx_film_halation_red_shift_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Film Halation: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_film_halation_red_shift_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_film_halation_red_shift", &clip.fx_film_halation_red_shift_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Film Halation: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_film_halation_red_shift", &clip.fx_film_halation_red_shift_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Film Halation: Beat Intensity");
+                }
             }
             break;
 
@@ -5665,103 +6163,113 @@
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "ASCII Art: Amount");
             ImGui::Dummy({0.f, 4.f});
             ui_label("Char Size");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_ascii_art_char_size", &clip.fx_ascii_art_char_size, 4.0f, 24.0f, "%.0f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "ASCII Art: Char Size");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_ascii_art_char_size_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_ascii_art_char_size", &clip.fx_ascii_art_char_size, 4.0f, 24.0f, "%.0f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "ASCII Art: Char Size");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_ascii_art_char_size")) {
                     clip.fx_ascii_art_char_size_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "ASCII Art: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_ascii_art_char_size_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_ascii_art_char_size", &clip.fx_ascii_art_char_size_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "ASCII Art: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_ascii_art_char_size", &clip.fx_ascii_art_char_size_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "ASCII Art: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("FG Red");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_ascii_art_fg_r", &clip.fx_ascii_art_fg_r, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "ASCII Art: FG Red");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_ascii_art_fg_r_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_ascii_art_fg_r", &clip.fx_ascii_art_fg_r, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "ASCII Art: FG Red");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_ascii_art_fg_r")) {
                     clip.fx_ascii_art_fg_r_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "ASCII Art: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_ascii_art_fg_r_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_ascii_art_fg_r", &clip.fx_ascii_art_fg_r_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "ASCII Art: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_ascii_art_fg_r", &clip.fx_ascii_art_fg_r_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "ASCII Art: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("FG Green");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_ascii_art_fg_g", &clip.fx_ascii_art_fg_g, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "ASCII Art: FG Green");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_ascii_art_fg_g_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_ascii_art_fg_g", &clip.fx_ascii_art_fg_g, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "ASCII Art: FG Green");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_ascii_art_fg_g")) {
                     clip.fx_ascii_art_fg_g_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "ASCII Art: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_ascii_art_fg_g_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_ascii_art_fg_g", &clip.fx_ascii_art_fg_g_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "ASCII Art: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_ascii_art_fg_g", &clip.fx_ascii_art_fg_g_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "ASCII Art: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("FG Blue");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_ascii_art_fg_b", &clip.fx_ascii_art_fg_b, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "ASCII Art: FG Blue");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_ascii_art_fg_b_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_ascii_art_fg_b", &clip.fx_ascii_art_fg_b, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "ASCII Art: FG Blue");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_ascii_art_fg_b")) {
                     clip.fx_ascii_art_fg_b_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "ASCII Art: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_ascii_art_fg_b_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_ascii_art_fg_b", &clip.fx_ascii_art_fg_b_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "ASCII Art: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_ascii_art_fg_b", &clip.fx_ascii_art_fg_b_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "ASCII Art: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("BG Darken");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_ascii_art_bg_dark", &clip.fx_ascii_art_bg_dark, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "ASCII Art: BG Darken");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_ascii_art_bg_dark_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_ascii_art_bg_dark", &clip.fx_ascii_art_bg_dark, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "ASCII Art: BG Darken");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_ascii_art_bg_dark")) {
                     clip.fx_ascii_art_bg_dark_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "ASCII Art: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_ascii_art_bg_dark_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_ascii_art_bg_dark", &clip.fx_ascii_art_bg_dark_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "ASCII Art: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_ascii_art_bg_dark", &clip.fx_ascii_art_bg_dark_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "ASCII Art: Beat Intensity");
+                }
             }
             break;
 
@@ -5772,103 +6280,113 @@
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "DNA Helix Grid: Amount");
             ImGui::Dummy({0.f, 4.f});
             ui_label("Grid Scale");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_dna_helix_grid_scale", &clip.fx_dna_helix_grid_scale, 5.0f, 30.0f, "%.1f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "DNA Helix Grid: Grid Scale");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_dna_helix_grid_scale_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_dna_helix_grid_scale", &clip.fx_dna_helix_grid_scale, 5.0f, 30.0f, "%.1f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "DNA Helix Grid: Grid Scale");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_dna_helix_grid_scale")) {
                     clip.fx_dna_helix_grid_scale_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "DNA Helix Grid: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_dna_helix_grid_scale_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_dna_helix_grid_scale", &clip.fx_dna_helix_grid_scale_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "DNA Helix Grid: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_dna_helix_grid_scale", &clip.fx_dna_helix_grid_scale_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "DNA Helix Grid: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Wave Amp");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_dna_helix_wave_amp", &clip.fx_dna_helix_wave_amp, 0.15f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "DNA Helix Grid: Wave Amp");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_dna_helix_wave_amp_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_dna_helix_wave_amp", &clip.fx_dna_helix_wave_amp, 0.15f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "DNA Helix Grid: Wave Amp");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_dna_helix_wave_amp")) {
                     clip.fx_dna_helix_wave_amp_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "DNA Helix Grid: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_dna_helix_wave_amp_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_dna_helix_wave_amp", &clip.fx_dna_helix_wave_amp_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "DNA Helix Grid: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_dna_helix_wave_amp", &clip.fx_dna_helix_wave_amp_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "DNA Helix Grid: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Line Width");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_dna_helix_line_width", &clip.fx_dna_helix_line_width, 0.02f, 0.15f, "%.3f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "DNA Helix Grid: Line Width");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_dna_helix_line_width_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_dna_helix_line_width", &clip.fx_dna_helix_line_width, 0.02f, 0.15f, "%.3f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "DNA Helix Grid: Line Width");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_dna_helix_line_width")) {
                     clip.fx_dna_helix_line_width_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "DNA Helix Grid: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_dna_helix_line_width_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_dna_helix_line_width", &clip.fx_dna_helix_line_width_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "DNA Helix Grid: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_dna_helix_line_width", &clip.fx_dna_helix_line_width_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "DNA Helix Grid: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Hue");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_dna_helix_hue", &clip.fx_dna_helix_hue, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "DNA Helix Grid: Hue");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_dna_helix_hue_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_dna_helix_hue", &clip.fx_dna_helix_hue, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "DNA Helix Grid: Hue");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_dna_helix_hue")) {
                     clip.fx_dna_helix_hue_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "DNA Helix Grid: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_dna_helix_hue_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_dna_helix_hue", &clip.fx_dna_helix_hue_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "DNA Helix Grid: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_dna_helix_hue", &clip.fx_dna_helix_hue_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "DNA Helix Grid: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("BG Darken");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_dna_helix_bg_darken", &clip.fx_dna_helix_bg_darken, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "DNA Helix Grid: BG Darken");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_dna_helix_bg_darken_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_dna_helix_bg_darken", &clip.fx_dna_helix_bg_darken, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "DNA Helix Grid: BG Darken");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_dna_helix_bg_darken")) {
                     clip.fx_dna_helix_bg_darken_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "DNA Helix Grid: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_dna_helix_bg_darken_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_dna_helix_bg_darken", &clip.fx_dna_helix_bg_darken_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "DNA Helix Grid: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_dna_helix_bg_darken", &clip.fx_dna_helix_bg_darken_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "DNA Helix Grid: Beat Intensity");
+                }
             }
             break;
 
@@ -5879,102 +6397,112 @@
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Double Exposure: Amount");
             ImGui::Dummy({0.f, 4.f});
             ui_label("Offset X");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_double_exposure_offset_x", &clip.fx_double_exposure_offset_x, -0.3f, 0.3f, "%.3f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Double Exposure: Offset X");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_double_exposure_offset_x_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_double_exposure_offset_x", &clip.fx_double_exposure_offset_x, -0.3f, 0.3f, "%.3f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Double Exposure: Offset X");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_double_exposure_offset_x")) {
                     clip.fx_double_exposure_offset_x_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Double Exposure: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_double_exposure_offset_x_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_double_exposure_offset_x", &clip.fx_double_exposure_offset_x_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Double Exposure: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_double_exposure_offset_x", &clip.fx_double_exposure_offset_x_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Double Exposure: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Offset Y");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_double_exposure_offset_y", &clip.fx_double_exposure_offset_y, -0.3f, 0.3f, "%.3f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Double Exposure: Offset Y");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_double_exposure_offset_y_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_double_exposure_offset_y", &clip.fx_double_exposure_offset_y, -0.3f, 0.3f, "%.3f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Double Exposure: Offset Y");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_double_exposure_offset_y")) {
                     clip.fx_double_exposure_offset_y_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Double Exposure: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_double_exposure_offset_y_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_double_exposure_offset_y", &clip.fx_double_exposure_offset_y_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Double Exposure: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_double_exposure_offset_y", &clip.fx_double_exposure_offset_y_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Double Exposure: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Scale 2");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_double_exposure_scale2", &clip.fx_double_exposure_scale2, 0.5f, 2.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Double Exposure: Scale 2");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_double_exposure_scale2_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_double_exposure_scale2", &clip.fx_double_exposure_scale2, 0.5f, 2.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Double Exposure: Scale 2");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_double_exposure_scale2")) {
                     clip.fx_double_exposure_scale2_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Double Exposure: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_double_exposure_scale2_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_double_exposure_scale2", &clip.fx_double_exposure_scale2_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Double Exposure: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_double_exposure_scale2", &clip.fx_double_exposure_scale2_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Double Exposure: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Desaturate 2");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_double_exposure_desaturate2", &clip.fx_double_exposure_desaturate2, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Double Exposure: Desaturate 2");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_double_exposure_desaturate2_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_double_exposure_desaturate2", &clip.fx_double_exposure_desaturate2, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Double Exposure: Desaturate 2");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_double_exposure_desaturate2")) {
                     clip.fx_double_exposure_desaturate2_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Double Exposure: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_double_exposure_desaturate2_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_double_exposure_desaturate2", &clip.fx_double_exposure_desaturate2_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Double Exposure: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_double_exposure_desaturate2", &clip.fx_double_exposure_desaturate2_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Double Exposure: Beat Intensity");
+                }
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Opacity");
-            ImGui::SetNextItemWidth(sw - 26.f);
-            ImGui::SliderFloat("##gen_double_exposure_opacity", &clip.fx_double_exposure_opacity, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Double Exposure: Opacity");
-            ImGui::SameLine(0.f, 4.f);
             {
                 bool _bon = clip.fx_double_exposure_opacity_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_double_exposure_opacity", &clip.fx_double_exposure_opacity, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Double Exposure: Opacity");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
                 ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
                 if (ImGui::SmallButton("B##bt_double_exposure_opacity")) {
                     clip.fx_double_exposure_opacity_beat = _bon ? 0.f : 0.5f;
                     history_push(state, "Double Exposure: Beat Sync");
                 }
                 ImGui::PopStyleColor();
-            }
-            if (clip.fx_double_exposure_opacity_beat > 0.001f) {
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##bi_double_exposure_opacity", &clip.fx_double_exposure_opacity_beat, 0.0f, 1.0f, "beat %.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Double Exposure: Beat Intensity");
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_double_exposure_opacity", &clip.fx_double_exposure_opacity_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Double Exposure: Beat Intensity");
+                }
             }
             break;

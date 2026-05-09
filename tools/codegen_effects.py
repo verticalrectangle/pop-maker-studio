@@ -30,25 +30,23 @@ def write(path, content):
     print(f"  wrote {os.path.relpath(path, ROOT)}")
 
 def uniform_set_lines(p, eid, indent="            "):
-    """Generate glUniform1f call for a param, applying power curve + beat contribution."""
-    uname      = f'u_{p["name"]}'
-    field      = f'cfx.{eid}_{p["name"]}'
-    beat_field = f'cfx.{eid}_{p["name"]}_beat'
+    """Generate glUniform1f call for a param, applying power curve. Beat is baked into the accum."""
+    uname = f'u_{p["name"]}'
+    field = f'cfx.{eid}_{p["name"]}'
     curve = float(p.get("curve", 1.0))
     pmin  = float(p["min"])
     pmax  = float(p["max"])
     rng   = pmax - pmin
-    beat_suffix = f' + {beat_field} * {rng}f' if rng > 0 else ''
 
     if curve == 1.0 or rng <= 0.0:
-        return [f'{indent}glUniform1f(glGetUniformLocation(p, "{uname}"), {field}{beat_suffix});']
+        return [f'{indent}glUniform1f(glGetUniformLocation(p, "{uname}"), {field});']
 
     # Normalize stored value to [0,1], apply power curve, scale back to [min,max].
     lines = [
         f'{indent}{{',
         f'{indent}    float _n = ({field} - {pmin}f) / {rng}f;',
         f'{indent}    _n = _n < 0.0f ? 0.0f : (_n > 1.0f ? 1.0f : _n);',
-        f'{indent}    glUniform1f(glGetUniformLocation(p, "{uname}"), {pmin}f + powf(_n, {curve}f) * {rng}f{beat_suffix});',
+        f'{indent}    glUniform1f(glGetUniformLocation(p, "{uname}"), {pmin}f + powf(_n, {curve}f) * {rng}f);',
         f'{indent}}}',
     ]
     return lines
@@ -74,7 +72,6 @@ def main():
         lines.append(f'    float {eid}_amount = 0.0f;')
         for p in e["params"]:
             lines.append(f'    float {eid}_{p["name"]} = {float(p["min"])}f;')
-            lines.append(f'    float {eid}_{p["name"]}_beat = 0.0f;')  # pre-multiplied beat contribution
     write(os.path.join(GEN_DIR, "fx_accum_fields.h"), "\n".join(lines) + "\n")
 
     # ── fx_clip_fields.h ──────────────────────────────────────────────────────
@@ -97,8 +94,11 @@ def main():
         lines.append(f'            acc.any_gen_fx = true;')
         lines.append(f'            acc.{eid}_amount = fmaxf(acc.{eid}_amount, cl.fx_{eid}_amount);')
         for p in e["params"]:
-            lines.append(f'            acc.{eid}_{p["name"]} = fmaxf(acc.{eid}_{p["name"]}, cl.fx_{eid}_{p["name"]});')
-            lines.append(f'            acc.{eid}_{p["name"]}_beat = fmaxf(acc.{eid}_{p["name"]}_beat, _cl_beat_pulse * cl.fx_{eid}_{p["name"]}_beat);')
+            lines.append(f'            {{')
+            lines.append(f'                float _bi = cl.fx_{eid}_{p["name"]}_beat;')
+            lines.append(f'                float _bv = cl.fx_{eid}_{p["name"]};')
+            lines.append(f'                acc.{eid}_{p["name"]} = fmaxf(acc.{eid}_{p["name"]}, (_bi > 0.001f) ? (_bv * _bi * _cl_beat_pulse) : _bv);')
+            lines.append(f'            }}')
         lines.append(f'            break;')
     write(os.path.join(GEN_DIR, "fx_collect_cases.h"), "\n".join(lines) + "\n")
 
@@ -188,23 +188,25 @@ def main():
             plabel = p["label"]
             lines.append('            ImGui::Dummy({0.f, 4.f});')
             lines.append(f'            ui_label("{plabel}");')
-            lines.append(f'            ImGui::SetNextItemWidth(sw - 26.f);')
-            lines.append(f'            ImGui::SliderFloat("##gen_{eid}_{pname}", &clip.fx_{eid}_{pname}, {float(p["min"])}f, {float(p["max"])}f, "{p["fmt"]}");')
-            lines.append(f'            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "{elabel}: {plabel}");')
-            lines.append(f'            ImGui::SameLine(0.f, 4.f);')
             lines.append(f'            {{')
             lines.append(f'                bool _bon = clip.fx_{eid}_{pname}_beat > 0.001f;')
+            lines.append(f'                if (_bon) ImGui::BeginDisabled();')
+            lines.append(f'                ImGui::SetNextItemWidth(sw - 26.f);')
+            lines.append(f'                ImGui::SliderFloat("##gen_{eid}_{pname}", &clip.fx_{eid}_{pname}, {float(p["min"])}f, {float(p["max"])}f, "{p["fmt"]}");')
+            lines.append(f'                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "{elabel}: {plabel}");')
+            lines.append(f'                if (_bon) ImGui::EndDisabled();')
+            lines.append(f'                ImGui::SameLine(0.f, 4.f);')
             lines.append(f'                ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));')
             lines.append(f'                if (ImGui::SmallButton("B##bt_{eid}_{pname}")) {{')
             lines.append(f'                    clip.fx_{eid}_{pname}_beat = _bon ? 0.f : 0.5f;')
             lines.append(f'                    history_push(state, "{elabel}: Beat Sync");')
             lines.append(f'                }}')
             lines.append(f'                ImGui::PopStyleColor();')
-            lines.append(f'            }}')
-            lines.append(f'            if (clip.fx_{eid}_{pname}_beat > 0.001f) {{')
-            lines.append(f'                ImGui::SetNextItemWidth(sw);')
-            lines.append(f'                ImGui::SliderFloat("##bi_{eid}_{pname}", &clip.fx_{eid}_{pname}_beat, 0.0f, 1.0f, "beat %.2f");')
-            lines.append(f'                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "{elabel}: Beat Intensity");')
+            lines.append(f'                if (_bon) {{')
+            lines.append(f'                    ImGui::SetNextItemWidth(sw);')
+            lines.append(f'                    ImGui::SliderFloat("##bi_{eid}_{pname}", &clip.fx_{eid}_{pname}_beat, 0.0f, 1.0f, "beat %.2f");')
+            lines.append(f'                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "{elabel}: Beat Intensity");')
+            lines.append(f'                }}')
             lines.append(f'            }}')
         lines.append('            break;')
         lines.append('')
