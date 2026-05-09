@@ -78,6 +78,12 @@ struct WordEntry {
     float end   = 0.f;
 };
 
+struct AttachedFX {
+    FXType             type   = FXType::Adjustment;
+    float              amount = 1.0f;
+    std::vector<float> params; // non-hidden params in registry order, at defaults
+};
+
 struct Clip {
     ClipType    clip_type = ClipType::Text;  // Text/Video/Audio — independent of track type
     float       start = 0.f;
@@ -204,6 +210,9 @@ struct Clip {
     // keyframe tracks — keyed by property name string
     // empty = use the matching static field above
     std::unordered_map<std::string, PropTrack> ktracks;
+
+    // FX attached directly to this clip (pre-composite, clip-specific)
+    std::vector<AttachedFX> attached_fx;
 
     // Evaluate named property at absolute timeline time `playhead`.
     // Falls back to the static field when no keyframes exist.

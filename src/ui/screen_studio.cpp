@@ -19,6 +19,9 @@
 #include <imgui.h>
 #include <imgui_internal.h>
 #include "json.hpp"
+#include "generated/fx_attached_accum.h"
+#include "generated/fx_attached_defaults.h"
+#include "generated/fx_attached_ui.h"
 #include <fstream>
 #include <filesystem>
 #include <algorithm>
@@ -1349,6 +1352,15 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                     ? video_get_texture(slot, (double)(src_t + lookahead)) : 0;
                 if (!tex) return;
 
+                // Pre-composite: clip-attached FX applied to this clip's frame only.
+                if (slot >= 0 && !cl_ptr->attached_fx.empty()) {
+                    VideoInfo vi_afx = video_info(slot);
+                    CreativeFXAccum clip_cfx;
+                    for (auto& afx : cl_ptr->attached_fx)
+                        fx_accum_from_attached(clip_cfx, afx.type, afx.amount, afx.params);
+                    if (clip_cfx.any_gen_fx)
+                        tex = fx_apply(tex, slot, vi_afx.width, vi_afx.height, {}, clip_cfx, t_anim);
+                }
                 // GPU FX pipeline: grade, blur, vignette, chroma-key, glitch, VHS, leak, datamosh.
                 // bg_remove alpha was already applied CPU-side in upload_jpeg above.
                 if (slot >= 0) {
@@ -3303,6 +3315,44 @@ static void panel_clip(AppState& state, float w) {
                 ImGui::Dummy({0.f, 4.f});
             }
             if (!rembg_ok) ImGui::EndDisabled();
+        }
+
+        // ── Attached FX ───────────────────────────────────────────────────────
+        if (!clip.attached_fx.empty()) {
+            ImGui::Dummy({0.f, 4.f});
+            if (ImGui::CollapsingHeader("Attached Effects", ImGuiTreeNodeFlags_DefaultOpen)) {
+                ImGui::Dummy({0.f, 4.f});
+                for (int ai = (int)clip.attached_fx.size() - 1; ai >= 0; --ai) {
+                    AttachedFX& afx = clip.attached_fx[ai];
+                    ImGui::PushID(ai);
+                    ImU32 hdr_col = fx_type_accent(afx.type);
+                    ImGui::PushStyleColor(ImGuiCol_Header,        ImGui::ColorConvertU32ToFloat4(hdr_col & 0x80FFFFFFu));
+                    ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImGui::ColorConvertU32ToFloat4(hdr_col & 0xAAFFFFFFu));
+                    bool open = ImGui::CollapsingHeader(fx_type_display(afx.type), ImGuiTreeNodeFlags_DefaultOpen);
+                    ImGui::PopStyleColor(2);
+                    // Detach button on same line (right side)
+                    ImGui::SameLine(w - 60.f);
+                    if (ui_btn("Detach", false, true)) {
+                        // Convert back to a standalone FX clip on same track
+                        Clip fx_cl;
+                        fx_cl.clip_type = ClipType::Effect;
+                        fx_cl.fx_type   = afx.type;
+                        fx_cl.start     = clip.start;
+                        fx_cl.end       = clip.end;
+                        state.tracks[state.selected_track].clips.push_back(fx_cl);
+                        clip.attached_fx.erase(clip.attached_fx.begin() + ai);
+                        history_push(state, "Detach FX from clip");
+                        ImGui::PopID();
+                        break;
+                    }
+                    if (open) {
+                        ImGui::Dummy({0.f, 4.f});
+                        fx_attached_inspector(afx, w - 16.f, state, clip);
+                        ImGui::Dummy({0.f, 6.f});
+                    }
+                    ImGui::PopID();
+                }
+            }
         }
     }
 
@@ -5405,6 +5455,23 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
             dl->AddRect({vis_x0,cy0},{vis_x1,cy1},
                 to_u32(sel ? Col::fg : Col::line), 2.f);
 
+            // Attached FX bands — colored pills at top of clip brick
+            if (!clip.attached_fx.empty()) {
+                constexpr float BAND_H = 7.f, BAND_W = 28.f, BAND_PAD = 2.f;
+                float bx = vis_x0 + 3.f;
+                ImGui::PushClipRect({vis_x0, cy0}, {vis_x1, cy1}, true);
+                for (size_t ai = 0; ai < clip.attached_fx.size(); ++ai) {
+                    float bx1 = bx + BAND_W;
+                    if (bx1 > vis_x1 - 3.f) break;
+                    ImU32 bc = fx_type_accent(clip.attached_fx[ai].type);
+                    dl->AddRectFilled({bx, cy0+2.f}, {bx1, cy0+2.f+BAND_H}, bc, 2.f);
+                    dl->AddText(ImGui::GetFont(), 8.f, {bx+2.f, cy0+2.f},
+                        IM_COL32(255,255,255,220), fx_type_name(clip.attached_fx[ai].type));
+                    bx = bx1 + BAND_PAD;
+                }
+                ImGui::PopClipRect();
+            }
+
             // Clip label / waveform
             if ((clip.clip_type==ClipType::Text || clip.clip_type==ClipType::Lyrics ||
                  clip.clip_type==ClipType::Subtitle) && !clip.text.empty()) {
@@ -6124,6 +6191,42 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
     }
     if (ImGui::IsMouseReleased(0)) {
         if (drag_track >= 0 && drag_clip >= 0) {
+            // Attach FX brick: FX clip dragged onto a video/audio clip → embed it
+            bool did_attach = false;
+            if (!drag_left && !drag_right && s_drag_moved) {
+                Clip& dragged = state.tracks[drag_track].clips[drag_clip];
+                if (dragged.clip_type == ClipType::Effect &&
+                    dragged.fx_type != FXType::Adjustment) {
+                    // Check all tracks for a video/audio clip overlapping the dragged FX at the mouse Y
+                    int hot_ti = drag_hot_track >= 0 ? drag_hot_track : drag_track;
+                    if (hot_ti >= 0 && hot_ti < (int)state.tracks.size()) {
+                        for (int ci = 0; ci < (int)state.tracks[hot_ti].clips.size(); ++ci) {
+                            Clip& target = state.tracks[hot_ti].clips[ci];
+                            if (target.clip_type != ClipType::Video &&
+                                target.clip_type != ClipType::Audio) continue;
+                            // Time overlap check
+                            if (dragged.start >= target.end || dragged.end <= target.start) continue;
+                            // Attach: create AttachedFX from the dragged FX clip
+                            AttachedFX afx;
+                            afx.type   = dragged.fx_type;
+                            afx.amount = 1.0f;
+                            afx.params = fx_attached_defaults(dragged.fx_type);
+                            // Copy any gen params from dragged clip
+                            // (clip already has fx_ fields; copy amount at minimum)
+                            target.attached_fx.push_back(std::move(afx));
+                            // Remove the standalone FX clip
+                            state.tracks[drag_track].clips.erase(
+                                state.tracks[drag_track].clips.begin() + drag_clip);
+                            state.selected_track = hot_ti;
+                            state.selected_clip  = ci;
+                            history_push(state, "Attach FX to clip");
+                            did_attach = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            if (!did_attach) {
             if (!drag_left && !drag_right && drag_hot_gap >= 0) {
                 // Drop into gap between tracks — insert new track there
                 Clip moved = state.tracks[drag_track].clips[drag_clip];
@@ -6203,6 +6306,7 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
                     history_push(state, act);
                 }
             }
+            } // end if (!did_attach)
         }
         drag_track=-1; drag_clip=-1; drag_left=false; drag_right=false;
         drag_hot_track=-1; drag_hot_gap=-1;

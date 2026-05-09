@@ -5,6 +5,7 @@
 #include "overlay_renderer.h"
 #include "video.h"
 #include "fx_shader.h"
+#include "generated/fx_attached_accum.h"
 
 #define GL_GLEXT_PROTOTYPES
 #include <GL/gl.h>
@@ -1670,9 +1671,18 @@ static bool gl_render_vid_clip(ImDrawList& dl, const Clip* cl, float at_time,
     int vid_w = vf->width, vid_h = vf->height;
     video_free_frame(vf);
 
+    // Pre-composite: clip-attached FX applied to this clip's frame only.
+    uintptr_t cur_tex = (uintptr_t)tex_id;
+    if (!cl->attached_fx.empty()) {
+        CreativeFXAccum clip_cfx;
+        for (auto& afx : cl->attached_fx)
+            fx_accum_from_attached(clip_cfx, afx.type, afx.amount, afx.params);
+        if (clip_cfx.any_gen_fx)
+            cur_tex = fx_apply(cur_tex, fx_slot, vid_w, vid_h, {}, clip_cfx, at_time);
+    }
     // Apply GPU FX pipeline
     EffectAccum     ea  = collect_effects    (state, at_time, ti);
-    uintptr_t draw_tex  = fx_apply((uintptr_t)tex_id, fx_slot, vid_w, vid_h, ea, cfx, at_time);
+    uintptr_t draw_tex  = fx_apply(cur_tex, fx_slot, vid_w, vid_h, ea, cfx, at_time);
 
     // ZoomPunch — beat-synced scale spike, same logic as preview
     float px    = cl->eval_prop("pos_x",    at_time);

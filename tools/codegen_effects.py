@@ -221,6 +221,67 @@ def main():
     lines = [f'    "{e["id"]}",' for e in effects]
     write(os.path.join(GEN_DIR, "fx_gen_names.h"), "\n".join(lines) + "\n")
 
+    # ── fx_attached_accum.h ───────────────────────────────────────────────────
+    # Populates CreativeFXAccum from a single AttachedFX (type + amount + params vector).
+    # Params vector contains non-hidden params in registry order.
+    lines = ["static void fx_accum_from_attached(CreativeFXAccum& acc, FXType type, float amount, const std::vector<float>& pv) {",
+             "    switch (type) {"]
+    for e in effects:
+        eid = e["id"]
+        visible_params = [p for p in e["params"] if not p.get("hidden")]
+        lines.append(f'        case FXType::{e["enum"]}:')
+        lines.append(f'            acc.{eid}_on = true;')
+        lines.append(f'            acc.{eid}_amount = fmaxf(acc.{eid}_amount, amount);')
+        for i, p in enumerate(visible_params):
+            lines.append(f'            if ((int)pv.size() > {i}) acc.{eid}_{p["name"]} = fmaxf(acc.{eid}_{p["name"]}, pv[{i}]);')
+        lines.append(f'            acc.any_gen_fx = true;')
+        lines.append(f'            break;')
+    lines.append("        default: break;")
+    lines.append("    }")
+    lines.append("}")
+    write(os.path.join(GEN_DIR, "fx_attached_accum.h"), "\n".join(lines) + "\n")
+
+    # ── fx_attached_defaults.h ────────────────────────────────────────────────
+    # Returns default param values (non-hidden) for a given FXType.
+    lines = ["static std::vector<float> fx_attached_defaults(FXType type) {",
+             "    switch (type) {"]
+    for e in effects:
+        visible_params = [p for p in e["params"] if not p.get("hidden")]
+        defaults = ", ".join(f"{float(p['default'])}f" for p in visible_params)
+        lines.append(f'        case FXType::{e["enum"]}: return {{{defaults}}};')
+    lines.append("        default: return {};")
+    lines.append("    }")
+    lines.append("}")
+    write(os.path.join(GEN_DIR, "fx_attached_defaults.h"), "\n".join(lines) + "\n")
+
+    # ── fx_attached_ui.h ──────────────────────────────────────────────────────
+    # Inspector UI for a single AttachedFX — operates on afx.amount and afx.params[i].
+    lines = ["static void fx_attached_inspector(AttachedFX& afx, float sw, AppState& state, Clip& clip) {",
+             "    (void)clip;",
+             "    switch (afx.type) {"]
+    for e in effects:
+        eid = e["id"]
+        visible_params = [p for p in e["params"] if not p.get("hidden")]
+        n = len(visible_params)
+        lines.append(f'        case FXType::{e["enum"]}: {{')
+        lines.append(f'            if ((int)afx.params.size() < {n}) afx.params.resize({n}, 0.f);')
+        lines.append(f'            ui_label("Amount");')
+        lines.append(f'            ImGui::SetNextItemWidth(sw);')
+        lines.append(f'            ImGui::SliderFloat("##afx_{eid}_amount", &afx.amount, 0.0f, 1.0f, "%.2f");')
+        lines.append(f'            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "{e["label"]}: Amount");')
+        for i, p in enumerate(visible_params):
+            lines.append(f'            ImGui::Dummy({{0.f, 4.f}});')
+            lines.append(f'            ui_label("{p["label"]}");')
+            lines.append(f'            ImGui::SetNextItemWidth(sw);')
+            lines.append(f'            ImGui::SliderFloat("##afx_{eid}_{p["name"]}", &afx.params[{i}], {float(p["min"])}f, {float(p["max"])}f, "{p["fmt"]}");')
+            lines.append(f'            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "{e["label"]}: {p["label"]}");')
+        lines.append(f'            break;')
+        lines.append(f'        }}')
+    lines.append("        default: break;")
+    lines.append("    }")
+    lines.append("}")
+    write(os.path.join(GEN_DIR, "fx_attached_ui.h"), "\n".join(lines) + "\n")
+
     print(f"done — {len(effects)} effects, project version {reg['project_version']}")
 
 if __name__ == "__main__":
