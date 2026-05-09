@@ -15,6 +15,7 @@
 #include "history.h"
 #include "proxy.h"
 #include "waveform.h"
+#include "beat_detect.h"
 #include "project.h"
 #include <imgui.h>
 #include <imgui_internal.h>
@@ -22,6 +23,8 @@
 #include <fstream>
 #include <filesystem>
 #include <algorithm>
+#include <mutex>
+#include <unordered_set>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -359,118 +362,75 @@ static std::vector<Clip> group_words(
 // Load the flat word list from words_json_path into AppState::words_cache.
 // ── Beat detection subprocess ─────────────────────────────────────────────────
 
-static void load_beats_cache(AppState& state) {
-    state.beats.clear();
-    state.beat_bpm = 0.f;
-    if (state.beats_json_path.empty() || !fs::exists(state.beats_json_path)) return;
-    std::ifstream f(state.beats_json_path);
-    if (!f) return;
-    try {
-        auto j = nlohmann::json::parse(f);
-        state.beat_bpm = j.value("bpm", 0.f);
-        for (auto& v : j["beats"])
-            state.beats.push_back(v.get<float>());
-    } catch (...) {}
-}
+// ── Beat detect completion queue ──────────────────────────────────────────────
+// Background threads post results here; main thread drains each frame.
+static std::mutex              s_beat_queue_mtx;
+static std::vector<BeatResult> s_beat_queue;
+// Tracks which source_ids are currently being analysed (prevents duplicate jobs).
+static std::mutex              s_beat_pending_mtx;
+static std::unordered_set<std::string> s_beat_pending;
 
 static void run_beat_detect(AppState& state) {
     if (state.beats_running) return;
     std::string src = state.vocals_path.empty() ? state.audio_path : state.vocals_path;
     if (src.empty() || !fs::exists(src)) return;
-    extern std::string g_beat_detect_script;
-    if (g_beat_detect_script.empty()) return;
-
-    fs::path out = fs::path(src).parent_path() / "beats.json";
-    state.beats_json_path = out.string();
-    state.beats_running   = true;
-
-    std::string python  = state.python_path;
-    std::string script  = g_beat_detect_script;
-    std::string outpath = out.string();
-
-    std::thread([&state, python, script, src, outpath]() {
-        std::string cmd = "\"" + python + "\" \"" + script + "\" \"" + src + "\" \"" + outpath + "\" 2>&1";
-        FILE* p = popen(cmd.c_str(), "r");
-        char buf[256];
-        while (p && fgets(buf, sizeof(buf), p)) {}
-        if (p) pclose(p);
+    state.beats_running = true;
+    std::thread([&state, src]() {
+        BeatResult r = beat_detect(src);
         state.beats_running = false;
-        load_beats_cache(state);
+        if (r.ok) {
+            state.beat_bpm = r.bpm;
+            state.beats    = std::move(r.beats);
+        }
     }).detach();
 }
 
 // ── Per-clip beat analysis ────────────────────────────────────────────────────
 
-static void load_clip_beats_cache(Clip& cl) {
-    cl.beats.clear();
-    cl.beat_bpm = 0.f;
-    if (cl.beats_json_path.empty() || !fs::exists(cl.beats_json_path)) return;
-    std::ifstream f(cl.beats_json_path);
-    if (!f) return;
-    try {
-        auto j = nlohmann::json::parse(f);
-        cl.beat_bpm = j.value("bpm", 0.f);
-        for (auto& v : j["beats"])
-            cl.beats.push_back(v.get<float>());
-    } catch (...) {}
-}
-
-static void run_clip_beat_detect(AppState& state, int ti, int ci) {
-    if (ti < 0 || ti >= (int)state.tracks.size()) return;
-    auto& track = state.tracks[ti];
-    if (ci < 0 || ci >= (int)track.clips.size()) return;
-    Clip& cl = track.clips[ci];
-    if (cl.beats_analyzing) return;
-    if (cl.source_id.empty() || !fs::exists(cl.source_id)) return;
-    extern std::string g_beat_detect_script;
-    if (g_beat_detect_script.empty()) return;
-
-    fs::path out = fs::path(cl.source_id).parent_path() /
-                   (fs::path(cl.source_id).stem().string() + "_beats.json");
-    cl.beats_json_path = out.string();
-    cl.beats_analyzing = true;
-
-    std::string python  = state.python_path;
-    std::string script  = g_beat_detect_script;
-    std::string src     = cl.source_id;
-    std::string outpath = out.string();
-
-    std::thread([&state, ti, ci, python, script, src, outpath]() {
-        std::string cmd = "\"" + python + "\" \"" + script + "\" \"" + src + "\" \"" + outpath + "\" 2>&1";
-        FILE* p = popen(cmd.c_str(), "r");
-        char buf[256];
-        while (p && fgets(buf, sizeof(buf), p)) {}
-        if (p) pclose(p);
-        // mark done; main thread will detect and load
-        if (ti < (int)state.tracks.size()) {
-            auto& t2 = state.tracks[ti];
-            if (ci < (int)t2.clips.size()) {
-                t2.clips[ci].beats_analyzing = false;
-                load_clip_beats_cache(t2.clips[ci]);
-            }
+static void kick_clip_beat_detect(const std::string& src) {
+    {
+        std::lock_guard<std::mutex> lk(s_beat_pending_mtx);
+        if (s_beat_pending.count(src)) return; // already running
+        s_beat_pending.insert(src);
+    }
+    std::thread([src]() {
+        BeatResult r = beat_detect(src);
+        {
+            std::lock_guard<std::mutex> lk(s_beat_queue_mtx);
+            s_beat_queue.push_back(std::move(r));
+        }
+        {
+            std::lock_guard<std::mutex> lk(s_beat_pending_mtx);
+            s_beat_pending.erase(src);
         }
     }).detach();
 }
 
-// Poll per-frame: check if any clip finished analysis and load its beats (thread already does it).
-// Also auto-trigger analysis for Audio/Video clips that have a source but no beats.
+// Poll per-frame: drain completion queue and auto-trigger analysis.
 static void poll_clip_beat_analysis(AppState& state) {
-    extern std::string g_beat_detect_script;
-    if (g_beat_detect_script.empty()) return;
-    for (int ti = 0; ti < (int)state.tracks.size(); ++ti) {
-        auto& track = state.tracks[ti];
-        for (int ci = 0; ci < (int)track.clips.size(); ++ci) {
-            Clip& cl = track.clips[ci];
-            if (cl.clip_type != ClipType::Video && cl.clip_type != ClipType::Audio) continue;
-            if (cl.source_id.empty()) continue;
-            if (cl.beats_analyzing || !cl.beats.empty()) continue;
-            // check if cached beats file already exists from a prior run
-            if (!cl.beats_json_path.empty() && fs::exists(cl.beats_json_path)) {
-                load_clip_beats_cache(cl);
-                continue;
+    // Drain completed results — match by source_id across all clips
+    std::vector<BeatResult> done;
+    {
+        std::lock_guard<std::mutex> lk(s_beat_queue_mtx);
+        done.swap(s_beat_queue);
+    }
+    for (auto& r : done) {
+        for (auto& track : state.tracks) {
+            for (auto& cl : track.clips) {
+                if (cl.source_id != r.source_id) continue;
+                cl.beats_analyzing = false;
+                if (r.ok) { cl.beat_bpm = r.bpm; cl.beats = r.beats; }
             }
-            // auto-kick analysis
-            run_clip_beat_detect(state, ti, ci);
+        }
+    }
+
+    // Auto-trigger for any Audio/Video clip that has no beats and isn't pending
+    for (auto& track : state.tracks) {
+        for (auto& cl : track.clips) {
+            if (cl.clip_type != ClipType::Video && cl.clip_type != ClipType::Audio) continue;
+            if (cl.source_id.empty() || !cl.beats.empty() || cl.beats_analyzing) continue;
+            cl.beats_analyzing = true;
+            kick_clip_beat_detect(cl.source_id);
         }
     }
 }
@@ -839,8 +799,6 @@ static void import_file(AppState& state, const std::string& path) {
     {
         std::string src = (outdir / "vocals.wav").string();
         if (!fs::exists(src)) src = path;
-        std::string bc = (fs::path(src).parent_path() / "beats.json").string();
-        if (fs::exists(bc)) { state.beats_json_path = bc; load_beats_cache(state); }
         std::string ec = (fs::path(src).parent_path() / "envelope.json").string();
         if (fs::exists(ec)) { state.envelope_json_path = ec; load_envelope_cache(state); }
     }

@@ -15,6 +15,7 @@ pkg_check_modules(AVUTIL   REQUIRED libavutil)
 pkg_check_modules(SWRESAMPLE REQUIRED libswresample)
 pkg_check_modules(SWSCALE   REQUIRED libswscale)
 pkg_check_modules(FREETYPE  REQUIRED freetype2)
+pkg_check_modules(AUBIO     REQUIRED aubio)
 
 # ── ImGui ─────────────────────────────────────────────────────────────────────
 set(IMGUI_DIR ${CMAKE_SOURCE_DIR}/vendor/imgui)
@@ -41,6 +42,7 @@ set(SOURCES
     src/video.cpp
     src/proxy.cpp
     src/waveform.cpp
+    src/beat_detect.cpp
     src/blender_export.cpp
     src/bg_remove.cpp
     src/noise_reduce.cpp
@@ -69,6 +71,7 @@ target_include_directories(pop-maker-studio PRIVATE
     ${SWRESAMPLE_INCLUDE_DIRS}
     ${SWSCALE_INCLUDE_DIRS}
     ${FREETYPE_INCLUDE_DIRS}
+    ${AUBIO_INCLUDE_DIRS}
 )
 
 target_link_libraries(pop-maker-studio PRIVATE
@@ -80,6 +83,7 @@ target_link_libraries(pop-maker-studio PRIVATE
     ${SWRESAMPLE_LIBRARIES}
     ${SWSCALE_LIBRARIES}
     ${FREETYPE_LIBRARIES}
+    ${AUBIO_LIBRARIES}
     dl pthread
 )
 
@@ -162,19 +166,6 @@ add_custom_command(
 add_custom_target(embed_setup DEPENDS ${CMAKE_BINARY_DIR}/ml_setup_embedded.h)
 add_dependencies(pop-maker-studio embed_setup)
 
-# Embed beat_detect.py
-add_custom_command(
-    OUTPUT ${CMAKE_BINARY_DIR}/beat_detect_embedded.h
-    COMMAND ${CMAKE_COMMAND}
-        -DINPUT=${CMAKE_SOURCE_DIR}/beat_detect.py
-        -DVAR=beat_detect_py
-        -DOUTPUT=${CMAKE_BINARY_DIR}/beat_detect_embedded.h
-        -P ${CMAKE_SOURCE_DIR}/cmake/EmbedFile.cmake
-    DEPENDS ${CMAKE_SOURCE_DIR}/beat_detect.py
-    COMMENT "Embedding beat_detect.py"
-)
-add_custom_target(embed_beat_detect DEPENDS ${CMAKE_BINARY_DIR}/beat_detect_embedded.h)
-add_dependencies(pop-maker-studio embed_beat_detect)
 
 # Embed rembg_remove.py
 add_custom_command(

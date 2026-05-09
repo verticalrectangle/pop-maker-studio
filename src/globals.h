@@ -7,7 +7,6 @@ extern std::string g_dropped_file;     // path from GLFW drop callback
 extern std::string g_pipeline_script;  // path to ml_pipeline.py  (extracted from binary)
 extern std::string g_prefetch_script;  // path to ml_prefetch.py  (extracted from binary)
 extern std::string g_setup_script;     // path to ml_setup.py     (extracted from binary)
-extern std::string g_beat_detect_script;    // path to beat_detect.py
 extern std::string g_envelope_script;       // path to envelope_extract.py
 extern std::string g_rembg_script;          // path to rembg_remove.py
 extern std::string g_noise_reduce_script;   // path to noise_reduce.py

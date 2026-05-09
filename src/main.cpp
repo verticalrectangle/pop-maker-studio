@@ -32,7 +32,6 @@ extern "C" {
 #include "ml_pipeline_embedded.h"
 #include "ml_prefetch_embedded.h"
 #include "ml_setup_embedded.h"
-#include "beat_detect_embedded.h"
 #include "envelope_extract_embedded.h"
 #include "rembg_remove_embedded.h"
 #include "noise_reduce_embedded.h"
@@ -44,7 +43,6 @@ std::string g_dropped_file;
 std::string g_pipeline_script;
 std::string g_prefetch_script;
 std::string g_setup_script;
-std::string g_beat_detect_script;
 std::string g_envelope_script;
 std::string g_rembg_script;
 std::string g_noise_reduce_script;
@@ -277,8 +275,6 @@ int main(int argc, char** argv) {
                                           "pop_maker_ml_prefetch.py");
     g_setup_script    = extract_embedded(ml_setup_py,          ml_setup_py_size,
                                           "pop_maker_ml_setup.py");
-    g_beat_detect_script = extract_embedded(beat_detect_py,   beat_detect_py_size,
-                                          "pop_maker_beat_detect.py");
     g_envelope_script    = extract_embedded(envelope_extract_py, envelope_extract_py_size,
                                           "pop_maker_envelope_extract.py");
     g_rembg_script       = extract_embedded(rembg_remove_py,  rembg_remove_py_size,
