@@ -70,9 +70,9 @@ def main():
     for e in effects:
         eid = e["id"]
         lines.append(f'    bool  {eid}_on = false;')
-        lines.append(f'    float {eid}_amount = 1.0f;')
+        lines.append(f'    float {eid}_amount = 0.0f;')
         for p in e["params"]:
-            lines.append(f'    float {eid}_{p["name"]} = {float(p["default"])}f;')
+            lines.append(f'    float {eid}_{p["name"]} = {float(p["min"])}f;')
     write(os.path.join(GEN_DIR, "fx_accum_fields.h"), "\n".join(lines) + "\n")
 
     # ── fx_clip_fields.h ──────────────────────────────────────────────────────
