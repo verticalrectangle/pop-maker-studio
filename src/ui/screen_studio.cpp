@@ -829,6 +829,7 @@ static void kick_pipeline(AppState& state, const std::string& path, PipelineMode
     state.out_wav            = vocals_out;
 
     state.pipeline_produces_subtitles = (mode == PipelineMode::TranscribeOnly);
+    state.pipeline_is_separate_only   = (mode == PipelineMode::SeparateOnly);
 
     if (mode == PipelineMode::Both) {
         bool has = false;
@@ -7410,7 +7411,7 @@ void ui_studio(AppState& state) {
         state.extract_done = false;
         if (!state.extract_wav_path.empty() && fs::exists(state.extract_wav_path)) {
             Track at;
-            at.name = fs::path(state.extract_wav_path).stem().string();
+            at.name = "Audio";
             AudioMeta meta;
             float dur = audio_probe(state.extract_wav_path, meta) ? meta.duration_secs : state.duration;
             Clip ac; ac.clip_type = ClipType::Audio;
@@ -7432,23 +7433,48 @@ void ui_studio(AppState& state) {
     static PipelineStage last_stage = PipelineStage::Idle;
     if (last_stage != PipelineStage::Done &&
         state.pipeline.stage == PipelineStage::Done) {
-        load_words_cache(state);
-        if (state.pipeline_produces_subtitles)
+
+        if (state.pipeline_produces_subtitles) {
+            load_words_cache(state);
             apply_subtitle_pipeline(state);
-        else
+            save_all_srts(state);
+        } else if (!state.pipeline_is_separate_only) {
+            // Both mode: has words + vocals
+            load_words_cache(state);
             apply_subtitle_mode(state);
-        save_all_srts(state);
+            save_all_srts(state);
+        }
+        // SeparateOnly: no words, skip subtitle machinery entirely
+
+        // Add vocals stem to timeline if Demucs produced one
+        if (!state.vocals_path.empty() && fs::exists(state.vocals_path)) {
+            bool already_present = false;
+            for (auto& t : state.tracks)
+                for (auto& c : t.clips)
+                    if (c.text == state.vocals_path) { already_present = true; break; }
+            if (!already_present) {
+                Track vt; vt.name = "Vocals";
+                AudioMeta vm;
+                float vdur = audio_probe(state.vocals_path, vm) ? vm.duration_secs : state.duration;
+                Clip vc; vc.clip_type = ClipType::Audio;
+                vc.start = 0.f; vc.end = vdur; vc.text = state.vocals_path;
+                vt.clips.push_back(vc);
+                state.tracks.push_back(std::move(vt));
+            }
+        }
+
         std::string stem = state.audio_path.empty() ? "audio"
             : fs::path(state.audio_path).stem().string();
         history_push(state, "Pipeline complete — " + stem);
-        // Auto-trigger beat detection and envelope extraction on the stems
         run_beat_detect(state);
         run_envelope_extract(state);
-        // "Make lyric video" path: auto-generate typography after transcription.
+
         if (state.typo_generate_when_done) {
             state.typo_generate_when_done = false;
             generate_typography(state);
         }
+
+        state.pipeline_is_separate_only = false;
     }
     last_stage = state.pipeline.stage;
 

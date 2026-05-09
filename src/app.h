@@ -487,6 +487,7 @@ struct AppState {
     SubtitleMode subtitle_mode = SubtitleMode::Word;
     int          subtitle_n    = 3;
     bool         pipeline_produces_subtitles  = false;
+    bool         pipeline_is_separate_only   = false;  // SeparateOnly run: skip subtitle apply, add vocals track
     bool         typo_generate_when_done     = false;  // "Make lyric video" sets this; fires generate_typography after pipeline
 
     // typography
