@@ -371,6 +371,10 @@ static std::vector<BeatResult> s_beat_queue;
 static std::mutex              s_beat_pending_mtx;
 static std::unordered_set<std::string> s_beat_pending;
 
+// Typography hover preview state — set each frame by panel_typography(), read by canvas render.
+static std::string s_typo_hover_id;    // preset id being hovered; empty = no hover
+static std::string s_typo_series_src;  // source_id of the currently selected lyrics series
+
 static void run_beat_detect(AppState& state) {
     if (state.beats_running) return;
     std::string src = state.vocals_path.empty() ? state.audio_path : state.vocals_path;
@@ -1562,6 +1566,25 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                 }
             }
             if (!show) { ++text_rendered; continue; }
+
+            // Hover preview: temporarily render with the hovered preset's style.
+            Clip hover_override;
+            if (!s_typo_hover_id.empty() && show->clip_type == ClipType::Lyrics
+                && show->source_id == s_typo_series_src) {
+                const TypographyPreset* hpr = typo_preset_by_id(s_typo_hover_id.c_str());
+                if (hpr) {
+                    hover_override                    = *show;
+                    hover_override.font_size          = hpr->font_size;
+                    hover_override.clip_style         = hpr->style;
+                    hover_override.sub_pos            = hpr->sub_pos;
+                    hover_override.sub_pos_x          = hpr->sub_pos_x;
+                    hover_override.sub_pos_y          = hpr->sub_pos_y;
+                    hover_override.sub_wrap_w         = hpr->sub_wrap_w;
+                    hover_override.sub_color_override = true;
+                    memcpy(hover_override.sub_color, hpr->color, sizeof(hpr->color));
+                    show = &hover_override;
+                }
+            }
 
             ImGui::PushFont(g_font_black);
             ImFont* txt_font = ImGui::GetFont();
@@ -3880,8 +3903,16 @@ static void generate_typography(AppState& state) {
         }
     }
 
-    state.selected_track = -1;
-    state.selected_clip  = -1;
+    // Auto-select the first generated Lyrics clip so the Typography inspector opens immediately.
+    int sel_ti = -1, sel_ci = -1;
+    for (int ti2 = 0; ti2 < (int)state.tracks.size() && sel_ti < 0; ++ti2)
+        for (int ci2 = 0; ci2 < (int)state.tracks[ti2].clips.size() && sel_ti < 0; ++ci2)
+            if (state.tracks[ti2].clips[ci2].clip_type == ClipType::Lyrics
+                && state.tracks[ti2].clips[ci2].source_id == src)
+                { sel_ti = ti2; sel_ci = ci2; }
+    state.selected_track = sel_ti;
+    state.selected_clip  = sel_ci;
+    state.panel_tab      = 8;
     history_push(state, std::string("Generate typography — ") + pr->label);
 }
 
@@ -3896,7 +3927,7 @@ static void typo_restyle_live(AppState& state) {
                 apply_typo_style(c, *pr, state);
 }
 
-// Returns a saturated accent color for each preset category
+// Category accent color
 static ImU32 typo_category_dot(const char* cat) {
     if (strcmp(cat, "Hype")      == 0) return IM_COL32(255,  60,  80, 255);
     if (strcmp(cat, "Aesthetic") == 0) return IM_COL32(220, 130, 255, 255);
@@ -3907,103 +3938,54 @@ static ImU32 typo_category_dot(const char* cat) {
 }
 
 static void panel_typography(AppState& state, float w) {
-    ImGui::Dummy({0.f, 8.f});
+    // Clear hover state at the start of each frame; re-set below if a card is hovered.
+    s_typo_hover_id.clear();
 
     float full_w = w - 16.f;
-
-    // ── Zone 1: Source ────────────────────────────────────────────────────────
-    bool has_words    = !state.words_json_path.empty() && fs::exists(state.words_json_path);
-    bool has_segments = !state.segments_json_path.empty() && fs::exists(state.segments_json_path);
-    bool has_source   = has_words || has_segments;
-    bool pipe_busy    = transcribe_running();
-
-    // Source block background
-    {
-        ImDrawList* dl = ImGui::GetWindowDrawList();
-        ImVec2 p0 = ImGui::GetCursorScreenPos();
-        float bh = has_source ? 46.f : (pipe_busy ? 58.f : 54.f);
-        dl->AddRectFilled(p0, {p0.x + full_w, p0.y + bh}, IM_COL32(22, 20, 32, 255), 6.f);
-        dl->AddRect(p0, {p0.x + full_w, p0.y + bh},
-            has_source ? IM_COL32(70, 160, 80, 120) : IM_COL32(60, 55, 80, 180), 6.f);
-    }
-
-    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 10.f);
     ImGui::Dummy({0.f, 8.f});
-    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 10.f);
 
-    if (has_words) {
-        int nw = (int)state.words_cache.size();
-        ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(100, 220, 120, 255));
-        char buf[80]; snprintf(buf, sizeof(buf), "  WhisperX  ·  %d words", nw);
-        ImGui::TextUnformatted(buf);
-        ImGui::PopStyleColor();
-        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 10.f);
-        ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
-        ImGui::TextUnformatted("  Ready to generate");
-        ImGui::PopStyleColor();
-    } else if (has_segments) {
-        ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(100, 180, 255, 255));
-        ImGui::TextUnformatted("  SRT / segments loaded");
-        ImGui::PopStyleColor();
-        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 10.f);
-        ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
-        ImGui::TextUnformatted("  Ready to generate");
-        ImGui::PopStyleColor();
-    } else if (pipe_busy) {
-        // Progress bar
-        float prog = state.pipeline.progress;
-        const char* stage_lbl = "Processing…";
-        switch (state.pipeline.stage) {
-            case PipelineStage::Extract:    stage_lbl = "Extracting audio…";  break;
-            case PipelineStage::Transcribe: stage_lbl = "Transcribing…";      break;
-            case PipelineStage::Align:      stage_lbl = "Aligning words…";    break;
-            case PipelineStage::Done:       stage_lbl = "Done";               break;
-            case PipelineStage::Error:      stage_lbl = "Error";              break;
-            default: break;
-        }
-        ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(200, 180, 255, 255));
-        ImGui::TextUnformatted(stage_lbl);
-        ImGui::PopStyleColor();
-        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 10.f);
-        ImGui::SetNextItemWidth(full_w - 20.f);
-        ImGui::PushStyleColor(ImGuiCol_PlotHistogram, IM_COL32(110, 70, 220, 255));
-        ImGui::PushStyleColor(ImGuiCol_FrameBg, IM_COL32(40, 35, 55, 255));
-        ImGui::ProgressBar(prog, {full_w - 20.f, 6.f}, "");
-        ImGui::PopStyleColor(2);
-    } else {
-        // No source yet — show transcribe button inline
+    // ── Resolve selected Lyrics/Text clip ─────────────────────────────────────
+    bool valid_sel = state.selected_track >= 0
+                     && state.selected_track < (int)state.tracks.size()
+                     && state.selected_clip  >= 0
+                     && state.selected_clip  < (int)state.tracks[state.selected_track].clips.size();
+    const Clip* sel_clip = valid_sel ? &state.tracks[state.selected_track].clips[state.selected_clip] : nullptr;
+    bool is_lyrics = sel_clip && (sel_clip->clip_type == ClipType::Lyrics
+                                  || sel_clip->clip_type == ClipType::Text
+                                  || sel_clip->clip_type == ClipType::Subtitle);
+
+    if (!is_lyrics) {
+        // ── Empty state ───────────────────────────────────────────────────────
+        s_typo_series_src.clear();
+        ImGui::Dummy({0.f, 40.f});
         ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
-        ImGui::TextUnformatted("  No lyrics source");
+        float tw = ImGui::CalcTextSize("Select a lyrics clip to style it").x;
+        ImGui::SetCursorPosX((w - tw) * 0.5f);
+        ImGui::TextUnformatted("Select a lyrics clip to style it");
         ImGui::PopStyleColor();
-        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 10.f);
-        bool no_audio = state.audio_path.empty();
-        if (no_audio) ImGui::BeginDisabled();
-        ImGui::PushStyleColor(ImGuiCol_Button,        IM_COL32(70, 50, 140, 255));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered,  IM_COL32(90, 70, 170, 255));
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive,   IM_COL32(55, 40, 120, 255));
-        if (ImGui::Button("Transcribe audio##typo_tr", {full_w - 20.f, 22.f}))
-            kick_pipeline(state, state.audio_path, PipelineMode::TranscribeOnly);
-        ImGui::PopStyleColor(3);
-        if (no_audio) {
-            ImGui::EndDisabled();
-            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-                ImGui::SetTooltip("Right-click an audio/video clip → Transcribe");
-            }
-        }
+        ImGui::Dummy({0.f, 6.f});
+        ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+        ImGui::TextWrapped("Right-click an audio or video clip and choose \"Make lyric video\" to get started.");
+        ImGui::PopStyleColor();
+        return;
     }
 
-    ImGui::Dummy({0.f, 8.f});
-    ImGui::Dummy({0.f, 10.f}); ui_separator(); ImGui::Dummy({0.f, 8.f});
+    // The series is identified by source_id (empty = just style the one clip).
+    s_typo_series_src = sel_clip->source_id;
 
-    // ── Zone 2: Preset grid (2 columns) ───────────────────────────────────────
+    // Which preset is currently active on this clip?
+    // Try to find it by matching the clip's stored preset_id if we stamped it, else fall back to state.
+    // We use state.typo_preset_id as the committed selection (updated on click).
+
+    // ── Preset grid (2 columns) ───────────────────────────────────────────────
     ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
     ImGui::TextUnformatted("STYLE");
     ImGui::PopStyleColor();
     ImGui::Dummy({0.f, 4.f});
 
-    float gap    = 4.f;
-    float cell_w = (full_w - gap) * 0.5f;
-    float cell_h = 58.f;
+    const float gap    = 4.f;
+    const float cell_w = (full_w - gap) * 0.5f;
+    const float cell_h = 58.f;
 
     const char* cur_cat = nullptr;
     int col_idx = 0;
@@ -4012,47 +3994,50 @@ static void panel_typography(AppState& state, float w) {
         const TypographyPreset& pr = g_typo_presets[i];
         bool selected = (state.typo_preset_id == pr.id);
 
-        // Category label — only on category change, always full width
+        // Category label — full width, resets column
         if (!cur_cat || strcmp(cur_cat, pr.category) != 0) {
             if (col_idx == 1) { ImGui::NewLine(); col_idx = 0; }
             if (cur_cat) ImGui::Dummy({0.f, 4.f});
             ImU32 dot_col = typo_category_dot(pr.category);
-            ImDrawList* dl = ImGui::GetWindowDrawList();
+            ImDrawList* dl_cat = ImGui::GetWindowDrawList();
             ImVec2 lp = ImGui::GetCursorScreenPos();
-            dl->AddCircleFilled({lp.x + 4.f, lp.y + 7.f}, 4.f, dot_col);
+            dl_cat->AddCircleFilled({lp.x + 4.f, lp.y + 7.f}, 4.f, dot_col);
             ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 14.f);
             ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
             ImGui::TextUnformatted(pr.category);
             ImGui::PopStyleColor();
             ImGui::Dummy({0.f, 2.f});
-            cur_cat  = pr.category;
-            col_idx  = 0;
+            cur_cat = pr.category;
+            col_idx = 0;
         }
 
-        // Position card in the correct column
-        if (col_idx == 1) {
-            ImGui::SameLine(0.f, gap);
-        }
+        if (col_idx == 1) ImGui::SameLine(0.f, gap);
 
         ImVec2 cp = ImGui::GetCursorScreenPos();
         ImDrawList* dl = ImGui::GetWindowDrawList();
 
+        bool hov = ImGui::IsMouseHoveringRect(cp, {cp.x + cell_w, cp.y + cell_h});
+
+        // Drive hover preview
+        if (hov) s_typo_hover_id = pr.id;
+
         ImU32 bg_col  = selected ? IM_COL32(55, 48, 88, 255) : IM_COL32(26, 24, 36, 255);
         ImU32 brd_col = selected ? IM_COL32(140, 100, 255, 255) : IM_COL32(50, 47, 65, 200);
         float brd_w   = selected ? 2.f : 1.f;
-        bool  hov     = ImGui::IsMouseHoveringRect(cp, {cp.x + cell_w, cp.y + cell_h});
-        if (hov && !selected) {
-            bg_col  = IM_COL32(36, 33, 50, 255);
-            brd_col = IM_COL32(90, 80, 130, 255);
-        }
+        if (hov && !selected) { bg_col = IM_COL32(38, 34, 54, 255); brd_col = IM_COL32(100, 85, 150, 255); }
 
         dl->AddRectFilled(cp, {cp.x + cell_w, cp.y + cell_h}, bg_col, 6.f);
 
-        // Category dot accent bar on left
-        ImU32 dot = typo_category_dot(pr.category);
-        dl->AddRectFilled({cp.x, cp.y + 10.f}, {cp.x + 3.f, cp.y + cell_h - 10.f}, dot, 2.f);
+        // Category accent bar left edge
+        dl->AddRectFilled({cp.x, cp.y + 10.f}, {cp.x + 3.f, cp.y + cell_h - 10.f},
+            typo_category_dot(pr.category), 2.f);
 
         dl->AddRect(cp, {cp.x + cell_w, cp.y + cell_h}, brd_col, 6.f, 0, brd_w);
+
+        // Color chip top-right
+        ImU32 chip = IM_COL32((int)(pr.color[0]*220), (int)(pr.color[1]*220), (int)(pr.color[2]*220), 220);
+        dl->AddRectFilled({cp.x + cell_w - 16.f, cp.y + 6.f},
+                          {cp.x + cell_w - 6.f,  cp.y + 16.f}, chip, 3.f);
 
         float tx = cp.x + 10.f;
         ImGui::PushFont(g_font_bold);
@@ -4060,18 +4045,14 @@ static void panel_typography(AppState& state, float w) {
             selected ? IM_COL32(255,255,255,255) : IM_COL32(210,205,230,240), pr.label);
         ImGui::PopFont();
 
-        // Tagline — truncate to fit
-        char tagbuf[48];
-        snprintf(tagbuf, sizeof(tagbuf), "%s", pr.tagline);
-        // Truncate tagline at first ·
-        for (int k = 0; tagbuf[k]; ++k) {
-            if (tagbuf[k] == '\xc2' && tagbuf[k+1] == '\xb7') { // UTF-8 ·
-                tagbuf[k ? k-1 : 0] = '\0'; break;
-            }
-        }
+        // Tagline — clip at first middle-dot
+        char tagbuf[48]; snprintf(tagbuf, sizeof(tagbuf), "%s", pr.tagline);
+        for (int k = 0; tagbuf[k]; ++k)
+            if ((unsigned char)tagbuf[k] == 0xc2 && (unsigned char)tagbuf[k+1] == 0xb7)
+                { tagbuf[k > 0 ? k-1 : 0] = '\0'; break; }
         dl->AddText({tx, cp.y + 27.f}, IM_COL32(120, 115, 145, 200), tagbuf);
 
-        // Animation style badge bottom-right
+        // Anim style badge bottom-right
         const char* style_tag = nullptr;
         switch (pr.style) {
             case AnimStyle::Fade:   style_tag = "fade";   break;
@@ -4094,22 +4075,19 @@ static void panel_typography(AppState& state, float w) {
             state.typo_preset_id = pr.id;
             state.typo_grouping  = pr.grouping;
             state.typo_custom_n  = pr.custom_n;
+            typo_restyle_live(state);
         }
 
         col_idx++;
-        if (col_idx >= 2) {
-            col_idx = 0;
-            ImGui::Dummy({0.f, gap});
-        }
+        if (col_idx >= 2) { col_idx = 0; ImGui::Dummy({0.f, gap}); }
     }
     if (col_idx == 1) ImGui::NewLine();
 
     ImGui::Dummy({0.f, 10.f}); ui_separator(); ImGui::Dummy({0.f, 8.f});
 
-    // ── Zone 3: Tune + Generate ────────────────────────────────────────────────
+    // ── Tune ──────────────────────────────────────────────────────────────────
     const TypographyPreset* pr = typo_preset_by_id(state.typo_preset_id.c_str());
 
-    // Font size
     ui_label("Font Size");
     float fs = (state.typo_font_size > 0.001f) ? state.typo_font_size : (pr ? pr->font_size : 0.09f);
     ImGui::SetNextItemWidth(full_w);
@@ -4122,7 +4100,6 @@ static void panel_typography(AppState& state, float w) {
 
     ImGui::Dummy({0.f, 8.f});
 
-    // Color
     ui_label("Color");
     float col_buf[4];
     const float* src_col = (state.typo_color[3] > 0.001f) ? state.typo_color
@@ -4135,25 +4112,9 @@ static void panel_typography(AppState& state, float w) {
         typo_restyle_live(state);
     }
 
-    ImGui::Dummy({0.f, 12.f});
-
-    // Generate button — big, always visible
-    if (!has_source) ImGui::BeginDisabled();
-    ImGui::PushStyleColor(ImGuiCol_Button,        IM_COL32(110, 70, 220, 255));
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered,  IM_COL32(130, 90, 240, 255));
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive,   IM_COL32(90,  50, 200, 255));
-    if (ImGui::Button("Generate##typo", {full_w, 36.f}))
-        generate_typography(state);
-    ImGui::PopStyleColor(3);
-    if (!has_source) {
-        ImGui::EndDisabled();
-        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-            ImGui::SetTooltip("Transcribe or import SRT first");
-    }
-
     ImGui::Dummy({0.f, 10.f});
 
-    // ── Advanced (collapsed by default) ───────────────────────────────────────
+    // ── Advanced ──────────────────────────────────────────────────────────────
     ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
     bool adv_open = ImGui::TreeNodeEx("Advanced##typo_adv",
         ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_FramePadding);
@@ -4161,16 +4122,14 @@ static void panel_typography(AppState& state, float w) {
     if (adv_open) {
         ImGui::Dummy({0.f, 6.f});
 
-        // All caps override
         bool caps = state.typo_all_caps_override ? state.typo_all_caps : (pr ? pr->all_caps : false);
         if (ImGui::Checkbox("ALL CAPS##tycaps", &caps)) {
             state.typo_all_caps_override = true;
             state.typo_all_caps = caps;
+            typo_restyle_live(state);
         }
 
         ImGui::Dummy({0.f, 8.f});
-
-        // Grouping override
         ui_label("Grouping override");
         ImGui::Dummy({0.f, 4.f});
         struct GrpBtn { SubtitleMode m; const char* label; };
@@ -4202,10 +4161,7 @@ static void panel_typography(AppState& state, float w) {
             state.typo_font_size         = 0.f;
             state.typo_color[3]          = 0.f;
             state.typo_all_caps_override = false;
-            if (pr) {
-                state.typo_grouping = pr->grouping;
-                state.typo_custom_n = pr->custom_n;
-            }
+            if (pr) { state.typo_grouping = pr->grouping; state.typo_custom_n = pr->custom_n; }
             typo_restyle_live(state);
         }
 
@@ -7225,14 +7181,18 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
             ImGui::Separator();
         }
 
-        // ── Transcribe / Separate (Audio & Video clips) ───────────────────────
+        // ── Make lyric video / Transcribe / Separate (Audio & Video clips) ──────
         if (cc && (cc->clip_type==ClipType::Audio || cc->clip_type==ClipType::Video)) {
-            bool busy          = transcribe_running();
-            bool models_ready  = state.models_ready;
-            bool disabled      = busy || !models_ready;
+            bool busy         = transcribe_running();
+            bool models_ready = state.models_ready;
+            bool disabled     = busy || !models_ready;
 
             if (disabled) ImGui::BeginDisabled();
-            if (ImGui::MenuItem("Transcribe")) {
+            if (ImGui::MenuItem("Make lyric video")) {
+                kick_pipeline(state, cc->text, PipelineMode::TranscribeOnly);
+                state.typo_generate_when_done = true;
+            }
+            if (ImGui::MenuItem("Transcribe  (subtitles only)")) {
                 kick_pipeline(state, cc->text, PipelineMode::TranscribeOnly);
             }
             if (ImGui::MenuItem("Separate vocals")) {
@@ -7683,6 +7643,11 @@ void ui_studio(AppState& state) {
         // Auto-trigger beat detection and envelope extraction on the stems
         run_beat_detect(state);
         run_envelope_extract(state);
+        // "Make lyric video" path: auto-generate typography after transcription.
+        if (state.typo_generate_when_done) {
+            state.typo_generate_when_done = false;
+            generate_typography(state);
+        }
     }
     last_stage = state.pipeline.stage;
 

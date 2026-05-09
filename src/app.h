@@ -486,7 +486,8 @@ struct AppState {
     // subtitle grouping (legacy, kept for project compat)
     SubtitleMode subtitle_mode = SubtitleMode::Word;
     int          subtitle_n    = 3;
-    bool         pipeline_produces_subtitles = false;
+    bool         pipeline_produces_subtitles  = false;
+    bool         typo_generate_when_done     = false;  // "Make lyric video" sets this; fires generate_typography after pipeline
 
     // typography
     std::string  typo_preset_id  = "flash";   // active preset id
