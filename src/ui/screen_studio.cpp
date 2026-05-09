@@ -6249,14 +6249,15 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
             // Track which row the mouse is hovering for cross-track transfer.
             // hot == tracks.size() means below all tracks → "New Track" ghost row.
             // drag_hot_gap >= 0 means between two existing tracks → insert new track there.
-            float ruler_bottom = origin.y + TL_RULER_H;
+            // Scroll-corrected origin: tracks visually start here on screen.
+            float track_origin_y = origin.y + TL_RULER_H - state.tl_v_scroll;
             int n_tracks = (int)state.tracks.size();
             // Midpoint assignment: drop target is whichever track center is closest.
             // Gap insertion fires only when mouse is within GAP_PX of a seam.
             const float GAP_PX = 5.f;
             drag_hot_gap = -1;
             for (int gi = 0; gi < n_tracks; ++gi) {
-                float boundary_y = ruler_bottom + gi * TL_TRACK_H;
+                float boundary_y = track_origin_y + gi * TL_TRACK_H;
                 if (fabsf(mouse.y - boundary_y) < GAP_PX) {
                     drag_hot_gap = gi;
                     break;
@@ -6264,7 +6265,7 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
             }
             // Always assign hot track by midpoint — gap zone does not steal the target.
             {
-                int hot = (int)((mouse.y - ruler_bottom) / TL_TRACK_H);
+                int hot = (int)((mouse.y - track_origin_y) / TL_TRACK_H);
                 drag_hot_track = (hot >= 0 && hot <= n_tracks) ? hot : -1;
             }
         }
