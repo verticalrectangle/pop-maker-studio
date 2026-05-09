@@ -3896,153 +3896,223 @@ static void typo_restyle_live(AppState& state) {
                 apply_typo_style(c, *pr, state);
 }
 
+// Returns a saturated accent color for each preset category
+static ImU32 typo_category_dot(const char* cat) {
+    if (strcmp(cat, "Hype")      == 0) return IM_COL32(255,  60,  80, 255);
+    if (strcmp(cat, "Aesthetic") == 0) return IM_COL32(220, 130, 255, 255);
+    if (strcmp(cat, "Editorial") == 0) return IM_COL32(255, 200,  50, 255);
+    if (strcmp(cat, "Clean")     == 0) return IM_COL32( 80, 200, 255, 255);
+    if (strcmp(cat, "Retro")     == 0) return IM_COL32(255, 140,  40, 255);
+    return IM_COL32(180, 180, 180, 255);
+}
+
 static void panel_typography(AppState& state, float w) {
     ImGui::Dummy({0.f, 8.f});
 
-    // ── Source status ─────────────────────────────────────────────────────────
+    float full_w = w - 16.f;
+
+    // ── Zone 1: Source ────────────────────────────────────────────────────────
     bool has_words    = !state.words_json_path.empty() && fs::exists(state.words_json_path);
     bool has_segments = !state.segments_json_path.empty() && fs::exists(state.segments_json_path);
     bool has_source   = has_words || has_segments;
+    bool pipe_busy    = transcribe_running();
+
+    // Source block background
+    {
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        ImVec2 p0 = ImGui::GetCursorScreenPos();
+        float bh = has_source ? 46.f : (pipe_busy ? 58.f : 54.f);
+        dl->AddRectFilled(p0, {p0.x + full_w, p0.y + bh}, IM_COL32(22, 20, 32, 255), 6.f);
+        dl->AddRect(p0, {p0.x + full_w, p0.y + bh},
+            has_source ? IM_COL32(70, 160, 80, 120) : IM_COL32(60, 55, 80, 180), 6.f);
+    }
+
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 10.f);
+    ImGui::Dummy({0.f, 8.f});
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 10.f);
 
     if (has_words) {
         int nw = (int)state.words_cache.size();
         ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(100, 220, 120, 255));
-        char buf[80];
-        snprintf(buf, sizeof(buf), "WhisperX  ·  %d words", nw);
+        char buf[80]; snprintf(buf, sizeof(buf), "  WhisperX  ·  %d words", nw);
         ImGui::TextUnformatted(buf);
+        ImGui::PopStyleColor();
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 10.f);
+        ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+        ImGui::TextUnformatted("  Ready to generate");
         ImGui::PopStyleColor();
     } else if (has_segments) {
         ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(100, 180, 255, 255));
-        ImGui::TextUnformatted("SRT / segments");
+        ImGui::TextUnformatted("  SRT / segments loaded");
         ImGui::PopStyleColor();
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 10.f);
+        ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+        ImGui::TextUnformatted("  Ready to generate");
+        ImGui::PopStyleColor();
+    } else if (pipe_busy) {
+        // Progress bar
+        float prog = state.pipeline.progress;
+        const char* stage_lbl = "Processing…";
+        switch (state.pipeline.stage) {
+            case PipelineStage::Extract:    stage_lbl = "Extracting audio…";  break;
+            case PipelineStage::Transcribe: stage_lbl = "Transcribing…";      break;
+            case PipelineStage::Align:      stage_lbl = "Aligning words…";    break;
+            case PipelineStage::Done:       stage_lbl = "Done";               break;
+            case PipelineStage::Error:      stage_lbl = "Error";              break;
+            default: break;
+        }
+        ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(200, 180, 255, 255));
+        ImGui::TextUnformatted(stage_lbl);
+        ImGui::PopStyleColor();
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 10.f);
+        ImGui::SetNextItemWidth(full_w - 20.f);
+        ImGui::PushStyleColor(ImGuiCol_PlotHistogram, IM_COL32(110, 70, 220, 255));
+        ImGui::PushStyleColor(ImGuiCol_FrameBg, IM_COL32(40, 35, 55, 255));
+        ImGui::ProgressBar(prog, {full_w - 20.f, 6.f}, "");
+        ImGui::PopStyleColor(2);
     } else {
+        // No source yet — show transcribe button inline
         ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
-        ImGui::TextWrapped("Transcribe or import SRT to enable generation.");
+        ImGui::TextUnformatted("  No lyrics source");
         ImGui::PopStyleColor();
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 10.f);
+        bool no_audio = state.audio_path.empty();
+        if (no_audio) ImGui::BeginDisabled();
+        ImGui::PushStyleColor(ImGuiCol_Button,        IM_COL32(70, 50, 140, 255));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered,  IM_COL32(90, 70, 170, 255));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive,   IM_COL32(55, 40, 120, 255));
+        if (ImGui::Button("Transcribe audio##typo_tr", {full_w - 20.f, 22.f}))
+            kick_pipeline(state, state.audio_path, PipelineMode::TranscribeOnly);
+        ImGui::PopStyleColor(3);
+        if (no_audio) {
+            ImGui::EndDisabled();
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+                ImGui::SetTooltip("Right-click an audio/video clip → Transcribe");
+            }
+        }
     }
 
+    ImGui::Dummy({0.f, 8.f});
     ImGui::Dummy({0.f, 10.f}); ui_separator(); ImGui::Dummy({0.f, 8.f});
 
-    // ── Preset picker ─────────────────────────────────────────────────────────
+    // ── Zone 2: Preset grid (2 columns) ───────────────────────────────────────
     ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
     ImGui::TextUnformatted("STYLE");
     ImGui::PopStyleColor();
     ImGui::Dummy({0.f, 4.f});
 
+    float gap    = 4.f;
+    float cell_w = (full_w - gap) * 0.5f;
+    float cell_h = 58.f;
+
     const char* cur_cat = nullptr;
-    float card_w = w - 16.f;
+    int col_idx = 0;
 
     for (int i = 0; i < g_n_typo_presets; ++i) {
         const TypographyPreset& pr = g_typo_presets[i];
         bool selected = (state.typo_preset_id == pr.id);
 
-        // Category header
+        // Category label — only on category change, always full width
         if (!cur_cat || strcmp(cur_cat, pr.category) != 0) {
-            if (cur_cat) ImGui::Dummy({0.f, 6.f});
+            if (col_idx == 1) { ImGui::NewLine(); col_idx = 0; }
+            if (cur_cat) ImGui::Dummy({0.f, 4.f});
+            ImU32 dot_col = typo_category_dot(pr.category);
+            ImDrawList* dl = ImGui::GetWindowDrawList();
+            ImVec2 lp = ImGui::GetCursorScreenPos();
+            dl->AddCircleFilled({lp.x + 4.f, lp.y + 7.f}, 4.f, dot_col);
+            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 14.f);
             ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
             ImGui::TextUnformatted(pr.category);
             ImGui::PopStyleColor();
             ImGui::Dummy({0.f, 2.f});
-            cur_cat = pr.category;
+            cur_cat  = pr.category;
+            col_idx  = 0;
         }
 
-        // Color swatch derived from preset palette
-        ImU32 swatch = IM_COL32(
-            (int)(pr.color[0]*180), (int)(pr.color[1]*180), (int)(pr.color[2]*180), 255);
-
-        ImGui::PushStyleColor(ImGuiCol_ChildBg,
-            selected ? IM_COL32(60,55,90,255) : IM_COL32(30,28,38,255));
-        ImGui::PushStyleColor(ImGuiCol_Border,
-            selected ? IM_COL32(140,100,255,255) : IM_COL32(55,52,68,255));
-        ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 6.f);
-        ImGui::PushStyleVar(ImGuiStyleVar_ChildBorderSize, selected ? 2.f : 1.f);
-
-        char child_id[64]; snprintf(child_id, sizeof(child_id), "typo_card_%s", pr.id);
-        if (ImGui::BeginChild(child_id, {card_w, 46.f}, true)) {
-            ImDrawList* dl = ImGui::GetWindowDrawList();
-            ImVec2 cp = ImGui::GetCursorScreenPos();
-            // swatch bar on left
-            dl->AddRectFilled({cp.x, cp.y}, {cp.x + 4.f, cp.y + 32.f}, swatch, 2.f);
-            ImGui::SetCursorScreenPos({cp.x + 10.f, cp.y});
-            ImGui::PushStyleColor(ImGuiCol_Text,
-                selected ? IM_COL32(255,255,255,255) : IM_COL32(210,205,230,255));
-            ImGui::TextUnformatted(pr.label);
-            ImGui::PopStyleColor();
-            ImGui::SetCursorScreenPos({cp.x + 10.f, cp.y + 18.f});
-            ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
-            ImGui::TextUnformatted(pr.tagline);
-            ImGui::PopStyleColor();
+        // Position card in the correct column
+        if (col_idx == 1) {
+            ImGui::SameLine(0.f, gap);
         }
-        ImGui::EndChild();
-        ImGui::PopStyleVar(2); ImGui::PopStyleColor(2);
 
-        if (ImGui::IsItemClicked()) {
-            state.typo_preset_id = pr.id;
-            // sync grouping to preset default
-            const TypographyPreset* pp = typo_preset_by_id(pr.id);
-            if (pp) {
-                state.typo_grouping  = pp->grouping;
-                state.typo_custom_n  = pp->custom_n;
+        ImVec2 cp = ImGui::GetCursorScreenPos();
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+
+        ImU32 bg_col  = selected ? IM_COL32(55, 48, 88, 255) : IM_COL32(26, 24, 36, 255);
+        ImU32 brd_col = selected ? IM_COL32(140, 100, 255, 255) : IM_COL32(50, 47, 65, 200);
+        float brd_w   = selected ? 2.f : 1.f;
+        bool  hov     = ImGui::IsMouseHoveringRect(cp, {cp.x + cell_w, cp.y + cell_h});
+        if (hov && !selected) {
+            bg_col  = IM_COL32(36, 33, 50, 255);
+            brd_col = IM_COL32(90, 80, 130, 255);
+        }
+
+        dl->AddRectFilled(cp, {cp.x + cell_w, cp.y + cell_h}, bg_col, 6.f);
+
+        // Category dot accent bar on left
+        ImU32 dot = typo_category_dot(pr.category);
+        dl->AddRectFilled({cp.x, cp.y + 10.f}, {cp.x + 3.f, cp.y + cell_h - 10.f}, dot, 2.f);
+
+        dl->AddRect(cp, {cp.x + cell_w, cp.y + cell_h}, brd_col, 6.f, 0, brd_w);
+
+        float tx = cp.x + 10.f;
+        ImGui::PushFont(g_font_bold);
+        dl->AddText(ImGui::GetFont(), 12.f, {tx, cp.y + 10.f},
+            selected ? IM_COL32(255,255,255,255) : IM_COL32(210,205,230,240), pr.label);
+        ImGui::PopFont();
+
+        // Tagline — truncate to fit
+        char tagbuf[48];
+        snprintf(tagbuf, sizeof(tagbuf), "%s", pr.tagline);
+        // Truncate tagline at first ·
+        for (int k = 0; tagbuf[k]; ++k) {
+            if (tagbuf[k] == '\xc2' && tagbuf[k+1] == '\xb7') { // UTF-8 ·
+                tagbuf[k ? k-1 : 0] = '\0'; break;
             }
         }
-        ImGui::Dummy({0.f, 3.f});
+        dl->AddText({tx, cp.y + 27.f}, IM_COL32(120, 115, 145, 200), tagbuf);
+
+        // Animation style badge bottom-right
+        const char* style_tag = nullptr;
+        switch (pr.style) {
+            case AnimStyle::Fade:   style_tag = "fade";   break;
+            case AnimStyle::Slide:  style_tag = "slide";  break;
+            case AnimStyle::Scale:  style_tag = "scale";  break;
+            case AnimStyle::Block:  style_tag = "block";  break;
+            case AnimStyle::Glitch: style_tag = "glitch"; break;
+            default: break;
+        }
+        if (style_tag) {
+            ImVec2 tsz = ImGui::CalcTextSize(style_tag);
+            dl->AddText({cp.x + cell_w - tsz.x - 7.f, cp.y + cell_h - 16.f},
+                IM_COL32(100, 90, 140, 200), style_tag);
+        }
+
+        ImGui::SetCursorScreenPos(cp);
+        char btn_id[64]; snprintf(btn_id, sizeof(btn_id), "##tycard_%s", pr.id);
+        ImGui::InvisibleButton(btn_id, {cell_w, cell_h});
+        if (ImGui::IsItemClicked()) {
+            state.typo_preset_id = pr.id;
+            state.typo_grouping  = pr.grouping;
+            state.typo_custom_n  = pr.custom_n;
+        }
+
+        col_idx++;
+        if (col_idx >= 2) {
+            col_idx = 0;
+            ImGui::Dummy({0.f, gap});
+        }
     }
+    if (col_idx == 1) ImGui::NewLine();
 
     ImGui::Dummy({0.f, 10.f}); ui_separator(); ImGui::Dummy({0.f, 8.f});
 
-    // ── Generate button ───────────────────────────────────────────────────────
-    if (!has_source) ImGui::BeginDisabled();
-    ImGui::PushStyleColor(ImGuiCol_Button,        IM_COL32(110, 70, 220, 255));
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered,  IM_COL32(130, 90, 240, 255));
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive,   IM_COL32(90,  50, 200, 255));
-    if (ImGui::Button("Generate##typo", {card_w, 32.f}))
-        generate_typography(state);
-    ImGui::PopStyleColor(3);
-    if (!has_source) ImGui::EndDisabled();
-
-    ImGui::Dummy({0.f, 10.f}); ui_separator(); ImGui::Dummy({0.f, 8.f});
-
-    // ── Tune section ──────────────────────────────────────────────────────────
-    ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
-    ImGui::TextUnformatted("TUNE");
-    ImGui::PopStyleColor();
-    ImGui::Dummy({0.f, 4.f});
-
+    // ── Zone 3: Tune + Generate ────────────────────────────────────────────────
     const TypographyPreset* pr = typo_preset_by_id(state.typo_preset_id.c_str());
-
-    // Grouping
-    ui_label("Grouping");
-    ImGui::Dummy({0.f, 4.f});
-    struct GrpBtn { SubtitleMode m; const char* label; };
-    static const GrpBtn grp_btns[] = {
-        {SubtitleMode::Word,    "One word"},
-        {SubtitleMode::Phrase,  "Phrases"},
-        {SubtitleMode::Line,    "Lines"},
-        {SubtitleMode::Segment, "Sentences"},
-        {SubtitleMode::CustomN, "Custom"},
-    };
-    for (auto& gb : grp_btns) {
-        bool sel = (state.typo_grouping == gb.m);
-        if (ui_btn(gb.label, sel, true)) state.typo_grouping = gb.m;
-        ImGui::SameLine(0.f, 4.f);
-    }
-    ImGui::NewLine();
-    if (state.typo_grouping == SubtitleMode::CustomN) {
-        ImGui::Dummy({0.f, 4.f});
-        ImGui::PushStyleColor(ImGuiCol_FrameBg, Col::bg_soft);
-        ImGui::SetNextItemWidth(80.f);
-        int n = state.typo_custom_n;
-        if (ImGui::InputInt("words##tyn", &n))
-            state.typo_custom_n = (n < 1) ? 1 : (n > 20) ? 20 : n;
-        ImGui::PopStyleColor();
-    }
-
-    ImGui::Dummy({0.f, 8.f});
 
     // Font size
     ui_label("Font Size");
     float fs = (state.typo_font_size > 0.001f) ? state.typo_font_size : (pr ? pr->font_size : 0.09f);
-    ImGui::SetNextItemWidth(card_w);
+    ImGui::SetNextItemWidth(full_w);
     ImGui::PushStyleColor(ImGuiCol_FrameBg, Col::bg_soft);
     if (ImGui::SliderFloat("##tyfo", &fs, 0.03f, 0.30f, "%.2f")) {
         state.typo_font_size = fs;
@@ -4054,36 +4124,92 @@ static void panel_typography(AppState& state, float w) {
 
     // Color
     ui_label("Color");
-    float* col = (state.typo_color[3] > 0.001f) ? state.typo_color
-                 : (pr ? const_cast<float*>(pr->color) : state.typo_color);
-    ImGui::SetNextItemWidth(card_w);
-    if (ImGui::ColorEdit4("##tycol", col,
+    float col_buf[4];
+    const float* src_col = (state.typo_color[3] > 0.001f) ? state.typo_color
+                           : (pr ? pr->color : state.typo_color);
+    memcpy(col_buf, src_col, sizeof(col_buf));
+    ImGui::SetNextItemWidth(full_w);
+    if (ImGui::ColorEdit4("##tycol", col_buf,
             ImGuiColorEditFlags_NoLabel | ImGuiColorEditFlags_AlphaBar)) {
-        memcpy(state.typo_color, col, sizeof(state.typo_color));
+        memcpy(state.typo_color, col_buf, sizeof(state.typo_color));
         typo_restyle_live(state);
     }
 
-    ImGui::Dummy({0.f, 8.f});
+    ImGui::Dummy({0.f, 12.f});
 
-    // All caps toggle
-    bool caps = state.typo_all_caps_override ? state.typo_all_caps : (pr ? pr->all_caps : false);
-    if (ImGui::Checkbox("ALL CAPS##tycaps", &caps)) {
-        state.typo_all_caps_override = true;
-        state.typo_all_caps = caps;
+    // Generate button — big, always visible
+    if (!has_source) ImGui::BeginDisabled();
+    ImGui::PushStyleColor(ImGuiCol_Button,        IM_COL32(110, 70, 220, 255));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered,  IM_COL32(130, 90, 240, 255));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive,   IM_COL32(90,  50, 200, 255));
+    if (ImGui::Button("Generate##typo", {full_w, 36.f}))
+        generate_typography(state);
+    ImGui::PopStyleColor(3);
+    if (!has_source) {
+        ImGui::EndDisabled();
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            ImGui::SetTooltip("Transcribe or import SRT first");
     }
 
-    ImGui::Dummy({0.f, 10.f}); ui_separator(); ImGui::Dummy({0.f, 8.f});
+    ImGui::Dummy({0.f, 10.f});
 
-    // Reset tune to preset defaults
-    if (ui_btn("Reset to preset defaults", false, true)) {
-        state.typo_font_size         = 0.f;
-        state.typo_color[3]          = 0.f;
-        state.typo_all_caps_override = false;
-        if (pr) {
-            state.typo_grouping = pr->grouping;
-            state.typo_custom_n = pr->custom_n;
+    // ── Advanced (collapsed by default) ───────────────────────────────────────
+    ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+    bool adv_open = ImGui::TreeNodeEx("Advanced##typo_adv",
+        ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_FramePadding);
+    ImGui::PopStyleColor();
+    if (adv_open) {
+        ImGui::Dummy({0.f, 6.f});
+
+        // All caps override
+        bool caps = state.typo_all_caps_override ? state.typo_all_caps : (pr ? pr->all_caps : false);
+        if (ImGui::Checkbox("ALL CAPS##tycaps", &caps)) {
+            state.typo_all_caps_override = true;
+            state.typo_all_caps = caps;
         }
-        typo_restyle_live(state);
+
+        ImGui::Dummy({0.f, 8.f});
+
+        // Grouping override
+        ui_label("Grouping override");
+        ImGui::Dummy({0.f, 4.f});
+        struct GrpBtn { SubtitleMode m; const char* label; };
+        static const GrpBtn grp_btns[] = {
+            {SubtitleMode::Word,    "Word"},
+            {SubtitleMode::Phrase,  "Phrase"},
+            {SubtitleMode::Line,    "Line"},
+            {SubtitleMode::Segment, "Sentence"},
+            {SubtitleMode::CustomN, "Custom N"},
+        };
+        for (auto& gb : grp_btns) {
+            bool sel = (state.typo_grouping == gb.m);
+            if (ui_btn(gb.label, sel, true)) state.typo_grouping = gb.m;
+            ImGui::SameLine(0.f, 4.f);
+        }
+        ImGui::NewLine();
+        if (state.typo_grouping == SubtitleMode::CustomN) {
+            ImGui::Dummy({0.f, 4.f});
+            ImGui::PushStyleColor(ImGuiCol_FrameBg, Col::bg_soft);
+            ImGui::SetNextItemWidth(80.f);
+            int n = state.typo_custom_n;
+            if (ImGui::InputInt("words##tyn", &n))
+                state.typo_custom_n = (n < 1) ? 1 : (n > 20) ? 20 : n;
+            ImGui::PopStyleColor();
+        }
+
+        ImGui::Dummy({0.f, 8.f});
+        if (ui_btn("Reset to preset defaults", false, true)) {
+            state.typo_font_size         = 0.f;
+            state.typo_color[3]          = 0.f;
+            state.typo_all_caps_override = false;
+            if (pr) {
+                state.typo_grouping = pr->grouping;
+                state.typo_custom_n = pr->custom_n;
+            }
+            typo_restyle_live(state);
+        }
+
+        ImGui::TreePop();
     }
 }
 
@@ -7087,11 +7213,11 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
         Track* ct = valid ? &state.tracks[ti] : nullptr;
         Clip*  cc = valid ? &ct->clips[ci]    : nullptr;
 
-        // ── Extract raw audio (video clips only) ─────────────────────────────
+        // ── Rip audio (video clips only) ─────────────────────────────────────
         if (cc && cc->clip_type==ClipType::Video) {
             bool ext_busy = state.extract_running;
             if (ext_busy) ImGui::BeginDisabled();
-            if (ImGui::MenuItem(ext_busy ? "Extracting audio…" : "Extract audio as track")) {
+            if (ImGui::MenuItem(ext_busy ? "Ripping audio…" : "Rip audio to new track")) {
                 state.extract_source_track = ctx_track;
                 extract_audio_start(state, cc->text);
             }
@@ -7099,26 +7225,24 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
             ImGui::Separator();
         }
 
-        // ── ML Processing — Audio & Video clips ──────────────────────────────
+        // ── Transcribe / Separate (Audio & Video clips) ───────────────────────
         if (cc && (cc->clip_type==ClipType::Audio || cc->clip_type==ClipType::Video)) {
-            bool busy = transcribe_running();
-            if (busy || !state.models_ready) ImGui::BeginDisabled();
-            if (ImGui::BeginMenu("ML Processing")) {
-                if (ImGui::MenuItem("Extract Lyrics  (separate + transcribe)")) {
-                    state.audio_path = cc->text;
-                    kick_pipeline(state, cc->text, PipelineMode::Both);
-                }
-                if (ImGui::MenuItem("Extract Subtitles  (transcribe only)")) {
-                    state.audio_path = cc->text;
-                    kick_pipeline(state, cc->text, PipelineMode::TranscribeOnly);
-                }
-                if (ImGui::MenuItem("Separate Vocals  (Demucs)")) {
-                    kick_pipeline(state, cc->text, PipelineMode::SeparateOnly);
-                }
-                ImGui::EndMenu();
+            bool busy          = transcribe_running();
+            bool models_ready  = state.models_ready;
+            bool disabled      = busy || !models_ready;
+
+            if (disabled) ImGui::BeginDisabled();
+            if (ImGui::MenuItem("Transcribe")) {
+                kick_pipeline(state, cc->text, PipelineMode::TranscribeOnly);
             }
-            if (busy || !state.models_ready) ImGui::EndDisabled();
-            if (!state.models_ready) {
+            if (ImGui::MenuItem("Separate vocals")) {
+                kick_pipeline(state, cc->text, PipelineMode::SeparateOnly);
+            }
+            if (disabled) ImGui::EndDisabled();
+
+            if (!models_ready && !busy) {
+                if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                    ImGui::SetTooltip("Set up AI first");
                 if (ImGui::MenuItem("Set Up AI Features…"))
                     state.show_model_dl_modal = true;
             }
