@@ -795,9 +795,15 @@ static bool write_filter_script(
             }
             float line_h_px = effective_font_sz * 1.25f;
 
-            // x expression: centre at sub_pos_x fraction of canvas width
+            // x expression: position text according to sub_anchor_h
+            // 0=left edge at sub_pos_x, 1=center at sub_pos_x, 2=right edge at sub_pos_x
             char x_base_buf[64];
-            snprintf(x_base_buf, sizeof(x_base_buf), "(w*%.4f-text_w/2)", (double)cl.sub_pos_x);
+            if (cl.sub_anchor_h == 0)
+                snprintf(x_base_buf, sizeof(x_base_buf), "(w*%.4f)", (double)cl.sub_pos_x);
+            else if (cl.sub_anchor_h == 2)
+                snprintf(x_base_buf, sizeof(x_base_buf), "(w*%.4f-text_w)", (double)cl.sub_pos_x);
+            else
+                snprintf(x_base_buf, sizeof(x_base_buf), "(w*%.4f-text_w/2)", (double)cl.sub_pos_x);
             std::string x_base = x_base_buf;
             std::string x_final = x_off == "0" ? x_base : "(" + x_base + "+" + x_off + ")";
 

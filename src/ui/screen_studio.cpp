@@ -512,6 +512,8 @@ static void load_words_cache(AppState& state) {
 }
 
 // Load word JSON and apply current grouping mode.
+static void generate_typography(AppState& state);  // forward decl — defined after presets
+
 // Removes all Lyrics clips with matching source_id from ALL tracks, then
 // places fresh grouped clips on the "Lyrics" track.
 static void apply_subtitle_mode(AppState& state) {
@@ -810,7 +812,7 @@ static void import_file(AppState& state, const std::string& path) {
         state.vocals_path        = (outdir / "vocals.wav").string();
         state.out_wav            = state.vocals_path;
         load_words_cache(state);
-        apply_subtitle_mode(state);
+        generate_typography(state);
     }
     {
         std::string src = (outdir / "vocals.wav").string();
@@ -940,8 +942,9 @@ struct TxState {
     float    start_px = 0.f, start_py = 0.f;
     float    start_sx = 0.f, start_sy = 0.f;
     float    start_rot = 0.f;
-    float    start_wrap_w   = 0.f;
+    float    start_wrap_w    = 0.f;
     float    start_font_size = 0.f;
+    int      start_anchor    = 1;   // sub_anchor_h at drag start (for Move conversion)
     bool     dirty = false;
 };
 static TxState s_tx;
@@ -1134,9 +1137,20 @@ static void draw_transform_box(AppState& state, ImDrawList* dl,
     if (cl.clip_type == ClipType::Text || cl.clip_type == ClipType::Subtitle ||
         cl.clip_type == ClipType::Lyrics) {
         float col_w  = cl.sub_wrap_w * w;
-        float col_cx = cl.sub_pos_x  * w + p.x;
-        float col_x0 = col_cx - col_w * 0.5f;
-        float col_x1 = col_cx + col_w * 0.5f;
+        float col_x0, col_x1, col_cx;
+        if (cl.sub_anchor_h == 0) {         // left: sub_pos_x = left edge
+            col_x0 = p.x + cl.sub_pos_x * w;
+            col_x1 = col_x0 + col_w;
+            col_cx = col_x0 + col_w * 0.5f;
+        } else if (cl.sub_anchor_h == 2) {  // right: sub_pos_x = right edge
+            col_x1 = p.x + cl.sub_pos_x * w;
+            col_x0 = col_x1 - col_w;
+            col_cx = col_x0 + col_w * 0.5f;
+        } else {                             // center (default)
+            col_cx = p.x + cl.sub_pos_x * w;
+            col_x0 = col_cx - col_w * 0.5f;
+            col_x1 = col_cx + col_w * 0.5f;
+        }
         float eff_fsz = cl.font_size > 0.f ? cl.font_size * h : ImGui::GetFontSize() * 1.8f;
         float row_h  = eff_fsz * 1.25f;
         float col_cy = cl.sub_pos_y  * h + p.y;
@@ -1174,6 +1188,7 @@ static void draw_transform_box(AppState& state, ImDrawList* dl,
                 s_tx.start_px        = cl.sub_pos_x;
                 s_tx.start_py        = cl.sub_pos_y;
                 s_tx.start_wrap_w    = cl.sub_wrap_w;
+                s_tx.start_anchor    = cl.sub_anchor_h;
                 s_tx.start_font_size = cl.font_size > 0.f ? cl.font_size
                                        : ImGui::GetFontSize() * 1.8f / h;
                 s_tx.dirty        = false;
@@ -1187,25 +1202,39 @@ static void draw_transform_box(AppState& state, ImDrawList* dl,
             float dmy = mpos.y - s_tx.start_my;
             Clip& mc = state.tracks[s_tx.track_idx].clips[s_tx.clip_idx];
             switch (s_tx.handle) {
-                case TxHandle::Move:
-                    mc.sub_pos   = 3;
-                    mc.sub_pos_x = fmaxf(0.02f, fminf(0.98f, s_tx.start_px + dmx / w));
-                    mc.sub_pos_y = fmaxf(0.02f, fminf(0.98f, s_tx.start_py + dmy / h));
+                case TxHandle::Move: {
+                    // Convert original anchor pos to center, move, keep as center anchor
+                    float cx0 = s_tx.start_px;
+                    if (s_tx.start_anchor == 0)      cx0 += s_tx.start_wrap_w * 0.5f;
+                    else if (s_tx.start_anchor == 2) cx0 -= s_tx.start_wrap_w * 0.5f;
+                    mc.sub_pos      = 3;
+                    mc.sub_anchor_h = 1;
+                    mc.sub_pos_x    = fmaxf(0.02f, fminf(0.98f, cx0 + dmx / w));
+                    mc.sub_pos_y    = fmaxf(0.02f, fminf(0.98f, s_tx.start_py + dmy / h));
                     break;
+                }
                 case TxHandle::TextLeft: {
                     float new_x0 = col_x0 + dmx;
                     float new_w  = col_x1 - new_x0;
                     mc.sub_wrap_w = fmaxf(0.1f, fminf(1.f, new_w / w));
-                    mc.sub_pos_x  = (new_x0 + new_w * 0.5f - p.x) / w;
-                    mc.sub_pos_x  = fmaxf(0.02f, fminf(0.98f, mc.sub_pos_x));
+                    if (s_tx.start_anchor == 0)
+                        mc.sub_pos_x = fmaxf(0.f, (new_x0 - p.x) / w);
+                    else if (s_tx.start_anchor == 2)
+                        mc.sub_pos_x = cl.sub_pos_x;  // right edge unchanged
+                    else
+                        mc.sub_pos_x = fmaxf(0.02f, fminf(0.98f, (new_x0 + new_w * 0.5f - p.x) / w));
                     break;
                 }
                 case TxHandle::TextRight: {
                     float new_x1 = col_x1 + dmx;
                     float new_w  = new_x1 - col_x0;
                     mc.sub_wrap_w = fmaxf(0.1f, fminf(1.f, new_w / w));
-                    mc.sub_pos_x  = (col_x0 + new_w * 0.5f - p.x) / w;
-                    mc.sub_pos_x  = fmaxf(0.02f, fminf(0.98f, mc.sub_pos_x));
+                    if (s_tx.start_anchor == 0)
+                        mc.sub_pos_x = cl.sub_pos_x;  // left edge unchanged
+                    else if (s_tx.start_anchor == 2)
+                        mc.sub_pos_x = fmaxf(0.f, (new_x1 - p.x) / w);
+                    else
+                        mc.sub_pos_x = fmaxf(0.02f, fminf(0.98f, (col_x0 + new_w * 0.5f - p.x) / w));
                     break;
                 }
                 case TxHandle::TextTop:
@@ -1221,10 +1250,10 @@ static void draw_transform_box(AppState& state, ImDrawList* dl,
             }
             s_tx.dirty = true;
 
-            // Snap X center to canvas center
+            // Snap text center to canvas center (after Move; anchor is always center post-move)
             if (s_tx.handle == TxHandle::Move) {
                 float snap_thr = 6.f;
-                float cx3 = mc.sub_pos_x * w + p.x;
+                float cx3 = mc.sub_pos_x * w + p.x;  // anchor==1 after move
                 if (fabsf(cx3 - (p.x + w*0.5f)) < snap_thr) {
                     mc.sub_pos_x = 0.5f;
                     dl->AddLine({p.x+w*0.5f, p.y}, {p.x+w*0.5f, p.y+h}, snap_col);
@@ -1254,6 +1283,9 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
     // Black base
     dl->AddRectFilled(p, {p.x+w, p.y+h},
         state.video_loaded ? IM_COL32(0,0,0,255) : to_u32(Col::accent_dark), 2.f);
+
+    // Clip everything to the video frame — text/effects never bleed into surrounding UI.
+    dl->PushClipRect(p, {p.x+w, p.y+h}, true);
 
     // Empty state prompt
     if (state.tracks.empty()) {
@@ -1706,7 +1738,7 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                 block_h     = txt_lines.size() * line_h;
             }
 
-            float block_cx = p.x + show->sub_pos_x * w;  // horizontal center of text column
+            float block_ax = p.x + show->sub_pos_x * w;   // anchor point X (meaning depends on sub_anchor_h)
             float ty_anim  = slot_y + anim_dy;
             ImU32 shad_col = IM_COL32(0, 0, 0, (int)(180.f * anim_alpha));
 
@@ -1727,7 +1759,10 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                 block_max_w = fmaxf(block_max_w, txt_font->CalcTextSizeA(fsz, FLT_MAX, -1.f, ln.c_str()).x);
             if (eff_style == AnimStyle::Block && active_ci >= 0) {
                 float pad_x = 8.f, pad_y = 4.f;
-                float bx0 = block_cx - block_max_w * 0.5f - pad_x + anim_dx;
+                float bx0;
+                if (show->sub_anchor_h == 0)      bx0 = block_ax - pad_x + anim_dx;
+                else if (show->sub_anchor_h == 2) bx0 = block_ax - block_max_w - pad_x + anim_dx;
+                else                               bx0 = block_ax - block_max_w * 0.5f - pad_x + anim_dx;
                 dl->AddRectFilled(
                     {bx0, ty_anim - pad_y},
                     {bx0 + block_max_w + pad_x * 2.f, ty_anim + block_h + pad_y},
@@ -1738,7 +1773,10 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
             for (int li = 0; li < (int)txt_lines.size(); ++li) {
                 const std::string& ln = txt_lines[li];
                 ImVec2 lsz = txt_font->CalcTextSizeA(fsz, FLT_MAX, -1.f, ln.c_str());
-                float lx   = block_cx - lsz.x * 0.5f + anim_dx;
+                float lx;
+                if (show->sub_anchor_h == 0)      lx = block_ax + anim_dx;
+                else if (show->sub_anchor_h == 2) lx = block_ax - lsz.x + anim_dx;
+                else                               lx = block_ax - lsz.x * 0.5f + anim_dx;
                 float ly   = ty_anim + li * line_h;
 
                 // Shadow
@@ -1798,8 +1836,12 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
 
             // Drag handle: covers entire block, moves position
             {
-                float bx0 = block_cx - block_max_w * 0.5f - 8.f;
-                float bx1 = block_cx + block_max_w * 0.5f + 8.f;
+                float blk_x0, blk_x1;
+                if (show->sub_anchor_h == 0)      { blk_x0 = block_ax; blk_x1 = block_ax + block_max_w; }
+                else if (show->sub_anchor_h == 2) { blk_x0 = block_ax - block_max_w; blk_x1 = block_ax; }
+                else                               { blk_x0 = block_ax - block_max_w*0.5f; blk_x1 = block_ax + block_max_w*0.5f; }
+                float bx0 = blk_x0 - 8.f;
+                float bx1 = blk_x1 + 8.f;
                 float by0 = ty_anim - 8.f;
                 float by1 = ty_anim + block_h + 8.f;
                 bool in_handle = mpos.x >= bx0 && mpos.x <= bx1 &&
@@ -1812,13 +1854,14 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                 if (is_this_drag && ldown) {
                     s_dragging = true;
                     Clip& mc = state.tracks[ti].clips[show_ci];
-                    mc.sub_pos   = 3;
-                    mc.sub_pos_x = fmaxf(0.02f, fminf(0.98f, (mpos.x - p.x) / w));
-                    mc.sub_pos_y = fmaxf(0.02f, fminf(0.98f, (mpos.y - p.y) / h));
+                    mc.sub_pos      = 3;
+                    mc.sub_anchor_h = 1;  // center after free drag
+                    mc.sub_pos_x    = fmaxf(0.02f, fminf(0.98f, (mpos.x - p.x) / w));
+                    mc.sub_pos_y    = fmaxf(0.02f, fminf(0.98f, (mpos.y - p.y) / h));
                 }
                 if (in_handle && !ldown) {
-                    // Drag hint dots
-                    float mid_x = block_cx;
+                    // Drag hint dots at block center
+                    float mid_x = (blk_x0 + blk_x1) * 0.5f;
                     for (int d = -1; d <= 1; ++d)
                         dl->AddCircleFilled({mid_x + d*6.f, ty_anim - 8.f}, 2.f, to_u32(Col::muted));
                 }
@@ -1866,6 +1909,8 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
         ImU32 fl0 = IM_COL32(255, 210, 140, 0);
         dl->AddRectFilledMultiColor({p.x, p.y}, {fx+w*0.25f, p.y+h*0.15f}, fl0, fl, fl0, fl0);
     }
+
+    dl->PopClipRect();  // end video-frame clip region
 
     // Transform box overlay — drawn above content, below border chrome
     draw_transform_box(state, dl, p, w, h);
@@ -3920,6 +3965,9 @@ static void panel_typography(AppState& state, float w) {
         ImGui::InvisibleButton(btn_id, {cell_w, cell_h});
         if (ImGui::IsItemClicked()) {
             state.typo_preset_id = pr.id;
+            state.typo_font_size = 0.f;
+            memset(state.typo_color, 0, sizeof(state.typo_color));
+            state.typo_all_caps_override = false;
             generate_typography(state);
         }
 
