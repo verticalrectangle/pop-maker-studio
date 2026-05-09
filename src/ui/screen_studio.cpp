@@ -7422,6 +7422,7 @@ void ui_studio(AppState& state) {
             if (state.extract_source_track >= 0 &&
                 state.extract_source_track < (int)state.tracks.size())
                 insert_pos = state.extract_source_track + 1;
+            audio_source_ensure(state.extract_wav_path);
             state.tracks.insert(state.tracks.begin() + insert_pos, std::move(at));
             state.extract_source_track = -1;
             history_push(state, "Extract audio from video");
@@ -7459,6 +7460,7 @@ void ui_studio(AppState& state) {
                 Clip vc; vc.clip_type = ClipType::Audio;
                 vc.start = 0.f; vc.end = vdur; vc.text = state.vocals_path;
                 vt.clips.push_back(vc);
+                audio_source_ensure(state.vocals_path);
                 state.tracks.push_back(std::move(vt));
             }
         }
@@ -7492,8 +7494,12 @@ void ui_studio(AppState& state) {
                 d.volume   = cl.volume;   d.pan      = cl.pan;
                 d.fade_in  = cl.fade_in;  d.fade_out = cl.fade_out;
                 d.path     = cl.text;
-                if      (cl.clip_type == ClipType::Video) vdescs.push_back(d);
-                else if (cl.clip_type == ClipType::Audio) adescs.push_back(d);
+                if (cl.clip_type == ClipType::Video) {
+                    vdescs.push_back(d);
+                    audio_source_ensure(cl.text);  // load video audio into per-source buffer
+                } else if (cl.clip_type == ClipType::Audio) {
+                    adescs.push_back(d);
+                }
             }
         }
         video_audio_clips_update(vdescs);

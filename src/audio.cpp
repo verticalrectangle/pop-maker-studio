@@ -94,40 +94,27 @@ static void data_callback(ma_device* pDevice, void* pOutput, const void*, ma_uin
     for (ma_uint32 f = 0; f < frameCount; ++f) {
         float t = t0 + (float)f / 44100.f;
 
-        // ── Video-embedded audio (from g_samples, clip-positioned) ────────────
-        // Silence in gaps; correct source offset inside each clip.
-        if (!g_samples.empty()) {
-            for (const auto& cl : g_vid_clips) {
-                if (t < cl.tl_start || t >= cl.tl_end) continue;
-                float src_t = cl.in_point + (t - cl.tl_start) * cl.speed;
-                size_t sp = (size_t)(src_t * 44100.f) * 2;
-                if (sp + 1 >= g_samples.size()) break;
-                float fade = clip_fade(cl, t);
-                float vol  = cl.volume * g_volume * fade;
-                float panL = cl.pan <= 0.f ? 1.f : (1.f - cl.pan);
-                float panR = cl.pan >= 0.f ? 1.f : (1.f + cl.pan);
-                out[f*2]   += g_samples[sp]   * vol * panL;
-                out[f*2+1] += g_samples[sp+1] * vol * panR;
-                break;  // at most one video clip active per moment
-            }
-        }
-
-        // ── Timeline Audio-track clips (from per-source PCM cache) ────────────
-        for (const auto& cl : g_clips) {
-            if (t < cl.tl_start || t >= cl.tl_end) continue;
-            if (cl.buf_idx < 0 || cl.buf_idx >= (int)g_src_bufs.size()) continue;
+        // ── All clips (Video + Audio) read from per-source PCM buffers ──────────
+        // Video and Audio clips use the same g_src_bufs system so they layer
+        // cleanly within their brick range regardless of clip type.
+        auto mix_clip = [&](const ClipInfo& cl, float global_vol) {
+            if (t < cl.tl_start || t >= cl.tl_end) return;
+            if (cl.buf_idx < 0 || cl.buf_idx >= (int)g_src_bufs.size()) return;
             const auto& buf = g_src_bufs[cl.buf_idx].samples;
-            if (buf.empty()) continue;
+            if (buf.empty()) return;
             float src_t = cl.in_point + (t - cl.tl_start) * cl.speed;
             size_t sp = (size_t)(src_t * 44100.f) * 2;
-            if (sp + 1 >= buf.size()) continue;
+            if (sp + 1 >= buf.size()) return;
             float fade = clip_fade(cl, t);
-            float vol  = cl.volume * fade;
+            float vol  = cl.volume * global_vol * fade;
             float panL = cl.pan <= 0.f ? 1.f : (1.f - cl.pan);
             float panR = cl.pan >= 0.f ? 1.f : (1.f + cl.pan);
             out[f*2]   += buf[sp]   * vol * panL;
             out[f*2+1] += buf[sp+1] * vol * panR;
-        }
+        };
+
+        for (const auto& cl : g_vid_clips) mix_clip(cl, g_volume);
+        for (const auto& cl : g_clips)     mix_clip(cl, 1.f);
     }
 
     // Hard-clamp to prevent inter-clip summing from clipping.
@@ -352,7 +339,12 @@ void video_audio_clips_update(const std::vector<AudioClipDesc>& descs) {
         ci.in_point = d.in_point; ci.speed     = d.speed;
         ci.volume   = d.volume;   ci.pan       = d.pan;
         ci.fade_in  = d.fade_in;  ci.fade_out  = d.fade_out;
-        ci.buf_idx  = -1;  // Video clips read from g_samples, not g_src_bufs
+        ci.buf_idx  = -1;
+        for (int i = 0; i < (int)g_src_bufs.size(); ++i) {
+            if (g_src_bufs[i].path == d.path && g_src_bufs[i].ready) {
+                ci.buf_idx = i; break;
+            }
+        }
         g_vid_clips.push_back(ci);
     }
 }
