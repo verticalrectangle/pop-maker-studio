@@ -183,7 +183,9 @@ CreativeFXAccum collect_creative_fx(const AppState& state, float t, int below_tr
                     acc.chroma_key_threshold = cl.fx_chroma_key_threshold;
                     acc.chroma_key_softness  = cl.fx_chroma_key_softness;
                     break;
-                default: break;
+                default:
+#include "generated/fx_collect_cases.h"
+                    break;
             }
         }
     }

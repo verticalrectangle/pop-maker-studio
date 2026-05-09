@@ -1951,6 +1951,7 @@ static ImU32 fx_type_accent(FXType ft) {
         case FXType::VHS:        return IM_COL32(110,195,95,255);
         case FXType::Datamosh:   return IM_COL32(255,60,100,255);
         case FXType::ChromaKey:  return IM_COL32(50,220,120,255);
+#include "generated/fx_ui_color.h"
         default:                return IM_COL32(120,80,220,255);
     }
 }
@@ -1963,6 +1964,7 @@ static const char* fx_type_name(FXType ft) {
         case FXType::VHS:       return "VHS";
         case FXType::Datamosh:  return "MOSH";
         case FXType::ChromaKey: return "KEY";
+#include "generated/fx_ui_abbrev.h"
         default:                return "ADJUST";
     }
 }
@@ -1975,6 +1977,7 @@ static const char* fx_type_display(FXType ft) {
         case FXType::VHS:       return "VHS";
         case FXType::Datamosh:  return "Datamosh";
         case FXType::ChromaKey: return "Chroma Key";
+#include "generated/fx_ui_label.h"
         default:                return "Adjustment";
     }
 }
@@ -4260,13 +4263,15 @@ static void panel_fx_creative(AppState& state, float w) {
         {FXType::LightLeak, "Light Leak",  "Film flare  ·  amplitude-driven  ·  Screen blend",    IM_COL32(255,90,160,255)},
         {FXType::VHS,       "VHS",         "Chroma bleed  ·  grain  ·  tracking glitch",          IM_COL32(110,195,95,255)},
         {FXType::Datamosh,  "Datamosh",    "Temporal ghost  ·  multi-key chaos  ·  total mosh",   IM_COL32(255,60,100,255)},
+#include "generated/fx_ui_picker.h"
     };
+    static const int N_CARDS = (int)(sizeof(CARDS) / sizeof(CARDS[0]));
 
     float card_w  = w - 8.f;
     float card_h  = 96.f;
     float thumb_w = card_h * (108.f / 192.f);  // portrait thumbnail width at card height
 
-    for (int i = 0; i < 7; ++i) {
+    for (int i = 0; i < N_CARDS; ++i) {
         const FXCard& fc = CARDS[i];
         ImGui::PushID(i + 9000);
         ImVec2 cp = ImGui::GetCursorScreenPos();
@@ -4489,6 +4494,8 @@ static void panel_fx_clip(AppState& state, float w) {
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Chroma Key: softness");
             break;
         }
+
+#include "generated/fx_ui_inspector.h"
 
         default: break;
     }

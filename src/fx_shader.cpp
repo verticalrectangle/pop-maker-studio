@@ -6,6 +6,7 @@
 
 #include <cstdio>
 #include <cmath>
+#include <unordered_map>
 
 // ── GLSL shader sources ───────────────────────────────────────────────────────
 
@@ -267,12 +268,18 @@ static GLuint link_prog(const char* frag_src) {
 }
 
 
+// ── Generated shader strings ───────────────────────────────────────────────────
+#include "generated/fx_shader_strings.h"
+
 // ── GPU state ─────────────────────────────────────────────────────────────────
 
 static struct {
     GLuint grade = 0, blur = 0, chroma_key = 0, glitch = 0;
     GLuint vhs = 0, leak = 0, datamosh = 0, blit = 0;
 } g_prog;
+
+// Generated effects use a map keyed by (int)FXType — no struct fields needed.
+static std::unordered_map<int, GLuint> g_gen_progs;
 
 static GLuint g_vao = 0;  // empty VAO required by GL core profile
 
@@ -338,6 +345,9 @@ static void draw_pass(GLuint fbo, GLuint src_tex, int w, int h, GLuint prog,
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
+// Forward declaration — defined by the generated include below.
+static void fx_generated_init();
+
 void fx_shader_init() {
     g_prog.grade          = link_prog(k_grade_frag);
     g_prog.blur           = link_prog(k_blur_frag);
@@ -349,12 +359,17 @@ void fx_shader_init() {
     g_prog.blit           = link_prog(k_blit_frag);
 
     glGenVertexArrays(1, &g_vao);
+    fx_generated_init();
 }
+
+#include "generated/fx_shader_init.h"
 
 void fx_shader_shutdown() {
     for (auto p : { g_prog.grade, g_prog.blur, g_prog.chroma_key, g_prog.glitch,
                     g_prog.vhs, g_prog.leak, g_prog.datamosh, g_prog.blit })
         if (p) glDeleteProgram(p);
+    for (auto& [k, v] : g_gen_progs) if (v) glDeleteProgram(v);
+    g_gen_progs.clear();
 
     if (g_pp.fbo[0]) { glDeleteFramebuffers(2, g_pp.fbo); glDeleteTextures(2, g_pp.tex); }
     for (int i = 0; i < kMaxSlots; i++)
@@ -377,7 +392,7 @@ uintptr_t fx_apply(uintptr_t src_tex_in, int slot, int w, int h,
     bool need_datamosh = cfx.datamosh_on && cfx.datamosh_spread > 0.01f;
 
     if (!need_grade && !need_vig && !need_blur && !need_chroma &&
-        !need_glitch && !need_vhs && !need_leak && !need_datamosh)
+        !need_glitch && !need_vhs && !need_leak && !need_datamosh && !cfx.any_gen_fx)
         return src_tex_in;
 
     if (w <= 0 || h <= 0) return src_tex_in;
@@ -481,6 +496,9 @@ uintptr_t fx_apply(uintptr_t src_tex_in, int slot, int w, int h,
         run1(p);
     }
 
+    // ── Generated effects ─────────────────────────────────────────────────────
+#include "generated/fx_shader_apply.h"
+
     // ── Write final result to stable per-slot output ──────────────────────────
     draw_pass(g_out[slot].fbo, cur, w, h, g_prog.blit);
 
@@ -491,4 +509,17 @@ uintptr_t fx_apply(uintptr_t src_tex_in, int slot, int w, int h,
     glBindVertexArray(0);
 
     return (uintptr_t)g_out[slot].tex;
+}
+
+uintptr_t fx_preview_gen_effect(FXType ft, uintptr_t src_tex, int w, int h, float t) {
+    // Build a CreativeFXAccum with the requested effect enabled at default params.
+    CreativeFXAccum cfx;
+    switch (ft) {
+#include "generated/fx_preview_defaults.h"
+        default: return src_tex;
+    }
+    cfx.any_gen_fx = true;  // bypass early-return guard in fx_apply
+    EffectAccum ea;
+    // Use the last slot as a dedicated preview slot — never used by normal video rendering.
+    return fx_apply(src_tex, kMaxSlots - 1, w, h, ea, cfx, t);
 }

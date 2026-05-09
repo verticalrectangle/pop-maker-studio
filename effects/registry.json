@@ -1,0 +1,4166 @@
+{
+  "_comment": "Pop Maker Studio \u2014 generated effects registry. Run tools/codegen_effects.py after changes.",
+  "project_version": 21,
+  "effects": [
+    {
+      "id": "pixelate",
+      "enum": "Pixelate",
+      "label": "Pixelate",
+      "abbrev": "PXL",
+      "color": [
+        120,
+        80,
+        255,
+        255
+      ],
+      "description": "Mosaic pixel art  \u00b7  lo-fi crunch  \u00b7  adjustable block size",
+      "shader": "shaders/pixelate.glsl",
+      "params": [
+        {
+          "name": "size",
+          "label": "Block Size",
+          "min": 1.0,
+          "max": 64.0,
+          "default": 12.0,
+          "fmt": "%.0f px"
+        }
+      ]
+    },
+    {
+      "id": "film_grain",
+      "enum": "FilmGrain",
+      "label": "Film Grain",
+      "abbrev": "GRAIN",
+      "color": [
+        200,
+        180,
+        120,
+        255
+      ],
+      "description": "Analog film noise  \u00b7  luma-weighted grain  \u00b7  cinematic texture",
+      "shader": "shaders/film_grain.glsl",
+      "params": [
+        {
+          "name": "amount",
+          "label": "Amount",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 0.4,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "size",
+          "label": "Grain Size",
+          "min": 0.5,
+          "max": 4.0,
+          "default": 1.0,
+          "fmt": "%.1f"
+        }
+      ]
+    },
+    {
+      "id": "scanlines",
+      "enum": "Scanlines",
+      "label": "Scanlines",
+      "abbrev": "SCAN",
+      "color": [
+        60,
+        200,
+        100,
+        255
+      ],
+      "description": "CRT horizontal lines  \u00b7  interlace look  \u00b7  retro monitor",
+      "shader": "shaders/scanlines.glsl",
+      "params": [
+        {
+          "name": "density",
+          "label": "Line Density",
+          "min": 1.0,
+          "max": 6.0,
+          "default": 2.0,
+          "fmt": "%.1f"
+        },
+        {
+          "name": "strength",
+          "label": "Strength",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 0.5,
+          "fmt": "%.2f"
+        }
+      ]
+    },
+    {
+      "id": "chromatic_aberration",
+      "enum": "ChromaticAberration",
+      "label": "Chromatic Aberration",
+      "abbrev": "CA",
+      "color": [
+        255,
+        80,
+        180,
+        255
+      ],
+      "description": "Lens color fringing  \u00b7  R/B channel split  \u00b7  radial distortion",
+      "shader": "shaders/chromatic_aberration.glsl",
+      "params": [
+        {
+          "name": "strength",
+          "label": "Strength",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 0.3,
+          "fmt": "%.2f"
+        }
+      ]
+    },
+    {
+      "id": "duotone",
+      "enum": "Duotone",
+      "label": "Duotone",
+      "abbrev": "DUO",
+      "color": [
+        255,
+        140,
+        60,
+        255
+      ],
+      "description": "Two-color gradient map  \u00b7  shadow/highlight toning  \u00b7  poster look",
+      "shader": "shaders/duotone.glsl",
+      "params": [
+        {
+          "name": "shadow_r",
+          "label": "Shadow R",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 0.05,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "shadow_g",
+          "label": "Shadow G",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 0.02,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "shadow_b",
+          "label": "Shadow B",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 0.2,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "highlight_r",
+          "label": "Highlight R",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 1.0,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "highlight_g",
+          "label": "Highlight G",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 0.85,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "highlight_b",
+          "label": "Highlight B",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 0.1,
+          "fmt": "%.2f"
+        }
+      ]
+    },
+    {
+      "id": "neon_glow",
+      "enum": "NeonGlow",
+      "label": "Neon Glow",
+      "abbrev": "NEON",
+      "color": [
+        0,
+        255,
+        200,
+        255
+      ],
+      "description": "Edge bloom  \u00b7  oversaturated halo  \u00b7  cyberpunk",
+      "shader": "shaders/neon_glow.glsl",
+      "params": [
+        {
+          "name": "strength",
+          "label": "Strength",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 0.6,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "width",
+          "label": "Glow Width",
+          "min": 1.0,
+          "max": 8.0,
+          "default": 3.0,
+          "fmt": "%.1f px"
+        }
+      ]
+    },
+    {
+      "id": "thermal",
+      "enum": "Thermal",
+      "label": "Thermal",
+      "abbrev": "HEAT",
+      "color": [
+        255,
+        100,
+        0,
+        255
+      ],
+      "description": "Infrared heat map  \u00b7  iron palette  \u00b7  night-cam look",
+      "shader": "shaders/thermal.glsl",
+      "params": [
+        {
+          "name": "strength",
+          "label": "Blend",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 1.0,
+          "fmt": "%.2f"
+        }
+      ]
+    },
+    {
+      "id": "night_vision",
+      "enum": "NightVision",
+      "label": "Night Vision",
+      "abbrev": "NVG",
+      "color": [
+        40,
+        220,
+        60,
+        255
+      ],
+      "description": "Amplified green channel  \u00b7  phosphor noise  \u00b7  vignette",
+      "shader": "shaders/night_vision.glsl",
+      "params": [
+        {
+          "name": "noise",
+          "label": "Static",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 0.3,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "gain",
+          "label": "Gain",
+          "min": 0.5,
+          "max": 3.0,
+          "default": 1.2,
+          "fmt": "%.1f"
+        }
+      ]
+    },
+    {
+      "id": "old_film",
+      "enum": "OldFilm",
+      "label": "Old Film",
+      "abbrev": "OLD",
+      "color": [
+        210,
+        170,
+        90,
+        255
+      ],
+      "description": "Sepia  \u00b7  scratches  \u00b7  flicker  \u00b7  aged look",
+      "shader": "shaders/old_film.glsl",
+      "params": [
+        {
+          "name": "sepia",
+          "label": "Sepia",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 0.8,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "scratch",
+          "label": "Scratches",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 0.4,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "flicker",
+          "label": "Flicker",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 0.2,
+          "fmt": "%.2f"
+        }
+      ]
+    },
+    {
+      "id": "holographic",
+      "enum": "Holographic",
+      "label": "Holographic",
+      "abbrev": "HOLO",
+      "color": [
+        180,
+        100,
+        255,
+        255
+      ],
+      "description": "Rainbow iridescent overlay  \u00b7  angle-dependent hue shift  \u00b7  foil",
+      "shader": "shaders/holographic.glsl",
+      "params": [
+        {
+          "name": "strength",
+          "label": "Strength",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 0.5,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "speed",
+          "label": "Speed",
+          "min": 0.0,
+          "max": 4.0,
+          "default": 1.0,
+          "fmt": "%.1f"
+        }
+      ]
+    },
+    {
+      "id": "rgb_split",
+      "enum": "RGBSplit",
+      "label": "RGB Split",
+      "abbrev": "RGB",
+      "color": [
+        255,
+        50,
+        50,
+        255
+      ],
+      "description": "Animated channel separation  \u00b7  beat-reactive offset  \u00b7  digital tear",
+      "shader": "shaders/rgb_split.glsl",
+      "params": [
+        {
+          "name": "amount",
+          "label": "Amount",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 0.3,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "speed",
+          "label": "Speed",
+          "min": 0.0,
+          "max": 4.0,
+          "default": 1.0,
+          "fmt": "%.1f"
+        }
+      ]
+    },
+    {
+      "id": "posterize",
+      "enum": "Posterize",
+      "label": "Posterize",
+      "abbrev": "POST",
+      "color": [
+        255,
+        200,
+        50,
+        255
+      ],
+      "description": "Quantized color steps  \u00b7  screen-print look  \u00b7  comic poster",
+      "shader": "shaders/posterize.glsl",
+      "params": [
+        {
+          "name": "levels",
+          "label": "Color Levels",
+          "min": 2.0,
+          "max": 16.0,
+          "default": 4.0,
+          "fmt": "%.0f"
+        }
+      ]
+    },
+    {
+      "id": "halftone",
+      "enum": "Halftone",
+      "label": "Halftone",
+      "abbrev": "HALF",
+      "color": [
+        50,
+        150,
+        255,
+        255
+      ],
+      "description": "Dot grid print  \u00b7  newsprint  \u00b7  pop art raster",
+      "shader": "shaders/halftone.glsl",
+      "params": [
+        {
+          "name": "size",
+          "label": "Dot Size",
+          "min": 2.0,
+          "max": 20.0,
+          "default": 6.0,
+          "fmt": "%.0f px"
+        },
+        {
+          "name": "strength",
+          "label": "Strength",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 0.8,
+          "fmt": "%.2f"
+        }
+      ]
+    },
+    {
+      "id": "fisheye",
+      "enum": "Fisheye",
+      "label": "Fisheye",
+      "abbrev": "FISH",
+      "color": [
+        100,
+        200,
+        255,
+        255
+      ],
+      "description": "Barrel distortion  \u00b7  wide-angle lens warp  \u00b7  GoPro look",
+      "shader": "shaders/fisheye.glsl",
+      "params": [
+        {
+          "name": "strength",
+          "label": "Distortion",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 0.4,
+          "fmt": "%.2f"
+        }
+      ]
+    },
+    {
+      "id": "bleach_bypass",
+      "enum": "BleachBypass",
+      "label": "Bleach Bypass",
+      "abbrev": "BLCH",
+      "color": [
+        200,
+        200,
+        200,
+        255
+      ],
+      "description": "High contrast desaturated  \u00b7  film processing look  \u00b7  gritty",
+      "shader": "shaders/bleach_bypass.glsl",
+      "params": [
+        {
+          "name": "strength",
+          "label": "Strength",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 0.7,
+          "fmt": "%.2f"
+        }
+      ]
+    },
+    {
+      "id": "color_burn",
+      "enum": "ColorBurn",
+      "label": "Color Burn",
+      "abbrev": "BURN",
+      "color": [
+        220,
+        60,
+        20,
+        255
+      ],
+      "description": "Burn blend mode overlay  \u00b7  deep shadow crush  \u00b7  fire palette",
+      "shader": "shaders/color_burn.glsl",
+      "params": [
+        {
+          "name": "strength",
+          "label": "Strength",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 0.5,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "hue",
+          "label": "Hue Shift",
+          "min": 0.0,
+          "max": 360.0,
+          "default": 0.0,
+          "fmt": "%.0f\u00b0"
+        }
+      ]
+    },
+    {
+      "id": "crt",
+      "enum": "CRT",
+      "label": "CRT",
+      "abbrev": "CRT",
+      "color": [
+        80,
+        220,
+        180,
+        255
+      ],
+      "description": "Screen curvature  \u00b7  phosphor glow  \u00b7  scanlines  \u00b7  border",
+      "shader": "shaders/crt.glsl",
+      "params": [
+        {
+          "name": "curvature",
+          "label": "Curvature",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 0.4,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "glow",
+          "label": "Phosphor",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 0.3,
+          "fmt": "%.2f"
+        }
+      ]
+    },
+    {
+      "id": "sketch",
+      "enum": "Sketch",
+      "label": "Sketch",
+      "abbrev": "SKTCH",
+      "color": [
+        200,
+        200,
+        180,
+        255
+      ],
+      "description": "Pencil drawing  \u00b7  edge extraction  \u00b7  paper texture",
+      "shader": "shaders/sketch.glsl",
+      "params": [
+        {
+          "name": "strength",
+          "label": "Edge Strength",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 0.6,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "invert",
+          "label": "Invert",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 1.0,
+          "fmt": "%.0f"
+        }
+      ]
+    },
+    {
+      "id": "glitch_block",
+      "enum": "GlitchBlock",
+      "label": "Glitch Block",
+      "abbrev": "BLOK",
+      "color": [
+        0,
+        230,
+        255,
+        255
+      ],
+      "description": "Rectangular displacement blocks  \u00b7  heavy digital break  \u00b7  signal loss",
+      "shader": "shaders/glitch_block.glsl",
+      "params": [
+        {
+          "name": "amount",
+          "label": "Amount",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 0.4,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "speed",
+          "label": "Speed",
+          "min": 0.0,
+          "max": 4.0,
+          "default": 1.5,
+          "fmt": "%.1f"
+        }
+      ]
+    },
+    {
+      "id": "lomo",
+      "enum": "Lomo",
+      "label": "Lomo",
+      "abbrev": "LOMO",
+      "color": [
+        255,
+        120,
+        40,
+        255
+      ],
+      "description": "Vignetted  \u00b7  saturated lo-fi  \u00b7  light leaks  \u00b7  toy camera",
+      "shader": "shaders/lomo.glsl",
+      "params": [
+        {
+          "name": "vignette",
+          "label": "Vignette",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 0.85,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "saturation",
+          "label": "Color Pop",
+          "min": 0.0,
+          "max": 2.0,
+          "default": 1.8,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "fade",
+          "label": "Fade",
+          "min": 0.0,
+          "max": 0.5,
+          "default": 0.1,
+          "fmt": "%.2f"
+        }
+      ]
+    },
+    {
+      "id": "twirl",
+      "enum": "Twirl",
+      "label": "Twirl",
+      "description": "Vortex rotation spiraling from center",
+      "abbrev": "TWL",
+      "color": [
+        180,
+        60,
+        230,
+        220
+      ],
+      "shader": "shaders/twirl.glsl",
+      "params": [
+        {
+          "name": "strength",
+          "label": "Strength",
+          "default": 3.5,
+          "min": 0.0,
+          "max": 12.0,
+          "fmt": "%.1f"
+        },
+        {
+          "name": "radius",
+          "label": "Radius",
+          "default": 0.55,
+          "min": 0.1,
+          "max": 1.0,
+          "fmt": "%.2f"
+        }
+      ]
+    },
+    {
+      "id": "ripple",
+      "enum": "Ripple",
+      "label": "Ripple",
+      "description": "Expanding ring waves from center",
+      "abbrev": "RPL",
+      "color": [
+        40,
+        160,
+        220,
+        220
+      ],
+      "shader": "shaders/ripple.glsl",
+      "params": [
+        {
+          "name": "frequency",
+          "label": "Frequency",
+          "default": 18.0,
+          "min": 2.0,
+          "max": 40.0,
+          "fmt": "%.0f"
+        },
+        {
+          "name": "amplitude",
+          "label": "Amplitude",
+          "default": 0.035,
+          "min": 0.0,
+          "max": 0.1,
+          "fmt": "%.3f"
+        },
+        {
+          "name": "speed",
+          "label": "Speed",
+          "default": 2.0,
+          "min": 0.0,
+          "max": 6.0,
+          "fmt": "%.1f"
+        }
+      ]
+    },
+    {
+      "id": "wave_warp",
+      "enum": "WaveWarp",
+      "label": "Wave Warp",
+      "description": "Perpendicular sine-wave displacement field",
+      "abbrev": "WWP",
+      "color": [
+        60,
+        200,
+        160,
+        220
+      ],
+      "shader": "shaders/wave_warp.glsl",
+      "params": [
+        {
+          "name": "freq_x",
+          "label": "Freq X",
+          "default": 8.0,
+          "min": 1.0,
+          "max": 30.0,
+          "fmt": "%.0f"
+        },
+        {
+          "name": "freq_y",
+          "label": "Freq Y",
+          "default": 6.0,
+          "min": 1.0,
+          "max": 30.0,
+          "fmt": "%.0f"
+        },
+        {
+          "name": "amplitude",
+          "label": "Amplitude",
+          "default": 0.085,
+          "min": 0.0,
+          "max": 0.12,
+          "fmt": "%.3f"
+        },
+        {
+          "name": "speed",
+          "label": "Speed",
+          "default": 1.5,
+          "min": 0.0,
+          "max": 5.0,
+          "fmt": "%.1f"
+        }
+      ]
+    },
+    {
+      "id": "kaleidoscope",
+      "enum": "Kaleidoscope",
+      "label": "Kaleidoscope",
+      "description": "N-way radial mirror symmetry",
+      "abbrev": "KAL",
+      "color": [
+        230,
+        80,
+        150,
+        220
+      ],
+      "shader": "shaders/kaleidoscope.glsl",
+      "params": [
+        {
+          "name": "segments",
+          "label": "Segments",
+          "default": 8.0,
+          "min": 2.0,
+          "max": 16.0,
+          "fmt": "%.0f"
+        },
+        {
+          "name": "rotation",
+          "label": "Rotation",
+          "default": 0.0,
+          "min": 0.0,
+          "max": 6.28,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "zoom",
+          "label": "Zoom",
+          "default": 0.55,
+          "min": 0.5,
+          "max": 3.0,
+          "fmt": "%.1f"
+        }
+      ]
+    },
+    {
+      "id": "zoom_blur_rad",
+      "enum": "ZoomBlurRad",
+      "label": "Zoom Streak",
+      "description": "Radial motion blur emanating from focal point",
+      "abbrev": "ZST",
+      "color": [
+        200,
+        220,
+        40,
+        220
+      ],
+      "shader": "shaders/zoom_blur_rad.glsl",
+      "params": [
+        {
+          "name": "amount",
+          "label": "Amount",
+          "default": 0.12,
+          "min": 0.0,
+          "max": 0.35,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "cx",
+          "label": "Center X",
+          "default": 0.5,
+          "min": 0.0,
+          "max": 1.0,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "cy",
+          "label": "Center Y",
+          "default": 0.5,
+          "min": 0.0,
+          "max": 1.0,
+          "fmt": "%.2f"
+        }
+      ]
+    },
+    {
+      "id": "spin_blur",
+      "enum": "SpinBlur",
+      "label": "Spin Blur",
+      "description": "Rotational motion blur around center",
+      "abbrev": "SPB",
+      "color": [
+        160,
+        230,
+        80,
+        220
+      ],
+      "shader": "shaders/spin_blur.glsl",
+      "params": [
+        {
+          "name": "angle",
+          "label": "Angle",
+          "default": 0.08,
+          "min": 0.0,
+          "max": 0.3,
+          "fmt": "%.3f"
+        }
+      ]
+    },
+    {
+      "id": "heat_haze",
+      "enum": "HeatHaze",
+      "label": "Heat Haze",
+      "description": "Shimmering atmospheric heat distortion",
+      "abbrev": "HHZ",
+      "color": [
+        230,
+        160,
+        40,
+        220
+      ],
+      "shader": "shaders/heat_haze.glsl",
+      "params": [
+        {
+          "name": "intensity",
+          "label": "Intensity",
+          "default": 1.8,
+          "min": 0.0,
+          "max": 2.0,
+          "fmt": "%.1f"
+        },
+        {
+          "name": "speed",
+          "label": "Speed",
+          "default": 1.5,
+          "min": 0.0,
+          "max": 4.0,
+          "fmt": "%.1f"
+        }
+      ]
+    },
+    {
+      "id": "barrel_warp",
+      "enum": "BarrelWarp",
+      "label": "Barrel Warp",
+      "description": "Strong barrel / pin-cushion lens distortion",
+      "abbrev": "BWP",
+      "color": [
+        100,
+        200,
+        230,
+        220
+      ],
+      "shader": "shaders/barrel_warp.glsl",
+      "params": [
+        {
+          "name": "k1",
+          "label": "Barrel",
+          "default": 0.4,
+          "min": -1.0,
+          "max": 1.0,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "k2",
+          "label": "Pincush",
+          "default": 0.1,
+          "min": -0.5,
+          "max": 0.5,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "scale",
+          "label": "Scale",
+          "default": 0.9,
+          "min": 0.5,
+          "max": 1.0,
+          "fmt": "%.2f"
+        }
+      ]
+    },
+    {
+      "id": "anamorphic_streak",
+      "enum": "AnamorphicStreak",
+      "label": "Anamorphic Flare",
+      "description": "Horizontal cyan lens streak flares on bright highlights",
+      "abbrev": "ANF",
+      "color": [
+        80,
+        200,
+        255,
+        220
+      ],
+      "shader": "shaders/anamorphic_streak.glsl",
+      "params": [
+        {
+          "name": "threshold",
+          "label": "Threshold",
+          "default": 0.7,
+          "min": 0.3,
+          "max": 1.0,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "length",
+          "label": "Length",
+          "default": 0.45,
+          "min": 0.0,
+          "max": 1.0,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "intensity",
+          "label": "Intensity",
+          "default": 1.2,
+          "min": 0.0,
+          "max": 3.0,
+          "fmt": "%.1f"
+        }
+      ]
+    },
+    {
+      "id": "starburst_spike",
+      "enum": "StarburstSpike",
+      "label": "Starburst",
+      "description": "Star diffraction spikes on bright light sources",
+      "abbrev": "STB",
+      "color": [
+        255,
+        230,
+        80,
+        220
+      ],
+      "shader": "shaders/starburst_spike.glsl",
+      "params": [
+        {
+          "name": "threshold",
+          "label": "Threshold",
+          "default": 0.65,
+          "min": 0.3,
+          "max": 1.0,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "length",
+          "label": "Length",
+          "default": 0.25,
+          "min": 0.0,
+          "max": 0.6,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "rays",
+          "label": "Rays",
+          "default": 6.0,
+          "min": 4.0,
+          "max": 12.0,
+          "fmt": "%.0f"
+        }
+      ]
+    },
+    {
+      "id": "god_rays",
+      "enum": "GodRays",
+      "label": "God Rays",
+      "description": "Volumetric crepuscular light shafts from highlights",
+      "abbrev": "GDR",
+      "color": [
+        255,
+        200,
+        80,
+        220
+      ],
+      "shader": "shaders/god_rays.glsl",
+      "params": [
+        {
+          "name": "intensity",
+          "label": "Intensity",
+          "default": 2.2,
+          "min": 0.0,
+          "max": 2.0,
+          "fmt": "%.1f"
+        },
+        {
+          "name": "decay",
+          "label": "Decay",
+          "default": 0.94,
+          "min": 0.7,
+          "max": 1.0,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "cx",
+          "label": "Source X",
+          "default": 0.5,
+          "min": 0.0,
+          "max": 1.0,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "cy",
+          "label": "Source Y",
+          "default": 0.85,
+          "min": 0.0,
+          "max": 1.0,
+          "fmt": "%.2f"
+        }
+      ]
+    },
+    {
+      "id": "aurora_borealis",
+      "enum": "AuroraBorealis",
+      "label": "Aurora",
+      "description": "Animated aurora borealis color curtains",
+      "abbrev": "AUR",
+      "color": [
+        40,
+        230,
+        180,
+        220
+      ],
+      "shader": "shaders/aurora_borealis.glsl",
+      "params": [
+        {
+          "name": "intensity",
+          "label": "Intensity",
+          "default": 0.7,
+          "min": 0.0,
+          "max": 2.0,
+          "fmt": "%.1f"
+        },
+        {
+          "name": "speed",
+          "label": "Speed",
+          "default": 0.4,
+          "min": 0.0,
+          "max": 2.0,
+          "fmt": "%.1f"
+        },
+        {
+          "name": "color_shift",
+          "label": "Color Shift",
+          "default": 0.3,
+          "min": 0.0,
+          "max": 1.0,
+          "fmt": "%.2f"
+        }
+      ]
+    },
+    {
+      "id": "bokeh_dream",
+      "enum": "BokehDream",
+      "label": "Bokeh Dream",
+      "description": "Out-of-focus dreamy bokeh highlight circles",
+      "abbrev": "BKH",
+      "color": [
+        200,
+        120,
+        230,
+        220
+      ],
+      "shader": "shaders/bokeh_dream.glsl",
+      "params": [
+        {
+          "name": "radius",
+          "label": "Radius",
+          "default": 0.025,
+          "min": 0.0,
+          "max": 0.08,
+          "fmt": "%.3f"
+        },
+        {
+          "name": "threshold",
+          "label": "Threshold",
+          "default": 0.55,
+          "min": 0.0,
+          "max": 1.0,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "intensity",
+          "label": "Intensity",
+          "default": 1.5,
+          "min": 0.0,
+          "max": 4.0,
+          "fmt": "%.1f"
+        }
+      ]
+    },
+    {
+      "id": "prism_disperse",
+      "enum": "PrismDisperse",
+      "label": "Prism",
+      "description": "Prismatic rainbow dispersion at edges",
+      "abbrev": "PRM",
+      "color": [
+        255,
+        100,
+        200,
+        220
+      ],
+      "shader": "shaders/prism_disperse.glsl",
+      "params": [
+        {
+          "name": "spread",
+          "label": "Spread",
+          "default": 0.06,
+          "min": 0.0,
+          "max": 0.2,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "intensity",
+          "label": "Intensity",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 2.0,
+          "fmt": "%.1f"
+        }
+      ]
+    },
+    {
+      "id": "film_burn",
+      "enum": "FilmBurn",
+      "label": "Film Burn",
+      "description": "Organic burning film edge degradation",
+      "abbrev": "FBN",
+      "color": [
+        230,
+        100,
+        30,
+        220
+      ],
+      "shader": "shaders/film_burn.glsl",
+      "params": [
+        {
+          "name": "intensity",
+          "label": "Intensity",
+          "default": 0.8,
+          "min": 0.0,
+          "max": 2.0,
+          "fmt": "%.1f"
+        },
+        {
+          "name": "speed",
+          "label": "Speed",
+          "default": 1.2,
+          "min": 0.0,
+          "max": 3.0,
+          "fmt": "%.1f"
+        },
+        {
+          "name": "edge",
+          "label": "Edge",
+          "default": 0.25,
+          "min": 0.0,
+          "max": 0.6,
+          "fmt": "%.2f"
+        }
+      ]
+    },
+    {
+      "id": "oil_paint",
+      "enum": "OilPaint",
+      "label": "Oil Paint",
+      "description": "Kuwahara painterly filter \u2014 sharp but smooth like oil",
+      "abbrev": "OIL",
+      "color": [
+        180,
+        120,
+        60,
+        220
+      ],
+      "shader": "shaders/oil_paint.glsl",
+      "params": [
+        {
+          "name": "radius",
+          "label": "Brush",
+          "default": 4.0,
+          "min": 1.0,
+          "max": 8.0,
+          "fmt": "%.0f"
+        },
+        {
+          "name": "sharpness",
+          "label": "Sharpness",
+          "default": 8.0,
+          "min": 1.0,
+          "max": 20.0,
+          "fmt": "%.0f"
+        }
+      ]
+    },
+    {
+      "id": "stained_glass",
+      "enum": "StainedGlass",
+      "label": "Stained Glass",
+      "description": "Voronoi-cell stained glass with dark lead borders",
+      "abbrev": "SGS",
+      "color": [
+        80,
+        180,
+        230,
+        220
+      ],
+      "shader": "shaders/stained_glass.glsl",
+      "params": [
+        {
+          "name": "cell_size",
+          "label": "Cell Size",
+          "default": 18.0,
+          "min": 4.0,
+          "max": 48.0,
+          "fmt": "%.0f"
+        },
+        {
+          "name": "border",
+          "label": "Border",
+          "default": 0.08,
+          "min": 0.0,
+          "max": 0.3,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "saturation",
+          "label": "Saturation",
+          "default": 1.6,
+          "min": 0.5,
+          "max": 3.0,
+          "fmt": "%.1f"
+        }
+      ]
+    },
+    {
+      "id": "neon_edge_glow",
+      "enum": "NeonEdgeGlow",
+      "label": "Neon Edges",
+      "description": "Sobel edge detection with colored neon glow",
+      "abbrev": "NEG",
+      "color": [
+        255,
+        50,
+        200,
+        220
+      ],
+      "shader": "shaders/neon_edge_glow.glsl",
+      "params": [
+        {
+          "name": "threshold",
+          "label": "Threshold",
+          "default": 0.15,
+          "min": 0.0,
+          "max": 0.5,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "glow",
+          "label": "Glow",
+          "default": 0.8,
+          "min": 0.0,
+          "max": 2.0,
+          "fmt": "%.1f"
+        },
+        {
+          "name": "hue",
+          "label": "Hue",
+          "default": 0.55,
+          "min": 0.0,
+          "max": 1.0,
+          "fmt": "%.2f"
+        }
+      ]
+    },
+    {
+      "id": "cyberpunk_grade",
+      "enum": "CyberpunkGrade",
+      "label": "Cyberpunk",
+      "description": "Deep blue-teal shadows with cyan/orange highlights",
+      "abbrev": "CPK",
+      "color": [
+        40,
+        200,
+        230,
+        220
+      ],
+      "shader": "shaders/cyberpunk_grade.glsl",
+      "params": [
+        {
+          "name": "shadow_teal",
+          "label": "Shadow Teal",
+          "default": 0.9,
+          "min": 0.0,
+          "max": 1.0,
+          "fmt": "%.1f"
+        },
+        {
+          "name": "hi_orange",
+          "label": "Hi Orange",
+          "default": 0.85,
+          "min": 0.0,
+          "max": 1.0,
+          "fmt": "%.1f"
+        },
+        {
+          "name": "contrast",
+          "label": "Contrast",
+          "default": 1.7,
+          "min": 1.0,
+          "max": 2.5,
+          "fmt": "%.1f"
+        }
+      ]
+    },
+    {
+      "id": "matrix_rain",
+      "enum": "MatrixRain",
+      "label": "Matrix",
+      "description": "Digital matrix green rain overlay",
+      "abbrev": "MTX",
+      "color": [
+        30,
+        200,
+        60,
+        220
+      ],
+      "shader": "shaders/matrix_rain.glsl",
+      "params": [
+        {
+          "name": "density",
+          "label": "Density",
+          "default": 0.45,
+          "min": 0.0,
+          "max": 1.0,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "speed",
+          "label": "Speed",
+          "default": 2.0,
+          "min": 0.5,
+          "max": 6.0,
+          "fmt": "%.1f"
+        },
+        {
+          "name": "green_mix",
+          "label": "Mix",
+          "default": 0.55,
+          "min": 0.0,
+          "max": 1.0,
+          "fmt": "%.2f"
+        }
+      ]
+    },
+    {
+      "id": "pixel_sort",
+      "enum": "PixelSort",
+      "label": "Pixel Sort",
+      "description": "Glitch art: sorts pixels by brightness along rows",
+      "abbrev": "PST",
+      "color": [
+        255,
+        80,
+        120,
+        220
+      ],
+      "shader": "shaders/pixel_sort.glsl",
+      "params": [
+        {
+          "name": "threshold",
+          "label": "Threshold",
+          "default": 0.35,
+          "min": 0.0,
+          "max": 0.9,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "amount",
+          "label": "Amount",
+          "default": 0.7,
+          "min": 0.0,
+          "max": 1.0,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "direction",
+          "label": "Direction",
+          "default": 0.0,
+          "min": 0.0,
+          "max": 1.0,
+          "fmt": "%.0f"
+        }
+      ]
+    },
+    {
+      "id": "solarize",
+      "enum": "Solarize",
+      "label": "Solarize",
+      "description": "Sabattier partial-negative solarization",
+      "abbrev": "SLZ",
+      "color": [
+        230,
+        80,
+        200,
+        220
+      ],
+      "shader": "shaders/solarize.glsl",
+      "params": [
+        {
+          "name": "threshold",
+          "label": "Threshold",
+          "default": 0.5,
+          "min": 0.0,
+          "max": 1.0,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "strength",
+          "label": "Strength",
+          "default": 0.9,
+          "min": 0.0,
+          "max": 1.0,
+          "fmt": "%.2f"
+        }
+      ]
+    },
+    {
+      "id": "double_ghost",
+      "enum": "DoubleGhost",
+      "label": "Double Ghost",
+      "description": "Double-exposure ghost offset \u2014 drunk / split double-vision",
+      "abbrev": "DGH",
+      "color": [
+        180,
+        180,
+        255,
+        220
+      ],
+      "shader": "shaders/double_ghost.glsl",
+      "params": [
+        {
+          "name": "offset",
+          "label": "Offset",
+          "default": 0.06,
+          "min": 0.0,
+          "max": 0.15,
+          "fmt": "%.3f"
+        },
+        {
+          "name": "opacity",
+          "label": "Opacity",
+          "default": 0.65,
+          "min": 0.0,
+          "max": 1.0,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "angle",
+          "label": "Angle",
+          "default": 10.0,
+          "min": 0.0,
+          "max": 90.0,
+          "fmt": "%.0f"
+        }
+      ]
+    },
+    {
+      "id": "watercolor",
+      "enum": "Watercolor",
+      "label": "Watercolor",
+      "description": "Watercolor wash \u2014 bleeding edges and soft paper texture",
+      "abbrev": "WCL",
+      "color": [
+        100,
+        180,
+        230,
+        220
+      ],
+      "shader": "shaders/watercolor.glsl",
+      "params": [
+        {
+          "name": "bleeding",
+          "label": "Bleeding",
+          "default": 0.018,
+          "min": 0.0,
+          "max": 0.06,
+          "fmt": "%.3f"
+        },
+        {
+          "name": "paper",
+          "label": "Paper",
+          "default": 0.5,
+          "min": 0.0,
+          "max": 1.0,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "saturation",
+          "label": "Saturation",
+          "default": 1.4,
+          "min": 0.5,
+          "max": 2.5,
+          "fmt": "%.1f"
+        }
+      ]
+    },
+    {
+      "id": "comic_dots",
+      "enum": "ComicDots",
+      "label": "Comic Book",
+      "description": "Ben-Day halftone dots + ink outline like pop art comics",
+      "abbrev": "CMC",
+      "color": [
+        255,
+        220,
+        40,
+        220
+      ],
+      "shader": "shaders/comic_dots.glsl",
+      "params": [
+        {
+          "name": "dot_size",
+          "label": "Dot Size",
+          "default": 4.0,
+          "min": 1.0,
+          "max": 10.0,
+          "fmt": "%.0f"
+        },
+        {
+          "name": "ink_threshold",
+          "label": "Ink",
+          "default": 0.12,
+          "min": 0.0,
+          "max": 0.4,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "color_levels",
+          "label": "Colors",
+          "default": 4.0,
+          "min": 2.0,
+          "max": 8.0,
+          "fmt": "%.0f"
+        }
+      ]
+    },
+    {
+      "id": "crosshatch",
+      "enum": "Crosshatch",
+      "label": "Crosshatch",
+      "description": "Pen crosshatch shading on light sketch paper",
+      "abbrev": "XHT",
+      "color": [
+        140,
+        120,
+        80,
+        220
+      ],
+      "shader": "shaders/crosshatch.glsl",
+      "params": [
+        {
+          "name": "density",
+          "label": "Density",
+          "default": 6.0,
+          "min": 2.0,
+          "max": 20.0,
+          "fmt": "%.0f"
+        },
+        {
+          "name": "thickness",
+          "label": "Thickness",
+          "default": 0.5,
+          "min": 0.1,
+          "max": 0.8,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "angle",
+          "label": "Angle",
+          "default": 0.0,
+          "min": 0.0,
+          "max": 90.0,
+          "fmt": "%.0f"
+        }
+      ]
+    },
+    {
+      "id": "daguerreotype",
+      "enum": "Daguerreotype",
+      "label": "Daguerreotype",
+      "description": "19th-century silver-plate sepia photograph",
+      "abbrev": "DAG",
+      "color": [
+        180,
+        150,
+        80,
+        220
+      ],
+      "shader": "shaders/daguerreotype.glsl",
+      "params": [
+        {
+          "name": "tone",
+          "label": "Tone",
+          "default": 0.5,
+          "min": 0.0,
+          "max": 1.0,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "vignette",
+          "label": "Vignette",
+          "default": 0.9,
+          "min": 0.0,
+          "max": 2.0,
+          "fmt": "%.1f"
+        },
+        {
+          "name": "scratch",
+          "label": "Scratch",
+          "default": 0.4,
+          "min": 0.0,
+          "max": 1.0,
+          "fmt": "%.2f"
+        }
+      ]
+    },
+    {
+      "id": "super8_film",
+      "enum": "Super8Film",
+      "label": "Super 8",
+      "description": "Super 8mm film with gate weave, grain and warm fade",
+      "abbrev": "S8F",
+      "color": [
+        220,
+        160,
+        60,
+        220
+      ],
+      "shader": "shaders/super8_film.glsl",
+      "params": [
+        {
+          "name": "grain",
+          "label": "Grain",
+          "default": 0.6,
+          "min": 0.0,
+          "max": 1.5,
+          "fmt": "%.1f"
+        },
+        {
+          "name": "gate",
+          "label": "Gate Weave",
+          "default": 0.4,
+          "min": 0.0,
+          "max": 1.0,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "fade",
+          "label": "Fade",
+          "default": 0.5,
+          "min": 0.0,
+          "max": 1.0,
+          "fmt": "%.2f"
+        }
+      ]
+    },
+    {
+      "id": "vhs_dropout",
+      "enum": "VHSDrop",
+      "label": "VHS Dropout",
+      "description": "VHS tape dropout: horizontal signal-loss white bars",
+      "abbrev": "VHD",
+      "color": [
+        200,
+        200,
+        200,
+        220
+      ],
+      "shader": "shaders/vhs_dropout.glsl",
+      "params": [
+        {
+          "name": "density",
+          "label": "Density",
+          "default": 0.12,
+          "min": 0.0,
+          "max": 0.4,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "strength",
+          "label": "Strength",
+          "default": 0.85,
+          "min": 0.0,
+          "max": 1.0,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "speed",
+          "label": "Speed",
+          "default": 3.0,
+          "min": 0.0,
+          "max": 8.0,
+          "fmt": "%.1f"
+        }
+      ]
+    },
+    {
+      "id": "x_ray",
+      "enum": "XRay",
+      "label": "X-Ray",
+      "description": "X-ray: inverted high-contrast with blue-white tone",
+      "abbrev": "XRY",
+      "color": [
+        180,
+        220,
+        255,
+        220
+      ],
+      "shader": "shaders/x_ray.glsl",
+      "params": [
+        {
+          "name": "contrast",
+          "label": "Contrast",
+          "default": 1.8,
+          "min": 0.5,
+          "max": 4.0,
+          "fmt": "%.1f"
+        },
+        {
+          "name": "blue_tint",
+          "label": "Blue Tint",
+          "default": 0.6,
+          "min": 0.0,
+          "max": 1.0,
+          "fmt": "%.2f"
+        }
+      ]
+    },
+    {
+      "id": "bit_crush",
+      "enum": "BitCrush",
+      "label": "Bit Crush",
+      "description": "Bit-depth reduction \u2014 chunky posterized pixels with dither",
+      "abbrev": "BCR",
+      "color": [
+        80,
+        255,
+        80,
+        220
+      ],
+      "shader": "shaders/bit_crush.glsl",
+      "params": [
+        {
+          "name": "levels",
+          "label": "Levels",
+          "default": 6.0,
+          "min": 2.0,
+          "max": 32.0,
+          "fmt": "%.0f"
+        },
+        {
+          "name": "dither",
+          "label": "Dither",
+          "default": 0.4,
+          "min": 0.0,
+          "max": 1.0,
+          "fmt": "%.2f"
+        }
+      ]
+    },
+    {
+      "id": "tv_static",
+      "enum": "TVStatic",
+      "label": "TV Static",
+      "description": "Analog TV static noise \u2014 channel between stations",
+      "abbrev": "TVS",
+      "color": [
+        200,
+        200,
+        200,
+        220
+      ],
+      "shader": "shaders/tv_static.glsl",
+      "params": [
+        {
+          "name": "amount",
+          "label": "Amount",
+          "default": 0.55,
+          "min": 0.0,
+          "max": 1.0,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "color_mix",
+          "label": "Color Mix",
+          "default": 0.25,
+          "min": 0.0,
+          "max": 1.0,
+          "fmt": "%.2f"
+        }
+      ]
+    },
+    {
+      "id": "dither_bayer",
+      "enum": "DitherBayer",
+      "label": "Dither",
+      "description": "Ordered Bayer dithering \u2014 retro 1-bit style",
+      "abbrev": "DTH",
+      "color": [
+        40,
+        40,
+        40,
+        220
+      ],
+      "shader": "shaders/dither_bayer.glsl",
+      "params": [
+        {
+          "name": "levels",
+          "label": "Levels",
+          "default": 3.0,
+          "min": 1.0,
+          "max": 8.0,
+          "fmt": "%.0f"
+        },
+        {
+          "name": "scale",
+          "label": "Scale",
+          "default": 2.0,
+          "min": 1.0,
+          "max": 6.0,
+          "fmt": "%.0f"
+        },
+        {
+          "name": "color",
+          "label": "Color",
+          "default": 0.4,
+          "min": 0.0,
+          "max": 1.0,
+          "fmt": "%.2f"
+        }
+      ]
+    },
+    {
+      "id": "miami_vice",
+      "enum": "MiamiVice",
+      "label": "Miami Vice",
+      "description": "80s hot pink and teal pastel neon palette",
+      "abbrev": "MVC",
+      "color": [
+        255,
+        80,
+        160,
+        220
+      ],
+      "shader": "shaders/miami_vice.glsl",
+      "params": [
+        {
+          "name": "strength",
+          "label": "Strength",
+          "default": 0.8,
+          "min": 0.0,
+          "max": 1.0,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "saturation",
+          "label": "Saturation",
+          "default": 1.8,
+          "min": 0.5,
+          "max": 3.0,
+          "fmt": "%.1f"
+        }
+      ]
+    },
+    {
+      "id": "horror_grade",
+      "enum": "HorrorGrade",
+      "label": "Horror",
+      "description": "Desaturated red-channel horror film grade",
+      "abbrev": "HRR",
+      "color": [
+        200,
+        20,
+        20,
+        220
+      ],
+      "shader": "shaders/horror_grade.glsl",
+      "params": [
+        {
+          "name": "desat",
+          "label": "Desaturate",
+          "default": 0.8,
+          "min": 0.0,
+          "max": 1.0,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "red",
+          "label": "Red Boost",
+          "default": 0.45,
+          "min": 0.0,
+          "max": 1.0,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "crush",
+          "label": "Crush",
+          "default": 0.15,
+          "min": 0.0,
+          "max": 0.4,
+          "fmt": "%.2f"
+        }
+      ]
+    },
+    {
+      "id": "split_toning",
+      "enum": "SplitToning",
+      "label": "Split Tone",
+      "description": "Shadow/highlight split toning with independent hue control",
+      "abbrev": "SPT",
+      "color": [
+        120,
+        80,
+        200,
+        220
+      ],
+      "shader": "shaders/split_toning.glsl",
+      "params": [
+        {
+          "name": "shadow_hue",
+          "label": "Shadow Hue",
+          "default": 0.6,
+          "min": 0.0,
+          "max": 1.0,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "hi_hue",
+          "label": "Highlight Hue",
+          "default": 0.1,
+          "min": 0.0,
+          "max": 1.0,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "strength",
+          "label": "Strength",
+          "default": 0.8,
+          "min": 0.0,
+          "max": 1.0,
+          "fmt": "%.2f"
+        }
+      ]
+    },
+    {
+      "id": "desert_gold",
+      "enum": "DesertGold",
+      "label": "Desert Gold",
+      "description": "Sun-bleached golden desert haze with lifted blacks",
+      "abbrev": "DSG",
+      "color": [
+        230,
+        190,
+        80,
+        220
+      ],
+      "shader": "shaders/desert_gold.glsl",
+      "params": [
+        {
+          "name": "warmth",
+          "label": "Warmth",
+          "default": 0.9,
+          "min": 0.0,
+          "max": 1.0,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "fade",
+          "label": "Fade",
+          "default": 0.6,
+          "min": 0.0,
+          "max": 1.0,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "haze",
+          "label": "Haze",
+          "default": 0.5,
+          "min": 0.0,
+          "max": 1.0,
+          "fmt": "%.2f"
+        }
+      ]
+    },
+    {
+      "id": "emboss_relief",
+      "enum": "EmbossRelief",
+      "label": "Emboss",
+      "description": "3D emboss relief sculpture with directional lighting",
+      "abbrev": "EMB",
+      "color": [
+        160,
+        160,
+        160,
+        220
+      ],
+      "shader": "shaders/emboss_relief.glsl",
+      "params": [
+        {
+          "name": "strength",
+          "label": "Strength",
+          "default": 3.0,
+          "min": 0.5,
+          "max": 8.0,
+          "fmt": "%.1f"
+        },
+        {
+          "name": "angle",
+          "label": "Light Angle",
+          "default": 135.0,
+          "min": 0.0,
+          "max": 360.0,
+          "fmt": "%.0f"
+        },
+        {
+          "name": "colorize",
+          "label": "Colorize",
+          "default": 0.0,
+          "min": 0.0,
+          "max": 1.0,
+          "fmt": "%.2f"
+        }
+      ]
+    },
+    {
+      "id": "pointillist",
+      "enum": "Pointillist",
+      "label": "Pointillism",
+      "description": "Seurat-style pointillist dots \u2014 image from colored circles",
+      "abbrev": "PTL",
+      "color": [
+        200,
+        230,
+        80,
+        220
+      ],
+      "shader": "shaders/pointillist.glsl",
+      "params": [
+        {
+          "name": "dot_size",
+          "label": "Dot Size",
+          "default": 5.0,
+          "min": 2.0,
+          "max": 14.0,
+          "fmt": "%.0f"
+        },
+        {
+          "name": "scatter",
+          "label": "Scatter",
+          "default": 0.4,
+          "min": 0.0,
+          "max": 1.0,
+          "fmt": "%.2f"
+        }
+      ]
+    },
+    {
+      "id": "interlace_glitch",
+      "enum": "InterlaceGlitch",
+      "label": "Interlace",
+      "description": "CRT interlace field offset glitch \u2014 alternating row shift",
+      "abbrev": "ILG",
+      "color": [
+        200,
+        80,
+        80,
+        220
+      ],
+      "shader": "shaders/interlace_glitch.glsl",
+      "params": [
+        {
+          "name": "strength",
+          "label": "Strength",
+          "default": 0.012,
+          "min": 0.0,
+          "max": 0.05,
+          "fmt": "%.3f"
+        },
+        {
+          "name": "intensity",
+          "label": "Intensity",
+          "default": 0.6,
+          "min": 0.0,
+          "max": 1.0,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "speed",
+          "label": "Speed",
+          "default": 2.0,
+          "min": 0.0,
+          "max": 6.0,
+          "fmt": "%.1f"
+        }
+      ]
+    },
+    {
+      "id": "frosted_glass",
+      "enum": "FrostedGlass",
+      "label": "Frosted Glass",
+      "description": "Frosted glass \u2014 directional blur with edge-dependent scatter",
+      "abbrev": "FRG",
+      "color": [
+        200,
+        230,
+        255,
+        220
+      ],
+      "shader": "shaders/frosted_glass.glsl",
+      "params": [
+        {
+          "name": "blur",
+          "label": "Blur",
+          "default": 0.018,
+          "min": 0.0,
+          "max": 0.06,
+          "fmt": "%.3f"
+        },
+        {
+          "name": "noise",
+          "label": "Noise",
+          "default": 0.5,
+          "min": 0.0,
+          "max": 1.0,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "tint",
+          "label": "Tint",
+          "default": 0.3,
+          "min": 0.0,
+          "max": 1.0,
+          "fmt": "%.2f"
+        }
+      ]
+    },
+    {
+      "id": "mirror_fold",
+      "enum": "MirrorFold",
+      "label": "Mirror Fold",
+      "description": "Horizontal mirror fold \u2014 left half reflects to right",
+      "abbrev": "MRF",
+      "color": [
+        140,
+        200,
+        255,
+        220
+      ],
+      "shader": "shaders/mirror_fold.glsl",
+      "params": [
+        {
+          "name": "axis",
+          "label": "Axis",
+          "default": 0.5,
+          "min": 0.0,
+          "max": 1.0,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "vertical",
+          "label": "Vertical",
+          "default": 0.0,
+          "min": 0.0,
+          "max": 1.0,
+          "fmt": "%.0f"
+        },
+        {
+          "name": "blend",
+          "label": "Blend",
+          "default": 0.0,
+          "min": 0.0,
+          "max": 1.0,
+          "fmt": "%.2f"
+        }
+      ]
+    },
+    {
+      "id": "echo_trails",
+      "enum": "EchoTrails",
+      "label": "Echo Trails",
+      "description": "Fading ghost trail echo copies shifted in a direction",
+      "abbrev": "ECT",
+      "color": [
+        180,
+        100,
+        255,
+        220
+      ],
+      "shader": "shaders/echo_trails.glsl",
+      "params": [
+        {
+          "name": "offset",
+          "label": "Offset",
+          "default": 0.025,
+          "min": 0.0,
+          "max": 0.1,
+          "fmt": "%.3f"
+        },
+        {
+          "name": "fade",
+          "label": "Fade",
+          "default": 0.55,
+          "min": 0.1,
+          "max": 0.9,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "angle",
+          "label": "Angle",
+          "default": 45.0,
+          "min": 0.0,
+          "max": 360.0,
+          "fmt": "%.0f"
+        }
+      ]
+    },
+    {
+      "id": "gradient_map",
+      "enum": "GradientMap",
+      "label": "Gradient Map",
+      "description": "Maps luminance to a two-color gradient ramp",
+      "abbrev": "GRM",
+      "color": [
+        100,
+        180,
+        255,
+        220
+      ],
+      "shader": "shaders/gradient_map.glsl",
+      "params": [
+        {
+          "name": "hue1",
+          "label": "Shadow Hue",
+          "default": 0.65,
+          "min": 0.0,
+          "max": 1.0,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "hue2",
+          "label": "Highlight Hue",
+          "default": 0.12,
+          "min": 0.0,
+          "max": 1.0,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "mix_orig",
+          "label": "Mix Original",
+          "default": 0.0,
+          "min": 0.0,
+          "max": 1.0,
+          "fmt": "%.2f"
+        }
+      ]
+    },
+    {
+      "id": "cross_process",
+      "enum": "CrossProcess",
+      "label": "Cross Process",
+      "description": "E6 slide film cross-processed in C41: wild hue shifts",
+      "abbrev": "CXP",
+      "color": [
+        255,
+        120,
+        60,
+        220
+      ],
+      "shader": "shaders/cross_process.glsl",
+      "params": [
+        {
+          "name": "strength",
+          "label": "Strength",
+          "default": 0.85,
+          "min": 0.0,
+          "max": 1.0,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "contrast",
+          "label": "Contrast",
+          "default": 1.4,
+          "min": 1.0,
+          "max": 2.5,
+          "fmt": "%.1f"
+        }
+      ]
+    },
+    {
+      "id": "plasma_field",
+      "enum": "PlasmaField",
+      "label": "Plasma",
+      "description": "Psychedelic animated plasma color field overlay",
+      "abbrev": "PLS",
+      "color": [
+        255,
+        60,
+        200,
+        220
+      ],
+      "shader": "shaders/plasma_field.glsl",
+      "params": [
+        {
+          "name": "scale",
+          "label": "Scale",
+          "default": 4.0,
+          "min": 1.0,
+          "max": 12.0,
+          "fmt": "%.0f"
+        },
+        {
+          "name": "speed",
+          "label": "Speed",
+          "default": 1.5,
+          "min": 0.0,
+          "max": 5.0,
+          "fmt": "%.1f"
+        },
+        {
+          "name": "intensity",
+          "label": "Mix",
+          "default": 0.55,
+          "min": 0.0,
+          "max": 1.0,
+          "fmt": "%.2f"
+        }
+      ]
+    },
+    {
+      "id": "fire_edge",
+      "enum": "FireEdge",
+      "label": "Fire Edge",
+      "description": "Procedural fire rises from the bottom edges",
+      "abbrev": "FRE",
+      "color": [
+        255,
+        80,
+        0,
+        220
+      ],
+      "shader": "shaders/fire_edge.glsl",
+      "params": [
+        {
+          "name": "intensity",
+          "label": "Intensity",
+          "default": 1.5,
+          "min": 0.0,
+          "max": 2.5,
+          "fmt": "%.1f"
+        },
+        {
+          "name": "speed",
+          "label": "Speed",
+          "default": 2.0,
+          "min": 0.0,
+          "max": 5.0,
+          "fmt": "%.1f"
+        },
+        {
+          "name": "height",
+          "label": "Height",
+          "default": 0.25,
+          "min": 0.0,
+          "max": 1.0,
+          "fmt": "%.2f"
+        }
+      ]
+    },
+    {
+      "id": "laser_grid",
+      "enum": "LaserGrid",
+      "label": "Laser Grid",
+      "description": "Sci-fi laser wireframe grid overlay",
+      "abbrev": "LSG",
+      "color": [
+        0,
+        230,
+        180,
+        220
+      ],
+      "shader": "shaders/laser_grid.glsl",
+      "params": [
+        {
+          "name": "grid_size",
+          "label": "Grid Size",
+          "default": 14.0,
+          "min": 4.0,
+          "max": 40.0,
+          "fmt": "%.0f"
+        },
+        {
+          "name": "hue",
+          "label": "Hue",
+          "default": 0.5,
+          "min": 0.0,
+          "max": 1.0,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "intensity",
+          "label": "Intensity",
+          "default": 0.8,
+          "min": 0.0,
+          "max": 2.0,
+          "fmt": "%.1f"
+        }
+      ]
+    },
+    {
+      "id": "technicolor",
+      "enum": "Technicolor",
+      "label": "Technicolor",
+      "description": "3-strip Technicolor: vivid saturated film-era color",
+      "abbrev": "TCH",
+      "color": [
+        230,
+        60,
+        80,
+        220
+      ],
+      "shader": "shaders/technicolor.glsl",
+      "params": [
+        {
+          "name": "saturation",
+          "label": "Saturation",
+          "default": 2.0,
+          "min": 1.0,
+          "max": 4.0,
+          "fmt": "%.1f"
+        },
+        {
+          "name": "contrast",
+          "label": "Contrast",
+          "default": 1.3,
+          "min": 1.0,
+          "max": 2.5,
+          "fmt": "%.1f"
+        },
+        {
+          "name": "warmth",
+          "label": "Warmth",
+          "default": 0.35,
+          "min": 0.0,
+          "max": 1.0,
+          "fmt": "%.2f"
+        }
+      ]
+    },
+    {
+      "id": "ice_crystal",
+      "enum": "IceCrystal",
+      "label": "Ice Crystal",
+      "description": "Crystalline ice-fracture distortion pattern",
+      "abbrev": "ICE",
+      "color": [
+        160,
+        220,
+        255,
+        220
+      ],
+      "shader": "shaders/ice_crystal.glsl",
+      "params": [
+        {
+          "name": "scale",
+          "label": "Scale",
+          "default": 8.0,
+          "min": 2.0,
+          "max": 20.0,
+          "fmt": "%.0f"
+        },
+        {
+          "name": "refract",
+          "label": "Refract",
+          "default": 0.04,
+          "min": 0.0,
+          "max": 0.15,
+          "fmt": "%.3f"
+        },
+        {
+          "name": "tint",
+          "label": "Blue Tint",
+          "default": 0.35,
+          "min": 0.0,
+          "max": 1.0,
+          "fmt": "%.2f"
+        }
+      ]
+    },
+    {
+      "id": "kodachrome",
+      "enum": "Kodachrome",
+      "label": "Kodachrome",
+      "description": "Kodachrome 64 film \u2014 deep reds, rich saturation, golden shadows",
+      "abbrev": "KDC",
+      "color": [
+        220,
+        80,
+        60,
+        220
+      ],
+      "shader": "shaders/kodachrome.glsl",
+      "params": [
+        {
+          "name": "saturation",
+          "label": "Saturation",
+          "default": 1.5,
+          "min": 0.5,
+          "max": 3.0,
+          "fmt": "%.1f"
+        },
+        {
+          "name": "reds",
+          "label": "Red Boost",
+          "default": 0.5,
+          "min": 0.0,
+          "max": 1.0,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "shadows",
+          "label": "Gold Shadow",
+          "default": 0.4,
+          "min": 0.0,
+          "max": 1.0,
+          "fmt": "%.2f"
+        }
+      ]
+    },
+    {
+      "id": "vortex_distort",
+      "enum": "VortexDistort",
+      "label": "Vortex",
+      "description": "Multi-vortex turbulent distortion field",
+      "abbrev": "VTX",
+      "color": [
+        200,
+        80,
+        255,
+        220
+      ],
+      "shader": "shaders/vortex_distort.glsl",
+      "params": [
+        {
+          "name": "strength",
+          "label": "Strength",
+          "default": 0.06,
+          "min": 0.0,
+          "max": 0.2,
+          "fmt": "%.3f"
+        },
+        {
+          "name": "scale",
+          "label": "Scale",
+          "default": 3.0,
+          "min": 1.0,
+          "max": 8.0,
+          "fmt": "%.0f"
+        },
+        {
+          "name": "speed",
+          "label": "Speed",
+          "default": 0.8,
+          "min": 0.0,
+          "max": 3.0,
+          "fmt": "%.1f"
+        }
+      ]
+    },
+    {
+      "id": "sepia_rich",
+      "enum": "SepiaRich",
+      "label": "Sepia",
+      "description": "Rich warm sepia with crushed blacks and vignette",
+      "abbrev": "SEP",
+      "color": [
+        180,
+        140,
+        60,
+        220
+      ],
+      "shader": "shaders/sepia_rich.glsl",
+      "params": [
+        {
+          "name": "strength",
+          "label": "Strength",
+          "default": 0.9,
+          "min": 0.0,
+          "max": 1.0,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "vignette",
+          "label": "Vignette",
+          "default": 0.7,
+          "min": 0.0,
+          "max": 2.0,
+          "fmt": "%.1f"
+        },
+        {
+          "name": "contrast",
+          "label": "Contrast",
+          "default": 1.2,
+          "min": 0.5,
+          "max": 2.0,
+          "fmt": "%.1f"
+        }
+      ]
+    },
+    {
+      "id": "digital_noise",
+      "enum": "DigitalNoise",
+      "label": "Digital Noise",
+      "description": "Colored RGB pixel noise \u2014 digital sensor ISO noise",
+      "abbrev": "DGN",
+      "color": [
+        120,
+        120,
+        200,
+        220
+      ],
+      "shader": "shaders/digital_noise.glsl",
+      "params": [
+        {
+          "name": "amount",
+          "label": "Amount",
+          "default": 0.5,
+          "min": 0.0,
+          "max": 1.0,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "color_sep",
+          "label": "Color Sep",
+          "default": 0.7,
+          "min": 0.0,
+          "max": 1.0,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "luma_bias",
+          "label": "Luma Bias",
+          "default": 0.5,
+          "min": 0.0,
+          "max": 1.0,
+          "fmt": "%.2f"
+        }
+      ]
+    },
+    {
+      "id": "color_dodge",
+      "enum": "ColorDodge",
+      "label": "Color Dodge",
+      "description": "Photographic color dodge \u2014 luminous blown-out look",
+      "abbrev": "CDG",
+      "color": [
+        255,
+        230,
+        120,
+        220
+      ],
+      "shader": "shaders/color_dodge.glsl",
+      "params": [
+        {
+          "name": "amount",
+          "label": "Amount",
+          "default": 0.5,
+          "min": 0.0,
+          "max": 1.0,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "hue",
+          "label": "Dodge Hue",
+          "default": 0.08,
+          "min": 0.0,
+          "max": 1.0,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "glow",
+          "label": "Glow",
+          "default": 0.6,
+          "min": 0.0,
+          "max": 1.0,
+          "fmt": "%.2f"
+        }
+      ]
+    },
+    {
+      "id": "warhol_pop",
+      "enum": "WarholPop",
+      "label": "Pop Art",
+      "description": "Andy Warhol pop art \u2014 bold flat posterized colors",
+      "abbrev": "POP",
+      "color": [
+        255,
+        80,
+        255,
+        220
+      ],
+      "shader": "shaders/warhol_pop.glsl",
+      "params": [
+        {
+          "name": "levels",
+          "label": "Levels",
+          "default": 4.0,
+          "min": 2.0,
+          "max": 8.0,
+          "fmt": "%.0f"
+        },
+        {
+          "name": "hue_shift",
+          "label": "Hue Shift",
+          "default": 0.25,
+          "min": 0.0,
+          "max": 1.0,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "saturation",
+          "label": "Saturation",
+          "default": 2.5,
+          "min": 1.0,
+          "max": 4.0,
+          "fmt": "%.1f"
+        }
+      ]
+    },
+    {
+      "id": "infrared_film",
+      "enum": "InfraredFilm",
+      "label": "Infrared",
+      "description": "Infrared film: glowing white foliage, dark skies",
+      "abbrev": "IRF",
+      "color": [
+        255,
+        180,
+        180,
+        220
+      ],
+      "shader": "shaders/infrared_film.glsl",
+      "params": [
+        {
+          "name": "channel_mix",
+          "label": "IR Mix",
+          "default": 0.8,
+          "min": 0.0,
+          "max": 1.0,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "glow",
+          "label": "Glow",
+          "default": 0.5,
+          "min": 0.0,
+          "max": 1.0,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "contrast",
+          "label": "Contrast",
+          "default": 1.4,
+          "min": 0.5,
+          "max": 3.0,
+          "fmt": "%.1f"
+        }
+      ]
+    },
+    {
+      "id": "scanline_color",
+      "enum": "ScanlineColor",
+      "label": "RGB Scanlines",
+      "description": "RGB phosphor triad scanlines \u2014 arcade monitor look",
+      "abbrev": "SLC",
+      "color": [
+        60,
+        200,
+        80,
+        220
+      ],
+      "shader": "shaders/scanline_color.glsl",
+      "params": [
+        {
+          "name": "line_width",
+          "label": "Line Width",
+          "default": 3.0,
+          "min": 1.0,
+          "max": 6.0,
+          "fmt": "%.0f"
+        },
+        {
+          "name": "intensity",
+          "label": "Intensity",
+          "default": 0.7,
+          "min": 0.0,
+          "max": 1.0,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "rgb_sep",
+          "label": "RGB Sep",
+          "default": 0.5,
+          "min": 0.0,
+          "max": 1.0,
+          "fmt": "%.2f"
+        }
+      ]
+    },
+    {
+      "id": "data_corrupt",
+      "enum": "DataCorrupt",
+      "label": "Data Corrupt",
+      "description": "Data corruption: random color block replacements",
+      "abbrev": "DTC",
+      "color": [
+        255,
+        50,
+        50,
+        220
+      ],
+      "shader": "shaders/data_corrupt.glsl",
+      "params": [
+        {
+          "name": "density",
+          "label": "Density",
+          "default": 0.18,
+          "min": 0.0,
+          "max": 0.5,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "block_size",
+          "label": "Block Size",
+          "default": 8.0,
+          "min": 2.0,
+          "max": 24.0,
+          "fmt": "%.0f"
+        },
+        {
+          "name": "intensity",
+          "label": "Intensity",
+          "default": 0.9,
+          "min": 0.0,
+          "max": 1.0,
+          "fmt": "%.2f"
+        }
+      ]
+    },
+    {
+      "id": "long_exposure",
+      "enum": "LongExposure",
+      "label": "Long Exposure",
+      "description": "Simulated long exposure \u2014 trails of light brighten",
+      "abbrev": "LXP",
+      "color": [
+        255,
+        255,
+        160,
+        220
+      ],
+      "shader": "shaders/long_exposure.glsl",
+      "params": [
+        {
+          "name": "threshold",
+          "label": "Threshold",
+          "default": 0.35,
+          "min": 0.0,
+          "max": 1.0,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "trail",
+          "label": "Trail",
+          "default": 0.06,
+          "min": 0.0,
+          "max": 0.2,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "glow",
+          "label": "Glow",
+          "default": 1.2,
+          "min": 0.0,
+          "max": 2.0,
+          "fmt": "%.1f"
+        }
+      ]
+    },
+    {
+      "id": "pixel_mosaic",
+      "label": "Pixel Mosaic",
+      "params": [
+        {
+          "name": "block_size",
+          "label": "Block Size",
+          "type": "float",
+          "min": 2,
+          "max": 64,
+          "default": 16,
+          "step": 1,
+          "fmt": "%.0f"
+        },
+        {
+          "name": "color_steps",
+          "label": "Color Steps",
+          "type": "float",
+          "min": 2,
+          "max": 16,
+          "default": 6,
+          "step": 1,
+          "fmt": "%.0f"
+        },
+        {
+          "name": "mix_orig",
+          "label": "Mix Original",
+          "type": "float",
+          "min": 0,
+          "max": 1,
+          "default": 0.0,
+          "step": 0.01,
+          "fmt": "%.2f"
+        }
+      ],
+      "shader": "shaders/pixel_mosaic.glsl",
+      "enum": "PixelMosaic",
+      "color": [
+        120,
+        200,
+        255,
+        255
+      ],
+      "abbrev": "MOSAIC",
+      "description": "Large pixel blocks with quantized colors"
+    },
+    {
+      "id": "thermal_map",
+      "label": "Thermal Camera",
+      "params": [
+        {
+          "name": "cold_hue",
+          "label": "Cold Hue",
+          "type": "float",
+          "min": 0,
+          "max": 1,
+          "default": 0.65,
+          "step": 0.01,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "hot_hue",
+          "label": "Hot Hue",
+          "type": "float",
+          "min": 0,
+          "max": 1,
+          "default": 0.08,
+          "step": 0.01,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "contrast",
+          "label": "Contrast",
+          "type": "float",
+          "min": 0.5,
+          "max": 3.0,
+          "default": 1.6,
+          "step": 0.05,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "scanlines",
+          "label": "Scanlines",
+          "type": "float",
+          "min": 0,
+          "max": 1,
+          "default": 0.15,
+          "step": 0.01,
+          "fmt": "%.2f"
+        }
+      ],
+      "shader": "shaders/thermal_map.glsl",
+      "enum": "ThermalMap",
+      "color": [
+        255,
+        80,
+        40,
+        255
+      ],
+      "abbrev": "THERM",
+      "description": "Infrared thermal camera heat palette"
+    },
+    {
+      "id": "tilt_shift",
+      "label": "Tilt-Shift Miniature",
+      "params": [
+        {
+          "name": "focus_y",
+          "label": "Focus Center",
+          "type": "float",
+          "min": 0,
+          "max": 1,
+          "default": 0.5,
+          "step": 0.01,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "focus_band",
+          "label": "Focus Band",
+          "type": "float",
+          "min": 0.02,
+          "max": 0.5,
+          "default": 0.08,
+          "step": 0.005,
+          "fmt": "%.3f"
+        },
+        {
+          "name": "blur_radius",
+          "label": "Blur Radius",
+          "type": "float",
+          "min": 1,
+          "max": 12,
+          "default": 18.0,
+          "step": 0.5,
+          "fmt": "%.1f"
+        },
+        {
+          "name": "saturation",
+          "label": "Saturation",
+          "type": "float",
+          "min": 1.0,
+          "max": 3.0,
+          "default": 1.8,
+          "step": 0.05,
+          "fmt": "%.2f"
+        }
+      ],
+      "shader": "shaders/tilt_shift.glsl",
+      "enum": "TiltShift",
+      "color": [
+        140,
+        220,
+        180,
+        255
+      ],
+      "abbrev": "TILT",
+      "description": "Miniature tilt-shift focus blur"
+    },
+    {
+      "id": "raindrop_refract",
+      "label": "Raindrops",
+      "params": [
+        {
+          "name": "density",
+          "label": "Density",
+          "type": "float",
+          "min": 1,
+          "max": 20,
+          "default": 8,
+          "step": 0.5,
+          "fmt": "%.1f"
+        },
+        {
+          "name": "size",
+          "label": "Size",
+          "type": "float",
+          "min": 0.1,
+          "max": 1.0,
+          "default": 0.45,
+          "step": 0.01,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "refract_str",
+          "label": "Refraction",
+          "type": "float",
+          "min": 0,
+          "max": 2,
+          "default": 1.5,
+          "step": 0.05,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "u_time",
+          "label": "",
+          "type": "float",
+          "min": 0,
+          "max": 1000,
+          "default": 0.0,
+          "step": 0.016,
+          "hidden": true,
+          "fmt": "%.2f"
+        }
+      ],
+      "shader": "shaders/raindrop_refract.glsl",
+      "enum": "RaindropRefract",
+      "color": [
+        80,
+        150,
+        255,
+        255
+      ],
+      "abbrev": "RAIN",
+      "description": "Animated raindrop lens refraction"
+    },
+    {
+      "id": "risograph",
+      "label": "Risograph Print",
+      "params": [
+        {
+          "name": "hue1",
+          "label": "Ink 1 Hue",
+          "type": "float",
+          "min": 0,
+          "max": 1,
+          "default": 0.58,
+          "step": 0.01,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "hue2",
+          "label": "Ink 2 Hue",
+          "type": "float",
+          "min": 0,
+          "max": 1,
+          "default": 0.02,
+          "step": 0.01,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "dot_size",
+          "label": "Dot Size",
+          "type": "float",
+          "min": 1,
+          "max": 8,
+          "default": 3,
+          "step": 0.5,
+          "fmt": "%.1f"
+        },
+        {
+          "name": "misreg",
+          "label": "Mis-register",
+          "type": "float",
+          "min": 0,
+          "max": 0.02,
+          "default": 0.004,
+          "step": 0.001,
+          "fmt": "%.3f"
+        },
+        {
+          "name": "paper",
+          "label": "Paper Tone",
+          "type": "float",
+          "min": 0,
+          "max": 1,
+          "default": 0.9,
+          "step": 0.01,
+          "fmt": "%.2f"
+        }
+      ],
+      "shader": "shaders/risograph.glsl",
+      "enum": "Risograph",
+      "color": [
+        255,
+        120,
+        200,
+        255
+      ],
+      "abbrev": "RISO",
+      "description": "2-ink halftone risograph printing"
+    },
+    {
+      "id": "vintage_negative",
+      "label": "Vintage Negative",
+      "params": [
+        {
+          "name": "orange_mask",
+          "label": "Orange Mask",
+          "type": "float",
+          "min": 0,
+          "max": 1,
+          "default": 0.55,
+          "step": 0.01,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "contrast",
+          "label": "Contrast",
+          "type": "float",
+          "min": 0.5,
+          "max": 2.5,
+          "default": 1.3,
+          "step": 0.05,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "grain",
+          "label": "Grain",
+          "type": "float",
+          "min": 0,
+          "max": 1,
+          "default": 0.12,
+          "step": 0.01,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "u_time",
+          "label": "",
+          "type": "float",
+          "min": 0,
+          "max": 1000,
+          "default": 0.0,
+          "step": 0.016,
+          "hidden": true,
+          "fmt": "%.2f"
+        }
+      ],
+      "shader": "shaders/vintage_negative.glsl",
+      "enum": "VintageNegative",
+      "color": [
+        180,
+        140,
+        100,
+        255
+      ],
+      "abbrev": "VNEG",
+      "description": "Inverted orange-mask film negative"
+    },
+    {
+      "id": "pencil_sketch",
+      "label": "Pencil Sketch",
+      "params": [
+        {
+          "name": "line_str",
+          "label": "Line Strength",
+          "type": "float",
+          "min": 0.5,
+          "max": 5.0,
+          "default": 2.5,
+          "step": 0.1,
+          "fmt": "%.1f"
+        },
+        {
+          "name": "paper_tone",
+          "label": "Paper Tone",
+          "type": "float",
+          "min": 0.7,
+          "max": 1.0,
+          "default": 0.95,
+          "step": 0.005,
+          "fmt": "%.3f"
+        },
+        {
+          "name": "hatching",
+          "label": "Hatching",
+          "type": "float",
+          "min": 0,
+          "max": 1,
+          "default": 0.4,
+          "step": 0.01,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "mix_orig",
+          "label": "Mix Color",
+          "type": "float",
+          "min": 0,
+          "max": 1,
+          "default": 0.0,
+          "step": 0.01,
+          "fmt": "%.2f"
+        }
+      ],
+      "shader": "shaders/pencil_sketch.glsl",
+      "enum": "PencilSketch",
+      "color": [
+        160,
+        140,
+        120,
+        255
+      ],
+      "abbrev": "PENCIL",
+      "description": "Pencil sketch with cross-hatching"
+    },
+    {
+      "id": "crt_barrel",
+      "label": "CRT Barrel",
+      "params": [
+        {
+          "name": "distort",
+          "label": "Distortion",
+          "type": "float",
+          "min": 0,
+          "max": 1,
+          "default": 0.35,
+          "step": 0.01,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "corner_dark",
+          "label": "Corner Dark",
+          "type": "float",
+          "min": 0,
+          "max": 3,
+          "default": 1.8,
+          "step": 0.05,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "rgb_shift",
+          "label": "RGB Shift",
+          "type": "float",
+          "min": 0,
+          "max": 0.02,
+          "default": 0.004,
+          "step": 0.0005,
+          "fmt": "%.4f"
+        },
+        {
+          "name": "scanline",
+          "label": "Scanlines",
+          "type": "float",
+          "min": 0,
+          "max": 1,
+          "default": 0.35,
+          "step": 0.01,
+          "fmt": "%.2f"
+        }
+      ],
+      "shader": "shaders/crt_barrel.glsl",
+      "enum": "CrtBarrel",
+      "color": [
+        80,
+        220,
+        80,
+        255
+      ],
+      "abbrev": "CRT",
+      "description": "CRT barrel distortion with scanlines"
+    },
+    {
+      "id": "rgb_split_wave",
+      "label": "RGB Wave Split",
+      "params": [
+        {
+          "name": "amplitude",
+          "label": "Amplitude",
+          "type": "float",
+          "min": 0,
+          "max": 0.05,
+          "default": 0.018,
+          "step": 0.001,
+          "fmt": "%.3f"
+        },
+        {
+          "name": "frequency",
+          "label": "Frequency",
+          "type": "float",
+          "min": 1,
+          "max": 20,
+          "default": 6.0,
+          "step": 0.5,
+          "fmt": "%.1f"
+        },
+        {
+          "name": "speed",
+          "label": "Speed",
+          "type": "float",
+          "min": 0,
+          "max": 10,
+          "default": 2.5,
+          "step": 0.1,
+          "fmt": "%.1f"
+        },
+        {
+          "name": "u_time",
+          "label": "",
+          "type": "float",
+          "min": 0,
+          "max": 1000,
+          "default": 0.0,
+          "step": 0.016,
+          "hidden": true,
+          "fmt": "%.2f"
+        }
+      ],
+      "shader": "shaders/rgb_split_wave.glsl",
+      "enum": "RgbSplitWave",
+      "color": [
+        200,
+        80,
+        255,
+        255
+      ],
+      "abbrev": "RWAVE",
+      "description": "Per-channel sine wave RGB split"
+    },
+    {
+      "id": "golden_hour",
+      "label": "Golden Hour",
+      "params": [
+        {
+          "name": "warmth",
+          "label": "Warmth",
+          "type": "float",
+          "min": 0,
+          "max": 1,
+          "default": 0.9,
+          "step": 0.01,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "glow_str",
+          "label": "Glow",
+          "type": "float",
+          "min": 0,
+          "max": 1,
+          "default": 0.8,
+          "step": 0.01,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "shadow_lift",
+          "label": "Shadow Lift",
+          "type": "float",
+          "min": 0,
+          "max": 0.3,
+          "default": 0.15,
+          "step": 0.005,
+          "fmt": "%.3f"
+        },
+        {
+          "name": "vignette",
+          "label": "Vignette",
+          "type": "float",
+          "min": 0,
+          "max": 2,
+          "default": 0.6,
+          "step": 0.05,
+          "fmt": "%.2f"
+        }
+      ],
+      "shader": "shaders/golden_hour.glsl",
+      "enum": "GoldenHour",
+      "color": [
+        255,
+        180,
+        60,
+        255
+      ],
+      "abbrev": "GOLD",
+      "description": "Warm sunset golden hour grade"
+    },
+    {
+      "id": "neon_sign",
+      "label": "Neon Sign",
+      "params": [
+        {
+          "name": "edge_str",
+          "label": "Edge Strength",
+          "type": "float",
+          "min": 0.5,
+          "max": 5.0,
+          "default": 2.5,
+          "step": 0.1,
+          "fmt": "%.1f"
+        },
+        {
+          "name": "glow_radius",
+          "label": "Glow Radius",
+          "type": "float",
+          "min": 1,
+          "max": 16,
+          "default": 8,
+          "step": 0.5,
+          "fmt": "%.1f"
+        },
+        {
+          "name": "hue_shift",
+          "label": "Hue Shift",
+          "type": "float",
+          "min": 0,
+          "max": 1,
+          "default": 0.0,
+          "step": 0.01,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "bg_darken",
+          "label": "BG Darken",
+          "type": "float",
+          "min": 0,
+          "max": 1,
+          "default": 0.75,
+          "step": 0.01,
+          "fmt": "%.2f"
+        }
+      ],
+      "shader": "shaders/neon_sign.glsl",
+      "enum": "NeonSign",
+      "color": [
+        255,
+        60,
+        200,
+        255
+      ],
+      "abbrev": "NSGN",
+      "description": "Edge-detected neon glow tubes"
+    },
+    {
+      "id": "mirror_tunnel",
+      "label": "Mirror Tunnel",
+      "params": [
+        {
+          "name": "depth",
+          "label": "Depth",
+          "type": "float",
+          "min": 1,
+          "max": 12,
+          "default": 5,
+          "step": 0.5,
+          "fmt": "%.1f"
+        },
+        {
+          "name": "rotation",
+          "label": "Rotation",
+          "type": "float",
+          "min": 0,
+          "max": 1,
+          "default": 0.12,
+          "step": 0.01,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "zoom",
+          "label": "Zoom",
+          "type": "float",
+          "min": 0.3,
+          "max": 0.95,
+          "default": 0.65,
+          "step": 0.01,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "u_time",
+          "label": "",
+          "type": "float",
+          "min": 0,
+          "max": 1000,
+          "default": 0.0,
+          "step": 0.016,
+          "hidden": true,
+          "fmt": "%.2f"
+        }
+      ],
+      "shader": "shaders/mirror_tunnel.glsl",
+      "enum": "MirrorTunnel",
+      "color": [
+        100,
+        180,
+        255,
+        255
+      ],
+      "abbrev": "MTUN",
+      "description": "Infinite mirror tunnel vortex"
+    },
+    {
+      "id": "liquid_chrome",
+      "label": "Liquid Chrome",
+      "params": [
+        {
+          "name": "flow",
+          "label": "Flow",
+          "type": "float",
+          "min": 0,
+          "max": 1,
+          "default": 0.5,
+          "step": 0.01,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "metallic",
+          "label": "Metallic",
+          "type": "float",
+          "min": 0,
+          "max": 1,
+          "default": 0.8,
+          "step": 0.01,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "tint_r",
+          "label": "Tint R",
+          "type": "float",
+          "min": 0,
+          "max": 1,
+          "default": 0.85,
+          "step": 0.01,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "tint_g",
+          "label": "Tint G",
+          "type": "float",
+          "min": 0,
+          "max": 1,
+          "default": 0.9,
+          "step": 0.01,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "tint_b",
+          "label": "Tint B",
+          "type": "float",
+          "min": 0,
+          "max": 1,
+          "default": 1.0,
+          "step": 0.01,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "u_time",
+          "label": "",
+          "type": "float",
+          "min": 0,
+          "max": 1000,
+          "default": 0.0,
+          "step": 0.016,
+          "hidden": true,
+          "fmt": "%.2f"
+        }
+      ],
+      "shader": "shaders/liquid_chrome.glsl",
+      "enum": "LiquidChrome",
+      "color": [
+        180,
+        200,
+        220,
+        255
+      ],
+      "abbrev": "CHROME",
+      "description": "Animated liquid metallic chrome"
+    },
+    {
+      "id": "zone_system_bw",
+      "label": "Zone System B&W",
+      "params": [
+        {
+          "name": "zones",
+          "label": "Zones",
+          "type": "float",
+          "min": 3,
+          "max": 10,
+          "default": 6,
+          "step": 1,
+          "fmt": "%.0f"
+        },
+        {
+          "name": "contrast",
+          "label": "Contrast",
+          "type": "float",
+          "min": 0.5,
+          "max": 3.0,
+          "default": 1.8,
+          "step": 0.05,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "grain",
+          "label": "Grain",
+          "type": "float",
+          "min": 0,
+          "max": 1,
+          "default": 0.08,
+          "step": 0.01,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "paper_white",
+          "label": "Paper White",
+          "type": "float",
+          "min": 0.85,
+          "max": 1.0,
+          "default": 0.96,
+          "step": 0.005,
+          "fmt": "%.3f"
+        },
+        {
+          "name": "u_time",
+          "label": "",
+          "type": "float",
+          "min": 0,
+          "max": 1000,
+          "default": 0.0,
+          "step": 0.016,
+          "hidden": true,
+          "fmt": "%.2f"
+        }
+      ],
+      "shader": "shaders/zone_system_bw.glsl",
+      "enum": "ZoneSystemBw",
+      "color": [
+        200,
+        200,
+        200,
+        255
+      ],
+      "abbrev": "ZONE",
+      "description": "Zone system B&W with film grain"
+    },
+    {
+      "id": "glitter_dust",
+      "label": "Glitter Dust",
+      "params": [
+        {
+          "name": "density",
+          "label": "Density",
+          "type": "float",
+          "min": 100,
+          "max": 2000,
+          "default": 800,
+          "step": 50,
+          "fmt": "%.0f"
+        },
+        {
+          "name": "size",
+          "label": "Size",
+          "type": "float",
+          "min": 0.5,
+          "max": 4.0,
+          "default": 0.6,
+          "step": 0.1,
+          "fmt": "%.1f"
+        },
+        {
+          "name": "sparkle",
+          "label": "Sparkle",
+          "type": "float",
+          "min": 0.5,
+          "max": 3.0,
+          "default": 0.7,
+          "step": 0.05,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "color_var",
+          "label": "Color Var",
+          "type": "float",
+          "min": 0,
+          "max": 1,
+          "default": 1.0,
+          "step": 0.01,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "u_time",
+          "label": "",
+          "type": "float",
+          "min": 0,
+          "max": 1000,
+          "default": 0.0,
+          "step": 0.016,
+          "hidden": true,
+          "fmt": "%.2f"
+        }
+      ],
+      "shader": "shaders/glitter_dust.glsl",
+      "enum": "GlitterDust",
+      "color": [
+        255,
+        220,
+        100,
+        255
+      ],
+      "abbrev": "GLIT",
+      "description": "Animated sparkle glitter overlay"
+    },
+    {
+      "id": "contour_map",
+      "label": "Contour Map",
+      "params": [
+        {
+          "name": "levels",
+          "label": "Levels",
+          "type": "float",
+          "min": 3,
+          "max": 20,
+          "default": 8,
+          "step": 1,
+          "fmt": "%.0f"
+        },
+        {
+          "name": "line_width",
+          "label": "Line Width",
+          "type": "float",
+          "min": 0.01,
+          "max": 0.15,
+          "default": 0.04,
+          "step": 0.005,
+          "fmt": "%.3f"
+        },
+        {
+          "name": "line_hue",
+          "label": "Line Hue",
+          "type": "float",
+          "min": 0,
+          "max": 1,
+          "default": 0.35,
+          "step": 0.01,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "fill_sat",
+          "label": "Fill Sat",
+          "type": "float",
+          "min": 0,
+          "max": 1,
+          "default": 0.6,
+          "step": 0.01,
+          "fmt": "%.2f"
+        }
+      ],
+      "shader": "shaders/contour_map.glsl",
+      "enum": "ContourMap",
+      "color": [
+        60,
+        200,
+        140,
+        255
+      ],
+      "abbrev": "CONT",
+      "description": "Topographic contour line overlay"
+    },
+    {
+      "id": "film_halation",
+      "label": "Film Halation",
+      "params": [
+        {
+          "name": "threshold",
+          "label": "Threshold",
+          "type": "float",
+          "min": 0.3,
+          "max": 0.9,
+          "default": 0.3,
+          "step": 0.01,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "radius",
+          "label": "Radius",
+          "type": "float",
+          "min": 2,
+          "max": 20,
+          "default": 16.0,
+          "step": 0.5,
+          "fmt": "%.1f"
+        },
+        {
+          "name": "red_shift",
+          "label": "Red Shift",
+          "type": "float",
+          "min": 0,
+          "max": 1,
+          "default": 0.75,
+          "step": 0.01,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "strength",
+          "label": "Strength",
+          "type": "float",
+          "min": 0,
+          "max": 2,
+          "default": 2.0,
+          "step": 0.05,
+          "fmt": "%.2f"
+        }
+      ],
+      "shader": "shaders/film_halation.glsl",
+      "enum": "FilmHalation",
+      "color": [
+        255,
+        140,
+        80,
+        255
+      ],
+      "abbrev": "HALO",
+      "description": "Red-orange bloom from bright highlights"
+    },
+    {
+      "id": "ascii_art",
+      "label": "ASCII Art",
+      "params": [
+        {
+          "name": "char_size",
+          "label": "Char Size",
+          "type": "float",
+          "min": 4,
+          "max": 24,
+          "default": 10,
+          "step": 1,
+          "fmt": "%.0f"
+        },
+        {
+          "name": "fg_r",
+          "label": "FG Red",
+          "type": "float",
+          "min": 0,
+          "max": 1,
+          "default": 0.0,
+          "step": 0.01,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "fg_g",
+          "label": "FG Green",
+          "type": "float",
+          "min": 0,
+          "max": 1,
+          "default": 1.0,
+          "step": 0.01,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "fg_b",
+          "label": "FG Blue",
+          "type": "float",
+          "min": 0,
+          "max": 1,
+          "default": 0.15,
+          "step": 0.01,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "bg_dark",
+          "label": "BG Darken",
+          "type": "float",
+          "min": 0,
+          "max": 1,
+          "default": 0.85,
+          "step": 0.01,
+          "fmt": "%.2f"
+        }
+      ],
+      "shader": "shaders/ascii_art.glsl",
+      "enum": "AsciiArt",
+      "color": [
+        60,
+        220,
+        60,
+        255
+      ],
+      "abbrev": "ASCII",
+      "description": "ASCII character density rendering"
+    },
+    {
+      "id": "dna_helix",
+      "label": "DNA Helix Grid",
+      "params": [
+        {
+          "name": "grid_scale",
+          "label": "Grid Scale",
+          "type": "float",
+          "min": 5,
+          "max": 30,
+          "default": 12,
+          "step": 0.5,
+          "fmt": "%.1f"
+        },
+        {
+          "name": "wave_amp",
+          "label": "Wave Amp",
+          "type": "float",
+          "min": 0.1,
+          "max": 1.0,
+          "default": 0.5,
+          "step": 0.01,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "line_width",
+          "label": "Line Width",
+          "type": "float",
+          "min": 0.01,
+          "max": 0.15,
+          "default": 0.05,
+          "step": 0.005,
+          "fmt": "%.3f"
+        },
+        {
+          "name": "hue",
+          "label": "Hue",
+          "type": "float",
+          "min": 0,
+          "max": 1,
+          "default": 0.55,
+          "step": 0.01,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "bg_darken",
+          "label": "BG Darken",
+          "type": "float",
+          "min": 0,
+          "max": 1,
+          "default": 0.6,
+          "step": 0.01,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "u_time",
+          "label": "",
+          "type": "float",
+          "min": 0,
+          "max": 1000,
+          "default": 0.0,
+          "step": 0.016,
+          "hidden": true,
+          "fmt": "%.2f"
+        }
+      ],
+      "shader": "shaders/dna_helix.glsl",
+      "enum": "DnaHelix",
+      "color": [
+        80,
+        255,
+        200,
+        255
+      ],
+      "abbrev": "DNA",
+      "description": "Animated DNA helix wire overlay"
+    },
+    {
+      "id": "double_exposure",
+      "label": "Double Exposure",
+      "params": [
+        {
+          "name": "offset_x",
+          "label": "Offset X",
+          "type": "float",
+          "min": -0.3,
+          "max": 0.3,
+          "default": 0.15,
+          "step": 0.005,
+          "fmt": "%.3f"
+        },
+        {
+          "name": "offset_y",
+          "label": "Offset Y",
+          "type": "float",
+          "min": -0.3,
+          "max": 0.3,
+          "default": -0.1,
+          "step": 0.005,
+          "fmt": "%.3f"
+        },
+        {
+          "name": "scale2",
+          "label": "Scale 2",
+          "type": "float",
+          "min": 0.5,
+          "max": 2.0,
+          "default": 1.15,
+          "step": 0.01,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "desaturate2",
+          "label": "Desaturate 2",
+          "type": "float",
+          "min": 0,
+          "max": 1,
+          "default": 0.6,
+          "step": 0.01,
+          "fmt": "%.2f"
+        },
+        {
+          "name": "opacity",
+          "label": "Opacity",
+          "type": "float",
+          "min": 0,
+          "max": 1,
+          "default": 0.8,
+          "step": 0.01,
+          "fmt": "%.2f"
+        }
+      ],
+      "shader": "shaders/double_exposure.glsl",
+      "enum": "DoubleExposure",
+      "color": [
+        160,
+        100,
+        255,
+        255
+      ],
+      "abbrev": "DEXP",
+      "description": "Screen-blended double exposure"
+    }
+  ]
+}

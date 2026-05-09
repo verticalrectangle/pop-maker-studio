@@ -17,3 +17,8 @@ void fx_shader_shutdown();
 // t:     animation time (seconds, e.g. clip-local or absolute playhead).
 uintptr_t fx_apply(uintptr_t src_tex, int slot, int w, int h,
                    const EffectAccum& ea, const CreativeFXAccum& cfx, float t);
+
+// Render a generated effect (FXType >= ChromaKey) on src_tex using default params.
+// Uses an internal preview slot — safe to call outside the normal video pipeline.
+// Returns a stable GL texture ID valid until the next call.
+uintptr_t fx_preview_gen_effect(FXType ft, uintptr_t src_tex, int w, int h, float t);

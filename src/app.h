@@ -56,6 +56,7 @@ enum class FXType {
     VHS,          // chroma bleed + grain + tracking glitch
     Datamosh,     // temporal ghost buffer + multi-key chroma chaos
     ChromaKey,    // color-range keyer — compositing brick
+#include "generated/fx_enum_entries.h"
 };
 
 // ── Transition type ───────────────────────────────────────────────────────────
@@ -197,6 +198,9 @@ struct Clip {
     float         bg_remove_box_t    = 0.f;
     float         bg_remove_box_b    = 1.f;
 
+    // Generated effect clip fields
+#include "generated/fx_clip_fields.h"
+
     // keyframe tracks — keyed by property name string
     // empty = use the matching static field above
     std::unordered_map<std::string, PropTrack> ktracks;
@@ -250,6 +254,11 @@ struct CreativeFXAccum {
     float vhs_noise      = 0.f;
     float vhs_bleed      = 0.f;
     float vhs_tracking   = 0.f;
+
+    // Generated creative FX fields
+#include "generated/fx_accum_fields.h"
+
+    bool any_gen_fx = false;
 };
 
 // ── Effect accumulator ────────────────────────────────────────────────────────
