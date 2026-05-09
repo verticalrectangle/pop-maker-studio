@@ -3800,12 +3800,18 @@ static void panel_adjustment(AppState& state, float w) {
 
     ImGui::Dummy({0.f, 8.f});
 
-    // Header — same style as panel_fx_clip
+    bool is_glass = fx_clip_is_glass(state, state.selected_track, clip);
     ImGui::TextUnformatted("Adjustment");
-    int n_below = (int)state.tracks.size() - state.selected_track - 1;
+    ImGui::SameLine(0.f, 8.f);
+    ImGui::PushStyleColor(ImGuiCol_Text, is_glass
+        ? IM_COL32(130, 210, 255, 255) : IM_COL32(160, 110, 255, 255));
+    ImGui::TextUnformatted(is_glass ? "GLASS" : "GLOBAL");
+    ImGui::PopStyleColor();
+
     char info[128];
-    snprintf(info, sizeof(info), "%s  ·  %.2fs – %.2fs  ·  %d track%s below",
-        track.name.c_str(), clip.start, clip.end, n_below, n_below==1?"":"s");
+    snprintf(info, sizeof(info), "%s  ·  %.2fs – %.2fs  ·  %s",
+        track.name.c_str(), clip.start, clip.end,
+        is_glass ? "clip-specific pre-composite" : "post-composite all tracks below");
     ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
     ImGui::TextWrapped("%s", info);
     ImGui::PopStyleColor();
@@ -4354,12 +4360,18 @@ static void panel_fx_clip(AppState& state, float w) {
     ImGui::Dummy({0.f, 8.f});
 
     ImU32 ac = fx_type_accent(clip.fx_type);
+    bool is_glass = fx_clip_is_glass(state, state.selected_track, clip);
     ImGui::TextUnformatted(fx_type_display(clip.fx_type));
+    ImGui::SameLine(0.f, 8.f);
+    ImGui::PushStyleColor(ImGuiCol_Text, is_glass
+        ? IM_COL32(130, 210, 255, 255) : IM_COL32(160, 110, 255, 255));
+    ImGui::TextUnformatted(is_glass ? "GLASS" : "GLOBAL");
+    ImGui::PopStyleColor();
 
-    int n_below = (int)state.tracks.size() - state.selected_track - 1;
     char info[128];
-    snprintf(info, sizeof(info), "%s  ·  %.2fs – %.2fs  ·  %d track%s below",
-        track.name.c_str(), clip.start, clip.end, n_below, n_below==1?"":"s");
+    snprintf(info, sizeof(info), "%s  ·  %.2fs – %.2fs  ·  %s",
+        track.name.c_str(), clip.start, clip.end,
+        is_glass ? "clip-specific pre-composite" : "post-composite all tracks below");
     ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
     ImGui::TextWrapped("%s", info);
     ImGui::PopStyleColor();
@@ -5576,46 +5588,64 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
             float cy0 = track_y+3.f, cy1 = track_y+TL_TRACK_H-3.f;
             bool sel = state.clip_selection.count({ti, ci}) > 0;
 
-            ImVec4 clip_fill = (clip.clip_type==ClipType::Lyrics)   ? Col::clip_lyrics
-                             : (clip.clip_type==ClipType::Subtitle) ? Col::clip_subtitle
-                             : (clip.clip_type==ClipType::Text)     ? Col::clip_sub
-                             : (clip.clip_type==ClipType::Audio)    ? Col::clip_audio
-                                                                     : Col::clip_video;
-            dl->AddRectFilled({vis_x0,cy0},{vis_x1,cy1},
-                to_u32(sel ? Col::fg : clip_fill), 2.f);
-            dl->AddRect({vis_x0,cy0},{vis_x1,cy1},
-                to_u32(sel ? Col::fg : Col::line), 2.f);
-
-            if ((clip.clip_type==ClipType::Text || clip.clip_type==ClipType::Lyrics ||
-                 clip.clip_type==ClipType::Subtitle) && !clip.text.empty()) {
-                ImGui::PushClipRect({vis_x0,cy0},{vis_x1,cy1},true);
-                dl->AddText({vis_x0+4.f, cy0+(cy1-cy0-13.f)*0.5f},
-                    to_u32(sel ? Col::bg : Col::fg), clip.text.c_str());
-                ImGui::PopClipRect();
-            } else if (clip.clip_type==ClipType::Audio || clip.clip_type==ClipType::Video) {
-                const std::string& wave_path = clip.text;
-                const WaveformData* wd = !wave_path.empty()
-                    ? waveform_get(wave_path) : nullptr;
-                ImGui::PushClipRect({vis_x0,cy0},{vis_x1,cy1},true);
-                if (clip.clip_type==ClipType::Video) {
-                    dl->AddText({vis_x0+4.f, cy0+3.f},
-                        to_u32(sel?Col::bg:Col::fg),
-                        clip.text.empty()?"Video":fs::path(clip.text).filename().string().c_str());
-                }
-                if (wd && !wd->samples.empty()) {
-                    float mid  = (cy0 + cy1) * 0.5f;
-                    float half = (cy1 - cy0) * 0.44f;
-                    ImU32 wcol = sel ? IM_COL32(0,0,0,160) : IM_COL32(255,255,255,120);
-                    for (float px = vis_x0; px < vis_x1; px += 1.f) {
-                        float t_src = clip.in_point + (px - cx0) / zoom;
-                        int   fi    = (int)(t_src * WAVEFORM_FPS);
-                        if (fi < 0 || fi >= (int)wd->samples.size()) continue;
-                        float amp = wd->samples[fi] * half;
-                        if (amp < 1.f) amp = 1.f;
-                        dl->AddLine({px, mid-amp}, {px, mid+amp}, wcol);
+            if (clip.clip_type == ClipType::Video) {
+                // Film strip look: dark body + perforation holes + filename
+                ImU32 film_bg  = sel ? to_u32(Col::fg) : IM_COL32(28, 28, 38, 255);
+                ImU32 film_bdr = sel ? to_u32(Col::fg) : IM_COL32(60, 60, 80, 255);
+                dl->AddRectFilled({vis_x0,cy0},{vis_x1,cy1}, film_bg, 2.f);
+                if (!sel) {
+                    // Perforation strip top + bottom
+                    dl->PushClipRect({vis_x0,cy0},{vis_x1,cy1},true);
+                    float ph = 4.f, pw = 3.f, pgap = 8.f;
+                    for (float px2 = vis_x0+4.f; px2+pw < vis_x1; px2 += pgap) {
+                        dl->AddRectFilled({px2,cy0+2.f},{px2+pw,cy0+2.f+ph}, IM_COL32(55,55,70,255),1.f);
+                        dl->AddRectFilled({px2,cy1-2.f-ph},{px2+pw,cy1-2.f}, IM_COL32(55,55,70,255),1.f);
                     }
+                    dl->PopClipRect();
                 }
+                dl->AddRect({vis_x0,cy0},{vis_x1,cy1}, film_bdr, 2.f);
+                ImGui::PushClipRect({vis_x0,cy0},{vis_x1,cy1},true);
+                std::string fname_s = clip.text.empty() ? "Video"
+                    : fs::path(clip.text).filename().string();
+                const char* fname = fname_s.c_str();
+                ImU32 ftcol = sel ? to_u32(Col::bg) : IM_COL32(200,200,220,255);
+                dl->AddText({vis_x0+4.f, cy0+(cy1-cy0-13.f)*0.5f}, ftcol, fname);
                 ImGui::PopClipRect();
+            } else {
+                ImVec4 clip_fill = (clip.clip_type==ClipType::Lyrics)   ? Col::clip_lyrics
+                                 : (clip.clip_type==ClipType::Subtitle) ? Col::clip_subtitle
+                                 : (clip.clip_type==ClipType::Text)     ? Col::clip_sub
+                                                                        : Col::clip_audio;
+                dl->AddRectFilled({vis_x0,cy0},{vis_x1,cy1},
+                    to_u32(sel ? Col::fg : clip_fill), 2.f);
+                dl->AddRect({vis_x0,cy0},{vis_x1,cy1},
+                    to_u32(sel ? Col::fg : Col::line), 2.f);
+
+                if ((clip.clip_type==ClipType::Text || clip.clip_type==ClipType::Lyrics ||
+                     clip.clip_type==ClipType::Subtitle) && !clip.text.empty()) {
+                    ImGui::PushClipRect({vis_x0,cy0},{vis_x1,cy1},true);
+                    dl->AddText({vis_x0+4.f, cy0+(cy1-cy0-13.f)*0.5f},
+                        to_u32(sel ? Col::bg : Col::fg), clip.text.c_str());
+                    ImGui::PopClipRect();
+                } else if (clip.clip_type==ClipType::Audio) {
+                    const WaveformData* wd = !clip.text.empty()
+                        ? waveform_get(clip.text) : nullptr;
+                    ImGui::PushClipRect({vis_x0,cy0},{vis_x1,cy1},true);
+                    if (wd && !wd->samples.empty()) {
+                        float mid  = (cy0 + cy1) * 0.5f;
+                        float half = (cy1 - cy0) * 0.44f;
+                        ImU32 wcol = sel ? IM_COL32(0,0,0,160) : IM_COL32(255,255,255,120);
+                        for (float px2 = vis_x0; px2 < vis_x1; px2 += 1.f) {
+                            float t_src = clip.in_point + (px2 - cx0) / zoom;
+                            int   fi    = (int)(t_src * WAVEFORM_FPS);
+                            if (fi < 0 || fi >= (int)wd->samples.size()) continue;
+                            float amp = wd->samples[fi] * half;
+                            if (amp < 1.f) amp = 1.f;
+                            dl->AddLine({px2, mid-amp}, {px2, mid+amp}, wcol);
+                        }
+                    }
+                    ImGui::PopClipRect();
+                }
             }
 
             // Locked track stripe
@@ -6341,7 +6371,7 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
                         state.tracks[orig.ti].clips[orig.ci].start = orig.start;
                         state.tracks[orig.ti].clips[orig.ci].end   = orig.end;
                     }
-                } else {
+                } else if (s_drag_moved || drag_left || drag_right) {
                     const char* act = drag_left  ? "Trim clip start" :
                                       drag_right ? "Trim clip end"   : "Move clip";
                     history_push(state, act);

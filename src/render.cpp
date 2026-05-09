@@ -1659,10 +1659,14 @@ static bool gl_render_vid_clip(ImDrawList& dl, const Clip* cl, float at_time,
     VideoFrame* vf = video_decode_frame_at((double)src_t);
     if (!vf) return false;
 
-    // CPU datamosh — must happen before GL upload (same as proxy path)
-    CreativeFXAccum cfx = collect_creative_fx(state, at_time, ti);
+    // CPU datamosh — must happen before GL upload.
+    // Collect both global and glass FX now so glass datamosh also runs pre-upload.
+    CreativeFXAccum cfx      = collect_creative_fx(state, at_time, ti);
+    CreativeFXAccum glass_cfx = collect_glass_fx  (state, at_time, ti);
     if (cfx.datamosh_on && cfx.datamosh_intensity > 0.01f)
         video_apply_datamosh(vf, cfx.datamosh_intensity, (float)src_t);
+    if (glass_cfx.datamosh_on && glass_cfx.datamosh_intensity > 0.01f)
+        video_apply_datamosh(vf, glass_cfx.datamosh_intensity, (float)src_t);
 
     glBindTexture(GL_TEXTURE_2D, tex_id);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, vf->width, vf->height, 0,
@@ -1670,18 +1674,17 @@ static bool gl_render_vid_clip(ImDrawList& dl, const Clip* cl, float at_time,
     int vid_w = vf->width, vid_h = vf->height;
     video_free_frame(vf);
 
-    // Pre-composite: glass FX/adjustments (track directly above this clip's track).
+    // Pre-composite: glass FX/adjustments on the same track as this video clip.
     uintptr_t cur_tex = (uintptr_t)tex_id;
     {
-        EffectAccum     glass_ea  = collect_glass_effects(state, at_time, ti);
-        CreativeFXAccum glass_cfx = collect_glass_fx     (state, at_time, ti);
+        EffectAccum glass_ea = collect_glass_effects(state, at_time, ti);
         if (glass_cfx.any_gen_fx || glass_ea.any_color || glass_ea.any_blur ||
             glass_ea.any_vignette || glass_ea.any_text)
             cur_tex = fx_apply(cur_tex, fx_slot, vid_w, vid_h, glass_ea, glass_cfx, at_time);
     }
-    // Apply GPU FX pipeline
-    EffectAccum     ea  = collect_effects    (state, at_time, ti);
-    uintptr_t draw_tex  = fx_apply(cur_tex, fx_slot, vid_w, vid_h, ea, cfx, at_time);
+    // Global FX: collected from tracks above, skipping glass clips.
+    EffectAccum    ea       = collect_effects(state, at_time, ti);
+    uintptr_t draw_tex      = fx_apply(cur_tex, fx_slot, vid_w, vid_h, ea, cfx, at_time);
 
     // ZoomPunch — beat-synced scale spike, same logic as preview
     float px    = cl->eval_prop("pos_x",    at_time);
