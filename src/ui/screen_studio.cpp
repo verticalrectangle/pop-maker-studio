@@ -6221,7 +6221,9 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
             // drag_hot_gap >= 0 means between two existing tracks → insert new track there.
             float ruler_bottom = origin.y + TL_RULER_H;
             int n_tracks = (int)state.tracks.size();
-            const float GAP_PX = 14.f;
+            // Midpoint assignment: drop target is whichever track center is closest.
+            // Gap insertion fires only when mouse is within GAP_PX of a seam.
+            const float GAP_PX = 5.f;
             drag_hot_gap = -1;
             for (int gi = 0; gi < n_tracks; ++gi) {
                 float boundary_y = ruler_bottom + gi * TL_TRACK_H;
@@ -6230,9 +6232,8 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
                     break;
                 }
             }
-            if (drag_hot_gap >= 0) {
-                drag_hot_track = -1;
-            } else {
+            // Always assign hot track by midpoint — gap zone does not steal the target.
+            {
                 int hot = (int)((mouse.y - ruler_bottom) / TL_TRACK_H);
                 drag_hot_track = (hot >= 0 && hot <= n_tracks) ? hot : -1;
             }
