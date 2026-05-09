@@ -175,6 +175,7 @@ CreativeFXAccum collect_creative_fx(const AppState& state, float t, int below_tr
             if (cl.fx_type == FXType::Adjustment)  continue;
             if (t < cl.start || t >= cl.end)       continue;
             if (fx_clip_is_glass(state, ti, cl))   continue; // glass: applied pre-composite
+            float _cl_beat_pulse = beat_pulse_at(state, cl.beat_src_track, cl.beat_src_clip, t, cl.beat_decay);
             switch (cl.fx_type) {
                 case FXType::Glitch:
                     acc.glitch_on         = true;
@@ -188,6 +189,8 @@ CreativeFXAccum collect_creative_fx(const AppState& state, float t, int below_tr
                     acc.zoom_strength = fmaxf(acc.zoom_strength, cl.fx_zoom_strength);
                     acc.zoom_decay    = fmaxf(acc.zoom_decay,    cl.fx_zoom_decay);
                     acc.zoom_shake    = fmaxf(acc.zoom_shake,    cl.fx_zoom_shake);
+                    acc.zoom_src_track = cl.beat_src_track;
+                    acc.zoom_src_clip  = cl.beat_src_clip;
                     break;
                 case FXType::LightLeak:
                     acc.leak_on        = true;
@@ -231,6 +234,7 @@ CreativeFXAccum collect_glass_fx(const AppState& state, float t, int video_track
         if (cl.fx_type == FXType::Adjustment)  continue;
         if (t < cl.start || t >= cl.end)       continue;
         if (!fx_clip_is_glass(state, video_track_idx, cl)) continue;
+        float _cl_beat_pulse = beat_pulse_at(state, cl.beat_src_track, cl.beat_src_clip, t, cl.beat_decay);
         switch (cl.fx_type) {
             case FXType::Glitch:
                 acc.glitch_on         = true;
@@ -244,6 +248,8 @@ CreativeFXAccum collect_glass_fx(const AppState& state, float t, int video_track
                 acc.zoom_strength = fmaxf(acc.zoom_strength, cl.fx_zoom_strength);
                 acc.zoom_decay    = fmaxf(acc.zoom_decay,    cl.fx_zoom_decay);
                 acc.zoom_shake    = fmaxf(acc.zoom_shake,    cl.fx_zoom_shake);
+                acc.zoom_src_track = cl.beat_src_track;
+                acc.zoom_src_clip  = cl.beat_src_clip;
                 break;
             case FXType::LightLeak:
                 acc.leak_on        = true;
@@ -275,6 +281,24 @@ CreativeFXAccum collect_glass_fx(const AppState& state, float t, int video_track
         }
     }
     return acc;
+}
+
+float beat_pulse_at(const AppState& state, int src_track, int src_clip, float t, float decay) {
+    if (src_track < 0 || src_clip < 0) return 0.f;
+    if (src_track >= (int)state.tracks.size()) return 0.f;
+    const auto& track = state.tracks[src_track];
+    if (src_clip >= (int)track.clips.size()) return 0.f;
+    const auto& clip = track.clips[src_clip];
+    if (clip.beats.empty()) return 0.f;
+    float last_beat = -1.f;
+    for (float b : clip.beats) {
+        if (b <= t) last_beat = b;
+        else break;
+    }
+    if (last_beat < 0.f) return 0.f;
+    float elapsed = t - last_beat;
+    float d = (decay > 0.001f) ? decay : 0.001f;
+    return expf(-elapsed / d);
 }
 
 void app_init(AppState& state) {

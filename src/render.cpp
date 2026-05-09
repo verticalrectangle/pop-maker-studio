@@ -492,41 +492,47 @@ static bool write_filter_script(
                         }
                     }
                     // ZoomPunch: scale spike per beat rendered via scale+crop chain
-                    if (fc.fx_type == FXType::ZoomPunch && !state.beats.empty() &&
-                        fc.fx_zoom_strength > 0.001f) {
-                        // Build max-of-decays expression over all beats in the clip window
-                        std::string zoom_e = "0";
-                        float str   = fc.fx_zoom_strength;
-                        float decay = fmaxf(0.05f, fc.fx_zoom_decay);
-                        for (float bt : state.beats) {
-                            if (bt < fc.start || bt >= fc.end) continue;
-                            // Time relative to clip's ffmpeg input start
-                            float bt_rel = fmaxf(0.f, bt - rl.vid_ss);
-                            char term[128];
-                            snprintf(term, sizeof(term),
-                                "if(gte(t,%.3f),%.4f*exp(-(t-%.3f)/%.4f),0)",
-                                (double)bt_rel, (double)str, (double)bt_rel, (double)decay);
-                            zoom_e = "max(" + zoom_e + "," + term + ")";
+                    if (fc.fx_type == FXType::ZoomPunch && fc.fx_zoom_strength > 0.001f) {
+                        const std::vector<float>* beat_src_vec = nullptr;
+                        if (fc.beat_src_track >= 0 && fc.beat_src_clip >= 0 &&
+                            fc.beat_src_track < (int)state.tracks.size()) {
+                            const auto& btr = state.tracks[fc.beat_src_track];
+                            if (fc.beat_src_clip < (int)btr.clips.size())
+                                beat_src_vec = &btr.clips[fc.beat_src_clip].beats;
                         }
-                        if (zoom_e != "0") {
-                            // Scale up from centre then crop back to canvas
-                            std::string stag = "[vfx" + std::to_string(fx_idx++) + "]";
-                            std::string ctag = "[vfx" + std::to_string(fx_idx++) + "]";
-                            char scale_f[512];
-                            snprintf(scale_f, sizeof(scale_f),
-                                "scale=iw*(1+%s):ih*(1+%s):eval=frame:enable='%s'",
-                                zoom_e.c_str(), zoom_e.c_str(), en);
-                            line() << layer_in << scale_f << stag;
-                            char crop_f[128];
-                            snprintf(crop_f, sizeof(crop_f),
-                                "crop=%d:%d:(iw-%d)/2:(ih-%d)/2:enable='%s'",
-                                out_w, out_h, out_w, out_h, en);
-                            line() << stag << crop_f << ctag;
-                            layer_in = ctag;
+                        if (beat_src_vec && !beat_src_vec->empty()) {
+                            // Build max-of-decays expression over all beats in the clip window
+                            std::string zoom_e = "0";
+                            float str   = fc.fx_zoom_strength;
+                            float decay = fmaxf(0.05f, fc.fx_zoom_decay);
+                            for (float bt : *beat_src_vec) {
+                                if (bt < fc.start || bt >= fc.end) continue;
+                                float bt_rel = fmaxf(0.f, bt - rl.vid_ss);
+                                char term[128];
+                                snprintf(term, sizeof(term),
+                                    "if(gte(t,%.3f),%.4f*exp(-(t-%.3f)/%.4f),0)",
+                                    (double)bt_rel, (double)str, (double)bt_rel, (double)decay);
+                                zoom_e = "max(" + zoom_e + "," + term + ")";
+                            }
+                            if (zoom_e != "0") {
+                                std::string stag = "[vfx" + std::to_string(fx_idx++) + "]";
+                                std::string ctag = "[vfx" + std::to_string(fx_idx++) + "]";
+                                char scale_f[512];
+                                snprintf(scale_f, sizeof(scale_f),
+                                    "scale=iw*(1+%s):ih*(1+%s):eval=frame:enable='%s'",
+                                    zoom_e.c_str(), zoom_e.c_str(), en);
+                                line() << layer_in << scale_f << stag;
+                                char crop_f[128];
+                                snprintf(crop_f, sizeof(crop_f),
+                                    "crop=%d:%d:(iw-%d)/2:(ih-%d)/2:enable='%s'",
+                                    out_w, out_h, out_w, out_h, en);
+                                line() << stag << crop_f << ctag;
+                                layer_in = ctag;
+                            }
                         }
                     }
-                }
-            }
+                } // for fc
+            } // for fti
 
             // Position — all layers use pos_x/pos_y; eval=frame when KFs animate it.
             // overlay filter uses overlay_w/overlay_h (not iw/ih) for the overlay input dimensions.
@@ -1704,15 +1710,9 @@ static bool gl_render_vid_clip(ImDrawList& dl, const Clip* cl, float at_time,
     float cx = px * W, cy = py * H;
     float hw = fit_w * sx * 0.5f, hh = fit_h * sy * 0.5f;
 
-    if (cfx.zoom_on && !state.beats.empty()) {
-        float punch = 0.f;
-        float decay = fmaxf(0.05f, cfx.zoom_decay);
-        for (float bt : state.beats) {
-            if (bt <= at_time) {
-                float elapsed = at_time - bt;
-                punch = fmaxf(punch, cfx.zoom_strength * expf(-elapsed / decay));
-            }
-        }
+    if (cfx.zoom_on) {
+        float pulse = beat_pulse_at(state, cfx.zoom_src_track, cfx.zoom_src_clip, at_time, cfx.zoom_decay);
+        float punch = cfx.zoom_strength * pulse;
         if (punch > 0.001f) {
             float sf = 1.f + punch;
             hw *= sf; hh *= sf;

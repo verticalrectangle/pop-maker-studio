@@ -1,6 +1,6 @@
 {
   "_comment": "Pop Maker Studio \u2014 generated effects registry. Run tools/codegen_effects.py after changes.",
-  "project_version": 22,
+  "project_version": 23,
   "effects": [
     {
       "id": "pixelate",

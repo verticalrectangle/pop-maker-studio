@@ -6,7 +6,7 @@
 // ── Binary serialization helpers ──────────────────────────────────────────────
 
 static const uint32_t MAGIC   = 0x534D5001u; // "PMS\x01"
-static const uint32_t VERSION = 16u;
+static const uint32_t VERSION = 23u;
 
 struct Writer {
     std::ofstream f;
@@ -138,8 +138,15 @@ static void write_clip(Writer& w, const Clip& c) {
     w.pod(c.font_size);
     // v15: datamosh spread
     w.pod(c.fx_datamosh_spread);
-    // v16: generated effects
+    // v16-v22: generated effects
 #include "generated/fx_project_write.h"
+    // v23: per-clip beat sync fields
+    w.pod(c.beat_src_track); w.pod(c.beat_src_clip); w.pod(c.beat_decay);
+    w.pod(c.beat_bpm);
+    w.str(c.beats_json_path);
+    uint32_t nb = (uint32_t)c.beats.size();
+    w.pod(nb);
+    for (float b : c.beats) w.pod(b);
     // ktracks
     uint32_t nk = (uint32_t)c.ktracks.size();
     w.pod(nk);
@@ -230,6 +237,14 @@ static Clip read_clip(Reader& r, uint32_t version) {
         c.fx_datamosh_spread = r.pod<float>();
     }
 #include "generated/fx_project_read.h"
+    if (version >= 23u) {
+        c.beat_src_track = r.pod<int>(); c.beat_src_clip = r.pod<int>(); c.beat_decay = r.pod<float>();
+        c.beat_bpm = r.pod<float>();
+        c.beats_json_path = r.str();
+        uint32_t nb = r.pod<uint32_t>();
+        c.beats.reserve(nb);
+        for (uint32_t i = 0; i < nb && r.ok; ++i) c.beats.push_back(r.pod<float>());
+    }
     // ktracks
     uint32_t nk = r.pod<uint32_t>();
     for (uint32_t i = 0; i < nk && r.ok; ++i) {

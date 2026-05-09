@@ -395,7 +395,8 @@ void main() {
     float gy = -tl - 2.0*tc - tr + bl + 2.0*bc + br;
     float edge = clamp(sqrt(gx*gx + gy*gy) * u_strength * 4.0, 0.0, 1.0);
     float sketch = (u_invert > 0.5) ? (1.0 - edge) : edge;
-    frag = vec4(vec3(sketch), texture(u_tex, v_uv).a);
+    vec4 orig = texture(u_tex, v_uv);
+    frag = vec4(orig.rgb * sketch, orig.a);
 }
 )glsl";
 

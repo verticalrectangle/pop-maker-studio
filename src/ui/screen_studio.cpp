@@ -399,6 +399,82 @@ static void run_beat_detect(AppState& state) {
     }).detach();
 }
 
+// ── Per-clip beat analysis ────────────────────────────────────────────────────
+
+static void load_clip_beats_cache(Clip& cl) {
+    cl.beats.clear();
+    cl.beat_bpm = 0.f;
+    if (cl.beats_json_path.empty() || !fs::exists(cl.beats_json_path)) return;
+    std::ifstream f(cl.beats_json_path);
+    if (!f) return;
+    try {
+        auto j = nlohmann::json::parse(f);
+        cl.beat_bpm = j.value("bpm", 0.f);
+        for (auto& v : j["beats"])
+            cl.beats.push_back(v.get<float>());
+    } catch (...) {}
+}
+
+static void run_clip_beat_detect(AppState& state, int ti, int ci) {
+    if (ti < 0 || ti >= (int)state.tracks.size()) return;
+    auto& track = state.tracks[ti];
+    if (ci < 0 || ci >= (int)track.clips.size()) return;
+    Clip& cl = track.clips[ci];
+    if (cl.beats_analyzing) return;
+    if (cl.source_id.empty() || !fs::exists(cl.source_id)) return;
+    extern std::string g_beat_detect_script;
+    if (g_beat_detect_script.empty()) return;
+
+    fs::path out = fs::path(cl.source_id).parent_path() /
+                   (fs::path(cl.source_id).stem().string() + "_beats.json");
+    cl.beats_json_path = out.string();
+    cl.beats_analyzing = true;
+
+    std::string python  = state.python_path;
+    std::string script  = g_beat_detect_script;
+    std::string src     = cl.source_id;
+    std::string outpath = out.string();
+
+    std::thread([&state, ti, ci, python, script, src, outpath]() {
+        std::string cmd = "\"" + python + "\" \"" + script + "\" \"" + src + "\" \"" + outpath + "\" 2>&1";
+        FILE* p = popen(cmd.c_str(), "r");
+        char buf[256];
+        while (p && fgets(buf, sizeof(buf), p)) {}
+        if (p) pclose(p);
+        // mark done; main thread will detect and load
+        if (ti < (int)state.tracks.size()) {
+            auto& t2 = state.tracks[ti];
+            if (ci < (int)t2.clips.size()) {
+                t2.clips[ci].beats_analyzing = false;
+                load_clip_beats_cache(t2.clips[ci]);
+            }
+        }
+    }).detach();
+}
+
+// Poll per-frame: check if any clip finished analysis and load its beats (thread already does it).
+// Also auto-trigger analysis for Audio/Video clips that have a source but no beats.
+static void poll_clip_beat_analysis(AppState& state) {
+    extern std::string g_beat_detect_script;
+    if (g_beat_detect_script.empty()) return;
+    for (int ti = 0; ti < (int)state.tracks.size(); ++ti) {
+        auto& track = state.tracks[ti];
+        for (int ci = 0; ci < (int)track.clips.size(); ++ci) {
+            Clip& cl = track.clips[ci];
+            if (cl.clip_type != ClipType::Video && cl.clip_type != ClipType::Audio) continue;
+            if (cl.source_id.empty()) continue;
+            if (cl.beats_analyzing || !cl.beats.empty()) continue;
+            // check if cached beats file already exists from a prior run
+            if (!cl.beats_json_path.empty() && fs::exists(cl.beats_json_path)) {
+                load_clip_beats_cache(cl);
+                continue;
+            }
+            // auto-kick analysis
+            run_clip_beat_detect(state, ti, ci);
+        }
+    }
+}
+
 // ── Envelope extraction subprocess ───────────────────────────────────────────
 
 static void load_envelope_cache(AppState& state) {
@@ -2001,11 +2077,27 @@ static const char* clip_display_name(const Clip& c) {
     return clip_type_name(c.clip_type);
 }
 
+static bool fx_type_is_adjustment_style(FXType ft) {
+    switch (ft) {
+        case FXType::Duotone:          case FXType::Posterize:      case FXType::BleachBypass:
+        case FXType::ColorBurn:        case FXType::Solarize:       case FXType::Daguerreotype:
+        case FXType::XRay:             case FXType::MiamiVice:      case FXType::HorrorGrade:
+        case FXType::SplitToning:      case FXType::DesertGold:     case FXType::GradientMap:
+        case FXType::CrossProcess:     case FXType::Technicolor:    case FXType::Kodachrome:
+        case FXType::SepiaRich:        case FXType::ColorDodge:     case FXType::InfraredFilm:
+        case FXType::Thermal:          case FXType::ThermalMap:     case FXType::VintageNegative:
+        case FXType::GoldenHour:       case FXType::CyberpunkGrade: case FXType::ZoneSystemBw:
+        case FXType::WarholPop:        case FXType::DitherBayer:    case FXType::BitCrush:
+            return true;
+        default: return false;
+    }
+}
+
 struct FxBrickColors { ImU32 fill, border, label; };
 static FxBrickColors fx_brick_colors(FXType ft, bool sel) {
     int r, g, b;
-    if (ft == FXType::Adjustment) { r=100; g=80;  b=200; }  // muted violet
-    else                          { r=210; g=110; b=30;  }  // warm amber
+    if (ft == FXType::Adjustment || fx_type_is_adjustment_style(ft)) { r=100; g=80;  b=200; }  // muted violet
+    else                                                               { r=210; g=110; b=30;  }  // warm amber
     if (sel) {
         int rb = (int)fminf(r*1.25f,255), gb2 = (int)fminf(g*1.25f,255), bb = (int)fminf(b*1.25f,255);
         return { IM_COL32(r,g,b,210), IM_COL32(rb,gb2,bb,255), IM_COL32(240,240,255,240) };
@@ -3641,6 +3733,20 @@ static EffectPreset preset_from_clip(const Clip& clip, const std::string& name) 
 
 
 
+// ── Shared FX card catalogue ──────────────────────────────────────────────────
+struct FXCard { FXType type; const char* name; const char* tagline; ImU32 accent; };
+static const FXCard g_fx_cards[] = {
+    {FXType::ChromaKey, "Chroma Key",  "Color-range keyer  ·  green screen  ·  compositing", IM_COL32(50,220,120,255)},
+    {FXType::Glitch,    "Glitch",      "RGB split  ·  row corruption  ·  digital tear",       IM_COL32(0,210,220,255)},
+    {FXType::ZoomPunch, "Zoom Punch",  "Beat-synced scale spike  ·  shake",                   IM_COL32(255,135,40,255)},
+    {FXType::LUT,       "LUT Grade",   "Load any .cube file  ·  cinematic color grade",       IM_COL32(255,205,55,255)},
+    {FXType::LightLeak, "Light Leak",  "Film flare  ·  amplitude-driven  ·  Screen blend",    IM_COL32(255,90,160,255)},
+    {FXType::VHS,       "VHS",         "Chroma bleed  ·  grain  ·  tracking glitch",          IM_COL32(110,195,95,255)},
+    {FXType::Datamosh,  "Datamosh",    "Temporal ghost  ·  multi-key chaos  ·  total mosh",   IM_COL32(255,60,100,255)},
+#include "generated/fx_ui_picker.h"
+};
+static const int g_n_fx_cards = (int)(sizeof(g_fx_cards) / sizeof(g_fx_cards[0]));
+
 // ── Right panel: Adjustment Library tab ──────────────────────────────────────
 
 static void panel_adjustment_library(AppState& state, float w) {
@@ -3784,6 +3890,78 @@ static void panel_adjustment_library(AppState& state, float w) {
                 ImGui::EndPopup();
             }
             ImGui::Dummy({0.f, 4.f});
+        }
+    }
+
+    // ── Color Grade & Tone ─────────────────────────────────────────────────────
+    {
+        ui_separator();
+        ImGui::Dummy({0.f, 4.f});
+        ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+        ImGui::TextUnformatted("Color Grade & Tone");
+        ImGui::PopStyleColor();
+        ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+        ImGui::TextWrapped("Static color grades. Click to add as a color grade brick.");
+        ImGui::PopStyleColor();
+        ImGui::Dummy({0.f, 4.f});
+
+        float cg_card_w  = w - 8.f;
+        float cg_card_h  = 80.f;
+        float cg_thumb_w = cg_card_h * (108.f / 192.f);
+
+        for (int i = 0; i < g_n_fx_cards; ++i) {
+            if (!fx_type_is_adjustment_style(g_fx_cards[i].type)) continue;
+            const FXCard& fc = g_fx_cards[i];
+            ImGui::PushID(i + 19000);
+            ImVec2 cp = ImGui::GetCursorScreenPos();
+            ImDrawList* dl = ImGui::GetWindowDrawList();
+
+            bool hov = ImGui::IsMouseHoveringRect(cp, {cp.x+cg_card_w, cp.y+cg_card_h});
+            dl->AddRectFilled(cp, {cp.x+cg_card_w, cp.y+cg_card_h},
+                              hov ? IM_COL32(28,22,48,255) : IM_COL32(18,14,32,255), 5.f);
+            dl->AddRectFilled(cp, {cp.x+3.f, cp.y+cg_card_h}, IM_COL32(100,80,200,200), 2.f);
+
+            uintptr_t prev_tex = video_fx_preview_texture(fc.type, (float)ImGui::GetTime());
+            if (prev_tex)
+                dl->AddImageRounded((ImTextureID)(uintptr_t)prev_tex,
+                                    cp, {cp.x+cg_thumb_w, cp.y+cg_card_h},
+                                    {0,0},{1,1},
+                                    hov ? IM_COL32(255,255,255,230) : IM_COL32(255,255,255,190),
+                                    5.f, ImDrawFlags_RoundCornersLeft);
+
+            dl->AddRect(cp, {cp.x+cg_card_w, cp.y+cg_card_h},
+                        hov ? IM_COL32(160,130,255,220) : IM_COL32(80,60,160,180), 5.f, 0, hov ? 2.f : 1.f);
+
+            float tx = cp.x + cg_thumb_w + 10.f;
+            ImGui::PushFont(g_font_bold);
+            dl->AddText(ImGui::GetFont(), 13.f, {tx, cp.y+10.f}, IM_COL32(255,255,255,240), fc.name);
+            ImGui::PopFont();
+            dl->AddText({tx, cp.y+27.f}, IM_COL32(160,160,170,200), fc.tagline);
+
+            if (hov) {
+                const char* al = "+ Add";
+                ImVec2 sz = ImGui::CalcTextSize(al);
+                dl->AddText({cp.x+cg_card_w-sz.x-10.f, cp.y+cg_card_h-16.f}, IM_COL32(255,255,255,200), al);
+            }
+
+            ImGui::SetCursorScreenPos(cp);
+            ImGui::InvisibleButton("##cgcard", {cg_card_w, cg_card_h});
+            if (ImGui::IsItemClicked()) {
+                Clip cl;
+                cl.clip_type = ClipType::Effect;
+                cl.fx_type   = fc.type;
+                cl.start     = state.playhead;
+                cl.end       = state.playhead + 5.f;
+                Track nt; nt.name = fc.name;
+                nt.clips.push_back(cl);
+                state.tracks.insert(state.tracks.begin(), std::move(nt));
+                state.selected_track = 0;
+                state.selected_clip  = 0;
+                history_push(state, std::string("Add Color Grade: ") + fc.name);
+            }
+
+            ImGui::Dummy({0.f, 4.f});
+            ImGui::PopID();
         }
     }
 
@@ -4271,55 +4449,36 @@ static void panel_fx_creative(AppState& state, float w) {
     ImGui::PopStyleColor();
     ImGui::Dummy({0.f, 8.f});
 
-    struct FXCard { FXType type; const char* name; const char* tagline; ImU32 accent; };
-    static const FXCard CARDS[] = {
-        {FXType::ChromaKey, "Chroma Key",  "Color-range keyer  ·  green screen  ·  compositing", IM_COL32(50,220,120,255)},
-        {FXType::Glitch,    "Glitch",      "RGB split  ·  row corruption  ·  digital tear",       IM_COL32(0,210,220,255)},
-        {FXType::ZoomPunch, "Zoom Punch",  "Beat-synced scale spike  ·  shake",                   IM_COL32(255,135,40,255)},
-        {FXType::LUT,       "LUT Grade",   "Load any .cube file  ·  cinematic color grade",       IM_COL32(255,205,55,255)},
-        {FXType::LightLeak, "Light Leak",  "Film flare  ·  amplitude-driven  ·  Screen blend",    IM_COL32(255,90,160,255)},
-        {FXType::VHS,       "VHS",         "Chroma bleed  ·  grain  ·  tracking glitch",          IM_COL32(110,195,95,255)},
-        {FXType::Datamosh,  "Datamosh",    "Temporal ghost  ·  multi-key chaos  ·  total mosh",   IM_COL32(255,60,100,255)},
-#include "generated/fx_ui_picker.h"
-    };
-    static const int N_CARDS = (int)(sizeof(CARDS) / sizeof(CARDS[0]));
-
     float card_w  = w - 8.f;
     float card_h  = 96.f;
-    float thumb_w = card_h * (108.f / 192.f);  // portrait thumbnail width at card height
+    float thumb_w = card_h * (108.f / 192.f);
 
-    for (int i = 0; i < N_CARDS; ++i) {
-        const FXCard& fc = CARDS[i];
+    for (int i = 0; i < g_n_fx_cards; ++i) {
+        if (fx_type_is_adjustment_style(g_fx_cards[i].type)) continue;
+        const FXCard& fc = g_fx_cards[i];
         ImGui::PushID(i + 9000);
         ImVec2 cp = ImGui::GetCursorScreenPos();
         ImDrawList* dl = ImGui::GetWindowDrawList();
 
         bool hov = ImGui::IsMouseHoveringRect(cp, {cp.x+card_w, cp.y+card_h});
-
-        // Card background
         dl->AddRectFilled(cp, {cp.x+card_w, cp.y+card_h},
                           hov ? IM_COL32(28,28,40,255) : IM_COL32(18,18,28,255), 5.f);
 
-        // Portrait thumbnail on the left
         uintptr_t prev_tex = video_fx_preview_texture(fc.type, (float)ImGui::GetTime());
-        if (prev_tex) {
+        if (prev_tex)
             dl->AddImageRounded((ImTextureID)(uintptr_t)prev_tex,
                                 cp, {cp.x+thumb_w, cp.y+card_h},
-                                {0,0}, {1,1},
+                                {0,0},{1,1},
                                 hov ? IM_COL32(255,255,255,230) : IM_COL32(255,255,255,190),
                                 5.f, ImDrawFlags_RoundCornersLeft);
-        }
 
-        // Border
         dl->AddRect(cp, {cp.x+card_w, cp.y+card_h},
                     hov ? IM_COL32(255,255,255,200) : IM_COL32(60,60,80,200), 5.f, 0, hov ? 2.f : 1.f);
 
-        // Name + tagline to the right of thumbnail
         float tx = cp.x + thumb_w + 10.f;
         ImGui::PushFont(g_font_bold);
         dl->AddText(ImGui::GetFont(), 13.f, {tx, cp.y+14.f}, IM_COL32(255,255,255,240), fc.name);
         ImGui::PopFont();
-        // Wrap tagline manually at card_w
         dl->AddText({tx, cp.y+33.f}, IM_COL32(160,160,170,200), fc.tagline);
 
         if (hov) {
@@ -4524,6 +4683,65 @@ static void panel_fx_clip(AppState& state, float w) {
     }
 
     ImGui::PopStyleColor(3);
+
+    // ── Beat Sync Source ────────────────────────────────────────────────────
+    ImGui::Dummy({0.f, 12.f}); ui_separator(); ImGui::Dummy({0.f, 8.f});
+    ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(255, 210, 60, 255));
+    ImGui::TextUnformatted("Beat Sync Source");
+    ImGui::PopStyleColor();
+    ImGui::Dummy({0.f, 4.f});
+
+    // Build list of analyzed Audio/Video clips
+    struct BeatSrcEntry { int ti, ci; std::string label; };
+    std::vector<BeatSrcEntry> beat_srcs;
+    beat_srcs.push_back({-1, -1, "None"});
+    for (int ti2 = 0; ti2 < (int)state.tracks.size(); ++ti2) {
+        const auto& tr2 = state.tracks[ti2];
+        for (int ci2 = 0; ci2 < (int)tr2.clips.size(); ++ci2) {
+            const Clip& c2 = tr2.clips[ci2];
+            if (c2.clip_type != ClipType::Audio && c2.clip_type != ClipType::Video) continue;
+            char lbl[128];
+            if (!c2.beats.empty())
+                snprintf(lbl, sizeof(lbl), "%s  ·  %d beats @ %.1f BPM",
+                    fs::path(c2.source_id).filename().string().c_str(), (int)c2.beats.size(), c2.beat_bpm);
+            else if (c2.beats_analyzing)
+                snprintf(lbl, sizeof(lbl), "%s  ·  analysing…",
+                    fs::path(c2.source_id).filename().string().c_str());
+            else
+                snprintf(lbl, sizeof(lbl), "%s  ·  no beats yet",
+                    fs::path(c2.source_id).filename().string().c_str());
+            beat_srcs.push_back({ti2, ci2, lbl});
+        }
+    }
+
+    // Find current selection index
+    int sel_idx = 0;
+    for (int i = 1; i < (int)beat_srcs.size(); ++i)
+        if (beat_srcs[i].ti == clip.beat_src_track && beat_srcs[i].ci == clip.beat_src_clip)
+            { sel_idx = i; break; }
+
+    const char* preview = beat_srcs[sel_idx].label.c_str();
+    ImGui::SetNextItemWidth(w - 16.f);
+    if (ImGui::BeginCombo("##bsrc", preview)) {
+        for (int i = 0; i < (int)beat_srcs.size(); ++i) {
+            bool selected = (i == sel_idx);
+            if (ImGui::Selectable(beat_srcs[i].label.c_str(), selected)) {
+                clip.beat_src_track = beat_srcs[i].ti;
+                clip.beat_src_clip  = beat_srcs[i].ci;
+                history_push(state, "FX: set beat sync source");
+            }
+            if (selected) ImGui::SetItemDefaultFocus();
+        }
+        ImGui::EndCombo();
+    }
+
+    if (clip.beat_src_track >= 0) {
+        ImGui::Dummy({0.f, 4.f});
+        ui_label("Beat Decay");
+        ImGui::SetNextItemWidth(w - 16.f);
+        ImGui::SliderFloat("##bdecay", &clip.beat_decay, 0.02f, 1.0f, "%.2fs");
+        if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "FX: beat decay");
+    }
 
     ImGui::Dummy({0.f, 12.f}); ui_separator(); ImGui::Dummy({0.f, 8.f});
     if (track.locked) ImGui::BeginDisabled();
@@ -6794,6 +7012,7 @@ void ui_studio(AppState& state) {
     }
 
     handle_shortcuts(state);
+    poll_clip_beat_analysis(state);
 
     // Keep state.duration in sync with actual clip content every frame.
     if (!state.tracks.empty()) {

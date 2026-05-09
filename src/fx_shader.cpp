@@ -99,8 +99,8 @@ void main() {
     vec3 cp = c.rgb - lum_p;
     float dist = length(cp - ck);
     float soft = max(u_softness, 0.001);
-    float t = (dist - u_threshold) / soft;
-    float alpha = clamp(t * t * (3.0 - 2.0 * t), 0.0, 1.0);
+    float t = clamp((dist - u_threshold) / soft, 0.0, 1.0);
+    float alpha = t * t * (3.0 - 2.0 * t);
     vec3 rgb = c.rgb;
     if (alpha < 1.0) {
         float spill = 1.0 - alpha;

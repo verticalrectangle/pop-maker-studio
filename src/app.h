@@ -201,6 +201,16 @@ struct Clip {
     // Generated effect clip fields
 #include "generated/fx_clip_fields.h"
 
+    // Beat sync fields (Audio/Video clips: analyzed beats; FX clips: source reference)
+    std::vector<float> beats;           // beat timestamps (Audio/Video clips only)
+    float              beat_bpm   = 0.f;
+    std::string        beats_json_path; // path to beats.json cache
+    bool               beats_analyzing = false; // background analysis in progress
+
+    int   beat_src_track = -1;   // FX clip: which track holds the audio source clip
+    int   beat_src_clip  = -1;   // FX clip: which clip index on that track
+    float beat_decay     = 0.15f; // FX clip: exp decay time in seconds
+
     // keyframe tracks — keyed by property name string
     // empty = use the matching static field above
     std::unordered_map<std::string, PropTrack> ktracks;
@@ -245,6 +255,8 @@ struct CreativeFXAccum {
     float zoom_strength  = 0.f;
     float zoom_decay     = 0.15f;
     float zoom_shake     = 0.f;
+    int   zoom_src_track = -1;
+    int   zoom_src_clip  = -1;
 
     bool  leak_on        = false;
     float leak_intensity = 0.f;
@@ -499,3 +511,8 @@ EffectAccum      collect_glass_effects(const AppState& state, float t, int video
 CreativeFXAccum  collect_glass_fx    (const AppState& state, float t, int video_track_idx);
 // Visual check: does this FX clip sit directly above any video/audio clip (time overlap)?
 bool             fx_clip_is_glass    (const AppState& state, int fx_ti, const Clip& fx_cl);
+
+// Beat sync: returns exp-decay pulse [0..1] from most recent beat before t in the referenced clip.
+// src_track/src_clip = -1 → always returns 0.
+float            beat_pulse_at       (const AppState& state, int src_track, int src_clip,
+                                      float t, float decay);
