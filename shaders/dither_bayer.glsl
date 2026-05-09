@@ -7,7 +7,6 @@ uniform float u_tex_h;
 uniform float u_levels;
 uniform float u_scale;
 uniform float u_color;
-uniform float u_strength;
 void main() {
     vec4 col = texture(u_tex, v_uv);
     float lum = dot(col.rgb, vec3(0.299, 0.587, 0.114));
@@ -37,5 +36,5 @@ void main() {
     float quant = floor(dith_lum / step_sz + 0.5) * step_sz;
     // Color dither or monochrome
     vec3 result = mix(vec3(quant), col.rgb * quant / max(lum, 0.001), u_color);
-    frag = vec4(clamp(mix(col.rgb, result, u_strength), 0.0, 1.0), col.a);
+    frag = vec4(clamp(result, 0.0, 1.0), col.a);
 }

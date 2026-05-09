@@ -8,7 +8,6 @@ uniform float u_orange_mask;
 uniform float u_contrast;
 uniform float u_grain;
 uniform float u_time;
-uniform float u_strength;
 float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1,311.7)))*43758.5453); }
 void main() {
     vec4 col = texture(u_tex, v_uv);
@@ -23,5 +22,5 @@ void main() {
     // Film grain
     vec2 npx = floor(v_uv * vec2(u_tex_w, u_tex_h));
     float g = (hash(npx + vec2(u_time * 23.1, u_time * 17.7)) - 0.5) * u_grain * 0.3;
-    frag = vec4(clamp(mix(col.rgb, neg + g, u_strength), 0.0, 1.0), col.a);
+    frag = vec4(clamp(neg + g, 0.0, 1.0), col.a);
 }

@@ -4,7 +4,7 @@ out vec4 frag;
 uniform sampler2D u_tex;
 uniform float u_tex_w;
 uniform float u_tex_h;
-uniform float u_amount;
+uniform float u_intensity;
 uniform float u_hue;
 uniform float u_glow;
 void main() {
@@ -14,7 +14,7 @@ void main() {
     vec3 kp = abs(fract(u_hue + K.xyz) * 6.0 - K.www);
     vec3 dodge_col = clamp(kp - K.xxx, 0.0, 1.0);
     // Color dodge blend mode
-    vec3 dodged = col.rgb / max(1.0 - dodge_col * u_amount, vec3(0.001));
+    vec3 dodged = col.rgb / max(1.0 - dodge_col * u_intensity, vec3(0.001));
     dodged = clamp(dodged, 0.0, 1.0);
     // Glow halo
     vec2 px = vec2(1.0/u_tex_w, 1.0/u_tex_h);

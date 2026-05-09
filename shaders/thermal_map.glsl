@@ -7,7 +7,6 @@ uniform float u_cold_hue;
 uniform float u_hot_hue;
 uniform float u_contrast;
 uniform float u_scanlines;
-uniform float u_strength;
 vec3 hue2rgb(float h) {
     vec4 K = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
     return clamp(abs(fract(h + K.xyz)*6.0 - K.www) - K.xxx, 0.0, 1.0);
@@ -29,5 +28,5 @@ void main() {
         thermal = mix(hue2rgb(u_hot_hue), vec3(1.0, 1.0, 0.9), (heat-0.75)*4.0);
     // Faint scan lines
     float scan = 1.0 - u_scanlines * 0.5 * (0.5 + 0.5*sin(v_uv.y * u_tex_h * 3.14159));
-    frag = vec4(clamp(mix(col.rgb, thermal * scan, u_strength), 0.0, 1.0), col.a);
+    frag = vec4(clamp(thermal * scan, 0.0, 1.0), col.a);
 }

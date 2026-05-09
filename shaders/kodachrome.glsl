@@ -5,7 +5,6 @@ uniform sampler2D u_tex;
 uniform float u_saturation;
 uniform float u_reds;
 uniform float u_shadows;
-uniform float u_strength;
 void main() {
     vec4 col = texture(u_tex, v_uv);
     float lum = dot(col.rgb, vec3(0.299, 0.587, 0.114));
@@ -21,5 +20,5 @@ void main() {
     sat = sat + gold * shadow_mask * u_shadows;
     // Slight blue desaturation (Kodachrome tends toward warm)
     sat.b = mix(sat.b, sat.b * 0.85, u_reds * 0.3);
-    frag = vec4(clamp(mix(col.rgb, sat, u_strength), 0.0, 1.0), col.a);
+    frag = vec4(clamp(sat, 0.0, 1.0), col.a);
 }

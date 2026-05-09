@@ -4,7 +4,6 @@ out vec4 frag;
 uniform sampler2D u_tex;
 uniform float u_contrast;
 uniform float u_blue_tint;
-uniform float u_strength;
 void main() {
     vec4 col = texture(u_tex, v_uv);
     float lum = dot(col.rgb, vec3(0.299, 0.587, 0.114));
@@ -19,5 +18,5 @@ void main() {
         inv
     );
     xray = mix(vec3(inv), xray, u_blue_tint);
-    frag = vec4(clamp(mix(col.rgb, xray, u_strength), 0.0, 1.0), col.a);
+    frag = vec4(clamp(xray, 0.0, 1.0), col.a);
 }

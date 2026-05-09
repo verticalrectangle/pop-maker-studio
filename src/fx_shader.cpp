@@ -234,6 +234,19 @@ uniform sampler2D u_tex;
 void main() { frag = texture(u_tex, v_uv); }
 )glsl";
 
+// Amount blend — mixes original (u_tex, unit 0) with effect (u_effect, unit 1)
+static const char* k_blend_frag = R"glsl(
+#version 330 core
+in vec2 v_uv;
+out vec4 frag;
+uniform sampler2D u_tex;
+uniform sampler2D u_effect;
+uniform float u_amount;
+void main() {
+    frag = mix(texture(u_tex, v_uv), texture(u_effect, v_uv), u_amount);
+}
+)glsl";
+
 
 // ── Compile / link helpers ────────────────────────────────────────────────────
 
@@ -275,7 +288,7 @@ static GLuint link_prog(const char* frag_src) {
 
 static struct {
     GLuint grade = 0, blur = 0, chroma_key = 0, glitch = 0;
-    GLuint vhs = 0, leak = 0, datamosh = 0, blit = 0;
+    GLuint vhs = 0, leak = 0, datamosh = 0, blit = 0, blend = 0;
 } g_prog;
 
 // Generated effects use a map keyed by (int)FXType — no struct fields needed.
@@ -331,7 +344,33 @@ static void out_ensure(int slot, int w, int h) {
 
 // Draw a fullscreen pass from src_tex into fbo.  The caller sets program uniforms first.
 static void draw_pass(GLuint fbo, GLuint src_tex, int w, int h, GLuint prog,
-                      const char* tex_uniform = "u_tex", int tex_unit = 0)
+                      const char* tex_uniform = "u_tex", int tex_unit = 0);  // defined below
+
+// Blend original_tex + effect_tex → out_fbo using g_prog.blend.
+// Called after each generated effect pass when amount < 1.
+static void draw_blend_pass(GLuint original_tex, GLuint effect_tex, float amount,
+                            GLuint out_fbo, int w, int h)
+{
+    glBindFramebuffer(GL_FRAMEBUFFER, out_fbo);
+    glViewport(0, 0, w, h);
+    glUseProgram(g_prog.blend);
+
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, original_tex);
+    glUniform1i(glGetUniformLocation(g_prog.blend, "u_tex"), 0);
+
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, effect_tex);
+    glUniform1i(glGetUniformLocation(g_prog.blend, "u_effect"), 1);
+
+    glUniform1f(glGetUniformLocation(g_prog.blend, "u_amount"), amount);
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+    glActiveTexture(GL_TEXTURE0);
+}
+
+// (definition of draw_pass — forward-declared above)
+static void draw_pass(GLuint fbo, GLuint src_tex, int w, int h, GLuint prog,
+                      const char* tex_uniform, int tex_unit)
 {
     glBindFramebuffer(GL_FRAMEBUFFER, fbo);
     glViewport(0, 0, w, h);
@@ -357,6 +396,7 @@ void fx_shader_init() {
     g_prog.leak           = link_prog(k_leak_frag);
     g_prog.datamosh       = link_prog(k_datamosh_frag);
     g_prog.blit           = link_prog(k_blit_frag);
+    g_prog.blend          = link_prog(k_blend_frag);
 
     glGenVertexArrays(1, &g_vao);
     fx_generated_init();
@@ -366,7 +406,7 @@ void fx_shader_init() {
 
 void fx_shader_shutdown() {
     for (auto p : { g_prog.grade, g_prog.blur, g_prog.chroma_key, g_prog.glitch,
-                    g_prog.vhs, g_prog.leak, g_prog.datamosh, g_prog.blit })
+                    g_prog.vhs, g_prog.leak, g_prog.datamosh, g_prog.blit, g_prog.blend })
         if (p) glDeleteProgram(p);
     for (auto& [k, v] : g_gen_progs) if (v) glDeleteProgram(v);
     g_gen_progs.clear();

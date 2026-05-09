@@ -6,7 +6,6 @@ uniform float u_depth;
 uniform float u_rotation;
 uniform float u_zoom;
 uniform float u_time;
-uniform float u_strength;
 void main() {
     vec2 uv = v_uv - 0.5;
     int maxSteps = int(u_depth);
@@ -20,7 +19,5 @@ void main() {
         angle_acc += 0.2 + u_rotation * 0.3;
     }
     uv += 0.5;
-    vec4 orig = texture(u_tex, v_uv);
-    vec4 effect = texture(u_tex, clamp(uv, 0.0, 1.0));
-    frag = vec4(mix(orig.rgb, effect.rgb, u_strength), orig.a);
+    frag = texture(u_tex, clamp(uv, 0.0, 1.0));
 }

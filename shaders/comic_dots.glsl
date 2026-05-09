@@ -7,7 +7,6 @@ uniform float u_tex_h;
 uniform float u_dot_size;
 uniform float u_ink_threshold;
 uniform float u_color_levels;
-uniform float u_strength;
 void main() {
     vec2 px = vec2(1.0/u_tex_w, 1.0/u_tex_h);
     // Snap to dot grid
@@ -28,6 +27,5 @@ void main() {
              -texture(u_tex, v_uv - vec2(0,  px.y)).rgb;
     float edge = clamp((length(gx)+length(gy) - u_ink_threshold) * 8.0, 0.0, 1.0);
     vec3 result = mix(vec3(1.0), cell_col, in_dot) * (1.0 - edge);
-    vec4 orig = texture(u_tex, v_uv);
-    frag = vec4(clamp(mix(orig.rgb, result, u_strength), 0.0, 1.0), orig.a);
+    frag = vec4(clamp(result, 0.0, 1.0), 1.0);
 }

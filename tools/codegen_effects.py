@@ -5,7 +5,7 @@ Reads effects/registry.json + shaders/*.glsl
 Writes src/generated/*.h
 Run from the repo root: python3 tools/codegen_effects.py
 """
-import json, os, sys, textwrap
+import json, os, sys, math
 
 ROOT    = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 REG     = os.path.join(ROOT, "effects", "registry.json")
@@ -19,10 +19,6 @@ def load_shader(path):
     with open(full) as f:
         return f.read().rstrip()
 
-def c_string(src, var):
-    escaped = src.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n\"\n\"")
-    return f'static const char* {var} = "{escaped}";'
-
 def glsl_multiline(src, var):
     return f'static const char* {var} = R"glsl(\n{src}\n)glsl";'
 
@@ -32,6 +28,29 @@ def write(path, content):
     with open(path, "w") as f:
         f.write(banner + content)
     print(f"  wrote {os.path.relpath(path, ROOT)}")
+
+def uniform_set_lines(p, eid, indent="            "):
+    """Generate glUniform1f call for a param, applying power curve if curve != 1.0."""
+    uname = f'u_{p["name"]}'
+    field = f'cfx.{eid}_{p["name"]}'
+    curve = float(p.get("curve", 1.0))
+    pmin  = float(p["min"])
+    pmax  = float(p["max"])
+    rng   = pmax - pmin
+
+    if curve == 1.0 or rng <= 0.0:
+        return [f'{indent}glUniform1f(glGetUniformLocation(p, "{uname}"), {field});']
+
+    # Normalize stored value to [0,1], apply power curve, scale back to [min,max].
+    # actual = min + pow(clamp((stored - min) / range, 0, 1), curve) * range
+    lines = [
+        f'{indent}{{',
+        f'{indent}    float _n = ({field} - {pmin}f) / {rng}f;',
+        f'{indent}    _n = _n < 0.0f ? 0.0f : (_n > 1.0f ? 1.0f : _n);',
+        f'{indent}    glUniform1f(glGetUniformLocation(p, "{uname}"), {pmin}f + powf(_n, {curve}f) * {rng}f);',
+        f'{indent}}}',
+    ]
+    return lines
 
 def main():
     with open(REG) as f:
@@ -46,10 +65,12 @@ def main():
     write(os.path.join(GEN_DIR, "fx_enum_entries.h"), "\n".join(lines) + "\n")
 
     # ── fx_accum_fields.h ─────────────────────────────────────────────────────
+    # Amount is a system field alongside the params.
     lines = []
     for e in effects:
         eid = e["id"]
         lines.append(f'    bool  {eid}_on = false;')
+        lines.append(f'    float {eid}_amount = 1.0f;')
         for p in e["params"]:
             lines.append(f'    float {eid}_{p["name"]} = {float(p["default"])}f;')
     write(os.path.join(GEN_DIR, "fx_accum_fields.h"), "\n".join(lines) + "\n")
@@ -58,6 +79,7 @@ def main():
     lines = []
     for e in effects:
         eid = e["id"]
+        lines.append(f'    float fx_{eid}_amount = 1.0f;')
         for p in e["params"]:
             lines.append(f'    float fx_{eid}_{p["name"]} = {float(p["default"])}f;')
     write(os.path.join(GEN_DIR, "fx_clip_fields.h"), "\n".join(lines) + "\n")
@@ -69,6 +91,7 @@ def main():
         lines.append(f'        case FXType::{e["enum"]}:')
         lines.append(f'            acc.{eid}_on = true;')
         lines.append(f'            acc.any_gen_fx = true;')
+        lines.append(f'            acc.{eid}_amount = fmaxf(acc.{eid}_amount, cl.fx_{eid}_amount);')
         for p in e["params"]:
             lines.append(f'            acc.{eid}_{p["name"]} = fmaxf(acc.{eid}_{p["name"]}, cl.fx_{eid}_{p["name"]});')
         lines.append(f'            break;')
@@ -91,28 +114,30 @@ def main():
     write(os.path.join(GEN_DIR, "fx_shader_init.h"), "\n".join(lines) + "\n")
 
     # ── fx_shader_apply.h ─────────────────────────────────────────────────────
+    # Guard: effect_on && amount > 0.01.
+    # Pipeline: save pre_tex, run effect, then blend if amount < 1.
+    # Power curve applied per-param when setting uniforms.
     lines = []
     for e in effects:
         eid = e["id"]
-        cond_parts = [f'cfx.{eid}_on']
-        # Only add secondary guard when there's a dedicated 'strength' param (min=0)
-        for p in e["params"]:
-            if p.get("hidden"): continue
-            if p["name"] == "strength" and float(p["min"]) == 0.0:
-                cond_parts.append(f'cfx.{eid}_strength > 0.01f')
-                break
-        cond = " && ".join(cond_parts)
+        cond = f'cfx.{eid}_on && cfx.{eid}_amount > 0.01f'
         lines.append(f'    if ({cond}) {{')
         lines.append(f'        GLuint p = g_gen_progs[(int)FXType::{e["enum"]}];')
         lines.append(f'        if (p) {{')
+        lines.append(f'            GLuint pre_tex = cur;')
         lines.append(f'            glUseProgram(p);')
         lines.append(f'            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);')
         lines.append(f'            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);')
         lines.append(f'            glUniform1f(glGetUniformLocation(p, "u_time"),  t);')
         for p in e["params"]:
-            uname = f'u_{p["name"]}'
-            lines.append(f'            glUniform1f(glGetUniformLocation(p, "{uname}"), cfx.{eid}_{p["name"]});')
+            if p.get("hidden"): continue
+            lines.extend(uniform_set_lines(p, eid))
         lines.append(f'            run1(p);')
+        lines.append(f'            if (cfx.{eid}_amount < 0.999f) {{')
+        lines.append(f'                draw_blend_pass(pre_tex, cur, cfx.{eid}_amount, g_pp.fbo[pslot], w, h);')
+        lines.append(f'                cur = g_pp.tex[pslot];')
+        lines.append(f'                pslot ^= 1;')
+        lines.append(f'            }}')
         lines.append(f'        }}')
         lines.append(f'    }}')
         lines.append('')
@@ -122,6 +147,7 @@ def main():
     lines = []
     for e in effects:
         eid = e["id"]
+        lines.append(f'    w.pod(c.fx_{eid}_amount);')
         for p in e["params"]:
             lines.append(f'    w.pod(c.fx_{eid}_{p["name"]});')
     write(os.path.join(GEN_DIR, "fx_project_write.h"), "\n".join(lines) + "\n")
@@ -130,19 +156,26 @@ def main():
     lines = [f'    if (version >= {reg["project_version"]}u) {{']
     for e in effects:
         eid = e["id"]
+        lines.append(f'        c.fx_{eid}_amount = r.pod<float>();')
         for p in e["params"]:
             lines.append(f'        c.fx_{eid}_{p["name"]} = r.pod<float>();')
     lines.append('    }')
     write(os.path.join(GEN_DIR, "fx_project_read.h"), "\n".join(lines) + "\n")
 
     # ── fx_ui_inspector.h ─────────────────────────────────────────────────────
+    # Amount slider first (system), then effect params.
     lines = []
     for e in effects:
         eid = e["id"]
         lines.append(f'        case FXType::{e["enum"]}:')
+        # Amount slider — always first, system-level
+        lines.append(f'            ui_label("Amount");')
+        lines.append(f'            ImGui::SetNextItemWidth(sw);')
+        lines.append(f'            ImGui::SliderFloat("##gen_{eid}_amount", &clip.fx_{eid}_amount, 0.0f, 1.0f, "%.2f");')
+        lines.append(f'            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "{e["label"]}: Amount");')
         for i, p in enumerate(e["params"]):
-            if i > 0:
-                lines.append('            ImGui::Dummy({0.f, 4.f});')
+            if p.get("hidden"): continue
+            lines.append('            ImGui::Dummy({0.f, 4.f});')
             lines.append(f'            ui_label("{p["label"]}");')
             lines.append(f'            ImGui::SetNextItemWidth(sw);')
             lines.append(f'            ImGui::SliderFloat("##gen_{eid}_{p["name"]}", &clip.fx_{eid}_{p["name"]}, {float(p["min"])}f, {float(p["max"])}f, "{p["fmt"]}");')
@@ -151,14 +184,13 @@ def main():
         lines.append('')
     write(os.path.join(GEN_DIR, "fx_ui_inspector.h"), "\n".join(lines))
 
-    # ── fx_ui_meta.h — color, abbrev, label, name for switch helpers ──────────
-    color_cases, abbrev_cases, label_cases, name_cases, picker_entries = [], [], [], [], []
+    # ── fx_ui_meta.h — color, abbrev, label for switch helpers ───────────────
+    color_cases, abbrev_cases, label_cases, picker_entries = [], [], [], []
     for e in effects:
         col = e["color"]
         color_cases.append(f'        case FXType::{e["enum"]}: return IM_COL32({col[0]},{col[1]},{col[2]},{col[3]});')
         abbrev_cases.append(f'        case FXType::{e["enum"]}: return "{e["abbrev"]}";')
         label_cases.append(f'        case FXType::{e["enum"]}: return "{e["label"]}";')
-        name_cases.append(f'        case FXType::{e["enum"]}: return "{e["label"]}";')
         picker_entries.append(f'        {{FXType::{e["enum"]}, "{e["label"]}", "{e["description"]}", IM_COL32({col[0]},{col[1]},{col[2]},{col[3]})}},')
 
     write(os.path.join(GEN_DIR, "fx_ui_color.h"),   "\n".join(color_cases)   + "\n")
@@ -166,25 +198,26 @@ def main():
     write(os.path.join(GEN_DIR, "fx_ui_label.h"),   "\n".join(label_cases)   + "\n")
     write(os.path.join(GEN_DIR, "fx_ui_picker.h"),  "\n".join(picker_entries) + "\n")
 
-    # ── fx_preview_defaults.h — switch cases for fx_preview_gen_effect ──────────
+    # ── fx_preview_defaults.h ─────────────────────────────────────────────────
     lines = []
     for e in effects:
         eid = e["id"]
         lines.append(f'        case FXType::{e["enum"]}:')
         lines.append(f'            cfx.{eid}_on = true;')
+        lines.append(f'            cfx.{eid}_amount = 1.0f;')
         for p in e["params"]:
             lines.append(f'            cfx.{eid}_{p["name"]} = {float(p["default"])}f;')
         lines.append(f'            break;')
     write(os.path.join(GEN_DIR, "fx_preview_defaults.h"), "\n".join(lines) + "\n")
 
-    # ── fx_type_list.h — array for --dump-fx-previews ────────────────────────
+    # ── fx_type_list.h ────────────────────────────────────────────────────────
     entries = [f'    FXType::{e["enum"]},' for e in effects]
     content = "static const FXType k_gen_fx_types[] = {\n"
     content += "\n".join(entries) + "\n"
     content += f"}};\nstatic const int k_gen_fx_count = {len(effects)};\n"
     write(os.path.join(GEN_DIR, "fx_type_list.h"), content)
 
-    # ── fx_gen_names.h — effect id strings for --dump-fx-previews filenames ──
+    # ── fx_gen_names.h ────────────────────────────────────────────────────────
     lines = [f'    "{e["id"]}",' for e in effects]
     write(os.path.join(GEN_DIR, "fx_gen_names.h"), "\n".join(lines) + "\n")
 

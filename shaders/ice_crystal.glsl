@@ -7,7 +7,6 @@ uniform float u_tex_h;
 uniform float u_scale;
 uniform float u_refract;
 uniform float u_tint;
-uniform float u_strength;
 float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1,311.7)))*43758.5453); }
 void main() {
     vec2 uv_sc = v_uv * vec2(u_tex_w, u_tex_h) / u_scale;
@@ -37,6 +36,5 @@ void main() {
     vec3 ice_tint = mix(sample_col, sample_col * vec3(0.7, 0.85, 1.2), u_tint);
     // Bright borders
     ice_tint += border * 0.5 * vec3(0.8, 0.9, 1.0);
-    vec4 orig = texture(u_tex, v_uv);
-    frag = vec4(clamp(mix(orig.rgb, ice_tint, u_strength), 0.0, 1.0), orig.a);
+    frag = vec4(clamp(ice_tint, 0.0, 1.0), 1.0);
 }

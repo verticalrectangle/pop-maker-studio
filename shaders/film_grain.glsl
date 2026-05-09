@@ -3,7 +3,7 @@ in vec2 v_uv;
 out vec4 frag;
 uniform sampler2D u_tex;
 uniform float u_time;
-uniform float u_amount;
+uniform float u_intensity;
 uniform float u_size;
 
 float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
@@ -16,5 +16,5 @@ void main() {
     // Luma-weighted: grain more visible in midtones
     float luma = dot(col.rgb, vec3(0.299, 0.587, 0.114));
     float w = 1.0 - abs(luma * 2.0 - 1.0);
-    frag = vec4(col.rgb + g * u_amount * w * 0.35, col.a);
+    frag = vec4(col.rgb + g * u_intensity * w * 0.35, col.a);
 }

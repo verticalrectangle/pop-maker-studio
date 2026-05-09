@@ -7,7 +7,6 @@ uniform float u_tex_h;
 uniform float u_channel_mix;
 uniform float u_glow;
 uniform float u_contrast;
-uniform float u_strength;
 void main() {
     vec4 col = texture(u_tex, v_uv);
     // IR: green channel reads as infrared (foliage glows white)
@@ -34,5 +33,5 @@ void main() {
     ir_val = min(ir_val + glow_acc * u_glow * 0.3, 1.0);
     // Slight warm tone
     vec3 result = vec3(ir_val * 1.02, ir_val * 0.99, ir_val * 0.92);
-    frag = vec4(clamp(mix(col.rgb, result, u_strength), 0.0, 1.0), col.a);
+    frag = vec4(clamp(result, 0.0, 1.0), col.a);
 }

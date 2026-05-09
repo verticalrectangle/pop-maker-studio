@@ -6,7 +6,6 @@ uniform float u_grain;
 uniform float u_gate;
 uniform float u_fade;
 uniform float u_time;
-uniform float u_strength;
 float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1,311.7)))*43758.5453); }
 void main() {
     // Gate weave: horizontal shift per frame
@@ -26,6 +25,5 @@ void main() {
     float frame_v = smoothstep(0.0, 0.04, v_uv.y) * smoothstep(1.0, 0.96, v_uv.y);
     float frame_h = smoothstep(0.0, 0.03, v_uv.x) * smoothstep(1.0, 0.97, v_uv.x);
     warm *= frame_v * frame_h;
-    vec4 exact_orig = texture(u_tex, v_uv);
-    frag = vec4(clamp(mix(exact_orig.rgb, warm, u_strength), 0.0, 1.0), exact_orig.a);
+    frag = vec4(clamp(warm, 0.0, 1.0), col.a);
 }

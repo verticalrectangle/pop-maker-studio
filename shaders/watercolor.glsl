@@ -7,7 +7,6 @@ uniform float u_tex_h;
 uniform float u_bleeding;
 uniform float u_paper;
 uniform float u_saturation;
-uniform float u_strength;
 float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1,311.7)))*43758.5453); }
 void main() {
     vec2 px = vec2(1.0/u_tex_w, 1.0/u_tex_h);
@@ -32,5 +31,5 @@ void main() {
     wash = mix(vec3(lum), wash, u_saturation) * paper_tex;
     // Slight edge darkening (wet paper bloom)
     vec4 orig = texture(u_tex, v_uv);
-    frag = vec4(clamp(mix(orig.rgb, wash, u_strength), 0.0, 1.0), orig.a);
+    frag = vec4(clamp(wash, 0.0, 1.0), orig.a);
 }

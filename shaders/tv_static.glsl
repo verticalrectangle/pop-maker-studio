@@ -4,7 +4,7 @@ out vec4 frag;
 uniform sampler2D u_tex;
 uniform float u_tex_w;
 uniform float u_tex_h;
-uniform float u_amount;
+uniform float u_intensity;
 uniform float u_color_mix;
 uniform float u_time;
 float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1,311.7)))*43758.5453); }
@@ -19,7 +19,7 @@ void main() {
     vec3 color_static = vec3(n, n2, hash(npx + 50.0 + fract(u_time * 19.3)));
     vec3 static_col = mix(grey_static, color_static, u_color_mix);
     // Blend static over image
-    vec3 result = mix(col.rgb, static_col, u_amount);
+    vec3 result = mix(col.rgb, static_col, u_intensity);
     // Add horizontal roll bar occasionally
     float roll = fract(u_time * 0.08);
     float bar = smoothstep(0.02, 0.0, abs(v_uv.y - roll)) * 0.3;

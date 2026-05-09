@@ -6,7 +6,6 @@ uniform float u_tex_w;
 uniform float u_tex_h;
 uniform float u_dot_size;
 uniform float u_scatter;
-uniform float u_strength;
 float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1,311.7)))*43758.5453); }
 void main() {
     vec2 px = vec2(1.0/u_tex_w, 1.0/u_tex_h);
@@ -44,6 +43,5 @@ void main() {
     float r = (1.0 - cell_lum * 0.7) * px.x * sz * 0.55;
     vec2 local = v_uv - best_center;
     result = (length(local) < r) ? cell_color : vec3(0.95);
-    vec4 orig = texture(u_tex, v_uv);
-    frag = vec4(clamp(mix(orig.rgb, result, u_strength), 0.0, 1.0), orig.a);
+    frag = vec4(clamp(result, 0.0, 1.0), 1.0);
 }
