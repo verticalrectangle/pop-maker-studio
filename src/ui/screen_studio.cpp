@@ -4911,11 +4911,17 @@ static constexpr float TL_RULER_H = 24.f;
 
 // ── Conflict predicate ────────────────────────────────────────────────────────
 // Returns true if clips a and b cannot coexist on the same track.
-// Effect clips never conflict with non-Effect clips (glass system).
+// Returns true if clips a and b cannot coexist on the same track.
+// Effect clips conflict with Video/Audio — they must live on their own track
+// so the glass system (which is track-index-based) works correctly.
+// Effect clips can coexist with other Effect clips as long as they don't overlap in time.
 static bool clips_conflict(const Clip& a, const Clip& b) {
-    if (a.clip_type == ClipType::Effect || b.clip_type == ClipType::Effect)
-        if (a.clip_type != b.clip_type) return false;
-    return a.start < b.end && a.end > b.start;
+    bool a_fx  = (a.clip_type == ClipType::Effect);
+    bool b_fx  = (b.clip_type == ClipType::Effect);
+    bool a_vid = (a.clip_type == ClipType::Video || a.clip_type == ClipType::Audio);
+    bool b_vid = (b.clip_type == ClipType::Video || b.clip_type == ClipType::Audio);
+    if ((a_fx && b_vid) || (b_fx && a_vid)) return true;   // FX ↔ Video: always incompatible
+    return a.start < b.end && a.end > b.start;              // everything else: time overlap
 }
 
 // ── Timeline state ────────────────────────────────────────────────────────────
@@ -5438,9 +5444,31 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
             bool sel = state.clip_selection.count({ti, ci}) > 0;
 
             if (clip.clip_type == ClipType::Effect) {
+                bool is_glass = fx_clip_is_glass(state, ti, clip);
                 FxBrickColors fbc = fx_brick_colors(clip.fx_type, sel);
-                dl->AddRectFilled({vis_x0,cy0},{vis_x1,cy1}, fbc.fill, 2.f);
-                dl->AddRect({vis_x0,cy0},{vis_x1,cy1}, fbc.border, 2.f, 0, 1.5f);
+
+                // Glass bricks: lighter fill, frosted diagonal lines, cyan accent border
+                ImU32 fill_col   = is_glass
+                    ? IM_COL32(
+                        (int)(((fbc.fill>>0)&0xFF)*0.55f + 100),
+                        (int)(((fbc.fill>>8)&0xFF)*0.55f + 100),
+                        (int)(((fbc.fill>>16)&0xFF)*0.55f + 100), 180)
+                    : fbc.fill;
+                ImU32 border_col = is_glass
+                    ? IM_COL32(130, 210, 255, sel ? 255 : 200)
+                    : fbc.border;
+
+                dl->AddRectFilled({vis_x0,cy0},{vis_x1,cy1}, fill_col, 2.f);
+                // Glass texture: sparse diagonal lines
+                if (is_glass) {
+                    dl->PushClipRect({vis_x0,cy0},{vis_x1,cy1},true);
+                    float gh = cy1 - cy0;
+                    for (float ox = vis_x0 - gh; ox < vis_x1 + gh; ox += 10.f)
+                        dl->AddLine({ox, cy0}, {ox + gh, cy1},
+                                    IM_COL32(160, 220, 255, 28), 1.f);
+                    dl->PopClipRect();
+                }
+                dl->AddRect({vis_x0,cy0},{vis_x1,cy1}, border_col, 2.f, 0, is_glass ? 2.f : 1.5f);
 
                 ImGui::PushClipRect({vis_x0,cy0},{vis_x1,cy1},true);
                 float ly = cy0 + (cy1-cy0-13.f)*0.5f;
@@ -5454,22 +5482,34 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
                     if (clip.fx_vignette_on && bx+24.f<vis_x1) { dl->AddText({bx,ly},fbc.label,"Vig"); bx+=28.f; }
                     if (clip.fx_text_on     && bx+22.f<vis_x1) { dl->AddText({bx,ly},fbc.label,"Txt"); }
                 }
-                // Down-arrow scope indicator at right edge
+                // Scope indicator: ↓ for global, ⊂ arrow for glass (clips down to one video)
                 if (vis_x1-vis_x0 > 30.f) {
                     float ax=vis_x1-12.f, ay=cy0+(cy1-cy0)*0.35f;
-                    dl->AddTriangleFilled({ax-5.f,ay},{ax+5.f,ay},{ax,ay+7.f},fbc.label);
+                    if (is_glass) {
+                        // Two small arrows pointing into a box → "clip-specific"
+                        dl->AddTriangleFilled({ax-5.f,ay},{ax+5.f,ay},{ax,ay+6.f},
+                                              IM_COL32(130,210,255,220));
+                        dl->AddLine({ax, ay+6.f},{ax, ay+10.f},
+                                    IM_COL32(130,210,255,180), 1.5f);
+                    } else {
+                        dl->AddTriangleFilled({ax-5.f,ay},{ax+5.f,ay},{ax,ay+7.f},fbc.label);
+                    }
                 }
                 ImGui::PopClipRect();
 
-                // Active-time glow on tracks below
+                // Active-time glow: glass = only the track directly below, global = all tracks below
                 if (state.playhead >= clip.start && state.playhead < clip.end) {
                     float gx = origin.x + TL_LABEL_W;
-                    for (int gti = ti+1; gti < (int)state.tracks.size(); ++gti) {
+                    int gti_start = is_glass ? ti+1 : ti+1;
+                    int gti_end   = is_glass ? ti+2 : (int)state.tracks.size();
+                    for (int gti = gti_start; gti < gti_end; ++gti) {
                         float gty = (track_area_top - state.tl_v_scroll)
                                   + gti * TL_TRACK_H;
                         if (gty+TL_TRACK_H < track_area_top || gty > track_area_bot) continue;
-                        dl->AddRectFilled({gx,gty},{gx+2.f,gty+TL_TRACK_H},
-                                          IM_COL32(160,110,255,80));
+                        ImU32 glow_col = is_glass
+                            ? IM_COL32(80, 180, 255, 90)
+                            : IM_COL32(160, 110, 255, 80);
+                        dl->AddRectFilled({gx,gty},{gx+2.f,gty+TL_TRACK_H}, glow_col);
                     }
                 }
             } else {
@@ -6206,7 +6246,7 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
             // drag_hot_gap >= 0 means between two existing tracks → insert new track there.
             float ruler_bottom = origin.y + TL_RULER_H;
             int n_tracks = (int)state.tracks.size();
-            const float GAP_PX = 8.f;
+            const float GAP_PX = 14.f;
             drag_hot_gap = -1;
             for (int gi = 0; gi < n_tracks; ++gi) {
                 float boundary_y = ruler_bottom + gi * TL_TRACK_H;
@@ -6259,18 +6299,10 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
                     state.selected_clip  = 0;
                     history_push(state, "Move clip to new track");
                 } else {
-                    // Abort drop if it would overlap a same-type clip on the target track.
-                    // Effect bricks can share a track with video/audio (glass system).
-                    float dur = moved.end - moved.start;
+                    // Abort drop if any clip on the target track conflicts with the moved clip.
                     bool overlaps = false;
-                    if (moved.clip_type != ClipType::Effect) {
-                        for (const Clip& oc : state.tracks[drag_hot_track].clips)
-                            if (moved.start < oc.end && moved.start + dur > oc.start) { overlaps = true; break; }
-                    } else {
-                        for (const Clip& oc : state.tracks[drag_hot_track].clips)
-                            if (oc.clip_type == ClipType::Effect &&
-                                moved.start < oc.end && moved.start + dur > oc.start) { overlaps = true; break; }
-                    }
+                    for (const Clip& oc : state.tracks[drag_hot_track].clips)
+                        if (clips_conflict(moved, oc)) { overlaps = true; break; }
                     if (overlaps) {
                         // Put clip back on its original track at its original position
                         moved.start = drag_origin_start;
