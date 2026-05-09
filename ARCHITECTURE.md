@@ -26,7 +26,7 @@ main loop
 
 **`src/app.h`**
 
-Everything lives in `AppState`. There is no hidden state in the UI layer beyond a handful of `static` locals inside `draw_timeline` and `draw_preview` that represent transient interaction state (drag offsets, popup positions, glass drag handles). If it needs to survive a frame, it either lives in `AppState` or in a file-scoped `static`.
+Everything lives in `AppState`. There is no hidden state in the UI layer beyond a handful of `static` locals inside `draw_timeline` and `draw_preview` that represent transient interaction state (drag offsets, popup positions, snap candidates). If it needs to survive a frame, it either lives in `AppState` or in a file-scoped `static`.
 
 This is intentional. ImGui's immediate-mode model makes retained widget state painful. Keeping everything in one flat struct means:
 - Undo/redo is trivial — snapshot and restore `AppState`
@@ -81,7 +81,7 @@ Binary format with a magic number and version field at the top:
 [MAGIC: u32] [VERSION: u32] [fields...]
 ```
 
-`MAGIC = 0x534D5001` ("PMS\x01"). Current `VERSION = 7`.
+`MAGIC = 0x534D5001` ("PMS\x01"). Current `VERSION = 16`.
 
 ### Versioning rule
 
@@ -144,18 +144,49 @@ video_get_texture(slot, src_t + lookahead);
 
 **`src/fx_shader.h`, `src/fx_shader.cpp`**
 
-All visual effects (grade, blur, vignette, chroma-key, glitch, VHS, light-leak, datamosh) are implemented as GLSL fragment shaders running on the GPU. This replaces a 600-line CPU pixel loop that blocked the main thread during scrubbing.
+All visual effects (grade, blur, vignette, chroma-key, glitch, VHS, light-leak, datamosh, and all generated effects) are implemented as GLSL fragment shaders running on the GPU.
 
 ### Effect accumulation
 
-Two structs accumulate effect clip data above the current video track:
+Four functions accumulate effect clip data from the timeline. Two are global (scan all tracks above a video), two are glass (scan only the track immediately above a specific video clip):
 
 ```cpp
-EffectAccum     ea  = collect_effects    (state, t, track_idx);
-CreativeFXAccum cfx = collect_creative_fx(state, t, track_idx);
+EffectAccum     collect_effects      (state, t, below_track_idx);  // global adjustments
+CreativeFXAccum collect_creative_fx  (state, t, below_track_idx);  // global creative FX
+EffectAccum     collect_glass_effects(state, t, video_track_idx);  // glass adjustments
+CreativeFXAccum collect_glass_fx     (state, t, video_track_idx);  // glass creative FX
 ```
 
-`collect_effects` handles `FXType::Adjustment` clips (grade, blur, vignette, text-scale, text-opacity). `collect_creative_fx` handles everything else (glitch, datamosh, VHS, ZoomPunch, LightLeak, ChromaKey).
+`collect_effects` handles `FXType::Adjustment` clips (grade, blur, vignette, text-scale, text-opacity). `collect_creative_fx` handles everything else (glitch, datamosh, VHS, ZoomPunch, LightLeak, ChromaKey, and all generated effects).
+
+**Both global functions skip glass tracks** (`track_is_glass_at`). The glass functions only read the one track directly above the target video track. This means a given FX brick is collected by exactly one of the two paths — never both.
+
+### Glass brick system
+
+An FX brick (Effect clip) is **glass** when the track directly below it has an active Video or Audio clip at that time. Glass bricks apply pre-composite — to that single clip's decoded frame only, before compositing with everything else. Non-glass bricks apply globally after compositing.
+
+```
+Track 0: [Glitch]          ← glass (track 1 has active video at this time)
+Track 1: [   Video clip  ] ← Glitch applies only here, not to track 2
+Track 2: [VHS]             ← global (track 3 has no video)
+Track 3: [   Video clip  ] ← VHS applies to full composite below track 2
+```
+
+The runtime check is `track_is_glass_at(state, fx_ti, t)`. The visual check (for timeline rendering) is `fx_clip_is_glass(state, fx_ti, clip)` (time-range overlap instead of point-in-time).
+
+**Pre-composite pass** (both preview and export):
+```cpp
+EffectAccum     glass_ea  = collect_glass_effects(state, t, ti);
+CreativeFXAccum glass_cfx = collect_glass_fx     (state, t, ti);
+if (any active)
+    cur_tex = fx_apply(cur_tex, slot, w, h, glass_ea, glass_cfx, t);
+// then the global pass:
+cur_tex = fx_apply(cur_tex, slot, w, h, global_ea, global_cfx, t);
+```
+
+### Overlap rule for Effect clips
+
+Effect clips do **not** conflict with Video or Audio clips for timeline placement purposes. Only Effect-vs-Effect time overlaps are blocked. This allows FX bricks to be dragged onto a track that already has a video clip, which is the core interaction for the glass system.
 
 ### fx_apply
 
@@ -164,7 +195,7 @@ uintptr_t fx_apply(uintptr_t src_tex, int slot, int w, int h,
                    const EffectAccum& ea, const CreativeFXAccum& cfx, float t);
 ```
 
-Runs the active passes in order: **grade+vignette → blur (2-pass) → chroma-key → glitch → VHS → light-leak → datamosh**. Returns `src_tex` unchanged if no FX is active.
+Runs the active passes in order: **grade+vignette → blur (2-pass) → chroma-key → glitch → VHS → light-leak → datamosh → (generated effects)**. Returns `src_tex` unchanged if no FX is active.
 
 The `slot` parameter (0–15) identifies which stable per-slot output texture to write to. Because ImDrawList defers rendering until the end of the frame, each slot must have its own stable output texture — shared ping-pong buffers would be overwritten before the draw commands execute.
 
@@ -197,23 +228,59 @@ The `bg_remove` effect stays CPU-side because it reads pre-rendered PNG alpha ma
 
 **Preview (`screen_studio.cpp`, `draw_vid_clip` lambda)**:
 ```
-video_set_pixel_fx(slot, pfx_bg_only)  ← CPU: applies bg_remove mask
-tex = video_get_texture(slot, src_t)   ← uploads proxy MJPEG to GL
-tex = fx_apply(tex, slot, w, h, ea, cfx, t)  ← GPU: all other FX
-dl->AddImageQuad(tex, ...)             ← draw
+video_set_pixel_fx(slot, pfx_bg_only)           ← CPU: applies bg_remove mask
+tex = video_get_texture(slot, src_t)             ← uploads proxy MJPEG to GL
+tex = fx_apply(tex, slot, w, h, glass_ea, glass_cfx, t)  ← pre-composite glass pass
+tex = fx_apply(tex, slot, w, h, global_ea, cfx,  t)      ← global GPU FX pass
+dl->AddImageQuad(tex, ...)                       ← draw
 ```
 
 **Export (`render.cpp`, `gl_render_vid_clip`)**:
 ```
-vf = video_decode_frame_at(src_t)      ← libavcodec, exact frame
-glTexImage2D(tex_id, ..., vf->data)    ← upload RGBA to GL
-tex = fx_apply(tex_id, slot, w, h, ea, cfx, t)  ← GPU FX
-dl.AddImageQuad(tex, ...)              ← draw into export FBO
+vf = video_decode_frame_at(src_t)                ← libavcodec, exact frame
+glTexImage2D(tex_id, ..., vf->data)              ← upload RGBA to GL
+tex = fx_apply(tex_id, slot, w, h, glass_ea, glass_cfx, t)  ← glass pass
+tex = fx_apply(tex_id, slot, w, h, global_ea, cfx, t)        ← global pass
+dl.AddImageQuad(tex, ...)                        ← draw into export FBO
 ```
 
 ---
 
-## 7. Audio pipeline
+## 7. Generated effects (codegen)
+
+**`effects/registry.json`, `tools/codegen_effects.py`**
+
+Effects beyond the hand-wired core (Glitch, VHS, LightLeak, ZoomPunch, Datamosh, ChromaKey) are defined in `effects/registry.json` and generated at build time by `tools/codegen_effects.py`. The script outputs ~15 headers into `src/generated/`:
+
+| Header | Purpose |
+|---|---|
+| `fx_accum_fields.h` | `CreativeFXAccum` field declarations |
+| `fx_clip_fields.h` | `Clip` fx_ field declarations |
+| `fx_collect_cases.h` | `collect_creative_fx` / `collect_glass_fx` switch cases |
+| `fx_enum_entries.h` | `FXType` enum values |
+| `fx_shader_strings.h` | GLSL fragment shader source strings |
+| `fx_shader_init.h` | `fx_shader_init()` program link calls |
+| `fx_shader_apply.h` | `fx_apply()` pass dispatch |
+| `fx_project_read.h` | `read_clip()` deserialization |
+| `fx_project_write.h` | `write_clip()` serialization |
+| `fx_ui_inspector.h` | Per-effect inspector panel UI |
+| `fx_ui_picker.h` | Effect type picker grid |
+| `fx_preview_defaults.h` | Default param values for preview |
+| `fx_type_list.h` | FXType enum list macro |
+| `fx_ui_color.h` | Per-type accent colors |
+| `fx_ui_label.h` | Display names and abbreviations |
+
+Each entry in `registry.json` specifies: `id`, `name`, `category`, `params[]` (with name, min, max, default, curve), and a GLSL shader body. The codegen emits all wiring automatically — no manual edits to the C++ are needed for a new generated effect.
+
+**Power curves**: each param can specify `"curve": 0.5` (sqrt mapping) so slider travel is perceptual. The codegen applies the curve at accumulation time, mapping UI value → shader value.
+
+**Amount field**: every generated effect has a system-level `amount` (0–1) that blends between the clean source and the full effect output via a two-texture blend shader. This is not a param — it is the top-level intensity control.
+
+To add a new generated effect: add an entry to `registry.json`, write the GLSL body under `effects/shaders/`, and regenerate.
+
+---
+
+## 8. Audio pipeline
 
 **`src/audio.h`, `src/audio.cpp`**
 
@@ -259,7 +326,7 @@ The callback uses `std::try_to_lock` — if the mutex is held by the main thread
 
 ---
 
-## 8. GL export pipeline
+## 9. GL export pipeline
 
 **`src/render.cpp` — `render_start_gl`, `render_tick_gl`**
 
@@ -293,11 +360,10 @@ glReadPixels → flip rows → write to ffmpeg pipe stdin
 For each video clip:
 1. `video_decode_frame_at(src_t)` — libavcodec frame-accurate seek + decode → RGBA
 2. `glTexImage2D(tex_id, ..., vf->data)` — upload to one of 16 pre-allocated video textures
-3. `fx_apply(tex_id, fx_slot, w, h, ea, cfx, t)` — GPU FX (§6 above)
-4. ZoomPunch transform applied to quad geometry
-5. `dl.AddImageQuad(fx_tex, ...)` — draw to the offscreen FBO
-
-The `fx_slot` equals `ti % MAX_VIDEO_TRACKS` for the primary clip and `MAX_VIDEO_TRACKS + slot_pri` for the secondary (transition) clip, mirroring the preview slot scheme.
+3. `fx_apply(glass_ea, glass_cfx)` — pre-composite glass pass
+4. `fx_apply(global_ea, cfx)` — global GPU FX pass
+5. ZoomPunch transform applied to quad geometry
+6. `dl.AddImageQuad(fx_tex, ...)` — draw to the offscreen FBO
 
 ### Video texture pool
 
@@ -320,7 +386,7 @@ Raw RGBA frames are written one-by-one to `pipe_write` (ffmpeg's stdin). The exp
 
 ---
 
-## 9. Text rendering
+## 10. Text rendering
 
 **`src/overlay_renderer.h`, `src/overlay_renderer.cpp`**
 
@@ -354,9 +420,13 @@ Exact word wrapping uses `ImFont::CalcTextSizeA` with the export font size, ensu
 
 ---
 
-## 10. Timeline UI
+## 11. Timeline UI
 
 **`src/ui/screen_studio.cpp` — `draw_timeline()`**
+
+### Layer order
+
+Track 0 is the topmost visual layer (renders last, drawn on top). Higher track indices render earlier, appearing behind lower indices. This mirrors professional NLE conventions: drag a clip up to bring it in front.
 
 ### Rendering order
 
@@ -376,9 +446,42 @@ clip_time = (screen_x - origin.x - TL_LABEL_W + tl_scroll) / zoom
 
 `TL_LABEL_W` is the track label column width. All hit testing uses `vis_x0 / vis_x1` (clamped to the visible area) for clip body, and `cx0 / cx1` (unclamped) for drag math.
 
+### Known state of the timeline code
+
+The current implementation uses ~15 `static` locals as an implicit state machine (drag position, snap candidates, hot track, etc.). This works but makes it difficult to add features cleanly. **A rewrite is planned** (see below).
+
+### Planned timeline rewrite
+
+Goal: extract the timeline into `src/ui/timeline.cpp` with a clean entry point and a proper state struct:
+
+```cpp
+struct TimelineDrag {
+    int   track = -1, clip = -1;
+    bool  left = false, right = false, moved = false;
+    float origin_start, origin_end;
+};
+struct TimelineSel {
+    std::vector<std::pair<int,int>> clips;  // multi-select
+};
+struct TimelineState {
+    TimelineDrag drag;
+    TimelineSel  sel;
+    float        scroll = 0.f, zoom = 100.f;
+    ImVec2       box_start;
+    bool         boxing = false;
+};
+```
+
+Key improvements:
+- **Box select**: rubber-band drag on empty timeline area selects all clips within the rect
+- **Ctrl+click multi-select**: toggle individual clips in/out of selection
+- **Multi-clip drag**: all selected clips move together by the same delta
+- **Single overlap predicate**: `bool clips_conflict(const Clip& a, const Clip& b)` — the only place that knows Effect clips can share a track with Video/Audio
+- **No attachment cruft**: drag release is just validate-or-snap-back; no embedded FX logic
+
 ---
 
-## 11. Transition system
+## 12. Transition system
 
 **`src/app.h` — `TransitionType`, `transition_pre`, `transition_post`**
 
@@ -400,7 +503,7 @@ The `in_trans_out` branch fires when the active clip is A (playhead in `[cut-pre
 
 ---
 
-## 12. ML pipeline
+## 13. ML pipeline
 
 **`src/transcribe.*`, Python subprocess**
 
@@ -416,7 +519,7 @@ The pipeline stages are: `Extract → Transcribe → Align → Done`. Progress i
 
 ---
 
-## 13. Undo / history
+## 14. Undo / history
 
 History is a stack of `AppState` snapshots. `history_push(state, label)` copies the entire struct. Undo pops and restores. This is simple and correct but memory-heavy for large projects. The clip word lists (`std::vector<WordEntry>`) and keyframe data are the main contributors to snapshot size.
 
@@ -430,8 +533,11 @@ The history stack is cleared on project load, new project, and after the ML pipe
 src/
   main.cpp              Entry point, GL/ImGui init, main loop
   app.h                 AppState, Clip, Track, all data model types
-  app.cpp               app_init, app_frame, app_shutdown; collect_effects/creative_fx
-  project.cpp           Binary save/load (versioned)
+  app.cpp               app_init, app_frame, app_shutdown
+                        collect_effects/creative_fx (global)
+                        collect_glass_effects/glass_fx (per-clip pre-composite)
+                        track_is_glass_at, fx_clip_is_glass
+  project.cpp           Binary save/load (versioned, current VERSION=16)
   audio.h / audio.cpp   miniaudio device, clip-based PCM mixing
   video.h / video.cpp   MJPEG proxy preview, GL texture upload, CPU bg_remove
   proxy.h / proxy.cpp   Proxy generation (ffmpeg subprocess)
@@ -440,10 +546,18 @@ src/
   render.h / render.cpp GL export pipeline + ffmpeg pipe; snapshot
   transcribe.h/.cpp     ML pipeline subprocess management
   presets.h/.cpp        User effect presets (JSON)
+  generated/            Auto-generated headers from codegen_effects.py — do not edit
   ui/
     screen_studio.cpp   Main editor UI (timeline, preview, panels) — largest file
     screen_splash.cpp   Splash screen
     screen_setup.cpp    First-run setup
+
+effects/
+  registry.json         Effect definitions (params, shader body, metadata)
+  shaders/              GLSL source files for generated effects
+
+tools/
+  codegen_effects.py    Reads registry.json → writes src/generated/*.h
 ```
 
 ---
@@ -458,6 +572,9 @@ src/
 - **The proxy poll loop opens slots it didn't open before.** Any slot that gets assigned (by `slot_for_video`) will be opened by the poll loop within one frame.
 - **Font size is a fraction of canvas height, never fixed pixels.** `h * 0.055f` default. This is why preview and 4K export look proportionally identical.
 - **fx_apply uses per-slot stable output textures.** Shared ping-pong buffers would be stale by the time the deferred ImDrawList flushes. Each slot (0–15) owns its own output texture.
-- **bg_remove stays CPU-side.** It reads pre-rendered PNG alpha masks from disk; everything else runs through GLSL shaders via fx_apply.
+- **bg_remove stays CPU-side.** It reads PNG alpha masks generated offline; everything else runs through GLSL shaders via fx_apply.
 - **Datamosh ghost resets on clip_start change.** Moving or replacing a datamosh clip restarts the ghost accumulation from the first visible frame.
 - **The audio master clock drives the video.** `playhead = audio_position() - audio_latency()`. Wall clock is only the fallback for no-audio projects.
+- **Effect clips don't conflict with Video/Audio for overlap checks.** Only Effect-vs-Effect time overlaps are blocked. This is what allows FX bricks to be dragged onto a track that has a video clip (glass system).
+- **A glass FX brick is collected by exactly one path.** `collect_effects` / `collect_creative_fx` skip glass tracks. `collect_glass_effects` / `collect_glass_fx` only read the one track directly above the target video. No double-counting.
+- **Generated headers are in `src/generated/` — do not edit them.** Re-run `tools/codegen_effects.py` after changing `effects/registry.json`.
