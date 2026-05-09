@@ -20,7 +20,9 @@ extern "C" {
 #include <libswscale/swscale.h>
 }
 
+#define GL_GLEXT_PROTOTYPES
 #include <GL/gl.h>
+#include <GL/glext.h>
 
 #include <cstdio>
 #include <cstring>
@@ -1171,14 +1173,10 @@ static void fxp_upload(FXPrev& pv, const std::vector<uint8_t>& px) {
 uintptr_t video_fx_preview_texture(FXType ft, float t) {
     int idx = (int)ft;
 
-    // Generated effects — render via GPU, then bake into a dedicated texture.
-    // fx_preview_gen_effect writes into a shared slot, so we must read back and
-    // copy into a per-effect texture before caching; otherwise every entry in
-    // s_gen_fxp_cache would alias the same GL texture ID.
+    // Generated effects — re-render every frame with current t (same as the
+    // animated legacy effects), then blit into a stable per-effect texture so
+    // simultaneous picker cards don't alias the shared output slot.
     if (idx >= FXP_N) {
-        auto it = s_gen_fxp_cache.find(idx);
-        if (it != s_gen_fxp_cache.end()) return (uintptr_t)it->second;
-
         // Upload portrait source texture once
         if (!s_fxp_portrait_gl) {
             if (s_fxp_src.empty()) fxp_make_sources();
@@ -1193,29 +1191,41 @@ uintptr_t video_fx_preview_texture(FXType ft, float t) {
             glBindTexture(GL_TEXTURE_2D, 0);
         }
 
-        // Render into the shared output slot
+        // Render into the shared slot with live t
         uintptr_t shared = fx_preview_gen_effect(ft, (uintptr_t)s_fxp_portrait_gl,
-                                                 FXP_W, FXP_H, 0.5f);
+                                                 FXP_W, FXP_H, t);
 
-        // Read back RGBA pixels from the shared texture
-        std::vector<uint8_t> px((size_t)FXP_W * FXP_H * 4);
-        glBindTexture(GL_TEXTURE_2D, (GLuint)shared);
-        glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, px.data());
-        glBindTexture(GL_TEXTURE_2D, 0);
+        // Ensure a dedicated texture exists for this effect
+        GLuint dedicated = s_gen_fxp_cache.count(idx) ? s_gen_fxp_cache[idx] : 0;
+        if (!dedicated) {
+            glGenTextures(1, &dedicated);
+            glBindTexture(GL_TEXTURE_2D, dedicated);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, FXP_W, FXP_H, 0,
+                         GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+            glBindTexture(GL_TEXTURE_2D, 0);
+            s_gen_fxp_cache[idx] = dedicated;
+        }
 
-        // Bake into a new dedicated texture so the cache entry is stable
-        GLuint dedicated = 0;
-        glGenTextures(1, &dedicated);
-        glBindTexture(GL_TEXTURE_2D, dedicated);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, FXP_W, FXP_H, 0,
-                     GL_RGBA, GL_UNSIGNED_BYTE, px.data());
-        glBindTexture(GL_TEXTURE_2D, 0);
+        // Blit shared output → dedicated texture so each picker card is stable
+        GLuint read_fbo = 0, draw_fbo = 0;
+        glGenFramebuffers(1, &read_fbo);
+        glGenFramebuffers(1, &draw_fbo);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, read_fbo);
+        glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                               GL_TEXTURE_2D, (GLuint)shared, 0);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, draw_fbo);
+        glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                               GL_TEXTURE_2D, dedicated, 0);
+        glBlitFramebuffer(0, 0, FXP_W, FXP_H, 0, 0, FXP_W, FXP_H,
+                          GL_COLOR_BUFFER_BIT, GL_NEAREST);
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        glDeleteFramebuffers(1, &read_fbo);
+        glDeleteFramebuffers(1, &draw_fbo);
 
-        s_gen_fxp_cache[idx] = dedicated;
         return (uintptr_t)dedicated;
     }
 
