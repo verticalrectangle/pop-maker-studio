@@ -1,4 +1,5 @@
 #include "video.h"
+#include "fx_shader.h"
 
 // ── stb_image — JPEG decode for preview frames ────────────────────────────────
 #define STB_IMAGE_IMPLEMENTATION
@@ -25,6 +26,7 @@ extern "C" {
 #include <cstring>
 #include <cmath>
 #include <array>
+#include <unordered_map>
 #include <vector>
 
 // ── CPU pixel FX helpers ──────────────────────────────────────────────────────
@@ -1127,11 +1129,16 @@ void video_apply_datamosh(VideoFrame* vf, float intensity, float time_sec) {
 
 static const int FXP_W = portrait_preview_w;   // 108
 static const int FXP_H = portrait_preview_h;   // 192
-static const int FXP_N = 8;  // number of FXType enum values
+static const int FXP_N = 8;  // number of legacy FXType enum values
 
 struct FXPrev { GLuint tex = 0; bool animated = false; };
 static std::array<FXPrev, FXP_N> s_fxp;
 static std::vector<uint8_t> s_fxp_src;      // base source image (RGB)
+
+// Portrait source uploaded as GL texture for generated-effect previews
+static GLuint s_fxp_portrait_gl = 0;
+// Cache of output textures for generated effects, indexed by FXType int value
+static std::unordered_map<int, GLuint> s_gen_fxp_cache;
 static std::vector<uint8_t> s_fxp_src_ck;   // chroma key source (right half = green)
 
 static void fxp_make_sources() {
@@ -1163,7 +1170,56 @@ static void fxp_upload(FXPrev& pv, const std::vector<uint8_t>& px) {
 
 uintptr_t video_fx_preview_texture(FXType ft, float t) {
     int idx = (int)ft;
-    if (idx < 0 || idx >= FXP_N) return 0;
+
+    // Generated effects — render via GPU, then bake into a dedicated texture.
+    // fx_preview_gen_effect writes into a shared slot, so we must read back and
+    // copy into a per-effect texture before caching; otherwise every entry in
+    // s_gen_fxp_cache would alias the same GL texture ID.
+    if (idx >= FXP_N) {
+        auto it = s_gen_fxp_cache.find(idx);
+        if (it != s_gen_fxp_cache.end()) return (uintptr_t)it->second;
+
+        // Upload portrait source texture once
+        if (!s_fxp_portrait_gl) {
+            if (s_fxp_src.empty()) fxp_make_sources();
+            glGenTextures(1, &s_fxp_portrait_gl);
+            glBindTexture(GL_TEXTURE_2D, s_fxp_portrait_gl);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, FXP_W, FXP_H, 0,
+                         GL_RGB, GL_UNSIGNED_BYTE, portrait_preview_rgb);
+            glBindTexture(GL_TEXTURE_2D, 0);
+        }
+
+        // Render into the shared output slot
+        uintptr_t shared = fx_preview_gen_effect(ft, (uintptr_t)s_fxp_portrait_gl,
+                                                 FXP_W, FXP_H, 0.5f);
+
+        // Read back RGBA pixels from the shared texture
+        std::vector<uint8_t> px((size_t)FXP_W * FXP_H * 4);
+        glBindTexture(GL_TEXTURE_2D, (GLuint)shared);
+        glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, px.data());
+        glBindTexture(GL_TEXTURE_2D, 0);
+
+        // Bake into a new dedicated texture so the cache entry is stable
+        GLuint dedicated = 0;
+        glGenTextures(1, &dedicated);
+        glBindTexture(GL_TEXTURE_2D, dedicated);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, FXP_W, FXP_H, 0,
+                     GL_RGBA, GL_UNSIGNED_BYTE, px.data());
+        glBindTexture(GL_TEXTURE_2D, 0);
+
+        s_gen_fxp_cache[idx] = dedicated;
+        return (uintptr_t)dedicated;
+    }
+
+    if (idx < 0) return 0;
 
     if (s_fxp_src.empty()) fxp_make_sources();
 
