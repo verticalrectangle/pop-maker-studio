@@ -7279,6 +7279,10 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
                 tr1 = (tr1 < 0) ? 0 : (tr1 >= n_tr ? n_tr-1 : tr1);
 
                 if (!ImGui::GetIO().KeyCtrl) state.clip_selection.clear();
+                // Only select clips when the box has meaningful size — a zero-size
+                // box (single click, t0==t1) would match any clip spanning the cursor,
+                // immediately re-selecting what we just deselected.
+                if (bx1 - bx0 > 4.f || by1 - by0 > 4.f)
                 for (int t2=0; t2<(int)state.tracks.size(); ++t2) {
                     if (t2 < tr0 || t2 > tr1) continue;
                     for (int c2=0; c2<(int)state.tracks[t2].clips.size(); ++c2) {
