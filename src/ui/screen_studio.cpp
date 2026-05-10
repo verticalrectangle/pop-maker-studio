@@ -39,6 +39,37 @@ namespace fs = std::filesystem;
 extern ImFont* g_font_bold;
 extern ImFont* g_font_black;
 
+// ── Panel view — single source of truth for the right-hand panel ─────────────
+
+enum class PanelView {
+    Clip, Animation, Typography, Project, History,       // tab-bar views
+    LibBG, LibFX, LibAdj, LibVID, LibIMG, LibAUD,        // library browsers
+    OverrideFX, OverrideAdj, OverrideBG,                 // clip-type overrides
+};
+static PanelView s_panel_view = PanelView::Project;
+
+static bool pv_is_lib(PanelView v) {
+    return v == PanelView::LibBG  || v == PanelView::LibFX  || v == PanelView::LibAdj ||
+           v == PanelView::LibVID || v == PanelView::LibIMG || v == PanelView::LibAUD;
+}
+static bool pv_is_override(PanelView v) {
+    return v == PanelView::OverrideFX || v == PanelView::OverrideAdj || v == PanelView::OverrideBG;
+}
+static PanelView pv_derive(const AppState& state) {
+    bool hs = state.selected_track >= 0 &&
+              state.selected_track < (int)state.tracks.size() &&
+              state.selected_clip  >= 0 &&
+              state.selected_clip  < (int)state.tracks[state.selected_track].clips.size();
+    if (!hs) return PanelView::Project;
+    const Clip& cl = state.tracks[state.selected_track].clips[state.selected_clip];
+    if (cl.clip_type == ClipType::Background) return PanelView::OverrideBG;
+    if (cl.clip_type == ClipType::Effect)
+        return cl.fx_type == FXType::Adjustment ? PanelView::OverrideAdj : PanelView::OverrideFX;
+    if (cl.clip_type == ClipType::Text || cl.clip_type == ClipType::Lyrics ||
+        cl.clip_type == ClipType::Subtitle) return PanelView::Typography;
+    return PanelView::Clip;
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 static std::string fmt_time(float s) {
@@ -167,7 +198,7 @@ static void add_clip_to_track(AppState& state, int ti, const std::string& path, 
             (fabsf(tr.clips[ci].start - cl.start) < 0.01f &&
              tr.clips[ci].clip_type == ct))
             { state.selected_clip = ci; break; }
-    state.panel_tab = 0;
+    s_panel_view = PanelView::Clip;
     history_push(state, std::string("Add ") +
                         (ct==ClipType::Video ? "video" :
                          ct==ClipType::Audio ? "audio" : "text") + " clip");
@@ -4051,7 +4082,7 @@ static void generate_typography(AppState& state) {
                 { sel_ti = ti2; sel_ci = ci2; }
     state.selected_track = sel_ti;
     state.selected_clip  = sel_ci;
-    state.panel_tab      = 8;
+    s_panel_view = PanelView::Typography;
     history_push(state, std::string("Generate typography — ") + pr->label);
 }
 
@@ -6007,6 +6038,9 @@ struct TlState {
 
     // Ruler seek drag
     bool ruler_drag = false;
+
+    // Re-click deselect: set when mousedown on the already-selected clip, cleared on drag or release
+    bool reclick_pending = false;
 };
 static TlState g_tl;
 
@@ -6313,6 +6347,7 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
     auto& s_box_selecting  = g_tl.box_selecting;
     auto& s_box_start      = g_tl.box_start;
     auto& s_clip_hit       = g_tl.clip_hit;
+    auto& s_reclick_pending = g_tl.reclick_pending;
     auto& ctx_track        = g_tl.ctx_track;
     auto& ctx_clip         = g_tl.ctx_clip;
     auto& open_clip_ctx    = g_tl.open_clip_ctx;
@@ -6520,7 +6555,6 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
                 state.selected_track  = ti;
                 state.selected_clip   = -1;
                 state.clip_selection.clear();
-                state.panel_tab       = 0;
                 s_track_drag_src      = ti;
                 s_track_drag_start_y  = mouse.y;
                 s_track_dragging      = false;
@@ -6684,8 +6718,10 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
                             if (e.start >= t_lo && e.start <= t_hi)
                                 state.clip_selection.insert({e.ti, e.ci});
                     } else {
+                        bool was_selected = (state.selected_track == ti && state.selected_clip == ci);
                         state.clip_selection.clear();
                         state.clip_selection.insert(key);
+                        s_reclick_pending = was_selected;
                     }
                     state.selected_track = ti;
                     state.selected_clip  = ci;
@@ -7184,7 +7220,7 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
                               (s_tl_hover_track < 0 || s_tl_hover_track >= (int)state.tracks.size());
 
         // Start box select when clicking empty body space (no clip was hit)
-        if (lclick && in_body && !s_clip_hit && !ImGui::IsAnyItemActive()) {
+        if (lclick && in_body && !s_clip_hit) {
             s_box_selecting = true;
             s_box_start     = mouse;
             if (!ImGui::GetIO().KeyCtrl && !ImGui::GetIO().KeyShift) {
@@ -7325,6 +7361,7 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
         ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
     if (drag_track>=0 && drag_clip>=0 && s_glass_drag==0 && ImGui::IsMouseDragging(0)) {
         s_drag_moved = true;
+        s_reclick_pending = false;
         Clip& dc = state.tracks[drag_track].clips[drag_clip];
         auto cands = build_snap_candidates(drag_track, drag_clip);
         float new_t = (mouse.x - origin.x - TL_LABEL_W + scroll) / zoom - drag_offset;
@@ -7565,6 +7602,13 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
             }
             }
         }
+        // Re-click deselect: if no drag occurred, deselect the clip
+        if (s_reclick_pending && !s_drag_moved)  {
+            state.selected_track = -1;
+            state.selected_clip  = -1;
+            state.clip_selection.clear();
+        }
+        s_reclick_pending = false;
         drag_track=-1; drag_clip=-1; drag_left=false; drag_right=false;
         drag_hot_track=-1; drag_hot_gap=-1;
         s_drag_moved = false;
@@ -7789,7 +7833,7 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
         // ── Subtitle clips ────────────────────────────────────────────────────
         if (cc && (cc->clip_type==ClipType::Text || cc->clip_type==ClipType::Lyrics)) {
             if (ImGui::MenuItem("Edit text")) {
-                state.panel_tab = 0;
+                s_panel_view = PanelView::Clip;
                 s_edit_focus_next = true;
             }
             // Re-group submenu — only if we have source JSON
@@ -8062,11 +8106,6 @@ static void handle_shortcuts(AppState& state) {
 
 // ── Brick toolbox strip ───────────────────────────────────────────────────────
 // Buttons switch the right panel into library-browse mode.
-// Selecting a clip on the timeline always clears toolbox mode.
-
-enum class ToolboxMode { None, BG, FX, Adj, VID, IMG, AUD };
-static ToolboxMode s_toolbox_mode = ToolboxMode::None;
-
 static void panel_media_browser(AppState& state, float w, bool is_video) {
     ImGui::Dummy({0.f, 8.f});
 
@@ -8104,7 +8143,7 @@ static void panel_media_browser(AppState& state, float w, bool is_video) {
                 int slot = slot_for_video(state, clip_slot_key(picked, cl.start), picked);
                 if (slot >= 0) video_open_still(slot, proxy_still_path(picked));
                 state.video_loaded = true;
-                s_toolbox_mode = ToolboxMode::None;
+                s_panel_view = PanelView::Clip;
                 history_push(state, (is_video ? "Import video: " : "Import image: ") +
                              fs::path(picked).filename().string());
             }
@@ -8219,7 +8258,7 @@ static void panel_media_browser(AppState& state, float w, bool is_video) {
             if (slot >= 0) video_open_still(slot, proxy_still_path(path));
             state.video_loaded = true;
             recent_media_push(path, is_video ? MediaKind::Video : MediaKind::Image);
-            s_toolbox_mode = ToolboxMode::None;
+            s_panel_view = PanelView::Clip;
             history_push(state, (is_video ? "Add video: " : "Add image: ") + fp.filename().string());
         }
 
@@ -8272,7 +8311,7 @@ static void panel_audio_browser(AppState& state, float w) {
                 state.tracks.insert(state.tracks.begin(), std::move(nt));
                 state.selected_track = 0; state.selected_clip = 0;
                 audio_source_ensure(picked);
-                s_toolbox_mode = ToolboxMode::None;
+                s_panel_view = PanelView::Clip;
                 history_push(state, "Import audio: " + fs::path(picked).filename().string());
             }
         }
@@ -8382,7 +8421,7 @@ static void panel_audio_browser(AppState& state, float w) {
             state.selected_track = 0; state.selected_clip = 0;
             audio_source_ensure(path);
             recent_media_push(path, MediaKind::Audio);
-            s_toolbox_mode = ToolboxMode::None;
+            s_panel_view = PanelView::Clip;
             history_push(state, "Add audio: " + fp.filename().string());
         }
 
@@ -8631,7 +8670,7 @@ void ui_studio(AppState& state) {
     }
 
     if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_H))
-        state.panel_tab = 3;
+        s_panel_view = PanelView::History;
 
     // ── Menu bar ─────────────────────────────────────────────────────────────
     if (ImGui::BeginMenuBar()) {
@@ -8781,7 +8820,7 @@ void ui_studio(AppState& state) {
                 }
             }
             ImGui::Separator();
-            if (ImGui::MenuItem("History", "Ctrl+Shift+H")) state.panel_tab = 3;
+            if (ImGui::MenuItem("History", "Ctrl+Shift+H")) s_panel_view = PanelView::History;
             ImGui::EndMenu();
         }
 
@@ -8809,7 +8848,7 @@ void ui_studio(AppState& state) {
                 ImGui::SetCursorPosX(ImGui::GetCursorPosX() + avail - total_btns);
 
             ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {10.f, 2.f});
-            if (ImGui::Button("Project")) state.panel_tab = 6;
+            if (ImGui::Button("Project")) s_panel_view = PanelView::Project;
             ImGui::SameLine(0.f, 6.f);
 
             ImGui::PushStyleColor(ImGuiCol_Button,        Col::fg);
@@ -8940,17 +8979,17 @@ void ui_studio(AppState& state) {
         const float BX   = sp.x + (TB_W - BSZ) * 0.5f;
         float       BY   = sp.y + 16.f;
 
-        struct { const char* id; ToolboxMode mode; ImU32 accent; } btns[] = {
-            { "BG",  ToolboxMode::BG,  IM_COL32(180,  60, 160, 255) },  // matches Background brick
-            { "FX",  ToolboxMode::FX,  IM_COL32(210, 110,  30, 255) },  // matches FX amber brick
-            { "Adj", ToolboxMode::Adj, IM_COL32(100,  80, 200, 255) },  // matches Adjustment violet brick
-            { "VID", ToolboxMode::VID, IM_COL32(140,  60, 220, 255) },  // matches Video brick
-            { "IMG", ToolboxMode::IMG, IM_COL32(140,  60, 220, 255) },  // images → Video clip type
-            { "AUD", ToolboxMode::AUD, IM_COL32( 50, 180, 100, 255) },  // matches Audio brick
+        struct { const char* id; PanelView lib_view; ImU32 accent; } btns[] = {
+            { "BG",  PanelView::LibBG,  IM_COL32(180,  60, 160, 255) },
+            { "FX",  PanelView::LibFX,  IM_COL32(210, 110,  30, 255) },
+            { "Adj", PanelView::LibAdj, IM_COL32(100,  80, 200, 255) },
+            { "VID", PanelView::LibVID, IM_COL32(140,  60, 220, 255) },
+            { "IMG", PanelView::LibIMG, IM_COL32(140,  60, 220, 255) },
+            { "AUD", PanelView::LibAUD, IM_COL32( 50, 180, 100, 255) },
         };
 
         for (auto& b : btns) {
-            bool active = (s_toolbox_mode == b.mode);
+            bool active = (s_panel_view == b.lib_view);
             ImVec2 bmin = { BX, BY }, bmax = { BX + BSZ, BY + BSZ };
             bool hov = ImGui::IsMouseHoveringRect(bmin, bmax);
             ImU32 fill = active ? b.accent
@@ -8969,7 +9008,7 @@ void ui_studio(AppState& state) {
             ImGui::SetCursorScreenPos(bmin);
             ImGui::InvisibleButton(b.id, { BSZ, BSZ });
             if (ImGui::IsItemClicked())
-                s_toolbox_mode = active ? ToolboxMode::None : b.mode;
+                s_panel_view = active ? pv_derive(state) : b.lib_view;
 
             BY += BSZ + 10.f;
         }
@@ -9261,64 +9300,52 @@ void ui_studio(AppState& state) {
             state.selected_clip  < (int)state.tracks[state.selected_track].clips.size());
         if (has_sel)
             sel_ct = state.tracks[state.selected_track].clips[state.selected_clip].clip_type;
-        bool has_fx_sel          = has_sel && sel_ct == ClipType::Effect;
-        bool focused_is_adjustment = has_fx_sel &&
-            state.tracks[state.selected_track].clips[state.selected_clip].fx_type == FXType::Adjustment;
-        bool focused_is_fx       = has_fx_sel && !focused_is_adjustment;
-        bool focused_is_bg       = has_sel && sel_ct == ClipType::Background;
-        bool focused_is_override = focused_is_adjustment || focused_is_fx || focused_is_bg;
-
         bool is_text_like = has_sel && (sel_ct == ClipType::Text ||
                                         sel_ct == ClipType::Lyrics ||
                                         sel_ct == ClipType::Subtitle);
-        bool show_clip_tabs = has_sel && !focused_is_override;
 
-        // ── Auto-switch tab on selection change ───────────────────────────────
+        // ── Auto-switch panel on selection change ─────────────────────────────
+        // Does not override Project/History if user explicitly navigated there,
+        // and does not override an open library browser.
         {
             static int s_last_sel_track = -1, s_last_sel_clip = -1;
             int st = state.selected_track, sc = state.selected_clip;
-            if ((st != s_last_sel_track || sc != s_last_sel_clip) && st >= 0 && sc >= 0) {
-                s_toolbox_mode = ToolboxMode::None;        // real clip selected → exit library
-                if (is_text_like)
-                    state.panel_tab = 8;                   // → Typography
-                else if (show_clip_tabs)
-                    state.panel_tab = 0;                   // → Clip
-                else if (!has_sel || focused_is_override)
-                    state.panel_tab = 6;                   // → Project
+            if (st != s_last_sel_track || sc != s_last_sel_clip) {
+                if (st >= 0 && sc >= 0 && !pv_is_lib(s_panel_view))
+                    s_panel_view = pv_derive(state);
+                else if (st < 0 && pv_is_override(s_panel_view))
+                    s_panel_view = PanelView::Project;  // deselected while override was shown
                 s_last_sel_track = st; s_last_sel_clip = sc;
             }
         }
 
-        // Redirect legacy / stale tab values to safe defaults
-        if (state.panel_tab == 4) state.panel_tab = 8;
-        if (state.panel_tab == 5 || state.panel_tab == 7 || state.panel_tab == 9)
-            state.panel_tab = 0;
-        if (!show_clip_tabs && (state.panel_tab == 0 || state.panel_tab == 1 ||
-                                state.panel_tab == 8))
-            state.panel_tab = 6;
-        if (!is_text_like && state.panel_tab == 8)
-            state.panel_tab = 0;
+        // ── Tab bar ───────────────────────────────────────────────────────────
+        // Hidden while a library browser is open (sidebar button toggles instead)
+        // and while an override panel (FX/Adj/BG clip) is active.
+        bool show_clip_tabs = has_sel && !pv_is_override(s_panel_view) && !pv_is_lib(s_panel_view);
+        bool show_tab_bar   = !pv_is_lib(s_panel_view) && !pv_is_override(s_panel_view);
 
-        // ── Contextual tab bar ────────────────────────────────────────────────
-        // Tabs are hidden for BG/FX/Adj clips and when toolbox library is open.
-        if (!focused_is_override && s_toolbox_mode == ToolboxMode::None) {
+        if (show_tab_bar) {
             ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {12.f, 6.f});
             ImGui::PushStyleColor(ImGuiCol_Tab,       Col::bg_soft);
             ImGui::PushStyleColor(ImGuiCol_TabActive, Col::line);
 
             if (ImGui::BeginTabBar("##panel_tabs")) {
+                auto tf = [](PanelView target) -> ImGuiTabItemFlags {
+                    return (s_panel_view == target) ? ImGuiTabItemFlags_SetSelected : 0;
+                };
                 if (show_clip_tabs) {
-                    if (ImGui::BeginTabItem("Clip"))
-                        { state.panel_tab=0; ImGui::EndTabItem(); }
-                    if (is_text_like && ImGui::BeginTabItem("Typography"))
-                        { state.panel_tab=8; ImGui::EndTabItem(); }
-                    if (ImGui::BeginTabItem("Animation"))
-                        { state.panel_tab=1; ImGui::EndTabItem(); }
+                    if (ImGui::BeginTabItem("Clip", nullptr, tf(PanelView::Clip)))
+                        { s_panel_view = PanelView::Clip; ImGui::EndTabItem(); }
+                    if (is_text_like && ImGui::BeginTabItem("Typography", nullptr, tf(PanelView::Typography)))
+                        { s_panel_view = PanelView::Typography; ImGui::EndTabItem(); }
+                    if (ImGui::BeginTabItem("Animation", nullptr, tf(PanelView::Animation)))
+                        { s_panel_view = PanelView::Animation; ImGui::EndTabItem(); }
                 }
-                if (ImGui::BeginTabItem("Project"))
-                    { state.panel_tab=6; ImGui::EndTabItem(); }
-                if (ImGui::BeginTabItem("History"))
-                    { state.panel_tab=3; ImGui::EndTabItem(); }
+                if (ImGui::BeginTabItem("Project", nullptr, tf(PanelView::Project)))
+                    { s_panel_view = PanelView::Project; ImGui::EndTabItem(); }
+                if (ImGui::BeginTabItem("History", nullptr, tf(PanelView::History)))
+                    { s_panel_view = PanelView::History; ImGui::EndTabItem(); }
                 ImGui::EndTabBar();
             }
 
@@ -9326,25 +9353,27 @@ void ui_studio(AppState& state) {
             ImGui::PopStyleVar();
         }
 
+        // ── Panel content ─────────────────────────────────────────────────────
         ImGui::BeginChild("##panel_scroll", {0.f, 0.f});
         ImGui::SetCursorPosX(8.f);
         float pw = props_w - 16.f;
 
-        if      (s_toolbox_mode == ToolboxMode::BG)  panel_background(state, pw);
-        else if (s_toolbox_mode == ToolboxMode::FX)  panel_fx_creative(state, pw);
-        else if (s_toolbox_mode == ToolboxMode::Adj) panel_adjustment_library(state, pw);
-        else if (s_toolbox_mode == ToolboxMode::VID) panel_media_browser(state, pw, true);
-        else if (s_toolbox_mode == ToolboxMode::IMG) panel_media_browser(state, pw, false);
-        else if (s_toolbox_mode == ToolboxMode::AUD) panel_audio_browser(state, pw);
-        else if (focused_is_adjustment)              panel_adjustment(state, pw);
-        else if (focused_is_fx)                      panel_fx_clip(state, pw);
-        else if (focused_is_bg)                      panel_background(state, pw, true);
-        else if (state.panel_tab == 0)               panel_clip(state, pw);
-        else if (state.panel_tab == 1)     panel_animation(state, pw);
-        else if (state.panel_tab == 2)     panel_export(state, pw);
-        else if (state.panel_tab == 8)     panel_typography(state, pw);
-        else if (state.panel_tab == 6)     panel_project(state, pw);
-        else                               panel_history(state, pw);
+        switch (s_panel_view) {
+            case PanelView::Clip:        panel_clip(state, pw);                  break;
+            case PanelView::Animation:   panel_animation(state, pw);             break;
+            case PanelView::Typography:  panel_typography(state, pw);            break;
+            case PanelView::Project:     panel_project(state, pw);               break;
+            case PanelView::History:     panel_history(state, pw);               break;
+            case PanelView::LibBG:       panel_background(state, pw);            break;
+            case PanelView::LibFX:       panel_fx_creative(state, pw);           break;
+            case PanelView::LibAdj:      panel_adjustment_library(state, pw);    break;
+            case PanelView::LibVID:      panel_media_browser(state, pw, true);   break;
+            case PanelView::LibIMG:      panel_media_browser(state, pw, false);  break;
+            case PanelView::LibAUD:      panel_audio_browser(state, pw);         break;
+            case PanelView::OverrideFX:  panel_fx_clip(state, pw);              break;
+            case PanelView::OverrideAdj: panel_adjustment(state, pw);           break;
+            case PanelView::OverrideBG:  panel_background(state, pw, true);     break;
+        }
         ImGui::EndChild();
     }
     ImGui::EndChild();
