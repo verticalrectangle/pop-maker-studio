@@ -6,7 +6,7 @@
 // ── Binary serialization helpers ──────────────────────────────────────────────
 
 static const uint32_t MAGIC   = 0x534D5001u; // "PMS\x01"
-static const uint32_t VERSION = 23u;
+static const uint32_t VERSION = 24u;
 
 struct Writer {
     std::ofstream f;
@@ -140,6 +140,11 @@ static void write_clip(Writer& w, const Clip& c) {
     w.pod(c.fx_datamosh_spread);
     // v16-v22: generated effects
 #include "generated/fx_project_write.h"
+    // v24: background clip fields
+    w.pod(c.bg_speed); w.pod(c.bg_intensity);
+    for (int i=0;i<4;++i) w.pod(c.bg_c1[i]);
+    for (int i=0;i<4;++i) w.pod(c.bg_c2[i]);
+    for (int i=0;i<4;++i) w.pod(c.bg_c3[i]);
     // v23: per-clip beat sync fields
     w.pod(c.beat_src_track); w.pod(c.beat_src_clip); w.pod(c.beat_decay);
     w.pod(c.beat_bpm);
@@ -237,6 +242,12 @@ static Clip read_clip(Reader& r, uint32_t version) {
         c.fx_datamosh_spread = r.pod<float>();
     }
 #include "generated/fx_project_read.h"
+    if (version >= 24u) {
+        c.bg_speed     = r.pod<float>(); c.bg_intensity = r.pod<float>();
+        for (int i=0;i<4;++i) c.bg_c1[i] = r.pod<float>();
+        for (int i=0;i<4;++i) c.bg_c2[i] = r.pod<float>();
+        for (int i=0;i<4;++i) c.bg_c3[i] = r.pod<float>();
+    }
     if (version >= 23u) {
         c.beat_src_track = r.pod<int>(); c.beat_src_clip = r.pod<int>(); c.beat_decay = r.pod<float>();
         c.beat_bpm = r.pod<float>();

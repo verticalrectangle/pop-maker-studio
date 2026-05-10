@@ -1347,12 +1347,6 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
     // Clip everything to the video frame — text/effects never bleed into surrounding UI.
     dl->PushClipRect(p, {p.x+w, p.y+h}, true);
 
-    // Animated background (drawn first, under video content)
-    if (!state.bg_preset_id.empty()) {
-        draw_bg_preset(state.bg_preset_id.c_str(), dl, p, w, h,
-            (float)ImGui::GetTime(), state.bg_speed, state.bg_intensity,
-            state.bg_color1, state.bg_color2, state.bg_color3);
-    }
 
     // Empty state prompt
     if (state.tracks.empty()) {
@@ -1437,6 +1431,16 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
     for (int ti = (int)state.tracks.size() - 1; ti >= 0; --ti) {
         auto& track = state.tracks[ti];
         if (!track.visible) continue;
+
+        // ── Background clip ────────────────────────────────────────────────────
+        for (auto& cl : track.clips) {
+            if (cl.clip_type != ClipType::Background) continue;
+            if (state.playhead < cl.start || state.playhead >= cl.end) continue;
+            if (!cl.text.empty())
+                draw_bg_preset(cl.text.c_str(), dl, p, w, h,
+                    t_anim, cl.bg_speed, cl.bg_intensity, cl.bg_c1, cl.bg_c2, cl.bg_c3);
+            break;
+        }
 
         // ── Video clip ─────────────────────────────────────────────────────────
         {
@@ -2117,22 +2121,24 @@ static bool s_edit_focus_next = false;
 
 static ImU32 clip_type_badge_color(ClipType ct) {
     switch (ct) {
-        case ClipType::Text:     return IM_COL32(80,140,220,255);
-        case ClipType::Lyrics:   return IM_COL32(220,160,40,255);
-        case ClipType::Subtitle: return IM_COL32(40,190,190,255);
-        case ClipType::Video:    return IM_COL32(140,60,220,255);
-        case ClipType::Audio:    return IM_COL32(50,180,100,255);
-        default:                 return IM_COL32(120,80,220,255);
+        case ClipType::Text:       return IM_COL32(80,140,220,255);
+        case ClipType::Lyrics:     return IM_COL32(220,160,40,255);
+        case ClipType::Subtitle:   return IM_COL32(40,190,190,255);
+        case ClipType::Video:      return IM_COL32(140,60,220,255);
+        case ClipType::Audio:      return IM_COL32(50,180,100,255);
+        case ClipType::Background: return IM_COL32(180,60,160,255);
+        default:                   return IM_COL32(120,80,220,255);
     }
 }
 static const char* clip_type_name(ClipType ct) {
     switch (ct) {
-        case ClipType::Text:     return "TEXT";
-        case ClipType::Lyrics:   return "LYRICS";
-        case ClipType::Subtitle: return "SUBTITLE";
-        case ClipType::Video:    return "VIDEO";
-        case ClipType::Audio:    return "AUDIO";
-        default:                 return "ADJUST";
+        case ClipType::Text:       return "TEXT";
+        case ClipType::Lyrics:     return "LYRICS";
+        case ClipType::Subtitle:   return "SUBTITLE";
+        case ClipType::Video:      return "VIDEO";
+        case ClipType::Audio:      return "AUDIO";
+        case ClipType::Background: return "BG";
+        default:                   return "ADJUST";
     }
 }
 
@@ -4883,53 +4889,69 @@ static void panel_animation(AppState& state, float w) {
 static void panel_background(AppState& state, float w) {
     ImGui::Dummy({0.f, 8.f});
 
-    // ── Controls ──────────────────────────────────────────────────────────────
-    ImGui::PushStyleColor(ImGuiCol_Text, to_u32(Col::muted));
-    ImGui::TextUnformatted("BACKGROUND");
-    ImGui::PopStyleColor();
-    ImGui::Dummy({0.f, 4.f});
+    // Resolve the selected Background clip (may be null if panel opened from BG tab without selection)
+    Clip* bgclip = nullptr;
+    if (state.selected_track >= 0 && state.selected_track < (int)state.tracks.size() &&
+        state.selected_clip  >= 0 && state.selected_clip  < (int)state.tracks[state.selected_track].clips.size()) {
+        Clip& c = state.tracks[state.selected_track].clips[state.selected_clip];
+        if (c.clip_type == ClipType::Background) bgclip = &c;
+    }
 
-    // None button
-    {
-        bool active = state.bg_preset_id.empty();
-        if (active) ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(60,60,90,255));
-        if (ImGui::Button("None", {w, 0.f})) { state.bg_preset_id = ""; history_push(state, "Background: none"); }
-        if (active) ImGui::PopStyleColor();
+    // ── Add Background brick button ────────────────────────────────────────────
+    if (ImGui::Button("+ Add Background Track", {w, 0.f})) {
+        float dur = state.duration > 0.f ? state.duration : 30.f;
+        Track t;
+        t.name = "Background";
+        Clip c;
+        c.clip_type = ClipType::Background;
+        c.start = 0.f; c.end = dur;
+        c.text  = "blob";  // default preset
+        t.clips.push_back(c);
+        state.tracks.push_back(t);
+        state.selected_track = (int)state.tracks.size() - 1;
+        state.selected_clip  = 0;
+        bgclip = &state.tracks[state.selected_track].clips[0];
+        history_push(state, "Add background");
     }
     ImGui::Dummy({0.f, 8.f});
 
-    // Speed / Intensity sliders
-    ImGui::SetNextItemWidth(w);
-    if (ImGui::SliderFloat("##bg_speed", &state.bg_speed, 0.1f, 4.f, "Speed %.1fx"))
-        history_push(state, "BG speed");
-    ImGui::SetNextItemWidth(w);
-    if (ImGui::SliderFloat("##bg_intensity", &state.bg_intensity, 0.f, 1.f, "Intensity %.0f%%",
-                            ImGuiSliderFlags_None))
-        history_push(state, "BG intensity");
-    ImGui::Dummy({0.f, 4.f});
+    // ── Per-clip controls (only when a bg clip is selected) ───────────────────
+    if (bgclip) {
+        ImGui::PushStyleColor(ImGuiCol_Text, to_u32(Col::muted));
+        ImGui::TextUnformatted("PRESET");
+        ImGui::PopStyleColor();
+        ImGui::Dummy({0.f, 4.f});
 
-    // Color pickers — only show if active preset uses them
-    const BgPreset* active_pr = state.bg_preset_id.empty() ? nullptr
-                                : bg_preset_by_id(state.bg_preset_id.c_str());
-    if (active_pr && active_pr->n_colors >= 1) {
-        ImGui::TextUnformatted("Colors");
-        ImGui::SameLine();
-        if (ImGui::ColorEdit4("##bgc1", state.bg_color1,
-            ImGuiColorEditFlags_NoLabel|ImGuiColorEditFlags_NoInputs|ImGuiColorEditFlags_NoBorder))
-            history_push(state, "BG color 1");
-        if (active_pr->n_colors >= 2) {
+        ImGui::SetNextItemWidth(w);
+        if (ImGui::SliderFloat("##bg_speed", &bgclip->bg_speed, 0.1f, 4.f, "Speed %.1fx"))
+            history_push(state, "BG speed");
+        ImGui::SetNextItemWidth(w);
+        if (ImGui::SliderFloat("##bg_int", &bgclip->bg_intensity, 0.f, 1.f, "Intensity %.0f%%"))
+            history_push(state, "BG intensity");
+        ImGui::Dummy({0.f, 4.f});
+
+        const BgPreset* active_pr = bgclip->text.empty() ? nullptr
+                                    : bg_preset_by_id(bgclip->text.c_str());
+        if (active_pr && active_pr->n_colors >= 1) {
+            ImGui::TextUnformatted("Colors");
             ImGui::SameLine();
-            if (ImGui::ColorEdit4("##bgc2", state.bg_color2,
+            if (ImGui::ColorEdit4("##bgc1", bgclip->bg_c1,
                 ImGuiColorEditFlags_NoLabel|ImGuiColorEditFlags_NoInputs|ImGuiColorEditFlags_NoBorder))
-                history_push(state, "BG color 2");
+                history_push(state, "BG color");
+            if (active_pr->n_colors >= 2) {
+                ImGui::SameLine();
+                if (ImGui::ColorEdit4("##bgc2", bgclip->bg_c2,
+                    ImGuiColorEditFlags_NoLabel|ImGuiColorEditFlags_NoInputs|ImGuiColorEditFlags_NoBorder))
+                    history_push(state, "BG color");
+            }
+            if (active_pr->n_colors >= 3) {
+                ImGui::SameLine();
+                if (ImGui::ColorEdit4("##bgc3", bgclip->bg_c3,
+                    ImGuiColorEditFlags_NoLabel|ImGuiColorEditFlags_NoInputs|ImGuiColorEditFlags_NoBorder))
+                    history_push(state, "BG color");
+            }
+            ImGui::Dummy({0.f, 6.f});
         }
-        if (active_pr->n_colors >= 3) {
-            ImGui::SameLine();
-            if (ImGui::ColorEdit4("##bgc3", state.bg_color3,
-                ImGuiColorEditFlags_NoLabel|ImGuiColorEditFlags_NoInputs|ImGuiColorEditFlags_NoBorder))
-                history_push(state, "BG color 3");
-        }
-        ImGui::Dummy({0.f, 6.f});
     }
 
     // ── Preset grid ───────────────────────────────────────────────────────────
@@ -4943,7 +4965,6 @@ static void panel_background(AppState& state, float w) {
     for (int pi = 0; pi < g_n_bg_presets; ++pi) {
         const BgPreset& pr = g_bg_presets[pi];
 
-        // Category header
         if (!cur_cat || strcmp(cur_cat, pr.category) != 0) {
             if (col_idx == 1) { ImGui::NewLine(); col_idx = 0; }
             if (cur_cat) ImGui::Dummy({0.f, 6.f});
@@ -4955,44 +4976,51 @@ static void panel_background(AppState& state, float w) {
         }
 
         ImVec2 cp = ImGui::GetCursorScreenPos();
-        bool selected = (state.bg_preset_id == pr.id);
+        bool selected = bgclip && (bgclip->text == pr.id);
 
-        // Card background
         ImU32 card_bg = selected ? IM_COL32(40,40,60,255) : IM_COL32(22,22,28,255);
         dl->AddRectFilled(cp, {cp.x+cell_w, cp.y+cell_h}, card_bg, 4.f);
         if (selected) dl->AddRect(cp, {cp.x+cell_w, cp.y+cell_h}, IM_COL32(130,100,255,220), 4.f, 0, 1.5f);
 
-        // Animated mini-preview inside card
+        // Animated mini-preview
         float pad = 5.f;
         ImVec2 pp = {cp.x+pad, cp.y+pad};
         float pw2 = cell_w-pad*2, ph2 = cell_h*0.58f;
         dl->PushClipRect(pp, {pp.x+pw2, pp.y+ph2}, true);
-        draw_bg_preset(pr.id, dl, pp, pw2, ph2,
-            t_anim, pr.default_speed, 1.f,
+        draw_bg_preset(pr.id, dl, pp, pw2, ph2, t_anim, pr.default_speed, 1.f,
             pr.dc1, pr.dc2, pr.dc3);
         dl->PopClipRect();
 
-        // Label below mini-preview
-        float lx = cp.x + 6.f, ly = cp.y + cell_h*0.62f;
-        dl->AddText({lx, ly}, to_u32(Col::fg), pr.label);
+        float lx = cp.x+6.f, ly = cp.y+cell_h*0.62f;
+        dl->AddText({lx,ly}, to_u32(Col::fg), pr.label);
 
         ImGui::SetCursorScreenPos(cp);
         ImGui::InvisibleButton(pr.id, {cell_w, cell_h});
         if (ImGui::IsItemClicked()) {
-            state.bg_preset_id = pr.id;
-            // Load default colors
-            memcpy(state.bg_color1, pr.dc1, sizeof(float)*4);
-            memcpy(state.bg_color2, pr.dc2, sizeof(float)*4);
-            memcpy(state.bg_color3, pr.dc3, sizeof(float)*4);
+            if (!bgclip) {
+                // No bg clip selected — create one
+                float dur = state.duration > 0.f ? state.duration : 30.f;
+                Track t; t.name = "Background";
+                Clip c; c.clip_type = ClipType::Background; c.start = 0.f; c.end = dur;
+                c.text = pr.id;
+                memcpy(c.bg_c1, pr.dc1, sizeof(float)*4);
+                memcpy(c.bg_c2, pr.dc2, sizeof(float)*4);
+                memcpy(c.bg_c3, pr.dc3, sizeof(float)*4);
+                t.clips.push_back(c);
+                state.tracks.push_back(t);
+                state.selected_track = (int)state.tracks.size()-1;
+                state.selected_clip  = 0;
+            } else {
+                bgclip->text = pr.id;
+                memcpy(bgclip->bg_c1, pr.dc1, sizeof(float)*4);
+                memcpy(bgclip->bg_c2, pr.dc2, sizeof(float)*4);
+                memcpy(bgclip->bg_c3, pr.dc3, sizeof(float)*4);
+            }
             history_push(state, "Background preset");
         }
 
-        if (col_idx == 0) {
-            ImGui::SameLine(0.f, 8.f);
-            col_idx = 1;
-        } else {
-            col_idx = 0;
-        }
+        if (col_idx == 0) { ImGui::SameLine(0.f, 8.f); col_idx = 1; }
+        else              { col_idx = 0; }
     }
     if (col_idx == 1) ImGui::NewLine();
     ImGui::Dummy({0.f, 12.f});
@@ -6396,6 +6424,24 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
                 const char* fname = fname_s.c_str();
                 ImU32 ftcol = sel ? to_u32(Col::bg) : IM_COL32(200,200,220,255);
                 dl->AddText({vis_x0+4.f, cy0+(cy1-cy0-13.f)*0.5f}, ftcol, fname);
+                ImGui::PopClipRect();
+            } else if (clip.clip_type == ClipType::Background) {
+                // Background brick: deep purple gradient with shimmer lines
+                ImU32 bg_fill   = sel ? IM_COL32(210,90,200,255) : IM_COL32(80,20,90,255);
+                ImU32 bg_border = sel ? IM_COL32(255,160,255,255) : IM_COL32(180,60,160,200);
+                dl->AddRectFilled({vis_x0,cy0},{vis_x1,cy1}, bg_fill, 2.f);
+                // Shimmer diagonal lines for "animated" feel
+                dl->PushClipRect({vis_x0,cy0},{vis_x1,cy1},true);
+                float bh = cy1-cy0;
+                for (float ox = vis_x0-bh; ox < vis_x1+bh; ox += 12.f)
+                    dl->AddLine({ox,cy0},{ox+bh,cy1}, IM_COL32(255,120,255, sel?60:30), 1.f);
+                dl->PopClipRect();
+                dl->AddRect({vis_x0,cy0},{vis_x1,cy1}, bg_border, 2.f, 0, 1.5f);
+                // Label: preset id or "BG"
+                ImGui::PushClipRect({vis_x0,cy0},{vis_x1,cy1},true);
+                const char* lbl = clip.text.empty() ? "BG" : clip.text.c_str();
+                dl->AddText({vis_x0+4.f, cy0+(cy1-cy0-13.f)*0.5f},
+                    sel ? IM_COL32(40,0,40,255) : IM_COL32(220,150,220,255), lbl);
                 ImGui::PopClipRect();
             } else {
                 ImVec4 clip_fill = (clip.clip_type==ClipType::Lyrics)   ? Col::clip_lyrics
@@ -8422,17 +8468,22 @@ void ui_studio(AppState& state) {
         float pw = props_w - 16.f;
 
         // Route based on selected clip type, then panel tab
-        bool has_fx_sel = (state.selected_track >= 0 &&
+        ClipType sel_ct = ClipType::Text;
+        bool has_sel = (state.selected_track >= 0 &&
             state.selected_track < (int)state.tracks.size() &&
             state.selected_clip  >= 0 &&
-            state.selected_clip  < (int)state.tracks[state.selected_track].clips.size() &&
-            state.tracks[state.selected_track].clips[state.selected_clip].clip_type == ClipType::Effect);
+            state.selected_clip  < (int)state.tracks[state.selected_track].clips.size());
+        if (has_sel)
+            sel_ct = state.tracks[state.selected_track].clips[state.selected_clip].clip_type;
+        bool has_fx_sel = has_sel && sel_ct == ClipType::Effect;
         bool focused_is_adjustment = has_fx_sel &&
             state.tracks[state.selected_track].clips[state.selected_clip].fx_type == FXType::Adjustment;
         bool focused_is_fx = has_fx_sel && !focused_is_adjustment;
+        bool focused_is_bg = has_sel && sel_ct == ClipType::Background;
 
         if      (focused_is_adjustment)    panel_adjustment(state, pw);
         else if (focused_is_fx)            panel_fx_clip(state, pw);
+        else if (focused_is_bg)            panel_background(state, pw);
         else if (state.panel_tab == 0)     panel_clip(state, pw);
         else if (state.panel_tab == 1)     panel_animation(state, pw);
         else if (state.panel_tab == 2)     panel_export(state, pw);

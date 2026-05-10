@@ -70,7 +70,7 @@ enum class OutputFormat { Vertical, Horizontal, Square };
 // ── Track / clip data model ───────────────────────────────────────────────────
 
 // Each clip carries its own type so any track can hold mixed content.
-enum class ClipType { Text, Lyrics, Subtitle, Video, Audio, Effect };
+enum class ClipType { Text, Lyrics, Subtitle, Video, Audio, Effect, Background };
 
 struct WordEntry {
     std::string text;
@@ -200,6 +200,13 @@ struct Clip {
 
     // Generated effect clip fields
 #include "generated/fx_clip_fields.h"
+
+    // Background clip fields (ClipType::Background; text = preset id)
+    float bg_speed     = 1.f;
+    float bg_intensity = 0.85f;
+    float bg_c1[4]    = {0.4f, 0.0f, 0.8f, 1.f};
+    float bg_c2[4]    = {0.0f, 0.8f, 1.0f, 1.f};
+    float bg_c3[4]    = {1.0f, 0.1f, 0.5f, 1.f};
 
     // Beat sync fields (Audio/Video clips: analyzed beats; FX clips: source reference)
     std::vector<float> beats;           // beat timestamps (Audio/Video clips only)
@@ -490,14 +497,6 @@ struct AppState {
     bool         pipeline_produces_subtitles  = false;
     bool         pipeline_is_separate_only   = false;  // SeparateOnly run: skip subtitle apply, add vocals track
     bool         typo_generate_when_done     = false;  // "Make lyric video" sets this; fires generate_typography after pipeline
-
-    // background
-    std::string  bg_preset_id;                  // empty = no background
-    float        bg_speed     = 1.f;
-    float        bg_intensity = 0.85f;
-    float        bg_color1[4] = {0.4f,0.0f,0.8f,1.f};
-    float        bg_color2[4] = {0.0f,0.8f,1.0f,1.f};
-    float        bg_color3[4] = {1.0f,0.1f,0.5f,1.f};
 
     // typography
     std::string  typo_preset_id  = "spotify";  // active preset id
