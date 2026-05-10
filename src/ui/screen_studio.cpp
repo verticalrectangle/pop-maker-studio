@@ -8236,7 +8236,7 @@ void ui_studio(AppState& state) {
 
             ImGui::SetCursorScreenPos(bmin);
             ImGui::InvisibleButton(b.id, { BSZ, BSZ });
-            if (ImGui::IsItemClicked()) *b.flag = !*b.flag;
+            if (ImGui::IsItemClicked()) *b.flag = true;
 
             BY += BSZ + 10.f;
         }
