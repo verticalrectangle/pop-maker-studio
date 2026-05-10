@@ -4898,6 +4898,10 @@ static void panel_background(AppState& state, float w) {
     }
 
     // ── Add Background brick button ────────────────────────────────────────────
+    ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+    ImGui::TextWrapped("Click to apply. Drag onto a timeline track.");
+    ImGui::PopStyleColor();
+    ImGui::Dummy({0.f, 4.f});
     if (ImGui::Button("+ Add Background Track", {w, 0.f})) {
         float dur = state.duration > 0.f ? state.duration : 30.f;
         Track t;
@@ -5018,6 +5022,22 @@ static void panel_background(AppState& state, float w) {
             }
             history_push(state, "Background preset");
         }
+        if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
+            ImGui::SetDragDropPayload("BG_PRESET", pr.id, strlen(pr.id)+1);
+            // Ghost chip
+            ImDrawList* gdl = ImGui::GetWindowDrawList();
+            ImVec2 gp = ImGui::GetCursorScreenPos();
+            float gw = 140.f, gh = 36.f;
+            gdl->AddRectFilled(gp, {gp.x+gw, gp.y+gh}, IM_COL32(90,15,105,230), 6.f);
+            draw_bg_preset(pr.id, gdl, gp, gw, gh, (float)ImGui::GetTime(),
+                           pr.default_speed, 0.6f, pr.dc1, pr.dc2, pr.dc3);
+            gdl->AddRect(gp, {gp.x+gw, gp.y+gh}, IM_COL32(180,80,200,200), 6.f, 0, 1.2f);
+            ImVec2 tsz = ImGui::CalcTextSize(pr.label);
+            gdl->AddText({gp.x+(gw-tsz.x)*0.5f, gp.y+(gh-13.f)*0.5f},
+                         IM_COL32(255,255,255,240), pr.label);
+            ImGui::Dummy({gw, gh});
+            ImGui::EndDragDropSource();
+        }
 
         if (col_idx == 0) { ImGui::SameLine(0.f, 8.f); col_idx = 1; }
         else              { col_idx = 0; }
@@ -5034,7 +5054,7 @@ static void panel_fx_creative(AppState& state, float w) {
     ImGui::TextUnformatted("FX");
     ImGui::PopStyleColor();
     ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
-    ImGui::TextWrapped("Creative effects. Click to add at playhead on the top track.");
+    ImGui::TextWrapped("Click to add at playhead. Drag onto a timeline track.");
     ImGui::PopStyleColor();
     ImGui::Dummy({0.f, 8.f});
 
@@ -5090,6 +5110,13 @@ static void panel_fx_creative(AppState& state, float w) {
             state.selected_track = 0;
             state.selected_clip  = 0;
             history_push(state, std::string("Add FX: ") + fc.name);
+        }
+        if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
+            int ft = (int)fc.type;
+            ImGui::SetDragDropPayload("FX_CREATIVE", &ft, sizeof(int));
+            ImGui::Text("%s", fc.name);
+            ImGui::TextDisabled("Drop onto timeline track");
+            ImGui::EndDragDropSource();
         }
 
         ImGui::Dummy({0.f, 5.f});
@@ -6081,10 +6108,7 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
                     else if (idx - bn < (int)state.user_presets.size())
                         preset = &state.user_presets[idx - bn];
                     if (preset) {
-                        // Place clip at cursor time position
-                        float drop_x = ImGui::GetMousePos().x - (origin.x + TL_LABEL_W);
-                        float drop_t = (drop_x + scroll) / zoom;
-                        drop_t = fmaxf(0.f, drop_t);
+                        float drop_t = fmaxf(0.f, (ImGui::GetMousePos().x - (origin.x + TL_LABEL_W) + scroll) / zoom);
                         Clip cl;
                         cl.clip_type = ClipType::Effect;
                         cl.start     = drop_t;
@@ -6097,6 +6121,45 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
                         s_drop_flash_t     = 0.6f;
                         history_push(state, "Drop Effect preset: " + preset->name);
                     }
+                }
+                if (const ImGuiPayload* pay = ImGui::AcceptDragDropPayload("BG_PRESET")) {
+                    const char* preset_id = (const char*)pay->Data;
+                    const BgPreset* pr = bg_preset_by_id(preset_id);
+                    if (pr) {
+                        float drop_t = fmaxf(0.f, (ImGui::GetMousePos().x - (origin.x + TL_LABEL_W) + scroll) / zoom);
+                        float proj_dur = state.duration > 0.f ? state.duration : 30.f;
+                        Clip cl;
+                        cl.clip_type    = ClipType::Background;
+                        cl.text         = preset_id;
+                        cl.start        = drop_t;
+                        cl.end          = drop_t + proj_dur;
+                        cl.bg_speed     = pr->default_speed;
+                        cl.bg_intensity = 0.85f;
+                        memcpy(cl.bg_c1, pr->dc1, sizeof(float)*4);
+                        memcpy(cl.bg_c2, pr->dc2, sizeof(float)*4);
+                        memcpy(cl.bg_c3, pr->dc3, sizeof(float)*4);
+                        state.tracks[ti].clips.push_back(cl);
+                        state.selected_track = ti;
+                        state.selected_clip  = (int)state.tracks[ti].clips.size() - 1;
+                        s_drop_flash_track = ti;
+                        s_drop_flash_t     = 0.6f;
+                        history_push(state, std::string("Drop Background: ") + pr->label);
+                    }
+                }
+                if (const ImGuiPayload* pay = ImGui::AcceptDragDropPayload("FX_CREATIVE")) {
+                    FXType ft = (FXType)*(const int*)pay->Data;
+                    float drop_t = fmaxf(0.f, (ImGui::GetMousePos().x - (origin.x + TL_LABEL_W) + scroll) / zoom);
+                    Clip cl;
+                    cl.clip_type = ClipType::Effect;
+                    cl.fx_type   = ft;
+                    cl.start     = drop_t;
+                    cl.end       = drop_t + 5.f;
+                    state.tracks[ti].clips.push_back(cl);
+                    state.selected_track = ti;
+                    state.selected_clip  = (int)state.tracks[ti].clips.size() - 1;
+                    s_drop_flash_track = ti;
+                    s_drop_flash_t     = 0.6f;
+                    history_push(state, std::string("Drop FX: ") + fx_type_name(ft));
                 }
                 // Highlight the row while dragging over it
                 dl->AddRectFilled(drop_tl, drop_br, IM_COL32(180,130,255,40));
@@ -7295,6 +7358,57 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
         track_y += TL_TRACK_H;  // push "+ Add Track" down so they don't overlap
     }
 
+    // ── New-track drop zone for picker bricks (BG / FX_CREATIVE) ─────────────
+    // Covers the row immediately below all existing tracks so dragging
+    // a preset card past the last track creates a new track on drop.
+    {
+        ImVec2 dz_tl = {origin.x + TL_LABEL_W, track_y};
+        ImVec2 dz_br = {origin.x + total_w, track_y + TL_TRACK_H};
+        if (dz_br.y > origin.y + TL_RULER_H && dz_br.y <= origin.y + total_h) {
+            ImGui::SetCursorScreenPos(dz_tl);
+            ImGui::InvisibleButton("##picker_new_track",
+                                   {dz_br.x - dz_tl.x, dz_br.y - dz_tl.y});
+            if (ImGui::BeginDragDropTarget()) {
+                auto make_new_track = [&](Clip&& cl, const char* act) {
+                    Track nt;
+                    nt.name = clip_type_name(cl.clip_type);
+                    nt.clips.push_back(std::move(cl));
+                    state.tracks.push_back(std::move(nt));
+                    state.selected_track = (int)state.tracks.size() - 1;
+                    state.selected_clip  = 0;
+                    s_drop_flash_track   = state.selected_track;
+                    s_drop_flash_t       = 0.6f;
+                    history_push(state, act);
+                };
+                float drop_t = fmaxf(0.f, (ImGui::GetMousePos().x - (origin.x + TL_LABEL_W) + scroll) / zoom);
+
+                if (const ImGuiPayload* pay = ImGui::AcceptDragDropPayload("BG_PRESET")) {
+                    const char* pid = (const char*)pay->Data;
+                    const BgPreset* pr = bg_preset_by_id(pid);
+                    if (pr) {
+                        float proj_dur = state.duration > 0.f ? state.duration : 30.f;
+                        Clip cl; cl.clip_type = ClipType::Background; cl.text = pid;
+                        cl.start = drop_t; cl.end = drop_t + proj_dur;
+                        cl.bg_speed = pr->default_speed; cl.bg_intensity = 0.85f;
+                        memcpy(cl.bg_c1, pr->dc1, 16); memcpy(cl.bg_c2, pr->dc2, 16); memcpy(cl.bg_c3, pr->dc3, 16);
+                        make_new_track(std::move(cl), (std::string("Drop Background: ") + pr->label).c_str());
+                    }
+                }
+                if (const ImGuiPayload* pay = ImGui::AcceptDragDropPayload("FX_CREATIVE")) {
+                    FXType ft = (FXType)*(const int*)pay->Data;
+                    Clip cl; cl.clip_type = ClipType::Effect; cl.fx_type = ft;
+                    cl.start = drop_t; cl.end = drop_t + 5.f;
+                    make_new_track(std::move(cl), (std::string("Drop FX: ") + fx_type_name(ft)).c_str());
+                }
+                // Highlight drop zone
+                dl->AddRectFilled(dz_tl, dz_br, IM_COL32(180,130,255,20));
+                dl->AddLine(dz_tl, {dz_br.x, dz_tl.y}, IM_COL32(180,130,255,160), 1.5f);
+                dl->AddText({dz_tl.x + 6.f, dz_tl.y + (TL_TRACK_H - 13.f) * 0.5f},
+                            IM_COL32(180,130,255,180), "+ New Track");
+                ImGui::EndDragDropTarget();
+            }
+        }
+    }
 
     // ── Context menus ─────────────────────────────────────────────────────────
 
