@@ -6039,8 +6039,6 @@ struct TlState {
     // Ruler seek drag
     bool ruler_drag = false;
 
-    // Re-click deselect: set when mousedown on the already-selected clip, cleared on drag or release
-    bool reclick_pending = false;
 };
 static TlState g_tl;
 
@@ -6347,7 +6345,6 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
     auto& s_box_selecting  = g_tl.box_selecting;
     auto& s_box_start      = g_tl.box_start;
     auto& s_clip_hit       = g_tl.clip_hit;
-    auto& s_reclick_pending = g_tl.reclick_pending;
     auto& ctx_track        = g_tl.ctx_track;
     auto& ctx_clip         = g_tl.ctx_clip;
     auto& open_clip_ctx    = g_tl.open_clip_ctx;
@@ -6719,9 +6716,21 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
                                 state.clip_selection.insert({e.ti, e.ci});
                     } else {
                         bool was_selected = (state.selected_track == ti && state.selected_clip == ci);
+                        if (was_selected) {
+                            // Re-click on selected clip — check it's a body click, not an edge
+                            float orig_cx0 = origin.x + TL_LABEL_W + clip.start * zoom - scroll;
+                            float orig_cx1 = origin.x + TL_LABEL_W + clip.end   * zoom - scroll;
+                            bool on_edge = mouse.x <= orig_cx0 + ew_hit || mouse.x >= orig_cx1 - ew_hit;
+                            if (!on_edge) {
+                                state.selected_track = -1;
+                                state.selected_clip  = -1;
+                                state.clip_selection.clear();
+                                s_clip_hit = true;  // suppress empty-area deselect
+                                return;
+                            }
+                        }
                         state.clip_selection.clear();
                         state.clip_selection.insert(key);
-                        s_reclick_pending = was_selected;
                     }
                     state.selected_track = ti;
                     state.selected_clip  = ci;
@@ -7361,7 +7370,6 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
         ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
     if (drag_track>=0 && drag_clip>=0 && s_glass_drag==0 && ImGui::IsMouseDragging(0)) {
         s_drag_moved = true;
-        s_reclick_pending = false;
         Clip& dc = state.tracks[drag_track].clips[drag_clip];
         auto cands = build_snap_candidates(drag_track, drag_clip);
         float new_t = (mouse.x - origin.x - TL_LABEL_W + scroll) / zoom - drag_offset;
@@ -7602,13 +7610,6 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
             }
             }
         }
-        // Re-click deselect: if no drag occurred, deselect the clip
-        if (s_reclick_pending && !s_drag_moved)  {
-            state.selected_track = -1;
-            state.selected_clip  = -1;
-            state.clip_selection.clear();
-        }
-        s_reclick_pending = false;
         drag_track=-1; drag_clip=-1; drag_left=false; drag_right=false;
         drag_hot_track=-1; drag_hot_gap=-1;
         s_drag_moved = false;
@@ -9313,17 +9314,16 @@ void ui_studio(AppState& state) {
             if (st != s_last_sel_track || sc != s_last_sel_clip) {
                 if (st >= 0 && sc >= 0 && !pv_is_lib(s_panel_view))
                     s_panel_view = pv_derive(state);
-                else if (st < 0 && pv_is_override(s_panel_view))
-                    s_panel_view = PanelView::Project;  // deselected while override was shown
+                else if (st < 0 && !pv_is_lib(s_panel_view))
+                    s_panel_view = PanelView::Project;  // no selection → Project
                 s_last_sel_track = st; s_last_sel_clip = sc;
             }
         }
 
         // ── Tab bar ───────────────────────────────────────────────────────────
-        // Hidden while a library browser is open (sidebar button toggles instead)
-        // and while an override panel (FX/Adj/BG clip) is active.
+        // Hidden when: no clip selected, library browser open, or override panel active.
         bool show_clip_tabs = has_sel && !pv_is_override(s_panel_view) && !pv_is_lib(s_panel_view);
-        bool show_tab_bar   = !pv_is_lib(s_panel_view) && !pv_is_override(s_panel_view);
+        bool show_tab_bar   = has_sel && !pv_is_lib(s_panel_view) && !pv_is_override(s_panel_view);
 
         if (show_tab_bar) {
             ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {12.f, 6.f});
