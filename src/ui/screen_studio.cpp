@@ -2277,24 +2277,6 @@ static void draw_clip_header(AppState& state, Clip& clip, Track& track, float w)
     ImGui::TextUnformatted(durbuf);
     ImGui::PopStyleColor();
 
-    // Nudge strip
-    ImGui::Dummy({0.f, 4.f});
-    if (track.locked) ImGui::BeginDisabled();
-    struct NudgeBtn { float dt; const char* lbl; };
-    static const NudgeBtn nudges[] = {{-1.f,"-1s"},{-0.1f,"-100ms"},{-0.01f,"-10ms"},
-                                      {0.01f,"+10ms"},{0.1f,"+100ms"},{1.f,"+1s"}};
-    bool nudged = false;
-    for (auto& nb : nudges) {
-        if (ui_btn(nb.lbl, false, true)) {
-            clip.start += nb.dt; clip.end += nb.dt;
-            if (clip.start < 0.f) { clip.end -= clip.start; clip.start = 0.f; }
-            nudged = true;
-        }
-        ImGui::SameLine(0.f, 3.f);
-    }
-    ImGui::NewLine();
-    if (nudged) history_push(state, "Nudge clip");
-
     // Action row
     ImGui::Dummy({0.f, 4.f});
     if (ui_btn("Split", false, true)) {
