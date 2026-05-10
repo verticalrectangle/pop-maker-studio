@@ -9330,10 +9330,10 @@ void ui_studio(AppState& state) {
             static int s_last_sel_track = -1, s_last_sel_clip = -1;
             int st = state.selected_track, sc = state.selected_clip;
             if (st != s_last_sel_track || sc != s_last_sel_clip) {
-                if (st >= 0 && sc >= 0 && !pv_is_lib(s_panel_view))
+                if (st >= 0 && sc >= 0)
                     s_panel_view = pv_derive(state);
-                else if ((st < 0 || sc < 0) && !pv_is_lib(s_panel_view))
-                    s_panel_view = PanelView::Project;  // no selection → Project
+                else if (st < 0 || sc < 0)
+                    s_panel_view = PanelView::Project;
                 s_last_sel_track = st; s_last_sel_clip = sc;
             }
         }
