@@ -5826,7 +5826,7 @@ static std::string media_recents_path() {
              : "/tmp/pop_maker_recent_media.json";
 }
 
-struct RecentMedia { std::vector<std::string> videos, images; };
+struct RecentMedia { std::vector<std::string> videos, images, audio; };
 
 static RecentMedia& recent_media() {
     static RecentMedia s;
@@ -5840,6 +5840,7 @@ static RecentMedia& recent_media() {
                 if (!j.is_discarded()) {
                     if (j.contains("videos")) s.videos = j["videos"].get<std::vector<std::string>>();
                     if (j.contains("images")) s.images = j["images"].get<std::vector<std::string>>();
+                    if (j.contains("audio"))  s.audio  = j["audio"].get<std::vector<std::string>>();
                 }
             }
         } catch (...) {}
@@ -5847,9 +5848,13 @@ static RecentMedia& recent_media() {
     return s;
 }
 
-static void recent_media_push(const std::string& path, bool is_video) {
+enum class MediaKind { Video, Image, Audio };
+
+static void recent_media_push(const std::string& path, MediaKind kind) {
     auto& r   = recent_media();
-    auto& vec = is_video ? r.videos : r.images;
+    auto& vec = kind == MediaKind::Video ? r.videos
+              : kind == MediaKind::Audio ? r.audio
+                                        : r.images;
     vec.erase(std::remove(vec.begin(), vec.end(), path), vec.end());
     vec.insert(vec.begin(), path);
     if (vec.size() > 24) vec.resize(24);
@@ -5857,6 +5862,7 @@ static void recent_media_push(const std::string& path, bool is_video) {
         nlohmann::json j;
         j["videos"] = r.videos;
         j["images"] = r.images;
+        j["audio"]  = r.audio;
         fs::create_directories(fs::path(media_recents_path()).parent_path());
         std::ofstream(media_recents_path()) << j.dump(2);
     } catch (...) {}
@@ -5868,6 +5874,7 @@ static bool is_image_path(const std::string& p) {
     for (auto& c : ext) c = (char)tolower((unsigned char)c);
     return ext==".jpg"||ext==".jpeg"||ext==".png"||ext==".bmp"||ext==".webp"||ext==".tiff";
 }
+
 
 // ── Timeline ──────────────────────────────────────────────────────────────────
 
@@ -6230,13 +6237,29 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
                         int slot = slot_for_video(state, clip_slot_key(path, drop_t), path);
                         if (slot >= 0) video_open_still(slot, proxy_still_path(path));
                         state.video_loaded = true;
-                        recent_media_push(path, !img);
+                        recent_media_push(path, img ? MediaKind::Image : MediaKind::Video);
                         history_push(state, (img ? "Drop image: " : "Drop video: ") +
                                      fs::path(path).filename().string());
                     }
                 };
                 accept_media_drop("MEDIA_VID");
                 accept_media_drop("MEDIA_IMG");
+                if (const ImGuiPayload* pay = ImGui::AcceptDragDropPayload("MEDIA_AUD")) {
+                    std::string path((const char*)pay->Data, pay->DataSize - 1);
+                    float drop_t = fmaxf(0.f, (ImGui::GetMousePos().x - (origin.x + TL_LABEL_W) + scroll) / zoom);
+                    AudioMeta meta{}; float dur = audio_probe(path, meta) ? meta.duration_secs : 4.f;
+                    if (dur <= 0.f) dur = 4.f;
+                    Clip cl; cl.clip_type = ClipType::Audio; cl.text = path;
+                    cl.source_id = path; cl.start = drop_t; cl.end = drop_t + dur;
+                    s_source_durations[path] = dur;
+                    state.tracks[ti].clips.push_back(cl);
+                    state.selected_track = ti;
+                    state.selected_clip  = (int)state.tracks[ti].clips.size() - 1;
+                    s_drop_flash_track = ti; s_drop_flash_t = 0.6f;
+                    audio_source_ensure(path);
+                    recent_media_push(path, MediaKind::Audio);
+                    history_push(state, "Drop audio: " + fs::path(path).filename().string());
+                }
                 // Highlight the row while dragging over it
                 dl->AddRectFilled(drop_tl, drop_br, IM_COL32(180,130,255,40));
                 dl->AddRect(drop_tl, drop_br, IM_COL32(180,130,255,180), 2.f);
@@ -7492,11 +7515,23 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
                         int slot = slot_for_video(state, clip_slot_key(path, drop_t), path);
                         if (slot >= 0) video_open_still(slot, proxy_still_path(path));
                         state.video_loaded = true;
-                        recent_media_push(path, !img);
+                        recent_media_push(path, img ? MediaKind::Image : MediaKind::Video);
                     }
                 };
                 new_track_media("MEDIA_VID");
                 new_track_media("MEDIA_IMG");
+                if (const ImGuiPayload* pay = ImGui::AcceptDragDropPayload("MEDIA_AUD")) {
+                    std::string path((const char*)pay->Data, pay->DataSize - 1);
+                    AudioMeta meta{}; float dur = audio_probe(path, meta) ? meta.duration_secs : 4.f;
+                    if (dur <= 0.f) dur = 4.f;
+                    Clip cl; cl.clip_type = ClipType::Audio; cl.text = path;
+                    cl.source_id = path; cl.start = drop_t; cl.end = drop_t + dur;
+                    s_source_durations[path] = dur;
+                    std::string act = "Drop audio: " + fs::path(path).filename().string();
+                    make_new_track(std::move(cl), act.c_str());
+                    audio_source_ensure(path);
+                    recent_media_push(path, MediaKind::Audio);
+                }
                 // Highlight drop zone
                 dl->AddRectFilled(dz_tl, dz_br, IM_COL32(180,130,255,20));
                 dl->AddLine(dz_tl, {dz_br.x, dz_tl.y}, IM_COL32(180,130,255,160), 1.5f);
@@ -7838,7 +7873,7 @@ static void handle_shortcuts(AppState& state) {
 // Buttons switch the right panel into library-browse mode.
 // Selecting a clip on the timeline always clears toolbox mode.
 
-enum class ToolboxMode { None, BG, FX, Adj, VID, IMG };
+enum class ToolboxMode { None, BG, FX, Adj, VID, IMG, AUD };
 static ToolboxMode s_toolbox_mode = ToolboxMode::None;
 
 static void panel_media_browser(AppState& state, float w, bool is_video) {
@@ -7863,7 +7898,7 @@ static void panel_media_browser(AppState& state, float w, bool is_video) {
                 ? filepicker_open("Open video", "Video", "*.mp4 *.mov *.mkv *.avi *.webm")
                 : filepicker_open("Open image", "Image", "*.jpg *.jpeg *.png *.bmp *.webp");
             if (!picked.empty()) {
-                recent_media_push(picked, is_video);
+                recent_media_push(picked, is_video ? MediaKind::Video : MediaKind::Image);
                 // Insert new track + clip at playhead
                 float dur = is_video ? video_probe_duration(picked) : 0.f;
                 if (dur <= 0.f) dur = is_video ? 4.f : 5.f;
@@ -7982,7 +8017,7 @@ static void panel_media_browser(AppState& state, float w, bool is_video) {
             int slot = slot_for_video(state, clip_slot_key(path, cl.start), path);
             if (slot >= 0) video_open_still(slot, proxy_still_path(path));
             state.video_loaded = true;
-            recent_media_push(path, is_video);
+            recent_media_push(path, is_video ? MediaKind::Video : MediaKind::Image);
             s_toolbox_mode = ToolboxMode::None;
             history_push(state, (is_video ? "Add video: " : "Add image: ") + fp.filename().string());
         }
@@ -8003,6 +8038,162 @@ static void panel_media_browser(AppState& state, float w, bool is_video) {
     // Advance cursor past all cards
     int rows = ((int)valid.size() + 1) / 2;
     ImGui::SetCursorPosY(base_y + rows * (CARD_H + GAP) + 4.f);
+}
+
+static void panel_audio_browser(AppState& state, float w) {
+    ImGui::Dummy({0.f, 8.f});
+
+    ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(80, 200, 120, 255));
+    ImGui::TextUnformatted("Audio");
+    ImGui::PopStyleColor();
+
+    {
+        float bw = ImGui::CalcTextSize("Browse…").x + 20.f;
+        ImGui::SameLine(w - bw - 4.f);
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {8.f, 3.f});
+        ImGui::PushStyleColor(ImGuiCol_Button,        IM_COL32(30,30,46,255));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(50,50,72,255));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive,  IM_COL32(60,60,90,255));
+        if (ImGui::SmallButton("Browse…")) {
+            std::string picked = filepicker_open("Open audio", "Audio",
+                                                 "*.wav *.mp3 *.m4a *.flac *.aac *.ogg");
+            if (!picked.empty()) {
+                recent_media_push(picked, MediaKind::Audio);
+                AudioMeta meta{};
+                float dur = audio_probe(picked, meta) ? meta.duration_secs : 4.f;
+                if (dur <= 0.f) dur = 4.f;
+                Track nt; nt.name = fs::path(picked).stem().string();
+                Clip cl; cl.clip_type = ClipType::Audio; cl.text = picked;
+                cl.source_id = picked; cl.start = state.playhead; cl.end = cl.start + dur;
+                s_source_durations[picked] = dur;
+                nt.clips.push_back(cl);
+                state.tracks.insert(state.tracks.begin(), std::move(nt));
+                state.selected_track = 0; state.selected_clip = 0;
+                audio_source_ensure(picked);
+                s_toolbox_mode = ToolboxMode::None;
+                history_push(state, "Import audio: " + fs::path(picked).filename().string());
+            }
+        }
+        ImGui::PopStyleColor(3);
+        ImGui::PopStyleVar();
+    }
+
+    ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+    ImGui::TextWrapped("Click to add at playhead. Drag onto a track.");
+    ImGui::PopStyleColor();
+    ImGui::Dummy({0.f, 8.f});
+
+    auto& recents = recent_media().audio;
+    std::vector<std::string> valid;
+    valid.reserve(recents.size());
+    for (auto& p : recents) if (fs::exists(p)) valid.push_back(p);
+
+    if (valid.empty()) {
+        ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+        ImGui::TextWrapped("No recent audio. Click Browse… to add one.");
+        ImGui::PopStyleColor();
+        return;
+    }
+
+    const float CARD_H  = 62.f;
+    const float CARD_W  = w - 8.f;
+    const float BAR_W   = 36.f;  // waveform bars area
+    const float GAP     = 5.f;
+
+    for (int i = 0; i < (int)valid.size(); ++i) {
+        const std::string& path = valid[i];
+        fs::path fp(path);
+
+        ImGui::PushID(i);
+        ImVec2 cp = ImGui::GetCursorScreenPos();
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+
+        ImGui::SetCursorPosX(4.f);
+        ImGui::InvisibleButton("##ac", {CARD_W, CARD_H});
+        bool hov = ImGui::IsItemHovered();
+
+        ImU32 bg = hov ? IM_COL32(30,38,32,255) : IM_COL32(16,22,18,255);
+        dl->AddRectFilled(cp, {cp.x+CARD_W, cp.y+CARD_H}, bg, 6.f);
+
+        // Fake waveform bars on the left
+        {
+            float bx = cp.x + 10.f;
+            float by = cp.y + CARD_H * 0.5f;
+            const int BARS = 9;
+            const float BSPC = 3.8f;
+            ImU32 bar_col = hov ? IM_COL32(80,220,130,200) : IM_COL32(50,160,90,160);
+            // deterministic heights from filename hash
+            uint32_t h = 0;
+            for (char c : fp.filename().string()) h = h * 31 + (uint8_t)c;
+            for (int b = 0; b < BARS; ++b) {
+                float frac = 0.25f + 0.65f * ((float)((h >> (b*3)) & 0x7) / 7.f);
+                float hh = floorf(frac * (CARD_H * 0.65f));
+                dl->AddRectFilled({bx + b*BSPC, by - hh*0.5f},
+                                  {bx + b*BSPC + 2.2f, by + hh*0.5f},
+                                  bar_col, 1.f);
+            }
+        }
+
+        // Filename
+        std::string name = fp.filename().string();
+        if ((int)name.size() > 28) name = name.substr(0,25) + "…";
+        float tx = cp.x + BAR_W + 14.f;
+        ImGui::PushFont(g_font_bold);
+        dl->AddText(ImGui::GetFont(), 12.f, {tx, cp.y + 12.f},
+                    hov ? IM_COL32(255,255,255,230) : IM_COL32(200,215,205,210),
+                    name.c_str());
+        ImGui::PopFont();
+
+        // Extension badge
+        std::string ext = fp.extension().string();
+        for (auto& c : ext) c = (char)toupper((unsigned char)c);
+        if (!ext.empty() && ext[0]=='.') ext = ext.substr(1);
+        dl->AddText({tx, cp.y + 30.f}, IM_COL32(80,160,100,180), ext.c_str());
+
+        // Duration (probe from cache if available)
+        auto dit = s_source_durations.find(path);
+        if (dit == s_source_durations.end()) {
+            AudioMeta meta{};
+            float dur = audio_probe(path, meta) ? meta.duration_secs : 0.f;
+            s_source_durations[path] = dur;
+            dit = s_source_durations.find(path);
+        }
+        if (dit != s_source_durations.end() && dit->second > 0.f) {
+            std::string ds = fmt_time_short(dit->second);
+            dl->AddText({tx, cp.y + 44.f}, IM_COL32(100,130,110,180), ds.c_str());
+        }
+
+        dl->AddRect(cp, {cp.x+CARD_W, cp.y+CARD_H},
+                    hov ? IM_COL32(80,220,130,160) : IM_COL32(38,58,44,180),
+                    6.f, 0, hov ? 1.5f : 1.f);
+
+        if (ImGui::IsItemClicked()) {
+            AudioMeta meta{};
+            float dur = audio_probe(path, meta) ? meta.duration_secs : 4.f;
+            if (dur <= 0.f) dur = 4.f;
+            Track nt; nt.name = fp.stem().string();
+            Clip cl; cl.clip_type = ClipType::Audio; cl.text = path;
+            cl.source_id = path; cl.start = state.playhead; cl.end = cl.start + dur;
+            s_source_durations[path] = dur;
+            nt.clips.push_back(cl);
+            state.tracks.insert(state.tracks.begin(), std::move(nt));
+            state.selected_track = 0; state.selected_clip = 0;
+            audio_source_ensure(path);
+            recent_media_push(path, MediaKind::Audio);
+            s_toolbox_mode = ToolboxMode::None;
+            history_push(state, "Add audio: " + fp.filename().string());
+        }
+
+        if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
+            ImGui::SetDragDropPayload("MEDIA_AUD", path.c_str(), path.size()+1);
+            ImGui::TextUnformatted(name.c_str());
+            ImGui::TextDisabled("Drop onto timeline track");
+            ImGui::EndDragDropSource();
+        }
+
+        ImGui::Dummy({0.f, GAP});
+        ImGui::PopID();
+    }
 }
 
 // ── Studio ────────────────────────────────────────────────────────────────────
@@ -8553,6 +8744,7 @@ void ui_studio(AppState& state) {
             { "Adj", ToolboxMode::Adj, IM_COL32(30,  95, 165, 255) },
             { "VID", ToolboxMode::VID, IM_COL32(180, 90,  20, 255) },
             { "IMG", ToolboxMode::IMG, IM_COL32(20, 150, 130, 255) },
+            { "AUD", ToolboxMode::AUD, IM_COL32(30, 140,  70, 255) },
         };
 
         for (auto& b : btns) {
@@ -8950,6 +9142,7 @@ void ui_studio(AppState& state) {
         else if (s_toolbox_mode == ToolboxMode::Adj) panel_adjustment_library(state, pw);
         else if (s_toolbox_mode == ToolboxMode::VID) panel_media_browser(state, pw, true);
         else if (s_toolbox_mode == ToolboxMode::IMG) panel_media_browser(state, pw, false);
+        else if (s_toolbox_mode == ToolboxMode::AUD) panel_audio_browser(state, pw);
         else if (state.panel_tab == 0)               panel_clip(state, pw);
         else if (state.panel_tab == 1)     panel_animation(state, pw);
         else if (state.panel_tab == 2)     panel_export(state, pw);
