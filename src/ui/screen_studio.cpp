@@ -6653,7 +6653,9 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
                 float orig_cx1h = origin.x+TL_LABEL_W+clip.end*zoom-scroll;
                 bool in_clip = mouse.y>=cy0 && mouse.y<=cy1 &&
                                mouse.x>=vis_x0 && mouse.x<=vis_x1;
-                if (in_clip && (mouse.x <= orig_cx0h+ew_hit || mouse.x >= orig_cx1h-ew_hit))
+                float clip_screen_wh = orig_cx1h - orig_cx0h;
+                if (in_clip && clip_screen_wh > 2.f * ew_hit &&
+                    (mouse.x <= orig_cx0h+ew_hit || mouse.x >= orig_cx1h-ew_hit))
                     ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
             }
             // Keyframe diamond markers
@@ -6720,7 +6722,9 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
                             // Re-click on selected clip — check it's a body click, not an edge
                             float orig_cx0 = origin.x + TL_LABEL_W + clip.start * zoom - scroll;
                             float orig_cx1 = origin.x + TL_LABEL_W + clip.end   * zoom - scroll;
-                            bool on_edge = mouse.x <= orig_cx0 + ew_hit || mouse.x >= orig_cx1 - ew_hit;
+                            float clip_screen_w = orig_cx1 - orig_cx0;
+                            bool on_edge = clip_screen_w > 2.f * ew_hit &&
+                                           (mouse.x <= orig_cx0 + ew_hit || mouse.x >= orig_cx1 - ew_hit);
                             if (!on_edge) {
                                 state.selected_track = -1;
                                 state.selected_clip  = -1;
@@ -6743,8 +6747,9 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
                     if (!track.locked) {
                         drag_origin_start = clip.start;
                         drag_origin_end   = clip.end;
-                        bool left_edge  = mouse.x <= orig_cx0+ew_hit;
-                        bool right_edge = mouse.x >= orig_cx1-ew_hit;
+                        float clip_scr_w  = orig_cx1 - orig_cx0;
+                        bool left_edge  = clip_scr_w > 2.f*ew_hit && mouse.x <= orig_cx0+ew_hit;
+                        bool right_edge = clip_scr_w > 2.f*ew_hit && mouse.x >= orig_cx1-ew_hit;
                         if (left_edge) {
                             drag_track=ti; drag_clip=ci; drag_left=true; drag_right=false; drag_offset=0.f;
                             g_tl.drag_multi.clear();
@@ -6969,6 +6974,15 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
             ImGui::PopClipRect();
 
             clip_interact(ci, clip, vis_x0, vis_x1, cy0, cy1, sel);
+        }
+
+        // Left-click empty track body (no clip hit) — deselect
+        if (!s_clip_hit && ImGui::IsMouseClicked(0) &&
+            mouse.y >= track_y && mouse.y < track_y+TL_TRACK_H &&
+            mouse.x > origin.x+TL_LABEL_W && mouse.x < origin.x+total_w) {
+            state.clip_selection.clear();
+            state.selected_track = -1;
+            state.selected_clip  = -1;
         }
 
         // Right-click empty timeline area (this track row, no clip hit)
@@ -7222,11 +7236,11 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
         bool ldown  = ImGui::IsMouseDown(0);
         bool lclick = ImGui::IsMouseClicked(0);
 
-        // Deselect on click in the label column below all tracks or on empty body space
+        // Deselect on click in the label column (any track row or below all tracks)
         bool in_label_empty = lclick && !ImGui::IsAnyItemActive() &&
                               mouse.x >= origin.x && mouse.x < origin.x+TL_LABEL_W &&
                               mouse.y > origin.y+TL_RULER_H && mouse.y < origin.y+total_h &&
-                              (s_tl_hover_track < 0 || s_tl_hover_track >= (int)state.tracks.size());
+                              s_rename_track < 0;  // don't deselect while renaming
 
         // Start box select when clicking empty body space (no clip was hit)
         if (lclick && in_body && !s_clip_hit) {
@@ -9314,7 +9328,7 @@ void ui_studio(AppState& state) {
             if (st != s_last_sel_track || sc != s_last_sel_clip) {
                 if (st >= 0 && sc >= 0 && !pv_is_lib(s_panel_view))
                     s_panel_view = pv_derive(state);
-                else if (st < 0 && !pv_is_lib(s_panel_view))
+                else if ((st < 0 || sc < 0) && !pv_is_lib(s_panel_view))
                     s_panel_view = PanelView::Project;  // no selection → Project
                 s_last_sel_track = st; s_last_sel_clip = sc;
             }
