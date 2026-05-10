@@ -6565,26 +6565,25 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
             bool sel = state.clip_selection.count({ti, ci}) > 0;
 
             if (clip.clip_type == ClipType::Video) {
-                // Film strip look: dark body + perforation holes + filename
-                ImU32 film_bg  = sel ? to_u32(Col::fg) : IM_COL32(28, 28, 38, 255);
-                ImU32 film_bdr = sel ? to_u32(Col::fg) : IM_COL32(60, 60, 80, 255);
+                // Film strip: dark body normally; inverted bright-purple when selected
+                ImU32 film_bg  = sel ? IM_COL32(160,  80, 255, 255) : IM_COL32(28, 28, 38, 255);
+                ImU32 film_bdr = sel ? IM_COL32(200, 140, 255, 255) : IM_COL32(60, 60, 80, 255);
+                ImU32 perf_col = sel ? IM_COL32( 90,  30, 160, 255) : IM_COL32(55, 55, 70, 255);
                 dl->AddRectFilled({vis_x0,cy0},{vis_x1,cy1}, film_bg, 2.f);
-                if (!sel) {
-                    // Perforation strip top + bottom
-                    dl->PushClipRect({vis_x0,cy0},{vis_x1,cy1},true);
-                    float ph = 4.f, pw = 3.f, pgap = 8.f;
-                    for (float px2 = vis_x0+4.f; px2+pw < vis_x1; px2 += pgap) {
-                        dl->AddRectFilled({px2,cy0+2.f},{px2+pw,cy0+2.f+ph}, IM_COL32(55,55,70,255),1.f);
-                        dl->AddRectFilled({px2,cy1-2.f-ph},{px2+pw,cy1-2.f}, IM_COL32(55,55,70,255),1.f);
-                    }
-                    dl->PopClipRect();
+                // Perforation strip top + bottom (always shown, color varies)
+                dl->PushClipRect({vis_x0,cy0},{vis_x1,cy1},true);
+                float ph = 4.f, pw = 3.f, pgap = 8.f;
+                for (float px2 = vis_x0+4.f; px2+pw < vis_x1; px2 += pgap) {
+                    dl->AddRectFilled({px2,cy0+2.f},{px2+pw,cy0+2.f+ph}, perf_col, 1.f);
+                    dl->AddRectFilled({px2,cy1-2.f-ph},{px2+pw,cy1-2.f}, perf_col, 1.f);
                 }
+                dl->PopClipRect();
                 dl->AddRect({vis_x0,cy0},{vis_x1,cy1}, film_bdr, 2.f);
                 ImGui::PushClipRect({vis_x0,cy0},{vis_x1,cy1},true);
                 std::string fname_s = clip.text.empty() ? "Video"
                     : fs::path(clip.text).filename().string();
                 const char* fname = fname_s.c_str();
-                ImU32 ftcol = sel ? to_u32(Col::bg) : IM_COL32(200,200,220,255);
+                ImU32 ftcol = sel ? IM_COL32(20, 8, 40, 255) : IM_COL32(200, 200, 220, 255);
                 dl->AddText({vis_x0+4.f, cy0+(cy1-cy0-13.f)*0.5f}, ftcol, fname);
                 ImGui::PopClipRect();
             } else if (clip.clip_type == ClipType::Background) {
@@ -8739,12 +8738,12 @@ void ui_studio(AppState& state) {
         float       BY   = sp.y + 16.f;
 
         struct { const char* id; ToolboxMode mode; ImU32 accent; } btns[] = {
-            { "BG",  ToolboxMode::BG,  IM_COL32(130, 30, 155, 255) },
-            { "FX",  ToolboxMode::FX,  IM_COL32(70,  30, 165, 255) },
-            { "Adj", ToolboxMode::Adj, IM_COL32(30,  95, 165, 255) },
-            { "VID", ToolboxMode::VID, IM_COL32(180, 90,  20, 255) },
-            { "IMG", ToolboxMode::IMG, IM_COL32(20, 150, 130, 255) },
-            { "AUD", ToolboxMode::AUD, IM_COL32(30, 140,  70, 255) },
+            { "BG",  ToolboxMode::BG,  IM_COL32(180,  60, 160, 255) },  // matches Background brick
+            { "FX",  ToolboxMode::FX,  IM_COL32(210, 110,  30, 255) },  // matches FX amber brick
+            { "Adj", ToolboxMode::Adj, IM_COL32(100,  80, 200, 255) },  // matches Adjustment violet brick
+            { "VID", ToolboxMode::VID, IM_COL32(140,  60, 220, 255) },  // matches Video brick
+            { "IMG", ToolboxMode::IMG, IM_COL32(140,  60, 220, 255) },  // images → Video clip type
+            { "AUD", ToolboxMode::AUD, IM_COL32( 50, 180, 100, 255) },  // matches Audio brick
         };
 
         for (auto& b : btns) {
