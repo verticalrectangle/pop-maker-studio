@@ -1340,9 +1340,23 @@ static void draw_canvas_handles(AppState& state, ImDrawList* dl, ImVec2 p, float
 static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
     ImDrawList* dl = ImGui::GetWindowDrawList();
 
-    // Black base
-    dl->AddRectFilled(p, {p.x+w, p.y+h},
-        state.video_loaded ? IM_COL32(0,0,0,255) : to_u32(Col::accent_dark), 2.f);
+    // Stage background: fine transparency checker so chroma-keyed holes look intentional.
+    // Two very dark grays at 10px tile size — subtle enough to not distract, clear enough
+    // to distinguish from actual black content.
+    {
+        const float CSZ = 10.f;
+        const ImU32 CA  = IM_COL32(22, 22, 22, 255);
+        const ImU32 CB  = IM_COL32(32, 32, 32, 255);
+        dl->AddRectFilled(p, {p.x+w, p.y+h}, CA, 2.f);
+        dl->PushClipRect(p, {p.x+w, p.y+h}, true);
+        int nx = (int)(w / CSZ) + 2, ny = (int)(h / CSZ) + 2;
+        for (int iy = 0; iy < ny; ++iy)
+            for (int ix = 0; ix < nx; ++ix)
+                if ((ix + iy) % 2 == 0)
+                    dl->AddRectFilled({p.x + ix*CSZ, p.y + iy*CSZ},
+                                     {p.x + ix*CSZ + CSZ, p.y + iy*CSZ + CSZ}, CB);
+        dl->PopClipRect();
+    }
 
     // Clip everything to the video frame — text/effects never bleed into surrounding UI.
     dl->PushClipRect(p, {p.x+w, p.y+h}, true);

@@ -266,13 +266,13 @@ inline void draw_bg_preset(const char* id,
     else if (!strcmp(id,"gridpulse")) {
         dl->AddRectFilled({x0,y0},{x1,y1}, from4(c1,0.95f));
         float scale = 1.f+0.15f*sinf(t*1.2f);
-        float spacing = w*0.08f*scale;
+        float spacing = w*0.045f*scale;  // tighter grid — was 0.08f
         float ox = fmodf(t*20.f,spacing);
         for (float gx=x0-spacing+ox; gx<x1+spacing; gx+=spacing)
-            dl->AddLine({gx,y0},{gx,y1}, from4(c2,0.4f));
+            dl->AddLine({gx,y0},{gx,y1}, from4(c2,0.35f));
         float oy = fmodf(t*20.f*h/w,spacing);
         for (float gy=y0-spacing+oy; gy<y1+spacing; gy+=spacing)
-            dl->AddLine({x0,gy},{x1,gy}, from4(c2,0.4f));
+            dl->AddLine({x0,gy},{x1,gy}, from4(c2,0.35f));
     }
     else if (!strcmp(id,"stripes")) {
         dl->AddRectFilled({x0,y0},{x1,y1}, from4(c1,0.95f));
@@ -335,14 +335,15 @@ inline void draw_bg_preset(const char* id,
         }
     }
     else if (!strcmp(id,"checker")) {
-        float csz = w*0.09f;
+        float csz = w*0.046f;  // smaller tiles — less blocky
+        float rnd  = csz*0.18f; // slight rounding so edges feel soft
         float ox = fmodf(t*20.f,csz*2), oy = fmodf(t*20.f*h/w,csz*2);
         int nx=(int)(w/csz)+3, ny=(int)(h/csz)+3;
         dl->AddRectFilled({x0,y0},{x1,y1}, from4(c1,0.95f));
         for (int iy=0;iy<ny;++iy) for (int ix=0;ix<nx;++ix) {
             if ((ix+iy)%2==0) {
                 float fx=x0-csz+ix*csz-ox, fy=y0-csz+iy*csz-oy;
-                dl->AddRectFilled({fx,fy},{fx+csz,fy+csz}, from4(c2,0.8f));
+                dl->AddRectFilled({fx,fy},{fx+csz,fy+csz}, from4(c2,0.75f), rnd);
             }
         }
     }

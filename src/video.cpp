@@ -1296,11 +1296,12 @@ uintptr_t video_fx_preview_texture(FXType ft, float t) {
                     size_t i = ((size_t)y * FXP_W + x);
                     uint8_t a = rgba[i*4+3];
                     if (a < 200) {
-                        // Checkerboard for transparent area
-                        bool chk = ((x / 6) + (y / 6)) % 2 == 0;
-                        px[i*3+0] = chk ? 80 : 50;
-                        px[i*3+1] = chk ? 80 : 50;
-                        px[i*3+2] = chk ? 80 : 50;
+                        // Fine transparency checker — 2px tiles, near-black tones
+                        bool chk = ((x / 2) + (y / 2)) % 2 == 0;
+                        uint8_t v = chk ? 38 : 24;
+                        px[i*3+0] = v;
+                        px[i*3+1] = v;
+                        px[i*3+2] = v;
                     } else {
                         px[i*3+0] = rgba[i*4+0];
                         px[i*3+1] = rgba[i*4+1];
