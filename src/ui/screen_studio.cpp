@@ -1116,8 +1116,8 @@ static void draw_canvas_handles(AppState& state, ImDrawList* dl, ImVec2 p, float
             float orig_w = s_ctx.start_bbox_x1 - s_ctx.start_bbox_x0;
             switch (s_ctx.handle) {
                 case CanvasHandle::Body:
-                    mc.pos_x = fmaxf(0.f, fminf(1.f, s_ctx.start_pos_x + dmx/w));
-                    mc.pos_y = fmaxf(0.f, fminf(1.f, s_ctx.start_pos_y + dmy/h));
+                    mc.pos_x = fmaxf(-1.f, fminf(2.f, s_ctx.start_pos_x + dmx/w));
+                    mc.pos_y = fmaxf(-1.f, fminf(2.f, s_ctx.start_pos_y + dmy/h));
                     break;
                 case CanvasHandle::Rotate: {
                     float ang0 = atan2f(s_ctx.drag_sy - vcy, s_ctx.drag_sx - vcx);
@@ -3357,8 +3357,8 @@ static void panel_clip(AppState& state, float w) {
 
         if (ImGui::CollapsingHeader("Transform", ImGuiTreeNodeFlags_DefaultOpen)) {
             ImGui::Dummy({0.f, 4.f});
-            kf_slider("pos_x",    "X",     &clip.pos_x,    0.f,  1.f,    "%.2f");
-            kf_slider("pos_y",    "Y",     &clip.pos_y,    0.f,  1.f,    "%.2f");
+            kf_slider("pos_x",    "X",     &clip.pos_x,    -1.f, 2.f,    "%.2f");
+            kf_slider("pos_y",    "Y",     &clip.pos_y,    -1.f, 2.f,    "%.2f");
             kf_slider("scale_x",  "ScX",   &clip.scale_x,  0.f,  4.f,    "%.2f");
             kf_slider("scale_y",  "ScY",   &clip.scale_y,  0.f,  4.f,    "%.2f");
             kf_slider("rotation", "Rot",   &clip.rotation, -180.f, 180.f, "%.1f\xc2\xb0");
