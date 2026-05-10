@@ -7623,15 +7623,16 @@ static void handle_shortcuts(AppState& state) {
     }
 }
 
-// ── Floating brick toolbox ────────────────────────────────────────────────────
+// ── Brick toolbox strip + picker windows ─────────────────────────────────────
 
 static bool s_tb_bg  = false;
 static bool s_tb_fx  = false;
 static bool s_tb_adj = false;
 
-static void toolbox_bg_window(AppState& state) {
+static void toolbox_bg_window(AppState& state, float strip_x) {
     if (!s_tb_bg) return;
     ImGui::SetNextWindowSize({360.f, 580.f}, ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowPos({strip_x + 4.f, 80.f}, ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSizeConstraints({260.f, 300.f}, {700.f, 1200.f});
     if (ImGui::Begin("Background##tb", &s_tb_bg, ImGuiWindowFlags_NoCollapse)) {
         float w = ImGui::GetContentRegionAvail().x - 8.f;
@@ -7641,9 +7642,10 @@ static void toolbox_bg_window(AppState& state) {
     ImGui::End();
 }
 
-static void toolbox_fx_window(AppState& state) {
+static void toolbox_fx_window(AppState& state, float strip_x) {
     if (!s_tb_fx) return;
     ImGui::SetNextWindowSize({360.f, 580.f}, ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowPos({strip_x + 4.f, 80.f}, ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSizeConstraints({260.f, 300.f}, {700.f, 1200.f});
     if (ImGui::Begin("Creative FX##tb", &s_tb_fx, ImGuiWindowFlags_NoCollapse)) {
         float w = ImGui::GetContentRegionAvail().x - 8.f;
@@ -7653,9 +7655,10 @@ static void toolbox_fx_window(AppState& state) {
     ImGui::End();
 }
 
-static void toolbox_adj_window(AppState& state) {
+static void toolbox_adj_window(AppState& state, float strip_x) {
     if (!s_tb_adj) return;
     ImGui::SetNextWindowSize({360.f, 580.f}, ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowPos({strip_x + 4.f, 80.f}, ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSizeConstraints({260.f, 300.f}, {700.f, 1200.f});
     if (ImGui::Begin("Adjustments##tb", &s_tb_adj, ImGuiWindowFlags_NoCollapse)) {
         float w = ImGui::GetContentRegionAvail().x - 8.f;
@@ -7663,81 +7666,6 @@ static void toolbox_adj_window(AppState& state) {
         panel_adjustment_library(state, w);
     }
     ImGui::End();
-}
-
-static void draw_brick_toolbox(AppState& state, ImVec2 anchor) {
-    static ImVec2  s_pos   = {-1.f, -1.f};
-    static float   s_alpha = 0.28f;
-    static double  s_last  = -999.0;
-
-    if (s_pos.x < 0.f)
-        s_pos = {anchor.x + 10.f, anchor.y + 10.f};
-
-    bool any_open = s_tb_bg || s_tb_fx || s_tb_adj;
-    double now = ImGui::GetTime();
-    float  dt  = fmaxf(ImGui::GetIO().DeltaTime, 0.001f);
-    float  tgt = (any_open || (now - s_last < 2.0)) ? 1.f : 0.22f;
-    s_alpha   += (tgt - s_alpha) * fminf(dt * 7.f, 1.f);
-
-    ImGui::SetNextWindowPos(s_pos, ImGuiCond_Always);
-    ImGui::SetNextWindowBgAlpha(s_alpha);
-
-    ImGuiWindowFlags flags =
-        ImGuiWindowFlags_NoTitleBar        | ImGuiWindowFlags_NoScrollbar  |
-        ImGuiWindowFlags_AlwaysAutoResize  | ImGuiWindowFlags_NoSavedSettings |
-        ImGuiWindowFlags_NoNav             | ImGuiWindowFlags_NoBringToFrontOnFocus |
-        ImGuiWindowFlags_NoFocusOnAppearing;
-
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,  {5.f, 5.f});
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 10.f);
-    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,    {0.f, 4.f});
-    ImGui::PushStyleColor(ImGuiCol_WindowBg, IM_COL32(18, 18, 24, 220));
-    ImGui::PushStyleColor(ImGuiCol_Border,   IM_COL32(80, 80, 110, 180));
-
-    if (ImGui::Begin("##brick_tb", nullptr, flags)) {
-        ImVec2 wpos  = ImGui::GetWindowPos();
-        ImVec2 wsz   = ImGui::GetWindowSize();
-        ImVec2 mouse = ImGui::GetIO().MousePos;
-        bool hovered = mouse.x >= wpos.x && mouse.x <= wpos.x + wsz.x &&
-                       mouse.y >= wpos.y && mouse.y <= wpos.y + wsz.y;
-        if (hovered) s_last = now;
-
-        // Drag the toolbox by its body when not over a button
-        if (hovered && ImGui::IsMouseDragging(ImGuiMouseButton_Left, 1.f) &&
-            !ImGui::IsAnyItemActive()) {
-            s_pos.x += ImGui::GetIO().MouseDelta.x;
-            s_pos.y += ImGui::GetIO().MouseDelta.y;
-            s_last = now;
-        }
-
-        // Grip dots
-        ImDrawList* tdl = ImGui::GetWindowDrawList();
-        float gx = wpos.x + wsz.x * 0.5f;
-        float gy = wpos.y + 7.f;
-        ImU32 gc = IM_COL32(150, 150, 170, (int)(s_alpha * 190));
-        for (int i = -2; i <= 2; ++i)
-            tdl->AddCircleFilled({gx + i * 5.f, gy}, 1.8f, gc);
-        ImGui::Dummy({0.f, 8.f});
-
-        const float BW = 58.f, BH = 30.f;
-
-        auto tool_btn = [&](const char* lbl, bool& flag, ImU32 active_col) {
-            if (flag) ImGui::PushStyleColor(ImGuiCol_Button, active_col);
-            if (ImGui::Button(lbl, {BW, BH})) { flag = !flag; s_last = now; }
-            if (flag) ImGui::PopStyleColor();
-        };
-
-        tool_btn("BG",  s_tb_bg,  IM_COL32(110, 25, 120, 240));
-        tool_btn("FX",  s_tb_fx,  IM_COL32(65,  25, 145, 240));
-        tool_btn("Adj", s_tb_adj, IM_COL32(25,  75, 145, 240));
-    }
-    ImGui::End();
-    ImGui::PopStyleColor(2);
-    ImGui::PopStyleVar(3);
-
-    toolbox_bg_window(state);
-    toolbox_fx_window(state);
-    toolbox_adj_window(state);
 }
 
 // ── Studio ────────────────────────────────────────────────────────────────────
@@ -8268,11 +8196,56 @@ void ui_studio(AppState& state) {
     float props_w   = (state.panel_w > 0.f)
                        ? fmaxf(200.f, fminf(win_w * 0.6f, state.panel_w))
                        : fmaxf(260.f, win_w * 0.27f);
-    float preview_w = win_w - props_w - 1.f;
+    const float TB_W   = 56.f;   // toolbox strip width
+    float preview_w = win_w - props_w - TB_W - 2.f;
+
+    // ── Toolbox strip (left rail, Photoshop-style) ────────────────────────────
+    static float s_strip_screen_x = 0.f;
+    ImGui::SetCursorPos({0.f, body_top});
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, IM_COL32(13, 13, 18, 255));
+    ImGui::PushStyleColor(ImGuiCol_Border,  Col::line);
+    if (ImGui::BeginChild("##toolbox_strip", {TB_W, body_h}, ImGuiChildFlags_Borders)) {
+        s_strip_screen_x = ImGui::GetWindowPos().x + TB_W;
+        ImDrawList* tdl  = ImGui::GetWindowDrawList();
+        ImVec2      sp   = ImGui::GetWindowPos();
+        const float BSZ  = 42.f;
+        const float BX   = sp.x + (TB_W - BSZ) * 0.5f;
+        float       BY   = sp.y + 16.f;
+
+        struct { const char* id; bool* flag; ImU32 accent; } btns[] = {
+            { "BG",  &s_tb_bg,  IM_COL32(130, 30, 155, 255) },
+            { "FX",  &s_tb_fx,  IM_COL32(70,  30, 165, 255) },
+            { "Adj", &s_tb_adj, IM_COL32(30,  95, 165, 255) },
+        };
+
+        for (auto& b : btns) {
+            ImVec2 bmin = { BX, BY }, bmax = { BX + BSZ, BY + BSZ };
+            bool hov = ImGui::IsMouseHoveringRect(bmin, bmax);
+            ImU32 fill = *b.flag ? b.accent
+                       : hov    ? IM_COL32(42, 42, 58, 255)
+                                : IM_COL32(24, 24, 34, 255);
+            tdl->AddRectFilled(bmin, bmax, fill, 7.f);
+            if (*b.flag || hov)
+                tdl->AddRect(bmin, bmax,
+                    *b.flag ? b.accent : IM_COL32(70, 70, 90, 200), 7.f, 0, 1.2f);
+
+            ImVec2 tsz = ImGui::CalcTextSize(b.id);
+            ImU32  tc  = *b.flag ? IM_COL32(255,255,255,255) : IM_COL32(155,155,180,210);
+            tdl->AddText({ BX + (BSZ - tsz.x) * 0.5f,
+                           BY + (BSZ - 13.f)  * 0.5f }, tc, b.id);
+
+            ImGui::SetCursorScreenPos(bmin);
+            ImGui::InvisibleButton(b.id, { BSZ, BSZ });
+            if (ImGui::IsItemClicked()) *b.flag = !*b.flag;
+
+            BY += BSZ + 10.f;
+        }
+    }
+    ImGui::EndChild();
+    ImGui::PopStyleColor(2);
 
     // ── Preview ───────────────────────────────────────────────────────────────
-    static ImVec2 s_stage_anchor = {100.f, 100.f};
-    ImGui::SetCursorPos({0.f, body_top});
+    ImGui::SameLine(0.f, 1.f);
     ImGui::PushStyleColor(ImGuiCol_ChildBg, Col::bg);
     ImGui::PushStyleColor(ImGuiCol_Border,  Col::line);
     if (ImGui::BeginChild("##preview_zone", {preview_w, body_h}, ImGuiChildFlags_Borders)) {
@@ -8291,7 +8264,6 @@ void ui_studio(AppState& state) {
         ImVec2 stage_p = ImGui::GetCursorScreenPos();
         ImGui::Dummy({sw, sh});
         draw_preview(state, stage_p, sw, sh);
-        s_stage_anchor = {stage_p.x + sw - 80.f, stage_p.y + 10.f};
 
         // ── Glass transport overlay ───────────────────────────────────────────
         {
@@ -8543,8 +8515,10 @@ void ui_studio(AppState& state) {
     ImGui::EndChild();
     ImGui::PopStyleColor(2);
 
-    // Floating brick toolbox (BG / FX / Adj) — lives over the preview area
-    draw_brick_toolbox(state, s_stage_anchor);
+    // Picker windows spawned by toolbox strip buttons
+    toolbox_bg_window(state, s_strip_screen_x);
+    toolbox_fx_window(state, s_strip_screen_x);
+    toolbox_adj_window(state, s_strip_screen_x);
 
     // ── Properties panel ─────────────────────────────────────────────────────
     ImGui::SameLine(0.f, 1.f);
@@ -8649,7 +8623,7 @@ void ui_studio(AppState& state) {
         ImVec2 mpos = ImGui::GetIO().MousePos;
 
         // Vertical splitter between preview and props
-        float vborder_x = wpos.x + preview_w + 1.f;
+        float vborder_x = wpos.x + TB_W + preview_w + 1.f;
         bool near_v = fabsf(mpos.x - vborder_x) < 6.f &&
                       mpos.y > wpos.y + body_top &&
                       mpos.y < wpos.y + body_top + body_h;
