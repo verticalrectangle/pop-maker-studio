@@ -2633,6 +2633,17 @@ static void palette_widget(const char* id, float** slots, int n_slots, bool has_
     ImDrawList* dl = ImGui::GetWindowDrawList();
     float avail    = ImGui::GetContentRegionAvail().x;
 
+    // ── Collapsible palette section ──────────────────────────────────────────
+    ImGui::PushStyleColor(ImGuiCol_Header,        IM_COL32(30, 28, 48, 255));
+    ImGui::PushStyleColor(ImGuiCol_HeaderHovered, IM_COL32(50, 45, 80, 255));
+    ImGui::PushStyleColor(ImGuiCol_HeaderActive,  IM_COL32(70, 60, 120, 255));
+    bool open = ImGui::CollapsingHeader("Palettes");
+    ImGui::PopStyleColor(3);
+
+    if (!open) { ImGui::PopID(); return; }
+
+    ImGui::Dummy({0.f, 4.f});
+
     // ── Search box ───────────────────────────────────────────────────────────
     ImGui::PushStyleColor(ImGuiCol_FrameBg, IM_COL32(28, 28, 40, 255));
     ImGui::SetNextItemWidth(avail);
@@ -5073,7 +5084,7 @@ static void panel_animation(AppState& state, float w) {
 
 // ── Right panel: Background ───────────────────────────────────────────────────
 
-static void panel_background(AppState& state, float w) {
+static void panel_background(AppState& state, float w, bool clip_only = false) {
     ImGui::Dummy({0.f, 8.f});
 
     // Resolve the selected Background clip (may be null if panel opened from BG tab without selection)
@@ -5084,27 +5095,29 @@ static void panel_background(AppState& state, float w) {
         if (c.clip_type == ClipType::Background) bgclip = &c;
     }
 
-    // ── Add Background brick button ────────────────────────────────────────────
-    ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
-    ImGui::TextWrapped("Click to apply. Drag onto a timeline track.");
-    ImGui::PopStyleColor();
-    ImGui::Dummy({0.f, 4.f});
-    if (ImGui::Button("+ Add Background Track", {w, 0.f})) {
-        float dur = state.duration > 0.f ? state.duration : 30.f;
-        Track t;
-        t.name = "Background";
-        Clip c;
-        c.clip_type = ClipType::Background;
-        c.start = 0.f; c.end = dur;
-        c.text  = "blob";  // default preset
-        t.clips.push_back(c);
-        state.tracks.push_back(t);
-        state.selected_track = (int)state.tracks.size() - 1;
-        state.selected_clip  = 0;
-        bgclip = &state.tracks[state.selected_track].clips[0];
-        history_push(state, "Add background");
+    if (!clip_only) {
+        // ── Add Background brick button ──────────────────────────────────────
+        ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+        ImGui::TextWrapped("Click to apply. Drag onto a timeline track.");
+        ImGui::PopStyleColor();
+        ImGui::Dummy({0.f, 4.f});
+        if (ImGui::Button("+ Add Background Track", {w, 0.f})) {
+            float dur = state.duration > 0.f ? state.duration : 30.f;
+            Track t;
+            t.name = "Background";
+            Clip c;
+            c.clip_type = ClipType::Background;
+            c.start = 0.f; c.end = dur;
+            c.text  = "blob";  // default preset
+            t.clips.push_back(c);
+            state.tracks.push_back(t);
+            state.selected_track = (int)state.tracks.size() - 1;
+            state.selected_clip  = 0;
+            bgclip = &state.tracks[state.selected_track].clips[0];
+            history_push(state, "Add background");
+        }
+        ImGui::Dummy({0.f, 8.f});
     }
-    ImGui::Dummy({0.f, 8.f});
 
     // ── Per-clip controls (only when a bg clip is selected) ───────────────────
     if (bgclip) {
@@ -5150,6 +5163,8 @@ static void panel_background(AppState& state, float w) {
             ImGui::Dummy({0.f, 4.f});
         }
     }
+
+    if (clip_only) return;
 
     // ── Preset grid ───────────────────────────────────────────────────────────
     const char* cur_cat = nullptr;
@@ -9344,7 +9359,7 @@ void ui_studio(AppState& state) {
         else if (s_toolbox_mode == ToolboxMode::AUD) panel_audio_browser(state, pw);
         else if (focused_is_adjustment)              panel_adjustment(state, pw);
         else if (focused_is_fx)                      panel_fx_clip(state, pw);
-        else if (focused_is_bg)                      panel_background(state, pw);
+        else if (focused_is_bg)                      panel_background(state, pw, true);
         else if (state.panel_tab == 0)               panel_clip(state, pw);
         else if (state.panel_tab == 1)     panel_animation(state, pw);
         else if (state.panel_tab == 2)     panel_export(state, pw);
