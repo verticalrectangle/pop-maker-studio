@@ -17,6 +17,7 @@
 #include "waveform.h"
 #include "beat_detect.h"
 #include "typography_presets.h"
+#include "bg_presets.h"
 #include "project.h"
 #include <imgui.h>
 #include <imgui_internal.h>
@@ -1345,6 +1346,13 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
 
     // Clip everything to the video frame — text/effects never bleed into surrounding UI.
     dl->PushClipRect(p, {p.x+w, p.y+h}, true);
+
+    // Animated background (drawn first, under video content)
+    if (!state.bg_preset_id.empty()) {
+        draw_bg_preset(state.bg_preset_id.c_str(), dl, p, w, h,
+            (float)ImGui::GetTime(), state.bg_speed, state.bg_intensity,
+            state.bg_color1, state.bg_color2, state.bg_color3);
+    }
 
     // Empty state prompt
     if (state.tracks.empty()) {
@@ -4870,6 +4878,126 @@ static void panel_animation(AppState& state, float w) {
     if (anim_locked) ImGui::EndDisabled();
 }
 
+// ── Right panel: Background ───────────────────────────────────────────────────
+
+static void panel_background(AppState& state, float w) {
+    ImGui::Dummy({0.f, 8.f});
+
+    // ── Controls ──────────────────────────────────────────────────────────────
+    ImGui::PushStyleColor(ImGuiCol_Text, to_u32(Col::muted));
+    ImGui::TextUnformatted("BACKGROUND");
+    ImGui::PopStyleColor();
+    ImGui::Dummy({0.f, 4.f});
+
+    // None button
+    {
+        bool active = state.bg_preset_id.empty();
+        if (active) ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(60,60,90,255));
+        if (ImGui::Button("None", {w, 0.f})) { state.bg_preset_id = ""; history_push(state, "Background: none"); }
+        if (active) ImGui::PopStyleColor();
+    }
+    ImGui::Dummy({0.f, 8.f});
+
+    // Speed / Intensity sliders
+    ImGui::SetNextItemWidth(w);
+    if (ImGui::SliderFloat("##bg_speed", &state.bg_speed, 0.1f, 4.f, "Speed %.1fx"))
+        history_push(state, "BG speed");
+    ImGui::SetNextItemWidth(w);
+    if (ImGui::SliderFloat("##bg_intensity", &state.bg_intensity, 0.f, 1.f, "Intensity %.0f%%",
+                            ImGuiSliderFlags_None))
+        history_push(state, "BG intensity");
+    ImGui::Dummy({0.f, 4.f});
+
+    // Color pickers — only show if active preset uses them
+    const BgPreset* active_pr = state.bg_preset_id.empty() ? nullptr
+                                : bg_preset_by_id(state.bg_preset_id.c_str());
+    if (active_pr && active_pr->n_colors >= 1) {
+        ImGui::TextUnformatted("Colors");
+        ImGui::SameLine();
+        if (ImGui::ColorEdit4("##bgc1", state.bg_color1,
+            ImGuiColorEditFlags_NoLabel|ImGuiColorEditFlags_NoInputs|ImGuiColorEditFlags_NoBorder))
+            history_push(state, "BG color 1");
+        if (active_pr->n_colors >= 2) {
+            ImGui::SameLine();
+            if (ImGui::ColorEdit4("##bgc2", state.bg_color2,
+                ImGuiColorEditFlags_NoLabel|ImGuiColorEditFlags_NoInputs|ImGuiColorEditFlags_NoBorder))
+                history_push(state, "BG color 2");
+        }
+        if (active_pr->n_colors >= 3) {
+            ImGui::SameLine();
+            if (ImGui::ColorEdit4("##bgc3", state.bg_color3,
+                ImGuiColorEditFlags_NoLabel|ImGuiColorEditFlags_NoInputs|ImGuiColorEditFlags_NoBorder))
+                history_push(state, "BG color 3");
+        }
+        ImGui::Dummy({0.f, 6.f});
+    }
+
+    // ── Preset grid ───────────────────────────────────────────────────────────
+    const char* cur_cat = nullptr;
+    float cell_w = (w - 8.f) * 0.5f;
+    float cell_h = 80.f;
+    int col_idx  = 0;
+    float t_anim = (float)ImGui::GetTime();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+
+    for (int pi = 0; pi < g_n_bg_presets; ++pi) {
+        const BgPreset& pr = g_bg_presets[pi];
+
+        // Category header
+        if (!cur_cat || strcmp(cur_cat, pr.category) != 0) {
+            if (col_idx == 1) { ImGui::NewLine(); col_idx = 0; }
+            if (cur_cat) ImGui::Dummy({0.f, 6.f});
+            cur_cat = pr.category;
+            ImGui::PushStyleColor(ImGuiCol_Text, to_u32(Col::muted));
+            ImGui::TextUnformatted(cur_cat);
+            ImGui::PopStyleColor();
+            ImGui::Dummy({0.f, 2.f});
+        }
+
+        ImVec2 cp = ImGui::GetCursorScreenPos();
+        bool selected = (state.bg_preset_id == pr.id);
+
+        // Card background
+        ImU32 card_bg = selected ? IM_COL32(40,40,60,255) : IM_COL32(22,22,28,255);
+        dl->AddRectFilled(cp, {cp.x+cell_w, cp.y+cell_h}, card_bg, 4.f);
+        if (selected) dl->AddRect(cp, {cp.x+cell_w, cp.y+cell_h}, IM_COL32(130,100,255,220), 4.f, 0, 1.5f);
+
+        // Animated mini-preview inside card
+        float pad = 5.f;
+        ImVec2 pp = {cp.x+pad, cp.y+pad};
+        float pw2 = cell_w-pad*2, ph2 = cell_h*0.58f;
+        dl->PushClipRect(pp, {pp.x+pw2, pp.y+ph2}, true);
+        draw_bg_preset(pr.id, dl, pp, pw2, ph2,
+            t_anim, pr.default_speed, 1.f,
+            pr.dc1, pr.dc2, pr.dc3);
+        dl->PopClipRect();
+
+        // Label below mini-preview
+        float lx = cp.x + 6.f, ly = cp.y + cell_h*0.62f;
+        dl->AddText({lx, ly}, to_u32(Col::fg), pr.label);
+
+        ImGui::SetCursorScreenPos(cp);
+        ImGui::InvisibleButton(pr.id, {cell_w, cell_h});
+        if (ImGui::IsItemClicked()) {
+            state.bg_preset_id = pr.id;
+            // Load default colors
+            memcpy(state.bg_color1, pr.dc1, sizeof(float)*4);
+            memcpy(state.bg_color2, pr.dc2, sizeof(float)*4);
+            memcpy(state.bg_color3, pr.dc3, sizeof(float)*4);
+            history_push(state, "Background preset");
+        }
+
+        if (col_idx == 0) {
+            ImGui::SameLine(0.f, 8.f);
+            col_idx = 1;
+        } else {
+            col_idx = 0;
+        }
+    }
+    if (col_idx == 1) ImGui::NewLine();
+    ImGui::Dummy({0.f, 12.f});
+}
+
 // ── Right panel: Creative FX library ─────────────────────────────────────────
 
 static void panel_fx_creative(AppState& state, float w) {
@@ -8278,6 +8406,7 @@ void ui_studio(AppState& state) {
         if (ImGui::BeginTabBar("##panel_tabs")) {
             if (ImGui::BeginTabItem("Clip"))       { state.panel_tab=0; ImGui::EndTabItem(); }
             if (ImGui::BeginTabItem("Typography")) { state.panel_tab=8; ImGui::EndTabItem(); }
+            if (ImGui::BeginTabItem("BG"))         { state.panel_tab=9; ImGui::EndTabItem(); }
             if (ImGui::BeginTabItem("Animation"))  { state.panel_tab=1; ImGui::EndTabItem(); }
             if (ImGui::BeginTabItem("Adjust"))     { state.panel_tab=5; ImGui::EndTabItem(); }
             if (ImGui::BeginTabItem("FX"))         { state.panel_tab=7; ImGui::EndTabItem(); }
@@ -8310,6 +8439,7 @@ void ui_studio(AppState& state) {
         else if (state.panel_tab == 8)     panel_typography(state, pw);
         else if (state.panel_tab == 5)     panel_adjustment_library(state, pw);
         else if (state.panel_tab == 7)     panel_fx_creative(state, pw);
+        else if (state.panel_tab == 9)     panel_background(state, pw);
         else if (state.panel_tab == 6)     panel_project(state, pw);
         else                               panel_history(state, pw);
         ImGui::EndChild();
