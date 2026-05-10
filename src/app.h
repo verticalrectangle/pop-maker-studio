@@ -278,7 +278,8 @@ struct CreativeFXAccum {
     // Generated creative FX fields
 #include "generated/fx_accum_fields.h"
 
-    bool any_gen_fx = false;
+    bool any_gen_fx = false;  // any generated (codegen) creative FX is active
+    bool any_cfx    = false;  // any hardcoded creative FX is active (chroma key, glitch, VHS, etc.)
 };
 
 // ── Effect accumulator ────────────────────────────────────────────────────────
@@ -529,6 +530,10 @@ CreativeFXAccum  collect_creative_fx (const AppState& state, float t, int below_
 // Glass FX/adjustments: bricks directly above a video/audio clip (clip-specific, pre-composite)
 EffectAccum      collect_glass_effects(const AppState& state, float t, int video_track_idx);
 CreativeFXAccum  collect_glass_fx    (const AppState& state, float t, int video_track_idx);
+// Single-track variants: accumulate only from the given track (global/non-glass only).
+// Used by the scene compositor to apply per-track global FX in z-order.
+EffectAccum      collect_effects_for_track     (const AppState& state, float t, int track_idx);
+CreativeFXAccum  collect_creative_fx_for_track (const AppState& state, float t, int track_idx);
 // Visual check: does this FX clip sit directly above any video/audio clip (time overlap)?
 bool             fx_clip_is_glass    (const AppState& state, int fx_ti, const Clip& fx_cl);
 

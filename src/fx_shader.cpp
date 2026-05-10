@@ -234,6 +234,47 @@ uniform sampler2D u_tex;
 void main() { frag = texture(u_tex, v_uv); }
 )glsl";
 
+// Scene compositor — alpha-correct "over" compositing of a clip onto the scene.
+// Inputs: u_scene (current accumulated scene), u_clip (new clip to layer on top).
+// u_center: clip centre in canvas pixels (Y-down, origin = top-left).
+// u_half:   clip half-extents in canvas pixels.
+// u_cossin: (cos(rotation), sin(rotation)).
+// u_alpha:  global clip alpha multiplier.
+//
+// GL fragment Y-up vs canvas Y-down: cy_canvas = canvas_h - gl_FragCoord.y
+// Clip UV: stbi stores top-of-image at data[0] → uploaded to GL t=0. Since our
+// Y-math gives clip_uv.y=0 at the top of the canvas, no extra flip is needed.
+// Output alpha is straight (not premultiplied).
+static const char* k_composite_frag = R"glsl(
+#version 330 core
+out vec4 fragColor;
+uniform sampler2D u_scene;
+uniform sampler2D u_clip;
+uniform vec2  u_canvas;
+uniform vec2  u_center;
+uniform vec2  u_half;
+uniform vec2  u_cossin;
+uniform float u_alpha;
+void main() {
+    vec2 scene_uv = gl_FragCoord.xy / u_canvas;
+    vec4 scene    = texture(u_scene, scene_uv);
+    float cx = gl_FragCoord.x;
+    float cy = u_canvas.y - gl_FragCoord.y;
+    float dx = cx - u_center.x, dy = cy - u_center.y;
+    float lx =  dx * u_cossin.x + dy * u_cossin.y;
+    float ly = -dx * u_cossin.y + dy * u_cossin.x;
+    vec2 clip_uv = vec2(lx / (u_half.x * 2.0) + 0.5,
+                        ly / (u_half.y * 2.0) + 0.5);
+    vec4 clip = vec4(0.0);
+    if (clip_uv.x >= 0.0 && clip_uv.x <= 1.0 &&
+        clip_uv.y >= 0.0 && clip_uv.y <= 1.0)
+        clip = texture(u_clip, clip_uv);
+    float src_a = clip.a * u_alpha;
+    fragColor = vec4(clip.rgb * src_a + scene.rgb * (1.0 - src_a),
+                     src_a + scene.a  * (1.0 - src_a));
+}
+)glsl";
+
 // Amount blend — mixes original (u_tex, unit 0) with effect (u_effect, unit 1)
 static const char* k_blend_frag = R"glsl(
 #version 330 core
@@ -289,6 +330,7 @@ static GLuint link_prog(const char* frag_src) {
 static struct {
     GLuint grade = 0, blur = 0, chroma_key = 0, glitch = 0;
     GLuint vhs = 0, leak = 0, datamosh = 0, blit = 0, blend = 0;
+    GLuint composite = 0;
 } g_prog;
 
 // Generated effects use a map keyed by (int)FXType — no struct fields needed.
@@ -301,6 +343,17 @@ static struct {
     GLuint fbo[2] = {}, tex[2] = {};
     int w = 0, h = 0;
 } g_pp;
+
+// Scene compositor ping-pong FBOs
+static struct {
+    GLuint fbo[2] = {}, tex[2] = {};
+    int w = 0, h = 0;
+    int active = 0;   // which slot holds the current accumulated scene
+    bool begun = false;
+} g_scene;
+
+// 1×1 solid-colour texture for scene_add_solid
+static GLuint g_solid_tex = 0;
 
 // Per-slot stable output textures — indexed by fx_apply's 'slot' argument.
 // These persist between pass chains so deferred ImDrawList commands are safe.
@@ -397,8 +450,18 @@ void fx_shader_init() {
     g_prog.datamosh       = link_prog(k_datamosh_frag);
     g_prog.blit           = link_prog(k_blit_frag);
     g_prog.blend          = link_prog(k_blend_frag);
+    g_prog.composite      = link_prog(k_composite_frag);
 
     glGenVertexArrays(1, &g_vao);
+
+    // 1×1 white texture used by scene_add_solid
+    glGenTextures(1, &g_solid_tex);
+    glBindTexture(GL_TEXTURE_2D, g_solid_tex);
+    uint8_t white[4] = {255, 255, 255, 255};
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, white);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+
     fx_generated_init();
 }
 
@@ -406,7 +469,8 @@ void fx_shader_init() {
 
 void fx_shader_shutdown() {
     for (auto p : { g_prog.grade, g_prog.blur, g_prog.chroma_key, g_prog.glitch,
-                    g_prog.vhs, g_prog.leak, g_prog.datamosh, g_prog.blit, g_prog.blend })
+                    g_prog.vhs, g_prog.leak, g_prog.datamosh, g_prog.blit, g_prog.blend,
+                    g_prog.composite })
         if (p) glDeleteProgram(p);
     for (auto& [k, v] : g_gen_progs) if (v) glDeleteProgram(v);
     g_gen_progs.clear();
@@ -414,6 +478,8 @@ void fx_shader_shutdown() {
     if (g_pp.fbo[0]) { glDeleteFramebuffers(2, g_pp.fbo); glDeleteTextures(2, g_pp.tex); }
     for (int i = 0; i < kMaxSlots; i++)
         if (g_out[i].fbo) { glDeleteFramebuffers(1, &g_out[i].fbo); glDeleteTextures(1, &g_out[i].tex); }
+    if (g_scene.fbo[0]) { glDeleteFramebuffers(2, g_scene.fbo); glDeleteTextures(2, g_scene.tex); }
+    if (g_solid_tex) glDeleteTextures(1, &g_solid_tex);
     if (g_vao) glDeleteVertexArrays(1, &g_vao);
 }
 
@@ -562,4 +628,129 @@ uintptr_t fx_preview_gen_effect(FXType ft, uintptr_t src_tex, int w, int h, floa
     EffectAccum ea;
     // Use the last slot as a dedicated preview slot — never used by normal video rendering.
     return fx_apply(src_tex, kMaxSlots - 1, w, h, ea, cfx, t);
+}
+
+// ── Scene compositor ──────────────────────────────────────────────────────────
+
+static void scene_ensure(int w, int h) {
+    if (g_scene.w == w && g_scene.h == h) return;
+    if (g_scene.fbo[0]) {
+        glDeleteFramebuffers(2, g_scene.fbo);
+        glDeleteTextures(2, g_scene.tex);
+        g_scene.fbo[0] = g_scene.fbo[1] = g_scene.tex[0] = g_scene.tex[1] = 0;
+    }
+    make_tex_fbo(g_scene.tex[0], g_scene.fbo[0], w, h);
+    make_tex_fbo(g_scene.tex[1], g_scene.fbo[1], w, h);
+    g_scene.w = w;
+    g_scene.h = h;
+}
+
+void scene_begin(int canvas_w, int canvas_h) {
+    if (!g_prog.composite || canvas_w <= 0 || canvas_h <= 0) { g_scene.begun = false; return; }
+    scene_ensure(canvas_w, canvas_h);
+
+    GLint prev_fbo = 0;
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prev_fbo);
+    GLint prev_vp[4];
+    glGetIntegerv(GL_VIEWPORT, prev_vp);
+
+    g_scene.active = 0;
+    glBindFramebuffer(GL_FRAMEBUFFER, g_scene.fbo[0]);
+    glViewport(0, 0, canvas_w, canvas_h);
+    glClearColor(0.f, 0.f, 0.f, 0.f);
+    glClear(GL_COLOR_BUFFER_BIT);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)prev_fbo);
+    glViewport(prev_vp[0], prev_vp[1], prev_vp[2], prev_vp[3]);
+    g_scene.begun = true;
+}
+
+void scene_add_layer(uintptr_t clip_tex, float cx, float cy, float hw, float hh,
+                     float cos_r, float sin_r, float alpha)
+{
+    if (!g_scene.begun || !g_prog.composite) return;
+    if (clip_tex == 0 || hw <= 0.f || hh <= 0.f) return;
+
+    GLint prev_fbo = 0;
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prev_fbo);
+    GLint prev_vp[4];
+    glGetIntegerv(GL_VIEWPORT, prev_vp);
+
+    int next = g_scene.active ^ 1;
+    glBindVertexArray(g_vao);
+    glBindFramebuffer(GL_FRAMEBUFFER, g_scene.fbo[next]);
+    glViewport(0, 0, g_scene.w, g_scene.h);
+    glUseProgram(g_prog.composite);
+
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, g_scene.tex[g_scene.active]);
+    glUniform1i(glGetUniformLocation(g_prog.composite, "u_scene"), 0);
+
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, (GLuint)clip_tex);
+    glUniform1i(glGetUniformLocation(g_prog.composite, "u_clip"), 1);
+
+    glUniform2f(glGetUniformLocation(g_prog.composite, "u_canvas"),
+                (float)g_scene.w, (float)g_scene.h);
+    glUniform2f(glGetUniformLocation(g_prog.composite, "u_center"), cx, cy);
+    glUniform2f(glGetUniformLocation(g_prog.composite, "u_half"),   hw, hh);
+    glUniform2f(glGetUniformLocation(g_prog.composite, "u_cossin"), cos_r, sin_r);
+    glUniform1f(glGetUniformLocation(g_prog.composite, "u_alpha"),  alpha);
+
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+    glActiveTexture(GL_TEXTURE0);
+
+    g_scene.active = next;
+    glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)prev_fbo);
+    glViewport(prev_vp[0], prev_vp[1], prev_vp[2], prev_vp[3]);
+    glBindVertexArray(0);
+}
+
+void scene_add_solid(float r, float g, float b, float a) {
+    if (!g_scene.begun || !g_solid_tex) return;
+    // Update solid texture colour
+    uint8_t px[4] = {(uint8_t)(r * 255.f), (uint8_t)(g * 255.f),
+                     (uint8_t)(b * 255.f), 255};
+    glBindTexture(GL_TEXTURE_2D, g_solid_tex);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, px);
+    // Composite as a full-canvas layer using the clip geometry
+    float cw = (float)g_scene.w, ch = (float)g_scene.h;
+    scene_add_layer((uintptr_t)g_solid_tex, cw * 0.5f, ch * 0.5f,
+                    cw * 0.5f, ch * 0.5f, 1.f, 0.f, a);
+}
+
+void scene_apply_fx(int canvas_w, int canvas_h,
+                    const EffectAccum& ea, const CreativeFXAccum& cfx, float t)
+{
+    if (!g_scene.begun) return;
+    uintptr_t src = (uintptr_t)g_scene.tex[g_scene.active];
+    uintptr_t out = fx_apply(src, kSceneFxSlot, canvas_w, canvas_h, ea, cfx, t);
+    if (out == src) return;  // no FX active — nothing to blit back
+    fx_blit(out, g_scene.fbo[g_scene.active], canvas_w, canvas_h);
+}
+
+uintptr_t scene_result() {
+    return g_scene.begun ? (uintptr_t)g_scene.tex[g_scene.active] : 0;
+}
+
+void fx_blit(uintptr_t src_tex, unsigned dst_fbo, int w, int h) {
+    if (!g_prog.blit || !src_tex) return;
+
+    GLint prev_fbo = 0;
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prev_fbo);
+    GLint prev_vp[4];
+    glGetIntegerv(GL_VIEWPORT, prev_vp);
+
+    glBindVertexArray(g_vao);
+    glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)dst_fbo);
+    glViewport(0, 0, w, h);
+    glUseProgram(g_prog.blit);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, (GLuint)src_tex);
+    glUniform1i(glGetUniformLocation(g_prog.blit, "u_tex"), 0);
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)prev_fbo);
+    glViewport(prev_vp[0], prev_vp[1], prev_vp[2], prev_vp[3]);
+    glBindVertexArray(0);
 }

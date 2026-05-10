@@ -22,3 +22,29 @@ uintptr_t fx_apply(uintptr_t src_tex, int slot, int w, int h,
 // Uses an internal preview slot — safe to call outside the normal video pipeline.
 // Returns a stable GL texture ID valid until the next call.
 uintptr_t fx_preview_gen_effect(FXType ft, uintptr_t src_tex, int w, int h, float t);
+
+// ── Scene compositor ──────────────────────────────────────────────────────────
+// Accumulates video clip textures into an offscreen FBO via alpha-correct "over"
+// compositing, then exposes the result for one-shot global FX and ImGui draw.
+//
+// Usage per frame:
+//   scene_begin(w, h)                       — clear scene to transparent black
+//   scene_add_layer(tex, cx, cy, hw, hh, …) — composite each clip
+//   scene_add_solid(r, g, b, a)             — composite a solid colour layer
+//   scene_apply_fx(w, h, ea, cfx, t)        — apply global FX to composited scene
+//   uintptr_t tex = scene_result()          — get GL texture (Y-flipped vs ImGui)
+//
+// Draw tex to ImGui with Y-flipped UVs: tl=(0,1) tr=(1,1) br=(1,0) bl=(0,0).
+// Uses standard (straight) alpha — no AddCallback/blend-mode change needed.
+static const int kSceneFxSlot = MAX_VIDEO_TRACKS * 2 - 2;  // reserved for global FX
+
+void      scene_begin    (int canvas_w, int canvas_h);
+void      scene_add_layer(uintptr_t clip_tex, float cx, float cy, float hw, float hh,
+                          float cos_r, float sin_r, float alpha);
+void      scene_add_solid(float r, float g, float b, float a);
+void      scene_apply_fx (int canvas_w, int canvas_h,
+                          const EffectAccum& ea, const CreativeFXAccum& cfx, float t);
+uintptr_t scene_result   ();
+
+// Blit src_tex (straight copy) into an existing GL FBO.  Saves/restores GL state.
+void fx_blit(uintptr_t src_tex, unsigned dst_fbo, int w, int h);

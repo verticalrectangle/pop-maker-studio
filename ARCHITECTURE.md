@@ -161,28 +161,57 @@ CreativeFXAccum collect_glass_fx     (state, t, video_track_idx);  // glass crea
 
 **Both global functions skip glass tracks** (`track_is_glass_at`). The glass functions only read the one track directly above the target video track. This means a given FX brick is collected by exactly one of the two paths — never both.
 
+Two single-track variants exist for the scene compositor:
+```cpp
+EffectAccum     collect_effects_for_track    (state, t, track_idx);
+CreativeFXAccum collect_creative_fx_for_track(state, t, track_idx);
+```
+
 ### Glass brick system
 
-An FX brick (Effect clip) is **glass** when the track directly below it has an active Video or Audio clip at that time. Glass bricks apply pre-composite — to that single clip's decoded frame only, before compositing with everything else. Non-glass bricks apply globally after compositing.
+An FX brick (Effect clip) is **glass** when the track directly below it has an active Video or Audio clip at that time. Glass bricks apply pre-composite — to that single clip's decoded frame only, before compositing with everything else. Non-glass bricks are **global**: they apply to the entire composited 9:16 frame via the scene compositor.
 
 ```
 Track 0: [Glitch]          ← glass (track 1 has active video at this time)
-Track 1: [   Video clip  ] ← Glitch applies only here, not to track 2
+Track 1: [   Video clip  ] ← Glitch applies only to this clip's texture
 Track 2: [VHS]             ← global (track 3 has no video)
-Track 3: [   Video clip  ] ← VHS applies to full composite below track 2
+Track 3: [   Video clip  ] ← VHS applies to the full composited frame
 ```
 
-The runtime check is `track_is_glass_at(state, fx_ti, t)`. The visual check (for timeline rendering) is `fx_clip_is_glass(state, fx_ti, clip)` (time-range overlap instead of point-in-time).
+The runtime check is `track_is_glass_at(state, fx_ti, t)`. The visual check (for timeline rendering) is `fx_clip_is_glass(state, fx_ti, clip)` (time-range overlap instead of point-in-time). Glass pass fires when `glass_cfx.any_gen_fx || glass_cfx.any_cfx || glass_ea.any_color || ...`.
 
-**Pre-composite pass** (both preview and export):
+**Pre-composite (glass) pass:**
 ```cpp
 EffectAccum     glass_ea  = collect_glass_effects(state, t, ti);
 CreativeFXAccum glass_cfx = collect_glass_fx     (state, t, ti);
-if (any active)
+if (glass_cfx.any_gen_fx || glass_cfx.any_cfx || glass_ea.any_color || ...)
     cur_tex = fx_apply(cur_tex, slot, w, h, glass_ea, glass_cfx, t);
-// then the global pass:
-cur_tex = fx_apply(cur_tex, slot, w, h, global_ea, global_cfx, t);
+// Global FX applied once to full scene — see Scene compositor section below
 ```
+
+### Scene compositor
+
+The scene compositor (`scene_*` API in `fx_shader.h`) accumulates video clip textures into an offscreen FBO and applies global FX to the composited result once — so a single VHS brick on its own track affects the entire 9:16 frame, not each clip separately.
+
+```
+scene_begin(canvas_w, canvas_h)         ← clear scene FBO to transparent black
+  for each clip (bottom→top):
+    scene_add_layer(tex, cx, cy, hw, hh, cos_r, sin_r, alpha)  ← alpha-composites clip
+    scene_add_solid(r, g, b, a)         ← full-canvas solid layer (DipWhite overlay)
+scene_apply_fx(w, h, global_ea, global_cfx, t)  ← global GPU FX to scene texture
+uintptr_t tex = scene_result()          ← stable GL texture (Y-flipped vs ImGui)
+```
+
+`scene_add_layer` uses a custom composite GLSL shader that maps each fragment's canvas-space position to the clip's local UV coordinates (handling rotation via cos/sin). Alpha compositing uses the straight-alpha "over" operator. The scene FBO uses straight alpha, drawn to ImGui with Y-flipped UVs `{0,1},{1,1},{1,0},{0,0}` (GL FBO origin is bottom-left; ImGui is top-left).
+
+| GL FBO storage | `t=0` = bottom of render target |
+|---|---|
+| stbi textures | `t=0` = top of image (no Y-flip at upload) |
+| ImGui quad UVs for scene | `tl=(0,1)`, `br=(1,0)` — compensates FBO Y-flip |
+
+`scene_apply_fx` calls `fx_apply` on the scene texture using `kSceneFxSlot`, then `fx_blit`s the result back. `fx_blit` is also used in the export path to copy the post-processed result back into the export FBO.
+
+**BG clips draw to ImGui before the scene FBO is blitted** — they are behind. Text clips are rendered in a second pass after the scene blit — they are in front.
 
 ### Overlap rule for Effect clips
 
@@ -226,22 +255,44 @@ The `bg_remove` effect stays CPU-side because it reads pre-rendered PNG alpha ma
 
 ### Call sites
 
-**Preview (`screen_studio.cpp`, `draw_vid_clip` lambda)**:
+**Preview (`screen_studio.cpp`, `draw_preview`)**:
 ```
-video_set_pixel_fx(slot, pfx_bg_only)           ← CPU: applies bg_remove mask
-tex = video_get_texture(slot, src_t)             ← uploads proxy MJPEG to GL
-tex = fx_apply(tex, slot, w, h, glass_ea, glass_cfx, t)  ← pre-composite glass pass
-tex = fx_apply(tex, slot, w, h, global_ea, cfx,  t)      ← global GPU FX pass
-dl->AddImageQuad(tex, ...)                       ← draw
+scene_begin(canvas_w, canvas_h)
+
+Per track (bottom→top):
+  draw_bg_preset(...)                              ← BG clip to ImGui dl (behind scene)
+  [for each active video clip]:
+    video_set_pixel_fx(slot, pfx_bg_only)          ← CPU: bg_remove mask
+    tex = video_get_texture(slot, src_t)           ← proxy MJPEG → GL
+    [glass pass if any glass FX]:
+      tex = fx_apply(tex, slot, ..., glass_ea, glass_cfx, t)
+    scene_add_layer(tex, cx, cy, hw, hh, cos_r, sin_r, alpha)
+
+scene_apply_fx(w, h, global_ea, global_cfx, t)    ← global FX to composited scene
+dl->AddImageQuad(scene_result(), ..., Y-flip UVs)  ← scene to ImGui (above BG)
+
+Second pass (text clips):
+  dl->AddText(...)                                 ← text on top of scene
 ```
 
-**Export (`render.cpp`, `gl_render_vid_clip`)**:
+**Export (`render.cpp`, `render_tick_gl`)**:
 ```
-vf = video_decode_frame_at(src_t)                ← libavcodec, exact frame
-glTexImage2D(tex_id, ..., vf->data)              ← upload RGBA to GL
-tex = fx_apply(tex_id, slot, w, h, glass_ea, glass_cfx, t)  ← glass pass
-tex = fx_apply(tex_id, slot, w, h, global_ea, cfx, t)        ← global pass
-dl.AddImageQuad(tex, ...)                        ← draw into export FBO
+Per track (bottom→top):
+  [for each active video clip]:
+    vf = video_decode_frame_at(src_t)              ← libavcodec, exact frame
+    glTexImage2D(tex_id, ..., vf->data)            ← upload RGBA
+    [glass pass if any glass FX]:
+      tex = fx_apply(cur_tex, slot, ..., glass_ea, glass_cfx, t)
+    dl.AddImageQuad(tex, ...)                      ← draw into export FBO
+text overlays → dl
+
+ImGui_ImplOpenGL3_RenderDrawData(dl)               ← composite into export FBO
+
+[global FX post-process]:
+  out = fx_apply(color_tex, kSceneFxSlot, W, H, global_ea, global_cfx, t)
+  fx_blit(out, export_fbo, W, H)                   ← overwrite FBO with processed frame
+
+glReadPixels → pipe to ffmpeg
 ```
 
 ---

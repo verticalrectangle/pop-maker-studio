@@ -1438,10 +1438,12 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
 
     float lookahead = ImGui::GetIO().DeltaTime;
     float t_anim    = (float)ImGui::GetTime();
-    int text_rendered = 0;
 
-    // Collect global creative FX (for full-frame overlay effects like LightLeak)
+    // Collect global creative FX (for full-frame effects — LightLeak, grade, etc.)
     CreativeFXAccum global_cfx = collect_creative_fx(state, state.playhead, (int)state.tracks.size());
+
+    // ── Pass 1: BG clips (ImGui draw list) + Video clips (→ scene FBO) ────────
+    scene_begin((int)w, (int)h);
 
     for (int ti = (int)state.tracks.size() - 1; ti >= 0; --ti) {
         auto& track = state.tracks[ti];
@@ -1459,20 +1461,19 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
 
         // ── Video clip ─────────────────────────────────────────────────────────
         {
-            // Helper: draw a video clip at a given playhead time with alpha multiplier.
+            // Helper: composite a video clip into the scene FBO.
+            // Global FX are collected only for CPU-side datamosh and ZoomPunch;
+            // the GPU shader pass for global FX is applied once after all clips
+            // via scene_apply_fx, not here.
             auto draw_vid_clip = [&](const Clip* cl_ptr, float at_time, float alpha_mul) {
                 if (!cl_ptr) return;
                 int slot = slot_for_video(const_cast<AppState&>(state),
                                clip_slot_key(cl_ptr->text, cl_ptr->start), cl_ptr->text);
-                // Map timeline time → source file time via clip's in_point and speed.
                 float src_t = cl_ptr->in_point + (at_time - cl_ptr->start) * cl_ptr->speed;
 
-                // Collect FX (used for both GPU shader pipeline and bg_remove CPU pass).
-                EffectAccum     vid_fx = collect_effects    (state, at_time, ti);
-                CreativeFXAccum cfx    = collect_creative_fx(state, at_time, ti);
+                // Global cfx needed for CPU-side datamosh and ZoomPunch transform.
+                CreativeFXAccum cfx = collect_creative_fx(state, at_time, ti);
                 if (slot >= 0) {
-                    // Pass only bg_remove to the CPU path; all other effects go through
-                    // the GPU shader pipeline (fx_apply) after video_get_texture().
                     PixelFX pfx;
                     pfx.bg_remove_on       = cl_ptr->bg_remove_on &&
                                              cl_ptr->bg_remove_status == BgRemoveStatus::Ready;
@@ -1494,21 +1495,16 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                     ? video_get_texture(slot, (double)(src_t + lookahead)) : 0;
                 if (!tex) return;
 
-                // Pre-composite: glass FX/adjustments (track directly above this clip's track).
+                // Glass FX: applied pre-composite to this clip only.
                 if (slot >= 0) {
                     EffectAccum     glass_ea  = collect_glass_effects(state, at_time, ti);
                     CreativeFXAccum glass_cfx = collect_glass_fx     (state, at_time, ti);
-                    if (glass_cfx.any_gen_fx || glass_ea.any_color || glass_ea.any_blur ||
+                    if (glass_cfx.any_gen_fx || glass_cfx.any_cfx ||
+                        glass_ea.any_color || glass_ea.any_blur ||
                         glass_ea.any_vignette || glass_ea.any_text) {
                         VideoInfo vi_g = video_info(slot);
                         tex = fx_apply(tex, slot, vi_g.width, vi_g.height, glass_ea, glass_cfx, t_anim);
                     }
-                }
-                // GPU FX pipeline: grade, blur, vignette, chroma-key, glitch, VHS, leak, datamosh.
-                // bg_remove alpha was already applied CPU-side in upload_jpeg above.
-                if (slot >= 0) {
-                    VideoInfo vi_fx = video_info(slot);
-                    tex = fx_apply(tex, slot, vi_fx.width, vi_fx.height, vid_fx, cfx, t_anim);
                 }
 
                 float px    = cl_ptr->eval_prop("pos_x",    at_time);
@@ -1525,14 +1521,12 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                     if (vid_asp > can_asp) { fit_w = w; fit_h = w / vid_asp; }
                     else                   { fit_h = h; fit_w = h * vid_asp; }
                 }
-                float cx = p.x + px * w, cy = p.y + py * h;
+                float cx = px * w, cy = py * h;  // canvas-relative (not ImGui-space)
                 float hw = fit_w * sx * 0.5f, hh = fit_h * sy * 0.5f;
                 float rad = rot * 3.14159265f / 180.f;
                 float cos_r = cosf(rad), sin_r = sinf(rad);
-                auto rot_pt = [&](float ox, float oy) -> ImVec2 {
-                    return { cx + ox*cos_r - oy*sin_r, cy + ox*sin_r + oy*cos_r };
-                };
-                // ZoomPunch — scale spike on each beat, decaying exponentially
+
+                // ZoomPunch — per-clip transform (no GPU shader needed)
                 if (cfx.zoom_on && !state.beats.empty()) {
                     float punch = 0.f;
                     float decay = fmaxf(0.05f, cfx.zoom_decay);
@@ -1554,10 +1548,8 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                     }
                 }
 
-                ImU32 col = IM_COL32(255, 255, 255, (int)(std::fmaxf(0.f, std::fminf(1.f, alpha)) * 255.f));
-                dl->AddImageQuad(ImTextureRef((ImTextureID)tex),
-                    rot_pt(-hw,-hh), rot_pt(hw,-hh), rot_pt(hw,hh), rot_pt(-hw,hh),
-                    {0,0}, {1,0}, {1,1}, {0,1}, col);
+                alpha = std::fmaxf(0.f, std::fminf(1.f, alpha));
+                scene_add_layer(tex, cx, cy, hw, hh, cos_r, sin_r, alpha);
             };
 
             // Find the active video clip and check for transitions
@@ -1624,23 +1616,21 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                         draw_vid_clip(active, state.playhead, 1.f - t_a);
                         float white_a = t_a * (1.f - t_b);
                         if (white_a > 0.01f)
-                            dl->AddRectFilled(p, {p.x+w, p.y+h}, IM_COL32(255,255,255,(int)(white_a*255.f)));
+                            scene_add_solid(1.f, 1.f, 1.f, white_a);
                         draw_vid_clip(next_cl, state.playhead, t_b);
                     }
                 } else if (in_trans_in && prev_cl) {
                     float t = std::fmaxf(0.f, std::fminf(1.f,
                         (state.playhead - active->start) / fmaxf(prev_cl->transition_post, 1e-5f)));
                     if (prev_cl->transition_type == TransitionType::Dissolve) {
-                        // Draw clip A's last frame at 1-t so alpha_A + alpha_B = 1 at cut
                         draw_vid_clip(prev_cl, std::fminf(state.playhead, prev_cl->end - 1e-4f), 1.f - t);
                         draw_vid_clip(active,  state.playhead, t);
                     } else if (prev_cl->transition_type == TransitionType::FadeBlack) {
-                        // Black at cut is intentional; clip B fades in from 0
                         draw_vid_clip(active, state.playhead, t);
                     } else { // DipWhite: white overlay fades out, clip B fades in
                         float white_a = 1.f - t;
                         if (white_a > 0.01f)
-                            dl->AddRectFilled(p, {p.x+w, p.y+h}, IM_COL32(255,255,255,(int)(white_a*255.f)));
+                            scene_add_solid(1.f, 1.f, 1.f, white_a);
                         draw_vid_clip(active, state.playhead, t);
                     }
                 } else {
@@ -1648,6 +1638,29 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                 }
             }
         }
+    }  // end Pass 1 track loop
+
+    // ── Apply global FX to composited scene ──────────────────────────────────
+    {
+        EffectAccum global_ea = collect_effects(state, state.playhead, (int)state.tracks.size());
+        scene_apply_fx((int)w, (int)h, global_ea, global_cfx, t_anim);
+    }
+
+    // ── Draw scene FBO to ImGui draw list ─────────────────────────────────────
+    // Y-flip UVs: GL FBO t=0 is at the bottom, ImGui tl=(0,0) is at the top.
+    if (uintptr_t scene_tex = scene_result()) {
+        dl->AddImageQuad(ImTextureRef((ImTextureID)scene_tex),
+            p,                      {p.x + w, p.y},
+            {p.x + w, p.y + h},    {p.x, p.y + h},
+            {0.f, 1.f}, {1.f, 1.f}, {1.f, 0.f}, {0.f, 0.f},
+            IM_COL32_WHITE);
+    }
+
+    // ── Pass 2: Text clips (drawn on top of scene) ────────────────────────────
+    int text_rendered = 0;
+    for (int ti = (int)state.tracks.size() - 1; ti >= 0; --ti) {
+        auto& track = state.tracks[ti];
+        if (!track.visible) continue;
 
         // ── Text / subtitle clip ───────────────────────────────────────────────
         {
@@ -1941,41 +1954,6 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
             }
             ++text_rendered;
         }
-    }
-
-    // ── LightLeak overlay ─────────────────────────────────────────────────────
-    if (global_cfx.leak_on && global_cfx.leak_intensity > 0.01f) {
-        float amp = 1.f;
-        if (!state.amplitude_envelope.empty() && state.envelope_fps > 0.f) {
-            int fi = (int)(state.playhead * state.envelope_fps);
-            fi = fi < 0 ? 0 : (fi >= (int)state.amplitude_envelope.size() ? (int)state.amplitude_envelope.size()-1 : fi);
-            amp = 0.3f + state.amplitude_envelope[fi] * 0.7f;
-        }
-        float base_a = global_cfx.leak_intensity * amp;
-
-        // Blob 1 — warm orange, top area, drifts left-right
-        float a1  = t_anim * global_cfx.leak_speed * 0.13f;
-        float bx1 = p.x + w * (0.55f + 0.3f * sinf(a1));
-        float by1 = p.y + h * (0.08f + 0.06f * cosf(a1 * 0.7f));
-        float r1  = w * (0.45f + 0.08f * sinf(a1 * 1.3f));
-        ImU32 hot1 = IM_COL32(255, 155, 50, (int)(base_a * 115.f));
-        ImU32 hot0 = IM_COL32(255, 120, 20, 0);
-        dl->AddRectFilledMultiColor({bx1-r1, by1-r1*0.5f}, {bx1+r1, by1+r1*0.5f}, hot0, hot1, hot0, hot0);
-
-        // Blob 2 — pink, bottom-left
-        float a2  = t_anim * global_cfx.leak_speed * 0.09f + 1.5f;
-        float bx2 = p.x + w * (0.12f + 0.12f * cosf(a2));
-        float by2 = p.y + h * (0.72f + 0.12f * sinf(a2 * 0.8f));
-        float r2  = w * (0.38f + 0.07f * cosf(a2 * 1.1f));
-        ImU32 pnk = IM_COL32(255, 75, 135, (int)(base_a * 90.f));
-        ImU32 pnk0= IM_COL32(200, 55, 95, 0);
-        dl->AddRectFilledMultiColor({bx2-r2, by2-r2*0.5f}, {bx2+r2, by2+r2*0.5f}, pnk0, pnk0, pnk, pnk0);
-
-        // Streak — horizontal lens flare across top third
-        float fx  = p.x + w * (0.25f + 0.35f * sinf(t_anim * global_cfx.leak_speed * 0.05f));
-        ImU32 fl  = IM_COL32(255, 225, 170, (int)(base_a * 65.f));
-        ImU32 fl0 = IM_COL32(255, 210, 140, 0);
-        dl->AddRectFilledMultiColor({p.x, p.y}, {fx+w*0.25f, p.y+h*0.15f}, fl0, fl, fl0, fl0);
     }
 
     dl->PopClipRect();  // end video-frame clip region

@@ -1690,13 +1690,14 @@ static bool gl_render_vid_clip(ImDrawList& dl, const Clip* cl, float at_time,
     uintptr_t cur_tex = (uintptr_t)tex_id;
     {
         EffectAccum glass_ea = collect_glass_effects(state, at_time, ti);
-        if (glass_cfx.any_gen_fx || glass_ea.any_color || glass_ea.any_blur ||
+        if (glass_cfx.any_gen_fx || glass_cfx.any_cfx ||
+            glass_ea.any_color || glass_ea.any_blur ||
             glass_ea.any_vignette || glass_ea.any_text)
             cur_tex = fx_apply(cur_tex, fx_slot, vid_w, vid_h, glass_ea, glass_cfx, at_time);
     }
-    // Global FX: collected from tracks above, skipping glass clips.
-    EffectAccum    ea       = collect_effects(state, at_time, ti);
-    uintptr_t draw_tex      = fx_apply(cur_tex, fx_slot, vid_w, vid_h, ea, cfx, at_time);
+    // Global FX are applied once to the full composited frame after all clips are
+    // rendered — not per-clip. See render_tick_gl post-process step.
+    uintptr_t draw_tex = cur_tex;
 
     // ZoomPunch — beat-synced scale spike, same logic as preview
     float px    = cl->eval_prop("pos_x",    at_time);
@@ -2076,6 +2077,19 @@ void render_tick_gl(AppState& state) {
     dd.Textures          = &ImGui::GetPlatformIO().Textures;
     dd.AddDrawList(&dl);
     ImGui_ImplOpenGL3_RenderDrawData(&dd);
+
+    // ── Global FX post-process ─────────────────────────────────────────────────
+    // Apply colour grade / blur / creative FX to the fully composited frame.
+    // fx_apply writes to kSceneFxSlot; fx_blit copies the result back.
+    {
+        EffectAccum    global_ea  = collect_effects    (state, t, (int)state.tracks.size());
+        CreativeFXAccum global_cfx = collect_creative_fx(state, t, (int)state.tracks.size());
+        uintptr_t src = (uintptr_t)g_gl_ex.color_tex;
+        uintptr_t out = fx_apply(src, kSceneFxSlot,
+                                 g_gl_ex.out_w, g_gl_ex.out_h, global_ea, global_cfx, t);
+        if (out != src)
+            fx_blit(out, g_gl_ex.fbo, g_gl_ex.out_w, g_gl_ex.out_h);
+    }
 
     // ── Read pixels and send to ffmpeg (vertical flip: GL is bottom-up) ───────
     int row_bytes = g_gl_ex.out_w * 4;
