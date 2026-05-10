@@ -1471,8 +1471,9 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                                clip_slot_key(cl_ptr->text, cl_ptr->start), cl_ptr->text);
                 float src_t = cl_ptr->in_point + (at_time - cl_ptr->start) * cl_ptr->speed;
 
-                // Global cfx needed for CPU-side datamosh and ZoomPunch transform.
-                CreativeFXAccum cfx = collect_creative_fx(state, at_time, ti);
+                // Glass-only cfx for CPU-side datamosh and ZoomPunch — global FX
+                // are applied once to the full composite via scene_apply_fx, not per-clip.
+                CreativeFXAccum cfx = collect_glass_fx(state, at_time, ti);
                 if (slot >= 0) {
                     PixelFX pfx;
                     pfx.bg_remove_on       = cl_ptr->bg_remove_on &&
