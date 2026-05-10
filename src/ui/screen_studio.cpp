@@ -47,6 +47,7 @@ enum class PanelView {
     OverrideFX, OverrideAdj, OverrideBG,                 // clip-type overrides
 };
 static PanelView s_panel_view = PanelView::Project;
+static bool      s_user_nav   = false; // user explicitly chose Animation/History tab
 
 static bool pv_is_lib(PanelView v) {
     return v == PanelView::LibBG  || v == PanelView::LibFX  || v == PanelView::LibAdj ||
@@ -9515,16 +9516,21 @@ void ui_studio(AppState& state) {
                                         sel_ct == ClipType::Subtitle);
 
         // ── Auto-switch panel on selection change ─────────────────────────────
-        // Does not override Project/History if user explicitly navigated there,
-        // and does not override an open library browser.
         {
             static int s_last_sel_track = -1, s_last_sel_clip = -1;
             int st = state.selected_track, sc = state.selected_clip;
             if (st != s_last_sel_track || sc != s_last_sel_clip) {
-                if (st >= 0 && sc >= 0)
-                    s_panel_view = pv_derive(state);
-                else if (st < 0 || sc < 0)
+                if (st >= 0 && sc >= 0) {
+                    PanelView derived = pv_derive(state);
+                    // Always follow override panels (BG/FX/Adj force their own view).
+                    // Otherwise only auto-switch when the user hasn't explicitly chosen
+                    // a tab (Animation, History) — respect that choice.
+                    if (pv_is_override(derived) || !s_user_nav)
+                        s_panel_view = derived;
+                } else {
                     s_panel_view = PanelView::Project;
+                    s_user_nav   = false;
+                }
                 s_last_sel_track = st; s_last_sel_clip = sc;
             }
         }
@@ -9545,14 +9551,14 @@ void ui_studio(AppState& state) {
                 };
                 if (show_clip_tabs) {
                     if (ImGui::BeginTabItem("Clip", nullptr, tf(PanelView::Clip)))
-                        { s_panel_view = PanelView::Clip; ImGui::EndTabItem(); }
+                        { s_panel_view = PanelView::Clip; s_user_nav = false; ImGui::EndTabItem(); }
                     if (is_text_like && ImGui::BeginTabItem("Typography", nullptr, tf(PanelView::Typography)))
-                        { s_panel_view = PanelView::Typography; ImGui::EndTabItem(); }
+                        { s_panel_view = PanelView::Typography; s_user_nav = false; ImGui::EndTabItem(); }
                     if (ImGui::BeginTabItem("Animation", nullptr, tf(PanelView::Animation)))
-                        { s_panel_view = PanelView::Animation; ImGui::EndTabItem(); }
+                        { s_panel_view = PanelView::Animation; s_user_nav = true; ImGui::EndTabItem(); }
                 }
                 if (ImGui::BeginTabItem("History", nullptr, tf(PanelView::History)))
-                    { s_panel_view = PanelView::History; ImGui::EndTabItem(); }
+                    { s_panel_view = PanelView::History; s_user_nav = true; ImGui::EndTabItem(); }
                 ImGui::EndTabBar();
             }
 
