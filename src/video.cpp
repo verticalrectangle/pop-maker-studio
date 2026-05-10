@@ -1,9 +1,8 @@
 #include "video.h"
 #include "fx_shader.h"
 
-// ── stb_image — JPEG decode for preview frames ────────────────────────────────
+// ── stb_image — JPEG + PNG decode ────────────────────────────────────────────
 #define STB_IMAGE_IMPLEMENTATION
-#define STBI_ONLY_JPEG
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wunused-function"
 #include "stb_image.h"
@@ -30,6 +29,9 @@ extern "C" {
 #include <array>
 #include <unordered_map>
 #include <vector>
+#include <filesystem>
+
+namespace fs = std::filesystem;
 
 // ── CPU pixel FX helpers ──────────────────────────────────────────────────────
 
@@ -904,6 +906,44 @@ float video_probe_duration(const std::string& path) {
         : 0.f;
     avformat_close_input(&fc);
     return dur;
+}
+
+// ── Browser thumbnail cache ───────────────────────────────────────────────────
+
+uintptr_t video_load_thumb(const std::string& path) {
+    static std::unordered_map<std::string, GLuint> s_cache;
+    auto it = s_cache.find(path);
+    if (it != s_cache.end()) return it->second;
+
+    if (!fs::exists(path)) return 0;
+
+    FILE* f = fopen(path.c_str(), "rb");
+    if (!f) return 0;
+    fseek(f, 0, SEEK_END);
+    long sz = ftell(f);
+    rewind(f);
+    if (sz <= 0) { fclose(f); return 0; }
+    std::vector<uint8_t> buf((size_t)sz);
+    fread(buf.data(), 1, (size_t)sz, f);
+    fclose(f);
+
+    int w, h, ch;
+    uint8_t* px = stbi_load_from_memory(buf.data(), (int)sz, &w, &h, &ch, 3);
+    if (!px) { s_cache[path] = 0; return 0; }
+
+    GLuint tex = 0;
+    glGenTextures(1, &tex);
+    glBindTexture(GL_TEXTURE_2D, tex);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, w, h, 0, GL_RGB, GL_UNSIGNED_BYTE, px);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    stbi_image_free(px);
+
+    s_cache[path] = tex;
+    return tex;
 }
 
 // ── Export path — FFmpeg original file ───────────────────────────────────────

@@ -139,6 +139,11 @@ uintptr_t video_adj_preview_texture(int unique_id,
 // Reads container header only — safe to call on the main thread, < 100 ms.
 float video_probe_duration(const std::string& path);
 
+// Browser thumbnail cache: load any JPEG/PNG file as a GL texture.
+// Returns 0 if the file does not exist yet. Textures are cached by path
+// for the session and never freed (one texture per source file, ~few KB each).
+uintptr_t video_load_thumb(const std::string& jpeg_or_png_path);
+
 // ── Export path ───────────────────────────────────────────────────────────────
 
 bool  video_open_export(const std::string& path);

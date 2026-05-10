@@ -5818,6 +5818,57 @@ struct TlState {
 };
 static TlState g_tl;
 
+// ── Media browser helpers ─────────────────────────────────────────────────────
+
+static std::string media_recents_path() {
+    const char* h = getenv("HOME");
+    return h ? std::string(h) + "/.config/pop-maker-studio/recent_media.json"
+             : "/tmp/pop_maker_recent_media.json";
+}
+
+struct RecentMedia { std::vector<std::string> videos, images; };
+
+static RecentMedia& recent_media() {
+    static RecentMedia s;
+    static bool loaded = false;
+    if (!loaded) {
+        loaded = true;
+        try {
+            std::ifstream f(media_recents_path());
+            if (f) {
+                auto j = nlohmann::json::parse(f, nullptr, false);
+                if (!j.is_discarded()) {
+                    if (j.contains("videos")) s.videos = j["videos"].get<std::vector<std::string>>();
+                    if (j.contains("images")) s.images = j["images"].get<std::vector<std::string>>();
+                }
+            }
+        } catch (...) {}
+    }
+    return s;
+}
+
+static void recent_media_push(const std::string& path, bool is_video) {
+    auto& r   = recent_media();
+    auto& vec = is_video ? r.videos : r.images;
+    vec.erase(std::remove(vec.begin(), vec.end(), path), vec.end());
+    vec.insert(vec.begin(), path);
+    if (vec.size() > 24) vec.resize(24);
+    try {
+        nlohmann::json j;
+        j["videos"] = r.videos;
+        j["images"] = r.images;
+        fs::create_directories(fs::path(media_recents_path()).parent_path());
+        std::ofstream(media_recents_path()) << j.dump(2);
+    } catch (...) {}
+}
+
+static bool is_image_path(const std::string& p) {
+    fs::path fp(p);
+    std::string ext = fp.extension().string();
+    for (auto& c : ext) c = (char)tolower((unsigned char)c);
+    return ext==".jpg"||ext==".jpeg"||ext==".png"||ext==".bmp"||ext==".webp"||ext==".tiff";
+}
+
 // ── Timeline ──────────────────────────────────────────────────────────────────
 
 static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h) {
@@ -6161,6 +6212,31 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
                     s_drop_flash_t     = 0.6f;
                     history_push(state, std::string("Drop FX: ") + fx_type_name(ft));
                 }
+                auto accept_media_drop = [&](const char* ptype) {
+                    if (const ImGuiPayload* pay = ImGui::AcceptDragDropPayload(ptype)) {
+                        std::string path((const char*)pay->Data, pay->DataSize - 1);
+                        bool img = is_image_path(path);
+                        float drop_t = fmaxf(0.f, (ImGui::GetMousePos().x - (origin.x + TL_LABEL_W) + scroll) / zoom);
+                        float dur = img ? 5.f : video_probe_duration(path);
+                        if (dur <= 0.f) dur = 4.f;
+                        Clip cl; cl.clip_type = ClipType::Video; cl.text = path;
+                        cl.source_id = path; cl.start = drop_t; cl.end = drop_t + dur;
+                        s_source_durations[path] = dur;
+                        state.tracks[ti].clips.push_back(cl);
+                        state.selected_track = ti;
+                        state.selected_clip  = (int)state.tracks[ti].clips.size() - 1;
+                        s_drop_flash_track = ti; s_drop_flash_t = 0.6f;
+                        proxy_start(path);
+                        int slot = slot_for_video(state, clip_slot_key(path, drop_t), path);
+                        if (slot >= 0) video_open_still(slot, proxy_still_path(path));
+                        state.video_loaded = true;
+                        recent_media_push(path, !img);
+                        history_push(state, (img ? "Drop image: " : "Drop video: ") +
+                                     fs::path(path).filename().string());
+                    }
+                };
+                accept_media_drop("MEDIA_VID");
+                accept_media_drop("MEDIA_IMG");
                 // Highlight the row while dragging over it
                 dl->AddRectFilled(drop_tl, drop_br, IM_COL32(180,130,255,40));
                 dl->AddRect(drop_tl, drop_br, IM_COL32(180,130,255,180), 2.f);
@@ -7400,6 +7476,27 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
                     cl.start = drop_t; cl.end = drop_t + 5.f;
                     make_new_track(std::move(cl), (std::string("Drop FX: ") + fx_type_name(ft)).c_str());
                 }
+                auto new_track_media = [&](const char* ptype) {
+                    if (const ImGuiPayload* pay = ImGui::AcceptDragDropPayload(ptype)) {
+                        std::string path((const char*)pay->Data, pay->DataSize - 1);
+                        bool img = is_image_path(path);
+                        float dur = img ? 5.f : video_probe_duration(path);
+                        if (dur <= 0.f) dur = 4.f;
+                        Clip cl; cl.clip_type = ClipType::Video; cl.text = path;
+                        cl.source_id = path; cl.start = drop_t; cl.end = drop_t + dur;
+                        s_source_durations[path] = dur;
+                        std::string act = (img ? "Drop image: " : "Drop video: ") +
+                                          fs::path(path).filename().string();
+                        make_new_track(std::move(cl), act.c_str());
+                        proxy_start(path);
+                        int slot = slot_for_video(state, clip_slot_key(path, drop_t), path);
+                        if (slot >= 0) video_open_still(slot, proxy_still_path(path));
+                        state.video_loaded = true;
+                        recent_media_push(path, !img);
+                    }
+                };
+                new_track_media("MEDIA_VID");
+                new_track_media("MEDIA_IMG");
                 // Highlight drop zone
                 dl->AddRectFilled(dz_tl, dz_br, IM_COL32(180,130,255,20));
                 dl->AddLine(dz_tl, {dz_br.x, dz_tl.y}, IM_COL32(180,130,255,160), 1.5f);
@@ -7741,8 +7838,172 @@ static void handle_shortcuts(AppState& state) {
 // Buttons switch the right panel into library-browse mode.
 // Selecting a clip on the timeline always clears toolbox mode.
 
-enum class ToolboxMode { None, BG, FX, Adj };
+enum class ToolboxMode { None, BG, FX, Adj, VID, IMG };
 static ToolboxMode s_toolbox_mode = ToolboxMode::None;
+
+static void panel_media_browser(AppState& state, float w, bool is_video) {
+    ImGui::Dummy({0.f, 8.f});
+
+    // Header
+    ImGui::PushStyleColor(ImGuiCol_Text, is_video ? IM_COL32(255,180,60,255)
+                                                   : IM_COL32(60,220,190,255));
+    ImGui::TextUnformatted(is_video ? "Videos" : "Images");
+    ImGui::PopStyleColor();
+
+    // Browse button right-aligned
+    {
+        float bw = ImGui::CalcTextSize("Browse…").x + 20.f;
+        ImGui::SameLine(w - bw - 4.f);
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {8.f, 3.f});
+        ImGui::PushStyleColor(ImGuiCol_Button,        IM_COL32(30,30,46,255));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(50,50,72,255));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive,  IM_COL32(60,60,90,255));
+        if (ImGui::SmallButton("Browse…")) {
+            std::string picked = is_video
+                ? filepicker_open("Open video", "Video", "*.mp4 *.mov *.mkv *.avi *.webm")
+                : filepicker_open("Open image", "Image", "*.jpg *.jpeg *.png *.bmp *.webp");
+            if (!picked.empty()) {
+                recent_media_push(picked, is_video);
+                // Insert new track + clip at playhead
+                float dur = is_video ? video_probe_duration(picked) : 0.f;
+                if (dur <= 0.f) dur = is_video ? 4.f : 5.f;
+                Track nt; nt.name = fs::path(picked).stem().string();
+                Clip cl; cl.clip_type = ClipType::Video; cl.text = picked;
+                cl.source_id = picked; cl.start = state.playhead; cl.end = cl.start + dur;
+                s_source_durations[picked] = dur;
+                nt.clips.push_back(cl);
+                state.tracks.insert(state.tracks.begin(), std::move(nt));
+                state.selected_track = 0; state.selected_clip = 0;
+                proxy_start(picked);
+                int slot = slot_for_video(state, clip_slot_key(picked, cl.start), picked);
+                if (slot >= 0) video_open_still(slot, proxy_still_path(picked));
+                state.video_loaded = true;
+                s_toolbox_mode = ToolboxMode::None;
+                history_push(state, (is_video ? "Import video: " : "Import image: ") +
+                             fs::path(picked).filename().string());
+            }
+        }
+        ImGui::PopStyleColor(3);
+        ImGui::PopStyleVar();
+    }
+
+    ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+    ImGui::TextWrapped("Click to add at playhead. Drag onto a track.");
+    ImGui::PopStyleColor();
+    ImGui::Dummy({0.f, 8.f});
+
+    auto& recents = is_video ? recent_media().videos : recent_media().images;
+
+    // Filter out missing files
+    std::vector<std::string> valid;
+    valid.reserve(recents.size());
+    for (auto& p : recents) if (fs::exists(p)) valid.push_back(p);
+
+    if (valid.empty()) {
+        ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+        ImGui::TextWrapped("No recent files. Click Browse… to add one.");
+        ImGui::PopStyleColor();
+        return;
+    }
+
+    // 2-column thumbnail grid
+    const float GAP    = 6.f;
+    const float COL_W  = floorf((w - GAP * 3.f) * 0.5f);
+    const float THUMB_H = floorf(COL_W * 9.f / 16.f);
+    const float CARD_H  = THUMB_H + 30.f;
+    float base_y = ImGui::GetCursorPosY();
+
+    for (int i = 0; i < (int)valid.size(); ++i) {
+        const std::string& path = valid[i];
+        int  col  = i % 2;
+        int  row  = i / 2;
+        float cx_ = GAP + col * (COL_W + GAP);
+        float cy_ = base_y + row * (CARD_H + GAP);
+
+        ImGui::SetCursorPos({cx_, cy_});
+        ImVec2 cp = ImGui::GetCursorScreenPos();
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+
+        ImGui::PushID(i);
+        ImGui::InvisibleButton("##mc", {COL_W, CARD_H});
+        bool hov = ImGui::IsItemHovered();
+
+        // Card background
+        ImU32 bg = hov ? IM_COL32(34,34,52,255) : IM_COL32(18,18,28,255);
+        dl->AddRectFilled(cp, {cp.x+COL_W, cp.y+CARD_H}, bg, 6.f);
+
+        // Thumbnail
+        uintptr_t tex = is_image_path(path)
+            ? video_load_thumb(path)
+            : video_load_thumb(proxy_still_path(path));
+
+        if (tex) {
+            dl->AddImageRounded((ImTextureID)(uintptr_t)tex,
+                                cp, {cp.x+COL_W, cp.y+THUMB_H},
+                                {0,0},{1,1}, IM_COL32(255,255,255,220), 6.f,
+                                ImDrawFlags_RoundCornersTop);
+        } else {
+            // Placeholder — gentle gradient while proxy generates
+            ImU32 ph0 = is_video ? IM_COL32(35,22,8,255)  : IM_COL32(8,28,28,255);
+            ImU32 ph1 = is_video ? IM_COL32(55,38,16,255) : IM_COL32(14,46,44,255);
+            dl->AddRectFilledMultiColor(cp, {cp.x+COL_W, cp.y+THUMB_H}, ph0, ph0, ph1, ph1);
+            const char* lbl = is_video ? "loading…" : "·";
+            ImVec2 tsz = ImGui::CalcTextSize(lbl);
+            dl->AddText({cp.x+(COL_W-tsz.x)*0.5f, cp.y+(THUMB_H-tsz.y)*0.5f},
+                        IM_COL32(90,80,70,200), lbl);
+        }
+
+        // Filename
+        fs::path fp(path);
+        std::string name = fp.filename().string();
+        if ((int)name.size() > 20) name = name.substr(0,17) + "…";
+        ImVec2 tsz = ImGui::CalcTextSize(name.c_str());
+        dl->AddText({cp.x+(COL_W-tsz.x)*0.5f, cp.y+THUMB_H+8.f},
+                    hov ? IM_COL32(255,255,255,230) : IM_COL32(190,190,205,200),
+                    name.c_str());
+
+        // Border
+        dl->AddRect(cp, {cp.x+COL_W, cp.y+CARD_H},
+                    hov ? IM_COL32(255,255,255,160) : IM_COL32(48,48,68,180),
+                    6.f, 0, hov ? 1.5f : 1.f);
+
+        // Click → add new track + clip
+        if (ImGui::IsItemClicked()) {
+            float dur = is_video ? video_probe_duration(path) : 0.f;
+            if (dur <= 0.f) dur = is_video ? 4.f : 5.f;
+            Track nt; nt.name = fp.stem().string();
+            Clip cl; cl.clip_type = ClipType::Video; cl.text = path;
+            cl.source_id = path; cl.start = state.playhead; cl.end = cl.start + dur;
+            s_source_durations[path] = dur;
+            nt.clips.push_back(cl);
+            state.tracks.insert(state.tracks.begin(), std::move(nt));
+            state.selected_track = 0; state.selected_clip = 0;
+            proxy_start(path);
+            int slot = slot_for_video(state, clip_slot_key(path, cl.start), path);
+            if (slot >= 0) video_open_still(slot, proxy_still_path(path));
+            state.video_loaded = true;
+            recent_media_push(path, is_video);
+            s_toolbox_mode = ToolboxMode::None;
+            history_push(state, (is_video ? "Add video: " : "Add image: ") + fp.filename().string());
+        }
+
+        // Drag-drop source
+        if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
+            const char* ptype = is_video ? "MEDIA_VID" : "MEDIA_IMG";
+            ImGui::SetDragDropPayload(ptype, path.c_str(), path.size()+1);
+            if (tex) ImGui::Image((ImTextureID)(uintptr_t)tex, {96.f, 54.f});
+            ImGui::TextUnformatted(name.c_str());
+            ImGui::TextDisabled("Drop onto timeline track");
+            ImGui::EndDragDropSource();
+        }
+
+        ImGui::PopID();
+    }
+
+    // Advance cursor past all cards
+    int rows = ((int)valid.size() + 1) / 2;
+    ImGui::SetCursorPosY(base_y + rows * (CARD_H + GAP) + 4.f);
+}
 
 // ── Studio ────────────────────────────────────────────────────────────────────
 
@@ -8290,6 +8551,8 @@ void ui_studio(AppState& state) {
             { "BG",  ToolboxMode::BG,  IM_COL32(130, 30, 155, 255) },
             { "FX",  ToolboxMode::FX,  IM_COL32(70,  30, 165, 255) },
             { "Adj", ToolboxMode::Adj, IM_COL32(30,  95, 165, 255) },
+            { "VID", ToolboxMode::VID, IM_COL32(180, 90,  20, 255) },
+            { "IMG", ToolboxMode::IMG, IM_COL32(20, 150, 130, 255) },
         };
 
         for (auto& b : btns) {
@@ -8685,6 +8948,8 @@ void ui_studio(AppState& state) {
         else if (s_toolbox_mode == ToolboxMode::BG)  panel_background(state, pw);
         else if (s_toolbox_mode == ToolboxMode::FX)  panel_fx_creative(state, pw);
         else if (s_toolbox_mode == ToolboxMode::Adj) panel_adjustment_library(state, pw);
+        else if (s_toolbox_mode == ToolboxMode::VID) panel_media_browser(state, pw, true);
+        else if (s_toolbox_mode == ToolboxMode::IMG) panel_media_browser(state, pw, false);
         else if (state.panel_tab == 0)               panel_clip(state, pw);
         else if (state.panel_tab == 1)     panel_animation(state, pw);
         else if (state.panel_tab == 2)     panel_export(state, pw);
