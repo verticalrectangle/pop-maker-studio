@@ -1,0 +1,706 @@
+#include "studio_types.h"
+#include "studio_shared.h"
+#include "pipeline.h"
+#include "panel_animation.h"
+#include "app.h"
+#include "audio.h"
+#include "video.h"
+#include "proxy.h"
+#include "history.h"
+#include "filepicker.h"
+#include "transcribe.h"
+#include "beat_detect.h"
+#include "waveform.h"
+#include "theme.h"
+#include "render.h"
+#include "json.hpp"
+#include <imgui.h>
+#include <imgui_internal.h>
+#include <filesystem>
+#include <algorithm>
+#include <fstream>
+#include <mutex>
+#include <unordered_set>
+#include <cmath>
+#include <cstdio>
+#include <cstring>
+#include <thread>
+
+namespace fs = std::filesystem;
+extern ImFont* g_font_bold;
+
+// Parse an SRT file into a list of Text clips.
+std::vector<Clip> parse_srt(const std::string& path) {
+    std::vector<Clip> out;
+    std::ifstream f(path);
+    if (!f) return out;
+
+    auto parse_ts = [](const std::string& s) -> float {
+        // HH:MM:SS,mmm
+        int h=0, m=0, sec=0, ms=0;
+        sscanf(s.c_str(), "%d:%d:%d,%d", &h, &m, &sec, &ms);
+        return h*3600.f + m*60.f + sec + ms*0.001f;
+    };
+
+    std::string line;
+    while (std::getline(f, line)) {
+        // Strip carriage return for Windows-encoded SRTs
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+
+        // Look for timecode line: HH:MM:SS,mmm --> HH:MM:SS,mmm
+        float t0 = 0.f, t1 = 0.f;
+        char buf0[32]={}, buf1[32]={};
+        if (sscanf(line.c_str(), "%31[^-]-->%31s", buf0, buf1) == 2) {
+            t0 = parse_ts(std::string(buf0));
+            t1 = parse_ts(std::string(buf1));
+
+            // Collect text lines until blank
+            std::string text;
+            while (std::getline(f, line)) {
+                if (!line.empty() && line.back() == '\r') line.pop_back();
+                if (line.empty()) break;
+                if (!text.empty()) text += ' ';
+                text += line;
+            }
+            if (!text.empty()) {
+                Clip c;
+                c.clip_type = ClipType::Subtitle;
+                c.source_id = path;
+                c.start     = t0;
+                c.end       = t1;
+                c.text      = text;
+                out.push_back(c);
+            }
+        }
+    }
+    return out;
+}
+
+// ── Subtitle grouping ─────────────────────────────────────────────────────────
+
+// Build clips from a flat list of words using the requested grouping mode.
+// pause_gap: override default gap threshold (0 = use mode default).
+// max_words: force a group break after this many words regardless of gap (0 = no limit).
+std::vector<Clip> group_words(
+    const std::vector<Clip>& words,
+    SubtitleMode mode, int custom_n,
+    float pause_gap, int max_words)
+{
+    if (words.empty()) return {};
+    std::vector<Clip> out;
+
+    // Helper: append word to current group, flushing if max_words hit.
+    auto flush_if_full = [&](Clip& cur, int& wcount) {
+        if (max_words > 0 && wcount >= max_words) {
+            out.push_back(cur);
+            cur = Clip{};
+            wcount = 0;
+            return true;
+        }
+        return false;
+    };
+
+    switch (mode) {
+    case SubtitleMode::Word:
+        return words;
+
+    case SubtitleMode::Phrase: {
+        float thresh = (pause_gap > 0.f) ? pause_gap : 0.3f;
+        Clip cur = words[0]; int wc = 1;
+        for (size_t i = 1; i < words.size(); ++i) {
+            float gap = words[i].start - words[i-1].end;
+            if (gap > thresh || (max_words > 0 && wc >= max_words)) {
+                out.push_back(cur); cur = words[i]; wc = 1;
+            } else {
+                cur.text += " " + words[i].text; cur.end = words[i].end; ++wc;
+            }
+        }
+        out.push_back(cur);
+        break;
+    }
+
+    case SubtitleMode::Line: {
+        float thresh = (pause_gap > 0.f) ? pause_gap : 0.8f;
+        Clip cur = words[0]; int wc = 1;
+        for (size_t i = 1; i < words.size(); ++i) {
+            float gap = words[i].start - words[i-1].end;
+            if (gap > thresh || (max_words > 0 && wc >= max_words)) {
+                out.push_back(cur); cur = words[i]; wc = 1;
+            } else {
+                cur.text += " " + words[i].text; cur.end = words[i].end; ++wc;
+            }
+        }
+        out.push_back(cur);
+        break;
+    }
+
+    case SubtitleMode::CustomN: {
+        int n = (custom_n < 1) ? 1 : custom_n;
+        if (max_words > 0 && max_words < n) n = max_words;
+        for (size_t i = 0; i < words.size(); ) {
+            Clip c = words[i++];
+            for (int k = 1; k < n && i < words.size(); ++k, ++i) {
+                c.text += " " + words[i].text; c.end = words[i].end;
+            }
+            out.push_back(c);
+        }
+        break;
+    }
+
+    case SubtitleMode::Karaoke: {
+        float thresh = (pause_gap > 0.f) ? pause_gap : 0.8f;
+        auto lines = group_words(words, SubtitleMode::Line, custom_n, thresh, max_words);
+        for (auto& c : lines) c.karaoke = true;
+        return lines;
+    }
+
+    case SubtitleMode::Segment:
+        return group_words(words, SubtitleMode::Line, custom_n, pause_gap, max_words);
+    }
+
+    // Suppress unused-variable warning from the lambda (only used in old draft).
+    (void)flush_if_full;
+    return out;
+}
+
+// Load the flat word list from words_json_path into AppState::words_cache.
+// ── Beat detection subprocess ─────────────────────────────────────────────────
+
+// ── Beat detect completion queue ──────────────────────────────────────────────
+// Background threads post results here; main thread drains each frame.
+static std::mutex              s_beat_queue_mtx;
+static std::vector<BeatResult> s_beat_queue;
+// Tracks which source_ids are currently being analysed (prevents duplicate jobs).
+static std::mutex              s_beat_pending_mtx;
+static std::unordered_set<std::string> s_beat_pending;
+
+void run_beat_detect(AppState& state) {
+    if (state.beats_running) return;
+    std::string src = state.vocals_path.empty() ? state.audio_path : state.vocals_path;
+    if (src.empty() || !fs::exists(src)) return;
+    state.beats_running = true;
+    std::thread([&state, src]() {
+        BeatResult r = beat_detect(src);
+        state.beats_running = false;
+        if (r.ok) {
+            state.beat_bpm = r.bpm;
+            state.beats    = std::move(r.beats);
+        }
+    }).detach();
+}
+
+// ── Per-clip beat analysis ────────────────────────────────────────────────────
+
+void kick_clip_beat_detect(const std::string& src) {
+    {
+        std::lock_guard<std::mutex> lk(s_beat_pending_mtx);
+        if (s_beat_pending.count(src)) return; // already running
+        s_beat_pending.insert(src);
+    }
+    std::thread([src]() {
+        BeatResult r = beat_detect(src);
+        {
+            std::lock_guard<std::mutex> lk(s_beat_queue_mtx);
+            s_beat_queue.push_back(std::move(r));
+        }
+        {
+            std::lock_guard<std::mutex> lk(s_beat_pending_mtx);
+            s_beat_pending.erase(src);
+        }
+    }).detach();
+}
+
+// Poll per-frame: drain completion queue and auto-trigger analysis.
+void poll_clip_beat_analysis(AppState& state) {
+    // Drain completed results — match by source_id across all clips
+    std::vector<BeatResult> done;
+    {
+        std::lock_guard<std::mutex> lk(s_beat_queue_mtx);
+        done.swap(s_beat_queue);
+    }
+    for (auto& r : done) {
+        for (auto& track : state.tracks) {
+            for (auto& cl : track.clips) {
+                if (cl.source_id != r.source_id) continue;
+                cl.beats_analyzing = false;
+                if (r.ok) { cl.beat_bpm = r.bpm; cl.beats = r.beats; }
+            }
+        }
+    }
+
+    // Auto-trigger for any Audio/Video clip that has no beats and isn't pending
+    for (auto& track : state.tracks) {
+        for (auto& cl : track.clips) {
+            if (cl.clip_type != ClipType::Video && cl.clip_type != ClipType::Audio) continue;
+            if (cl.source_id.empty() || !cl.beats.empty() || cl.beats_analyzing) continue;
+            cl.beats_analyzing = true;
+            kick_clip_beat_detect(cl.source_id);
+        }
+    }
+}
+
+// ── Envelope extraction subprocess ───────────────────────────────────────────
+
+void load_envelope_cache(AppState& state) {
+    state.amplitude_envelope.clear();
+    state.envelope_fps = 0.f;
+    if (state.envelope_json_path.empty() || !fs::exists(state.envelope_json_path)) return;
+    std::ifstream f(state.envelope_json_path);
+    if (!f) return;
+    try {
+        auto j = nlohmann::json::parse(f);
+        state.envelope_fps = j.value("fps", 0.f);
+        for (auto& v : j["rms"])
+            state.amplitude_envelope.push_back(v.get<float>());
+    } catch (...) {}
+}
+
+void run_envelope_extract(AppState& state) {
+    if (state.envelope_running) return;
+    std::string src = state.vocals_path.empty() ? state.audio_path : state.vocals_path;
+    if (src.empty() || !fs::exists(src)) return;
+    extern std::string g_envelope_script;
+    if (g_envelope_script.empty()) return;
+
+    fs::path out = fs::path(src).parent_path() / "envelope.json";
+    state.envelope_json_path = out.string();
+    state.envelope_running   = true;
+
+    std::string python  = state.python_path;
+    std::string script  = g_envelope_script;
+    std::string outpath = out.string();
+
+    std::thread([&state, python, script, src, outpath]() {
+        std::string cmd = "\"" + python + "\" \"" + script + "\" \"" + src + "\" \"" + outpath + "\" 2>&1";
+        FILE* p = popen(cmd.c_str(), "r");
+        char buf[256];
+        while (p && fgets(buf, sizeof(buf), p)) {}
+        if (p) pclose(p);
+        state.envelope_running = false;
+        load_envelope_cache(state);
+    }).detach();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+void load_words_cache(AppState& state) {
+    state.words_cache.clear();
+    if (state.words_json_path.empty() || !fs::exists(state.words_json_path)) return;
+    std::ifstream f(state.words_json_path);
+    if (!f) return;
+    try {
+        auto j = nlohmann::json::parse(f);
+        for (auto& w : j) {
+            if (!w.contains("word") || !w.contains("start") || !w.contains("end")) continue;
+            WordEntry e;
+            e.text  = w["word"].get<std::string>();
+            e.start = w["start"].get<float>();
+            e.end   = w["end"].get<float>();
+            state.words_cache.push_back(std::move(e));
+        }
+    } catch (...) {}
+}
+
+// Load word JSON and apply current grouping mode.
+// generate_typography is defined in panel_animation.cpp, declared in panel_animation.h
+
+// Removes all Lyrics clips with matching source_id from ALL tracks, then
+// places fresh grouped clips on the "Lyrics" track.
+void apply_subtitle_mode(AppState& state) {
+    if (state.words_json_path.empty()) return;
+    const std::string src = state.audio_path;
+
+    // Remove all Lyrics clips from this source across all tracks
+    if (!src.empty()) {
+        for (auto& t : state.tracks) {
+            t.clips.erase(std::remove_if(t.clips.begin(), t.clips.end(),
+                [&](const Clip& c){ return c.clip_type == ClipType::Lyrics && c.source_id == src; }),
+                t.clips.end());
+        }
+    }
+
+    auto stamp = [&](Clip& c){
+        c.clip_type = ClipType::Lyrics;
+        c.source_id = src;
+        c.sub_pos   = 1;          // center
+    };
+
+    // For Segment mode, read _segments.json instead
+    if (state.subtitle_mode == SubtitleMode::Segment &&
+        !state.segments_json_path.empty() &&
+        fs::exists(state.segments_json_path)) {
+        std::ifstream f(state.segments_json_path);
+        if (!f) return;
+        try {
+            auto j = nlohmann::json::parse(f);
+            Track* lyrics = nullptr;
+            for (auto& t : state.tracks)
+                if (t.name == "Lyrics") { lyrics = &t; break; }
+            if (!lyrics) {
+                state.tracks.insert(state.tracks.begin(), Track{});
+                lyrics = &state.tracks.front();
+                lyrics->name = "Lyrics";
+            }
+            lyrics->clips.clear();
+            for (auto& seg : j) {
+                Clip c;
+                c.text  = seg["text"].get<std::string>();
+                c.start = seg["start"].get<float>();
+                c.end   = seg["end"].get<float>();
+                stamp(c);
+                lyrics->clips.push_back(c);
+            }
+        } catch (...) {}
+        return;
+    }
+
+    // Word-level JSON → group
+    std::ifstream f(state.words_json_path);
+    if (!f) return;
+    try {
+        auto j = nlohmann::json::parse(f);
+        std::vector<Clip> raw;
+        for (auto& w : j) {
+            Clip c;
+            c.text  = w["word"].get<std::string>();
+            c.start = w["start"].get<float>();
+            c.end   = w["end"].get<float>();
+            raw.push_back(c);
+        }
+        auto grouped = group_words(raw, state.subtitle_mode, state.subtitle_n);
+        for (auto& c : grouped) stamp(c);
+
+        // Populate per-clip word lists from the raw word entries
+        std::vector<WordEntry> all_words;
+        for (auto& w : j) {
+            WordEntry we;
+            we.text  = w["word"].get<std::string>();
+            we.start = w["start"].get<float>();
+            we.end   = w["end"].get<float>();
+            all_words.push_back(we);
+        }
+        for (auto& c : grouped) {
+            c.words.clear();
+            for (auto& we : all_words)
+                if (we.start >= c.start - 0.001f && we.end <= c.end + 0.001f)
+                    c.words.push_back(we);
+        }
+
+        Track* lyrics = nullptr;
+        for (auto& t : state.tracks)
+            if (t.name == "Lyrics") { lyrics = &t; break; }
+        if (!lyrics) {
+            state.tracks.insert(state.tracks.begin(), Track{});
+            lyrics = &state.tracks.front();
+            lyrics->name = "Lyrics";
+        }
+        lyrics->clips = grouped;
+    } catch (...) {}
+}
+
+// Load segments JSON and populate a "Subtitles" track with ClipType::Subtitle clips.
+void apply_subtitle_pipeline(AppState& state) {
+    if (state.segments_json_path.empty()) return;
+    std::ifstream f(state.segments_json_path);
+    if (!f) return;
+    const std::string src = state.audio_path;
+    // Remove existing Subtitle clips from this source across all tracks
+    if (!src.empty()) {
+        for (auto& t : state.tracks) {
+            t.clips.erase(std::remove_if(t.clips.begin(), t.clips.end(),
+                [&](const Clip& c){ return c.clip_type == ClipType::Subtitle && c.source_id == src; }),
+                t.clips.end());
+        }
+    }
+    try {
+        auto j = nlohmann::json::parse(f);
+        Track* tr = nullptr;
+        for (auto& t : state.tracks)
+            if (t.name == "Subtitles") { tr = &t; break; }
+        if (!tr) {
+            state.tracks.insert(state.tracks.begin(), Track{});
+            tr = &state.tracks.front();
+            tr->name = "Subtitles";
+        }
+        tr->clips.clear();
+        for (auto& seg : j) {
+            Clip c;
+            c.clip_type = ClipType::Subtitle;
+            c.source_id = src;
+            c.sub_pos   = 3;      // custom Y — slightly below center
+            c.sub_pos_y = 0.62f;
+            c.text  = seg["text"].get<std::string>();
+            c.start = seg["start"].get<float>();
+            c.end   = seg["end"].get<float>();
+            tr->clips.push_back(c);
+        }
+    } catch (...) {}
+}
+
+// Save all four SRT variants to the output directory.
+void save_all_srts(AppState& state) {
+    if (state.words_json_path.empty()) return;
+
+    std::ifstream f(state.words_json_path);
+    if (!f) return;
+    std::vector<Clip> raw;
+    try {
+        auto j = nlohmann::json::parse(f);
+        for (auto& w : j) {
+            Clip c;
+            c.text  = w["word"].get<std::string>();
+            c.start = w["start"].get<float>();
+            c.end   = w["end"].get<float>();
+            raw.push_back(c);
+        }
+    } catch (...) { return; }
+
+    fs::path base = fs::path(state.words_json_path).parent_path() /
+                    fs::path(state.audio_path).stem();
+
+    auto write_srt = [](const std::vector<Clip>& clips, const std::string& path) {
+        auto ts = [](float s) -> std::string {
+            int h=int(s/3600), m=int(s/60)%60, sc=int(s)%60, ms=int(fmodf(s,1.f)*1000);
+            char buf[20]; snprintf(buf,sizeof(buf),"%02d:%02d:%02d,%03d",h,m,sc,ms);
+            return buf;
+        };
+        std::ofstream o(path);
+        int idx = 1;
+        for (auto& c : clips)
+            o << idx++ << "\n" << ts(c.start) << " --> " << ts(c.end) << "\n"
+              << c.text << "\n\n";
+    };
+
+    struct { SubtitleMode mode; const char* suffix; } variants[] = {
+        {SubtitleMode::Word,    "_word"},
+        {SubtitleMode::Phrase,  "_phrase"},
+        {SubtitleMode::Line,    "_line"},
+        {SubtitleMode::CustomN, "_custom"},
+    };
+    for (auto& v : variants) {
+        auto clips = group_words(raw, v.mode, state.subtitle_n);
+        write_srt(clips, base.string() + v.suffix + ".srt");
+    }
+
+    // Segment SRT from segments JSON
+    if (!state.segments_json_path.empty() && fs::exists(state.segments_json_path)) {
+        std::ifstream sf(state.segments_json_path);
+        try {
+            auto j = nlohmann::json::parse(sf);
+            std::vector<Clip> segs;
+            for (auto& seg : j) {
+                Clip c;
+                c.text  = seg["text"].get<std::string>();
+                c.start = seg["start"].get<float>();
+                c.end   = seg["end"].get<float>();
+                segs.push_back(c);
+            }
+            write_srt(segs, base.string() + "_segment.srt");
+        } catch (...) {}
+    }
+
+    // Set the primary SRT path to the current mode's file
+    const char* suffix = "_word";
+    if (state.subtitle_mode == SubtitleMode::Phrase)   suffix = "_phrase";
+    if (state.subtitle_mode == SubtitleMode::Line)     suffix = "_line";
+    if (state.subtitle_mode == SubtitleMode::Segment)  suffix = "_segment";
+    if (state.subtitle_mode == SubtitleMode::CustomN)  suffix = "_custom";
+    state.out_srt = base.string() + std::string(suffix) + ".srt";
+}
+
+// ── Import a file onto the timeline (no pipeline) ─────────────────────────────
+
+void import_file(AppState& state, const std::string& path) {
+    fs::path fp(path);
+    std::string ext = fp.extension().string();
+    for (auto& c : ext) c = (char)tolower((unsigned char)c);
+
+    bool is_video = (ext==".mp4"||ext==".mov"||ext==".mkv"||ext==".avi"||ext==".webm");
+
+    if (is_video) {
+        state.video_path   = path;
+        state.video_loaded = true;
+
+        // audio_load probes duration from the container header synchronously
+        // before spawning its background decode thread — use that as the
+        // primary duration source since it works on all formats.
+        audio_load(path);          // async — probes duration + starts device
+        audio_source_ensure(path); // also load into per-clip buffer for clip playback
+        state.duration = audio_duration();
+        // video_probe_duration is a faster path that works when the container
+        // header carries duration; use it only as an override if it succeeds.
+        float vprobed = video_probe_duration(path);
+        if (vprobed > 0.f) state.duration = vprobed;
+
+        state.tracks.insert(state.tracks.begin(), Track{});
+        Track& vt = state.tracks.front();
+        char vname[32];
+        snprintf(vname, sizeof(vname), "Track %d", (int)state.tracks.size());
+        vt.name = vname;
+        Clip vc; vc.clip_type = ClipType::Video;
+        vc.source_id = path;
+        vc.start=0.f; vc.end=state.duration; vc.text=path;
+        vt.clips.push_back(vc);
+
+        // Claim or reuse proxy slot for this clip instance.
+        int slot = slot_for_video(state, clip_slot_key(path, 0.f), path);
+        state.proxy_ready = false;
+
+        // Start proxy generation (no-op if proxy already exists on disk).
+        proxy_start(path);
+
+        if (slot >= 0) {
+            std::string still = proxy_still_path(path);
+            video_open_still(slot, still);
+
+            if (proxy_is_ready(path)) {
+                ProxyInfo pi;
+                if (proxy_load(path, pi)) {
+                    video_open_proxy(slot, pi);
+                    state.proxy_ready = true;
+                }
+            }
+        }
+    } else {
+        state.audio_path = path;
+        audio_load(path);          // async — probes duration + starts device
+        audio_source_ensure(path); // also load into per-clip buffer for clip playback
+        state.duration = audio_duration();
+        if (state.duration <= 0.f) {
+            AudioMeta meta{};
+            if (audio_probe(path, meta) && meta.duration_secs > 0.f)
+                state.duration = meta.duration_secs;
+        }
+
+        // Add Audio track
+        Track* at = nullptr;
+        // Reuse a track that already holds this exact audio file
+        for (auto& t : state.tracks)
+            if (!t.clips.empty() && t.clips[0].clip_type == ClipType::Audio &&
+                t.clips[0].source_id == path) { at=&t; break; }
+        if (!at) {
+            state.tracks.insert(state.tracks.begin(), Track{});
+            at = &state.tracks.front();
+            char aname[32];
+            snprintf(aname, sizeof(aname), "Track %d", (int)state.tracks.size());
+            at->name = aname;
+        }
+        at->clips.clear();
+        Clip ac; ac.clip_type = ClipType::Audio;
+        ac.source_id = path;
+        ac.start=0.f; ac.end=(state.duration > 0.f ? state.duration : 4.f); ac.text=path;
+        at->clips.push_back(ac);
+    }
+
+    // Pre-fill output paths in case user already has JSON from a previous run
+    fs::path outdir = fp.parent_path() / fp.stem();
+    std::string words_candidate = (outdir / (fp.stem().string() + "_words.json")).string();
+    std::string segs_candidate  = (outdir / (fp.stem().string() + "_segments.json")).string();
+    if (fs::exists(words_candidate)) {
+        state.words_json_path    = words_candidate;
+        state.segments_json_path = (outdir / (fp.stem().string() + "_segments.json")).string();
+        state.vocals_path        = (outdir / "vocals.wav").string();
+        state.out_wav            = state.vocals_path;
+        load_words_cache(state);
+        generate_typography(state);
+    }
+    {
+        std::string src = (outdir / "vocals.wav").string();
+        if (!fs::exists(src)) src = path;
+        std::string ec = (fs::path(src).parent_path() / "envelope.json").string();
+        if (fs::exists(ec)) { state.envelope_json_path = ec; load_envelope_cache(state); }
+    }
+
+    history_push(state, "Import \"" + fp.filename().string() + "\"");
+}
+
+// ── Kick ML pipeline on a specific clip ──────────────────────────────────────
+
+void kick_pipeline(AppState& state, const std::string& path, PipelineMode mode) {
+    if (transcribe_running()) return;
+
+    state.audio_path = path;
+    state.pipeline   = PipelineStatus{};
+
+    fs::path audio(path);
+    fs::path outdir = audio.parent_path() / audio.stem();
+    std::string words_json = (outdir / (audio.stem().string() + "_words.json")).string();
+    std::string vocals_out = (outdir / "vocals.wav").string();
+    state.words_json_path    = words_json;
+    state.segments_json_path = (outdir / (audio.stem().string() + "_segments.json")).string();
+    state.vocals_path        = vocals_out;
+    state.out_wav            = vocals_out;
+
+    state.pipeline_produces_subtitles = (mode == PipelineMode::TranscribeOnly);
+    state.pipeline_is_separate_only   = (mode == PipelineMode::SeparateOnly);
+
+    if (mode == PipelineMode::Both) {
+        bool has = false;
+        for (auto& t : state.tracks) if (t.name=="Lyrics") { has=true; break; }
+        if (!has) {
+            Track ph; ph.name="Lyrics";
+            state.tracks.insert(state.tracks.begin(), std::move(ph));
+        }
+    } else if (mode == PipelineMode::TranscribeOnly) {
+        bool has = false;
+        for (auto& t : state.tracks) if (t.name=="Subtitles") { has=true; break; }
+        if (!has) {
+            Track ph; ph.name="Subtitles";
+            state.tracks.insert(state.tracks.begin(), std::move(ph));
+        }
+    }
+
+    extern std::string g_pipeline_script;
+    transcribe_start(path, state.python_path, g_pipeline_script,
+                     state.pipeline, state.words_json_path, state.vocals_path, mode);
+}
+
+// ── Pipeline inline strip ─────────────────────────────────────────────────────
+
+void draw_pipeline_strip(AppState& state, float w) {
+    if (state.pipeline.stage == PipelineStage::Idle ||
+        state.pipeline.stage == PipelineStage::Done ||
+        state.pipeline.stage == PipelineStage::Error) return;
+
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    ImVec2 p = ImGui::GetCursorScreenPos();
+    float  h = 32.f;
+
+    dl->AddRectFilled(p, {p.x + w, p.y + h}, to_u32(Col::bg_soft));
+    dl->AddLine({p.x, p.y + h}, {p.x + w, p.y + h}, to_u32(Col::line));
+
+    // Progress fill
+    dl->AddRectFilled(p, {p.x + w * state.pipeline.progress, p.y + h},
+        IM_COL32(255,255,255,18));
+
+    // Status dot
+    float pulse = 0.5f + 0.5f * sinf((float)ImGui::GetTime() * 4.f);
+    dl->AddCircleFilled({p.x + 14.f, p.y + h * 0.5f}, 4.f,
+        ImGui::ColorConvertFloat4ToU32({1.f, 1.f, 1.f, pulse}));
+
+    // Text — status + raw debug line
+    std::string msg = state.pipeline.message.empty() ?
+        "Processing…" : state.pipeline.message;
+    char buf[256];
+    snprintf(buf, sizeof(buf), "%s  %d%%", msg.c_str(),
+        (int)(state.pipeline.progress * 100.f));
+    dl->AddText({p.x + 26.f, p.y + 3.f}, to_u32(Col::muted), buf);
+    if (!state.pipeline.raw_line.empty()) {
+        // truncate long lines for display
+        std::string raw = state.pipeline.raw_line;
+        if (raw.size() > 120) raw = raw.substr(0, 117) + "...";
+        dl->AddText(ImGui::GetFont(), 10.f, {p.x + 26.f, p.y + 15.f},
+            to_u32(Col::dim), raw.c_str());
+    }
+
+    // Cancel button (draw as text, handle click)
+    const char* cancel_lbl = "Cancel";
+    float cx = p.x + w - ImGui::CalcTextSize(cancel_lbl).x - 16.f;
+    ImVec2 mp = ImGui::GetIO().MousePos;
+    bool hov = mp.x >= cx && mp.y >= p.y && mp.y < p.y + h;
+    dl->AddText({cx, p.y + 3.f},
+        to_u32(hov ? Col::fg : Col::muted), cancel_lbl);
+    if (hov && ImGui::IsMouseClicked(0)) transcribe_cancel();
+
+    ImGui::Dummy({w, h});
+}

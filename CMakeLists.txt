@@ -49,6 +49,15 @@ set(SOURCES
     src/ui/screen_splash.cpp
     src/ui/screen_setup.cpp
     src/ui/screen_studio.cpp
+    src/ui/studio_shared.cpp
+    src/ui/canvas.cpp
+    src/ui/timeline.cpp
+    src/ui/pipeline.cpp
+    src/ui/panel_clip.cpp
+    src/ui/panel_animation.cpp
+    src/ui/panel_fx.cpp
+    src/ui/panel_media.cpp
+    src/ui/export_ui.cpp
     src/ui/theme.cpp
     src/project.cpp
     src/fx_shader.cpp
