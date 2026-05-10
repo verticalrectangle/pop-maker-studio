@@ -647,12 +647,14 @@ static void scene_ensure(int w, int h) {
 
 void scene_begin(int canvas_w, int canvas_h) {
     if (!g_prog.composite || canvas_w <= 0 || canvas_h <= 0) { g_scene.begun = false; return; }
-    scene_ensure(canvas_w, canvas_h);
 
+    // Save GL state BEFORE scene_ensure, which may bind a scene FBO on first call
     GLint prev_fbo = 0;
     glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prev_fbo);
     GLint prev_vp[4];
     glGetIntegerv(GL_VIEWPORT, prev_vp);
+
+    scene_ensure(canvas_w, canvas_h);
 
     g_scene.active = 0;
     glBindFramebuffer(GL_FRAMEBUFFER, g_scene.fbo[0]);
