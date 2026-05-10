@@ -9516,27 +9516,28 @@ void ui_studio(AppState& state) {
                                         sel_ct == ClipType::Subtitle);
 
         // ── Auto-switch panel on selection change ─────────────────────────────
+        // s_switch_tab is a one-shot flag: fires SetSelected once to move the tab
+        // bar, then clears.  Never set every frame — that fights user tab clicks.
+        static bool s_switch_tab = false;
         {
             static int s_last_sel_track = -1, s_last_sel_clip = -1;
             int st = state.selected_track, sc = state.selected_clip;
             if (st != s_last_sel_track || sc != s_last_sel_clip) {
+                PanelView prev = s_panel_view;
                 if (st >= 0 && sc >= 0) {
                     PanelView derived = pv_derive(state);
-                    // Always follow override panels (BG/FX/Adj force their own view).
-                    // Otherwise only auto-switch when the user hasn't explicitly chosen
-                    // a tab (Animation, History) — respect that choice.
                     if (pv_is_override(derived) || !s_user_nav)
                         s_panel_view = derived;
                 } else {
                     s_panel_view = PanelView::Project;
                     s_user_nav   = false;
                 }
+                if (s_panel_view != prev) s_switch_tab = true;
                 s_last_sel_track = st; s_last_sel_clip = sc;
             }
         }
 
         // ── Tab bar ───────────────────────────────────────────────────────────
-        // Hidden when: no clip selected, library browser open, or override panel active.
         bool show_clip_tabs = has_sel && !pv_is_override(s_panel_view) && !pv_is_lib(s_panel_view);
         bool show_tab_bar   = has_sel && !pv_is_lib(s_panel_view) && !pv_is_override(s_panel_view);
 
@@ -9545,10 +9546,16 @@ void ui_studio(AppState& state) {
             ImGui::PushStyleColor(ImGuiCol_Tab,       Col::bg_soft);
             ImGui::PushStyleColor(ImGuiCol_TabActive, Col::line);
 
+            // Consume the one-shot switch flag before building the tab bar.
+            // Pass SetSelected only on the frame we want to programmatically
+            // change tabs — never every frame, to avoid fighting user clicks.
+            bool do_switch = s_switch_tab;
+            s_switch_tab = false;
+            auto tf = [&](PanelView target) -> ImGuiTabItemFlags {
+                return (do_switch && s_panel_view == target) ? ImGuiTabItemFlags_SetSelected : 0;
+            };
+
             if (ImGui::BeginTabBar("##panel_tabs")) {
-                auto tf = [](PanelView target) -> ImGuiTabItemFlags {
-                    return (s_panel_view == target) ? ImGuiTabItemFlags_SetSelected : 0;
-                };
                 if (show_clip_tabs) {
                     if (ImGui::BeginTabItem("Clip", nullptr, tf(PanelView::Clip)))
                         { s_panel_view = PanelView::Clip; s_user_nav = false; ImGui::EndTabItem(); }
