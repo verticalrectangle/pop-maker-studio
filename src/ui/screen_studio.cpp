@@ -7737,50 +7737,12 @@ static void handle_shortcuts(AppState& state) {
     }
 }
 
-// ── Brick toolbox strip + picker windows ─────────────────────────────────────
+// ── Brick toolbox strip ───────────────────────────────────────────────────────
+// Buttons switch the right panel into library-browse mode.
+// Selecting a clip on the timeline always clears toolbox mode.
 
-static bool s_tb_bg  = false;
-static bool s_tb_fx  = false;
-static bool s_tb_adj = false;
-
-static void toolbox_bg_window(AppState& state, float strip_x) {
-    if (!s_tb_bg) return;
-    ImGui::SetNextWindowSize({360.f, 580.f}, ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowPos({strip_x + 4.f, 80.f}, ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSizeConstraints({260.f, 300.f}, {700.f, 1200.f});
-    if (ImGui::Begin("Background##tb", &s_tb_bg, ImGuiWindowFlags_NoCollapse)) {
-        float w = ImGui::GetContentRegionAvail().x - 8.f;
-        ImGui::SetCursorPosX(4.f);
-        panel_background(state, w);
-    }
-    ImGui::End();
-}
-
-static void toolbox_fx_window(AppState& state, float strip_x) {
-    if (!s_tb_fx) return;
-    ImGui::SetNextWindowSize({360.f, 580.f}, ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowPos({strip_x + 4.f, 80.f}, ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSizeConstraints({260.f, 300.f}, {700.f, 1200.f});
-    if (ImGui::Begin("Creative FX##tb", &s_tb_fx, ImGuiWindowFlags_NoCollapse)) {
-        float w = ImGui::GetContentRegionAvail().x - 8.f;
-        ImGui::SetCursorPosX(4.f);
-        panel_fx_creative(state, w);
-    }
-    ImGui::End();
-}
-
-static void toolbox_adj_window(AppState& state, float strip_x) {
-    if (!s_tb_adj) return;
-    ImGui::SetNextWindowSize({360.f, 580.f}, ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowPos({strip_x + 4.f, 80.f}, ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSizeConstraints({260.f, 300.f}, {700.f, 1200.f});
-    if (ImGui::Begin("Adjustments##tb", &s_tb_adj, ImGuiWindowFlags_NoCollapse)) {
-        float w = ImGui::GetContentRegionAvail().x - 8.f;
-        ImGui::SetCursorPosX(4.f);
-        panel_adjustment_library(state, w);
-    }
-    ImGui::End();
-}
+enum class ToolboxMode { None, BG, FX, Adj };
+static ToolboxMode s_toolbox_mode = ToolboxMode::None;
 
 // ── Studio ────────────────────────────────────────────────────────────────────
 
@@ -8314,43 +8276,49 @@ void ui_studio(AppState& state) {
     float preview_w = win_w - props_w - TB_W - 2.f;
 
     // ── Toolbox strip (left rail, Photoshop-style) ────────────────────────────
-    static float s_strip_screen_x = 0.f;
     ImGui::SetCursorPos({0.f, body_top});
     ImGui::PushStyleColor(ImGuiCol_ChildBg, IM_COL32(13, 13, 18, 255));
     ImGui::PushStyleColor(ImGuiCol_Border,  Col::line);
     if (ImGui::BeginChild("##toolbox_strip", {TB_W, body_h}, ImGuiChildFlags_Borders)) {
-        s_strip_screen_x = ImGui::GetWindowPos().x + TB_W;
         ImDrawList* tdl  = ImGui::GetWindowDrawList();
         ImVec2      sp   = ImGui::GetWindowPos();
         const float BSZ  = 42.f;
         const float BX   = sp.x + (TB_W - BSZ) * 0.5f;
         float       BY   = sp.y + 16.f;
 
-        struct { const char* id; bool* flag; ImU32 accent; } btns[] = {
-            { "BG",  &s_tb_bg,  IM_COL32(130, 30, 155, 255) },
-            { "FX",  &s_tb_fx,  IM_COL32(70,  30, 165, 255) },
-            { "Adj", &s_tb_adj, IM_COL32(30,  95, 165, 255) },
+        struct { const char* id; ToolboxMode mode; ImU32 accent; } btns[] = {
+            { "BG",  ToolboxMode::BG,  IM_COL32(130, 30, 155, 255) },
+            { "FX",  ToolboxMode::FX,  IM_COL32(70,  30, 165, 255) },
+            { "Adj", ToolboxMode::Adj, IM_COL32(30,  95, 165, 255) },
         };
 
         for (auto& b : btns) {
+            bool active = (s_toolbox_mode == b.mode);
             ImVec2 bmin = { BX, BY }, bmax = { BX + BSZ, BY + BSZ };
             bool hov = ImGui::IsMouseHoveringRect(bmin, bmax);
-            ImU32 fill = *b.flag ? b.accent
-                       : hov    ? IM_COL32(42, 42, 58, 255)
+            ImU32 fill = active ? b.accent
+                       : hov   ? IM_COL32(42, 42, 58, 255)
                                 : IM_COL32(24, 24, 34, 255);
             tdl->AddRectFilled(bmin, bmax, fill, 7.f);
-            if (*b.flag || hov)
+            if (active || hov)
                 tdl->AddRect(bmin, bmax,
-                    *b.flag ? b.accent : IM_COL32(70, 70, 90, 200), 7.f, 0, 1.2f);
+                    active ? b.accent : IM_COL32(70, 70, 90, 200), 7.f, 0, 1.2f);
 
             ImVec2 tsz = ImGui::CalcTextSize(b.id);
-            ImU32  tc  = *b.flag ? IM_COL32(255,255,255,255) : IM_COL32(155,155,180,210);
+            ImU32  tc  = active ? IM_COL32(255,255,255,255) : IM_COL32(155,155,180,210);
             tdl->AddText({ BX + (BSZ - tsz.x) * 0.5f,
                            BY + (BSZ - 13.f)  * 0.5f }, tc, b.id);
 
             ImGui::SetCursorScreenPos(bmin);
             ImGui::InvisibleButton(b.id, { BSZ, BSZ });
-            if (ImGui::IsItemClicked()) *b.flag = true;
+            if (ImGui::IsItemClicked()) {
+                s_toolbox_mode = active ? ToolboxMode::None : b.mode;
+                // deselect clip so right panel shows library
+                if (s_toolbox_mode != ToolboxMode::None) {
+                    state.selected_track = -1;
+                    state.selected_clip  = -1;
+                }
+            }
 
             BY += BSZ + 10.f;
         }
@@ -8629,11 +8597,6 @@ void ui_studio(AppState& state) {
     ImGui::EndChild();
     ImGui::PopStyleColor(2);
 
-    // Picker windows spawned by toolbox strip buttons
-    toolbox_bg_window(state, s_strip_screen_x);
-    toolbox_fx_window(state, s_strip_screen_x);
-    toolbox_adj_window(state, s_strip_screen_x);
-
     // ── Properties panel ─────────────────────────────────────────────────────
     ImGui::SameLine(0.f, 1.f);
     ImGui::PushStyleColor(ImGuiCol_ChildBg, Col::bg_soft);
@@ -8664,6 +8627,7 @@ void ui_studio(AppState& state) {
             static int s_last_sel_track = -1, s_last_sel_clip = -1;
             int st = state.selected_track, sc = state.selected_clip;
             if (st != s_last_sel_track || sc != s_last_sel_clip) {
+                s_toolbox_mode = ToolboxMode::None;        // clip selected → exit library
                 if (is_text_like)
                     state.panel_tab = 8;                   // → Typography
                 else if (show_clip_tabs)
@@ -8685,9 +8649,8 @@ void ui_studio(AppState& state) {
             state.panel_tab = 0;
 
         // ── Contextual tab bar ────────────────────────────────────────────────
-        // Tabs are hidden entirely for BG / FX / Adjustment clips whose panels
-        // take over the full content area.  Otherwise show only relevant tabs.
-        if (!focused_is_override) {
+        // Tabs are hidden for BG/FX/Adj clips and when toolbox library is open.
+        if (!focused_is_override && s_toolbox_mode == ToolboxMode::None) {
             ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {12.f, 6.f});
             ImGui::PushStyleColor(ImGuiCol_Tab,       Col::bg_soft);
             ImGui::PushStyleColor(ImGuiCol_TabActive, Col::line);
@@ -8716,10 +8679,13 @@ void ui_studio(AppState& state) {
         ImGui::SetCursorPosX(8.f);
         float pw = props_w - 16.f;
 
-        if      (focused_is_adjustment)    panel_adjustment(state, pw);
-        else if (focused_is_fx)            panel_fx_clip(state, pw);
-        else if (focused_is_bg)            panel_background(state, pw);
-        else if (state.panel_tab == 0)     panel_clip(state, pw);
+        if      (focused_is_adjustment)              panel_adjustment(state, pw);
+        else if (focused_is_fx)                      panel_fx_clip(state, pw);
+        else if (focused_is_bg)                      panel_background(state, pw);
+        else if (s_toolbox_mode == ToolboxMode::BG)  panel_background(state, pw);
+        else if (s_toolbox_mode == ToolboxMode::FX)  panel_fx_creative(state, pw);
+        else if (s_toolbox_mode == ToolboxMode::Adj) panel_adjustment_library(state, pw);
+        else if (state.panel_tab == 0)               panel_clip(state, pw);
         else if (state.panel_tab == 1)     panel_animation(state, pw);
         else if (state.panel_tab == 2)     panel_export(state, pw);
         else if (state.panel_tab == 8)     panel_typography(state, pw);
