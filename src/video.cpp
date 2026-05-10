@@ -70,9 +70,10 @@ static void cpu_apply_glitch(uint8_t* px, int w, int h,
     }
 }
 
-// Output is 4-channel RGBA. Keying in chroma space separates colour from luminance
-// so the key distance is independent of scene brightness. Spill suppression blends
-// the dominant key channel toward its neighbours on semi-transparent edge pixels.
+// Output is 4-channel RGBA. Three-pass approach:
+//   1. Per-pixel chroma distance → raw alpha (float buffer)
+//   2. Separable box blur on alpha → smooth feathered matte
+//   3. Composite RGB with blurred alpha + spill suppression across full feather zone
 static void cpu_apply_chroma_key(
     const uint8_t* rgb, uint8_t* rgba, int w, int h,
     float kr, float kg, float kb, float threshold, float softness)
@@ -86,24 +87,58 @@ static void cpu_apply_chroma_key(
     bool  blue_key  = (kb > kr && kb > kg);
 
     int n = w * h;
+
+    // Pass 1: raw alpha per pixel
+    static std::vector<float> s_alpha;
+    s_alpha.resize(n);
     for (int i = 0; i < n; ++i) {
         float r = rgb[i*3+0] * (1.f/255.f);
         float g = rgb[i*3+1] * (1.f/255.f);
         float b = rgb[i*3+2] * (1.f/255.f);
-
         float lum  = 0.299f*r + 0.587f*g + 0.114f*b;
         float cp_r = r - lum, cp_g = g - lum, cp_b = b - lum;
-
         float dist = sqrtf((cp_r-ck_r)*(cp_r-ck_r) +
                            (cp_g-ck_g)*(cp_g-ck_g) +
                            (cp_b-ck_b)*(cp_b-ck_b));
+        float t = (dist - threshold) / soft;
+        s_alpha[i] = t <= 0.f ? 0.f : t >= 1.f ? 1.f : t*t*(3.f - 2.f*t);
+    }
 
-        // smoothstep: 0 = fully keyed out, 1 = fully opaque
-        float t     = (dist - threshold) / soft;
-        float alpha = t <= 0.f ? 0.f : t >= 1.f ? 1.f : t*t*(3.f - 2.f*t);
+    // Pass 2: separable box blur on alpha — radius scales with softness
+    int radius = (int)(softness * w * 0.04f + 1.5f);
+    if (radius > 12) radius = 12;
+    static std::vector<float> s_tmp;
+    s_tmp.resize(n);
+    // horizontal
+    for (int y = 0; y < h; ++y) {
+        float sum = 0.f;
+        int   cnt = 0;
+        float* row = s_alpha.data() + y * w;
+        float* dst = s_tmp.data()   + y * w;
+        for (int x = -radius; x < w; ++x) {
+            if (x + radius < w) { sum += row[x + radius]; ++cnt; }
+            if (x - radius > 0) { sum -= row[x - radius - 1]; --cnt; }
+            if (x >= 0) dst[x] = sum / cnt;
+        }
+    }
+    // vertical
+    for (int x = 0; x < w; ++x) {
+        float sum = 0.f;
+        int   cnt = 0;
+        for (int y = -radius; y < h; ++y) {
+            if (y + radius < h) { sum += s_tmp[(y + radius) * w + x]; ++cnt; }
+            if (y - radius > 0) { sum -= s_tmp[(y - radius - 1) * w + x]; --cnt; }
+            if (y >= 0) s_alpha[y * w + x] = sum / cnt;
+        }
+    }
 
-        // Spill suppression: on semi-transparent pixels blend the dominant key
-        // channel toward the average of the other two channels
+    // Pass 3: write RGBA with blurred alpha + spill suppression across feather zone
+    for (int i = 0; i < n; ++i) {
+        float r = rgb[i*3+0] * (1.f/255.f);
+        float g = rgb[i*3+1] * (1.f/255.f);
+        float b = rgb[i*3+2] * (1.f/255.f);
+        float alpha = s_alpha[i];
+
         float out_r = r, out_g = g, out_b = b;
         if (alpha < 1.f) {
             float spill = 1.f - alpha;
