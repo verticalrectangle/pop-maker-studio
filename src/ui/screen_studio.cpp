@@ -8857,14 +8857,8 @@ void ui_studio(AppState& state) {
 
             ImGui::SetCursorScreenPos(bmin);
             ImGui::InvisibleButton(b.id, { BSZ, BSZ });
-            if (ImGui::IsItemClicked()) {
+            if (ImGui::IsItemClicked())
                 s_toolbox_mode = active ? ToolboxMode::None : b.mode;
-                // deselect clip so right panel shows library
-                if (s_toolbox_mode != ToolboxMode::None) {
-                    state.selected_track = -1;
-                    state.selected_clip  = -1;
-                }
-            }
 
             BY += BSZ + 10.f;
         }
@@ -9172,8 +9166,8 @@ void ui_studio(AppState& state) {
         {
             static int s_last_sel_track = -1, s_last_sel_clip = -1;
             int st = state.selected_track, sc = state.selected_clip;
-            if (st != s_last_sel_track || sc != s_last_sel_clip) {
-                s_toolbox_mode = ToolboxMode::None;        // clip selected → exit library
+            if ((st != s_last_sel_track || sc != s_last_sel_clip) && st >= 0 && sc >= 0) {
+                s_toolbox_mode = ToolboxMode::None;        // real clip selected → exit library
                 if (is_text_like)
                     state.panel_tab = 8;                   // → Typography
                 else if (show_clip_tabs)
@@ -9225,15 +9219,15 @@ void ui_studio(AppState& state) {
         ImGui::SetCursorPosX(8.f);
         float pw = props_w - 16.f;
 
-        if      (focused_is_adjustment)              panel_adjustment(state, pw);
-        else if (focused_is_fx)                      panel_fx_clip(state, pw);
-        else if (focused_is_bg)                      panel_background(state, pw);
-        else if (s_toolbox_mode == ToolboxMode::BG)  panel_background(state, pw);
+        if      (s_toolbox_mode == ToolboxMode::BG)  panel_background(state, pw);
         else if (s_toolbox_mode == ToolboxMode::FX)  panel_fx_creative(state, pw);
         else if (s_toolbox_mode == ToolboxMode::Adj) panel_adjustment_library(state, pw);
         else if (s_toolbox_mode == ToolboxMode::VID) panel_media_browser(state, pw, true);
         else if (s_toolbox_mode == ToolboxMode::IMG) panel_media_browser(state, pw, false);
         else if (s_toolbox_mode == ToolboxMode::AUD) panel_audio_browser(state, pw);
+        else if (focused_is_adjustment)              panel_adjustment(state, pw);
+        else if (focused_is_fx)                      panel_fx_clip(state, pw);
+        else if (focused_is_bg)                      panel_background(state, pw);
         else if (state.panel_tab == 0)               panel_clip(state, pw);
         else if (state.panel_tab == 1)     panel_animation(state, pw);
         else if (state.panel_tab == 2)     panel_export(state, pw);
