@@ -8115,9 +8115,10 @@ static void panel_media_browser(AppState& state, float w, bool is_video) {
         ImGui::PopID();
     }
 
-    // Advance cursor past all cards
+    // Advance cursor past all cards — Dummy() required so ImGui registers the height extension
     int rows = ((int)valid.size() + 1) / 2;
     ImGui::SetCursorPosY(base_y + rows * (CARD_H + GAP) + 4.f);
+    ImGui::Dummy({0.f, 0.f});
 }
 
 static void panel_audio_browser(AppState& state, float w) {
