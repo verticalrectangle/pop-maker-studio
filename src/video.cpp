@@ -473,10 +473,6 @@ struct PreviewState {
     int                  bg_mask_w       = 0;
     int                  bg_mask_h       = 0;
     std::vector<uint8_t> bg_mask_alpha;                // w*h alpha values
-    // Raw RGB snapshot of the last decoded frame (pre-FX) for eyedropper sampling
-    std::vector<uint8_t> last_rgb;
-    int                  last_rgb_w      = 0;
-    int                  last_rgb_h      = 0;
 };
 
 static PreviewState g_pv[MAX_VIDEO_TRACKS];
@@ -496,19 +492,10 @@ static void upload_jpeg(GLuint* tex, int* tex_w, int* tex_h, bool* tex_rgba,
                         const uint8_t* buf, size_t sz,
                         const PixelFX* pfx = nullptr,
                         const uint8_t* bg_mask = nullptr, int bg_mask_w = 0, int bg_mask_h = 0,
-                        float bg_softness = 0.f,
-                        std::vector<uint8_t>* raw_stash = nullptr,
-                        int* stash_w = nullptr, int* stash_h = nullptr) {
+                        float bg_softness = 0.f) {
     int w, h, ch;
     uint8_t* pixels = stbi_load_from_memory(buf, (int)sz, &w, &h, &ch, 3);
     if (!pixels) return;
-
-    // Stash pre-FX RGB for eyedropper sampling
-    if (raw_stash) {
-        raw_stash->assign(pixels, pixels + (size_t)w * h * 3);
-        if (stash_w) *stash_w = w;
-        if (stash_h) *stash_h = h;
-    }
 
     bool do_corr_bleed = pfx && pfx->glitch_on &&
                          pfx->glitch_corruption >= 0.01f &&
@@ -760,8 +747,7 @@ static uintptr_t decode_proxy_frame(PreviewState& pv, int frame_idx) {
                             ? pv.bg_mask_alpha.data() : nullptr;
 
     upload_jpeg(&pv.tex, &pv.tex_w, &pv.tex_h, &pv.tex_rgba, s_buf.data(), got, &pv.pixel_fx,
-                bg_ptr, pv.bg_mask_w, pv.bg_mask_h, pv.pixel_fx.bg_remove_softness,
-                &pv.last_rgb, &pv.last_rgb_w, &pv.last_rgb_h);
+                bg_ptr, pv.bg_mask_w, pv.bg_mask_h, pv.pixel_fx.bg_remove_softness);
 
     return pv.tex ? (uintptr_t)pv.tex : 0;
 }
@@ -887,21 +873,6 @@ uintptr_t video_get_texture(int track_id, double playhead) {
     pv.pixel_fx_dirty = false;
     pv.last_frame_idx = frame_idx;
     return decode_proxy_frame(pv, frame_idx);
-}
-
-bool video_sample_pixel(int track_id, float u, float v, float* r, float* g, float* b) {
-    if (track_id < 0 || track_id >= MAX_VIDEO_TRACKS) return false;
-    const PreviewState& pv = g_pv[track_id];
-    if (pv.last_rgb.empty() || pv.last_rgb_w <= 0 || pv.last_rgb_h <= 0) return false;
-    int x = (int)(u * pv.last_rgb_w);
-    int y = (int)(v * pv.last_rgb_h);
-    x = x < 0 ? 0 : x >= pv.last_rgb_w ? pv.last_rgb_w - 1 : x;
-    y = y < 0 ? 0 : y >= pv.last_rgb_h ? pv.last_rgb_h - 1 : y;
-    int idx = (y * pv.last_rgb_w + x) * 3;
-    *r = pv.last_rgb[idx + 0] / 255.f;
-    *g = pv.last_rgb[idx + 1] / 255.f;
-    *b = pv.last_rgb[idx + 2] / 255.f;
-    return true;
 }
 
 uintptr_t video_get_thumbnail(double t, int* out_w, int* out_h) {

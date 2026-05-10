@@ -109,8 +109,6 @@ static std::string source_from_key(const std::string& key) {
 // Track index the mouse is hovering over in the timeline — updated by draw_timeline
 // each frame so the drop handler can target a specific lane.
 static int s_tl_hover_track   = -1;
-// Eyedropper: track_id >= 0 means pick mode active for that track's chroma key
-static int s_eyedropper_track = -1;
 
 // Drop flash — highlight the target track row for ~0.5 s after a file lands.
 static float s_drop_flash_t     = 0.f;  // countdown in seconds
@@ -1393,45 +1391,7 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
     bool in_preview_area = mpos.x >= p.x && mpos.x <= p.x+w &&
                            mpos.y >= p.y && mpos.y <= p.y+h;
 
-    // Eyedropper: intercept click to sample pixel color for chroma key
-    bool eyedrop_consumed = false;
-    if (s_eyedropper_track >= 0) {
-        ImGui::SetMouseCursor(ImGuiMouseCursor_None);
-        const float CH = 10.f;
-        ImU32 cwhite = IM_COL32(255, 255, 255, 220);
-        ImU32 cblack = IM_COL32(0, 0, 0, 160);
-        dl->AddLine({mpos.x - CH - 1, mpos.y}, {mpos.x + CH + 1, mpos.y}, cblack, 2.f);
-        dl->AddLine({mpos.x, mpos.y - CH - 1}, {mpos.x, mpos.y + CH + 1}, cblack, 2.f);
-        dl->AddLine({mpos.x - CH, mpos.y}, {mpos.x + CH, mpos.y}, cwhite, 1.f);
-        dl->AddLine({mpos.x, mpos.y - CH}, {mpos.x, mpos.y + CH}, cwhite, 1.f);
-        dl->AddCircle(mpos, 4.f, cwhite, 12, 1.f);
-
-        if (lclick && in_preview_area) {
-            eyedrop_consumed = true;
-            float u = (mpos.x - p.x) / w;
-            float v = (mpos.y - p.y) / h;
-            float sr, sg, sb;
-            int tid = s_eyedropper_track;
-            if (video_sample_pixel(tid, u, v, &sr, &sg, &sb)) {
-                if (tid < (int)state.tracks.size()) {
-                    for (auto& cl : state.tracks[tid].clips) {
-                        if (state.playhead >= cl.start && state.playhead < cl.end &&
-                            cl.clip_type == ClipType::Video) {
-                            cl.fx_chroma_key_r = sr;
-                            cl.fx_chroma_key_g = sg;
-                            cl.fx_chroma_key_b = sb;
-                            history_push(state, "Chroma Key: color");
-                            break;
-                        }
-                    }
-                }
-            }
-            s_eyedropper_track = -1;
-        }
-        if (ImGui::IsKeyPressed(ImGuiKey_Escape)) s_eyedropper_track = -1;
-    }
-
-    if (lclick && in_preview_area && s_ctx.handle == CanvasHandle::None && !eyedrop_consumed) {
+    if (lclick && in_preview_area && s_ctx.handle == CanvasHandle::None) {
         struct HitCandidate { int ti, ci; float area; };
         std::vector<HitCandidate> hits;
         for (int ti = 0; ti < (int)state.tracks.size(); ++ti) {
@@ -2652,6 +2612,180 @@ static void section_position(AppState& state, Clip& clip, float w) {
     ImGui::PopStyleColor(2);
 }
 
+// ── Palette widget ────────────────────────────────────────────────────────────
+// Draws a row of 5 color swatches below any ColorEdit3/4.
+// rgb[3] is the current color (read/write). Clicking a swatch writes back to rgb.
+// Harmony types cycle: Complementary → Analogous → Triadic → Split-Comp → Mono.
+
+static void hsv_to_rgb(float h, float s, float v, float& r, float& g, float& b) {
+    if (s <= 0.f) { r = g = b = v; return; }
+    h = fmodf(h, 360.f); if (h < 0.f) h += 360.f;
+    int   i = (int)(h / 60.f);
+    float f = h / 60.f - i;
+    float p = v * (1.f - s), q = v * (1.f - s*f), t = v * (1.f - s*(1.f-f));
+    switch (i % 6) {
+        case 0: r=v; g=t; b=p; break; case 1: r=q; g=v; b=p; break;
+        case 2: r=p; g=v; b=t; break; case 3: r=p; g=q; b=v; break;
+        case 4: r=t; g=p; b=v; break; default: r=v; g=p; b=q; break;
+    }
+}
+
+static void rgb_to_hsv(float r, float g, float b, float& h, float& s, float& v) {
+    float mx = r>g?(r>b?r:b):(g>b?g:b);
+    float mn = r<g?(r<b?r:b):(g<b?g:b);
+    v = mx;
+    s = mx < 0.0001f ? 0.f : (mx - mn) / mx;
+    if (s < 0.0001f) { h = 0.f; return; }
+    float d = mx - mn;
+    if      (mx == r) h = 60.f * (g - b) / d;
+    else if (mx == g) h = 60.f * ((b - r) / d + 2.f);
+    else              h = 60.f * ((r - g) / d + 4.f);
+    if (h < 0.f) h += 360.f;
+}
+
+static void palette_widget(const char* id, float* rgb) {
+    struct PaletteState {
+        float  slots[5][3] = {};
+        bool   locked[5]   = {};
+        int    harmony      = 0;  // 0=Comp 1=Analog 2=Triadic 3=SplitComp 4=Mono
+        bool   generated    = false;
+    };
+    static std::unordered_map<std::string, PaletteState> s_palettes;
+
+    PaletteState& ps = s_palettes[id];
+
+    float h, s, v;
+    rgb_to_hsv(rgb[0], rgb[1], rgb[2], h, s, v);
+
+    const char* harmony_names[] = { "Comp", "Analog", "Triadic", "Split", "Mono" };
+
+    auto gen_slot = [&](int slot, float dh, float ds_mul, float dv_mul) {
+        if (ps.locked[slot]) return;
+        float nh = fmodf(h + dh + 360.f, 360.f);
+        float ns = fminf(1.f, s * ds_mul);
+        float nv = fminf(1.f, v * dv_mul);
+        if (ns < 0.05f) ns = 0.35f;
+        if (nv < 0.15f) nv = 0.45f;
+        hsv_to_rgb(nh, ns, nv, ps.slots[slot][0], ps.slots[slot][1], ps.slots[slot][2]);
+    };
+
+    auto generate = [&]() {
+        switch (ps.harmony) {
+            case 0: // Complementary
+                gen_slot(0, 0.f,   1.f,  1.f);
+                gen_slot(1, 180.f, 1.f,  1.f);
+                gen_slot(2, 0.f,   0.6f, 0.9f);
+                gen_slot(3, 180.f, 0.7f, 0.8f);
+                gen_slot(4, 0.f,   0.3f, 1.f);
+                break;
+            case 1: // Analogous
+                gen_slot(0, -60.f, 1.f,  1.f);
+                gen_slot(1, -30.f, 1.f,  1.f);
+                gen_slot(2,   0.f, 1.f,  1.f);
+                gen_slot(3,  30.f, 1.f,  1.f);
+                gen_slot(4,  60.f, 1.f,  1.f);
+                break;
+            case 2: // Triadic
+                gen_slot(0,   0.f, 1.f,  1.f);
+                gen_slot(1, 120.f, 1.f,  1.f);
+                gen_slot(2, 240.f, 1.f,  1.f);
+                gen_slot(3, 120.f, 0.7f, 0.85f);
+                gen_slot(4, 240.f, 0.7f, 0.85f);
+                break;
+            case 3: // Split-Complementary
+                gen_slot(0,   0.f, 1.f,  1.f);
+                gen_slot(1, 150.f, 1.f,  1.f);
+                gen_slot(2, 210.f, 1.f,  1.f);
+                gen_slot(3, 150.f, 0.6f, 0.9f);
+                gen_slot(4, 210.f, 0.6f, 0.9f);
+                break;
+            case 4: // Monochromatic
+                gen_slot(0, 0.f, 1.f,   1.f);
+                gen_slot(1, 0.f, 0.75f, 0.85f);
+                gen_slot(2, 0.f, 0.5f,  0.7f);
+                gen_slot(3, 0.f, 0.3f,  0.9f);
+                gen_slot(4, 0.f, 1.f,   0.5f);
+                break;
+        }
+        ps.generated = true;
+    };
+
+    if (!ps.generated) generate();
+
+    ImGui::PushID(id);
+    ImGui::Dummy({0.f, 4.f});
+
+    // Harmony cycle button
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {5.f, 2.f});
+    ImGui::PushStyleColor(ImGuiCol_Button,        IM_COL32(30, 30, 46, 255));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(50, 50, 72, 255));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive,  IM_COL32(70, 70, 100, 255));
+    ImGui::PushStyleColor(ImGuiCol_Text,          IM_COL32(160, 160, 200, 220));
+    if (ImGui::SmallButton(harmony_names[ps.harmony])) {
+        ps.harmony = (ps.harmony + 1) % 5;
+        generate();
+    }
+    ImGui::PopStyleColor(4);
+    ImGui::PopStyleVar();
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Cycle harmony type");
+
+    ImGui::SameLine(0.f, 6.f);
+
+    if (ImGui::SmallButton("Gen##palgen")) generate();
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Regenerate unlocked swatches from current color");
+
+    ImGui::SameLine(0.f, 10.f);
+
+    // Swatches
+    const float SZ  = 18.f;
+    const float GAP = 4.f;
+    ImDrawList* dl  = ImGui::GetWindowDrawList();
+
+    for (int i = 0; i < 5; ++i) {
+        ImGui::PushID(i);
+        ImVec2 cp = ImGui::GetCursorScreenPos();
+
+        ImGui::InvisibleButton("##sw", {SZ, SZ});
+
+        ImU32 col = IM_COL32(
+            (int)(ps.slots[i][0]*255), (int)(ps.slots[i][1]*255),
+            (int)(ps.slots[i][2]*255), 255);
+        bool hov = ImGui::IsItemHovered();
+
+        dl->AddRectFilled(cp, {cp.x+SZ, cp.y+SZ}, col, 4.f);
+        dl->AddRect(cp, {cp.x+SZ, cp.y+SZ},
+            ps.locked[i] ? IM_COL32(255,220,80,230)
+            : hov         ? IM_COL32(255,255,255,180)
+                          : IM_COL32(80,80,100,140),
+            4.f, 0, ps.locked[i] ? 1.5f : 1.f);
+
+        // Lock indicator dot
+        if (ps.locked[i]) {
+            dl->AddCircleFilled({cp.x+SZ-4.f, cp.y+4.f}, 2.5f, IM_COL32(255,220,80,255));
+        }
+
+        if (ImGui::IsItemClicked(0)) {
+            // Left click: apply to rgb
+            rgb[0] = ps.slots[i][0];
+            rgb[1] = ps.slots[i][1];
+            rgb[2] = ps.slots[i][2];
+        }
+        if (ImGui::IsItemClicked(1)) {
+            // Right click: toggle lock
+            ps.locked[i] = !ps.locked[i];
+        }
+        if (hov) ImGui::SetTooltip(ps.locked[i] ? "Locked — right-click to unlock"
+                                                 : "Click to apply — right-click to lock");
+
+        ImGui::SameLine(0.f, GAP);
+        ImGui::PopID();
+    }
+
+    ImGui::NewLine();
+    ImGui::Dummy({0.f, 2.f});
+    ImGui::PopID();
+}
+
 static void section_color(AppState& state, Clip& clip, float w) {
     ImGui::PushStyleColor(ImGuiCol_FrameBg, Col::bg_soft);
     bool col_ov = clip.sub_color_override;
@@ -2664,6 +2798,7 @@ static void section_color(AppState& state, Clip& clip, float w) {
         ImGui::ColorEdit4("##sub_col", clip.sub_color,
             ImGuiColorEditFlags_NoLabel | ImGuiColorEditFlags_AlphaBar);
         if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Clip color");
+        palette_widget("##pal_subcol", clip.sub_color);
     }
     ImGui::PopStyleColor();
 }
@@ -4167,6 +4302,11 @@ static void panel_typography(AppState& state, float w) {
         memcpy(state.typo_color, col_buf, sizeof(state.typo_color));
         typo_restyle_live(state);
     }
+    palette_widget("##pal_typo", col_buf);
+    if (memcmp(col_buf, state.typo_color, sizeof(col_buf)) != 0) {
+        memcpy(state.typo_color, col_buf, sizeof(state.typo_color));
+        typo_restyle_live(state);
+    }
 
     ImGui::Dummy({0.f, 10.f});
 
@@ -5009,7 +5149,9 @@ static void panel_background(AppState& state, float w) {
                     ImGuiColorEditFlags_NoLabel|ImGuiColorEditFlags_NoInputs|ImGuiColorEditFlags_NoBorder))
                     history_push(state, "BG color");
             }
-            ImGui::Dummy({0.f, 6.f});
+            // Palette derived from c1 (primary color)
+            palette_widget("##pal_bg1", bgclip->bg_c1);
+            ImGui::Dummy({0.f, 4.f});
         }
     }
 
@@ -5327,9 +5469,7 @@ static void panel_fx_clip(AppState& state, float w) {
             float sw2 = w - 16.f;
             ui_label("Key Color");
             float col3[3] = { clip.fx_chroma_key_r, clip.fx_chroma_key_g, clip.fx_chroma_key_b };
-            // Color swatch + dropper button on the same row
-            float drop_w = 28.f;
-            ImGui::SetNextItemWidth(sw2 - drop_w - 6.f);
+            ImGui::SetNextItemWidth(sw2);
             if (ImGui::ColorEdit3("##ckbcol", col3, ImGuiColorEditFlags_NoInputs |
                                                      ImGuiColorEditFlags_PickerHueWheel)) {
                 clip.fx_chroma_key_r = col3[0];
@@ -5337,29 +5477,10 @@ static void panel_fx_clip(AppState& state, float w) {
                 clip.fx_chroma_key_b = col3[2];
             }
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Chroma Key: color");
-            ImGui::SameLine(0.f, 6.f);
-            {
-                bool picking = (s_eyedropper_track == state.selected_track);
-                if (picking) ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(80, 180, 255, 200));
-                if (ImGui::Button(picking ? "##drop_on" : "##drop_off", {drop_w, 0.f})) {
-                    s_eyedropper_track = picking ? -1 : state.selected_track;
-                }
-                if (picking) ImGui::PopStyleColor();
-                // Draw pipette icon manually in the button
-                ImVec2 bp = ImGui::GetItemRectMin();
-                ImVec2 be = ImGui::GetItemRectMax();
-                ImDrawList* bdl = ImGui::GetWindowDrawList();
-                ImVec2 bc = { (bp.x + be.x) * 0.5f, (bp.y + be.y) * 0.5f };
-                float  bs = (be.y - bp.y) * 0.28f;
-                ImU32  ic = picking ? IM_COL32(20,20,20,255) : IM_COL32(200,200,220,255);
-                // pipette body (diagonal line)
-                bdl->AddLine({bc.x - bs, bc.y + bs}, {bc.x + bs * 0.6f, bc.y - bs * 0.6f}, ic, 2.f);
-                // tip dot
-                bdl->AddCircleFilled({bc.x - bs - 1.f, bc.y + bs + 1.f}, 2.f, ic);
-                // handle end cap
-                bdl->AddCircleFilled({bc.x + bs * 0.7f, bc.y - bs * 0.7f}, 2.5f, ic);
-                if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("Pick color from preview");
+            palette_widget("##pal_ck", col3);
+            if (col3[0] != clip.fx_chroma_key_r || col3[1] != clip.fx_chroma_key_g || col3[2] != clip.fx_chroma_key_b) {
+                clip.fx_chroma_key_r = col3[0]; clip.fx_chroma_key_g = col3[1]; clip.fx_chroma_key_b = col3[2];
+                history_push(state, "Chroma Key: color");
             }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Threshold");
