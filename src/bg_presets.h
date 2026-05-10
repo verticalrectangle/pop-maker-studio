@@ -141,36 +141,43 @@ inline void draw_bg_preset(const char* id,
         }
     }
     else if (!strcmp(id,"plasma")) {
+        // Bilinear interpolation via AddRectFilledMultiColor — smooth even at low grid res.
         int gx = 32, gy = (int)(gx*h/w+0.5f);
         float cw = w/gx, ch = h/gy;
-        for (int iy = 0; iy < gy; ++iy) for (int ix = 0; ix < gx; ++ix) {
-            float fx = (float)ix/gx, fy = (float)iy/gy;
+        auto plasma_col = [&](int ix, int iy) -> ImU32 {
+            float fx=(float)ix/gx, fy=(float)iy/gy;
             float v = sinf(fx*8+t)*0.25f + sinf(fy*6+t*1.3f)*0.25f
-                    + sinf((fx+fy)*5+t*0.7f)*0.25f + sinf(sqrtf((fx-0.5f)*(fx-0.5f)+(fy-0.5f)*(fy-0.5f))*9+t)*0.25f;
+                    + sinf((fx+fy)*5+t*0.7f)*0.25f
+                    + sinf(sqrtf((fx-0.5f)*(fx-0.5f)+(fy-0.5f)*(fy-0.5f))*9+t)*0.25f;
             v = v*0.5f+0.5f;
             float r,g,b;
-            if (v < 0.333f) { float f=v/0.333f; r=c1[0]+(c2[0]-c1[0])*f; g=c1[1]+(c2[1]-c1[1])*f; b=c1[2]+(c2[2]-c1[2])*f; }
-            else if (v < 0.667f) { float f=(v-0.333f)/0.333f; r=c2[0]+(c3[0]-c2[0])*f; g=c2[1]+(c3[1]-c2[1])*f; b=c2[2]+(c3[2]-c2[2])*f; }
-            else { float f=(v-0.667f)/0.333f; r=c3[0]+(c1[0]-c3[0])*f; g=c3[1]+(c1[1]-c3[1])*f; b=c3[2]+(c1[2]-c3[2])*f; }
-            dl->AddRectFilled({x0+ix*cw,y0+iy*ch},{x0+(ix+1)*cw+1,y0+(iy+1)*ch+1}, rgba(r,g,b,intensity));
-        }
+            if (v<0.333f){float f=v/0.333f;r=c1[0]+(c2[0]-c1[0])*f;g=c1[1]+(c2[1]-c1[1])*f;b=c1[2]+(c2[2]-c1[2])*f;}
+            else if(v<0.667f){float f=(v-0.333f)/0.333f;r=c2[0]+(c3[0]-c2[0])*f;g=c2[1]+(c3[1]-c2[1])*f;b=c2[2]+(c3[2]-c2[2])*f;}
+            else{float f=(v-0.667f)/0.333f;r=c3[0]+(c1[0]-c3[0])*f;g=c3[1]+(c1[1]-c3[1])*f;b=c3[2]+(c1[2]-c3[2])*f;}
+            return rgba(r,g,b,intensity);
+        };
+        for (int iy=0;iy<gy;++iy) for (int ix=0;ix<gx;++ix)
+            dl->AddRectFilledMultiColor({x0+ix*cw,y0+iy*ch},{x0+(ix+1)*cw,y0+(iy+1)*ch},
+                plasma_col(ix,iy), plasma_col(ix+1,iy), plasma_col(ix+1,iy+1), plasma_col(ix,iy+1));
     }
     else if (!strcmp(id,"oilslick")) {
-        for (int ix = 0; ix < 40; ++ix) for (int iy = 0; iy < (int)(40.f*h/w+1); ++iy) {
-            float fx=(float)ix/40, fy=(float)iy/(40.f*h/w);
-            float angle = atan2f(fy-0.5f,fx-0.5f);
-            float hue = fmodf((angle/(2*3.14159f)+0.5f + t*0.12f + (fx+fy)*0.3f), 1.f);
-            float r,g,b;
-            int hi=(int)(hue*6); float f=hue*6-hi;
+        int gx=40, gy=(int)(40.f*h/w+1);
+        float cw=w/gx, ch=h/gy;
+        auto oil_col = [&](int ix, int iy) -> ImU32 {
+            float fx=(float)ix/gx, fy=(float)iy/gy;
+            float angle=atan2f(fy-0.5f,fx-0.5f);
+            float hue=fmodf((angle/(2*3.14159f)+0.5f+t*0.12f+(fx+fy)*0.3f),1.f);
+            float r,g,b; int hi=(int)(hue*6); float f=hue*6-hi;
             switch(hi%6){
-                case 0: r=1;g=f;b=0;break; case 1: r=1-f;g=1;b=0;break;
-                case 2: r=0;g=1;b=f;break; case 3: r=0;g=1-f;b=1;break;
-                case 4: r=f;g=0;b=1;break; default: r=1;g=0;b=1-f;break;
+                case 0:r=1;g=f;b=0;break; case 1:r=1-f;g=1;b=0;break;
+                case 2:r=0;g=1;b=f;break; case 3:r=0;g=1-f;b=1;break;
+                case 4:r=f;g=0;b=1;break; default:r=1;g=0;b=1-f;break;
             }
-            float cw=w/40, ch=cw;
-            dl->AddRectFilled({x0+ix*cw,y0+iy*ch},{x0+(ix+1)*cw+1,y0+(iy+1)*ch+1},
-                rgba(r*0.6f,g*0.6f,b*0.6f,intensity));
-        }
+            return rgba(r*0.6f,g*0.6f,b*0.6f,intensity);
+        };
+        for (int iy=0;iy<gy;++iy) for (int ix=0;ix<gx;++ix)
+            dl->AddRectFilledMultiColor({x0+ix*cw,y0+iy*ch},{x0+(ix+1)*cw,y0+(iy+1)*ch},
+                oil_col(ix,iy), oil_col(ix+1,iy), oil_col(ix+1,iy+1), oil_col(ix,iy+1));
     }
     else if (!strcmp(id,"inkdrop")) {
         dl->AddRectFilled({x0,y0},{x1,y1}, from4(c1,0.95f));
@@ -349,7 +356,7 @@ inline void draw_bg_preset(const char* id,
     }
     else if (!strcmp(id,"hex")) {
         dl->AddRectFilled({x0,y0},{x1,y1}, from4(c1,0.95f));
-        float hr = w*0.055f;
+        float hr = w*0.030f;  // ~32px at 1080p — recognizable hex without bathroom-tile scale
         float hx_step = hr*1.732f, hy_step = hr*1.5f;
         float wave_t = t*2.f;
         int nx=(int)(w/hx_step)+3, ny=(int)(h/hy_step)+3;
@@ -369,7 +376,7 @@ inline void draw_bg_preset(const char* id,
     }
     else if (!strcmp(id,"halftone")) {
         dl->AddRectFilled({x0,y0},{x1,y1}, from4(c1,0.95f));
-        float spacing = w*0.07f;
+        float spacing = w*0.035f;  // ~38px at 1080p — actual halftone scale
         float maxr = spacing*0.45f;
         int nx=(int)(w/spacing)+2, ny=(int)(h/spacing)+2;
         for (int iy=0;iy<ny;++iy) for (int ix=0;ix<nx;++ix) {
@@ -382,7 +389,7 @@ inline void draw_bg_preset(const char* id,
     // ── Retro ─────────────────────────────────────────────────────────────────
     else if (!strcmp(id,"filmgrain")) {
         dl->AddRectFilled({x0,y0},{x1,y1}, rgba(0.05f,0.04f,0.03f,intensity));
-        int gw=80, gh=(int)(80.f*h/w+1);
+        int gw=180, gh=(int)(180.f*h/w+1);  // ~6px cells at 1080p — reads as grain not blocks
         float cw2=w/gw, ch2=h/gh;
         int frame=(int)(t*24)&0xFFF;
         for (int iy=0;iy<gh;++iy) for (int ix=0;ix<gw;++ix) {
@@ -392,14 +399,20 @@ inline void draw_bg_preset(const char* id,
         }
     }
     else if (!strcmp(id,"tvstatic")) {
-        int gw=60, gh=(int)(60.f*h/w+1);
-        float cw2=w/gw, ch2=h/gh;
+        // Horizontal scanlines — more authentic TV static look than square blocks.
         int frame=(int)(t*30)&0xFFFF;
-        for (int iy=0;iy<gh;++iy) for (int ix=0;ix<gw;++ix) {
-            float v=hf(ix+iy*gw+frame*4999);
-            dl->AddRectFilled({x0+ix*cw2,y0+iy*ch2},{x0+(ix+1)*cw2,y0+(iy+1)*ch2},
-                rgba(v,v,v,intensity));
+        int nlines=(int)(h/2.f)+1;
+        for (int il=0;il<nlines;++il) {
+            float fy=y0+il*2.f;
+            // Per-line brightness with coarser band modulation on top
+            float fine=hf(il*13+frame*4999);
+            float band=hf(il/6+frame*997)*0.4f;
+            float v=fine*0.7f+band*0.3f;
+            dl->AddLine({x0,fy+0.5f},{x1,fy+0.5f},rgba(v,v,v,intensity),2.f);
         }
+        // Occasional rolling bright band
+        float by=y0+fmodf(t*h*0.25f,h);
+        dl->AddRectFilled({x0,by},{x1,fminf(y1,by+h*0.04f)},rgba(1.f,1.f,1.f,intensity*0.12f));
     }
     else if (!strcmp(id,"crt")) {
         dl->AddRectFilled({x0,y0},{x1,y1}, from4(c1,0.95f));
@@ -546,23 +559,24 @@ inline void draw_bg_preset(const char* id,
         }
     }
     else if (!strcmp(id,"fire")) {
-        // low-res upward flickering noise
-        int gw=40, gh=50;
+        // Bilinear fire: compute heat at each corner, blend across cells smoothly.
+        int gw=60, gh=75;
         float cw2=w/gw, ch2=h/gh;
         dl->AddRectFilled({x0,y0},{x1,y1}, rgba(0.f,0.f,0.f,intensity));
         int frame=(int)(t*30)&0xFFF;
-        for (int iy=0;iy<gh;++iy) for (int ix=0;ix<gw;++ix) {
-            float fy=(float)(gh-1-iy)/gh;  // 0=top,1=bottom
-            float noise=hf(ix+iy*gw+frame*777+ix*frame%100)*0.5f+
-                         hf((ix+1)%gw+iy*gw+frame*313)*0.3f+
-                         hf(ix+((iy+1)%gh)*gw+frame*541)*0.2f;
+        auto fire_col = [&](int ix, int iy) -> ImU32 {
+            float fy=(float)(gh-iy)/gh;  // 1=top (cool), 0=bottom (hot)
+            float noise=hf(ix+iy*gw+frame*777+ix*(frame&63))*0.5f+
+                        hf((ix+1)%gw+iy*gw+frame*313)*0.3f+
+                        hf(ix+((iy+1)%gh)*gw+frame*541)*0.2f;
             float heat=noise*(1.f-fy*fy)-fy*0.3f;
             heat=heat<0?0:(heat>1?1:heat);
-            float r=fminf(1.f,heat*2.5f), g=fminf(1.f,heat*1.2f-0.2f), b2=0.f;
-            if(g<0)g=0;
-            dl->AddRectFilled({x0+ix*cw2,y0+iy*ch2},{x0+(ix+1)*cw2,y0+(iy+1)*ch2},
-                rgba(r,g,b2,intensity));
-        }
+            float r=fminf(1.f,heat*2.5f), g=fmaxf(0.f,fminf(1.f,heat*1.2f-0.2f));
+            return rgba(r,g,0.f,intensity);
+        };
+        for (int iy=0;iy<gh;++iy) for (int ix=0;ix<gw;++ix)
+            dl->AddRectFilledMultiColor({x0+ix*cw2,y0+iy*ch2},{x0+(ix+1)*cw2,y0+(iy+1)*ch2},
+                fire_col(ix,iy), fire_col(ix+1,iy), fire_col(ix+1,iy+1), fire_col(ix,iy+1));
     }
     // ── Abstract ──────────────────────────────────────────────────────────────
     else if (!strcmp(id,"waveform")) {
