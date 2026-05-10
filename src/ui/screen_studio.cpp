@@ -6909,22 +6909,6 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
                             if (e.start >= t_lo && e.start <= t_hi)
                                 state.clip_selection.insert({e.ti, e.ci});
                     } else {
-                        bool was_selected = (state.selected_track == ti && state.selected_clip == ci);
-                        if (was_selected) {
-                            // Re-click on selected clip — check it's a body click, not an edge
-                            float orig_cx0 = origin.x + TL_LABEL_W + clip.start * zoom - scroll;
-                            float orig_cx1 = origin.x + TL_LABEL_W + clip.end   * zoom - scroll;
-                            float clip_screen_w = orig_cx1 - orig_cx0;
-                            bool on_edge = clip_screen_w > 2.f * ew_hit &&
-                                           (mouse.x <= orig_cx0 + ew_hit || mouse.x >= orig_cx1 - ew_hit);
-                            if (!on_edge) {
-                                state.selected_track = -1;
-                                state.selected_clip  = -1;
-                                state.clip_selection.clear();
-                                s_clip_hit = true;  // suppress empty-area deselect
-                                return;
-                            }
-                        }
                         state.clip_selection.clear();
                         state.clip_selection.insert(key);
                     }
