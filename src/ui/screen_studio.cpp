@@ -9342,8 +9342,6 @@ void ui_studio(AppState& state) {
                     if (ImGui::BeginTabItem("Animation", nullptr, tf(PanelView::Animation)))
                         { s_panel_view = PanelView::Animation; ImGui::EndTabItem(); }
                 }
-                if (ImGui::BeginTabItem("Project", nullptr, tf(PanelView::Project)))
-                    { s_panel_view = PanelView::Project; ImGui::EndTabItem(); }
                 if (ImGui::BeginTabItem("History", nullptr, tf(PanelView::History)))
                     { s_panel_view = PanelView::History; ImGui::EndTabItem(); }
                 ImGui::EndTabBar();
