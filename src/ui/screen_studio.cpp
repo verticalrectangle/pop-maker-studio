@@ -1394,9 +1394,9 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                            mpos.y >= p.y && mpos.y <= p.y+h;
 
     // Eyedropper: intercept click to sample pixel color for chroma key
+    bool eyedrop_consumed = false;
     if (s_eyedropper_track >= 0) {
         ImGui::SetMouseCursor(ImGuiMouseCursor_None);
-        // Draw crosshair cursor
         const float CH = 10.f;
         ImU32 cwhite = IM_COL32(255, 255, 255, 220);
         ImU32 cblack = IM_COL32(0, 0, 0, 160);
@@ -1407,12 +1407,12 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
         dl->AddCircle(mpos, 4.f, cwhite, 12, 1.f);
 
         if (lclick && in_preview_area) {
+            eyedrop_consumed = true;
             float u = (mpos.x - p.x) / w;
             float v = (mpos.y - p.y) / h;
             float sr, sg, sb;
             int tid = s_eyedropper_track;
             if (video_sample_pixel(tid, u, v, &sr, &sg, &sb)) {
-                // Find the selected clip on this track and update chroma key color
                 if (tid < (int)state.tracks.size()) {
                     for (auto& cl : state.tracks[tid].clips) {
                         if (state.playhead >= cl.start && state.playhead < cl.end &&
@@ -1431,7 +1431,7 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
         if (ImGui::IsKeyPressed(ImGuiKey_Escape)) s_eyedropper_track = -1;
     }
 
-    if (lclick && in_preview_area && s_ctx.handle == CanvasHandle::None && s_eyedropper_track < 0) {
+    if (lclick && in_preview_area && s_ctx.handle == CanvasHandle::None && !eyedrop_consumed) {
         struct HitCandidate { int ti, ci; float area; };
         std::vector<HitCandidate> hits;
         for (int ti = 0; ti < (int)state.tracks.size(); ++ti) {
