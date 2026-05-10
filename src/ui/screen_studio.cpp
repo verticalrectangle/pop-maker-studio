@@ -380,9 +380,12 @@ static std::vector<BeatResult> s_beat_queue;
 static std::mutex              s_beat_pending_mtx;
 static std::unordered_set<std::string> s_beat_pending;
 
-// Typography hover preview state — set each frame by panel_typography(), read by canvas render.
-static std::string s_typo_hover_id;    // preset id being hovered; empty = no hover
-static std::string s_typo_series_src;  // source_id of the currently selected lyrics series
+// Social-media safe zone fractions (canvas-relative).
+// TikTok/Reels/Shorts crop sides and cover top/bottom with UI chrome.
+static constexpr float SAFE_TOP  = 0.08f;   // username bar
+static constexpr float SAFE_BOT  = 0.20f;   // interaction buttons (conservative, worst-case Android)
+static constexpr float SAFE_SIDE = 0.05f;   // side crop
+
 
 static void run_beat_detect(AppState& state) {
     if (state.beats_running) return;
@@ -1625,25 +1628,6 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
             }
 
             // Hover preview: temporarily render with the hovered preset's style.
-            Clip hover_override;
-            if (!s_typo_hover_id.empty() && show->clip_type == ClipType::Lyrics
-                && show->source_id == s_typo_series_src) {
-                const TypographyPreset* hpr = typo_preset_by_id(s_typo_hover_id.c_str());
-                if (hpr) {
-                    hover_override                    = *show;
-                    hover_override.font_size          = hpr->font_size;
-                    hover_override.clip_style         = hpr->style;
-                    hover_override.sub_pos            = hpr->sub_pos;
-                    hover_override.sub_pos_x          = hpr->sub_pos_x;
-                    hover_override.sub_pos_y          = hpr->sub_pos_y;
-                    hover_override.sub_wrap_w         = hpr->sub_wrap_w;
-                    hover_override.sub_anchor_h       = hpr->sub_anchor_h;
-                    hover_override.sub_color_override = true;
-                    memcpy(hover_override.sub_color, hpr->color, sizeof(hpr->color));
-                    show = &hover_override;
-                }
-            }
-
             ImGui::PushFont(g_font_black);
             ImFont* txt_font = ImGui::GetFont();
             float fsz    = show->font_size > 0.f ? show->font_size * h
@@ -1678,17 +1662,48 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
 
             float block_h = txt_lines.size() * line_h;
 
+            // Post-wrap font scale: ensure no rendered line overflows the canvas given the anchor.
+            // Checks actual line widths (including trailing spaces/punctuation from transcription).
+            {
+                float max_fit_w;
+                if (show->sub_anchor_h == 0)
+                    max_fit_w = (1.f - show->sub_pos_x - SAFE_SIDE) * w;
+                else if (show->sub_anchor_h == 2)
+                    max_fit_w = (show->sub_pos_x - SAFE_SIDE) * w;
+                else
+                    max_fit_w = 2.f * fminf(show->sub_pos_x - SAFE_SIDE,
+                                            1.f - show->sub_pos_x - SAFE_SIDE) * w;
+                max_fit_w = fminf(max_fit_w, max_line_w);              // also cap at wrap column
+                max_fit_w = fmaxf(max_fit_w, 40.f);                    // safety floor
+
+                float max_rendered_w = 0.f;
+                for (auto& ln : txt_lines)
+                    max_rendered_w = fmaxf(max_rendered_w,
+                        txt_font->CalcTextSizeA(fsz, FLT_MAX, -1.f, ln.c_str()).x);
+
+                if (max_rendered_w > max_fit_w && max_rendered_w > 0.f) {
+                    fsz     *= max_fit_w / max_rendered_w;
+                    line_h   = fsz * 1.25f;
+                    block_h  = txt_lines.size() * line_h;
+                }
+            }
+
             // Vertical slot positioning (uses block_h so multi-line is centred correctly)
+            float sz_top = SAFE_TOP * h;
+            float sz_bot = SAFE_BOT * h;
             float slot_h = fmaxf(40.f, block_h);
             float slot_y;
             if (show->sub_pos == 1)
                 slot_y = p.y + h * 0.5f - block_h * 0.5f;
             else if (show->sub_pos == 2)
-                slot_y = p.y + 24.f + text_rendered * slot_h;
+                slot_y = p.y + sz_top + text_rendered * slot_h;
             else if (show->sub_pos == 3)
                 slot_y = p.y + show->sub_pos_y * h - block_h * 0.5f;
             else
-                slot_y = p.y + h - 24.f - block_h - text_rendered * slot_h;
+                slot_y = p.y + h - sz_bot - block_h - text_rendered * slot_h;
+
+            // Clamp to safe zone so text never lands under platform UI chrome.
+            slot_y = fmaxf(p.y + sz_top, fminf(p.y + h - sz_bot - block_h, slot_y));
 
             // Kinetic typography
             float local_t  = state.playhead - show->start;
@@ -1925,6 +1940,26 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
     }
 
     dl->PopClipRect();  // end video-frame clip region
+
+    // Safe zone guide — shown when a managed Lyrics track exists.
+    // Represents the region guaranteed visible on TikTok/Reels/Shorts.
+    {
+        bool has_lyrics = false;
+        for (auto& t : state.tracks)
+            if (t.managed) { has_lyrics = true; break; }
+        if (has_lyrics) {
+            float sx0 = p.x + SAFE_SIDE * w,  sy0 = p.y + SAFE_TOP * h;
+            float sx1 = p.x + (1.f - SAFE_SIDE) * w, sy1 = p.y + (1.f - SAFE_BOT) * h;
+            dl->AddRect({sx0, sy0}, {sx1, sy1}, IM_COL32(255, 255, 255, 22), 0.f, 0, 1.f);
+            // Corner ticks to make the guide readable without being distracting
+            float tk = 8.f;
+            ImU32 tc = IM_COL32(255, 255, 255, 55);
+            dl->AddLine({sx0, sy0}, {sx0 + tk, sy0}, tc);  dl->AddLine({sx0, sy0}, {sx0, sy0 + tk}, tc);
+            dl->AddLine({sx1, sy0}, {sx1 - tk, sy0}, tc);  dl->AddLine({sx1, sy0}, {sx1, sy0 + tk}, tc);
+            dl->AddLine({sx0, sy1}, {sx0 + tk, sy1}, tc);  dl->AddLine({sx0, sy1}, {sx0, sy1 - tk}, tc);
+            dl->AddLine({sx1, sy1}, {sx1 - tk, sy1}, tc);  dl->AddLine({sx1, sy1}, {sx1, sy1 - tk}, tc);
+        }
+    }
 
     // Transform box overlay — drawn above content, below border chrome
     draw_transform_box(state, dl, p, w, h);
@@ -3844,9 +3879,6 @@ static ImU32 typo_category_dot(const char* cat) {
 }
 
 static void panel_typography(AppState& state, float w) {
-    // Clear hover state at the start of each frame; re-set below if a card is hovered.
-    s_typo_hover_id.clear();
-
     float full_w = w - 16.f;
     ImGui::Dummy({0.f, 8.f});
 
@@ -3862,7 +3894,6 @@ static void panel_typography(AppState& state, float w) {
 
     if (!is_lyrics) {
         // ── Empty state ───────────────────────────────────────────────────────
-        s_typo_series_src.clear();
         ImGui::Dummy({0.f, 40.f});
         ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
         float tw = ImGui::CalcTextSize("Select a lyrics clip to style it").x;
@@ -3876,8 +3907,6 @@ static void panel_typography(AppState& state, float w) {
         return;
     }
 
-    // The series is identified by source_id (empty = just style the one clip).
-    s_typo_series_src = sel_clip->source_id;
 
     // Which preset is currently active on this clip?
     // Try to find it by matching the clip's stored preset_id if we stamped it, else fall back to state.
@@ -3891,7 +3920,7 @@ static void panel_typography(AppState& state, float w) {
 
     const float gap    = 4.f;
     const float cell_w = (full_w - gap) * 0.5f;
-    const float cell_h = 58.f;
+    const float cell_h = 92.f;
 
     const char* cur_cat = nullptr;
     int col_idx = 0;
@@ -3924,9 +3953,6 @@ static void panel_typography(AppState& state, float w) {
 
         bool hov = ImGui::IsMouseHoveringRect(cp, {cp.x + cell_w, cp.y + cell_h});
 
-        // Drive hover preview
-        if (hov) s_typo_hover_id = pr.id;
-
         ImU32 bg_col  = selected ? IM_COL32(55, 48, 88, 255) : IM_COL32(26, 24, 36, 255);
         ImU32 brd_col = selected ? IM_COL32(140, 100, 255, 255) : IM_COL32(50, 47, 65, 200);
         float brd_w   = selected ? 2.f : 1.f;
@@ -3958,20 +3984,62 @@ static void panel_typography(AppState& state, float w) {
                 { tagbuf[k > 0 ? k-1 : 0] = '\0'; break; }
         dl->AddText({tx, cp.y + 27.f}, IM_COL32(120, 115, 145, 200), tagbuf);
 
-        // Anim style badge bottom-right
-        const char* style_tag = nullptr;
-        switch (pr.style) {
-            case AnimStyle::Fade:   style_tag = "fade";   break;
-            case AnimStyle::Slide:  style_tag = "slide";  break;
-            case AnimStyle::Scale:  style_tag = "scale";  break;
-            case AnimStyle::Block:  style_tag = "block";  break;
-            case AnimStyle::Glitch: style_tag = "glitch"; break;
-            default: break;
-        }
-        if (style_tag) {
-            ImVec2 tsz = ImGui::CalcTextSize(style_tag);
-            dl->AddText({cp.x + cell_w - tsz.x - 7.f, cp.y + cell_h - 16.f},
-                IM_COL32(100, 90, 140, 200), style_tag);
+        // ── Inline text preview ───────────────────────────────────────────────
+        {
+            float px0 = cp.x + 6.f, px1 = cp.x + cell_w - 6.f;
+            float py0 = cp.y + 42.f, py1 = cp.y + cell_h - 6.f;
+            float pw  = px1 - px0, ph = py1 - py0;
+
+            dl->AddRectFilled({px0, py0}, {px1, py1}, IM_COL32(10, 8, 18, 220), 3.f);
+            dl->AddRect({px0, py0}, {px1, py1}, IM_COL32(40, 36, 58, 180), 3.f);
+            dl->PushClipRect({px0, py0}, {px1, py1}, true);
+
+            // Sample string with preset's caps setting
+            char sample[8] = "stay";
+            if (pr.all_caps) { sample[0]='S'; sample[1]='T'; sample[2]='A'; sample[3]='Y'; }
+
+            ImFont* pfont = g_font_black;
+            float pfsz = fmaxf(8.f, fminf(20.f, pr.font_size * ph * 4.5f));
+            ImVec2 tsz2 = pfont->CalcTextSizeA(pfsz, FLT_MAX, -1.f, sample);
+
+            // Horizontal anchor
+            float pax = px0 + pr.sub_pos_x * pw;
+            float plx;
+            if (pr.sub_anchor_h == 0)      plx = pax;
+            else if (pr.sub_anchor_h == 2) plx = pax - tsz2.x;
+            else                            plx = pax - tsz2.x * 0.5f;
+            plx = fmaxf(px0, fminf(px1 - tsz2.x, plx));
+
+            // Vertical slot
+            float ply;
+            if (pr.sub_pos == 1)      ply = py0 + ph * 0.5f - tsz2.y * 0.5f;
+            else if (pr.sub_pos == 2) ply = py0 + 2.f;
+            else if (pr.sub_pos == 3) ply = py0 + pr.sub_pos_y * ph - tsz2.y * 0.5f;
+            else                       ply = py1 - tsz2.y - 2.f;
+            ply = fmaxf(py0, fminf(py1 - tsz2.y, ply));
+
+            ImU32 tcol = IM_COL32((int)(pr.color[0]*255), (int)(pr.color[1]*255),
+                                   (int)(pr.color[2]*255), (int)(pr.color[3]*255));
+            dl->AddText(pfont, pfsz, {plx, ply}, tcol, sample);
+
+            // Anim style badge bottom-right inside preview
+            const char* style_tag = nullptr;
+            switch (pr.style) {
+                case AnimStyle::Fade:   style_tag = "fade";   break;
+                case AnimStyle::Slide:  style_tag = "slide";  break;
+                case AnimStyle::Scale:  style_tag = "scale";  break;
+                case AnimStyle::Block:  style_tag = "block";  break;
+                case AnimStyle::Glitch: style_tag = "glitch"; break;
+                default: break;
+            }
+            if (style_tag) {
+                ImVec2 bsz = ImGui::GetFont()->CalcTextSizeA(9.f, FLT_MAX, -1.f, style_tag);
+                dl->AddText(ImGui::GetFont(), 9.f,
+                    {px1 - bsz.x - 4.f, py1 - bsz.y - 2.f},
+                    IM_COL32(100, 90, 140, 180), style_tag);
+            }
+
+            dl->PopClipRect();
         }
 
         ImGui::SetCursorScreenPos(cp);

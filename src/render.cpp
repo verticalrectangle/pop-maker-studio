@@ -595,13 +595,13 @@ static bool write_filter_script(
 
             std::string y_e;
             if      (cl.sub_pos == 1) y_e = "(h-text_h)/2";
-            else if (cl.sub_pos == 2) y_e = "h*0.10";
+            else if (cl.sub_pos == 2) y_e = "h*0.08";          // SAFE_TOP
             else if (cl.sub_pos == 3) {
                 char yb[64];
                 snprintf(yb, sizeof(yb), "h*%.4f-text_h/2", (double)cl.sub_pos_y);
                 y_e = yb;
             } else {
-                y_e = "h*0.88-text_h";
+                y_e = "h*0.80-text_h";                          // 1 - SAFE_BOT
             }
 
             // Per-word karaoke overlays only for clips created in Karaoke grouping mode
