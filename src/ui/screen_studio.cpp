@@ -8551,46 +8551,7 @@ void ui_studio(AppState& state) {
     ImGui::PushStyleColor(ImGuiCol_ChildBg, Col::bg_soft);
     ImGui::PushStyleColor(ImGuiCol_Border,  Col::line);
     if (ImGui::BeginChild("##props_zone", {props_w, body_h}, ImGuiChildFlags_Borders)) {
-        // Tab bar
-        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {12.f, 6.f});
-        ImGui::PushStyleColor(ImGuiCol_Tab,       Col::bg_soft);
-        ImGui::PushStyleColor(ImGuiCol_TabActive, Col::line);
-        // Auto-switch to Typography tab when a Lyrics/Text clip is newly selected.
-        {
-            static int s_last_sel_track = -1, s_last_sel_clip = -1;
-            int st = state.selected_track, sc = state.selected_clip;
-            if ((st != s_last_sel_track || sc != s_last_sel_clip) && st >= 0 && sc >= 0
-                && st < (int)state.tracks.size() && sc < (int)state.tracks[st].clips.size()) {
-                auto ct = state.tracks[st].clips[sc].clip_type;
-                if (ct == ClipType::Lyrics || ct == ClipType::Text || ct == ClipType::Subtitle)
-                    state.panel_tab = 8;
-            }
-            s_last_sel_track = st; s_last_sel_clip = sc;
-        }
-
-        // Redirect stale Lyrics tab (4) to Typography (8).
-        if (state.panel_tab == 4) state.panel_tab = 8;
-
-        // Redirect stale tab values from removed tabs (BG=9, Adj=5, FX=7)
-        if (state.panel_tab == 5 || state.panel_tab == 7 || state.panel_tab == 9)
-            state.panel_tab = 0;
-
-        if (ImGui::BeginTabBar("##panel_tabs")) {
-            if (ImGui::BeginTabItem("Clip"))       { state.panel_tab=0; ImGui::EndTabItem(); }
-            if (ImGui::BeginTabItem("Typography")) { state.panel_tab=8; ImGui::EndTabItem(); }
-            if (ImGui::BeginTabItem("Animation"))  { state.panel_tab=1; ImGui::EndTabItem(); }
-            if (ImGui::BeginTabItem("Project"))    { state.panel_tab=6; ImGui::EndTabItem(); }
-            if (ImGui::BeginTabItem("History"))    { state.panel_tab=3; ImGui::EndTabItem(); }
-            ImGui::EndTabBar();
-        }
-        ImGui::PopStyleColor(2);
-        ImGui::PopStyleVar();
-
-        ImGui::BeginChild("##panel_scroll", {0.f, 0.f});
-        ImGui::SetCursorPosX(8.f);
-        float pw = props_w - 16.f;
-
-        // Route based on selected clip type, then panel tab
+        // ── Resolve selected clip type ────────────────────────────────────────
         ClipType sel_ct = ClipType::Text;
         bool has_sel = (state.selected_track >= 0 &&
             state.selected_track < (int)state.tracks.size() &&
@@ -8598,11 +8559,74 @@ void ui_studio(AppState& state) {
             state.selected_clip  < (int)state.tracks[state.selected_track].clips.size());
         if (has_sel)
             sel_ct = state.tracks[state.selected_track].clips[state.selected_clip].clip_type;
-        bool has_fx_sel = has_sel && sel_ct == ClipType::Effect;
+        bool has_fx_sel          = has_sel && sel_ct == ClipType::Effect;
         bool focused_is_adjustment = has_fx_sel &&
             state.tracks[state.selected_track].clips[state.selected_clip].fx_type == FXType::Adjustment;
-        bool focused_is_fx = has_fx_sel && !focused_is_adjustment;
-        bool focused_is_bg = has_sel && sel_ct == ClipType::Background;
+        bool focused_is_fx       = has_fx_sel && !focused_is_adjustment;
+        bool focused_is_bg       = has_sel && sel_ct == ClipType::Background;
+        bool focused_is_override = focused_is_adjustment || focused_is_fx || focused_is_bg;
+
+        bool is_text_like = has_sel && (sel_ct == ClipType::Text ||
+                                        sel_ct == ClipType::Lyrics ||
+                                        sel_ct == ClipType::Subtitle);
+        bool show_clip_tabs = has_sel && !focused_is_override;
+
+        // ── Auto-switch tab on selection change ───────────────────────────────
+        {
+            static int s_last_sel_track = -1, s_last_sel_clip = -1;
+            int st = state.selected_track, sc = state.selected_clip;
+            if (st != s_last_sel_track || sc != s_last_sel_clip) {
+                if (is_text_like)
+                    state.panel_tab = 8;                   // → Typography
+                else if (show_clip_tabs)
+                    state.panel_tab = 0;                   // → Clip
+                else if (!has_sel || focused_is_override)
+                    state.panel_tab = 6;                   // → Project
+                s_last_sel_track = st; s_last_sel_clip = sc;
+            }
+        }
+
+        // Redirect legacy / stale tab values to safe defaults
+        if (state.panel_tab == 4) state.panel_tab = 8;
+        if (state.panel_tab == 5 || state.panel_tab == 7 || state.panel_tab == 9)
+            state.panel_tab = 0;
+        if (!show_clip_tabs && (state.panel_tab == 0 || state.panel_tab == 1 ||
+                                state.panel_tab == 8))
+            state.panel_tab = 6;
+        if (!is_text_like && state.panel_tab == 8)
+            state.panel_tab = 0;
+
+        // ── Contextual tab bar ────────────────────────────────────────────────
+        // Tabs are hidden entirely for BG / FX / Adjustment clips whose panels
+        // take over the full content area.  Otherwise show only relevant tabs.
+        if (!focused_is_override) {
+            ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {12.f, 6.f});
+            ImGui::PushStyleColor(ImGuiCol_Tab,       Col::bg_soft);
+            ImGui::PushStyleColor(ImGuiCol_TabActive, Col::line);
+
+            if (ImGui::BeginTabBar("##panel_tabs")) {
+                if (show_clip_tabs) {
+                    if (ImGui::BeginTabItem("Clip"))
+                        { state.panel_tab=0; ImGui::EndTabItem(); }
+                    if (is_text_like && ImGui::BeginTabItem("Typography"))
+                        { state.panel_tab=8; ImGui::EndTabItem(); }
+                    if (ImGui::BeginTabItem("Animation"))
+                        { state.panel_tab=1; ImGui::EndTabItem(); }
+                }
+                if (ImGui::BeginTabItem("Project"))
+                    { state.panel_tab=6; ImGui::EndTabItem(); }
+                if (ImGui::BeginTabItem("History"))
+                    { state.panel_tab=3; ImGui::EndTabItem(); }
+                ImGui::EndTabBar();
+            }
+
+            ImGui::PopStyleColor(2);
+            ImGui::PopStyleVar();
+        }
+
+        ImGui::BeginChild("##panel_scroll", {0.f, 0.f});
+        ImGui::SetCursorPosX(8.f);
+        float pw = props_w - 16.f;
 
         if      (focused_is_adjustment)    panel_adjustment(state, pw);
         else if (focused_is_fx)            panel_fx_clip(state, pw);
