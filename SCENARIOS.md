@@ -66,6 +66,16 @@ Tabs still open.
 
 ---
 
+## Billy the Gen Alpha
+
+Opens it by accident while trying to find Roblox. Drags in a Playboi Carti song because that's the only artist he knows by name. Hits every button in the UI within 45 seconds. Somehow enables karaoke mode without knowing what karaoke is. Switches presets 11 times in 30 seconds by mashing the grid. Lands on "Strobe" and has a genuine reaction of "WOAH."
+
+Exports it. The file is 4 seconds long because he trimmed the timeline by dragging something he shouldn't have. Sends it to his friend on Discord. His friend says "W app." Billy says "no cap it took me 3 hours."
+
+Has already forgotten the name of the app.
+
+---
+
 ## Gerber the Baby
 
 Cannot read.

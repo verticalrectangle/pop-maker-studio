@@ -26,6 +26,7 @@
 #include <algorithm>
 #include <mutex>
 #include <unordered_set>
+#include <unordered_map>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -918,217 +919,251 @@ static void draw_pipeline_strip(AppState& state, float w) {
     ImGui::Dummy({w, h});
 }
 
-// ── Transform box overlay ─────────────────────────────────────────────────────
-// Drawn after all track content for the selected clip.
-// Video clips: 8 scale handles + move interior + rotation handle.
-// Text/subtitle/lyrics clips: column rect with edge handles for width + move.
-// Keyframes are NOT written on drag — caller must explicitly add via the
-// Animation panel.  History is pushed once on mouse-up.
+// ── Canvas object system ──────────────────────────────────────────────────────
+// TextLayout: tight rendered bbox computed each frame during text draw.
+// Persists so draw_canvas_handles can use accurate extents for handles.
+struct TextLayout {
+    float x0 = 0.f, y0 = 0.f, x1 = 0.f, y1 = 0.f;  // tight bbox, canvas pixels
+    float block_ax = 0.f;   // anchor X (canvas pixels)
+    float fsz      = 0.f;   // final rendered font size
+    bool  valid    = false;
+};
+static std::unordered_map<uint64_t, TextLayout> s_text_layouts;
 
-enum class TxHandle {
-    None,
-    Move,
-    ScaleNW, ScaleN, ScaleNE,
-    ScaleE,  ScaleSE, ScaleS,
-    ScaleSW, ScaleW,
-    Rotate,
-    // Text-specific
-    TextLeft, TextRight, TextTop, TextBot
+enum class CanvasHandle {
+    None, Body,
+    CornerTL, CornerTR, CornerBL, CornerBR,
+    EdgeL, EdgeR, EdgeT, EdgeB,
+    Rotate
 };
 
-struct TxState {
-    TxHandle handle    = TxHandle::None;
-    int      track_idx = -1;
-    int      clip_idx  = -1;
-    // values at drag start
-    float    start_mx = 0.f, start_my = 0.f;
-    float    start_px = 0.f, start_py = 0.f;
-    float    start_sx = 0.f, start_sy = 0.f;
-    float    start_rot = 0.f;
-    float    start_wrap_w    = 0.f;
-    float    start_font_size = 0.f;
-    int      start_anchor    = 1;   // sub_anchor_h at drag start (for Move conversion)
-    bool     dirty = false;
+struct CanvasTransform {
+    CanvasHandle handle     = CanvasHandle::None;
+    int          track_idx  = -1, clip_idx = -1;
+    float        drag_sx    = 0.f, drag_sy = 0.f;
+    float        start_pos_x = 0.f, start_pos_y = 0.f;
+    float        start_wrap_w    = 0.f;
+    float        start_font_size = 0.f;
+    float        start_scale_x   = 0.f, start_scale_y = 0.f;
+    float        start_rot       = 0.f;
+    int          start_anchor    = 1;
+    float        start_bbox_x0   = 0.f, start_bbox_y0 = 0.f;
+    float        start_bbox_x1   = 0.f, start_bbox_y1 = 0.f;
+    bool         dirty = false;
 };
-static TxState s_tx;
+static CanvasTransform s_ctx;
 
-static void draw_transform_box(AppState& state, ImDrawList* dl,
-                                ImVec2 p, float w, float h) {
+static void compute_video_bbox(AppState& state, Clip& cl, ImVec2 p, float w, float h,
+                                float& bx0, float& by0, float& bx1, float& by1) {
+    float px = cl.eval_prop("pos_x",   state.playhead) * w + p.x;
+    float py = cl.eval_prop("pos_y",   state.playhead) * h + p.y;
+    float sx = cl.eval_prop("scale_x", state.playhead);
+    float sy = cl.eval_prop("scale_y", state.playhead);
+    float fit_w = w, fit_h = h;
+    std::string vkey = clip_slot_key(cl.text, cl.start);
+    for (int s = 0; s < MAX_VIDEO_TRACKS; ++s) {
+        if (state.proxy_paths[s] == vkey && video_info(s).width > 0) {
+            float va = (float)video_info(s).width / (float)video_info(s).height;
+            float ca = w / h;
+            if (va > ca) { fit_w = w; fit_h = w / va; }
+            else         { fit_h = h; fit_w = h * va; }
+            break;
+        }
+    }
+    float hw = fit_w * sx * 0.5f, hh = fit_h * sy * 0.5f;
+    bx0 = px - hw; by0 = py - hh;
+    bx1 = px + hw; by1 = py + hh;
+}
+
+static void draw_canvas_handles(AppState& state, ImDrawList* dl, ImVec2 p, float w, float h) {
     if (state.selected_track < 0 || state.selected_clip < 0) return;
     if (state.selected_track >= (int)state.tracks.size()) return;
     Track& tr = state.tracks[state.selected_track];
     if (state.selected_clip >= (int)tr.clips.size()) return;
     Clip& cl = tr.clips[state.selected_clip];
 
-    ImVec2 mpos  = ImGui::GetIO().MousePos;
+    ImVec2 mpos   = ImGui::GetIO().MousePos;
     bool   ldown  = ImGui::IsMouseDown(0);
     bool   lclick = ImGui::IsMouseClicked(0);
 
-    // Only draw when mouse is inside the preview (or drag is active)
-    bool in_preview = mpos.x >= p.x && mpos.x <= p.x+w &&
-                      mpos.y >= p.y && mpos.y <= p.y+h;
-    bool drag_active = (s_tx.handle != TxHandle::None);
+    bool in_preview  = mpos.x >= p.x && mpos.x <= p.x+w &&
+                       mpos.y >= p.y && mpos.y <= p.y+h;
+    bool drag_active = (s_ctx.handle != CanvasHandle::None);
     if (!in_preview && !drag_active) return;
 
-    const float HR = 5.f;   // handle radius
+    // ── Handle visual constants ───────────────────────────────────────────────
+    const float CR       = 4.5f;    // corner half-size
+    const float EL       = 11.f;    // edge handle long-axis half
+    const float ES       = 2.5f;    // edge handle short-axis half
     const float ROT_DIST = 28.f;
 
-    ImU32 box_col  = IM_COL32(255, 255, 255, 100);
-    ImU32 hdl_col  = IM_COL32(255, 255, 255, 220);
+    ImU32 box_col  = IM_COL32(255, 255, 255, 180);
+    ImU32 hdl_col  = IM_COL32(255, 255, 255, 230);
+    ImU32 hdl_bdr  = IM_COL32(0,   0,   0,   180);
     ImU32 hdl_hov  = IM_COL32(100, 180, 255, 255);
     ImU32 snap_col = IM_COL32(100, 180, 255, 160);
 
-    auto hit_handle = [&](ImVec2 hpos) -> bool {
-        return fabsf(mpos.x - hpos.x) <= HR + 3.f &&
-               fabsf(mpos.y - hpos.y) <= HR + 3.f;
+    // ── Draw helpers (return true if clicked) ─────────────────────────────────
+    auto draw_corner_h = [&](float cx, float cy, CanvasHandle ht) -> bool {
+        bool hov = fabsf(mpos.x - cx) <= CR + 4.f && fabsf(mpos.y - cy) <= CR + 4.f;
+        ImU32 c = (hov || s_ctx.handle == ht) ? hdl_hov : hdl_col;
+        dl->AddRectFilled({cx-CR, cy-CR}, {cx+CR, cy+CR}, c, 2.f);
+        dl->AddRect      ({cx-CR, cy-CR}, {cx+CR, cy+CR}, hdl_bdr, 2.f, 0, 0.8f);
+        return hov && lclick && s_ctx.handle == CanvasHandle::None;
     };
-    auto draw_handle = [&](ImVec2 hpos, TxHandle ht) {
-        bool hov = hit_handle(hpos);
-        ImU32 c = (hov || s_tx.handle == ht) ? hdl_hov : hdl_col;
-        dl->AddRectFilled({hpos.x-HR, hpos.y-HR}, {hpos.x+HR, hpos.y+HR}, c, 1.f);
-        dl->AddRect      ({hpos.x-HR, hpos.y-HR}, {hpos.x+HR, hpos.y+HR},
-                           IM_COL32(0,0,0,160), 1.f);
-        if (hov && lclick && s_tx.handle == TxHandle::None) {
-            s_tx.handle    = ht;
-            s_tx.track_idx = state.selected_track;
-            s_tx.clip_idx  = state.selected_clip;
-            s_tx.start_mx  = mpos.x; s_tx.start_my = mpos.y;
-            s_tx.start_px  = cl.pos_x;    s_tx.start_py  = cl.pos_y;
-            s_tx.start_sx  = cl.scale_x;  s_tx.start_sy  = cl.scale_y;
-            s_tx.start_rot = cl.rotation;
-            s_tx.start_wrap_w    = cl.sub_wrap_w;
-            s_tx.start_font_size = cl.font_size > 0.f ? cl.font_size
-                                   : ImGui::GetFontSize() * 1.8f / h;
-            s_tx.dirty     = false;
-        }
+    // vertical=true → tall bar (left/right edges); false → wide bar (top/bottom)
+    auto draw_edge_h = [&](float ex, float ey, bool vertical, CanvasHandle ht) -> bool {
+        float ex0 = vertical ? ex-ES : ex-EL, ey0 = vertical ? ey-EL : ey-ES;
+        float ex1 = vertical ? ex+ES : ex+EL, ey1 = vertical ? ey+EL : ey+ES;
+        bool hov = mpos.x >= ex0-4.f && mpos.x <= ex1+4.f &&
+                   mpos.y >= ey0-4.f && mpos.y <= ey1+4.f;
+        ImU32 c = (hov || s_ctx.handle == ht) ? hdl_hov : hdl_col;
+        dl->AddRectFilled({ex0, ey0}, {ex1, ey1}, c, 2.5f);
+        dl->AddRect      ({ex0, ey0}, {ex1, ey1}, hdl_bdr, 2.5f, 0, 0.6f);
+        return hov && lclick && s_ctx.handle == CanvasHandle::None;
+    };
+    auto begin_drag = [&](CanvasHandle ht) {
+        s_ctx.handle    = ht;
+        s_ctx.track_idx = state.selected_track;
+        s_ctx.clip_idx  = state.selected_clip;
+        s_ctx.drag_sx   = mpos.x;
+        s_ctx.drag_sy   = mpos.y;
+        s_ctx.dirty     = false;
     };
 
-    // ── Video clip box ────────────────────────────────────────────────────────
+    // ── Video clip ────────────────────────────────────────────────────────────
     if (cl.clip_type == ClipType::Video) {
-        int slot = -1;
-        for (int s = 0; s < MAX_VIDEO_TRACKS; ++s)
-            if (state.proxy_paths[s] == cl.text) { slot = s; break; }
+        float bx0, by0, bx1, by1;
+        compute_video_bbox(state, cl, p, w, h, bx0, by0, bx1, by1);
+        float vmx = (bx0+bx1)*0.5f, vmy = (by0+by1)*0.5f;
+        float vcx  = cl.eval_prop("pos_x", state.playhead) * w + p.x;
+        float vcy  = cl.eval_prop("pos_y", state.playhead) * h + p.y;
 
-        float px   = cl.eval_prop("pos_x",   state.playhead) * w + p.x;
-        float py   = cl.eval_prop("pos_y",   state.playhead) * h + p.y;
-        float sx   = cl.eval_prop("scale_x", state.playhead);
-        float sy   = cl.eval_prop("scale_y", state.playhead);
-
-        float fit_w = w, fit_h = h;
-        if (slot >= 0 && video_info(slot).width > 0) {
-            float va = (float)video_info(slot).width / (float)video_info(slot).height;
-            float ca = w / h;
-            if (va > ca) { fit_w = w;         fit_h = w / va; }
-            else         { fit_h = h;         fit_w = h * va; }
-        }
-        float hw = fit_w * sx * 0.5f;
-        float hh = fit_h * sy * 0.5f;
-
-        // Box corners (no rotation for simplicity — rotation handle only)
-        float bx0 = px - hw, bx1 = px + hw;
-        float by0 = py - hh, by1 = py + hh;
-
-        // Draw dashed box
-        ImU32 dc = box_col;
-        float dash = 6.f;
-        for (float x = bx0; x < bx1; x += dash*2)
-            dl->AddLine({x, by0}, {fminf(x+dash, bx1), by0}, dc);
-        for (float x = bx0; x < bx1; x += dash*2)
-            dl->AddLine({x, by1}, {fminf(x+dash, bx1), by1}, dc);
-        for (float y = by0; y < by1; y += dash*2)
-            dl->AddLine({bx0, y}, {bx0, fminf(y+dash, by1)}, dc);
-        for (float y = by0; y < by1; y += dash*2)
-            dl->AddLine({bx1, y}, {bx1, fminf(y+dash, by1)}, dc);
-
-        float mx = (bx0 + bx1) * 0.5f;
-        float my = (by0 + by1) * 0.5f;
+        // Solid box
+        dl->AddRect({bx0, by0}, {bx1, by1}, box_col, 0.f, 0, 1.5f);
 
         // Rotation handle
-        ImVec2 rot_pos = {mx, by0 - ROT_DIST};
-        dl->AddLine({mx, by0}, rot_pos, IM_COL32(255,255,255,80));
-        dl->AddCircleFilled(rot_pos, HR + 1.f, IM_COL32(0,0,0,120));
-        dl->AddCircle(rot_pos, HR + 1.f, hdl_col);
-        if ((hit_handle(rot_pos) || s_tx.handle == TxHandle::Rotate) && lclick &&
-            s_tx.handle == TxHandle::None) {
-            s_tx.handle = TxHandle::Rotate;
-            s_tx.track_idx = state.selected_track; s_tx.clip_idx = state.selected_clip;
-            s_tx.start_mx = mpos.x; s_tx.start_my = mpos.y;
-            s_tx.start_rot = cl.rotation; s_tx.dirty = false;
+        ImVec2 rot_pos = {vmx, by0 - ROT_DIST};
+        dl->AddLine({vmx, by0}, rot_pos, IM_COL32(255,255,255,80));
+        dl->AddCircleFilled(rot_pos, CR+1.5f, IM_COL32(0,0,0,120));
+        bool rot_act = (s_ctx.handle == CanvasHandle::Rotate);
+        dl->AddCircle(rot_pos, CR+1.5f, rot_act ? hdl_hov : hdl_col);
+        float rdist = sqrtf((mpos.x-rot_pos.x)*(mpos.x-rot_pos.x) +
+                            (mpos.y-rot_pos.y)*(mpos.y-rot_pos.y));
+        if (rdist <= CR+5.f && lclick && s_ctx.handle == CanvasHandle::None) {
+            begin_drag(CanvasHandle::Rotate);
+            s_ctx.start_rot = cl.rotation;
         }
 
-        // Scale + move handles
-        draw_handle({bx0, by0}, TxHandle::ScaleNW);
-        draw_handle({mx,  by0}, TxHandle::ScaleN);
-        draw_handle({bx1, by0}, TxHandle::ScaleNE);
-        draw_handle({bx1, my},  TxHandle::ScaleE);
-        draw_handle({bx1, by1}, TxHandle::ScaleSE);
-        draw_handle({mx,  by1}, TxHandle::ScaleS);
-        draw_handle({bx0, by1}, TxHandle::ScaleSW);
-        draw_handle({bx0, my},  TxHandle::ScaleW);
+        // Corners (proportional scale)
+        if (draw_corner_h(bx0, by0, CanvasHandle::CornerTL)) {
+            begin_drag(CanvasHandle::CornerTL);
+            s_ctx.start_scale_x = cl.scale_x; s_ctx.start_scale_y = cl.scale_y;
+            s_ctx.start_bbox_y0 = by0;         s_ctx.start_bbox_y1 = by1;
+        }
+        if (draw_corner_h(bx1, by0, CanvasHandle::CornerTR)) {
+            begin_drag(CanvasHandle::CornerTR);
+            s_ctx.start_scale_x = cl.scale_x; s_ctx.start_scale_y = cl.scale_y;
+            s_ctx.start_bbox_y0 = by0;         s_ctx.start_bbox_y1 = by1;
+        }
+        if (draw_corner_h(bx1, by1, CanvasHandle::CornerBR)) {
+            begin_drag(CanvasHandle::CornerBR);
+            s_ctx.start_scale_x = cl.scale_x; s_ctx.start_scale_y = cl.scale_y;
+            s_ctx.start_bbox_y0 = by0;         s_ctx.start_bbox_y1 = by1;
+        }
+        if (draw_corner_h(bx0, by1, CanvasHandle::CornerBL)) {
+            begin_drag(CanvasHandle::CornerBL);
+            s_ctx.start_scale_x = cl.scale_x; s_ctx.start_scale_y = cl.scale_y;
+            s_ctx.start_bbox_y0 = by0;         s_ctx.start_bbox_y1 = by1;
+        }
+        // Edges
+        if (draw_edge_h(vmx, by0, false, CanvasHandle::EdgeT)) {
+            begin_drag(CanvasHandle::EdgeT);
+            s_ctx.start_scale_y = cl.scale_y; s_ctx.start_bbox_y0 = by0; s_ctx.start_bbox_y1 = by1;
+        }
+        if (draw_edge_h(vmx, by1, false, CanvasHandle::EdgeB)) {
+            begin_drag(CanvasHandle::EdgeB);
+            s_ctx.start_scale_y = cl.scale_y; s_ctx.start_bbox_y0 = by0; s_ctx.start_bbox_y1 = by1;
+        }
+        if (draw_edge_h(bx0, vmy, true, CanvasHandle::EdgeL)) {
+            begin_drag(CanvasHandle::EdgeL);
+            s_ctx.start_scale_x = cl.scale_x; s_ctx.start_bbox_x0 = bx0; s_ctx.start_bbox_x1 = bx1;
+        }
+        if (draw_edge_h(bx1, vmy, true, CanvasHandle::EdgeR)) {
+            begin_drag(CanvasHandle::EdgeR);
+            s_ctx.start_scale_x = cl.scale_x; s_ctx.start_bbox_x0 = bx0; s_ctx.start_bbox_x1 = bx1;
+        }
 
-        // Interior move hit
-        bool in_interior = mpos.x > bx0+HR*2 && mpos.x < bx1-HR*2 &&
-                           mpos.y > by0+HR*2 && mpos.y < by1-HR*2;
-        if (in_interior) {
+        // Interior → move
+        bool in_vid = mpos.x > bx0+CR*2 && mpos.x < bx1-CR*2 &&
+                      mpos.y > by0+CR*2 && mpos.y < by1-CR*2;
+        if (in_vid) {
             ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
-            if (lclick && s_tx.handle == TxHandle::None) {
-                s_tx.handle    = TxHandle::Move;
-                s_tx.track_idx = state.selected_track;
-                s_tx.clip_idx  = state.selected_clip;
-                s_tx.start_mx  = mpos.x; s_tx.start_my = mpos.y;
-                s_tx.start_px  = cl.pos_x; s_tx.start_py = cl.pos_y;
-                s_tx.dirty     = false;
+            if (lclick && s_ctx.handle == CanvasHandle::None) {
+                begin_drag(CanvasHandle::Body);
+                s_ctx.start_pos_x = cl.pos_x; s_ctx.start_pos_y = cl.pos_y;
             }
         }
 
-        // Apply drag
-        if (drag_active && s_tx.track_idx == state.selected_track &&
-            s_tx.clip_idx == state.selected_clip) {
-            float dmx = mpos.x - s_tx.start_mx;
-            float dmy = mpos.y - s_tx.start_my;
-            Clip& mc = state.tracks[s_tx.track_idx].clips[s_tx.clip_idx];
-            switch (s_tx.handle) {
-                case TxHandle::Move:
-                    mc.pos_x = fmaxf(0.f, fminf(1.f, s_tx.start_px + dmx / w));
-                    mc.pos_y = fmaxf(0.f, fminf(1.f, s_tx.start_py + dmy / h));
+        // Apply video drag
+        if (drag_active && s_ctx.track_idx == state.selected_track &&
+            s_ctx.clip_idx == state.selected_clip && cl.clip_type == ClipType::Video) {
+            float dmx = mpos.x - s_ctx.drag_sx;
+            float dmy = mpos.y - s_ctx.drag_sy;
+            Clip& mc = state.tracks[s_ctx.track_idx].clips[s_ctx.clip_idx];
+            float orig_h = s_ctx.start_bbox_y1 - s_ctx.start_bbox_y0;
+            float orig_w = s_ctx.start_bbox_x1 - s_ctx.start_bbox_x0;
+            switch (s_ctx.handle) {
+                case CanvasHandle::Body:
+                    mc.pos_x = fmaxf(0.f, fminf(1.f, s_ctx.start_pos_x + dmx/w));
+                    mc.pos_y = fmaxf(0.f, fminf(1.f, s_ctx.start_pos_y + dmy/h));
                     break;
-                case TxHandle::Rotate: {
-                    float cx2 = px, cy2 = py;
-                    float ang0 = atan2f(s_tx.start_my - cy2, s_tx.start_mx - cx2);
-                    float ang1 = atan2f(mpos.y        - cy2, mpos.x        - cx2);
-                    mc.rotation = fmodf(s_tx.start_rot + (ang1 - ang0) * 180.f / 3.14159f, 360.f);
-                    break;
-                }
-                case TxHandle::ScaleNW: case TxHandle::ScaleN: case TxHandle::ScaleNE:
-                case TxHandle::ScaleSW: case TxHandle::ScaleS: case TxHandle::ScaleSE: {
-                    float ds = 1.f + dmy / (fit_h * s_tx.start_sy * 0.5f) *
-                               (s_tx.handle == TxHandle::ScaleNW ||
-                                s_tx.handle == TxHandle::ScaleN  ||
-                                s_tx.handle == TxHandle::ScaleNE ? -1.f : 1.f);
-                    mc.scale_x = fmaxf(0.05f, s_tx.start_sx * ds);
-                    mc.scale_y = fmaxf(0.05f, s_tx.start_sy * ds);
+                case CanvasHandle::Rotate: {
+                    float ang0 = atan2f(s_ctx.drag_sy - vcy, s_ctx.drag_sx - vcx);
+                    float ang1 = atan2f(mpos.y - vcy,        mpos.x - vcx);
+                    mc.rotation = fmodf(s_ctx.start_rot + (ang1-ang0)*180.f/3.14159f, 360.f);
                     break;
                 }
-                case TxHandle::ScaleE: case TxHandle::ScaleW: {
-                    float ds = 1.f + dmx / (fit_w * s_tx.start_sx * 0.5f) *
-                               (s_tx.handle == TxHandle::ScaleW ? -1.f : 1.f);
-                    mc.scale_x = fmaxf(0.05f, s_tx.start_sx * ds);
+                case CanvasHandle::CornerTL: case CanvasHandle::CornerTR: {
+                    if (orig_h > 0.f) {
+                        float scale = (orig_h - dmy) / orig_h;
+                        mc.scale_x = fmaxf(0.05f, s_ctx.start_scale_x * scale);
+                        mc.scale_y = fmaxf(0.05f, s_ctx.start_scale_y * scale);
+                    }
                     break;
                 }
+                case CanvasHandle::CornerBL: case CanvasHandle::CornerBR: {
+                    if (orig_h > 0.f) {
+                        float scale = (orig_h + dmy) / orig_h;
+                        mc.scale_x = fmaxf(0.05f, s_ctx.start_scale_x * scale);
+                        mc.scale_y = fmaxf(0.05f, s_ctx.start_scale_y * scale);
+                    }
+                    break;
+                }
+                case CanvasHandle::EdgeT:
+                    if (orig_h > 0.f) mc.scale_y = fmaxf(0.05f, s_ctx.start_scale_y * (orig_h-dmy)/orig_h);
+                    break;
+                case CanvasHandle::EdgeB:
+                    if (orig_h > 0.f) mc.scale_y = fmaxf(0.05f, s_ctx.start_scale_y * (orig_h+dmy)/orig_h);
+                    break;
+                case CanvasHandle::EdgeL:
+                    if (orig_w > 0.f) mc.scale_x = fmaxf(0.05f, s_ctx.start_scale_x * (orig_w-dmx)/orig_w);
+                    break;
+                case CanvasHandle::EdgeR:
+                    if (orig_w > 0.f) mc.scale_x = fmaxf(0.05f, s_ctx.start_scale_x * (orig_w+dmx)/orig_w);
+                    break;
                 default: break;
             }
-            s_tx.dirty = true;
+            s_ctx.dirty = true;
 
-            // Snap guides — canvas center
-            float snap_thr = 6.f;
-            float cx3 = mc.pos_x * w + p.x;
-            float cy3 = mc.pos_y * h + p.y;
-            if (s_tx.handle == TxHandle::Move) {
-                if (fabsf(cx3 - (p.x + w*0.5f)) < snap_thr) {
+            // Center snap guides for move
+            if (s_ctx.handle == CanvasHandle::Body) {
+                float cx3 = mc.pos_x * w + p.x, cy3 = mc.pos_y * h + p.y;
+                if (fabsf(cx3 - (p.x+w*0.5f)) < 6.f) {
                     mc.pos_x = 0.5f;
                     dl->AddLine({p.x+w*0.5f, p.y}, {p.x+w*0.5f, p.y+h}, snap_col);
                 }
-                if (fabsf(cy3 - (p.y + h*0.5f)) < snap_thr) {
+                if (fabsf(cy3 - (p.y+h*0.5f)) < 6.f) {
                     mc.pos_y = 0.5f;
                     dl->AddLine({p.x, p.y+h*0.5f}, {p.x+w, p.y+h*0.5f}, snap_col);
                 }
@@ -1139,125 +1174,143 @@ static void draw_transform_box(AppState& state, ImDrawList* dl,
     // ── Text / subtitle / lyrics box ─────────────────────────────────────────
     if (cl.clip_type == ClipType::Text || cl.clip_type == ClipType::Subtitle ||
         cl.clip_type == ClipType::Lyrics) {
-        float col_w  = cl.sub_wrap_w * w;
-        float col_x0, col_x1, col_cx;
-        if (cl.sub_anchor_h == 0) {         // left: sub_pos_x = left edge
-            col_x0 = p.x + cl.sub_pos_x * w;
-            col_x1 = col_x0 + col_w;
-            col_cx = col_x0 + col_w * 0.5f;
-        } else if (cl.sub_anchor_h == 2) {  // right: sub_pos_x = right edge
-            col_x1 = p.x + cl.sub_pos_x * w;
-            col_x0 = col_x1 - col_w;
-            col_cx = col_x0 + col_w * 0.5f;
-        } else {                             // center (default)
-            col_cx = p.x + cl.sub_pos_x * w;
-            col_x0 = col_cx - col_w * 0.5f;
-            col_x1 = col_cx + col_w * 0.5f;
+        uint64_t tl_key = ((uint64_t)state.selected_track << 32) | (uint32_t)state.selected_clip;
+        auto it = s_text_layouts.find(tl_key);
+        if (it == s_text_layouts.end() || !it->second.valid) return;
+        const TextLayout& tl = it->second;
+
+        float bx0 = tl.x0, by0 = tl.y0, bx1 = tl.x1, by1 = tl.y1;
+        float tmx = (bx0+bx1)*0.5f, tmy = (by0+by1)*0.5f;
+
+        // Solid box
+        dl->AddRect({bx0, by0}, {bx1, by1}, box_col, 0.f, 0, 1.5f);
+
+        // Corners → scale font size
+        if (draw_corner_h(bx0, by0, CanvasHandle::CornerTL)) {
+            begin_drag(CanvasHandle::CornerTL);
+            s_ctx.start_font_size = cl.font_size > 0.f ? cl.font_size : 0.09f;
+            s_ctx.start_bbox_y0 = by0; s_ctx.start_bbox_y1 = by1;
         }
-        float eff_fsz = cl.font_size > 0.f ? cl.font_size * h : ImGui::GetFontSize() * 1.8f;
-        float row_h  = eff_fsz * 1.25f;
-        float col_cy = cl.sub_pos_y  * h + p.y;
-        float col_y0 = col_cy - row_h * 0.5f;
-        float col_y1 = col_cy + row_h * 0.5f;
+        if (draw_corner_h(bx1, by0, CanvasHandle::CornerTR)) {
+            begin_drag(CanvasHandle::CornerTR);
+            s_ctx.start_font_size = cl.font_size > 0.f ? cl.font_size : 0.09f;
+            s_ctx.start_bbox_y0 = by0; s_ctx.start_bbox_y1 = by1;
+        }
+        if (draw_corner_h(bx1, by1, CanvasHandle::CornerBR)) {
+            begin_drag(CanvasHandle::CornerBR);
+            s_ctx.start_font_size = cl.font_size > 0.f ? cl.font_size : 0.09f;
+            s_ctx.start_bbox_y0 = by0; s_ctx.start_bbox_y1 = by1;
+        }
+        if (draw_corner_h(bx0, by1, CanvasHandle::CornerBL)) {
+            begin_drag(CanvasHandle::CornerBL);
+            s_ctx.start_font_size = cl.font_size > 0.f ? cl.font_size : 0.09f;
+            s_ctx.start_bbox_y0 = by0; s_ctx.start_bbox_y1 = by1;
+        }
 
-        // Dashed rect
-        ImU32 dc = box_col;
-        float dash = 6.f;
-        for (float x = col_x0; x < col_x1; x += dash*2)
-            dl->AddLine({x, col_y0}, {fminf(x+dash, col_x1), col_y0}, dc);
-        for (float x = col_x0; x < col_x1; x += dash*2)
-            dl->AddLine({x, col_y1}, {fminf(x+dash, col_x1), col_y1}, dc);
-        for (float y = col_y0; y < col_y1; y += dash*2)
-            dl->AddLine({col_x0, y}, {col_x0, fminf(y+dash, col_y1)}, dc);
-        for (float y = col_y0; y < col_y1; y += dash*2)
-            dl->AddLine({col_x1, y}, {col_x1, fminf(y+dash, col_y1)}, dc);
+        // Left/Right edges → wrap width
+        if (draw_edge_h(bx0, tmy, true, CanvasHandle::EdgeL)) {
+            begin_drag(CanvasHandle::EdgeL);
+            s_ctx.start_wrap_w = cl.sub_wrap_w; s_ctx.start_anchor = cl.sub_anchor_h;
+            s_ctx.start_bbox_x0 = bx0; s_ctx.start_bbox_x1 = bx1;
+        }
+        if (draw_edge_h(bx1, tmy, true, CanvasHandle::EdgeR)) {
+            begin_drag(CanvasHandle::EdgeR);
+            s_ctx.start_wrap_w = cl.sub_wrap_w; s_ctx.start_anchor = cl.sub_anchor_h;
+            s_ctx.start_bbox_x0 = bx0; s_ctx.start_bbox_x1 = bx1;
+        }
 
-        // Left/right edge handles for wrap width; top/bottom for font size
-        draw_handle({col_x0, col_cy}, TxHandle::TextLeft);
-        draw_handle({col_x1, col_cy}, TxHandle::TextRight);
-        draw_handle({col_cx, col_y0}, TxHandle::TextTop);
-        draw_handle({col_cx, col_y1}, TxHandle::TextBot);
+        // Top/Bottom edges → vertical nudge
+        if (draw_edge_h(tmx, by0, false, CanvasHandle::EdgeT)) {
+            begin_drag(CanvasHandle::EdgeT);
+            s_ctx.start_pos_y = ((by0+by1)*0.5f - p.y) / h;
+        }
+        if (draw_edge_h(tmx, by1, false, CanvasHandle::EdgeB)) {
+            begin_drag(CanvasHandle::EdgeB);
+            s_ctx.start_pos_y = ((by0+by1)*0.5f - p.y) / h;
+        }
 
-        // Interior move
-        bool in_interior = mpos.x > col_x0+HR*2 && mpos.x < col_x1-HR*2 &&
-                           mpos.y > col_y0       && mpos.y < col_y1;
-        if (in_interior) {
+        // Interior → move
+        bool in_txt = mpos.x > bx0+CR*2 && mpos.x < bx1-CR*2 &&
+                      mpos.y > by0+CR*2 && mpos.y < by1-CR*2;
+        if (in_txt) {
             ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
-            if (lclick && s_tx.handle == TxHandle::None) {
-                s_tx.handle       = TxHandle::Move;
-                s_tx.track_idx    = state.selected_track;
-                s_tx.clip_idx     = state.selected_clip;
-                s_tx.start_mx     = mpos.x; s_tx.start_my = mpos.y;
-                s_tx.start_px        = cl.sub_pos_x;
-                s_tx.start_py        = cl.sub_pos_y;
-                s_tx.start_wrap_w    = cl.sub_wrap_w;
-                s_tx.start_anchor    = cl.sub_anchor_h;
-                s_tx.start_font_size = cl.font_size > 0.f ? cl.font_size
-                                       : ImGui::GetFontSize() * 1.8f / h;
-                s_tx.dirty        = false;
+            if (lclick && s_ctx.handle == CanvasHandle::None) {
+                begin_drag(CanvasHandle::Body);
+                s_ctx.start_pos_x  = ((bx0+bx1)*0.5f - p.x) / w;
+                s_ctx.start_pos_y  = ((by0+by1)*0.5f - p.y) / h;
+                s_ctx.start_wrap_w = cl.sub_wrap_w;
+                s_ctx.start_anchor = cl.sub_anchor_h;
+                s_ctx.start_bbox_x0 = bx0; s_ctx.start_bbox_x1 = bx1;
+                s_ctx.start_bbox_y0 = by0; s_ctx.start_bbox_y1 = by1;
             }
         }
 
-        // Apply drag
-        if (drag_active && s_tx.track_idx == state.selected_track &&
-            s_tx.clip_idx == state.selected_clip) {
-            float dmx = mpos.x - s_tx.start_mx;
-            float dmy = mpos.y - s_tx.start_my;
-            Clip& mc = state.tracks[s_tx.track_idx].clips[s_tx.clip_idx];
-            switch (s_tx.handle) {
-                case TxHandle::Move: {
-                    // Convert original anchor pos to center, move, keep as center anchor
-                    float cx0 = s_tx.start_px;
-                    if (s_tx.start_anchor == 0)      cx0 += s_tx.start_wrap_w * 0.5f;
-                    else if (s_tx.start_anchor == 2) cx0 -= s_tx.start_wrap_w * 0.5f;
+        // Apply text drag
+        if (drag_active && s_ctx.track_idx == state.selected_track &&
+            s_ctx.clip_idx == state.selected_clip &&
+            (cl.clip_type == ClipType::Text || cl.clip_type == ClipType::Subtitle ||
+             cl.clip_type == ClipType::Lyrics)) {
+            float dmx = mpos.x - s_ctx.drag_sx;
+            float dmy = mpos.y - s_ctx.drag_sy;
+            Clip& mc = state.tracks[s_ctx.track_idx].clips[s_ctx.clip_idx];
+            float orig_bbox_h = s_ctx.start_bbox_y1 - s_ctx.start_bbox_y0;
+
+            switch (s_ctx.handle) {
+                case CanvasHandle::Body:
                     mc.sub_pos      = 3;
                     mc.sub_anchor_h = 1;
-                    mc.sub_pos_x    = fmaxf(0.02f, fminf(0.98f, cx0 + dmx / w));
-                    mc.sub_pos_y    = fmaxf(0.02f, fminf(0.98f, s_tx.start_py + dmy / h));
+                    mc.sub_pos_x    = fmaxf(SAFE_SIDE, fminf(1.f-SAFE_SIDE,
+                                        s_ctx.start_pos_x + dmx/w));
+                    mc.sub_pos_y    = fmaxf(SAFE_TOP,  fminf(1.f-SAFE_BOT,
+                                        s_ctx.start_pos_y + dmy/h));
+                    break;
+                case CanvasHandle::CornerTL: case CanvasHandle::CornerTR:
+                    if (orig_bbox_h > 0.f) {
+                        float scale = (orig_bbox_h - dmy) / orig_bbox_h;
+                        mc.font_size = fmaxf(0.02f, fminf(0.5f, s_ctx.start_font_size * scale));
+                    }
+                    break;
+                case CanvasHandle::CornerBL: case CanvasHandle::CornerBR:
+                    if (orig_bbox_h > 0.f) {
+                        float scale = (orig_bbox_h + dmy) / orig_bbox_h;
+                        mc.font_size = fmaxf(0.02f, fminf(0.5f, s_ctx.start_font_size * scale));
+                    }
+                    break;
+                case CanvasHandle::EdgeL: {
+                    float new_x0 = s_ctx.start_bbox_x0 + dmx;
+                    float new_w  = s_ctx.start_bbox_x1 - new_x0;
+                    if (new_w > 20.f) {
+                        mc.sub_wrap_w   = fmaxf(0.08f, fminf(0.98f, new_w/w));
+                        mc.sub_anchor_h = 1;
+                        mc.sub_pos_x    = fmaxf(0.f, fminf(1.f,
+                            (new_x0 + new_w*0.5f - p.x) / w));
+                    }
                     break;
                 }
-                case TxHandle::TextLeft: {
-                    float new_x0 = col_x0 + dmx;
-                    float new_w  = col_x1 - new_x0;
-                    mc.sub_wrap_w = fmaxf(0.1f, fminf(1.f, new_w / w));
-                    if (s_tx.start_anchor == 0)
-                        mc.sub_pos_x = fmaxf(0.f, (new_x0 - p.x) / w);
-                    else if (s_tx.start_anchor == 2)
-                        mc.sub_pos_x = cl.sub_pos_x;  // right edge unchanged
-                    else
-                        mc.sub_pos_x = fmaxf(0.02f, fminf(0.98f, (new_x0 + new_w * 0.5f - p.x) / w));
+                case CanvasHandle::EdgeR: {
+                    float new_x1 = s_ctx.start_bbox_x1 + dmx;
+                    float new_w  = new_x1 - s_ctx.start_bbox_x0;
+                    if (new_w > 20.f) {
+                        mc.sub_wrap_w   = fmaxf(0.08f, fminf(0.98f, new_w/w));
+                        mc.sub_anchor_h = 1;
+                        mc.sub_pos_x    = fmaxf(0.f, fminf(1.f,
+                            (s_ctx.start_bbox_x0 + new_w*0.5f - p.x) / w));
+                    }
                     break;
                 }
-                case TxHandle::TextRight: {
-                    float new_x1 = col_x1 + dmx;
-                    float new_w  = new_x1 - col_x0;
-                    mc.sub_wrap_w = fmaxf(0.1f, fminf(1.f, new_w / w));
-                    if (s_tx.start_anchor == 0)
-                        mc.sub_pos_x = cl.sub_pos_x;  // left edge unchanged
-                    else if (s_tx.start_anchor == 2)
-                        mc.sub_pos_x = fmaxf(0.f, (new_x1 - p.x) / w);
-                    else
-                        mc.sub_pos_x = fmaxf(0.02f, fminf(0.98f, (col_x0 + new_w * 0.5f - p.x) / w));
-                    break;
-                }
-                case TxHandle::TextTop:
-                    // drag up = negative dmy = larger font
-                    mc.font_size = fmaxf(0.01f, fminf(0.5f,
-                        s_tx.start_font_size - dmy / h));
-                    break;
-                case TxHandle::TextBot:
-                    mc.font_size = fmaxf(0.01f, fminf(0.5f,
-                        s_tx.start_font_size + dmy / h));
+                case CanvasHandle::EdgeT: case CanvasHandle::EdgeB:
+                    mc.sub_pos   = 3;
+                    mc.sub_pos_y = fmaxf(SAFE_TOP, fminf(1.f-SAFE_BOT,
+                                    s_ctx.start_pos_y + dmy/h));
                     break;
                 default: break;
             }
-            s_tx.dirty = true;
+            s_ctx.dirty = true;
 
-            // Snap text center to canvas center (after Move; anchor is always center post-move)
-            if (s_tx.handle == TxHandle::Move) {
-                float snap_thr = 6.f;
-                float cx3 = mc.sub_pos_x * w + p.x;  // anchor==1 after move
-                if (fabsf(cx3 - (p.x + w*0.5f)) < snap_thr) {
+            // Center snap for text body move
+            if (s_ctx.handle == CanvasHandle::Body) {
+                float cx3 = mc.sub_pos_x * w + p.x;
+                if (fabsf(cx3 - (p.x+w*0.5f)) < 8.f) {
                     mc.sub_pos_x = 0.5f;
                     dl->AddLine({p.x+w*0.5f, p.y}, {p.x+w*0.5f, p.y+h}, snap_col);
                 }
@@ -1266,15 +1319,18 @@ static void draw_transform_box(AppState& state, ImDrawList* dl,
     }
 
     // Release drag → push history once
-    if (!ldown && s_tx.handle != TxHandle::None) {
-        if (s_tx.dirty) {
-            const char* act = (s_tx.handle == TxHandle::Move)    ? "Move clip"      :
-                              (s_tx.handle == TxHandle::Rotate)   ? "Rotate clip"    :
-                              (s_tx.handle == TxHandle::TextTop ||
-                               s_tx.handle == TxHandle::TextBot)  ? "Font size"      : "Scale clip";
+    if (!ldown && s_ctx.handle != CanvasHandle::None) {
+        if (s_ctx.dirty) {
+            const char* act =
+                (s_ctx.handle == CanvasHandle::Body)                              ? "Move clip"   :
+                (s_ctx.handle == CanvasHandle::Rotate)                            ? "Rotate clip" :
+                (s_ctx.handle == CanvasHandle::CornerTL || s_ctx.handle == CanvasHandle::CornerTR ||
+                 s_ctx.handle == CanvasHandle::CornerBL || s_ctx.handle == CanvasHandle::CornerBR) ? "Resize clip" :
+                (s_ctx.handle == CanvasHandle::EdgeL    || s_ctx.handle == CanvasHandle::EdgeR)    ? "Wrap width"  :
+                "Adjust clip";
             history_push(state, act);
         }
-        s_tx = TxState{};
+        s_ctx = CanvasTransform{};
     }
 }
 
@@ -1312,73 +1368,49 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
 
     // Unified z-order pass: track index 0 = frontmost, so iterate high→low (background first).
     // Each track draws whichever clip type is active — video and text are interleaved correctly.
-    static int   s_drag_ti   = -1, s_drag_ci   = -1;
-    static bool  s_dragging  = false;
     ImVec2 mpos  = ImGui::GetIO().MousePos;
-    bool   ldown  = ImGui::IsMouseDown(0);
     bool   lclick = ImGui::IsMouseClicked(0);
 
-    // Click-to-select: hit-test frontmost clip under cursor on left click.
-    // Iterate 0→n (frontmost first); first hit wins.
+    // Click-to-select using tight bboxes: video computed inline, text from previous-frame layouts.
     bool in_preview_area = mpos.x >= p.x && mpos.x <= p.x+w &&
                            mpos.y >= p.y && mpos.y <= p.y+h;
-    if (lclick && in_preview_area && s_tx.handle == TxHandle::None) {
-        // Collect all hits, then pick smallest bounding area (most specific target).
-        // Z-order (track index, lower = frontmost) breaks ties between equal-size hits.
+    if (lclick && in_preview_area && s_ctx.handle == CanvasHandle::None) {
         struct HitCandidate { int ti, ci; float area; };
         std::vector<HitCandidate> hits;
         for (int ti = 0; ti < (int)state.tracks.size(); ++ti) {
-            auto& tr = state.tracks[ti];
-            if (!tr.visible) continue;
-            for (int ci = 0; ci < (int)tr.clips.size(); ++ci) {
-                auto& cl = tr.clips[ci];
-                if (state.playhead < cl.start || state.playhead >= cl.end) continue;
-                if (cl.clip_type == ClipType::Video) {
-                    int slot = -1;
-                    std::string key = clip_slot_key(cl.text, cl.start);
-                    for (int s = 0; s < MAX_VIDEO_TRACKS; ++s)
-                        if (state.proxy_paths[s] == key) { slot = s; break; }
-                    float cpx = cl.eval_prop("pos_x",   state.playhead) * w + p.x;
-                    float cpy = cl.eval_prop("pos_y",   state.playhead) * h + p.y;
-                    float csx = cl.eval_prop("scale_x", state.playhead);
-                    float csy = cl.eval_prop("scale_y", state.playhead);
-                    float fw = w, fh = h;
-                    if (slot >= 0 && video_info(slot).width > 0) {
-                        float va = (float)video_info(slot).width / video_info(slot).height;
-                        float ca = w / h;
-                        if (va > ca) { fw = w; fh = w/va; } else { fh = h; fw = h*va; }
-                    }
-                    float hw2 = fw*csx*0.5f, hh2 = fh*csy*0.5f;
-                    if (mpos.x >= cpx-hw2 && mpos.x <= cpx+hw2 &&
-                        mpos.y >= cpy-hh2 && mpos.y <= cpy+hh2) {
-                        hits.push_back({ti, ci, hw2*hh2*4.f});
-                    }
-                } else if (cl.clip_type == ClipType::Text ||
-                           cl.clip_type == ClipType::Subtitle ||
-                           cl.clip_type == ClipType::Lyrics) {
-                    float col_w  = cl.sub_wrap_w * w;
-                    float col_cx = cl.sub_pos_x  * w + p.x;
-                    float eff_fsz2 = cl.font_size > 0.f ? cl.font_size * h
-                                                        : ImGui::GetFontSize() * 1.8f;
-                    float row_h2 = eff_fsz2 * 1.5f;
-                    float col_cy = cl.sub_pos_y  * h + p.y;
-                    if (mpos.x >= col_cx - col_w*0.5f && mpos.x <= col_cx + col_w*0.5f &&
-                        mpos.y >= col_cy - row_h2*0.5f && mpos.y <= col_cy + row_h2*0.5f) {
-                        hits.push_back({ti, ci, col_w * row_h2});
+            auto& tr2 = state.tracks[ti];
+            if (!tr2.visible) continue;
+            for (int ci = 0; ci < (int)tr2.clips.size(); ++ci) {
+                auto& cl2 = tr2.clips[ci];
+                if (state.playhead < cl2.start || state.playhead >= cl2.end) continue;
+                if (cl2.clip_type == ClipType::Video) {
+                    float hbx0, hby0, hbx1, hby1;
+                    compute_video_bbox(state, cl2, p, w, h, hbx0, hby0, hbx1, hby1);
+                    if (mpos.x >= hbx0 && mpos.x <= hbx1 &&
+                        mpos.y >= hby0 && mpos.y <= hby1)
+                        hits.push_back({ti, ci, (hbx1-hbx0)*(hby1-hby0)});
+                } else if (cl2.clip_type == ClipType::Text ||
+                           cl2.clip_type == ClipType::Subtitle ||
+                           cl2.clip_type == ClipType::Lyrics) {
+                    uint64_t tk = ((uint64_t)ti << 32) | (uint32_t)ci;
+                    auto it2 = s_text_layouts.find(tk);
+                    if (it2 != s_text_layouts.end() && it2->second.valid) {
+                        auto& tl2 = it2->second;
+                        if (mpos.x >= tl2.x0 && mpos.x <= tl2.x1 &&
+                            mpos.y >= tl2.y0 && mpos.y <= tl2.y1)
+                            hits.push_back({ti, ci, (tl2.x1-tl2.x0)*(tl2.y1-tl2.y0)});
                     }
                 }
             }
         }
-        // Sort: smallest area first, then lowest track index (frontmost) as tiebreaker
         std::sort(hits.begin(), hits.end(), [](const HitCandidate& a, const HitCandidate& b) {
             if (a.area != b.area) return a.area < b.area;
             return a.ti < b.ti;
         });
         if (!hits.empty()) {
-            int hit_ti = hits[0].ti, hit_ci = hits[0].ci;
-            if (state.selected_track != hit_ti || state.selected_clip != hit_ci) {
-                state.selected_track = hit_ti;
-                state.selected_clip  = hit_ci;
+            if (state.selected_track != hits[0].ti || state.selected_clip != hits[0].ci) {
+                state.selected_track = hits[0].ti;
+                state.selected_clip  = hits[0].ci;
                 state.request_scroll_to_clip = true;
             }
         } else {
@@ -1863,45 +1895,25 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
 
             ImGui::PopFont();
 
-            // Drag handle: covers entire block, moves position
+            // Store tight TextLayout for accurate handle hit testing (used next frame for
+            // click-to-select and this frame for draw_canvas_handles called after this loop).
             {
                 float blk_x0, blk_x1;
                 if (show->sub_anchor_h == 0)      { blk_x0 = block_ax; blk_x1 = block_ax + block_max_w; }
                 else if (show->sub_anchor_h == 2) { blk_x0 = block_ax - block_max_w; blk_x1 = block_ax; }
                 else                               { blk_x0 = block_ax - block_max_w*0.5f; blk_x1 = block_ax + block_max_w*0.5f; }
-                float bx0 = blk_x0 - 8.f;
-                float bx1 = blk_x1 + 8.f;
-                float by0 = ty_anim - 8.f;
-                float by1 = ty_anim + block_h + 8.f;
-                bool in_handle = mpos.x >= bx0 && mpos.x <= bx1 &&
-                                 mpos.y >= by0 && mpos.y <= by1;
-                bool is_this_drag = (s_drag_ti == ti && s_drag_ci == show_ci);
-
-                if (in_handle || (is_this_drag && ldown))
-                    ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
-                if (in_handle && lclick) { s_drag_ti = ti; s_drag_ci = show_ci; }
-                if (is_this_drag && ldown) {
-                    s_dragging = true;
-                    Clip& mc = state.tracks[ti].clips[show_ci];
-                    mc.sub_pos      = 3;
-                    mc.sub_anchor_h = 1;  // center after free drag
-                    mc.sub_pos_x    = fmaxf(0.02f, fminf(0.98f, (mpos.x - p.x) / w));
-                    mc.sub_pos_y    = fmaxf(0.02f, fminf(0.98f, (mpos.y - p.y) / h));
-                }
-                if (in_handle && !ldown) {
-                    // Drag hint dots at block center
-                    float mid_x = (blk_x0 + blk_x1) * 0.5f;
-                    for (int d = -1; d <= 1; ++d)
-                        dl->AddCircleFilled({mid_x + d*6.f, ty_anim - 8.f}, 2.f, to_u32(Col::muted));
-                }
+                uint64_t tl_key = ((uint64_t)ti << 32) | (uint32_t)show_ci;
+                TextLayout& tl = s_text_layouts[tl_key];
+                tl.x0       = blk_x0 - 4.f;
+                tl.y0       = ty_anim - 4.f;
+                tl.x1       = blk_x1 + 4.f;
+                tl.y1       = ty_anim + block_h + 4.f;
+                tl.block_ax = block_ax;
+                tl.fsz      = fsz;
+                tl.valid    = true;
             }
             ++text_rendered;
         }
-    }
-
-    if (s_dragging && !ldown) {
-        history_push(state, "Subtitle position");
-        s_dragging = false; s_drag_ti = -1; s_drag_ci = -1;
     }
 
     // ── LightLeak overlay ─────────────────────────────────────────────────────
@@ -1962,7 +1974,7 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
     }
 
     // Transform box overlay — drawn above content, below border chrome
-    draw_transform_box(state, dl, p, w, h);
+    draw_canvas_handles(state, dl, p, w, h);
 
     // Border and chrome drawn last so they sit on top of all content
     dl->AddRect(p, {p.x+w, p.y+h}, to_u32(Col::line), 2.f);
