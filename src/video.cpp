@@ -974,10 +974,15 @@ float video_probe_duration(const std::string& path) {
 
 // ── Browser thumbnail cache ───────────────────────────────────────────────────
 
-uintptr_t video_load_thumb(const std::string& path) {
-    static std::unordered_map<std::string, GLuint> s_cache;
+uintptr_t video_load_thumb(const std::string& path, int* out_w, int* out_h) {
+    struct Entry { GLuint tex; int w, h; };
+    static std::unordered_map<std::string, Entry> s_cache;
     auto it = s_cache.find(path);
-    if (it != s_cache.end()) return it->second;
+    if (it != s_cache.end()) {
+        if (out_w) *out_w = it->second.w;
+        if (out_h) *out_h = it->second.h;
+        return it->second.tex;
+    }
 
     if (!fs::exists(path)) return 0;
 
@@ -993,7 +998,7 @@ uintptr_t video_load_thumb(const std::string& path) {
 
     int w, h, ch;
     uint8_t* px = stbi_load_from_memory(buf.data(), (int)sz, &w, &h, &ch, 3);
-    if (!px) { s_cache[path] = 0; return 0; }
+    if (!px) { s_cache[path] = {0, 0, 0}; return 0; }
 
     GLuint tex = 0;
     glGenTextures(1, &tex);
@@ -1006,7 +1011,9 @@ uintptr_t video_load_thumb(const std::string& path) {
     glBindTexture(GL_TEXTURE_2D, 0);
     stbi_image_free(px);
 
-    s_cache[path] = tex;
+    s_cache[path] = {tex, w, h};
+    if (out_w) *out_w = w;
+    if (out_h) *out_h = h;
     return tex;
 }
 

@@ -8047,16 +8047,26 @@ static void panel_media_browser(AppState& state, float w, bool is_video) {
         ImU32 bg = hov ? IM_COL32(34,34,52,255) : IM_COL32(18,18,28,255);
         dl->AddRectFilled(cp, {cp.x+COL_W, cp.y+CARD_H}, bg, 6.f);
 
-        // Thumbnail
+        // Thumbnail — letterboxed to preserve aspect ratio
+        int tw = 0, th = 0;
         uintptr_t tex = is_image_path(path)
-            ? video_load_thumb(path)
-            : video_load_thumb(proxy_still_path(path));
+            ? video_load_thumb(path, &tw, &th)
+            : video_load_thumb(proxy_still_path(path), &tw, &th);
 
         if (tex) {
+            float aspect = (tw > 0 && th > 0) ? (float)tw / (float)th : 16.f/9.f;
+            float disp_w = COL_W, disp_h = COL_W / aspect;
+            if (disp_h > THUMB_H) { disp_h = THUMB_H; disp_w = THUMB_H * aspect; }
+            float ox = (COL_W - disp_w) * 0.5f;
+            float oy = (THUMB_H - disp_h) * 0.5f;
+            ImVec2 img0 = {cp.x + ox, cp.y + oy};
+            ImVec2 img1 = {img0.x + disp_w, img0.y + disp_h};
+            dl->PushClipRect(cp, {cp.x+COL_W, cp.y+THUMB_H}, true);
             dl->AddImageRounded((ImTextureID)(uintptr_t)tex,
-                                cp, {cp.x+COL_W, cp.y+THUMB_H},
+                                img0, img1,
                                 {0,0},{1,1}, IM_COL32(255,255,255,220), 6.f,
                                 ImDrawFlags_RoundCornersTop);
+            dl->PopClipRect();
         } else {
             // Placeholder — gentle gradient while proxy generates
             ImU32 ph0 = is_video ? IM_COL32(35,22,8,255)  : IM_COL32(8,28,28,255);
