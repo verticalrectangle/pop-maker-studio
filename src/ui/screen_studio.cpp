@@ -2613,177 +2613,169 @@ static void section_position(AppState& state, Clip& clip, float w) {
 }
 
 // ── Palette widget ────────────────────────────────────────────────────────────
-// Draws a row of 5 color swatches below any ColorEdit3/4.
-// rgb[3] is the current color (read/write). Clicking a swatch writes back to rgb.
-// Harmony types cycle: Complementary → Analogous → Triadic → Split-Comp → Mono.
+// 423 named palettes + search + category filter.
+// slots[0..n_slots-1] are float[3] or float[4]; only RGB is written.
+// has_alpha=true means each slot is float[4] and alpha is preserved.
 
-static void hsv_to_rgb(float h, float s, float v, float& r, float& g, float& b) {
-    if (s <= 0.f) { r = g = b = v; return; }
-    h = fmodf(h, 360.f); if (h < 0.f) h += 360.f;
-    int   i = (int)(h / 60.f);
-    float f = h / 60.f - i;
-    float p = v * (1.f - s), q = v * (1.f - s*f), t = v * (1.f - s*(1.f-f));
-    switch (i % 6) {
-        case 0: r=v; g=t; b=p; break; case 1: r=q; g=v; b=p; break;
-        case 2: r=p; g=v; b=t; break; case 3: r=p; g=q; b=v; break;
-        case 4: r=t; g=p; b=v; break; default: r=v; g=p; b=q; break;
-    }
-}
+#include "palette_presets.h"
 
-static void rgb_to_hsv(float r, float g, float b, float& h, float& s, float& v) {
-    float mx = r>g?(r>b?r:b):(g>b?g:b);
-    float mn = r<g?(r<b?r:b):(g<b?g:b);
-    v = mx;
-    s = mx < 0.0001f ? 0.f : (mx - mn) / mx;
-    if (s < 0.0001f) { h = 0.f; return; }
-    float d = mx - mn;
-    if      (mx == r) h = 60.f * (g - b) / d;
-    else if (mx == g) h = 60.f * ((b - r) / d + 2.f);
-    else              h = 60.f * ((r - g) / d + 4.f);
-    if (h < 0.f) h += 360.f;
-}
-
-static void palette_widget(const char* id, float* rgb) {
-    struct PaletteState {
-        float  slots[5][3] = {};
-        bool   locked[5]   = {};
-        int    harmony      = 0;  // 0=Comp 1=Analog 2=Triadic 3=SplitComp 4=Mono
-        bool   generated    = false;
+static void palette_widget(const char* id, float** slots, int n_slots, bool has_alpha = false) {
+    struct WidgetState {
+        char search[48] = {};
+        int  tag        = 0;   // index into g_palette_tags; 0 = All
     };
-    static std::unordered_map<std::string, PaletteState> s_palettes;
-
-    PaletteState& ps = s_palettes[id];
-
-    float h, s, v;
-    rgb_to_hsv(rgb[0], rgb[1], rgb[2], h, s, v);
-
-    const char* harmony_names[] = { "Comp", "Analog", "Triadic", "Split", "Mono" };
-
-    auto gen_slot = [&](int slot, float dh, float ds_mul, float dv_mul) {
-        if (ps.locked[slot]) return;
-        float nh = fmodf(h + dh + 360.f, 360.f);
-        float ns = fminf(1.f, s * ds_mul);
-        float nv = fminf(1.f, v * dv_mul);
-        if (ns < 0.05f) ns = 0.35f;
-        if (nv < 0.15f) nv = 0.45f;
-        hsv_to_rgb(nh, ns, nv, ps.slots[slot][0], ps.slots[slot][1], ps.slots[slot][2]);
-    };
-
-    auto generate = [&]() {
-        switch (ps.harmony) {
-            case 0: // Complementary
-                gen_slot(0, 0.f,   1.f,  1.f);
-                gen_slot(1, 180.f, 1.f,  1.f);
-                gen_slot(2, 0.f,   0.6f, 0.9f);
-                gen_slot(3, 180.f, 0.7f, 0.8f);
-                gen_slot(4, 0.f,   0.3f, 1.f);
-                break;
-            case 1: // Analogous
-                gen_slot(0, -60.f, 1.f,  1.f);
-                gen_slot(1, -30.f, 1.f,  1.f);
-                gen_slot(2,   0.f, 1.f,  1.f);
-                gen_slot(3,  30.f, 1.f,  1.f);
-                gen_slot(4,  60.f, 1.f,  1.f);
-                break;
-            case 2: // Triadic
-                gen_slot(0,   0.f, 1.f,  1.f);
-                gen_slot(1, 120.f, 1.f,  1.f);
-                gen_slot(2, 240.f, 1.f,  1.f);
-                gen_slot(3, 120.f, 0.7f, 0.85f);
-                gen_slot(4, 240.f, 0.7f, 0.85f);
-                break;
-            case 3: // Split-Complementary
-                gen_slot(0,   0.f, 1.f,  1.f);
-                gen_slot(1, 150.f, 1.f,  1.f);
-                gen_slot(2, 210.f, 1.f,  1.f);
-                gen_slot(3, 150.f, 0.6f, 0.9f);
-                gen_slot(4, 210.f, 0.6f, 0.9f);
-                break;
-            case 4: // Monochromatic
-                gen_slot(0, 0.f, 1.f,   1.f);
-                gen_slot(1, 0.f, 0.75f, 0.85f);
-                gen_slot(2, 0.f, 0.5f,  0.7f);
-                gen_slot(3, 0.f, 0.3f,  0.9f);
-                gen_slot(4, 0.f, 1.f,   0.5f);
-                break;
-        }
-        ps.generated = true;
-    };
-
-    if (!ps.generated) generate();
+    static std::unordered_map<std::string, WidgetState> s_ws;
+    WidgetState& ws = s_ws[id];
 
     ImGui::PushID(id);
+    ImGui::Dummy({0.f, 6.f});
+
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    float avail    = ImGui::GetContentRegionAvail().x;
+
+    // ── Search box ───────────────────────────────────────────────────────────
+    ImGui::PushStyleColor(ImGuiCol_FrameBg, IM_COL32(28, 28, 40, 255));
+    ImGui::SetNextItemWidth(avail);
+    ImGui::InputTextWithHint("##palsearch", "Search palettes…", ws.search, sizeof(ws.search));
+    ImGui::PopStyleColor();
     ImGui::Dummy({0.f, 4.f});
 
-    // Harmony cycle button
-    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {5.f, 2.f});
-    ImGui::PushStyleColor(ImGuiCol_Button,        IM_COL32(30, 30, 46, 255));
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(50, 50, 72, 255));
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive,  IM_COL32(70, 70, 100, 255));
-    ImGui::PushStyleColor(ImGuiCol_Text,          IM_COL32(160, 160, 200, 220));
-    if (ImGui::SmallButton(harmony_names[ps.harmony])) {
-        ps.harmony = (ps.harmony + 1) % 5;
-        generate();
+    // ── Category pills ───────────────────────────────────────────────────────
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {6.f, 2.f});
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,  {4.f, 4.f});
+    for (int t = 0; t < g_n_palette_tags; ++t) {
+        bool sel = (ws.tag == t);
+        if (sel) ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(90, 70, 180, 255));
+        else     ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(32, 32, 48, 255));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(70, 60, 140, 255));
+        ImGui::PushStyleColor(ImGuiCol_Text, sel ? IM_COL32(255,255,255,255)
+                                                  : IM_COL32(160,158,190,220));
+        if (ImGui::SmallButton(g_palette_tags[t])) ws.tag = t;
+        ImGui::PopStyleColor(3);
+        if (t < g_n_palette_tags - 1) ImGui::SameLine(0.f, 4.f);
     }
-    ImGui::PopStyleColor(4);
-    ImGui::PopStyleVar();
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Cycle harmony type");
+    ImGui::PopStyleVar(2);
+    ImGui::Dummy({0.f, 5.f});
 
-    ImGui::SameLine(0.f, 6.f);
+    // ── Scrollable palette grid ──────────────────────────────────────────────
+    const float CARD_H   = 30.f;
+    const float NAME_H   = 11.f;
+    const float STRIP_H  = CARD_H - NAME_H - 2.f;
+    const float GAP      = 5.f;
+    const float COL_W    = floorf((avail - GAP) * 0.5f);
 
-    if (ImGui::SmallButton("Gen##palgen")) generate();
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Regenerate unlocked swatches from current color");
+    // Build filtered list
+    static std::vector<int> s_filtered;
+    s_filtered.clear();
+    bool has_search = ws.search[0] != '\0';
+    for (int i = 0; i < g_n_palettes; ++i) {
+        if (ws.tag != 0 && strcmp(g_palettes[i].tag, g_palette_tags[ws.tag]) != 0)
+            continue;
+        if (has_search) {
+            // case-insensitive substring match
+            const char* src = g_palettes[i].name;
+            const char* q   = ws.search;
+            bool found = false;
+            for (int si = 0; src[si]; ++si) {
+                bool match = true;
+                for (int qi = 0; q[qi] && src[si+qi]; ++qi)
+                    if (tolower((unsigned char)src[si+qi]) != tolower((unsigned char)q[qi]))
+                        { match = false; break; }
+                if (match && !q[0]) { found = true; break; }
+                if (match) {
+                    // verify full query matched
+                    bool full = true;
+                    for (int qi = 0; q[qi]; ++qi)
+                        if (!src[si+qi] || tolower((unsigned char)src[si+qi]) != tolower((unsigned char)q[qi]))
+                            { full = false; break; }
+                    if (full) { found = true; break; }
+                }
+            }
+            if (!found) continue;
+        }
+        s_filtered.push_back(i);
+    }
 
-    ImGui::SameLine(0.f, 10.f);
+    int n_rows = ((int)s_filtered.size() + 1) / 2;
+    float scroll_h = fminf((float)n_rows * (CARD_H + GAP) + GAP, 210.f);
 
-    // Swatches
-    const float SZ  = 18.f;
-    const float GAP = 4.f;
-    ImDrawList* dl  = ImGui::GetWindowDrawList();
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, IM_COL32(14, 14, 22, 255));
+    ImGui::BeginChild("##palscroll", {avail, scroll_h}, ImGuiChildFlags_None,
+                      ImGuiWindowFlags_NoScrollbar);
 
-    for (int i = 0; i < 5; ++i) {
-        ImGui::PushID(i);
+    float base_y = ImGui::GetCursorPosY();
+
+    for (int fi = 0; fi < (int)s_filtered.size(); ++fi) {
+        int pi  = s_filtered[fi];
+        int col = fi % 2;
+        int row = fi / 2;
+        float cx = GAP * 0.5f + col * (COL_W + GAP);
+        float cy = base_y + row * (CARD_H + GAP);
+
+        ImGui::SetCursorPos({cx, cy});
         ImVec2 cp = ImGui::GetCursorScreenPos();
 
-        ImGui::InvisibleButton("##sw", {SZ, SZ});
-
-        ImU32 col = IM_COL32(
-            (int)(ps.slots[i][0]*255), (int)(ps.slots[i][1]*255),
-            (int)(ps.slots[i][2]*255), 255);
+        ImGui::PushID(fi);
+        ImGui::InvisibleButton("##pc", {COL_W, CARD_H});
         bool hov = ImGui::IsItemHovered();
 
-        dl->AddRectFilled(cp, {cp.x+SZ, cp.y+SZ}, col, 4.f);
-        dl->AddRect(cp, {cp.x+SZ, cp.y+SZ},
-            ps.locked[i] ? IM_COL32(255,220,80,230)
-            : hov         ? IM_COL32(255,255,255,180)
-                          : IM_COL32(80,80,100,140),
-            4.f, 0, ps.locked[i] ? 1.5f : 1.f);
+        // Card background
+        ImU32 card_bg = hov ? IM_COL32(38,36,58,255) : IM_COL32(22,20,34,255);
+        dl->AddRectFilled(cp, {cp.x+COL_W, cp.y+CARD_H}, card_bg, 5.f);
 
-        // Lock indicator dot
-        if (ps.locked[i]) {
-            dl->AddCircleFilled({cp.x+SZ-4.f, cp.y+4.f}, 2.5f, IM_COL32(255,220,80,255));
+        // Color strip
+        const auto& pe = g_palettes[pi];
+        float sw = COL_W / pe.n;
+        for (int ci = 0; ci < pe.n; ++ci) {
+            ImVec2 s0 = {cp.x + ci*sw, cp.y + 2.f};
+            ImVec2 s1 = {cp.x + (ci+1)*sw, cp.y + 2.f + STRIP_H};
+            ImDrawFlags rf = ImDrawFlags_RoundCornersNone;
+            if (ci == 0)        rf = ImDrawFlags_RoundCornersTopLeft | ImDrawFlags_RoundCornersBottomLeft;
+            if (ci == pe.n - 1) rf = ImDrawFlags_RoundCornersTopRight | ImDrawFlags_RoundCornersBottomRight;
+            if (pe.n == 1)      rf = ImDrawFlags_RoundCornersAll;
+            dl->AddRectFilled(s0, s1, IM_COL32(pe.c[ci][0], pe.c[ci][1], pe.c[ci][2], 255), 4.f, rf);
         }
 
-        if (ImGui::IsItemClicked(0)) {
-            // Left click: apply to rgb
-            rgb[0] = ps.slots[i][0];
-            rgb[1] = ps.slots[i][1];
-            rgb[2] = ps.slots[i][2];
-        }
-        if (ImGui::IsItemClicked(1)) {
-            // Right click: toggle lock
-            ps.locked[i] = !ps.locked[i];
-        }
-        if (hov) ImGui::SetTooltip(ps.locked[i] ? "Locked — right-click to unlock"
-                                                 : "Click to apply — right-click to lock");
+        // Name
+        dl->AddText(ImGui::GetFont(), 10.f,
+            {cp.x + 4.f, cp.y + STRIP_H + 4.f},
+            hov ? IM_COL32(255,255,255,220) : IM_COL32(155,155,175,180),
+            pe.name);
 
-        ImGui::SameLine(0.f, GAP);
+        // Border
+        dl->AddRect(cp, {cp.x+COL_W, cp.y+CARD_H},
+            hov ? IM_COL32(140,120,255,200) : IM_COL32(45,42,65,180), 5.f, 0, 1.f);
+
+        // Click → apply to all slots
+        if (ImGui::IsItemClicked()) {
+            for (int si = 0; si < n_slots; ++si) {
+                int ci = si < pe.n ? si : pe.n - 1;
+                slots[si][0] = pe.c[ci][0] / 255.f;
+                slots[si][1] = pe.c[ci][1] / 255.f;
+                slots[si][2] = pe.c[ci][2] / 255.f;
+                (void)has_alpha; // alpha always preserved — we never touch [3]
+            }
+        }
+
+        if (hov) ImGui::SetTooltip("%s  ·  %s", pe.name, pe.tag);
         ImGui::PopID();
     }
 
-    ImGui::NewLine();
-    ImGui::Dummy({0.f, 2.f});
+    // Advance cursor so child window knows its height
+    ImGui::SetCursorPosY(base_y + n_rows * (CARD_H + GAP) + 4.f);
+    ImGui::Dummy({0.f, 0.f});
+
+    ImGui::EndChild();
+    ImGui::PopStyleColor();
+
+    ImGui::Dummy({0.f, 4.f});
     ImGui::PopID();
+}
+
+// Convenience: single slot (float[3] or float[4])
+static void palette_widget(const char* id, float* rgb) {
+    float* s[1] = { rgb };
+    palette_widget(id, s, 1, false);
 }
 
 static void section_color(AppState& state, Clip& clip, float w) {
@@ -5149,8 +5141,12 @@ static void panel_background(AppState& state, float w) {
                     ImGuiColorEditFlags_NoLabel|ImGuiColorEditFlags_NoInputs|ImGuiColorEditFlags_NoBorder))
                     history_push(state, "BG color");
             }
-            // Palette derived from c1 (primary color)
-            palette_widget("##pal_bg1", bgclip->bg_c1);
+            // Palette fills all active gradient slots simultaneously
+            {
+                int ns = active_pr->n_colors;
+                float* bg_slots[3] = { bgclip->bg_c1, bgclip->bg_c2, bgclip->bg_c3 };
+                palette_widget("##pal_bg", bg_slots, ns, true);
+            }
             ImGui::Dummy({0.f, 4.f});
         }
     }
