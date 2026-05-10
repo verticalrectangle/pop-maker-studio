@@ -7712,6 +7712,8 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
                 state.tracks.insert(state.tracks.begin() + drag_hot_gap, std::move(nt));
                 state.selected_track = drag_hot_gap;
                 state.selected_clip  = 0;
+                state.clip_selection.clear();
+                state.clip_selection.insert({state.selected_track, state.selected_clip});
                 history_push(state, "Move clip to new track");
             } else if (!drag_left && !drag_right && s_drag_moved &&
                 drag_hot_track >= 0 && drag_hot_track != drag_track) {
@@ -7728,6 +7730,8 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
                     state.tracks.push_back(nt);
                     state.selected_track = (int)state.tracks.size() - 1;
                     state.selected_clip  = 0;
+                    state.clip_selection.clear();
+                    state.clip_selection.insert({state.selected_track, state.selected_clip});
                     history_push(state, "Move clip to new track");
                 } else {
                     // Abort drop if any clip on the target track conflicts with the moved clip.
@@ -7742,10 +7746,14 @@ static void draw_timeline(AppState& state, ImVec2 origin, float total_w, float t
                             state.tracks[drag_track].clips.begin() + drag_clip, moved);
                         state.selected_track = drag_track;
                         state.selected_clip  = drag_clip;
+                        state.clip_selection.clear();
+                        state.clip_selection.insert({state.selected_track, state.selected_clip});
                     } else {
                         state.tracks[drag_hot_track].clips.push_back(moved);
                         state.selected_track = drag_hot_track;
                         state.selected_clip  = (int)state.tracks[drag_hot_track].clips.size() - 1;
+                        state.clip_selection.clear();
+                        state.clip_selection.insert({state.selected_track, state.selected_clip});
                         history_push(state, "Move clip to track");
                     }
                 }
