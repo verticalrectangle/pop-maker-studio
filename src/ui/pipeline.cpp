@@ -541,6 +541,7 @@ void import_file(AppState& state, const std::string& path) {
         vc.source_id = path;
         vc.start=0.f; vc.end=state.duration; vc.text=path;
         vt.clips.push_back(vc);
+        state.tl_zoom_to_fit_end = vc.end;
 
         // Claim or reuse proxy slot for this clip instance.
         int slot = slot_for_video(state, clip_slot_key(path, 0.f), path);
@@ -590,6 +591,7 @@ void import_file(AppState& state, const std::string& path) {
         ac.source_id = path;
         ac.start=0.f; ac.end=(state.duration > 0.f ? state.duration : 4.f); ac.text=path;
         at->clips.push_back(ac);
+        state.tl_zoom_to_fit_end = ac.end;
     }
 
     // Pre-fill output paths in case user already has JSON from a previous run

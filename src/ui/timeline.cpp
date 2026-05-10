@@ -48,10 +48,25 @@ static bool clips_conflict(const Clip& a, const Clip& b) {
 
 void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h) {
     ImDrawList* dl      = ImGui::GetWindowDrawList();
-    float clip_area_w   = total_w - TL_LABEL_W;
-    float dur           = fmaxf(state.duration, 1.f);
+    float clip_area_w        = total_w - TL_LABEL_W;
+    state.tl_clip_area_w     = clip_area_w;
+    float dur                = fmaxf(state.duration, 1.f);
     float& zoom         = state.tl_zoom;
     float& scroll       = state.tl_scroll;
+
+    // Deferred zoom-to-fit: set by add_clip_to_track when a new clip extends past the visible right edge.
+    if (state.tl_zoom_to_fit_end > 0.f && clip_area_w > 0.f) {
+        float visible_end = (scroll + clip_area_w) / zoom;
+        if (state.tl_zoom_to_fit_end > visible_end) {
+            float target  = state.tl_zoom_to_fit_end * 1.15f;
+            float new_zoom = fmaxf(20.f, fminf(clip_area_w / target, 4000.f));
+            float left_t  = scroll / zoom;
+            zoom   = new_zoom;
+            scroll = fmaxf(0.f, left_t * new_zoom);
+        }
+        state.tl_zoom_to_fit_end = 0.f;
+    }
+
     float tl_content_w  = dur * zoom;
 
     // Scroll to bring selected clip into view (triggered by preview click-to-select)

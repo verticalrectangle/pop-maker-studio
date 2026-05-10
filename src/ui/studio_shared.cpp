@@ -179,6 +179,10 @@ void add_clip_to_track(AppState& state, int ti, const std::string& path, ClipTyp
     std::sort(tr.clips.begin(), tr.clips.end(),
               [](const Clip& a, const Clip& b){ return a.start < b.start; });
 
+    // Ask draw_timeline to zoom out if the clip extends past the visible right edge.
+    // Deferred so it always runs with a valid clip_area_w even on the very first frame.
+    state.tl_zoom_to_fit_end = cl.end;
+
     state.selected_track = ti;
     for (int ci = 0; ci < (int)tr.clips.size(); ++ci)
         if (&tr.clips[ci] == &tr.clips.back() ||

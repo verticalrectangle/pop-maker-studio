@@ -539,7 +539,12 @@ void ui_studio(AppState& state) {
                 ImGui::SetCursorPosX(ImGui::GetCursorPosX() + avail - total_btns);
 
             ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {10.f, 2.f});
-            if (ImGui::Button("Project")) s_panel_view = PanelView::Project;
+            if (ImGui::Button("Project")) {
+                s_panel_view = PanelView::Project;
+                state.selected_track = -1;
+                state.selected_clip  = -1;
+                state.clip_selection.clear();
+            }
             ImGui::SameLine(0.f, 6.f);
 
             ImGui::PushStyleColor(ImGuiCol_Button,        Col::fg);
