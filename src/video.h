@@ -50,6 +50,10 @@ uintptr_t video_get_texture(int track_id, double playhead);
 // Thumbnail for the scrub bar hover — always uses track 0's proxy.
 uintptr_t video_get_thumbnail(double t, int* out_w, int* out_h);
 
+// Sample the pre-FX RGB of the last decoded frame at normalized UV coords (0..1).
+// Returns false if no frame has been decoded for this track yet.
+bool video_sample_pixel(int track_id, float u, float v, float* r, float* g, float* b);
+
 // CPU pixel FX — set before video_get_texture(); applied during MJPEG decode.
 // Call once per slot per render frame; all processing happens on the decoded pixels.
 struct PixelFX {

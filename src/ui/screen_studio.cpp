@@ -108,7 +108,9 @@ static std::string source_from_key(const std::string& key) {
 
 // Track index the mouse is hovering over in the timeline — updated by draw_timeline
 // each frame so the drop handler can target a specific lane.
-static int s_tl_hover_track = -1;
+static int s_tl_hover_track   = -1;
+// Eyedropper: track_id >= 0 means pick mode active for that track's chroma key
+static int s_eyedropper_track = -1;
 
 // Drop flash — highlight the target track row for ~0.5 s after a file lands.
 static float s_drop_flash_t     = 0.f;  // countdown in seconds
@@ -1390,7 +1392,46 @@ static void draw_preview(AppState& state, ImVec2 p, float w, float h) {
     // Click-to-select using tight bboxes: video computed inline, text from previous-frame layouts.
     bool in_preview_area = mpos.x >= p.x && mpos.x <= p.x+w &&
                            mpos.y >= p.y && mpos.y <= p.y+h;
-    if (lclick && in_preview_area && s_ctx.handle == CanvasHandle::None) {
+
+    // Eyedropper: intercept click to sample pixel color for chroma key
+    if (s_eyedropper_track >= 0) {
+        ImGui::SetMouseCursor(ImGuiMouseCursor_None);
+        // Draw crosshair cursor
+        const float CH = 10.f;
+        ImU32 cwhite = IM_COL32(255, 255, 255, 220);
+        ImU32 cblack = IM_COL32(0, 0, 0, 160);
+        dl->AddLine({mpos.x - CH - 1, mpos.y}, {mpos.x + CH + 1, mpos.y}, cblack, 2.f);
+        dl->AddLine({mpos.x, mpos.y - CH - 1}, {mpos.x, mpos.y + CH + 1}, cblack, 2.f);
+        dl->AddLine({mpos.x - CH, mpos.y}, {mpos.x + CH, mpos.y}, cwhite, 1.f);
+        dl->AddLine({mpos.x, mpos.y - CH}, {mpos.x, mpos.y + CH}, cwhite, 1.f);
+        dl->AddCircle(mpos, 4.f, cwhite, 12, 1.f);
+
+        if (lclick && in_preview_area) {
+            float u = (mpos.x - p.x) / w;
+            float v = (mpos.y - p.y) / h;
+            float sr, sg, sb;
+            int tid = s_eyedropper_track;
+            if (video_sample_pixel(tid, u, v, &sr, &sg, &sb)) {
+                // Find the selected clip on this track and update chroma key color
+                if (tid < (int)state.tracks.size()) {
+                    for (auto& cl : state.tracks[tid].clips) {
+                        if (state.playhead >= cl.start && state.playhead < cl.end &&
+                            cl.clip_type == ClipType::Video) {
+                            cl.fx_chroma_key_r = sr;
+                            cl.fx_chroma_key_g = sg;
+                            cl.fx_chroma_key_b = sb;
+                            history_push(state, "Chroma Key: color");
+                            break;
+                        }
+                    }
+                }
+            }
+            s_eyedropper_track = -1;
+        }
+        if (ImGui::IsKeyPressed(ImGuiKey_Escape)) s_eyedropper_track = -1;
+    }
+
+    if (lclick && in_preview_area && s_ctx.handle == CanvasHandle::None && s_eyedropper_track < 0) {
         struct HitCandidate { int ti, ci; float area; };
         std::vector<HitCandidate> hits;
         for (int ti = 0; ti < (int)state.tracks.size(); ++ti) {
@@ -5286,7 +5327,9 @@ static void panel_fx_clip(AppState& state, float w) {
             float sw2 = w - 16.f;
             ui_label("Key Color");
             float col3[3] = { clip.fx_chroma_key_r, clip.fx_chroma_key_g, clip.fx_chroma_key_b };
-            ImGui::SetNextItemWidth(sw2);
+            // Color swatch + dropper button on the same row
+            float drop_w = 28.f;
+            ImGui::SetNextItemWidth(sw2 - drop_w - 6.f);
             if (ImGui::ColorEdit3("##ckbcol", col3, ImGuiColorEditFlags_NoInputs |
                                                      ImGuiColorEditFlags_PickerHueWheel)) {
                 clip.fx_chroma_key_r = col3[0];
@@ -5294,6 +5337,30 @@ static void panel_fx_clip(AppState& state, float w) {
                 clip.fx_chroma_key_b = col3[2];
             }
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Chroma Key: color");
+            ImGui::SameLine(0.f, 6.f);
+            {
+                bool picking = (s_eyedropper_track == state.selected_track);
+                if (picking) ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(80, 180, 255, 200));
+                if (ImGui::Button(picking ? "##drop_on" : "##drop_off", {drop_w, 0.f})) {
+                    s_eyedropper_track = picking ? -1 : state.selected_track;
+                }
+                if (picking) ImGui::PopStyleColor();
+                // Draw pipette icon manually in the button
+                ImVec2 bp = ImGui::GetItemRectMin();
+                ImVec2 be = ImGui::GetItemRectMax();
+                ImDrawList* bdl = ImGui::GetWindowDrawList();
+                ImVec2 bc = { (bp.x + be.x) * 0.5f, (bp.y + be.y) * 0.5f };
+                float  bs = (be.y - bp.y) * 0.28f;
+                ImU32  ic = picking ? IM_COL32(20,20,20,255) : IM_COL32(200,200,220,255);
+                // pipette body (diagonal line)
+                bdl->AddLine({bc.x - bs, bc.y + bs}, {bc.x + bs * 0.6f, bc.y - bs * 0.6f}, ic, 2.f);
+                // tip dot
+                bdl->AddCircleFilled({bc.x - bs - 1.f, bc.y + bs + 1.f}, 2.f, ic);
+                // handle end cap
+                bdl->AddCircleFilled({bc.x + bs * 0.7f, bc.y - bs * 0.7f}, 2.5f, ic);
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Pick color from preview");
+            }
             ImGui::Dummy({0.f, 4.f});
             ui_label("Threshold");
             ImGui::SetNextItemWidth(sw2);
