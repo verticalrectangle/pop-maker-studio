@@ -56,6 +56,9 @@ enum class FXType {
     VHS,          // chroma bleed + grain + tracking glitch
     Datamosh,     // temporal ghost buffer + multi-key chroma chaos
     ChromaKey,    // color-range keyer — compositing brick
+    Grade,        // colour grade: brightness / contrast / saturation / hue
+    Blur,         // gaussian blur
+    Vignette,     // radial vignette
 #include "generated/fx_enum_entries.h"
 };
 

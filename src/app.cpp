@@ -134,7 +134,8 @@ static void accum_effect_clip(EffectAccum& acc, const Clip& cl) {
 bool fx_clip_is_glass(const AppState& state, int fx_ti, const Clip& fx_cl) {
     if (fx_ti < 0 || fx_ti >= (int)state.tracks.size()) return false;
     for (auto& cl : state.tracks[fx_ti].clips) {
-        if (cl.clip_type != ClipType::Video && cl.clip_type != ClipType::Audio) continue;
+        if (cl.clip_type != ClipType::Video && cl.clip_type != ClipType::Audio &&
+            cl.clip_type != ClipType::Background) continue;
         if (fx_cl.start < cl.end && fx_cl.end > cl.start) return true;
     }
     return false;
@@ -172,7 +173,10 @@ CreativeFXAccum collect_creative_fx(const AppState& state, float t, int below_tr
     for (int ti = 0; ti < below_track_idx && ti < (int)state.tracks.size(); ++ti) {
         for (auto& cl : state.tracks[ti].clips) {
             if (cl.clip_type != ClipType::Effect) continue;
-            if (cl.fx_type == FXType::Adjustment)  continue;
+            if (cl.fx_type == FXType::Adjustment ||
+                cl.fx_type == FXType::Grade      ||
+                cl.fx_type == FXType::Blur       ||
+                cl.fx_type == FXType::Vignette)  continue;
             if (t < cl.start || t >= cl.end)       continue;
             if (fx_clip_is_glass(state, ti, cl))   continue; // glass: applied pre-composite
             float _cl_beat_pulse = beat_pulse_at(state, cl.beat_src_track, cl.beat_src_clip, t, cl.beat_decay);
@@ -231,7 +235,10 @@ CreativeFXAccum collect_glass_fx(const AppState& state, float t, int video_track
     if (video_track_idx < 0 || video_track_idx >= (int)state.tracks.size()) return acc;
     for (auto& cl : state.tracks[video_track_idx].clips) {
         if (cl.clip_type != ClipType::Effect) continue;
-        if (cl.fx_type == FXType::Adjustment)  continue;
+        if (cl.fx_type == FXType::Adjustment ||
+            cl.fx_type == FXType::Grade      ||
+            cl.fx_type == FXType::Blur       ||
+            cl.fx_type == FXType::Vignette)  continue;
         if (t < cl.start || t >= cl.end)       continue;
         if (!fx_clip_is_glass(state, video_track_idx, cl)) continue;
         float _cl_beat_pulse = beat_pulse_at(state, cl.beat_src_track, cl.beat_src_clip, t, cl.beat_decay);
@@ -303,7 +310,10 @@ CreativeFXAccum collect_creative_fx_for_track(const AppState& state, float t, in
     if (track_idx < 0 || track_idx >= (int)state.tracks.size()) return acc;
     for (auto& cl : state.tracks[track_idx].clips) {
         if (cl.clip_type != ClipType::Effect) continue;
-        if (cl.fx_type == FXType::Adjustment) continue;
+        if (cl.fx_type == FXType::Adjustment ||
+            cl.fx_type == FXType::Grade      ||
+            cl.fx_type == FXType::Blur       ||
+            cl.fx_type == FXType::Vignette)  continue;
         if (t < cl.start || t >= cl.end)      continue;
         if (fx_clip_is_glass(state, track_idx, cl)) continue;
         float _cl_beat_pulse = beat_pulse_at(state, cl.beat_src_track, cl.beat_src_clip, t, cl.beat_decay);

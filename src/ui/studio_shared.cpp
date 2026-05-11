@@ -213,8 +213,14 @@ PanelView pv_derive(const AppState& state) {
     if (!hs) return PanelView::Project;
     const Clip& cl = state.tracks[state.selected_track].clips[state.selected_clip];
     if (cl.clip_type == ClipType::Background) return PanelView::OverrideBG;
-    if (cl.clip_type == ClipType::Effect)
-        return cl.fx_type == FXType::Adjustment ? PanelView::OverrideAdj : PanelView::OverrideFX;
+    if (cl.clip_type == ClipType::Effect) {
+        if (cl.fx_type == FXType::Adjustment ||
+            cl.fx_type == FXType::Grade      ||
+            cl.fx_type == FXType::Blur       ||
+            cl.fx_type == FXType::Vignette)
+            return PanelView::OverrideAdj;
+        return PanelView::OverrideFX;
+    }
     if (cl.clip_type == ClipType::Text || cl.clip_type == ClipType::Lyrics ||
         cl.clip_type == ClipType::Subtitle) return PanelView::Typography;
     return PanelView::Clip;
@@ -268,6 +274,9 @@ const char* fx_type_name(FXType ft) {
         case FXType::VHS:       return "VHS";
         case FXType::Datamosh:  return "MOSH";
         case FXType::ChromaKey: return "KEY";
+        case FXType::Grade:     return "Grade";
+        case FXType::Blur:      return "Blur";
+        case FXType::Vignette:  return "Vignette";
 #include "generated/fx_ui_abbrev.h"
         default:                return "ADJUST";
     }
@@ -315,8 +324,10 @@ bool fx_type_is_adjustment_style(FXType ft) {
 
 FxBrickColors fx_brick_colors(FXType ft, bool sel) {
     int r, g, b;
-    if (ft == FXType::Adjustment || fx_type_is_adjustment_style(ft)) { r=100; g=80;  b=200; }
-    else                                                               { r=210; g=110; b=30;  }
+    if (ft == FXType::Adjustment || ft == FXType::Grade ||
+        ft == FXType::Blur       || ft == FXType::Vignette ||
+        fx_type_is_adjustment_style(ft)) { r=100; g=80;  b=200; }
+    else                                 { r=210; g=110; b=30;  }
     if (sel) {
         int rb = (int)fminf(r*1.25f,255), gb2 = (int)fminf(g*1.25f,255), bb = (int)fminf(b*1.25f,255);
         return { IM_COL32(r,g,b,210), IM_COL32(rb,gb2,bb,255), IM_COL32(240,240,255,240) };

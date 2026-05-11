@@ -71,6 +71,9 @@ static const FXCard g_fx_cards[] = {
     {FXType::LightLeak, "Light Leak",  "Film flare  ·  amplitude-driven  ·  Screen blend",    IM_COL32(255,90,160,255)},
     {FXType::VHS,       "VHS",         "Chroma bleed  ·  grain  ·  tracking glitch",          IM_COL32(110,195,95,255)},
     {FXType::Datamosh,  "Datamosh",    "Temporal ghost  ·  multi-key chaos  ·  total mosh",   IM_COL32(255,60,100,255)},
+    {FXType::Grade,     "Grade",       "colour  ·  contrast  ·  saturation",                  IM_COL32(100,80,200,255)},
+    {FXType::Blur,      "Blur",        "gaussian softness",                                    IM_COL32(100,80,200,255)},
+    {FXType::Vignette,  "Vignette",    "radial darkening",                                    IM_COL32(100,80,200,255)},
 #include "generated/fx_ui_picker.h"
 };
 static const int g_n_fx_cards = (int)(sizeof(g_fx_cards) / sizeof(g_fx_cards[0]));
@@ -82,17 +85,9 @@ void panel_adjustment_library(AppState& state, float w) {
 
     ImGui::TextUnformatted("Adjustment Library");
     ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
-    ImGui::TextWrapped("Click to apply to selected Adjustment clip. Drag to timeline to create one.");
+    ImGui::TextWrapped("Click to create a new Grade clip with the preset applied. Drag to timeline to create one.");
     ImGui::PopStyleColor();
     ImGui::Dummy({0.f, 8.f});
-
-    // Determine if an Adjustment clip is currently selected (for click-to-apply).
-    bool has_fx_clip = (state.selected_track >= 0 &&
-                        state.selected_track < (int)state.tracks.size() &&
-                        state.selected_clip  >= 0 &&
-                        state.selected_clip  < (int)state.tracks[state.selected_track].clips.size() &&
-                        state.tracks[state.selected_track].clips[state.selected_clip].clip_type == ClipType::Effect &&
-                        state.tracks[state.selected_track].clips[state.selected_clip].fx_type == FXType::Adjustment);
 
     float card_w  = w - 8.f;  // single column like FX cards
     float card_h  = 80.f;
@@ -151,24 +146,20 @@ void panel_adjustment_library(AppState& state, float w) {
         ImGui::PopID();
 
         if (clicked) {
-            if (has_fx_clip) {
-                preset_apply(state.tracks[state.selected_track].clips[state.selected_clip], p);
-                history_push(state, "Apply preset: " + p.name);
-            } else {
-                // Always create a new track above everything for the adjustment clip
-                Clip cl;
-                cl.clip_type = ClipType::Effect;
-                cl.fx_type   = FXType::Adjustment;
-                cl.start     = state.playhead;
-                cl.end       = state.playhead + 2.f;
-                preset_apply(cl, p);
-                Track nt; nt.name = "Adjust";
-                nt.clips.push_back(cl);
-                state.tracks.insert(state.tracks.begin(), std::move(nt));
-                state.selected_track = 0;
-                state.selected_clip  = 0;
-                history_push(state, "Add Adjustment: " + p.name);
-            }
+            // Always create a new Grade clip with the preset applied
+            Clip cl;
+            cl.clip_type     = ClipType::Effect;
+            cl.fx_type       = FXType::Grade;
+            cl.fx_color_on   = true;
+            cl.start         = state.playhead;
+            cl.end           = state.playhead + 2.f;
+            preset_apply(cl, p);
+            Track nt; nt.name = "Grade";
+            nt.clips.push_back(cl);
+            state.tracks.insert(state.tracks.begin(), std::move(nt));
+            state.selected_track = 0;
+            state.selected_clip  = 0;
+            history_push(state, "Add Grade: " + p.name);
         }
     };
 
@@ -335,65 +326,73 @@ void panel_adjustment(AppState& state, float w) {
     };
     float sw = w - 72.f;  // slider width leaving room for label + reset
 
+    bool show_color    = (clip.fx_type == FXType::Adjustment || clip.fx_type == FXType::Grade);
+    bool show_blur     = (clip.fx_type == FXType::Adjustment || clip.fx_type == FXType::Blur);
+    bool show_vignette = (clip.fx_type == FXType::Adjustment || clip.fx_type == FXType::Vignette);
+
     // ── Color Grade ───────────────────────────────────────────────────────────
-    bool cg = clip.fx_color_on;
-    if (ImGui::Checkbox("Color Grade##fx", &cg)) {
-        clip.fx_color_on = cg;
-        history_push(state, "Effect: color grade");
+    if (show_color) {
+        bool cg = clip.fx_color_on;
+        if (ImGui::Checkbox("Color Grade##fx", &cg)) {
+            clip.fx_color_on = cg;
+            history_push(state, "Effect: color grade");
+        }
+        if (clip.fx_color_on) {
+            ImGui::Dummy({0.f, 4.f});
+            ImGui::SetNextItemWidth(sw); ImGui::SliderFloat("Brightness##fx",&clip.fx_brightness,-1.f,1.f,"%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Effect: brightness");
+            fx_reset_btn("br", &clip.fx_brightness, 0.f);
+
+            ImGui::SetNextItemWidth(sw); ImGui::SliderFloat("Contrast##fx",  &clip.fx_contrast, 0.5f,2.f,"%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Effect: contrast");
+            fx_reset_btn("co", &clip.fx_contrast, 1.f);
+
+            ImGui::SetNextItemWidth(sw); ImGui::SliderFloat("Saturation##fx",&clip.fx_saturation,0.f,2.f,"%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Effect: saturation");
+            fx_reset_btn("sa", &clip.fx_saturation, 1.f);
+
+            ImGui::SetNextItemWidth(sw); ImGui::SliderFloat("Hue##fx",       &clip.fx_hue,-180.f,180.f,"%.0f\xc2\xb0");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Effect: hue");
+            fx_reset_btn("hu", &clip.fx_hue, 0.f);
+            ImGui::Dummy({0.f, 4.f});
+        }
+        ImGui::Dummy({0.f, 4.f}); ui_separator(); ImGui::Dummy({0.f, 4.f});
     }
-    if (clip.fx_color_on) {
-        ImGui::Dummy({0.f, 4.f});
-        ImGui::SetNextItemWidth(sw); ImGui::SliderFloat("Brightness##fx",&clip.fx_brightness,-1.f,1.f,"%.2f");
-        if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Effect: brightness");
-        fx_reset_btn("br", &clip.fx_brightness, 0.f);
-
-        ImGui::SetNextItemWidth(sw); ImGui::SliderFloat("Contrast##fx",  &clip.fx_contrast, 0.5f,2.f,"%.2f");
-        if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Effect: contrast");
-        fx_reset_btn("co", &clip.fx_contrast, 1.f);
-
-        ImGui::SetNextItemWidth(sw); ImGui::SliderFloat("Saturation##fx",&clip.fx_saturation,0.f,2.f,"%.2f");
-        if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Effect: saturation");
-        fx_reset_btn("sa", &clip.fx_saturation, 1.f);
-
-        ImGui::SetNextItemWidth(sw); ImGui::SliderFloat("Hue##fx",       &clip.fx_hue,-180.f,180.f,"%.0f\xc2\xb0");
-        if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Effect: hue");
-        fx_reset_btn("hu", &clip.fx_hue, 0.f);
-        ImGui::Dummy({0.f, 4.f});
-    }
-
-    ImGui::Dummy({0.f, 4.f}); ui_separator(); ImGui::Dummy({0.f, 4.f});
 
     // ── Blur ──────────────────────────────────────────────────────────────────
-    bool bl = clip.fx_blur_on;
-    if (ImGui::Checkbox("Blur##fx", &bl)) {
-        clip.fx_blur_on = bl;
-        history_push(state, "Effect: blur");
+    if (show_blur) {
+        bool bl = clip.fx_blur_on;
+        if (ImGui::Checkbox("Blur##fx", &bl)) {
+            clip.fx_blur_on = bl;
+            history_push(state, "Effect: blur");
+        }
+        if (clip.fx_blur_on) {
+            ImGui::Dummy({0.f, 4.f});
+            ImGui::SetNextItemWidth(sw); ImGui::SliderFloat("Radius##fx", &clip.fx_blur, 0.f, 20.f, "%.1f px");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Effect: blur radius");
+            fx_reset_btn("bl", &clip.fx_blur, 0.f);
+            ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+            ImGui::TextUnformatted("Live preview shows badge — rendered on export");
+            ImGui::PopStyleColor();
+            ImGui::Dummy({0.f, 4.f});
+        }
+        ImGui::Dummy({0.f, 4.f}); ui_separator(); ImGui::Dummy({0.f, 4.f});
     }
-    if (clip.fx_blur_on) {
-        ImGui::Dummy({0.f, 4.f});
-        ImGui::SetNextItemWidth(sw); ImGui::SliderFloat("Radius##fx", &clip.fx_blur, 0.f, 20.f, "%.1f px");
-        if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Effect: blur radius");
-        fx_reset_btn("bl", &clip.fx_blur, 0.f);
-        ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
-        ImGui::TextUnformatted("Live preview shows badge — rendered on export");
-        ImGui::PopStyleColor();
-        ImGui::Dummy({0.f, 4.f});
-    }
-
-    ImGui::Dummy({0.f, 4.f}); ui_separator(); ImGui::Dummy({0.f, 4.f});
 
     // ── Vignette ──────────────────────────────────────────────────────────────
-    bool vi = clip.fx_vignette_on;
-    if (ImGui::Checkbox("Vignette##fx", &vi)) {
-        clip.fx_vignette_on = vi;
-        history_push(state, "Effect: vignette");
-    }
-    if (clip.fx_vignette_on) {
-        ImGui::Dummy({0.f, 4.f});
-        ImGui::SetNextItemWidth(sw); ImGui::SliderFloat("Strength##fx", &clip.fx_vignette, 0.f, 1.f, "%.2f");
-        if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Effect: vignette strength");
-        fx_reset_btn("vi", &clip.fx_vignette, 0.f);
-        ImGui::Dummy({0.f, 4.f});
+    if (show_vignette) {
+        bool vi = clip.fx_vignette_on;
+        if (ImGui::Checkbox("Vignette##fx", &vi)) {
+            clip.fx_vignette_on = vi;
+            history_push(state, "Effect: vignette");
+        }
+        if (clip.fx_vignette_on) {
+            ImGui::Dummy({0.f, 4.f});
+            ImGui::SetNextItemWidth(sw); ImGui::SliderFloat("Strength##fx", &clip.fx_vignette, 0.f, 1.f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Effect: vignette strength");
+            fx_reset_btn("vi", &clip.fx_vignette, 0.f);
+            ImGui::Dummy({0.f, 4.f});
+        }
     }
 
     ImGui::Dummy({0.f, 4.f}); ui_separator(); ImGui::Dummy({0.f, 4.f});
@@ -648,6 +647,7 @@ void panel_fx_creative(AppState& state, float w) {
 
     for (int i = 0; i < g_n_fx_cards; ++i) {
         if (fx_type_is_adjustment_style(g_fx_cards[i].type)) continue;
+        if (g_fx_cards[i].type == FXType::Adjustment) continue;
         const FXCard& fc = g_fx_cards[i];
         ImGui::PushID(i + 9000);
         ImVec2 cp = ImGui::GetCursorScreenPos();
@@ -688,6 +688,20 @@ void panel_fx_creative(AppState& state, float w) {
             cl.fx_type   = fc.type;
             cl.start     = state.playhead;
             cl.end       = state.playhead + 5.f;
+            // Set defaults for each adjustment FX type
+            if (fc.type == FXType::Grade) {
+                cl.fx_color_on   = true;
+                cl.fx_brightness = 0.f;
+                cl.fx_contrast   = 1.f;
+                cl.fx_saturation = 1.f;
+                cl.fx_hue        = 0.f;
+            } else if (fc.type == FXType::Blur) {
+                cl.fx_blur_on = true;
+                cl.fx_blur    = 4.f;
+            } else if (fc.type == FXType::Vignette) {
+                cl.fx_vignette_on = true;
+                cl.fx_vignette    = 0.5f;
+            }
             Track nt; nt.name = fc.name;
             nt.clips.push_back(cl);
             state.tracks.insert(state.tracks.begin(), std::move(nt));
