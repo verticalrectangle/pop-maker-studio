@@ -7,6 +7,7 @@
 #include "filepicker.h"
 #include "audio_fx.h"
 #include "hf_api.h"
+#include "vc_job.h"
 #include "bg_presets.h"
 #include "theme.h"
 #include "presets.h"
@@ -946,7 +947,7 @@ void panel_audio_fx_clip(AppState& state, float w) {
             break;
         }
         case FXType::AudioVoiceConvert: {
-            // Current model
+            // ── Model picker ──────────────────────────────────────────────────
             if (!afx.voice_model_path.empty()) {
                 ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(30,220,150,255));
                 ImGui::TextUnformatted(fs::path(afx.voice_model_path).filename().string().c_str());
@@ -962,13 +963,100 @@ void panel_audio_fx_clip(AppState& state, float w) {
                 if (!p.empty()) { afx.voice_model_path = p; afx.voice_convert_on = true;
                                   history_push(state, "Voice model"); }
             }
+            ImGui::Dummy({0.f, 6.f});
+
+            // ── Find overlapping audio clips on this track ────────────────────
+            // We need them to show conversion state and to trigger vc_start.
+            int ti = state.selected_track;
+            struct AudioRef { int ci; };
+            std::vector<AudioRef> audio_refs;
+            for (int ci = 0; ci < (int)track.clips.size(); ++ci) {
+                const Clip& ac = track.clips[ci];
+                if (ac.clip_type != ClipType::Audio || ac.text.empty()) continue;
+                if (ac.end <= clip.start || ac.start >= clip.end) continue;
+                audio_refs.push_back({ci});
+            }
+
+            // ── Conversion job progress / controls ────────────────────────────
+            if (!afx.voice_model_path.empty() && !audio_refs.empty()) {
+                // Aggregate status: Processing if any clip is processing
+                VcStatus agg = VcStatus::Idle;
+                float    agg_prog = 0.f;
+                std::string agg_err;
+                for (auto& ar : audio_refs) {
+                    const Clip& ac = track.clips[ar.ci];
+                    if (ac.vc_status == VcStatus::Processing) { agg = VcStatus::Processing; agg_prog = ac.vc_progress; }
+                    else if (ac.vc_status == VcStatus::Error && agg != VcStatus::Processing) { agg = VcStatus::Error; agg_err = ac.vc_error; }
+                    else if (ac.vc_status == VcStatus::Ready  && agg == VcStatus::Idle)       agg = VcStatus::Ready;
+                }
+
+                ImVec2 bp = ImGui::GetCursorScreenPos();
+                ImDrawList* dl = ImGui::GetWindowDrawList();
+
+                if (agg == VcStatus::Processing) {
+                    ImU32 green     = IM_COL32(30, 200, 140, 255);
+                    ImU32 green_dim = IM_COL32(30, 200, 140, 50);
+                    float fill = fmaxf(0.01f, fminf(1.f, agg_prog));
+                    dl->AddRectFilled(bp, {bp.x+bar_w, bp.y+6.f}, green_dim, 3.f);
+                    dl->AddRectFilled(bp, {bp.x+bar_w*fill, bp.y+6.f}, green, 3.f);
+                    ImGui::Dummy({0.f, 10.f});
+                    char pct[64];
+                    snprintf(pct, sizeof(pct), "Converting voice…  %d%%", (int)(fill * 100.f));
+                    ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(30,220,150,255));
+                    ImGui::TextUnformatted(pct);
+                    ImGui::PopStyleColor();
+                    ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+                    ImGui::TextWrapped("Running RVC. This may take a minute.");
+                    ImGui::PopStyleColor();
+                } else if (agg == VcStatus::Ready) {
+                    dl->AddRectFilled(bp, {bp.x+bar_w, bp.y+6.f}, IM_COL32(30, 200, 80, 255), 3.f);
+                    ImGui::Dummy({0.f, 10.f});
+                    ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(40,220,100,255));
+                    ImGui::TextUnformatted("Voice converted");
+                    ImGui::PopStyleColor();
+                    ImGui::Dummy({0.f, 4.f});
+                    if (ui_btn("Re-convert##vcr", false, true)) {
+                        for (auto& ar : audio_refs)
+                            vc_start(state, ti, ar.ci, afx.voice_model_path,
+                                     state.python_path, g_voice_convert_script);
+                    }
+                } else if (agg == VcStatus::Error) {
+                    ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(220,80,80,255));
+                    ImGui::TextWrapped("Error: %s", agg_err.c_str());
+                    ImGui::PopStyleColor();
+                    ImGui::Dummy({0.f, 4.f});
+                    if (ui_btn("Retry##vcretry", false, true)) {
+                        for (auto& ar : audio_refs)
+                            vc_start(state, ti, ar.ci, afx.voice_model_path,
+                                     state.python_path, g_voice_convert_script);
+                    }
+                } else {
+                    // Idle — show Convert button
+                    if (ui_btn("Convert##vc_go", false, false)) {
+                        for (auto& ar : audio_refs)
+                            vc_start(state, ti, ar.ci, afx.voice_model_path,
+                                     state.python_path, g_voice_convert_script);
+                    }
+                }
+            } else if (afx.voice_model_path.empty()) {
+                ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+                ImGui::TextUnformatted("Load a model below, then hit Convert.");
+                ImGui::PopStyleColor();
+            } else {
+                ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+                ImGui::TextWrapped("No audio clips overlap this brick on the timeline.");
+                ImGui::PopStyleColor();
+            }
+
+            ImGui::Dummy({0.f, 10.f});
+            ui_separator();
             ImGui::Dummy({0.f, 8.f});
 
-            // Inline voice model search
-            static HFSearch   s_vc_search;
-            static char       s_vc_query[64]      = {};
-            static char       s_vc_prev[64]        = {};
-            static float      s_vc_debounce        = 0.f;
+            // ── HuggingFace model browser ─────────────────────────────────────
+            static HFSearch s_vc_search;
+            static char     s_vc_query[64] = {};
+            static char     s_vc_prev[64]  = {};
+            static float    s_vc_debounce  = 0.f;
 
             ImGui::SetNextItemWidth(w - 8.f);
             if (ImGui::InputTextWithHint("##vcq", "Search HuggingFace RVC…",
@@ -990,17 +1078,18 @@ void panel_audio_fx_clip(AppState& state, float w) {
 
             auto ss = s_vc_search.status.load(std::memory_order_acquire);
 
-            // Pinned (shown when search is empty)
+            // Card: Download + Use (sets model path; user then hits Convert above)
             auto draw_vc_card = [&](int id, const char* lbl,
                                     const char* repo, const char* file) {
                 std::string key = dl_key(repo, file);
-                HFDownload& dl  = s_dl[key];
-                hf_download_poll(dl);
-                if (dl.status.load(std::memory_order_acquire) == HFDownload::Status::Done) {
-                    afx.voice_model_path = dl.out_path;
+                HFDownload& hfdl = s_dl[key];
+                hf_download_poll(hfdl);
+                // Download completed → set model path
+                if (hfdl.status.load(std::memory_order_acquire) == HFDownload::Status::Done) {
+                    afx.voice_model_path = hfdl.out_path;
                     afx.voice_convert_on = true;
                     history_push(state, std::string("Voice: ") + lbl);
-                    dl.status.store(HFDownload::Status::Idle, std::memory_order_release);
+                    hfdl.status.store(HFDownload::Status::Idle, std::memory_order_release);
                 }
                 bool installed = hf_rvc_installed(repo, file);
                 ImGui::PushID(id);
@@ -1017,9 +1106,9 @@ void panel_audio_fx_clip(AppState& state, float w) {
                              IM_COL32(255,255,255,220), lbl);
                 ImGui::PopFont();
 
-                auto dst = dl.status.load(std::memory_order_acquire);
+                auto dst = hfdl.status.load(std::memory_order_acquire);
                 if (dst == HFDownload::Status::Running) {
-                    float prog = dl.progress();
+                    float prog = hfdl.progress();
                     float bx0 = cp.x+cw-94.f, bx1 = cp.x+cw-8.f, by = cp.y+18.f;
                     cdl->AddRectFilled({bx0,by},{bx1,by+5.f},IM_COL32(20,60,45,255),2.f);
                     cdl->AddRectFilled({bx0,by},{bx0+(bx1-bx0)*prog,by+5.f},IM_COL32(30,200,150,255),2.f);
@@ -1028,7 +1117,7 @@ void panel_audio_fx_clip(AppState& state, float w) {
                     bool active = (afx.voice_model_path == hf_rvc_model_path(repo, file));
                     cdl->AddText({cp.x+8.f, cp.y+28.f},
                                  active ? IM_COL32(30,220,150,255) : IM_COL32(60,140,100,180),
-                                 active ? "Active" : "Installed");
+                                 active ? "Selected" : "Installed");
                     ImGui::SetCursorScreenPos({cp.x+cw-44.f, cp.y+8.f});
                     if (ImGui::SmallButton("Use##vu")) {
                         afx.voice_model_path = hf_rvc_model_path(repo, file);
@@ -1038,11 +1127,11 @@ void panel_audio_fx_clip(AppState& state, float w) {
                 } else {
                     ImGui::SetCursorScreenPos({cp.x+cw-70.f, cp.y+ch/2.f-8.f});
                     if (ImGui::SmallButton("Download##vd"))
-                        hf_download_model(repo, file, hf_rvc_model_path(repo, file), dl);
+                        hf_download_model(repo, file, hf_rvc_model_path(repo, file), hfdl);
                     if (dst == HFDownload::Status::Error) {
                         cdl->AddText({cp.x+8.f, cp.y+28.f}, IM_COL32(220,80,80,200), "Failed");
-                        if (ImGui::IsItemHovered() && !dl.error_msg.empty())
-                            ImGui::SetTooltip("%s", dl.error_msg.c_str());
+                        if (ImGui::IsItemHovered() && !hfdl.error_msg.empty())
+                            ImGui::SetTooltip("%s", hfdl.error_msg.c_str());
                     }
                 }
                 ImGui::SetCursorScreenPos(cp);

@@ -45,6 +45,7 @@ enum class AnimStyle {
 // ── Background removal status ─────────────────────────────────────────────────
 
 enum class BgRemoveStatus { Idle, Processing, Ready, Error };
+enum class VcStatus       { Idle, Processing, Ready, Error };
 
 // ── Creative FX type ─────────────────────────────────────────────────────────
 
@@ -206,6 +207,13 @@ struct Clip {
     float         bg_remove_box_r    = 1.f;
     float         bg_remove_box_t    = 0.f;
     float         bg_remove_box_b    = 1.f;
+
+    // Voice conversion job state (explicit, like rembg)
+    VcStatus    vc_status   = VcStatus::Idle;
+    float       vc_progress = 0.f;
+    std::string vc_out_path;    // converted WAV path when Ready
+    std::string vc_model_used;  // model .pth that produced vc_out_path
+    std::string vc_error;
 
     // Generated effect clip fields
 #include "generated/fx_clip_fields.h"

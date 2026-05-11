@@ -16,6 +16,7 @@
 #include "video.h"
 #include "proxy.h"
 #include "bg_remove.h"
+#include "vc_job.h"
 #include "noise_reduce.h"
 #include "transcribe.h"
 #include "filepicker.h"
@@ -232,8 +233,9 @@ void ui_studio(AppState& state) {
     // GC slots whose clips have been deleted or moved.
     gc_video_slots(state);
 
-    // Poll background removal jobs.
+    // Poll background removal and voice conversion jobs.
     bg_remove_poll(state);
+    vc_poll(state);
 
     // Poll noise reduction — on completion, set denoised WAV as playback source.
     {
@@ -347,14 +349,20 @@ void ui_studio(AppState& state) {
                 d.in_point = cl.in_point; d.speed    = cl.speed;
                 d.volume   = cl.volume;   d.pan      = cl.pan;
                 d.fade_in  = cl.fade_in;  d.fade_out = cl.fade_out;
-                d.path     = cl.text;
+                // Use converted audio when voice conversion is ready
+                if (cl.clip_type == ClipType::Audio
+                    && cl.vc_status == VcStatus::Ready
+                    && !cl.vc_out_path.empty()) {
+                    d.path = cl.vc_out_path;
+                } else {
+                    d.path = cl.text;
+                }
                 {
-                    // Merge per-clip AudioFX with any audio FX bricks on the same track
+                    // Merge per-clip AudioFX with any audio FX bricks on the same track.
+                    // Exclude voice_convert_on when the clip already has a converted source.
                     AudioFX combined = collect_audio_fx_for_clip(state, (int)(&tr - state.tracks.data()), cl);
-                    // Per-clip AudioFX overrides brick if directly set
                     if (cl.audio_fx.any_active()) combined = cl.audio_fx;
-                    combined.vc_python_path = state.python_path;
-                    combined.vc_script_path = g_voice_convert_script;
+                    if (cl.vc_status == VcStatus::Ready) combined.voice_convert_on = false;
                     if (combined.any_active()) {
                         d.fx      = combined;
                         d.fx_hash = audio_fx_hash(combined);
@@ -362,7 +370,7 @@ void ui_studio(AppState& state) {
                 }
                 if (cl.clip_type == ClipType::Video) {
                     vdescs.push_back(d);
-                    audio_source_ensure(cl.text);  // load video audio into per-source buffer
+                    audio_source_ensure(cl.text);
                 } else if (cl.clip_type == ClipType::Audio) {
                     adescs.push_back(d);
                 }

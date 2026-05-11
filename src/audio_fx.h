@@ -37,9 +37,6 @@ struct AudioFX {
     // AI voice conversion (ML — requires model)
     bool        voice_convert_on  = false;
     std::string voice_model_path; // path to .pth
-    // Not hashed — stable runtime paths that don't affect audio content
-    std::string vc_python_path;
-    std::string vc_script_path;
 
     bool any_active() const {
         return autotune_on || pitch_on || formant_on ||
