@@ -689,7 +689,7 @@ void ui_studio(AppState& state) {
             { "BG",    PanelView::LibBG,    IM_COL32(180,  60, 160, 255) },
             { "FX",    PanelView::LibFX,    IM_COL32(210, 110,  30, 255) },
             { "Adj",   PanelView::LibAdj,   IM_COL32(100,  80, 200, 255) },
-            { "AFX",   PanelView::LibVoice, IM_COL32( 30, 200, 150, 255) },
+            { "AFX",   PanelView::LibAFX,   IM_COL32( 30, 200, 150, 255) },
             { "VID",   PanelView::LibVID,   IM_COL32(140,  60, 220, 255) },
             { "IMG",   PanelView::LibIMG,   IM_COL32(140,  60, 220, 255) },
             { "AUD",   PanelView::LibAUD,   IM_COL32( 50, 180, 100, 255) },
@@ -1083,9 +1083,7 @@ void ui_studio(AppState& state) {
             case PanelView::LibBG:           panel_background(state, pw);            break;
             case PanelView::LibFX:           panel_fx_creative(state, pw);           break;
             case PanelView::LibAdj:          panel_adjustment_library(state, pw);    break;
-            case PanelView::LibVoice:        panel_fx_audio(state, pw);
-                                             ImGui::Separator();
-                                             panel_voice_browser(state, pw);         break;
+            case PanelView::LibAFX:          panel_fx_audio(state, pw);              break;
             case PanelView::LibVID:          panel_media_browser(state, pw, true);   break;
             case PanelView::LibIMG:          panel_media_browser(state, pw, false);  break;
             case PanelView::LibAUD:          panel_audio_browser(state, pw);         break;

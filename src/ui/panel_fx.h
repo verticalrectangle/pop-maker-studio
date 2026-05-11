@@ -11,7 +11,6 @@ void panel_audio_fx_clip(AppState& state, float w);
 void panel_adjustment_library(AppState& state, float w);
 void panel_adjustment(AppState& state, float w);
 void panel_background(AppState& state, float w, bool clip_only = false);
-void panel_voice_browser(AppState& state, float w);
 
 // FX preset helpers (used by timeline drag-drop)
 #include "presets.h"
