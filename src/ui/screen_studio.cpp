@@ -373,6 +373,7 @@ void ui_studio(AppState& state) {
                     audio_source_ensure(cl.text);
                 } else if (cl.clip_type == ClipType::Audio) {
                     adescs.push_back(d);
+                    audio_source_ensure(d.path);  // loads vc_out_path when Ready, cl.text otherwise
                 }
             }
         }
