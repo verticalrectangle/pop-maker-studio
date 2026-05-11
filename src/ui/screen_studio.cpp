@@ -348,9 +348,15 @@ void ui_studio(AppState& state) {
                 d.volume   = cl.volume;   d.pan      = cl.pan;
                 d.fade_in  = cl.fade_in;  d.fade_out = cl.fade_out;
                 d.path     = cl.text;
-                if (cl.audio_fx.any_active()) {
-                    d.fx      = cl.audio_fx;
-                    d.fx_hash = audio_fx_hash(cl.audio_fx);
+                {
+                    // Merge per-clip AudioFX with any audio FX bricks on the same track
+                    AudioFX combined = collect_audio_fx_for_clip(state, (int)(&tr - state.tracks.data()), cl);
+                    // Per-clip AudioFX overrides brick if directly set
+                    if (cl.audio_fx.any_active()) combined = cl.audio_fx;
+                    if (combined.any_active()) {
+                        d.fx      = combined;
+                        d.fx_hash = audio_fx_hash(combined);
+                    }
                 }
                 if (cl.clip_type == ClipType::Video) {
                     vdescs.push_back(d);
@@ -680,12 +686,13 @@ void ui_studio(AppState& state) {
         float       BY   = sp.y + 16.f;
 
         struct { const char* id; PanelView lib_view; ImU32 accent; } btns[] = {
-            { "BG",  PanelView::LibBG,  IM_COL32(180,  60, 160, 255) },
-            { "FX",  PanelView::LibFX,  IM_COL32(210, 110,  30, 255) },
-            { "Adj", PanelView::LibAdj, IM_COL32(100,  80, 200, 255) },
-            { "VID", PanelView::LibVID, IM_COL32(140,  60, 220, 255) },
-            { "IMG", PanelView::LibIMG, IM_COL32(140,  60, 220, 255) },
-            { "AUD", PanelView::LibAUD, IM_COL32( 50, 180, 100, 255) },
+            { "BG",    PanelView::LibBG,    IM_COL32(180,  60, 160, 255) },
+            { "FX",    PanelView::LibFX,    IM_COL32(210, 110,  30, 255) },
+            { "Adj",   PanelView::LibAdj,   IM_COL32(100,  80, 200, 255) },
+            { "AFX",   PanelView::LibVoice, IM_COL32( 30, 200, 150, 255) },
+            { "VID",   PanelView::LibVID,   IM_COL32(140,  60, 220, 255) },
+            { "IMG",   PanelView::LibIMG,   IM_COL32(140,  60, 220, 255) },
+            { "AUD",   PanelView::LibAUD,   IM_COL32( 50, 180, 100, 255) },
         };
 
         for (auto& b : btns) {
@@ -1073,15 +1080,19 @@ void ui_studio(AppState& state) {
             case PanelView::Typography:  panel_typography(state, pw);            break;
             case PanelView::Project:     panel_project(state, pw);               break;
             case PanelView::History:     panel_history(state, pw);               break;
-            case PanelView::LibBG:       panel_background(state, pw);            break;
-            case PanelView::LibFX:       panel_fx_creative(state, pw);           break;
-            case PanelView::LibAdj:      panel_adjustment_library(state, pw);    break;
-            case PanelView::LibVID:      panel_media_browser(state, pw, true);   break;
-            case PanelView::LibIMG:      panel_media_browser(state, pw, false);  break;
-            case PanelView::LibAUD:      panel_audio_browser(state, pw);         break;
-            case PanelView::OverrideFX:  panel_fx_clip(state, pw);              break;
-            case PanelView::OverrideAdj: panel_adjustment(state, pw);           break;
-            case PanelView::OverrideBG:  panel_background(state, pw, true);     break;
+            case PanelView::LibBG:           panel_background(state, pw);            break;
+            case PanelView::LibFX:           panel_fx_creative(state, pw);           break;
+            case PanelView::LibAdj:          panel_adjustment_library(state, pw);    break;
+            case PanelView::LibVoice:        panel_fx_audio(state, pw);
+                                             ImGui::Separator();
+                                             panel_voice_browser(state, pw);         break;
+            case PanelView::LibVID:          panel_media_browser(state, pw, true);   break;
+            case PanelView::LibIMG:          panel_media_browser(state, pw, false);  break;
+            case PanelView::LibAUD:          panel_audio_browser(state, pw);         break;
+            case PanelView::OverrideFX:      panel_fx_clip(state, pw);               break;
+            case PanelView::OverrideAdj:     panel_adjustment(state, pw);            break;
+            case PanelView::OverrideBG:      panel_background(state, pw, true);      break;
+            case PanelView::OverrideAudioFX: panel_audio_fx_clip(state, pw);         break;
         }
         ImGui::EndChild();
     }

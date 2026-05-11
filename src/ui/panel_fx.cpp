@@ -1,17 +1,15 @@
 #include "studio_types.h"
 #include "studio_shared.h"
 #include "panel_fx.h"
-#include "pipeline.h"
 #include "app.h"
-#include "audio.h"
 #include "video.h"
 #include "history.h"
 #include "filepicker.h"
-#include "fx_shader.h"
+#include "audio_fx.h"
 #include "bg_presets.h"
 #include "theme.h"
 #include "presets.h"
-#include "waveform.h"
+#include "globals.h"
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <filesystem>
@@ -725,7 +723,393 @@ void panel_fx_creative(AppState& state, float w) {
     }
 }
 
+// ── Audio FX brick catalogue ──────────────────────────────────────────────────
+
+struct AudioFXCard {
+    FXType      type;
+    const char* name;
+    const char* tagline;
+    ImU32       accent;
+};
+
+static const AudioFXCard g_audio_fx_cards[] = {
+    { FXType::AudioAutotune,     "Autotune",       "YIN pitch detection  ·  scale snap  ·  grain shift",      IM_COL32(30,220,180,255) },
+    { FXType::AudioPitch,        "Pitch Shift",    "Grain pitch shift  ·  -24 to +24 semitones",              IM_COL32(30,180,140,255) },
+    { FXType::AudioFormant,      "Formant",        "Voice character shift  ·  chipmunk / deep",               IM_COL32(40,200,160,255) },
+    { FXType::AudioDelay,        "Delay",          "Stereo delay  ·  feedback  ·  wet/dry",                   IM_COL32(20,160,120,255) },
+    { FXType::AudioReverb,       "Reverb",         "Freeverb room reverb  ·  damp  ·  wet/dry",               IM_COL32(20,140,110,255) },
+    { FXType::AudioVoiceConvert, "Voice Convert",  "RVC voice conversion  ·  load .pth model",                IM_COL32(50,220,150,255) },
+};
+static const int g_n_audio_fx_cards = (int)(sizeof(g_audio_fx_cards) / sizeof(g_audio_fx_cards[0]));
+
+void panel_fx_audio(AppState& state, float w) {
+    ImGui::Dummy({0.f, 8.f});
+    ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(30,220,180,255));
+    ImGui::TextUnformatted("Audio FX");
+    ImGui::PopStyleColor();
+    ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+    ImGui::TextWrapped("Click to add to selected audio track.");
+    ImGui::PopStyleColor();
+    ImGui::Dummy({0.f, 8.f});
+
+    float card_w = w - 8.f;
+    float card_h = 72.f;
+
+    for (int i = 0; i < g_n_audio_fx_cards; ++i) {
+        const AudioFXCard& fc = g_audio_fx_cards[i];
+        ImGui::PushID(i + 20000);
+        ImVec2 cp = ImGui::GetCursorScreenPos();
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+
+        bool hov = ImGui::IsMouseHoveringRect(cp, {cp.x+card_w, cp.y+card_h});
+        dl->AddRectFilled(cp, {cp.x+card_w, cp.y+card_h},
+                          hov ? IM_COL32(18,38,34,255) : IM_COL32(12,26,22,255), 5.f);
+
+        // Accent bar on left
+        dl->AddRectFilled(cp, {cp.x+3.f, cp.y+card_h}, fc.accent, 5.f);
+
+        dl->AddRect(cp, {cp.x+card_w, cp.y+card_h},
+                    hov ? IM_COL32(30,220,180,160) : IM_COL32(30,100,80,160), 5.f, 0, hov ? 2.f : 1.f);
+
+        float tx = cp.x + 14.f;
+        ImGui::PushFont(g_font_bold);
+        dl->AddText(ImGui::GetFont(), 13.f, {tx, cp.y+12.f}, IM_COL32(255,255,255,240), fc.name);
+        ImGui::PopFont();
+        dl->AddText({tx, cp.y+30.f}, IM_COL32(130,200,180,200), fc.tagline);
+
+        if (hov) {
+            const char* al = "+ Add";
+            ImVec2 sz = ImGui::CalcTextSize(al);
+            dl->AddText({cp.x+card_w-sz.x-10.f, cp.y+card_h-16.f}, IM_COL32(30,220,180,220), al);
+        }
+
+        ImGui::SetCursorScreenPos(cp);
+        ImGui::InvisibleButton("##afxcard", {card_w, card_h});
+        if (ImGui::IsItemClicked()) {
+            // Find selected audio track, or first audio track, or create one
+            int target_ti = -1;
+            if (state.selected_track >= 0 && state.selected_track < (int)state.tracks.size()) {
+                auto& tr = state.tracks[state.selected_track];
+                for (auto& cl : tr.clips)
+                    if (cl.clip_type == ClipType::Audio) { target_ti = state.selected_track; break; }
+            }
+            if (target_ti < 0) {
+                for (int ti = 0; ti < (int)state.tracks.size(); ++ti)
+                    for (auto& cl : state.tracks[ti].clips)
+                        if (cl.clip_type == ClipType::Audio) { target_ti = ti; break; }
+            }
+            if (target_ti < 0) {
+                Track nt; nt.name = fc.name;
+                state.tracks.push_back(std::move(nt));
+                target_ti = (int)state.tracks.size() - 1;
+            }
+
+            Clip cl;
+            cl.clip_type = ClipType::Effect;
+            cl.fx_type   = fc.type;
+            cl.start     = state.playhead;
+            cl.end       = state.playhead + 5.f;
+            // Set sensible defaults
+            cl.audio_fx.autotune_on      = (fc.type == FXType::AudioAutotune);
+            cl.audio_fx.pitch_on         = (fc.type == FXType::AudioPitch);
+            cl.audio_fx.formant_on       = (fc.type == FXType::AudioFormant);
+            cl.audio_fx.delay_on         = (fc.type == FXType::AudioDelay);
+            cl.audio_fx.reverb_on        = (fc.type == FXType::AudioReverb);
+            cl.audio_fx.voice_convert_on = (fc.type == FXType::AudioVoiceConvert);
+
+            state.tracks[target_ti].clips.push_back(cl);
+            state.selected_track = target_ti;
+            state.selected_clip  = (int)state.tracks[target_ti].clips.size() - 1;
+            history_push(state, std::string("Add audio FX: ") + fc.name);
+        }
+
+        ImGui::Dummy({0.f, 5.f});
+        ImGui::PopID();
+    }
+
+    ImGui::Dummy({0.f, 8.f});
+    if (ui_btn("Browse Voices…", false, true)) {
+        extern PanelView s_panel_view;
+        s_panel_view = PanelView::LibVoice;
+    }
+}
+
 // ── Right panel: Creative FX clip controls ────────────────────────────────────
+
+void panel_audio_fx_clip(AppState& state, float w) {
+    if (state.selected_track < 0 || state.selected_track >= (int)state.tracks.size()) return;
+    Track& track = state.tracks[state.selected_track];
+    if (state.selected_clip < 0 || state.selected_clip >= (int)track.clips.size()) return;
+    Clip& clip = track.clips[state.selected_clip];
+    AudioFX& afx = clip.audio_fx;
+
+    float bar_w = w - 16.f;
+    ImGui::Dummy({0.f, 8.f});
+    ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(30,220,180,255));
+    ImGui::TextUnformatted(fx_type_display(clip.fx_type));
+    ImGui::PopStyleColor();
+    ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+    char info[128];
+    snprintf(info, sizeof(info), "%s  ·  %.2fs – %.2fs", track.name.c_str(), clip.start, clip.end);
+    ImGui::TextUnformatted(info);
+    ImGui::PopStyleColor();
+    ImGui::Dummy({0.f, 8.f});
+    ui_separator();
+    ImGui::Dummy({0.f, 8.f});
+
+    auto pct_slider = [&](const char* id, const char* lbl, float* v, float mn, float mx, const char* fmt) {
+        ImGui::SetNextItemWidth(bar_w);
+        float pct = *v * 100.f;
+        if (ImGui::SliderFloat(id, &pct, mn*100.f, mx*100.f, fmt))
+            *v = pct / 100.f;
+        if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, lbl);
+    };
+
+    switch (clip.fx_type) {
+        case FXType::AudioAutotune: {
+            static const char* keys[]   = {"C","C#","D","D#","E","F","F#","G","G#","A","A#","B"};
+            static const char* scales[] = {"Major","Minor","Chromatic"};
+            ImGui::SetNextItemWidth(60.f);
+            if (ImGui::Combo("Key##at_k", &afx.autotune_key, keys, 12))
+                history_push(state, "Autotune key");
+            ImGui::SameLine(0.f, 8.f);
+            ImGui::SetNextItemWidth(90.f);
+            if (ImGui::Combo("Scale##at_sc", &afx.autotune_scale, scales, 3))
+                history_push(state, "Autotune scale");
+            ImGui::SetNextItemWidth(bar_w);
+            ImGui::SliderFloat("##at_sp", &afx.autotune_speed, 0.f, 200.f, "Snap speed %.0f ms");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Autotune speed");
+            ImGui::Dummy({0.f, 6.f});
+            ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+            ImGui::TextWrapped("Voice presets:");
+            ImGui::PopStyleColor();
+            for (int pi = 0; pi < k_voice_preset_count; ++pi) {
+                const VoicePresetDef& pd = k_voice_presets[pi];
+                if (ui_btn(pd.name, false, true)) {
+                    afx = pd.fx; history_push(state, "Voice preset");
+                }
+                if (pi < k_voice_preset_count-1) ImGui::SameLine(0.f, 4.f);
+            }
+            break;
+        }
+        case FXType::AudioPitch: {
+            ImGui::SetNextItemWidth(bar_w);
+            ImGui::SliderFloat("##pt_st", &afx.pitch_semitones, -24.f, 24.f, "%.0f semitones");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Pitch semitones");
+            break;
+        }
+        case FXType::AudioFormant: {
+            ImGui::SetNextItemWidth(bar_w);
+            ImGui::SliderFloat("##fm_sh", &afx.formant_shift, -1.f, 1.f, "Shift %.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Formant shift");
+            ImGui::Dummy({0.f, 6.f});
+            ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+            ImGui::TextWrapped("Voice presets:");
+            ImGui::PopStyleColor();
+            for (int pi = 0; pi < k_voice_preset_count; ++pi) {
+                const VoicePresetDef& pd = k_voice_presets[pi];
+                if (ui_btn(pd.name, false, true)) {
+                    afx = pd.fx; history_push(state, "Voice preset");
+                }
+                if (pi < k_voice_preset_count-1) ImGui::SameLine(0.f, 4.f);
+            }
+            break;
+        }
+        case FXType::AudioDelay: {
+            ImGui::SetNextItemWidth(bar_w);
+            ImGui::SliderFloat("##dl_t", &afx.delay_time, 0.01f, 2.f, "Time %.2f s");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Delay time");
+            pct_slider("##dl_fb", "Delay feedback", &afx.delay_feedback, 0.f, 0.95f, "Feedback %.0f%%");
+            pct_slider("##dl_mx", "Delay mix",      &afx.delay_mix,      0.f, 1.f,   "Mix %.0f%%");
+            break;
+        }
+        case FXType::AudioReverb: {
+            pct_slider("##rv_rm", "Reverb room", &afx.reverb_room, 0.f, 1.f, "Room %.0f%%");
+            pct_slider("##rv_dp", "Reverb damp", &afx.reverb_damp, 0.f, 1.f, "Damp %.0f%%");
+            pct_slider("##rv_mx", "Reverb mix",  &afx.reverb_mix,  0.f, 1.f, "Mix %.0f%%");
+            break;
+        }
+        case FXType::AudioVoiceConvert: {
+            ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+            ImGui::TextWrapped("Load an RVC .pth model, or browse the voice library.");
+            ImGui::PopStyleColor();
+            ImGui::Dummy({0.f, 6.f});
+            ImGui::Checkbox("Enable##vc_on2", &afx.voice_convert_on);
+            if (afx.voice_convert_on) {
+                ImGui::SameLine(0.f, 8.f);
+                if (ui_btn("Load model…##vc2", false, true)) {
+                    std::string p = filepicker_open("Voice model", "Model", "*.pth *.onnx");
+                    if (!p.empty()) { afx.voice_model_path = p; history_push(state, "Voice model"); }
+                }
+                if (!afx.voice_model_path.empty()) {
+                    ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+                    ImGui::TextUnformatted(fs::path(afx.voice_model_path).filename().string().c_str());
+                    ImGui::PopStyleColor();
+                }
+            }
+            ImGui::Dummy({0.f, 6.f});
+            if (ui_btn("Browse voices…##vc_browse", false, true)) {
+                extern PanelView s_panel_view;
+                s_panel_view = PanelView::LibVoice;
+            }
+            break;
+        }
+        default: break;
+    }
+}
+
+// ── Voice browser ─────────────────────────────────────────────────────────────
+
+struct VoiceModel {
+    const char* name;
+    const char* artist_style;
+    const char* description;
+    const char* hf_repo;       // huggingface repo id
+    const char* hf_filename;   // .pth filename inside the repo
+};
+
+static const VoiceModel k_voice_models[] = {
+    // Rap / Hip-Hop
+    { "Drake",        "Rap",      "Deep baritone, Toronto flow",               "RVC-Boss/Drake",           "drake.pth"         },
+    { "Kanye West",   "Rap",      "Aggressive mid-range, Chicago",             "RVC-Boss/Kanye",           "kanye.pth"         },
+    { "Travis Scott", "Rap",      "Auto-heavy trap voice",                     "RVC-Boss/TravisScott",     "travis_scott.pth"  },
+    { "Kendrick",     "Rap",      "West Coast flow, expressive dynamics",      "RVC-Boss/KendrickLamar",   "kendrick.pth"      },
+    { "Playboi Carti","Rap",      "High-pitched, melodic mumble",              "RVC-Boss/PlayboiCarti",    "carti.pth"         },
+    // Pop
+    { "Taylor Swift", "Pop",      "Clear pop soprano",                         "RVC-Boss/TaylorSwift",     "taylor_swift.pth"  },
+    { "Ariana Grande","Pop",      "Whistle register, breathy pop",             "RVC-Boss/ArianaGrande",    "ariana_grande.pth" },
+    { "The Weeknd",   "R&B/Pop",  "Falsetto-heavy dark R&B",                  "RVC-Boss/TheWeeknd",       "the_weeknd.pth"    },
+    { "Frank Ocean",  "R&B",      "Smooth, layered harmonics",                 "RVC-Boss/FrankOcean",      "frank_ocean.pth"   },
+    { "Billie Eilish","Pop",      "Breathy low pop, ASMR-adjacent",            "RVC-Boss/BillieEilish",    "billie_eilish.pth" },
+    // Rock / Alt
+    { "Kurt Cobain",  "Rock",     "Raspy grunge, classic 90s",                 "RVC-Boss/KurtCobain",      "kurt_cobain.pth"   },
+    { "Chester B.",   "Rock",     "Linkin Park screamo/clean hybrid",          "RVC-Boss/ChesterBennington","chester.pth"      },
+    // Electronic / Other
+    { "Daft Punk",    "Electronic","Vocoder-processed robot",                  "RVC-Boss/DaftPunk",        "daft_punk.pth"     },
+    { "Bladee",       "Hyperpop", "Nasal Swedish hyperpop",                    "RVC-Boss/Bladee",          "bladee.pth"        },
+    { "Ken Carson",   "Hyperpop", "Soft melodic trap",                         "RVC-Boss/KenCarson",       "ken_carson.pth"    },
+};
+static const int k_n_voice_models = (int)(sizeof(k_voice_models) / sizeof(k_voice_models[0]));
+
+static std::string voice_model_cache_path(const VoiceModel& vm) {
+    const char* home = getenv("HOME");
+    if (!home) return "";
+    return std::string(home) + "/.cache/pop-maker-studio/rvc/" + vm.hf_filename;
+}
+
+static bool voice_model_installed(const VoiceModel& vm) {
+    std::string p = voice_model_cache_path(vm);
+    return !p.empty() && std::filesystem::exists(p);
+}
+
+static std::unordered_map<std::string, VCState> s_vc_downloads;
+
+void panel_voice_browser(AppState& state, float w) {
+    ImGui::Dummy({0.f, 8.f});
+    ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(30,220,180,255));
+    ImGui::TextUnformatted("Voice Library");
+    ImGui::PopStyleColor();
+    ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+    ImGui::TextWrapped("Models download to your local cache. Click to use on selected Audio Voice Convert brick.");
+    ImGui::PopStyleColor();
+    ImGui::Dummy({0.f, 8.f});
+
+    // Filter by category
+    static char s_filter[64] = {};
+    ImGui::SetNextItemWidth(w - 8.f);
+    ImGui::InputTextWithHint("##vf", "Filter…", s_filter, sizeof(s_filter));
+    ImGui::Dummy({0.f, 6.f});
+
+    float card_w = w - 8.f;
+    float card_h = 58.f;
+
+    for (int i = 0; i < k_n_voice_models; ++i) {
+        const VoiceModel& vm = k_voice_models[i];
+        if (s_filter[0] && !strcasestr(vm.name, s_filter) && !strcasestr(vm.artist_style, s_filter))
+            continue;
+
+        ImGui::PushID(i + 30000);
+        ImVec2 cp = ImGui::GetCursorScreenPos();
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+
+        bool installed = voice_model_installed(vm);
+        bool hov = ImGui::IsMouseHoveringRect(cp, {cp.x+card_w, cp.y+card_h});
+
+        dl->AddRectFilled(cp, {cp.x+card_w, cp.y+card_h},
+                          hov ? IM_COL32(20,36,32,255) : IM_COL32(14,24,20,255), 4.f);
+        dl->AddRect(cp, {cp.x+card_w, cp.y+card_h},
+                    installed ? IM_COL32(30,200,150,180) : IM_COL32(40,60,50,160), 4.f, 0, 1.f);
+
+        // Name + style
+        ImGui::PushFont(g_font_bold);
+        dl->AddText(ImGui::GetFont(), 12.f, {cp.x+10.f, cp.y+10.f},
+                    IM_COL32(255,255,255,230), vm.name);
+        ImGui::PopFont();
+        dl->AddText({cp.x+10.f, cp.y+26.f}, IM_COL32(30,180,130,200), vm.artist_style);
+        dl->AddText({cp.x+10.f, cp.y+39.f}, IM_COL32(120,140,130,170), vm.description);
+
+        // Status / button on right
+        if (installed) {
+            dl->AddText({cp.x+card_w-52.f, cp.y+10.f}, IM_COL32(30,220,150,220), "Installed");
+            // Use button
+            ImGui::SetCursorScreenPos({cp.x+card_w-56.f, cp.y+26.f});
+            if (ImGui::SmallButton("Use##vuse")) {
+                // Apply to selected AudioVoiceConvert brick
+                if (state.selected_track >= 0 && state.selected_clip >= 0) {
+                    auto& tr = state.tracks[state.selected_track];
+                    if (state.selected_clip < (int)tr.clips.size()) {
+                        auto& cl = tr.clips[state.selected_clip];
+                        if (cl.fx_type == FXType::AudioVoiceConvert) {
+                            cl.audio_fx.voice_model_path = voice_model_cache_path(vm);
+                            cl.audio_fx.voice_convert_on = true;
+                            history_push(state, std::string("Voice: ") + vm.name);
+                        }
+                    }
+                }
+            }
+        } else {
+            auto& ds = s_vc_downloads[vm.hf_filename];
+            if (ds.status == VCStatus::Running) {
+                // Progress bar
+                float prog = ds.progress;
+                dl->AddRectFilled({cp.x+card_w-100.f, cp.y+18.f},
+                                  {cp.x+card_w-10.f,  cp.y+22.f},
+                                  IM_COL32(20,60,45,255), 2.f);
+                dl->AddRectFilled({cp.x+card_w-100.f, cp.y+18.f},
+                                  {cp.x+card_w-10.f+90.f*prog-90.f, cp.y+22.f},
+                                  IM_COL32(30,200,150,255), 2.f);
+                dl->AddText({cp.x+card_w-100.f, cp.y+26.f},
+                            IM_COL32(80,180,140,200), "Downloading…");
+            } else {
+                ImGui::SetCursorScreenPos({cp.x+card_w-72.f, cp.y+card_h/2.f-8.f});
+                if (ImGui::SmallButton("Download##vdl")) {
+                    ds = VCState{};
+                    // Use Python + voice_convert script's download path via huggingface_hub
+                    extern std::string g_voice_convert_script;
+                    std::string model_id = std::string("rvc:") + vm.hf_repo;
+                    std::string dummy_in = "/dev/null";
+                    std::string out = voice_model_cache_path(vm);
+                    // Ensure cache dir exists
+                    std::filesystem::create_directories(
+                        std::filesystem::path(out).parent_path());
+                    vc_convert(dummy_in, model_id, state.python_path,
+                               g_voice_convert_script, ds);
+                }
+                if (ds.status == VCStatus::Error) {
+                    dl->AddText({cp.x+card_w-100.f, cp.y+26.f},
+                                IM_COL32(220,80,80,220), "Failed");
+                }
+            }
+        }
+
+        // Invisible button for the whole card (selection highlight)
+        ImGui::SetCursorScreenPos(cp);
+        ImGui::InvisibleButton("##vcard", {card_w - 80.f, card_h});
+
+        ImGui::Dummy({0.f, 4.f});
+        ImGui::PopID();
+    }
+}
 
 void panel_fx_clip(AppState& state, float w) {
     if (state.selected_track < 0 || state.selected_track >= (int)state.tracks.size()) return;

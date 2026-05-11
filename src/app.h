@@ -59,6 +59,13 @@ enum class FXType {
     VHS,          // chroma bleed + grain + tracking glitch
     Datamosh,     // temporal ghost buffer + multi-key chroma chaos
     ChromaKey,    // color-range keyer — compositing brick
+    // ── Audio FX bricks ─────────────────────────────────────────────────────
+    AudioAutotune,      // YIN pitch detection + grain shift + scale quantize
+    AudioPitch,         // grain pitch shift, fixed semitone offset
+    AudioFormant,       // formant shift (voice character colouring)
+    AudioDelay,         // stereo delay with feedback
+    AudioReverb,        // Freeverb-style room reverb
+    AudioVoiceConvert,  // RVC-based voice conversion (requires .pth model)
 #include "generated/fx_enum_entries.h"
 };
 
