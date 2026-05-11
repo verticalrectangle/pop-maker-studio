@@ -818,6 +818,11 @@ uintptr_t bg_render_to_texture(const char* preset_id, int slot,
     if (canvas_w <= 0 || canvas_h <= 0) return 0;
     auto& buf = g_bg_out[slot];
 
+    // Save GL state BEFORE any FBO creation (creation binds buf.fbo, which
+    // would otherwise be saved as prev_fbo and never actually restored).
+    GLint prev_fbo = 0; glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prev_fbo);
+    GLint prev_vp[4]; glGetIntegerv(GL_VIEWPORT, prev_vp);
+
     // (Re)create FBO if size changed
     if (buf.fbo == 0 || buf.w != canvas_w || buf.h != canvas_h) {
         if (buf.fbo) { glDeleteFramebuffers(1, &buf.fbo); glDeleteTextures(1, &buf.tex); buf = {}; }
@@ -833,10 +838,6 @@ uintptr_t bg_render_to_texture(const char* preset_id, int slot,
         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, buf.tex, 0);
         buf.w = canvas_w; buf.h = canvas_h;
     }
-
-    // Save GL state
-    GLint prev_fbo = 0; glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prev_fbo);
-    GLint prev_vp[4]; glGetIntegerv(GL_VIEWPORT, prev_vp);
 
     glBindFramebuffer(GL_FRAMEBUFFER, buf.fbo);
     glViewport(0, 0, canvas_w, canvas_h);
