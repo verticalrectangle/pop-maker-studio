@@ -280,6 +280,149 @@ void draw_canvas_handles(AppState& state, ImDrawList* dl, ImVec2 p, float w, flo
         }
     }
 
+    // ── Background clip ───────────────────────────────────────────────────────
+    if (cl.clip_type == ClipType::Background) {
+        float px2 = cl.eval_prop("pos_x",   state.playhead) * w + p.x;
+        float py2 = cl.eval_prop("pos_y",   state.playhead) * h + p.y;
+        float sx2 = cl.eval_prop("scale_x", state.playhead);
+        float sy2 = cl.eval_prop("scale_y", state.playhead);
+        float hw2 = w * sx2 * 0.5f, hh2 = h * sy2 * 0.5f;
+        float bx0 = px2 - hw2, by0 = py2 - hh2;
+        float bx1 = px2 + hw2, by1 = py2 + hh2;
+        float vmx2 = (bx0+bx1)*0.5f, vmy2 = (by0+by1)*0.5f;
+
+        // Solid box
+        dl->AddRect({bx0, by0}, {bx1, by1}, box_col, 0.f, 0, 1.5f);
+
+        // Rotation handle
+        ImVec2 rot_pos2 = {vmx2, by0 - ROT_DIST};
+        dl->AddLine({vmx2, by0}, rot_pos2, IM_COL32(255,255,255,80));
+        dl->AddCircleFilled(rot_pos2, CR+1.5f, IM_COL32(0,0,0,120));
+        bool rot_act2 = (s_ctx.handle == CanvasHandle::Rotate);
+        dl->AddCircle(rot_pos2, CR+1.5f, rot_act2 ? hdl_hov : hdl_col);
+        float rdist2 = sqrtf((mpos.x-rot_pos2.x)*(mpos.x-rot_pos2.x) +
+                             (mpos.y-rot_pos2.y)*(mpos.y-rot_pos2.y));
+        if (rdist2 <= CR+5.f && lclick && s_ctx.handle == CanvasHandle::None) {
+            begin_drag(CanvasHandle::Rotate);
+            s_ctx.start_rot = cl.rotation;
+        }
+
+        // Corners (proportional scale)
+        if (draw_corner_h(bx0, by0, CanvasHandle::CornerTL)) {
+            begin_drag(CanvasHandle::CornerTL);
+            s_ctx.start_scale_x = cl.scale_x; s_ctx.start_scale_y = cl.scale_y;
+            s_ctx.start_bbox_y0 = by0;         s_ctx.start_bbox_y1 = by1;
+        }
+        if (draw_corner_h(bx1, by0, CanvasHandle::CornerTR)) {
+            begin_drag(CanvasHandle::CornerTR);
+            s_ctx.start_scale_x = cl.scale_x; s_ctx.start_scale_y = cl.scale_y;
+            s_ctx.start_bbox_y0 = by0;         s_ctx.start_bbox_y1 = by1;
+        }
+        if (draw_corner_h(bx1, by1, CanvasHandle::CornerBR)) {
+            begin_drag(CanvasHandle::CornerBR);
+            s_ctx.start_scale_x = cl.scale_x; s_ctx.start_scale_y = cl.scale_y;
+            s_ctx.start_bbox_y0 = by0;         s_ctx.start_bbox_y1 = by1;
+        }
+        if (draw_corner_h(bx0, by1, CanvasHandle::CornerBL)) {
+            begin_drag(CanvasHandle::CornerBL);
+            s_ctx.start_scale_x = cl.scale_x; s_ctx.start_scale_y = cl.scale_y;
+            s_ctx.start_bbox_y0 = by0;         s_ctx.start_bbox_y1 = by1;
+        }
+        // Edges
+        if (draw_edge_h(vmx2, by0, false, CanvasHandle::EdgeT)) {
+            begin_drag(CanvasHandle::EdgeT);
+            s_ctx.start_scale_y = cl.scale_y; s_ctx.start_bbox_y0 = by0; s_ctx.start_bbox_y1 = by1;
+        }
+        if (draw_edge_h(vmx2, by1, false, CanvasHandle::EdgeB)) {
+            begin_drag(CanvasHandle::EdgeB);
+            s_ctx.start_scale_y = cl.scale_y; s_ctx.start_bbox_y0 = by0; s_ctx.start_bbox_y1 = by1;
+        }
+        if (draw_edge_h(bx0, vmy2, true, CanvasHandle::EdgeL)) {
+            begin_drag(CanvasHandle::EdgeL);
+            s_ctx.start_scale_x = cl.scale_x; s_ctx.start_bbox_x0 = bx0; s_ctx.start_bbox_x1 = bx1;
+        }
+        if (draw_edge_h(bx1, vmy2, true, CanvasHandle::EdgeR)) {
+            begin_drag(CanvasHandle::EdgeR);
+            s_ctx.start_scale_x = cl.scale_x; s_ctx.start_bbox_x0 = bx0; s_ctx.start_bbox_x1 = bx1;
+        }
+
+        // Interior → move
+        bool in_bg = mpos.x > bx0+CR*2 && mpos.x < bx1-CR*2 &&
+                     mpos.y > by0+CR*2 && mpos.y < by1-CR*2;
+        if (in_bg) {
+            ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
+            if (lclick && s_ctx.handle == CanvasHandle::None) {
+                begin_drag(CanvasHandle::Body);
+                s_ctx.start_pos_x = cl.pos_x; s_ctx.start_pos_y = cl.pos_y;
+            }
+        }
+
+        // Apply BG drag (same logic as video)
+        if (drag_active && s_ctx.track_idx == state.selected_track &&
+            s_ctx.clip_idx == state.selected_clip && cl.clip_type == ClipType::Background) {
+            float dmx = mpos.x - s_ctx.drag_sx;
+            float dmy = mpos.y - s_ctx.drag_sy;
+            Clip& mc = state.tracks[s_ctx.track_idx].clips[s_ctx.clip_idx];
+            float orig_h = s_ctx.start_bbox_y1 - s_ctx.start_bbox_y0;
+            float orig_w = s_ctx.start_bbox_x1 - s_ctx.start_bbox_x0;
+            switch (s_ctx.handle) {
+                case CanvasHandle::Body:
+                    mc.pos_x = fmaxf(-1.f, fminf(2.f, s_ctx.start_pos_x + dmx/w));
+                    mc.pos_y = fmaxf(-1.f, fminf(2.f, s_ctx.start_pos_y + dmy/h));
+                    break;
+                case CanvasHandle::Rotate: {
+                    float ang0 = atan2f(s_ctx.drag_sy - py2, s_ctx.drag_sx - px2);
+                    float ang1 = atan2f(mpos.y - py2,        mpos.x - px2);
+                    mc.rotation = fmodf(s_ctx.start_rot + (ang1-ang0)*180.f/3.14159f, 360.f);
+                    break;
+                }
+                case CanvasHandle::CornerTL: case CanvasHandle::CornerTR: {
+                    if (orig_h > 0.f) {
+                        float scale = (orig_h - dmy) / orig_h;
+                        mc.scale_x = fmaxf(0.05f, s_ctx.start_scale_x * scale);
+                        mc.scale_y = fmaxf(0.05f, s_ctx.start_scale_y * scale);
+                    }
+                    break;
+                }
+                case CanvasHandle::CornerBL: case CanvasHandle::CornerBR: {
+                    if (orig_h > 0.f) {
+                        float scale = (orig_h + dmy) / orig_h;
+                        mc.scale_x = fmaxf(0.05f, s_ctx.start_scale_x * scale);
+                        mc.scale_y = fmaxf(0.05f, s_ctx.start_scale_y * scale);
+                    }
+                    break;
+                }
+                case CanvasHandle::EdgeT:
+                    if (orig_h > 0.f) mc.scale_y = fmaxf(0.05f, s_ctx.start_scale_y * (orig_h-dmy)/orig_h);
+                    break;
+                case CanvasHandle::EdgeB:
+                    if (orig_h > 0.f) mc.scale_y = fmaxf(0.05f, s_ctx.start_scale_y * (orig_h+dmy)/orig_h);
+                    break;
+                case CanvasHandle::EdgeL:
+                    if (orig_w > 0.f) mc.scale_x = fmaxf(0.05f, s_ctx.start_scale_x * (orig_w-dmx)/orig_w);
+                    break;
+                case CanvasHandle::EdgeR:
+                    if (orig_w > 0.f) mc.scale_x = fmaxf(0.05f, s_ctx.start_scale_x * (orig_w+dmx)/orig_w);
+                    break;
+                default: break;
+            }
+            s_ctx.dirty = true;
+
+            // Center snap guides for move
+            if (s_ctx.handle == CanvasHandle::Body) {
+                float cx3 = mc.pos_x * w + p.x, cy3 = mc.pos_y * h + p.y;
+                if (fabsf(cx3 - (p.x+w*0.5f)) < 6.f) {
+                    mc.pos_x = 0.5f;
+                    dl->AddLine({p.x+w*0.5f, p.y}, {p.x+w*0.5f, p.y+h}, snap_col);
+                }
+                if (fabsf(cy3 - (p.y+h*0.5f)) < 6.f) {
+                    mc.pos_y = 0.5f;
+                    dl->AddLine({p.x, p.y+h*0.5f}, {p.x+w, p.y+h*0.5f}, snap_col);
+                }
+            }
+        }
+    }
+
     // ── Text / subtitle / lyrics box ─────────────────────────────────────────
     if (cl.clip_type == ClipType::Text || cl.clip_type == ClipType::Subtitle ||
         cl.clip_type == ClipType::Lyrics) {
@@ -514,6 +657,17 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                     if (mpos.x >= hbx0 && mpos.x <= hbx1 &&
                         mpos.y >= hby0 && mpos.y <= hby1)
                         hits.push_back({ti, ci, (hbx1-hbx0)*(hby1-hby0)});
+                } else if (cl2.clip_type == ClipType::Background) {
+                    float hpx = cl2.eval_prop("pos_x",   state.playhead) * w + p.x;
+                    float hpy = cl2.eval_prop("pos_y",   state.playhead) * h + p.y;
+                    float hsx = cl2.eval_prop("scale_x", state.playhead);
+                    float hsy = cl2.eval_prop("scale_y", state.playhead);
+                    float hhw = w * hsx * 0.5f, hhh = h * hsy * 0.5f;
+                    float hbx0 = hpx - hhw, hby0 = hpy - hhh;
+                    float hbx1 = hpx + hhw, hby1 = hpy + hhh;
+                    if (mpos.x >= hbx0 && mpos.x <= hbx1 &&
+                        mpos.y >= hby0 && mpos.y <= hby1)
+                        hits.push_back({ti, ci, (hbx1-hbx0)*(hby1-hby0)});
                 } else if (cl2.clip_type == ClipType::Text ||
                            cl2.clip_type == ClipType::Subtitle ||
                            cl2.clip_type == ClipType::Lyrics) {
@@ -561,9 +715,24 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
         for (auto& cl : track.clips) {
             if (cl.clip_type != ClipType::Background) continue;
             if (state.playhead < cl.start || state.playhead >= cl.end) continue;
-            if (!cl.text.empty())
-                draw_bg_preset(cl.text.c_str(), dl, p, w, h,
-                    t_anim, cl.bg_speed, cl.bg_intensity, cl.bg_c1, cl.bg_c2, cl.bg_c3);
+            if (cl.text.empty()) break;
+
+            int bg_slot = ti % MAX_BG_SLOTS;
+            uintptr_t tex = bg_render_to_texture(cl.text.c_str(), bg_slot,
+                (int)w, (int)h, t_anim, cl.bg_speed, cl.bg_intensity,
+                cl.bg_c1, cl.bg_c2, cl.bg_c3);
+            if (tex) {
+                float px    = cl.eval_prop("pos_x",    state.playhead);
+                float py    = cl.eval_prop("pos_y",    state.playhead);
+                float sx    = cl.eval_prop("scale_x",  state.playhead);
+                float sy    = cl.eval_prop("scale_y",  state.playhead);
+                float rot   = cl.eval_prop("rotation", state.playhead);
+                float alpha = cl.eval_prop("opacity",  state.playhead);
+                float cx = px * w, cy = py * h;
+                float hw = w * sx * 0.5f, hh = h * sy * 0.5f;
+                float rad = rot * 3.14159265f / 180.f;
+                scene_add_layer(tex, cx, cy, hw, hh, cosf(rad), sinf(rad), alpha);
+            }
             break;
         }
 

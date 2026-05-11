@@ -2,6 +2,8 @@
 #include "app.h"
 #include <cstdint>
 
+static const int MAX_BG_SLOTS = 8;
+
 void fx_shader_init();
 void fx_shader_shutdown();
 
@@ -48,3 +50,10 @@ uintptr_t scene_result   ();
 
 // Blit src_tex (straight copy) into an existing GL FBO.  Saves/restores GL state.
 void fx_blit(uintptr_t src_tex, unsigned dst_fbo, int w, int h);
+
+// Renders a BG preset into a stable per-slot GL texture. Returns 0 on failure.
+// slot: 0..MAX_BG_SLOTS-1
+uintptr_t bg_render_to_texture(const char* preset_id, int slot,
+                                int canvas_w, int canvas_h,
+                                float t, float speed, float intensity,
+                                const float c1[4], const float c2[4], const float c3[4]);

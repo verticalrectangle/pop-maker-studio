@@ -1,8 +1,13 @@
 #include "fx_shader.h"
+#include "bg_presets.h"
 
 #define GL_GLEXT_PROTOTYPES
 #include <GL/gl.h>
 #include <GL/glext.h>
+
+#include <imgui.h>
+#include <imgui_internal.h>
+#include <backends/imgui_impl_opengl3.h>
 
 #include <cstdio>
 #include <cmath>
@@ -363,6 +368,12 @@ static struct {
     int w = 0, h = 0;
 } g_out[kMaxSlots];
 
+// Per-slot BG output FBOs (for bg_render_to_texture)
+static struct {
+    GLuint fbo = 0, tex = 0;
+    int w = 0, h = 0;
+} g_bg_out[MAX_BG_SLOTS];
+
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
 static void make_tex_fbo(GLuint& tex, GLuint& fbo, int w, int h) {
@@ -478,6 +489,8 @@ void fx_shader_shutdown() {
     if (g_pp.fbo[0]) { glDeleteFramebuffers(2, g_pp.fbo); glDeleteTextures(2, g_pp.tex); }
     for (int i = 0; i < kMaxSlots; i++)
         if (g_out[i].fbo) { glDeleteFramebuffers(1, &g_out[i].fbo); glDeleteTextures(1, &g_out[i].tex); }
+    for (auto& b : g_bg_out)
+        if (b.fbo) { glDeleteFramebuffers(1, &b.fbo); glDeleteTextures(1, &b.tex); b = {}; }
     if (g_scene.fbo[0]) { glDeleteFramebuffers(2, g_scene.fbo); glDeleteTextures(2, g_scene.tex); }
     if (g_solid_tex) glDeleteTextures(1, &g_solid_tex);
     if (g_vao) glDeleteVertexArrays(1, &g_vao);
@@ -733,6 +746,66 @@ void scene_apply_fx(int canvas_w, int canvas_h,
 
 uintptr_t scene_result() {
     return g_scene.begun ? (uintptr_t)g_scene.tex[g_scene.active] : 0;
+}
+
+uintptr_t bg_render_to_texture(const char* preset_id, int slot,
+                                int canvas_w, int canvas_h,
+                                float t, float speed, float intensity,
+                                const float c1[4], const float c2[4], const float c3[4])
+{
+    if (slot < 0 || slot >= MAX_BG_SLOTS) return 0;
+    if (canvas_w <= 0 || canvas_h <= 0) return 0;
+    auto& buf = g_bg_out[slot];
+
+    // (Re)create FBO if size changed
+    if (buf.fbo == 0 || buf.w != canvas_w || buf.h != canvas_h) {
+        if (buf.fbo) { glDeleteFramebuffers(1, &buf.fbo); glDeleteTextures(1, &buf.tex); buf = {}; }
+        glGenTextures(1, &buf.tex);
+        glBindTexture(GL_TEXTURE_2D, buf.tex);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, canvas_w, canvas_h, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glGenFramebuffers(1, &buf.fbo);
+        glBindFramebuffer(GL_FRAMEBUFFER, buf.fbo);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, buf.tex, 0);
+        buf.w = canvas_w; buf.h = canvas_h;
+    }
+
+    // Save GL state
+    GLint prev_fbo = 0; glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prev_fbo);
+    GLint prev_vp[4]; glGetIntegerv(GL_VIEWPORT, prev_vp);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, buf.fbo);
+    glViewport(0, 0, canvas_w, canvas_h);
+    glClearColor(0, 0, 0, 1);
+    glClear(GL_COLOR_BUFFER_BIT);
+
+    // Use ImGui's draw list to collect BG draw commands, then render them into our FBO.
+    ImDrawList tmp_dl(ImGui::GetDrawListSharedData());
+    tmp_dl.AddDrawCmd();
+    // Push a clip rect covering the whole canvas so primitives aren't discarded
+    tmp_dl.PushClipRect({0.f, 0.f}, {(float)canvas_w, (float)canvas_h}, false);
+    draw_bg_preset(preset_id, &tmp_dl, {0.f, 0.f}, (float)canvas_w, (float)canvas_h,
+                   t, speed, intensity, c1, c2, c3);
+    tmp_dl.PopClipRect();
+
+    // Build ImDrawData wrapping our list using the same pattern as render.cpp
+    ImDrawData draw_data;
+    draw_data.DisplayPos       = {0.f, 0.f};
+    draw_data.DisplaySize      = {(float)canvas_w, (float)canvas_h};
+    draw_data.FramebufferScale = {1.f, 1.f};
+    draw_data.Textures         = &ImGui::GetPlatformIO().Textures;
+    draw_data.AddDrawList(&tmp_dl);
+
+    ImGui_ImplOpenGL3_RenderDrawData(&draw_data);
+
+    // Restore GL state
+    glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)prev_fbo);
+    glViewport(prev_vp[0], prev_vp[1], prev_vp[2], prev_vp[3]);
+
+    return (uintptr_t)buf.tex;
 }
 
 void fx_blit(uintptr_t src_tex, unsigned dst_fbo, int w, int h) {
