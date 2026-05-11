@@ -46,6 +46,7 @@ set(SOURCES
     src/blender_export.cpp
     src/bg_remove.cpp
     src/noise_reduce.cpp
+    src/audio_fx.cpp
     src/ui/screen_splash.cpp
     src/ui/screen_setup.cpp
     src/ui/screen_studio.cpp
@@ -217,6 +218,34 @@ add_custom_command(
 )
 add_custom_target(embed_envelope DEPENDS ${CMAKE_BINARY_DIR}/envelope_extract_embedded.h)
 add_dependencies(pop-maker-studio embed_envelope)
+
+# Embed piper_tts.py
+add_custom_command(
+    OUTPUT ${CMAKE_BINARY_DIR}/piper_tts_embedded.h
+    COMMAND ${CMAKE_COMMAND}
+        -DINPUT=${CMAKE_SOURCE_DIR}/piper_tts.py
+        -DVAR=piper_tts_py
+        -DOUTPUT=${CMAKE_BINARY_DIR}/piper_tts_embedded.h
+        -P ${CMAKE_SOURCE_DIR}/cmake/EmbedFile.cmake
+    DEPENDS ${CMAKE_SOURCE_DIR}/piper_tts.py
+    COMMENT "Embedding piper_tts.py"
+)
+add_custom_target(embed_piper_tts DEPENDS ${CMAKE_BINARY_DIR}/piper_tts_embedded.h)
+add_dependencies(pop-maker-studio embed_piper_tts)
+
+# Embed voice_convert.py
+add_custom_command(
+    OUTPUT ${CMAKE_BINARY_DIR}/voice_convert_embedded.h
+    COMMAND ${CMAKE_COMMAND}
+        -DINPUT=${CMAKE_SOURCE_DIR}/voice_convert.py
+        -DVAR=voice_convert_py
+        -DOUTPUT=${CMAKE_BINARY_DIR}/voice_convert_embedded.h
+        -P ${CMAKE_SOURCE_DIR}/cmake/EmbedFile.cmake
+    DEPENDS ${CMAKE_SOURCE_DIR}/voice_convert.py
+    COMMENT "Embedding voice_convert.py"
+)
+add_custom_target(embed_voice_convert DEPENDS ${CMAKE_BINARY_DIR}/voice_convert_embedded.h)
+add_dependencies(pop-maker-studio embed_voice_convert)
 
 # ── Embed Python 3.11 standalone runtime (multiplatform) ─────────────────────
 set(PYTHON_STANDALONE_VERSION "3.11.15")

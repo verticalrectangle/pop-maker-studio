@@ -348,6 +348,10 @@ void ui_studio(AppState& state) {
                 d.volume   = cl.volume;   d.pan      = cl.pan;
                 d.fade_in  = cl.fade_in;  d.fade_out = cl.fade_out;
                 d.path     = cl.text;
+                if (cl.audio_fx.any_active()) {
+                    d.fx      = cl.audio_fx;
+                    d.fx_hash = audio_fx_hash(cl.audio_fx);
+                }
                 if (cl.clip_type == ClipType::Video) {
                     vdescs.push_back(d);
                     audio_source_ensure(cl.text);  // load video audio into per-source buffer

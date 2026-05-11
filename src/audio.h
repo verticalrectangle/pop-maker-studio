@@ -1,4 +1,5 @@
 #pragma once
+#include "audio_fx.h"
 #include <string>
 #include <vector>
 #include <cstdint>
@@ -37,6 +38,8 @@ struct AudioClipDesc {
     float       fade_in   = 0.f;
     float       fade_out  = 0.f;
     std::string path;
+    AudioFX     fx;
+    uint64_t    fx_hash   = 0;    // audio_fx_hash(fx); 0 = no FX
 };
 
 // Kick off async PCM decode for a source file so it's ready when needed.

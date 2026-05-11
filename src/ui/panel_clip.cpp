@@ -4,6 +4,7 @@
 #include "pipeline.h"
 #include "app.h"
 #include "audio.h"
+#include "audio_fx.h"
 #include "video.h"
 #include "proxy.h"
 #include "history.h"
@@ -1640,6 +1641,229 @@ void panel_clip(AppState& state, float w) {
                 clip.volume = vol_pct / 100.f;
             ImGui::Dummy({0.f, 4.f});
             plain_slider("##aud_pan", "Pan  (left \xe2\x86\x94 right)", &clip.pan, -1.f, 1.f, "%.2f");
+        }
+
+        // ── Voice Effects ─────────────────────────────────────────────────────
+        {
+            ImGui::Dummy({0.f, 10.f}); ui_separator(); ImGui::Dummy({0.f, 6.f});
+            ui_label("Voice Effects");
+            ImGui::Dummy({0.f, 6.f});
+
+            AudioFX& afx = clip.audio_fx;
+
+            // Voice preset cards
+            ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+            ImGui::TextUnformatted("Preset");
+            ImGui::PopStyleColor();
+            ImGui::Dummy({0.f, 4.f});
+
+            for (int pi = 0; pi < k_voice_preset_count; ++pi) {
+                const VoicePresetDef& pd = k_voice_presets[pi];
+                bool active = afx.pitch_on == pd.fx.pitch_on &&
+                              fabsf(afx.pitch_semitones - pd.fx.pitch_semitones) < 0.5f &&
+                              afx.formant_on == pd.fx.formant_on &&
+                              afx.autotune_on == pd.fx.autotune_on;
+                if (ui_btn(pd.name, active, true)) {
+                    afx = pd.fx;
+                    history_push(state, "Voice preset");
+                }
+                if (pi < k_voice_preset_count - 1) ImGui::SameLine(0.f, 4.f);
+            }
+            ImGui::SameLine(0.f, 8.f);
+            if (ui_btn("None##vclear", !afx.any_active(), true)) {
+                afx = AudioFX{};
+                history_push(state, "Clear voice FX");
+            }
+            ImGui::Dummy({0.f, 8.f});
+
+            // Autotune
+            bool at_hdr = ImGui::CollapsingHeader("Autotune##at_hdr");
+            if (at_hdr) {
+                ImGui::Checkbox("##at_on", &afx.autotune_on);
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Autotune");
+                if (afx.autotune_on) {
+                    ImGui::SameLine(0.f, 8.f);
+                    static const char* keys[] = {"C","C#","D","D#","E","F","F#","G","G#","A","A#","B"};
+                    ImGui::SetNextItemWidth(58.f);
+                    if (ImGui::Combo("##at_key", &afx.autotune_key, keys, 12))
+                        history_push(state, "Autotune key");
+                    ImGui::SameLine(0.f, 6.f);
+                    static const char* scales[] = { "Major", "Minor", "Chromatic" };
+                    ImGui::SetNextItemWidth(86.f);
+                    if (ImGui::Combo("##at_sc", &afx.autotune_scale, scales, 3))
+                        history_push(state, "Autotune scale");
+                    ImGui::SetNextItemWidth(bar_w);
+                    ImGui::SliderFloat("##at_sp", &afx.autotune_speed, 0.f, 200.f, "Snap speed %.0f ms");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Autotune speed");
+                }
+                ImGui::Dummy({0.f, 4.f});
+            }
+
+            // Pitch
+            bool pt_hdr = ImGui::CollapsingHeader("Pitch Shift##pt_hdr");
+            if (pt_hdr) {
+                ImGui::Checkbox("##pt_on", &afx.pitch_on);
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Pitch shift");
+                if (afx.pitch_on) {
+                    ImGui::SameLine(0.f, 8.f);
+                    ImGui::SetNextItemWidth(bar_w - 30.f);
+                    ImGui::SliderFloat("##pt_st", &afx.pitch_semitones, -24.f, 24.f, "%.0f st");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Pitch semitones");
+                }
+                ImGui::Dummy({0.f, 4.f});
+            }
+
+            // Formant
+            bool fm_hdr = ImGui::CollapsingHeader("Formant##fm_hdr");
+            if (fm_hdr) {
+                ImGui::Checkbox("##fm_on", &afx.formant_on);
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Formant");
+                if (afx.formant_on) {
+                    ImGui::SameLine(0.f, 8.f);
+                    ImGui::SetNextItemWidth(bar_w - 30.f);
+                    ImGui::SliderFloat("##fm_sh", &afx.formant_shift, -1.f, 1.f, "%.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Formant shift");
+                }
+                ImGui::Dummy({0.f, 4.f});
+            }
+
+            // Delay
+            bool dl_hdr = ImGui::CollapsingHeader("Delay##dl_hdr");
+            if (dl_hdr) {
+                ImGui::Checkbox("##dl_on", &afx.delay_on);
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Delay");
+                if (afx.delay_on) {
+                    ImGui::SetNextItemWidth(bar_w);
+                    ImGui::SliderFloat("##dl_t", &afx.delay_time, 0.01f, 2.f, "Time %.2f s");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Delay time");
+                    ImGui::SetNextItemWidth(bar_w);
+                    float fb_pct = afx.delay_feedback * 100.f;
+                    if (ImGui::SliderFloat("##dl_fb", &fb_pct, 0.f, 95.f, "Feedback %.0f%%"))
+                        afx.delay_feedback = fb_pct / 100.f;
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Delay feedback");
+                    ImGui::SetNextItemWidth(bar_w);
+                    float mx_pct = afx.delay_mix * 100.f;
+                    if (ImGui::SliderFloat("##dl_mx", &mx_pct, 0.f, 100.f, "Mix %.0f%%"))
+                        afx.delay_mix = mx_pct / 100.f;
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Delay mix");
+                }
+                ImGui::Dummy({0.f, 4.f});
+            }
+
+            // Reverb
+            bool rv_hdr = ImGui::CollapsingHeader("Reverb##rv_hdr");
+            if (rv_hdr) {
+                ImGui::Checkbox("##rv_on", &afx.reverb_on);
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Reverb");
+                if (afx.reverb_on) {
+                    ImGui::SetNextItemWidth(bar_w);
+                    float rm_pct = afx.reverb_room * 100.f;
+                    if (ImGui::SliderFloat("##rv_rm", &rm_pct, 0.f, 100.f, "Room %.0f%%"))
+                        afx.reverb_room = rm_pct / 100.f;
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Reverb room");
+                    ImGui::SetNextItemWidth(bar_w);
+                    float dp_pct = afx.reverb_damp * 100.f;
+                    if (ImGui::SliderFloat("##rv_dp", &dp_pct, 0.f, 100.f, "Damp %.0f%%"))
+                        afx.reverb_damp = dp_pct / 100.f;
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Reverb damp");
+                    ImGui::SetNextItemWidth(bar_w);
+                    float mx_pct = afx.reverb_mix * 100.f;
+                    if (ImGui::SliderFloat("##rv_mx", &mx_pct, 0.f, 100.f, "Mix %.0f%%"))
+                        afx.reverb_mix = mx_pct / 100.f;
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Reverb mix");
+                }
+                ImGui::Dummy({0.f, 4.f});
+            }
+
+            // AI Voice Conversion
+            bool vc_hdr = ImGui::CollapsingHeader("AI Voice Conversion##vc_hdr");
+            if (vc_hdr) {
+                ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+                ImGui::TextWrapped("Converts this clip's voice using an RVC model (.pth).");
+                ImGui::PopStyleColor();
+                ImGui::Dummy({0.f, 4.f});
+                ImGui::Checkbox("Enable##vc_on", &afx.voice_convert_on);
+                if (afx.voice_convert_on) {
+                    ImGui::SameLine(0.f, 8.f);
+                    if (ui_btn("Load model…##vc_load", false, true)) {
+                        std::string p = filepicker_open("Voice model", "Model", "*.pth *.onnx");
+                        if (!p.empty()) { afx.voice_model_path = p; history_push(state, "Voice model"); }
+                    }
+                    if (!afx.voice_model_path.empty()) {
+                        ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+                        ImGui::TextUnformatted(fs::path(afx.voice_model_path).filename().string().c_str());
+                        ImGui::PopStyleColor();
+                    }
+                }
+                ImGui::Dummy({0.f, 4.f});
+            }
+        }
+
+        // ── Text to Speech ────────────────────────────────────────────────────
+        {
+            extern std::string g_piper_tts_script;
+            extern void import_file(AppState&, const std::string&);
+            if (!g_piper_tts_script.empty()) {
+                ImGui::Dummy({0.f, 10.f}); ui_separator(); ImGui::Dummy({0.f, 6.f});
+                ui_label("Text to Speech");
+                ImGui::Dummy({0.f, 6.f});
+
+                static char s_tts_text[2048] = {};
+                static int  s_tts_voice      = 0;
+                static TTSState s_tts_state;
+                static std::string s_tts_added;
+
+                static const char* tts_voices[] = { "female", "male", "whisper", "narrator" };
+
+                ImGui::SetNextItemWidth(bar_w);
+                ImGui::InputTextMultiline("##tts_in", s_tts_text, sizeof(s_tts_text),
+                                          {bar_w, 64.f});
+                ImGui::Dummy({0.f, 4.f});
+                ImGui::SetNextItemWidth(bar_w);
+                ImGui::Combo("##tts_voice", &s_tts_voice, tts_voices, 4);
+                ImGui::Dummy({0.f, 6.f});
+
+                bool tts_busy = (s_tts_state.status == TTSStatus::Running);
+                if (tts_busy) {
+                    ImVec2 bp = ImGui::GetCursorScreenPos();
+                    ImDrawList* dl2 = ImGui::GetWindowDrawList();
+                    dl2->AddRectFilled(bp, {bp.x+bar_w, bp.y+4.f}, to_u32(Col::line), 2.f);
+                    dl2->AddRectFilled(bp, {bp.x+bar_w*s_tts_state.progress, bp.y+4.f},
+                                       to_u32(Col::fg), 2.f);
+                    ImGui::Dummy({0.f, 8.f});
+                    ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+                    ImGui::TextUnformatted("Generating…");
+                    ImGui::PopStyleColor();
+                } else {
+                    if (s_tts_state.status == TTSStatus::Done && !s_tts_state.out_path.empty()
+                        && s_tts_added != s_tts_state.out_path) {
+                        ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+                        ImGui::TextUnformatted("Ready.");
+                        ImGui::PopStyleColor();
+                        ImGui::SameLine(0.f, 8.f);
+                        if (ui_btn("Add to timeline##tts_add", false, true)) {
+                            import_file(state, s_tts_state.out_path);
+                            s_tts_added = s_tts_state.out_path;
+                            s_tts_state = TTSState{};
+                        }
+                    }
+                    if (!s_tts_state.error.empty()) {
+                        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f,0.3f,0.3f,1.f));
+                        ImGui::TextWrapped("%s", s_tts_state.error.c_str());
+                        ImGui::PopStyleColor();
+                        ImGui::Dummy({0.f, 4.f});
+                    }
+                    bool can_gen = s_tts_text[0] != '\0';
+                    if (!can_gen) ImGui::BeginDisabled();
+                    if (ui_btn("Generate##tts_go", false, true)) {
+                        s_tts_state = TTSState{};
+                        tts_generate(s_tts_text, tts_voices[s_tts_voice],
+                                     state.python_path, g_piper_tts_script, s_tts_state);
+                    }
+                    if (!can_gen) ImGui::EndDisabled();
+                }
+                ImGui::Dummy({0.f, 6.f});
+            }
         }
 
         // ── AI Tools ─────────────────────────────────────────────────────────

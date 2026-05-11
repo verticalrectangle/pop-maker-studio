@@ -1,5 +1,6 @@
 #pragma once
 #include "presets.h"
+#include "audio_fx.h"
 #include <string>
 #include <vector>
 #include <chrono>
@@ -218,6 +219,9 @@ struct Clip {
     int   beat_src_track = -1;   // FX clip: which track holds the audio source clip
     int   beat_src_clip  = -1;   // FX clip: which clip index on that track
     float beat_decay     = 0.15f; // FX clip: exp decay time in seconds
+
+    // Audio FX chain (Audio/Video clips with embedded audio)
+    AudioFX audio_fx;
 
     // keyframe tracks — keyed by property name string
     // empty = use the matching static field above

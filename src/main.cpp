@@ -35,6 +35,8 @@ extern "C" {
 #include "envelope_extract_embedded.h"
 #include "rembg_remove_embedded.h"
 #include "noise_reduce_embedded.h"
+#include "piper_tts_embedded.h"
+#include "voice_convert_embedded.h"
 
 namespace fs = std::filesystem;
 
@@ -46,6 +48,8 @@ std::string g_setup_script;
 std::string g_envelope_script;
 std::string g_rembg_script;
 std::string g_noise_reduce_script;
+std::string g_piper_tts_script;
+std::string g_voice_convert_script;
 std::string g_managed_dir;
 
 static void glfw_drop_callback(GLFWwindow*, int count, const char** paths) {
@@ -281,6 +285,10 @@ int main(int argc, char** argv) {
                                           "pop_maker_rembg_remove.py");
     g_noise_reduce_script = extract_embedded(noise_reduce_py, noise_reduce_py_size,
                                           "pop_maker_noise_reduce.py");
+    g_piper_tts_script     = extract_embedded(piper_tts_py,     piper_tts_py_size,
+                                          "pop_maker_piper_tts.py");
+    g_voice_convert_script = extract_embedded(voice_convert_py, voice_convert_py_size,
+                                          "pop_maker_voice_convert.py");
 
     glfwSetErrorCallback(glfw_error_callback);
     if (!glfwInit()) return 1;

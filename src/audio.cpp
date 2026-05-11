@@ -1,4 +1,5 @@
 #include "audio.h"
+#include "audio_fx.h"
 
 extern "C" {
 #include <libavformat/avformat.h>
@@ -18,6 +19,8 @@ extern "C" {
 #include <cstdio>
 #include <cstdlib>
 #include <cmath>
+#include <map>
+#include <memory>
 
 #include <unistd.h>
 #include <signal.h>
@@ -46,12 +49,27 @@ struct SrcBuf {
     bool               ready = false;
 };
 
+// ── Processed FX cache ────────────────────────────────────────────────────────
+// Keyed by (path, fx_hash). Shared_ptr so ClipInfo can hold a stable pointer.
+
+struct FXBuf {
+    std::vector<float>    samples;
+    std::atomic<bool>     ready{false};
+    std::atomic<uint64_t> gen{0};   // generation counter for cancellation
+};
+
+static std::mutex                                        g_fx_mutex;
+static std::map<std::pair<std::string,uint64_t>, std::shared_ptr<FXBuf>> g_fx_cache;
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 struct ClipInfo {
     float tl_start, tl_end;
     float in_point, speed;
     float volume, pan;
     float fade_in, fade_out;
     int   buf_idx;  // index into g_src_bufs, -1 = not yet loaded
+    std::shared_ptr<FXBuf> fx_buf;  // non-null = processed samples available
 };
 
 static std::mutex            g_clip_mutex;
@@ -100,17 +118,20 @@ static void data_callback(ma_device* pDevice, void* pOutput, const void*, ma_uin
         auto mix_clip = [&](const ClipInfo& cl, float global_vol) {
             if (t < cl.tl_start || t >= cl.tl_end) return;
             if (cl.buf_idx < 0 || cl.buf_idx >= (int)g_src_bufs.size()) return;
-            const auto& buf = g_src_bufs[cl.buf_idx].samples;
-            if (buf.empty()) return;
+            // Prefer FX-processed buffer when ready; fall back to raw samples.
+            const std::vector<float>* buf_ptr = &g_src_bufs[cl.buf_idx].samples;
+            if (cl.fx_buf && cl.fx_buf->ready.load(std::memory_order_acquire))
+                buf_ptr = &cl.fx_buf->samples;
+            if (buf_ptr->empty()) return;
             float src_t = cl.in_point + (t - cl.tl_start) * cl.speed;
             size_t sp = (size_t)(src_t * 44100.f) * 2;
-            if (sp + 1 >= buf.size()) return;
+            if (sp + 1 >= buf_ptr->size()) return;
             float fade = clip_fade(cl, t);
             float vol  = cl.volume * global_vol * fade;
             float panL = cl.pan <= 0.f ? 1.f : (1.f - cl.pan);
             float panR = cl.pan >= 0.f ? 1.f : (1.f + cl.pan);
-            out[f*2]   += buf[sp]   * vol * panL;
-            out[f*2+1] += buf[sp+1] * vol * panR;
+            out[f*2]   += (*buf_ptr)[sp]   * vol * panL;
+            out[f*2+1] += (*buf_ptr)[sp+1] * vol * panR;
         };
 
         for (const auto& cl : g_vid_clips) mix_clip(cl, g_volume);
@@ -311,9 +332,8 @@ void audio_source_ensure(const std::string& path) {
     }).detach();
 }
 
-void audio_clips_update(const std::vector<AudioClipDesc>& descs) {
-    std::lock_guard<std::mutex> lk(g_clip_mutex);
-    g_clips.clear();
+static void clips_fill(std::vector<ClipInfo>& out, const std::vector<AudioClipDesc>& descs) {
+    out.clear();
     for (const auto& d : descs) {
         ClipInfo ci;
         ci.tl_start = d.tl_start; ci.tl_end  = d.tl_end;
@@ -326,32 +346,59 @@ void audio_clips_update(const std::vector<AudioClipDesc>& descs) {
                 ci.buf_idx = i; break;
             }
         }
-        g_clips.push_back(ci);
+
+        // FX processing
+        if (d.fx_hash != 0 && ci.buf_idx >= 0) {
+            auto key = std::make_pair(d.path, d.fx_hash);
+            std::shared_ptr<FXBuf> fb;
+            {
+                std::lock_guard<std::mutex> lk2(g_fx_mutex);
+                auto it = g_fx_cache.find(key);
+                if (it != g_fx_cache.end()) {
+                    fb = it->second;
+                } else {
+                    fb = std::make_shared<FXBuf>();
+                    g_fx_cache[key] = fb;
+                    // Kick off async processing
+                    uint64_t my_gen = fb->gen.fetch_add(1) + 1;
+                    const std::vector<float>& raw = g_src_bufs[ci.buf_idx].samples;
+                    AudioFX fx = d.fx;
+                    std::thread([fb, raw, fx, my_gen]() {
+                        auto result = process_audio_fx(raw, fx, 44100.f,
+                                                        &fb->gen, my_gen);
+                        if (!result.empty()) {
+                            fb->samples = std::move(result);
+                            fb->ready.store(true, std::memory_order_release);
+                        }
+                    }).detach();
+                }
+            }
+            ci.fx_buf = fb;
+        }
+
+        out.push_back(ci);
     }
+}
+
+void audio_clips_update(const std::vector<AudioClipDesc>& descs) {
+    std::lock_guard<std::mutex> lk(g_clip_mutex);
+    clips_fill(g_clips, descs);
 }
 
 void video_audio_clips_update(const std::vector<AudioClipDesc>& descs) {
     std::lock_guard<std::mutex> lk(g_clip_mutex);
-    g_vid_clips.clear();
-    for (const auto& d : descs) {
-        ClipInfo ci;
-        ci.tl_start = d.tl_start; ci.tl_end   = d.tl_end;
-        ci.in_point = d.in_point; ci.speed     = d.speed;
-        ci.volume   = d.volume;   ci.pan       = d.pan;
-        ci.fade_in  = d.fade_in;  ci.fade_out  = d.fade_out;
-        ci.buf_idx  = -1;
-        for (int i = 0; i < (int)g_src_bufs.size(); ++i) {
-            if (g_src_bufs[i].path == d.path && g_src_bufs[i].ready) {
-                ci.buf_idx = i; break;
-            }
-        }
-        g_vid_clips.push_back(ci);
-    }
+    clips_fill(g_vid_clips, descs);
 }
 
 void audio_clips_clear() {
-    std::lock_guard<std::mutex> lk(g_clip_mutex);
-    g_src_bufs.clear();
-    g_clips.clear();
-    g_vid_clips.clear();
+    {
+        std::lock_guard<std::mutex> lk(g_clip_mutex);
+        g_src_bufs.clear();
+        g_clips.clear();
+        g_vid_clips.clear();
+    }
+    std::lock_guard<std::mutex> lk2(g_fx_mutex);
+    // Bump generation on all in-flight jobs so they self-cancel, then evict.
+    for (auto& [k, fb] : g_fx_cache) fb->gen.fetch_add(1);
+    g_fx_cache.clear();
 }

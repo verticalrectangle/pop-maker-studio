@@ -10,6 +10,8 @@ extern std::string g_setup_script;     // path to ml_setup.py     (extracted fro
 extern std::string g_envelope_script;       // path to envelope_extract.py
 extern std::string g_rembg_script;          // path to rembg_remove.py
 extern std::string g_noise_reduce_script;   // path to noise_reduce.py
+extern std::string g_piper_tts_script;      // path to piper_tts.py
+extern std::string g_voice_convert_script;  // path to voice_convert.py
 extern std::string g_managed_dir;      // ~/.local/share/pop-maker-studio
 
 // Returns true if faster-whisper and Demucs weights are present on disk.
