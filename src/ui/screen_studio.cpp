@@ -353,6 +353,8 @@ void ui_studio(AppState& state) {
                     AudioFX combined = collect_audio_fx_for_clip(state, (int)(&tr - state.tracks.data()), cl);
                     // Per-clip AudioFX overrides brick if directly set
                     if (cl.audio_fx.any_active()) combined = cl.audio_fx;
+                    combined.vc_python_path = state.python_path;
+                    combined.vc_script_path = g_voice_convert_script;
                     if (combined.any_active()) {
                         d.fx      = combined;
                         d.fx_hash = audio_fx_hash(combined);

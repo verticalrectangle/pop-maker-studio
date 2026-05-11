@@ -167,10 +167,14 @@ static std::string rvc_cache_dir() {
     return home ? std::string(home) + "/.cache/pop-maker-studio/rvc/" : "";
 }
 
-std::string hf_rvc_model_path(const std::string& model_file) {
+std::string hf_rvc_model_path(const std::string& repo,
+                               const std::string& model_file) {
     std::string dir = rvc_cache_dir();
     if (dir.empty()) return {};
-    // If model is a zip, the installed artifact is <stem>.pth
+    // Sanitize repo for use as a directory name (replace '/' with '__')
+    std::string repo_dir = repo;
+    for (char& c : repo_dir) if (c == '/') c = '_';
+    dir += repo_dir + "/";
     if (ends_with(model_file, ".zip")) {
         std::string stem = model_file.substr(0, model_file.size() - 4);
         return dir + stem + ".pth";
@@ -178,8 +182,8 @@ std::string hf_rvc_model_path(const std::string& model_file) {
     return dir + model_file;
 }
 
-bool hf_rvc_installed(const std::string& model_file) {
-    std::string p = hf_rvc_model_path(model_file);
+bool hf_rvc_installed(const std::string& repo, const std::string& model_file) {
+    std::string p = hf_rvc_model_path(repo, model_file);
     return !p.empty() && fs::exists(p);
 }
 

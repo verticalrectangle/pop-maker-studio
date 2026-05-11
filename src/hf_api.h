@@ -54,8 +54,10 @@ void hf_download_poll(HFDownload& dl);
 
 // ── Cache helpers ─────────────────────────────────────────────────────────────
 
-// Returns the .pth path that will exist after download completes,
-// whether model_file is a .pth or a .zip (stem.zip → stem.pth).
-std::string hf_rvc_model_path(const std::string& model_file);
+// Returns the .pth path that will exist after download completes.
+// repo is used to namespace the cache (avoids collisions when multiple
+// repos share the same filename, e.g. model.pth).
+std::string hf_rvc_model_path(const std::string& repo,
+                               const std::string& model_file);
 
-bool hf_rvc_installed(const std::string& model_file);
+bool hf_rvc_installed(const std::string& repo, const std::string& model_file);

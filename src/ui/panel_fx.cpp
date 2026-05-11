@@ -1002,7 +1002,7 @@ void panel_audio_fx_clip(AppState& state, float w) {
                     history_push(state, std::string("Voice: ") + lbl);
                     dl.status.store(HFDownload::Status::Idle, std::memory_order_release);
                 }
-                bool installed = hf_rvc_installed(file);
+                bool installed = hf_rvc_installed(repo, file);
                 ImGui::PushID(id);
                 ImVec2 cp = ImGui::GetCursorScreenPos();
                 float cw = w - 8.f, ch = 44.f;
@@ -1025,20 +1025,20 @@ void panel_audio_fx_clip(AppState& state, float w) {
                     cdl->AddRectFilled({bx0,by},{bx0+(bx1-bx0)*prog,by+5.f},IM_COL32(30,200,150,255),2.f);
                     cdl->AddText({bx0, by+8.f}, IM_COL32(80,180,140,180), "Downloading…");
                 } else if (installed) {
-                    bool active = (afx.voice_model_path == hf_rvc_model_path(file));
+                    bool active = (afx.voice_model_path == hf_rvc_model_path(repo, file));
                     cdl->AddText({cp.x+8.f, cp.y+28.f},
                                  active ? IM_COL32(30,220,150,255) : IM_COL32(60,140,100,180),
                                  active ? "Active" : "Installed");
                     ImGui::SetCursorScreenPos({cp.x+cw-44.f, cp.y+8.f});
                     if (ImGui::SmallButton("Use##vu")) {
-                        afx.voice_model_path = hf_rvc_model_path(file);
+                        afx.voice_model_path = hf_rvc_model_path(repo, file);
                         afx.voice_convert_on = true;
                         history_push(state, std::string("Voice: ") + lbl);
                     }
                 } else {
                     ImGui::SetCursorScreenPos({cp.x+cw-70.f, cp.y+ch/2.f-8.f});
                     if (ImGui::SmallButton("Download##vd"))
-                        hf_download_model(repo, file, hf_rvc_model_path(file), dl);
+                        hf_download_model(repo, file, hf_rvc_model_path(repo, file), dl);
                     if (dst == HFDownload::Status::Error) {
                         cdl->AddText({cp.x+8.f, cp.y+28.f}, IM_COL32(220,80,80,200), "Failed");
                         if (ImGui::IsItemHovered() && !dl.error_msg.empty())

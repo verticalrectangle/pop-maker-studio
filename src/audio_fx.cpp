@@ -8,6 +8,7 @@
 #include <sys/wait.h>
 #include <fcntl.h>
 #include <functional>
+#include <filesystem>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -445,6 +446,74 @@ std::vector<float> process_audio_fx(const std::vector<float>& raw,
 
         out[f * 2]     = std::fmaxf(-1.f, std::fminf(1.f, L));
         out[f * 2 + 1] = std::fmaxf(-1.f, std::fminf(1.f, R));
+    }
+
+    // ── Voice conversion (RVC) ────────────────────────────────────────────────
+    if (fx.voice_convert_on && !fx.voice_model_path.empty()
+        && !fx.vc_python_path.empty() && !fx.vc_script_path.empty()
+        && std::filesystem::exists(fx.voice_model_path)) {
+
+        // Write temp input WAV (IEEE float 32-bit, stereo, 44100 Hz)
+        std::string key = fx.voice_model_path
+                        + std::to_string(out.size());
+        uint64_t h64 = std::hash<std::string>{}(key);
+        std::string tmp_in  = "/tmp/pms_vcin_"  + std::to_string(h64) + ".wav";
+        std::string tmp_out = "/tmp/pms_vcout_" + std::to_string(h64) + ".wav";
+
+        // Write IEEE float WAV
+        if (FILE* f = fopen(tmp_in.c_str(), "wb")) {
+            uint32_t data_bytes  = (uint32_t)(out.size() * sizeof(float));
+            uint32_t riff_size   = 4 + 8 + 18 + 8 + data_bytes;
+            uint16_t fmt         = 3;    // IEEE_FLOAT
+            uint16_t channels    = 2;
+            uint32_t sample_rate = 44100;
+            uint16_t bits        = 32;
+            uint16_t block_align = channels * (bits / 8);
+            uint32_t byte_rate   = sample_rate * block_align;
+            uint16_t ext_size    = 0;
+            fwrite("RIFF", 1, 4, f);  fwrite(&riff_size,   4, 1, f);
+            fwrite("WAVE", 1, 4, f);
+            fwrite("fmt ", 1, 4, f);  uint32_t fmt_size = 18;
+            fwrite(&fmt_size,   4, 1, f); fwrite(&fmt,        2, 1, f);
+            fwrite(&channels,   2, 1, f); fwrite(&sample_rate,4, 1, f);
+            fwrite(&byte_rate,  4, 1, f); fwrite(&block_align,2, 1, f);
+            fwrite(&bits,       2, 1, f); fwrite(&ext_size,   2, 1, f);
+            fwrite("data", 1, 4, f);  fwrite(&data_bytes,  4, 1, f);
+            fwrite(out.data(), sizeof(float), out.size(), f);
+            fclose(f);
+
+            // Run voice_convert.py (blocking — we're already in a worker thread)
+            std::string cmd = "\"" + fx.vc_python_path + "\" \""
+                            + fx.vc_script_path + "\" \""
+                            + tmp_in + "\" \""
+                            + fx.voice_model_path + "\" \""
+                            + tmp_out + "\" 2>/dev/null";
+            system(cmd.c_str());  // NOLINT
+
+            // Read back result via ffmpeg → f32le 44100 stereo
+            if (std::filesystem::exists(tmp_out)) {
+                std::string raw_tmp = tmp_out + ".raw";
+                std::string dec_cmd = "ffmpeg -hide_banner -loglevel error -y"
+                                      " -i \"" + tmp_out + "\""
+                                      " -vn -ar 44100 -ac 2 -f f32le \""
+                                      + raw_tmp + "\" 2>/dev/null";
+                if (system(dec_cmd.c_str()) == 0) {  // NOLINT
+                    if (FILE* rf = fopen(raw_tmp.c_str(), "rb")) {
+                        fseek(rf, 0, SEEK_END);
+                        long sz = ftell(rf); rewind(rf);
+                        if (sz > 0) {
+                            std::vector<float> converted(sz / sizeof(float));
+                            fread(converted.data(), sizeof(float), converted.size(), rf);
+                            out = std::move(converted);
+                        }
+                        fclose(rf);
+                    }
+                    std::filesystem::remove(raw_tmp);
+                }
+                std::filesystem::remove(tmp_out);
+            }
+            std::filesystem::remove(tmp_in);
+        }
     }
 
     return out;
