@@ -979,13 +979,63 @@ static std::string dl_key(const std::string& repo, const std::string& file) {
 
 static void apply_voice_model(AppState& state, const std::string& path,
                               const std::string& label) {
-    if (state.selected_track < 0 || state.selected_clip < 0) return;
-    auto& tr = state.tracks[state.selected_track];
-    if (state.selected_clip >= (int)tr.clips.size()) return;
-    auto& cl = tr.clips[state.selected_clip];
-    if (cl.fx_type != FXType::AudioVoiceConvert) return;
-    cl.audio_fx.voice_model_path = path;
-    cl.audio_fx.voice_convert_on = true;
+    // 1. Selected clip is already a VC brick — just update it
+    if (state.selected_track >= 0 && state.selected_clip >= 0) {
+        auto& tr = state.tracks[state.selected_track];
+        if (state.selected_clip < (int)tr.clips.size()) {
+            auto& cl = tr.clips[state.selected_clip];
+            if (cl.fx_type == FXType::AudioVoiceConvert) {
+                cl.audio_fx.voice_model_path = path;
+                cl.audio_fx.voice_convert_on = true;
+                history_push(state, "Voice: " + label);
+                return;
+            }
+        }
+    }
+
+    // 2. Find an existing VC brick on any track
+    for (int ti = 0; ti < (int)state.tracks.size(); ++ti) {
+        auto& tr = state.tracks[ti];
+        for (int ci = 0; ci < (int)tr.clips.size(); ++ci) {
+            if (tr.clips[ci].fx_type == FXType::AudioVoiceConvert) {
+                tr.clips[ci].audio_fx.voice_model_path = path;
+                tr.clips[ci].audio_fx.voice_convert_on = true;
+                state.selected_track = ti;
+                state.selected_clip  = ci;
+                history_push(state, "Voice: " + label);
+                return;
+            }
+        }
+    }
+
+    // 3. No VC brick anywhere — find an audio track (has Audio clips) or first track
+    int audio_ti = -1;
+    for (int ti = 0; ti < (int)state.tracks.size(); ++ti) {
+        for (auto& cl : state.tracks[ti].clips)
+            if (cl.clip_type == ClipType::Audio) { audio_ti = ti; break; }
+        if (audio_ti >= 0) break;
+    }
+    if (audio_ti < 0 && !state.tracks.empty())
+        audio_ti = 0;
+    if (audio_ti < 0) {
+        Track t; t.name = "Audio";
+        state.tracks.push_back(std::move(t));
+        audio_ti = (int)state.tracks.size() - 1;
+    }
+
+    auto& tr2 = state.tracks[audio_ti];
+    float proj_end = std::max(project_end(state), 5.f);
+    Clip vc{};
+    vc.clip_type = ClipType::Effect;
+    vc.fx_type   = FXType::AudioVoiceConvert;
+    vc.start     = 0.f;
+    vc.end       = proj_end;
+    vc.audio_fx.voice_convert_on = true;
+    vc.audio_fx.voice_model_path = path;
+    int ci2 = (int)tr2.clips.size();
+    tr2.clips.push_back(std::move(vc));
+    state.selected_track = audio_ti;
+    state.selected_clip  = ci2;
     history_push(state, "Voice: " + label);
 }
 
