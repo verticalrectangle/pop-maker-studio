@@ -7,7 +7,6 @@
 
 #include <imgui.h>
 #include <imgui_internal.h>
-#include <backends/imgui_impl_opengl3.h>
 
 #include <cstdio>
 #include <cmath>
@@ -326,6 +325,23 @@ static GLuint link_prog(const char* frag_src) {
     return prog;
 }
 
+static GLuint link_prog2(const char* vert_src, const char* frag_src) {
+    GLuint vs = compile_shader(GL_VERTEX_SHADER,   vert_src);
+    GLuint fs = compile_shader(GL_FRAGMENT_SHADER, frag_src);
+    if (!vs || !fs) { glDeleteShader(vs); glDeleteShader(fs); return 0; }
+    GLuint prog = glCreateProgram();
+    glAttachShader(prog, vs); glAttachShader(prog, fs);
+    glLinkProgram(prog);
+    glDeleteShader(vs); glDeleteShader(fs);
+    GLint ok = 0; glGetProgramiv(prog, GL_LINK_STATUS, &ok);
+    if (!ok) {
+        char buf[512]; glGetProgramInfoLog(prog, sizeof(buf), nullptr, buf);
+        fprintf(stderr, "[fx_shader] link error: %s\n", buf);
+        glDeleteProgram(prog); return 0;
+    }
+    return prog;
+}
+
 
 // ── Generated shader strings ───────────────────────────────────────────────────
 #include "generated/fx_shader_strings.h"
@@ -373,6 +389,31 @@ static struct {
     GLuint fbo = 0, tex = 0;
     int w = 0, h = 0;
 } g_bg_out[MAX_BG_SLOTS];
+
+// Self-contained mini renderer for BG ImDrawList → FBO.
+// Uses its own VAO/VBO/EBO so it never touches ImGui's backend state mid-frame.
+static const char* k_bg_dl_vert = R"glsl(
+#version 330 core
+layout(location=0) in vec2 a_pos;
+layout(location=1) in vec2 a_uv;
+layout(location=2) in vec4 a_col;
+out vec4 v_col;
+uniform vec2 u_size;
+void main() {
+    v_col = a_col;
+    gl_Position = vec4(a_pos.x/u_size.x*2.0-1.0, 1.0-a_pos.y/u_size.y*2.0, 0.0, 1.0);
+}
+)glsl";
+
+static const char* k_bg_dl_frag = R"glsl(
+#version 330 core
+in vec4 v_col;
+out vec4 frag;
+void main() { frag = v_col; }
+)glsl";
+
+static GLuint g_bg_prog = 0;
+static GLuint g_bg_vao  = 0, g_bg_vbo = 0, g_bg_ebo = 0;
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
@@ -474,6 +515,22 @@ void fx_shader_init() {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
 
     fx_generated_init();
+
+    // BG mini renderer
+    g_bg_prog = link_prog2(k_bg_dl_vert, k_bg_dl_frag);
+    glGenVertexArrays(1, &g_bg_vao);
+    glGenBuffers(1, &g_bg_vbo);
+    glGenBuffers(1, &g_bg_ebo);
+    glBindVertexArray(g_bg_vao);
+    glBindBuffer(GL_ARRAY_BUFFER, g_bg_vbo);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, g_bg_ebo);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 2, GL_FLOAT,         GL_FALSE,      sizeof(ImDrawVert), (void*)offsetof(ImDrawVert, pos));
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(1, 2, GL_FLOAT,         GL_FALSE,      sizeof(ImDrawVert), (void*)offsetof(ImDrawVert, uv));
+    glEnableVertexAttribArray(2);
+    glVertexAttribPointer(2, 4, GL_UNSIGNED_BYTE, GL_TRUE,       sizeof(ImDrawVert), (void*)offsetof(ImDrawVert, col));
+    glBindVertexArray(0);
 }
 
 #include "generated/fx_shader_init.h"
@@ -494,6 +551,10 @@ void fx_shader_shutdown() {
     if (g_scene.fbo[0]) { glDeleteFramebuffers(2, g_scene.fbo); glDeleteTextures(2, g_scene.tex); }
     if (g_solid_tex) glDeleteTextures(1, &g_solid_tex);
     if (g_vao) glDeleteVertexArrays(1, &g_vao);
+    if (g_bg_prog) glDeleteProgram(g_bg_prog);
+    if (g_bg_vao)  glDeleteVertexArrays(1, &g_bg_vao);
+    if (g_bg_vbo)  glDeleteBuffers(1, &g_bg_vbo);
+    if (g_bg_ebo)  glDeleteBuffers(1, &g_bg_ebo);
 }
 
 uintptr_t fx_apply(uintptr_t src_tex_in, int slot, int w, int h,
@@ -782,24 +843,40 @@ uintptr_t bg_render_to_texture(const char* preset_id, int slot,
     glClearColor(0, 0, 0, 1);
     glClear(GL_COLOR_BUFFER_BIT);
 
-    // Use ImGui's draw list to collect BG draw commands, then render them into our FBO.
+    // Collect BG draw commands into a temporary draw list.
     ImDrawList tmp_dl(ImGui::GetDrawListSharedData());
     tmp_dl.AddDrawCmd();
-    // Push a clip rect covering the whole canvas so primitives aren't discarded
-    tmp_dl.PushClipRect({0.f, 0.f}, {(float)canvas_w, (float)canvas_h}, false);
+    tmp_dl.PushClipRectFullScreen();
     draw_bg_preset(preset_id, &tmp_dl, {0.f, 0.f}, (float)canvas_w, (float)canvas_h,
                    t, speed, intensity, c1, c2, c3);
     tmp_dl.PopClipRect();
 
-    // Build ImDrawData wrapping our list using the same pattern as render.cpp
-    ImDrawData draw_data;
-    draw_data.DisplayPos       = {0.f, 0.f};
-    draw_data.DisplaySize      = {(float)canvas_w, (float)canvas_h};
-    draw_data.FramebufferScale = {1.f, 1.f};
-    draw_data.Textures         = &ImGui::GetPlatformIO().Textures;
-    draw_data.AddDrawList(&tmp_dl);
+    // Render with our own VAO/VBO/program — never touches ImGui's backend state.
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_SCISSOR_TEST);
+    glUseProgram(g_bg_prog);
+    glUniform2f(glGetUniformLocation(g_bg_prog, "u_size"), (float)canvas_w, (float)canvas_h);
+    glBindVertexArray(g_bg_vao);
+    glBindBuffer(GL_ARRAY_BUFFER, g_bg_vbo);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, g_bg_ebo);
 
-    ImGui_ImplOpenGL3_RenderDrawData(&draw_data);
+    for (int n = 0; n < tmp_dl.CmdBuffer.Size; ++n) {
+        const ImDrawCmd& cmd = tmp_dl.CmdBuffer[n];
+        if (cmd.UserCallback) {
+            cmd.UserCallback(&tmp_dl, &cmd);
+            continue;
+        }
+        const ImDrawVert* vtx = tmp_dl.VtxBuffer.Data + cmd.VtxOffset;
+        const ImDrawIdx*  idx = tmp_dl.IdxBuffer.Data + cmd.IdxOffset;
+        glBufferData(GL_ARRAY_BUFFER,         tmp_dl.VtxBuffer.Size * sizeof(ImDrawVert), tmp_dl.VtxBuffer.Data, GL_STREAM_DRAW);
+        glBufferData(GL_ELEMENT_ARRAY_BUFFER, tmp_dl.IdxBuffer.Size * sizeof(ImDrawIdx),  tmp_dl.IdxBuffer.Data, GL_STREAM_DRAW);
+        (void)vtx; (void)idx;
+        glDrawElementsBaseVertex(GL_TRIANGLES, (GLsizei)cmd.ElemCount, sizeof(ImDrawIdx)==2 ? GL_UNSIGNED_SHORT : GL_UNSIGNED_INT,
+                                 (void*)(intptr_t)(cmd.IdxOffset * sizeof(ImDrawIdx)), (GLint)cmd.VtxOffset);
+    }
+    glBindVertexArray(0);
 
     // Restore GL state
     glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)prev_fbo);
