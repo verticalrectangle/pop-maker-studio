@@ -85,7 +85,54 @@ def fallback_convert(input_wav, output_wav):
     sys.exit(1)
 
 
+def hf_download_model(repo_id, filename, out_path):
+    """Download a single HuggingFace file directly to out_path."""
+    try:
+        from huggingface_hub import hf_hub_download
+    except ImportError:
+        rc = subprocess.call(
+            [sys.executable, "-m", "pip", "install", "--quiet", "huggingface_hub"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        )
+        if rc != 0:
+            print("ERROR could not install huggingface_hub", file=sys.stderr)
+            sys.exit(1)
+        from huggingface_hub import hf_hub_download
+
+    print("PROGRESS 0.05", flush=True)
+    local_dir = os.path.dirname(out_path)
+    os.makedirs(local_dir, exist_ok=True)
+
+    try:
+        cached = hf_hub_download(
+            repo_id=repo_id,
+            filename=filename,
+            local_dir=local_dir,
+            local_dir_use_symlinks=False,
+        )
+        # hf_hub_download may put it at local_dir/filename; ensure it's at out_path
+        expected = os.path.join(local_dir, filename)
+        if os.path.isfile(expected) and expected != out_path:
+            shutil.move(expected, out_path)
+        elif os.path.isfile(cached) and cached != out_path:
+            shutil.move(cached, out_path)
+    except Exception as e:
+        print(f"ERROR {e}", file=sys.stderr)
+        sys.exit(1)
+
+    print("PROGRESS 1.00", flush=True)
+
+
 def main():
+    # Download-only mode: --download <repo_id> <filename> <out_path>
+    if len(sys.argv) >= 2 and sys.argv[1] == "--download":
+        if len(sys.argv) < 5:
+            print("Usage: voice_convert.py --download <hf_repo> <filename> <out_path>",
+                  file=sys.stderr)
+            sys.exit(1)
+        hf_download_model(sys.argv[2], sys.argv[3], sys.argv[4])
+        return
+
     if len(sys.argv) < 4:
         print("Usage: voice_convert.py <input.wav> <model> <output.wav>", file=sys.stderr)
         sys.exit(1)
@@ -103,14 +150,19 @@ def main():
     # Try RVC
     if ensure_rvc():
         if model.startswith("rvc:"):
-            # Auto-download from HuggingFace
-            from huggingface_hub import hf_hub_download
-            repo_id = model[4:]
-            cache   = os.path.join(os.path.expanduser("~"), ".cache",
-                                   "pop-maker-studio", "rvc")
-            os.makedirs(cache, exist_ok=True)
-            model = hf_hub_download(repo_id=repo_id, filename="model.pth",
-                                    cache_dir=cache)
+            # Auto-download from HuggingFace into our cache dir
+            parts   = model[4:].split("/", 2)  # repo_owner/repo_name/filename.pth
+            if len(parts) < 3:
+                print("ERROR rvc: format must be rvc:<owner>/<repo>/<filename>",
+                      file=sys.stderr)
+                sys.exit(1)
+            repo_id  = parts[0] + "/" + parts[1]
+            filename = parts[2]
+            cache    = os.path.join(os.path.expanduser("~"), ".cache",
+                                    "pop-maker-studio", "rvc")
+            out_path = os.path.join(cache, filename)
+            hf_download_model(repo_id, filename, out_path)
+            model = out_path
 
         if not os.path.isfile(model):
             print(f"ERROR model not found: {model}", file=sys.stderr)

@@ -1084,20 +1084,18 @@ void panel_voice_browser(AppState& state, float w) {
                 ImGui::SetCursorScreenPos({cp.x+card_w-72.f, cp.y+card_h/2.f-8.f});
                 if (ImGui::SmallButton("Download##vdl")) {
                     ds = VCState{};
-                    // Use Python + voice_convert script's download path via huggingface_hub
                     extern std::string g_voice_convert_script;
-                    std::string model_id = std::string("rvc:") + vm.hf_repo;
-                    std::string dummy_in = "/dev/null";
                     std::string out = voice_model_cache_path(vm);
-                    // Ensure cache dir exists
                     std::filesystem::create_directories(
                         std::filesystem::path(out).parent_path());
-                    vc_convert(dummy_in, model_id, state.python_path,
-                               g_voice_convert_script, ds);
+                    vc_download(vm.hf_repo, vm.hf_filename, out,
+                                state.python_path, g_voice_convert_script, ds);
                 }
                 if (ds.status == VCStatus::Error) {
                     dl->AddText({cp.x+card_w-100.f, cp.y+26.f},
                                 IM_COL32(220,80,80,220), "Failed");
+                    if (ImGui::IsItemHovered() && !ds.error.empty())
+                        ImGui::SetTooltip("%s", ds.error.c_str());
                 }
             }
         }
