@@ -968,26 +968,28 @@ struct VoiceModel {
     const char* hf_filename;   // .pth filename inside the repo
 };
 
+// All sail-rvc repos store their model at "model.pth".
+// Non-sail-rvc entries note the actual filename.
 static const VoiceModel k_voice_models[] = {
     // Rap / Hip-Hop
-    { "Drake",        "Rap",      "Deep baritone, Toronto flow",               "RVC-Boss/Drake",           "drake.pth"         },
-    { "Kanye West",   "Rap",      "Aggressive mid-range, Chicago",             "RVC-Boss/Kanye",           "kanye.pth"         },
-    { "Travis Scott", "Rap",      "Auto-heavy trap voice",                     "RVC-Boss/TravisScott",     "travis_scott.pth"  },
-    { "Kendrick",     "Rap",      "West Coast flow, expressive dynamics",      "RVC-Boss/KendrickLamar",   "kendrick.pth"      },
-    { "Playboi Carti","Rap",      "High-pitched, melodic mumble",              "RVC-Boss/PlayboiCarti",    "carti.pth"         },
-    // Pop
-    { "Taylor Swift", "Pop",      "Clear pop soprano",                         "RVC-Boss/TaylorSwift",     "taylor_swift.pth"  },
-    { "Ariana Grande","Pop",      "Whistle register, breathy pop",             "RVC-Boss/ArianaGrande",    "ariana_grande.pth" },
-    { "The Weeknd",   "R&B/Pop",  "Falsetto-heavy dark R&B",                  "RVC-Boss/TheWeeknd",       "the_weeknd.pth"    },
-    { "Frank Ocean",  "R&B",      "Smooth, layered harmonics",                 "RVC-Boss/FrankOcean",      "frank_ocean.pth"   },
-    { "Billie Eilish","Pop",      "Breathy low pop, ASMR-adjacent",            "RVC-Boss/BillieEilish",    "billie_eilish.pth" },
+    { "Drake",         "Rap",       "Deep baritone, Toronto flow",              "sail-rvc/Drake_RVC",                                 "model.pth"                    },
+    { "Kanye West",    "Rap",       "Aggressive mid-range, Chicago",            "sail-rvc/Kanye-West",                                "model.pth"                    },
+    { "Travis Scott",  "Rap",       "Auto-heavy trap voice",                    "sail-rvc/Travis-Scott",                              "model.pth"                    },
+    { "Kendrick",      "Rap",       "West Coast flow, expressive dynamics",     "sail-rvc/Kendrick-Lamar",                            "model.pth"                    },
+    { "Playboi Carti", "Rap",       "High-pitched, melodic mumble",             "sail-rvc/Playboi_Carti_-_Era_2018__RVC_-_250_Epochs_","model.pth"                   },
+    { "2Pac",          "Rap",       "Classic West Coast delivery",              "sail-rvc/2pac",                                      "model.pth"                    },
+    // Pop / R&B
+    { "Taylor Swift",  "Pop",       "Clear pop soprano",                        "sail-rvc/Taylor-Swift",                              "model.pth"                    },
+    { "Ariana Grande", "Pop",       "Whistle register, breathy pop",            "sail-rvc/Ariana-Grande",                             "model.pth"                    },
+    { "The Weeknd",    "R&B/Pop",   "Falsetto-heavy dark R&B",                  "sail-rvc/The-Weeknd",                                "model.pth"                    },
+    { "Frank Ocean",   "R&B",       "Smooth, layered harmonics",                "sail-rvc/Frank-Ocean",                               "model.pth"                    },
+    { "Billie Eilish", "Pop",       "Breathy low pop, ASMR-adjacent",           "sail-rvc/billie-eilish",                             "model.pth"                    },
     // Rock / Alt
-    { "Kurt Cobain",  "Rock",     "Raspy grunge, classic 90s",                 "RVC-Boss/KurtCobain",      "kurt_cobain.pth"   },
-    { "Chester B.",   "Rock",     "Linkin Park screamo/clean hybrid",          "RVC-Boss/ChesterBennington","chester.pth"      },
-    // Electronic / Other
-    { "Daft Punk",    "Electronic","Vocoder-processed robot",                  "RVC-Boss/DaftPunk",        "daft_punk.pth"     },
-    { "Bladee",       "Hyperpop", "Nasal Swedish hyperpop",                    "RVC-Boss/Bladee",          "bladee.pth"        },
-    { "Ken Carson",   "Hyperpop", "Soft melodic trap",                         "RVC-Boss/KenCarson",       "ken_carson.pth"    },
+    { "Kurt Cobain",   "Rock",      "Raspy grunge, classic 90s",                "sail-rvc/Kurt-Cobain",                               "model.pth"                    },
+    { "Chester B.",    "Rock",      "Linkin Park screamo/clean hybrid",         "sail-rvc/Chester-Bennington",                        "model.pth"                    },
+    // Electronic / Hyperpop
+    { "Post Malone",   "Pop/Rap",   "Melodic mumble rap, emotional",            "sail-rvc/PostMalone",                                "model.pth"                    },
+    { "Ken Carson",    "Hyperpop",  "Soft melodic trap",                        "Shadow-AI/Ken-Carson-AGC-Era-400-Epochs-RVC2",       "KenCarsonAGC_e400_s18400.pth" },
 };
 static const int k_n_voice_models = (int)(sizeof(k_voice_models) / sizeof(k_voice_models[0]));
 
@@ -1106,6 +1108,67 @@ void panel_voice_browser(AppState& state, float w) {
 
         ImGui::Dummy({0.f, 4.f});
         ImGui::PopID();
+    }
+
+    // ── Custom HuggingFace model ───────────────────────────────────────────────
+    ImGui::Dummy({0.f, 8.f});
+    ui_separator();
+    ImGui::Dummy({0.f, 6.f});
+    ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+    ImGui::TextUnformatted("Custom model from HuggingFace");
+    ImGui::PopStyleColor();
+    ImGui::Dummy({0.f, 4.f});
+
+    static char s_custom_repo[128] = {};
+    static char s_custom_file[64]  = "model.pth";
+    static VCState s_custom_dl;
+
+    ImGui::SetNextItemWidth(w - 8.f);
+    ImGui::InputTextWithHint("##cv_repo", "owner/repo-name", s_custom_repo, sizeof(s_custom_repo));
+    ImGui::Dummy({0.f, 2.f});
+    ImGui::SetNextItemWidth(w - 8.f);
+    ImGui::InputTextWithHint("##cv_file", ".pth filename", s_custom_file, sizeof(s_custom_file));
+    ImGui::Dummy({0.f, 4.f});
+
+    bool custom_busy = (s_custom_dl.status == VCStatus::Running);
+    if (custom_busy) {
+        ImGui::ProgressBar(s_custom_dl.progress, {w - 8.f, 6.f}, "");
+    } else {
+        bool can_dl = s_custom_repo[0] && s_custom_file[0];
+        if (!can_dl) ImGui::BeginDisabled();
+        if (ImGui::Button("Download & Use##cv_dl", {w - 8.f, 0.f}) && can_dl) {
+            s_custom_dl = VCState{};
+            extern std::string g_voice_convert_script;
+            const char* home = getenv("HOME");
+            std::string out = home ? std::string(home) + "/.cache/pop-maker-studio/rvc/" + s_custom_file : "";
+            if (!out.empty()) {
+                std::filesystem::create_directories(
+                    std::filesystem::path(out).parent_path());
+                vc_download(s_custom_repo, s_custom_file, out,
+                            state.python_path, g_voice_convert_script, s_custom_dl);
+            }
+        }
+        if (!can_dl) ImGui::EndDisabled();
+    }
+    if (s_custom_dl.status == VCStatus::Done && !s_custom_dl.out_path.empty()) {
+        // Apply to selected VC brick
+        if (state.selected_track >= 0 && state.selected_clip >= 0) {
+            auto& tr2 = state.tracks[state.selected_track];
+            if (state.selected_clip < (int)tr2.clips.size()) {
+                auto& cl2 = tr2.clips[state.selected_clip];
+                if (cl2.fx_type == FXType::AudioVoiceConvert) {
+                    cl2.audio_fx.voice_model_path = s_custom_dl.out_path;
+                    cl2.audio_fx.voice_convert_on = true;
+                    history_push(state, "Voice: custom");
+                }
+            }
+        }
+        s_custom_dl = VCState{};
+    }
+    if (s_custom_dl.status == VCStatus::Error) {
+        ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(220,80,80,255));
+        ImGui::TextWrapped("Error: %s", s_custom_dl.error.c_str());
+        ImGui::PopStyleColor();
     }
 }
 
