@@ -502,11 +502,15 @@ void panel_background(AppState& state, float w, bool clip_only) {
         ImGui::Dummy({0.f, 4.f});
 
         ImGui::SetNextItemWidth(w);
-        if (ImGui::SliderFloat("##bg_speed", &bgclip->bg_speed, 0.1f, 4.f, "Speed %.1fx"))
-            history_push(state, "BG speed");
+        ImGui::SliderFloat("##bg_speed", &bgclip->bg_speed, 0.1f, 4.f, "Speed %.1fx");
+        if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "BG speed");
         ImGui::SetNextItemWidth(w);
-        if (ImGui::SliderFloat("##bg_int", &bgclip->bg_intensity, 0.f, 1.f, "Intensity %.0f%%"))
-            history_push(state, "BG intensity");
+        {
+            float pct = bgclip->bg_intensity * 100.f;
+            if (ImGui::SliderFloat("##bg_int", &pct, 0.f, 100.f, "Intensity %.0f%%"))
+                bgclip->bg_intensity = pct / 100.f;
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "BG intensity");
+        }
         ImGui::Dummy({0.f, 4.f});
 
         const BgPreset* active_pr = bgclip->text.empty() ? nullptr
