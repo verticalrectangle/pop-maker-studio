@@ -6,6 +6,7 @@
 #include "history.h"
 #include "filepicker.h"
 #include "audio_fx.h"
+#include "hf_api.h"
 #include "bg_presets.h"
 #include "theme.h"
 #include "presets.h"
@@ -13,8 +14,7 @@
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <filesystem>
-#include <algorithm>
-#include <cmath>
+#include <map>
 #include <cstdio>
 #include <cstring>
 
@@ -960,215 +960,230 @@ void panel_audio_fx_clip(AppState& state, float w) {
 
 // ── Voice browser ─────────────────────────────────────────────────────────────
 
-struct VoiceModel {
-    const char* name;
-    const char* artist_style;
-    const char* description;
-    const char* hf_repo;       // huggingface repo id
-    const char* hf_filename;   // .pth filename inside the repo
+// 4 confirmed working pinned models shown above the search results.
+struct PinnedVoice { const char* label; const char* repo; const char* file; };
+static const PinnedVoice k_pinned[] = {
+    { "Drake",        "sail-rvc/Drake_RVC",                                  "model.pth" },
+    { "Billie Eilish","sail-rvc/billie-eilish",                              "model.pth" },
+    { "Post Malone",  "sail-rvc/PostMalone",                                 "model.pth" },
+    { "Playboi Carti","sail-rvc/Playboi_Carti_-_Era_2018__RVC_-_250_Epochs_","model.pth" },
 };
 
-// All sail-rvc repos store their model at "model.pth".
-// Non-sail-rvc entries note the actual filename.
-static const VoiceModel k_voice_models[] = {
-    // Rap / Hip-Hop
-    { "Drake",         "Rap",       "Deep baritone, Toronto flow",              "sail-rvc/Drake_RVC",                                 "model.pth"                    },
-    { "Kanye West",    "Rap",       "Aggressive mid-range, Chicago",            "sail-rvc/Kanye-West",                                "model.pth"                    },
-    { "Travis Scott",  "Rap",       "Auto-heavy trap voice",                    "sail-rvc/Travis-Scott",                              "model.pth"                    },
-    { "Kendrick",      "Rap",       "West Coast flow, expressive dynamics",     "sail-rvc/Kendrick-Lamar",                            "model.pth"                    },
-    { "Playboi Carti", "Rap",       "High-pitched, melodic mumble",             "sail-rvc/Playboi_Carti_-_Era_2018__RVC_-_250_Epochs_","model.pth"                   },
-    { "2Pac",          "Rap",       "Classic West Coast delivery",              "sail-rvc/2pac",                                      "model.pth"                    },
-    // Pop / R&B
-    { "Taylor Swift",  "Pop",       "Clear pop soprano",                        "sail-rvc/Taylor-Swift",                              "model.pth"                    },
-    { "Ariana Grande", "Pop",       "Whistle register, breathy pop",            "sail-rvc/Ariana-Grande",                             "model.pth"                    },
-    { "The Weeknd",    "R&B/Pop",   "Falsetto-heavy dark R&B",                  "sail-rvc/The-Weeknd",                                "model.pth"                    },
-    { "Frank Ocean",   "R&B",       "Smooth, layered harmonics",                "sail-rvc/Frank-Ocean",                               "model.pth"                    },
-    { "Billie Eilish", "Pop",       "Breathy low pop, ASMR-adjacent",           "sail-rvc/billie-eilish",                             "model.pth"                    },
-    // Rock / Alt
-    { "Kurt Cobain",   "Rock",      "Raspy grunge, classic 90s",                "sail-rvc/Kurt-Cobain",                               "model.pth"                    },
-    { "Chester B.",    "Rock",      "Linkin Park screamo/clean hybrid",         "sail-rvc/Chester-Bennington",                        "model.pth"                    },
-    // Electronic / Hyperpop
-    { "Post Malone",   "Pop/Rap",   "Melodic mumble rap, emotional",            "sail-rvc/PostMalone",                                "model.pth"                    },
-    { "Ken Carson",    "Hyperpop",  "Soft melodic trap",                        "Shadow-AI/Ken-Carson-AGC-Era-400-Epochs-RVC2",       "KenCarsonAGC_e400_s18400.pth" },
-};
-static const int k_n_voice_models = (int)(sizeof(k_voice_models) / sizeof(k_voice_models[0]));
+// Download state keyed by "repo::filename" — map gives stable references on insert.
+static std::map<std::string, HFDownload> s_dl;
 
-static std::string voice_model_cache_path(const VoiceModel& vm) {
-    const char* home = getenv("HOME");
-    if (!home) return "";
-    return std::string(home) + "/.cache/pop-maker-studio/rvc/" + vm.hf_filename;
+static std::string dl_key(const std::string& repo, const std::string& file) {
+    return repo + "::" + file;
 }
 
-static bool voice_model_installed(const VoiceModel& vm) {
-    std::string p = voice_model_cache_path(vm);
-    return !p.empty() && std::filesystem::exists(p);
+static void apply_voice_model(AppState& state, const std::string& path,
+                              const std::string& label) {
+    if (state.selected_track < 0 || state.selected_clip < 0) return;
+    auto& tr = state.tracks[state.selected_track];
+    if (state.selected_clip >= (int)tr.clips.size()) return;
+    auto& cl = tr.clips[state.selected_clip];
+    if (cl.fx_type != FXType::AudioVoiceConvert) return;
+    cl.audio_fx.voice_model_path = path;
+    cl.audio_fx.voice_convert_on = true;
+    history_push(state, "Voice: " + label);
 }
 
-static std::unordered_map<std::string, VCState> s_vc_downloads;
+// Draw one voice card. Returns true if "Use" was clicked.
+// cp = top-left screen pos, card_w/card_h = dimensions.
+static void voice_card(AppState& state, int id,
+                       ImVec2 cp, float card_w, float card_h,
+                       const char* label, const char* repo, const char* file,
+                       const char* sub = nullptr)
+{
+    std::string key = dl_key(repo, file);
+    HFDownload& dl  = s_dl[key];   // default-constructs on first access
+
+    // Poll file-size progress
+    hf_download_poll(dl);
+
+    // Check if Done → auto-apply then reset
+    if (dl.status.load(std::memory_order_acquire) == HFDownload::Status::Done) {
+        apply_voice_model(state, dl.out_path, label);
+        dl.status.store(HFDownload::Status::Idle, std::memory_order_release);
+    }
+
+    bool installed = hf_rvc_installed(file);
+    ImDrawList* idl = ImGui::GetWindowDrawList();
+    bool hov = ImGui::IsMouseHoveringRect(cp, {cp.x+card_w, cp.y+card_h});
+
+    idl->AddRectFilled(cp, {cp.x+card_w, cp.y+card_h},
+                       hov ? IM_COL32(20,36,32,255) : IM_COL32(14,24,20,255), 4.f);
+    idl->AddRect(cp, {cp.x+card_w, cp.y+card_h},
+                 installed ? IM_COL32(30,200,150,180) : IM_COL32(40,60,50,160),
+                 4.f, 0, 1.f);
+
+    ImGui::PushID(id);
+
+    // Left: label + subtitle
+    ImGui::PushFont(g_font_bold);
+    idl->AddText(ImGui::GetFont(), 12.f, {cp.x+10.f, cp.y+10.f},
+                 IM_COL32(255,255,255,230), label);
+    ImGui::PopFont();
+    if (sub)
+        idl->AddText({cp.x+10.f, cp.y+27.f}, IM_COL32(80,120,100,180), sub);
+
+    // Right: status / buttons
+    auto st = dl.status.load(std::memory_order_acquire);
+    if (st == HFDownload::Status::Running) {
+        float prog = dl.progress();
+        float bx0 = cp.x + card_w - 104.f, bx1 = cp.x + card_w - 10.f;
+        float by  = cp.y + card_h/2.f - 3.f;
+        idl->AddRectFilled({bx0, by}, {bx1, by+6.f}, IM_COL32(20,60,45,255), 3.f);
+        idl->AddRectFilled({bx0, by}, {bx0 + (bx1-bx0)*prog, by+6.f},
+                           IM_COL32(30,200,150,255), 3.f);
+        idl->AddText({bx0, by+10.f}, IM_COL32(80,180,140,180), "Downloading…");
+    } else if (installed) {
+        idl->AddText({cp.x+card_w-52.f, cp.y+10.f},
+                     IM_COL32(30,220,150,220), "Installed");
+        ImGui::SetCursorScreenPos({cp.x+card_w-50.f, cp.y+26.f});
+        if (ImGui::SmallButton("Use##vu"))
+            apply_voice_model(state, hf_rvc_cache_path(file), label);
+    } else {
+        ImGui::SetCursorScreenPos({cp.x+card_w-76.f, cp.y+card_h/2.f-8.f});
+        if (ImGui::SmallButton("Download##vd")) {
+            dl.status.store(HFDownload::Status::Idle, std::memory_order_relaxed);
+            hf_download_model(repo, file, hf_rvc_cache_path(file), dl);
+        }
+        if (st == HFDownload::Status::Error) {
+            idl->AddText({cp.x+card_w-104.f, cp.y+card_h-14.f},
+                         IM_COL32(220,80,80,200), "Failed");
+            if (ImGui::IsItemHovered() && !dl.error_msg.empty())
+                ImGui::SetTooltip("%s", dl.error_msg.c_str());
+        }
+    }
+
+    // Invisible hit area so hover works
+    ImGui::SetCursorScreenPos(cp);
+    ImGui::InvisibleButton("##vc", {card_w - 82.f, card_h});
+
+    ImGui::PopID();
+}
 
 void panel_voice_browser(AppState& state, float w) {
+    static HFSearch   s_search;
+    static char       s_query[64]      = {};
+    static char       s_prev_query[64] = {};
+    static float      s_debounce       = 0.f;
+
+    // ── Header ──────────────────────────────────────────────────────────────
     ImGui::Dummy({0.f, 8.f});
     ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(30,220,180,255));
     ImGui::TextUnformatted("Voice Library");
     ImGui::PopStyleColor();
     ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
-    ImGui::TextWrapped("Models download to your local cache. Click to use on selected Audio Voice Convert brick.");
+    ImGui::TextWrapped("Search HuggingFace for RVC voice models. Downloads go to local cache.");
     ImGui::PopStyleColor();
     ImGui::Dummy({0.f, 8.f});
-
-    // Filter by category
-    static char s_filter[64] = {};
-    ImGui::SetNextItemWidth(w - 8.f);
-    ImGui::InputTextWithHint("##vf", "Filter…", s_filter, sizeof(s_filter));
-    ImGui::Dummy({0.f, 6.f});
 
     float card_w = w - 8.f;
-    float card_h = 58.f;
+    float card_h = 54.f;
 
-    for (int i = 0; i < k_n_voice_models; ++i) {
-        const VoiceModel& vm = k_voice_models[i];
-        if (s_filter[0] && !strcasestr(vm.name, s_filter) && !strcasestr(vm.artist_style, s_filter))
-            continue;
-
-        ImGui::PushID(i + 30000);
-        ImVec2 cp = ImGui::GetCursorScreenPos();
-        ImDrawList* dl = ImGui::GetWindowDrawList();
-
-        bool installed = voice_model_installed(vm);
-        bool hov = ImGui::IsMouseHoveringRect(cp, {cp.x+card_w, cp.y+card_h});
-
-        dl->AddRectFilled(cp, {cp.x+card_w, cp.y+card_h},
-                          hov ? IM_COL32(20,36,32,255) : IM_COL32(14,24,20,255), 4.f);
-        dl->AddRect(cp, {cp.x+card_w, cp.y+card_h},
-                    installed ? IM_COL32(30,200,150,180) : IM_COL32(40,60,50,160), 4.f, 0, 1.f);
-
-        // Name + style
-        ImGui::PushFont(g_font_bold);
-        dl->AddText(ImGui::GetFont(), 12.f, {cp.x+10.f, cp.y+10.f},
-                    IM_COL32(255,255,255,230), vm.name);
-        ImGui::PopFont();
-        dl->AddText({cp.x+10.f, cp.y+26.f}, IM_COL32(30,180,130,200), vm.artist_style);
-        dl->AddText({cp.x+10.f, cp.y+39.f}, IM_COL32(120,140,130,170), vm.description);
-
-        // Status / button on right
-        if (installed) {
-            dl->AddText({cp.x+card_w-52.f, cp.y+10.f}, IM_COL32(30,220,150,220), "Installed");
-            // Use button
-            ImGui::SetCursorScreenPos({cp.x+card_w-56.f, cp.y+26.f});
-            if (ImGui::SmallButton("Use##vuse")) {
-                // Apply to selected AudioVoiceConvert brick
-                if (state.selected_track >= 0 && state.selected_clip >= 0) {
-                    auto& tr = state.tracks[state.selected_track];
-                    if (state.selected_clip < (int)tr.clips.size()) {
-                        auto& cl = tr.clips[state.selected_clip];
-                        if (cl.fx_type == FXType::AudioVoiceConvert) {
-                            cl.audio_fx.voice_model_path = voice_model_cache_path(vm);
-                            cl.audio_fx.voice_convert_on = true;
-                            history_push(state, std::string("Voice: ") + vm.name);
-                        }
-                    }
-                }
-            }
+    // ── Search box ───────────────────────────────────────────────────────────
+    ImGui::SetNextItemWidth(w - 8.f);
+    bool edited = ImGui::InputTextWithHint("##vq", "Search artist or model name…",
+                                           s_query, sizeof(s_query));
+    if (edited && strcmp(s_query, s_prev_query) != 0) {
+        memcpy(s_prev_query, s_query, sizeof(s_query));
+        if (s_query[0]) {
+            s_debounce = 0.8f;
         } else {
-            auto& ds = s_vc_downloads[vm.hf_filename];
-            if (ds.status == VCStatus::Running) {
-                // Progress bar
-                float prog = ds.progress;
-                dl->AddRectFilled({cp.x+card_w-100.f, cp.y+18.f},
-                                  {cp.x+card_w-10.f,  cp.y+22.f},
-                                  IM_COL32(20,60,45,255), 2.f);
-                dl->AddRectFilled({cp.x+card_w-100.f, cp.y+18.f},
-                                  {cp.x+card_w-10.f+90.f*prog-90.f, cp.y+22.f},
-                                  IM_COL32(30,200,150,255), 2.f);
-                dl->AddText({cp.x+card_w-100.f, cp.y+26.f},
-                            IM_COL32(80,180,140,200), "Downloading…");
-            } else {
-                ImGui::SetCursorScreenPos({cp.x+card_w-72.f, cp.y+card_h/2.f-8.f});
-                if (ImGui::SmallButton("Download##vdl")) {
-                    ds = VCState{};
-                    extern std::string g_voice_convert_script;
-                    std::string out = voice_model_cache_path(vm);
-                    std::filesystem::create_directories(
-                        std::filesystem::path(out).parent_path());
-                    vc_download(vm.hf_repo, vm.hf_filename, out,
-                                state.python_path, g_voice_convert_script, ds);
-                }
-                if (ds.status == VCStatus::Error) {
-                    dl->AddText({cp.x+card_w-100.f, cp.y+26.f},
-                                IM_COL32(220,80,80,220), "Failed");
-                    if (ImGui::IsItemHovered() && !ds.error.empty())
-                        ImGui::SetTooltip("%s", ds.error.c_str());
-                }
-            }
+            // cleared — cancel search, go back to pinned
+            hf_search_cancel(s_search);
+            s_debounce = 0.f;
         }
-
-        // Invisible button for the whole card (selection highlight)
-        ImGui::SetCursorScreenPos(cp);
-        ImGui::InvisibleButton("##vcard", {card_w - 80.f, card_h});
-
-        ImGui::Dummy({0.f, 4.f});
-        ImGui::PopID();
     }
 
-    // ── Custom HuggingFace model ───────────────────────────────────────────────
-    ImGui::Dummy({0.f, 8.f});
-    ui_separator();
-    ImGui::Dummy({0.f, 6.f});
-    ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
-    ImGui::TextUnformatted("Custom model from HuggingFace");
-    ImGui::PopStyleColor();
-    ImGui::Dummy({0.f, 4.f});
-
-    static char s_custom_repo[128] = {};
-    static char s_custom_file[64]  = "model.pth";
-    static VCState s_custom_dl;
-
-    ImGui::SetNextItemWidth(w - 8.f);
-    ImGui::InputTextWithHint("##cv_repo", "owner/repo-name", s_custom_repo, sizeof(s_custom_repo));
-    ImGui::Dummy({0.f, 2.f});
-    ImGui::SetNextItemWidth(w - 8.f);
-    ImGui::InputTextWithHint("##cv_file", ".pth filename", s_custom_file, sizeof(s_custom_file));
-    ImGui::Dummy({0.f, 4.f});
-
-    bool custom_busy = (s_custom_dl.status == VCStatus::Running);
-    if (custom_busy) {
-        ImGui::ProgressBar(s_custom_dl.progress, {w - 8.f, 6.f}, "");
-    } else {
-        bool can_dl = s_custom_repo[0] && s_custom_file[0];
-        if (!can_dl) ImGui::BeginDisabled();
-        if (ImGui::Button("Download & Use##cv_dl", {w - 8.f, 0.f}) && can_dl) {
-            s_custom_dl = VCState{};
-            extern std::string g_voice_convert_script;
-            const char* home = getenv("HOME");
-            std::string out = home ? std::string(home) + "/.cache/pop-maker-studio/rvc/" + s_custom_file : "";
-            if (!out.empty()) {
-                std::filesystem::create_directories(
-                    std::filesystem::path(out).parent_path());
-                vc_download(s_custom_repo, s_custom_file, out,
-                            state.python_path, g_voice_convert_script, s_custom_dl);
-            }
+    // Debounce timer
+    if (s_debounce > 0.f) {
+        s_debounce -= ImGui::GetIO().DeltaTime;
+        if (s_debounce <= 0.f) {
+            s_debounce = 0.f;
+            hf_search_cancel(s_search);
+            hf_search(s_query, s_search);
         }
-        if (!can_dl) ImGui::EndDisabled();
     }
-    if (s_custom_dl.status == VCStatus::Done && !s_custom_dl.out_path.empty()) {
-        // Apply to selected VC brick
-        if (state.selected_track >= 0 && state.selected_clip >= 0) {
-            auto& tr2 = state.tracks[state.selected_track];
-            if (state.selected_clip < (int)tr2.clips.size()) {
-                auto& cl2 = tr2.clips[state.selected_clip];
-                if (cl2.fx_type == FXType::AudioVoiceConvert) {
-                    cl2.audio_fx.voice_model_path = s_custom_dl.out_path;
-                    cl2.audio_fx.voice_convert_on = true;
-                    history_push(state, "Voice: custom");
-                }
-            }
-        }
-        s_custom_dl = VCState{};
-    }
-    if (s_custom_dl.status == VCStatus::Error) {
-        ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(220,80,80,255));
-        ImGui::TextWrapped("Error: %s", s_custom_dl.error.c_str());
+
+    auto search_status = s_search.status.load(std::memory_order_acquire);
+
+    // ── Pinned (shown when search box is empty) ───────────────────────────
+    if (!s_query[0]) {
+        ImGui::Dummy({0.f, 6.f});
+        ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+        ImGui::TextUnformatted("Featured");
         ImGui::PopStyleColor();
+        ImGui::Dummy({0.f, 4.f});
+
+        for (int i = 0; i < 4; ++i) {
+            const PinnedVoice& pv = k_pinned[i];
+            ImVec2 cp = ImGui::GetCursorScreenPos();
+            voice_card(state, 40000 + i, cp, card_w, card_h,
+                       pv.label, pv.repo, pv.file);
+            ImGui::Dummy({0.f, card_h + 4.f});
+        }
+        return;
+    }
+
+    // ── Search results ────────────────────────────────────────────────────
+    ImGui::Dummy({0.f, 4.f});
+
+    if (search_status == HFSearch::Status::Running || s_debounce > 0.f) {
+        // Animated dots while waiting
+        static float s_t = 0.f;
+        s_t += ImGui::GetIO().DeltaTime;
+        int dots = ((int)(s_t * 2.f) % 4);
+        char spin[8] = "   ";
+        for (int i = 0; i < dots; ++i) spin[i] = '.';
+        ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+        ImGui::Text("Searching%s", spin);
+        ImGui::PopStyleColor();
+        return;
+    }
+
+    if (search_status == HFSearch::Status::Error) {
+        ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(220,80,80,255));
+        ImGui::TextWrapped("Error: %s", s_search.error.c_str());
+        ImGui::PopStyleColor();
+        return;
+    }
+
+    if (search_status == HFSearch::Status::Done) {
+        if (s_search.results.empty()) {
+            ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+            ImGui::TextUnformatted("No RVC models found.");
+            ImGui::PopStyleColor();
+        } else {
+            ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+            ImGui::Text("%d results", (int)s_search.results.size());
+            ImGui::PopStyleColor();
+            ImGui::Dummy({0.f, 4.f});
+
+            for (int i = 0; i < (int)s_search.results.size(); ++i) {
+                const HFModel& m = s_search.results[i];
+
+                // subtitle: repo path + download count
+                char sub[128];
+                if (m.downloads > 0)
+                    snprintf(sub, sizeof(sub), "%s  ·  %d dl", m.repo.c_str(), m.downloads);
+                else
+                    snprintf(sub, sizeof(sub), "%s", m.repo.c_str());
+
+                // Display name: last segment of repo, underscores → spaces
+                std::string disp = m.repo;
+                auto slash = disp.rfind('/');
+                if (slash != std::string::npos) disp = disp.substr(slash + 1);
+                for (char& c : disp) if (c == '_' || c == '-') c = ' ';
+
+                ImVec2 cp = ImGui::GetCursorScreenPos();
+                voice_card(state, 50000 + i, cp, card_w, card_h,
+                           disp.c_str(), m.repo.c_str(), m.pth_file.c_str(), sub);
+                ImGui::Dummy({0.f, card_h + 4.f});
+            }
+        }
     }
 }
 

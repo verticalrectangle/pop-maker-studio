@@ -47,6 +47,7 @@ set(SOURCES
     src/bg_remove.cpp
     src/noise_reduce.cpp
     src/audio_fx.cpp
+    src/hf_api.cpp
     src/ui/screen_splash.cpp
     src/ui/screen_setup.cpp
     src/ui/screen_studio.cpp
