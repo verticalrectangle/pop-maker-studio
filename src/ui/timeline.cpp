@@ -368,7 +368,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                     const BgPreset* pr = bg_preset_by_id(preset_id);
                     if (pr) {
                         float drop_t = fmaxf(0.f, (ImGui::GetMousePos().x - (origin.x + TL_LABEL_W) + scroll) / zoom);
-                        float proj_dur = state.duration > 0.f ? state.duration : 30.f;
+                        float proj_dur = 7.f;
                         Clip cl;
                         cl.clip_type    = ClipType::Background;
                         cl.text         = preset_id;
@@ -1683,7 +1683,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                     const char* pid = (const char*)pay->Data;
                     const BgPreset* pr = bg_preset_by_id(pid);
                     if (pr) {
-                        float proj_dur = state.duration > 0.f ? state.duration : 30.f;
+                        float proj_dur = 7.f;
                         Clip cl; cl.clip_type = ClipType::Background; cl.text = pid;
                         cl.start = drop_t; cl.end = drop_t + proj_dur;
                         cl.bg_speed = pr->default_speed; cl.bg_intensity = 0.85f;

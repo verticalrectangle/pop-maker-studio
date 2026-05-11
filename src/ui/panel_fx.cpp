@@ -477,7 +477,7 @@ void panel_background(AppState& state, float w, bool clip_only) {
         ImGui::PopStyleColor();
         ImGui::Dummy({0.f, 4.f});
         if (ImGui::Button("+ Add Background Track", {w, 0.f})) {
-            float dur = state.duration > 0.f ? state.duration : 30.f;
+            float dur = 7.f;
             Track t;
             t.name = "Background";
             Clip c;
@@ -586,7 +586,7 @@ void panel_background(AppState& state, float w, bool clip_only) {
         if (ImGui::IsItemClicked()) {
             if (!bgclip) {
                 // No bg clip selected — create one
-                float dur = state.duration > 0.f ? state.duration : 30.f;
+                float dur = 7.f;
                 Track t; t.name = "Background";
                 Clip c; c.clip_type = ClipType::Background; c.start = 0.f; c.end = dur;
                 c.text = pr.id;
