@@ -962,11 +962,12 @@ void panel_audio_fx_clip(AppState& state, float w) {
 
 // 4 confirmed working pinned models shown above the search results.
 struct PinnedVoice { const char* label; const char* repo; const char* file; };
+// Confirmed via HF API — repos verified to exist with a downloadable file.
 static const PinnedVoice k_pinned[] = {
-    { "Drake",        "sail-rvc/Drake_RVC",                                  "model.pth" },
-    { "Billie Eilish","sail-rvc/billie-eilish",                              "model.pth" },
-    { "Post Malone",  "sail-rvc/PostMalone",                                 "model.pth" },
-    { "Playboi Carti","sail-rvc/Playboi_Carti_-_Era_2018__RVC_-_250_Epochs_","model.pth" },
+    { "Drake",        "binant/Drake_RVC",                             "model.pth" },
+    { "Travis Scott", "binant/Travis_Scott_-_RVC_-_1000_Epoch_48k",  "model.pth" },
+    { "The Weeknd",   "binant/The_Weeknd__RVC__1000_Epochs",         "model.pth" },
+    { "Playboi Carti","Shadow-AI/Playboi_Carti_Deep_Voice_300_Epochs_RVC_V2","PBCDeepVoice.zip" },
 };
 
 // Download state keyed by "repo::filename" — map gives stable references on insert.
@@ -1042,12 +1043,12 @@ static void voice_card(AppState& state, int id,
                      IM_COL32(30,220,150,220), "Installed");
         ImGui::SetCursorScreenPos({cp.x+card_w-50.f, cp.y+26.f});
         if (ImGui::SmallButton("Use##vu"))
-            apply_voice_model(state, hf_rvc_cache_path(file), label);
+            apply_voice_model(state, hf_rvc_model_path(file), label);
     } else {
         ImGui::SetCursorScreenPos({cp.x+card_w-76.f, cp.y+card_h/2.f-8.f});
         if (ImGui::SmallButton("Download##vd")) {
             dl.status.store(HFDownload::Status::Idle, std::memory_order_relaxed);
-            hf_download_model(repo, file, hf_rvc_cache_path(file), dl);
+            hf_download_model(repo, file, hf_rvc_model_path(file), dl);
         }
         if (st == HFDownload::Status::Error) {
             idl->AddText({cp.x+card_w-104.f, cp.y+card_h-14.f},
@@ -1180,7 +1181,7 @@ void panel_voice_browser(AppState& state, float w) {
 
                 ImVec2 cp = ImGui::GetCursorScreenPos();
                 voice_card(state, 50000 + i, cp, card_w, card_h,
-                           disp.c_str(), m.repo.c_str(), m.pth_file.c_str(), sub);
+                           disp.c_str(), m.repo.c_str(), m.model_file.c_str(), sub);
                 ImGui::Dummy({0.f, card_h + 4.f});
             }
         }

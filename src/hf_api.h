@@ -8,8 +8,8 @@
 // ── Model record ──────────────────────────────────────────────────────────────
 
 struct HFModel {
-    std::string repo;       // e.g. "sail-rvc/Drake_RVC"
-    std::string pth_file;   // first .pth found in siblings, e.g. "model.pth"
+    std::string repo;        // e.g. "binant/Drake_RVC"
+    std::string model_file;  // .pth preferred; .zip if no bare .pth in repo
     int         downloads = 0;
 };
 
@@ -23,9 +23,7 @@ struct HFSearch {
     std::string           error;
 };
 
-// Fire a background search. Results land in s.results; s.status → Done/Error.
 void hf_search(const std::string& query, HFSearch& s);
-// Cancel current search (bumps gen so the thread discards its result).
 void hf_search_cancel(HFSearch& s);
 
 // ── Download ──────────────────────────────────────────────────────────────────
@@ -34,9 +32,9 @@ struct HFDownload {
     enum class Status { Idle, Running, Done, Error };
     std::atomic<Status>    status{Status::Idle};
     std::atomic<uint64_t>  bytes_done{0};
-    uint64_t               bytes_total = 0;  // set before thread; read-only thereafter
-    std::string            out_path;
-    std::string            tmp_path;
+    uint64_t               bytes_total = 0;
+    std::string            out_path;   // final .pth path after download/extract
+    std::string            tmp_path;   // temp file being written (for progress poll)
     std::string            error_msg;
 
     float progress() const {
@@ -46,15 +44,18 @@ struct HFDownload {
     }
 };
 
-// Download <repo>/resolve/main/<filename> → out_path via curl.
+// Download repo/resolve/main/model_file → final .pth at out_path.
+// If model_file is a .zip, extracts the .pth after download.
 // Call hf_download_poll() every frame while status == Running.
-void hf_download_model(const std::string& repo, const std::string& filename,
+void hf_download_model(const std::string& repo, const std::string& model_file,
                        const std::string& out_path, HFDownload& dl);
 
-// Poll file-size progress (call each frame while status == Running).
 void hf_download_poll(HFDownload& dl);
 
 // ── Cache helpers ─────────────────────────────────────────────────────────────
 
-std::string hf_rvc_cache_path(const std::string& filename);
-bool        hf_rvc_installed(const std::string& filename);
+// Returns the .pth path that will exist after download completes,
+// whether model_file is a .pth or a .zip (stem.zip → stem.pth).
+std::string hf_rvc_model_path(const std::string& model_file);
+
+bool hf_rvc_installed(const std::string& model_file);
