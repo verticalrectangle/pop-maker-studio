@@ -48,7 +48,9 @@ enum class BgRemoveStatus { Idle, Processing, Ready, Error };
 // ── Creative FX type ─────────────────────────────────────────────────────────
 
 enum class FXType {
-    Adjustment,   // brightness / contrast / blur / vignette (classic adjustment layer)
+    Grade,        // colour grade: brightness / contrast / saturation / hue
+    Blur,         // gaussian blur
+    Vignette,     // radial vignette
     Glitch,       // RGB channel split + row jitter
     ZoomPunch,    // beat-synced scale spike + shake
     LUT,          // 3D LUT color grade from .cube file
@@ -56,9 +58,6 @@ enum class FXType {
     VHS,          // chroma bleed + grain + tracking glitch
     Datamosh,     // temporal ghost buffer + multi-key chroma chaos
     ChromaKey,    // color-range keyer — compositing brick
-    Grade,        // colour grade: brightness / contrast / saturation / hue
-    Blur,         // gaussian blur
-    Vignette,     // radial vignette
 #include "generated/fx_enum_entries.h"
 };
 
@@ -150,8 +149,7 @@ struct Clip {
     float fx_opacity_mul = 1.f;
     float fx_scale_mul   = 1.f;
 
-    // Creative FX (only active when fx_type != Adjustment)
-    FXType      fx_type          = FXType::Adjustment;
+    FXType      fx_type          = FXType::Grade;
 
     // ChromaKey brick
     float       fx_chroma_key_r         = 0.f;

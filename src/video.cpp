@@ -1322,7 +1322,7 @@ uintptr_t video_fx_preview_texture(FXType ft, float t) {
     std::vector<uint8_t> px;
 
     switch (ft) {
-        case FXType::Adjustment: {
+        case FXType::Grade: {
             px = s_fxp_src;
             cpu_apply_grade(px.data(), FXP_W, FXP_H, 0.06f, 1.45f, 1.7f, 0.f);
             break;

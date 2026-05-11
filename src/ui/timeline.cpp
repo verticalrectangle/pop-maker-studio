@@ -898,13 +898,6 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
             float ly = cy0 + (cy1-cy0-13.f)*0.5f;
             ImU32 lbl_col = is_glass ? IM_COL32(200, 240, 255, 255) : fbc.label;
             dl->AddText({vis_x0+5.f, ly}, lbl_col, fx_type_name(clip.fx_type));
-            if (clip.fx_type == FXType::Adjustment) {
-                float bx = vis_x0 + 38.f;
-                if (clip.fx_color_on    && bx+28.f<vis_x1) { dl->AddText({bx,ly},lbl_col,"Col");  bx+=28.f; }
-                if (clip.fx_blur_on     && bx+30.f<vis_x1) { dl->AddText({bx,ly},lbl_col,"Blur"); bx+=32.f; }
-                if (clip.fx_vignette_on && bx+24.f<vis_x1) { dl->AddText({bx,ly},lbl_col,"Vig");  bx+=28.f; }
-                if (clip.fx_text_on     && bx+22.f<vis_x1) { dl->AddText({bx,ly},lbl_col,"Txt"); }
-            }
             // Scope arrow
             if (vis_x1-vis_x0 > 30.f) {
                 float ax=vis_x1-12.f, ay=cy0+(cy1-cy0)*0.35f;
@@ -1928,9 +1921,6 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                 std::string p = filepicker_open("Add audio clip",
                     "Audio", "*.wav *.mp3 *.m4a *.flac *.aac");
                 if (!p.empty()) add_clip_to_track(state, ti, p, ClipType::Audio);
-            }
-            if (ImGui::MenuItem("Add Adjustment Clip")) {
-                add_clip_to_track(state, ti, "", ClipType::Effect);
             }
             ImGui::Separator();
         }

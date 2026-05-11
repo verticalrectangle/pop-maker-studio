@@ -326,9 +326,9 @@ void panel_adjustment(AppState& state, float w) {
     };
     float sw = w - 72.f;  // slider width leaving room for label + reset
 
-    bool show_color    = (clip.fx_type == FXType::Adjustment || clip.fx_type == FXType::Grade);
-    bool show_blur     = (clip.fx_type == FXType::Adjustment || clip.fx_type == FXType::Blur);
-    bool show_vignette = (clip.fx_type == FXType::Adjustment || clip.fx_type == FXType::Vignette);
+    bool show_color    = (clip.fx_type == FXType::Grade);
+    bool show_blur     = (clip.fx_type == FXType::Blur);
+    bool show_vignette = (clip.fx_type == FXType::Vignette);
 
     // ── Color Grade ───────────────────────────────────────────────────────────
     if (show_color) {
@@ -647,7 +647,6 @@ void panel_fx_creative(AppState& state, float w) {
 
     for (int i = 0; i < g_n_fx_cards; ++i) {
         if (fx_type_is_adjustment_style(g_fx_cards[i].type)) continue;
-        if (g_fx_cards[i].type == FXType::Adjustment) continue;
         const FXCard& fc = g_fx_cards[i];
         ImGui::PushID(i + 9000);
         ImVec2 cp = ImGui::GetCursorScreenPos();

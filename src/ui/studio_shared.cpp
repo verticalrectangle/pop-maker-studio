@@ -214,9 +214,8 @@ PanelView pv_derive(const AppState& state) {
     const Clip& cl = state.tracks[state.selected_track].clips[state.selected_clip];
     if (cl.clip_type == ClipType::Background) return PanelView::OverrideBG;
     if (cl.clip_type == ClipType::Effect) {
-        if (cl.fx_type == FXType::Adjustment ||
-            cl.fx_type == FXType::Grade      ||
-            cl.fx_type == FXType::Blur       ||
+        if (cl.fx_type == FXType::Grade    ||
+            cl.fx_type == FXType::Blur     ||
             cl.fx_type == FXType::Vignette)
             return PanelView::OverrideAdj;
         return PanelView::OverrideFX;
@@ -278,7 +277,7 @@ const char* fx_type_name(FXType ft) {
         case FXType::Blur:      return "Blur";
         case FXType::Vignette:  return "Vignette";
 #include "generated/fx_ui_abbrev.h"
-        default:                return "ADJUST";
+        default:                return "FX";
     }
 }
 
@@ -292,7 +291,7 @@ const char* fx_type_display(FXType ft) {
         case FXType::Datamosh:  return "Datamosh";
         case FXType::ChromaKey: return "Chroma Key";
 #include "generated/fx_ui_label.h"
-        default:                return "Adjustment";
+        default:                return "FX";
     }
 }
 
@@ -324,8 +323,7 @@ bool fx_type_is_adjustment_style(FXType ft) {
 
 FxBrickColors fx_brick_colors(FXType ft, bool sel) {
     int r, g, b;
-    if (ft == FXType::Adjustment || ft == FXType::Grade ||
-        ft == FXType::Blur       || ft == FXType::Vignette ||
+    if (ft == FXType::Grade || ft == FXType::Blur || ft == FXType::Vignette ||
         fx_type_is_adjustment_style(ft)) { r=100; g=80;  b=200; }
     else                                 { r=210; g=110; b=30;  }
     if (sel) {

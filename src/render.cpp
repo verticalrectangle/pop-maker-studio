@@ -419,7 +419,9 @@ static bool write_filter_script(
                     snprintf(en, sizeof(en), "between(t,%.3f,%.3f)", (double)en0, (double)en1);
 
                     // ── Adjustment layer FX ───────────────────────────────
-                    if (fc.fx_type == FXType::Adjustment) {
+                    if (fc.fx_type == FXType::Grade    ||
+                        fc.fx_type == FXType::Blur     ||
+                        fc.fx_type == FXType::Vignette) {
                         if (fc.fx_color_on) {
                             std::string ntag = "[vfx" + std::to_string(fx_idx++) + "]";
                             char eq[256];
