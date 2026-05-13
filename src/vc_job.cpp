@@ -51,8 +51,19 @@ static void run_job(std::shared_ptr<VcJobData> data,
         return;
     }
 
-    // Step 2: run voice_convert.py, reading PROGRESS lines
-    std::string cmd = "\"" + python_path + "\" \"" + script_path + "\""
+    // Step 2: run voice_convert.py, reading PROGRESS lines.
+    // Prefer the song2subs venv which has torchaudio (no fairseq dependency).
+    std::string py = python_path;
+    {
+        static const char* alts[] = {
+            "/home/alexis/dev/song2subs/venv/bin/python3",
+            nullptr
+        };
+        for (const char** a = alts; *a; a++) {
+            if (fs::exists(*a)) { py = *a; break; }
+        }
+    }
+    std::string cmd = "\"" + py + "\" \"" + script_path + "\""
                     + " \"" + wav_in + "\""
                     + " \"" + model_path + "\""
                     + " \"" + out_path + "\" 2>&1";

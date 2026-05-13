@@ -259,23 +259,71 @@ void run_envelope_extract(AppState& state) {
     if (state.envelope_running) return;
     std::string src = state.vocals_path.empty() ? state.audio_path : state.vocals_path;
     if (src.empty() || !fs::exists(src)) return;
-    extern std::string g_envelope_script;
-    if (g_envelope_script.empty()) return;
 
     fs::path out = fs::path(src).parent_path() / "envelope.json";
     state.envelope_json_path = out.string();
     state.envelope_running   = true;
 
-    std::string python  = state.python_path;
-    std::string script  = g_envelope_script;
     std::string outpath = out.string();
 
-    std::thread([&state, python, script, src, outpath]() {
-        std::string cmd = "\"" + python + "\" \"" + script + "\" \"" + src + "\" \"" + outpath + "\" 2>&1";
-        FILE* p = popen(cmd.c_str(), "r");
-        char buf[256];
-        while (p && fgets(buf, sizeof(buf), p)) {}
-        if (p) pclose(p);
+    std::thread([&state, src, outpath]() {
+        const float env_fps = 24.f;
+
+        // Probe sample rate
+        std::string probe = "ffprobe -v error -select_streams a:0"
+                            " -show_entries stream=sample_rate"
+                            " -of default=noprint_wrappers=1:nokey=1"
+                            " \"" + src + "\" 2>/dev/null";
+        int sr = 44100;
+        {
+            FILE* p = popen(probe.c_str(), "r");
+            if (p) {
+                char buf[32] = {};
+                if (fgets(buf, sizeof(buf), p)) sr = std::max(1, atoi(buf));
+                pclose(p);
+            }
+        }
+
+        int samples_per_frame = std::max(1, (int)(sr / env_fps));
+
+        // Decode mono f32le PCM via pipe
+        std::string cmd = "ffmpeg -hide_banner -loglevel error"
+                          " -i \"" + src + "\""
+                          " -vn -ac 1 -f f32le pipe:1 2>/dev/null";
+        FILE* pipe = popen(cmd.c_str(), "r");
+        if (!pipe) {
+            state.envelope_running = false;
+            return;
+        }
+
+        std::vector<float> rms_vals;
+        float sample = 0.f;
+        double sum_sq = 0.0;
+        int n = 0;
+        while (fread(&sample, sizeof(float), 1, pipe) == 1) {
+            sum_sq += (double)sample * sample;
+            if (++n >= samples_per_frame) {
+                rms_vals.push_back((float)std::sqrt(sum_sq / n));
+                sum_sq = 0.0;
+                n = 0;
+            }
+        }
+        if (n > 0) rms_vals.push_back((float)std::sqrt(sum_sq / n));
+        pclose(pipe);
+
+        // Normalize to [0, 1]
+        float peak = 0.f;
+        for (float v : rms_vals) peak = std::max(peak, v);
+        if (peak > 0.f)
+            for (float& v : rms_vals) v /= peak;
+
+        // Write JSON
+        nlohmann::json j;
+        j["fps"] = env_fps;
+        j["rms"] = rms_vals;
+        std::ofstream f(outpath);
+        f << j.dump();
+
         state.envelope_running = false;
         load_envelope_cache(state);
     }).detach();

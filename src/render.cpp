@@ -1006,7 +1006,7 @@ static std::vector<std::string> build_args(AppState& state) {
         if (!cl.bg_remove_on || cl.text.empty()) continue;
         if (hires_masks.count(cl.text)) continue;
         std::string hdir = bg_remove_hires_dir(cl.text);
-        bg_remove_run_hires(cl.text, hdir, state.python_path, g_rembg_script);
+        bg_remove_run_hires(cl.text, hdir);
         float fps = bg_remove_read_fps(hdir);
         hires_masks[cl.text] = {hdir, fps};
     }

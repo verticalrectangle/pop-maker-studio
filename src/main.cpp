@@ -32,10 +32,6 @@ extern "C" {
 #include "ml_pipeline_embedded.h"
 #include "ml_prefetch_embedded.h"
 #include "ml_setup_embedded.h"
-#include "envelope_extract_embedded.h"
-#include "rembg_remove_embedded.h"
-#include "noise_reduce_embedded.h"
-#include "piper_tts_embedded.h"
 #include "voice_convert_embedded.h"
 
 namespace fs = std::filesystem;
@@ -45,10 +41,6 @@ std::string g_dropped_file;
 std::string g_pipeline_script;
 std::string g_prefetch_script;
 std::string g_setup_script;
-std::string g_envelope_script;
-std::string g_rembg_script;
-std::string g_noise_reduce_script;
-std::string g_piper_tts_script;
 std::string g_voice_convert_script;
 std::string g_managed_dir;
 
@@ -279,14 +271,6 @@ int main(int argc, char** argv) {
                                           "pop_maker_ml_prefetch.py");
     g_setup_script    = extract_embedded(ml_setup_py,          ml_setup_py_size,
                                           "pop_maker_ml_setup.py");
-    g_envelope_script    = extract_embedded(envelope_extract_py, envelope_extract_py_size,
-                                          "pop_maker_envelope_extract.py");
-    g_rembg_script       = extract_embedded(rembg_remove_py,  rembg_remove_py_size,
-                                          "pop_maker_rembg_remove.py");
-    g_noise_reduce_script = extract_embedded(noise_reduce_py, noise_reduce_py_size,
-                                          "pop_maker_noise_reduce.py");
-    g_piper_tts_script     = extract_embedded(piper_tts_py,     piper_tts_py_size,
-                                          "pop_maker_piper_tts.py");
     g_voice_convert_script = extract_embedded(voice_convert_py, voice_convert_py_size,
                                           "pop_maker_voice_convert.py");
 

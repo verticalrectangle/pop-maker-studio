@@ -4,10 +4,17 @@
 #include <algorithm>
 #include <thread>
 #include <cstdio>
+#include <cstdlib>
 #include <unistd.h>
 #include <sys/wait.h>
 #include <fcntl.h>
 #include <functional>
+#include <filesystem>
+#include <unordered_map>
+#include <vector>
+#include <string>
+
+namespace fs = std::filesystem;
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -452,10 +459,30 @@ std::vector<float> process_audio_fx(const std::vector<float>& raw,
 
 // ── TTS ───────────────────────────────────────────────────────────────────────
 
+static std::string piper_cache_dir() {
+    std::string base;
+    if (const char* xdg = getenv("XDG_CACHE_HOME"); xdg && *xdg)
+        base = xdg;
+    else if (const char* home = getenv("HOME"); home && *home)
+        base = std::string(home) + "/.cache";
+    else
+        base = "/tmp";
+    std::string d = base + "/pop-maker-studio/piper";
+    fs::create_directories(d);
+    return d;
+}
+
 void tts_generate(const std::string& text, const std::string& voice,
-                  const std::string& python_path, const std::string& script_path,
                   TTSState& out_state)
 {
+    static const std::unordered_map<std::string, std::string> aliases = {
+        {"female",   "en_US-amy-medium"},
+        {"male",     "en_US-ryan-medium"},
+        {"whisper",  "en_US-lessac-medium"},
+        {"narrator", "en_GB-alan-medium"},
+        {"default",  "en_US-amy-medium"},
+    };
+
     out_state.status   = TTSStatus::Running;
     out_state.progress = 0.f;
     out_state.error.clear();
@@ -464,30 +491,100 @@ void tts_generate(const std::string& text, const std::string& voice,
         std::to_string(std::hash<std::string>{}(text + voice)) + ".wav";
     out_state.out_path = out_path;
 
-    std::thread([=, &out_state]() {
-        std::string cmd = "\"" + python_path + "\" \"" + script_path + "\" "
-                        + "\"" + text + "\" "
-                        + "\"" + voice + "\" "
-                        + "\"" + out_path + "\" 2>&1";
+    std::thread([=, &out_state]() mutable {
+        auto it = aliases.find(voice);
+        std::string voice_id = (it != aliases.end()) ? it->second : voice;
+
+        std::string onnx_path, cfg_path;
+        // Absolute .onnx path — use directly
+        if (voice_id.size() > 5
+            && voice_id.compare(voice_id.size()-5, 5, ".onnx") == 0
+            && fs::exists(voice_id)) {
+            onnx_path = voice_id;
+            cfg_path  = voice_id + ".json";
+        } else {
+            std::string cache = piper_cache_dir();
+            onnx_path = cache + "/" + voice_id + ".onnx";
+            cfg_path  = onnx_path + ".json";
+
+            if (!fs::exists(onnx_path) || !fs::exists(cfg_path)) {
+                out_state.progress = 0.1f;
+                // en_US-amy-medium → en/en_US/en_US-amy-medium/medium/
+                auto us_pos   = voice_id.find('_');
+                auto dash_pos = voice_id.find('-');
+                std::string lang  = (dash_pos != std::string::npos)
+                                    ? voice_id.substr(0, dash_pos) : "en_US";
+                std::string lang2 = (us_pos != std::string::npos && us_pos < dash_pos)
+                                    ? lang.substr(0, us_pos) : lang;
+                auto rdash = voice_id.rfind('-');
+                std::string quality = (rdash != std::string::npos)
+                                      ? voice_id.substr(rdash + 1) : "medium";
+                std::string hf_dir = lang2 + "/" + lang + "/" + voice_id + "/" + quality;
+                std::string base_url =
+                    "https://huggingface.co/rhasspy/piper-voices/resolve/main/";
+
+                for (auto& [fname, local] : std::vector<std::pair<std::string,std::string>>{
+                    {voice_id + ".onnx",      onnx_path},
+                    {voice_id + ".onnx.json", cfg_path},
+                }) {
+                    if (!fs::exists(local)) {
+                        std::string url = base_url + hf_dir + "/" + fname;
+                        std::string dl  = "curl -fsSL --create-dirs -o \""
+                                         + local + "\" \"" + url + "\" 2>&1";
+                        if (system(dl.c_str()) != 0) {  // NOLINT
+                            out_state.error  = "Failed to download " + fname;
+                            out_state.status = TTSStatus::Error;
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+
+        if (!fs::exists(cfg_path)) {
+            out_state.error  = "Missing piper config: " + cfg_path;
+            out_state.status = TTSStatus::Error;
+            return;
+        }
+
+        out_state.progress = 0.4f;
+
+        // Escape text for shell single-quote
+        std::string safe;
+        safe.reserve(text.size() + 8);
+        for (char c : text) {
+            if (c == '\'') safe += "'\\''";
+            else safe += c;
+        }
+
+        std::string cmd = "printf '%s' '" + safe + "'"
+                          " | ESPEAK_DATA_PATH=/opt/piper-tts/espeak-ng-data"
+                          " /opt/piper-tts/piper"
+                          " --model \"" + onnx_path + "\""
+                          " --config \"" + cfg_path + "\""
+                          " --output_file \"" + out_path + "\""
+                          " 2>&1";
+
         FILE* p = popen(cmd.c_str(), "r");
         if (!p) {
-            out_state.error  = "Failed to launch TTS";
+            out_state.error  = "Failed to launch piper";
             out_state.status = TTSStatus::Error;
             return;
         }
         char buf[256];
+        std::string tail;
         while (fgets(buf, sizeof(buf), p)) {
-            float prog = 0.f;
-            if (sscanf(buf, "PROGRESS %f", &prog) == 1)
-                out_state.progress = prog;
+            tail += buf;
+            if (tail.size() > 500) tail = tail.substr(tail.size() - 500);
         }
         int rc = pclose(p);
-        if (rc != 0) {
-            out_state.error  = "TTS script failed";
-            out_state.status = TTSStatus::Error;
-        } else {
+
+        if (rc == 0 && fs::exists(out_path)) {
             out_state.progress = 1.f;
             out_state.status   = TTSStatus::Done;
+        } else {
+            out_state.error  = tail.empty() ? "Piper TTS failed" : tail;
+            out_state.status = TTSStatus::Error;
         }
     }).detach();
 }

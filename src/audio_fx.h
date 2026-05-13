@@ -85,7 +85,6 @@ struct TTSState {
 };
 
 void tts_generate(const std::string& text, const std::string& voice,
-                  const std::string& python_path, const std::string& script_path,
                   TTSState& out_state);
 
 // ── Voice conversion status ───────────────────────────────────────────────────

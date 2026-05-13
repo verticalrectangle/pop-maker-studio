@@ -96,7 +96,13 @@ target_link_libraries(pop-maker-studio PRIVATE
     ${SWSCALE_LIBRARIES}
     ${FREETYPE_LIBRARIES}
     ${AUBIO_LIBRARIES}
+    onnxruntime
+    whisper
     dl pthread
+)
+
+target_include_directories(pop-maker-studio PRIVATE
+    /usr/include/onnxruntime
 )
 
 target_compile_definitions(pop-maker-studio PRIVATE IMGUI_ENABLE_FREETYPE)
@@ -179,61 +185,6 @@ add_custom_target(embed_setup DEPENDS ${CMAKE_BINARY_DIR}/ml_setup_embedded.h)
 add_dependencies(pop-maker-studio embed_setup)
 
 
-# Embed rembg_remove.py
-add_custom_command(
-    OUTPUT ${CMAKE_BINARY_DIR}/rembg_remove_embedded.h
-    COMMAND ${CMAKE_COMMAND}
-        -DINPUT=${CMAKE_SOURCE_DIR}/rembg_remove.py
-        -DVAR=rembg_remove_py
-        -DOUTPUT=${CMAKE_BINARY_DIR}/rembg_remove_embedded.h
-        -P ${CMAKE_SOURCE_DIR}/cmake/EmbedFile.cmake
-    DEPENDS ${CMAKE_SOURCE_DIR}/rembg_remove.py
-    COMMENT "Embedding rembg_remove.py"
-)
-add_custom_target(embed_rembg DEPENDS ${CMAKE_BINARY_DIR}/rembg_remove_embedded.h)
-add_dependencies(pop-maker-studio embed_rembg)
-
-# Embed noise_reduce.py
-add_custom_command(
-    OUTPUT ${CMAKE_BINARY_DIR}/noise_reduce_embedded.h
-    COMMAND ${CMAKE_COMMAND}
-        -DINPUT=${CMAKE_SOURCE_DIR}/noise_reduce.py
-        -DVAR=noise_reduce_py
-        -DOUTPUT=${CMAKE_BINARY_DIR}/noise_reduce_embedded.h
-        -P ${CMAKE_SOURCE_DIR}/cmake/EmbedFile.cmake
-    DEPENDS ${CMAKE_SOURCE_DIR}/noise_reduce.py
-    COMMENT "Embedding noise_reduce.py"
-)
-add_custom_target(embed_noise_reduce DEPENDS ${CMAKE_BINARY_DIR}/noise_reduce_embedded.h)
-add_dependencies(pop-maker-studio embed_noise_reduce)
-
-# Embed envelope_extract.py
-add_custom_command(
-    OUTPUT ${CMAKE_BINARY_DIR}/envelope_extract_embedded.h
-    COMMAND ${CMAKE_COMMAND}
-        -DINPUT=${CMAKE_SOURCE_DIR}/envelope_extract.py
-        -DVAR=envelope_extract_py
-        -DOUTPUT=${CMAKE_BINARY_DIR}/envelope_extract_embedded.h
-        -P ${CMAKE_SOURCE_DIR}/cmake/EmbedFile.cmake
-    DEPENDS ${CMAKE_SOURCE_DIR}/envelope_extract.py
-    COMMENT "Embedding envelope_extract.py"
-)
-add_custom_target(embed_envelope DEPENDS ${CMAKE_BINARY_DIR}/envelope_extract_embedded.h)
-add_dependencies(pop-maker-studio embed_envelope)
-
-# Embed piper_tts.py
-add_custom_command(
-    OUTPUT ${CMAKE_BINARY_DIR}/piper_tts_embedded.h
-    COMMAND ${CMAKE_COMMAND}
-        -DINPUT=${CMAKE_SOURCE_DIR}/piper_tts.py
-        -DVAR=piper_tts_py
-        -DOUTPUT=${CMAKE_BINARY_DIR}/piper_tts_embedded.h
-        -P ${CMAKE_SOURCE_DIR}/cmake/EmbedFile.cmake
-    DEPENDS ${CMAKE_SOURCE_DIR}/piper_tts.py
-    COMMENT "Embedding piper_tts.py"
-)
-add_custom_target(embed_piper_tts DEPENDS ${CMAKE_BINARY_DIR}/piper_tts_embedded.h)
-add_dependencies(pop-maker-studio embed_piper_tts)
 
 # Embed voice_convert.py
 add_custom_command(

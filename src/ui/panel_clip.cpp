@@ -1278,15 +1278,9 @@ void panel_clip(AppState& state, float w) {
         ui_label("Noise Reduction");
         ImGui::Dummy({0.f, 6.f});
         {
-            extern std::string g_noise_reduce_script;
-            bool nr_installed = noise_reduce_is_installed(state.python_path);
-            bool nr_running   = state.noise_reduce_running;
-            bool has_path2    = !clip.text.empty();
-            if (!nr_installed) {
-                ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
-                ImGui::TextWrapped("Removes background hum and mic noise from audio.\nRequires: pip install noisereduce soundfile");
-                ImGui::PopStyleColor();
-            } else if (nr_running) {
+            bool nr_running = state.noise_reduce_running;
+            bool has_path2  = !clip.text.empty();
+            if (nr_running) {
                 ImVec2 bp = ImGui::GetCursorScreenPos();
                 ImDrawList* nrdl = ImGui::GetWindowDrawList();
                 float t2 = fmodf((float)ImGui::GetTime() * 0.8f, 1.f);
@@ -1322,7 +1316,7 @@ void panel_clip(AppState& state, float w) {
                 if (!has_path2) ImGui::BeginDisabled();
                 if (ui_btn("Reduce Noise", false, true)) {
                     state.noise_reduce_error.clear();
-                    noise_reduce_start(state, clip.text, state.python_path, g_noise_reduce_script);
+                    noise_reduce_start(state, clip.text);
                 }
                 if (!has_path2) ImGui::EndDisabled();
                 ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
@@ -1491,9 +1485,7 @@ void panel_clip(AppState& state, float w) {
                 }
                 ImGui::Dummy({0.f, 4.f});
                 if (ui_btn("Re-run", false, true)) {
-                    extern std::string g_rembg_script;
-                    bg_remove_start(state, state.selected_track, state.selected_clip,
-                                    state.python_path, g_rembg_script);
+                    bg_remove_start(state, state.selected_track, state.selected_clip);
                 }
 
             } else if (status == BgRemoveStatus::Error) {
@@ -1512,9 +1504,7 @@ void panel_clip(AppState& state, float w) {
                 }
                 ImGui::Dummy({0.f, 4.f});
                 if (ui_btn("Retry", false, true)) {
-                    extern std::string g_rembg_script;
-                    bg_remove_start(state, state.selected_track, state.selected_clip,
-                                    state.python_path, g_rembg_script);
+                    bg_remove_start(state, state.selected_track, state.selected_clip);
                 }
 
             } else {
@@ -1527,9 +1517,7 @@ void panel_clip(AppState& state, float w) {
                 }
                 if (!proxy_ok || !clip.bg_remove_on) ImGui::BeginDisabled();
                 if (ui_btn("Process  (removes background via AI)", false, true)) {
-                    extern std::string g_rembg_script;
-                    bg_remove_start(state, state.selected_track, state.selected_clip,
-                                    state.python_path, g_rembg_script);
+                    bg_remove_start(state, state.selected_track, state.selected_clip);
                 }
                 if (!proxy_ok || !clip.bg_remove_on) ImGui::EndDisabled();
                 if (!clip.bg_remove_on) {
@@ -1645,69 +1633,65 @@ void panel_clip(AppState& state, float w) {
 
         // ── Text to Speech ────────────────────────────────────────────────────
         {
-            extern std::string g_piper_tts_script;
             extern void import_file(AppState&, const std::string&);
-            if (!g_piper_tts_script.empty()) {
-                ImGui::Dummy({0.f, 10.f}); ui_separator(); ImGui::Dummy({0.f, 6.f});
-                ui_label("Text to Speech");
-                ImGui::Dummy({0.f, 6.f});
+            ImGui::Dummy({0.f, 10.f}); ui_separator(); ImGui::Dummy({0.f, 6.f});
+            ui_label("Text to Speech");
+            ImGui::Dummy({0.f, 6.f});
 
-                static char s_tts_text[2048] = {};
-                static int  s_tts_voice      = 0;
-                static TTSState s_tts_state;
-                static std::string s_tts_added;
+            static char s_tts_text[2048] = {};
+            static int  s_tts_voice      = 0;
+            static TTSState s_tts_state;
+            static std::string s_tts_added;
 
-                static const char* tts_voices[] = { "female", "male", "whisper", "narrator" };
+            static const char* tts_voices[] = { "female", "male", "whisper", "narrator" };
 
-                ImGui::SetNextItemWidth(bar_w);
-                ImGui::InputTextMultiline("##tts_in", s_tts_text, sizeof(s_tts_text),
-                                          {bar_w, 64.f});
-                ImGui::Dummy({0.f, 4.f});
-                ImGui::SetNextItemWidth(bar_w);
-                ImGui::Combo("##tts_voice", &s_tts_voice, tts_voices, 4);
-                ImGui::Dummy({0.f, 6.f});
+            ImGui::SetNextItemWidth(bar_w);
+            ImGui::InputTextMultiline("##tts_in", s_tts_text, sizeof(s_tts_text),
+                                      {bar_w, 64.f});
+            ImGui::Dummy({0.f, 4.f});
+            ImGui::SetNextItemWidth(bar_w);
+            ImGui::Combo("##tts_voice", &s_tts_voice, tts_voices, 4);
+            ImGui::Dummy({0.f, 6.f});
 
-                bool tts_busy = (s_tts_state.status == TTSStatus::Running);
-                if (tts_busy) {
-                    ImVec2 bp = ImGui::GetCursorScreenPos();
-                    ImDrawList* dl2 = ImGui::GetWindowDrawList();
-                    dl2->AddRectFilled(bp, {bp.x+bar_w, bp.y+4.f}, to_u32(Col::line), 2.f);
-                    dl2->AddRectFilled(bp, {bp.x+bar_w*s_tts_state.progress, bp.y+4.f},
-                                       to_u32(Col::fg), 2.f);
-                    ImGui::Dummy({0.f, 8.f});
+            bool tts_busy = (s_tts_state.status == TTSStatus::Running);
+            if (tts_busy) {
+                ImVec2 bp = ImGui::GetCursorScreenPos();
+                ImDrawList* dl2 = ImGui::GetWindowDrawList();
+                dl2->AddRectFilled(bp, {bp.x+bar_w, bp.y+4.f}, to_u32(Col::line), 2.f);
+                dl2->AddRectFilled(bp, {bp.x+bar_w*s_tts_state.progress, bp.y+4.f},
+                                   to_u32(Col::fg), 2.f);
+                ImGui::Dummy({0.f, 8.f});
+                ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+                ImGui::TextUnformatted("Generating…");
+                ImGui::PopStyleColor();
+            } else {
+                if (s_tts_state.status == TTSStatus::Done && !s_tts_state.out_path.empty()
+                    && s_tts_added != s_tts_state.out_path) {
                     ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
-                    ImGui::TextUnformatted("Generating…");
+                    ImGui::TextUnformatted("Ready.");
                     ImGui::PopStyleColor();
-                } else {
-                    if (s_tts_state.status == TTSStatus::Done && !s_tts_state.out_path.empty()
-                        && s_tts_added != s_tts_state.out_path) {
-                        ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
-                        ImGui::TextUnformatted("Ready.");
-                        ImGui::PopStyleColor();
-                        ImGui::SameLine(0.f, 8.f);
-                        if (ui_btn("Add to timeline##tts_add", false, true)) {
-                            import_file(state, s_tts_state.out_path);
-                            s_tts_added = s_tts_state.out_path;
-                            s_tts_state = TTSState{};
-                        }
-                    }
-                    if (!s_tts_state.error.empty()) {
-                        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f,0.3f,0.3f,1.f));
-                        ImGui::TextWrapped("%s", s_tts_state.error.c_str());
-                        ImGui::PopStyleColor();
-                        ImGui::Dummy({0.f, 4.f});
-                    }
-                    bool can_gen = s_tts_text[0] != '\0';
-                    if (!can_gen) ImGui::BeginDisabled();
-                    if (ui_btn("Generate##tts_go", false, true)) {
+                    ImGui::SameLine(0.f, 8.f);
+                    if (ui_btn("Add to timeline##tts_add", false, true)) {
+                        import_file(state, s_tts_state.out_path);
+                        s_tts_added = s_tts_state.out_path;
                         s_tts_state = TTSState{};
-                        tts_generate(s_tts_text, tts_voices[s_tts_voice],
-                                     state.python_path, g_piper_tts_script, s_tts_state);
                     }
-                    if (!can_gen) ImGui::EndDisabled();
                 }
-                ImGui::Dummy({0.f, 6.f});
+                if (!s_tts_state.error.empty()) {
+                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f,0.3f,0.3f,1.f));
+                    ImGui::TextWrapped("%s", s_tts_state.error.c_str());
+                    ImGui::PopStyleColor();
+                    ImGui::Dummy({0.f, 4.f});
+                }
+                bool can_gen = s_tts_text[0] != '\0';
+                if (!can_gen) ImGui::BeginDisabled();
+                if (ui_btn("Generate##tts_go", false, true)) {
+                    s_tts_state = TTSState{};
+                    tts_generate(s_tts_text, tts_voices[s_tts_voice], s_tts_state);
+                }
+                if (!can_gen) ImGui::EndDisabled();
             }
+            ImGui::Dummy({0.f, 6.f});
         }
 
         // ── AI Tools ─────────────────────────────────────────────────────────
@@ -1792,15 +1776,9 @@ void panel_clip(AppState& state, float w) {
         ui_label("Noise Reduction");
         ImGui::Dummy({0.f, 6.f});
         {
-            extern std::string g_noise_reduce_script;
-            bool nr_installed = noise_reduce_is_installed(state.python_path);
-            bool nr_running   = state.noise_reduce_running;
-            bool has_path2    = !clip.text.empty();
-            if (!nr_installed) {
-                ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
-                ImGui::TextWrapped("Removes background hum and mic noise from audio.\nRequires: pip install noisereduce soundfile");
-                ImGui::PopStyleColor();
-            } else if (nr_running) {
+            bool nr_running = state.noise_reduce_running;
+            bool has_path2  = !clip.text.empty();
+            if (nr_running) {
                 ImVec2 bp = ImGui::GetCursorScreenPos();
                 ImDrawList* nrdl = ImGui::GetWindowDrawList();
                 float t2 = fmodf((float)ImGui::GetTime() * 0.8f, 1.f);
@@ -1836,7 +1814,7 @@ void panel_clip(AppState& state, float w) {
                 if (!has_path2) ImGui::BeginDisabled();
                 if (ui_btn("Reduce Noise##a", false, true)) {
                     state.noise_reduce_error.clear();
-                    noise_reduce_start(state, clip.text, state.python_path, g_noise_reduce_script);
+                    noise_reduce_start(state, clip.text);
                 }
                 if (!has_path2) ImGui::EndDisabled();
             }

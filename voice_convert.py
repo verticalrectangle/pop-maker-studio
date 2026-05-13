@@ -1,178 +1,239 @@
 #!/usr/bin/env python3
 """
-voice_convert.py — AI voice conversion for Pop Maker Studio
-Usage: voice_convert.py <input.wav> <model_path_or_preset> <output.wav>
+voice_convert.py — RVC V2 voice conversion for Pop Maker Studio
 
-<model_path_or_preset> can be:
-  - path to an RVC .pth model file
-  - "rvc:<huggingface_model_id>" to auto-download a public RVC model
-  - (future) other voice conversion backends
+Uses torchaudio (HuBERT) for feature extraction — no fairseq dependency.
+Python interpreter must be the song2subs venv which has torch/torchaudio/pyworld.
 
-Requires: pip install rvc-python  (auto-installed on first run)
+Usage: voice_convert.py <input.wav> <model.pth> <output.wav>
+
+Progress is printed as:  PROGRESS 0.45
+Errors as:               ERROR <message>
 """
 
-import sys
-import os
-import subprocess
-import tempfile
-import shutil
+import sys, os
+
+# Add song2subs venv site-packages so we get torch/torchaudio/pyworld/librosa
+VENV_SITE = "/home/alexis/dev/song2subs/venv/lib/python3.11/site-packages"
+if VENV_SITE not in sys.path:
+    sys.path.insert(0, VENV_SITE)
+
+import types
+
+# Stub only the broken sub-modules so the package itself remains a real package.
+# fairseq 0.12.2 fails on Python 3.11 dataclasses; stub checkpoint_utils only.
+import sys as _sys
+
+def _make_stub(name):
+    m = types.ModuleType(name)
+    _sys.modules[name] = m
+    return m
+
+# Pre-stub fairseq hierarchy to prevent the dataclass error
+for _s in ("fairseq", "fairseq.checkpoint_utils",
+           "fairseq.distributed", "fairseq.dataclass",
+           "fairseq.dataclass.configs", "fairseq.logging"):
+    if _s not in _sys.modules:
+        _make_stub(_s)
+
+# Pre-stub the rvc_python sub-modules that import fairseq
+for _s in ("rvc_python.infer",
+           "rvc_python.modules",
+           "rvc_python.modules.vc",
+           "rvc_python.modules.vc.modules",
+           "rvc_python.modules.vc.utils"):
+    if _s not in _sys.modules:
+        _make_stub(_s)
+
+import numpy as np
+import torch
+import soundfile as sf
+import librosa
+
+def progress(p): print(f"PROGRESS {p:.2f}", flush=True)
+def error(msg):  print(f"ERROR {msg}", flush=True)
 
 
-def ensure_rvc():
-    try:
-        import rvc
-        return True
-    except ImportError:
-        pass
-    print("PROGRESS 0.05", flush=True)
-    rc = subprocess.call(
-        [sys.executable, "-m", "pip", "install", "--quiet", "rvc-python"],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+# ── HuBERT feature extraction (via torchaudio, no fairseq) ───────────────────
+
+_hubert_model = None
+
+def get_hubert(device):
+    global _hubert_model
+    if _hubert_model is None:
+        import torchaudio
+        bundle = torchaudio.pipelines.HUBERT_BASE
+        _hubert_model = bundle.get_model().to(device).eval()
+    return _hubert_model
+
+@torch.no_grad()
+def extract_features(wav16k_np, device):
+    """wav16k_np: 1D float32 numpy at 16 kHz → tensor [1, T', 768]"""
+    model = get_hubert(device)
+    waveform = torch.from_numpy(wav16k_np).unsqueeze(0).to(device)
+    features, _ = model.extract_features(waveform)
+    return features[-1]   # last layer, [1, T', 768]
+
+
+# ── F0 extraction via pyworld ─────────────────────────────────────────────────
+
+def extract_f0(wav_np, sr, n_frames, up_key=0):
+    """Returns (f0_coarse [n_frames], f0_bak [n_frames]) at the requested length."""
+    import pyworld as pw
+
+    f0_min, f0_max = 50.0, 1100.0
+    frame_period = 1000.0 * 160.0 / sr   # 160 samples per frame at sr
+
+    f0, t = pw.dio(wav_np.astype(np.float64), sr,
+                   f0_floor=f0_min, f0_ceil=f0_max,
+                   frame_period=frame_period)
+    f0 = pw.stonemask(wav_np.astype(np.float64), f0, t, sr)
+    f0 *= 2 ** (up_key / 12.0)
+
+    # Quantise into [1..255] for the pitch embedding
+    f0_mel_min = 1127 * np.log(1 + f0_min / 700)
+    f0_mel_max = 1127 * np.log(1 + f0_max / 700)
+    f0_mel = 1127 * np.log(1 + f0 / 700)
+    f0_mel[f0_mel > 0] = (f0_mel[f0_mel > 0] - f0_mel_min) * 254 / (
+        f0_mel_max - f0_mel_min) + 1
+    f0_mel = np.clip(f0_mel, 1, 255)
+    f0_coarse = np.rint(f0_mel).astype(np.int64)
+    f0_bak    = f0.astype(np.float32)
+
+    # Trim/pad to n_frames
+    def fit(a, n, pad_val=0):
+        if len(a) >= n: return a[:n]
+        return np.pad(a, (0, n - len(a)), constant_values=pad_val)
+
+    return fit(f0_coarse, n_frames), fit(f0_bak, n_frames, 0.0)
+
+
+# ── VITS synthesizer ──────────────────────────────────────────────────────────
+
+def load_synthesizer(pth_path, device):
+    # Import model architecture without triggering rvc_python/__init__.py
+    # (which imports rvc_python.infer → fairseq, broken on Python 3.11)
+    import importlib.util, types
+
+    def _load_mod(rel_path, name):
+        full = os.path.join(VENV_SITE, "rvc_python", rel_path)
+        spec = importlib.util.spec_from_file_location(name, full)
+        mod  = importlib.util.module_from_spec(spec)
+        sys.modules[name] = mod
+        spec.loader.exec_module(mod)
+        return mod
+
+    # Load dependency chain without touching fairseq
+    if "rvc_python.lib.infer_pack.commons" not in sys.modules:
+        _load_mod("lib/infer_pack/commons.py",   "rvc_python.lib.infer_pack.commons")
+    if "rvc_python.lib.infer_pack.transforms" not in sys.modules:
+        _load_mod("lib/infer_pack/transforms.py","rvc_python.lib.infer_pack.transforms")
+    if "rvc_python.lib.infer_pack.attentions" not in sys.modules:
+        _load_mod("lib/infer_pack/attentions.py","rvc_python.lib.infer_pack.attentions")
+    if "rvc_python.lib.infer_pack.modules" not in sys.modules:
+        _load_mod("lib/infer_pack/modules.py",   "rvc_python.lib.infer_pack.modules")
+    if "rvc_python.lib.infer_pack.models_onnx" not in sys.modules:
+        _load_mod("lib/infer_pack/models_onnx.py","rvc_python.lib.infer_pack.models_onnx")
+
+    SynthesizerTrnMsNSFsidM = sys.modules["rvc_python.lib.infer_pack.models_onnx"].SynthesizerTrnMsNSFsidM
+
+    ckpt    = torch.load(pth_path, map_location="cpu", weights_only=False)
+    cfg     = ckpt["config"]
+    weights = ckpt["weight"]
+    sr      = int(ckpt.get("sr", cfg[-1]))
+    use_f0  = bool(ckpt.get("f0", 1))
+
+    # Config layout (RVC V2, 18 elements):
+    # [spec_ch, seg_sz, inter_ch, hidden_ch, filter_ch, n_heads, n_layers,
+    #  kernel_sz, p_dropout, resblock, rb_kernels, rb_dilations,
+    #  up_rates, up_init_ch, up_kernels, spk_embed_dim, gin_channels, sr]
+    (spec_channels, segment_size, inter_channels, hidden_channels,
+     filter_channels, n_heads, n_layers, kernel_size, p_dropout,
+     resblock, resblock_kernel_sizes, resblock_dilation_sizes,
+     upsample_rates, upsample_initial_channel, upsample_kernel_sizes,
+     spk_embed_dim_cfg, gin_channels, _sr) = cfg[:18]
+
+    n_speakers = weights.get("emb_g.weight", torch.zeros(spk_embed_dim_cfg, 1)).shape[0]
+
+    version = ckpt.get("version", "v2")
+    net = SynthesizerTrnMsNSFsidM(
+        spec_channels, segment_size, inter_channels, hidden_channels,
+        filter_channels, n_heads, n_layers, kernel_size, p_dropout,
+        resblock, resblock_kernel_sizes, resblock_dilation_sizes,
+        upsample_rates, upsample_initial_channel, upsample_kernel_sizes,
+        spk_embed_dim=n_speakers, gin_channels=gin_channels,
+        sr=sr, version=version, is_half=False,
     )
-    return rc == 0
+    net.load_state_dict(weights, strict=False)
+    return net.to(device).eval(), sr, use_f0
 
 
-def convert_with_rvc(input_wav, model_path, output_wav):
-    from rvc import Config, load_hubert, get_vc, rvc_infer
-    print("PROGRESS 0.20", flush=True)
+# ── Main conversion pipeline ──────────────────────────────────────────────────
 
-    cfg     = Config()
-    hubert  = load_hubert(cfg)
-    print("PROGRESS 0.40", flush=True)
+def convert(input_wav, model_pth, output_wav, f0_up_key=0):
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    cpt, version, net_g, tgt_sr, vc = get_vc(model_path, cfg, hubert)
-    print("PROGRESS 0.60", flush=True)
+    progress(0.05)
 
-    rvc_infer(
-        index_file  = "",
-        index_rate  = 0,
-        input_path  = input_wav,
-        output_path = output_wav,
-        pitch_change= 0,
-        f0_method   = "rmvpe",
-        cpt=cpt, version=version, net_g=net_g, filter_radius=3,
-        tgt_sr=tgt_sr, rms_mix_rate=0.25, protect=0.33,
-        crepe_hop_length=128, vc=vc, hubert_model=hubert,
-    )
-    print("PROGRESS 1.00", flush=True)
+    wav, src_sr = librosa.load(input_wav, sr=None, mono=True)
+    progress(0.10)
 
+    synth, target_sr, use_f0 = load_synthesizer(model_pth, device)
+    progress(0.25)
 
-def fallback_convert(input_wav, output_wav):
-    """Fallback: simple formant shift via sox or ffmpeg if RVC unavailable."""
-    import shutil
-    # Try sox pitch shift as a minimal fallback
-    if shutil.which("sox"):
-        rc = subprocess.call(
-            ["sox", input_wav, output_wav, "pitch", "200"],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-        )
-        if rc == 0:
-            print("PROGRESS 1.00", flush=True)
-            return
-    # ffmpeg rubberband
-    if shutil.which("ffmpeg"):
-        rc = subprocess.call(
-            ["ffmpeg", "-y", "-i", input_wav,
-             "-af", "asetrate=44100*1.2,aresample=44100",
-             output_wav],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-        )
-        if rc == 0:
-            print("PROGRESS 1.00", flush=True)
-            return
-    print("ERROR No voice conversion backend available. Install rvc-python or sox.",
-          file=sys.stderr)
-    sys.exit(1)
+    # 16 kHz mono for HuBERT
+    wav16k = librosa.resample(wav, orig_sr=src_sr, target_sr=16000)
 
+    # Extract HuBERT features → [1, T', 768]
+    feats = extract_features(wav16k.astype(np.float32), device)
+    progress(0.50)
 
-def hf_download_model(repo_id, filename, out_path):
-    """Download a single HuggingFace file directly to out_path."""
-    try:
-        from huggingface_hub import hf_hub_download
-    except ImportError:
-        rc = subprocess.call(
-            [sys.executable, "-m", "pip", "install", "--quiet", "huggingface_hub"],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-        )
-        if rc != 0:
-            print("ERROR could not install huggingface_hub", file=sys.stderr)
-            sys.exit(1)
-        from huggingface_hub import hf_hub_download
+    # RVC doubles the frame rate: repeat each frame to go from 50fps → 100fps
+    feats = feats.repeat_interleave(2, dim=1)   # [1, 2T', 768]
+    T = feats.shape[1]
+    feats_len = torch.tensor([T], dtype=torch.int64, device=device)
 
-    print("PROGRESS 0.05", flush=True)
-    local_dir = os.path.dirname(out_path)
-    os.makedirs(local_dir, exist_ok=True)
+    # F0 at 100fps (hop=160 at target_sr ≈ target_sr/100 samples per frame)
+    if use_f0:
+        wav_tgt = librosa.resample(wav, orig_sr=src_sr, target_sr=target_sr)
+        f0_coarse, f0_bak = extract_f0(wav_tgt, target_sr, T, up_key=f0_up_key)
+        pitch = torch.from_numpy(f0_coarse).unsqueeze(0).to(device)
+        nsff0 = torch.from_numpy(f0_bak).unsqueeze(0).to(device)
+    else:
+        pitch = torch.zeros(1, T, dtype=torch.int64, device=device)
+        nsff0 = torch.zeros(1, T, device=device)
 
-    try:
-        cached = hf_hub_download(
-            repo_id=repo_id,
-            filename=filename,
-            local_dir=local_dir,
-            local_dir_use_symlinks=False,
-        )
-        # hf_hub_download may put it at local_dir/filename; ensure it's at out_path
-        expected = os.path.join(local_dir, filename)
-        if os.path.isfile(expected) and expected != out_path:
-            shutil.move(expected, out_path)
-        elif os.path.isfile(cached) and cached != out_path:
-            shutil.move(cached, out_path)
-    except Exception as e:
-        print(f"ERROR {e}", file=sys.stderr)
-        sys.exit(1)
+    progress(0.65)
 
-    print("PROGRESS 1.00", flush=True)
+    sid = torch.zeros(1, dtype=torch.int64, device=device)
+    rnd = torch.randn(1, 192, T, device=device)
+
+    with torch.no_grad():
+        audio_out = synth.forward(feats, feats_len, pitch, nsff0, sid, rnd)
+
+    progress(0.90)
+
+    audio_np = audio_out.squeeze().cpu().float().numpy()
+    if target_sr != 44100:
+        audio_np = librosa.resample(audio_np, orig_sr=target_sr, target_sr=44100)
+
+    sf.write(output_wav, audio_np, 44100)
+    progress(1.00)
 
 
 def main():
-    # Download-only mode: --download <repo_id> <filename> <out_path>
-    if len(sys.argv) >= 2 and sys.argv[1] == "--download":
-        if len(sys.argv) < 5:
-            print("Usage: voice_convert.py --download <hf_repo> <filename> <out_path>",
-                  file=sys.stderr)
-            sys.exit(1)
-        hf_download_model(sys.argv[2], sys.argv[3], sys.argv[4])
-        return
-
     if len(sys.argv) < 4:
-        print("Usage: voice_convert.py <input.wav> <model> <output.wav>", file=sys.stderr)
+        print("Usage: voice_convert.py <input.wav> <model.pth> <output.wav>",
+              file=sys.stderr)
         sys.exit(1)
 
-    input_wav  = sys.argv[1]
-    model      = sys.argv[2]
-    output_wav = sys.argv[3]
-
-    print("PROGRESS 0.02", flush=True)
-
-    if not os.path.exists(input_wav):
-        print(f"ERROR input not found: {input_wav}", file=sys.stderr)
+    try:
+        convert(sys.argv[1], sys.argv[2], sys.argv[3])
+    except Exception as e:
+        import traceback
+        error(str(e))
+        traceback.print_exc(file=sys.stderr)
         sys.exit(1)
-
-    # Try RVC
-    if ensure_rvc():
-        if model.startswith("rvc:"):
-            # Auto-download from HuggingFace into our cache dir
-            parts   = model[4:].split("/", 2)  # repo_owner/repo_name/filename.pth
-            if len(parts) < 3:
-                print("ERROR rvc: format must be rvc:<owner>/<repo>/<filename>",
-                      file=sys.stderr)
-                sys.exit(1)
-            repo_id  = parts[0] + "/" + parts[1]
-            filename = parts[2]
-            cache    = os.path.join(os.path.expanduser("~"), ".cache",
-                                    "pop-maker-studio", "rvc")
-            out_path = os.path.join(cache, filename)
-            hf_download_model(repo_id, filename, out_path)
-            model = out_path
-
-        if not os.path.isfile(model):
-            print(f"ERROR model not found: {model}", file=sys.stderr)
-            fallback_convert(input_wav, output_wav)
-            return
-
-        convert_with_rvc(input_wav, model, output_wav)
-    else:
-        print("WARNING rvc-python not available — using fallback", file=sys.stderr)
-        fallback_convert(input_wav, output_wav)
 
 
 if __name__ == "__main__":
