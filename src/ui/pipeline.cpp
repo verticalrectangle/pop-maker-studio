@@ -700,9 +700,7 @@ void kick_pipeline(AppState& state, const std::string& path, PipelineMode mode) 
         }
     }
 
-    extern std::string g_pipeline_script;
-    transcribe_start(path, state.python_path, g_pipeline_script,
-                     state.pipeline, state.words_json_path, state.vocals_path, mode);
+    transcribe_start(path, state.pipeline, state.words_json_path, state.vocals_path, mode);
 }
 
 // ── Pipeline inline strip ─────────────────────────────────────────────────────

@@ -170,22 +170,6 @@ add_custom_command(
 add_custom_target(embed_prefetch DEPENDS ${CMAKE_BINARY_DIR}/ml_prefetch_embedded.h)
 add_dependencies(pop-maker-studio embed_prefetch)
 
-# Embed ml_setup.py as a compiled byte array
-add_custom_command(
-    OUTPUT ${CMAKE_BINARY_DIR}/ml_setup_embedded.h
-    COMMAND ${CMAKE_COMMAND}
-        -DINPUT=${CMAKE_SOURCE_DIR}/ml_setup.py
-        -DVAR=ml_setup_py
-        -DOUTPUT=${CMAKE_BINARY_DIR}/ml_setup_embedded.h
-        -P ${CMAKE_SOURCE_DIR}/cmake/EmbedFile.cmake
-    DEPENDS ${CMAKE_SOURCE_DIR}/ml_setup.py
-    COMMENT "Embedding ml_setup.py"
-)
-add_custom_target(embed_setup DEPENDS ${CMAKE_BINARY_DIR}/ml_setup_embedded.h)
-add_dependencies(pop-maker-studio embed_setup)
-
-
-
 # Embed voice_convert.py
 add_custom_command(
     OUTPUT ${CMAKE_BINARY_DIR}/voice_convert_embedded.h
@@ -199,105 +183,5 @@ add_custom_command(
 )
 add_custom_target(embed_voice_convert DEPENDS ${CMAKE_BINARY_DIR}/voice_convert_embedded.h)
 add_dependencies(pop-maker-studio embed_voice_convert)
-
-# ── Embed Python 3.11 standalone runtime (multiplatform) ─────────────────────
-set(PYTHON_STANDALONE_VERSION "3.11.15")
-set(PYTHON_STANDALONE_DATE    "20260414")
-
-# Resolve platform + arch suffix for python-build-standalone
-if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-    if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64")
-        set(_PY_PLATFORM "aarch64-unknown-linux-gnu")
-    else()
-        set(_PY_PLATFORM "x86_64-unknown-linux-gnu")
-    endif()
-    set(_PY_EXT "tar.gz")
-elseif(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
-    if(CMAKE_SYSTEM_PROCESSOR MATCHES "arm64|aarch64")
-        set(_PY_PLATFORM "aarch64-apple-darwin")
-    else()
-        set(_PY_PLATFORM "x86_64-apple-darwin")
-    endif()
-    set(_PY_EXT "tar.gz")
-elseif(CMAKE_SYSTEM_NAME STREQUAL "Windows")
-    set(_PY_PLATFORM "x86_64-pc-windows-msvc-shared")
-    set(_PY_EXT "zip")
-else()
-    message(FATAL_ERROR "Unsupported platform: ${CMAKE_SYSTEM_NAME}")
-endif()
-
-set(PYTHON_STANDALONE_URL
-    "https://github.com/indygreg/python-build-standalone/releases/download/${PYTHON_STANDALONE_DATE}/cpython-${PYTHON_STANDALONE_VERSION}+${PYTHON_STANDALONE_DATE}-${_PY_PLATFORM}-install_only_stripped.${_PY_EXT}")
-set(PYTHON_STANDALONE_TARBALL "${CMAKE_BINARY_DIR}/python311.${_PY_EXT}")
-
-if(NOT EXISTS "${PYTHON_STANDALONE_TARBALL}")
-    message(STATUS "Downloading Python ${PYTHON_STANDALONE_VERSION} (${_PY_PLATFORM}, ~31 MB)…")
-    file(DOWNLOAD "${PYTHON_STANDALONE_URL}" "${PYTHON_STANDALONE_TARBALL}"
-         SHOW_PROGRESS STATUS _dl_status)
-    list(GET _dl_status 0 _dl_code)
-    if(NOT _dl_code EQUAL 0)
-        message(FATAL_ERROR "Failed to download Python standalone: ${_dl_status}")
-    endif()
-endif()
-
-set(PYTHON_BLOB_OBJ "${CMAKE_BINARY_DIR}/python311_blob.o")
-
-if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-    # Use objcopy to embed directly into an ELF object — fast, no C parsing.
-    if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64")
-        set(_OBJCOPY_ARCH "aarch64")
-        set(_OBJCOPY_OUT  "elf64-littleaarch64")
-    else()
-        set(_OBJCOPY_ARCH "i386:x86-64")
-        set(_OBJCOPY_OUT  "elf64-x86-64")
-    endif()
-    add_custom_command(
-        OUTPUT  "${PYTHON_BLOB_OBJ}"
-        COMMAND objcopy
-                --input  binary
-                --output ${_OBJCOPY_OUT}
-                --binary-architecture ${_OBJCOPY_ARCH}
-                "python311.${_PY_EXT}"
-                "${PYTHON_BLOB_OBJ}"
-        WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
-        DEPENDS "${PYTHON_STANDALONE_TARBALL}"
-        COMMENT "Embedding Python 3.11 tarball (objcopy, Linux)"
-    )
-elseif(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
-    # ld -r -sectcreate embeds a file as a Mach-O section.
-    # Access via getsectbyname("__DATA","__python_tar") at runtime.
-    add_custom_command(
-        OUTPUT  "${PYTHON_BLOB_OBJ}"
-        COMMAND ld -r -sectcreate __DATA __python_tar
-                    "python311.${_PY_EXT}"
-                    -o "${PYTHON_BLOB_OBJ}"
-        WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
-        DEPENDS "${PYTHON_STANDALONE_TARBALL}"
-        COMMENT "Embedding Python 3.11 tarball (ld sectcreate, macOS)"
-    )
-else()
-    # Windows: fall back to the portable CMake C-array embedder.
-    set(PYTHON_BLOB_OBJ "")   # no .o; use a generated header instead
-    set(PYTHON_BLOB_H "${CMAKE_BINARY_DIR}/python311_embedded.h")
-    add_custom_command(
-        OUTPUT  "${PYTHON_BLOB_H}"
-        COMMAND ${CMAKE_COMMAND}
-                -DINPUT="${PYTHON_STANDALONE_TARBALL}"
-                -DVAR=python311_zip
-                -DOUTPUT="${PYTHON_BLOB_H}"
-                -P "${CMAKE_SOURCE_DIR}/cmake/EmbedFile.cmake"
-        DEPENDS "${PYTHON_STANDALONE_TARBALL}"
-        COMMENT "Embedding Python 3.11 zip (C array, Windows)"
-    )
-    add_custom_target(embed_python_win DEPENDS "${PYTHON_BLOB_H}")
-    add_dependencies(pop-maker-studio embed_python_win)
-    target_compile_definitions(pop-maker-studio PRIVATE PYTHON_EMBED_CARRAY=1)
-endif()
-
-if(NOT CMAKE_SYSTEM_NAME STREQUAL "Windows")
-    add_custom_target(embed_python DEPENDS "${PYTHON_BLOB_OBJ}")
-    add_dependencies(pop-maker-studio embed_python)
-    target_link_libraries(pop-maker-studio PRIVATE "${PYTHON_BLOB_OBJ}")
-endif()
 
 install(TARGETS pop-maker-studio DESTINATION bin)

@@ -301,8 +301,6 @@ void ui_screen_upload(AppState& state) {
 
         transcribe_start(
             state.audio_path,
-            state.python_path,
-            g_pipeline_script,
             state.pipeline,
             state.words_json_path,
             state.vocals_path

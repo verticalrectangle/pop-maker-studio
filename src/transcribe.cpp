@@ -1,4 +1,5 @@
 #include "transcribe.h"
+#include "globals.h"
 #include <thread>
 #include <atomic>
 #include <cstdio>
@@ -11,6 +12,16 @@ namespace fs = std::filesystem;
 static std::thread       g_thread;
 static std::atomic<bool> g_running{false};
 static std::atomic<bool> g_cancel{false};
+
+static std::string find_pipeline_python() {
+    static const char* alts[] = {
+        "/home/alexis/dev/song2subs/venv/bin/python3",
+        nullptr
+    };
+    for (const char** a = alts; *a; a++)
+        if (fs::exists(*a)) return *a;
+    return "python3";
+}
 
 static void parse_line(const std::string& line, PipelineStatus& status) {
     if (line.find("[MODEL]") != std::string::npos) {
@@ -41,8 +52,6 @@ static void parse_line(const std::string& line, PipelineStatus& status) {
 
 void transcribe_start(
     const std::string& audio_path,
-    const std::string& python_path,
-    const std::string& pipeline_script,
     PipelineStatus&    status,
     std::string&       out_words_json,
     std::string&       out_vocals_wav,
@@ -67,10 +76,12 @@ void transcribe_start(
                                (mode == PipelineMode::TranscribeOnly)  ? "transcribe" :
                                                                           "both";
 
+        std::string py = find_pipeline_python();
+
         std::ostringstream cmd;
-        cmd << "\"" << python_path    << "\" "
-            << "\"" << pipeline_script << "\" "
-            << "\"" << audio_path      << "\" "
+        cmd << "\"" << py                   << "\" "
+            << "\"" << g_pipeline_script    << "\" "
+            << "\"" << audio_path           << "\" "
             << "--outdir \"" << outdir.string() << "\" "
             << "--mode " << mode_str
             << " 2>&1";

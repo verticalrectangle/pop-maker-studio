@@ -471,9 +471,7 @@ struct AppState {
     // first-run multi-stage setup
     enum class SetupStage {
         Idle,
-        PythonExtract,  // extracting embedded Python 3.11 tarball
-        PipInstall,     // pip install whisperx demucs
-        ModelDL,        // downloading model weights
+        ModelDL,  // downloading model weights
         Done,
         Error
     };

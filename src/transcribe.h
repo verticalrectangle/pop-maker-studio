@@ -13,8 +13,6 @@ enum class PipelineMode {
 // out_words_json / out_vocals_wav are set before the thread reads them.
 void transcribe_start(
     const std::string& audio_path,
-    const std::string& python_path,
-    const std::string& pipeline_script,
     PipelineStatus&    status,
     std::string&       out_words_json,
     std::string&       out_vocals_wav,
