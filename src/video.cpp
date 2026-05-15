@@ -1027,8 +1027,13 @@ bool video_open_export(const std::string& path) {
 
     // Detect container rotation (phone portrait videos store raw as landscape + rotate tag).
     g_ex.rotation = 0;
+#if LIBAVUTIL_VERSION_MAJOR >= 57
     for (int i = 0; i < st->codecpar->nb_coded_side_data; ++i) {
         const AVPacketSideData& sd = st->codecpar->coded_side_data[i];
+#else
+    for (int i = 0; i < st->nb_side_data; ++i) {
+        const AVPacketSideData& sd = st->side_data[i];
+#endif
         if (sd.type == AV_PKT_DATA_DISPLAYMATRIX && sd.size >= 9 * (int)sizeof(int32_t)) {
             double angle = -av_display_rotation_get((const int32_t*)sd.data);
             int rot = ((int)round(angle) % 360 + 360) % 360;
