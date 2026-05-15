@@ -32,6 +32,8 @@ set(IMGUI_SOURCES
 # ── Sources ───────────────────────────────────────────────────────────────────
 set(SOURCES
     src/paths.cpp
+    src/runtime_fx.cpp
+    src/ipc_server.cpp
     src/main.cpp
     src/app.cpp
     src/audio.cpp
@@ -46,6 +48,7 @@ set(SOURCES
     src/beat_detect.cpp
     src/blender_export.cpp
     src/bg_remove.cpp
+    src/body_fx.cpp
     src/noise_reduce.cpp
     src/audio_fx.cpp
     src/hf_api.cpp

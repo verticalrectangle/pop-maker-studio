@@ -1,6 +1,7 @@
 #pragma once
 #include "presets.h"
 #include "audio_fx.h"
+#include "body_fx.h"
 #include <string>
 #include <vector>
 #include <chrono>
@@ -81,7 +82,7 @@ enum class OutputFormat { Vertical, Horizontal, Square };
 // ── Track / clip data model ───────────────────────────────────────────────────
 
 // Each clip carries its own type so any track can hold mixed content.
-enum class ClipType { Text, Lyrics, Subtitle, Video, Audio, Effect, Background };
+enum class ClipType { Text, Lyrics, Subtitle, Video, Audio, Effect, Background, BodyFX };
 
 struct WordEntry {
     std::string text;
@@ -224,6 +225,16 @@ struct Clip {
     float bg_c1[4]    = {0.4f, 0.0f, 0.8f, 1.f};
     float bg_c2[4]    = {0.0f, 0.8f, 1.0f, 1.f};
     float bg_c3[4]    = {1.0f, 0.1f, 0.5f, 1.f};
+
+    // Runtime FX (hot-reload custom effect from effects directory)
+    std::string          runtime_fx_id;              // id of active runtime effect ("" = none)
+    std::vector<float>   runtime_fx_params;           // one float per param, in registry order
+    float                runtime_fx_amount = 1.f;
+
+    // BodyFX brick (ClipType::BodyFX)
+    BodyFXType   body_fx_type        = BodyFXType::NeonOutline;
+    float        body_fx_params[4]   = {0.5f, 0.5f, 0.5f, 0.5f};
+    float        body_fx_amount      = 1.f;
 
     // Beat sync fields (Audio/Video clips: analyzed beats; FX clips: source reference)
     std::vector<float> beats;           // beat timestamps (Audio/Video clips only)

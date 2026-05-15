@@ -2,6 +2,9 @@
 #include "studio_shared.h"
 #include "panel_fx.h"
 #include "app.h"
+#include "body_fx.h"
+#include "bg_remove.h"
+#include "runtime_fx.h"
 #include "video.h"
 #include "history.h"
 #include "filepicker.h"
@@ -284,6 +287,177 @@ void panel_adjustment_library(AppState& state, float w) {
     }
 
     ImGui::Dummy({0.f, 16.f});
+
+    // ── Custom (runtime FX) section ───────────────────────────────────────────
+    {
+        const auto& defs = runtime_fx_list();
+        if (!defs.empty()) {
+            ui_separator();
+            ImGui::Dummy({0.f, 4.f});
+            ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+            ImGui::TextUnformatted("Custom");
+            ImGui::PopStyleColor();
+            ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+            ImGui::TextWrapped("Hot-reload effects — edit the JSON in effects/ and changes appear live.");
+            ImGui::PopStyleColor();
+            ImGui::Dummy({0.f, 4.f});
+
+            float card_w = w - 8.f;
+            float card_h = 64.f;
+            bool has_sel = (state.selected_track >= 0 && state.selected_track < (int)state.tracks.size() &&
+                            state.selected_clip  >= 0 && state.selected_clip  < (int)state.tracks[state.selected_track].clips.size());
+
+            for (int i = 0; i < (int)defs.size(); ++i) {
+                const RuntimeFXDef& def = defs[i];
+                ImGui::PushID(20000 + i);
+                ImVec2 cp  = ImGui::GetCursorScreenPos();
+                ImDrawList* dl = ImGui::GetWindowDrawList();
+
+                bool failed = (def.program == 0);
+                bool hov    = !failed && ImGui::IsMouseHoveringRect(cp, {cp.x+card_w, cp.y+card_h});
+
+                ImU32 bg  = hov ? IM_COL32(22,30,50,255) : IM_COL32(14,18,30,255);
+                ImU32 bdr = failed ? IM_COL32(180,60,60,180) :
+                            (hov   ? IM_COL32(80,160,255,220)  : IM_COL32(50,80,140,180));
+
+                dl->AddRectFilled(cp, {cp.x+card_w, cp.y+card_h}, bg, 5.f);
+                dl->AddRectFilled(cp, {cp.x+3.f, cp.y+card_h}, bdr, 2.f);
+                dl->AddRect(cp, {cp.x+card_w, cp.y+card_h}, bdr, 5.f, 0, hov ? 2.f : 1.f);
+
+                ImU32 name_col = failed ? IM_COL32(200,80,80,255) : IM_COL32(255,255,255,240);
+                ImGui::PushFont(g_font_bold);
+                dl->AddText(ImGui::GetFont(), 13.f, {cp.x+12.f, cp.y+10.f}, name_col, def.name.c_str());
+                ImGui::PopFont();
+
+                std::string meta = def.category;
+                if (!def.description.empty()) meta += "  ·  " + def.description;
+                if (failed) meta = "compile error — hover for details";
+                dl->AddText({cp.x+12.f, cp.y+27.f}, IM_COL32(140,150,170,200), meta.c_str());
+
+                if ((int)def.params.size() > 0) {
+                    char ps[32]; snprintf(ps, sizeof(ps), "%d param%s", (int)def.params.size(), def.params.size()==1?"":"s");
+                    dl->AddText({cp.x+12.f, cp.y+44.f}, IM_COL32(100,110,130,200), ps);
+                }
+
+                ImGui::SetCursorScreenPos(cp);
+                ImGui::InvisibleButton("##rfxcard", {card_w, card_h});
+
+                if (failed && ImGui::IsItemHovered()) {
+                    ImGui::BeginTooltip();
+                    ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(255,120,120,255));
+                    ImGui::TextUnformatted(def.compile_error.c_str());
+                    ImGui::PopStyleColor();
+                    ImGui::EndTooltip();
+                }
+
+                if (!failed && ImGui::IsItemClicked()) {
+                    if (has_sel) {
+                        Clip& cl = state.tracks[state.selected_track].clips[state.selected_clip];
+                        cl.runtime_fx_id = def.id;
+                        // Initialize params to defaults
+                        cl.runtime_fx_params.resize(def.params.size());
+                        for (int pi = 0; pi < (int)def.params.size(); ++pi)
+                            cl.runtime_fx_params[pi] = def.params[pi].default_val;
+                        cl.runtime_fx_amount = 1.f;
+                        history_push(state, "Apply custom FX: " + def.name);
+                    } else {
+                        ImGui::SetTooltip("Select a clip first to apply a custom effect.");
+                    }
+                }
+
+                ImGui::Dummy({0.f, 4.f});
+                ImGui::PopID();
+            }
+        }
+    }
+
+    ImGui::Dummy({0.f, 16.f});
+
+    // ── Body FX section ───────────────────────────────────────────────────────────
+    {
+        ui_separator();
+        ImGui::Dummy({0.f, 4.f});
+        ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+        ImGui::TextUnformatted("Body FX");
+        ImGui::PopStyleColor();
+        ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+        ImGui::TextWrapped("Glass bricks — applied to person and background independently using AI masks.");
+        ImGui::PopStyleColor();
+        ImGui::Dummy({0.f, 4.f});
+
+        // Find selected video clip
+        bool has_vid = (state.selected_track >= 0 &&
+                        state.selected_track < (int)state.tracks.size() &&
+                        state.selected_clip  >= 0 &&
+                        state.selected_clip  < (int)state.tracks[state.selected_track].clips.size() &&
+                        state.tracks[state.selected_track].clips[state.selected_clip].clip_type == ClipType::Video);
+
+        float card_w = w - 8.f;
+        float card_h = 68.f;
+        int n = body_fx_info_count();
+        const BodyFXInfo* infos = body_fx_info_list();
+
+        for (int i = 0; i < n; ++i) {
+            const BodyFXInfo& info = infos[i];
+            ImGui::PushID(40000 + i);
+            ImVec2 cp = ImGui::GetCursorScreenPos();
+            ImDrawList* dl = ImGui::GetWindowDrawList();
+
+            bool hov = has_vid && ImGui::IsMouseHoveringRect(cp, {cp.x+card_w, cp.y+card_h});
+            ImU32 bg  = hov ? IM_COL32(20,28,46,255) : IM_COL32(12,16,28,255);
+            dl->AddRectFilled(cp, {cp.x+card_w, cp.y+card_h}, bg, 5.f);
+            dl->AddRectFilled(cp, {cp.x+3.f, cp.y+card_h}, (ImU32)info.accent, 2.f);
+            dl->AddRect(cp, {cp.x+card_w, cp.y+card_h},
+                        hov ? (ImU32)info.accent : IM_COL32(40,50,80,200), 5.f, 0, hov ? 2.f : 1.f);
+
+            ImGui::PushFont(g_font_bold);
+            dl->AddText(ImGui::GetFont(), 13.f, {cp.x+12.f, cp.y+8.f},
+                        has_vid ? IM_COL32(255,255,255,240) : IM_COL32(120,120,140,200), info.name);
+            ImGui::PopFont();
+            dl->AddText({cp.x+12.f, cp.y+25.f}, IM_COL32(130,140,160,200), info.tagline);
+            dl->AddText({cp.x+12.f, cp.y+44.f}, IM_COL32(80,100,130,180), info.category);
+
+            ImGui::SetCursorScreenPos(cp);
+            ImGui::InvisibleButton("##bfxcard", {card_w, card_h});
+
+            if (!has_vid && ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Select a video clip first.");
+            }
+
+            if (has_vid && ImGui::IsItemClicked()) {
+                int ti = state.selected_track;
+                int ci = state.selected_clip;
+                Clip& vid_cl = state.tracks[ti].clips[ci];
+
+                // Create BodyFX brick on same track, same time range
+                Clip bfx;
+                bfx.clip_type    = ClipType::BodyFX;
+                bfx.start        = vid_cl.start;
+                bfx.end          = vid_cl.end;
+                bfx.source_id    = vid_cl.source_id;
+                bfx.body_fx_type = info.type;
+                for (int pi = 0; pi < 4; ++pi)
+                    bfx.body_fx_params[pi] = (pi < info.n_params) ? info.params[pi].default_val : 0.5f;
+                bfx.body_fx_amount = 1.f;
+
+                state.tracks[ti].clips.push_back(bfx);
+
+                // Auto-trigger mask generation if not already done
+                if (vid_cl.bg_remove_mask_dir.empty() ||
+                    vid_cl.bg_remove_status != BgRemoveStatus::Ready) {
+                    bg_remove_start(state, ti, ci);
+                }
+
+                state.selected_clip = (int)state.tracks[ti].clips.size() - 1;
+                history_push(state, std::string("Add Body FX: ") + info.name);
+            }
+
+            ImGui::Dummy({0.f, 4.f});
+            ImGui::PopID();
+        }
+    }
+
+    ImGui::Dummy({0.f, 16.f});
 }
 
 // ── Right panel: Effect tab ───────────────────────────────────────────────────
@@ -445,6 +619,52 @@ void panel_adjustment(AppState& state, float w) {
         }
         ImGui::SameLine();
         if (ui_btn("X", false, true)) s_naming = false;
+    }
+
+    // ── Runtime FX controls ───────────────────────────────────────────────────
+    if (!clip.runtime_fx_id.empty()) {
+        ImGui::Dummy({0.f, 4.f}); ui_separator(); ImGui::Dummy({0.f, 4.f});
+        const RuntimeFXDef* rdef = runtime_fx_find(clip.runtime_fx_id);
+        if (rdef) {
+            ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+            ImGui::Text("Custom FX: %s", rdef->name.c_str());
+            ImGui::PopStyleColor();
+            ImGui::Dummy({0.f, 4.f});
+
+            clip.runtime_fx_params.resize(rdef->params.size());
+            float sw = w - 72.f;
+
+            for (int pi = 0; pi < (int)rdef->params.size(); ++pi) {
+                const RuntimeFXParam& p = rdef->params[pi];
+                ImGui::PushID(30000 + pi);
+                ImGui::SetNextItemWidth(sw);
+                ImGui::SliderFloat(p.label.c_str(), &clip.runtime_fx_params[pi], p.min_val, p.max_val, "%.3f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Runtime FX: " + p.label);
+                ImGui::SameLine(0.f, 6.f);
+                char rl[24]; snprintf(rl, sizeof(rl), "R##rfx%d", pi);
+                if (ui_btn(rl, false, true)) {
+                    clip.runtime_fx_params[pi] = p.default_val;
+                    history_push(state, "Runtime FX: reset " + p.label);
+                }
+                ImGui::PopID();
+            }
+
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("Amount##rfx", &clip.runtime_fx_amount, 0.f, 1.f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Runtime FX: amount");
+
+            ImGui::Dummy({0.f, 4.f});
+            if (ui_btn("Remove custom FX", false, true)) {
+                clip.runtime_fx_id.clear();
+                clip.runtime_fx_params.clear();
+                clip.runtime_fx_amount = 1.f;
+                history_push(state, "Remove custom FX");
+            }
+        } else {
+            ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(200,80,80,255));
+            ImGui::Text("Custom FX '%s' not found", clip.runtime_fx_id.c_str());
+            ImGui::PopStyleColor();
+        }
     }
 
     ImGui::Dummy({0.f, 4.f});

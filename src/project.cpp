@@ -1,4 +1,5 @@
 #include "project.h"
+#include "body_fx.h"
 #include <fstream>
 #include <cstdint>
 #include <filesystem>
@@ -6,7 +7,7 @@
 // ── Binary serialization helpers ──────────────────────────────────────────────
 
 static const uint32_t MAGIC   = 0x534D5001u; // "PMS\x01"
-static const uint32_t VERSION = 25u;
+static const uint32_t VERSION = 27u;
 
 struct Writer {
     std::ofstream f;
@@ -160,6 +161,14 @@ static void write_clip(Writer& w, const Clip& c) {
     uint32_t nw = (uint32_t)c.words.size();
     w.pod(nw);
     for (auto& we : c.words) write_wordentry(w, we);
+    // v26: runtime FX
+    w.str(c.runtime_fx_id);
+    w.vecf(c.runtime_fx_params);
+    w.pod(c.runtime_fx_amount);
+    // v27: body FX
+    w.pod((int)c.body_fx_type);
+    for (int i=0;i<4;++i) w.pod(c.body_fx_params[i]);
+    w.pod(c.body_fx_amount);
 }
 
 static Clip read_clip(Reader& r, uint32_t version) {
@@ -266,6 +275,18 @@ static Clip read_clip(Reader& r, uint32_t version) {
     uint32_t nw = r.pod<uint32_t>();
     for (uint32_t i = 0; i < nw && r.ok; ++i)
         c.words.push_back(read_wordentry(r));
+    // v26: runtime FX
+    if (version >= 26u) {
+        c.runtime_fx_id     = r.str();
+        c.runtime_fx_params = r.vecf();
+        c.runtime_fx_amount = r.pod<float>();
+    }
+    // v27: body FX
+    if (version >= 27u) {
+        c.body_fx_type = (BodyFXType)r.pod<int>();
+        for (int i=0;i<4;++i) c.body_fx_params[i] = r.pod<float>();
+        c.body_fx_amount = r.pod<float>();
+    }
     return c;
 }
 

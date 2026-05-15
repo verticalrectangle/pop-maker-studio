@@ -5,6 +5,9 @@
 #include "render.h"
 #include "fx_shader.h"
 #include "presets.h"
+#include "runtime_fx.h"
+#include "ipc_server.h"
+#include "globals.h"
 #include "ui/theme.h"
 #include "ui/screens.h"
 #include <imgui.h>
@@ -386,6 +389,9 @@ void app_init(AppState& state) {
     render_init_fonts();
     fx_shader_init();
     state.user_presets = presets_load_user();
+    std::string effects_dir = g_managed_dir + "/effects";
+    runtime_fx_init(effects_dir);
+    ipc_server_start();
 }
 
 void app_frame(AppState& state) {
@@ -430,6 +436,10 @@ void app_frame(AppState& state) {
     // Drive one export frame per app frame (GL calls must be on main thread).
     render_tick_gl(state);
 
+    // Hot-reload custom effects and dispatch IPC messages.
+    runtime_fx_poll(g_managed_dir + "/effects");
+    ipc_server_poll(state);
+
     if (state.splash_timer > 0.f) {
         state.splash_timer -= io.DeltaTime;
         ui_splash(state);
@@ -443,6 +453,8 @@ void app_frame(AppState& state) {
 }
 
 void app_shutdown(AppState& state) {
+    ipc_server_stop();
+    runtime_fx_shutdown();
     audio_shutdown();
     video_close();
     transcribe_cancel();

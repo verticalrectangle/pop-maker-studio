@@ -1,0 +1,492 @@
+#include "ipc_server.h"
+#include "history.h"
+#include "runtime_fx.h"
+#include "ui/pipeline.h"
+#include "json.hpp"
+
+#include <sys/socket.h>
+#include <sys/un.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <poll.h>
+
+#include <cstdio>
+#include <cstring>
+#include <string>
+#include <vector>
+#include <algorithm>
+#include <fstream>
+
+using json = nlohmann::json;
+
+// ── Static state ──────────────────────────────────────────────────────────────
+
+static int  g_srv_fd   = -1;
+static std::string g_sock_path;
+static std::string g_lock_path = "/tmp/pop-maker-studio.lock";
+
+struct Client {
+    int  fd = -1;
+    std::string rbuf;  // accumulates partial reads
+};
+static std::vector<Client> g_clients;
+
+// Batch state: IPC edits are rejected unless inside a batch.
+static bool        g_in_batch    = false;
+static std::string g_batch_label;
+static AppState*   g_batch_state = nullptr;  // state pointer for end_batch
+
+// ── Socket helpers ────────────────────────────────────────────────────────────
+
+static void set_nonblock(int fd) {
+    int fl = fcntl(fd, F_GETFL, 0);
+    if (fl >= 0) fcntl(fd, F_SETFL, fl | O_NONBLOCK);
+}
+
+static void send_json(int fd, const json& j) {
+    std::string s = j.dump() + "\n";
+    (void)write(fd, s.c_str(), s.size());
+}
+
+// id will be added by the caller at dispatch time
+static void send_ok_id(int fd, const std::string& id, const json& result = json::object()) {
+    json r; r["id"] = id; r["result"] = result;
+    send_json(fd, r);
+}
+
+static void send_err_id(int fd, const std::string& id, const std::string& msg) {
+    json r; r["id"] = id; r["error"] = msg;
+    send_json(fd, r);
+}
+
+// ── AppState → JSON serialization ─────────────────────────────────────────────
+
+static std::string clip_type_str(ClipType t) {
+    switch (t) {
+        case ClipType::Audio:      return "audio";
+        case ClipType::Video:      return "video";
+        case ClipType::Text:       return "text";
+        case ClipType::Lyrics:     return "lyrics";
+        case ClipType::Subtitle:   return "subtitle";
+        case ClipType::Effect:     return "effect";
+        case ClipType::Background: return "background";
+        case ClipType::BodyFX:     return "body_fx";
+    }
+    return "unknown";
+}
+
+static json clip_to_json(int idx, const Clip& c) {
+    json j;
+    j["index"]    = idx;
+    j["type"]     = clip_type_str(c.clip_type);
+    j["start"]    = c.start;
+    j["end"]      = c.end;
+    j["text"]     = c.text;
+    j["in_point"] = c.in_point;
+    j["duration"] = c.end - c.start;
+    j["volume"]   = c.volume;
+    j["speed"]    = c.speed;
+    j["opacity"]  = c.opacity;
+    j["muted"]    = c.muted;
+    if (!c.runtime_fx_id.empty()) {
+        j["runtime_fx_id"]     = c.runtime_fx_id;
+        j["runtime_fx_amount"] = c.runtime_fx_amount;
+    }
+    return j;
+}
+
+static json state_to_json(const AppState& state) {
+    json j;
+    j["duration"]   = state.duration;
+    j["fps"]        = state.fps;
+    j["bpm"]        = state.beat_bpm;
+    j["audio_path"] = state.audio_path;
+    j["playhead"]   = state.playhead;
+
+    // Beats (truncated to 3 decimal places)
+    json beats_arr = json::array();
+    for (float b : state.beats) {
+        float rounded = (float)((int)(b * 1000 + 0.5f)) / 1000.f;
+        beats_arr.push_back(rounded);
+    }
+    j["beats"] = beats_arr;
+
+    json tracks_arr = json::array();
+    for (int ti = 0; ti < (int)state.tracks.size(); ++ti) {
+        const Track& t = state.tracks[ti];
+        json tj;
+        tj["index"]  = ti;
+        tj["name"]   = t.name;
+        tj["muted"]  = t.muted;
+        tj["locked"] = t.locked;
+        json clips_arr = json::array();
+        for (int ci = 0; ci < (int)t.clips.size(); ++ci)
+            clips_arr.push_back(clip_to_json(ci, t.clips[ci]));
+        tj["clips"] = clips_arr;
+        tracks_arr.push_back(tj);
+    }
+    j["tracks"] = tracks_arr;
+    return j;
+}
+
+// ── ClipType parsing ──────────────────────────────────────────────────────────
+
+static ClipType parse_clip_type(const std::string& s) {
+    if (s == "audio")      return ClipType::Audio;
+    if (s == "video")      return ClipType::Video;
+    if (s == "text")       return ClipType::Text;
+    if (s == "lyrics")     return ClipType::Lyrics;
+    if (s == "subtitle")   return ClipType::Subtitle;
+    if (s == "effect")     return ClipType::Effect;
+    if (s == "background") return ClipType::Background;
+    if (s == "body_fx")   return ClipType::BodyFX;
+    return ClipType::Text;
+}
+
+// ── Bounds checking helpers ───────────────────────────────────────────────────
+
+static bool check_track(const AppState& state, int ti, std::string& err) {
+    if (ti < 0 || ti >= (int)state.tracks.size()) { err = "track index out of range"; return false; }
+    return true;
+}
+static bool check_clip(const AppState& state, int ti, int ci, std::string& err) {
+    if (!check_track(state, ti, err)) return false;
+    if (ci < 0 || ci >= (int)state.tracks[ti].clips.size()) { err = "clip index out of range"; return false; }
+    return true;
+}
+
+// ── Command dispatch ──────────────────────────────────────────────────────────
+
+static json dispatch(AppState& state, const std::string& method, const json& params, std::string& err) {
+    // ── Read-only: no batch required ─────────────────────────────────────────
+    if (method == "get_project") {
+        return state_to_json(state);
+    }
+
+    if (method == "get_beats") {
+        json j;
+        j["bpm"] = state.beat_bpm;
+        json ba = json::array();
+        for (float b : state.beats) ba.push_back(b);
+        j["beats"] = ba;
+        return j;
+    }
+
+    if (method == "seek") {
+        float t = params.value("time", 0.f);
+        state.playhead = t;
+        return json::object();
+    }
+
+    if (method == "play") {
+        if (!state.playing) {
+            state.playing = true;
+            state.play_start_wall = std::chrono::steady_clock::now();
+            state.play_start_pos  = state.playhead;
+        }
+        return json::object();
+    }
+
+    if (method == "pause") {
+        state.playing = false;
+        return json::object();
+    }
+
+    if (method == "validate_glsl") {
+        std::string glsl = params.value("glsl", "");
+        std::vector<RuntimeFXParam> ps;
+        if (params.contains("params") && params["params"].is_array()) {
+            for (auto& p : params["params"]) {
+                RuntimeFXParam fp;
+                fp.name        = p.value("name",    "p");
+                fp.label       = p.value("label",   fp.name);
+                fp.min_val     = p.value("min",     0.f);
+                fp.max_val     = p.value("max",     1.f);
+                fp.default_val = p.value("default", 0.f);
+                ps.push_back(fp);
+            }
+        }
+        std::string compile_err = runtime_fx_validate(glsl, ps);
+        json r;
+        r["ok"] = compile_err.empty();
+        if (!compile_err.empty()) r["error"] = compile_err;
+        return r;
+    }
+
+    // ── Batch control ─────────────────────────────────────────────────────────
+    if (method == "begin_batch") {
+        if (g_in_batch) { err = "already in a batch"; return {}; }
+        g_in_batch    = true;
+        g_batch_label = params.value("label", "MCP edit");
+        g_batch_state = &state;
+        return json::object();
+    }
+
+    if (method == "end_batch") {
+        if (!g_in_batch) { err = "not in a batch"; return {}; }
+        history_push(state, g_batch_label);
+        g_in_batch    = false;
+        g_batch_label.clear();
+        g_batch_state = nullptr;
+        return json::object();
+    }
+
+    // ── Editing: require batch ────────────────────────────────────────────────
+    if (!g_in_batch) {
+        err = "editing calls must be inside a begin_batch / end_batch";
+        return {};
+    }
+
+    if (method == "move_clip") {
+        int ti = params.value("track", -1), ci = params.value("clip", -1);
+        float start = params.value("start", 0.f);
+        if (!check_clip(state, ti, ci, err)) return {};
+        Clip& cl = state.tracks[ti].clips[ci];
+        float dur = cl.end - cl.start;
+        cl.start = start;
+        cl.end   = start + dur;
+        return json::object();
+    }
+
+    if (method == "trim_clip") {
+        int ti = params.value("track", -1), ci = params.value("clip", -1);
+        if (!check_clip(state, ti, ci, err)) return {};
+        Clip& cl = state.tracks[ti].clips[ci];
+        float old_start = cl.start;
+        if (params.contains("start")) {
+            float ns = params["start"].get<float>();
+            float delta = ns - old_start;
+            if (delta > 0.f) cl.in_point += delta;
+            cl.start = ns;
+        }
+        if (params.contains("end")) cl.end = params["end"].get<float>();
+        return json::object();
+    }
+
+    if (method == "split_clip") {
+        int ti = params.value("track", -1), ci = params.value("clip", -1);
+        float t = params.value("time", -1.f);
+        if (!check_clip(state, ti, ci, err)) return {};
+        Clip& cl = state.tracks[ti].clips[ci];
+        if (t <= cl.start || t >= cl.end) { err = "split time outside clip range"; return {}; }
+
+        Clip right = cl;
+        right.in_point = cl.in_point + (t - cl.start);
+        right.start = t;
+
+        cl.end = t;
+        state.tracks[ti].clips.insert(state.tracks[ti].clips.begin() + ci + 1, right);
+        json r;
+        r["left_clip"]  = ci;
+        r["right_clip"] = ci + 1;
+        return r;
+    }
+
+    if (method == "delete_clip") {
+        int ti = params.value("track", -1), ci = params.value("clip", -1);
+        if (!check_clip(state, ti, ci, err)) return {};
+        state.tracks[ti].clips.erase(state.tracks[ti].clips.begin() + ci);
+        if (state.selected_track == ti && state.selected_clip == ci)
+            state.selected_clip = -1;
+        return json::object();
+    }
+
+    if (method == "add_clip") {
+        int ti = params.value("track", -1);
+        if (!check_track(state, ti, err)) return {};
+        if (state.tracks[ti].locked) { err = "track is locked"; return {}; }
+        std::string type_s = params.value("type", "text");
+        float start = params.value("start", 0.f);
+        float end   = params.value("end", start + 2.f);
+        std::string text = params.value("text", "");
+
+        Clip cl;
+        cl.clip_type = parse_clip_type(type_s);
+        cl.start = start;
+        cl.end   = end;
+        cl.text  = text;
+        if (cl.clip_type == ClipType::Video || cl.clip_type == ClipType::Audio)
+            cl.source_id = text;
+        state.tracks[ti].clips.push_back(cl);
+        int new_ci = (int)state.tracks[ti].clips.size() - 1;
+        json r; r["clip"] = new_ci;
+        return r;
+    }
+
+    if (method == "set_clip_prop") {
+        int ti = params.value("track", -1), ci = params.value("clip", -1);
+        std::string prop = params.value("prop", "");
+        if (!check_clip(state, ti, ci, err)) return {};
+        Clip& cl = state.tracks[ti].clips[ci];
+
+        if (prop == "volume")   { cl.volume   = params["value"].get<float>(); }
+        else if (prop == "speed")    { cl.speed    = params["value"].get<float>(); }
+        else if (prop == "opacity")  { cl.opacity  = params["value"].get<float>(); }
+        else if (prop == "muted")    { cl.muted    = params["value"].get<bool>(); }
+        else if (prop == "in_point") { cl.in_point = params["value"].get<float>(); }
+        else if (prop == "fade_in")  { cl.fade_in  = params["value"].get<float>(); }
+        else if (prop == "fade_out") { cl.fade_out = params["value"].get<float>(); }
+        else if (prop == "pos_x")    { cl.pos_x    = params["value"].get<float>(); }
+        else if (prop == "pos_y")    { cl.pos_y    = params["value"].get<float>(); }
+        else if (prop == "scale_x")  { cl.scale_x  = params["value"].get<float>(); }
+        else if (prop == "scale_y")  { cl.scale_y  = params["value"].get<float>(); }
+        else if (prop == "rotation") { cl.rotation = params["value"].get<float>(); }
+        else if (prop == "text")     { cl.text     = params["value"].get<std::string>(); }
+        else { err = "unknown prop: " + prop; return {}; }
+        return json::object();
+    }
+
+    if (method == "add_track") {
+        std::string name = params.value("name", "Track");
+        int pos = params.value("position", 0);
+        if (pos < 0) pos = 0;
+        if (pos > (int)state.tracks.size()) pos = (int)state.tracks.size();
+        Track t;
+        t.name = name;
+        state.tracks.insert(state.tracks.begin() + pos, t);
+        json r; r["track"] = pos;
+        return r;
+    }
+
+    if (method == "delete_track") {
+        int ti = params.value("track", -1);
+        if (!check_track(state, ti, err)) return {};
+        state.tracks.erase(state.tracks.begin() + ti);
+        if (state.selected_track == ti) { state.selected_track = -1; state.selected_clip = -1; }
+        return json::object();
+    }
+
+    if (method == "trigger_pipeline") {
+        std::string mode_s = params.value("mode", "both");
+        PipelineMode mode = PipelineMode::Both;
+        if (mode_s == "transcribe_only") mode = PipelineMode::TranscribeOnly;
+        else if (mode_s == "separate_only") mode = PipelineMode::SeparateOnly;
+        if (state.audio_path.empty()) { err = "no audio file loaded"; return {}; }
+        kick_pipeline(state, state.audio_path, mode);
+        return json::object();
+    }
+
+    err = "unknown method: " + method;
+    return {};
+}
+
+// ── Per-client message processing ─────────────────────────────────────────────
+
+static void process_client(Client& cl, AppState& state) {
+    // Try to read more data
+    char buf[4096];
+    ssize_t n = read(cl.fd, buf, sizeof(buf));
+    if (n == 0 || (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK)) {
+        // Connection closed or error
+        if (g_in_batch && g_batch_state == &state) {
+            // Close open batch: push history and reset
+            history_push(state, g_batch_label + " (incomplete)");
+            g_in_batch    = false;
+            g_batch_label.clear();
+            g_batch_state = nullptr;
+        }
+        close(cl.fd);
+        cl.fd = -1;
+        return;
+    }
+    if (n > 0) cl.rbuf.append(buf, (size_t)n);
+
+    // Process complete lines
+    size_t pos;
+    while ((pos = cl.rbuf.find('\n')) != std::string::npos) {
+        std::string line = cl.rbuf.substr(0, pos);
+        cl.rbuf.erase(0, pos + 1);
+        if (line.empty()) continue;
+
+        std::string req_id;
+        try {
+            json req = json::parse(line);
+            req_id = req.value("id", "");
+            std::string method = req.value("method", "");
+            json params = req.value("params", json::object());
+
+            std::string err;
+            json result = dispatch(state, method, params, err);
+            if (!err.empty()) {
+                send_err_id(cl.fd, req_id, err);
+            } else {
+                send_ok_id(cl.fd, req_id, result);
+            }
+        } catch (const json::exception& e) {
+            json r; r["id"] = req_id; r["error"] = std::string("JSON parse error: ") + e.what();
+            send_json(cl.fd, r);
+        } catch (const std::exception& e) {
+            json r; r["id"] = req_id; r["error"] = std::string("internal error: ") + e.what();
+            send_json(cl.fd, r);
+        }
+    }
+}
+
+// ── Public API ────────────────────────────────────────────────────────────────
+
+void ipc_server_start() {
+    // Build socket path using PID
+    char sock_buf[128];
+    snprintf(sock_buf, sizeof(sock_buf), "/tmp/pop-maker-studio-%d.sock", (int)getpid());
+    g_sock_path = sock_buf;
+
+    // Remove stale socket
+    ::unlink(g_sock_path.c_str());
+
+    g_srv_fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
+    if (g_srv_fd < 0) { perror("[ipc] socket"); return; }
+
+    struct sockaddr_un addr{};
+    addr.sun_family = AF_UNIX;
+    strncpy(addr.sun_path, g_sock_path.c_str(), sizeof(addr.sun_path) - 1);
+
+    if (::bind(g_srv_fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
+        perror("[ipc] bind"); ::close(g_srv_fd); g_srv_fd = -1; return;
+    }
+    if (::listen(g_srv_fd, 8) < 0) {
+        perror("[ipc] listen"); ::close(g_srv_fd); g_srv_fd = -1; return;
+    }
+    set_nonblock(g_srv_fd);
+
+    // Write lock file
+    {
+        std::ofstream lf(g_lock_path);
+        lf << getpid() << " " << g_sock_path << "\n";
+    }
+
+    fprintf(stdout, "[ipc] listening on %s\n", g_sock_path.c_str());
+}
+
+void ipc_server_poll(AppState& state) {
+    if (g_srv_fd < 0) return;
+
+    // Accept new connections
+    for (;;) {
+        int fd = ::accept(g_srv_fd, nullptr, nullptr);
+        if (fd < 0) break;
+        set_nonblock(fd);
+        g_clients.push_back({fd, {}});
+    }
+
+    // Process existing clients
+    for (auto& cl : g_clients) {
+        if (cl.fd >= 0) process_client(cl, state);
+    }
+
+    // Remove disconnected clients
+    g_clients.erase(
+        std::remove_if(g_clients.begin(), g_clients.end(),
+                       [](const Client& c){ return c.fd < 0; }),
+        g_clients.end());
+}
+
+void ipc_server_stop() {
+    for (auto& cl : g_clients) if (cl.fd >= 0) { ::close(cl.fd); cl.fd = -1; }
+    g_clients.clear();
+
+    if (g_srv_fd >= 0) { ::close(g_srv_fd); g_srv_fd = -1; }
+    if (!g_sock_path.empty()) ::unlink(g_sock_path.c_str());
+    ::unlink(g_lock_path.c_str());
+
+    if (g_in_batch) { g_in_batch = false; g_batch_state = nullptr; }
+}

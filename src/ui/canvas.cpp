@@ -3,6 +3,7 @@
 #include "canvas.h"
 #include "pipeline.h"
 #include "app.h"
+#include "runtime_fx.h"
 #include "audio.h"
 #include "video.h"
 #include "proxy.h"
@@ -12,6 +13,8 @@
 #include "theme.h"
 #include "render.h"
 #include "waveform.h"
+#include "body_fx.h"
+#include "bg_remove.h"
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <filesystem>
@@ -783,6 +786,37 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                         VideoInfo vi_g = video_info(slot);
                         tex = fx_apply(tex, slot, vi_g.width, vi_g.height, glass_ea, glass_cfx, t_anim);
                     }
+                }
+
+                // Runtime FX (hot-reload custom effect)
+                if (cl_ptr && !cl_ptr->runtime_fx_id.empty()) {
+                    VideoInfo vi_r = (slot >= 0) ? video_info(slot) : VideoInfo{};
+                    int rw = (vi_r.width  > 0) ? vi_r.width  : (int)w;
+                    int rh = (vi_r.height > 0) ? vi_r.height : (int)h;
+                    tex = runtime_fx_apply(cl_ptr->runtime_fx_id, tex, rw, rh,
+                                          cl_ptr->runtime_fx_params,
+                                          cl_ptr->runtime_fx_amount, t_anim);
+                }
+
+                // Body FX (glass BodyFX brick on same track)
+                for (auto& bfx_cl : track.clips) {
+                    if (bfx_cl.clip_type != ClipType::BodyFX) continue;
+                    if (at_time < bfx_cl.start || at_time >= bfx_cl.end) continue;
+                    // Get mask for this frame
+                    std::string mask_dir = bg_remove_proxy_dir(cl_ptr->source_id);
+                    if (mask_dir.empty()) break;
+                    float mask_fps = bg_remove_read_fps(mask_dir);
+                    float local_t  = at_time - cl_ptr->start + cl_ptr->in_point;
+                    int   frame_i  = (int)(local_t * mask_fps);
+                    unsigned mask_tex_id = body_fx_mask_texture(mask_dir, frame_i);
+                    if (!mask_tex_id) break;
+                    VideoInfo vi_b = (slot >= 0) ? video_info(slot) : VideoInfo{};
+                    int bw = vi_b.width  > 0 ? vi_b.width  : (int)w;
+                    int bh = vi_b.height > 0 ? vi_b.height : (int)h;
+                    tex = body_fx_apply(bfx_cl.body_fx_type, tex, mask_tex_id,
+                                        bw, bh, bfx_cl.body_fx_params,
+                                        bfx_cl.body_fx_amount, t_anim);
+                    break; // only first BodyFX brick applies
                 }
 
                 float px    = cl_ptr->eval_prop("pos_x",    at_time);

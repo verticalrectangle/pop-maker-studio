@@ -16,6 +16,7 @@
 #include "render.h"
 #include "palette_presets.h"
 #include "bg_remove.h"
+#include "body_fx.h"
 #include "noise_reduce.h"
 #include <imgui.h>
 #include <imgui_internal.h>
@@ -1828,6 +1829,135 @@ void panel_clip(AppState& state, float w) {
             kf_slider("volume", "Volume", &clip.volume, 0.f, 2.f, "%.2f\xc3\x97"); kf_interp_bar();
             ImGui::Dummy({0.f, 2.f});
             kf_slider("pan",    "Pan",    &clip.pan,   -1.f, 1.f, "%.2f");          kf_interp_bar();
+            ImGui::Dummy({0.f, 4.f});
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // BODY FX CLIP
+    // ═══════════════════════════════════════════════════════════════════════════
+    else if (clip.clip_type == ClipType::BodyFX) {
+        float bar_w = w - 16.f;
+
+        auto plain_slider = [&](const char* id, const char* label, float* v,
+                                float vmin, float vmax, const char* fmt) {
+            ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+            ImGui::TextUnformatted(label);
+            ImGui::PopStyleColor();
+            ImGui::PushStyleColor(ImGuiCol_SliderGrab, to_u32(Col::fg));
+            ImGui::PushStyleColor(ImGuiCol_FrameBg,    Col::bg_soft);
+            ImGui::SetNextItemWidth(bar_w);
+            bool ch = ImGui::SliderFloat(id, v, vmin, vmax, fmt);
+            ImGui::PopStyleColor(2);
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, label);
+            return ch;
+        };
+
+        // ── Effect name ───────────────────────────────────────────────────────
+        ImGui::Dummy({0.f, 4.f});
+        {
+            const BodyFXInfo* info = body_fx_find_info(clip.body_fx_type);
+            if (info) {
+                ImGui::PushFont(g_font_bold);
+                ImGui::TextUnformatted(info->name);
+                ImGui::PopFont();
+                ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+                ImGui::TextUnformatted(info->tagline);
+                ImGui::PopStyleColor();
+                ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+                ImGui::TextUnformatted(info->category);
+                ImGui::PopStyleColor();
+            }
+        }
+
+        // ── Amount ────────────────────────────────────────────────────────────
+        ImGui::Dummy({0.f, 10.f}); ui_separator(); ImGui::Dummy({0.f, 6.f});
+        ui_label("Blend");
+        ImGui::Dummy({0.f, 6.f});
+        plain_slider("##bfx_amount", "Amount", &clip.body_fx_amount, 0.f, 1.f, "%.2f");
+
+        // ── Parameters ────────────────────────────────────────────────────────
+        {
+            const BodyFXInfo* info = body_fx_find_info(clip.body_fx_type);
+            if (info && info->n_params > 0) {
+                ImGui::Dummy({0.f, 10.f}); ui_separator(); ImGui::Dummy({0.f, 6.f});
+                ui_label("Parameters");
+                ImGui::Dummy({0.f, 6.f});
+                for (int pi = 0; pi < info->n_params && pi < 4; ++pi) {
+                    const BodyFXParamDef& pd = info->params[pi];
+                    char id[32]; snprintf(id, sizeof(id), "##bfxp%d", pi);
+                    plain_slider(id, pd.label, &clip.body_fx_params[pi],
+                                 pd.min_val, pd.max_val, "%.3f");
+                    ImGui::Dummy({0.f, 2.f});
+                }
+            }
+        }
+
+        // ── Mask status ───────────────────────────────────────────────────────
+        ImGui::Dummy({0.f, 10.f}); ui_separator(); ImGui::Dummy({0.f, 6.f});
+        ui_label("Mask Status");
+        ImGui::Dummy({0.f, 6.f});
+        {
+            // Find the video clip on the same track to check its bg_remove status
+            bool found_vid = false;
+            for (auto& sibling : track.clips) {
+                if (sibling.clip_type != ClipType::Video) continue;
+                if (sibling.source_id != clip.source_id) continue;
+                found_vid = true;
+                if (sibling.bg_remove_status == BgRemoveStatus::Ready) {
+                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.25f, 0.85f, 0.4f, 1.f));
+                    ImGui::TextUnformatted("Masks ready");
+                    ImGui::PopStyleColor();
+                } else if (sibling.bg_remove_status == BgRemoveStatus::Processing) {
+                    char pct[64];
+                    int p = (int)(fmaxf(0.f, fminf(1.f, sibling.bg_remove_progress)) * 100.f);
+                    snprintf(pct, sizeof(pct), "Generating masks %d%%", p);
+                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, 0.65f, 0.f, 1.f));
+                    ImGui::TextUnformatted(pct);
+                    ImGui::PopStyleColor();
+                } else if (sibling.bg_remove_status == BgRemoveStatus::Error) {
+                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.3f, 0.3f, 1.f));
+                    ImGui::TextUnformatted("Mask generation failed");
+                    ImGui::PopStyleColor();
+                    ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+                    ImGui::TextWrapped("%s", sibling.bg_remove_error.c_str());
+                    ImGui::PopStyleColor();
+                } else {
+                    ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+                    ImGui::TextWrapped("No masks — select the video clip and run Remove Background.");
+                    ImGui::PopStyleColor();
+                }
+                break;
+            }
+            if (!found_vid) {
+                ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+                ImGui::TextWrapped("No matching video clip found on this track.");
+                ImGui::PopStyleColor();
+            }
+        }
+
+        // ── Change effect ─────────────────────────────────────────────────────
+        ImGui::Dummy({0.f, 10.f}); ui_separator(); ImGui::Dummy({0.f, 6.f});
+        if (ImGui::CollapsingHeader("Change Effect##bfx_change")) {
+            ImGui::Dummy({0.f, 4.f});
+            int n = body_fx_info_count();
+            const BodyFXInfo* infos = body_fx_info_list();
+            for (int i = 0; i < n; ++i) {
+                const BodyFXInfo& info = infos[i];
+                bool selected = (clip.body_fx_type == info.type);
+                ImGui::PushID(50000 + i);
+                if (ImGui::Selectable(info.name, selected)) {
+                    clip.body_fx_type = info.type;
+                    // Reset params to defaults
+                    for (int pi = 0; pi < 4; ++pi)
+                        clip.body_fx_params[pi] = (pi < info.n_params) ? info.params[pi].default_val : 0.5f;
+                    history_push(state, std::string("Change Body FX: ") + info.name);
+                }
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("%s\n%s", info.tagline, info.category);
+                }
+                ImGui::PopID();
+            }
             ImGui::Dummy({0.f, 4.f});
         }
     }
