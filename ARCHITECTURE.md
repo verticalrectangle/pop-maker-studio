@@ -112,13 +112,13 @@ Do not edit files in `src/generated/`. Re-run `tools/codegen_effects.py` after m
 
 ## ML pipeline
 
-### HTDemucs stem separation
+### MDX-Net vocal separation
 
-The full DSP pipeline — STFT, iSTFT, overlap-add — is implemented from scratch in C++ with a hand-rolled Cooley-Tukey radix-2 DIT FFT. No external DSP library.
+Model: Kim_Vocal_2.onnx (~64 MB, UVR5 community). Auto-downloaded to `~/.cache/pop-maker-studio/mdx/` on first use.
 
-Audio is processed in 10-second windows (441,000 samples) with 1-second linear cross-fades on each side (stride = 352,800 samples). The ONNX session takes stereo PCM and complex-as-channels STFT as separate inputs; outputs are the frequency path and time residual per stem. Vocals are stem index 3.
+Pipeline: ffmpeg decode → STFT (FFTW3, n_fft=6144, hop=1024) → chunked ONNX inference (256-frame chunks, 64-frame overlap) → iSTFT → instrumental as `original − vocals`. All C++, ONNX Runtime CPU. No GPU required.
 
-GPU acceleration via the CUDA execution provider; silent CPU fallback if CUDA is unavailable. No degraded fallback to center/side separation — if the HTDemucs model hasn't been downloaded, separation fails with a clear error.
+If the model hasn't been downloaded, separation fails with a clear error pointing to the Setup screen. No fallback.
 
 ### Whisper transcription
 

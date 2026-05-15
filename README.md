@@ -16,7 +16,7 @@ The application is a single binary with no runtime dependencies beyond what ship
 
 The ML stack runs fully locally. Nothing is uploaded.
 
-**Vocal separation** uses HTDemucs v4 via ONNX Runtime. The audio processing pipeline — STFT, iSTFT, overlap-add segmentation with 1-second linear cross-fades — is implemented from scratch in C++, including a hand-rolled Cooley-Tukey radix-2 DIT FFT. No external DSP library. GPU acceleration via the CUDA execution provider when available; silent CPU fallback otherwise.
+**Vocal separation** uses Kim_Vocal_2, a battle-tested MDX-Net model from the UVR5 community (~64 MB, auto-downloaded on first use). The pipeline — STFT via FFTW3, chunked ONNX inference with 25% frame overlap, iSTFT, instrumental as `original − vocals` — is implemented in C++ with ONNX Runtime. No Python, no GPU requirement.
 
 **Transcription** uses whisper.cpp (`large-v3-turbo-q5_0`, ~584 MB) with DTW token timestamps for word-level alignment. No external forced aligner. The C++ layer handles everything: subprocess management, JSON output, timeline placement.
 
