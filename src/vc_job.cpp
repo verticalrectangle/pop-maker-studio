@@ -1,4 +1,5 @@
 #include "vc_job.h"
+#include "vc_onnx.h"
 #include <filesystem>
 #include <functional>
 #include <thread>
@@ -20,29 +21,27 @@ static std::string managed_dir() {
     return h ? (std::string(h) + "/.local/share/pop-maker-studio") : "/tmp/pop-maker-studio";
 }
 
-static std::string vc_venv_dir()   { return managed_dir() + "/vc_venv"; }
-static std::string vc_venv_py()    { return vc_venv_dir() + "/bin/python3"; }
-static std::string vc_script_dest(){ return managed_dir() + "/vc_infer.py"; }
+static std::string vc_venv_dir() { return managed_dir() + "/vc_venv"; }
+static std::string vc_venv_py()  { return vc_venv_dir() + "/bin/python3"; }
 
-// ── Embedded Python script (written to disk on first use) ─────────────────────
+// ── Script discovery ──────────────────────────────────────────────────────────
 
 // The script source lives at tools/vc_infer.py in the repo.
 // At runtime we find it relative to the binary, or fall back to the managed copy.
-static std::string find_vc_script() {
-    // Try next to binary (for installed builds)
+static std::string find_tool_script(const std::string& name) {
     fs::path self;
     char buf[4096] = {};
     ssize_t n = readlink("/proc/self/exe", buf, sizeof(buf)-1);
     if (n > 0) self = fs::path(buf).parent_path();
 
-    for (auto candidate : {
-        self / "tools" / "vc_infer.py",
-        self / "../tools" / "vc_infer.py",              // build dir → source
-        self / "../../tools" / "vc_infer.py",
-        fs::path(vc_script_dest()),
+    for (const auto& base : {
+        self / "tools",
+        self / "../tools",
+        self / "../../tools",
     }) {
         std::error_code ec;
-        if (fs::exists(candidate, ec)) return candidate.string();
+        fs::path c = base / name;
+        if (fs::exists(c, ec)) return c.string();
     }
     return "";
 }
@@ -155,33 +154,78 @@ static void run_job(std::shared_ptr<VcJobData> data,
         data->status.store(2);
     };
 
-    // Find script
-    std::string script = find_vc_script();
-    if (script.empty()) {
-        set_err("vc_infer.py not found — check tools/ directory");
-        return;
+    // ── Determine ONNX paths ──────────────────────────────────────────────────
+    // Voice ONNX lives alongside the .pth, with .onnx extension.
+    std::string voice_onnx = model_path.substr(0, model_path.rfind('.')) + ".onnx";
+
+    bool use_onnx = fs::exists(voice_onnx) && hubert_onnx_exists();
+
+    // ── One-time ONNX export via Python ──────────────────────────────────────
+    if (!use_onnx) {
+        std::string infer_script  = find_tool_script("vc_infer.py");
+        std::string export_script = find_tool_script("vc_export.py");
+
+        if (export_script.empty() || infer_script.empty()) {
+            set_err("vc_infer.py / vc_export.py not found — check tools/ directory");
+            return;
+        }
+
+        std::string syspy = find_system_python();
+        if (syspy.empty()) {
+            set_err("Python 3 not found. Install from python.org then try again.");
+            return;
+        }
+
+        if (!fs::exists(vc_venv_py())) {
+            set_prog(0.01f, "bootstrap");
+            std::string err = bootstrap_venv(syspy, [&](float p, const std::string& msg) {
+                set_prog(p * 0.25f, "bootstrap:" + msg);
+            });
+            if (!err.empty()) { set_err(err); return; }
+        }
+
+        std::string py = vc_venv_py();
+
+        // Ensure hubert ONNX output directory exists
+        fs::path hub_path = hubert_onnx_path();
+        std::error_code ec;
+        fs::create_directories(hub_path.parent_path(), ec);
+
+        // Run vc_export.py — converts .pth → .onnx + exports hubert.onnx
+        set_prog(0.26f, "exporting");
+        std::string exp_cmd = "\"" + py + "\" \"" + export_script + "\""
+                            + " \"" + model_path  + "\""
+                            + " \"" + voice_onnx  + "\""
+                            + " \"" + hub_path.string() + "\""
+                            + " 2>&1";
+
+        FILE* efp = popen(exp_cmd.c_str(), "r");
+        if (!efp) { set_err("Failed to launch vc_export.py"); return; }
+
+        std::string last_exp_err;
+        char eline[512];
+        while (fgets(eline, sizeof(eline), efp)) {
+            float p = 0.f;
+            if (sscanf(eline, "PROGRESS:%f", &p) == 1)
+                set_prog(0.26f + p * 0.34f, "exporting model");
+            else if (strncmp(eline, "ERROR", 5) == 0)
+                last_exp_err = std::string(eline).substr(6);
+        }
+        int exp_rc = pclose(efp);
+
+        use_onnx = (exp_rc == 0) && fs::exists(voice_onnx) && hubert_onnx_exists();
+
+        if (!use_onnx) {
+            // Export failed — fall back to full Python inference via vc_infer.py
+            if (last_exp_err.empty())
+                last_exp_err = "ONNX export failed (rc=" + std::to_string(exp_rc) + ")";
+            // Log but continue — fall through to Python mode below
+            set_prog(0.35f, "python-fallback:" + last_exp_err);
+        }
     }
 
-    // Find or verify system Python
-    std::string syspy = find_system_python();
-    if (syspy.empty()) {
-        set_err("Python 3 not found. Install from python.org then try again.");
-        return;
-    }
-
-    // Bootstrap venv if needed
-    if (!fs::exists(vc_venv_py())) {
-        set_prog(0.01f, "bootstrap");
-        std::string err = bootstrap_venv(syspy, [&](float p, const std::string& msg) {
-            set_prog(p * 0.35f, "bootstrap:" + msg);
-        });
-        if (!err.empty()) { set_err(err); return; }
-    }
-
-    std::string py = vc_venv_py();
-
-    // Decode source to temp WAV
-    set_prog(0.35f, "converting");
+    // ── Decode source audio ───────────────────────────────────────────────────
+    set_prog(use_onnx ? 0.60f : 0.35f, "converting");
     std::string wav_in = out_path + ".src.wav";
     std::string dec_cmd = "ffmpeg -hide_banner -loglevel error -y"
                           " -i \"" + source_path + "\""
@@ -191,37 +235,53 @@ static void run_job(std::shared_ptr<VcJobData> data,
         return;
     }
 
-    set_prog(0.40f, "converting");
-
-    // Run inference — parse PROGRESS:<float> lines
-    std::string cmd = "\"" + py + "\" \"" + script + "\""
-                    + " \"" + wav_in    + "\""
-                    + " \"" + model_path + "\""
-                    + " \"" + out_path   + "\""
-                    + " " + std::to_string(f0_semitones)
-                    + " 2>&1";
-
-    FILE* fp = popen(cmd.c_str(), "r");
-    if (!fp) { set_err("Failed to launch vc_infer.py"); fs::remove(wav_in); return; }
-
-    std::string last_err;
-    char line[512];
-    while (fgets(line, sizeof(line), fp)) {
-        float p = 0.f;
-        if (sscanf(line, "PROGRESS:%f", &p) == 1) {
-            // map script's 0..1 into 0.4..1.0 of our range
-            set_prog(0.40f + p * 0.60f, "converting");
-        } else if (strncmp(line, "ERROR", 5) == 0 || strncmp(line, "Traceback", 9) == 0) {
-            last_err = line;
-            last_err.erase(last_err.find_last_not_of("\r\n") + 1);
+    // ── Inference ─────────────────────────────────────────────────────────────
+    if (use_onnx) {
+        // ── C++ ONNX path (fast, no Python at runtime) ────────────────────────
+        std::string err = vc_onnx_convert(wav_in, voice_onnx, out_path, f0_semitones,
+            [&](float p, const std::string& msg) {
+                set_prog(0.62f + p * 0.38f, "converting:" + msg);
+            });
+        fs::remove(wav_in);
+        if (!err.empty()) { set_err(err); return; }
+    } else {
+        // ── Python fallback path ──────────────────────────────────────────────
+        std::string infer_script = find_tool_script("vc_infer.py");
+        std::string py = vc_venv_py();
+        if (infer_script.empty() || py.empty()) {
+            fs::remove(wav_in);
+            set_err("Voice conversion failed: no ONNX models and no Python fallback");
+            return;
         }
-    }
-    int rc = pclose(fp);
-    fs::remove(wav_in);
 
-    if (rc != 0 || !fs::exists(out_path)) {
-        set_err(last_err.empty() ? "Voice conversion failed" : last_err);
-        return;
+        std::string cmd = "\"" + py + "\" \"" + infer_script + "\""
+                        + " \"" + wav_in     + "\""
+                        + " \"" + model_path + "\""
+                        + " \"" + out_path   + "\""
+                        + " " + std::to_string(f0_semitones)
+                        + " 2>&1";
+
+        FILE* fp = popen(cmd.c_str(), "r");
+        if (!fp) { fs::remove(wav_in); set_err("Failed to launch vc_infer.py"); return; }
+
+        std::string last_err;
+        char line[512];
+        while (fgets(line, sizeof(line), fp)) {
+            float p = 0.f;
+            if (sscanf(line, "PROGRESS:%f", &p) == 1)
+                set_prog(0.40f + p * 0.60f, "converting");
+            else if (strncmp(line, "ERROR", 5) == 0 || strncmp(line, "Traceback", 9) == 0) {
+                last_err = std::string(line);
+                last_err.erase(last_err.find_last_not_of("\r\n") + 1);
+            }
+        }
+        int rc = pclose(fp);
+        fs::remove(wav_in);
+
+        if (rc != 0 || !fs::exists(out_path)) {
+            set_err(last_err.empty() ? "Voice conversion failed" : last_err);
+            return;
+        }
     }
 
     data->progress.store(1.f);
