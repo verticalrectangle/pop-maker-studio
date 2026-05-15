@@ -271,7 +271,11 @@ bool audio_probe(const std::string& path, AudioMeta& meta) {
     for (unsigned i = 0; i < fmt_ctx->nb_streams; ++i) {
         if (fmt_ctx->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_AUDIO) {
             meta.sample_rate = fmt_ctx->streams[i]->codecpar->sample_rate;
+#if LIBAVUTIL_VERSION_MAJOR >= 57
             meta.channels    = fmt_ctx->streams[i]->codecpar->ch_layout.nb_channels;
+#else
+            meta.channels    = fmt_ctx->streams[i]->codecpar->channels;
+#endif
             break;
         }
     }

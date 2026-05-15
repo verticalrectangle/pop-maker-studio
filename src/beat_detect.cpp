@@ -42,11 +42,20 @@ BeatResult beat_detect(const std::string& path) {
     }
 
     SwrContext* swr = swr_alloc();
+#if LIBAVUTIL_VERSION_MAJOR >= 57
     av_opt_set_chlayout  (swr, "in_chlayout",   &codec_ctx->ch_layout, 0);
     av_opt_set_int       (swr, "in_sample_rate",  codec_ctx->sample_rate, 0);
     av_opt_set_sample_fmt(swr, "in_sample_fmt",   codec_ctx->sample_fmt, 0);
     AVChannelLayout mono = AV_CHANNEL_LAYOUT_MONO;
     av_opt_set_chlayout  (swr, "out_chlayout",   &mono, 0);
+#else
+    av_opt_set_int       (swr, "in_channel_count",   codec_ctx->channels, 0);
+    av_opt_set_int       (swr, "in_channel_layout",  (int64_t)codec_ctx->channel_layout, 0);
+    av_opt_set_int       (swr, "in_sample_rate",     codec_ctx->sample_rate, 0);
+    av_opt_set_sample_fmt(swr, "in_sample_fmt",      codec_ctx->sample_fmt, 0);
+    av_opt_set_int       (swr, "out_channel_count",  1, 0);
+    av_opt_set_int       (swr, "out_channel_layout", AV_CH_LAYOUT_MONO, 0);
+#endif
     av_opt_set_int       (swr, "out_sample_rate", (int)AUBIO_SR, 0);
     av_opt_set_sample_fmt(swr, "out_sample_fmt",  AV_SAMPLE_FMT_FLT, 0);
     swr_init(swr);
