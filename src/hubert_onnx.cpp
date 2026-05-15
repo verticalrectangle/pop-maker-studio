@@ -15,11 +15,6 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
-#include <algorithm>
-#include <stdexcept>
-#include <cassert>
-#include <numeric>
-#include <climits>
 #include <cstdint>
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -312,14 +307,6 @@ static std::string op_unsqueeze(G& g, const std::string& x, int64_t axis,
     return g.emit("Unsqueeze", {x, ax}, {}, hint);
 }
 
-static std::string op_squeeze(G& g, const std::string& x, int64_t axis,
-                               const std::string& hint = "sq")
-{
-    static int cnt = 0;
-    std::string ax = "hsq_ax_" + std::to_string(cnt++);
-    g.add_init_i64(ax, {1}, {axis});
-    return g.emit("Squeeze", {x, ax}, {}, hint);
-}
 
 static std::string op_transpose(G& g, const std::string& x,
                                   const std::vector<int64_t>& perm,
@@ -361,20 +348,6 @@ static std::string op_concat(G& g, const std::vector<std::string>& ins,
 static std::string op_softmax(G& g, const std::string& x, int64_t axis,
                                const std::string& h = "sm")
 { return g.emit("Softmax", {x}, {G::attr_int("axis", axis)}, h); }
-
-static std::string op_slice(G& g, const std::string& x,
-                              const std::vector<int64_t>& starts,
-                              const std::vector<int64_t>& ends,
-                              const std::vector<int64_t>& axes,
-                              const std::string& hint = "sl")
-{
-    static int cnt = 0;
-    std::string b = hint + "_sls_" + std::to_string(cnt++);
-    std::string sn = b + "_s"; g.add_init_i64(sn, {(int64_t)starts.size()}, starts);
-    std::string en = b + "_e"; g.add_init_i64(en, {(int64_t)ends.size()},   ends);
-    std::string an = b + "_a"; g.add_init_i64(an, {(int64_t)axes.size()},   axes);
-    return g.emit("Slice", {x, sn, en, an}, {}, hint);
-}
 
 // Dynamic-axis slice: starts/ends/axes given as tensor names already in the graph.
 static std::string op_slice_dyn(G& g, const std::string& x,
