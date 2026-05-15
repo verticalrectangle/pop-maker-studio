@@ -1,5 +1,7 @@
 #include "vc_job.h"
 #include "vc_onnx.h"
+#include "rvc_onnx.h"
+#include "pth_reader.h"
 #include <filesystem>
 #include <functional>
 #include <thread>
@@ -160,69 +162,70 @@ static void run_job(std::shared_ptr<VcJobData> data,
 
     bool use_onnx = fs::exists(voice_onnx) && hubert_onnx_exists();
 
-    // ── One-time ONNX export via Python ──────────────────────────────────────
-    if (!use_onnx) {
-        std::string infer_script  = find_tool_script("vc_infer.py");
-        std::string export_script = find_tool_script("vc_export.py");
-
-        if (export_script.empty() || infer_script.empty()) {
-            set_err("vc_infer.py / vc_export.py not found — check tools/ directory");
+    // ── One-time voice ONNX export (C++, no Python required) ────────────────
+    if (!fs::exists(voice_onnx)) {
+        set_prog(0.05f, "exporting model");
+        PthModel pth = pth_open(model_path);
+        if (!pth.err.empty()) {
+            set_err("Failed to read model: " + pth.err);
             return;
         }
+        std::string conv_err = pth_to_onnx(pth, voice_onnx);
+        pth_close(pth);
+        if (!conv_err.empty()) {
+            set_err("Model export failed: " + conv_err);
+            return;
+        }
+        set_prog(0.20f, "model exported");
+    }
 
+    // ── One-time HuBERT ONNX export (Python, one-time only) ──────────────────
+    if (!hubert_onnx_exists()) {
+        std::string export_script = find_tool_script("vc_export.py");
+        std::string infer_script  = find_tool_script("vc_infer.py");
         std::string syspy = find_system_python();
-        if (syspy.empty()) {
-            set_err("Python 3 not found. Install from python.org then try again.");
+
+        if (export_script.empty() || infer_script.empty() || syspy.empty()) {
+            set_err("HuBERT ONNX not found and Python unavailable to generate it.\n"
+                    "Run tools/vc_export.py once to export hubert.onnx, or copy it manually.");
             return;
         }
 
         if (!fs::exists(vc_venv_py())) {
-            set_prog(0.01f, "bootstrap");
+            set_prog(0.21f, "bootstrap");
             std::string err = bootstrap_venv(syspy, [&](float p, const std::string& msg) {
-                set_prog(p * 0.25f, "bootstrap:" + msg);
+                set_prog(0.21f + p * 0.35f, "bootstrap:" + msg);
             });
             if (!err.empty()) { set_err(err); return; }
         }
 
-        std::string py = vc_venv_py();
-
-        // Ensure hubert ONNX output directory exists
         fs::path hub_path = hubert_onnx_path();
         std::error_code ec;
         fs::create_directories(hub_path.parent_path(), ec);
 
-        // Run vc_export.py — converts .pth → .onnx + exports hubert.onnx
-        set_prog(0.26f, "exporting");
+        // Export only HuBERT — pass a dummy voice_onnx path we already have
+        set_prog(0.57f, "exporting hubert");
+        std::string py = vc_venv_py();
         std::string exp_cmd = "\"" + py + "\" \"" + export_script + "\""
-                            + " \"" + model_path  + "\""
-                            + " \"" + voice_onnx  + "\""
+                            + " \"" + model_path + "\""
+                            + " \"" + voice_onnx + "\""
                             + " \"" + hub_path.string() + "\""
                             + " 2>&1";
-
         FILE* efp = popen(exp_cmd.c_str(), "r");
-        if (!efp) { set_err("Failed to launch vc_export.py"); return; }
-
-        std::string last_exp_err;
+        if (!efp) { set_err("Failed to export HuBERT ONNX"); return; }
         char eline[512];
         while (fgets(eline, sizeof(eline), efp)) {
             float p = 0.f;
             if (sscanf(eline, "PROGRESS:%f", &p) == 1)
-                set_prog(0.26f + p * 0.34f, "exporting model");
-            else if (strncmp(eline, "ERROR", 5) == 0)
-                last_exp_err = std::string(eline).substr(6);
+                set_prog(0.57f + p * 0.03f, "exporting hubert");
         }
-        int exp_rc = pclose(efp);
-
-        use_onnx = (exp_rc == 0) && fs::exists(voice_onnx) && hubert_onnx_exists();
-
-        if (!use_onnx) {
-            // Export failed — fall back to full Python inference via vc_infer.py
-            if (last_exp_err.empty())
-                last_exp_err = "ONNX export failed (rc=" + std::to_string(exp_rc) + ")";
-            // Log but continue — fall through to Python mode below
-            set_prog(0.35f, "python-fallback:" + last_exp_err);
+        if (pclose(efp) != 0 || !hubert_onnx_exists()) {
+            set_err("HuBERT ONNX export failed");
+            return;
         }
     }
+
+    use_onnx = fs::exists(voice_onnx) && hubert_onnx_exists();
 
     // ── Decode source audio ───────────────────────────────────────────────────
     set_prog(use_onnx ? 0.60f : 0.35f, "converting");

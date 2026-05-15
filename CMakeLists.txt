@@ -50,6 +50,8 @@ set(SOURCES
     src/hf_api.cpp
     src/vc_job.cpp
     src/vc_onnx.cpp
+    src/pth_reader.cpp
+    src/rvc_onnx.cpp
     src/demucs.cpp
     src/ui/screen_splash.cpp
     src/ui/screen_setup.cpp
