@@ -87,23 +87,3 @@ struct TTSState {
 void tts_generate(const std::string& text, const std::string& voice,
                   TTSState& out_state);
 
-// ── Voice conversion status ───────────────────────────────────────────────────
-
-enum class VCStatus { Idle, Running, Done, Error };
-
-struct VCState {
-    VCStatus    status   = VCStatus::Idle;
-    float       progress = 0.f;
-    std::string out_path;
-    std::string error;
-};
-
-void vc_convert(const std::string& input_wav, const std::string& model_path,
-                const std::string& python_path, const std::string& script_path,
-                VCState& out_state);
-
-// Download-only: fetches hf_filename from hf_repo and saves to out_path.
-void vc_download(const std::string& hf_repo, const std::string& hf_filename,
-                 const std::string& out_path,
-                 const std::string& python_path, const std::string& script_path,
-                 VCState& out_state);

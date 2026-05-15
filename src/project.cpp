@@ -6,7 +6,7 @@
 // ── Binary serialization helpers ──────────────────────────────────────────────
 
 static const uint32_t MAGIC   = 0x534D5001u; // "PMS\x01"
-static const uint32_t VERSION = 24u;
+static const uint32_t VERSION = 25u;
 
 struct Writer {
     std::ofstream f;
@@ -303,7 +303,7 @@ bool project_save(const AppState& state, const std::string& path) {
     w.str(state.audio_path); w.str(state.vocals_path);
     w.str(state.words_json_path); w.str(state.segments_json_path);
     w.str(state.beats_json_path); w.str(state.envelope_json_path);
-    w.str(state.video_path); w.str(state.python_path);
+    w.str(state.video_path);
     w.str(state.out_mp4); w.str(state.out_wav); w.str(state.out_srt);
 
     // Beat / envelope data
@@ -358,7 +358,7 @@ bool project_load(AppState& state, const std::string& path) {
     state.audio_path         = r.str(); state.vocals_path   = r.str();
     state.words_json_path    = r.str(); state.segments_json_path = r.str();
     state.beats_json_path    = r.str(); state.envelope_json_path = r.str();
-    state.video_path         = r.str(); state.python_path   = r.str();
+    state.video_path         = r.str();
     state.out_mp4            = r.str(); state.out_wav        = r.str();
     state.out_srt            = r.str();
 

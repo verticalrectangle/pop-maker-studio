@@ -1017,8 +1017,7 @@ void panel_audio_fx_clip(AppState& state, float w) {
                     ImGui::Dummy({0.f, 4.f});
                     if (ui_btn("Re-convert##vcr", false, true)) {
                         for (auto& ar : audio_refs)
-                            vc_start(state, ti, ar.ci, afx.voice_model_path,
-                                     state.python_path, g_voice_convert_script);
+                            vc_start(state, ti, ar.ci, afx.voice_model_path);
                     }
                 } else if (agg == VcStatus::Error) {
                     ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(220,80,80,255));
@@ -1027,15 +1026,13 @@ void panel_audio_fx_clip(AppState& state, float w) {
                     ImGui::Dummy({0.f, 4.f});
                     if (ui_btn("Retry##vcretry", false, true)) {
                         for (auto& ar : audio_refs)
-                            vc_start(state, ti, ar.ci, afx.voice_model_path,
-                                     state.python_path, g_voice_convert_script);
+                            vc_start(state, ti, ar.ci, afx.voice_model_path);
                     }
                 } else {
                     // Idle — show Convert button
                     if (ui_btn("Convert##vc_go", false, false)) {
                         for (auto& ar : audio_refs)
-                            vc_start(state, ti, ar.ci, afx.voice_model_path,
-                                     state.python_path, g_voice_convert_script);
+                            vc_start(state, ti, ar.ci, afx.voice_model_path);
                     }
                 }
             } else if (afx.voice_model_path.empty()) {

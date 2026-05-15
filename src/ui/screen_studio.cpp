@@ -606,30 +606,6 @@ void ui_studio(AppState& state) {
             ImGui::Dummy({0.f, 10.f});
 
 
-            // ── Python path ───────────────────────────────────────────────────
-            ui_label("Python path");
-            ImGui::Dummy({0.f, 4.f});
-            ImGui::SetCursorPosX(ImGui::GetStyle().WindowPadding.x + 8.f);
-            static char s_python_buf[512] = {};
-            static bool s_python_init = false;
-            if (!s_python_init) {
-                snprintf(s_python_buf, sizeof(s_python_buf), "%s", state.python_path.c_str());
-                s_python_init = true;
-            }
-            ImGui::PushStyleColor(ImGuiCol_FrameBg, Col::bg_soft);
-            ImGui::PushStyleColor(ImGuiCol_Border,  Col::line);
-            ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - 16.f);
-            if (ImGui::InputText("##python_path", s_python_buf, sizeof(s_python_buf),
-                    ImGuiInputTextFlags_EnterReturnsTrue))
-                state.python_path = s_python_buf;
-            if (ImGui::IsItemDeactivated())
-                state.python_path = s_python_buf;
-            ImGui::PopStyleColor(2);
-
-            ImGui::Dummy({0.f, 12.f});
-            ui_separator();
-            ImGui::Dummy({0.f, 10.f});
-
             // ── Lyric extraction models ───────────────────────────────────────
             ui_label("Lyric extraction models");
             ImGui::Dummy({0.f, 4.f});
