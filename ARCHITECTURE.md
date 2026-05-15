@@ -556,17 +556,53 @@ The `in_trans_out` branch fires when the active clip is A (playhead in `[cut-pre
 
 ## 13. ML pipeline
 
-**`src/transcribe.*`, Python subprocess**
+**`src/transcribe.*`, `src/demucs.*`**
 
-Transcription runs as an external Python process using WhisperX (faster-whisper backend) and Demucs for stem separation. PMS communicates via:
-- Stdin/stdout for progress updates (JSON lines)
-- Output JSON files: `*_words.json`, `*_segments.json`
+The transcription pipeline is pure C++ — no Python required.  Stages: `Extract → Transcribe → Align → Done`.  Progress is polled each frame via `PipelineStatus`.
 
-The pipeline stages are: `Extract → Transcribe → Align → Done`. Progress is polled each frame via `PipelineStatus`. The Python binary path is user-configurable (`state.python_path`).
+### Stage 1 — HTDemucs stem separation (`src/demucs.cpp`)
+
+Separates the mix into vocals + instrumental using the HTDemucs v4 ONNX model (~289 MB, auto-downloaded to `~/.cache/pop-maker-studio/demucs/htdemucs.onnx` on first use).
+
+**Full pipeline — built from scratch, no external DSP library:**
+
+```
+stereo PCM (44 100 Hz)
+  │
+  ├── Cooley-Tukey radix-2 DIT FFT (hand-rolled, ~30 lines)
+  │
+  ├── STFT  (Hann window, nfft=4096, hop=1024, center-padded)
+  │     L_real / L_imag / R_real / R_imag  → [1, 4, 2049, T]
+  │
+  ├── ONNX Runtime  (HTDemucs v4)
+  │     inputs:  mix  [1, 2, N]       ← stereo time-domain
+  │              x    [1, 4, 2049, T] ← complex-as-channels STFT
+  │     outputs: out_x  [1, 4, 4, 2049, T] ← freq path per stem
+  │              out_xt [1, 4, 2, N]        ← time residual per stem
+  │     stem order: drums=0  bass=1  other=2  vocals=3
+  │
+  ├── iSTFT  (overlap-add with Hann normalisation) per stem channel
+  │
+  └── stem_pcm = iSTFT(out_x[s]) + out_xt[s]   ← freq + time paths combined
+```
+
+**Overlap-add segmentation:**  Audio is processed in 10 s windows (441 000 samples) with 1 s linear cross-fades on each side (stride = 352 800 samples).  Adjacent segments are accumulated with a weight ramp and normalised, so there are no audible seams.
+
+**GPU acceleration:**  The ONNX session tries the CUDA execution provider first; silently falls back to CPU if CUDA is unavailable.
+
+**No fallback:**  If the HTDemucs model has not been downloaded, separation fails with a clear message pointing to the Setup screen.  There is no degraded ffmpeg center/side fallback — quality is non-negotiable.
+
+### Stage 2 — Whisper transcription (`src/transcribe.cpp`)
+
+Transcribes the separated vocals (or the original file for `TranscribeOnly` mode) using whisper.cpp with the `ggml-large-v3-turbo-q5_0` model (~584 MB, auto-downloaded).
+
+- **DTW word timestamps:** `cparams.dtw_token_timestamps = true` + `WHISPER_AHEADS_LARGE_V3_TURBO` — whisper.cpp aligns each BPE token to the audio using its own attention heads.  No external aligner needed.
+- **Token → word grouping:**  tokens that start with a space mark word boundaries.  `t_dtw` is preferred over `t0`/`t1` when available.
+- Output: `*_words.json` (word timestamps) + `*_segments.json` (sentence segments).
 
 **Model locations:**
-- WhisperX / faster-whisper: HuggingFace hub cache (`~/.cache/huggingface/hub/`)
-- Demucs weights: torch hub checkpoints (`~/.cache/torch/hub/checkpoints/`)
+- Whisper ggml model: `~/.cache/pop-maker-studio/whisper/`
+- HTDemucs ONNX model: `~/.cache/pop-maker-studio/demucs/`
 
 ---
 

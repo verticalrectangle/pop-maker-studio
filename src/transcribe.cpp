@@ -1,11 +1,16 @@
 #include "transcribe.h"
-#include "globals.h"
+#include "demucs.h"
+#include <whisper.h>
 #include <thread>
 #include <atomic>
-#include <cstdio>
-#include <sstream>
 #include <filesystem>
-#include <cstring>
+#include <fstream>
+#include <cstdio>
+#include <cstdlib>
+#include <cmath>
+#include <vector>
+#include <string>
+#include "json.hpp"
 
 namespace fs = std::filesystem;
 
@@ -13,42 +18,287 @@ static std::thread       g_thread;
 static std::atomic<bool> g_running{false};
 static std::atomic<bool> g_cancel{false};
 
-static std::string find_pipeline_python() {
-    static const char* alts[] = {
-        "/home/alexis/dev/song2subs/venv/bin/python3",
-        nullptr
-    };
-    for (const char** a = alts; *a; a++)
-        if (fs::exists(*a)) return *a;
-    return "python3";
+// ── Whisper ggml model path ───────────────────────────────────────────────────
+
+static const char* kModelFile = "ggml-large-v3-turbo-q5_0.bin";
+static const char* kModelUrl  =
+    "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin";
+
+fs::path whisper_model_path() {
+    const char* home = getenv("HOME");
+    if (!home) return {};
+    return fs::path(home) / ".cache" / "pop-maker-studio" / "whisper" / kModelFile;
 }
 
-static void parse_line(const std::string& line, PipelineStatus& status) {
-    if (line.find("[MODEL]") != std::string::npos) {
-        status.stage    = PipelineStage::Extract;
-        status.progress = 0.05f;
-        status.message  = line.substr(line.find(']') + 2);
-    } else if (line.find("[SEPARATE]") != std::string::npos) {
-        status.stage    = PipelineStage::Extract;
-        status.progress = 0.25f;
-        status.message  = line.substr(line.find(']') + 2);
-    } else if (line.find("[TRANSCRIBE]") != std::string::npos) {
-        status.stage    = PipelineStage::Transcribe;
-        status.progress = 0.55f;
-        status.message  = line.substr(line.find(']') + 2);
-    } else if (line.find("[ALIGN]") != std::string::npos) {
-        status.stage    = PipelineStage::Align;
-        status.progress = 0.80f;
-        status.message  = line.substr(line.find(']') + 2);
-    } else if (line.find("[DONE]") != std::string::npos) {
-        status.stage    = PipelineStage::Done;
-        status.progress = 1.0f;
-        status.message  = line.substr(line.find(']') + 2);
-    } else if (line.find("[ERROR]") != std::string::npos) {
+bool whisper_model_exists() { return fs::exists(whisper_model_path()); }
+
+// ── Audio helpers ─────────────────────────────────────────────────────────────
+
+// Decode audio to 16 kHz mono float32 via ffmpeg.
+static std::vector<float> decode_16k(const std::string& path) {
+    std::string cmd = "ffmpeg -hide_banner -loglevel error"
+                      " -i \"" + path + "\""
+                      " -vn -ar 16000 -ac 1 -f f32le pipe:1 2>/dev/null";
+    FILE* fp = popen(cmd.c_str(), "r");
+    if (!fp) return {};
+    std::vector<float> s;
+    float buf[4096];
+    size_t n;
+    while ((n = fread(buf, sizeof(float), 4096, fp)) > 0)
+        s.insert(s.end(), buf, buf + n);
+    pclose(fp);
+    return s;
+}
+
+// ── Stem separation ───────────────────────────────────────────────────────────
+
+// Calls the C++ HTDemucs ONNX pipeline. Returns false and sets status on error.
+// No ffmpeg fallback — if demucs is not ready, the user must download the model.
+static bool separate_channels(
+    const std::string& in,
+    const std::string& outdir,
+    PipelineStatus&    status)
+{
+    std::string voc  = outdir + "/vocals.wav";
+    std::string inst = outdir + "/instrumental.wav";
+
+    std::string err = demucs_separate(in, voc, inst, [&](float p, const std::string& msg) {
+        status.progress = 0.05f + p * 0.15f;
+        status.message  = msg;
+    });
+
+    if (!err.empty()) {
         status.stage = PipelineStage::Error;
-        status.error = line;
+        status.error = "Stem separation failed: " + err +
+                       "\nDownload the HTDemucs model (~289 MB) from the Setup screen.";
+        return false;
+    }
+    return true;
+}
+
+// ── Word-timestamp extraction ─────────────────────────────────────────────────
+
+// Group BPE tokens into words.  Whisper tokens starting with a space signal
+// a new word boundary.  We use t_dtw (DTW-aligned) timestamps when available,
+// falling back to the regular t0/t1 in centiseconds.
+static void extract_words_segments(
+    whisper_context* ctx,
+    nlohmann::json& words_out,
+    nlohmann::json& segs_out)
+{
+    whisper_token tok_eot = whisper_token_eot(ctx);
+    whisper_token tok_beg = whisper_token_beg(ctx);
+
+    int n_segs = whisper_full_n_segments(ctx);
+    for (int i = 0; i < n_segs; ++i) {
+        // Segment-level entry
+        const char* seg_raw = whisper_full_get_segment_text(ctx, i);
+        std::string seg_text(seg_raw ? seg_raw : "");
+        if (!seg_text.empty() && seg_text[0] == ' ') seg_text = seg_text.substr(1);
+        if (!seg_text.empty()) {
+            double t0 = whisper_full_get_segment_t0(ctx, i) / 100.0;
+            double t1 = whisper_full_get_segment_t1(ctx, i) / 100.0;
+            segs_out.push_back({{"text", seg_text}, {"start", t0}, {"end", t1}});
+        }
+
+        // Token → word grouping
+        int n_tok = whisper_full_n_tokens(ctx, i);
+        std::string cur_word;
+        double w_t0 = 0.0, w_t1 = 0.0;
+
+        auto emit = [&]() {
+            std::string w = cur_word;
+            size_t a = w.find_first_not_of(" \t\r\n");
+            if (a == std::string::npos) return;
+            w = w.substr(a);
+            if (!w.empty())
+                words_out.push_back({{"word", w}, {"start", w_t0}, {"end", w_t1}});
+        };
+
+        for (int j = 0; j < n_tok; ++j) {
+            whisper_token id = whisper_full_get_token_id(ctx, i, j);
+            if (id >= tok_eot || id == tok_beg) continue;
+
+            const char* raw = whisper_full_get_token_text(ctx, i, j);
+            if (!raw) continue;
+            std::string t(raw);
+
+            whisper_token_data td = whisper_full_get_token_data(ctx, i, j);
+            double t0_s = (td.t_dtw >= 0 ? td.t_dtw : td.t0) / 100.0;
+            double t1_s = td.t1 / 100.0;
+
+            bool new_word = !t.empty() && t[0] == ' ';
+
+            if (new_word && !cur_word.empty()) {
+                emit();
+                cur_word.clear();
+            }
+
+            std::string stripped = t;
+            if (!stripped.empty() && stripped[0] == ' ')
+                stripped = stripped.substr(1);
+
+            if (cur_word.empty()) {
+                cur_word = stripped;
+                w_t0 = t0_s;
+                w_t1 = t1_s;
+            } else {
+                cur_word += stripped;
+                w_t1 = t1_s;
+            }
+        }
+        if (!cur_word.empty()) emit();
     }
 }
+
+// ── Main transcription worker ─────────────────────────────────────────────────
+
+static void do_transcribe(
+    const std::string& audio_path,
+    PipelineStatus&    status,
+    std::string&       out_words_json,
+    std::string&       out_vocals_wav,
+    PipelineMode       mode)
+{
+    fs::path audio(audio_path);
+    fs::path outdir = audio.parent_path() / audio.stem();
+    fs::create_directories(outdir);
+
+    std::string stem       = audio.stem().string();
+    out_words_json         = (outdir / (stem + "_words.json")).string();
+    out_vocals_wav         = (outdir / "vocals.wav").string();
+    std::string segs_json  = (outdir / (stem + "_segments.json")).string();
+
+    // ── Separation ────────────────────────────────────────────────────────────
+    if (mode == PipelineMode::Both || mode == PipelineMode::SeparateOnly) {
+        status.stage    = PipelineStage::Extract;
+        status.progress = 0.02f;
+        status.message  = "Separating stems (HTDemucs)…";
+        if (!separate_channels(audio_path, outdir.string(), status)) {
+            g_running.store(false);
+            return;
+        }
+        status.progress = 0.20f;
+    }
+
+    if (g_cancel.load()) {
+        status.stage = PipelineStage::Idle;
+        g_running.store(false);
+        return;
+    }
+
+    if (mode == PipelineMode::SeparateOnly) {
+        status.stage    = PipelineStage::Done;
+        status.progress = 1.0f;
+        status.message  = "Separation complete";
+        g_running.store(false);
+        return;
+    }
+
+    // ── Download ggml model if needed ─────────────────────────────────────────
+    fs::path mp = whisper_model_path();
+    if (!fs::exists(mp)) {
+        status.stage    = PipelineStage::Extract;
+        status.progress = 0.02f;
+        status.message  = "Downloading whisper large-v3-turbo (~584 MB)…";
+
+        fs::create_directories(mp.parent_path());
+        std::string tmp = mp.string() + ".part";
+        std::string dl  = "curl -fsSL -o \"" + tmp + "\" \"" + kModelUrl + "\"";
+        if (system(dl.c_str()) != 0 || !fs::exists(tmp)) {  // NOLINT
+            fs::remove(tmp);
+            status.stage = PipelineStage::Error;
+            status.error = "Failed to download whisper model";
+            g_running.store(false);
+            return;
+        }
+        fs::rename(tmp, mp);
+    }
+
+    if (g_cancel.load()) {
+        status.stage = PipelineStage::Idle;
+        g_running.store(false);
+        return;
+    }
+
+    // ── Decode audio to 16 kHz ────────────────────────────────────────────────
+    status.stage    = PipelineStage::Transcribe;
+    status.progress = 0.25f;
+    status.message  = "Loading audio…";
+
+    // Transcribe vocals if we separated, else original
+    std::string tx_src = (mode == PipelineMode::Both && fs::exists(out_vocals_wav))
+                       ? out_vocals_wav : audio_path;
+    std::vector<float> pcm = decode_16k(tx_src);
+    if (pcm.empty()) {
+        status.stage = PipelineStage::Error;
+        status.error = "Failed to decode audio";
+        g_running.store(false);
+        return;
+    }
+
+    // ── Init whisper ──────────────────────────────────────────────────────────
+    status.progress = 0.28f;
+    status.message  = "Loading whisper large-v3-turbo…";
+
+    // DTW-based word timestamps live in context params (experimental).
+    whisper_context_params cparams     = whisper_context_default_params();
+    cparams.use_gpu                    = true;
+    cparams.dtw_token_timestamps       = true;
+    cparams.dtw_aheads_preset          = WHISPER_AHEADS_LARGE_V3_TURBO;
+
+    whisper_context* ctx = whisper_init_from_file_with_params(
+        mp.string().c_str(), cparams);
+    if (!ctx) {
+        status.stage = PipelineStage::Error;
+        status.error = "Failed to load whisper model";
+        g_running.store(false);
+        return;
+    }
+
+    // ── Transcribe ────────────────────────────────────────────────────────────
+    status.progress = 0.35f;
+    status.message  = "Transcribing (whisper large-v3-turbo + DTW alignment)…";
+
+    whisper_full_params wp = whisper_full_default_params(WHISPER_SAMPLING_BEAM_SEARCH);
+    wp.language         = "en";
+    wp.n_threads        = 4;
+    wp.token_timestamps = true;
+    wp.thold_pt         = 0.01f;
+    wp.thold_ptsum      = 0.01f;
+    wp.print_progress   = false;
+    wp.print_realtime   = false;
+    wp.print_timestamps = false;
+    wp.print_special    = false;
+
+    if (whisper_full(ctx, wp, pcm.data(), (int)pcm.size()) != 0) {
+        whisper_free(ctx);
+        status.stage = PipelineStage::Error;
+        status.error = "Whisper inference failed";
+        g_running.store(false);
+        return;
+    }
+
+    // ── Build JSON ────────────────────────────────────────────────────────────
+    status.stage    = PipelineStage::Align;
+    status.progress = 0.90f;
+    status.message  = "Building word timestamps…";
+
+    nlohmann::json words_arr = nlohmann::json::array();
+    nlohmann::json segs_arr  = nlohmann::json::array();
+    extract_words_segments(ctx, words_arr, segs_arr);
+    whisper_free(ctx);
+
+    { std::ofstream f(out_words_json); f << words_arr.dump(2); }
+    { std::ofstream f(segs_json);      f << segs_arr.dump(2); }
+
+    status.stage    = PipelineStage::Done;
+    status.progress = 1.0f;
+    status.message  = std::to_string(words_arr.size()) + " words transcribed";
+    g_running.store(false);
+}
+
+// ── Public API ────────────────────────────────────────────────────────────────
 
 void transcribe_start(
     const std::string& audio_path,
@@ -61,67 +311,14 @@ void transcribe_start(
     g_cancel.store(false);
     g_running.store(true);
 
-    g_thread = std::thread([&, mode]() {
-        fs::path audio(audio_path);
-        fs::path outdir = audio.parent_path() / audio.stem();
-        fs::create_directories(outdir);
+    status.stage    = PipelineStage::Extract;
+    status.progress = 0.01f;
+    status.message  = "Starting pipeline…";
 
-        std::string words_json = (outdir / (audio.stem().string() + "_words.json")).string();
-        std::string vocals_out = (outdir / "vocals.wav").string();
-
-        out_words_json = words_json;
-        out_vocals_wav = vocals_out;
-
-        const char* mode_str = (mode == PipelineMode::SeparateOnly)   ? "separate"   :
-                               (mode == PipelineMode::TranscribeOnly)  ? "transcribe" :
-                                                                          "both";
-
-        std::string py = find_pipeline_python();
-
-        std::ostringstream cmd;
-        cmd << "\"" << py                   << "\" "
-            << "\"" << g_pipeline_script    << "\" "
-            << "\"" << audio_path           << "\" "
-            << "--outdir \"" << outdir.string() << "\" "
-            << "--mode " << mode_str
-            << " 2>&1";
-
-        status.stage    = PipelineStage::Extract;
-        status.progress = 0.01f;
-        status.message  = "Starting pipeline…";
-
-        FILE* pipe = popen(cmd.str().c_str(), "r");
-        if (!pipe) {
-            status.stage = PipelineStage::Error;
-            status.error = "Failed to launch ml_pipeline.py";
-            g_running.store(false);
-            return;
-        }
-
-        char buf[1024];
-        while (fgets(buf, sizeof(buf), pipe)) {
-            if (g_cancel.load()) {
-                pclose(pipe);
-                status.stage   = PipelineStage::Idle;
-                status.message = "Cancelled";
-                g_running.store(false);
-                return;
-            }
-            std::string line(buf);
-            if (!line.empty() && line.back() == '\n') line.pop_back();
-            status.raw_line = line;
-            parse_line(line, status);
-        }
-
-        int ret = pclose(pipe);
-        if (ret != 0 && status.stage != PipelineStage::Done) {
-            status.stage = PipelineStage::Error;
-            status.error = "Pipeline exited with code " + std::to_string(ret);
-        }
-
-        g_running.store(false);
-    });
-
+    g_thread = std::thread(do_transcribe,
+        audio_path, std::ref(status),
+        std::ref(out_words_json), std::ref(out_vocals_wav),
+        mode);
     g_thread.detach();
 }
 

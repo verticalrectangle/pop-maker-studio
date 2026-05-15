@@ -49,6 +49,7 @@ set(SOURCES
     src/audio_fx.cpp
     src/hf_api.cpp
     src/vc_job.cpp
+    src/demucs.cpp
     src/ui/screen_splash.cpp
     src/ui/screen_setup.cpp
     src/ui/screen_studio.cpp
@@ -141,47 +142,5 @@ add_custom_command(
 )
 add_custom_target(embed_portrait DEPENDS ${CMAKE_BINARY_DIR}/portrait_preview.h)
 add_dependencies(pop-maker-studio embed_portrait)
-
-# Embed ml_pipeline.py as a compiled byte array
-add_custom_command(
-    OUTPUT ${CMAKE_BINARY_DIR}/ml_pipeline_embedded.h
-    COMMAND ${CMAKE_COMMAND}
-        -DINPUT=${CMAKE_SOURCE_DIR}/ml_pipeline.py
-        -DVAR=ml_pipeline_py
-        -DOUTPUT=${CMAKE_BINARY_DIR}/ml_pipeline_embedded.h
-        -P ${CMAKE_SOURCE_DIR}/cmake/EmbedFile.cmake
-    DEPENDS ${CMAKE_SOURCE_DIR}/ml_pipeline.py
-    COMMENT "Embedding ml_pipeline.py"
-)
-add_custom_target(embed_pipeline DEPENDS ${CMAKE_BINARY_DIR}/ml_pipeline_embedded.h)
-add_dependencies(pop-maker-studio embed_pipeline)
-
-# Embed ml_prefetch.py as a compiled byte array
-add_custom_command(
-    OUTPUT ${CMAKE_BINARY_DIR}/ml_prefetch_embedded.h
-    COMMAND ${CMAKE_COMMAND}
-        -DINPUT=${CMAKE_SOURCE_DIR}/ml_prefetch.py
-        -DVAR=ml_prefetch_py
-        -DOUTPUT=${CMAKE_BINARY_DIR}/ml_prefetch_embedded.h
-        -P ${CMAKE_SOURCE_DIR}/cmake/EmbedFile.cmake
-    DEPENDS ${CMAKE_SOURCE_DIR}/ml_prefetch.py
-    COMMENT "Embedding ml_prefetch.py"
-)
-add_custom_target(embed_prefetch DEPENDS ${CMAKE_BINARY_DIR}/ml_prefetch_embedded.h)
-add_dependencies(pop-maker-studio embed_prefetch)
-
-# Embed voice_convert.py
-add_custom_command(
-    OUTPUT ${CMAKE_BINARY_DIR}/voice_convert_embedded.h
-    COMMAND ${CMAKE_COMMAND}
-        -DINPUT=${CMAKE_SOURCE_DIR}/voice_convert.py
-        -DVAR=voice_convert_py
-        -DOUTPUT=${CMAKE_BINARY_DIR}/voice_convert_embedded.h
-        -P ${CMAKE_SOURCE_DIR}/cmake/EmbedFile.cmake
-    DEPENDS ${CMAKE_SOURCE_DIR}/voice_convert.py
-    COMMENT "Embedding voice_convert.py"
-)
-add_custom_target(embed_voice_convert DEPENDS ${CMAKE_BINARY_DIR}/voice_convert_embedded.h)
-add_dependencies(pop-maker-studio embed_voice_convert)
 
 install(TARGETS pop-maker-studio DESTINATION bin)
