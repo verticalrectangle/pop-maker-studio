@@ -13,8 +13,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Fetch imgui submodule
-        run: git submodule update --init vendor/imgui
+      - name: Fetch imgui
+        run: |
+          rm -rf vendor/imgui
+          git clone --depth=1 -b docking https://github.com/ocornut/imgui.git vendor/imgui
 
       - name: Install build dependencies
         run: |
