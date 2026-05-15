@@ -1,4 +1,5 @@
 #include "audio_fx.h"
+#include "paths.h"
 #include <cmath>
 #include <cstring>
 #include <algorithm>
@@ -460,16 +461,7 @@ std::vector<float> process_audio_fx(const std::vector<float>& raw,
 // ── TTS ───────────────────────────────────────────────────────────────────────
 
 static std::string piper_cache_dir() {
-    std::string base;
-    if (const char* xdg = getenv("XDG_CACHE_HOME"); xdg && *xdg)
-        base = xdg;
-    else if (const char* home = getenv("HOME"); home && *home)
-        base = std::string(home) + "/.cache";
-    else
-        base = "/tmp";
-    std::string d = base + "/pop-maker-studio/piper";
-    fs::create_directories(d);
-    return d;
+    return app_models_dir() + "/piper";
 }
 
 void tts_generate(const std::string& text, const std::string& voice,
@@ -508,36 +500,10 @@ void tts_generate(const std::string& text, const std::string& voice,
             cfg_path  = onnx_path + ".json";
 
             if (!fs::exists(onnx_path) || !fs::exists(cfg_path)) {
-                out_state.progress = 0.1f;
-                // en_US-amy-medium → en/en_US/en_US-amy-medium/medium/
-                auto us_pos   = voice_id.find('_');
-                auto dash_pos = voice_id.find('-');
-                std::string lang  = (dash_pos != std::string::npos)
-                                    ? voice_id.substr(0, dash_pos) : "en_US";
-                std::string lang2 = (us_pos != std::string::npos && us_pos < dash_pos)
-                                    ? lang.substr(0, us_pos) : lang;
-                auto rdash = voice_id.rfind('-');
-                std::string quality = (rdash != std::string::npos)
-                                      ? voice_id.substr(rdash + 1) : "medium";
-                std::string hf_dir = lang2 + "/" + lang + "/" + voice_id + "/" + quality;
-                std::string base_url =
-                    "https://huggingface.co/rhasspy/piper-voices/resolve/main/";
-
-                for (auto& [fname, local] : std::vector<std::pair<std::string,std::string>>{
-                    {voice_id + ".onnx",      onnx_path},
-                    {voice_id + ".onnx.json", cfg_path},
-                }) {
-                    if (!fs::exists(local)) {
-                        std::string url = base_url + hf_dir + "/" + fname;
-                        std::string dl  = "curl -fsSL --create-dirs -o \""
-                                         + local + "\" \"" + url + "\" 2>&1";
-                        if (system(dl.c_str()) != 0) {  // NOLINT
-                            out_state.error  = "Failed to download " + fname;
-                            out_state.status = TTSStatus::Error;
-                            return;
-                        }
-                    }
-                }
+                out_state.error  = "Piper voice not found: " + voice_id +
+                                   "\nPlace the models/piper/ folder next to the binary.";
+                out_state.status = TTSStatus::Error;
+                return;
             }
         }
 

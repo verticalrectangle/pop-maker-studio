@@ -31,6 +31,7 @@ set(IMGUI_SOURCES
 
 # ── Sources ───────────────────────────────────────────────────────────────────
 set(SOURCES
+    src/paths.cpp
     src/main.cpp
     src/app.cpp
     src/audio.cpp

@@ -3,6 +3,7 @@
 //           → VITS ONNX → ffmpeg encode.
 // Python is only ever used for one-time model export (vc_export.py).
 #include "vc_onnx.h"
+#include "paths.h"
 #include <onnxruntime_cxx_api.h>
 #include <filesystem>
 #include <cmath>
@@ -25,9 +26,7 @@ static constexpr int kYINHop   = 160;     // ~10 ms at 16 kHz → ~100 fps
 // ── Paths ─────────────────────────────────────────────────────────────────────
 
 std::string hubert_onnx_path() {
-    const char* h = getenv("HOME");
-    if (!h) return {};
-    return std::string(h) + "/.cache/pop-maker-studio/hubert/hubert.onnx";
+    return app_models_dir() + "/hubert.onnx";
 }
 bool hubert_onnx_exists() { return fs::exists(hubert_onnx_path()); }
 

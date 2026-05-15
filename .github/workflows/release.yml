@@ -1,0 +1,114 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            cmake ninja-build \
+            libgl-dev libglfw3-dev \
+            ffmpeg \
+            libavcodec-dev libavformat-dev libavutil-dev \
+            libswresample-dev libswscale-dev \
+            libfreetype6-dev \
+            libaubio-dev \
+            libfftw3-dev \
+            pkg-config \
+            curl
+
+      - name: Install ONNX Runtime
+        run: |
+          ORT_VERSION=1.17.3
+          curl -fsSL "https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/onnxruntime-linux-x64-${ORT_VERSION}.tgz" \
+            | tar -xz -C /opt
+          ln -s "/opt/onnxruntime-linux-x64-${ORT_VERSION}" /opt/onnxruntime
+          echo "PKG_CONFIG_PATH=/opt/onnxruntime/lib/pkgconfig:$PKG_CONFIG_PATH" >> "$GITHUB_ENV"
+          echo "CMAKE_PREFIX_PATH=/opt/onnxruntime" >> "$GITHUB_ENV"
+
+      - name: Build whisper.cpp
+        run: |
+          git clone --depth=1 https://github.com/ggerganov/whisper.cpp vendor/whisper.cpp || true
+          cmake -S vendor/whisper.cpp -B vendor/whisper.cpp/build \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DWHISPER_BUILD_TESTS=OFF \
+            -DWHISPER_BUILD_EXAMPLES=OFF
+          cmake --build vendor/whisper.cpp/build --parallel
+          sudo cmake --install vendor/whisper.cpp/build
+
+      - name: Build pop-maker-studio
+        run: |
+          cmake -S . -B build \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DONNXRUNTIME_ROOT=/opt/onnxruntime
+          cmake --build build --parallel
+
+      - name: Download models
+        env:
+          HUBERT_ONNX_URL: ${{ secrets.HUBERT_ONNX_URL }}
+        run: |
+          mkdir -p release/models/piper
+
+          echo "Downloading Whisper model..."
+          curl -fsSL -o release/models/ggml-large-v3-turbo-q5_0.bin \
+            "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin"
+
+          echo "Downloading Kim_Vocal_2..."
+          curl -fsSL -o release/models/Kim_Vocal_2.onnx \
+            "https://huggingface.co/Politrees/UVR_resources/resolve/main/models/MDXNet/Kim_Vocal_2.onnx"
+
+          echo "Downloading u2net..."
+          curl -fsSL -o release/models/u2net_human_seg.onnx \
+            "https://github.com/danielgatis/rembg/releases/download/v0.0.0/u2net_human_seg.onnx"
+
+          if [ -n "$HUBERT_ONNX_URL" ]; then
+            echo "Downloading HuBERT..."
+            curl -fsSL -o release/models/hubert.onnx "$HUBERT_ONNX_URL"
+          else
+            echo "WARNING: HUBERT_ONNX_URL secret not set — hubert.onnx will be missing"
+          fi
+
+          echo "Downloading Piper voices..."
+          BASE_URL="https://huggingface.co/rhasspy/piper-voices/resolve/main"
+          for VOICE in en_US-amy-medium en_US-ryan-medium en_US-lessac-medium en_GB-alan-medium; do
+            # Parse lang2/lang/quality from voice id pattern: ll_CC-name-quality
+            LANG="${VOICE%%-*}"          # en_US or en_GB
+            LANG2="${LANG%%_*}"          # en
+            QUALITY="${VOICE##*-}"       # medium
+            HF_DIR="${LANG2}/${LANG}/${VOICE}/${QUALITY}"
+            for EXT in onnx onnx.json; do
+              curl -fsSL -o "release/models/piper/${VOICE}.${EXT}" \
+                "${BASE_URL}/${HF_DIR}/${VOICE}.${EXT}"
+            done
+          done
+
+      - name: Package release
+        run: |
+          mkdir -p pop-maker-studio
+          cp build/pop-maker-studio pop-maker-studio/pop-maker-studio
+          cp -r release/models pop-maker-studio/models
+          tar -czf pop-maker-studio-linux-x86_64.tar.gz pop-maker-studio/
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: pop-maker-studio-linux-x86_64.tar.gz
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,5 +1,6 @@
 #include "transcribe.h"
 #include "demucs.h"
+#include "paths.h"
 #include <whisper.h>
 #include <thread>
 #include <atomic>
@@ -20,14 +21,8 @@ static std::atomic<bool> g_cancel{false};
 
 // ── Whisper ggml model path ───────────────────────────────────────────────────
 
-static const char* kModelFile = "ggml-large-v3-turbo-q5_0.bin";
-static const char* kModelUrl  =
-    "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin";
-
 fs::path whisper_model_path() {
-    const char* home = getenv("HOME");
-    if (!home) return {};
-    return fs::path(home) / ".cache" / "pop-maker-studio" / "whisper" / kModelFile;
+    return fs::path(app_models_dir()) / "ggml-large-v3-turbo-q5_0.bin";
 }
 
 bool whisper_model_exists() { return fs::exists(whisper_model_path()); }
@@ -70,7 +65,7 @@ static bool separate_channels(
     if (!err.empty()) {
         status.stage = PipelineStage::Error;
         status.error = "Stem separation failed: " + err +
-                       "\nDownload the MDX vocal model (~64 MB) from the Setup screen.";
+                       "\nPlace the models/ folder next to the binary.";
         return false;
     }
     return true;
@@ -195,24 +190,14 @@ static void do_transcribe(
         return;
     }
 
-    // ── Download ggml model if needed ─────────────────────────────────────────
+    // ── Check ggml model exists ───────────────────────────────────────────────
     fs::path mp = whisper_model_path();
     if (!fs::exists(mp)) {
-        status.stage    = PipelineStage::Extract;
-        status.progress = 0.02f;
-        status.message  = "Downloading whisper large-v3-turbo (~584 MB)…";
-
-        fs::create_directories(mp.parent_path());
-        std::string tmp = mp.string() + ".part";
-        std::string dl  = "curl -fsSL -o \"" + tmp + "\" \"" + kModelUrl + "\"";
-        if (system(dl.c_str()) != 0 || !fs::exists(tmp)) {  // NOLINT
-            fs::remove(tmp);
-            status.stage = PipelineStage::Error;
-            status.error = "Failed to download whisper model";
-            g_running.store(false);
-            return;
-        }
-        fs::rename(tmp, mp);
+        status.stage = PipelineStage::Error;
+        status.error = "Whisper model not found: " + mp.string() +
+                       "\nPlace the models/ folder next to the binary.";
+        g_running.store(false);
+        return;
     }
 
     if (g_cancel.load()) {

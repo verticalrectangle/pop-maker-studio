@@ -8,6 +8,7 @@
 #include <filesystem>
 
 #include "app.h"
+#include "paths.h"
 #include "video.h"
 #include "fx_shader.h"
 #include "render.h"
@@ -30,12 +31,9 @@ static void glfw_error_callback(int err, const char* desc) {
     fprintf(stderr, "GLFW error %d: %s\n", err, desc);
 }
 
-// Check for the whisper ggml model in the default cache location.
+// Check for the whisper ggml model in the bundled models/ directory.
 bool models_detect() {
-    const char* home = getenv("HOME");
-    if (!home) return false;
-    fs::path mp = fs::path(home) / ".cache" / "pop-maker-studio"
-                                 / "whisper" / "ggml-large-v3-turbo-q5_0.bin";
+    fs::path mp = fs::path(app_models_dir()) / "ggml-large-v3-turbo-q5_0.bin";
     return fs::exists(mp);
 }
 

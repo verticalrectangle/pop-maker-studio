@@ -1,4 +1,5 @@
 #include "bg_remove.h"
+#include "paths.h"
 #include "proxy.h"
 #include <onnxruntime_cxx_api.h>
 #include <filesystem>
@@ -61,13 +62,7 @@ float bg_remove_read_fps(const std::string& mask_dir) {
 // ── u2net helpers ─────────────────────────────────────────────────────────────
 
 static std::string u2net_model_path() {
-    const char* home = getenv("HOME");
-    if (!home || !*home) return "";
-    std::string p = std::string(home) + "/.u2net/u2net_human_seg.onnx";
-    if (fs::exists(p)) return p;
-    p = std::string(home) + "/.u2net/u2net.onnx";
-    if (fs::exists(p)) return p;
-    return "";
+    return app_models_dir() + "/u2net_human_seg.onnx";
 }
 
 static const float U2NET_MEAN[3] = {0.485f, 0.456f, 0.406f};
@@ -207,9 +202,10 @@ static void run_job(std::shared_ptr<JobData> data,
 
     // Load ONNX model
     std::string model = u2net_model_path();
-    if (model.empty()) {
+    if (!fs::exists(model)) {
         std::lock_guard<std::mutex> lk(data->mu);
-        data->error_msg = "u2net model not found — download it first";
+        data->error_msg = "u2net model not found: " + model +
+                          "\nPlace the models/ folder next to the binary.";
         data->status.store(2);
         return;
     }
@@ -461,73 +457,20 @@ bool bg_remove_run_hires(const std::string& video_path,
 
 // ── rembg/u2net model management ─────────────────────────────────────────────
 
-static std::atomic<int>  s_rembg_ok{-1};
 static std::atomic<int>  s_install_status{0};  // 0=idle 1=running 2=done 3=failed
 static std::string       s_install_error;
 static std::mutex        s_install_mu;
 
 bool rembg_is_installed(const std::string& /*python_path*/) {
-    int cached = s_rembg_ok.load();
-    if (cached == 1) return true;
-    if (cached == 0) return false;
-    // Async check on first call
-    s_rembg_ok.store(-2);
-    std::thread([]() {
-        s_rembg_ok.store(u2net_model_path().empty() ? 0 : 1);
-    }).detach();
-    return false;
+    return fs::exists(u2net_model_path());
 }
 
 void rembg_install_reset() {
-    s_rembg_ok.store(-1);
+    // no-op: model is bundled
 }
 
 void rembg_install_start(const std::string& /*python_path*/) {
-    if (s_install_status.load() == 1) return;
-    s_install_status.store(1);
-    { std::lock_guard<std::mutex> lk(s_install_mu); s_install_error.clear(); }
-
-    std::thread([]() {
-        const char* home = getenv("HOME");
-        if (!home) {
-            std::lock_guard<std::mutex> lk(s_install_mu);
-            s_install_error = "HOME not set";
-            s_install_status.store(3);
-            return;
-        }
-        std::string u2net_dir = std::string(home) + "/.u2net";
-        std::string out = u2net_dir + "/u2net_human_seg.onnx";
-
-        if (!fs::exists(out)) {
-            fs::create_directories(u2net_dir);
-            // Download from GitHub releases (same source as rembg Python library)
-            std::string url = "https://github.com/danielgatis/rembg/releases/download/v0.0.0/u2net_human_seg.onnx";
-            std::string cmd = "curl -fSL --create-dirs --progress-bar"
-                              " -o \"" + out + "\" \"" + url + "\" 2>&1";
-            FILE* pipe = popen(cmd.c_str(), "r");
-            std::string output;
-            if (pipe) {
-                char buf[256];
-                while (fgets(buf, sizeof(buf), pipe)) output += buf;
-                int ret = pclose(pipe);
-                if (ret != 0 || !fs::exists(out)) {
-                    std::lock_guard<std::mutex> lk(s_install_mu);
-                    s_install_error = output.size() > 300
-                                      ? output.substr(output.size()-300) : output;
-                    s_install_status.store(3);
-                    return;
-                }
-            } else {
-                std::lock_guard<std::mutex> lk(s_install_mu);
-                s_install_error = "popen failed";
-                s_install_status.store(3);
-                return;
-            }
-        }
-
-        s_rembg_ok.store(1);
-        s_install_status.store(2);
-    }).detach();
+    // no-op: model is bundled, cannot install
 }
 
 RembgInstallStatus rembg_install_status() {

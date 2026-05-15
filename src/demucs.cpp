@@ -3,6 +3,7 @@
 // Pipeline: ffmpeg decode → STFT (FFTW3) → chunked ONNX → ISTFT → ffmpeg encode.
 // Stems: vocals (model output) + instrumental (original − vocals).
 #include "demucs.h"
+#include "paths.h"
 #include <onnxruntime_cxx_api.h>
 #include <fftw3.h>
 #include <filesystem>
@@ -18,10 +19,6 @@
 namespace fs = std::filesystem;
 using cx = std::complex<float>;
 
-static const char* kModelFile = "Kim_Vocal_2.onnx";
-static const char* kModelUrl  =
-    "https://huggingface.co/Politrees/UVR_resources/resolve/main/models/MDXNet/Kim_Vocal_2.onnx";
-
 static constexpr int   kRate   = 44100;
 static constexpr int   kNFFT   = 6144;         // n_fft
 static constexpr int   kDimF   = 3072;         // n_fft / 2 — freq bins used by model
@@ -35,36 +32,17 @@ static constexpr int   kStride = kDimT - kOvlap; // 192 frames
 // ── Paths ─────────────────────────────────────────────────────────────────────
 
 std::string demucs_model_path() {
-    const char* h = getenv("HOME");
-    if (!h) return {};
-    return std::string(h) + "/.cache/pop-maker-studio/mdx/" + kModelFile;
+    return app_models_dir() + "/Kim_Vocal_2.onnx";
 }
 bool demucs_model_exists() { return fs::exists(demucs_model_path()); }
 
-// ── Download ──────────────────────────────────────────────────────────────────
+// ── Download (no-op — model must be bundled) ──────────────────────────────────
 
 std::string demucs_download(
-    std::function<void(float, const std::string&)> on_progress)
+    std::function<void(float, const std::string&)> /*on_progress*/)
 {
     if (demucs_model_exists()) return {};
-
-    fs::path mp = demucs_model_path();
-    std::error_code ec;
-    fs::create_directories(mp.parent_path(), ec);
-
-    if (on_progress) on_progress(0.01f, "Downloading Kim_Vocal_2 MDX model (~64 MB)…");
-
-    std::string tmp = mp.string() + ".part";
-    std::string cmd = "curl -fsSL -o \"" + tmp + "\" \"" + kModelUrl + "\"";
-    if (system(cmd.c_str()) != 0 || !fs::exists(tmp)) {  // NOLINT
-        fs::remove(tmp, ec);
-        return "Failed to download MDX vocal model";
-    }
-    fs::rename(tmp, mp, ec);
-    if (ec) return "Failed to install model: " + ec.message();
-
-    if (on_progress) on_progress(1.f, "Model ready");
-    return {};
+    return "Model not found: " + demucs_model_path();
 }
 
 // ── Audio I/O ─────────────────────────────────────────────────────────────────
@@ -181,10 +159,8 @@ std::string demucs_separate(
     };
 
     if (!demucs_model_exists()) {
-        std::string err = demucs_download([&](float p, const std::string& m) {
-            prog(p * 0.20f, m);
-        });
-        if (!err.empty()) return err;
+        return "Model not found: " + demucs_model_path() +
+               "\nPlace the models/ folder next to the binary.";
     }
 
     // ── Load audio ────────────────────────────────────────────────────────────
