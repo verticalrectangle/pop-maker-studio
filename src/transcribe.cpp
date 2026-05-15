@@ -8,7 +8,6 @@
 #include <fstream>
 #include <cstdio>
 #include <cstdlib>
-#include <cmath>
 #include <vector>
 #include <string>
 #include "json.hpp"

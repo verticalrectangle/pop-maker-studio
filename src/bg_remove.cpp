@@ -12,8 +12,6 @@
 #include <string>
 #include <cstdio>
 #include <cstdlib>
-#include <cstring>
-#include <cmath>
 #include <algorithm>
 #include "stb_image.h"
 #include "stb_image_write.h"
