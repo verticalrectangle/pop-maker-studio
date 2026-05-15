@@ -8,6 +8,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 # ── Dependencies ──────────────────────────────────────────────────────────────
 find_package(OpenGL REQUIRED)
 find_package(PkgConfig REQUIRED)
+find_package(whisper CONFIG QUIET)
 pkg_check_modules(GLFW REQUIRED glfw3)
 pkg_check_modules(AVCODEC  REQUIRED libavcodec)
 pkg_check_modules(AVFORMAT REQUIRED libavformat)
@@ -106,7 +107,7 @@ target_link_libraries(pop-maker-studio PRIVATE
     ${FREETYPE_LIBRARIES}
     ${AUBIO_LIBRARIES}
     onnxruntime
-    whisper
+    $<IF:$<TARGET_EXISTS:whisper::whisper>,whisper::whisper,whisper>
     fftw3f
     dl pthread
 )
