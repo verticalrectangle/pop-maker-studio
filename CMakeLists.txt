@@ -111,9 +111,12 @@ target_link_libraries(pop-maker-studio PRIVATE
     dl pthread
 )
 
-target_include_directories(pop-maker-studio PRIVATE
-    /usr/include/onnxruntime
-)
+if(DEFINED ONNXRUNTIME_ROOT)
+    target_include_directories(pop-maker-studio PRIVATE ${ONNXRUNTIME_ROOT}/include)
+    target_link_directories(pop-maker-studio PRIVATE ${ONNXRUNTIME_ROOT}/lib)
+else()
+    target_include_directories(pop-maker-studio PRIVATE /usr/include/onnxruntime)
+endif()
 
 target_compile_definitions(pop-maker-studio PRIVATE IMGUI_ENABLE_FREETYPE)
 
