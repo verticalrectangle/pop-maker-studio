@@ -59,9 +59,10 @@ jobs:
             -DONNXRUNTIME_ROOT=/opt/onnxruntime
           cmake --build build --parallel
 
+      - name: Build export-hubert
+        run: cmake --build build --target export-hubert --parallel
+
       - name: Download models
-        env:
-          HUBERT_ONNX_URL: ${{ secrets.HUBERT_ONNX_URL }}
         run: |
           mkdir -p release/models/piper
 
@@ -77,12 +78,12 @@ jobs:
           curl -fsSL -o release/models/u2net_human_seg.onnx \
             "https://github.com/danielgatis/rembg/releases/download/v0.0.0/u2net_human_seg.onnx"
 
-          if [ -n "$HUBERT_ONNX_URL" ]; then
-            echo "Downloading HuBERT..."
-            curl -fsSL -o release/models/hubert.onnx "$HUBERT_ONNX_URL"
-          else
-            echo "WARNING: HUBERT_ONNX_URL secret not set — hubert.onnx will be missing"
-          fi
+          echo "Downloading HuBERT checkpoint..."
+          curl -fsSL -o hubert_base.pt \
+            "https://huggingface.co/lj1995/VoiceConversionWebUI/resolve/main/hubert_base.pt"
+
+          echo "Exporting HuBERT to ONNX..."
+          ./build/export-hubert hubert_base.pt release/models/hubert.onnx
 
           echo "Downloading Piper voices..."
           BASE_URL="https://huggingface.co/rhasspy/piper-voices/resolve/main"

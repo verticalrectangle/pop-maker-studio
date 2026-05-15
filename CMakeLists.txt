@@ -53,6 +53,7 @@ set(SOURCES
     src/vc_onnx.cpp
     src/pth_reader.cpp
     src/rvc_onnx.cpp
+    src/hubert_onnx.cpp
     src/demucs.cpp
     src/ui/screen_splash.cpp
     src/ui/screen_setup.cpp
@@ -149,3 +150,29 @@ add_custom_target(embed_portrait DEPENDS ${CMAKE_BINARY_DIR}/portrait_preview.h)
 add_dependencies(pop-maker-studio embed_portrait)
 
 install(TARGETS pop-maker-studio DESTINATION bin)
+
+# ── export-hubert CLI tool ────────────────────────────────────────────────────
+add_executable(export-hubert
+    tools/export_hubert.cpp
+    src/pth_reader.cpp
+    src/hubert_onnx.cpp
+)
+
+target_include_directories(export-hubert PRIVATE
+    src
+    ${AVCODEC_INCLUDE_DIRS}
+    ${AVFORMAT_INCLUDE_DIRS}
+    ${AVUTIL_INCLUDE_DIRS}
+)
+
+target_link_libraries(export-hubert PRIVATE
+    ${AVCODEC_LIBRARIES}
+    ${AVFORMAT_LIBRARIES}
+    ${AVUTIL_LIBRARIES}
+    dl pthread
+)
+
+target_compile_options(export-hubert PRIVATE
+    -Wall -Wextra -Wno-unused-parameter
+    $<$<CONFIG:Release>:-O2>
+)
