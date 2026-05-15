@@ -358,6 +358,23 @@ void apply_subtitle_mode(AppState& state) {
     if (state.words_json_path.empty()) return;
     const std::string src = state.audio_path;
 
+    // Compute timeline offset: whisper timestamps are relative to the audio file
+    // start, but the clip may sit at a non-zero timeline position or have an in_point.
+    // offset = clip.start - clip.in_point
+    float tl_offset = 0.f;
+    for (auto& t : state.tracks) {
+        bool found = false;
+        for (auto& c : t.clips) {
+            if ((c.clip_type == ClipType::Audio || c.clip_type == ClipType::Video) &&
+                c.source_id == src) {
+                tl_offset = c.start - c.in_point;
+                found = true;
+                break;
+            }
+        }
+        if (found) break;
+    }
+
     // Remove all Lyrics clips from this source across all tracks
     if (!src.empty()) {
         for (auto& t : state.tracks) {
@@ -394,8 +411,8 @@ void apply_subtitle_mode(AppState& state) {
             for (auto& seg : j) {
                 Clip c;
                 c.text  = seg["text"].get<std::string>();
-                c.start = seg["start"].get<float>();
-                c.end   = seg["end"].get<float>();
+                c.start = seg["start"].get<float>() + tl_offset;
+                c.end   = seg["end"].get<float>()   + tl_offset;
                 stamp(c);
                 lyrics->clips.push_back(c);
             }
@@ -412,8 +429,8 @@ void apply_subtitle_mode(AppState& state) {
         for (auto& w : j) {
             Clip c;
             c.text  = w["word"].get<std::string>();
-            c.start = w["start"].get<float>();
-            c.end   = w["end"].get<float>();
+            c.start = w["start"].get<float>() + tl_offset;
+            c.end   = w["end"].get<float>()   + tl_offset;
             raw.push_back(c);
         }
         auto grouped = group_words(raw, state.subtitle_mode, state.subtitle_n);
@@ -424,8 +441,8 @@ void apply_subtitle_mode(AppState& state) {
         for (auto& w : j) {
             WordEntry we;
             we.text  = w["word"].get<std::string>();
-            we.start = w["start"].get<float>();
-            we.end   = w["end"].get<float>();
+            we.start = w["start"].get<float>() + tl_offset;
+            we.end   = w["end"].get<float>()   + tl_offset;
             all_words.push_back(we);
         }
         for (auto& c : grouped) {
@@ -454,6 +471,21 @@ void apply_subtitle_pipeline(AppState& state) {
     std::ifstream f(state.segments_json_path);
     if (!f) return;
     const std::string src = state.audio_path;
+
+    float tl_offset = 0.f;
+    for (auto& t : state.tracks) {
+        bool found = false;
+        for (auto& c : t.clips) {
+            if ((c.clip_type == ClipType::Audio || c.clip_type == ClipType::Video) &&
+                c.source_id == src) {
+                tl_offset = c.start - c.in_point;
+                found = true;
+                break;
+            }
+        }
+        if (found) break;
+    }
+
     // Remove existing Subtitle clips from this source across all tracks
     if (!src.empty()) {
         for (auto& t : state.tracks) {
@@ -480,8 +512,8 @@ void apply_subtitle_pipeline(AppState& state) {
             c.sub_pos   = 3;      // custom Y — slightly below center
             c.sub_pos_y = 0.62f;
             c.text  = seg["text"].get<std::string>();
-            c.start = seg["start"].get<float>();
-            c.end   = seg["end"].get<float>();
+            c.start = seg["start"].get<float>() + tl_offset;
+            c.end   = seg["end"].get<float>()   + tl_offset;
             tr->clips.push_back(c);
         }
     } catch (...) {}
