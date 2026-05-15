@@ -461,9 +461,6 @@ struct AppState {
     std::string extract_wav_path;
     int         extract_source_track = -1;  // track index of the video clip that was extracted
 
-    // venv python
-    std::string python_path = "/home/alexis/dev/song2subs/venv/bin/python";
-
     // model availability
     bool models_ready   = false;  // whisper + demucs weights detected on disk
     bool models_skipped = false;  // user chose "Skip for now" on setup screen

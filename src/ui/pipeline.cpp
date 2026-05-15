@@ -389,6 +389,7 @@ void apply_subtitle_mode(AppState& state) {
                 lyrics = &state.tracks.front();
                 lyrics->name = "Lyrics";
             }
+            lyrics->managed = true;
             lyrics->clips.clear();
             for (auto& seg : j) {
                 Clip c;
@@ -442,6 +443,7 @@ void apply_subtitle_mode(AppState& state) {
             lyrics = &state.tracks.front();
             lyrics->name = "Lyrics";
         }
+        lyrics->managed = true;
         lyrics->clips = grouped;
     } catch (...) {}
 }
