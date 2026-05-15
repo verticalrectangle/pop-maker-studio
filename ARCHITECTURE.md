@@ -200,7 +200,7 @@ src/
   rvc_onnx.h/.cpp       VITS→ONNX exporter (hand-rolled protobuf)
   vc_job.h/.cpp         Voice conversion job queue
   vc_onnx.h/.cpp        HuBERT + voice ONNX inference
-  demucs.h/.cpp         HTDemucs ONNX inference, hand-rolled STFT
+  demucs.h/.cpp         MDX-Net (Kim_Vocal_2) vocal separation, FFTW3 STFT
   presets.h/.cpp        User effect presets (JSON)
   generated/            Auto-generated from codegen_effects.py — do not edit
   ui/
