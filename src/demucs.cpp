@@ -1,38 +1,43 @@
-// HTDemucs stem separation — C++ ONNX Runtime inference.
-// The MrCitron ONNX export handles STFT/iSTFT internally.
-// Interface: input[1,2,N] stereo → output[1,4,2,N] four stems stereo.
-// Stem order: drums=0 bass=1 other=2 vocals=3
+// MDX-Net vocal separation — C++ ONNX Runtime inference.
+// Model: Kim_Vocal_2.onnx  (UVR5 community, battle-tested)
+// Pipeline: ffmpeg decode → STFT (FFTW3) → chunked ONNX → ISTFT → ffmpeg encode.
+// Stems: vocals (model output) + instrumental (original − vocals).
 #include "demucs.h"
 #include <onnxruntime_cxx_api.h>
+#include <fftw3.h>
 #include <filesystem>
 #include <cmath>
 #include <vector>
 #include <string>
 #include <algorithm>
 #include <functional>
+#include <complex>
 #include <cstdlib>
 #include <cstdio>
 
 namespace fs = std::filesystem;
+using cx = std::complex<float>;
 
-static const char* kModelFile  = "htdemucs.onnx";
-static const char* kModelUrl   =
-    "https://huggingface.co/MrCitron/demucs-v4-onnx/resolve/main/htdemucs.onnx";
+static const char* kModelFile = "Kim_Vocal_2.onnx";
+static const char* kModelUrl  =
+    "https://huggingface.co/Politrees/UVR_resources/resolve/main/models/MDXNet/Kim_Vocal_2.onnx";
 
-static constexpr int kRate     = 44100;
-static constexpr int kNumStem  = 4;
-static constexpr int kVocals   = 3;   // drums=0 bass=1 other=2 vocals=3
-// Segment length and overlap for overlap-add on long files.
-static constexpr int kSegLen   = 343980;   // 7.8 s — HTDemucs fixed segment
-static constexpr int kOverlap  = 17199;    // 0.39 s fade zone each side (5%)
-static constexpr int kStride   = kSegLen - 2 * kOverlap;   // 309582
+static constexpr int   kRate   = 44100;
+static constexpr int   kNFFT   = 6144;         // n_fft
+static constexpr int   kDimF   = 3072;         // n_fft / 2 — freq bins used by model
+static constexpr int   kDimT   = 256;          // time frames per model chunk
+static constexpr int   kHop    = 1024;         // STFT hop length
+static constexpr float kComp   = 1.035f;       // Kim_Vocal_2 amplitude compensate
+// Overlap between consecutive model chunks (in STFT frames).
+static constexpr int   kOvlap  = 64;           // 25% of 256
+static constexpr int   kStride = kDimT - kOvlap; // 192 frames
 
 // ── Paths ─────────────────────────────────────────────────────────────────────
 
 std::string demucs_model_path() {
     const char* h = getenv("HOME");
     if (!h) return {};
-    return std::string(h) + "/.cache/pop-maker-studio/demucs/" + kModelFile;
+    return std::string(h) + "/.cache/pop-maker-studio/mdx/" + kModelFile;
 }
 bool demucs_model_exists() { return fs::exists(demucs_model_path()); }
 
@@ -47,13 +52,13 @@ std::string demucs_download(
     std::error_code ec;
     fs::create_directories(mp.parent_path(), ec);
 
-    if (on_progress) on_progress(0.01f, "Downloading HTDemucs model (~289 MB)…");
+    if (on_progress) on_progress(0.01f, "Downloading Kim_Vocal_2 MDX model (~64 MB)…");
 
     std::string tmp = mp.string() + ".part";
     std::string cmd = "curl -fsSL -o \"" + tmp + "\" \"" + kModelUrl + "\"";
     if (system(cmd.c_str()) != 0 || !fs::exists(tmp)) {  // NOLINT
         fs::remove(tmp, ec);
-        return "Failed to download HTDemucs model";
+        return "Failed to download MDX vocal model";
     }
     fs::rename(tmp, mp, ec);
     if (ec) return "Failed to install model: " + ec.message();
@@ -64,7 +69,6 @@ std::string demucs_download(
 
 // ── Audio I/O ─────────────────────────────────────────────────────────────────
 
-// Returns interleaved L R float32 at kRate. Sets n to per-channel count.
 static std::vector<float> read_stereo(const std::string& p, int& n) {
     std::string cmd = "ffmpeg -hide_banner -loglevel error"
                       " -i \"" + p + "\""
@@ -81,15 +85,87 @@ static std::vector<float> read_stereo(const std::string& p, int& n) {
     return buf;
 }
 
-static bool write_stereo(const std::string& p, const std::vector<float>& d) {
+static bool write_stereo(const std::string& p, const std::vector<float>& d, int n) {
     std::string cmd = "ffmpeg -hide_banner -loglevel error -y"
                       " -f f32le -ar " + std::to_string(kRate) +
                       " -ac 2 -i pipe:0"
                       " \"" + p + "\" 2>/dev/null";
     FILE* fp = popen(cmd.c_str(), "w");
     if (!fp) return false;
-    fwrite(d.data(), sizeof(float), d.size(), fp);
+    fwrite(d.data(), sizeof(float), (size_t)n * 2, fp);
     return pclose(fp) == 0;
+}
+
+// ── STFT / ISTFT ──────────────────────────────────────────────────────────────
+
+// Hann window, periodic (matches librosa default).
+static std::vector<float> make_hann(int n) {
+    std::vector<float> w(n);
+    for (int i = 0; i < n; i++)
+        w[i] = 0.5f * (1.f - cosf(2.f * float(M_PI) * i / n));
+    return w;
+}
+
+// STFT of a mono signal.  Returns complex spectrum [T][kNFFT/2+1].
+// Uses center-padding (n_fft/2 zeros on each side) matching librosa default.
+static std::vector<std::vector<cx>>
+stft_mono(const std::vector<float>& x, const std::vector<float>& win,
+          fftwf_plan plan, fftwf_complex* out_c, float* in_f)
+{
+    int N   = (int)x.size();
+    int pad = kNFFT / 2;
+    int T   = (N + 2 * pad - kNFFT) / kHop + 1;
+
+    std::vector<std::vector<cx>> spec(T, std::vector<cx>(kNFFT / 2 + 1));
+
+    for (int t = 0; t < T; t++) {
+        int start = t * kHop - pad;
+        for (int i = 0; i < kNFFT; i++) {
+            int idx = start + i;
+            in_f[i] = (idx >= 0 && idx < N) ? x[idx] * win[i] : 0.f;
+        }
+        fftwf_execute(plan);
+        for (int f = 0; f <= kNFFT / 2; f++)
+            spec[t][f] = cx(out_c[f][0], out_c[f][1]);
+    }
+    return spec;
+}
+
+// ISTFT: inverse of stft_mono.  Returns reconstructed signal of length N.
+static std::vector<float>
+istft_mono(const std::vector<std::vector<cx>>& spec, int N,
+           const std::vector<float>& win,
+           fftwf_plan iplan, float* out_f, fftwf_complex* in_c)
+{
+    int T   = (int)spec.size();
+    int pad = kNFFT / 2;
+
+    std::vector<float> buf(N + 2 * pad, 0.f);
+    std::vector<float> wsq(N + 2 * pad, 0.f);
+
+    for (int t = 0; t < T; t++) {
+        // Fill complex input (n_fft/2+1 bins)
+        for (int f = 0; f <= kNFFT / 2; f++) {
+            in_c[f][0] = spec[t][f].real();
+            in_c[f][1] = spec[t][f].imag();
+        }
+        fftwf_execute(iplan);
+
+        int start = t * kHop;
+        float norm = 1.f / kNFFT;
+        for (int i = 0; i < kNFFT; i++) {
+            buf[start + i] += out_f[i] * win[i] * norm;
+            wsq[start + i] += win[i] * win[i];
+        }
+    }
+
+    // Normalize overlap-add by window power, trim center padding.
+    std::vector<float> result(N);
+    for (int i = 0; i < N; i++) {
+        float w = wsq[i + pad];
+        result[i] = (w > 1e-8f) ? buf[i + pad] / w : 0.f;
+    }
+    return result;
 }
 
 // ── Main separation ───────────────────────────────────────────────────────────
@@ -104,30 +180,46 @@ std::string demucs_separate(
         if (on_progress) on_progress(p, m);
     };
 
-    // ── Download model if needed ──────────────────────────────────────────────
     if (!demucs_model_exists()) {
         std::string err = demucs_download([&](float p, const std::string& m) {
-            prog(p * 0.30f, m);
+            prog(p * 0.20f, m);
         });
         if (!err.empty()) return err;
     }
 
     // ── Load audio ────────────────────────────────────────────────────────────
-    prog(0.30f, "Loading audio…");
+    prog(0.20f, "Loading audio…");
     int N = 0;
     auto interleaved = read_stereo(input_path, N);
     if (N == 0) return "Failed to decode audio";
 
-    // Deinterleave: L[0..N-1] then R[0..N-1] (model wants non-interleaved)
     std::vector<float> L(N), R(N);
     for (int i = 0; i < N; i++) { L[i] = interleaved[2*i]; R[i] = interleaved[2*i+1]; }
-    interleaved.clear();
-    interleaved.shrink_to_fit();
+    interleaved.clear(); interleaved.shrink_to_fit();
+
+    // ── FFTW setup ────────────────────────────────────────────────────────────
+    prog(0.22f, "Computing spectrograms…");
+
+    auto win = make_hann(kNFFT);
+
+    float*         fft_in  = fftwf_alloc_real(kNFFT);
+    fftwf_complex* fft_out = fftwf_alloc_complex(kNFFT / 2 + 1);
+    fftwf_complex* iff_in  = fftwf_alloc_complex(kNFFT / 2 + 1);
+    float*         iff_out = fftwf_alloc_real(kNFFT);
+
+    fftwf_plan fwd  = fftwf_plan_dft_r2c_1d(kNFFT, fft_in,  fft_out, FFTW_ESTIMATE);
+    fftwf_plan inv  = fftwf_plan_dft_c2r_1d(kNFFT, iff_in,  iff_out, FFTW_ESTIMATE);
+
+    // ── STFT of both channels ─────────────────────────────────────────────────
+    auto specL = stft_mono(L, win, fwd, fft_out, fft_in);
+    auto specR = stft_mono(R, win, fwd, fft_out, fft_in);
+
+    int T_total = (int)specL.size();  // total STFT frames
 
     // ── ONNX session ──────────────────────────────────────────────────────────
-    prog(0.32f, "Loading HTDemucs model…");
+    prog(0.28f, "Loading MDX model…");
 
-    Ort::Env env(ORT_LOGGING_LEVEL_WARNING, "demucs");
+    Ort::Env env(ORT_LOGGING_LEVEL_WARNING, "mdx");
     Ort::SessionOptions opts;
     opts.SetIntraOpNumThreads(4);
     opts.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
@@ -135,113 +227,122 @@ std::string demucs_separate(
     catch (...) {}
 
     Ort::Session session(env, demucs_model_path().c_str(), opts);
-
-    // Validate model interface at runtime
     Ort::AllocatorWithDefaultOptions alloc;
-    if (session.GetInputCount() < 1 || session.GetOutputCount() < 1)
-        return "Unexpected model: no inputs or outputs";
-
     auto in0  = session.GetInputNameAllocated(0, alloc);
     auto out0 = session.GetOutputNameAllocated(0, alloc);
     std::string in_name(in0.get()), out_name(out0.get());
 
-    // ── Overlap-add accumulators ───────────────────────────────────────────────
-    std::vector<float> voc_L(N, 0.f), voc_R(N, 0.f);
-    std::vector<float> ins_L(N, 0.f), ins_R(N, 0.f);
-    std::vector<float> wsum  (N, 0.f);
+    // ── Chunked MDX inference ─────────────────────────────────────────────────
+    // Accumulators for the vocal spectrogram.
+    std::vector<std::vector<cx>> voc_L(T_total, std::vector<cx>(kDimF, 0.f));
+    std::vector<std::vector<cx>> voc_R(T_total, std::vector<cx>(kDimF, 0.f));
+    std::vector<float>           wsum(T_total, 0.f);
 
-    int n_segs = (N <= kSegLen) ? 1
-               : (int)std::ceil((double)(N - kSegLen) / kStride) + 1;
+    int n_chunks = std::max(1, (T_total - kDimT + kStride - 1) / kStride + 1);
+    if (T_total <= kDimT) n_chunks = 1;
 
-    for (int seg = 0; seg < n_segs; seg++) {
-        int seg_start = seg * kStride;
-        int seg_end   = std::min(seg_start + kSegLen, N);
-        int seg_n     = seg_end - seg_start;
+    Ort::MemoryInfo mem = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
+    std::vector<int64_t> in_shape = {1, 4, kDimF, kDimT};
 
-        prog(0.35f + (float)seg / n_segs * 0.55f,
-             "Separating stems (segment " + std::to_string(seg + 1) +
-             "/" + std::to_string(n_segs) + ")…");
+    for (int chunk = 0; chunk < n_chunks; chunk++) {
+        int t0 = chunk * kStride;
+        int t1 = std::min(t0 + kDimT, T_total);
+        int tN = t1 - t0;  // actual frames in this chunk
 
-        // Build model input [1, 2, seg_len] — zero-padded if needed.
-        // Layout: first kSegLen floats = L, next kSegLen = R.
-        std::vector<float> mix(2 * kSegLen, 0.f);
-        for (int i = 0; i < seg_n; i++) {
-            mix[i]          = L[seg_start + i];
-            mix[kSegLen + i] = R[seg_start + i];
+        prog(0.30f + (float)chunk / n_chunks * 0.60f,
+             "Separating vocals (chunk " + std::to_string(chunk + 1) +
+             "/" + std::to_string(n_chunks) + ")…");
+
+        // Build model input [1, 4, kDimF, kDimT] — zero-padded if needed.
+        std::vector<float> inp(4 * kDimF * kDimT, 0.f);
+        for (int t = 0; t < tN; t++) {
+            for (int f = 0; f < kDimF; f++) {
+                cx sL = specL[t0 + t][f];
+                cx sR = specR[t0 + t][f];
+                size_t base = (size_t)t + (size_t)kDimT * f;
+                inp[0 * kDimF * kDimT + base] = sL.real();   // L real
+                inp[1 * kDimF * kDimT + base] = sL.imag();   // L imag
+                inp[2 * kDimF * kDimT + base] = sR.real();   // R real
+                inp[3 * kDimF * kDimT + base] = sR.imag();   // R imag
+            }
         }
-
-        Ort::MemoryInfo mem =
-            Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
-        std::vector<int64_t> in_shape = {1, 2, (int64_t)kSegLen};
 
         std::vector<Ort::Value> inputs;
         inputs.push_back(Ort::Value::CreateTensor<float>(
-            mem, mix.data(), mix.size(), in_shape.data(), 3));
+            mem, inp.data(), inp.size(), in_shape.data(), 4));
 
         const char* in_names[]  = {in_name.c_str()};
         const char* out_names[] = {out_name.c_str()};
-        auto outs = session.Run(
-            Ort::RunOptions{nullptr},
-            in_names, inputs.data(), 1,
-            out_names, 1);
+        auto outs = session.Run(Ort::RunOptions{nullptr},
+                                in_names, inputs.data(), 1, out_names, 1);
 
-        // Output: [1, 4, 2, kSegLen]  stems × channels × samples
-        auto out_shape = outs[0].GetTensorTypeAndShapeInfo().GetShape();
-        if (out_shape.size() < 4)
-            return "Unexpected model output rank " + std::to_string(out_shape.size());
-
-        int n_out_stems = (int)out_shape[1];
-        int n_out_ch    = (int)out_shape[2];
-        int n_out_time  = (int)out_shape[3];
         const float* pd = outs[0].GetTensorData<float>();
 
-        if (n_out_stems < kNumStem || n_out_ch < 2)
-            return "Unexpected model output shape: stems=" + std::to_string(n_out_stems);
-
-        // Overlap-add with linear cross-fade at segment boundaries.
-        // Weight: ramp in for leading overlap, ramp out for trailing overlap.
-        int lim = std::min(seg_n, n_out_time);
-        for (int i = 0; i < lim; i++) {
-            int   out_i = seg_start + i;
+        // Crossfade weight: ramp in / ramp out at chunk boundaries.
+        for (int t = 0; t < tN; t++) {
             float w;
-            if      (i < kOverlap      && seg > 0)        w = (float)i / kOverlap;
-            else if (i >= lim-kOverlap && seg < n_segs-1) w = (float)(lim - 1 - i) / kOverlap;
-            else                                           w = 1.f;
+            if      (t < kOvlap && chunk > 0)           w = (float)t / kOvlap;
+            else if (t >= tN - kOvlap && chunk < n_chunks - 1) w = (float)(tN - 1 - t) / kOvlap;
+            else                                          w = 1.f;
 
-            for (int s = 0; s < kNumStem; s++) {
-                float sL = pd[(size_t)s * n_out_ch * n_out_time + 0 * n_out_time + i];
-                float sR = pd[(size_t)s * n_out_ch * n_out_time + 1 * n_out_time + i];
-                if (s == kVocals) {
-                    voc_L[out_i] += w * sL;
-                    voc_R[out_i] += w * sR;
-                } else {
-                    ins_L[out_i] += w * sL;
-                    ins_R[out_i] += w * sR;
-                }
+            for (int f = 0; f < kDimF; f++) {
+                size_t base = (size_t)t + (size_t)kDimT * f;
+                cx ol(pd[0 * kDimF * kDimT + base], pd[1 * kDimF * kDimT + base]);
+                cx or_(pd[2 * kDimF * kDimT + base], pd[3 * kDimF * kDimT + base]);
+                voc_L[t0 + t][f] += w * ol;
+                voc_R[t0 + t][f] += w * or_;
             }
-            wsum[out_i] += w;
+            wsum[t0 + t] += w;
         }
     }
 
-    // Normalise by accumulated weight
-    for (int i = 0; i < N; i++) {
-        if (wsum[i] > 1e-6f) {
-            voc_L[i] /= wsum[i]; voc_R[i] /= wsum[i];
-            ins_L[i] /= wsum[i]; ins_R[i] /= wsum[i];
+    // Normalise overlap-add weights.
+    for (int t = 0; t < T_total; t++) {
+        float w = (wsum[t] > 1e-6f) ? 1.f / wsum[t] : 0.f;
+        for (int f = 0; f < kDimF; f++) {
+            voc_L[t][f] *= w * kComp;
+            voc_R[t][f] *= w * kComp;
         }
     }
 
-    // ── Write output WAVs ─────────────────────────────────────────────────────
-    prog(0.93f, "Writing output files…");
+    // ── ISTFT ─────────────────────────────────────────────────────────────────
+    prog(0.92f, "Reconstructing audio…");
 
+    // Expand kDimF bins to full n_fft/2+1 (zero-pad the missing Nyquist bin).
+    auto expandSpec = [&](const std::vector<std::vector<cx>>& src) {
+        std::vector<std::vector<cx>> dst(T_total, std::vector<cx>(kNFFT / 2 + 1, 0.f));
+        for (int t = 0; t < T_total; t++)
+            for (int f = 0; f < kDimF; f++)
+                dst[t][f] = src[t][f];
+        return dst;
+    };
+
+    auto vocL_full = expandSpec(voc_L);
+    auto vocR_full = expandSpec(voc_R);
+
+    auto voc_l = istft_mono(vocL_full, N, win, inv, iff_out, iff_in);
+    auto voc_r = istft_mono(vocR_full, N, win, inv, iff_out, iff_in);
+
+    // Instrumental = original − vocals.
     std::vector<float> voc_pcm(2 * N), ins_pcm(2 * N);
     for (int i = 0; i < N; i++) {
-        voc_pcm[2*i]   = voc_L[i]; voc_pcm[2*i+1]   = voc_R[i];
-        ins_pcm[2*i]   = ins_L[i]; ins_pcm[2*i+1]   = ins_R[i];
+        voc_pcm[2*i]   = voc_l[i];
+        voc_pcm[2*i+1] = voc_r[i];
+        ins_pcm[2*i]   = L[i] - voc_l[i];
+        ins_pcm[2*i+1] = R[i] - voc_r[i];
     }
 
-    if (!write_stereo(vocals_out,       voc_pcm)) return "Failed to write vocals WAV";
-    if (!write_stereo(instrumental_out, ins_pcm)) return "Failed to write instrumental WAV";
+    fftwf_destroy_plan(fwd);
+    fftwf_destroy_plan(inv);
+    fftwf_free(fft_in); fftwf_free(fft_out);
+    fftwf_free(iff_in); fftwf_free(iff_out);
+
+    // ── Write outputs ─────────────────────────────────────────────────────────
+    prog(0.95f, "Writing output files…");
+    if (!write_stereo(vocals_out, voc_pcm, N))
+        return "Failed to write vocals WAV";
+    if (!write_stereo(instrumental_out, ins_pcm, N))
+        return "Failed to write instrumental WAV";
 
     prog(1.f, "Separation complete");
     return {};

@@ -52,7 +52,7 @@ static std::vector<float> decode_16k(const std::string& path) {
 
 // ── Stem separation ───────────────────────────────────────────────────────────
 
-// Calls the C++ HTDemucs ONNX pipeline. Returns false and sets status on error.
+// Calls the C++ MDX-Net (Kim_Vocal_2) vocal separation. Returns false and sets status on error.
 // No ffmpeg fallback — if demucs is not ready, the user must download the model.
 static bool separate_channels(
     const std::string& in,
@@ -70,7 +70,7 @@ static bool separate_channels(
     if (!err.empty()) {
         status.stage = PipelineStage::Error;
         status.error = "Stem separation failed: " + err +
-                       "\nDownload the HTDemucs model (~289 MB) from the Setup screen.";
+                       "\nDownload the MDX vocal model (~64 MB) from the Setup screen.";
         return false;
     }
     return true;
@@ -173,7 +173,7 @@ static void do_transcribe(
     if (mode == PipelineMode::Both || mode == PipelineMode::SeparateOnly) {
         status.stage    = PipelineStage::Extract;
         status.progress = 0.02f;
-        status.message  = "Separating stems (HTDemucs)…";
+        status.message  = "Separating vocals (MDX-Net)…";
         if (!separate_channels(audio_path, outdir.string(), status)) {
             g_running.store(false);
             return;

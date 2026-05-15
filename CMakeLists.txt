@@ -100,6 +100,7 @@ target_link_libraries(pop-maker-studio PRIVATE
     ${AUBIO_LIBRARIES}
     onnxruntime
     whisper
+    fftw3f
     dl pthread
 )
 
