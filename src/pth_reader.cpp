@@ -90,6 +90,7 @@ struct Unpickler {
     size_t           pos, size;
     std::vector<Val> stack;
     std::unordered_map<int, Val> memo;
+    int              memo_next = 0; // for MEMOIZE (protocol 4)
     std::string      err;
 
     // ── Low-level reads ───────────────────────────────────────────────────────
@@ -217,6 +218,25 @@ struct Unpickler {
             uint8_t op = read1();
             switch (op) {
             case 0x80: read1(); break; // PROTO — skip version byte
+            case 0x95: pos += 8; break; // FRAME (protocol 4) — skip 8-byte length
+            case 0x94: { // MEMOIZE (protocol 4) — memo stack top with auto index
+                if (!stack.empty()) memo[memo_next++] = stack.back();
+                break;
+            }
+            case 0x93: { // STACK_GLOBAL (protocol 4) — pop name then module
+                Val nm = pop(); Val mod = pop();
+                Val v; v.kind = Val::Global;
+                v.extra = (mod.kind == Val::Str) ? mod.s : "";
+                v.s     = (nm.kind  == Val::Str) ? nm.s  : "";
+                stack.push_back(std::move(v));
+                break;
+            }
+            case 0x92: { // NEWOBJ_EX — class(*args, **kwargs); treat as NEWOBJ
+                Val kwargs = pop(); Val args = pop(); Val cls = pop();
+                stack.push_back(reduce(cls, args));
+                (void)kwargs;
+                break;
+            }
 
             case 'c': { // GLOBAL module\nname\n
                 std::string mod = read_line();
