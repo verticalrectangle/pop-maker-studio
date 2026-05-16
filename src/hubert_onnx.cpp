@@ -516,16 +516,17 @@ static std::string emit_feature_projection(G& g, const TensorLoader& tl,
     // Transpose [1, 512, T] → [1, T, 512]
     auto xt = op_transpose(g, x, {0, 2, 1}, "fp_tp0");
 
-    // LayerNorm over last dim (512)
-    auto ln_w = tl.load("feature_projection.layer_norm.weight");
-    auto ln_b = tl.load("feature_projection.layer_norm.bias");
+    // LayerNorm over last dim (512) — fairseq key: "layer_norm.*"
+    auto ln_w = tl.load("layer_norm.weight");
+    auto ln_b = tl.load("layer_norm.bias");
     g.add_init_f32("fp_lnw", {512}, ln_w);
     g.add_init_f32("fp_lnb", {512}, ln_b);
     auto xln = emit_layer_norm_last(g, xt, "fp_lnw", "fp_lnb", "fp_ln");
 
     // Linear(512→768): weight [768, 512] → transpose to [512, 768] for matmul
-    auto proj_w_raw = tl.load("feature_projection.projection.weight");  // [768, 512]
-    auto proj_b     = tl.load("feature_projection.projection.bias");    // [768]
+    // fairseq key: "post_extract_proj.*"
+    auto proj_w_raw = tl.load("post_extract_proj.weight");  // [768, 512]
+    auto proj_b     = tl.load("post_extract_proj.bias");    // [768]
 
     // Transpose weight CPU-side: [768,512] → [512,768]
     std::vector<float> proj_w_T(768 * 512);
