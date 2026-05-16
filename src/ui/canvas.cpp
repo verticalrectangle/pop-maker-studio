@@ -702,7 +702,7 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
     }
 
     float lookahead = ImGui::GetIO().DeltaTime;
-    float t_anim    = (float)ImGui::GetTime();
+    float t_anim    = state.playing ? (float)ImGui::GetTime() : state.playhead;
 
     // Collect global creative FX (for full-frame effects — LightLeak, grade, etc.)
     CreativeFXAccum global_cfx = collect_creative_fx(state, state.playhead, (int)state.tracks.size());
