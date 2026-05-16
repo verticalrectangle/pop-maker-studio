@@ -525,10 +525,12 @@ PthModel pth_open(const std::string& path) {
     const Val* weight_val = nullptr;
     const Val* config_val = nullptr;
 
+    const Val* model_val = nullptr; // fairseq/HuBERT format uses 'model' key
     auto scan_pairs = [&](const std::vector<std::pair<Val,Val>>& pairs) {
         for (auto& p : pairs) {
             if (p.first.kind == Val::Str) {
                 if (p.first.s == "weight") weight_val = &p.second;
+                if (p.first.s == "model")  model_val  = &p.second;
                 if (p.first.s == "config") config_val = &p.second;
             }
         }
@@ -546,6 +548,9 @@ PthModel pth_open(const std::string& path) {
     if (config_val) {
         m.config = parse_config(*config_val);
     }
+
+    // Fall back to 'model' key if no 'weight' found (fairseq/HuBERT format)
+    if (!weight_val && model_val) weight_val = model_val;
 
     // Parse weight dict into TensorMeta
     if (weight_val && weight_val->kind == Val::Dict) {
