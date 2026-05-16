@@ -1,7 +1,0 @@
-{
-	"InstallScripts" : 
-	[
-		"/home/alexis/dev/pop-maker-studio/build_debug/cmake_install.cmake"
-	],
-	"Parallel" : false
-}
