@@ -91,11 +91,13 @@ jobs:
           echo "Downloading Piper voices..."
           BASE_URL="https://huggingface.co/rhasspy/piper-voices/resolve/main"
           for VOICE in en_US-amy-medium en_US-ryan-medium en_US-lessac-medium en_GB-alan-medium; do
-            # Parse lang2/lang/quality from voice id pattern: ll_CC-name-quality
-            LANG="${VOICE%%-*}"          # en_US or en_GB
-            LANG2="${LANG%%_*}"          # en
-            QUALITY="${VOICE##*-}"       # medium
-            HF_DIR="${LANG2}/${LANG}/${VOICE}/${QUALITY}"
+            # Parse lang2/lang/name/quality from voice id: ll_CC-name-quality
+            LANG="${VOICE%%-*}"                    # en_US or en_GB
+            LANG2="${LANG%%_*}"                    # en
+            QUALITY="${VOICE##*-}"                 # medium
+            TMP="${VOICE#${LANG}-}"                # amy-medium
+            NAME="${TMP%-${QUALITY}}"              # amy
+            HF_DIR="${LANG2}/${LANG}/${NAME}/${QUALITY}"
             for EXT in onnx onnx.json; do
               curl -fsSL -o "release/models/piper/${VOICE}.${EXT}" \
                 "${BASE_URL}/${HF_DIR}/${VOICE}.${EXT}"
