@@ -481,21 +481,23 @@ static std::string emit_feature_extractor(G& g, const TensorLoader& tl,
         // Conv1d, no bias (fairseq feature extractor has no conv bias)
         cur = op_conv1d(g, cur, h + "_cw", "", k, s, 0, h + "_conv");
 
-        // GroupNorm(num_groups=512, num_channels=512) = InstanceNormalization
-        auto gn_w = tl.load(npfx + ".weight");
-        auto gn_b = tl.load(npfx + ".bias");
-        g.add_init_f32(h + "_gnw", {c_out}, gn_w);
-        g.add_init_f32(h + "_gnb", {c_out}, gn_b);
+        // GroupNorm only on layer 0 (mode="default" in fairseq HuBERT base)
+        if (i == 0) {
+            auto gn_w = tl.load(npfx + ".weight");
+            auto gn_b = tl.load(npfx + ".bias");
+            g.add_init_f32(h + "_gnw", {c_out}, gn_w);
+            g.add_init_f32(h + "_gnb", {c_out}, gn_b);
 
-        PbBuf eps_attr;
-        eps_attr.tag_string(1, "epsilon");
-        uint32_t eps_bits; float eps_val = 1e-5f; memcpy(&eps_bits, &eps_val, 4);
-        eps_attr.tag_i32(4, eps_bits);
-        eps_attr.tag_varint(20, kAttrFloat);
-        cur = g.emit("InstanceNormalization",
-                     {cur, h + "_gnw", h + "_gnb"},
-                     {eps_attr},
-                     h + "_gn");
+            PbBuf eps_attr;
+            eps_attr.tag_string(1, "epsilon");
+            uint32_t eps_bits; float eps_val = 1e-5f; memcpy(&eps_bits, &eps_val, 4);
+            eps_attr.tag_i32(4, eps_bits);
+            eps_attr.tag_varint(20, kAttrFloat);
+            cur = g.emit("InstanceNormalization",
+                         {cur, h + "_gnw", h + "_gnb"},
+                         {eps_attr},
+                         h + "_gn");
+        }
 
         // GELU
         cur = op_gelu(g, cur, h + "_gelu");
