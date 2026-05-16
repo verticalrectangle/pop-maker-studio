@@ -718,21 +718,7 @@ void kick_pipeline(AppState& state, const std::string& path, PipelineMode mode) 
     state.pipeline_produces_subtitles = (mode == PipelineMode::TranscribeOnly);
     state.pipeline_is_separate_only   = (mode == PipelineMode::SeparateOnly);
 
-    if (mode == PipelineMode::Both) {
-        bool has = false;
-        for (auto& t : state.tracks) if (t.name=="Lyrics") { has=true; break; }
-        if (!has) {
-            Track ph; ph.name="Lyrics";
-            state.tracks.insert(state.tracks.begin(), std::move(ph));
-        }
-    } else if (mode == PipelineMode::TranscribeOnly) {
-        bool has = false;
-        for (auto& t : state.tracks) if (t.name=="Subtitles") { has=true; break; }
-        if (!has) {
-            Track ph; ph.name="Subtitles";
-            state.tracks.insert(state.tracks.begin(), std::move(ph));
-        }
-    }
+    (void)mode;
 
     transcribe_start(path, state.pipeline, state.words_json_path, state.vocals_path, mode);
 }
