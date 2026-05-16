@@ -83,7 +83,7 @@ jobs:
 
           echo "Downloading HuBERT checkpoint..."
           curl -fsSL -o hubert_base.pt \
-            "https://huggingface.co/lj1995/VoiceConversionWebUI/resolve/main/hubert_base.pt"
+            "https://dl.fbaipublicfiles.com/hubert/hubert_base_ls960.pt"
 
           echo "Exporting HuBERT to ONNX..."
           ./build/export-hubert hubert_base.pt release/models/hubert.onnx
