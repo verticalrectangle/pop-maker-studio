@@ -328,9 +328,15 @@ struct Unpickler {
                     for (auto& p : state.pairs) stack.back().pairs.push_back(p);
                 break;
             }
-            case 'o': { // NEWOBJ — pop args + class, just keep None for us
-                pop(); pop();
-                stack.push_back(Val::make_none());
+            case 'o': { // OBJ — pop to mark (args) then pop class
+                auto args = pop_to_mark();
+                Val cls = pop();
+                stack.push_back(reduce(cls, Val::make_list(std::move(args))));
+                break;
+            }
+            case 0x81: { // NEWOBJ — cls(*args)
+                Val args = pop(); Val cls = pop();
+                stack.push_back(reduce(cls, args));
                 break;
             }
             case 'i': { // INST — module\nname\n + MARK args
@@ -339,6 +345,9 @@ struct Unpickler {
                 stack.push_back(Val::make_none());
                 break;
             }
+            case 0x82: pos += 1; stack.push_back(Val::make_none()); break; // EXT1
+            case 0x83: pos += 2; stack.push_back(Val::make_none()); break; // EXT2
+            case 0x84: pos += 4; stack.push_back(Val::make_none()); break; // EXT4
             case 'p': { // PUT n\n — text memo
                 std::string key = read_line();
                 memo[std::stoi(key)] = stack.empty() ? Val::make_none() : stack.back();
