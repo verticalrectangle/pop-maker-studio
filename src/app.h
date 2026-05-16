@@ -473,7 +473,7 @@ struct AppState {
     int         extract_source_track = -1;  // track index of the video clip that was extracted
 
     // model availability
-    bool models_ready   = false;  // whisper + demucs weights detected on disk
+    bool models_ready   = false;  // whisper + separate weights detected on disk
     bool models_skipped = false;  // user chose "Skip for now" on setup screen
 
     // first-run multi-stage setup

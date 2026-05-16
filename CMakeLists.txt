@@ -58,7 +58,7 @@ set(SOURCES
     src/pth_reader.cpp
     src/rvc_onnx.cpp
     src/hubert_onnx.cpp
-    src/demucs.cpp
+    src/separate.cpp
     src/ui/screen_splash.cpp
     src/ui/screen_setup.cpp
     src/ui/screen_studio.cpp

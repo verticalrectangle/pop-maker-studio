@@ -1,5 +1,5 @@
 #include "transcribe.h"
-#include "demucs.h"
+#include "separate.h"
 #include "paths.h"
 #include <whisper.h>
 #include <thread>
@@ -47,7 +47,7 @@ static std::vector<float> decode_16k(const std::string& path) {
 // ── Stem separation ───────────────────────────────────────────────────────────
 
 // Calls the C++ MDX-Net (Kim_Vocal_2) vocal separation. Returns false and sets status on error.
-// No ffmpeg fallback — if demucs is not ready, the user must download the model.
+// No ffmpeg fallback — if the model is not ready, the user must download the model.
 static bool separate_channels(
     const std::string& in,
     const std::string& outdir,
@@ -56,7 +56,7 @@ static bool separate_channels(
     std::string voc  = outdir + "/vocals.wav";
     std::string inst = outdir + "/instrumental.wav";
 
-    std::string err = demucs_separate(in, voc, inst, [&](float p, const std::string& msg) {
+    std::string err = separate_run(in, voc, inst, [&](float p, const std::string& msg) {
         status.progress = 0.05f + p * 0.15f;
         status.message  = msg;
     });
