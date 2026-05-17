@@ -16,7 +16,8 @@ void transcribe_start(
     PipelineStatus&    status,
     std::string&       out_words_json,
     std::string&       out_vocals_wav,
-    PipelineMode       mode = PipelineMode::Both
+    PipelineMode       mode      = PipelineMode::Both,
+    double             proxy_fps = 0.0
 );
 
 void transcribe_cancel();

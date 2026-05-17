@@ -1,6 +1,7 @@
 #include "transcribe.h"
 #include "separate.h"
 #include "paths.h"
+#include "forced_align.h"
 #include <whisper.h>
 #include <thread>
 #include <atomic>
@@ -152,7 +153,8 @@ static void do_transcribe(
     PipelineStatus&    status,
     std::string&       out_words_json,
     std::string&       out_vocals_wav,
-    PipelineMode       mode)
+    PipelineMode       mode,
+    double             proxy_fps)
 {
     fs::path audio(audio_path);
     fs::path outdir = audio.parent_path() / audio.stem();
@@ -273,6 +275,30 @@ static void do_transcribe(
     extract_words_segments(ctx, words_arr, segs_arr);
     whisper_free(ctx);
 
+    // ── CTC forced alignment ──────────────────────────────────────────────────
+    if (!words_arr.empty() && !pcm.empty()) {
+        status.progress = 0.92f;
+        status.message  = "CTC forced alignment…";
+
+        std::vector<WordEntry> we_in;
+        we_in.reserve(words_arr.size());
+        for (auto& w : words_arr) {
+            WordEntry e;
+            e.text  = w.value("word",  "");
+            e.start = w.value("start", 0.f);
+            e.end   = w.value("end",   0.f);
+            we_in.push_back(e);
+        }
+
+        auto we_out = forced_align(pcm, we_in, proxy_fps);
+        if (we_out.size() == we_in.size()) {
+            for (size_t i = 0; i < words_arr.size(); ++i) {
+                words_arr[i]["start"] = we_out[i].start;
+                words_arr[i]["end"]   = we_out[i].end;
+            }
+        }
+    }
+
     { std::ofstream f(out_words_json); f << words_arr.dump(2); }
     { std::ofstream f(segs_json);      f << segs_arr.dump(2); }
 
@@ -289,7 +315,8 @@ void transcribe_start(
     PipelineStatus&    status,
     std::string&       out_words_json,
     std::string&       out_vocals_wav,
-    PipelineMode       mode)
+    PipelineMode       mode,
+    double             proxy_fps)
 {
     if (g_running.load()) return;
     g_cancel.store(false);
@@ -302,7 +329,7 @@ void transcribe_start(
     g_thread = std::thread(do_transcribe,
         audio_path, std::ref(status),
         std::ref(out_words_json), std::ref(out_vocals_wav),
-        mode);
+        mode, proxy_fps);
     g_thread.detach();
 }
 

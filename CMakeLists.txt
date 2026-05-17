@@ -59,6 +59,7 @@ set(SOURCES
     src/rvc_onnx.cpp
     src/hubert_onnx.cpp
     src/separate.cpp
+    src/forced_align.cpp
     src/ui/screen_splash.cpp
     src/ui/screen_setup.cpp
     src/ui/screen_studio.cpp

@@ -718,9 +718,15 @@ void kick_pipeline(AppState& state, const std::string& path, PipelineMode mode) 
     state.pipeline_produces_subtitles = (mode == PipelineMode::TranscribeOnly);
     state.pipeline_is_separate_only   = (mode == PipelineMode::SeparateOnly);
 
-    (void)mode;
+    // Get MJPEG proxy FPS so forced alignment can snap timestamps to frame boundaries
+    double proxy_fps = 0.0;
+    if (!state.video_path.empty()) {
+        ProxyInfo pi;
+        if (proxy_load(state.video_path, pi)) proxy_fps = pi.fps;
+    }
 
-    transcribe_start(path, state.pipeline, state.words_json_path, state.vocals_path, mode);
+    transcribe_start(path, state.pipeline, state.words_json_path, state.vocals_path,
+                     mode, proxy_fps);
 }
 
 // ── Pipeline inline strip ─────────────────────────────────────────────────────

@@ -8,3 +8,7 @@ std::string app_models_dir() {
     if (n <= 0) return "models";
     return (fs::path(buf).parent_path() / "models").string();
 }
+
+std::string wav2vec2_ctc_path() {
+    return (fs::path(app_models_dir()) / "wav2vec2_ctc.onnx").string();
+}
