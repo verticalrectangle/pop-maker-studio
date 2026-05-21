@@ -50,6 +50,15 @@ static void apply_typo_style(Clip& c, const TypographyPreset& pr, const AppState
     if (caps) {
         for (auto& ch : c.text) ch = (char)toupper((unsigned char)ch);
     }
+
+    c.ts = TextStyle{};
+    if (strcmp(pr.id, "neon") == 0) {
+        c.ts.glow_enabled = true; c.ts.glow_r = 10.f;
+        c.ts.glow_col[0] = 1.f; c.ts.glow_col[1] = 0.2f; c.ts.glow_col[2] = 0.8f; c.ts.glow_col[3] = 0.7f;
+    } else if (strcmp(pr.id, "cyberpunk") == 0) {
+        c.ts.stroke_enabled = true; c.ts.stroke_w = 1.5f;
+        c.ts.stroke_col[0] = 0.f; c.ts.stroke_col[1] = 1.f; c.ts.stroke_col[2] = 1.f; c.ts.stroke_col[3] = 0.8f;
+    }
 }
 
 void generate_typography(AppState& state) {

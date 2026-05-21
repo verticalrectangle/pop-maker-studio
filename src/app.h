@@ -90,6 +90,24 @@ struct WordEntry {
     float end   = 0.f;
 };
 
+struct TextStyle {
+    bool  shadow_enabled = true;
+    float shadow_ox      = 2.f, shadow_oy = 2.f;
+    float shadow_col[4]  = {0.f, 0.f, 0.f, 0.7f};
+
+    bool  stroke_enabled = false;
+    float stroke_w       = 2.f;
+    float stroke_col[4]  = {0.f, 0.f, 0.f, 1.f};
+
+    bool  glow_enabled   = false;
+    float glow_r         = 6.f;
+    float glow_col[4]    = {1.f, 1.f, 1.f, 0.4f};
+
+    bool  bg_enabled     = false;
+    float bg_col[4]      = {1.f, 1.f, 1.f, 1.f};
+    float bg_pad_x       = 8.f, bg_pad_y = 4.f, bg_corner = 0.f;
+};
+
 struct Clip {
     ClipType    clip_type = ClipType::Text;  // Text/Video/Audio — independent of track type
     float       start = 0.f;
@@ -131,6 +149,8 @@ struct Clip {
     float sub_color[4] = {1.f, 1.f, 1.f, 1.f};  // RGBA base / unspoken color
     bool  sub_color_override = false;
     float karaoke_highlight_color[4] = {1.f, 0.85f, 0.1f, 1.f};  // active word color
+
+    TextStyle ts;
 
     // per-clip word list for deep lyrics editing (populated by apply_subtitle_mode)
     std::vector<WordEntry> words;

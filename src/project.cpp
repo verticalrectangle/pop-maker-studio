@@ -7,7 +7,7 @@
 // ── Binary serialization helpers ──────────────────────────────────────────────
 
 static const uint32_t MAGIC   = 0x534D5001u; // "PMS\x01"
-static const uint32_t VERSION = 27u;
+static const uint32_t VERSION = 28u;
 
 struct Writer {
     std::ofstream f;
@@ -169,6 +169,16 @@ static void write_clip(Writer& w, const Clip& c) {
     w.pod((int)c.body_fx_type);
     for (int i=0;i<4;++i) w.pod(c.body_fx_params[i]);
     w.pod(c.body_fx_amount);
+    // v28: text style
+    w.pod((uint8_t)c.ts.shadow_enabled); w.pod(c.ts.shadow_ox); w.pod(c.ts.shadow_oy);
+    for (int i=0;i<4;++i) w.pod(c.ts.shadow_col[i]);
+    w.pod((uint8_t)c.ts.stroke_enabled); w.pod(c.ts.stroke_w);
+    for (int i=0;i<4;++i) w.pod(c.ts.stroke_col[i]);
+    w.pod((uint8_t)c.ts.glow_enabled); w.pod(c.ts.glow_r);
+    for (int i=0;i<4;++i) w.pod(c.ts.glow_col[i]);
+    w.pod((uint8_t)c.ts.bg_enabled);
+    for (int i=0;i<4;++i) w.pod(c.ts.bg_col[i]);
+    w.pod(c.ts.bg_pad_x); w.pod(c.ts.bg_pad_y); w.pod(c.ts.bg_corner);
 }
 
 static Clip read_clip(Reader& r, uint32_t version) {
@@ -286,6 +296,19 @@ static Clip read_clip(Reader& r, uint32_t version) {
         c.body_fx_type = (BodyFXType)r.pod<int>();
         for (int i=0;i<4;++i) c.body_fx_params[i] = r.pod<float>();
         c.body_fx_amount = r.pod<float>();
+    }
+    // v28: text style (default-constructed c.ts already gives backward-compatible shadow)
+    if (version >= 28u) {
+        c.ts.shadow_enabled = (bool)r.pod<uint8_t>();
+        c.ts.shadow_ox = r.pod<float>(); c.ts.shadow_oy = r.pod<float>();
+        for (int i=0;i<4;++i) c.ts.shadow_col[i] = r.pod<float>();
+        c.ts.stroke_enabled = (bool)r.pod<uint8_t>(); c.ts.stroke_w = r.pod<float>();
+        for (int i=0;i<4;++i) c.ts.stroke_col[i] = r.pod<float>();
+        c.ts.glow_enabled = (bool)r.pod<uint8_t>(); c.ts.glow_r = r.pod<float>();
+        for (int i=0;i<4;++i) c.ts.glow_col[i] = r.pod<float>();
+        c.ts.bg_enabled = (bool)r.pod<uint8_t>();
+        for (int i=0;i<4;++i) c.ts.bg_col[i] = r.pod<float>();
+        c.ts.bg_pad_x = r.pod<float>(); c.ts.bg_pad_y = r.pod<float>(); c.ts.bg_corner = r.pod<float>();
     }
     return c;
 }

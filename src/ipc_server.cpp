@@ -2,6 +2,9 @@
 #include "history.h"
 #include "runtime_fx.h"
 #include "ui/pipeline.h"
+#include "ui/panel_animation.h"
+#include "project.h"
+#include "generated/fx_clip_set_dispatch.h"
 #include "json.hpp"
 
 #include <sys/socket.h>
@@ -75,19 +78,64 @@ static std::string clip_type_str(ClipType t) {
     return "unknown";
 }
 
+static std::string anim_style_str(AnimStyle s) {
+    switch (s) {
+        case AnimStyle::None:       return "none";
+        case AnimStyle::Fade:       return "fade";
+        case AnimStyle::Glitch:     return "glitch";
+        case AnimStyle::Typewriter: return "typewriter";
+        case AnimStyle::Bounce:     return "bounce";
+        case AnimStyle::Scale:      return "scale";
+        case AnimStyle::Slide:      return "slide";
+        case AnimStyle::Stack:      return "stack";
+        case AnimStyle::Block:      return "block";
+        default:                    return "unknown";
+    }
+}
+
 static json clip_to_json(int idx, const Clip& c) {
     json j;
-    j["index"]    = idx;
-    j["type"]     = clip_type_str(c.clip_type);
-    j["start"]    = c.start;
-    j["end"]      = c.end;
-    j["text"]     = c.text;
-    j["in_point"] = c.in_point;
-    j["duration"] = c.end - c.start;
-    j["volume"]   = c.volume;
-    j["speed"]    = c.speed;
-    j["opacity"]  = c.opacity;
-    j["muted"]    = c.muted;
+    j["index"]       = idx;
+    j["type"]        = clip_type_str(c.clip_type);
+    j["start"]       = c.start;
+    j["end"]         = c.end;
+    j["text"]        = c.text;
+    j["in_point"]    = c.in_point;
+    j["duration"]    = c.end - c.start;
+    j["volume"]      = c.volume;
+    j["speed"]       = c.speed;
+    j["opacity"]     = c.opacity;
+    j["muted"]       = c.muted;
+    j["clip_style"]  = anim_style_str(c.clip_style);
+    j["font_size"]   = c.font_size;
+    j["karaoke"]     = c.karaoke;
+    j["sub_pos"]     = c.sub_pos;
+    j["sub_pos_x"]   = c.sub_pos_x;
+    j["sub_pos_y"]   = c.sub_pos_y;
+    j["sub_anchor_h"]= c.sub_anchor_h;
+    j["sub_wrap_w"]  = c.sub_wrap_w;
+    j["sub_color"]   = {c.sub_color[0], c.sub_color[1], c.sub_color[2], c.sub_color[3]};
+    j["karaoke_highlight_color"] = {c.karaoke_highlight_color[0], c.karaoke_highlight_color[1],
+                                    c.karaoke_highlight_color[2], c.karaoke_highlight_color[3]};
+    // TextStyle
+    json ts;
+    ts["shadow_enabled"] = c.ts.shadow_enabled;
+    ts["shadow_ox"]      = c.ts.shadow_ox;
+    ts["shadow_oy"]      = c.ts.shadow_oy;
+    ts["shadow_col"]     = {c.ts.shadow_col[0], c.ts.shadow_col[1], c.ts.shadow_col[2], c.ts.shadow_col[3]};
+    ts["stroke_enabled"] = c.ts.stroke_enabled;
+    ts["stroke_w"]       = c.ts.stroke_w;
+    ts["stroke_col"]     = {c.ts.stroke_col[0], c.ts.stroke_col[1], c.ts.stroke_col[2], c.ts.stroke_col[3]};
+    ts["glow_enabled"]   = c.ts.glow_enabled;
+    ts["glow_r"]         = c.ts.glow_r;
+    ts["glow_col"]       = {c.ts.glow_col[0], c.ts.glow_col[1], c.ts.glow_col[2], c.ts.glow_col[3]};
+    ts["bg_enabled"]     = c.ts.bg_enabled;
+    ts["bg_col"]         = {c.ts.bg_col[0], c.ts.bg_col[1], c.ts.bg_col[2], c.ts.bg_col[3]};
+    ts["bg_pad_x"]       = c.ts.bg_pad_x;
+    ts["bg_pad_y"]       = c.ts.bg_pad_y;
+    ts["bg_corner"]      = c.ts.bg_corner;
+    j["text_style"]      = ts;
+
     if (!c.runtime_fx_id.empty()) {
         j["runtime_fx_id"]     = c.runtime_fx_id;
         j["runtime_fx_amount"] = c.runtime_fx_amount;
@@ -170,6 +218,34 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         for (float b : state.beats) ba.push_back(b);
         j["beats"] = ba;
         return j;
+    }
+
+    if (method == "get_pipeline_status") {
+        json j;
+        auto stage_str = [](PipelineStage s) -> std::string {
+            switch (s) {
+                case PipelineStage::Idle:       return "idle";
+                case PipelineStage::Extract:    return "extract";
+                case PipelineStage::Transcribe: return "transcribe";
+                case PipelineStage::Align:      return "align";
+                case PipelineStage::Done:       return "done";
+                case PipelineStage::Error:      return "error";
+                default:                        return "unknown";
+            }
+        };
+        j["stage"]    = stage_str(state.pipeline.stage);
+        j["progress"] = state.pipeline.progress;
+        j["message"]  = state.pipeline.message;
+        j["error"]    = state.pipeline.error;
+        return j;
+    }
+
+    if (method == "save_project") {
+        std::string path = params.value("path", state.project_path);
+        if (path.empty()) { err = "no project path — provide 'path' param or save once from UI"; return {}; }
+        if (!project_save(state, path)) { err = "project_save failed"; return {}; }
+        json r; r["path"] = path;
+        return r;
     }
 
     if (method == "seek") {
@@ -363,6 +439,67 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         else if (mode_s == "separate_only") mode = PipelineMode::SeparateOnly;
         if (state.audio_path.empty()) { err = "no audio file loaded"; return {}; }
         kick_pipeline(state, state.audio_path, mode);
+        return json::object();
+    }
+
+    if (method == "generate_typography") {
+        generate_typography(state);
+        return json::object();
+    }
+
+    if (method == "load_project") {
+        std::string path = params.value("path", "");
+        if (path.empty()) { err = "path is required"; return {}; }
+        if (!project_load(state, path)) { err = "project_load failed"; return {}; }
+        json r; r["path"] = path;
+        return r;
+    }
+
+    if (method == "set_text_style") {
+        int ti = params.value("track", -1), ci = params.value("clip", -1);
+        if (!check_clip(state, ti, ci, err)) return {};
+        TextStyle& ts = state.tracks[ti].clips[ci].ts;
+        auto get4 = [&](const char* key, float* dst) {
+            if (params.contains(key) && params[key].is_array() && params[key].size() == 4)
+                for (int i = 0; i < 4; ++i) dst[i] = params[key][i].get<float>();
+        };
+        if (params.contains("shadow_enabled")) ts.shadow_enabled = params["shadow_enabled"].get<bool>();
+        if (params.contains("shadow_ox"))      ts.shadow_ox      = params["shadow_ox"].get<float>();
+        if (params.contains("shadow_oy"))      ts.shadow_oy      = params["shadow_oy"].get<float>();
+        get4("shadow_col", ts.shadow_col);
+        if (params.contains("stroke_enabled")) ts.stroke_enabled = params["stroke_enabled"].get<bool>();
+        if (params.contains("stroke_w"))       ts.stroke_w       = params["stroke_w"].get<float>();
+        get4("stroke_col", ts.stroke_col);
+        if (params.contains("glow_enabled"))   ts.glow_enabled   = params["glow_enabled"].get<bool>();
+        if (params.contains("glow_r"))         ts.glow_r         = params["glow_r"].get<float>();
+        get4("glow_col", ts.glow_col);
+        if (params.contains("bg_enabled"))     ts.bg_enabled     = params["bg_enabled"].get<bool>();
+        get4("bg_col", ts.bg_col);
+        if (params.contains("bg_pad_x"))       ts.bg_pad_x       = params["bg_pad_x"].get<float>();
+        if (params.contains("bg_pad_y"))       ts.bg_pad_y       = params["bg_pad_y"].get<float>();
+        if (params.contains("bg_corner"))      ts.bg_corner      = params["bg_corner"].get<float>();
+        return json::object();
+    }
+
+    if (method == "set_clip_fx") {
+        int ti = params.value("track", -1), ci = params.value("clip", -1);
+        if (!check_clip(state, ti, ci, err)) return {};
+        std::string fx_id = params.value("fx_id", "");
+        if (fx_id.empty()) { err = "fx_id is required"; return {}; }
+        Clip& cl = state.tracks[ti].clips[ci];
+        if (params.contains("amount"))
+            fx_clip_set_param(cl, fx_id, "amount", params["amount"].get<float>());
+        if (params.contains("params") && params["params"].is_object()) {
+            for (auto& [pname, pval] : params["params"].items()) {
+                if (!pval.is_number()) continue;
+                if (!fx_clip_set_param(cl, fx_id, pname, pval.get<float>())) {
+                    err = "unknown param '" + pname + "' for effect '" + fx_id + "'";
+                    return {};
+                }
+            }
+        }
+        // Set FX type so the effect clip renders
+        cl.fx_type = FXType::Grade;  // will be overridden if clip is Effect type
         return json::object();
     }
 

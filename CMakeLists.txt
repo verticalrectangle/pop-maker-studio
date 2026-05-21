@@ -77,6 +77,7 @@ set(SOURCES
     src/fx_shader.cpp
     src/presets.cpp
     src/overlay_renderer.cpp
+    src/text_renderer.cpp
 )
 
 add_executable(pop-maker-studio ${SOURCES} ${IMGUI_SOURCES})

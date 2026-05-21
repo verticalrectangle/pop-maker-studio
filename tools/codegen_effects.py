@@ -312,6 +312,52 @@ def main():
     lines.append("}")
     write(os.path.join(GEN_DIR, "fx_attached_ui.h"), "\n".join(lines) + "\n")
 
+    # ── fx_clip_set_dispatch.h ────────────────────────────────────────────────
+    # Runtime param setter used by IPC set_clip_fx command.
+    lines = [
+        "static bool fx_clip_set_param(Clip& c, const std::string& fx_id,",
+        "                              const std::string& param, float value) {",
+    ]
+    for e in effects:
+        eid = e["id"]
+        all_params = e["params"]
+        lines.append(f'    if (fx_id == "{eid}") {{')
+        lines.append(f'        if (param == "amount") {{ c.fx_{eid}_amount = value; return true; }}')
+        for p in all_params:
+            pname = p["name"]
+            lines.append(f'        if (param == "{pname}") {{ c.fx_{eid}_{pname} = value; return true; }}')
+            lines.append(f'        if (param == "{pname}_beat") {{ c.fx_{eid}_{pname}_beat = value; return true; }}')
+        lines.append(f'        return false;')
+        lines.append(f'    }}')
+    lines.append("    return false;")
+    lines.append("}")
+    write(os.path.join(GEN_DIR, "fx_clip_set_dispatch.h"), "\n".join(lines) + "\n")
+
+    # ── effects/mcp_manifest.json ─────────────────────────────────────────────
+    manifest = []
+    for e in effects:
+        visible_params = [p for p in e["params"] if not p.get("hidden")]
+        manifest.append({
+            "id":          e["id"],
+            "label":       e["label"],
+            "description": e["description"],
+            "params": [
+                {
+                    "name":    p["name"],
+                    "label":   p["label"],
+                    "min":     float(p["min"]),
+                    "max":     float(p["max"]),
+                    "default": float(p["default"]),
+                    "fmt":     p["fmt"],
+                }
+                for p in visible_params
+            ],
+        })
+    mcp_path = os.path.join(ROOT, "effects", "mcp_manifest.json")
+    with open(mcp_path, "w") as f:
+        json.dump(manifest, f, indent=2)
+    print(f"  wrote effects/mcp_manifest.json ({len(manifest)} effects)")
+
     print(f"done — {len(effects)} effects, project version {reg['project_version']}")
 
 if __name__ == "__main__":

@@ -603,6 +603,82 @@ static void section_fade(AppState& state, Clip& clip, float w) {
     ImGui::PopStyleColor();
 }
 
+static void section_text_style(AppState& state, Clip& clip, float w) {
+    TextStyle& ts = clip.ts;
+    float sw = w - 16.f;
+    ImGui::PushStyleColor(ImGuiCol_SliderGrab, Col::fg);
+    ImGui::PushStyleColor(ImGuiCol_FrameBg,    Col::bg_soft);
+
+    // Shadow
+    bool shad = ts.shadow_enabled;
+    if (ImGui::Checkbox("Shadow##ts_shad", &shad)) { ts.shadow_enabled = shad; history_push(state, "Text shadow"); }
+    if (ts.shadow_enabled) {
+        ImGui::SameLine(0.f, 8.f); ImGui::SetNextItemWidth(54.f);
+        if (ImGui::SliderFloat("ox##ts_sox", &ts.shadow_ox, -20.f, 20.f, "%.0f"))
+            history_push(state, "Shadow offset");
+        ImGui::SameLine(0.f, 4.f); ImGui::SetNextItemWidth(54.f);
+        if (ImGui::SliderFloat("oy##ts_soy", &ts.shadow_oy, -20.f, 20.f, "%.0f"))
+            history_push(state, "Shadow offset");
+        ImGui::SameLine(0.f, 4.f); ImGui::SetNextItemWidth(sw - 130.f);
+        if (ImGui::ColorEdit4("##ts_scol", ts.shadow_col,
+                ImGuiColorEditFlags_NoLabel | ImGuiColorEditFlags_AlphaBar))
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Shadow color");
+    }
+
+    ImGui::Dummy({0.f, 2.f});
+
+    // Stroke
+    bool stk = ts.stroke_enabled;
+    if (ImGui::Checkbox("Stroke##ts_stk", &stk)) { ts.stroke_enabled = stk; history_push(state, "Text stroke"); }
+    if (ts.stroke_enabled) {
+        ImGui::SameLine(0.f, 8.f); ImGui::SetNextItemWidth(70.f);
+        if (ImGui::SliderFloat("w##ts_sw", &ts.stroke_w, 0.5f, 10.f, "%.1f"))
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Stroke width");
+        ImGui::SameLine(0.f, 4.f); ImGui::SetNextItemWidth(sw - 100.f);
+        if (ImGui::ColorEdit4("##ts_stkcol", ts.stroke_col,
+                ImGuiColorEditFlags_NoLabel | ImGuiColorEditFlags_AlphaBar))
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Stroke color");
+    }
+
+    ImGui::Dummy({0.f, 2.f});
+
+    // Glow
+    bool glow = ts.glow_enabled;
+    if (ImGui::Checkbox("Glow##ts_glow", &glow)) { ts.glow_enabled = glow; history_push(state, "Text glow"); }
+    if (ts.glow_enabled) {
+        ImGui::SameLine(0.f, 8.f); ImGui::SetNextItemWidth(70.f);
+        if (ImGui::SliderFloat("r##ts_gr", &ts.glow_r, 1.f, 30.f, "%.0f"))
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Glow radius");
+        ImGui::SameLine(0.f, 4.f); ImGui::SetNextItemWidth(sw - 100.f);
+        if (ImGui::ColorEdit4("##ts_gcol", ts.glow_col,
+                ImGuiColorEditFlags_NoLabel | ImGuiColorEditFlags_AlphaBar))
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Glow color");
+    }
+
+    ImGui::Dummy({0.f, 2.f});
+
+    // Background box
+    bool bg = ts.bg_enabled;
+    if (ImGui::Checkbox("Background##ts_bg", &bg)) { ts.bg_enabled = bg; history_push(state, "Text background"); }
+    if (ts.bg_enabled) {
+        ImGui::SetNextItemWidth(sw);
+        if (ImGui::ColorEdit4("##ts_bgcol", ts.bg_col,
+                ImGuiColorEditFlags_NoLabel | ImGuiColorEditFlags_AlphaBar))
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Background color");
+        ImGui::SetNextItemWidth(54.f);
+        if (ImGui::SliderFloat("pad x##ts_bpx", &ts.bg_pad_x, 0.f, 40.f, "%.0f"))
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Background padding");
+        ImGui::SameLine(0.f, 4.f); ImGui::SetNextItemWidth(54.f);
+        if (ImGui::SliderFloat("pad y##ts_bpy", &ts.bg_pad_y, 0.f, 40.f, "%.0f"))
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Background padding");
+        ImGui::SameLine(0.f, 4.f); ImGui::SetNextItemWidth(60.f);
+        if (ImGui::SliderFloat("corner##ts_bc", &ts.bg_corner, 0.f, 20.f, "%.0f"))
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Background corner");
+    }
+
+    ImGui::PopStyleColor(2);
+}
+
 void panel_clip(AppState& state, float w) {
     // ── Nothing selected ──────────────────────────────────────────────────────
     if (state.selected_track < 0 || state.selected_track >= (int)state.tracks.size()) {
@@ -742,6 +818,9 @@ void panel_clip(AppState& state, float w) {
         if (ImGui::CollapsingHeader("Fade")) {
             ImGui::Dummy({0.f, 4.f}); section_fade(state, clip, w); ImGui::Dummy({0.f, 4.f});
         }
+        if (ImGui::CollapsingHeader("Text Style")) {
+            ImGui::Dummy({0.f, 4.f}); section_text_style(state, clip, w); ImGui::Dummy({0.f, 4.f});
+        }
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -808,6 +887,9 @@ void panel_clip(AppState& state, float w) {
         if (ImGui::CollapsingHeader("Fade")) {
             ImGui::Dummy({0.f, 4.f}); section_fade(state, clip, w); ImGui::Dummy({0.f, 4.f});
         }
+        if (ImGui::CollapsingHeader("Text Style")) {
+            ImGui::Dummy({0.f, 4.f}); section_text_style(state, clip, w); ImGui::Dummy({0.f, 4.f});
+        }
 
         if (ImGui::CollapsingHeader("Grouping")) {
             ImGui::Dummy({0.f, 4.f});
@@ -868,6 +950,7 @@ void panel_clip(AppState& state, float w) {
                             memcpy(tgt.sub_color, clip.sub_color, sizeof(clip.sub_color));
                             memcpy(tgt.karaoke_highlight_color, clip.karaoke_highlight_color,
                                    sizeof(clip.karaoke_highlight_color));
+                            tgt.ts = clip.ts;
                         }
                         history_push(state, "Apply style to selected");
                     }

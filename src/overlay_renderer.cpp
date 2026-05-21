@@ -1,6 +1,7 @@
 #include "overlay_renderer.h"
 #include "app.h"
 #include "ui/theme.h"
+#include "text_renderer.h"
 
 #include <imgui.h>
 #include <cmath>
@@ -139,7 +140,6 @@ void draw_text_overlays(ImDrawList* dl, const AppState& state, float t,
 
         float block_cx = p.x + active->sub_pos_x * w;
         float ty_anim  = slot_y + anim_dy;
-        ImU32 shad_col = IM_COL32(0, 0, 0, (int)(180.f * anim_alpha));
 
         std::vector<const WordEntry*> clip_words;
         bool has_karaoke = (active->karaoke && !state.words_cache.empty());
@@ -149,73 +149,24 @@ void draw_text_overlays(ImDrawList* dl, const AppState& state, float t,
                     clip_words.push_back(&we);
             if (clip_words.empty()) has_karaoke = false;
         }
-        int kw_idx = 0;
 
-        float block_max_w = 0.f;
-        for (auto& ln : txt_lines)
-            block_max_w = fmaxf(block_max_w, txt_font->CalcTextSizeA(fsz, FLT_MAX, -1.f, ln.c_str()).x);
-
-        if (eff_style == AnimStyle::Block) {
-            float pad_x = 8.f, pad_y = 4.f;
-            float bx0 = block_cx - block_max_w * 0.5f - pad_x + anim_dx;
-            dl->AddRectFilled(
-                {bx0, ty_anim - pad_y},
-                {bx0 + block_max_w + pad_x * 2.f, ty_anim + block_h + pad_y},
-                to_u32(Col::fg), 2.f);
-        }
-
-        for (int li = 0; li < (int)txt_lines.size(); ++li) {
-            const std::string& ln = txt_lines[li];
-            ImVec2 lsz = txt_font->CalcTextSizeA(fsz, FLT_MAX, -1.f, ln.c_str());
-            float lx   = block_cx - lsz.x * 0.5f + anim_dx;
-            float ly   = ty_anim + li * line_h;
-
-            dl->AddText(txt_font, fsz, {lx + 2.f, ly + 2.f}, shad_col, ln.c_str());
-
-            if (has_karaoke) {
-                const char* lp = ln.c_str();
-                float cur_x = lx;
-                while (*lp) {
-                    const char* ep = lp;
-                    while (*ep && *ep != ' ') ++ep;
-                    std::string lword(lp, ep);
-                    bool has_space = (*ep == ' ');
-                    std::string lword_sp = lword + (has_space ? " " : "");
-
-                    bool is_active_word = false;
-                    if (kw_idx < (int)clip_words.size()) {
-                        const WordEntry* we = clip_words[kw_idx];
-                        is_active_word = (t >= we->start && t < we->end);
-                        ++kw_idx;
-                    }
-
-                    ImU32 wcol;
-                    if (active->sub_color_override) {
-                        float a = (is_active_word ? active->sub_color[3] : active->sub_color[3] * 0.45f) * anim_alpha;
-                        wcol = IM_COL32((int)(active->sub_color[0]*255), (int)(active->sub_color[1]*255),
-                                        (int)(active->sub_color[2]*255), (int)(a*255));
-                    } else {
-                        wcol = is_active_word ? IM_COL32(255,255,255,(int)(255*anim_alpha))
-                                              : IM_COL32(255,255,255,(int)(100*anim_alpha));
-                    }
-                    float word_w = txt_font->CalcTextSizeA(fsz, FLT_MAX, -1.f, lword_sp.c_str()).x;
-                    dl->AddText(txt_font, fsz, {cur_x, ly}, wcol, lword_sp.c_str());
-                    cur_x += word_w;
-                    lp = has_space ? ep + 1 : ep;
-                }
-            } else {
-                ImU32 tcol;
-                if (active->sub_color_override) {
-                    float a = active->sub_color[3] * anim_alpha;
-                    tcol = IM_COL32((int)(active->sub_color[0]*255), (int)(active->sub_color[1]*255),
-                                    (int)(active->sub_color[2]*255), (int)(a*255));
-                } else if (eff_style == AnimStyle::Block) {
-                    tcol = to_u32(Col::bg);
-                } else {
-                    tcol = IM_COL32(255, 255, 255, (int)(255.f * anim_alpha));
-                }
-                dl->AddText(txt_font, fsz, {lx, ly}, tcol, ln.c_str());
-            }
+        {
+            TextRenderCtx trc;
+            trc.dl         = dl;
+            trc.font       = txt_font;
+            trc.fsz        = fsz;
+            trc.anim_alpha = anim_alpha;
+            trc.anim_dx    = anim_dx;
+            trc.anim_dy    = 0.f;
+            trc.clip       = active;
+            trc.eff_style  = eff_style;
+            trc.anchor_h   = active->sub_anchor_h;
+            trc.block_cx   = block_cx;
+            trc.ty         = ty_anim;
+            trc.line_h     = line_h;
+            trc.t          = t;
+            trc.clip_words = has_karaoke ? &clip_words : nullptr;
+            render_text_block(trc, txt_lines);
         }
 
         ++text_rendered;

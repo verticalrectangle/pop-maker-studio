@@ -15,10 +15,11 @@ The main loop:
 ```
 app_frame(state)
   ├── update playhead (audio position or wall clock fallback)
-  ├── render_tick_gl(state)         — advance export by one frame if running
+  ├── ipc_server_poll(state)          — process MCP/IPC commands from socket
+  ├── render_tick_gl(state)           — advance export by one frame if running
   └── ui_studio(state)
         ├── draw_timeline()
-        ├── draw_preview()          — proxy decode → fx_apply → scene composite
+        ├── draw_preview()            — proxy decode → fx_apply → scene composite
         └── draw_panel_*()
 ```
 
@@ -26,7 +27,7 @@ app_frame(state)
 
 ## Clip data model
 
-Every piece of content on the timeline is a `Clip`. Clips are typed (`ClipType::Video`, `Audio`, `Text`, `Lyrics`, `Subtitle`, `Effect`) but live in the same struct. Tracks are named containers.
+Every piece of content on the timeline is a `Clip`. Clips are typed (`ClipType::Video`, `Audio`, `Text`, `Lyrics`, `Subtitle`, `Effect`, `Background`, `BodyFX`) but live in the same struct. Tracks are named containers.
 
 **Source time vs timeline time** is the single most important distinction in the codebase:
 
@@ -37,6 +38,8 @@ source_time = clip.in_point + (timeline_time - clip.start) * clip.speed
 Any code that reads a video frame or audio sample must use `source_time`. Confusing the two caused the split-clip black-frame and wrong-audio bugs. Every decoder call site has been audited.
 
 Keyframe times (`Keyframe.time`) are relative to `clip.start`, not absolute timeline time. `Clip::eval_prop(name, playhead)` handles the offset — callers pass absolute playhead time and don't need to think about it.
+
+**`TextStyle`** (`src/app.h`) is a sub-struct on every `Clip` carrying per-clip text rendering configuration: shadow (offset x/y, RGBA), stroke (width, RGBA), glow (radius, RGBA), and background box (RGBA, padding x/y, corner radius). Defaults match the old hardcoded behavior (shadow on at 2px, everything else off) so old projects are visually unchanged on load.
 
 ---
 
@@ -64,11 +67,11 @@ Each clip gets its own decoder slot (0–7), keyed by:
 source_path + '\x01' + clip_start_time
 ```
 
-Not just the source path. Two clips from the same file get independent slots so their decoders don't fight over seek position. This is why `proxy_paths[MAX_VIDEO_TRACKS]` is not serialized — it is rebuilt at runtime from the live clip list.
+Not just the source path. Two clips from the same file get independent slots so their decoders don't fight over seek position.
 
 The proxy poll loop runs every frame and manages the slot state machine: slot assigned and proxy ready → open proxy; slot assigned and proxy still generating → open a JPEG still as placeholder. `gc_video_slots` frees slots whose clips were deleted.
 
-**One invariant**: `fps` in the `ProxyInfo` struct must be probed from the original source file, not the proxy. The proxy is always 12 fps; the source FPS determines the frame count table.
+**One invariant**: `fps` in the `ProxyInfo` struct must be probed from the original source file, not the proxy. The proxy is always 12 fps; the source FPS determines the frame count table. This value is also passed to the CTC forced aligner so word timestamps snap to actual source frame boundaries.
 
 ---
 
@@ -98,13 +101,29 @@ The four accumulator functions:
 
 ## Codegen effects
 
-Effects beyond the hand-wired core are defined in `effects/registry.json` and generated at build time by `tools/codegen_effects.py`. The script outputs ~15 headers into `src/generated/`:
+Effects beyond the hand-wired core are defined in `effects/registry.json` and generated at build time by `tools/codegen_effects.py`. The script outputs into `src/generated/`:
 
-`fx_accum_fields.h`, `fx_clip_fields.h`, `fx_collect_cases.h`, `fx_enum_entries.h`, `fx_shader_strings.h`, `fx_shader_init.h`, `fx_shader_apply.h`, `fx_project_read.h`, `fx_project_write.h`, `fx_ui_inspector.h`, `fx_ui_picker.h`, `fx_preview_defaults.h`, `fx_type_list.h`, `fx_ui_color.h`, `fx_ui_label.h`
+| File | Purpose |
+|------|---------|
+| `fx_enum_entries.h` | `FXType` enum cases |
+| `fx_clip_fields.h` | Per-clip amount + param fields (with beat-sync variants) |
+| `fx_accum_fields.h` | `CreativeFXAccum` fields |
+| `fx_collect_cases.h` | Switch cases for accumulating clip FX |
+| `fx_shader_strings.h` | GLSL source as `R"glsl(...)glsl"` string literals |
+| `fx_shader_init.h` | `fx_generated_init()` — compile all programs at startup |
+| `fx_shader_apply.h` | Per-effect `glUniform` calls and blend pass |
+| `fx_project_read.h` | Versioned deserialization |
+| `fx_project_write.h` | Serialization |
+| `fx_ui_inspector.h` | ImGui slider + beat-sync button per param |
+| `fx_ui_color.h`, `fx_ui_label.h`, `fx_ui_abbrev.h`, `fx_ui_picker.h` | Display metadata |
+| `fx_preview_defaults.h` | Default param values for the effect picker preview |
+| `fx_type_list.h`, `fx_gen_names.h` | Iteration helpers |
+| `fx_attached_accum.h`, `fx_attached_defaults.h`, `fx_attached_ui.h` | AttachedFX system |
+| `fx_clip_set_dispatch.h` | `fx_clip_set_param(Clip&, fx_id, param, value)` — used by IPC `set_clip_fx` |
 
-Every entry in `registry.json` specifies: `id`, `name`, `category`, `params[]` (with name, min, max, default, curve), and a GLSL shader body. Adding a new effect means writing a shader body and a JSON entry — no manual edits to C++.
+The script also writes `effects/mcp_manifest.json` — a machine-readable effect catalog (id, label, description, params with ranges) consumed by the MCP server to populate the `apply_effect` tool description. All 100 effects are self-documenting to Claude.
 
-Power curves (`"curve": 0.5`) map slider travel to perceptual values at accumulation time. Every generated effect has a system-level `amount` (0–1) that blends source and effect output — this is not a param, it is the top-level intensity control.
+Every entry specifies: `id`, `label`, `params[]` (name, min, max, default, curve, fmt), a GLSL shader path, and display metadata. Power curves (`"curve": 0.5`) map slider travel to perceptual values at accumulation time.
 
 Do not edit files in `src/generated/`. Re-run `tools/codegen_effects.py` after modifying `effects/registry.json`.
 
@@ -112,19 +131,32 @@ Do not edit files in `src/generated/`. Re-run `tools/codegen_effects.py` after m
 
 ## ML pipeline
 
-### MDX-Net vocal separation
+### MDX-Net vocal separation (`src/separate.cpp`)
 
-Model: Kim_Vocal_2.onnx (~64 MB, UVR5 community). Auto-downloaded to `~/.cache/pop-maker-studio/mdx/` on first use.
+Model: Kim_Vocal_2.onnx (~64 MB, UVR5 community). Pipeline: ffmpeg decode → STFT (FFTW3, n_fft=6144, hop=1024, Hann window, center-padded matching librosa defaults) → chunked ONNX inference (256-frame chunks, 64-frame overlap, linear crossfade) → iSTFT → instrumental as `original − vocals`. All C++, ONNX Runtime CPU. CUDA attempted opportunistically.
 
-Pipeline: ffmpeg decode → STFT (FFTW3, n_fft=6144, hop=1024) → chunked ONNX inference (256-frame chunks, 64-frame overlap) → iSTFT → instrumental as `original − vocals`. All C++, ONNX Runtime CPU. No GPU required.
+The model expects `[1, 4, kDimF, kDimT]` float tensors (L_real, L_imag, R_real, R_imag). Output is a vocal mask in the same layout. ISTFT uses overlap-add normalized by window power squared.
 
-If the model hasn't been downloaded, separation fails with a clear error pointing to the Setup screen. No fallback.
+### Whisper transcription (`src/transcribe.cpp`)
 
-### Whisper transcription
+whisper.cpp with `ggml-large-v3-turbo-q5_0`. DTW token timestamps (`cparams.dtw_token_timestamps = true` + `WHISPER_AHEADS_LARGE_V3_TURBO`) align each BPE token to the audio using attention heads. Token → word grouping: tokens that start with a space mark word boundaries. `td.t_dtw` is preferred over `td.t0` when non-negative.
 
-whisper.cpp with `ggml-large-v3-turbo-q5_0`. DTW token timestamps (`cparams.dtw_token_timestamps = true` + `WHISPER_AHEADS_LARGE_V3_TURBO`) align each BPE token to the audio using attention heads. Token → word grouping: tokens that start with a space mark word boundaries. No external forced aligner.
+### CTC forced alignment (`src/forced_align.cpp`)
 
-### Voice conversion — zero Python
+Runs after Whisper to produce frame-accurate word timestamps. Model: wav2vec2-base-960h ONNX (Xenova quantized, ~94 MB). The vocab is loaded from `wav2vec2_vocab.json` at runtime (character → token index map; `<pad>` = CTC blank; `|` = word separator).
+
+The Viterbi CTC decoder uses standard blank-padded expanded targets (`[B, t0, B, t1, ..., tL, B]`) with a two-row DP and a full `int8_t back[T×S]` back-pointer matrix for path reconstruction. Skip-blank transitions are allowed only when the current token differs from the token two positions back.
+
+Processing is chunked into 30-second windows. Each chunk is mean/variance normalized before ONNX inference (wav2vec2 feature extractor convention). The model's `attention_mask` input is optional — detected via `sess.GetInputCount() >= 2`.
+
+Final timestamps are snapped to proxy FPS frame boundaries:
+```cpp
+snap(t) = round(t * proxy_fps) / proxy_fps
+```
+
+Whisper timestamps serve as fallback if alignment fails for any chunk.
+
+### Voice conversion — zero Python (`src/pth_reader.cpp`, `src/rvc_onnx.cpp`, `src/vc_onnx.cpp`)
 
 The voice conversion pipeline reads PyTorch `.pth` checkpoints directly: parse the zip archive, execute the pickle protocol-2 VM, reconstruct tensor metadata and model configuration. No libtorch. No Python.
 
@@ -136,7 +168,42 @@ From metadata alone, `pth_to_onnx()` builds a complete ONNX graph using a hand-r
 
 Weight normalization is resolved at export time: `W_eff[i] = weight_g[i] / ||weight_v[i]||₂ × weight_v[i]`. All sequence-length dimensions are dynamic throughout the graph via Shape/Gather/Concat/Reshape/Slice nodes.
 
-HuBERT feature extraction uses a shared `hubert.onnx` model (one-time export, shared across all voice models). Inference is ONNX Runtime.
+HuBERT feature extraction uses a shared `hubert.onnx` model exported once by the `export-hubert` CLI tool (same C++ pipeline: reads `hubert_base_ls960.pt`, exports ONNX). Inference is ONNX Runtime.
+
+---
+
+## Text rendering (`src/text_renderer.h/cpp`)
+
+All Text, Lyrics, and Subtitle clip rendering goes through `render_text_block(TextRenderCtx, lines)`. Both the canvas preview (`src/ui/canvas.cpp`) and the export overlay renderer (`src/overlay_renderer.cpp`) call this single function, guaranteeing pixel-exact correspondence between preview and export.
+
+Layer order per line block:
+1. **Glow** — 3 passes × 8 angles, decreasing alpha and increasing radius per pass (~24 AddText calls/line)
+2. **Background box** — `AddRectFilled` with `ts.bg_col` and `ts.bg_corner`; also fires when `eff_style == AnimStyle::Block`
+3. **Shadow** — single AddText at `{lx + shadow_ox, ly + shadow_oy}`
+4. **Stroke** — 8-directional AddText at `±stroke_w` (N/S/E/W + diagonals)
+5. **Main text / Karaoke** — per-word color using `clip->karaoke_highlight_color` for active words
+
+`TextRenderCtx` carries: draw list, font, font size, animation alpha/dx/dy, clip pointer (for TextStyle and color), effective AnimStyle, anchor mode (left/center/right), anchor X position, top-Y, line height, playhead time, and an optional pointer to the karaoke word list.
+
+---
+
+## IPC and MCP server
+
+`ipc_server.cpp` listens on a PID-scoped Unix domain socket (`/tmp/pop-maker-studio-{pid}.sock`). The lock file `/tmp/pop-maker-studio.lock` holds `{pid} {socket_path}` for client discovery.
+
+Protocol: newline-delimited JSON. Request: `{"id": "...", "method": "...", "params": {...}}`. Response: `{"id": "...", "result": {...}}` or `{"id": "...", "error": "string"}`.
+
+`ipc_server_poll(state)` is called from the main loop — same thread as the UI. All mutations land on the main thread between frames, identical to a UI interaction. No locking required.
+
+**Batch system**: mutation commands are rejected outside a `begin_batch`/`end_batch` pair. `end_batch` calls `history_push`, making MCP edits undoable from the UI. If the client disconnects with an open batch, the partial batch is pushed with an `(incomplete)` label.
+
+**Commands** (read-only — no batch required): `get_project`, `get_pipeline_status`, `get_beats`, `seek`, `play`, `pause`, `validate_glsl`, `save_project`.
+
+**Commands** (mutation — require batch): `add_clip`, `delete_clip`, `move_clip`, `trim_clip`, `split_clip`, `set_clip_prop`, `set_text_style`, `set_clip_fx`, `add_track`, `delete_track`, `trigger_pipeline`, `generate_typography`, `load_project`.
+
+`set_clip_fx` dispatches to the generated `fx_clip_set_param()` function in `src/generated/fx_clip_set_dispatch.h`, which covers all 100 codegen effects by id and param name.
+
+The **Python MCP server** (`mcp_server/server.py`) bridges Claude to the IPC layer using the `mcp` SDK. It reads the lock file, connects to the socket, and exposes 17 MCP tools. The `apply_effect` tool description is populated at import time from `effects/mcp_manifest.json` — Claude sees all 100 effect IDs, descriptions, and param ranges without any hardcoding in the Python layer.
 
 ---
 
@@ -152,26 +219,16 @@ Resolution: 1080×1920 (vertical), 1920×1080 (horizontal), 1080×1080 (square).
 
 ---
 
-## Text rendering
-
-`draw_text_overlays` renders all active Text/Lyrics/Subtitle clips onto an `ImDrawList` using the embedded Inter Black font.
-
-Font size is stored as a **fraction of canvas height** (`clip.font_size`), not pixels. Default is `h * 0.055f`. The preview canvas might be 500 px; the export FBO 1920 px — the text appears at the same visual proportion in both because the math is the same.
-
-Word wrapping uses `ImFont::CalcTextSizeA` with the export font size. The wrap in preview matches the wrap in export exactly.
-
-Eight animation styles: Fade, Glitch, Typewriter, Bounce, Scale, Slide, Stack, Block. `eff_style` is the per-clip override if set, otherwise the project-level `state.style`.
-
----
-
 ## Project serialization
 
 Binary format:
 ```
-[MAGIC: u32 = 0x534D5001]  [VERSION: u32 = 16]  [fields...]
+[MAGIC: u32 = 0x534D5001]  [VERSION: u32 = 28]  [fields...]
 ```
 
-When adding a field: bump `VERSION`, write unconditionally in `write_clip`/`project_save`, wrap the read in `if (version >= N)` in `read_clip`/`project_load` with a sensible default in the else branch. Never reorder existing fields. Never remove version guards.
+When adding a field: bump `VERSION`, write unconditionally in `write_clip`/`project_save`, wrap the read in `if (version >= N)` in `read_clip`/`project_load` with a sensible default. Never reorder existing fields. Never remove version guards.
+
+The generated effect fields are all written under a single version gate (currently v23) — when the effect set changes, `project_version` in `effects/registry.json` bumps and the codegen regenerates `fx_project_read.h` with the new gate. Old projects get default-constructed values for new fields.
 
 ---
 
@@ -185,36 +242,60 @@ A stack of `AppState` snapshots. `history_push` copies the entire struct. `AppSt
 
 ```
 src/
-  main.cpp              Entry point, GL/ImGui init, main loop
-  app.h                 AppState, Clip, Track, all data model types
-  app.cpp               app_frame; collect_effects/creative_fx; glass variants
-  project.cpp           Binary save/load, VERSION=16
-  audio.h / audio.cpp   miniaudio device, PCM mixing, master clock
-  video.h / video.cpp   MJPEG proxy preview, GL texture upload, CPU bg_remove
-  proxy.h / proxy.cpp   Proxy generation (ffmpeg subprocess)
-  fx_shader.h/.cpp      GPU FX: GLSL shaders, fx_apply, scene compositor
+  main.cpp               Entry point, GL/ImGui init, main loop
+  app.h                  AppState, Clip, Track, TextStyle, all data model types
+  app.cpp                app_frame; collect_effects/creative_fx; glass variants
+  project.cpp            Binary save/load, VERSION=28
+  audio.h / audio.cpp    miniaudio device, PCM mixing, master clock
+  video.h / video.cpp    MJPEG proxy preview, GL texture upload
+  proxy.h / proxy.cpp    Proxy generation (ffmpeg subprocess)
+  fx_shader.h/.cpp       GPU FX: GLSL shaders, fx_apply, scene compositor
   overlay_renderer.h/.cpp  ImDrawList text/subtitle rendering (preview + export)
-  render.h / render.cpp GL export pipeline, ffmpeg pipe, snapshot
-  transcribe.h/.cpp     ML pipeline subprocess management
-  pth_reader.h/.cpp     PyTorch .pth reader (zip+pickle, no libtorch)
-  rvc_onnx.h/.cpp       VITS→ONNX exporter (hand-rolled protobuf)
-  vc_job.h/.cpp         Voice conversion job queue
-  vc_onnx.h/.cpp        HuBERT + voice ONNX inference
-  demucs.h/.cpp         MDX-Net (Kim_Vocal_2) vocal separation, FFTW3 STFT
-  presets.h/.cpp        User effect presets (JSON)
-  generated/            Auto-generated from codegen_effects.py — do not edit
+  text_renderer.h/.cpp   Shared text layer renderer (glow/bg/shadow/stroke/karaoke)
+  render.h / render.cpp  GL export pipeline, ffmpeg pipe, snapshot
+  transcribe.h/.cpp      ML pipeline orchestration (separate → whisper → align)
+  separate.h/.cpp        MDX-Net vocal separation, FFTW3 STFT/iSTFT
+  forced_align.h/.cpp    CTC forced alignment, Viterbi DP, wav2vec2 ONNX
+  ipc_server.h/.cpp      Unix socket IPC server, JSON command dispatch
+  pth_reader.h/.cpp      PyTorch .pth reader (zip+pickle, no libtorch)
+  rvc_onnx.h/.cpp        VITS→ONNX exporter (hand-rolled protobuf)
+  vc_job.h/.cpp          Voice conversion job queue
+  vc_onnx.h/.cpp         HuBERT + voice ONNX inference
+  bg_remove.h/.cpp       Background removal (u2net ONNX, mask streaming)
+  body_fx.h/.cpp         BodyFX brick (skeleton-tracked effects)
+  noise_reduce.h/.cpp    Spectral noise reduction
+  forced_align.h/.cpp    CTC forced alignment
+  paths.h / paths.cpp    Binary-relative model path resolution
+  history.h/.cpp         AppState snapshot stack
+  presets.h/.cpp         User effect presets (JSON)
+  generated/             Auto-generated from codegen_effects.py — do not edit
+
   ui/
-    screen_studio.cpp   Main editor UI — largest file
-    screen_splash.cpp   Splash screen
-    screen_setup.cpp    First-run setup
+    screen_studio.cpp    Main editor UI
+    screen_splash.cpp    Splash screen
+    screen_setup.cpp     First-run setup
+    canvas.cpp           Canvas preview, text layout, handle hit testing
+    timeline.cpp         Timeline, clip drag/resize, track management
+    pipeline.cpp         ML pipeline UI, kick_pipeline()
+    panel_clip.cpp       Clip inspector (properties, text style, karaoke)
+    panel_animation.cpp  Typography presets, generate_typography()
+    panel_fx.cpp         Effect inspector
+    panel_media.cpp      Media browser
+    export_ui.cpp        Export dialog
 
 effects/
-  registry.json         Effect definitions (params, shader body, metadata)
-  shaders/              GLSL source files for generated effects
+  registry.json          Effect definitions (params, shader paths, metadata)
+  mcp_manifest.json      MCP tool catalog — generated by codegen_effects.py
+  shaders/               GLSL source files for generated effects
 
 tools/
-  codegen_effects.py    registry.json → src/generated/*.h
-  test_pth_reader.cpp   Standalone .pth parser test
+  codegen_effects.py     registry.json → src/generated/*.h + effects/mcp_manifest.json
+  export_hubert.cpp      CLI tool: hubert_base.pt → hubert.onnx
+
+mcp_server/
+  server.py              Python MCP server (17 tools, reads lock file)
+  requirements.txt       mcp>=1.0
+  README.md              Setup instructions for Claude Desktop and Claude Code CLI
 ```
 
 ---
@@ -231,5 +312,8 @@ tools/
 - **fx_apply uses per-slot stable output textures.** Shared ping-pong buffers would be overwritten before the deferred ImDrawList flushes. Each slot (0–15) owns its output texture.
 - **bg_remove stays CPU-side.** It reads PNG alpha masks generated by a background process; all other FX run through GLSL via fx_apply.
 - **Datamosh ghost resets on `clip_start` change.** Moving or replacing a datamosh clip restarts the ghost from the first visible frame.
-- **Proxy FPS must be probed from the original file, not the proxy.** The proxy is always 12 fps.
+- **Proxy FPS must be probed from the original file, not the proxy.** The proxy is always 12 fps. This value is passed to `forced_align` so CTC timestamps snap to real source frame boundaries.
 - **WN `n_layers` is derived from weight shapes.** `cond_layer` output channels ÷ (2 × hidden_channels) — not hardcoded.
+- **CTC alignment is chunked in 30-second windows.** The full-song Viterbi DP matrix would be ~60 MB; per-chunk it stays at ~750 KB. Whisper timestamps are the fallback if any chunk fails.
+- **IPC mutations land on the main thread.** `ipc_server_poll` runs in the main loop. There is no concurrency between MCP edits and UI interactions — they interleave frame by frame.
+- **`set_clip_fx` dispatches via generated code.** `fx_clip_set_dispatch.h` is a codegen output. If you add a new effect to the registry, re-run `codegen_effects.py` or `set_clip_fx` won't recognize the new effect id.
