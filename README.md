@@ -22,9 +22,9 @@ The ML stack runs fully locally. Nothing is uploaded.
 
 **CTC forced alignment** refines Whisper timestamps to frame-accurate precision. A Viterbi CTC decoder (handrolled in C++, two-row DP with full back-pointer matrix) runs wav2vec2-base-960h (Xenova ONNX quantized, ~94 MB) over 30-second chunks to keep the DP matrix at ~750 KB/chunk. Word timestamps are snapped to MJPEG proxy frame boundaries so karaoke highlighting lands on exact video frames.
 
-**Background removal** uses u2net_human_seg via ONNX with 2× supersampling, Lanczos downsampling, and σ=0.7 Gaussian smoothing for edge quality. Masks are streamed as grayscale MJPEG so the canvas updates in real time while the model processes.
+**Background removal** uses u2net_human_seg via ONNX. Each frame is bilinear-resized to 320×320 for inference, the output mask is bilinear-resized back to the original frame resolution, and a separable Gaussian blur (radius ~1px) smooths mask edges. Masks are streamed as grayscale MJPEG so the canvas updates in real time while the model processes.
 
-**Voice conversion** runs entirely in C++ with zero Python involvement. The pipeline reads PyTorch `.pth` model files directly — parsing the zip+pickle format without libtorch — extracts tensor metadata and model configuration, and exports a fully functional ONNX graph using a hand-rolled protobuf serializer. The VITS architecture (TextEncoder → ResidualCouplingBlock reverse flow → NSF-HiFiGAN decoder) is reconstructed entirely in C++. HuBERT embeddings use a shared ONNX model. `.pth` in, voice-converted audio out, no Python interpreter ever started.
+**Voice conversion** runs entirely in C++ with zero Python involvement. The pipeline reads PyTorch `.pth` model files directly without libtorch: the zip archive is extracted with the system `unzip`, then a hand-rolled pickle VM parses `data.pkl` to extract tensor metadata and model configuration, and exports a fully functional ONNX graph using a hand-rolled protobuf serializer. The VITS architecture (TextEncoder → ResidualCouplingBlock reverse flow → NSF-HiFiGAN decoder) is reconstructed entirely in C++. HuBERT embeddings use a shared ONNX model. `.pth` in, voice-converted audio out, no Python interpreter ever started.
 
 ---
 
@@ -62,7 +62,7 @@ The audio clock advances unconditionally. The video follows it. This gives lip-s
 
 ## Video preview
 
-High-bitrate source footage is transcoded to a per-clip MJPEG proxy at a lower resolution. Scrubbing seeks to the correct proxy frame via a prebuilt seek table — essentially a direct fseek to the right JPEG — which makes real-time preview instant regardless of source codec. Each clip gets its own decoder slot keyed by source path and clip start time, so splitting a clip gives each half independent decoders with no seek contention.
+High-bitrate source footage is transcoded to a per-clip MJPEG proxy at a lower resolution. Scrubbing seeks to the correct proxy frame via a prebuilt seek table — essentially a direct fseek to the right JPEG — which makes real-time preview instant regardless of source codec. Each clip gets its own decoder slot keyed by source file path, so multiple clips sharing the same source get independent decoders with no seek contention.
 
 ---
 
@@ -74,7 +74,7 @@ Eight animation styles (Fade, Glitch, Typewriter, Bounce, Scale, Slide, Stack, B
 
 ## MCP server
 
-Pop Maker Studio exposes its full editing surface to Claude via the Model Context Protocol. The app runs a Unix socket IPC server on startup; a Python MCP bridge (`mcp_server/server.py`) reads the lock file, connects to the socket, and registers 17 tools covering the complete editing surface: clip creation and manipulation, text style, typography generation, ML pipeline control, effect application, playback, and project persistence.
+Pop Maker Studio exposes its full editing surface to Claude via the Model Context Protocol. The app runs a Unix socket IPC server on startup; a Python MCP bridge (`mcp_server/server.py`) reads the lock file, connects to the socket, and registers 20 tools covering the complete editing surface: clip creation and manipulation, text style, typography generation, ML pipeline control, effect application, playback, and project persistence.
 
 ```bash
 pip install -r mcp_server/requirements.txt
