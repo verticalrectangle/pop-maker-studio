@@ -62,12 +62,7 @@ The callback mixes three sources: video-embedded audio decoded to a flat PCM buf
 
 Decoding H.264/HEVC in real time on the main thread is too slow for interactive scrubbing. Each video clip gets a proxy: a folder of MJPEG frames at a lower resolution with a prebuilt seek table (fseek + stb_image). Scrubbing is essentially a direct fseek to a JPEG.
 
-Each clip gets its own decoder slot (0–7), keyed by:
-```
-source_path + '\x01' + clip_start_time
-```
-
-Not just the source path. Two clips from the same file get independent slots so their decoders don't fight over seek position.
+Each track gets its own decoder slot (0–7), indexed by `track_id`. The slot is opened with whatever clip is currently active on that track. Two clips on different tracks get independent slots with no seek contention; two clips on the same track share a slot (but never simultaneously).
 
 The proxy poll loop runs every frame and manages the slot state machine: slot assigned and proxy ready → open proxy; slot assigned and proxy still generating → open a JPEG still as placeholder. `gc_video_slots` frees slots whose clips were deleted.
 
@@ -158,7 +153,7 @@ Whisper timestamps serve as fallback if alignment fails for any chunk.
 
 ### Voice conversion — zero Python (`src/pth_reader.cpp`, `src/rvc_onnx.cpp`, `src/vc_onnx.cpp`)
 
-The voice conversion pipeline reads PyTorch `.pth` checkpoints directly: parse the zip archive, execute the pickle protocol-2 VM, reconstruct tensor metadata and model configuration. No libtorch. No Python.
+The voice conversion pipeline reads PyTorch `.pth` checkpoints directly without libtorch or Python: the zip archive is extracted via the system `unzip` binary, then a hand-rolled pickle protocol-2 VM parses `data.pkl` to reconstruct tensor metadata and model configuration.
 
 From metadata alone, `pth_to_onnx()` builds a complete ONNX graph using a hand-rolled protobuf serializer. The VITS architecture is reconstructed in C++:
 
@@ -203,7 +198,7 @@ Protocol: newline-delimited JSON. Request: `{"id": "...", "method": "...", "para
 
 `set_clip_fx` dispatches to the generated `fx_clip_set_param()` function in `src/generated/fx_clip_set_dispatch.h`, which covers all 100 codegen effects by id and param name.
 
-The **Python MCP server** (`mcp_server/server.py`) bridges Claude to the IPC layer using the `mcp` SDK. It reads the lock file, connects to the socket, and exposes 17 MCP tools. The `apply_effect` tool description is populated at import time from `effects/mcp_manifest.json` — Claude sees all 100 effect IDs, descriptions, and param ranges without any hardcoding in the Python layer.
+The **Python MCP server** (`mcp_server/server.py`) bridges Claude to the IPC layer using the `mcp` SDK. It reads the lock file, connects to the socket, and exposes 20 MCP tools. The `apply_effect` tool description is populated at import time from `effects/mcp_manifest.json` — Claude sees all 100 effect IDs, descriptions, and param ranges without any hardcoding in the Python layer.
 
 ---
 
@@ -257,14 +252,13 @@ src/
   separate.h/.cpp        MDX-Net vocal separation, FFTW3 STFT/iSTFT
   forced_align.h/.cpp    CTC forced alignment, Viterbi DP, wav2vec2 ONNX
   ipc_server.h/.cpp      Unix socket IPC server, JSON command dispatch
-  pth_reader.h/.cpp      PyTorch .pth reader (zip+pickle, no libtorch)
+  pth_reader.h/.cpp      PyTorch .pth reader (system unzip + handrolled pickle VM, no libtorch)
   rvc_onnx.h/.cpp        VITS→ONNX exporter (hand-rolled protobuf)
   vc_job.h/.cpp          Voice conversion job queue
   vc_onnx.h/.cpp         HuBERT + voice ONNX inference
-  bg_remove.h/.cpp       Background removal (u2net ONNX, mask streaming)
+  bg_remove.h/.cpp       Background removal (u2net ONNX, grayscale MJPEG mask streaming)
   body_fx.h/.cpp         BodyFX brick (skeleton-tracked effects)
   noise_reduce.h/.cpp    Spectral noise reduction
-  forced_align.h/.cpp    CTC forced alignment
   paths.h / paths.cpp    Binary-relative model path resolution
   history.h/.cpp         AppState snapshot stack
   presets.h/.cpp         User effect presets (JSON)
@@ -293,7 +287,7 @@ tools/
   export_hubert.cpp      CLI tool: hubert_base.pt → hubert.onnx
 
 mcp_server/
-  server.py              Python MCP server (17 tools, reads lock file)
+  server.py              Python MCP server (20 tools, reads lock file)
   requirements.txt       mcp>=1.0
   README.md              Setup instructions for Claude Desktop and Claude Code CLI
 ```
@@ -303,14 +297,14 @@ mcp_server/
 ## Things that will surprise you
 
 - **`g_read_pos` is a clock, not a cursor.** It advances unconditionally. Source position is always computed from clip data.
-- **Proxy slots are per clip instance, not per source file.** Two clips from the same video get two independent slots.
+- **Proxy slots are per track, not per clip or source file.** Each track_id maps to one slot (0–7). Two clips on different tracks get independent slots; clips on the same track share a slot sequentially.
 - **Font size is a fraction of canvas height, never pixels.** This is why preview and 4K export look proportionally identical.
 - **`Keyframe.time` is relative to `clip.start`.** `eval_prop` takes absolute playhead time and handles the offset.
 - **`in_point` must be advanced on split.** `right.in_point += (cut - left.start) * left.speed`. All split sites do this.
 - **Glass FX is collected by exactly one path.** `collect_effects`/`collect_creative_fx` skip glass tracks. The glass functions read only the one track directly above the target video. No double-counting.
 - **Effect clips don't conflict with Video/Audio for overlap checks.** Only Effect-vs-Effect overlaps are blocked. This is what allows FX bricks on the same track as a video clip (glass system).
 - **fx_apply uses per-slot stable output textures.** Shared ping-pong buffers would be overwritten before the deferred ImDrawList flushes. Each slot (0–15) owns its output texture.
-- **bg_remove stays CPU-side.** It reads PNG alpha masks generated by a background process; all other FX run through GLSL via fx_apply.
+- **bg_remove stays CPU-side.** It reads grayscale MJPEG masks (`bg_masks.mjpeg`) generated by a background thread; all other FX run through GLSL via fx_apply.
 - **Datamosh ghost resets on `clip_start` change.** Moving or replacing a datamosh clip restarts the ghost from the first visible frame.
 - **Proxy FPS must be probed from the original file, not the proxy.** The proxy is always 12 fps. This value is passed to `forced_align` so CTC timestamps snap to real source frame boundaries.
 - **WN `n_layers` is derived from weight shapes.** `cond_layer` output channels ÷ (2 × hidden_channels) — not hardcoded.
