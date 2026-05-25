@@ -35,7 +35,14 @@ jobs:
         run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 
       - name: Build
-        run: cmake --build build --parallel
+        run: cmake --build build --parallel 2>&1 | tee build-log.txt; exit ${PIPESTATUS[0]}
+
+      - name: Upload build log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log-linux
+          path: build-log.txt
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

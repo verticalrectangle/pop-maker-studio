@@ -1,0 +1,37 @@
+name: Claude Diagnose
+
+on:
+  workflow_run:
+    workflows: ["Build"]
+    types: [completed]
+
+jobs:
+  claude-diagnose:
+    if: ${{ github.event.workflow_run.conclusion == 'failure' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 10
+
+      - name: Download build log
+        uses: actions/download-artifact@v4
+        with:
+          name: build-log-linux
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install anthropic
+        run: pip install anthropic --quiet
+
+      - name: Run Claude diagnose
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: python3 tools/claude_diagnose.py --log build-log.txt
