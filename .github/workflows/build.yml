@@ -23,6 +23,7 @@ jobs:
             libgl1-mesa-dev \
             libavcodec-dev libavformat-dev libavutil-dev \
             libswresample-dev libswscale-dev \
+            ffmpeg \
             libfreetype6-dev \
             libaubio-dev \
             xxd
