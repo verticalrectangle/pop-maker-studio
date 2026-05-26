@@ -1,6 +1,9 @@
 # Claude-Assisted CI Pipeline
 
-Two modes for integrating Claude into the GitHub Actions CI pipeline. Both trigger on build or test failure and use the Anthropic API to analyze the failure with full source context.
+Three modes for integrating Claude into the GitHub Actions CI pipeline. All trigger on build failure and use the Anthropic API to analyze the failure with full source context.
+
+**Implemented**: Mode D and Mode D + Slack (`tools/claude_diagnose.py`, `.github/workflows/claude-diagnose.yml`)
+**Documented**: Mode C (design reference only)
 
 ---
 
@@ -69,7 +72,7 @@ jobs:
 
 ## Mode D — Claude diagnoses and comments
 
-On CI failure, Claude reads the build log, correlates it with recent commits, and posts a GitHub comment on the commit with a diagnosis and suggested fix. Human applies it manually.
+On CI failure, Claude reads the build log, correlates it with recent commits, and posts a GitHub comment on the commit with a diagnosis and suggested fix. Human applies it manually. Optionally also sends a Slack notification.
 
 **Why this mode**: safer than Mode C — no automated commits, no automated PRs. Claude acts as a smart observer that saves you the time of reading the raw build log and tracing it to the right file and line.
 
@@ -80,13 +83,15 @@ CI fails
     ↓
 GitHub Actions triggers claude-diagnose job
     ↓
-claude-fix.py reads build log + git log + relevant src files
+claude_diagnose.py reads build log + git log + relevant src files
     ↓
 Claude API: diagnose root cause, identify file + line, suggest fix
     ↓
 gh api: post comment on failing commit with full diagnosis
     ↓
-Human reads comment, applies fix manually
+(if SLACK_WEBHOOK_URL set) POST Block Kit message to Slack
+    ↓
+Human reads comment/Slack message, applies fix manually
 ```
 
 **GitHub Actions workflow** (`.github/workflows/claude-diagnose.yml`):
@@ -102,10 +107,10 @@ on:
 jobs:
   claude-diagnose:
     if: ${{ github.event.workflow_run.conclusion == 'failure' }}
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
-      pull-requests: write
+      actions: read
 
     steps:
       - uses: actions/checkout@v4
@@ -115,69 +120,77 @@ jobs:
       - name: Download build log
         uses: actions/download-artifact@v4
         with:
-          name: build-log
+          name: build-log-linux
           run-id: ${{ github.event.workflow_run.id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Run Claude diagnose script
+      - name: Install anthropic
+        run: pip install anthropic --quiet
+
+      - name: Run Claude diagnose
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: python3 tools/claude-fix.py --log build-log.txt --mode comment
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_SHA: ${{ github.event.workflow_run.head_sha }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: python3 tools/claude_diagnose.py --log build-log.txt
 ```
 
 ---
 
-## The script (`tools/claude-fix.py`)
+## The script (`tools/claude_diagnose.py`)
 
-Both modes use the same script with a `--mode` flag.
+Mode D implementation. Slack is opt-in via `--slack-webhook` flag or `SLACK_WEBHOOK_URL` env var.
 
 ```python
 #!/usr/bin/env python3
 """
-Claude-assisted CI failure handler.
+Mode D CI pipeline — Claude diagnoses a failed build, posts a GitHub commit comment,
+and optionally sends a Slack notification.
 
-Modes:
-  --mode pr       Produce a fix and open a pull request
-  --mode comment  Diagnose and post a GitHub commit comment
+Usage (local test):
+    ANTHROPIC_API_KEY=... GITHUB_TOKEN=... GITHUB_REPOSITORY=verticalrectangle/pop-maker-studio \
+    GITHUB_SHA=<sha> python3 tools/claude_diagnose.py --log build-log.txt
+
+With Slack:
+    ... python3 tools/claude_diagnose.py --log build-log.txt --slack-webhook https://hooks.slack.com/...
 """
 
 import argparse
 import os
+import re
 import subprocess
 import sys
-import textwrap
 from pathlib import Path
 
 import anthropic
+import urllib.request
+import json
 
-REPO_ROOT = Path(__file__).parent.parent
-SRC_DIRS  = ["src", "tools", "mcp_server"]
-MAX_SRC_CHARS = 80_000   # cap on source context sent to Claude
+REPO_ROOT     = Path(__file__).parent.parent
+SRC_DIRS      = ["src", "tools", "mcp_server"]
+MAX_SRC_CHARS = 60_000
+LOG_TAIL      = 300
 
 
-def read_build_log(path: str) -> str:
-    log = Path(path).read_text(errors="ignore")
-    # Keep last 300 lines — the tail is where errors live
-    lines = log.splitlines()
-    return "\n".join(lines[-300:])
+def read_log(path: str) -> str:
+    text = Path(path).read_text(errors="ignore")
+    lines = text.splitlines()
+    return "\n".join(lines[-LOG_TAIL:])
 
 
 def collect_source(log: str) -> str:
-    """Heuristic: find filenames mentioned in the log and read those files."""
-    import re
-    mentioned = set(re.findall(r'[\w/]+\.(?:cpp|h|py|cmake)', log))
-    chunks = []
-    total = 0
-    for name in mentioned:
+    mentioned = set(re.findall(r'[\w/]+\.(?:cpp|h|py|cmake|txt)', log))
+    chunks, total = [], 0
+    for name in sorted(mentioned):
         for d in SRC_DIRS:
-            candidates = list((REPO_ROOT / d).rglob(name))
-            for c in candidates:
+            for candidate in (REPO_ROOT / d).rglob(name):
                 try:
-                    text = c.read_text(errors="ignore")
+                    text = candidate.read_text(errors="ignore")
                     if total + len(text) > MAX_SRC_CHARS:
-                        break
-                    chunks.append(f"=== {c.relative_to(REPO_ROOT)} ===\n{text}")
+                        return "\n\n".join(chunks)
+                    chunks.append(f"=== {candidate.relative_to(REPO_ROOT)} ===\n{text}")
                     total += len(text)
                 except OSError:
                     pass
@@ -187,47 +200,28 @@ def collect_source(log: str) -> str:
 def recent_commits() -> str:
     result = subprocess.run(
         ["git", "log", "--oneline", "-10"],
-        capture_output=True, text=True
+        capture_output=True, text=True, cwd=REPO_ROOT
     )
     return result.stdout.strip()
 
 
-def call_claude(log: str, source: str, commits: str, mode: str) -> str:
+def call_claude(log: str, source: str, commits: str) -> str:
     client = anthropic.Anthropic()
-
-    if mode == "pr":
-        task = textwrap.dedent("""
-            The CI build has failed. Produce a minimal fix.
-
-            Return your response as:
-            1. A brief diagnosis (2-3 sentences)
-            2. A unified diff of the fix (```diff ... ```)
-            3. A one-line PR title
-
-            Do not change anything unrelated to the failure.
-            Do not add comments explaining the fix.
-        """)
-    else:
-        task = textwrap.dedent("""
-            The CI build has failed. Diagnose the root cause.
-
-            Return:
-            1. Root cause (2-3 sentences, specific file and line if possible)
-            2. The exact change needed to fix it (code snippet, not a diff)
-            3. Whether this looks like a code bug, a dependency issue, or a config issue
-
-            Be specific. A developer will apply this fix manually.
-        """)
-
     message = client.messages.create(
         model="claude-opus-4-7",
-        max_tokens=2048,
+        max_tokens=1024,
         messages=[{
             "role": "user",
-            "content": f"""
-{task}
+            "content": f"""A C++ CI build has failed. Diagnose the root cause.
 
-## Build log (last 300 lines)
+Return exactly three sections:
+1. **Root cause** — 2-3 sentences, specific file and line number if visible in the log
+2. **Fix** — the exact code change needed (short snippet, not a full diff)
+3. **Category** — one of: code bug | dependency issue | config issue | environment issue
+
+Be specific and concise. A developer will apply this fix manually.
+
+## Build log (last {LOG_TAIL} lines)
 ```
 {log}
 ```
@@ -245,88 +239,79 @@ def call_claude(log: str, source: str, commits: str, mode: str) -> str:
     return message.content[0].text
 
 
-def apply_diff(diff: str) -> bool:
-    """Apply a unified diff. Returns True on success."""
-    result = subprocess.run(
-        ["patch", "-p1", "--forward"],
-        input=diff, text=True,
-        capture_output=True
-    )
-    return result.returncode == 0
-
-
-def post_github_comment(body: str) -> None:
-    sha = subprocess.run(
-        ["git", "rev-parse", "HEAD"], capture_output=True, text=True
-    ).stdout.strip()
-    repo = os.environ.get("GITHUB_REPOSITORY", "")
+def post_commit_comment(sha: str, body: str) -> None:
+    repo  = os.environ["GITHUB_REPOSITORY"]
     token = os.environ["GITHUB_TOKEN"]
-
-    subprocess.run([
+    result = subprocess.run([
         "gh", "api",
         f"repos/{repo}/commits/{sha}/comments",
         "-f", f"body={body}",
-    ], env={**os.environ, "GH_TOKEN": token}, check=True)
+    ], env={**os.environ, "GH_TOKEN": token}, capture_output=True, text=True)
+    if result.returncode != 0:
+        print(f"gh api error: {result.stderr}", file=sys.stderr)
+        sys.exit(1)
 
 
-def open_pr(diagnosis: str, diff: str, title: str) -> None:
-    import re
-    run_id = os.environ.get("GITHUB_RUN_ID", "unknown")
-    branch = f"claude/fix-{run_id}"
+def post_slack_message(webhook_url: str, sha: str, diagnosis: str) -> None:
+    repo        = os.environ.get("GITHUB_REPOSITORY", "")
+    commit_url  = f"https://github.com/{repo}/commit/{sha}"
+    first_line  = diagnosis.splitlines()[0].replace("**Root cause**", "").strip(" —:-")
 
-    subprocess.run(["git", "checkout", "-b", branch], check=True)
-    if not apply_diff(diff):
-        print("Patch failed to apply — skipping PR", file=sys.stderr)
-        return
-
-    subprocess.run(["git", "add", "-u"], check=True)
-    subprocess.run([
-        "git", "commit", "-m", f"fix: {title}"
-    ], check=True)
-    subprocess.run([
-        "git", "push", "origin", branch
-    ], check=True)
-
-    body = f"## Claude diagnosis\n\n{diagnosis}\n\n---\n\n🤖 Auto-generated by Claude CI"
-    subprocess.run([
-        "gh", "pr", "create",
-        "--title", f"fix: {title}",
-        "--body", body,
-        "--head", branch,
-    ], check=True)
+    payload = {
+        "blocks": [
+            {
+                "type": "header",
+                "text": {"type": "plain_text", "text": "🔴 Build Failed"}
+            },
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f"*`{sha[:8]}`* — {first_line}"
+                },
+                "accessory": {
+                    "type": "button",
+                    "text": {"type": "plain_text", "text": "View diagnosis"},
+                    "url": commit_url
+                }
+            }
+        ]
+    }
+    data = json.dumps(payload).encode()
+    req  = urllib.request.Request(webhook_url, data=data,
+                                  headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req) as resp:
+        if resp.status != 200:
+            print(f"Slack webhook error: {resp.status}", file=sys.stderr)
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--log",  required=True)
-    parser.add_argument("--mode", required=True, choices=["pr", "comment"])
+    parser.add_argument("--log", required=True, help="Path to build log file")
+    parser.add_argument("--slack-webhook", default=os.environ.get("SLACK_WEBHOOK_URL"),
+                        help="Slack incoming webhook URL (or set SLACK_WEBHOOK_URL)")
     args = parser.parse_args()
 
-    log     = read_build_log(args.log)
+    log     = read_log(args.log)
     source  = collect_source(log)
     commits = recent_commits()
 
-    print(f"Calling Claude ({args.mode} mode)...")
-    response = call_claude(log, source, commits, args.mode)
-    print(response)
+    print("Calling Claude...", flush=True)
+    diagnosis = call_claude(log, source, commits)
+    print(diagnosis)
 
-    if args.mode == "comment":
-        body = f"## 🤖 Claude CI diagnosis\n\n{response}"
-        post_github_comment(body)
-        print("Comment posted.")
+    sha = os.environ.get("GITHUB_SHA", "")
+    if not sha:
+        print("No GITHUB_SHA — skipping comment post")
+        return
 
-    elif args.mode == "pr":
-        import re
-        diff_match  = re.search(r'```diff\n(.*?)```', response, re.DOTALL)
-        title_match = re.search(r'(?:PR title:|title:)\s*(.+)', response, re.IGNORECASE)
-        diff  = diff_match.group(1)  if diff_match  else ""
-        title = title_match.group(1) if title_match else "automated fix"
-        diag  = response.split("```")[0].strip()
-        if diff:
-            open_pr(diag, diff, title)
-        else:
-            print("No diff found in Claude response — falling back to comment mode")
-            post_github_comment(f"## 🤖 Claude CI diagnosis\n\n{response}")
+    body = f"## 🤖 Claude CI Diagnosis\n\n{diagnosis}\n\n---\n*Generated by [claude_diagnose.py](tools/claude_diagnose.py) on build failure*"
+    post_commit_comment(sha, body)
+    print(f"Comment posted to {sha[:8]}")
+
+    if args.slack_webhook:
+        post_slack_message(args.slack_webhook, sha, diagnosis)
+        print("Slack message sent.")
 
 
 if __name__ == "__main__":
@@ -337,11 +322,12 @@ if __name__ == "__main__":
 
 ## Setup
 
-**1. Add secret**
+**1. Add secrets**
 
 In GitHub repo settings → Secrets → Actions:
 ```
 ANTHROPIC_API_KEY = sk-ant-...
+SLACK_WEBHOOK_URL = https://hooks.slack.com/services/...   # optional
 ```
 
 **2. Ensure build log is uploaded as artifact**
@@ -352,33 +338,32 @@ In your existing build workflow, add after the build step:
   if: failure()
   uses: actions/upload-artifact@v4
   with:
-    name: build-log
+    name: build-log-linux
     path: build-log.txt
 ```
 
 And pipe build output to that file:
 ```yaml
 - name: Build
-  run: cmake --build build -j$(nproc) 2>&1 | tee build-log.txt; exit ${PIPESTATUS[0]}
+  run: cmake --build build --parallel 2>&1 | tee build-log.txt; exit ${PIPESTATUS[0]}
 ```
 
-**3. Install script dependencies**
-```bash
-pip install anthropic
-```
+**3. Script dependencies**
+
+The workflow installs `anthropic` inline (`pip install anthropic --quiet`). No other dependencies — Slack uses stdlib `urllib.request`.
 
 ---
 
 ## Security considerations
 
-- `ANTHROPIC_API_KEY` is a repo secret — never logged, never in PR bodies
+- `ANTHROPIC_API_KEY` and `SLACK_WEBHOOK_URL` are repo secrets — never logged, never in commit comments
 - Mode C (PR) only runs `patch -p1` on Claude's diff — no `eval`, no `exec`, no shell injection surface
-- Mode D (comment) makes no writes to the repo — read-only CI job
-- Both modes have `contents: read` or `contents: write` scoped permissions only — no admin access
+- Mode D (comment) makes no writes to the repo — read-only CI job (`contents: read`, `actions: read`)
+- Slack payload is built in Python with `json.dumps` — no shell interpolation of Claude output
 - Claude never sees secrets, only source files and the build log
 
 ---
 
 ## Cost
 
-Each invocation is one `claude-opus-4-7` API call with up to ~80K tokens of source context plus 300 lines of build log. At typical pricing this is under $1 per failure. For a low-traffic repo this is negligible; for high-volume CI consider gating on branch (e.g. only trigger on `main` failures).
+Each invocation is one `claude-opus-4-7` API call with up to ~60K tokens of source context plus 300 lines of build log. At typical pricing this is under $1 per failure. For a low-traffic repo this is negligible; for high-volume CI consider gating on branch (e.g. only trigger on `main` failures).
