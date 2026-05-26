@@ -24,6 +24,7 @@ jobs:
             libavcodec-dev libavformat-dev libavutil-dev \
             libswresample-dev libswscale-dev \
             libfreetype6-dev \
+            libaubio-dev \
             xxd
 
       - name: Download Inter font
