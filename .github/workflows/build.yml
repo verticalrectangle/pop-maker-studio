@@ -23,6 +23,7 @@ jobs:
             libgl1-mesa-dev \
             libavcodec-dev libavformat-dev libavutil-dev \
             libswresample-dev libswscale-dev \
+            libfreetype6-dev \
             xxd
 
       - name: Download Inter font
