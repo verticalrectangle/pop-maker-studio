@@ -26,7 +26,29 @@ jobs:
             ffmpeg \
             libfreetype6-dev \
             libaubio-dev \
+            libfftw3-dev \
             xxd
+
+      - name: Install whisper.cpp
+        run: |
+          git clone --depth 1 --branch v1.8.4 https://github.com/ggerganov/whisper.cpp.git /tmp/whisper
+          cmake -S /tmp/whisper -B /tmp/whisper/build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_SHARED_LIBS=ON \
+            -DWHISPER_BUILD_TESTS=OFF \
+            -DWHISPER_BUILD_EXAMPLES=OFF
+          cmake --build /tmp/whisper/build --parallel
+          sudo cmake --install /tmp/whisper/build
+          sudo ldconfig
+
+      - name: Install onnxruntime
+        run: |
+          curl -sL https://github.com/microsoft/onnxruntime/releases/download/v1.20.1/onnxruntime-linux-x64-1.20.1.tgz -o /tmp/ort.tgz
+          tar -xzf /tmp/ort.tgz -C /tmp/
+          sudo mkdir -p /usr/include/onnxruntime
+          sudo cp -r /tmp/onnxruntime-linux-x64-1.20.1/include/* /usr/include/onnxruntime/
+          sudo cp -r /tmp/onnxruntime-linux-x64-1.20.1/lib/* /usr/lib/
+          sudo ldconfig
 
       - name: Download Inter font
         run: |
