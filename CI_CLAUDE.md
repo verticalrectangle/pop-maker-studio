@@ -1,9 +1,9 @@
-# Claude-Assisted CI Pipeline
+# Claude-Assisted CI Pipeline (Mode D)
 
-Three modes for integrating Claude into the GitHub Actions CI pipeline. All trigger on build failure and use the Anthropic API to analyze the failure with full source context.
+Mode D is implemented and live. Mode C is documented here as a design reference.
 
-**Implemented**: Mode D and Mode D + Slack (`tools/claude_diagnose.py`, `.github/workflows/claude-diagnose.yml`)
-**Documented**: Mode C (design reference only)
+**Implemented**: Mode D — diagnose + GitHub commit comment + optional Slack notification (`tools/claude_diagnose.py`, `.github/workflows/claude-diagnose.yml`)
+**Design reference only**: Mode C — Claude opens a fix PR (not implemented)
 
 ---
 
