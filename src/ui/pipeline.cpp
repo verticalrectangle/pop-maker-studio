@@ -408,11 +408,12 @@ void apply_subtitle_mode(AppState& state) {
             }
             lyrics->managed = true;
             lyrics->clips.clear();
+            float latency = audio_latency();
             for (auto& seg : j) {
                 Clip c;
                 c.text  = seg["text"].get<std::string>();
-                c.start = seg["start"].get<float>() + tl_offset;
-                c.end   = seg["end"].get<float>()   + tl_offset;
+                c.start = seg["start"].get<float>() + tl_offset - latency;
+                c.end   = seg["end"].get<float>()   + tl_offset - latency;
                 if (c.end < 0.f) continue;  // skip clips shifted before timeline start
                 stamp(c);
                 lyrics->clips.push_back(c);
@@ -429,12 +430,13 @@ void apply_subtitle_mode(AppState& state) {
     if (!f) return;
     try {
         auto j = nlohmann::json::parse(f);
+        float latency = audio_latency();
         std::vector<Clip> raw;
         for (auto& w : j) {
             Clip c;
             c.text  = w["word"].get<std::string>();
-            c.start = w["start"].get<float>() + tl_offset;
-            c.end   = w["end"].get<float>()   + tl_offset;
+            c.start = w["start"].get<float>() + tl_offset - latency;
+            c.end   = w["end"].get<float>()   + tl_offset - latency;
             raw.push_back(c);
         }
         auto grouped = group_words(raw, state.subtitle_mode, state.subtitle_n);
@@ -450,8 +452,8 @@ void apply_subtitle_mode(AppState& state) {
         for (auto& w : j) {
             WordEntry we;
             we.text  = w["word"].get<std::string>();
-            we.start = w["start"].get<float>() + tl_offset;
-            we.end   = w["end"].get<float>()   + tl_offset;
+            we.start = w["start"].get<float>() + tl_offset - latency;
+            we.end   = w["end"].get<float>()   + tl_offset - latency;
             all_words.push_back(we);
         }
         for (auto& c : grouped) {
@@ -518,6 +520,7 @@ void apply_subtitle_pipeline(AppState& state) {
             tr->name = "Subtitles";
         }
         tr->clips.clear();
+        float latency = audio_latency();
         for (auto& seg : j) {
             Clip c;
             c.clip_type = ClipType::Subtitle;
@@ -525,8 +528,8 @@ void apply_subtitle_pipeline(AppState& state) {
             c.sub_pos   = 3;      // custom Y — slightly below center
             c.sub_pos_y = 0.62f;
             c.text  = seg["text"].get<std::string>();
-            c.start = seg["start"].get<float>() + tl_offset;
-            c.end   = seg["end"].get<float>()   + tl_offset;
+            c.start = seg["start"].get<float>() + tl_offset - latency;
+            c.end   = seg["end"].get<float>()   + tl_offset - latency;
             if (c.end < 0.f) continue;  // skip clips shifted before timeline start
             tr->clips.push_back(c);
         }
@@ -620,16 +623,23 @@ void import_file(AppState& state, const std::string& path) {
         state.video_path   = path;
         state.video_loaded = true;
 
-        // audio_load probes duration from the container header synchronously
-        // before spawning its background decode thread — use that as the
-        // primary duration source since it works on all formats.
-        audio_load(path);          // async — probes duration + starts device
-        audio_source_ensure(path); // also load into per-clip buffer for clip playback
-        state.duration = audio_duration();
-        // video_probe_duration is a faster path that works when the container
-        // header carries duration; use it only as an override if it succeeds.
-        float vprobed = video_probe_duration(path);
-        if (vprobed > 0.f) state.duration = vprobed;
+        // Probe duration without touching the audio engine.
+        // audio_load() calls audio_shutdown() internally which stops the device
+        // and leaves it uninitialized if the video has no audio stream — killing
+        // any music track that was already playing.  Use dedicated probe helpers
+        // instead and just ensure the device is alive.
+        {
+            float vprobed = video_probe_duration(path);
+            if (vprobed > 0.f) {
+                state.duration = vprobed;
+            } else {
+                AudioMeta meta{};
+                if (audio_probe(path, meta) && meta.duration_secs > 0.f)
+                    state.duration = meta.duration_secs;
+            }
+        }
+        audio_init();              // ensure device is alive (no-op if already running)
+        audio_source_ensure(path); // decode video audio into per-clip buffer
 
         state.tracks.insert(state.tracks.begin(), Track{});
         Track& vt = state.tracks.front();

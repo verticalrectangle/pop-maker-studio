@@ -3,6 +3,10 @@
     "pop-maker-studio": {
       "command": "python3",
       "args": ["mcp_server/server.py"]
+    },
+    "vr-docs": {
+      "command": "/home/alexis/dev/vertrectdirectory/.venv/bin/python3",
+      "args": ["/home/alexis/dev/vertrectdirectory/server.py"]
     }
   }
 }

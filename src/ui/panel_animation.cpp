@@ -199,6 +199,22 @@ void generate_typography(AppState& state) {
         }
     }
 
+    // Compensate for the playhead step-function lag: audio_position() is
+    // advanced at the START of each audio callback, so the displayed playhead
+    // always lags behind the actually-heard audio by up to one buffer period.
+    // app.cpp subtracts audio_latency() from audio_position() to get the
+    // playhead.  We subtract the same amount from clip timestamps at placement
+    // time so the lyric clip becomes visible precisely when its word is heard.
+    {
+        float latency = audio_latency();
+        if (latency > 0.f) {
+            for (auto& c : raw) {
+                c.start -= latency;
+                c.end   -= latency;
+            }
+        }
+    }
+
     // Drop clips that land entirely before the timeline start (words before
     // in_point shifted to negative time after applying tl_offset).
     raw.erase(std::remove_if(raw.begin(), raw.end(),
