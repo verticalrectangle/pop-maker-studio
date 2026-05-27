@@ -54,10 +54,15 @@ static void log_softmax_row(float* row, int n) {
 }
 
 // ── Viterbi CTC forced alignment ─────────────────────────────────────────────
-// Returns char_times[L]: the first frame index at which each target[i] is "active"
-// in the best Viterbi path.
+// Returns, for each target char i, the first and last frame on the best Viterbi
+// path where that char is active.  The caller uses the midpoint to correct for
+// wav2vec2's look-ahead bias (bidirectional attention causes onset predictions
+// to appear before the actual acoustic event; midpoint of the emission window
+// is a principled, reference-free estimator of the acoustic centre).
 
-static std::vector<int> ctc_align(
+struct CharSpan { int first; int last; };
+
+static std::vector<CharSpan> ctc_align(
     const float* lp, int T, int V,
     const std::vector<int>& target, int blank)
 {
@@ -104,17 +109,20 @@ static std::vector<int> ctc_align(
         path[t-1] = s;
     }
 
-    // First frame at which each non-blank state 2i+1 appears on the best path
-    std::vector<int>  times(L, T-1);
-    std::vector<bool> found(L, false);
+    // First AND last frame at which each non-blank state 2i+1 appears on the path.
+    // Initialise first=T-1 (will be pulled back), last=0 (will be pushed forward).
+    std::vector<CharSpan> spans(L, {T-1, 0});
     for (int t = 0; t < T; ++t) {
         int st = path[t];
         if (st % 2 == 1) {
             int ci = st / 2;
-            if (ci < L && !found[ci]) { times[ci] = t; found[ci] = true; }
+            if (ci < L) {
+                if (t < spans[ci].first) spans[ci].first = t;
+                if (t > spans[ci].last)  spans[ci].last  = t;
+            }
         }
     }
-    return times;
+    return spans;
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -228,42 +236,34 @@ std::vector<WordEntry> forced_align(
         if (target.empty()) continue;
 
         // Run CTC forced alignment (Viterbi)
-        std::vector<int> times = ctc_align(lp.data(), T, V, target, vocab.blank);
-        if (times.empty()) continue;
+        std::vector<CharSpan> spans = ctc_align(lp.data(), T, V, target, vocab.blank);
+        if (spans.empty()) continue;
 
-        // Map char frame times → word start/end seconds, then snap to proxy frames.
+        // Map char emission spans → word start/end seconds, then snap to proxy frames.
         //
-        // Guard: only accept a CTC timestamp when it stays within MAX_CTC_DEVIATION
-        // of whisper's DTW timestamp.  wav2vec2 uses bidirectional attention, so its
-        // predictions can appear up to ~0.5 s before the actual acoustic onset
-        // (look-ahead bias).  Whisper DTW is already well-calibrated; CTC should
-        // only be trusted for small refinements, not large corrections.
-        static constexpr float MAX_CTC_DEVIATION = 0.200f;  // 200 ms
-
+        // Use the MIDPOINT of each character's emission window rather than its onset.
+        // wav2vec2's bidirectional attention causes the Viterbi path to begin emitting
+        // a character before it acoustically occurs (look-ahead bias, typically ~0.5 s).
+        // The offset of a character's emission is driven by the onset of the *next*
+        // event, so onset and offset are pulled roughly symmetrically by the same
+        // look-ahead.  Midpoint cancels that bias without any external reference or
+        // calibration constant.
         for (int k = 0; k < (int)widxs.size(); ++k) {
             auto& r = ranges[k];
-            if (r.ci0 > r.ci1 || r.ci0 >= (int)times.size()) continue;
+            if (r.ci0 > r.ci1 || r.ci0 >= (int)spans.size()) continue;
 
-            float t0_abs = (float)(ct0 + times[r.ci0] * frame_dt);
+            // Word start: midpoint of the first character's emission span
+            auto& s0 = spans[r.ci0];
+            int mid0  = (s0.first + s0.last) / 2;
+            float t0_abs = (float)(ct0 + mid0 * frame_dt);
 
-            // End time = first frame of the next char (separator or past-end)
-            int end_ci = r.ci1 + 1;
-            float t1_abs;
-            if (end_ci < (int)times.size())
-                t1_abs = (float)(ct0 + times[end_ci] * frame_dt);
-            else
-                t1_abs = (float)(ct0 + (times[r.ci1] + 1) * frame_dt);
+            // Word end: midpoint of the last character's emission span + 1 frame
+            auto& s1 = spans[r.ci1];
+            int mid1  = (s1.first + s1.last) / 2 + 1;
+            float t1_abs = (float)(ct0 + mid1 * frame_dt);
 
-            float ws_start = whisper_words[widxs[k]].start;
-            float ws_end   = whisper_words[widxs[k]].end;
-
-            if (std::fabsf(t0_abs - ws_start) <= MAX_CTC_DEVIATION)
-                result[widxs[k]].start = snap(t0_abs);
-            // else: CTC deviated too far — keep whisper DTW start
-
-            if (std::fabsf(t1_abs - ws_end) <= MAX_CTC_DEVIATION)
-                result[widxs[k]].end = snap(t1_abs);
-            // else: CTC deviated too far — keep whisper DTW end
+            result[widxs[k]].start = snap(t0_abs);
+            result[widxs[k]].end   = snap(t1_abs);
         }
     }
 
