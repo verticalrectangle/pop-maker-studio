@@ -220,6 +220,24 @@ void proxy_start(const std::string& video_path) {
             };
             pid_t sp = spawn_ffmpeg(args);
             wait_ok(sp);
+
+            // Fallback for formats ffmpeg can't decode (e.g. HEIC without libheif):
+            // try heif-convert → produce a JPEG → re-run ffmpeg to scale it.
+            if (!fs::exists(still)) {
+                std::string tmp = still + ".tmp.jpg";
+                std::string cmd = "heif-convert " + std::string("\"") + video_path + "\" \"" + tmp + "\" 2>/dev/null";
+                if (system(cmd.c_str()) == 0 && fs::exists(tmp)) { // NOLINT
+                    const char* scale_args[] = {
+                        "ffmpeg", "-hide_banner", "-loglevel", "error",
+                        "-y", "-i", tmp.c_str(),
+                        "-vf", "scale=iw/2:ih/2",
+                        still.c_str(), nullptr
+                    };
+                    pid_t sp2 = spawn_ffmpeg(scale_args);
+                    wait_ok(sp2);
+                    fs::remove(tmp);
+                }
+            }
         }
         return;
     }
