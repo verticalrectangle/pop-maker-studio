@@ -54,13 +54,15 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
     float& zoom         = state.tl_zoom;
     float& scroll       = state.tl_scroll;
 
-    // Deferred zoom-to-fit: set by add_clip_to_track when a new clip extends past the visible right edge.
+    // Deferred zoom-to-fit: set by add_clip_to_track / import whenever a new clip is added.
+    // Always compute the target zoom for the clip; only apply it if it means zooming OUT
+    // (new_zoom < current zoom). This means: if the user is already zoomed out enough to
+    // see the full clip, nothing changes; if not, the timeline adjusts to show it with spacing.
     if (state.tl_zoom_to_fit_end > 0.f && clip_area_w > 0.f) {
-        float visible_end = (scroll + clip_area_w) / zoom;
-        if (state.tl_zoom_to_fit_end > visible_end) {
-            float target  = state.tl_zoom_to_fit_end * 1.15f;
-            float new_zoom = fmaxf(20.f, fminf(clip_area_w / target, 4000.f));
-            float left_t  = scroll / zoom;
+        float target   = state.tl_zoom_to_fit_end * 1.15f;
+        float new_zoom = fmaxf(20.f, fminf(clip_area_w / target, 4000.f));
+        if (new_zoom < zoom) {
+            float left_t = scroll / zoom;
             zoom   = new_zoom;
             scroll = fmaxf(0.f, left_t * new_zoom);
         }

@@ -413,9 +413,13 @@ void apply_subtitle_mode(AppState& state) {
                 c.text  = seg["text"].get<std::string>();
                 c.start = seg["start"].get<float>() + tl_offset;
                 c.end   = seg["end"].get<float>()   + tl_offset;
+                if (c.end < 0.f) continue;  // skip clips shifted before timeline start
                 stamp(c);
                 lyrics->clips.push_back(c);
             }
+            // Extend project duration so all lyrics are reachable on the timeline.
+            for (auto& c : lyrics->clips)
+                if (c.end > state.duration) state.duration = c.end;
         } catch (...) {}
         return;
     }
@@ -435,6 +439,11 @@ void apply_subtitle_mode(AppState& state) {
         }
         auto grouped = group_words(raw, state.subtitle_mode, state.subtitle_n);
         for (auto& c : grouped) stamp(c);
+
+        // Drop clips that land entirely before timeline start (can happen when
+        // in_point > 0 causes a negative tl_offset shifting early words off-screen).
+        grouped.erase(std::remove_if(grouped.begin(), grouped.end(),
+            [](const Clip& c){ return c.end < 0.f; }), grouped.end());
 
         // Populate per-clip word lists from the raw word entries
         std::vector<WordEntry> all_words;
@@ -462,6 +471,10 @@ void apply_subtitle_mode(AppState& state) {
         }
         lyrics->managed = true;
         lyrics->clips = grouped;
+
+        // Extend project duration so all lyrics are reachable on the timeline.
+        for (auto& c : lyrics->clips)
+            if (c.end > state.duration) state.duration = c.end;
     } catch (...) {}
 }
 
@@ -514,8 +527,12 @@ void apply_subtitle_pipeline(AppState& state) {
             c.text  = seg["text"].get<std::string>();
             c.start = seg["start"].get<float>() + tl_offset;
             c.end   = seg["end"].get<float>()   + tl_offset;
+            if (c.end < 0.f) continue;  // skip clips shifted before timeline start
             tr->clips.push_back(c);
         }
+        // Extend project duration so all subtitles are reachable on the timeline.
+        for (auto& c : tr->clips)
+            if (c.end > state.duration) state.duration = c.end;
     } catch (...) {}
 }
 
@@ -646,14 +663,23 @@ void import_file(AppState& state, const std::string& path) {
         }
     } else {
         state.audio_path = path;
-        audio_load(path);          // async — probes duration + starts device
-        audio_source_ensure(path); // also load into per-clip buffer for clip playback
-        state.duration = audio_duration();
-        if (state.duration <= 0.f) {
+        // Probe duration synchronously first (same approach as add_clip_to_track).
+        // audio_load() is async — calling audio_duration() immediately after returns
+        // 0 or a stale value from the previously loaded file, which would set the
+        // clip's end to 4 s and break zoom-to-fit for long audio tracks.
+        {
             AudioMeta meta{};
             if (audio_probe(path, meta) && meta.duration_secs > 0.f)
                 state.duration = meta.duration_secs;
+            else {
+                // Fallback: start async load and wait for a duration reading.
+                // audio_load probes the header quickly even though decode is async.
+                audio_load(path);
+                state.duration = audio_duration();
+            }
         }
+        audio_load(path);          // async — starts device and begins decode
+        audio_source_ensure(path); // also load into per-clip buffer for clip playback
 
         // Add Audio track
         Track* at = nullptr;
