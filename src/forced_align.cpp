@@ -10,16 +10,16 @@
 
 namespace fs = std::filesystem;
 
-static constexpr float  NEG_INF     = -1e30f;
-static constexpr double CHUNK_DUR   = 30.0;    // seconds per alignment window
-static constexpr double SAMPLE_RATE = 16000.0;
+static constexpr double SAMPLE_RATE  = 16000.0;
+static constexpr int    WAV2VEC2_MIN = 400;    // minimum samples wav2vec2 accepts
+static constexpr float  SEG_GAP      = 0.40f;  // fallback gap for segment splitting
 
 // ── Vocab ─────────────────────────────────────────────────────────────────────
 
 struct AlignVocab {
-    int blank   = 0;   // <pad> — CTC blank token
-    int wordsep = 0;   // |    — word boundary token
-    std::unordered_map<char, int> c2i;  // lowercase char → vocab index
+    int blank   = 0;
+    int wordsep = 0;
+    std::unordered_map<char, int> c2i;
     bool ok = false;
 };
 
@@ -53,84 +53,137 @@ static void log_softmax_row(float* row, int n) {
     for (int i = 0; i < n; ++i) row[i] -= ls;
 }
 
-// ── Viterbi CTC forced alignment ─────────────────────────────────────────────
-// Returns, for each target char i, the first and last frame on the best Viterbi
-// path where that char is active.  The caller uses the midpoint to correct for
-// wav2vec2's look-ahead bias (bidirectional attention causes onset predictions
-// to appear before the actual acoustic event; midpoint of the emission window
-// is a principled, reference-free estimator of the acoustic centre).
+// ── WhisperX/torchaudio stay-advance trellis ──────────────────────────────────
+//
+// Ported directly from:
+//   https://pytorch.org/tutorials/intermediate/forced_alignment_with_torchaudio_tutorial.html
+// and WhisperX alignment.py (get_trellis / backtrack / merge_repeats).
+//
+// State j = "number of tokens consumed so far" (0..L).
+// At each frame: stay at j (emit blank) or advance to j+1 (emit tokens[j]).
+// Unlike the standard CTC Viterbi there is no blank-padded expanded sequence
+// and no skip-blank transition — the trellis is (T+1) × (L+1).
 
-struct CharSpan { int first; int last; };
+struct PathPoint {
+    int   token_idx;  // 0-based index into target[]
+    int   time_idx;   // 0-based frame within the segment's emission matrix
+    float score;      // probability (not log-prob) at this frame
+};
 
-static std::vector<CharSpan> ctc_align(
-    const float* lp, int T, int V,
-    const std::vector<int>& target, int blank)
+// A merged character span: one token, spanning [start, end) frames.
+struct CharSeg {
+    int   start;   // first frame (inclusive)
+    int   end;     // last frame (exclusive)
+    float score;   // mean probability over frames
+};
+
+// Build the (T+1) × (L+1) trellis in log-prob space.
+static std::vector<float> get_trellis(
+    const float* lp, int T, int V, int blank,
+    const std::vector<int>& tokens)
 {
-    int L = (int)target.size();
-    if (L == 0 || T < L) return {};
+    int L = (int)tokens.size();
+    std::vector<float> tr((size_t)(T+1) * (L+1), -1e30f);
+    auto cell = [&](int t, int j) -> float& { return tr[(size_t)t*(L+1)+j]; };
 
-    // Blank-padded expanded target: [B, t0, B, t1, ..., tL, B], length = 2L+1
-    std::vector<int> exp(2*L+1);
-    for (int i = 0; i <= L; ++i) {
-        exp[2*i] = blank;
-        if (i < L) exp[2*i+1] = target[i];
-    }
-    int S = 2*L+1;
+    cell(0, 0) = 0.f;
 
-    // Two-row DP + full back-pointer matrix for backtracking
-    std::vector<float> dp(S, NEG_INF), ndp(S, NEG_INF);
-    // back[t*S+s]: signed offset to predecessor state (0, -1, or -2)
-    std::vector<int8_t> back((size_t)T * S, 0);
-
-    // Initialise t = 0
-    dp[0] = lp[exp[0]];
-    if (S > 1) dp[1] = lp[exp[1]];
-
-    for (int t = 1; t < T; ++t) {
-        const float* row = lp + (size_t)t * V;
-        for (int s = 0; s < S; ++s) {
-            float best = dp[s]; int8_t from = 0;
-            if (s >= 1 && dp[s-1] > best) { best = dp[s-1]; from = -1; }
-            // Skip-blank transition: only when target char differs from two positions back
-            if (s >= 2 && exp[s] != blank && exp[s] != exp[s-2] && dp[s-2] > best)
-                { best = dp[s-2]; from = -2; }
-            ndp[s]  = (best > NEG_INF) ? best + row[exp[s]] : NEG_INF;
-            back[(size_t)t * S + s] = from;
-        }
-        std::swap(dp, ndp);
-    }
-
-    // Backtrack from the best terminal state (last char or last blank)
-    int s = (S >= 2 && dp[S-2] > dp[S-1]) ? S-2 : S-1;
-    std::vector<int> path(T);
-    path[T-1] = s;
-    for (int t = T-1; t > 0; --t) {
-        s += (int)back[(size_t)t * S + s];
-        path[t-1] = s;
-    }
-
-    // First AND last frame at which each non-blank state 2i+1 appears on the path.
-    // Initialise first=T-1 (will be pulled back), last=0 (will be pushed forward).
-    std::vector<CharSpan> spans(L, {T-1, 0});
+    // Column 0: cumulative blank score (no tokens consumed yet)
+    float cum = 0.f;
     for (int t = 0; t < T; ++t) {
-        int st = path[t];
-        if (st % 2 == 1) {
-            int ci = st / 2;
-            if (ci < L) {
-                if (t < spans[ci].first) spans[ci].first = t;
-                if (t > spans[ci].last)  spans[ci].last  = t;
-            }
+        cum += lp[(size_t)t * V + blank];
+        cell(t+1, 0) = cum;
+    }
+    // Force consuming all L tokens: last L rows of column 0 = +inf.
+    // This makes backtrack always find t_start near the end of the segment.
+    for (int t = std::max(0, T + 1 - L); t <= T; ++t)
+        cell(t, 0) = 1e30f;
+
+    // Forward DP
+    for (int t = 0; t < T; ++t) {
+        float bs = lp[(size_t)t * V + blank];   // blank score at frame t
+        for (int j = 1; j <= L; ++j) {
+            float stay    = cell(t, j)   + bs;
+            float advance = cell(t, j-1) + lp[(size_t)t * V + tokens[j-1]];
+            cell(t+1, j) = std::max(stay, advance);
         }
     }
-    return spans;
+    return tr;
+}
+
+// Backtrack through the trellis.  Returns empty on failure.
+static std::vector<PathPoint> backtrack(
+    const std::vector<float>& tr, int T, int L,
+    const float* lp, int V, int blank,
+    const std::vector<int>& tokens)
+{
+    auto cell = [&](int t, int j) { return tr[(size_t)t*(L+1)+j]; };
+
+    // Find the frame where all tokens are optimally consumed
+    int   t_start = 0;
+    float best    = cell(0, L);
+    for (int t = 1; t <= T; ++t)
+        if (cell(t, L) > best) { best = cell(t, L); t_start = t; }
+
+    std::vector<PathPoint> path;
+    path.reserve(t_start);
+    int j = L;
+
+    for (int t = t_start; t > 0; --t) {
+        float stayed  = cell(t-1, j)   + lp[(size_t)(t-1)*V + blank];
+        float changed = cell(t-1, j-1) + lp[(size_t)(t-1)*V + tokens[j-1]];
+        bool  adv     = changed > stayed;
+        float prob    = std::exp(lp[(size_t)(t-1)*V + (adv ? tokens[j-1] : blank)]);
+        path.push_back({j-1, t-1, prob});
+        if (adv) { if (--j == 0) break; }
+    }
+
+    if (j != 0) return {};           // failed to consume all tokens
+    std::reverse(path.begin(), path.end());
+    return path;
+}
+
+// Merge consecutive same-token path entries → one CharSeg per token (0..L-1).
+// Because the path is monotonically non-decreasing in token_idx, result[i]
+// always corresponds to tokens[i].
+static std::vector<CharSeg> merge_repeats(const std::vector<PathPoint>& path, int L)
+{
+    std::vector<CharSeg> segs(L, {0, 0, 0.f});
+    if (path.empty()) return segs;
+
+    int n = (int)path.size(), i1 = 0;
+    while (i1 < n) {
+        int  tok = path[i1].token_idx;
+        int  i2  = i1;
+        while (i2 < n && path[i2].token_idx == tok) ++i2;
+        float sum = 0.f;
+        for (int k = i1; k < i2; ++k) sum += path[k].score;
+        segs[tok] = {path[i1].time_idx, path[i2-1].time_idx + 1, sum / (i2 - i1)};
+        i1 = i2;
+    }
+    return segs;
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
+//
+// Exact port of WhisperX's align() function strategy:
+//
+//   For each whisper segment [t1, t2]:
+//     1. Slice audio to exactly [t1, t2] (no extra padding).
+//     2. Run wav2vec2 ONNX on that slice → T × V log-probs.
+//     3. Build the character target for words in this segment (letters + "|").
+//     4. get_trellis → backtrack → merge_repeats → one CharSeg per target char.
+//     5. Map char frame indices to absolute time: t_abs = t1 + frame * ratio
+//        where ratio = (t2 - t1) / T.
+//     6. word.start = min char start, word.end = max char end (WhisperX style).
+//     7. Words with no vocabulary-mapped chars get NaN — filled by linear
+//        interpolation between the nearest aligned neighbours afterward.
 
 std::vector<WordEntry> forced_align(
-    const std::vector<float>& audio16k,
-    const std::vector<WordEntry>& whisper_words,
-    double proxy_fps)
+    const std::vector<float>&               audio16k,
+    const std::vector<WordEntry>&           whisper_words,
+    double                                  proxy_fps,
+    const std::vector<std::pair<float,float>>& seg_bounds)
 {
     if (audio16k.empty() || whisper_words.empty()) return {};
 
@@ -140,131 +193,222 @@ std::vector<WordEntry> forced_align(
     AlignVocab vocab = load_vocab(mp);
     if (!vocab.ok) return {};
 
-    // One ONNX session reused across all chunks
     Ort::Env env(ORT_LOGGING_LEVEL_WARNING, "forced_align");
     Ort::SessionOptions opts;
     opts.SetIntraOpNumThreads(2);
     Ort::Session sess(env, mp.c_str(), opts);
     Ort::MemoryInfo mem = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
-
-    // Detect whether the model expects an attention_mask input
     bool need_mask = (sess.GetInputCount() >= 2);
 
     auto snap = [&](float t) -> float {
         return (proxy_fps > 0.0) ? (float)(std::round((double)t * proxy_fps) / proxy_fps) : t;
     };
 
-    // Start with Whisper timestamps as fallback
-    std::vector<WordEntry> result(whisper_words);
+    int    N         = (int)whisper_words.size();
     double total_dur = (double)audio16k.size() / SAMPLE_RATE;
+    (void)total_dur;
 
-    // Process in CHUNK_DUR-second windows to keep the Viterbi DP matrix small
-    for (double ct0 = 0.0; ct0 < total_dur; ct0 += CHUNK_DUR) {
-        double ct1 = std::min(ct0 + CHUNK_DUR, total_dur);
+    // ── Build segment list ────────────────────────────────────────────────────
+    // Each segment: word range [w0, w1] (inclusive) and audio window [t0, t1].
 
-        // Words whose Whisper start time falls in this chunk
-        std::vector<int> widxs;
-        for (int i = 0; i < (int)whisper_words.size(); ++i)
-            if ((double)whisper_words[i].start >= ct0 && (double)whisper_words[i].start < ct1)
-                widxs.push_back(i);
-        if (widxs.empty()) continue;
+    struct Seg { int w0, w1; float t0, t1; };
+    std::vector<Seg> segs;
 
-        // Extract and normalise chunk
-        int s0 = (int)(ct0 * SAMPLE_RATE);
-        int s1 = std::min((int)(ct1 * SAMPLE_RATE), (int)audio16k.size());
+    if (!seg_bounds.empty()) {
+        // Use whisper's actual segment boundaries.
+        // Walk word list in order; assign each word to the segment whose window
+        // contains its start time.
+        int wi = 0;
+        for (auto& [st, en] : seg_bounds) {
+            if (wi >= N) break;
+            int w0 = wi;
+            // Advance past words that start before this segment's end.
+            // Use a small epsilon to handle floating-point boundary alignment.
+            while (wi < N && whisper_words[wi].start < en - 0.001f) ++wi;
+            int w1 = wi - 1;
+            if (w0 <= w1)
+                segs.push_back({w0, w1, st, en});
+        }
+        // Any words not covered by a segment (rare timing edge case)
+        if (wi < N) {
+            float t0 = whisper_words[wi].start;
+            float t1 = std::max(whisper_words[N-1].end, t0 + 0.1f);
+            segs.push_back({wi, N-1, t0, t1});
+        }
+    } else {
+        // Fallback: reconstruct segments from inter-word pauses.
+        int sw = 0;
+        for (int i = 1; i < N; ++i) {
+            if (whisper_words[i].start - whisper_words[i-1].end > SEG_GAP) {
+                segs.push_back({sw, i-1,
+                    whisper_words[sw].start,
+                    whisper_words[i-1].end});
+                sw = i;
+            }
+        }
+        segs.push_back({sw, N-1,
+            whisper_words[sw].start,
+            whisper_words[N-1].end});
+    }
+
+    // ── Per-segment alignment ─────────────────────────────────────────────────
+
+    std::vector<WordEntry> result(whisper_words);
+    std::vector<bool>      aligned(N, false);
+
+    for (auto& seg : segs) {
+        // Exact audio window — no extra padding (WhisperX slices precisely)
+        int s0 = (int)(seg.t0 * SAMPLE_RATE);
+        int s1 = std::min((int)(seg.t1 * SAMPLE_RATE), (int)audio16k.size());
         if (s1 <= s0) continue;
-        size_t CN = (size_t)(s1 - s0);
+
         std::vector<float> chunk(audio16k.begin() + s0, audio16k.begin() + s1);
 
-        // Waveform normalisation expected by wav2vec2 feature extractor
+        // Pad to wav2vec2 minimum (400 samples = 25 ms at 16 kHz)
+        if ((int)chunk.size() < WAV2VEC2_MIN)
+            chunk.resize(WAV2VEC2_MIN, 0.f);
+
+        size_t CN = chunk.size();
+
+        // Per-segment zero-mean unit-variance normalisation
         float mean = 0.f; for (float x : chunk) mean += x; mean /= (float)CN;
         float var  = 0.f; for (float x : chunk) var += (x-mean)*(x-mean); var /= (float)CN;
         float istd = 1.f / (std::sqrt(var) + 1e-7f);
         for (float& x : chunk) x = (x - mean) * istd;
 
-        // Run ONNX inference
+        // ONNX inference
         std::vector<int64_t> in_shape = {1, (int64_t)CN};
         std::vector<Ort::Value> ins;
         ins.push_back(Ort::Value::CreateTensor<float>(
             mem, chunk.data(), CN, in_shape.data(), 2));
-
         std::vector<float> attn_mask;
         if (need_mask) {
             attn_mask.assign(CN, 1.0f);
             ins.push_back(Ort::Value::CreateTensor<float>(
                 mem, attn_mask.data(), CN, in_shape.data(), 2));
         }
-
-        const char* in_names2[] = {"input_values", "attention_mask"};
+        const char* in_names[]  = {"input_values", "attention_mask"};
         const char* out_names[] = {"logits"};
-        int n_in = need_mask ? 2 : 1;
-
         std::vector<Ort::Value> outs;
         try {
             outs = sess.Run(Ort::RunOptions{nullptr},
-                in_names2, ins.data(), (size_t)n_in, out_names, 1);
+                in_names, ins.data(), need_mask ? 2u : 1u, out_names, 1);
         } catch (...) { continue; }
 
         auto sh = outs[0].GetTensorTypeAndShapeInfo().GetShape();
         int T = (int)sh[1], V = (int)sh[2];
         if (T == 0 || V == 0) continue;
 
-        // Copy logits and apply log-softmax (ONNX output may be quantized / packed)
-        const float* lp_raw = outs[0].GetTensorData<float>();
-        std::vector<float> lp(lp_raw, lp_raw + (size_t)T * V);
+        const float* raw = outs[0].GetTensorData<float>();
+        std::vector<float> lp(raw, raw + (size_t)T * V);
         for (int t = 0; t < T; ++t) log_softmax_row(lp.data() + (size_t)t * V, V);
 
-        // seconds per model output frame (computed from actual T vs chunk samples)
-        double frame_dt = (double)CN / (SAMPLE_RATE * T);
+        // seconds per output frame — maps frame index → time offset from seg.t0
+        double ratio = (seg.t1 - seg.t0) / T;
 
-        // Build character target for words in this chunk; record per-word char ranges
+        // Build character target; record each word's char index range
         std::vector<int> target;
-        struct WRange { int ci0, ci1; };    // inclusive char indices in target
-        std::vector<WRange> ranges;
+        struct WRange { int ci0, ci1; };   // inclusive char indices into target[]
+        std::vector<WRange> wranges;
 
-        for (int k = 0; k < (int)widxs.size(); ++k) {
-            if (k > 0) target.push_back(vocab.wordsep);
+        for (int k = seg.w0; k <= seg.w1; ++k) {
+            if (k > seg.w0) target.push_back(vocab.wordsep);
             int ci0 = (int)target.size();
-            for (char c : whisper_words[widxs[k]].text) {
+            for (char c : whisper_words[k].text) {
                 char lc = (char)std::tolower((unsigned char)c);
                 auto it = vocab.c2i.find(lc);
                 if (it != vocab.c2i.end()) target.push_back(it->second);
             }
-            int ci1 = (int)target.size() - 1;
-            ranges.push_back({ci0, ci1});
+            wranges.push_back({ci0, (int)target.size() - 1});
         }
-        if (target.empty()) continue;
 
-        // Run CTC forced alignment (Viterbi)
-        std::vector<CharSpan> spans = ctc_align(lp.data(), T, V, target, vocab.blank);
-        if (spans.empty()) continue;
+        if (target.empty() || T < (int)target.size()) continue;
 
-        // Map char emission spans → word start/end seconds, then snap to proxy frames.
-        //
-        // Use the MIDPOINT of each character's emission window rather than its onset.
-        // wav2vec2's bidirectional attention causes the Viterbi path to begin emitting
-        // a character before it acoustically occurs (look-ahead bias, typically ~0.5 s).
-        // The offset of a character's emission is driven by the onset of the *next*
-        // event, so onset and offset are pulled roughly symmetrically by the same
-        // look-ahead.  Midpoint cancels that bias without any external reference or
-        // calibration constant.
-        for (int k = 0; k < (int)widxs.size(); ++k) {
-            auto& r = ranges[k];
-            if (r.ci0 > r.ci1 || r.ci0 >= (int)spans.size()) continue;
+        // Trellis → path → CharSegs (one per target character, index-matched)
+        auto tr    = get_trellis(lp.data(), T, V, vocab.blank, target);
+        auto path  = backtrack(tr, T, (int)target.size(), lp.data(), V, vocab.blank, target);
+        if (path.empty()) continue;
+        auto csegs = merge_repeats(path, (int)target.size());
 
-            // Word start: midpoint of the first character's emission span
-            auto& s0 = spans[r.ci0];
-            int mid0  = (s0.first + s0.last) / 2;
-            float t0_abs = (float)(ct0 + mid0 * frame_dt);
+        // Extract word timestamps from character spans (WhisperX style):
+        //   word.start = min char start,  word.end = max char end
+        //   word.score = mean char score
+        for (int k = 0; k < (int)wranges.size(); ++k) {
+            auto& r = wranges[k];
+            if (r.ci0 > r.ci1) continue;   // no vocab-mapped chars → NaN, interpolate later
 
-            // Word end: midpoint of the last character's emission span + 1 frame
-            auto& s1 = spans[r.ci1];
-            int mid1  = (s1.first + s1.last) / 2 + 1;
-            float t1_abs = (float)(ct0 + mid1 * frame_dt);
+            int   fmin  = csegs[r.ci0].start;
+            int   fmax  = csegs[r.ci0].end;
+            float score = 0.f;
+            for (int ci = r.ci0; ci <= r.ci1; ++ci) {
+                fmin  = std::min(fmin,  csegs[ci].start);
+                fmax  = std::max(fmax,  csegs[ci].end);
+                score += csegs[ci].score;
+            }
+            score /= (float)(r.ci1 - r.ci0 + 1);
 
-            result[widxs[k]].start = snap(t0_abs);
-            result[widxs[k]].end   = snap(t1_abs);
+            float t0_abs = snap((float)(seg.t0 + fmin * ratio));
+            float t1_abs = snap((float)(seg.t0 + fmax * ratio));
+
+            result[seg.w0 + k].start = t0_abs;
+            result[seg.w0 + k].end   = t1_abs;
+            aligned[seg.w0 + k]      = true;
+
+            (void)score;  // available for future score-gating if needed
         }
+    }
+
+    // ── NaN interpolation (WhisperX interpolate_nans, method=nearest) ─────────
+    // For each unaligned word, linearly interpolate its start/end between
+    // the nearest aligned neighbours.  Falls back to the original Whisper
+    // timestamp if there are no aligned neighbours on one or both sides.
+
+    for (int i = 0; i < N; ++i) {
+        if (aligned[i]) continue;
+
+        // Find nearest aligned neighbours
+        int left  = -1, right = -1;
+        for (int j = i - 1; j >= 0; --j) { if (aligned[j]) { left  = j; break; } }
+        for (int j = i + 1; j < N;  ++j) { if (aligned[j]) { right = j; break; } }
+
+        float l_end   = (left  >= 0) ? result[left].end   : result[i].start; // Whisper fallback
+        float r_start = (right >= 0) ? result[right].start : result[i].end;
+
+        float gap = r_start - l_end;
+        if (gap <= 0.f) {
+            // No room — snap to the boundary
+            result[i].start = snap(l_end);
+            result[i].end   = snap(l_end);
+            continue;
+        }
+
+        // Count mappable chars for proportional distribution within this run.
+        // Collect the whole unaligned run so proportions are consistent.
+        int run_end = i;
+        while (run_end + 1 < N && !aligned[run_end + 1]) ++run_end;
+
+        // Total mappable chars in run
+        auto mapped = [&](int k) {
+            int n = 0;
+            for (char c : whisper_words[k].text) {
+                char lc = (char)std::tolower((unsigned char)c);
+                if (vocab.c2i.count(lc)) ++n;
+            }
+            return std::max(n, 1);   // at least 1 so unmappable words still get a slot
+        };
+
+        int total_chars = 0;
+        for (int k = i; k <= run_end; ++k) total_chars += mapped(k);
+
+        float t = l_end;
+        for (int k = i; k <= run_end; ++k) {
+            float dur = gap * (float)mapped(k) / (float)total_chars;
+            result[k].start = snap(t);
+            result[k].end   = snap(t + dur);
+            t += dur;
+        }
+
+        i = run_end;   // skip rest of run (already handled)
     }
 
     return result;

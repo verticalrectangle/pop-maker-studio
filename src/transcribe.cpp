@@ -307,7 +307,14 @@ static void do_transcribe(
             we_in.push_back(e);
         }
 
-        auto we_out = forced_align(pcm, we_in, proxy_fps);
+        // Pass whisper's segment boundaries so forced_align uses exact segment
+        // audio windows — the same strategy WhisperX uses for "god tier" timing.
+        std::vector<std::pair<float,float>> sb;
+        sb.reserve(segs_arr.size());
+        for (auto& s : segs_arr)
+            sb.push_back({s.value("start", 0.f), s.value("end", 0.f)});
+
+        auto we_out = forced_align(pcm, we_in, proxy_fps, sb);
         if (we_out.size() == we_in.size()) {
             for (size_t i = 0; i < words_arr.size(); ++i) {
                 words_arr[i]["start"] = we_out[i].start;
