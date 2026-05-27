@@ -994,12 +994,15 @@ uintptr_t video_load_thumb(const std::string& path, int* out_w, int* out_h) {
 // ── Export path — FFmpeg original file ───────────────────────────────────────
 
 static struct ExportState {
-    AVFormatContext* fmt_ctx    = nullptr;
-    AVCodecContext*  codec_ctx  = nullptr;
-    SwsContext*      sws        = nullptr;
-    int              stream_idx = -1;
-    int              rotation   = 0;   // degrees CW to apply to decoded frames (0/90/180/270)
-    VideoInfo        info       = {};
+    AVFormatContext* fmt_ctx          = nullptr;
+    AVCodecContext*  codec_ctx        = nullptr;
+    SwsContext*      sws              = nullptr;
+    int              stream_idx       = -1;
+    int              rotation         = 0;   // degrees CW to apply to decoded frames (0/90/180/270)
+    VideoInfo        info             = {};
+    // Sequential decode state — avoids seek+flush on every frame when exporting.
+    // Set to -1 when a seek is needed (first call, new file, backward jump, etc.).
+    double           last_decoded_pts = -1.0;
 } g_ex;
 
 bool video_open_export(const std::string& path) {
@@ -1063,8 +1066,9 @@ void video_close_export() {
     if (g_ex.sws)       { sws_freeContext(g_ex.sws);       g_ex.sws       = nullptr; }
     if (g_ex.codec_ctx) { avcodec_free_context(&g_ex.codec_ctx); }
     if (g_ex.fmt_ctx)   { avformat_close_input(&g_ex.fmt_ctx); }
-    g_ex.stream_idx = -1;
-    g_ex.info = {};
+    g_ex.stream_idx       = -1;
+    g_ex.info             = {};
+    g_ex.last_decoded_pts = -1.0;
 }
 
 static VideoFrame* decode_and_rotate(AVFrame* frm) {
@@ -1111,9 +1115,29 @@ VideoFrame* video_decode_frame_at(double seconds) {
     AVStream* st = g_ex.fmt_ctx->streams[g_ex.stream_idx];
     double frame_dur = (g_ex.info.fps > 0.0) ? (1.0 / g_ex.info.fps) : (1.0 / 30.0);
 
-    int64_t ts = (int64_t)(seconds * AV_TIME_BASE);
-    av_seek_frame(g_ex.fmt_ctx, -1, ts, AVSEEK_FLAG_BACKWARD);
-    avcodec_flush_buffers(g_ex.codec_ctx);
+    // Sequential decode optimisation: avoid seeking on every frame during export.
+    // A seek + avcodec_flush_buffers forces the decoder to restart from a keyframe
+    // and decode forward, which for H.264 with 2-5 s GOP means up to ~150 frames
+    // decoded and thrown away per output frame — extremely slow.
+    //
+    // When the caller requests frames in order (the normal export case), we can
+    // simply continue reading from where we stopped last frame.  We only seek when:
+    //   (a) First call after open/clip-change  (last_decoded_pts < 0)
+    //   (b) Backward jump or repeat             (seconds <= last_decoded_pts)
+    //   (c) Forward gap bigger than ~8 frames   (clip cut with speed change etc.)
+    //
+    // Note: the decoder's internal B-frame buffer is preserved between calls when
+    // we do not flush, so avcodec_receive_frame drains buffered frames first —
+    // no frames are skipped on sequential access.
+    bool need_seek = (g_ex.last_decoded_pts < 0.0)
+                  || (seconds <= g_ex.last_decoded_pts - frame_dur * 0.5)
+                  || (seconds >  g_ex.last_decoded_pts + frame_dur * 8.0);
+
+    if (need_seek) {
+        int64_t ts = (int64_t)(seconds * AV_TIME_BASE);
+        av_seek_frame(g_ex.fmt_ctx, -1, ts, AVSEEK_FLAG_BACKWARD);
+        avcodec_flush_buffers(g_ex.codec_ctx);
+    }
 
     AVPacket*   pkt    = av_packet_alloc();
     AVFrame*    frm    = av_frame_alloc();
@@ -1131,6 +1155,9 @@ VideoFrame* video_decode_frame_at(double seconds) {
             double pts = frm->pts * av_q2d(st->time_base);
             if (pts > seconds + frame_dur * 0.5) {
                 // Overshot — the previous result is already the right frame.
+                // We discard this frame; the decoder's internal queue still holds
+                // any remaining B-frames, so the next sequential call will drain
+                // them before reading more packets from the demuxer.
                 av_frame_unref(frm);
                 done = true;
             } else {
@@ -1143,6 +1170,8 @@ VideoFrame* video_decode_frame_at(double seconds) {
             }
         }
     }
+
+    if (result) g_ex.last_decoded_pts = result->pts;
 
     av_packet_free(&pkt);
     av_frame_free(&frm);
