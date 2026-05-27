@@ -179,6 +179,27 @@ void ui_studio(AppState& state) {
                 s_drop_flash_t     = 0.6f;
                 history_push(state, "Import SRT \"" + fp.filename().string() + "\"");
             }
+        } else if (is_image_path(dp)) {
+            // Dropped image: new track + 5-second clip at playhead, same as Browse
+            recent_media_push(dp, MediaKind::Image);
+            Track nt; nt.name = fp.stem().string();
+            Clip cl;
+            cl.clip_type = ClipType::Video;
+            cl.text      = dp;
+            cl.source_id = dp;
+            cl.start     = state.playhead;
+            cl.end       = cl.start + 5.f;
+            nt.clips.push_back(cl);
+            state.tracks.insert(state.tracks.begin(), std::move(nt));
+            state.selected_track = 0;
+            state.selected_clip  = 0;
+            proxy_start(dp);
+            int slot = slot_for_video(state, clip_slot_key(dp, cl.start), dp);
+            if (slot >= 0) video_open_still(slot, proxy_still_path(dp));
+            state.video_loaded = true;
+            s_drop_flash_track = 0;
+            s_drop_flash_t     = 0.6f;
+            history_push(state, "Import image: " + fp.filename().string());
         } else if (is_audio_file(dp)) {
             bool is_vid = (ext==".mp4"||ext==".mov"||ext==".mkv"||ext==".avi"||ext==".webm");
             ClipType drop_ct = is_vid ? ClipType::Video : ClipType::Audio;
