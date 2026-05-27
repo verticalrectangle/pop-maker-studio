@@ -201,7 +201,8 @@ void proxy_cancel() {
 static bool is_image_ext(const std::string& path) {
     auto ext = fs::path(path).extension().string();
     for (auto& c : ext) c = (char)std::tolower((unsigned char)c);
-    return ext==".jpg"||ext==".jpeg"||ext==".png"||ext==".bmp"||ext==".webp"||ext==".tiff";
+    return ext==".jpg"||ext==".jpeg"||ext==".png"||ext==".bmp"||ext==".webp"||ext==".tiff"
+        || ext==".heic"||ext==".heif";
 }
 
 void proxy_start(const std::string& video_path) {

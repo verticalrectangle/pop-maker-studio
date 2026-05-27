@@ -178,7 +178,8 @@ bool is_image_path(const std::string& p) {
     fs::path fp(p);
     std::string ext = fp.extension().string();
     for (auto& c : ext) c = (char)tolower((unsigned char)c);
-    return ext==".jpg"||ext==".jpeg"||ext==".png"||ext==".bmp"||ext==".webp"||ext==".tiff";
+    return ext==".jpg"||ext==".jpeg"||ext==".png"||ext==".bmp"||ext==".webp"||ext==".tiff"
+        || ext==".heic"||ext==".heif";
 }
 
 
@@ -203,7 +204,7 @@ void panel_media_browser(AppState& state, float w, bool is_video) {
         if (ImGui::SmallButton("Browse…")) {
             std::string picked = is_video
                 ? filepicker_open("Open video", "Video", "*.mp4 *.mov *.mkv *.avi *.webm")
-                : filepicker_open("Open image", "Image", "*.jpg *.jpeg *.png *.bmp *.webp");
+                : filepicker_open("Open image", "Image", "*.jpg *.jpeg *.png *.bmp *.webp *.heic *.heif");
             if (!picked.empty()) {
                 recent_media_push(picked, is_video ? MediaKind::Video : MediaKind::Image);
                 // Insert new track + clip at playhead
