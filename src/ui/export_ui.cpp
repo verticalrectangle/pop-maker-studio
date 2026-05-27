@@ -175,6 +175,17 @@ void draw_export_modal(AppState& state) {
                     fs::create_directories(outdir);
                     state.out_mp4 = (outdir / (audio.stem().string() + ".mp4")).string();
                     state.out_srt = (outdir / (audio.stem().string() + ".srt")).string();
+                } else if (state.out_mp4.empty()) {
+                    // Video-only project — derive output path from project file or home dir.
+                    fs::path base;
+                    if (!state.project_path.empty()) {
+                        fs::path pp(state.project_path);
+                        base = pp.parent_path() / pp.stem();
+                    } else {
+                        base = fs::path(std::getenv("HOME") ? std::getenv("HOME") : ".") / "Videos" / "pop_maker_export";
+                    }
+                    fs::create_directories(base.parent_path());
+                    state.out_mp4 = base.string() + ".mp4";
                 }
                 render_start_gl(state);
             }
@@ -291,6 +302,16 @@ void panel_export(AppState& state, float w) {
                 fs::create_directories(outdir);
                 state.out_mp4 = (outdir / (audio.stem().string() + ".mp4")).string();
                 state.out_srt = (outdir / (audio.stem().string() + ".srt")).string();
+            } else if (state.out_mp4.empty()) {
+                fs::path base;
+                if (!state.project_path.empty()) {
+                    fs::path pp(state.project_path);
+                    base = pp.parent_path() / pp.stem();
+                } else {
+                    base = fs::path(std::getenv("HOME") ? std::getenv("HOME") : ".") / "Videos" / "pop_maker_export";
+                }
+                fs::create_directories(base.parent_path());
+                state.out_mp4 = base.string() + ".mp4";
             }
             render_start_gl(state);
         }
