@@ -2231,9 +2231,11 @@ void render_tick_gl(AppState& state) {
 
         // ── Background (color-pattern) clips ───────────────────────────────────
         // Rendered before video clips so they appear beneath chroma-keyed footage.
+        // Mirrors canvas.cpp: continue past non-active BG clips, break after render.
         for (auto& bg_cl : track.clips) {
             if (bg_cl.clip_type != ClipType::Background) continue;
-            if (t < bg_cl.start || t >= bg_cl.end || bg_cl.text.empty()) break;
+            if (t < bg_cl.start || t >= bg_cl.end) continue;  // not active yet/any more
+            if (bg_cl.text.empty()) break;                     // no preset assigned
 
             // Each track uses its own BG slot (0..MAX_BG_SLOTS-1).
             int bg_slot_idx = ti % MAX_BG_SLOTS;
@@ -2263,7 +2265,7 @@ void render_tick_gl(AppState& state) {
             dl.AddImageQuad(ImTextureRef((ImTextureID)bg_tex),
                 brot(-bhw, -bhh), brot(bhw, -bhh), brot(bhw, bhh), brot(-bhw, bhh),
                 {0,1}, {1,1}, {1,0}, {0,0}, bcol);
-            break;
+            break;  // one BG clip per track per frame
         }
 
         const Clip* active = nullptr;

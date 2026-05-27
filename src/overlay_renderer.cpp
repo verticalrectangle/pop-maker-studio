@@ -1,6 +1,7 @@
 #include "overlay_renderer.h"
 #include "app.h"
 #include "ui/theme.h"
+#include "ui/pipeline.h"  // SAFE_TOP, SAFE_BOT
 #include "text_renderer.h"
 
 #include <imgui.h>
@@ -46,7 +47,18 @@ void draw_text_overlays(ImDrawList* dl, const AppState& state, float t,
                 break;
             }
         }
-        if (!active) { ++text_rendered; continue; }
+        if (!active) {
+            // Only count this track toward the stacking offset when it actually
+            // contains text/lyrics/subtitle clips — mirrors canvas.cpp's logic.
+            bool has_text = false;
+            for (auto& c : track.clips) {
+                auto ct = c.clip_type;
+                if (ct == ClipType::Text || ct == ClipType::Lyrics || ct == ClipType::Subtitle)
+                    { has_text = true; break; }
+            }
+            if (has_text) ++text_rendered;
+            continue;
+        }
 
         ImFont* txt_font = g_font_black;
         // font_size is stored as a fraction of canvas height (0 = use default).
@@ -84,15 +96,20 @@ void draw_text_overlays(ImDrawList* dl, const AppState& state, float t,
 
         float block_h = txt_lines.size() * line_h;
         float slot_h  = fmaxf(40.f, block_h);
+        // Safe-zone margins — proportional to canvas height, identical to canvas.cpp.
+        float sz_top = SAFE_TOP * h;
+        float sz_bot = SAFE_BOT * h;
         float slot_y;
         if (active->sub_pos == 1)
             slot_y = p.y + h * 0.5f - block_h * 0.5f;
         else if (active->sub_pos == 2)
-            slot_y = p.y + 24.f + text_rendered * slot_h;
+            slot_y = p.y + sz_top + text_rendered * slot_h;
         else if (active->sub_pos == 3)
             slot_y = p.y + active->sub_pos_y * h - block_h * 0.5f;
         else
-            slot_y = p.y + h - 24.f - block_h - text_rendered * slot_h;
+            slot_y = p.y + h - sz_bot - block_h - text_rendered * slot_h;
+        // Clamp to safe zone so text never lands under platform UI chrome.
+        slot_y = fmaxf(p.y + sz_top, fminf(p.y + h - sz_bot - block_h, slot_y));
 
         float local_t  = t - active->start;
         float clip_dur = active->end - active->start;

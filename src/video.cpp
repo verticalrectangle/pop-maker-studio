@@ -1191,7 +1191,19 @@ VideoFrame* video_decode_frame_at(int slot, double seconds) {
         }
     }
 
-    if (result) ex.last_decoded_pts = result->pts;
+    if (result) {
+        ex.last_decoded_pts = result->pts;
+    } else if (ex.last_decoded_pts >= 0.0) {
+        // EOF or decode failure — hold the last successfully decoded frame rather
+        // than returning null (which would produce a blank/black flash).
+        // Re-decode at last_decoded_pts; this will seek and return the same frame.
+        // Only do this once (don't recurse if the re-decode also fails).
+        av_packet_free(&pkt);
+        av_frame_free(&frm);
+        double hold_pts = ex.last_decoded_pts;
+        ex.last_decoded_pts = -1.0;  // force re-seek
+        return video_decode_frame_at(slot, hold_pts);
+    }
 
     av_packet_free(&pkt);
     av_frame_free(&frm);
