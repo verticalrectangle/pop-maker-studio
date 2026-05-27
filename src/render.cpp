@@ -17,6 +17,8 @@
 #include "stb_image_write.h"
 #pragma GCC diagnostic pop
 
+#include "stb_image.h"  // declarations only — implementation lives in video.cpp
+
 #include <fstream>
 #include <sstream>
 #include <iomanip>
@@ -1659,12 +1661,71 @@ static void gl_cleanup_export() {
 
 // Decode a video clip frame, upload to a GL texture, and AddImageQuad to dl.
 // Returns false if the clip has no file or decode fails.
+static bool is_still_ext(const std::string& path) {
+    auto ext = fs::path(path).extension().string();
+    for (auto& c : ext) c = (char)std::tolower((unsigned char)c);
+    return ext==".jpg"||ext==".jpeg"||ext==".png"||ext==".bmp"||ext==".webp"
+        || ext==".tiff"||ext==".heic"||ext==".heif";
+}
+
 static bool gl_render_vid_clip(ImDrawList& dl, const Clip* cl, float at_time,
                                 float alpha_mul, GLuint tex_id, int fx_slot,
                                 float W, float H, const AppState& state, int ti)
 {
     if (!cl || cl->text.empty()) return false;
     float src_t = cl->in_point + (at_time - cl->start) * cl->speed;
+
+    // Still images (HEIC, JPEG, PNG…): FFmpeg can't reliably decode these,
+    // especially HEIC without libheif. Use the proxy JPEG via stb_image instead.
+    if (is_still_ext(cl->text)) {
+        std::string still = proxy_still_path(cl->text);
+        if (!fs::exists(still)) return false;
+        int sw = 0, sh = 0, sc = 0;
+        uint8_t* px = stbi_load(still.c_str(), &sw, &sh, &sc, 4);
+        if (!px) return false;
+        glBindTexture(GL_TEXTURE_2D, tex_id);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, sw, sh, 0, GL_RGBA, GL_UNSIGNED_BYTE, px);
+        stbi_image_free(px);
+        int vid_w = sw, vid_h = sh;
+
+        uintptr_t cur_tex = (uintptr_t)tex_id;
+        {
+            EffectAccum glass_ea = collect_glass_effects(state, at_time, ti);
+            CreativeFXAccum glass_cfx = collect_glass_fx(state, at_time, ti);
+            if (glass_cfx.any_gen_fx || glass_cfx.any_cfx ||
+                glass_ea.any_color || glass_ea.any_blur ||
+                glass_ea.any_vignette || glass_ea.any_text)
+                cur_tex = fx_apply(cur_tex, fx_slot, vid_w, vid_h, glass_ea, glass_cfx, at_time);
+        }
+
+        float px_ = cl->eval_prop("pos_x",    at_time);
+        float py_ = cl->eval_prop("pos_y",    at_time);
+        float sx  = cl->eval_prop("scale_x",  at_time);
+        float sy_ = cl->eval_prop("scale_y",  at_time);
+        float rot = cl->eval_prop("rotation", at_time);
+        float alpha = cl->eval_prop("opacity", at_time) * alpha_mul;
+
+        float fit_w = W, fit_h = H;
+        if (vid_w > 0 && vid_h > 0) {
+            float va = (float)vid_w / (float)vid_h, ca = W / H;
+            if (va > ca) { fit_w = W; fit_h = W / va; }
+            else         { fit_h = H; fit_w = H * va; }
+        }
+        float cx = px_ * W, cy = py_ * H;
+        float hw = fit_w * sx * 0.5f, hh = fit_h * sy_ * 0.5f;
+        float rad = rot * 3.14159265f / 180.f;
+        float cos_r = cosf(rad), sin_r = sinf(rad);
+        auto rot_pt = [&](float ox, float oy) -> ImVec2 {
+            return { cx + ox*cos_r - oy*sin_r, cy + ox*sin_r + oy*cos_r };
+        };
+        ImVec2 uv0{0,0}, uv1{1,1};
+        ImU32 col = IM_COL32(255,255,255,(int)(alpha*255));
+        dl.AddImageQuad((ImTextureID)(uintptr_t)cur_tex,
+            rot_pt(-hw,-hh), rot_pt(hw,-hh), rot_pt(hw,hh), rot_pt(-hw,hh),
+            uv0, {uv1.x,uv0.y}, uv1, {uv0.x,uv1.y}, col);
+        g_gl_ex.cur_vid_path.clear();
+        return true;
+    }
 
     if (g_gl_ex.cur_vid_path != cl->text) {
         if (!video_open_export(cl->text)) return false;
