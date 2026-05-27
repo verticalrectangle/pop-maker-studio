@@ -1964,19 +1964,31 @@ void render_start_gl(AppState& state) {
         if (audio_ins.size() == 1) {
             args.push_back("-map"); args.push_back("1:a");
         } else {
+            // Build filter_complex correctly:
+            //   Step 1: volume-adjust each non-unity stream  →  [aN_v]
+            //   Step 2: amix all streams (labeled or raw) into [aout]
+            //
+            // Broken previous form: "[1:a][2:a]volume=1.39amix=…" — no output
+            // label on volume, and amix concatenated directly with no separator.
             std::string fc;
+            std::vector<std::string> mix_ins;
             for (int i = 0; i < (int)audio_ins.size(); ++i) {
-                if (audio_ins[i].vol != 1.f) {
-                    char buf[64];
-                    snprintf(buf, sizeof(buf), "[%d:a]volume=%.3f", i + 1, (double)audio_ins[i].vol);
+                if (fabsf(audio_ins[i].vol - 1.f) > 0.001f) {
+                    char buf[128];
+                    snprintf(buf, sizeof(buf), "[%d:a]volume=%.4f[a%dv];",
+                             i + 1, (double)audio_ins[i].vol, i + 1);
                     fc += buf;
+                    char lbl[32]; snprintf(lbl, sizeof(lbl), "[a%dv]", i + 1);
+                    mix_ins.push_back(lbl);
                 } else {
-                    char buf[32]; snprintf(buf, sizeof(buf), "[%d:a]", i + 1);
-                    fc += buf;
+                    char lbl[32]; snprintf(lbl, sizeof(lbl), "[%d:a]", i + 1);
+                    mix_ins.push_back(lbl);
                 }
             }
+            for (auto& s : mix_ins) fc += s;
             char mixbuf[64];
-            snprintf(mixbuf, sizeof(mixbuf), "amix=inputs=%d[aout]", (int)audio_ins.size());
+            snprintf(mixbuf, sizeof(mixbuf), "amix=inputs=%d:duration=longest[aout]",
+                     (int)audio_ins.size());
             fc += mixbuf;
             args.push_back("-filter_complex"); args.push_back(fc);
             args.push_back("-map"); args.push_back("[aout]");
@@ -2004,6 +2016,11 @@ void render_start_gl(AppState& state) {
     args.push_back("-shortest");
     args.push_back(state.out_mp4);
 
+    // Log the full ffmpeg command so failures can be diagnosed.
+    rlog("ffmpeg cmd:");
+    for (auto& a : args) rlog(" [%s]", a.c_str());
+    rlog("\n");
+
     // ── Fork ffmpeg ───────────────────────────────────────────────────────────
     int stdin_pipe[2];
     if (pipe(stdin_pipe) != 0) {
@@ -2025,8 +2042,11 @@ void render_start_gl(AppState& state) {
     if (pid == 0) {
         dup2(stdin_pipe[0], STDIN_FILENO);
         close(stdin_pipe[0]); close(stdin_pipe[1]);
+        // Redirect ffmpeg stderr to a log file for post-mortem diagnosis.
+        int errfd = open("/tmp/pms_ffmpeg_err.txt", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (errfd >= 0) { dup2(errfd, STDERR_FILENO); close(errfd); }
         int devnull = open("/dev/null", O_WRONLY);
-        if (devnull >= 0) { dup2(devnull, STDOUT_FILENO); dup2(devnull, STDERR_FILENO); close(devnull); }
+        if (devnull >= 0) { dup2(devnull, STDOUT_FILENO); close(devnull); }
         std::vector<char*> av;
         for (auto& s : args) av.push_back(const_cast<char*>(s.c_str()));
         av.push_back(nullptr);
@@ -2167,36 +2187,30 @@ void render_tick_gl(AppState& state) {
 
     rlog("  state_saved ok\n");
 
-    // ── Phase 1: Composite video clips into the scene FBO ─────────────────────
-    // Use scene_begin/scene_add_layer rather than batching into an ImDrawList.
-    // This ensures:
-    //   (a) fx_apply results are consumed (scene_add_layer reads them) before
-    //       the next clip's fx_apply overwrites the same slot — no texture aliasing.
-    //   (b) Global FX are applied to the scene texture (not g_gl_ex.color_tex
-    //       while it's still attached to the export FBO) — no undefined read.
-    scene_begin(g_gl_ex.out_w, g_gl_ex.out_h);
+    // ── Phase 1: Collect video clips into ImDrawList ──────────────────────────
+    // Per-clip glass FX (fx_apply) write to g_out[slot].tex before the draw list
+    // is submitted, so all texture references stored in the list are stable when
+    // ImGui_ImplOpenGL3_RenderDrawData samples them.
+    //
+    // Slot assignment:
+    //   primary  = ti % MAX_VIDEO_TRACKS          (0 .. MAX_VIDEO_TRACKS-1)
+    //   secondary = MAX_VIDEO_TRACKS + slot_pri   (MAX_VIDEO_TRACKS .. 2*MAX_VIDEO_TRACKS-1)
+    // Global FX use kSceneFxSlot (= MAX_VIDEO_TRACKS*2-2) — that slot is only
+    // touched in Phase 3, *after* RenderDrawData has consumed the draw list, so
+    // any overlap between slot_sec and kSceneFxSlot is harmless.
+    ImDrawList dl(ImGui::GetDrawListSharedData());
+    dl._ResetForNewFrame();
+    dl.PushClipRect({0.f, 0.f}, {W, H});
+    dl.PushTexture(ImGui::GetIO().Fonts->TexRef);
 
-    rlog("  scene_begin ok\n");
-
-    // Dummy draw list — only used by the !use_scene (snapshot) path; ignored here.
-    ImDrawList dummy_dl(ImGui::GetDrawListSharedData());
-    dummy_dl._ResetForNewFrame();
-    dummy_dl.PushClipRect({0.f, 0.f}, {W, H});
-    dummy_dl.PushTexture(ImGui::GetIO().Fonts->TexRef);
-
-    // ── Render video clips into scene (high→low track index = background first)
     for (int ti = (int)state.tracks.size() - 1; ti >= 0; --ti) {
         const auto& track = state.tracks[ti];
         if (!track.visible) continue;
 
-        // Slots: each track gets its own stable fx buffer so glass effects don't
-        // collide across tracks.  kSceneFxSlot is reserved for the global pass.
-        int slot_pri = ti % kSceneFxSlot;
-        int slot_sec = (ti % kSceneFxSlot) ^ 1;  // neighbouring slot for transitions
-        // Ensure slot_sec doesn't equal slot_pri when kSceneFxSlot==1 (degenerate)
-        if (slot_sec == slot_pri) slot_sec = (slot_pri + 1) % kSceneFxSlot;
-        GLuint tex_pri = g_gl_ex.vid_tex[slot_pri % (MAX_VIDEO_TRACKS * 2)];
-        GLuint tex_sec = g_gl_ex.vid_tex[slot_sec % (MAX_VIDEO_TRACKS * 2)];
+        int slot_pri = ti % MAX_VIDEO_TRACKS;
+        int slot_sec = MAX_VIDEO_TRACKS + slot_pri;
+        GLuint tex_pri = g_gl_ex.vid_tex[slot_pri];
+        GLuint tex_sec = g_gl_ex.vid_tex[slot_sec];
 
         const Clip* active = nullptr;
         int active_ci = -1;
@@ -2241,7 +2255,6 @@ void render_tick_gl(AppState& state) {
             }
         }
 
-        // All calls use use_scene=true — result goes to scene_add_layer, not dl.
         if (in_trans_out && next_cl) {
             float pre  = active->transition_pre, post = active->transition_post;
             float cut  = active->end;
@@ -2249,102 +2262,117 @@ void render_tick_gl(AppState& state) {
             float t_b  = fmaxf(0.f, fminf(1.f, (t - cut)          / fmaxf(post, 1e-5f)));
 
             if (active->transition_type == TransitionType::Dissolve) {
-                gl_render_vid_clip(dummy_dl, active,  t, 1.f-t_a, tex_pri, slot_pri, W, H, state, ti, true);
+                gl_render_vid_clip(dl, active,  t, 1.f-t_a, tex_pri, slot_pri, W, H, state, ti);
                 g_gl_ex.cur_vid_path.clear();
-                gl_render_vid_clip(dummy_dl, next_cl, t, t_b>0.f?t_b:t_a, tex_sec, slot_sec, W, H, state, ti, true);
+                gl_render_vid_clip(dl, next_cl, t, t_b>0.f?t_b:t_a, tex_sec, slot_sec, W, H, state, ti);
             } else if (active->transition_type == TransitionType::FadeBlack) {
-                gl_render_vid_clip(dummy_dl, active,  t, 1.f-t_a, tex_pri, slot_pri, W, H, state, ti, true);
+                gl_render_vid_clip(dl, active,  t, 1.f-t_a, tex_pri, slot_pri, W, H, state, ti);
                 g_gl_ex.cur_vid_path.clear();
-                gl_render_vid_clip(dummy_dl, next_cl, t, t_b, tex_sec, slot_sec, W, H, state, ti, true);
+                gl_render_vid_clip(dl, next_cl, t, t_b, tex_sec, slot_sec, W, H, state, ti);
             } else { // DipWhite
-                gl_render_vid_clip(dummy_dl, active, t, 1.f-t_a, tex_pri, slot_pri, W, H, state, ti, true);
+                gl_render_vid_clip(dl, active, t, 1.f-t_a, tex_pri, slot_pri, W, H, state, ti);
                 float white_a = t_a * (1.f - t_b);
-                if (white_a > 0.01f) scene_add_solid(1.f, 1.f, 1.f, white_a);
+                if (white_a > 0.01f)
+                    dl.AddRectFilled({0.f, 0.f}, {W, H},
+                                     IM_COL32(255, 255, 255, (int)(white_a * 255.f)));
                 g_gl_ex.cur_vid_path.clear();
-                gl_render_vid_clip(dummy_dl, next_cl, t, t_b, tex_sec, slot_sec, W, H, state, ti, true);
+                gl_render_vid_clip(dl, next_cl, t, t_b, tex_sec, slot_sec, W, H, state, ti);
             }
         } else if (in_trans_in && prev_cl) {
             float tf = fmaxf(0.f, fminf(1.f,
                 (t - active->start) / fmaxf(prev_cl->transition_post, 1e-5f)));
             if (prev_cl->transition_type == TransitionType::Dissolve) {
-                gl_render_vid_clip(dummy_dl, prev_cl, fminf(t, prev_cl->end-1e-4f),
-                                   1.f-tf, tex_sec, slot_sec, W, H, state, ti, true);
+                gl_render_vid_clip(dl, prev_cl, fminf(t, prev_cl->end-1e-4f),
+                                   1.f-tf, tex_sec, slot_sec, W, H, state, ti);
                 g_gl_ex.cur_vid_path.clear();
-                gl_render_vid_clip(dummy_dl, active, t, tf, tex_pri, slot_pri, W, H, state, ti, true);
+                gl_render_vid_clip(dl, active, t, tf, tex_pri, slot_pri, W, H, state, ti);
             } else if (prev_cl->transition_type == TransitionType::FadeBlack) {
-                gl_render_vid_clip(dummy_dl, active, t, tf, tex_pri, slot_pri, W, H, state, ti, true);
+                gl_render_vid_clip(dl, active, t, tf, tex_pri, slot_pri, W, H, state, ti);
             } else { // DipWhite
                 float white_a = 1.f - tf;
-                if (white_a > 0.01f) scene_add_solid(1.f, 1.f, 1.f, white_a);
-                gl_render_vid_clip(dummy_dl, active, t, tf, tex_pri, slot_pri, W, H, state, ti, true);
+                if (white_a > 0.01f)
+                    dl.AddRectFilled({0.f, 0.f}, {W, H},
+                                     IM_COL32(255, 255, 255, (int)(white_a * 255.f)));
+                gl_render_vid_clip(dl, active, t, tf, tex_pri, slot_pri, W, H, state, ti);
             }
         } else {
-            gl_render_vid_clip(dummy_dl, active, t, 1.f, tex_pri, slot_pri, W, H, state, ti, true);
+            gl_render_vid_clip(dl, active, t, 1.f, tex_pri, slot_pri, W, H, state, ti);
         }
     }
 
     rlog("  vid_clips_done\n");
 
-    // ── Phase 2: Global FX via scene_apply_fx ────────────────────────────────
-    // scene_apply_fx reads from the scene texture (NOT from g_gl_ex.color_tex
-    // while it's still FBO-attached), so there's no undefined feedback loop.
-    {
-        EffectAccum     global_ea  = collect_effects    (state, t, (int)state.tracks.size());
-        CreativeFXAccum global_cfx = collect_creative_fx(state, t, (int)state.tracks.size());
-        scene_apply_fx(g_gl_ex.out_w, g_gl_ex.out_h, global_ea, global_cfx, t);
-    }
-
-    rlog("  fx_done\n");
-
-    // ── Phase 3: Blit composited scene into the export FBO ────────────────────
-    // fx_blit saves/restores FBO; after it returns we explicitly re-bind the
-    // export FBO so the text overlay ImGui pass draws into it.
+    // ── Phase 2: Render video clips to export FBO ─────────────────────────────
+    // Bind and clear the export FBO, then render the ImDrawList into it.
     glBindFramebuffer(GL_FRAMEBUFFER, g_gl_ex.fbo);
     glViewport(0, 0, g_gl_ex.out_w, g_gl_ex.out_h);
     glClearColor(0.f, 0.f, 0.f, 1.f);
     glClear(GL_COLOR_BUFFER_BIT);
-    if (uintptr_t scene_tex = scene_result())
-        fx_blit(scene_tex, g_gl_ex.fbo, g_gl_ex.out_w, g_gl_ex.out_h);
-
-    rlog("  scene_blit ok\n");
-
-    // Re-bind export FBO for text overlay rendering (fx_blit restores prev_fbo
-    // which was the display framebuffer, not our export FBO).
-    glBindFramebuffer(GL_FRAMEBUFFER, g_gl_ex.fbo);
-    glViewport(0, 0, g_gl_ex.out_w, g_gl_ex.out_h);
-
-    // ── Phase 4: Text overlays (ImDrawList on top of the composited frame) ────
     {
-        ImDrawList dl(ImGui::GetDrawListSharedData());
-        dl._ResetForNewFrame();
-        dl.PushClipRect({0.f, 0.f}, {W, H});
-        dl.PushTexture(ImGui::GetIO().Fonts->TexRef);
-
-        draw_text_overlays(&dl, state, t, {0.f, 0.f}, W, H);
-
-        rlog("  text_overlays_done  vtx=%d idx=%d cmd=%d\n",
-             dl.VtxBuffer.Size, dl.IdxBuffer.Size, dl.CmdBuffer.Size);
-
         dl.PopTexture();
-        rlog("  pop_texture ok\n");
         dl.PopClipRect();
-        rlog("  pop_cliprect ok\n");
-
         ImDrawData dd;
-        rlog("  imgui_drawdata_init ok\n");
         dd.DisplayPos       = {0.f, 0.f};
         dd.DisplaySize      = {W, H};
         dd.FramebufferScale = {1.f, 1.f};
-        // Use atlas->TexList — PlatformIO.Textures is stale for new baked sizes.
         dd.Textures         = &ImGui::GetIO().Fonts->TexList;
         dd.AddDrawList(&dl);
-        rlog("  imgui_add_draw_list ok  cmds=%d\n", dl.CmdBuffer.Size);
         ImGui_ImplOpenGL3_RenderDrawData(&dd);
-        rlog("  imgui_render_done\n");
     }
 
-    dummy_dl.PopTexture();
-    dummy_dl.PopClipRect();
+    rlog("  vid_render_done\n");
+
+    // ── Phase 3: Global FX ────────────────────────────────────────────────────
+    // MUST run after RenderDrawData so per-clip fx slot textures are no longer
+    // referenced by a live draw list.  Unbind the export FBO before calling
+    // fx_apply so g_gl_ex.color_tex (the FBO's colour attachment) can be safely
+    // sampled without an undefined read-while-attached feedback loop.
+    {
+        EffectAccum     global_ea  = collect_effects    (state, t, (int)state.tracks.size());
+        CreativeFXAccum global_cfx = collect_creative_fx(state, t, (int)state.tracks.size());
+        if (global_ea.any_color || global_ea.any_blur || global_ea.any_vignette ||
+            global_ea.any_text  || global_cfx.any_cfx || global_cfx.any_gen_fx) {
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);  // detach so color_tex is readable
+            uintptr_t out = fx_apply((uintptr_t)g_gl_ex.color_tex, kSceneFxSlot,
+                                     g_gl_ex.out_w, g_gl_ex.out_h,
+                                     global_ea, global_cfx, t);
+            glBindFramebuffer(GL_FRAMEBUFFER, g_gl_ex.fbo);
+            glViewport(0, 0, g_gl_ex.out_w, g_gl_ex.out_h);
+            if (out != (uintptr_t)g_gl_ex.color_tex)
+                fx_blit(out, g_gl_ex.fbo, g_gl_ex.out_w, g_gl_ex.out_h);
+        }
+    }
+
+    rlog("  fx_done\n");
+
+    // ── Phase 4: Text overlays (ImDrawList on top of the composited frame) ────
+    // Export FBO must be bound — it is, either from Phase 2 (no global FX) or
+    // re-bound explicitly in Phase 3.
+    glBindFramebuffer(GL_FRAMEBUFFER, g_gl_ex.fbo);
+    glViewport(0, 0, g_gl_ex.out_w, g_gl_ex.out_h);
+    {
+        ImDrawList text_dl(ImGui::GetDrawListSharedData());
+        text_dl._ResetForNewFrame();
+        text_dl.PushClipRect({0.f, 0.f}, {W, H});
+        text_dl.PushTexture(ImGui::GetIO().Fonts->TexRef);
+
+        draw_text_overlays(&text_dl, state, t, {0.f, 0.f}, W, H);
+
+        rlog("  text_overlays_done  vtx=%d idx=%d cmd=%d\n",
+             text_dl.VtxBuffer.Size, text_dl.IdxBuffer.Size, text_dl.CmdBuffer.Size);
+
+        text_dl.PopTexture();
+        text_dl.PopClipRect();
+
+        ImDrawData tdd;
+        tdd.DisplayPos       = {0.f, 0.f};
+        tdd.DisplaySize      = {W, H};
+        tdd.FramebufferScale = {1.f, 1.f};
+        tdd.Textures         = &ImGui::GetIO().Fonts->TexList;
+        tdd.AddDrawList(&text_dl);
+        ImGui_ImplOpenGL3_RenderDrawData(&tdd);
+        rlog("  imgui_render_done\n");
+    }
 
     // ── Kick async GPU→PBO DMA (non-blocking — returns immediately) ───────────
     // The GPU will fill pbo[current_frame % 2] while the CPU processes the next
