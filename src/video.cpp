@@ -784,8 +784,11 @@ void video_open_still(int track_id, const std::string& jpeg_path) {
 
     upload_jpeg(&g_pv[track_id].tex, &g_pv[track_id].tex_w, &g_pv[track_id].tex_h,
                 &g_pv[track_id].tex_rgba, buf.data(), (size_t)sz);
-    g_pv[track_id].is_open  = true;
-    g_pv[track_id].is_proxy = false;
+    g_pv[track_id].is_open       = true;
+    g_pv[track_id].is_proxy      = false;
+    // Expose dimensions via video_info() so canvas aspect-ratio fit works for stills.
+    g_pv[track_id].info.width    = g_pv[track_id].tex_w;
+    g_pv[track_id].info.height   = g_pv[track_id].tex_h;
 }
 
 bool video_open_proxy(int track_id, const ProxyInfo& proxy) {
