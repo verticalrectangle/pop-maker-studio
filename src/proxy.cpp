@@ -197,7 +197,32 @@ void proxy_cancel() {
     if (sp > 0) waitpid(sp, nullptr, 0);
 }
 
+// Returns true for still-image extensions that never need an MJPEG proxy.
+static bool is_image_ext(const std::string& path) {
+    auto ext = fs::path(path).extension().string();
+    for (auto& c : ext) c = (char)std::tolower((unsigned char)c);
+    return ext==".jpg"||ext==".jpeg"||ext==".png"||ext==".bmp"||ext==".webp"||ext==".tiff";
+}
+
 void proxy_start(const std::string& video_path) {
+    // Images: generate a scaled still and return — no MJPEG proxy needed.
+    // A single-frame MJPEG would cause proxy_load to spawn ffprobe every frame
+    // (fps comes back 0 → load fails → loop retries indefinitely).
+    if (is_image_ext(video_path)) {
+        std::string still = proxy_still_path(video_path);
+        if (!fs::exists(still)) {
+            const char* args[] = {
+                "ffmpeg", "-hide_banner", "-loglevel", "error",
+                "-y", "-i", video_path.c_str(),
+                "-vf", "scale=iw/2:ih/2",
+                still.c_str(), nullptr
+            };
+            pid_t sp = spawn_ffmpeg(args);
+            wait_ok(sp);
+        }
+        return;
+    }
+
     if (proxy_is_ready(video_path)) return;
     if (g_generating.load()) proxy_cancel();
 

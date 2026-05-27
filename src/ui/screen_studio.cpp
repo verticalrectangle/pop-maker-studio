@@ -225,12 +225,14 @@ void ui_studio(AppState& state) {
     //   1. Already a full proxy (fps > 0)  → nothing to do
     //   2. Proxy ready but slot not open   → open proxy directly (covers split/moved clips)
     //   3. No proxy yet, slot not open     → open still as placeholder
+    // Images never get an MJPEG proxy — skip them to avoid per-frame ffprobe spawns.
     for (int slot = 0; slot < MAX_VIDEO_TRACKS; ++slot) {
         const std::string& key = state.proxy_paths[slot];
         if (key.empty()) continue;
         if (video_info(slot).fps > 0.0) continue;  // already fully open
 
         std::string src = source_from_key(key);
+        if (is_image_path(src)) continue;  // stills only — proxy never generated
         if (proxy_is_ready(src)) {
             ProxyInfo pi;
             if (!proxy_load(src, pi)) continue;
