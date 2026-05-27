@@ -369,6 +369,7 @@ struct RenderSettings {
     int         audio_bitrate = 192;      // kbps: 128 / 192 / 320
     std::string preset        = "medium"; // ultrafast/fast/medium/slow/veryslow
     bool        high_profile  = false;    // false=Main, true=High
+    bool        use_vaapi     = true;     // use VAAPI HW encoder when available (AMD/Intel on Linux)
     bool        advanced_open = false;    // UI collapsible state
 };
 

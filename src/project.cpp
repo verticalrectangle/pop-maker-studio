@@ -7,7 +7,7 @@
 // ── Binary serialization helpers ──────────────────────────────────────────────
 
 static const uint32_t MAGIC   = 0x534D5001u; // "PMS\x01"
-static const uint32_t VERSION = 28u;
+static const uint32_t VERSION = 29u;
 
 struct Writer {
     std::ofstream f;
@@ -377,6 +377,7 @@ bool project_save(const AppState& state, const std::string& path) {
     // Render settings
     w.pod(state.render_settings.crf); w.pod(state.render_settings.audio_bitrate);
     w.str(state.render_settings.preset); w.pod((uint8_t)state.render_settings.high_profile);
+    w.pod((uint8_t)state.render_settings.use_vaapi);
 
     // UI
     w.pod(state.panel_tab);
@@ -438,6 +439,8 @@ bool project_load(AppState& state, const std::string& path) {
     state.render_settings.audio_bitrate= r.pod<int>();
     state.render_settings.preset       = r.str();
     state.render_settings.high_profile = (bool)r.pod<uint8_t>();
+    if (version >= 29u)
+        state.render_settings.use_vaapi = (bool)r.pod<uint8_t>();
 
     // UI
     state.panel_tab = r.pod<int>();

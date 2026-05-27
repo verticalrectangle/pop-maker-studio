@@ -38,6 +38,7 @@
 #include <sys/wait.h>
 #include <sys/types.h>
 #include <fcntl.h>
+#include <cstdarg>
 
 namespace fs = std::filesystem;
 
@@ -1421,6 +1422,9 @@ static struct GlExport {
     pid_t   ffmpeg_pid    = 0;
     std::vector<uint8_t> pixel_buf;
     std::string cur_vid_path;
+    // Double-buffered PBOs: GPU DMAs frame N into pbo[N%2] while CPU reads pbo[(N-1)%2].
+    GLuint  pbo[2]        = {};
+    bool    use_vaapi     = false;  // h264_vaapi encoder active
 } g_gl_ex;
 
 static void gl_cleanup_export();
@@ -1610,7 +1614,11 @@ void render_snapshot_gl(AppState& state, float snap_t) {
 
     ImDrawData dd;
     dd.DisplayPos = {0,0}; dd.DisplaySize = {W,H}; dd.FramebufferScale = {1,1};
-    dd.Textures = &ImGui::GetPlatformIO().Textures;
+    // Use atlas->TexList directly — PlatformIO.Textures is rebuilt at the END
+    // of each frame, so it misses new ImTextureData* objects created by
+    // draw_text_overlays when first rendering at the export resolution (new
+    // font size triggers ImFontAtlasTextureAdd → WantCreate + TexID=Invalid).
+    dd.Textures = &ImGui::GetIO().Fonts->TexList;
     dd.AddDrawList(&dl);
     ImGui_ImplOpenGL3_RenderDrawData(&dd);
 
@@ -1648,14 +1656,27 @@ void render_snapshot_gl(AppState& state, float snap_t) {
 // libavcodec, composited via ImDrawList into an offscreen FBO, read back with
 // glReadPixels, and piped as rawvideo RGBA to ffmpeg for H.264 encoding.
 
+// ── Render crash log ─────────────────────────────────────────────────────────
+// Written incrementally; last flushed line shows where a crash occurred.
+// Log lives at /tmp/pms_render_log.txt.
+static FILE* g_render_log = nullptr;
+
+static void rlog(const char* fmt, ...) {
+    if (!g_render_log) return;
+    va_list ap; va_start(ap, fmt); vfprintf(g_render_log, fmt, ap); va_end(ap);
+    fflush(g_render_log);
+}
+
 static void gl_cleanup_export() {
     if (g_gl_ex.fbo)       { glDeleteFramebuffers(1, &g_gl_ex.fbo);       g_gl_ex.fbo       = 0; }
     if (g_gl_ex.color_tex) { glDeleteTextures(1, &g_gl_ex.color_tex);     g_gl_ex.color_tex = 0; }
     glDeleteTextures(MAX_VIDEO_TRACKS * 2, g_gl_ex.vid_tex);
     memset(g_gl_ex.vid_tex, 0, sizeof(g_gl_ex.vid_tex));
+    if (g_gl_ex.pbo[0]) { glDeleteBuffers(2, g_gl_ex.pbo); g_gl_ex.pbo[0] = g_gl_ex.pbo[1] = 0; }
     video_close_export();
     g_gl_ex.cur_vid_path.clear();
     g_gl_ex.pixel_buf.clear();
+    g_gl_ex.use_vaapi = false;
     g_gl_ex.active = false;
 }
 
@@ -1810,6 +1831,12 @@ static bool gl_render_vid_clip(ImDrawList& dl, const Clip* cl, float at_time,
 void render_start_gl(AppState& state) {
     g_cancel.store(false);
 
+    // Open crash log — each line is flushed so the last line before a crash is visible.
+    if (g_render_log) fclose(g_render_log);
+    g_render_log = fopen("/tmp/pms_render_log.txt", "w");
+    rlog("render_start_gl: out_mp4=%s duration=%.2f fps=%d\n",
+         state.out_mp4.c_str(), (double)state.duration, state.fps);
+
     int out_w = 1080, out_h = 1920;
     switch (state.format) {
         case OutputFormat::Horizontal: out_w = 1920; out_h = 1080; break;
@@ -1872,11 +1899,21 @@ void render_start_gl(AppState& state) {
         }
     }
 
+    // ── VAAPI detection ───────────────────────────────────────────────────────
+    // Use AMD/Intel VAAPI hardware encoder when the render node exists and the
+    // user hasn't disabled it.  Encodes on dedicated GPU silicon → ~10-20× faster
+    // than libx264, freeing the CPU entirely for the next frame's GL work.
+    bool use_vaapi = state.render_settings.use_vaapi &&
+                     fs::exists("/dev/dri/renderD128");
+
     // ── Build ffmpeg command ──────────────────────────────────────────────────
-    // Input 0: rawvideo from stdin (RGBA)
+    // Input 0: rawvideo from stdin (RGBA, GL bottom-up — vflip applied below)
     // Input 1..N: audio files
     std::vector<std::string> args;
     args.push_back("ffmpeg"); args.push_back("-hide_banner"); args.push_back("-y");
+    if (use_vaapi) {
+        args.push_back("-vaapi_device"); args.push_back("/dev/dri/renderD128");
+    }
     args.push_back("-f");       args.push_back("rawvideo");
     args.push_back("-pix_fmt"); args.push_back("rgba");
     args.push_back("-s");       args.push_back(std::to_string(out_w) + "x" + std::to_string(out_h));
@@ -1908,12 +1945,20 @@ void render_start_gl(AppState& state) {
             args.push_back("-map"); args.push_back("[aout]");
         }
     }
-    args.push_back("-c:v");     args.push_back("libx264");
-    args.push_back("-pix_fmt"); args.push_back("yuv420p");
-    args.push_back("-crf");     args.push_back(std::to_string(state.render_settings.crf));
-    args.push_back("-preset");  args.push_back(state.render_settings.preset);
-    if (state.render_settings.high_profile) {
-        args.push_back("-profile:v"); args.push_back("high");
+    if (use_vaapi) {
+        // RGBA → NV12 (CPU) → hwupload → h264_vaapi on the GPU's VCE engine.
+        // vflip corrects GL's bottom-up pixel order.
+        args.push_back("-vf");    args.push_back("vflip,format=nv12,hwupload");
+        args.push_back("-c:v");   args.push_back("h264_vaapi");
+        args.push_back("-global_quality"); args.push_back(std::to_string(state.render_settings.crf));
+    } else {
+        args.push_back("-c:v");     args.push_back("libx264");
+        args.push_back("-pix_fmt"); args.push_back("yuv420p");
+        args.push_back("-crf");     args.push_back(std::to_string(state.render_settings.crf));
+        args.push_back("-preset");  args.push_back(state.render_settings.preset);
+        if (state.render_settings.high_profile) {
+            args.push_back("-profile:v"); args.push_back("high");
+        }
     }
     if (!audio_ins.empty()) {
         args.push_back("-c:a");  args.push_back("aac");
@@ -1953,6 +1998,18 @@ void render_start_gl(AppState& state) {
     }
     close(stdin_pipe[0]);
 
+    // ── Allocate double-buffered PBOs for async GPU→CPU readback ─────────────
+    // With VAAPI, ffmpeg handles the vflip so we don't need the flip memcpy;
+    // pixel_buf is still used for the libx264 path.
+    size_t frame_bytes = (size_t)out_w * out_h * 4;
+    GLuint pbos[2] = {};
+    glGenBuffers(2, pbos);
+    for (int i = 0; i < 2; ++i) {
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, pbos[i]);
+        glBufferData(GL_PIXEL_PACK_BUFFER, (GLsizeiptr)frame_bytes, nullptr, GL_STREAM_READ);
+    }
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+
     // ── Store GL export state ─────────────────────────────────────────────────
     g_gl_ex.active        = true;
     g_gl_ex.fbo           = fbo;
@@ -1965,7 +2022,10 @@ void render_start_gl(AppState& state) {
     g_gl_ex.fps_f         = (float)fps;
     g_gl_ex.pipe_write    = stdin_pipe[1];
     g_gl_ex.ffmpeg_pid    = pid;
-    g_gl_ex.pixel_buf.resize((size_t)out_w * out_h * 4);
+    g_gl_ex.pixel_buf.resize(frame_bytes);
+    g_gl_ex.pbo[0]        = pbos[0];
+    g_gl_ex.pbo[1]        = pbos[1];
+    g_gl_ex.use_vaapi     = use_vaapi;
     g_gl_ex.cur_vid_path.clear();
     g_ffmpeg_pid.store(pid);
 
@@ -1980,9 +2040,45 @@ void render_start_gl(AppState& state) {
         render_export_srt(state, state.out_srt);
 }
 
+// Collect one PBO frame (map → flip rows → write to pipe). Called at the start
+// of tick N+1 to retrieve the pixels kicked during tick N.
+// With VAAPI, ffmpeg's vflip handles row inversion so we pipe raw bottom-up RGBA.
+static void gl_collect_pbo_frame(int frame_idx) {
+    int slot = frame_idx % 2;
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, g_gl_ex.pbo[slot]);
+    uint8_t* src = (uint8_t*)glMapBuffer(GL_PIXEL_PACK_BUFFER, GL_READ_ONLY);
+    if (src) {
+        int out_w     = g_gl_ex.out_w;
+        int out_h     = g_gl_ex.out_h;
+        int row_bytes = out_w * 4;
+        if (g_gl_ex.use_vaapi) {
+            // VAAPI: ffmpeg applies vflip — pipe raw GL bottom-up order directly.
+            memcpy(g_gl_ex.pixel_buf.data(), src, (size_t)out_w * out_h * 4);
+        } else {
+            // libx264: flip rows here (GL bottom-up → top-down for MP4).
+            for (int y = 0; y < out_h; ++y) {
+                int src_y = out_h - 1 - y;
+                memcpy(g_gl_ex.pixel_buf.data() + (size_t)y * row_bytes,
+                       src + (size_t)src_y * row_bytes, row_bytes);
+            }
+        }
+        glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
+    }
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+
+    const uint8_t* buf = g_gl_ex.pixel_buf.data();
+    size_t total = (size_t)g_gl_ex.out_w * g_gl_ex.out_h * 4;
+    while (total > 0) {
+        ssize_t n = write(g_gl_ex.pipe_write, buf, total);
+        if (n <= 0) break;
+        buf += n; total -= (size_t)n;
+    }
+}
+
 void render_tick_gl(AppState& state) {
     if (!g_gl_ex.active) return;
 
+    // Cancel: discard any pending PBO, close pipe immediately.
     if (g_cancel.load()) {
         close(g_gl_ex.pipe_write); g_gl_ex.pipe_write = -1;
         waitpid(g_gl_ex.ffmpeg_pid, nullptr, 0);
@@ -1990,9 +2086,18 @@ void render_tick_gl(AppState& state) {
         gl_cleanup_export();
         state.render.running = false;
         state.render.stage   = "Cancelled";
+        if (g_render_log) { fclose(g_render_log); g_render_log = nullptr; }
         return;
     }
 
+    // Collect the previous tick's PBO frame and write it to the pipe.
+    // On tick 0 there is no previous frame yet.
+    if (g_gl_ex.current_frame > 0)
+        gl_collect_pbo_frame(g_gl_ex.current_frame - 1);
+
+    rlog("  readpixels_done\n");   // previous frame collected (or first frame skipped)
+
+    // All frames rendered + last frame written → signal ffmpeg and wait.
     if (g_gl_ex.current_frame >= g_gl_ex.total_frames) {
         close(g_gl_ex.pipe_write); g_gl_ex.pipe_write = -1;
         int wstat = 0;
@@ -2004,12 +2109,18 @@ void render_tick_gl(AppState& state) {
         state.render.progress = ok ? 1.f : state.render.progress;
         state.render.stage    = ok ? "Done" : "Error — ffmpeg failed";
         if (ok) state.render_done = true;
+        if (g_render_log) {
+            rlog("render_tick_gl: finished ok=%d wstatus=%d\n", ok, wstat);
+            fclose(g_render_log); g_render_log = nullptr;
+        }
         return;
     }
 
     float t = (float)g_gl_ex.current_frame / g_gl_ex.fps_f;
     float W = (float)g_gl_ex.out_w;
     float H = (float)g_gl_ex.out_h;
+
+    rlog("frame %d  t=%.3f\n", g_gl_ex.current_frame, (double)t);
 
     // Save previous GL state
     GLint prev_fbo = 0;
@@ -2028,6 +2139,8 @@ void render_tick_gl(AppState& state) {
     dl._ResetForNewFrame();
     dl.PushClipRect({0.f, 0.f}, {W, H});
     dl.PushTexture(ImGui::GetIO().Fonts->TexRef);
+
+    rlog("  bind_fbo ok\n");
 
     // ── Render video clips (high→low track index = background first) ──────────
     for (int ti = (int)state.tracks.size() - 1; ti >= 0; --ti) {
@@ -2058,6 +2171,8 @@ void render_tick_gl(AppState& state) {
             }
         }
         if (!active) continue;
+
+        rlog("  vid_clip track=%d clip=%d path=%s\n", ti, active_ci, active->text.c_str());
 
         bool in_trans_out = (active->transition_type != TransitionType::None &&
                              active->transition_pre > 0.f &&
@@ -2125,21 +2240,36 @@ void render_tick_gl(AppState& state) {
         }
     }
 
+    rlog("  vid_clips_done\n");
+
     // ── Render text overlays ──────────────────────────────────────────────────
     draw_text_overlays(&dl, state, t, {0.f, 0.f}, W, H);
 
+    rlog("  text_overlays_done  vtx=%d idx=%d cmd=%d\n",
+         dl.VtxBuffer.Size, dl.IdxBuffer.Size, dl.CmdBuffer.Size);
+
     // Finalise draw list
     dl.PopTexture();
+    rlog("  pop_texture ok\n");
     dl.PopClipRect();
+    rlog("  pop_cliprect ok\n");
 
     // ── Submit draw list to GL ────────────────────────────────────────────────
     ImDrawData dd;
+    rlog("  imgui_drawdata_init ok\n");
     dd.DisplayPos        = {0.f, 0.f};
     dd.DisplaySize       = {W, H};
     dd.FramebufferScale  = {1.f, 1.f};
-    dd.Textures          = &ImGui::GetPlatformIO().Textures;
+    // Use atlas->TexList directly — PlatformIO.Textures is rebuilt at the END
+    // of each frame, so it misses new ImTextureData* objects created by
+    // draw_text_overlays when first rendering at the export resolution (new
+    // font size triggers ImFontAtlasTextureAdd → WantCreate + TexID=Invalid).
+    dd.Textures          = &ImGui::GetIO().Fonts->TexList;
     dd.AddDrawList(&dl);
+    rlog("  imgui_add_draw_list ok  cmds=%d\n", dl.CmdBuffer.Size);
     ImGui_ImplOpenGL3_RenderDrawData(&dd);
+
+    rlog("  imgui_render_done\n");
 
     // ── Global FX post-process ─────────────────────────────────────────────────
     // Apply colour grade / blur / creative FX to the fully composited frame.
@@ -2154,25 +2284,17 @@ void render_tick_gl(AppState& state) {
             fx_blit(out, g_gl_ex.fbo, g_gl_ex.out_w, g_gl_ex.out_h);
     }
 
-    // ── Read pixels and send to ffmpeg (vertical flip: GL is bottom-up) ───────
-    int row_bytes = g_gl_ex.out_w * 4;
-    std::vector<uint8_t> raw(g_gl_ex.pixel_buf.size());
+    rlog("  fx_done\n");
+
+    // ── Kick async GPU→PBO DMA (non-blocking — returns immediately) ───────────
+    // The GPU will fill pbo[current_frame % 2] while the CPU processes the next
+    // frame. We collect these pixels at the top of the NEXT render_tick_gl call.
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, g_gl_ex.pbo[g_gl_ex.current_frame % 2]);
     glReadPixels(0, 0, g_gl_ex.out_w, g_gl_ex.out_h,
-                 GL_RGBA, GL_UNSIGNED_BYTE, raw.data());
-    for (int y = 0; y < g_gl_ex.out_h; ++y) {
-        int src_y = g_gl_ex.out_h - 1 - y;
-        memcpy(g_gl_ex.pixel_buf.data() + (size_t)y * row_bytes,
-               raw.data() + (size_t)src_y * row_bytes, row_bytes);
-    }
-    // Write full frame; handle partial writes
-    const uint8_t* buf = g_gl_ex.pixel_buf.data();
-    size_t total = (size_t)g_gl_ex.out_w * g_gl_ex.out_h * 4;
-    while (total > 0) {
-        ssize_t n = write(g_gl_ex.pipe_write, buf, total);
-        if (n <= 0) break;
-        buf   += n;
-        total -= (size_t)n;
-    }
+                 GL_RGBA, GL_UNSIGNED_BYTE, nullptr); // nullptr = async into PBO
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+
+    rlog("  pipe_write_done\n");  // will be written at start of next tick
 
     // ── Restore GL state ──────────────────────────────────────────────────────
     glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)prev_fbo);

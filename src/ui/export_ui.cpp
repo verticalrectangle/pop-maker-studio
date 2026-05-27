@@ -140,6 +140,33 @@ void draw_export_modal(AppState& state) {
             state.render_settings.preset = "slow";
         ImGui::NewLine();
 
+        ImGui::Dummy({0.f, 8.f});
+        ImGui::SetCursorPosX(ImGui::GetStyle().WindowPadding.x + 8.f);
+        ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+        ImGui::TextUnformatted("Encoder");
+        ImGui::PopStyleColor();
+        ImGui::Dummy({0.f, 6.f});
+        {
+            bool vaapi_present = fs::exists("/dev/dri/renderD128");
+            bool vaapi_on = state.render_settings.use_vaapi && vaapi_present;
+            ImGui::SetCursorPosX(ImGui::GetStyle().WindowPadding.x + 8.f);
+            if (ui_btn("GPU (VAAPI)##enc", vaapi_on, true))
+                state.render_settings.use_vaapi = true;
+            ImGui::SameLine(0.f, 4.f);
+            if (ui_btn("CPU (x264)##enc", !vaapi_on, true))
+                state.render_settings.use_vaapi = false;
+            ImGui::NewLine();
+            ImGui::SetCursorPosX(ImGui::GetStyle().WindowPadding.x + 8.f);
+            ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+            if (!vaapi_present)
+                ImGui::TextUnformatted("GPU encoder not found — using CPU.");
+            else if (vaapi_on)
+                ImGui::TextUnformatted("AMD VCE — ~10-20x faster, frees CPU.");
+            else
+                ImGui::TextUnformatted("libx264 — slower, slightly smaller files.");
+            ImGui::PopStyleColor();
+        }
+
         ImGui::Dummy({0.f, 10.f}); ui_separator(); ImGui::Dummy({0.f, 8.f});
 
         // ── Progress and action ───────────────────────────────────────────────
@@ -265,6 +292,29 @@ void panel_export(AppState& state, float w) {
         ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
         ImGui::TextUnformatted("Slow = better compression, same quality.");
         ImGui::PopStyleColor();
+
+        // Hardware encoder
+        ImGui::Dummy({0.f, 8.f}); ui_label("Encoder"); ImGui::Dummy({0.f, 4.f});
+        {
+            bool vaapi_present = std::filesystem::exists("/dev/dri/renderD128");
+            bool vaapi_on = state.render_settings.use_vaapi && vaapi_present;
+            if (ui_btn("GPU (VAAPI)", vaapi_on, true)) {
+                state.render_settings.use_vaapi = true;
+            }
+            ImGui::SameLine(0.f, 4.f);
+            if (ui_btn("CPU (x264)", !vaapi_on, true)) {
+                state.render_settings.use_vaapi = false;
+            }
+            ImGui::NewLine();
+            ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+            if (!vaapi_present)
+                ImGui::TextUnformatted("VAAPI not found — using CPU.");
+            else if (vaapi_on)
+                ImGui::TextUnformatted("GPU: ~10-20x faster, uses AMD VCE.");
+            else
+                ImGui::TextUnformatted("CPU: smaller files, slower encode.");
+            ImGui::PopStyleColor();
+        }
 
         ImGui::Dummy({0.f, 4.f});
         ImGui::TreePop();
