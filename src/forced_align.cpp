@@ -231,7 +231,15 @@ std::vector<WordEntry> forced_align(
         std::vector<int> times = ctc_align(lp.data(), T, V, target, vocab.blank);
         if (times.empty()) continue;
 
-        // Map char frame times → word start/end seconds, then snap to proxy frames
+        // Map char frame times → word start/end seconds, then snap to proxy frames.
+        //
+        // Guard: only accept a CTC timestamp when it stays within MAX_CTC_DEVIATION
+        // of whisper's DTW timestamp.  wav2vec2 uses bidirectional attention, so its
+        // predictions can appear up to ~0.5 s before the actual acoustic onset
+        // (look-ahead bias).  Whisper DTW is already well-calibrated; CTC should
+        // only be trusted for small refinements, not large corrections.
+        static constexpr float MAX_CTC_DEVIATION = 0.200f;  // 200 ms
+
         for (int k = 0; k < (int)widxs.size(); ++k) {
             auto& r = ranges[k];
             if (r.ci0 > r.ci1 || r.ci0 >= (int)times.size()) continue;
@@ -246,8 +254,16 @@ std::vector<WordEntry> forced_align(
             else
                 t1_abs = (float)(ct0 + (times[r.ci1] + 1) * frame_dt);
 
-            result[widxs[k]].start = snap(t0_abs);
-            result[widxs[k]].end   = snap(t1_abs);
+            float ws_start = whisper_words[widxs[k]].start;
+            float ws_end   = whisper_words[widxs[k]].end;
+
+            if (std::fabsf(t0_abs - ws_start) <= MAX_CTC_DEVIATION)
+                result[widxs[k]].start = snap(t0_abs);
+            // else: CTC deviated too far — keep whisper DTW start
+
+            if (std::fabsf(t1_abs - ws_end) <= MAX_CTC_DEVIATION)
+                result[widxs[k]].end = snap(t1_abs);
+            // else: CTC deviated too far — keep whisper DTW end
         }
     }
 
