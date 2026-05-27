@@ -5,6 +5,8 @@
 #include "overlay_renderer.h"
 #include "video.h"
 #include "fx_shader.h"
+#include "runtime_fx.h"
+#include "body_fx.h"
 
 #define GL_GLEXT_PROTOTYPES
 #include <GL/gl.h>
@@ -1421,7 +1423,6 @@ static struct GlExport {
     int     pipe_write    = -1;
     pid_t   ffmpeg_pid    = 0;
     std::vector<uint8_t> pixel_buf;
-    std::string cur_vid_path;
     // Double-buffered PBOs: GPU DMAs frame N into pbo[N%2] while CPU reads pbo[(N-1)%2].
     GLuint  pbo[2]        = {};
     bool    use_vaapi     = false;  // h264_vaapi encoder active
@@ -1516,8 +1517,8 @@ void render_snapshot_gl(AppState& state, float snap_t) {
     dl.PushClipRect({0.f, 0.f}, {W, H});
     dl.PushTexture(ImGui::GetIO().Fonts->TexRef);
 
-    // Reuse the same video-clip rendering path as render_tick_gl
-    std::string snap_vid_path;
+    // Reuse the same video-clip rendering path as render_tick_gl.
+    // Per-slot decoders self-track their open file, so no path-cache bookkeeping needed.
     for (int ti = (int)state.tracks.size() - 1; ti >= 0; --ti) {
         const auto& track = state.tracks[ti];
         if (!track.visible) continue;
@@ -1541,10 +1542,6 @@ void render_snapshot_gl(AppState& state, float snap_t) {
             }
         }
         if (!active) continue;
-
-        // Temporarily redirect the global export path cache to our local string
-        std::string saved_path = g_gl_ex.cur_vid_path;
-        g_gl_ex.cur_vid_path = snap_vid_path;
 
         bool in_trans_out = (active->transition_type != TransitionType::None &&
                              active->transition_pre > 0.f &&
@@ -1570,18 +1567,15 @@ void render_snapshot_gl(AppState& state, float snap_t) {
             float t_b = fmaxf(0.f, fminf(1.f, (t-cut)/fmaxf(post,1e-5f)));
             if (active->transition_type == TransitionType::Dissolve) {
                 gl_render_vid_clip(dl, active, t, 1.f-t_a, vid_texs[slot_pri], slot_pri, W, H, state, ti);
-                g_gl_ex.cur_vid_path.clear();
                 gl_render_vid_clip(dl, next_cl, t, t_b>0.f?t_b:t_a, vid_texs[slot_sec], slot_sec, W, H, state, ti);
             } else if (active->transition_type == TransitionType::FadeBlack) {
                 gl_render_vid_clip(dl, active, t, 1.f-t_a, vid_texs[slot_pri], slot_pri, W, H, state, ti);
-                g_gl_ex.cur_vid_path.clear();
                 gl_render_vid_clip(dl, next_cl, t, t_b, vid_texs[slot_sec], slot_sec, W, H, state, ti);
             } else {
                 gl_render_vid_clip(dl, active, t, 1.f-t_a, vid_texs[slot_pri], slot_pri, W, H, state, ti);
                 float wa = t_a*(1.f-t_b);
                 if (wa > 0.01f)
                     dl.AddRectFilled({0,0},{W,H},IM_COL32(255,255,255,(int)(wa*255)));
-                g_gl_ex.cur_vid_path.clear();
                 gl_render_vid_clip(dl, next_cl, t, t_b, vid_texs[slot_sec], slot_sec, W, H, state, ti);
             }
         } else if (in_trans_in && prev_cl) {
@@ -1590,7 +1584,6 @@ void render_snapshot_gl(AppState& state, float snap_t) {
             if (prev_cl->transition_type == TransitionType::Dissolve) {
                 gl_render_vid_clip(dl, prev_cl, fminf(t,prev_cl->end-1e-4f),
                                    1.f-tf, vid_texs[slot_sec], slot_sec, W, H, state, ti);
-                g_gl_ex.cur_vid_path.clear();
                 gl_render_vid_clip(dl, active, t, tf, vid_texs[slot_pri], slot_pri, W, H, state, ti);
             } else if (prev_cl->transition_type == TransitionType::FadeBlack) {
                 gl_render_vid_clip(dl, active, t, tf, vid_texs[slot_pri], slot_pri, W, H, state, ti);
@@ -1603,11 +1596,8 @@ void render_snapshot_gl(AppState& state, float snap_t) {
         } else {
             gl_render_vid_clip(dl, active, t, 1.f, vid_texs[slot_pri], slot_pri, W, H, state, ti);
         }
-
-        snap_vid_path = g_gl_ex.cur_vid_path;
-        g_gl_ex.cur_vid_path = saved_path;
     }
-    video_close_export();
+    video_close_export_all();
 
     draw_text_overlays(&dl, state, t, {0.f, 0.f}, W, H);
     dl.PopTexture();
@@ -1674,8 +1664,7 @@ static void gl_cleanup_export() {
     glDeleteTextures(MAX_VIDEO_TRACKS * 2, g_gl_ex.vid_tex);
     memset(g_gl_ex.vid_tex, 0, sizeof(g_gl_ex.vid_tex));
     if (g_gl_ex.pbo[0]) { glDeleteBuffers(2, g_gl_ex.pbo); g_gl_ex.pbo[0] = g_gl_ex.pbo[1] = 0; }
-    video_close_export();
-    g_gl_ex.cur_vid_path.clear();
+    video_close_export_all();
     g_gl_ex.pixel_buf.clear();
     g_gl_ex.use_vaapi = false;
     g_gl_ex.active = false;
@@ -1751,15 +1740,12 @@ static bool gl_render_vid_clip(ImDrawList& dl, const Clip* cl, float at_time,
                 rot_pt(-hw,-hh), rot_pt(hw,-hh), rot_pt(hw,hh), rot_pt(-hw,hh),
                 uv0, {uv1.x,uv0.y}, uv1, {uv0.x,uv1.y}, col);
         }
-        g_gl_ex.cur_vid_path.clear();
         return true;
     }
 
-    if (g_gl_ex.cur_vid_path != cl->text) {
-        if (!video_open_export(cl->text)) return false;
-        g_gl_ex.cur_vid_path = cl->text;
-    }
-    VideoFrame* vf = video_decode_frame_at((double)src_t);
+    // Per-slot decoder: fx_slot (== decoder slot) self-tracks which file it has open.
+    if (!video_open_export(fx_slot, cl->text)) return false;
+    VideoFrame* vf = video_decode_frame_at(fx_slot, (double)src_t);
     if (!vf) return false;
 
     // CPU datamosh — must happen before GL upload.
@@ -1770,6 +1756,15 @@ static bool gl_render_vid_clip(ImDrawList& dl, const Clip* cl, float at_time,
         video_apply_datamosh(vf, cfx.datamosh_intensity, (float)src_t);
     if (glass_cfx.datamosh_on && glass_cfx.datamosh_intensity > 0.01f)
         video_apply_datamosh(vf, glass_cfx.datamosh_intensity, (float)src_t);
+
+    // AI bg-remove: apply mask alpha before GL upload so the compositor can
+    // correctly composite over background layers.
+    if (cl->bg_remove_on && cl->bg_remove_status == BgRemoveStatus::Ready
+            && !cl->bg_remove_mask_dir.empty()) {
+        float mask_fps = bg_remove_read_fps(cl->bg_remove_mask_dir);
+        int   frame_i  = (int)(src_t * mask_fps);
+        video_apply_bg_remove_export(vf, *cl, frame_i);
+    }
 
     glBindTexture(GL_TEXTURE_2D, tex_id);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, vf->width, vf->height, 0,
@@ -1786,6 +1781,28 @@ static bool gl_render_vid_clip(ImDrawList& dl, const Clip* cl, float at_time,
             glass_ea.any_vignette || glass_ea.any_text)
             cur_tex = fx_apply(cur_tex, fx_slot, vid_w, vid_h, glass_ea, glass_cfx, at_time);
     }
+
+    // RuntimeFX — custom hot-reload shader on this clip.
+    if (!cl->runtime_fx_id.empty())
+        cur_tex = runtime_fx_apply(cl->runtime_fx_id, cur_tex, vid_w, vid_h,
+                                   cl->runtime_fx_params, cl->runtime_fx_amount, at_time);
+
+    // BodyFX — AI body-mask effect brick on the same track.
+    for (auto& bfx_cl : state.tracks[ti].clips) {
+        if (bfx_cl.clip_type != ClipType::BodyFX) continue;
+        if (at_time < bfx_cl.start || at_time >= bfx_cl.end) continue;
+        // Use hires masks (PNG per frame) from the video clip's bg_remove mask dir.
+        std::string mask_dir = bg_remove_hires_dir(cl->text);
+        float bfx_fps   = bg_remove_read_fps(mask_dir);
+        int   bfx_frame = (int)(src_t * bfx_fps);
+        unsigned mask_tex = body_fx_mask_texture(mask_dir, bfx_frame);
+        if (!mask_tex) break;  // hires masks not computed yet — skip silently
+        cur_tex = body_fx_apply(bfx_cl.body_fx_type, cur_tex, mask_tex,
+                                vid_w, vid_h, bfx_cl.body_fx_params,
+                                bfx_cl.body_fx_amount, at_time);
+        break;  // only first BodyFX brick applies
+    }
+
     // Global FX are applied once to the full composited frame after all clips are
     // rendered — not per-clip. See render_tick_gl post-process step.
     uintptr_t draw_tex = cur_tex;
@@ -2083,7 +2100,7 @@ void render_start_gl(AppState& state) {
     g_gl_ex.pbo[0]        = pbos[0];
     g_gl_ex.pbo[1]        = pbos[1];
     g_gl_ex.use_vaapi     = use_vaapi;
-    g_gl_ex.cur_vid_path.clear();
+    video_close_export_all();  // reset all decoder slots for the new render session
     g_ffmpeg_pid.store(pid);
 
     state.render.running      = true;
@@ -2212,6 +2229,43 @@ void render_tick_gl(AppState& state) {
         GLuint tex_pri = g_gl_ex.vid_tex[slot_pri];
         GLuint tex_sec = g_gl_ex.vid_tex[slot_sec];
 
+        // ── Background (color-pattern) clips ───────────────────────────────────
+        // Rendered before video clips so they appear beneath chroma-keyed footage.
+        for (auto& bg_cl : track.clips) {
+            if (bg_cl.clip_type != ClipType::Background) continue;
+            if (t < bg_cl.start || t >= bg_cl.end || bg_cl.text.empty()) break;
+
+            // Each track uses its own BG slot (0..MAX_BG_SLOTS-1).
+            int bg_slot_idx = ti % MAX_BG_SLOTS;
+            uintptr_t bg_tex = bg_render_to_texture(
+                bg_cl.text.c_str(), bg_slot_idx, g_gl_ex.out_w, g_gl_ex.out_h,
+                t, bg_cl.bg_speed, bg_cl.bg_intensity,
+                bg_cl.bg_c1, bg_cl.bg_c2, bg_cl.bg_c3);
+            if (!bg_tex) break;
+
+            float bpx = bg_cl.eval_prop("pos_x",    t);
+            float bpy = bg_cl.eval_prop("pos_y",    t);
+            float bsx = bg_cl.eval_prop("scale_x",  t);
+            float bsy = bg_cl.eval_prop("scale_y",  t);
+            float brt = bg_cl.eval_prop("rotation", t);
+            float ba  = bg_cl.eval_prop("opacity",  t);
+            float bcx = bpx * W, bcy = bpy * H;
+            float bhw = W * bsx * 0.5f, bhh = H * bsy * 0.5f;
+            float brad = brt * 3.14159265f / 180.f;
+            float bcos = cosf(brad), bsin = sinf(brad);
+            auto brot = [&](float ox, float oy) -> ImVec2 {
+                return { bcx + ox*bcos - oy*bsin, bcy + ox*bsin + oy*bcos };
+            };
+            ImU32 bcol = IM_COL32(255, 255, 255,
+                                  (int)(fmaxf(0.f, fminf(1.f, ba)) * 255.f));
+            // Y-flipped UVs: bg_render_to_texture produces a GL-orientation texture
+            // (row 0 = bottom). Flip so the top of the pattern maps to the top of the FBO.
+            dl.AddImageQuad(ImTextureRef((ImTextureID)bg_tex),
+                brot(-bhw, -bhh), brot(bhw, -bhh), brot(bhw, bhh), brot(-bhw, bhh),
+                {0,1}, {1,1}, {1,0}, {0,0}, bcol);
+            break;
+        }
+
         const Clip* active = nullptr;
         int active_ci = -1;
         for (int ci = 0; ci < (int)track.clips.size(); ++ci) {
@@ -2263,11 +2317,9 @@ void render_tick_gl(AppState& state) {
 
             if (active->transition_type == TransitionType::Dissolve) {
                 gl_render_vid_clip(dl, active,  t, 1.f-t_a, tex_pri, slot_pri, W, H, state, ti);
-                g_gl_ex.cur_vid_path.clear();
                 gl_render_vid_clip(dl, next_cl, t, t_b>0.f?t_b:t_a, tex_sec, slot_sec, W, H, state, ti);
             } else if (active->transition_type == TransitionType::FadeBlack) {
                 gl_render_vid_clip(dl, active,  t, 1.f-t_a, tex_pri, slot_pri, W, H, state, ti);
-                g_gl_ex.cur_vid_path.clear();
                 gl_render_vid_clip(dl, next_cl, t, t_b, tex_sec, slot_sec, W, H, state, ti);
             } else { // DipWhite
                 gl_render_vid_clip(dl, active, t, 1.f-t_a, tex_pri, slot_pri, W, H, state, ti);
@@ -2275,7 +2327,6 @@ void render_tick_gl(AppState& state) {
                 if (white_a > 0.01f)
                     dl.AddRectFilled({0.f, 0.f}, {W, H},
                                      IM_COL32(255, 255, 255, (int)(white_a * 255.f)));
-                g_gl_ex.cur_vid_path.clear();
                 gl_render_vid_clip(dl, next_cl, t, t_b, tex_sec, slot_sec, W, H, state, ti);
             }
         } else if (in_trans_in && prev_cl) {
@@ -2284,7 +2335,6 @@ void render_tick_gl(AppState& state) {
             if (prev_cl->transition_type == TransitionType::Dissolve) {
                 gl_render_vid_clip(dl, prev_cl, fminf(t, prev_cl->end-1e-4f),
                                    1.f-tf, tex_sec, slot_sec, W, H, state, ti);
-                g_gl_ex.cur_vid_path.clear();
                 gl_render_vid_clip(dl, active, t, tf, tex_pri, slot_pri, W, H, state, ti);
             } else if (prev_cl->transition_type == TransitionType::FadeBlack) {
                 gl_render_vid_clip(dl, active, t, tf, tex_pri, slot_pri, W, H, state, ti);

@@ -1,0 +1,3 @@
+chromadb>=0.4
+sentence-transformers>=2.2
+mcp>=1.0

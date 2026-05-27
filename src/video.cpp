@@ -992,6 +992,9 @@ uintptr_t video_load_thumb(const std::string& path, int* out_w, int* out_h) {
 }
 
 // ── Export path — FFmpeg original file ───────────────────────────────────────
+//
+// Each slot is an independent decoder so that two clips in a cross-dissolve
+// don't thrash each other's sequential-decode position.
 
 static struct ExportState {
     AVFormatContext* fmt_ctx          = nullptr;
@@ -1003,36 +1006,42 @@ static struct ExportState {
     // Sequential decode state — avoids seek+flush on every frame when exporting.
     // Set to -1 when a seek is needed (first call, new file, backward jump, etc.).
     double           last_decoded_pts = -1.0;
-} g_ex;
+    std::string      cur_path;   // path currently open in this slot (self-tracking)
+} g_ex[MAX_VIDEO_TRACKS * 2];
 
-bool video_open_export(const std::string& path) {
-    video_close_export();
+bool video_open_export(int slot, const std::string& path) {
+    if (slot < 0 || slot >= MAX_VIDEO_TRACKS * 2) return false;
+    ExportState& ex = g_ex[slot];
 
-    if (avformat_open_input(&g_ex.fmt_ctx, path.c_str(), nullptr, nullptr) < 0)
+    // If this slot already has the right file open, skip the expensive re-open.
+    if (ex.cur_path == path && ex.fmt_ctx) return true;
+    video_close_export(slot);
+
+    if (avformat_open_input(&ex.fmt_ctx, path.c_str(), nullptr, nullptr) < 0)
         return false;
-    if (avformat_find_stream_info(g_ex.fmt_ctx, nullptr) < 0) {
-        avformat_close_input(&g_ex.fmt_ctx); return false;
+    if (avformat_find_stream_info(ex.fmt_ctx, nullptr) < 0) {
+        avformat_close_input(&ex.fmt_ctx); return false;
     }
-    for (unsigned i = 0; i < g_ex.fmt_ctx->nb_streams; ++i) {
-        if (g_ex.fmt_ctx->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
-            g_ex.stream_idx = (int)i; break;
+    for (unsigned i = 0; i < ex.fmt_ctx->nb_streams; ++i) {
+        if (ex.fmt_ctx->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
+            ex.stream_idx = (int)i; break;
         }
     }
-    if (g_ex.stream_idx < 0) { avformat_close_input(&g_ex.fmt_ctx); return false; }
+    if (ex.stream_idx < 0) { avformat_close_input(&ex.fmt_ctx); return false; }
 
-    AVStream* st = g_ex.fmt_ctx->streams[g_ex.stream_idx];
+    AVStream* st = ex.fmt_ctx->streams[ex.stream_idx];
     const AVCodec* codec = avcodec_find_decoder(st->codecpar->codec_id);
-    g_ex.codec_ctx = avcodec_alloc_context3(codec);
-    avcodec_parameters_to_context(g_ex.codec_ctx, st->codecpar);
-    avcodec_open2(g_ex.codec_ctx, codec, nullptr);
+    ex.codec_ctx = avcodec_alloc_context3(codec);
+    avcodec_parameters_to_context(ex.codec_ctx, st->codecpar);
+    avcodec_open2(ex.codec_ctx, codec, nullptr);
 
-    g_ex.info.width    = g_ex.codec_ctx->width;
-    g_ex.info.height   = g_ex.codec_ctx->height;
-    g_ex.info.duration = (double)g_ex.fmt_ctx->duration / AV_TIME_BASE;
-    g_ex.info.fps      = av_q2d(st->avg_frame_rate);
+    ex.info.width    = ex.codec_ctx->width;
+    ex.info.height   = ex.codec_ctx->height;
+    ex.info.duration = (double)ex.fmt_ctx->duration / AV_TIME_BASE;
+    ex.info.fps      = av_q2d(st->avg_frame_rate);
 
     // Detect container rotation (phone portrait videos store raw as landscape + rotate tag).
-    g_ex.rotation = 0;
+    ex.rotation = 0;
 #if LIBAVUTIL_VERSION_MAJOR >= 57
     for (int i = 0; i < st->codecpar->nb_coded_side_data; ++i) {
         const AVPacketSideData& sd = st->codecpar->coded_side_data[i];
@@ -1043,59 +1052,68 @@ bool video_open_export(const std::string& path) {
         if (sd.type == AV_PKT_DATA_DISPLAYMATRIX && sd.size >= 9 * (int)sizeof(int32_t)) {
             double angle = -av_display_rotation_get((const int32_t*)sd.data);
             int rot = ((int)round(angle) % 360 + 360) % 360;
-            if (rot == 90 || rot == 180 || rot == 270) { g_ex.rotation = rot; break; }
+            if (rot == 90 || rot == 180 || rot == 270) { ex.rotation = rot; break; }
         }
     }
-    if (g_ex.rotation == 0) {
+    if (ex.rotation == 0) {
         AVDictionaryEntry* e = av_dict_get(st->metadata, "rotate", nullptr, 0);
         if (e) {
             int rot = ((atoi(e->value) % 360) + 360) % 360;
-            if (rot == 90 || rot == 180 || rot == 270) g_ex.rotation = rot;
+            if (rot == 90 || rot == 180 || rot == 270) ex.rotation = rot;
         }
     }
 
-    g_ex.sws = sws_getContext(
-        g_ex.info.width, g_ex.info.height, g_ex.codec_ctx->pix_fmt,
-        g_ex.info.width, g_ex.info.height, AV_PIX_FMT_RGBA,
+    ex.sws = sws_getContext(
+        ex.info.width, ex.info.height, ex.codec_ctx->pix_fmt,
+        ex.info.width, ex.info.height, AV_PIX_FMT_RGBA,
         SWS_BILINEAR, nullptr, nullptr, nullptr);
 
+    ex.cur_path = path;
     return true;
 }
 
-void video_close_export() {
-    if (g_ex.sws)       { sws_freeContext(g_ex.sws);       g_ex.sws       = nullptr; }
-    if (g_ex.codec_ctx) { avcodec_free_context(&g_ex.codec_ctx); }
-    if (g_ex.fmt_ctx)   { avformat_close_input(&g_ex.fmt_ctx); }
-    g_ex.stream_idx       = -1;
-    g_ex.info             = {};
-    g_ex.last_decoded_pts = -1.0;
+void video_close_export(int slot) {
+    if (slot < 0 || slot >= MAX_VIDEO_TRACKS * 2) return;
+    ExportState& ex = g_ex[slot];
+    if (ex.sws)       { sws_freeContext(ex.sws);       ex.sws       = nullptr; }
+    if (ex.codec_ctx) { avcodec_free_context(&ex.codec_ctx); }
+    if (ex.fmt_ctx)   { avformat_close_input(&ex.fmt_ctx); }
+    ex.stream_idx       = -1;
+    ex.info             = {};
+    ex.last_decoded_pts = -1.0;
+    ex.cur_path.clear();
 }
 
-static VideoFrame* decode_and_rotate(AVFrame* frm) {
+void video_close_export_all() {
+    for (int i = 0; i < MAX_VIDEO_TRACKS * 2; ++i)
+        video_close_export(i);
+}
+
+static VideoFrame* decode_and_rotate(ExportState& ex, AVFrame* frm) {
     VideoFrame* vf = new VideoFrame();
-    vf->width  = g_ex.info.width;
-    vf->height = g_ex.info.height;
+    vf->width  = ex.info.width;
+    vf->height = ex.info.height;
     vf->data   = (uint8_t*)av_malloc((size_t)vf->width * vf->height * 4 + 64);
-    AVStream* st = g_ex.fmt_ctx->streams[g_ex.stream_idx];
+    AVStream* st = ex.fmt_ctx->streams[ex.stream_idx];
     vf->pts = frm->pts * av_q2d(st->time_base);
     uint8_t* dst[1] = { vf->data };
     int      lsz[1] = { vf->width * 4 };
-    sws_scale(g_ex.sws,
+    sws_scale(ex.sws,
         (const uint8_t* const*)frm->data, frm->linesize,
         0, frm->height, dst, lsz);
-    if (g_ex.rotation != 0) {
+    if (ex.rotation != 0) {
         int ow = vf->width, oh = vf->height;
-        int nw = (g_ex.rotation == 90 || g_ex.rotation == 270) ? oh : ow;
-        int nh = (g_ex.rotation == 90 || g_ex.rotation == 270) ? ow : oh;
+        int nw = (ex.rotation == 90 || ex.rotation == 270) ? oh : ow;
+        int nh = (ex.rotation == 90 || ex.rotation == 270) ? ow : oh;
         uint8_t* rot = (uint8_t*)av_malloc((size_t)nw * nh * 4 + 64);
         if (rot) {
             for (int y = 0; y < oh; ++y) {
                 for (int x = 0; x < ow; ++x) {
                     const uint8_t* s = vf->data + (y * ow + x) * 4;
                     int dx, dy;
-                    if      (g_ex.rotation == 90)  { dx = oh-1-y; dy = x;      }
-                    else if (g_ex.rotation == 270) { dx = y;      dy = ow-1-x; }
-                    else                           { dx = ow-1-x; dy = oh-1-y; }
+                    if      (ex.rotation == 90)  { dx = oh-1-y; dy = x;      }
+                    else if (ex.rotation == 270) { dx = y;      dy = ow-1-x; }
+                    else                         { dx = ow-1-x; dy = oh-1-y; }
                     uint8_t* d = rot + (dy * nw + dx) * 4;
                     d[0]=s[0]; d[1]=s[1]; d[2]=s[2]; d[3]=s[3];
                 }
@@ -1109,11 +1127,13 @@ static VideoFrame* decode_and_rotate(AVFrame* frm) {
     return vf;
 }
 
-VideoFrame* video_decode_frame_at(double seconds) {
-    if (!g_ex.fmt_ctx) return nullptr;
+VideoFrame* video_decode_frame_at(int slot, double seconds) {
+    if (slot < 0 || slot >= MAX_VIDEO_TRACKS * 2) return nullptr;
+    ExportState& ex = g_ex[slot];
+    if (!ex.fmt_ctx) return nullptr;
 
-    AVStream* st = g_ex.fmt_ctx->streams[g_ex.stream_idx];
-    double frame_dur = (g_ex.info.fps > 0.0) ? (1.0 / g_ex.info.fps) : (1.0 / 30.0);
+    AVStream* st = ex.fmt_ctx->streams[ex.stream_idx];
+    double frame_dur = (ex.info.fps > 0.0) ? (1.0 / ex.info.fps) : (1.0 / 30.0);
 
     // Sequential decode optimisation: avoid seeking on every frame during export.
     // A seek + avcodec_flush_buffers forces the decoder to restart from a keyframe
@@ -1129,14 +1149,14 @@ VideoFrame* video_decode_frame_at(double seconds) {
     // Note: the decoder's internal B-frame buffer is preserved between calls when
     // we do not flush, so avcodec_receive_frame drains buffered frames first —
     // no frames are skipped on sequential access.
-    bool need_seek = (g_ex.last_decoded_pts < 0.0)
-                  || (seconds <= g_ex.last_decoded_pts - frame_dur * 0.5)
-                  || (seconds >  g_ex.last_decoded_pts + frame_dur * 8.0);
+    bool need_seek = (ex.last_decoded_pts < 0.0)
+                  || (seconds <= ex.last_decoded_pts - frame_dur * 0.5)
+                  || (seconds >  ex.last_decoded_pts + frame_dur * 8.0);
 
     if (need_seek) {
         int64_t ts = (int64_t)(seconds * AV_TIME_BASE);
-        av_seek_frame(g_ex.fmt_ctx, -1, ts, AVSEEK_FLAG_BACKWARD);
-        avcodec_flush_buffers(g_ex.codec_ctx);
+        av_seek_frame(ex.fmt_ctx, -1, ts, AVSEEK_FLAG_BACKWARD);
+        avcodec_flush_buffers(ex.codec_ctx);
     }
 
     AVPacket*   pkt    = av_packet_alloc();
@@ -1147,11 +1167,11 @@ VideoFrame* video_decode_frame_at(double seconds) {
     // Decode forward, keeping the last frame whose pts <= seconds.
     // Stop as soon as we decode a frame past the target (we already have the right one).
     bool done = false;
-    while (!done && av_read_frame(g_ex.fmt_ctx, pkt) >= 0) {
-        if (pkt->stream_index != g_ex.stream_idx) { av_packet_unref(pkt); continue; }
-        avcodec_send_packet(g_ex.codec_ctx, pkt);
+    while (!done && av_read_frame(ex.fmt_ctx, pkt) >= 0) {
+        if (pkt->stream_index != ex.stream_idx) { av_packet_unref(pkt); continue; }
+        avcodec_send_packet(ex.codec_ctx, pkt);
         av_packet_unref(pkt);
-        while (!done && avcodec_receive_frame(g_ex.codec_ctx, frm) == 0) {
+        while (!done && avcodec_receive_frame(ex.codec_ctx, frm) == 0) {
             double pts = frm->pts * av_q2d(st->time_base);
             if (pts > seconds + frame_dur * 0.5) {
                 // Overshot — the previous result is already the right frame.
@@ -1163,7 +1183,7 @@ VideoFrame* video_decode_frame_at(double seconds) {
             } else {
                 // This frame is at or before the target — keep it as best candidate.
                 if (result) { av_free(result->data); delete result; }
-                result = decode_and_rotate(frm);
+                result = decode_and_rotate(ex, frm);
                 av_frame_unref(frm);
                 // If pts is within half a frame of target, we're accurate enough.
                 if (pts >= seconds - frame_dur * 0.5) done = true;
@@ -1171,7 +1191,7 @@ VideoFrame* video_decode_frame_at(double seconds) {
         }
     }
 
-    if (result) g_ex.last_decoded_pts = result->pts;
+    if (result) ex.last_decoded_pts = result->pts;
 
     av_packet_free(&pkt);
     av_frame_free(&frm);
@@ -1184,8 +1204,136 @@ void video_free_frame(VideoFrame* f) {
     delete f;
 }
 
-int video_export_width()  { return g_ex.info.width; }
-int video_export_height() { return g_ex.info.height; }
+int video_export_width(int slot) {
+    if (slot < 0 || slot >= MAX_VIDEO_TRACKS * 2) return 0;
+    return g_ex[slot].info.width;
+}
+int video_export_height(int slot) {
+    if (slot < 0 || slot >= MAX_VIDEO_TRACKS * 2) return 0;
+    return g_ex[slot].info.height;
+}
+
+// ── Export bg-remove mask application ────────────────────────────────────────
+//
+// Reads per-frame grayscale JPEG from bg_masks.mjpeg in the clip's mask dir,
+// blends it into vf's alpha channel.  Cache is static, keyed by mask_dir.
+
+struct ExportMaskCache {
+    std::string           dir;
+    FILE*                 file        = nullptr;
+    std::vector<uint64_t> offsets;     // SOI byte offsets inside bg_masks.mjpeg
+    long                  scanned_sz  = 0;
+};
+static std::vector<ExportMaskCache> s_ex_masks;
+
+static ExportMaskCache* ex_mask_open(const std::string& mdir) {
+    for (auto& m : s_ex_masks)
+        if (m.dir == mdir) return &m;
+
+    ExportMaskCache nm;
+    nm.dir  = mdir;
+    nm.file = fopen((mdir + "/bg_masks.mjpeg").c_str(), "rb");
+    if (!nm.file) return nullptr;
+
+    // Initial scan for SOI markers.
+    fseeko(nm.file, 0, SEEK_END);
+    long fsz = ftell(nm.file);
+    if (fsz > 0) {
+        std::vector<uint8_t> buf((size_t)fsz);
+        fseeko(nm.file, 0, SEEK_SET);
+        size_t got = fread(buf.data(), 1, (size_t)fsz, nm.file);
+        for (size_t i = 0; i + 2 < got; ++i) {
+            if (buf[i] == 0xFF && buf[i+1] == 0xD8 && buf[i+2] == 0xFF)
+                nm.offsets.push_back((uint64_t)i);
+        }
+        nm.scanned_sz = fsz;
+    }
+    s_ex_masks.push_back(std::move(nm));
+    return &s_ex_masks.back();
+}
+
+void video_apply_bg_remove_export(VideoFrame* vf, const Clip& cl, int mask_frame_idx) {
+    if (!vf || !vf->data || !cl.bg_remove_on || cl.bg_remove_mask_dir.empty()) return;
+    if (mask_frame_idx < 0) return;
+
+    ExportMaskCache* ms = ex_mask_open(cl.bg_remove_mask_dir);
+    if (!ms || !ms->file) return;
+
+    // Incrementally scan for newly appended frames.
+    fseeko(ms->file, 0, SEEK_END);
+    long cur_sz = ftell(ms->file);
+    if (cur_sz > ms->scanned_sz) {
+        long scan_from = ms->scanned_sz > 2 ? ms->scanned_sz - 2 : 0;
+        long to_scan   = cur_sz - scan_from;
+        std::vector<uint8_t> buf((size_t)to_scan);
+        fseeko(ms->file, scan_from, SEEK_SET);
+        size_t got = fread(buf.data(), 1, (size_t)to_scan, ms->file);
+        for (size_t i = 0; i + 2 < got; ++i) {
+            if (buf[i] == 0xFF && buf[i+1] == 0xD8 && buf[i+2] == 0xFF) {
+                long abs = scan_from + (long)i;
+                if (ms->offsets.empty() || abs > (long)ms->offsets.back())
+                    ms->offsets.push_back((uint64_t)abs);
+            }
+        }
+        ms->scanned_sz = cur_sz;
+    }
+
+    if (mask_frame_idx >= (int)ms->offsets.size()) return;
+
+    // Read the JPEG for this frame.
+    uint64_t off     = ms->offsets[(size_t)mask_frame_idx];
+    bool     is_last = ((size_t)mask_frame_idx + 1 >= ms->offsets.size());
+    size_t   fsz     = 0;
+    if (!is_last) {
+        fsz = (size_t)(ms->offsets[(size_t)mask_frame_idx + 1] - off);
+    } else {
+        fseeko(ms->file, 0, SEEK_END);
+        long end = ftell(ms->file);
+        fsz = (end > (long)off) ? (size_t)(end - off) : 0;
+    }
+    if (fsz == 0) return;
+
+    static std::vector<uint8_t> s_mbuf;
+    s_mbuf.resize(fsz);
+    fseeko(ms->file, (off_t)off, SEEK_SET);
+    size_t got = fread(s_mbuf.data(), 1, fsz, ms->file);
+    if (got == 0) return;
+
+    int mw = 0, mh = 0, mc = 0;
+    uint8_t* dec = stbi_load_from_memory(s_mbuf.data(), (int)got, &mw, &mh, &mc, 1);
+    if (!dec) return;
+
+    // Apply bounding-box zeroing if enabled.
+    if (cl.bg_remove_box_on && mw > 0 && mh > 0) {
+        int xl = (int)(cl.bg_remove_box_l * mw);
+        int xr = (int)(cl.bg_remove_box_r * mw);
+        int yt = (int)(cl.bg_remove_box_t * mh);
+        int yb = (int)(cl.bg_remove_box_b * mh);
+        for (int y = 0; y < mh; ++y)
+            for (int x = 0; x < mw; ++x)
+                if (x < xl || x >= xr || y < yt || y >= yb)
+                    dec[(size_t)y * mw + x] = 0;
+    }
+
+    // Apply mask alpha into vf->data.
+    // If mask and frame dimensions differ, scale mask index with nearest-neighbour.
+    int vw = vf->width, vh = vf->height;
+    int n  = vw * vh;
+    for (int i = 0; i < n; ++i) {
+        int fy = i / vw, fx = i % vw;
+        int mx = (mw > 0) ? (int)((float)fx / vw * mw + 0.5f) : 0;
+        int my = (mh > 0) ? (int)((float)fy / vh * mh + 0.5f) : 0;
+        if (mx >= mw) mx = mw - 1;
+        if (my >= mh) my = mh - 1;
+        uint8_t alpha = dec[(size_t)my * mw + mx];
+        // Softness: blend mask alpha with full-opacity based on cl.bg_remove_softness.
+        float soft = fmaxf(0.f, fminf(1.f, cl.bg_remove_softness));
+        float fa = alpha / 255.f;
+        fa = fa < soft ? 0.f : (fa - soft) / fmaxf(1.f - soft, 0.001f);
+        vf->data[i * 4 + 3] = (uint8_t)(fmaxf(0.f, fminf(1.f, fa)) * 255.f);
+    }
+    stbi_image_free(dec);
+}
 
 void video_apply_datamosh(VideoFrame* vf, float intensity, float time_sec) {
     if (!vf || !vf->data || intensity <= 0.f) return;

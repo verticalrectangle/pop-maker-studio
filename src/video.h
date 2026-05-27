@@ -148,17 +148,31 @@ uintptr_t video_load_thumb(const std::string& jpeg_or_png_path,
                            int* out_w = nullptr, int* out_h = nullptr);
 
 // ── Export path ───────────────────────────────────────────────────────────────
+//
+// Each export slot (0 .. MAX_VIDEO_TRACKS*2-1) has its own independent FFmpeg
+// decoder context.  This prevents transition frames from disturbing each other's
+// sequential-decode state (no seek thrash when two clips overlap).
+//
+// slot defaults to 0 so callers outside render.cpp (snapshot path, tests) work
+// without change.
 
-bool  video_open_export(const std::string& path);
-void  video_close_export();
+bool  video_open_export   (int slot, const std::string& path);
+void  video_close_export  (int slot = 0);
+void  video_close_export_all();  // close every slot (call at end of render)
 
 // Frame-accurate single-frame decode.  Caller must call video_free_frame().
-VideoFrame* video_decode_frame_at(double seconds);
+VideoFrame* video_decode_frame_at(int slot, double seconds);
 void        video_free_frame(VideoFrame* f);  // av_free(data) + delete
 
 // Returns dimensions of the currently open export file (0,0 if none open).
-int video_export_width();
-int video_export_height();
+int video_export_width (int slot = 0);
+int video_export_height(int slot = 0);
+
+// Apply AI bg-remove alpha mask to a decoded export frame in-place.
+// Reads the per-frame grayscale JPEG from cl.bg_remove_mask_dir / bg_masks.mjpeg.
+// The mask is bilinearly scaled to match vf dimensions if they differ.
+// No-op if bg_remove_on is false, mask_dir is empty, or the frame is not found.
+void video_apply_bg_remove_export(VideoFrame* vf, const Clip& cl, int mask_frame_idx);
 
 // Apply CPU JPEG datamosh corruption to an RGBA VideoFrame in-place.
 // Encodes to JPEG, corrupts scan bytes, decodes back.  Modifies vf->data.
