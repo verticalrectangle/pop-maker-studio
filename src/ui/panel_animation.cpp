@@ -172,6 +172,38 @@ void generate_typography(AppState& state) {
 
     if (raw.empty()) return;
 
+    // Apply the same timeline offset as apply_subtitle_mode:
+    // tl_offset = clip.start - clip.in_point shifts source-relative whisper
+    // timestamps to the clip's position on the timeline.  Without this,
+    // lyrics are placed at their source positions regardless of where the
+    // clip brick sits on the timeline.
+    {
+        float tl_offset = 0.f;
+        for (auto& t : state.tracks) {
+            bool found = false;
+            for (auto& c : t.clips) {
+                if ((c.clip_type == ClipType::Audio || c.clip_type == ClipType::Video) &&
+                    c.source_id == src) {
+                    tl_offset = c.start - c.in_point;
+                    found = true;
+                    break;
+                }
+            }
+            if (found) break;
+        }
+        if (tl_offset != 0.f) {
+            for (auto& c : raw) {
+                c.start += tl_offset;
+                c.end   += tl_offset;
+            }
+        }
+    }
+
+    // Drop clips that land entirely before the timeline start (words before
+    // in_point shifted to negative time after applying tl_offset).
+    raw.erase(std::remove_if(raw.begin(), raw.end(),
+        [](const Clip& c){ return c.end < 0.f; }), raw.end());
+
     auto grouped = from_segments ? raw
                                  : group_words(raw, grouping, pr->custom_n, pr->pause_gap, pr->max_words);
 
