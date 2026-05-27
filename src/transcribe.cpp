@@ -30,9 +30,16 @@ bool whisper_model_exists() { return fs::exists(whisper_model_path()); }
 // ── Audio helpers ─────────────────────────────────────────────────────────────
 
 // Decode audio to 16 kHz mono float32 via ffmpeg.
-static std::vector<float> decode_16k(const std::string& path) {
-    std::string cmd = "ffmpeg -hide_banner -loglevel error"
-                      " -i \"" + path + "\""
+// clip_in / clip_dur: when clip_dur > 0, only decode [clip_in, clip_in+clip_dur] seconds.
+static std::vector<float> decode_16k(const std::string& path,
+                                      float clip_in = 0.f, float clip_dur = 0.f) {
+    std::string seek_args;
+    if (clip_in  > 0.f) seek_args += " -ss " + std::to_string(clip_in);
+    std::string dur_args;
+    if (clip_dur > 0.f) dur_args  += " -t "  + std::to_string(clip_dur);
+
+    std::string cmd = "ffmpeg -hide_banner -loglevel error" + seek_args +
+                      " -i \"" + path + "\"" + dur_args +
                       " -vn -ar 16000 -ac 1 -f f32le pipe:1 2>/dev/null";
     FILE* fp = popen(cmd.c_str(), "r");
     if (!fp) return {};
@@ -52,7 +59,9 @@ static std::vector<float> decode_16k(const std::string& path) {
 static bool separate_channels(
     const std::string& in,
     const std::string& outdir,
-    PipelineStatus&    status)
+    PipelineStatus&    status,
+    float clip_in  = 0.f,
+    float clip_dur = 0.f)
 {
     std::string voc  = outdir + "/vocals.wav";
     std::string inst = outdir + "/instrumental.wav";
@@ -60,7 +69,7 @@ static bool separate_channels(
     std::string err = separate_run(in, voc, inst, [&](float p, const std::string& msg) {
         status.progress = 0.05f + p * 0.15f;
         status.message  = msg;
-    });
+    }, clip_in, clip_dur);
 
     if (!err.empty()) {
         status.stage = PipelineStage::Error;
@@ -154,7 +163,9 @@ static void do_transcribe(
     std::string&       out_words_json,
     std::string&       out_vocals_wav,
     PipelineMode       mode,
-    double             proxy_fps)
+    double             proxy_fps,
+    float              clip_in,
+    float              clip_dur)
 {
     fs::path audio(audio_path);
     fs::path outdir = audio.parent_path() / audio.stem();
@@ -170,7 +181,7 @@ static void do_transcribe(
         status.stage    = PipelineStage::Extract;
         status.progress = 0.02f;
         status.message  = "Separating vocals (MDX-Net)…";
-        if (!separate_channels(audio_path, outdir.string(), status)) {
+        if (!separate_channels(audio_path, outdir.string(), status, clip_in, clip_dur)) {
             g_running.store(false);
             return;
         }
@@ -212,10 +223,16 @@ static void do_transcribe(
     status.progress = 0.25f;
     status.message  = "Loading audio…";
 
-    // Transcribe vocals if we separated, else original
-    std::string tx_src = (mode == PipelineMode::Both && fs::exists(out_vocals_wav))
-                       ? out_vocals_wav : audio_path;
-    std::vector<float> pcm = decode_16k(tx_src);
+    // Transcribe vocals if we separated, else original.
+    // When using the separated vocals.wav, the clip window was already applied
+    // during separation — no extra seek/duration args needed for decode.
+    // When transcribing the original (TranscribeOnly), pass the clip window so
+    // we only decode the brick's portion of the source.
+    bool use_vocals = (mode == PipelineMode::Both && fs::exists(out_vocals_wav));
+    std::string tx_src = use_vocals ? out_vocals_wav : audio_path;
+    float tx_in  = use_vocals ? 0.f : clip_in;
+    float tx_dur = use_vocals ? 0.f : clip_dur;
+    std::vector<float> pcm = decode_16k(tx_src, tx_in, tx_dur);
     if (pcm.empty()) {
         status.stage = PipelineStage::Error;
         status.error = "Failed to decode audio";
@@ -299,6 +316,22 @@ static void do_transcribe(
         }
     }
 
+    // Whisper timestamps are 0-based relative to the start of the decoded audio.
+    // When we clipped the source to [clip_in, clip_in+clip_dur], timestamp 0 in
+    // the JSON represents source position clip_in.  Add clip_in back so that the
+    // JSON holds source-relative timestamps — apply_subtitle_mode's tl_offset
+    // math (tl_offset = clip.start - clip.in_point) then works unchanged.
+    if (clip_in > 0.f) {
+        for (auto& w : words_arr) {
+            w["start"] = w.value("start", 0.f) + clip_in;
+            w["end"]   = w.value("end",   0.f) + clip_in;
+        }
+        for (auto& s : segs_arr) {
+            s["start"] = s.value("start", 0.f) + clip_in;
+            s["end"]   = s.value("end",   0.f) + clip_in;
+        }
+    }
+
     { std::ofstream f(out_words_json); f << words_arr.dump(2); }
     { std::ofstream f(segs_json);      f << segs_arr.dump(2); }
 
@@ -316,7 +349,9 @@ void transcribe_start(
     std::string&       out_words_json,
     std::string&       out_vocals_wav,
     PipelineMode       mode,
-    double             proxy_fps)
+    double             proxy_fps,
+    float              clip_in,
+    float              clip_dur)
 {
     if (g_running.load()) return;
     g_cancel.store(false);
@@ -329,7 +364,7 @@ void transcribe_start(
     g_thread = std::thread(do_transcribe,
         audio_path, std::ref(status),
         std::ref(out_words_json), std::ref(out_vocals_wav),
-        mode, proxy_fps);
+        mode, proxy_fps, clip_in, clip_dur);
     g_thread.detach();
 }
 

@@ -11,13 +11,19 @@ enum class PipelineMode {
 // Kick off ml_pipeline.py as a subprocess.
 // Writes progress to `status` from a background thread.
 // out_words_json / out_vocals_wav are set before the thread reads them.
+// clip_in / clip_dur (seconds): when clip_dur > 0, only the source region
+// [clip_in, clip_in+clip_dur] is decoded, separated, and transcribed.
+// Whisper timestamps in the output JSON are shifted back to be source-relative
+// so that apply_subtitle_mode's tl_offset logic works unchanged.
 void transcribe_start(
     const std::string& audio_path,
     PipelineStatus&    status,
     std::string&       out_words_json,
     std::string&       out_vocals_wav,
     PipelineMode       mode      = PipelineMode::Both,
-    double             proxy_fps = 0.0
+    double             proxy_fps = 0.0,
+    float              clip_in   = 0.f,
+    float              clip_dur  = 0.f
 );
 
 void transcribe_cancel();

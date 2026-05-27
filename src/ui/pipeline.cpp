@@ -751,8 +751,26 @@ void kick_pipeline(AppState& state, const std::string& path, PipelineMode mode) 
         if (proxy_load(state.video_path, pi)) proxy_fps = pi.fps;
     }
 
+    // Find the clip this pipeline was triggered on to get its in_point and
+    // timeline duration.  We only process the portion of the source the clip
+    // brick actually uses — separation and transcription are both scoped to
+    // [in_point, in_point + (clip.end - clip.start)].
+    float clip_in  = 0.f;
+    float clip_dur = 0.f;
+    for (auto& t : state.tracks) {
+        for (auto& c : t.clips) {
+            if ((c.clip_type == ClipType::Audio || c.clip_type == ClipType::Video) &&
+                c.source_id == path) {
+                clip_in  = c.in_point;
+                clip_dur = c.end - c.start;
+                break;
+            }
+        }
+        if (clip_dur > 0.f) break;
+    }
+
     transcribe_start(path, state.pipeline, state.words_json_path, state.vocals_path,
-                     mode, proxy_fps);
+                     mode, proxy_fps, clip_in, clip_dur);
 }
 
 // ── Pipeline inline strip ─────────────────────────────────────────────────────

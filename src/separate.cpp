@@ -47,9 +47,17 @@ std::string separate_download(
 
 // ── Audio I/O ─────────────────────────────────────────────────────────────────
 
-static std::vector<float> read_stereo(const std::string& p, int& n) {
-    std::string cmd = "ffmpeg -hide_banner -loglevel error"
-                      " -i \"" + p + "\""
+static std::vector<float> read_stereo(const std::string& p, int& n,
+                                       float clip_in = 0.f, float clip_dur = 0.f) {
+    // Build optional seek/duration args.  -ss before -i = fast keyframe seek;
+    // -t after -i = precise output duration limit.
+    std::string seek_args;
+    if (clip_in  > 0.f) seek_args += " -ss " + std::to_string(clip_in);
+    std::string dur_args;
+    if (clip_dur > 0.f) dur_args  += " -t "  + std::to_string(clip_dur);
+
+    std::string cmd = "ffmpeg -hide_banner -loglevel error" + seek_args +
+                      " -i \"" + p + "\"" + dur_args +
                       " -vn -ar " + std::to_string(kRate) +
                       " -ac 2 -f f32le pipe:1 2>/dev/null";
     FILE* fp = popen(cmd.c_str(), "r");
@@ -152,7 +160,9 @@ std::string separate_run(
     const std::string& input_path,
     const std::string& vocals_out,
     const std::string& instrumental_out,
-    std::function<void(float, const std::string&)> on_progress)
+    std::function<void(float, const std::string&)> on_progress,
+    float clip_in,
+    float clip_dur)
 {
     auto prog = [&](float p, const std::string& m) {
         if (on_progress) on_progress(p, m);
@@ -166,7 +176,7 @@ std::string separate_run(
     // ── Load audio ────────────────────────────────────────────────────────────
     prog(0.20f, "Loading audio…");
     int N = 0;
-    auto interleaved = read_stereo(input_path, N);
+    auto interleaved = read_stereo(input_path, N, clip_in, clip_dur);
     if (N == 0) return "Failed to decode audio";
 
     std::vector<float> L(N), R(N);
