@@ -15,6 +15,19 @@ void draw_text_overlays(ImDrawList* dl, const AppState& state, float t,
 {
     if (state.tracks.empty()) return;
 
+    // If any Lyrics clip is active at time t, suppress Subtitle clips.
+    // This prevents the auto-generated subtitle track from double-rendering
+    // when the user has applied typography on top of it.
+    bool lyrics_active = false;
+    for (auto& track : state.tracks) {
+        if (!track.visible) continue;
+        for (auto& cl : track.clips) {
+            if (cl.clip_type == ClipType::Lyrics && t >= cl.start && t < cl.end)
+                { lyrics_active = true; break; }
+        }
+        if (lyrics_active) break;
+    }
+
     int text_rendered = 0;
 
     for (int ti = (int)state.tracks.size() - 1; ti >= 0; --ti) {
@@ -26,6 +39,8 @@ void draw_text_overlays(ImDrawList* dl, const AppState& state, float t,
             auto ct = track.clips[ci].clip_type;
             if (ct != ClipType::Text && ct != ClipType::Lyrics && ct != ClipType::Subtitle)
                 continue;
+            // Suppress subtitle track when lyrics are present at this time.
+            if (ct == ClipType::Subtitle && lyrics_active) continue;
             if (t >= track.clips[ci].start && t < track.clips[ci].end) {
                 active = &track.clips[ci];
                 break;

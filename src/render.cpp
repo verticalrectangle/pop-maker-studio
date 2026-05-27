@@ -1430,7 +1430,8 @@ static struct GlExport {
 static void gl_cleanup_export();
 static bool gl_render_vid_clip(ImDrawList& dl, const Clip* cl, float at_time,
                                 float alpha_mul, GLuint tex_id, int fx_slot,
-                                float W, float H, const AppState& state, int ti);
+                                float W, float H, const AppState& state, int ti,
+                                bool use_scene = false);
 
 // ── GL snapshot — identical to preview ───────────────────────────────────────
 
@@ -1691,7 +1692,8 @@ static bool is_still_ext(const std::string& path) {
 
 static bool gl_render_vid_clip(ImDrawList& dl, const Clip* cl, float at_time,
                                 float alpha_mul, GLuint tex_id, int fx_slot,
-                                float W, float H, const AppState& state, int ti)
+                                float W, float H, const AppState& state, int ti,
+                                bool use_scene)
 {
     if (!cl || cl->text.empty()) return false;
     float src_t = cl->in_point + (at_time - cl->start) * cl->speed;
@@ -1739,11 +1741,16 @@ static bool gl_render_vid_clip(ImDrawList& dl, const Clip* cl, float at_time,
         auto rot_pt = [&](float ox, float oy) -> ImVec2 {
             return { cx + ox*cos_r - oy*sin_r, cy + ox*sin_r + oy*cos_r };
         };
-        ImVec2 uv0{0,0}, uv1{1,1};
-        ImU32 col = IM_COL32(255,255,255,(int)(alpha*255));
-        dl.AddImageQuad((ImTextureID)(uintptr_t)cur_tex,
-            rot_pt(-hw,-hh), rot_pt(hw,-hh), rot_pt(hw,hh), rot_pt(-hw,hh),
-            uv0, {uv1.x,uv0.y}, uv1, {uv0.x,uv1.y}, col);
+        if (use_scene) {
+            scene_add_layer(cur_tex, cx, cy, hw, hh, cos_r, sin_r,
+                            fmaxf(0.f, fminf(1.f, alpha)));
+        } else {
+            ImVec2 uv0{0,0}, uv1{1,1};
+            ImU32 col = IM_COL32(255,255,255,(int)(alpha*255));
+            dl.AddImageQuad((ImTextureID)(uintptr_t)cur_tex,
+                rot_pt(-hw,-hh), rot_pt(hw,-hh), rot_pt(hw,hh), rot_pt(-hw,hh),
+                uv0, {uv1.x,uv0.y}, uv1, {uv0.x,uv1.y}, col);
+        }
         g_gl_ex.cur_vid_path.clear();
         return true;
     }
@@ -1821,10 +1828,15 @@ static bool gl_render_vid_clip(ImDrawList& dl, const Clip* cl, float at_time,
     auto rot_pt = [&](float ox, float oy) -> ImVec2 {
         return { cx + ox*cos_r - oy*sin_r, cy + ox*sin_r + oy*cos_r };
     };
-    ImU32 col = IM_COL32(255, 255, 255, (int)(fmaxf(0.f, fminf(1.f, alpha)) * 255.f));
-    dl.AddImageQuad(ImTextureRef((ImTextureID)draw_tex),
-        rot_pt(-hw,-hh), rot_pt(hw,-hh), rot_pt(hw,hh), rot_pt(-hw,hh),
-        {0,0}, {1,0}, {1,1}, {0,1}, col);
+    if (use_scene) {
+        scene_add_layer(draw_tex, cx, cy, hw, hh, cos_r, sin_r,
+                        fmaxf(0.f, fminf(1.f, alpha)));
+    } else {
+        ImU32 col = IM_COL32(255, 255, 255, (int)(fmaxf(0.f, fminf(1.f, alpha)) * 255.f));
+        dl.AddImageQuad(ImTextureRef((ImTextureID)draw_tex),
+            rot_pt(-hw,-hh), rot_pt(hw,-hh), rot_pt(hw,hh), rot_pt(-hw,hh),
+            {0,0}, {1,0}, {1,1}, {0,1}, col);
+    }
     return true;
 }
 
@@ -1883,19 +1895,31 @@ void render_start_gl(AppState& state) {
     glBindTexture(GL_TEXTURE_2D, 0);
 
     // ── Collect audio inputs ──────────────────────────────────────────────────
-    struct AudioIn { std::string path; float vol = 1.f; };
+    // Each audio clip gets its own ffmpeg input with correct -ss / -to / -itsoffset
+    // so that:
+    //   ss    = clip.in_point   (start position in the source file)
+    //   to    = ss + (end-start)*speed   (end position in the source file)
+    //   delay = clip.start      (-itsoffset: where it lands on the output timeline)
+    struct AudioIn {
+        std::string path;
+        float vol   = 1.f;
+        float ss    = 0.f;   // source seek (-ss before -i)
+        float to    = -1.f;  // source end  (-to before -i, -1 = no limit)
+        float delay = 0.f;   // timeline offset (-itsoffset before -i)
+    };
     std::vector<AudioIn> audio_ins;
     if (!state.audio_path.empty())
-        audio_ins.push_back({state.audio_path, 1.f});
+        audio_ins.push_back({state.audio_path, 1.f, 0.f, -1.f, 0.f});
     for (int ti = (int)state.tracks.size() - 1; ti >= 0; --ti) {
         for (auto& cl : state.tracks[ti].clips) {
             if (cl.clip_type != ClipType::Audio || cl.text.empty()) continue;
             if (!fs::exists(cl.text)) continue;
-            float vol = state.tracks[ti].muted ? 0.f : cl.volume;
-            bool found = false;
-            for (auto& ai : audio_ins)
-                if (ai.path == cl.text) { found = true; break; }
-            if (!found) audio_ins.push_back({cl.text, vol});
+            float vol   = state.tracks[ti].muted ? 0.f : cl.volume;
+            float ss    = cl.in_point;
+            float dur   = (cl.end - cl.start) * fmaxf(0.01f, cl.speed);
+            float to    = ss + dur;
+            float delay = cl.start;
+            audio_ins.push_back({cl.text, vol, ss, to, delay});
         }
     }
 
@@ -1920,6 +1944,19 @@ void render_start_gl(AppState& state) {
     args.push_back("-r");       args.push_back(std::to_string(fps));
     args.push_back("-i");       args.push_back("pipe:0");
     for (auto& ai : audio_ins) {
+        // -itsoffset must come before -ss/-to/-i; a value of 0 is harmless.
+        if (ai.delay > 0.001f) {
+            char buf[64]; snprintf(buf, sizeof(buf), "%.6f", (double)ai.delay);
+            args.push_back("-itsoffset"); args.push_back(buf);
+        }
+        if (ai.ss > 0.001f) {
+            char buf[64]; snprintf(buf, sizeof(buf), "%.6f", (double)ai.ss);
+            args.push_back("-ss"); args.push_back(buf);
+        }
+        if (ai.to > 0.001f) {
+            char buf[64]; snprintf(buf, sizeof(buf), "%.6f", (double)ai.to);
+            args.push_back("-to"); args.push_back(buf);
+        }
         args.push_back("-i"); args.push_back(ai.path);
     }
     args.push_back("-map"); args.push_back("0:v");
@@ -2122,35 +2159,44 @@ void render_tick_gl(AppState& state) {
 
     rlog("frame %d  t=%.3f\n", g_gl_ex.current_frame, (double)t);
 
-    // Save previous GL state
+    // Save previous GL state (restored at end of tick)
     GLint prev_fbo = 0;
     glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prev_fbo);
     GLint prev_vp[4];
     glGetIntegerv(GL_VIEWPORT, prev_vp);
 
-    // Bind export FBO
-    glBindFramebuffer(GL_FRAMEBUFFER, g_gl_ex.fbo);
-    glViewport(0, 0, g_gl_ex.out_w, g_gl_ex.out_h);
-    glClearColor(0.f, 0.f, 0.f, 1.f);
-    glClear(GL_COLOR_BUFFER_BIT);
+    rlog("  state_saved ok\n");
 
-    // ── Build draw list ───────────────────────────────────────────────────────
-    ImDrawList dl(ImGui::GetDrawListSharedData());
-    dl._ResetForNewFrame();
-    dl.PushClipRect({0.f, 0.f}, {W, H});
-    dl.PushTexture(ImGui::GetIO().Fonts->TexRef);
+    // ── Phase 1: Composite video clips into the scene FBO ─────────────────────
+    // Use scene_begin/scene_add_layer rather than batching into an ImDrawList.
+    // This ensures:
+    //   (a) fx_apply results are consumed (scene_add_layer reads them) before
+    //       the next clip's fx_apply overwrites the same slot — no texture aliasing.
+    //   (b) Global FX are applied to the scene texture (not g_gl_ex.color_tex
+    //       while it's still attached to the export FBO) — no undefined read.
+    scene_begin(g_gl_ex.out_w, g_gl_ex.out_h);
 
-    rlog("  bind_fbo ok\n");
+    rlog("  scene_begin ok\n");
 
-    // ── Render video clips (high→low track index = background first) ──────────
+    // Dummy draw list — only used by the !use_scene (snapshot) path; ignored here.
+    ImDrawList dummy_dl(ImGui::GetDrawListSharedData());
+    dummy_dl._ResetForNewFrame();
+    dummy_dl.PushClipRect({0.f, 0.f}, {W, H});
+    dummy_dl.PushTexture(ImGui::GetIO().Fonts->TexRef);
+
+    // ── Render video clips into scene (high→low track index = background first)
     for (int ti = (int)state.tracks.size() - 1; ti >= 0; --ti) {
         const auto& track = state.tracks[ti];
         if (!track.visible) continue;
 
-        int slot_pri = ti % MAX_VIDEO_TRACKS;
-        int slot_sec = MAX_VIDEO_TRACKS + slot_pri;
-        GLuint tex_pri = g_gl_ex.vid_tex[slot_pri];
-        GLuint tex_sec = g_gl_ex.vid_tex[slot_sec];
+        // Slots: each track gets its own stable fx buffer so glass effects don't
+        // collide across tracks.  kSceneFxSlot is reserved for the global pass.
+        int slot_pri = ti % kSceneFxSlot;
+        int slot_sec = (ti % kSceneFxSlot) ^ 1;  // neighbouring slot for transitions
+        // Ensure slot_sec doesn't equal slot_pri when kSceneFxSlot==1 (degenerate)
+        if (slot_sec == slot_pri) slot_sec = (slot_pri + 1) % kSceneFxSlot;
+        GLuint tex_pri = g_gl_ex.vid_tex[slot_pri % (MAX_VIDEO_TRACKS * 2)];
+        GLuint tex_sec = g_gl_ex.vid_tex[slot_sec % (MAX_VIDEO_TRACKS * 2)];
 
         const Clip* active = nullptr;
         int active_ci = -1;
@@ -2195,6 +2241,7 @@ void render_tick_gl(AppState& state) {
             }
         }
 
+        // All calls use use_scene=true — result goes to scene_add_layer, not dl.
         if (in_trans_out && next_cl) {
             float pre  = active->transition_pre, post = active->transition_post;
             float cut  = active->end;
@@ -2202,89 +2249,102 @@ void render_tick_gl(AppState& state) {
             float t_b  = fmaxf(0.f, fminf(1.f, (t - cut)          / fmaxf(post, 1e-5f)));
 
             if (active->transition_type == TransitionType::Dissolve) {
-                gl_render_vid_clip(dl, active,  t, 1.f - t_a, tex_pri, slot_pri, W, H, state, ti);
-                g_gl_ex.cur_vid_path.clear();  // force reopen for second clip
-                gl_render_vid_clip(dl, next_cl, t, t_b > 0.f ? t_b : t_a, tex_sec, slot_sec, W, H, state, ti);
+                gl_render_vid_clip(dummy_dl, active,  t, 1.f-t_a, tex_pri, slot_pri, W, H, state, ti, true);
+                g_gl_ex.cur_vid_path.clear();
+                gl_render_vid_clip(dummy_dl, next_cl, t, t_b>0.f?t_b:t_a, tex_sec, slot_sec, W, H, state, ti, true);
             } else if (active->transition_type == TransitionType::FadeBlack) {
-                gl_render_vid_clip(dl, active,  t, 1.f - t_a, tex_pri, slot_pri, W, H, state, ti);
+                gl_render_vid_clip(dummy_dl, active,  t, 1.f-t_a, tex_pri, slot_pri, W, H, state, ti, true);
                 g_gl_ex.cur_vid_path.clear();
-                gl_render_vid_clip(dl, next_cl, t, t_b, tex_sec, slot_sec, W, H, state, ti);
+                gl_render_vid_clip(dummy_dl, next_cl, t, t_b, tex_sec, slot_sec, W, H, state, ti, true);
             } else { // DipWhite
-                gl_render_vid_clip(dl, active, t, 1.f - t_a, tex_pri, slot_pri, W, H, state, ti);
+                gl_render_vid_clip(dummy_dl, active, t, 1.f-t_a, tex_pri, slot_pri, W, H, state, ti, true);
                 float white_a = t_a * (1.f - t_b);
-                if (white_a > 0.01f)
-                    dl.AddRectFilled({0.f, 0.f}, {W, H},
-                                     IM_COL32(255,255,255,(int)(white_a * 255.f)));
+                if (white_a > 0.01f) scene_add_solid(1.f, 1.f, 1.f, white_a);
                 g_gl_ex.cur_vid_path.clear();
-                gl_render_vid_clip(dl, next_cl, t, t_b, tex_sec, slot_sec, W, H, state, ti);
+                gl_render_vid_clip(dummy_dl, next_cl, t, t_b, tex_sec, slot_sec, W, H, state, ti, true);
             }
         } else if (in_trans_in && prev_cl) {
             float tf = fmaxf(0.f, fminf(1.f,
                 (t - active->start) / fmaxf(prev_cl->transition_post, 1e-5f)));
             if (prev_cl->transition_type == TransitionType::Dissolve) {
-                gl_render_vid_clip(dl, prev_cl, fminf(t, prev_cl->end - 1e-4f),
-                                   1.f - tf, tex_sec, slot_sec, W, H, state, ti);
+                gl_render_vid_clip(dummy_dl, prev_cl, fminf(t, prev_cl->end-1e-4f),
+                                   1.f-tf, tex_sec, slot_sec, W, H, state, ti, true);
                 g_gl_ex.cur_vid_path.clear();
-                gl_render_vid_clip(dl, active, t, tf, tex_pri, slot_pri, W, H, state, ti);
+                gl_render_vid_clip(dummy_dl, active, t, tf, tex_pri, slot_pri, W, H, state, ti, true);
             } else if (prev_cl->transition_type == TransitionType::FadeBlack) {
-                gl_render_vid_clip(dl, active, t, tf, tex_pri, slot_pri, W, H, state, ti);
+                gl_render_vid_clip(dummy_dl, active, t, tf, tex_pri, slot_pri, W, H, state, ti, true);
             } else { // DipWhite
                 float white_a = 1.f - tf;
-                if (white_a > 0.01f)
-                    dl.AddRectFilled({0.f, 0.f}, {W, H},
-                                     IM_COL32(255,255,255,(int)(white_a * 255.f)));
-                gl_render_vid_clip(dl, active, t, tf, tex_pri, slot_pri, W, H, state, ti);
+                if (white_a > 0.01f) scene_add_solid(1.f, 1.f, 1.f, white_a);
+                gl_render_vid_clip(dummy_dl, active, t, tf, tex_pri, slot_pri, W, H, state, ti, true);
             }
         } else {
-            gl_render_vid_clip(dl, active, t, 1.f, tex_pri, slot_pri, W, H, state, ti);
+            gl_render_vid_clip(dummy_dl, active, t, 1.f, tex_pri, slot_pri, W, H, state, ti, true);
         }
     }
 
     rlog("  vid_clips_done\n");
 
-    // ── Render text overlays ──────────────────────────────────────────────────
-    draw_text_overlays(&dl, state, t, {0.f, 0.f}, W, H);
-
-    rlog("  text_overlays_done  vtx=%d idx=%d cmd=%d\n",
-         dl.VtxBuffer.Size, dl.IdxBuffer.Size, dl.CmdBuffer.Size);
-
-    // Finalise draw list
-    dl.PopTexture();
-    rlog("  pop_texture ok\n");
-    dl.PopClipRect();
-    rlog("  pop_cliprect ok\n");
-
-    // ── Submit draw list to GL ────────────────────────────────────────────────
-    ImDrawData dd;
-    rlog("  imgui_drawdata_init ok\n");
-    dd.DisplayPos        = {0.f, 0.f};
-    dd.DisplaySize       = {W, H};
-    dd.FramebufferScale  = {1.f, 1.f};
-    // Use atlas->TexList directly — PlatformIO.Textures is rebuilt at the END
-    // of each frame, so it misses new ImTextureData* objects created by
-    // draw_text_overlays when first rendering at the export resolution (new
-    // font size triggers ImFontAtlasTextureAdd → WantCreate + TexID=Invalid).
-    dd.Textures          = &ImGui::GetIO().Fonts->TexList;
-    dd.AddDrawList(&dl);
-    rlog("  imgui_add_draw_list ok  cmds=%d\n", dl.CmdBuffer.Size);
-    ImGui_ImplOpenGL3_RenderDrawData(&dd);
-
-    rlog("  imgui_render_done\n");
-
-    // ── Global FX post-process ─────────────────────────────────────────────────
-    // Apply colour grade / blur / creative FX to the fully composited frame.
-    // fx_apply writes to kSceneFxSlot; fx_blit copies the result back.
+    // ── Phase 2: Global FX via scene_apply_fx ────────────────────────────────
+    // scene_apply_fx reads from the scene texture (NOT from g_gl_ex.color_tex
+    // while it's still FBO-attached), so there's no undefined feedback loop.
     {
-        EffectAccum    global_ea  = collect_effects    (state, t, (int)state.tracks.size());
+        EffectAccum     global_ea  = collect_effects    (state, t, (int)state.tracks.size());
         CreativeFXAccum global_cfx = collect_creative_fx(state, t, (int)state.tracks.size());
-        uintptr_t src = (uintptr_t)g_gl_ex.color_tex;
-        uintptr_t out = fx_apply(src, kSceneFxSlot,
-                                 g_gl_ex.out_w, g_gl_ex.out_h, global_ea, global_cfx, t);
-        if (out != src)
-            fx_blit(out, g_gl_ex.fbo, g_gl_ex.out_w, g_gl_ex.out_h);
+        scene_apply_fx(g_gl_ex.out_w, g_gl_ex.out_h, global_ea, global_cfx, t);
     }
 
     rlog("  fx_done\n");
+
+    // ── Phase 3: Blit composited scene into the export FBO ────────────────────
+    // fx_blit saves/restores FBO; after it returns we explicitly re-bind the
+    // export FBO so the text overlay ImGui pass draws into it.
+    glBindFramebuffer(GL_FRAMEBUFFER, g_gl_ex.fbo);
+    glViewport(0, 0, g_gl_ex.out_w, g_gl_ex.out_h);
+    glClearColor(0.f, 0.f, 0.f, 1.f);
+    glClear(GL_COLOR_BUFFER_BIT);
+    if (uintptr_t scene_tex = scene_result())
+        fx_blit(scene_tex, g_gl_ex.fbo, g_gl_ex.out_w, g_gl_ex.out_h);
+
+    rlog("  scene_blit ok\n");
+
+    // Re-bind export FBO for text overlay rendering (fx_blit restores prev_fbo
+    // which was the display framebuffer, not our export FBO).
+    glBindFramebuffer(GL_FRAMEBUFFER, g_gl_ex.fbo);
+    glViewport(0, 0, g_gl_ex.out_w, g_gl_ex.out_h);
+
+    // ── Phase 4: Text overlays (ImDrawList on top of the composited frame) ────
+    {
+        ImDrawList dl(ImGui::GetDrawListSharedData());
+        dl._ResetForNewFrame();
+        dl.PushClipRect({0.f, 0.f}, {W, H});
+        dl.PushTexture(ImGui::GetIO().Fonts->TexRef);
+
+        draw_text_overlays(&dl, state, t, {0.f, 0.f}, W, H);
+
+        rlog("  text_overlays_done  vtx=%d idx=%d cmd=%d\n",
+             dl.VtxBuffer.Size, dl.IdxBuffer.Size, dl.CmdBuffer.Size);
+
+        dl.PopTexture();
+        rlog("  pop_texture ok\n");
+        dl.PopClipRect();
+        rlog("  pop_cliprect ok\n");
+
+        ImDrawData dd;
+        rlog("  imgui_drawdata_init ok\n");
+        dd.DisplayPos       = {0.f, 0.f};
+        dd.DisplaySize      = {W, H};
+        dd.FramebufferScale = {1.f, 1.f};
+        // Use atlas->TexList — PlatformIO.Textures is stale for new baked sizes.
+        dd.Textures         = &ImGui::GetIO().Fonts->TexList;
+        dd.AddDrawList(&dl);
+        rlog("  imgui_add_draw_list ok  cmds=%d\n", dl.CmdBuffer.Size);
+        ImGui_ImplOpenGL3_RenderDrawData(&dd);
+        rlog("  imgui_render_done\n");
+    }
+
+    dummy_dl.PopTexture();
+    dummy_dl.PopClipRect();
 
     // ── Kick async GPU→PBO DMA (non-blocking — returns immediately) ───────────
     // The GPU will fill pbo[current_frame % 2] while the CPU processes the next
