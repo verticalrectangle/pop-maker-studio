@@ -94,6 +94,31 @@ void draw_text_overlays(ImDrawList* dl, const AppState& state, float t,
             if (txt_lines.empty()) txt_lines.push_back("");
         }
 
+        // Post-wrap font scale: ensure no rendered line overflows the canvas given the anchor.
+        // Mirrors canvas.cpp lines ~1052-1073.
+        {
+            float max_fit_w;
+            if (active->sub_anchor_h == 0)
+                max_fit_w = (1.f - active->sub_pos_x - SAFE_SIDE) * w;
+            else if (active->sub_anchor_h == 2)
+                max_fit_w = (active->sub_pos_x - SAFE_SIDE) * w;
+            else
+                max_fit_w = 2.f * fminf(active->sub_pos_x - SAFE_SIDE,
+                                        1.f - active->sub_pos_x - SAFE_SIDE) * w;
+            max_fit_w = fminf(max_fit_w, max_line_w);   // also cap at wrap column
+            max_fit_w = fmaxf(max_fit_w, 40.f);          // safety floor
+
+            float max_rendered_w = 0.f;
+            for (auto& ln : txt_lines)
+                max_rendered_w = fmaxf(max_rendered_w,
+                    txt_font->CalcTextSizeA(fsz, FLT_MAX, -1.f, ln.c_str()).x);
+
+            if (max_rendered_w > max_fit_w && max_rendered_w > 0.f) {
+                fsz    *= max_fit_w / max_rendered_w;
+                line_h  = fsz * 1.25f;
+            }
+        }
+
         float block_h = txt_lines.size() * line_h;
         float slot_h  = fmaxf(40.f, block_h);
         // Safe-zone margins — proportional to canvas height, identical to canvas.cpp.
