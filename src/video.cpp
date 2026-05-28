@@ -1006,14 +1006,6 @@ static struct ExportState {
     // Sequential decode state — avoids seek+flush on every frame when exporting.
     // Set to -1 when a seek is needed (first call, new file, backward jump, etc.).
     double           last_decoded_pts = -1.0;
-    // Last successfully decoded frame cached as raw RGBA pixels.
-    // Returned (as a fresh copy) on EOF so we hold the last frame without
-    // seeking — seeking would rewind the AVFormatContext's audio stream too,
-    // causing a brief audio replay at the clip tail.
-    uint8_t*         held_data        = nullptr;
-    int              held_w           = 0;
-    int              held_h           = 0;
-    double           held_pts         = -1.0;
     std::string      cur_path;   // path currently open in this slot (self-tracking)
 } g_ex[MAX_VIDEO_TRACKS * 2];
 
@@ -1086,13 +1078,9 @@ void video_close_export(int slot) {
     if (ex.sws)       { sws_freeContext(ex.sws);       ex.sws       = nullptr; }
     if (ex.codec_ctx) { avcodec_free_context(&ex.codec_ctx); }
     if (ex.fmt_ctx)   { avformat_close_input(&ex.fmt_ctx); }
-    if (ex.held_data) { av_free(ex.held_data);              ex.held_data = nullptr; }
     ex.stream_idx       = -1;
     ex.info             = {};
     ex.last_decoded_pts = -1.0;
-    ex.held_w           = 0;
-    ex.held_h           = 0;
-    ex.held_pts         = -1.0;
     ex.cur_path.clear();
 }
 
@@ -1205,29 +1193,16 @@ VideoFrame* video_decode_frame_at(int slot, double seconds) {
 
     if (result) {
         ex.last_decoded_pts = result->pts;
-        // Update the pixel cache so EOF can return this frame without seeking.
-        // av_malloc matches av_free used by video_free_frame.
-        int nbytes = result->width * result->height * 4;
-        if (ex.held_w != result->width || ex.held_h != result->height) {
-            av_free(ex.held_data);
-            ex.held_data = (uint8_t*)av_malloc(nbytes);
-        }
-        if (ex.held_data) {
-            memcpy(ex.held_data, result->data, nbytes);
-            ex.held_w   = result->width;
-            ex.held_h   = result->height;
-            ex.held_pts = result->pts;
-        }
-    } else if (ex.held_data) {
-        // EOF or decode failure — return a copy of the cached last frame.
-        // We intentionally do NOT seek; seeking would rewind the demuxer's
-        // audio stream position and cause a brief audio replay at the clip tail.
-        int nbytes = ex.held_w * ex.held_h * 4;
-        uint8_t* copy = (uint8_t*)av_malloc(nbytes);
-        if (copy) {
-            memcpy(copy, ex.held_data, nbytes);
-            result = new VideoFrame{copy, ex.held_w, ex.held_h, ex.held_pts};
-        }
+    } else if (ex.last_decoded_pts >= 0.0) {
+        // EOF or decode failure — hold the last successfully decoded frame rather
+        // than returning null (which would produce a blank/black flash).
+        // Re-decode at last_decoded_pts; this will seek and return the same frame.
+        // Only do this once (don't recurse if the re-decode also fails).
+        av_packet_free(&pkt);
+        av_frame_free(&frm);
+        double hold_pts = ex.last_decoded_pts;
+        ex.last_decoded_pts = -1.0;  // force re-seek
+        return video_decode_frame_at(slot, hold_pts);
     }
 
     av_packet_free(&pkt);
