@@ -371,6 +371,8 @@ struct RenderSettings {
     bool        high_profile  = false;    // false=Main, true=High
     bool        use_vaapi     = true;     // use VAAPI HW encoder when available (AMD/Intel on Linux)
     bool        advanced_open = false;    // UI collapsible state
+    bool        gif_export    = false;    // output animated GIF instead of MP4
+    int         gif_fps       = 12;       // GIF playback framerate (8/12/15/24)
 };
 
 // ── Render state ──────────────────────────────────────────────────────────────
@@ -480,6 +482,7 @@ struct AppState {
     RenderSettings render_settings;
     bool           render_done = false;
     std::string    out_mp4;
+    std::string    out_gif;
     std::string    out_wav;
     std::string    out_srt;
 

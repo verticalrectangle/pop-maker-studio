@@ -105,66 +105,106 @@ void draw_export_modal(AppState& state) {
 
         ImGui::Dummy({0.f, 10.f}); ui_separator(); ImGui::Dummy({0.f, 8.f});
 
-        // ── Settings ──────────────────────────────────────────────────────────
+        // ── Format ────────────────────────────────────────────────────────────
         ImGui::SetCursorPosX(ImGui::GetStyle().WindowPadding.x + 8.f);
         ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
-        ImGui::TextUnformatted("Quality");
-        ImGui::PopStyleColor();
-        ImGui::Dummy({0.f, 6.f});
-
-        // 4 quality preset buttons that map to CRF values
-        struct QPreset { const char* label; int crf; };
-        static constexpr QPreset kQPresets[] = {
-            {"Draft", 28}, {"Balanced", 23}, {"Quality", 18}, {"Master", 12}
-        };
-        ImGui::SetCursorPosX(ImGui::GetStyle().WindowPadding.x + 8.f);
-        for (auto& qp : kQPresets) {
-            char id[32]; snprintf(id, sizeof(id), "%s##qm", qp.label);
-            if (ui_btn(id, state.render_settings.crf == qp.crf, true))
-                state.render_settings.crf = qp.crf;
-            ImGui::SameLine(0.f, 4.f);
-        }
-        ImGui::NewLine();
-
-        ImGui::Dummy({0.f, 8.f});
-        ImGui::SetCursorPosX(ImGui::GetStyle().WindowPadding.x + 8.f);
-        ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
-        ImGui::TextUnformatted("Encode speed");
+        ImGui::TextUnformatted("Format");
         ImGui::PopStyleColor();
         ImGui::Dummy({0.f, 6.f});
         ImGui::SetCursorPosX(ImGui::GetStyle().WindowPadding.x + 8.f);
-        if (ui_btn("Fast##spm", state.render_settings.preset == "fast", true))
-            state.render_settings.preset = "fast";
+        if (ui_btn("MP4##fmtm", !state.render_settings.gif_export, true))
+            state.render_settings.gif_export = false;
         ImGui::SameLine(0.f, 4.f);
-        if (ui_btn("Slow##spm", state.render_settings.preset == "slow", true))
-            state.render_settings.preset = "slow";
+        if (ui_btn("GIF##fmtm", state.render_settings.gif_export, true))
+            state.render_settings.gif_export = true;
         ImGui::NewLine();
 
-        ImGui::Dummy({0.f, 8.f});
-        ImGui::SetCursorPosX(ImGui::GetStyle().WindowPadding.x + 8.f);
-        ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
-        ImGui::TextUnformatted("Encoder");
-        ImGui::PopStyleColor();
-        ImGui::Dummy({0.f, 6.f});
-        {
-            bool vaapi_present = fs::exists("/dev/dri/renderD128");
-            bool vaapi_on = state.render_settings.use_vaapi && vaapi_present;
+        // ── Settings ──────────────────────────────────────────────────────────
+        if (state.render_settings.gif_export) {
+            // GIF-specific: framerate picker
+            ImGui::Dummy({0.f, 8.f});
             ImGui::SetCursorPosX(ImGui::GetStyle().WindowPadding.x + 8.f);
-            if (ui_btn("GPU (VAAPI)##enc", vaapi_on, true))
-                state.render_settings.use_vaapi = true;
-            ImGui::SameLine(0.f, 4.f);
-            if (ui_btn("CPU (x264)##enc", !vaapi_on, true))
-                state.render_settings.use_vaapi = false;
+            ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+            ImGui::TextUnformatted("Framerate");
+            ImGui::PopStyleColor();
+            ImGui::Dummy({0.f, 6.f});
+            ImGui::SetCursorPosX(ImGui::GetStyle().WindowPadding.x + 8.f);
+            struct GifFps { int fps; const char* lbl; };
+            static constexpr GifFps kGifFps[] = {{8,"8 fps"},{12,"12 fps"},{15,"15 fps"},{24,"24 fps"}};
+            for (auto& gf : kGifFps) {
+                char id[32]; snprintf(id, sizeof(id), "%s##gfm", gf.lbl);
+                if (ui_btn(id, state.render_settings.gif_fps == gf.fps, true))
+                    state.render_settings.gif_fps = gf.fps;
+                ImGui::SameLine(0.f, 4.f);
+            }
             ImGui::NewLine();
             ImGui::SetCursorPosX(ImGui::GetStyle().WindowPadding.x + 8.f);
             ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
-            if (!vaapi_present)
-                ImGui::TextUnformatted("GPU encoder not found — using CPU.");
-            else if (vaapi_on)
-                ImGui::TextUnformatted("AMD VCE — ~10-20x faster, frees CPU.");
-            else
-                ImGui::TextUnformatted("libx264 — slower, slightly smaller files.");
+            ImGui::TextUnformatted("No audio. 256-color palette, bayer dither.");
             ImGui::PopStyleColor();
+        } else {
+            // MP4 settings
+            ImGui::Dummy({0.f, 8.f});
+            ImGui::SetCursorPosX(ImGui::GetStyle().WindowPadding.x + 8.f);
+            ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+            ImGui::TextUnformatted("Quality");
+            ImGui::PopStyleColor();
+            ImGui::Dummy({0.f, 6.f});
+
+            // 4 quality preset buttons that map to CRF values
+            struct QPreset { const char* label; int crf; };
+            static constexpr QPreset kQPresets[] = {
+                {"Draft", 28}, {"Balanced", 23}, {"Quality", 18}, {"Master", 12}
+            };
+            ImGui::SetCursorPosX(ImGui::GetStyle().WindowPadding.x + 8.f);
+            for (auto& qp : kQPresets) {
+                char id[32]; snprintf(id, sizeof(id), "%s##qm", qp.label);
+                if (ui_btn(id, state.render_settings.crf == qp.crf, true))
+                    state.render_settings.crf = qp.crf;
+                ImGui::SameLine(0.f, 4.f);
+            }
+            ImGui::NewLine();
+
+            ImGui::Dummy({0.f, 8.f});
+            ImGui::SetCursorPosX(ImGui::GetStyle().WindowPadding.x + 8.f);
+            ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+            ImGui::TextUnformatted("Encode speed");
+            ImGui::PopStyleColor();
+            ImGui::Dummy({0.f, 6.f});
+            ImGui::SetCursorPosX(ImGui::GetStyle().WindowPadding.x + 8.f);
+            if (ui_btn("Fast##spm", state.render_settings.preset == "fast", true))
+                state.render_settings.preset = "fast";
+            ImGui::SameLine(0.f, 4.f);
+            if (ui_btn("Slow##spm", state.render_settings.preset == "slow", true))
+                state.render_settings.preset = "slow";
+            ImGui::NewLine();
+
+            ImGui::Dummy({0.f, 8.f});
+            ImGui::SetCursorPosX(ImGui::GetStyle().WindowPadding.x + 8.f);
+            ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+            ImGui::TextUnformatted("Encoder");
+            ImGui::PopStyleColor();
+            ImGui::Dummy({0.f, 6.f});
+            {
+                bool vaapi_present = fs::exists("/dev/dri/renderD128");
+                bool vaapi_on = state.render_settings.use_vaapi && vaapi_present;
+                ImGui::SetCursorPosX(ImGui::GetStyle().WindowPadding.x + 8.f);
+                if (ui_btn("GPU (VAAPI)##enc", vaapi_on, true))
+                    state.render_settings.use_vaapi = true;
+                ImGui::SameLine(0.f, 4.f);
+                if (ui_btn("CPU (x264)##enc", !vaapi_on, true))
+                    state.render_settings.use_vaapi = false;
+                ImGui::NewLine();
+                ImGui::SetCursorPosX(ImGui::GetStyle().WindowPadding.x + 8.f);
+                ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+                if (!vaapi_present)
+                    ImGui::TextUnformatted("GPU encoder not found — using CPU.");
+                else if (vaapi_on)
+                    ImGui::TextUnformatted("AMD VCE — ~10-20x faster, frees CPU.");
+                else
+                    ImGui::TextUnformatted("libx264 — slower, slightly smaller files.");
+                ImGui::PopStyleColor();
+            }
         }
 
         ImGui::Dummy({0.f, 10.f}); ui_separator(); ImGui::Dummy({0.f, 8.f});
@@ -201,6 +241,7 @@ void draw_export_modal(AppState& state) {
                     fs::path outdir = audio.parent_path() / audio.stem();
                     fs::create_directories(outdir);
                     state.out_mp4 = (outdir / (audio.stem().string() + ".mp4")).string();
+                    state.out_gif = (outdir / (audio.stem().string() + ".gif")).string();
                     state.out_srt = (outdir / (audio.stem().string() + ".srt")).string();
                 } else if (state.out_mp4.empty()) {
                     // Video-only project — derive output path from project file or home dir.
@@ -213,6 +254,7 @@ void draw_export_modal(AppState& state) {
                     }
                     fs::create_directories(base.parent_path());
                     state.out_mp4 = base.string() + ".mp4";
+                    state.out_gif = base.string() + ".gif";
                 }
                 render_start_gl(state);
             }
@@ -232,7 +274,8 @@ void draw_export_modal(AppState& state) {
             ImGui::SetCursorPosX(ImGui::GetStyle().WindowPadding.x + 8.f);
             struct Dl2 { const char* tag; const char* name; std::string path; bool ok; };
             Dl2 dls[] = {
-                {".MP4", "Lyric video", state.out_mp4, state.render_done && !state.out_mp4.empty()},
+                {".MP4", "Lyric video", state.out_mp4, state.render_done && !state.render_settings.gif_export && !state.out_mp4.empty()},
+                {".GIF", "Animated GIF", state.out_gif, state.render_done && state.render_settings.gif_export && !state.out_gif.empty() && fs::exists(state.out_gif)},
                 {".WAV", "Vocals stem", state.out_wav, !state.out_wav.empty() && fs::exists(state.out_wav)},
                 {".SRT", "Subtitles",   state.out_srt, !state.out_srt.empty() && fs::exists(state.out_srt)},
             };
@@ -258,6 +301,34 @@ void draw_export_modal(AppState& state) {
 }
 
 void panel_export(AppState& state, float w) {
+    ImGui::Dummy({0.f, 8.f});
+
+    // ── Format ────────────────────────────────────────────────────────────────
+    ui_label("Format"); ImGui::Dummy({0.f, 4.f});
+    if (ui_btn("MP4##fmtp", !state.render_settings.gif_export, true))
+        state.render_settings.gif_export = false;
+    ImGui::SameLine(0.f, 4.f);
+    if (ui_btn("GIF##fmtp", state.render_settings.gif_export, true))
+        state.render_settings.gif_export = true;
+    ImGui::NewLine();
+
+    if (state.render_settings.gif_export) {
+        ImGui::Dummy({0.f, 6.f});
+        ui_label("Framerate"); ImGui::Dummy({0.f, 4.f});
+        struct GifFps { int fps; const char* lbl; };
+        static constexpr GifFps kGifFps[] = {{8,"8 fps"},{12,"12 fps"},{15,"15 fps"},{24,"24 fps"}};
+        for (auto& gf : kGifFps) {
+            char id[32]; snprintf(id, sizeof(id), "%s##gfp", gf.lbl);
+            if (ui_btn(id, state.render_settings.gif_fps == gf.fps, true))
+                state.render_settings.gif_fps = gf.fps;
+            ImGui::SameLine(0.f, 4.f);
+        }
+        ImGui::NewLine();
+        ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+        ImGui::TextUnformatted("No audio. 256-color palette, bayer dither.");
+        ImGui::PopStyleColor();
+    }
+
     ImGui::Dummy({0.f, 8.f});
 
     // Advanced settings (collapsible)
@@ -351,6 +422,7 @@ void panel_export(AppState& state, float w) {
                 fs::path outdir = audio.parent_path() / audio.stem();
                 fs::create_directories(outdir);
                 state.out_mp4 = (outdir / (audio.stem().string() + ".mp4")).string();
+                state.out_gif = (outdir / (audio.stem().string() + ".gif")).string();
                 state.out_srt = (outdir / (audio.stem().string() + ".srt")).string();
             } else if (state.out_mp4.empty()) {
                 fs::path base;
@@ -362,6 +434,7 @@ void panel_export(AppState& state, float w) {
                 }
                 fs::create_directories(base.parent_path());
                 state.out_mp4 = base.string() + ".mp4";
+                state.out_gif = base.string() + ".gif";
             }
             render_start_gl(state);
         }
@@ -374,7 +447,8 @@ void panel_export(AppState& state, float w) {
     const char* fmt_res = state.format==OutputFormat::Vertical?"9:16":state.format==OutputFormat::Horizontal?"16:9":"1:1";
     (void)fmt_res;
     Dl dls[] = {
-        {".MP4", "Lyric video",  state.out_mp4, state.render_done && !state.out_mp4.empty()},
+        {".MP4", "Lyric video",  state.out_mp4, state.render_done && !state.render_settings.gif_export && !state.out_mp4.empty()},
+        {".GIF", "Animated GIF", state.out_gif, state.render_done && state.render_settings.gif_export && !state.out_gif.empty() && fs::exists(state.out_gif)},
         {".WAV", "Vocals stem",  state.out_wav, !state.out_wav.empty() && fs::exists(state.out_wav)},
         {".SRT", "Subtitles",    state.out_srt, !state.out_srt.empty() && fs::exists(state.out_srt)},
     };

@@ -1911,6 +1911,9 @@ void render_start_gl(AppState& state) {
     }
     glBindTexture(GL_TEXTURE_2D, 0);
 
+    // GIF exports have no audio — skip collection entirely.
+    const bool is_gif = state.render_settings.gif_export;
+
     // ── Collect audio inputs ──────────────────────────────────────────────────
     // Each audio clip gets its own ffmpeg input with correct -ss / -to / -itsoffset
     // so that:
@@ -1925,34 +1928,36 @@ void render_start_gl(AppState& state) {
         float delay = 0.f;   // timeline offset (-itsoffset before -i)
     };
     std::vector<AudioIn> audio_ins;
-    // state.audio_path is the primary audio file (extracted stem / uploaded track).
-    // The preview audio callback does NOT play g_samples (audio_path content) directly —
-    // it only mixes Audio brick clips.  To keep export consistent with preview, only
-    // add audio_path as a background input when no Audio brick is already sourced
-    // from the same file.  If a brick covers it, the bricks are the sole audio source.
-    if (!state.audio_path.empty()) {
-        bool covered_by_brick = false;
-        for (auto& tr : state.tracks)
-            for (auto& cl : tr.clips)
-                if (cl.clip_type == ClipType::Audio && cl.text == state.audio_path)
-                    { covered_by_brick = true; break; }
-        if (!covered_by_brick)
-            audio_ins.push_back({state.audio_path, 1.f, 0.f, -1.f, 0.f});
-    }
-    for (int ti = (int)state.tracks.size() - 1; ti >= 0; --ti) {
-        for (auto& cl : state.tracks[ti].clips) {
-            if (cl.clip_type != ClipType::Audio || cl.text.empty()) continue;
-            if (!fs::exists(cl.text)) continue;
-            float vol   = state.tracks[ti].muted ? 0.f : cl.volume;
-            float ss    = cl.in_point;
-            float dur   = (cl.end - cl.start) * fmaxf(0.01f, cl.speed);
-            float to    = ss + dur;
-            // Modern FFmpeg keeps absolute timestamps after -ss (input option),
-            // so the stream's pts starts at ~in_point, not 0.  To place audio at
-            // cl.start on the output timeline we need itsoffset = cl.start - in_point,
-            // not cl.start.  Clamped to 0 — negative itsoffset is unsupported.
-            float delay = fmaxf(0.f, cl.start - cl.in_point);
-            audio_ins.push_back({cl.text, vol, ss, to, delay});
+    if (!is_gif) {
+        // state.audio_path is the primary audio file (extracted stem / uploaded track).
+        // The preview audio callback does NOT play g_samples (audio_path content) directly —
+        // it only mixes Audio brick clips.  To keep export consistent with preview, only
+        // add audio_path as a background input when no Audio brick is already sourced
+        // from the same file.  If a brick covers it, the bricks are the sole audio source.
+        if (!state.audio_path.empty()) {
+            bool covered_by_brick = false;
+            for (auto& tr : state.tracks)
+                for (auto& cl : tr.clips)
+                    if (cl.clip_type == ClipType::Audio && cl.text == state.audio_path)
+                        { covered_by_brick = true; break; }
+            if (!covered_by_brick)
+                audio_ins.push_back({state.audio_path, 1.f, 0.f, -1.f, 0.f});
+        }
+        for (int ti = (int)state.tracks.size() - 1; ti >= 0; --ti) {
+            for (auto& cl : state.tracks[ti].clips) {
+                if (cl.clip_type != ClipType::Audio || cl.text.empty()) continue;
+                if (!fs::exists(cl.text)) continue;
+                float vol   = state.tracks[ti].muted ? 0.f : cl.volume;
+                float ss    = cl.in_point;
+                float dur   = (cl.end - cl.start) * fmaxf(0.01f, cl.speed);
+                float to    = ss + dur;
+                // Modern FFmpeg keeps absolute timestamps after -ss (input option),
+                // so the stream's pts starts at ~in_point, not 0.  To place audio at
+                // cl.start on the output timeline we need itsoffset = cl.start - in_point,
+                // not cl.start.  Clamped to 0 — negative itsoffset is unsupported.
+                float delay = fmaxf(0.f, cl.start - cl.in_point);
+                audio_ins.push_back({cl.text, vol, ss, to, delay});
+            }
         }
     }
 
@@ -2027,27 +2032,43 @@ void render_start_gl(AppState& state) {
             args.push_back("-map"); args.push_back("[aout]");
         }
     }
-    if (use_vaapi) {
-        // RGBA → NV12 (CPU) → hwupload → h264_vaapi on the GPU's VCE engine.
-        // vflip corrects GL's bottom-up pixel order.
-        args.push_back("-vf");    args.push_back("vflip,format=nv12,hwupload");
-        args.push_back("-c:v");   args.push_back("h264_vaapi");
-        args.push_back("-global_quality"); args.push_back(std::to_string(state.render_settings.crf));
+    if (is_gif) {
+        // Animated GIF: single-pass palettegen+paletteuse via filter_complex.
+        // vflip corrects GL's bottom-up pixel order; fps downsamples to gif_fps.
+        // split feeds the same stream to palettegen (palette analysis) and
+        // paletteuse (dithered remapping).  bayer dithering hides banding well.
+        char gif_vf[256];
+        snprintf(gif_vf, sizeof(gif_vf),
+            "vflip,fps=%d,split[s0][s1];[s0]palettegen=stats_mode=full[p];"
+            "[s1][p]paletteuse=dither=bayer:bayer_scale=5",
+            state.render_settings.gif_fps);
+        args.push_back("-filter_complex"); args.push_back(gif_vf);
+        args.push_back("-loop");  args.push_back("0");   // infinite loop
+        args.push_back("-f");     args.push_back("gif");
+        args.push_back(state.out_gif);
     } else {
-        args.push_back("-c:v");     args.push_back("libx264");
-        args.push_back("-pix_fmt"); args.push_back("yuv420p");
-        args.push_back("-crf");     args.push_back(std::to_string(state.render_settings.crf));
-        args.push_back("-preset");  args.push_back(state.render_settings.preset);
-        if (state.render_settings.high_profile) {
-            args.push_back("-profile:v"); args.push_back("high");
+        if (use_vaapi) {
+            // RGBA → NV12 (CPU) → hwupload → h264_vaapi on the GPU's VCE engine.
+            // vflip corrects GL's bottom-up pixel order.
+            args.push_back("-vf");    args.push_back("vflip,format=nv12,hwupload");
+            args.push_back("-c:v");   args.push_back("h264_vaapi");
+            args.push_back("-global_quality"); args.push_back(std::to_string(state.render_settings.crf));
+        } else {
+            args.push_back("-c:v");     args.push_back("libx264");
+            args.push_back("-pix_fmt"); args.push_back("yuv420p");
+            args.push_back("-crf");     args.push_back(std::to_string(state.render_settings.crf));
+            args.push_back("-preset");  args.push_back(state.render_settings.preset);
+            if (state.render_settings.high_profile) {
+                args.push_back("-profile:v"); args.push_back("high");
+            }
         }
+        if (!audio_ins.empty()) {
+            args.push_back("-c:a");  args.push_back("aac");
+            args.push_back("-b:a");  args.push_back(std::to_string(state.render_settings.audio_bitrate) + "k");
+        }
+        args.push_back("-shortest");
+        args.push_back(state.out_mp4);
     }
-    if (!audio_ins.empty()) {
-        args.push_back("-c:a");  args.push_back("aac");
-        args.push_back("-b:a");  args.push_back(std::to_string(state.render_settings.audio_bitrate) + "k");
-    }
-    args.push_back("-shortest");
-    args.push_back(state.out_mp4);
 
     // Log the full ffmpeg command so failures can be diagnosed.
     rlog("ffmpeg cmd:");
