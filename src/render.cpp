@@ -1925,8 +1925,20 @@ void render_start_gl(AppState& state) {
         float delay = 0.f;   // timeline offset (-itsoffset before -i)
     };
     std::vector<AudioIn> audio_ins;
-    if (!state.audio_path.empty())
-        audio_ins.push_back({state.audio_path, 1.f, 0.f, -1.f, 0.f});
+    // state.audio_path is the primary audio file (extracted stem / uploaded track).
+    // The preview audio callback does NOT play g_samples (audio_path content) directly —
+    // it only mixes Audio brick clips.  To keep export consistent with preview, only
+    // add audio_path as a background input when no Audio brick is already sourced
+    // from the same file.  If a brick covers it, the bricks are the sole audio source.
+    if (!state.audio_path.empty()) {
+        bool covered_by_brick = false;
+        for (auto& tr : state.tracks)
+            for (auto& cl : tr.clips)
+                if (cl.clip_type == ClipType::Audio && cl.text == state.audio_path)
+                    { covered_by_brick = true; break; }
+        if (!covered_by_brick)
+            audio_ins.push_back({state.audio_path, 1.f, 0.f, -1.f, 0.f});
+    }
     for (int ti = (int)state.tracks.size() - 1; ti >= 0; --ti) {
         for (auto& cl : state.tracks[ti].clips) {
             if (cl.clip_type != ClipType::Audio || cl.text.empty()) continue;
