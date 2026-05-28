@@ -1935,7 +1935,11 @@ void render_start_gl(AppState& state) {
             float ss    = cl.in_point;
             float dur   = (cl.end - cl.start) * fmaxf(0.01f, cl.speed);
             float to    = ss + dur;
-            float delay = cl.start;
+            // Modern FFmpeg keeps absolute timestamps after -ss (input option),
+            // so the stream's pts starts at ~in_point, not 0.  To place audio at
+            // cl.start on the output timeline we need itsoffset = cl.start - in_point,
+            // not cl.start.  Clamped to 0 — negative itsoffset is unsupported.
+            float delay = fmaxf(0.f, cl.start - cl.in_point);
             audio_ins.push_back({cl.text, vol, ss, to, delay});
         }
     }
