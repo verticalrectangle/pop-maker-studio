@@ -691,7 +691,7 @@ void ui_studio(AppState& state) {
     float props_w   = (state.panel_w > 0.f)
                        ? fmaxf(200.f, fminf(win_w * 0.6f, state.panel_w))
                        : fmaxf(260.f, win_w * 0.27f);
-    const float TB_W   = 56.f;   // toolbox strip width
+    const float TB_W   = 68.f;   // toolbox strip width
     float preview_w = win_w - props_w - TB_W - 2.f;
 
     // ── Toolbox strip (left rail, Photoshop-style) ────────────────────────────
@@ -705,18 +705,25 @@ void ui_studio(AppState& state) {
         const float BX   = sp.x + (TB_W - BSZ) * 0.5f;
         float       BY   = sp.y + 16.f;
 
-        struct { const char* id; PanelView lib_view; ImU32 accent; } btns[] = {
-            { "BG",    PanelView::LibBG,    IM_COL32(180,  60, 160, 255) },
-            { "FX",    PanelView::LibFX,    IM_COL32(210, 110,  30, 255) },
-            { "Adj",   PanelView::LibAdj,   IM_COL32(100,  80, 200, 255) },
-            { "BFX",   PanelView::LibBFX,   IM_COL32( 20, 180, 160, 255) },
-            { "AFX",   PanelView::LibAFX,   IM_COL32( 30, 200, 150, 255) },
-            { "VID",   PanelView::LibVID,   IM_COL32(140,  60, 220, 255) },
-            { "IMG",   PanelView::LibIMG,   IM_COL32(140,  60, 220, 255) },
-            { "AUD",   PanelView::LibAUD,   IM_COL32( 50, 180, 100, 255) },
+        struct BtnDef { const char* id; PanelView lib_view; ImU32 accent; bool sep_before; };
+        static const BtnDef btns[] = {
+            { "Backgrounds", PanelView::LibBG,   IM_COL32(180,  60, 160, 255), false },
+            { "Effects",     PanelView::LibFX,   IM_COL32(210, 110,  30, 255), true  },
+            { "Filters",     PanelView::LibAdj,  IM_COL32(100,  80, 200, 255), false },
+            { "Body FX",     PanelView::LibBFX,  IM_COL32( 20, 180, 160, 255), false },
+            { "Audio FX",    PanelView::LibAFX,  IM_COL32( 30, 200, 150, 255), false },
+            { "Video",       PanelView::LibVID,  IM_COL32(140,  60, 220, 255), true  },
+            { "Images",      PanelView::LibIMG,  IM_COL32(140,  60, 220, 255), false },
+            { "Audio",       PanelView::LibAUD,  IM_COL32( 50, 180, 100, 255), false },
         };
 
         for (auto& b : btns) {
+            if (b.sep_before) {
+                tdl->AddLine({sp.x + 8.f, BY - 5.f}, {sp.x + TB_W - 8.f, BY - 5.f},
+                             IM_COL32(50, 50, 65, 180), 1.f);
+                BY += 4.f;
+            }
+
             bool active = (s_panel_view == b.lib_view);
             ImVec2 bmin = { BX, BY }, bmax = { BX + BSZ, BY + BSZ };
             bool hov = ImGui::IsMouseHoveringRect(bmin, bmax);
@@ -728,10 +735,26 @@ void ui_studio(AppState& state) {
                 tdl->AddRect(bmin, bmax,
                     active ? b.accent : IM_COL32(70, 70, 90, 200), 7.f, 0, 1.2f);
 
-            ImVec2 tsz = ImGui::CalcTextSize(b.id);
-            ImU32  tc  = active ? IM_COL32(255,255,255,255) : IM_COL32(155,155,180,210);
-            tdl->AddText({ BX + (BSZ - tsz.x) * 0.5f,
-                           BY + (BSZ - 13.f)  * 0.5f }, tc, b.id);
+            // Two-line label: split on space if present
+            ImU32 tc = active ? IM_COL32(255,255,255,255) : IM_COL32(155,155,180,210);
+            const char* sp2 = strchr(b.id, ' ');
+            if (sp2) {
+                // Two words: render stacked, centered
+                char line1[32], line2[32];
+                size_t len1 = (size_t)(sp2 - b.id);
+                strncpy(line1, b.id, len1); line1[len1] = '\0';
+                strncpy(line2, sp2 + 1, sizeof(line2) - 1);
+                ImVec2 s1 = ImGui::CalcTextSize(line1);
+                ImVec2 s2 = ImGui::CalcTextSize(line2);
+                float  lh = 13.f, gap = 2.f;
+                float  total_h = lh + gap + lh;
+                float  ty = BY + (BSZ - total_h) * 0.5f;
+                tdl->AddText({BX + (BSZ - s1.x) * 0.5f, ty},           tc, line1);
+                tdl->AddText({BX + (BSZ - s2.x) * 0.5f, ty + lh + gap}, tc, line2);
+            } else {
+                ImVec2 tsz = ImGui::CalcTextSize(b.id);
+                tdl->AddText({BX + (BSZ - tsz.x) * 0.5f, BY + (BSZ - 13.f) * 0.5f}, tc, b.id);
+            }
 
             ImGui::SetCursorScreenPos(bmin);
             ImGui::InvisibleButton(b.id, { BSZ, BSZ });
