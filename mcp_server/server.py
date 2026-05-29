@@ -265,6 +265,7 @@ async def list_tools() -> list[Tool]:
                 "Set a scalar property on a clip. Requires batch.\n\n"
                 "General props:\n"
                 "  volume (0–2), speed (0.25–4), opacity (0–1), muted (bool),\n"
+                "  in_point (seconds into source — equivalent to trimming the brick's left edge),\n"
                 "  fade_in, fade_out, pos_x, pos_y, scale_x, scale_y, rotation, text\n\n"
                 "Subtitle / text layout:\n"
                 "  sub_pos (0=bottom 1=center 2=top 3=custom), sub_pos_x, sub_pos_y (0–1 normalised),\n"

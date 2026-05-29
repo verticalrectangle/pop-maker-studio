@@ -558,6 +558,7 @@ static json dispatch(AppState& state, const std::string& method, const json& par
             else if (prop == "speed")     { cl.speed     = jval_float(val); }
             else if (prop == "opacity")   { cl.opacity   = jval_float(val); }
             else if (prop == "muted")     { cl.muted     = jval_bool(val); }
+            else if (prop == "in_point")  { cl.in_point  = jval_float(val); }
             else if (prop == "fade_in")   { cl.fade_in   = jval_float(val); }
             else if (prop == "fade_out")  { cl.fade_out  = jval_float(val); }
             else if (prop == "blend_mode"){ cl.blend_mode= jval_int(val); }
@@ -601,6 +602,7 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         else if (prop == "speed")    { cl.speed      = jval_float(val); }
         else if (prop == "opacity")  { cl.opacity    = jval_float(val); }
         else if (prop == "muted")    { cl.muted      = jval_bool(val); }
+        else if (prop == "in_point") { cl.in_point   = jval_float(val); }
         else if (prop == "fade_in")  { cl.fade_in    = jval_float(val); }
         else if (prop == "fade_out") { cl.fade_out   = jval_float(val); }
         else if (prop == "blend_mode") { cl.blend_mode = jval_int(val); }
