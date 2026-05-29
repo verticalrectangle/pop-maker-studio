@@ -2243,6 +2243,9 @@ void panel_body_fx_library(AppState& state, float w) {
                 state.selected_track = vid_ti;
                 state.selected_clip  = (int)state.tracks[vid_ti].clips.size() - 1;
                 history_push(state, std::string("Add Body FX: ") + info.name);
+                // Auto-start bg removal on the video clip if not already ready
+                if (vid_clip->bg_remove_status != BgRemoveStatus::Ready)
+                    bg_remove_start(state, vid_ti, vid_ci);
             }
         }
 

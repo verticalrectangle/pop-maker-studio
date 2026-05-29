@@ -410,6 +410,7 @@ void bg_remove_start(AppState& state, int track_idx, int clip_idx) {
     clip.bg_remove_status   = BgRemoveStatus::Processing;
     clip.bg_remove_progress = 0.f;
     clip.bg_remove_error.clear();
+    clip.bg_remove_on       = true;
 
     if (fs::exists(mdir)) {
         fs::remove(mdir + "/bg_masks.mjpeg");
