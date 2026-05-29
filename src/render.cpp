@@ -2003,11 +2003,15 @@ void render_start_gl(AppState& state) {
         // split feeds the same stream to palettegen (palette analysis) and
         // paletteuse (dithered remapping).  bayer dithering hides banding well.
         // Do NOT also push -map 0:v — filter_complex auto-maps its unlabeled output.
-        char gif_vf[256];
+        char gif_vf[320];
         snprintf(gif_vf, sizeof(gif_vf),
-            "[0:v]vflip,fps=%d,split[s0][s1];[s0]palettegen=stats_mode=full[p];"
+            "[0:v]vflip,fps=%d,"
+            "scale=trunc(iw*%d/200)*2:trunc(ih*%d/200)*2,"
+            "split[s0][s1];[s0]palettegen=stats_mode=full[p];"
             "[s1][p]paletteuse=dither=bayer:bayer_scale=5[out]",
-            state.render_settings.gif_fps);
+            state.render_settings.gif_fps,
+            state.render_settings.gif_scale,
+            state.render_settings.gif_scale);
         args.push_back("-filter_complex"); args.push_back(gif_vf);
         args.push_back("-map");   args.push_back("[out]");
         args.push_back("-loop");  args.push_back("0");   // infinite loop

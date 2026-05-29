@@ -121,7 +121,7 @@ void draw_export_modal(AppState& state) {
 
         // ── Settings ──────────────────────────────────────────────────────────
         if (state.render_settings.gif_export) {
-            // GIF-specific: framerate picker
+            // GIF-specific: framerate + scale pickers
             ImGui::Dummy({0.f, 8.f});
             ImGui::SetCursorPosX(ImGui::GetStyle().WindowPadding.x + 8.f);
             ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
@@ -138,10 +138,41 @@ void draw_export_modal(AppState& state) {
                 ImGui::SameLine(0.f, 4.f);
             }
             ImGui::NewLine();
+
+            ImGui::Dummy({0.f, 8.f});
             ImGui::SetCursorPosX(ImGui::GetStyle().WindowPadding.x + 8.f);
-            ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
-            ImGui::TextUnformatted("No audio. 256-color palette, bayer dither.");
+            ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+            ImGui::TextUnformatted("Size");
             ImGui::PopStyleColor();
+            ImGui::Dummy({0.f, 6.f});
+            ImGui::SetCursorPosX(ImGui::GetStyle().WindowPadding.x + 8.f);
+            struct GifSc { int pct; const char* lbl; };
+            static constexpr GifSc kGifSc[] = {{25,"25%"},{50,"50%"},{75,"75%"},{100,"100%"}};
+            for (auto& gs : kGifSc) {
+                char id[32]; snprintf(id, sizeof(id), "%s##gsm", gs.lbl);
+                if (ui_btn(id, state.render_settings.gif_scale == gs.pct, true))
+                    state.render_settings.gif_scale = gs.pct;
+                ImGui::SameLine(0.f, 4.f);
+            }
+            ImGui::NewLine();
+
+            {
+                int base_w = (state.format == OutputFormat::Horizontal) ? 1920 : 1080;
+                int base_h = (state.format == OutputFormat::Horizontal) ? 1080 :
+                             (state.format == OutputFormat::Square)      ? 1080 : 1920;
+                int sc  = state.render_settings.gif_scale;
+                int gw  = (base_w * sc / 100 / 2) * 2;
+                int gh  = (base_h * sc / 100 / 2) * 2;
+                float est_mb = (float)(gw * gh) * state.render_settings.gif_fps
+                             * state.duration * 0.5f / (1024.f * 1024.f);
+                char info[128];
+                snprintf(info, sizeof(info),
+                    "No audio · %d×%d · ~%.0f MB (approx)", gw, gh, (double)est_mb);
+                ImGui::SetCursorPosX(ImGui::GetStyle().WindowPadding.x + 8.f);
+                ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+                ImGui::TextUnformatted(info);
+                ImGui::PopStyleColor();
+            }
         } else {
             // MP4 settings
             ImGui::Dummy({0.f, 8.f});
@@ -324,9 +355,35 @@ void panel_export(AppState& state, float w) {
             ImGui::SameLine(0.f, 4.f);
         }
         ImGui::NewLine();
-        ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
-        ImGui::TextUnformatted("No audio. 256-color palette, bayer dither.");
-        ImGui::PopStyleColor();
+
+        ImGui::Dummy({0.f, 6.f});
+        ui_label("Size"); ImGui::Dummy({0.f, 4.f});
+        struct GifSc { int pct; const char* lbl; };
+        static constexpr GifSc kGifSc[] = {{25,"25%"},{50,"50%"},{75,"75%"},{100,"100%"}};
+        for (auto& gs : kGifSc) {
+            char id[32]; snprintf(id, sizeof(id), "%s##gsp", gs.lbl);
+            if (ui_btn(id, state.render_settings.gif_scale == gs.pct, true))
+                state.render_settings.gif_scale = gs.pct;
+            ImGui::SameLine(0.f, 4.f);
+        }
+        ImGui::NewLine();
+
+        {
+            int base_w = (state.format == OutputFormat::Horizontal) ? 1920 : 1080;
+            int base_h = (state.format == OutputFormat::Horizontal) ? 1080 :
+                         (state.format == OutputFormat::Square)      ? 1080 : 1920;
+            int sc  = state.render_settings.gif_scale;
+            int gw  = (base_w * sc / 100 / 2) * 2;
+            int gh  = (base_h * sc / 100 / 2) * 2;
+            float est_mb = (float)(gw * gh) * state.render_settings.gif_fps
+                         * state.duration * 0.5f / (1024.f * 1024.f);
+            char info[128];
+            snprintf(info, sizeof(info),
+                "No audio · %d×%d · ~%.0f MB (approx)", gw, gh, (double)est_mb);
+            ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+            ImGui::TextUnformatted(info);
+            ImGui::PopStyleColor();
+        }
     }
 
     ImGui::Dummy({0.f, 8.f});

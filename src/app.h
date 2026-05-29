@@ -373,6 +373,7 @@ struct RenderSettings {
     bool        advanced_open = false;    // UI collapsible state
     bool        gif_export    = false;    // output animated GIF instead of MP4
     int         gif_fps       = 12;       // GIF playback framerate (8/12/15/24)
+    int         gif_scale     = 50;       // output scale percent (25/50/75/100)
 };
 
 // ── Render state ──────────────────────────────────────────────────────────────
