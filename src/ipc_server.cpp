@@ -7,6 +7,7 @@
 #include "beat_detect.h"
 #include "scene_detect.h"
 #include "vision_caption.h"
+#include "vision_download.h"
 #include "generated/fx_clip_set_dispatch.h"
 #include "json.hpp"
 
@@ -446,6 +447,30 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         } catch (...) {
             json r; r["status"] = "error"; r["message"] = "failed to read sidecar"; return r;
         }
+    }
+
+    if (method == "get_vision_model_status") {
+        json r;
+        if (vision_models_ready()) {
+            r["status"] = "ready";
+        } else if (vision_download_running()) {
+            r["status"]   = "downloading";
+            r["progress"] = vision_download_progress();
+            r["message"]  = vision_download_message();
+        } else if (!vision_download_error().empty()) {
+            r["status"] = "error";
+            r["error"]  = vision_download_error();
+        } else {
+            r["status"] = "idle";
+        }
+        return r;
+    }
+
+    if (method == "download_vision_model") {
+        if (vision_models_ready()) { json r; r["status"] = "ready"; return r; }
+        vision_download_start();
+        json r; r["status"] = "started";
+        return r;
     }
 
     if (method == "save_project") {

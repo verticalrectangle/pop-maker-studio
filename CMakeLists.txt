@@ -51,6 +51,7 @@ set(SOURCES
     src/bg_remove.cpp
     src/scene_detect.cpp
     src/vision_caption.cpp
+    src/vision_download.cpp
     src/body_fx.cpp
     src/noise_reduce.cpp
     src/audio_fx.cpp

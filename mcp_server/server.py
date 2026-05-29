@@ -601,6 +601,26 @@ async def list_tools() -> list[Tool]:
             },
         ),
         Tool(
+            name="get_vision_model_status",
+            description=(
+                "Check whether the local Moondream2 vision model (~1.1 GB) is installed. "
+                "Returns {status: 'ready'|'downloading'|'idle'|'error', progress?, message?}. "
+                "Call this before find_video_moment to decide if download_vision_model is needed."
+            ),
+            inputSchema={"type": "object", "properties": {}},
+        ),
+        Tool(
+            name="download_vision_model",
+            description=(
+                "Download the Moondream2 q4 ONNX vision model (~1.1 GB one-time download). "
+                "Checks the local HuggingFace cache first — if the weights are already there "
+                "it just copies them (~seconds). Otherwise downloads from HuggingFace. "
+                "The app shows a progress bar while this runs. "
+                "Blocks until the download is complete or fails (up to 5 minutes)."
+            ),
+            inputSchema={"type": "object", "properties": {}},
+        ),
+        Tool(
             name="find_video_moment",
             description=(
                 "Analyse a video file with the local Moondream2 vision model (runs on device, "
@@ -813,6 +833,26 @@ async def _find_audio_cue(arguments: dict) -> dict:
     }
 
 
+# ── vision model download ─────────────────────────────────────────────────────
+
+async def _download_vision_model() -> dict:
+    status = _call("get_vision_model_status", {})
+    if status.get("status") == "ready":
+        return {"status": "ready", "message": "Vision model already installed."}
+
+    _call("download_vision_model", {})
+
+    for _ in range(300):  # up to 5 minutes
+        await asyncio.sleep(1.0)
+        st = _call("get_vision_model_status", {})
+        s = st.get("status")
+        if s == "ready":
+            return {"status": "ready", "message": "Vision model installed successfully."}
+        if s == "error":
+            raise ValueError("Vision model download failed: " + st.get("error", "unknown"))
+    raise TimeoutError("Vision model download timed out after 5 minutes")
+
+
 # ── find_video_moment ─────────────────────────────────────────────────────────
 
 def _tfidf_score(query: str, text: str) -> float:
@@ -831,6 +871,14 @@ async def _find_video_moment(arguments: dict) -> list[dict]:
         raise ValueError("path is required")
     if not query:
         raise ValueError("query is required")
+
+    # Gate on vision model being installed
+    st = _call("get_vision_model_status", {})
+    if st.get("status") != "ready":
+        raise ValueError(
+            "Vision model not installed. Call download_vision_model first "
+            "(~1.1 GB one-time download — the app will show a progress bar)."
+        )
 
     # Trigger analysis (or pick up a previously completed one)
     try:
@@ -874,6 +922,12 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         return [TextContent(type="text", text=json.dumps(result, indent=2))]
     if name == "find_video_moment":
         result = await _find_video_moment(arguments)
+        return [TextContent(type="text", text=json.dumps(result, indent=2))]
+    if name == "download_vision_model":
+        result = await _download_vision_model()
+        return [TextContent(type="text", text=json.dumps(result, indent=2))]
+    if name == "get_vision_model_status":
+        result = _call("get_vision_model_status", {})
         return [TextContent(type="text", text=json.dumps(result, indent=2))]
     try:
         result = _call(name, arguments)

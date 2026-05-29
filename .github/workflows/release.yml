@@ -97,15 +97,6 @@ jobs:
           curl -fsSL -o release/models/wav2vec2_vocab.json \
             "https://huggingface.co/facebook/wav2vec2-base-960h/resolve/main/vocab.json"
 
-          echo "Downloading Moondream2 ONNX vision model..."
-          HF_BASE="https://huggingface.co/onnx-community/moondream2-ONNX/resolve/main"
-          curl -fsSL -o release/models/moondream-encoder.onnx \
-            "${HF_BASE}/encoder_model.onnx"
-          curl -fsSL -o release/models/moondream-decoder.onnx \
-            "${HF_BASE}/decoder_model_merged.onnx"
-          curl -fsSL -o release/models/moondream-tokenizer.json \
-            "${HF_BASE}/tokenizer.json"
-
           echo "Downloading Piper voices..."
           BASE_URL="https://huggingface.co/rhasspy/piper-voices/resolve/main"
           for VOICE in en_US-amy-medium en_US-ryan-medium en_US-lessac-medium en_GB-alan-medium; do

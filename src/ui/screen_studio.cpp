@@ -1156,6 +1156,7 @@ void ui_studio(AppState& state) {
         ImGui::SetCursorPos({0.f, ImGui::GetCursorPosY()});
         draw_pipeline_strip(state, win_w);
     }
+    draw_vision_download_strip(win_w);
 
     // ── Timeline panel ────────────────────────────────────────────────────────
     ImGui::PushStyleColor(ImGuiCol_ChildBg, Col::bg);

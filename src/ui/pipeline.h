@@ -27,6 +27,7 @@ void poll_clip_beat_analysis(AppState& state);
 
 // ── Pipeline UI strip ─────────────────────────────────────────────────────────
 void draw_pipeline_strip(AppState& state, float w);
+void draw_vision_download_strip(float w);
 
 // ── Safe-zone constants (used by canvas & typography) ─────────────────────────
 static constexpr float SAFE_TOP  = 0.08f;
