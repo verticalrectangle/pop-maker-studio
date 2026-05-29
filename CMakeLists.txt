@@ -49,6 +49,8 @@ set(SOURCES
     src/beat_detect.cpp
     src/blender_export.cpp
     src/bg_remove.cpp
+    src/scene_detect.cpp
+    src/vision_caption.cpp
     src/body_fx.cpp
     src/noise_reduce.cpp
     src/audio_fx.cpp

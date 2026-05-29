@@ -5,6 +5,8 @@
 #include "ui/panel_animation.h"
 #include "project.h"
 #include "beat_detect.h"
+#include "scene_detect.h"
+#include "vision_caption.h"
 #include "generated/fx_clip_set_dispatch.h"
 #include "json.hpp"
 
@@ -32,6 +34,13 @@ static struct {
     std::atomic<bool> done{false};
     BeatResult        result;
 } s_audio_analysis;
+
+static struct {
+    std::atomic<bool> running{false};
+    std::atomic<bool> done{false};
+    std::string       sidecar_path;
+    std::string       error;
+} s_scene_analysis;
 
 static int  g_srv_fd   = -1;
 static std::string g_sock_path;
@@ -370,6 +379,73 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         r["beats"]    = res.beats;
         r["rms"]      = res.rms;
         return r;
+    }
+
+    if (method == "describe_video") {
+        std::string path = params.value("path", "");
+        if (path.empty()) { err = "path required"; return {}; }
+        if (s_scene_analysis.running.load()) { err = "scene analysis already running"; return {}; }
+        s_scene_analysis.running.store(true);
+        s_scene_analysis.done.store(false);
+        s_scene_analysis.error.clear();
+        s_scene_analysis.sidecar_path.clear();
+        std::thread([path]() {
+            bool capped = false;
+            std::vector<KeyFrame> frames = extract_keyframes(path, 60, &capped);
+            if (frames.empty()) {
+                s_scene_analysis.error = "keyframe extraction failed or no scene changes detected";
+                s_scene_analysis.done.store(true);
+                s_scene_analysis.running.store(false);
+                return;
+            }
+            // Caption each frame
+            json sidecar;
+            sidecar["source"] = path;
+            sidecar["model"]  = "moondream2";
+            sidecar["capped"] = capped;
+            json frames_arr = json::array();
+            for (auto& kf : frames) {
+                SceneResult res = caption_frame(kf.jpeg_path);
+                json entry;
+                entry["timestamp"]   = kf.timestamp;
+                entry["description"] = res.ok ? res.description : "";
+                frames_arr.push_back(entry);
+            }
+            sidecar["frames"] = frames_arr;
+            std::string sidecar_path = path + ".pms_scene.json";
+            {
+                std::ofstream f(sidecar_path);
+                f << sidecar.dump(2);
+            }
+            s_scene_analysis.sidecar_path = sidecar_path;
+            s_scene_analysis.done.store(true);
+            s_scene_analysis.running.store(false);
+        }).detach();
+        json r; r["status"] = "started";
+        return r;
+    }
+
+    if (method == "get_video_description") {
+        if (s_scene_analysis.running.load()) { json r; r["status"] = "running"; return r; }
+        if (!s_scene_analysis.done.load())   { json r; r["status"] = "idle"; return r; }
+        if (!s_scene_analysis.error.empty()) {
+            json r; r["status"] = "error"; r["message"] = s_scene_analysis.error; return r;
+        }
+        // Read sidecar JSON and return it
+        std::string sp = s_scene_analysis.sidecar_path;
+        if (sp.empty()) { json r; r["status"] = "error"; r["message"] = "no sidecar path"; return r; }
+        try {
+            std::ifstream f(sp);
+            json sc; f >> sc;
+            json r;
+            r["status"]  = "done";
+            r["sidecar"] = sp;
+            r["frames"]  = sc.value("frames", json::array());
+            r["capped"]  = sc.value("capped", false);
+            return r;
+        } catch (...) {
+            json r; r["status"] = "error"; r["message"] = "failed to read sidecar"; return r;
+        }
     }
 
     if (method == "save_project") {

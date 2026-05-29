@@ -601,6 +601,26 @@ async def list_tools() -> list[Tool]:
             },
         ),
         Tool(
+            name="find_video_moment",
+            description=(
+                "Analyse a video file with the local Moondream2 vision model (runs on device, "
+                "no API cost) and find the timestamp(s) that best match a natural-language query. "
+                "The app must be running. Analysis takes up to ~3 minutes for a long video.\n\n"
+                "query examples: 'close-up face reaction', 'crowd shot', 'energetic dancing', "
+                "'aerial establishing shot', 'someone laughing'\n\n"
+                "Returns a list of up to 3 matches sorted by relevance: "
+                "{timestamp, description, confidence}."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Absolute path to the video file"},
+                    "query": {"type": "string", "description": "Natural-language description of the moment to find"},
+                },
+                "required": ["path", "query"],
+            },
+        ),
+        Tool(
             name="validate_glsl",
             description=(
                 "Test-compile a GLSL fragment shader body without registering it as a runtime effect. "
@@ -793,10 +813,67 @@ async def _find_audio_cue(arguments: dict) -> dict:
     }
 
 
+# ── find_video_moment ─────────────────────────────────────────────────────────
+
+def _tfidf_score(query: str, text: str) -> float:
+    """Simple word-overlap score between query and text (0–1)."""
+    q_words = set(query.lower().split())
+    t_words = set(text.lower().split())
+    if not q_words:
+        return 0.0
+    return len(q_words & t_words) / len(q_words)
+
+
+async def _find_video_moment(arguments: dict) -> list[dict]:
+    path        = arguments.get("path", "")
+    query       = arguments.get("query", "")
+    if not path:
+        raise ValueError("path is required")
+    if not query:
+        raise ValueError("query is required")
+
+    # Trigger analysis (or pick up a previously completed one)
+    try:
+        _call("describe_video", {"path": path})
+    except ValueError as e:
+        if "already running" not in str(e):
+            raise
+
+    # Poll until done (up to 180 s)
+    for _ in range(360):
+        await asyncio.sleep(0.5)
+        res = _call("get_video_description", {})
+        status = res.get("status")
+        if status == "done":
+            break
+        if status == "error":
+            raise ValueError("scene analysis failed: " + res.get("message", "unknown"))
+    else:
+        raise TimeoutError("scene analysis timed out after 180 s")
+
+    frames = res.get("frames", [])
+    if not frames:
+        return [{"timestamp": 0.0, "description": "(no frames)", "confidence": 0.0}]
+
+    # Score each frame against the query
+    scored = []
+    for f in frames:
+        desc  = f.get("description", "")
+        score = _tfidf_score(query, desc)
+        scored.append({"timestamp": f["timestamp"], "description": desc, "confidence": round(score, 3)})
+
+    # Sort descending by confidence, return top 3
+    scored.sort(key=lambda x: x["confidence"], reverse=True)
+    return scored[:3]
+
+
 @server.call_tool()
 async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     if name == "find_audio_cue":
         result = await _find_audio_cue(arguments)
+        return [TextContent(type="text", text=json.dumps(result, indent=2))]
+    if name == "find_video_moment":
+        result = await _find_video_moment(arguments)
         return [TextContent(type="text", text=json.dumps(result, indent=2))]
     try:
         result = _call(name, arguments)
