@@ -285,8 +285,10 @@ void draw_export_modal(AppState& state) {
                     }
                     fs::create_directories(base.parent_path());
                     state.out_mp4 = base.string() + ".mp4";
-                    state.out_gif = base.string() + ".gif";
                 }
+                // Always sync out_gif from out_mp4 so a pre-existing out_mp4
+                // (from a previous render) doesn't leave out_gif empty.
+                state.out_gif = fs::path(state.out_mp4).replace_extension(".gif").string();
                 render_start_gl(state);
             }
             ImGui::EndDisabled();
@@ -491,8 +493,8 @@ void panel_export(AppState& state, float w) {
                 }
                 fs::create_directories(base.parent_path());
                 state.out_mp4 = base.string() + ".mp4";
-                state.out_gif = base.string() + ".gif";
             }
+            state.out_gif = fs::path(state.out_mp4).replace_extension(".gif").string();
             render_start_gl(state);
         }
     }
