@@ -243,7 +243,8 @@ void ui_studio(AppState& state) {
                 if (pd > 0.f) {
                     for (auto& tr : state.tracks)
                         for (auto& cl : tr.clips)
-                            if (cl.clip_type == ClipType::Video && cl.text == src && cl.end < pd)
+                            if (cl.clip_type == ClipType::Video && cl.text == src && cl.end < pd
+                                && fabsf(cl.end - cl.start - 5.f) < 0.1f)
                                 cl.end = pd;
                 }
             }
