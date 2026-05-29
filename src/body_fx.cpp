@@ -60,9 +60,19 @@ float edge_mask(float w){
 }
 )glsl";
 
-// ── 40 effect frag bodies ─────────────────────────────────────────────────────
+// ── 41 effect frag bodies ────────────────────────────────────────────────────
 
-// 0: NeonOutline
+// 0: RemoveBackground
+static const char* k_frag_RemoveBackground = R"glsl(
+void main() {
+    vec4 orig = texture(u_src, v_uv);
+    float m   = texture(u_mask, v_uv).r;
+    vec4 result = vec4(orig.rgb, orig.a * m);
+    frag = mix(orig, result, u_amount);
+}
+)glsl";
+
+// 1: NeonOutline
 static const char* k_frag_NeonOutline = R"glsl(
 void main() {
     vec4 orig = texture(u_src, v_uv);
@@ -768,7 +778,12 @@ void main() {
 #define ACOL(r,g,b) ((unsigned)(0xFF000000u | ((unsigned)(b) << 16) | ((unsigned)(g) << 8) | (unsigned)(r)))
 
 static const BodyFXInfo g_body_fx_infos[] = {
-    // 0: NeonOutline
+    // 0: RemoveBackground
+    { BodyFXType::RemoveBackground, "Remove Background", "AI mask removes background, keeps subject", "Mask",
+      ACOL(60, 200, 255), 0,
+      {{}, {}, {}, {}},
+      k_frag_RemoveBackground },
+    // 1: NeonOutline
     { BodyFXType::NeonOutline, "Neon Outline", "Glowing edge trace on body silhouette", "Retro / 80s",
       ACOL(255,80,200), 2,
       {{"Glow Width", 1.f, 4.f, 2.f}, {"Hue", 0.f, 1.f, 0.8f}, {}, {}},

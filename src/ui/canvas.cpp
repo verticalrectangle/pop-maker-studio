@@ -789,31 +789,44 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                     }
                 }
 
-                // Glass BodyFX: from BodyFX sub-effects in glass MultiFX bricks on this track
-                if (cl_ptr && slot >= 0) {
-                    std::string mask_dir = bg_remove_proxy_dir(cl_ptr->source_id);
-                    if (!mask_dir.empty()) {
-                        float mask_fps = bg_remove_read_fps(mask_dir);
-                        float src_t = cl_ptr->in_point + (at_time - cl_ptr->start) / cl_ptr->speed;
-                        int frame_i = (int)(src_t * mask_fps);
-                        for (auto& mfx_cl : state.tracks[ti].clips) {
-                            if (mfx_cl.clip_type != ClipType::MultiFX) continue;
-                            if (at_time < mfx_cl.start || at_time >= mfx_cl.end) continue;
-                            if (!fx_clip_is_glass(state, ti, mfx_cl)) continue;
-                            float rel = at_time - mfx_cl.start;
-                            float parent_dur = mfx_cl.end - mfx_cl.start;
-                            for (auto& se : mfx_cl.fx_chain) {
-                                if (se.clip_type != ClipType::BodyFX) continue;
-                                float se_end = (se.rel_end <= 0.f) ? parent_dur : se.rel_end;
-                                if (rel < se.rel_start || rel >= se_end) continue;
-                                unsigned mask_tex = body_fx_mask_texture(mask_dir, frame_i);
-                                if (!mask_tex) continue;
-                                VideoInfo vi_g = video_info(slot);
-                                int bw = (vi_g.width  > 0) ? vi_g.width  : (int)w;
-                                int bh = (vi_g.height > 0) ? vi_g.height : (int)h;
-                                tex = body_fx_apply(se.body_fx_type, tex, mask_tex, bw, bh,
-                                                    se.body_fx_params, se.body_fx_amount, t_anim);
-                            }
+                // Glass BodyFX: standalone BodyFX bricks and MultiFX BodyFX sub-effects on this track.
+                // Both use the video clip's own bg_remove masks.
+                if (cl_ptr && slot >= 0 &&
+                    cl_ptr->bg_remove_status == BgRemoveStatus::Ready &&
+                    !cl_ptr->bg_remove_mask_dir.empty()) {
+                    std::string mask_dir = cl_ptr->bg_remove_mask_dir;
+                    float mask_fps = bg_remove_read_fps(mask_dir);
+                    float src_t = cl_ptr->in_point + (at_time - cl_ptr->start) / cl_ptr->speed;
+                    int frame_i = (int)(src_t * mask_fps);
+                    VideoInfo vi_g = video_info(slot);
+                    int bw = (vi_g.width  > 0) ? vi_g.width  : (int)w;
+                    int bh = (vi_g.height > 0) ? vi_g.height : (int)h;
+
+                    // Standalone glass BodyFX bricks on this track
+                    for (auto& bfx_cl : state.tracks[ti].clips) {
+                        if (bfx_cl.clip_type != ClipType::BodyFX) continue;
+                        if (at_time < bfx_cl.start || at_time >= bfx_cl.end) continue;
+                        unsigned mask_tex = body_fx_mask_texture(mask_dir, frame_i);
+                        if (!mask_tex) continue;
+                        tex = body_fx_apply(bfx_cl.body_fx_type, tex, mask_tex, bw, bh,
+                                            bfx_cl.body_fx_params, bfx_cl.body_fx_amount, t_anim);
+                    }
+
+                    // BodyFX sub-effects inside glass MultiFX bricks on this track
+                    for (auto& mfx_cl : state.tracks[ti].clips) {
+                        if (mfx_cl.clip_type != ClipType::MultiFX) continue;
+                        if (at_time < mfx_cl.start || at_time >= mfx_cl.end) continue;
+                        if (!fx_clip_is_glass(state, ti, mfx_cl)) continue;
+                        float rel = at_time - mfx_cl.start;
+                        float parent_dur = mfx_cl.end - mfx_cl.start;
+                        for (auto& se : mfx_cl.fx_chain) {
+                            if (se.clip_type != ClipType::BodyFX) continue;
+                            float se_end = (se.rel_end <= 0.f) ? parent_dur : se.rel_end;
+                            if (rel < se.rel_start || rel >= se_end) continue;
+                            unsigned mask_tex = body_fx_mask_texture(mask_dir, frame_i);
+                            if (!mask_tex) continue;
+                            tex = body_fx_apply(se.body_fx_type, tex, mask_tex, bw, bh,
+                                                se.body_fx_params, se.body_fx_amount, t_anim);
                         }
                     }
                 }
@@ -967,51 +980,10 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
         scene_apply_fx((int)w, (int)h, global_ea, global_cfx, t_anim);
     }
 
-    // ── Solid BodyFX bricks: post-composite pass ──────────────────────────────
-    // Tracks iterate 0 (top) to N-1 (bottom). A solid BodyFX brick has no video
-    // clip on its own track; it affects the composited scene below it.
     if (uintptr_t scene_tex = scene_result()) {
-        uintptr_t final_tex = scene_tex;
-        for (int ti = 0; ti < (int)state.tracks.size(); ++ti) {
-            auto& bfx_track = state.tracks[ti];
-            for (auto& bfx_cl : bfx_track.clips) {
-                if (bfx_cl.clip_type != ClipType::BodyFX) continue;
-                if (state.playhead < bfx_cl.start || state.playhead >= bfx_cl.end) continue;
-                // Confirm solid (no video clip co-inhabiting this track at this time)
-                bool is_glass = false;
-                for (auto& tc : bfx_track.clips) {
-                    if (tc.clip_type == ClipType::Video &&
-                        state.playhead >= tc.start && state.playhead < tc.end)
-                        { is_glass = true; break; }
-                }
-                if (is_glass) continue;
-                // Find topmost video clip on a track below (higher index = lower in stack)
-                const Clip* vid_cl = nullptr;
-                for (int vi = ti + 1; vi < (int)state.tracks.size(); ++vi) {
-                    for (auto& vc : state.tracks[vi].clips) {
-                        if (vc.clip_type == ClipType::Video &&
-                            state.playhead >= vc.start && state.playhead < vc.end)
-                            { vid_cl = &vc; break; }
-                    }
-                    if (vid_cl) break;
-                }
-                if (!vid_cl) continue;
-                std::string mask_dir = bg_remove_proxy_dir(vid_cl->source_id);
-                if (mask_dir.empty()) continue;
-                float mask_fps = bg_remove_read_fps(mask_dir);
-                float src_t    = vid_cl->in_point + (state.playhead - vid_cl->start) / vid_cl->speed;
-                int   frame_i  = (int)(src_t * mask_fps);
-                unsigned mask_tex_id = body_fx_mask_texture(mask_dir, frame_i);
-                if (!mask_tex_id) continue;
-                final_tex = body_fx_apply(bfx_cl.body_fx_type, final_tex, mask_tex_id,
-                                          (int)w, (int)h, bfx_cl.body_fx_params,
-                                          bfx_cl.body_fx_amount, t_anim);
-            }
-        }
-
         // ── Draw scene FBO to ImGui draw list ─────────────────────────────────
         // Y-flip UVs: GL FBO t=0 is at the bottom, ImGui tl=(0,0) is at the top.
-        dl->AddImageQuad(ImTextureRef((ImTextureID)final_tex),
+        dl->AddImageQuad(ImTextureRef((ImTextureID)scene_tex),
             p,                      {p.x + w, p.y},
             {p.x + w, p.y + h},    {p.x, p.y + h},
             {0.f, 1.f}, {1.f, 1.f}, {1.f, 0.f}, {0.f, 0.f},

@@ -2098,6 +2098,17 @@ void panel_body_fx_library(AppState& state, float w) {
         if (c.clip_type == ClipType::BodyFX) bfx_clip = &c;
     }
 
+    // Find selected video clip (target track for adding BodyFX bricks)
+    Clip* vid_clip = nullptr;
+    int   vid_ti   = state.selected_track;
+    int   vid_ci   = state.selected_clip;
+    if (!bfx_clip &&
+        vid_ti >= 0 && vid_ti < (int)state.tracks.size() &&
+        vid_ci >= 0 && vid_ci < (int)state.tracks[vid_ti].clips.size()) {
+        Clip& c = state.tracks[vid_ti].clips[vid_ci];
+        if (c.clip_type == ClipType::Video) vid_clip = &c;
+    }
+
     float bar_w = w - 16.f;
 
     // ── Selected brick controls (only shown when a BodyFX brick is selected) ───
@@ -2153,7 +2164,12 @@ void panel_body_fx_library(AppState& state, float w) {
     ImGui::TextUnformatted("Body FX");
     ImGui::PopStyleColor();
     ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
-    ImGui::TextWrapped("Click to add a brick at the playhead. Select a brick to tweak it above.");
+    if (bfx_clip)
+        ImGui::TextWrapped("Click to change the selected brick's effect type.");
+    else if (vid_clip)
+        ImGui::TextWrapped("Click to add a Body FX brick to the selected video clip's track.");
+    else
+        ImGui::TextWrapped("Select a video clip in the timeline to add Body FX bricks.");
     ImGui::PopStyleColor();
     ImGui::Dummy({0.f, 8.f});
 
@@ -2181,37 +2197,40 @@ void panel_body_fx_library(AppState& state, float w) {
         ImVec2 cp = ImGui::GetCursorScreenPos();
         ImDrawList* dl = ImGui::GetWindowDrawList();
 
-        bool hov = ImGui::IsMouseHoveringRect(cp, {cp.x + card_w, cp.y + card_h});
-        ImU32 fill = selected ? IM_COL32(10, 90, 80, 255)
-                   : hov      ? IM_COL32(20, 50, 46, 255)
-                              : IM_COL32(14, 28, 26, 255);
-        ImU32 border = selected ? IM_COL32(30, 200, 170, 200)
-                     : hov      ? IM_COL32(40, 140, 120, 150)
-                                : IM_COL32(30, 60, 55, 180);
+        bool can_act = bfx_clip || vid_clip;
+        bool hov = can_act && ImGui::IsMouseHoveringRect(cp, {cp.x + card_w, cp.y + card_h});
+        ImU32 fill = selected  ? IM_COL32(10, 90, 80, 255)
+                   : !can_act  ? IM_COL32(10, 20, 18, 180)
+                   : hov       ? IM_COL32(20, 50, 46, 255)
+                               : IM_COL32(14, 28, 26, 255);
+        ImU32 border = selected  ? IM_COL32(30, 200, 170, 200)
+                     : !can_act  ? IM_COL32(20, 35, 32, 120)
+                     : hov       ? IM_COL32(40, 140, 120, 150)
+                                 : IM_COL32(30, 60, 55, 180);
         dl->AddRectFilled(cp, {cp.x + card_w, cp.y + card_h}, fill, 4.f);
         dl->AddRect(cp, {cp.x + card_w, cp.y + card_h}, border, 4.f, 0, selected ? 1.5f : 1.f);
 
         ImGui::PushFont(g_font_bold);
-        ImU32 nc = selected ? IM_COL32(80, 240, 210, 255) : IM_COL32(200, 230, 225, 220);
+        ImU32 nc = selected   ? IM_COL32(80, 240, 210, 255)
+                 : !can_act   ? IM_COL32(80, 100, 95, 160)
+                              : IM_COL32(200, 230, 225, 220);
         dl->AddText(ImGui::GetFont(), 13.f, {cp.x + 10.f, cp.y + 8.f}, nc, info.name);
         ImGui::PopFont();
-        ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
-        dl->AddText({cp.x + 10.f, cp.y + 24.f}, to_u32(Col::dim), info.tagline);
-        ImGui::PopStyleColor();
+        ImU32 tc = can_act ? to_u32(Col::dim) : IM_COL32(60, 75, 70, 140);
+        dl->AddText({cp.x + 10.f, cp.y + 24.f}, tc, info.tagline);
 
         ImGui::SetCursorScreenPos(cp);
         ImGui::InvisibleButton("##bfx_card", {card_w, card_h});
-        if (ImGui::IsItemClicked()) {
+        if (ImGui::IsItemClicked() && can_act) {
             if (bfx_clip) {
-                // Apply effect to selected brick
+                // Change selected brick's effect type
                 bfx_clip->body_fx_type = info.type;
                 for (int pi = 0; pi < 4; ++pi)
                     bfx_clip->body_fx_params[pi] = pi < info.n_params
                                                    ? info.params[pi].default_val : 0.5f;
                 history_push(state, std::string("Body FX: ") + info.name);
             } else {
-                // Create a new BodyFX brick on a new track at playhead
-                Track nt; nt.name = "Body FX";
+                // Add BodyFX brick to the selected video clip's track
                 Clip cl;
                 cl.clip_type     = ClipType::BodyFX;
                 cl.body_fx_type  = info.type;
@@ -2220,10 +2239,9 @@ void panel_body_fx_library(AppState& state, float w) {
                 for (int pi = 0; pi < 4; ++pi)
                     cl.body_fx_params[pi] = pi < info.n_params
                                             ? info.params[pi].default_val : 0.5f;
-                nt.clips.push_back(cl);
-                state.tracks.insert(state.tracks.begin(), std::move(nt));
-                state.selected_track = 0;
-                state.selected_clip  = 0;
+                state.tracks[vid_ti].clips.push_back(cl);
+                state.selected_track = vid_ti;
+                state.selected_clip  = (int)state.tracks[vid_ti].clips.size() - 1;
                 history_push(state, std::string("Add Body FX: ") + info.name);
             }
         }

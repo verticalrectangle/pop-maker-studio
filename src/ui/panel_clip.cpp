@@ -1949,26 +1949,13 @@ void panel_clip(AppState& state, float w) {
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // BODY FX CLIP
+    // BODY FX CLIP (always glass — lives on same track as a video clip)
     // ═══════════════════════════════════════════════════════════════════════════
     else if (clip.clip_type == ClipType::BodyFX) {
         float bar_w = w - 16.f;
+        ImDrawList* bgdl = ImGui::GetWindowDrawList();
 
-        auto plain_slider = [&](const char* id, const char* label, float* v,
-                                float vmin, float vmax, const char* fmt) {
-            ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
-            ImGui::TextUnformatted(label);
-            ImGui::PopStyleColor();
-            ImGui::PushStyleColor(ImGuiCol_SliderGrab, to_u32(Col::fg));
-            ImGui::PushStyleColor(ImGuiCol_FrameBg,    Col::bg_soft);
-            ImGui::SetNextItemWidth(bar_w);
-            bool ch = ImGui::SliderFloat(id, v, vmin, vmax, fmt);
-            ImGui::PopStyleColor(2);
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, label);
-            return ch;
-        };
-
-        // ── Effect name ───────────────────────────────────────────────────────
+        // ── Effect name + params ──────────────────────────────────────────────
         ImGui::Dummy({0.f, 4.f});
         {
             const BodyFXInfo* info = body_fx_find_info(clip.body_fx_type);
@@ -1979,179 +1966,201 @@ void panel_clip(AppState& state, float w) {
                 ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
                 ImGui::TextUnformatted(info->tagline);
                 ImGui::PopStyleColor();
-                ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
-                ImGui::TextUnformatted(info->category);
-                ImGui::PopStyleColor();
             }
         }
 
-        // ── Amount ────────────────────────────────────────────────────────────
-        ImGui::Dummy({0.f, 10.f}); ui_separator(); ImGui::Dummy({0.f, 6.f});
-        ui_label("Blend");
-        ImGui::Dummy({0.f, 6.f});
-        plain_slider("##bfx_amount", "Amount", &clip.body_fx_amount, 0.f, 1.f, "%.2f");
+        if (clip.body_fx_type != BodyFXType::RemoveBackground) {
+            // Amount only shown for effects other than RemoveBackground
+            ImGui::Dummy({0.f, 6.f});
+            ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+            ImGui::TextUnformatted("Amount");
+            ImGui::PopStyleColor();
+            ImGui::PushStyleColor(ImGuiCol_SliderGrab, to_u32(Col::fg));
+            ImGui::PushStyleColor(ImGuiCol_FrameBg,    Col::bg_soft);
+            ImGui::SetNextItemWidth(bar_w);
+            if (ImGui::SliderFloat("##bfx_amount", &clip.body_fx_amount, 0.f, 1.f, "%.2f"))
+                {}
+            ImGui::PopStyleColor(2);
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Amount");
 
-        // ── Parameters ────────────────────────────────────────────────────────
-        {
             const BodyFXInfo* info = body_fx_find_info(clip.body_fx_type);
             if (info && info->n_params > 0) {
-                ImGui::Dummy({0.f, 10.f}); ui_separator(); ImGui::Dummy({0.f, 6.f});
-                ui_label("Parameters");
-                ImGui::Dummy({0.f, 6.f});
+                ImGui::Dummy({0.f, 4.f});
                 for (int pi = 0; pi < info->n_params && pi < 4; ++pi) {
                     const BodyFXParamDef& pd = info->params[pi];
                     char id[32]; snprintf(id, sizeof(id), "##bfxp%d", pi);
-                    plain_slider(id, pd.label, &clip.body_fx_params[pi],
-                                 pd.min_val, pd.max_val, "%.3f");
+                    ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+                    ImGui::TextUnformatted(pd.label);
+                    ImGui::PopStyleColor();
+                    ImGui::PushStyleColor(ImGuiCol_SliderGrab, to_u32(Col::fg));
+                    ImGui::PushStyleColor(ImGuiCol_FrameBg,    Col::bg_soft);
+                    ImGui::SetNextItemWidth(bar_w);
+                    ImGui::SliderFloat(id, &clip.body_fx_params[pi], pd.min_val, pd.max_val, "%.3f");
+                    ImGui::PopStyleColor(2);
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, pd.label);
                     ImGui::Dummy({0.f, 2.f});
                 }
             }
         }
 
-        // ── Mask status ───────────────────────────────────────────────────────
+        // ── Remove Background — use the sibling video clip's bg_remove UI ────
         ImGui::Dummy({0.f, 10.f}); ui_separator(); ImGui::Dummy({0.f, 6.f});
-        ui_label("Mask Status");
+        ui_label("Remove Background");
         ImGui::Dummy({0.f, 6.f});
-        {
-            // Determine if this is a glass brick (co-track video) or solid brick
-            bool is_glass = false;
-            for (auto& sibling : track.clips)
-                if (sibling.clip_type == ClipType::Video) { is_glass = true; break; }
 
-            if (is_glass) {
-                // Glass brick: show status of sibling video's bg_remove masks
-                bool found_vid = false;
-                for (auto& sibling : track.clips) {
-                    if (sibling.clip_type != ClipType::Video) continue;
-                    if (sibling.source_id != clip.source_id) continue;
-                    found_vid = true;
-                    if (sibling.bg_remove_status == BgRemoveStatus::Ready) {
-                        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.25f, 0.85f, 0.4f, 1.f));
-                        ImGui::TextUnformatted("Masks ready");
-                        ImGui::PopStyleColor();
-                    } else if (sibling.bg_remove_status == BgRemoveStatus::Processing) {
-                        char pct[64];
-                        int p = (int)(fmaxf(0.f, fminf(1.f, sibling.bg_remove_progress)) * 100.f);
-                        snprintf(pct, sizeof(pct), "Generating masks %d%%", p);
-                        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, 0.65f, 0.f, 1.f));
-                        ImGui::TextUnformatted(pct);
-                        ImGui::PopStyleColor();
-                    } else if (sibling.bg_remove_status == BgRemoveStatus::Error) {
-                        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.3f, 0.3f, 1.f));
-                        ImGui::TextUnformatted("Mask generation failed");
-                        ImGui::PopStyleColor();
-                        ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
-                        ImGui::TextWrapped("%s", sibling.bg_remove_error.c_str());
-                        ImGui::PopStyleColor();
-                    } else {
-                        ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
-                        ImGui::TextWrapped("No masks — select the video clip and run Remove Background.");
-                        ImGui::PopStyleColor();
-                    }
-                    break;
-                }
-                if (!found_vid) {
-                    ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
-                    ImGui::TextWrapped("No matching video clip found on this track.");
-                    ImGui::PopStyleColor();
-                }
-            } else {
-                // Solid brick: has its own mask pipeline
-                static BgRemoveStatus s_prev_bfx_status = BgRemoveStatus::Idle;
-                static bool           s_show_bfx_ok     = false;
-                static float          s_bfx_ok_timer    = 0.f;
-
-                BgRemoveStatus bfx_status = clip.body_fx_mask_status;
-
-                if (bfx_status == BgRemoveStatus::Ready &&
-                    s_prev_bfx_status == BgRemoveStatus::Processing) {
-                    s_show_bfx_ok  = true;
-                    s_bfx_ok_timer = (float)ImGui::GetTime() + 3.f;
-                }
-                s_prev_bfx_status = bfx_status;
-                if (s_show_bfx_ok && ImGui::GetTime() > s_bfx_ok_timer) s_show_bfx_ok = false;
-
-                if (bfx_status == BgRemoveStatus::Processing) {
-                    float prog = fmaxf(0.f, fminf(1.f, clip.body_fx_mask_progress));
-                    char pct[64]; snprintf(pct, sizeof(pct), "Processing  %d%%", (int)(prog * 100.f));
-                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, 0.65f, 0.f, 1.f));
-                    ImGui::TextUnformatted(pct);
-                    ImGui::PopStyleColor();
-                    ImGui::PushStyleColor(ImGuiCol_PlotHistogram, ImVec4(1.f, 0.65f, 0.f, 1.f));
-                    ImGui::ProgressBar(prog, ImVec2(bar_w, 6.f), "");
-                    ImGui::PopStyleColor();
-                } else if (bfx_status == BgRemoveStatus::Ready || s_show_bfx_ok) {
-                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.25f, 0.85f, 0.4f, 1.f));
-                    ImGui::TextUnformatted("Masks ready \xE2\x9C\x93");
-                    ImGui::PopStyleColor();
-                } else if (bfx_status == BgRemoveStatus::Error) {
-                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.3f, 0.3f, 1.f));
-                    ImGui::TextUnformatted("Mask generation failed");
-                    ImGui::PopStyleColor();
-                    if (!clip.body_fx_mask_error.empty()) {
-                        ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
-                        ImGui::TextWrapped("%s", clip.body_fx_mask_error.c_str());
-                        ImGui::PopStyleColor();
-                    }
-                } else {
-                    ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
-                    ImGui::TextUnformatted("No masks processed yet.");
-                    ImGui::PopStyleColor();
-                }
-
-                // Expand warning
-                if (clip.body_fx_needs_expand) {
-                    ImGui::Dummy({0.f, 4.f});
-                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, 0.8f, 0.2f, 1.f));
-                    ImGui::TextWrapped("Brick extended past processed range — re-run Process Masks to cover new frames.");
-                    ImGui::PopStyleColor();
-                }
-
-                // Process Masks button
-                ImGui::Dummy({0.f, 6.f});
-                bool has_video_below = false;
-                int my_ti = state.selected_track;
-                for (int vi = my_ti + 1; vi < (int)state.tracks.size(); ++vi) {
-                    for (auto& vc : state.tracks[vi].clips)
-                        if (vc.clip_type == ClipType::Video) { has_video_below = true; break; }
-                    if (has_video_below) break;
-                }
-                bool busy = (bfx_status == BgRemoveStatus::Processing);
-                if (!has_video_below || busy) ImGui::BeginDisabled();
-                if (ImGui::Button("Process Masks", ImVec2(bar_w, 0.f)))
-                    bg_remove_body_fx_start(state, state.selected_track, state.selected_clip);
-                if (!has_video_below || busy) ImGui::EndDisabled();
-                if (!has_video_below) {
-                    ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
-                    ImGui::TextWrapped("Add a video clip on a track below to enable mask processing.");
-                    ImGui::PopStyleColor();
-                }
+        // Find the sibling video clip on this track
+        Clip* vid_clip = nullptr;
+        int   vid_ci   = -1;
+        for (int ci2 = 0; ci2 < (int)track.clips.size(); ++ci2) {
+            if (track.clips[ci2].clip_type == ClipType::Video) {
+                vid_clip = &track.clips[ci2];
+                vid_ci   = ci2;
+                break;
             }
         }
 
-        // ── Change effect ─────────────────────────────────────────────────────
-        ImGui::Dummy({0.f, 10.f}); ui_separator(); ImGui::Dummy({0.f, 6.f});
-        if (ImGui::CollapsingHeader("Change Effect##bfx_change")) {
-            ImGui::Dummy({0.f, 4.f});
-            int n = body_fx_info_count();
-            const BodyFXInfo* infos = body_fx_info_list();
-            for (int i = 0; i < n; ++i) {
-                const BodyFXInfo& info = infos[i];
-                bool selected = (clip.body_fx_type == info.type);
-                ImGui::PushID(50000 + i);
-                if (ImGui::Selectable(info.name, selected)) {
-                    clip.body_fx_type = info.type;
-                    // Reset params to defaults
-                    for (int pi = 0; pi < 4; ++pi)
-                        clip.body_fx_params[pi] = (pi < info.n_params) ? info.params[pi].default_val : 0.5f;
-                    history_push(state, std::string("Change Body FX: ") + info.name);
+        if (!vid_clip) {
+            ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+            ImGui::TextWrapped("No video clip on this track. Body FX must be on the same track as a video clip.");
+            ImGui::PopStyleColor();
+        } else {
+            // Re-use the exact same bg_remove UI from the video clip inspector.
+            // We show it here pointing at the sibling video clip.
+            bool rembg_ok = rembg_is_installed();
+            if (!rembg_ok) {
+                RembgInstallStatus inst = rembg_install_status();
+                if (inst == RembgInstallStatus::Running) {
+                    float t = fmodf((float)ImGui::GetTime() * 0.8f, 1.f);
+                    ImVec2 bp = ImGui::GetCursorScreenPos();
+                    bgdl->AddRectFilled(bp, {bp.x+bar_w, bp.y+4.f}, IM_COL32(255,165,0,40), 2.f);
+                    bgdl->AddRectFilled({bp.x+bar_w*t, bp.y}, {bp.x+bar_w*fminf(1.f,t+0.3f), bp.y+4.f}, IM_COL32(255,165,0,220), 2.f);
+                    ImGui::Dummy({0.f, 8.f});
+                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f,0.65f,0.f,1.f));
+                    ImGui::TextUnformatted("Installing rembg…");
+                    ImGui::PopStyleColor();
+                } else if (inst == RembgInstallStatus::Failed) {
+                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f,0.3f,0.3f,1.f));
+                    ImGui::TextUnformatted("Install failed.");
+                    ImGui::PopStyleColor();
+                    ImGui::Dummy({0.f,4.f});
+                    if (ui_btn("Retry install", false, true)) rembg_install_start();
+                } else {
+                    ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+                    ImGui::TextWrapped("rembg is not installed. It's needed to generate body masks.");
+                    ImGui::PopStyleColor();
+                    ImGui::Dummy({0.f,4.f});
+                    if (ui_btn("Install rembg", false, true)) rembg_install_start();
                 }
-                if (ImGui::IsItemHovered()) {
-                    ImGui::SetTooltip("%s\n%s", info.tagline, info.category);
-                }
-                ImGui::PopID();
+                ImGui::Dummy({0.f, 4.f});
             }
-            ImGui::Dummy({0.f, 4.f});
+
+            auto& vc = *vid_clip;
+            auto status = vc.bg_remove_status;
+            if (!rembg_ok) ImGui::BeginDisabled();
+
+            bool tog = vc.bg_remove_on;
+            if (ImGui::Checkbox("Enable##bfx_bgr", &tog)) {
+                vc.bg_remove_on = tog;
+                history_push(state, "Remove Background");
+            }
+            ImGui::Dummy({0.f, 6.f});
+
+            static BgRemoveStatus s_prev_bfx_bgr = BgRemoveStatus::Idle;
+            static int            s_prev_bfx_ci  = -1;
+            if (status == BgRemoveStatus::Processing && vc.bg_remove_progress > 0.f) {
+                float dur = vc.end - vc.start;
+                if (dur > 0.f) state.playhead = vc.start + fminf(vc.bg_remove_progress, 0.99f) * dur;
+            } else if (status == BgRemoveStatus::Ready &&
+                       s_prev_bfx_bgr == BgRemoveStatus::Processing &&
+                       s_prev_bfx_ci == vid_ci) {
+                seek_to(state, vc.start);
+            }
+            s_prev_bfx_bgr = status; s_prev_bfx_ci = vid_ci;
+
+            if (status == BgRemoveStatus::Processing) {
+                ImVec2 bp = ImGui::GetCursorScreenPos();
+                ImU32 amber = IM_COL32(255,165,0,255), amber_dim = IM_COL32(255,165,0,60);
+                if (vc.bg_remove_progress < 0.f) {
+                    float t = fmodf((float)ImGui::GetTime() * 0.6f, 1.f);
+                    float seg = bar_w * 0.35f, x0 = bp.x + (bar_w - seg) * t;
+                    bgdl->AddRectFilled(bp, {bp.x+bar_w, bp.y+6.f}, amber_dim, 3.f);
+                    bgdl->AddRectFilled({x0, bp.y}, {x0+seg, bp.y+6.f}, amber, 3.f);
+                    ImGui::Dummy({0.f, 10.f});
+                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f,0.65f,0.f,1.f));
+                    ImGui::TextUnformatted("Downloading AI model…");
+                    ImGui::PopStyleColor();
+                    ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+                    ImGui::TextWrapped("First run only (~180 MB). Please wait.");
+                    ImGui::PopStyleColor();
+                } else {
+                    float fill = fmaxf(0.01f, fminf(1.f, vc.bg_remove_progress));
+                    bgdl->AddRectFilled(bp, {bp.x+bar_w, bp.y+6.f}, amber_dim, 3.f);
+                    bgdl->AddRectFilled(bp, {bp.x+bar_w*fill, bp.y+6.f}, amber, 3.f);
+                    ImGui::Dummy({0.f, 10.f});
+                    char pct[64]; snprintf(pct, sizeof(pct), "Removing background…  %d%%", (int)(fill*100.f));
+                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f,0.65f,0.f,1.f));
+                    ImGui::TextUnformatted(pct);
+                    ImGui::PopStyleColor();
+                    ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+                    ImGui::TextWrapped("Please wait. This processes every frame using the AI model.");
+                    ImGui::PopStyleColor();
+                }
+                ImGui::Dummy({0.f, 4.f});
+            } else if (status == BgRemoveStatus::Ready) {
+                ImVec2 bp = ImGui::GetCursorScreenPos();
+                bgdl->AddRectFilled(bp, {bp.x+bar_w, bp.y+6.f}, IM_COL32(40,200,80,255), 3.f);
+                ImGui::Dummy({0.f, 10.f});
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.25f,0.85f,0.4f,1.f));
+                ImGui::TextUnformatted("Ready");
+                ImGui::PopStyleColor();
+                ImGui::Dummy({0.f, 6.f});
+                ImGui::PushStyleColor(ImGuiCol_Text, Col::muted); ImGui::TextUnformatted("Edge softness"); ImGui::PopStyleColor();
+                ImGui::PushStyleColor(ImGuiCol_SliderGrab, to_u32(Col::fg));
+                ImGui::PushStyleColor(ImGuiCol_FrameBg,    Col::bg_soft);
+                ImGui::SetNextItemWidth(bar_w);
+                if (ImGui::SliderFloat("##bfx_bgrsoft", &vc.bg_remove_softness, 0.f, 1.f, "%.2f"))
+                    history_push(state, "BG Softness");
+                ImGui::PopStyleColor(2);
+                ImGui::Dummy({0.f, 6.f});
+                if (ui_btn("Re-run", false, true))
+                    bg_remove_start(state, state.selected_track, vid_ci);
+            } else if (status == BgRemoveStatus::Error) {
+                ImVec2 bp = ImGui::GetCursorScreenPos();
+                bgdl->AddRectFilled(bp, {bp.x+bar_w, bp.y+6.f}, IM_COL32(220,60,60,255), 3.f);
+                ImGui::Dummy({0.f, 10.f});
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f,0.3f,0.3f,1.f));
+                ImGui::TextUnformatted("Failed");
+                ImGui::PopStyleColor();
+                if (!vc.bg_remove_error.empty()) {
+                    ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+                    std::string err = vc.bg_remove_error;
+                    if (err.size() > 120) err = err.substr(0,117) + "...";
+                    ImGui::TextWrapped("%s", err.c_str());
+                    ImGui::PopStyleColor();
+                }
+                ImGui::Dummy({0.f, 4.f});
+                if (ui_btn("Retry", false, true))
+                    bg_remove_start(state, state.selected_track, vid_ci);
+            } else {
+                bool proxy_ok = !vc.text.empty() && proxy_is_ready(vc.text);
+                if (!proxy_ok) {
+                    ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+                    ImGui::TextWrapped("Waiting for video proxy to finish before processing.");
+                    ImGui::PopStyleColor();
+                    ImGui::Dummy({0.f, 4.f});
+                }
+                if (!proxy_ok || !vc.bg_remove_on) ImGui::BeginDisabled();
+                if (ui_btn("Process  (removes background via AI)", false, true))
+                    bg_remove_start(state, state.selected_track, vid_ci);
+                if (!proxy_ok || !vc.bg_remove_on) ImGui::EndDisabled();
+                if (!vc.bg_remove_on) {
+                    ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+                    ImGui::TextWrapped("Enable the toggle above to start.");
+                    ImGui::PopStyleColor();
+                }
+                ImGui::Dummy({0.f, 4.f});
+            }
+            if (!rembg_ok) ImGui::EndDisabled();
         }
     }
 }

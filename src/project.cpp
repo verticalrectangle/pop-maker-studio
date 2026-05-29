@@ -7,7 +7,7 @@
 // ── Binary serialization helpers ──────────────────────────────────────────────
 
 static const uint32_t MAGIC   = 0x534D5001u; // "PMS\x01"
-static const uint32_t VERSION = 33u;
+static const uint32_t VERSION = 34u;
 
 struct Writer {
     std::ofstream f;
@@ -187,10 +187,7 @@ static void write_clip(Writer& w, const Clip& c) {
     // v31: callout overlay fields
     w.pod(c.callout_style); w.pod((uint8_t)c.callout_arrow);
     w.pod(c.arrow_tx); w.pod(c.arrow_ty);
-    // v32: BodyFX brick mask state
-    w.pod((uint8_t)c.body_fx_mask_status);
-    w.pod(c.body_fx_mask_progress);
-    w.str(c.body_fx_mask_error);
+    // v32–33: body_fx_mask_status/progress/error were written here; removed in v34
 }
 
 static Clip read_clip(Reader& r, uint32_t version) {
@@ -303,9 +300,11 @@ static Clip read_clip(Reader& r, uint32_t version) {
         c.runtime_fx_params = r.vecf();
         c.runtime_fx_amount = r.pod<float>();
     }
-    // v27: body FX
+    // v27: body FX  (v34+: RemoveBackground inserted at index 0, shift old values by +1)
     if (version >= 27u) {
-        c.body_fx_type = (BodyFXType)r.pod<int>();
+        int raw_type = r.pod<int>();
+        if (version < 34u) raw_type += 1;  // remap: old NeonOutline=0 → new NeonOutline=1
+        c.body_fx_type = (BodyFXType)raw_type;
         for (int i=0;i<4;++i) c.body_fx_params[i] = r.pod<float>();
         c.body_fx_amount = r.pod<float>();
     }
@@ -337,14 +336,9 @@ static Clip read_clip(Reader& r, uint32_t version) {
         c.arrow_tx      = r.pod<float>();
         c.arrow_ty      = r.pod<float>();
     }
-    // v32: BodyFX brick mask state
-    if (version >= 32u) {
-        c.body_fx_mask_status   = (BgRemoveStatus)r.pod<uint8_t>();
-        c.body_fx_mask_progress = r.pod<float>();
-        c.body_fx_mask_error    = r.str();
-        // Revert processing state — don't resume mid-job after reload
-        if (c.body_fx_mask_status == BgRemoveStatus::Processing)
-            c.body_fx_mask_status = BgRemoveStatus::Idle;
+    // v32–33: body_fx_mask_status/progress/error — read and discard (removed in v34)
+    if (version >= 32u && version < 34u) {
+        r.pod<uint8_t>(); r.pod<float>(); r.str();
     }
     return c;
 }

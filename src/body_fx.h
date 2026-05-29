@@ -3,8 +3,10 @@
 #include <cstdint>
 
 enum class BodyFXType : int {
+    // Mask utility (must stay first — index 0)
+    RemoveBackground = 0,
     // Retro / 80s
-    NeonOutline = 0, VHSBody, Scanlines, ChromaticBody, Retrowave,
+    NeonOutline, VHSBody, Scanlines, ChromaticBody, Retrowave,
     TVStaticBg, Arcade, FilmGrainBody,
     // Depth / Focus
     DepthBlur, TiltShiftBg, Spotlight, FogBg, BokehBg,

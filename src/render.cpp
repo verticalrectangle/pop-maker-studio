@@ -1839,29 +1839,41 @@ static bool gl_render_vid_clip(ImDrawList& dl, const Clip* cl, float at_time,
             cur_tex = fx_apply(cur_tex, fx_slot, vid_w, vid_h, glass_ea, glass_cfx, at_time);
     }
 
-    // Glass BodyFX: from BodyFX sub-effects in glass MultiFX bricks on this track.
-    {
-        std::string mask_dir = bg_remove_hires_dir(cl->text);
-        if (!mask_dir.empty()) {
-            float mask_fps = bg_remove_read_fps(mask_dir);
-            float bfx_src_t = cl->in_point + (at_time - cl->start) / cl->speed;
-            int frame_i = (int)(bfx_src_t * mask_fps);
-            for (auto& mfx_cl : state.tracks[ti].clips) {
-                if (mfx_cl.clip_type != ClipType::MultiFX) continue;
-                if (at_time < mfx_cl.start || at_time >= mfx_cl.end) continue;
-                if (!fx_clip_is_glass(state, ti, mfx_cl)) continue;
-                float rel = at_time - mfx_cl.start;
-                float parent_dur = mfx_cl.end - mfx_cl.start;
-                for (auto& se : mfx_cl.fx_chain) {
-                    if (se.clip_type != ClipType::BodyFX) continue;
-                    float se_end = (se.rel_end <= 0.f) ? parent_dur : se.rel_end;
-                    if (rel < se.rel_start || rel >= se_end) continue;
-                    unsigned mask_tex = body_fx_mask_texture(mask_dir, frame_i);
-                    if (!mask_tex) continue;
-                    cur_tex = body_fx_apply(se.body_fx_type, cur_tex, mask_tex,
-                                            vid_w, vid_h, se.body_fx_params,
-                                            se.body_fx_amount, at_time);
-                }
+    // Glass BodyFX: standalone bricks and MultiFX sub-effects on this track.
+    // Both use the video clip's own bg_remove masks (hires at export time).
+    if (cl->bg_remove_status == BgRemoveStatus::Ready && !cl->bg_remove_mask_dir.empty()) {
+        std::string mask_dir = cl->bg_remove_mask_dir;
+        float mask_fps = bg_remove_read_fps(mask_dir);
+        float bfx_src_t = cl->in_point + (at_time - cl->start) / cl->speed;
+        int frame_i = (int)(bfx_src_t * mask_fps);
+
+        // Standalone glass BodyFX bricks on this track
+        for (auto& bfx_cl : state.tracks[ti].clips) {
+            if (bfx_cl.clip_type != ClipType::BodyFX) continue;
+            if (at_time < bfx_cl.start || at_time >= bfx_cl.end) continue;
+            unsigned mask_tex = body_fx_mask_texture(mask_dir, frame_i);
+            if (!mask_tex) continue;
+            cur_tex = body_fx_apply(bfx_cl.body_fx_type, cur_tex, mask_tex,
+                                    vid_w, vid_h, bfx_cl.body_fx_params,
+                                    bfx_cl.body_fx_amount, at_time);
+        }
+
+        // BodyFX sub-effects inside glass MultiFX bricks on this track
+        for (auto& mfx_cl : state.tracks[ti].clips) {
+            if (mfx_cl.clip_type != ClipType::MultiFX) continue;
+            if (at_time < mfx_cl.start || at_time >= mfx_cl.end) continue;
+            if (!fx_clip_is_glass(state, ti, mfx_cl)) continue;
+            float rel = at_time - mfx_cl.start;
+            float parent_dur = mfx_cl.end - mfx_cl.start;
+            for (auto& se : mfx_cl.fx_chain) {
+                if (se.clip_type != ClipType::BodyFX) continue;
+                float se_end = (se.rel_end <= 0.f) ? parent_dur : se.rel_end;
+                if (rel < se.rel_start || rel >= se_end) continue;
+                unsigned mask_tex = body_fx_mask_texture(mask_dir, frame_i);
+                if (!mask_tex) continue;
+                cur_tex = body_fx_apply(se.body_fx_type, cur_tex, mask_tex,
+                                        vid_w, vid_h, se.body_fx_params,
+                                        se.body_fx_amount, at_time);
             }
         }
     }
@@ -2517,47 +2529,6 @@ void render_tick_gl(AppState& state) {
     }
 
     rlog("  fx_done\n");
-
-    // ── Phase 3b: Solid BodyFX bricks — post-composite pass ──────────────────
-    // Tracks: index 0 = top, N-1 = bottom. Solid brick has no video on its track.
-    for (int ti = 0; ti < (int)state.tracks.size(); ++ti) {
-        auto& bfx_track = state.tracks[ti];
-        for (auto& bfx_cl : bfx_track.clips) {
-            if (bfx_cl.clip_type != ClipType::BodyFX) continue;
-            if (t < bfx_cl.start || t >= bfx_cl.end) continue;
-            bool is_glass = false;
-            for (auto& tc : bfx_track.clips) {
-                if (tc.clip_type == ClipType::Video && t >= tc.start && t < tc.end)
-                    { is_glass = true; break; }
-            }
-            if (is_glass) continue;
-            const Clip* vid_cl = nullptr;
-            for (int vi = ti + 1; vi < (int)state.tracks.size(); ++vi) {
-                for (auto& vc : state.tracks[vi].clips) {
-                    if (vc.clip_type == ClipType::Video && t >= vc.start && t < vc.end)
-                        { vid_cl = &vc; break; }
-                }
-                if (vid_cl) break;
-            }
-            if (!vid_cl) continue;
-            std::string mask_dir = bg_remove_hires_dir(vid_cl->text);
-            if (mask_dir.empty()) continue;
-            float mask_fps = bg_remove_read_fps(mask_dir);
-            float src_t    = vid_cl->in_point + (t - vid_cl->start) / vid_cl->speed;
-            int   frame_i  = (int)(src_t * mask_fps);
-            unsigned mask_tex_id = body_fx_mask_texture(mask_dir, frame_i);
-            if (!mask_tex_id) continue;
-            glBindFramebuffer(GL_FRAMEBUFFER, 0);
-            uintptr_t out = body_fx_apply(bfx_cl.body_fx_type,
-                                          (uintptr_t)g_gl_ex.color_tex, mask_tex_id,
-                                          g_gl_ex.out_w, g_gl_ex.out_h,
-                                          bfx_cl.body_fx_params, bfx_cl.body_fx_amount, t);
-            glBindFramebuffer(GL_FRAMEBUFFER, g_gl_ex.fbo);
-            glViewport(0, 0, g_gl_ex.out_w, g_gl_ex.out_h);
-            if (out != (uintptr_t)g_gl_ex.color_tex)
-                fx_blit(out, g_gl_ex.fbo, g_gl_ex.out_w, g_gl_ex.out_h);
-        }
-    }
 
     // ── Phase 4: Text overlays (ImDrawList on top of the composited frame) ────
     // Export FBO must be bound — it is, either from Phase 2 (no global FX) or

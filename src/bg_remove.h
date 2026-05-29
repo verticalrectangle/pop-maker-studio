@@ -35,14 +35,6 @@ int bg_remove_read_start_frame(const std::string& mask_dir);
 // Returns 0 if no masks exist.
 int bg_remove_read_frame_count(const std::string& mask_dir);
 
-// Spawn background mask-generation job for a BodyFX solid brick.
-// Scopes inference to the brick's time range; appends if only right-expanding.
-// Sets clip.body_fx_mask_status = Processing immediately.
-void bg_remove_body_fx_start(AppState& state, int track_idx, int clip_idx);
-
-// Poll BodyFX mask jobs and push progress/status back onto matching clips.
-void bg_remove_body_fx_poll(AppState& state);
-
 // ── u2net model management ────────────────────────────────────────────────────
 
 // Returns true if the u2net ONNX model is present on disk.
