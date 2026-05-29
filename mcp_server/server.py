@@ -577,11 +577,13 @@ async def list_tools() -> list[Tool]:
             name="find_audio_cue",
             description=(
                 "Analyse an audio file using the app's beat detector and find a good "
-                "beat-aligned in_point timestamp matching a natural-language description "
+                "beat-aligned source timestamp matching a natural-language description "
                 "of what you're looking for. The app must be running.\n\n"
                 "description examples: 'after the intro', 'first big drop', 'energetic buildup', "
                 "'quiet bridge', 'chorus', 'before the outro', 'most energetic part'\n\n"
-                "Returns: recommended_in_point (seconds, beat-aligned), bpm, duration, "
+                "Returns: source_timestamp (seconds, beat-aligned) — use as a negative clip "
+                "start to position the audio brick: clip start = -source_timestamp, "
+                "clip end = video_duration - source_timestamp. Also returns bpm, duration, "
                 "reasoning, and 2 alternative timestamps."
             ),
             inputSchema={
@@ -743,8 +745,8 @@ def _match_cue(description: str, rms: list[float], beats: list[float],
     alt2 = _snap_to_beat(float(quiet_zone), beats)
 
     alternatives = [
-        {"in_point": alt1, "reasoning": f"Second energy peak at ~{alt_drop_s}s"},
-        {"in_point": alt2, "reasoning": f"Mid-track entry at ~{quiet_zone}s"},
+        {"source_timestamp": alt1, "reasoning": f"Second energy peak at ~{alt_drop_s}s"},
+        {"source_timestamp": alt2, "reasoning": f"Mid-track entry at ~{quiet_zone}s"},
     ]
 
     return primary, reasoning, alternatives
@@ -782,7 +784,7 @@ async def _find_audio_cue(arguments: dict) -> dict:
     )
 
     return {
-        "recommended_in_point": primary,
+        "source_timestamp": primary,
         "bpm": bpm,
         "duration": duration,
         "reasoning": reasoning,
