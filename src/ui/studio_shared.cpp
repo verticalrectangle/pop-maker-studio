@@ -71,9 +71,8 @@ float tl_fps(const AppState& state) {
 }
 
 // ── Clip / slot helpers ───────────────────────────────────────────────────────
-std::string clip_slot_key(const std::string& src, float start) {
-    char buf[32]; snprintf(buf, sizeof(buf), "\x01%.6f", start);
-    return src + buf;
+std::string clip_slot_key(const std::string& src, float /*start*/) {
+    return src;
 }
 
 std::string source_from_key(const std::string& key) {
