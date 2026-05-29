@@ -709,6 +709,7 @@ void ui_studio(AppState& state) {
             { "BG",    PanelView::LibBG,    IM_COL32(180,  60, 160, 255) },
             { "FX",    PanelView::LibFX,    IM_COL32(210, 110,  30, 255) },
             { "Adj",   PanelView::LibAdj,   IM_COL32(100,  80, 200, 255) },
+            { "BFX",   PanelView::LibBFX,   IM_COL32( 20, 180, 160, 255) },
             { "AFX",   PanelView::LibAFX,   IM_COL32( 30, 200, 150, 255) },
             { "VID",   PanelView::LibVID,   IM_COL32(140,  60, 220, 255) },
             { "IMG",   PanelView::LibIMG,   IM_COL32(140,  60, 220, 255) },
@@ -1103,6 +1104,7 @@ void ui_studio(AppState& state) {
             case PanelView::LibBG:           panel_background(state, pw);            break;
             case PanelView::LibFX:           panel_fx_creative(state, pw);           break;
             case PanelView::LibAdj:          panel_adjustment_library(state, pw);    break;
+            case PanelView::LibBFX:          panel_body_fx_library(state, pw);       break;
             case PanelView::LibAFX:          panel_fx_audio(state, pw);              break;
             case PanelView::LibVID:          panel_media_browser(state, pw, true);   break;
             case PanelView::LibIMG:          panel_media_browser(state, pw, false);  break;

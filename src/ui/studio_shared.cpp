@@ -197,8 +197,8 @@ void add_clip_to_track(AppState& state, int ti, const std::string& path, ClipTyp
 // ── Panel-view helpers ────────────────────────────────────────────────────────
 bool pv_is_lib(PanelView v) {
     return v == PanelView::LibBG    || v == PanelView::LibFX  || v == PanelView::LibAdj ||
-           v == PanelView::LibAFX   || v == PanelView::LibVID || v == PanelView::LibIMG ||
-           v == PanelView::LibAUD;
+           v == PanelView::LibBFX   || v == PanelView::LibAFX || v == PanelView::LibVID ||
+           v == PanelView::LibIMG   || v == PanelView::LibAUD;
 }
 
 bool pv_is_override(PanelView v) {

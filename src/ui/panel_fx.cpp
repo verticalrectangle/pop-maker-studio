@@ -1990,3 +1990,151 @@ void panel_multifx(AppState& state, float w) {
     }
     if (track.locked) ImGui::EndDisabled();
 }
+
+// ── Body FX library / toolbox ─────────────────────────────────────────────────
+
+void panel_body_fx_library(AppState& state, float w) {
+    // Find selected BodyFX brick (if any)
+    Clip* bfx_clip = nullptr;
+    int   bfx_ti   = state.selected_track;
+    int   bfx_ci   = state.selected_clip;
+    if (bfx_ti >= 0 && bfx_ti < (int)state.tracks.size() &&
+        bfx_ci >= 0 && bfx_ci < (int)state.tracks[bfx_ti].clips.size()) {
+        Clip& c = state.tracks[bfx_ti].clips[bfx_ci];
+        if (c.clip_type == ClipType::BodyFX) bfx_clip = &c;
+    }
+
+    float bar_w = w - 16.f;
+
+    // ── Selected brick controls (only shown when a BodyFX brick is selected) ───
+    if (bfx_clip) {
+        ImGui::Dummy({0.f, 8.f});
+        {
+            const BodyFXInfo* info = body_fx_find_info(bfx_clip->body_fx_type);
+            if (info) {
+                ImGui::PushFont(g_font_bold);
+                ImGui::TextUnformatted(info->name);
+                ImGui::PopFont();
+                ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+                ImGui::TextUnformatted(info->tagline);
+                ImGui::PopStyleColor();
+            }
+        }
+
+        auto plain_slider = [&](const char* id, const char* label, float* v,
+                                float vmin, float vmax, const char* fmt) {
+            ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+            ImGui::TextUnformatted(label);
+            ImGui::PopStyleColor();
+            ImGui::PushStyleColor(ImGuiCol_SliderGrab, to_u32(Col::fg));
+            ImGui::PushStyleColor(ImGuiCol_FrameBg,    Col::bg_soft);
+            ImGui::SetNextItemWidth(bar_w);
+            ImGui::SliderFloat(id, v, vmin, vmax, fmt);
+            ImGui::PopStyleColor(2);
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, label);
+        };
+
+        ImGui::Dummy({0.f, 6.f});
+        plain_slider("##bfx_amount", "Amount", &bfx_clip->body_fx_amount, 0.f, 1.f, "%.2f");
+
+        const BodyFXInfo* info = body_fx_find_info(bfx_clip->body_fx_type);
+        if (info && info->n_params > 0) {
+            ImGui::Dummy({0.f, 4.f});
+            for (int pi = 0; pi < info->n_params && pi < 4; ++pi) {
+                const BodyFXParamDef& pd = info->params[pi];
+                char id[32]; snprintf(id, sizeof(id), "##lbfxp%d", pi);
+                plain_slider(id, pd.label, &bfx_clip->body_fx_params[pi],
+                             pd.min_val, pd.max_val, "%.3f");
+                ImGui::Dummy({0.f, 2.f});
+            }
+        }
+
+        ImGui::Dummy({0.f, 10.f});
+        ui_separator();
+    }
+
+    // ── Effect browser ────────────────────────────────────────────────────────
+    ImGui::Dummy({0.f, 8.f});
+    ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(80, 240, 210, 255));
+    ImGui::TextUnformatted("Body FX");
+    ImGui::PopStyleColor();
+    ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+    ImGui::TextWrapped("Click to add a brick at the playhead. Select a brick to tweak it above.");
+    ImGui::PopStyleColor();
+    ImGui::Dummy({0.f, 8.f});
+
+    int n_infos         = body_fx_info_count();
+    const BodyFXInfo* infos = body_fx_info_list();
+    const char* cur_cat = nullptr;
+
+    for (int i = 0; i < n_infos; ++i) {
+        const BodyFXInfo& info = infos[i];
+
+        // Category header when it changes
+        if (!cur_cat || strcmp(cur_cat, info.category) != 0) {
+            if (cur_cat) ImGui::Dummy({0.f, 4.f});
+            ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+            ImGui::TextUnformatted(info.category);
+            ImGui::PopStyleColor();
+            cur_cat = info.category;
+        }
+
+        float card_h = 44.f;
+        float card_w = w - 8.f;
+        bool selected = bfx_clip && (bfx_clip->body_fx_type == info.type);
+
+        ImGui::PushID(70000 + i);
+        ImVec2 cp = ImGui::GetCursorScreenPos();
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+
+        bool hov = ImGui::IsMouseHoveringRect(cp, {cp.x + card_w, cp.y + card_h});
+        ImU32 fill = selected ? IM_COL32(10, 90, 80, 255)
+                   : hov      ? IM_COL32(20, 50, 46, 255)
+                              : IM_COL32(14, 28, 26, 255);
+        ImU32 border = selected ? IM_COL32(30, 200, 170, 200)
+                     : hov      ? IM_COL32(40, 140, 120, 150)
+                                : IM_COL32(30, 60, 55, 180);
+        dl->AddRectFilled(cp, {cp.x + card_w, cp.y + card_h}, fill, 4.f);
+        dl->AddRect(cp, {cp.x + card_w, cp.y + card_h}, border, 4.f, 0, selected ? 1.5f : 1.f);
+
+        ImGui::PushFont(g_font_bold);
+        ImU32 nc = selected ? IM_COL32(80, 240, 210, 255) : IM_COL32(200, 230, 225, 220);
+        dl->AddText(ImGui::GetFont(), 13.f, {cp.x + 10.f, cp.y + 8.f}, nc, info.name);
+        ImGui::PopFont();
+        ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+        dl->AddText({cp.x + 10.f, cp.y + 24.f}, to_u32(Col::dim), info.tagline);
+        ImGui::PopStyleColor();
+
+        ImGui::SetCursorScreenPos(cp);
+        ImGui::InvisibleButton("##bfx_card", {card_w, card_h});
+        if (ImGui::IsItemClicked()) {
+            if (bfx_clip) {
+                // Apply effect to selected brick
+                bfx_clip->body_fx_type = info.type;
+                for (int pi = 0; pi < 4; ++pi)
+                    bfx_clip->body_fx_params[pi] = pi < info.n_params
+                                                   ? info.params[pi].default_val : 0.5f;
+                history_push(state, std::string("Body FX: ") + info.name);
+            } else {
+                // Create a new BodyFX brick on a new track at playhead
+                Track nt; nt.name = "Body FX";
+                Clip cl;
+                cl.clip_type     = ClipType::BodyFX;
+                cl.body_fx_type  = info.type;
+                cl.start         = state.playhead;
+                cl.end           = fminf(state.duration, state.playhead + 5.f);
+                for (int pi = 0; pi < 4; ++pi)
+                    cl.body_fx_params[pi] = pi < info.n_params
+                                            ? info.params[pi].default_val : 0.5f;
+                nt.clips.push_back(cl);
+                state.tracks.insert(state.tracks.begin(), std::move(nt));
+                state.selected_track = 0;
+                state.selected_clip  = 0;
+                history_push(state, std::string("Add Body FX: ") + info.name);
+            }
+        }
+
+        ImGui::PopID();
+        ImGui::Dummy({0.f, 2.f});
+    }
+}
