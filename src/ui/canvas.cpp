@@ -789,6 +789,35 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                     }
                 }
 
+                // Glass BodyFX: from BodyFX sub-effects in glass MultiFX bricks on this track
+                if (cl_ptr && slot >= 0) {
+                    std::string mask_dir = bg_remove_proxy_dir(cl_ptr->source_id);
+                    if (!mask_dir.empty()) {
+                        float mask_fps = bg_remove_read_fps(mask_dir);
+                        float src_t = cl_ptr->in_point + (at_time - cl_ptr->start) / cl_ptr->speed;
+                        int frame_i = (int)(src_t * mask_fps);
+                        for (auto& mfx_cl : state.tracks[ti].clips) {
+                            if (mfx_cl.clip_type != ClipType::MultiFX) continue;
+                            if (at_time < mfx_cl.start || at_time >= mfx_cl.end) continue;
+                            if (!fx_clip_is_glass(state, ti, mfx_cl)) continue;
+                            float rel = at_time - mfx_cl.start;
+                            float parent_dur = mfx_cl.end - mfx_cl.start;
+                            for (auto& se : mfx_cl.fx_chain) {
+                                if (se.clip_type != ClipType::BodyFX) continue;
+                                float se_end = (se.rel_end <= 0.f) ? parent_dur : se.rel_end;
+                                if (rel < se.rel_start || rel >= se_end) continue;
+                                unsigned mask_tex = body_fx_mask_texture(mask_dir, frame_i);
+                                if (!mask_tex) continue;
+                                VideoInfo vi_g = video_info(slot);
+                                int bw = (vi_g.width  > 0) ? vi_g.width  : (int)w;
+                                int bh = (vi_g.height > 0) ? vi_g.height : (int)h;
+                                tex = body_fx_apply(se.body_fx_type, tex, mask_tex, bw, bh,
+                                                    se.body_fx_params, se.body_fx_amount, t_anim);
+                            }
+                        }
+                    }
+                }
+
                 // Runtime FX (hot-reload custom effect)
                 if (cl_ptr && !cl_ptr->runtime_fx_id.empty()) {
                     VideoInfo vi_r = (slot >= 0) ? video_info(slot) : VideoInfo{};

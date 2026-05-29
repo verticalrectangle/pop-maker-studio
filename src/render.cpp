@@ -1839,6 +1839,33 @@ static bool gl_render_vid_clip(ImDrawList& dl, const Clip* cl, float at_time,
             cur_tex = fx_apply(cur_tex, fx_slot, vid_w, vid_h, glass_ea, glass_cfx, at_time);
     }
 
+    // Glass BodyFX: from BodyFX sub-effects in glass MultiFX bricks on this track.
+    {
+        std::string mask_dir = bg_remove_hires_dir(cl->text);
+        if (!mask_dir.empty()) {
+            float mask_fps = bg_remove_read_fps(mask_dir);
+            float bfx_src_t = cl->in_point + (at_time - cl->start) / cl->speed;
+            int frame_i = (int)(bfx_src_t * mask_fps);
+            for (auto& mfx_cl : state.tracks[ti].clips) {
+                if (mfx_cl.clip_type != ClipType::MultiFX) continue;
+                if (at_time < mfx_cl.start || at_time >= mfx_cl.end) continue;
+                if (!fx_clip_is_glass(state, ti, mfx_cl)) continue;
+                float rel = at_time - mfx_cl.start;
+                float parent_dur = mfx_cl.end - mfx_cl.start;
+                for (auto& se : mfx_cl.fx_chain) {
+                    if (se.clip_type != ClipType::BodyFX) continue;
+                    float se_end = (se.rel_end <= 0.f) ? parent_dur : se.rel_end;
+                    if (rel < se.rel_start || rel >= se_end) continue;
+                    unsigned mask_tex = body_fx_mask_texture(mask_dir, frame_i);
+                    if (!mask_tex) continue;
+                    cur_tex = body_fx_apply(se.body_fx_type, cur_tex, mask_tex,
+                                            vid_w, vid_h, se.body_fx_params,
+                                            se.body_fx_amount, at_time);
+                }
+            }
+        }
+    }
+
     // RuntimeFX — custom hot-reload shader on this clip.
     if (!cl->runtime_fx_id.empty())
         cur_tex = runtime_fx_apply(cl->runtime_fx_id, cur_tex, vid_w, vid_h,

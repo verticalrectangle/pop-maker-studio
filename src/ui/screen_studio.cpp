@@ -691,19 +691,27 @@ void ui_studio(AppState& state) {
     float props_w   = (state.panel_w > 0.f)
                        ? fmaxf(200.f, fminf(win_w * 0.6f, state.panel_w))
                        : fmaxf(260.f, win_w * 0.27f);
-    const float TB_W   = 68.f;   // toolbox strip width
+    // ── Toolbox strip width: fits the widest label + margins (computed once) ─────
+    static float s_tb_w = 0.f;
+    if (s_tb_w == 0.f) {
+        // "Backgrounds" is the longest label; measure it plus 24px padding
+        s_tb_w = ImGui::CalcTextSize("Backgrounds").x + 24.f;
+    }
+    const float TB_W = s_tb_w;
     float preview_w = win_w - props_w - TB_W - 2.f;
 
-    // ── Toolbox strip (left rail, Photoshop-style) ────────────────────────────
+    // ── Toolbox strip (left rail) ──────────────────────────────────────────────
     ImGui::SetCursorPos({0.f, body_top});
     ImGui::PushStyleColor(ImGuiCol_ChildBg, IM_COL32(13, 13, 18, 255));
     ImGui::PushStyleColor(ImGuiCol_Border,  Col::line);
     if (ImGui::BeginChild("##toolbox_strip", {TB_W, body_h}, ImGuiChildFlags_Borders)) {
-        ImDrawList* tdl  = ImGui::GetWindowDrawList();
-        ImVec2      sp   = ImGui::GetWindowPos();
-        const float BSZ  = 42.f;
-        const float BX   = sp.x + (TB_W - BSZ) * 0.5f;
-        float       BY   = sp.y + 16.f;
+        ImDrawList* tdl = ImGui::GetWindowDrawList();
+        ImVec2      sp  = ImGui::GetWindowPos();
+        const float PAD_X  = 8.f;
+        const float BTN_W  = TB_W - PAD_X * 2.f;
+        const float BTN_H  = 26.f;
+        const float BX     = sp.x + PAD_X;
+        float       BY     = sp.y + 14.f;
 
         struct BtnDef { const char* id; PanelView lib_view; ImU32 accent; bool sep_before; };
         static const BtnDef btns[] = {
@@ -719,49 +727,32 @@ void ui_studio(AppState& state) {
 
         for (auto& b : btns) {
             if (b.sep_before) {
-                tdl->AddLine({sp.x + 8.f, BY - 5.f}, {sp.x + TB_W - 8.f, BY - 5.f},
+                tdl->AddLine({sp.x + 6.f, BY - 5.f}, {sp.x + TB_W - 6.f, BY - 5.f},
                              IM_COL32(50, 50, 65, 180), 1.f);
                 BY += 4.f;
             }
 
             bool active = (s_panel_view == b.lib_view);
-            ImVec2 bmin = { BX, BY }, bmax = { BX + BSZ, BY + BSZ };
+            ImVec2 bmin = { BX, BY }, bmax = { BX + BTN_W, BY + BTN_H };
             bool hov = ImGui::IsMouseHoveringRect(bmin, bmax);
             ImU32 fill = active ? b.accent
                        : hov   ? IM_COL32(42, 42, 58, 255)
                                 : IM_COL32(24, 24, 34, 255);
-            tdl->AddRectFilled(bmin, bmax, fill, 7.f);
+            tdl->AddRectFilled(bmin, bmax, fill, 4.f);
             if (active || hov)
                 tdl->AddRect(bmin, bmax,
-                    active ? b.accent : IM_COL32(70, 70, 90, 200), 7.f, 0, 1.2f);
+                    active ? b.accent : IM_COL32(70, 70, 90, 200), 4.f, 0, 1.2f);
 
-            // Two-line label: split on space if present
             ImU32 tc = active ? IM_COL32(255,255,255,255) : IM_COL32(155,155,180,210);
-            const char* sp2 = strchr(b.id, ' ');
-            if (sp2) {
-                // Two words: render stacked, centered
-                char line1[32], line2[32];
-                size_t len1 = (size_t)(sp2 - b.id);
-                strncpy(line1, b.id, len1); line1[len1] = '\0';
-                strncpy(line2, sp2 + 1, sizeof(line2) - 1);
-                ImVec2 s1 = ImGui::CalcTextSize(line1);
-                ImVec2 s2 = ImGui::CalcTextSize(line2);
-                float  lh = 13.f, gap = 2.f;
-                float  total_h = lh + gap + lh;
-                float  ty = BY + (BSZ - total_h) * 0.5f;
-                tdl->AddText({BX + (BSZ - s1.x) * 0.5f, ty},           tc, line1);
-                tdl->AddText({BX + (BSZ - s2.x) * 0.5f, ty + lh + gap}, tc, line2);
-            } else {
-                ImVec2 tsz = ImGui::CalcTextSize(b.id);
-                tdl->AddText({BX + (BSZ - tsz.x) * 0.5f, BY + (BSZ - 13.f) * 0.5f}, tc, b.id);
-            }
+            ImVec2 tsz = ImGui::CalcTextSize(b.id);
+            tdl->AddText({BX + (BTN_W - tsz.x) * 0.5f, BY + (BTN_H - tsz.y) * 0.5f}, tc, b.id);
 
             ImGui::SetCursorScreenPos(bmin);
-            ImGui::InvisibleButton(b.id, { BSZ, BSZ });
+            ImGui::InvisibleButton(b.id, { BTN_W, BTN_H });
             if (ImGui::IsItemClicked())
                 s_panel_view = active ? pv_derive(state) : b.lib_view;
 
-            BY += BSZ + 10.f;
+            BY += BTN_H + 6.f;
         }
     }
     ImGui::EndChild();

@@ -204,6 +204,7 @@ static void accum_multifx_effects(EffectAccum& ea, CreativeFXAccum& ca,
     float parent_dur = brick.end - brick.start;
     float beat_pulse = beat_pulse_at(state, brick.beat_src_track, brick.beat_src_clip, t, brick.beat_decay);
     for (auto& se : brick.fx_chain) {
+        if (se.clip_type == ClipType::BodyFX) continue;  // handled by glass BodyFX pass
         float se_end = (se.rel_end <= 0.f) ? parent_dur : se.rel_end;
         if (rel < se.rel_start || rel >= se_end) continue;
         accum_effect_clip(ea, se);
