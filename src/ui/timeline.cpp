@@ -43,8 +43,9 @@ float s_drop_flash_t     = 0.f;
 int   s_drop_flash_track = -1;
 
 static bool clips_conflict(const Clip& a, const Clip& b) {
-    if (a.clip_type == ClipType::Effect || b.clip_type == ClipType::Effect ||
-        a.clip_type == ClipType::MultiFX || b.clip_type == ClipType::MultiFX) return false;
+    if (a.clip_type == ClipType::Effect  || b.clip_type == ClipType::Effect  ||
+        a.clip_type == ClipType::MultiFX || b.clip_type == ClipType::MultiFX ||
+        a.clip_type == ClipType::BodyFX  || b.clip_type == ClipType::BodyFX) return false;
     return a.start < b.end && a.end > b.start;
 }
 // ── Timeline ──────────────────────────────────────────────────────────────────
@@ -757,7 +758,9 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
         // ── Pass 1: non-FX clips ─────────────────────────────────────────────
         for (int ci = 0; ci < (int)track.clips.size(); ++ci) {
             Clip& clip = track.clips[ci];
-            if (clip.clip_type == ClipType::Effect || clip.clip_type == ClipType::MultiFX) continue;
+            if (clip.clip_type == ClipType::Effect  ||
+                clip.clip_type == ClipType::MultiFX ||
+                clip.clip_type == ClipType::BodyFX) continue;
             float cx0 = origin.x+TL_LABEL_W+clip.start*zoom-scroll;
             float cx1 = origin.x+TL_LABEL_W+clip.end*zoom-scroll;
             if (cx1 < origin.x+TL_LABEL_W || cx0 > origin.x+total_w) continue;
@@ -882,11 +885,12 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
             clip_interact(ci, clip, vis_x0, vis_x1, cy0, cy1, sel);
         }
 
-        // ── Pass 2: FX / MultiFX bricks — rendered on top, interact last ──
+        // ── Pass 2: FX / MultiFX / BodyFX bricks — rendered on top, interact last ──
         for (int ci = 0; ci < (int)track.clips.size(); ++ci) {
             Clip& clip = track.clips[ci];
             bool is_mfx = (clip.clip_type == ClipType::MultiFX);
-            if (clip.clip_type != ClipType::Effect && !is_mfx) continue;
+            bool is_bfx = (clip.clip_type == ClipType::BodyFX);
+            if (clip.clip_type != ClipType::Effect && !is_mfx && !is_bfx) continue;
             float cx0 = origin.x+TL_LABEL_W+clip.start*zoom-scroll;
             float cx1 = origin.x+TL_LABEL_W+clip.end*zoom-scroll;
             if (cx1 < origin.x+TL_LABEL_W || cx0 > origin.x+total_w) continue;
@@ -894,6 +898,26 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
             float vis_x1 = fminf(cx1, origin.x+total_w);
             float cy0 = track_y+3.f, cy1 = track_y+TL_TRACK_H-3.f;
             bool sel = state.clip_selection.count({ti, ci}) > 0;
+
+            // BodyFX bricks: always glass, drawn with teal accent
+            if (is_bfx) {
+                ImU32 bfx_fill   = sel ? IM_COL32( 20, 180, 160, 255) : IM_COL32(10, 80, 75, 255);
+                ImU32 bfx_border = sel ? IM_COL32( 80, 255, 220, 255) : IM_COL32(30, 160, 130, 200);
+                dl->AddRectFilled({vis_x0, cy0}, {vis_x1, cy1}, bfx_fill, 2.f);
+                dl->AddRect({vis_x0, cy0}, {vis_x1, cy1}, bfx_border, 2.f, 0, 1.5f);
+                ImGui::PushClipRect({vis_x0, cy0}, {vis_x1, cy1}, true);
+                {
+                    const BodyFXInfo* info = body_fx_find_info(clip.body_fx_type);
+                    char lbl[64];
+                    snprintf(lbl, sizeof(lbl), "Body FX%s%s",
+                             info ? " \xe2\x80\x94 " : "", info ? info->name : "");
+                    ImU32 ltcol = sel ? IM_COL32(0, 30, 25, 255) : IM_COL32(160, 240, 220, 255);
+                    dl->AddText({vis_x0 + 4.f, cy0 + (cy1 - cy0 - 13.f) * 0.5f}, ltcol, lbl);
+                }
+                ImGui::PopClipRect();
+                clip_interact(ci, clip, vis_x0, vis_x1, cy0, cy1, sel);
+                continue;
+            }
 
             bool is_glass = fx_clip_is_glass(state, ti, clip);
             FxBrickColors fbc = is_mfx ? fx_brick_colors(FXType::Glitch, sel)
