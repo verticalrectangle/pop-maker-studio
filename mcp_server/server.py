@@ -192,7 +192,11 @@ async def list_tools() -> list[Tool]:
             name="add_track",
             description=(
                 "Add a new track to the project at a given position (default 0 = top). "
-                "Returns the track index. Requires batch."
+                "Returns the track index. Requires batch.\n\n"
+                "LAYERING: tracks are stacked like Photoshop layers — track 0 is the TOP "
+                "(foreground) and the highest-index track is the BOTTOM (background). "
+                "Always put video/background clips on higher-index tracks and text/FX/overlays "
+                "on lower-index tracks so they render on top."
             ),
             inputSchema={
                 "type": "object",
@@ -404,6 +408,51 @@ async def list_tools() -> list[Tool]:
                 "type": "object",
                 "properties": {"path": {"type": "string"}},
                 "required": ["path"],
+            },
+        ),
+        Tool(
+            name="add_multifx_brick",
+            description=(
+                "Add a Multi-FX brick — a single timeline brick containing an ordered chain of "
+                "sub-effects, each with its own timing window inside the brick's span. "
+                "Use this instead of multiple overlapping add_effect_brick calls when effects "
+                "share the same time range or partially overlap.\n\n"
+                "GLASS behaviour: if placed on the same track as a video/audio clip it overlaps, "
+                "it becomes a 'glass' FX and applies only to that specific clip before compositing. "
+                "Place it on a separate FX track for global (all-layers) effect.\n\n"
+                "effects array: each entry is an object with:\n"
+                "  fx_type (required) — same options as add_effect_brick\n"
+                "  rel_start (default 0) — seconds from brick start\n"
+                "  rel_end   (default 0 = until brick end) — seconds from brick start\n"
+                "  params — same effect-specific param dict as add_effect_brick\n\n"
+                "Requires batch."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "track": {"type": "integer"},
+                    "start": {"type": "number"},
+                    "end": {"type": "number"},
+                    "effects": {
+                        "type": "array",
+                        "description": "Ordered list of sub-effects",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "fx_type": {
+                                    "type": "string",
+                                    "enum": ["grade", "blur", "vignette", "glitch", "zoom_punch",
+                                             "lut", "light_leak", "vhs", "datamosh", "chroma_key"],
+                                },
+                                "rel_start": {"type": "number", "default": 0},
+                                "rel_end": {"type": "number", "default": 0, "description": "0 = until brick end"},
+                                "params": {"type": "object"},
+                            },
+                            "required": ["fx_type"],
+                        },
+                    },
+                },
+                "required": ["track", "start", "end"],
             },
         ),
         Tool(

@@ -623,6 +623,40 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         return r;
     }
 
+    if (method == "add_multifx_brick") {
+        int ti = params.value("track", -1);
+        if (!check_track(state, ti, err)) return {};
+        if (state.tracks[ti].locked) { err = "track is locked"; return {}; }
+        float start = params.value("start", 0.f);
+        float end   = params.value("end",   start + 2.f);
+
+        Clip brick;
+        brick.clip_type = ClipType::MultiFX;
+        brick.start     = start;
+        brick.end       = end;
+
+        if (params.contains("effects") && params["effects"].is_array()) {
+            float dur = end - start;
+            for (auto& e : params["effects"]) {
+                Clip se;
+                se.clip_type  = ClipType::Effect;
+                se.fx_type    = parse_fx_type(e.value("fx_type", "grade"));
+                se.rel_start  = e.value("rel_start", 0.f);
+                se.rel_end    = e.value("rel_end",   0.f);
+                // clamp rel_end to parent duration
+                if (se.rel_end > dur) se.rel_end = dur;
+                if (e.contains("params") && e["params"].is_object()) {
+                    if (!apply_effect_params(se, e["params"], err)) return {};
+                }
+                brick.fx_chain.push_back(se);
+            }
+        }
+
+        state.tracks[ti].clips.push_back(brick);
+        json r; r["clip"] = (int)state.tracks[ti].clips.size() - 1;
+        return r;
+    }
+
     if (method == "new_project") {
         state = AppState{};
         return json::object();
