@@ -479,6 +479,7 @@ static json dispatch(AppState& state, const std::string& method, const json& par
             cl.source_id = text;
         state.tracks[ti].clips.push_back(cl);
         int new_ci = (int)state.tracks[ti].clips.size() - 1;
+        if (cl.clip_type == ClipType::Video) state.proxy_scan_needed = true;
         json r; r["clip"] = new_ci;
         return r;
     }

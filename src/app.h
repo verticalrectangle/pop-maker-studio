@@ -468,6 +468,7 @@ struct AppState {
     bool        video_loaded   = false;
     bool        proxy_ready    = false;        // proxy ready for track 0 (backwards compat)
     bool        proxy_was_generating = false;  // tracks generation state changes
+    bool        proxy_scan_needed = false;     // set by IPC after adding video clips
 
     // Proxy slot table: proxy_paths[slot] = source file path (empty = free).
     // Keyed by file path so two clips sharing a source share one proxy.

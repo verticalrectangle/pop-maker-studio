@@ -256,6 +256,12 @@ void ui_studio(AppState& state) {
     // GC slots whose clips have been deleted or moved.
     gc_video_slots(state);
 
+    // IPC may have added new video clips — trigger proxy scan on next frame.
+    if (state.proxy_scan_needed) {
+        state.proxy_scan_needed = false;
+        reopen_video_slots(state);
+    }
+
     // Poll background removal and voice conversion jobs.
     bg_remove_poll(state);
     vc_poll(state);
