@@ -41,7 +41,8 @@ float s_drop_flash_t     = 0.f;
 int   s_drop_flash_track = -1;
 
 static bool clips_conflict(const Clip& a, const Clip& b) {
-    if (a.clip_type == ClipType::Effect || b.clip_type == ClipType::Effect) return false;
+    if (a.clip_type == ClipType::Effect || b.clip_type == ClipType::Effect ||
+        a.clip_type == ClipType::MultiFX || b.clip_type == ClipType::MultiFX) return false;
     return a.start < b.end && a.end > b.start;
 }
 // ── Timeline ──────────────────────────────────────────────────────────────────
@@ -742,7 +743,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
         // ── Pass 1: non-FX clips ─────────────────────────────────────────────
         for (int ci = 0; ci < (int)track.clips.size(); ++ci) {
             Clip& clip = track.clips[ci];
-            if (clip.clip_type == ClipType::Effect) continue;
+            if (clip.clip_type == ClipType::Effect || clip.clip_type == ClipType::MultiFX) continue;
             float cx0 = origin.x+TL_LABEL_W+clip.start*zoom-scroll;
             float cx1 = origin.x+TL_LABEL_W+clip.end*zoom-scroll;
             if (cx1 < origin.x+TL_LABEL_W || cx0 > origin.x+total_w) continue;
@@ -850,10 +851,11 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
             clip_interact(ci, clip, vis_x0, vis_x1, cy0, cy1, sel);
         }
 
-        // ── Pass 2: FX bricks — rendered on top, interact last (wins on overlap) ──
+        // ── Pass 2: FX / MultiFX bricks — rendered on top, interact last ──
         for (int ci = 0; ci < (int)track.clips.size(); ++ci) {
             Clip& clip = track.clips[ci];
-            if (clip.clip_type != ClipType::Effect) continue;
+            bool is_mfx = (clip.clip_type == ClipType::MultiFX);
+            if (clip.clip_type != ClipType::Effect && !is_mfx) continue;
             float cx0 = origin.x+TL_LABEL_W+clip.start*zoom-scroll;
             float cx1 = origin.x+TL_LABEL_W+clip.end*zoom-scroll;
             if (cx1 < origin.x+TL_LABEL_W || cx0 > origin.x+total_w) continue;
@@ -863,7 +865,8 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
             bool sel = state.clip_selection.count({ti, ci}) > 0;
 
             bool is_glass = fx_clip_is_glass(state, ti, clip);
-            FxBrickColors fbc = fx_brick_colors(clip.fx_type, sel);
+            FxBrickColors fbc = is_mfx ? fx_brick_colors(FXType::Glitch, sel)
+                                       : fx_brick_colors(clip.fx_type, sel);
 
             if (is_glass) {
                 // Glass brick: semi-transparent frosted overlay over the video clip below it.
@@ -899,15 +902,28 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
             ImGui::PushClipRect({vis_x0,cy0},{vis_x1,cy1},true);
             float ly = cy0 + (cy1-cy0-13.f)*0.5f;
             ImU32 lbl_col = is_glass ? IM_COL32(200, 240, 255, 255) : fbc.label;
-            dl->AddText({vis_x0+5.f, ly}, lbl_col, fx_type_name(clip.fx_type));
-            // Scope arrow
-            if (vis_x1-vis_x0 > 30.f) {
-                float ax=vis_x1-12.f, ay=cy0+(cy1-cy0)*0.35f;
-                if (is_glass)
-                    dl->AddTriangleFilled({ax-5.f,ay},{ax+5.f,ay},{ax,ay+6.f},
-                                          IM_COL32(130,210,255,220));
-                else
-                    dl->AddTriangleFilled({ax-5.f,ay},{ax+5.f,ay},{ax,ay+7.f},fbc.label);
+            if (is_mfx) {
+                // Show "N FX" label with stacked-layers indicator
+                char mfx_lbl[24];
+                snprintf(mfx_lbl, sizeof(mfx_lbl), "MULTI %d FX", (int)clip.fx_chain.size());
+                dl->AddText({vis_x0+5.f, ly}, lbl_col, mfx_lbl);
+                // Stacked layers icon: three small horizontal bars at right
+                if (vis_x1 - vis_x0 > 40.f) {
+                    float ix = vis_x1 - 14.f, iy = cy0 + (cy1-cy0)*0.35f;
+                    for (int k = 0; k < 3; ++k)
+                        dl->AddRectFilled({ix, iy+k*4.f}, {ix+10.f, iy+k*4.f+2.f}, lbl_col);
+                }
+            } else {
+                dl->AddText({vis_x0+5.f, ly}, lbl_col, fx_type_name(clip.fx_type));
+                // Scope arrow
+                if (vis_x1-vis_x0 > 30.f) {
+                    float ax=vis_x1-12.f, ay=cy0+(cy1-cy0)*0.35f;
+                    if (is_glass)
+                        dl->AddTriangleFilled({ax-5.f,ay},{ax+5.f,ay},{ax,ay+6.f},
+                                              IM_COL32(130,210,255,220));
+                    else
+                        dl->AddTriangleFilled({ax-5.f,ay},{ax+5.f,ay},{ax,ay+7.f},fbc.label);
+                }
             }
             ImGui::PopClipRect();
 
@@ -1824,6 +1840,21 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                     if (!has_json) ImGui::EndDisabled();
                 }
                 ImGui::EndMenu();
+            }
+            ImGui::Separator();
+        }
+
+        // ── Convert single Effect → Multi-FX ─────────────────────────────────
+        if (cc && cc->clip_type == ClipType::Effect) {
+            if (ImGui::MenuItem("Wrap in Multi-FX")) {
+                Clip se    = *cc;
+                cc->clip_type  = ClipType::MultiFX;
+                cc->fx_chain.clear();
+                cc->fx_chain_selected = 0;
+                // Sub-clip inherits the parent's time span as full duration (rel_start=0, rel_end=0)
+                se.rel_start = 0.f; se.rel_end = 0.f;
+                cc->fx_chain.push_back(std::move(se));
+                history_push(state, "Wrap in Multi-FX");
             }
             ImGui::Separator();
         }

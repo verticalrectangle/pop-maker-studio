@@ -74,6 +74,7 @@ static std::string clip_type_str(ClipType t) {
         case ClipType::Effect:     return "effect";
         case ClipType::Background: return "background";
         case ClipType::BodyFX:     return "body_fx";
+        case ClipType::MultiFX:    return "multi_fx";
     }
     return "unknown";
 }

@@ -204,7 +204,8 @@ bool pv_is_lib(PanelView v) {
 
 bool pv_is_override(PanelView v) {
     return v == PanelView::OverrideFX    || v == PanelView::OverrideAdj ||
-           v == PanelView::OverrideBG    || v == PanelView::OverrideAudioFX;
+           v == PanelView::OverrideBG    || v == PanelView::OverrideAudioFX ||
+           v == PanelView::OverrideMultiFX;
 }
 
 bool fx_type_is_audio_fx(FXType ft) {
@@ -266,6 +267,7 @@ PanelView pv_derive(const AppState& state) {
     if (!hs) return PanelView::Project;
     const Clip& cl = state.tracks[state.selected_track].clips[state.selected_clip];
     if (cl.clip_type == ClipType::Background) return PanelView::OverrideBG;
+    if (cl.clip_type == ClipType::MultiFX) return PanelView::OverrideMultiFX;
     if (cl.clip_type == ClipType::Effect) {
         if (cl.fx_type == FXType::Grade    ||
             cl.fx_type == FXType::Blur     ||
@@ -359,12 +361,14 @@ const char* fx_type_display(FXType ft) {
 }
 
 ImU32 clip_badge_color(const Clip& c) {
-    if (c.clip_type == ClipType::Effect) return fx_type_accent(c.fx_type);
+    if (c.clip_type == ClipType::Effect)  return fx_type_accent(c.fx_type);
+    if (c.clip_type == ClipType::MultiFX) return IM_COL32(210, 110, 30, 220);
     return ImGui::ColorConvertFloat4ToU32(clip_type_badge_color(c.clip_type));
 }
 
 const char* clip_display_name(const Clip& c) {
-    if (c.clip_type == ClipType::Effect) return fx_type_name(c.fx_type);
+    if (c.clip_type == ClipType::Effect)  return fx_type_name(c.fx_type);
+    if (c.clip_type == ClipType::MultiFX) return "MULTI";
     return clip_type_name(c.clip_type);
 }
 

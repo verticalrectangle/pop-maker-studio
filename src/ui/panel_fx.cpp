@@ -1642,3 +1642,349 @@ void panel_fx_clip(AppState& state, float w) {
     }
     if (track.locked) ImGui::EndDisabled();
 }
+
+// ── Multi-FX chain panel ──────────────────────────────────────────────────────
+
+void panel_multifx(AppState& state, float w) {
+    if (state.selected_track < 0 || state.selected_track >= (int)state.tracks.size()) return;
+    Track& track = state.tracks[state.selected_track];
+    if (state.selected_clip < 0 || state.selected_clip >= (int)track.clips.size()) return;
+    Clip& brick = track.clips[state.selected_clip];
+    if (brick.clip_type != ClipType::MultiFX) return;
+
+    ImGui::Dummy({0.f, 8.f});
+    ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(210,110,30,255));
+    ImGui::TextUnformatted("Multi-FX");
+    ImGui::PopStyleColor();
+    ImGui::SameLine(0.f, 8.f);
+    bool is_glass = fx_clip_is_glass(state, state.selected_track, brick);
+    ImGui::PushStyleColor(ImGuiCol_Text, is_glass ? IM_COL32(130,210,255,255) : IM_COL32(160,110,255,255));
+    ImGui::TextUnformatted(is_glass ? "GLASS" : "GLOBAL");
+    ImGui::PopStyleColor();
+
+    char info[128];
+    snprintf(info, sizeof(info), "%s  ·  %.2fs – %.2fs  ·  %d effect%s",
+        track.name.c_str(), brick.start, brick.end,
+        (int)brick.fx_chain.size(), brick.fx_chain.size() == 1 ? "" : "s");
+    ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+    ImGui::TextWrapped("%s", info);
+    ImGui::PopStyleColor();
+    ImGui::Dummy({0.f, 4.f}); ui_separator(); ImGui::Dummy({0.f, 8.f});
+
+    float brick_dur = fmaxf(0.01f, brick.end - brick.start);
+
+    // ── Add Effect dropdown ────────────────────────────────────────────────
+    if (ImGui::BeginCombo("##mfx_add", "+ Add Effect", ImGuiComboFlags_NoArrowButton)) {
+        for (int k = 0; k < g_n_fx_cards; ++k) {
+            if (ImGui::Selectable(g_fx_cards[k].name)) {
+                Clip se;
+                se.clip_type = ClipType::Effect;
+                se.fx_type   = g_fx_cards[k].type;
+                se.rel_start = 0.f; se.rel_end = 0.f;
+                brick.fx_chain.push_back(std::move(se));
+                brick.fx_chain_selected = (int)brick.fx_chain.size() - 1;
+                history_push(state, std::string("Multi-FX: add ") + g_fx_cards[k].name);
+            }
+        }
+        ImGui::EndCombo();
+    }
+    ImGui::Dummy({0.f, 8.f});
+
+    // ── Chain list ─────────────────────────────────────────────────────────
+    int del_idx = -1, swap_a = -1, swap_b = -1;
+    float bar_w = w - 100.f;  // width for the duration mini-bar
+    for (int i = 0; i < (int)brick.fx_chain.size(); ++i) {
+        Clip& se = brick.fx_chain[i];
+        bool sel = (brick.fx_chain_selected == i);
+        ImGui::PushID(i);
+
+        // Row background
+        ImVec2 row_pos = ImGui::GetCursorScreenPos();
+        float row_h   = 28.f;
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        if (sel)
+            dl->AddRectFilled(row_pos, {row_pos.x + w, row_pos.y + row_h},
+                              IM_COL32(60, 40, 20, 180), 3.f);
+
+        // Up/down reorder buttons (compact)
+        ImGui::SetCursorScreenPos({row_pos.x + 2.f, row_pos.y + 5.f});
+        ImGui::BeginGroup();
+        ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(0,0,0,0));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(80,60,20,160));
+        if (ImGui::SmallButton("^") && i > 0)                        { swap_a = i-1; swap_b = i; }
+        ImGui::SameLine(0.f, 2.f);
+        if (ImGui::SmallButton("v") && i < (int)brick.fx_chain.size()-1) { swap_a = i; swap_b = i+1; }
+        ImGui::PopStyleColor(2);
+        ImGui::EndGroup();
+
+        // Effect name (click to select)
+        ImGui::SameLine(0.f, 6.f);
+        ImU32 name_col = sel ? IM_COL32(255,200,80,255) : IM_COL32(220,220,220,255);
+        ImGui::PushStyleColor(ImGuiCol_Text, name_col);
+        if (ImGui::Selectable(fx_type_display(se.fx_type), sel,
+                              ImGuiSelectableFlags_DontClosePopups, {80.f, row_h}))
+            brick.fx_chain_selected = i;
+        ImGui::PopStyleColor();
+
+        // Duration mini-bar
+        ImGui::SameLine(0.f, 6.f);
+        {
+            float rel_end_eff = (se.rel_end <= 0.f) ? brick_dur : se.rel_end;
+            float x0 = ImGui::GetCursorScreenPos().x;
+            float y0 = ImGui::GetCursorScreenPos().y + 8.f;
+            float bh = row_h - 16.f;
+            // Track background
+            dl->AddRectFilled({x0, y0}, {x0 + bar_w, y0 + bh}, IM_COL32(40,40,40,200), 2.f);
+            // Active region
+            float rx0 = x0 + (se.rel_start / brick_dur) * bar_w;
+            float rx1 = x0 + (rel_end_eff  / brick_dur) * bar_w;
+            ImU32 bar_col = sel ? IM_COL32(210,130,30,220) : IM_COL32(150,90,20,180);
+            dl->AddRectFilled({rx0, y0}, {rx1, y0 + bh}, bar_col, 2.f);
+
+            // Draggable left handle
+            ImGui::SetCursorScreenPos({rx0 - 3.f, y0});
+            ImGui::InvisibleButton("##hleft", {8.f, bh});
+            if (ImGui::IsItemActive() && ImGui::IsMouseDragging(0)) {
+                float dx = ImGui::GetIO().MouseDelta.x / bar_w * brick_dur;
+                se.rel_start = fmaxf(0.f, fminf(se.rel_start + dx, rel_end_eff - 0.1f));
+                history_push(state, "Multi-FX: adjust timing");
+            }
+            if (ImGui::IsItemHovered()) ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+
+            // Draggable right handle (only if rel_end != 0, i.e. not "full")
+            ImGui::SetCursorScreenPos({rx1 - 3.f, y0});
+            ImGui::InvisibleButton("##hright", {8.f, bh});
+            if (ImGui::IsItemActive() && ImGui::IsMouseDragging(0)) {
+                float dx = ImGui::GetIO().MouseDelta.x / bar_w * brick_dur;
+                float new_end = rel_end_eff + dx;
+                // Snap to full-duration when near the end
+                if (new_end >= brick_dur * 0.97f) new_end = 0.f;
+                else new_end = fmaxf(se.rel_start + 0.1f, fminf(new_end, brick_dur));
+                se.rel_end = new_end;
+                history_push(state, "Multi-FX: adjust timing");
+            }
+            if (ImGui::IsItemHovered()) ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+
+            // Advance cursor past bar
+            ImGui::SetCursorScreenPos({x0 + bar_w, y0 - 8.f});
+            ImGui::Dummy({0.f, row_h});
+        }
+
+        // Delete button
+        ImGui::SameLine(0.f, 4.f);
+        ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(0,0,0,0));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(180,40,40,180));
+        if (ImGui::SmallButton("x")) del_idx = i;
+        ImGui::PopStyleColor(2);
+
+        ImGui::PopID();
+    }
+
+    // Apply pending swap / delete
+    if (swap_a >= 0) {
+        std::swap(brick.fx_chain[swap_a], brick.fx_chain[swap_b]);
+        if (brick.fx_chain_selected == swap_a) brick.fx_chain_selected = swap_b;
+        else if (brick.fx_chain_selected == swap_b) brick.fx_chain_selected = swap_a;
+        history_push(state, "Multi-FX: reorder");
+    }
+    if (del_idx >= 0) {
+        brick.fx_chain.erase(brick.fx_chain.begin() + del_idx);
+        brick.fx_chain_selected = fmaxf(-1, (float)(brick.fx_chain_selected - (brick.fx_chain_selected >= del_idx ? 1 : 0)));
+        history_push(state, "Multi-FX: remove effect");
+    }
+
+    if (brick.fx_chain.empty()) {
+        ImGui::Dummy({0.f, 12.f});
+        ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+        ImGui::TextWrapped("No effects yet — use 'Add Effect' above.");
+        ImGui::PopStyleColor();
+        return;
+    }
+
+    // ── Parameters for selected sub-effect ────────────────────────────────
+    int si = brick.fx_chain_selected;
+    if (si < 0 || si >= (int)brick.fx_chain.size()) { ImGui::Dummy({0.f, 8.f}); return; }
+    Clip& clip = brick.fx_chain[si];   // named 'clip' so generated includes work
+
+    ImGui::Dummy({0.f, 8.f}); ui_separator(); ImGui::Dummy({0.f, 8.f});
+
+    ImU32 ac = fx_type_accent(clip.fx_type);
+    ImGui::PushStyleColor(ImGuiCol_Text, ac);
+    ImGui::TextUnformatted(fx_type_display(clip.fx_type));
+    ImGui::PopStyleColor();
+
+    // Duration quick controls
+    ImGui::SameLine(0.f, 12.f);
+    float rel_end_eff = (clip.rel_end <= 0.f) ? brick_dur : clip.rel_end;
+    char dur_lbl[32];
+    snprintf(dur_lbl, sizeof(dur_lbl), "%.1fs – %.1fs", clip.rel_start, rel_end_eff);
+    ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+    ImGui::TextUnformatted(dur_lbl);
+    ImGui::PopStyleColor();
+    ImGui::Dummy({0.f, 4.f});
+
+    float sw = w - 16.f;
+    ImGui::PushStyleColor(ImGuiCol_SliderGrab,       ac);
+    ImGui::PushStyleColor(ImGuiCol_SliderGrabActive, ac);
+    ImGui::PushStyleColor(ImGuiCol_FrameBg,          Col::bg_soft);
+
+    switch (clip.fx_type) {
+        case FXType::Glitch:
+            ui_label("Chroma Shift");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##mgchroma", &clip.fx_glitch_chroma, 0.f, 30.f, "%.1f px");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Multi-FX Glitch: chroma");
+            ImGui::Dummy({0.f, 4.f});
+            ui_label("Row Jitter");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##mgjitter", &clip.fx_glitch_jitter, 0.f, 1.f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Multi-FX Glitch: jitter");
+            ImGui::Dummy({0.f, 4.f});
+            ui_label("Block Corruption");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##mgcorrupt", &clip.fx_glitch_corruption, 0.f, 1.f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Multi-FX Glitch: corruption");
+            ImGui::Dummy({0.f, 4.f});
+            ui_label("Layer Bleed");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##mgbleed", &clip.fx_glitch_corruption_bleed, 0.f, 1.f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Multi-FX Glitch: bleed");
+            break;
+
+        case FXType::ZoomPunch:
+            ui_label("Punch Strength");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##mzstr", &clip.fx_zoom_strength, 0.f, 0.5f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Multi-FX Zoom: strength");
+            ImGui::Dummy({0.f, 4.f});
+            ui_label("Decay");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##mzdec", &clip.fx_zoom_decay, 0.05f, 0.5f, "%.2fs");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Multi-FX Zoom: decay");
+            ImGui::Dummy({0.f, 4.f});
+            ui_label("Shake");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##mzshk", &clip.fx_zoom_shake, 0.f, 1.f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Multi-FX Zoom: shake");
+            break;
+
+        case FXType::LightLeak:
+            ui_label("Intensity");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##mllint", &clip.fx_leak_intensity, 0.f, 1.f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Multi-FX Leak: intensity");
+            ImGui::Dummy({0.f, 4.f});
+            ui_label("Speed");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##mllspd", &clip.fx_leak_speed, 0.f, 4.f, "%.1f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Multi-FX Leak: speed");
+            break;
+
+        case FXType::VHS:
+            ui_label("Noise");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##mvhsnoise", &clip.fx_vhs_noise, 0.f, 1.f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Multi-FX VHS: noise");
+            ImGui::Dummy({0.f, 4.f});
+            ui_label("Chroma Bleed");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##mvhsbleed", &clip.fx_vhs_bleed, 0.f, 20.f, "%.1f px");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Multi-FX VHS: bleed");
+            ImGui::Dummy({0.f, 4.f});
+            ui_label("Tracking");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##mvhstrk", &clip.fx_vhs_tracking, 0.f, 1.f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Multi-FX VHS: tracking");
+            break;
+
+        case FXType::Datamosh:
+            ui_label("Intensity");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##mdmint", &clip.fx_datamosh_intensity, 0.f, 1.f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Multi-FX Datamosh: intensity");
+            ImGui::Dummy({0.f, 4.f});
+            ui_label("Spread");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##mdmspread", &clip.fx_datamosh_spread, 0.f, 1.f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Multi-FX Datamosh: spread");
+            break;
+
+        case FXType::ChromaKey: {
+            float sw2 = sw - 20.f;
+            ui_label("Key Color  R");
+            ImGui::SetNextItemWidth(sw2);
+            ImGui::SliderFloat("##mckr", &clip.fx_chroma_key_r, 0.f, 1.f, "%.2f");
+            ui_label("           G");
+            ImGui::SetNextItemWidth(sw2);
+            ImGui::SliderFloat("##mckg", &clip.fx_chroma_key_g, 0.f, 1.f, "%.2f");
+            ui_label("           B");
+            ImGui::SetNextItemWidth(sw2);
+            ImGui::SliderFloat("##mckb", &clip.fx_chroma_key_b, 0.f, 1.f, "%.2f");
+            ImGui::Dummy({0.f, 4.f});
+            ui_label("Threshold");
+            ImGui::SetNextItemWidth(sw2);
+            ImGui::SliderFloat("##mckthr", &clip.fx_chroma_key_threshold, 0.f, 1.f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Multi-FX ChromaKey");
+            ImGui::Dummy({0.f, 4.f});
+            ui_label("Softness");
+            ImGui::SetNextItemWidth(sw2);
+            ImGui::SliderFloat("##mcksoft", &clip.fx_chroma_key_softness, 0.f, 0.5f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Multi-FX ChromaKey: softness");
+            break;
+        }
+
+        case FXType::Grade:
+            if (ImGui::Checkbox("Color Grade##mfx", &clip.fx_color_on))
+                history_push(state, "Multi-FX Grade");
+            if (clip.fx_color_on) {
+                ImGui::SetNextItemWidth(sw); ImGui::SliderFloat("Brightness##mfx", &clip.fx_brightness, -1.f, 1.f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Multi-FX Grade: brightness");
+                ImGui::SetNextItemWidth(sw); ImGui::SliderFloat("Contrast##mfx",   &clip.fx_contrast, 0.5f, 2.f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Multi-FX Grade: contrast");
+                ImGui::SetNextItemWidth(sw); ImGui::SliderFloat("Saturation##mfx", &clip.fx_saturation, 0.f, 2.f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Multi-FX Grade: saturation");
+                ImGui::SetNextItemWidth(sw); ImGui::SliderFloat("Hue##mfx",        &clip.fx_hue, -180.f, 180.f, "%.0f\xc2\xb0");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Multi-FX Grade: hue");
+            }
+            break;
+
+        case FXType::Blur:
+            if (ImGui::Checkbox("Blur##mfx", &clip.fx_blur_on))
+                history_push(state, "Multi-FX Blur");
+            if (clip.fx_blur_on) {
+                ImGui::SetNextItemWidth(sw);
+                ImGui::SliderFloat("Radius##mfx", &clip.fx_blur, 0.f, 20.f, "%.1f px");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Multi-FX Blur: radius");
+            }
+            break;
+
+        case FXType::Vignette:
+            if (ImGui::Checkbox("Vignette##mfx", &clip.fx_vignette_on))
+                history_push(state, "Multi-FX Vignette");
+            if (clip.fx_vignette_on) {
+                ImGui::SetNextItemWidth(sw);
+                ImGui::SliderFloat("Strength##mfx", &clip.fx_vignette, 0.f, 1.f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Multi-FX Vignette: strength");
+            }
+            break;
+
+        default:
+            ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+            ImGui::TextWrapped("Parameters for this effect type are not yet supported in Multi-FX.");
+            ImGui::PopStyleColor();
+            break;
+    }
+
+    ImGui::PopStyleColor(3);
+
+    ImGui::Dummy({0.f, 12.f}); ui_separator(); ImGui::Dummy({0.f, 8.f});
+    if (track.locked) ImGui::BeginDisabled();
+    if (ui_btn("Delete Multi-FX brick", false, true)) {
+        if (track.locked) ImGui::EndDisabled();
+        track.clips.erase(track.clips.begin() + state.selected_clip);
+        state.selected_clip = -1;
+        history_push(state, "Delete Multi-FX clip");
+        return;
+    }
+    if (track.locked) ImGui::EndDisabled();
+}

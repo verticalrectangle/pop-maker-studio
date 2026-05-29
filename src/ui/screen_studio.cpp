@@ -1101,6 +1101,7 @@ void ui_studio(AppState& state) {
             case PanelView::OverrideAdj:     panel_adjustment(state, pw);            break;
             case PanelView::OverrideBG:      panel_background(state, pw, true);      break;
             case PanelView::OverrideAudioFX: panel_audio_fx_clip(state, pw);         break;
+            case PanelView::OverrideMultiFX: panel_multifx(state, pw);               break;
         }
         ImGui::EndChild();
     }

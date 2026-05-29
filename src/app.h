@@ -82,7 +82,7 @@ enum class OutputFormat { Vertical, Horizontal, Square };
 // ── Track / clip data model ───────────────────────────────────────────────────
 
 // Each clip carries its own type so any track can hold mixed content.
-enum class ClipType { Text, Lyrics, Subtitle, Video, Audio, Effect, Background, BodyFX };
+enum class ClipType { Text, Lyrics, Subtitle, Video, Audio, Effect, Background, BodyFX, MultiFX };
 
 struct WordEntry {
     std::string text;
@@ -276,6 +276,13 @@ struct Clip {
     // Evaluate named property at absolute timeline time `playhead`.
     // Falls back to the static field when no keyframes exist.
     float eval_prop(const std::string& name, float playhead) const;
+
+    // Multi-FX chain (ClipType::MultiFX only).
+    // rel_start/rel_end: seconds from this clip's .start (rel_end==0 → full duration).
+    float              rel_start = 0.f;
+    float              rel_end   = 0.f;
+    std::vector<Clip>  fx_chain;          // ordered sub-effects for MultiFX bricks
+    int                fx_chain_selected = -1;
 };
 
 struct Track {

@@ -62,6 +62,7 @@ void draw_export_modal(AppState& state) {
                         case ClipType::Subtitle: ctype = "Subtitle"; break;
                         case ClipType::Lyrics:   ctype = "Lyrics";   break;
                         case ClipType::Effect:   ctype = "Effect";   break;
+                        case ClipType::MultiFX:  ctype = "Multi-FX"; break;
                         default:                 ctype = "Clip";     break;
                     }
                 }

@@ -133,6 +133,58 @@ static void accum_effect_clip(EffectAccum& acc, const Clip& cl) {
     }
 }
 
+// Accumulate a single creative-FX clip into acc. _cl_beat_pulse must be
+// pre-computed by the caller (pass 0.f for MultiFX sub-clips).
+static void accum_creative_clip(CreativeFXAccum& acc, const Clip& cl, float _cl_beat_pulse) {
+    if (cl.fx_type == FXType::Grade    ||
+        cl.fx_type == FXType::Blur     ||
+        cl.fx_type == FXType::Vignette) return;
+    switch (cl.fx_type) {
+        case FXType::Glitch:
+            acc.glitch_on         = true; acc.any_cfx = true;
+            acc.glitch_chroma     = fmaxf(acc.glitch_chroma,     cl.fx_glitch_chroma);
+            acc.glitch_jitter     = fmaxf(acc.glitch_jitter,     cl.fx_glitch_jitter);
+            acc.glitch_corruption       = fmaxf(acc.glitch_corruption,       cl.fx_glitch_corruption);
+            acc.glitch_corruption_bleed = fmaxf(acc.glitch_corruption_bleed, cl.fx_glitch_corruption_bleed);
+            break;
+        case FXType::ZoomPunch:
+            acc.zoom_on       = true; acc.any_cfx = true;
+            acc.zoom_strength = fmaxf(acc.zoom_strength, cl.fx_zoom_strength);
+            acc.zoom_decay    = fmaxf(acc.zoom_decay,    cl.fx_zoom_decay);
+            acc.zoom_shake    = fmaxf(acc.zoom_shake,    cl.fx_zoom_shake);
+            acc.zoom_src_track = cl.beat_src_track;
+            acc.zoom_src_clip  = cl.beat_src_clip;
+            break;
+        case FXType::LightLeak:
+            acc.leak_on        = true; acc.any_cfx = true;
+            acc.leak_intensity = fmaxf(acc.leak_intensity, cl.fx_leak_intensity);
+            acc.leak_speed     = fmaxf(acc.leak_speed,     cl.fx_leak_speed);
+            break;
+        case FXType::VHS:
+            acc.vhs_on       = true; acc.any_cfx = true;
+            acc.vhs_noise    = fmaxf(acc.vhs_noise,    cl.fx_vhs_noise);
+            acc.vhs_bleed    = fmaxf(acc.vhs_bleed,    cl.fx_vhs_bleed);
+            acc.vhs_tracking = fmaxf(acc.vhs_tracking, cl.fx_vhs_tracking);
+            break;
+        case FXType::Datamosh:
+            acc.datamosh_on        = true; acc.any_cfx = true;
+            acc.datamosh_intensity = fmaxf(acc.datamosh_intensity, cl.fx_datamosh_intensity);
+            acc.datamosh_spread    = fmaxf(acc.datamosh_spread,    cl.fx_datamosh_spread);
+            break;
+        case FXType::ChromaKey:
+            acc.chroma_key_on        = true; acc.any_cfx = true;
+            acc.chroma_key_r         = cl.fx_chroma_key_r;
+            acc.chroma_key_g         = cl.fx_chroma_key_g;
+            acc.chroma_key_b         = cl.fx_chroma_key_b;
+            acc.chroma_key_threshold = cl.fx_chroma_key_threshold;
+            acc.chroma_key_softness  = cl.fx_chroma_key_softness;
+            break;
+        default:
+#include "generated/fx_collect_cases.h"
+            break;
+    }
+}
+
 // An FX clip is glass if it overlaps a Video/Audio clip on the same track.
 bool fx_clip_is_glass(const AppState& state, int fx_ti, const Clip& fx_cl) {
     if (fx_ti < 0 || fx_ti >= (int)state.tracks.size()) return false;
@@ -144,25 +196,53 @@ bool fx_clip_is_glass(const AppState& state, int fx_ti, const Clip& fx_cl) {
     return false;
 }
 
+// Helper: accumulate all sub-effects of a MultiFX brick that are active at time t.
+static void accum_multifx_effects(EffectAccum& ea, CreativeFXAccum& ca,
+                                  const AppState& state, const Clip& brick, float t) {
+    float rel        = t - brick.start;
+    float parent_dur = brick.end - brick.start;
+    float beat_pulse = beat_pulse_at(state, brick.beat_src_track, brick.beat_src_clip, t, brick.beat_decay);
+    for (auto& se : brick.fx_chain) {
+        float se_end = (se.rel_end <= 0.f) ? parent_dur : se.rel_end;
+        if (rel < se.rel_start || rel >= se_end) continue;
+        accum_effect_clip(ea, se);
+        accum_creative_clip(ca, se, beat_pulse);
+    }
+}
+
 // Global adjustment FX: clips on tracks above below_track_idx that are NOT glass.
 EffectAccum collect_effects(const AppState& state, float t, int below_track_idx) {
     EffectAccum acc;
     for (int ti = 0; ti < below_track_idx && ti < (int)state.tracks.size(); ++ti) {
         for (auto& cl : state.tracks[ti].clips) {
+            if (cl.clip_type == ClipType::MultiFX) {
+                if (t < cl.start || t >= cl.end) continue;
+                if (fx_clip_is_glass(state, ti, cl)) continue;
+                CreativeFXAccum dummy;
+                accum_multifx_effects(acc, dummy, state, cl, t);
+                continue;
+            }
             if (cl.clip_type != ClipType::Effect) continue;
             if (t < cl.start || t >= cl.end) continue;
-            if (fx_clip_is_glass(state, ti, cl)) continue; // glass: applied pre-composite per video clip
+            if (fx_clip_is_glass(state, ti, cl)) continue;
             accum_effect_clip(acc, cl);
         }
     }
     return acc;
 }
 
-// Glass adjustment FX: Effect clips on the same track as the video clip that overlap it.
+// Glass adjustment FX: Effect/MultiFX clips on the same track as the video clip that overlap it.
 EffectAccum collect_glass_effects(const AppState& state, float t, int video_track_idx) {
     EffectAccum acc;
     if (video_track_idx < 0 || video_track_idx >= (int)state.tracks.size()) return acc;
     for (auto& cl : state.tracks[video_track_idx].clips) {
+        if (cl.clip_type == ClipType::MultiFX) {
+            if (t < cl.start || t >= cl.end) continue;
+            if (!fx_clip_is_glass(state, video_track_idx, cl)) continue;
+            CreativeFXAccum dummy;
+            accum_multifx_effects(acc, dummy, state, cl, t);
+            continue;
+        }
         if (cl.clip_type != ClipType::Effect) continue;
         if (t < cl.start || t >= cl.end) continue;
         if (!fx_clip_is_glass(state, video_track_idx, cl)) continue;
@@ -175,118 +255,40 @@ CreativeFXAccum collect_creative_fx(const AppState& state, float t, int below_tr
     CreativeFXAccum acc;
     for (int ti = 0; ti < below_track_idx && ti < (int)state.tracks.size(); ++ti) {
         for (auto& cl : state.tracks[ti].clips) {
-            if (cl.clip_type != ClipType::Effect) continue;
-            if (cl.fx_type == FXType::Grade    ||
-                cl.fx_type == FXType::Blur     ||
-                cl.fx_type == FXType::Vignette) continue;
-            if (t < cl.start || t >= cl.end)       continue;
-            if (fx_clip_is_glass(state, ti, cl))   continue; // glass: applied pre-composite
-            float _cl_beat_pulse = beat_pulse_at(state, cl.beat_src_track, cl.beat_src_clip, t, cl.beat_decay);
-            switch (cl.fx_type) {
-                case FXType::Glitch:
-                    acc.glitch_on         = true; acc.any_cfx = true;
-                    acc.glitch_chroma     = fmaxf(acc.glitch_chroma,     cl.fx_glitch_chroma);
-                    acc.glitch_jitter     = fmaxf(acc.glitch_jitter,     cl.fx_glitch_jitter);
-                    acc.glitch_corruption       = fmaxf(acc.glitch_corruption,       cl.fx_glitch_corruption);
-                    acc.glitch_corruption_bleed = fmaxf(acc.glitch_corruption_bleed, cl.fx_glitch_corruption_bleed);
-                    break;
-                case FXType::ZoomPunch:
-                    acc.zoom_on       = true; acc.any_cfx = true;
-                    acc.zoom_strength = fmaxf(acc.zoom_strength, cl.fx_zoom_strength);
-                    acc.zoom_decay    = fmaxf(acc.zoom_decay,    cl.fx_zoom_decay);
-                    acc.zoom_shake    = fmaxf(acc.zoom_shake,    cl.fx_zoom_shake);
-                    acc.zoom_src_track = cl.beat_src_track;
-                    acc.zoom_src_clip  = cl.beat_src_clip;
-                    break;
-                case FXType::LightLeak:
-                    acc.leak_on        = true; acc.any_cfx = true;
-                    acc.leak_intensity = fmaxf(acc.leak_intensity, cl.fx_leak_intensity);
-                    acc.leak_speed     = fmaxf(acc.leak_speed,     cl.fx_leak_speed);
-                    break;
-                case FXType::VHS:
-                    acc.vhs_on       = true; acc.any_cfx = true;
-                    acc.vhs_noise    = fmaxf(acc.vhs_noise,    cl.fx_vhs_noise);
-                    acc.vhs_bleed    = fmaxf(acc.vhs_bleed,    cl.fx_vhs_bleed);
-                    acc.vhs_tracking = fmaxf(acc.vhs_tracking, cl.fx_vhs_tracking);
-                    break;
-                case FXType::Datamosh:
-                    acc.datamosh_on        = true; acc.any_cfx = true;
-                    acc.datamosh_intensity = fmaxf(acc.datamosh_intensity, cl.fx_datamosh_intensity);
-                    acc.datamosh_spread    = fmaxf(acc.datamosh_spread,    cl.fx_datamosh_spread);
-                    break;
-                case FXType::ChromaKey:
-                    acc.chroma_key_on        = true; acc.any_cfx = true;
-                    acc.chroma_key_r         = cl.fx_chroma_key_r;
-                    acc.chroma_key_g         = cl.fx_chroma_key_g;
-                    acc.chroma_key_b         = cl.fx_chroma_key_b;
-                    acc.chroma_key_threshold = cl.fx_chroma_key_threshold;
-                    acc.chroma_key_softness  = cl.fx_chroma_key_softness;
-                    break;
-                default:
-#include "generated/fx_collect_cases.h"
-                    break;
+            if (cl.clip_type == ClipType::MultiFX) {
+                if (t < cl.start || t >= cl.end) continue;
+                if (fx_clip_is_glass(state, ti, cl)) continue;
+                EffectAccum dummy;
+                accum_multifx_effects(dummy, acc, state, cl, t);
+                continue;
             }
+            if (cl.clip_type != ClipType::Effect) continue;
+            if (t < cl.start || t >= cl.end)       continue;
+            if (fx_clip_is_glass(state, ti, cl))   continue;
+            float _cl_beat_pulse = beat_pulse_at(state, cl.beat_src_track, cl.beat_src_clip, t, cl.beat_decay);
+            accum_creative_clip(acc, cl, _cl_beat_pulse);
         }
     }
     return acc;
 }
 
-// Glass creative FX: Effect clips on the same track as the video clip that overlap it.
+// Glass creative FX: Effect/MultiFX clips on the same track as the video clip that overlap it.
 CreativeFXAccum collect_glass_fx(const AppState& state, float t, int video_track_idx) {
     CreativeFXAccum acc;
     if (video_track_idx < 0 || video_track_idx >= (int)state.tracks.size()) return acc;
     for (auto& cl : state.tracks[video_track_idx].clips) {
+        if (cl.clip_type == ClipType::MultiFX) {
+            if (t < cl.start || t >= cl.end) continue;
+            if (!fx_clip_is_glass(state, video_track_idx, cl)) continue;
+            EffectAccum dummy;
+            accum_multifx_effects(dummy, acc, state, cl, t);
+            continue;
+        }
         if (cl.clip_type != ClipType::Effect) continue;
-        if (cl.fx_type == FXType::Grade    ||
-            cl.fx_type == FXType::Blur     ||
-            cl.fx_type == FXType::Vignette) continue;
         if (t < cl.start || t >= cl.end)       continue;
         if (!fx_clip_is_glass(state, video_track_idx, cl)) continue;
         float _cl_beat_pulse = beat_pulse_at(state, cl.beat_src_track, cl.beat_src_clip, t, cl.beat_decay);
-        switch (cl.fx_type) {
-            case FXType::Glitch:
-                acc.glitch_on         = true; acc.any_cfx = true;
-                acc.glitch_chroma     = fmaxf(acc.glitch_chroma,     cl.fx_glitch_chroma);
-                acc.glitch_jitter     = fmaxf(acc.glitch_jitter,     cl.fx_glitch_jitter);
-                acc.glitch_corruption       = fmaxf(acc.glitch_corruption,       cl.fx_glitch_corruption);
-                acc.glitch_corruption_bleed = fmaxf(acc.glitch_corruption_bleed, cl.fx_glitch_corruption_bleed);
-                break;
-            case FXType::ZoomPunch:
-                acc.zoom_on       = true; acc.any_cfx = true;
-                acc.zoom_strength = fmaxf(acc.zoom_strength, cl.fx_zoom_strength);
-                acc.zoom_decay    = fmaxf(acc.zoom_decay,    cl.fx_zoom_decay);
-                acc.zoom_shake    = fmaxf(acc.zoom_shake,    cl.fx_zoom_shake);
-                acc.zoom_src_track = cl.beat_src_track;
-                acc.zoom_src_clip  = cl.beat_src_clip;
-                break;
-            case FXType::LightLeak:
-                acc.leak_on        = true; acc.any_cfx = true;
-                acc.leak_intensity = fmaxf(acc.leak_intensity, cl.fx_leak_intensity);
-                acc.leak_speed     = fmaxf(acc.leak_speed,     cl.fx_leak_speed);
-                break;
-            case FXType::VHS:
-                acc.vhs_on       = true; acc.any_cfx = true;
-                acc.vhs_noise    = fmaxf(acc.vhs_noise,    cl.fx_vhs_noise);
-                acc.vhs_bleed    = fmaxf(acc.vhs_bleed,    cl.fx_vhs_bleed);
-                acc.vhs_tracking = fmaxf(acc.vhs_tracking, cl.fx_vhs_tracking);
-                break;
-            case FXType::Datamosh:
-                acc.datamosh_on        = true; acc.any_cfx = true;
-                acc.datamosh_intensity = fmaxf(acc.datamosh_intensity, cl.fx_datamosh_intensity);
-                acc.datamosh_spread    = fmaxf(acc.datamosh_spread,    cl.fx_datamosh_spread);
-                break;
-            case FXType::ChromaKey:
-                acc.chroma_key_on        = true; acc.any_cfx = true;
-                acc.chroma_key_r         = cl.fx_chroma_key_r;
-                acc.chroma_key_g         = cl.fx_chroma_key_g;
-                acc.chroma_key_b         = cl.fx_chroma_key_b;
-                acc.chroma_key_threshold = cl.fx_chroma_key_threshold;
-                acc.chroma_key_softness  = cl.fx_chroma_key_softness;
-                break;
-            default:
-#include "generated/fx_collect_cases.h"
-                break;
-        }
+        accum_creative_clip(acc, cl, _cl_beat_pulse);
     }
     return acc;
 }
@@ -298,6 +300,13 @@ EffectAccum collect_effects_for_track(const AppState& state, float t, int track_
     EffectAccum acc;
     if (track_idx < 0 || track_idx >= (int)state.tracks.size()) return acc;
     for (auto& cl : state.tracks[track_idx].clips) {
+        if (cl.clip_type == ClipType::MultiFX) {
+            if (t < cl.start || t >= cl.end) continue;
+            if (fx_clip_is_glass(state, track_idx, cl)) continue;
+            CreativeFXAccum dummy;
+            accum_multifx_effects(acc, dummy, state, cl, t);
+            continue;
+        }
         if (cl.clip_type != ClipType::Effect) continue;
         if (t < cl.start || t >= cl.end) continue;
         if (fx_clip_is_glass(state, track_idx, cl)) continue;
@@ -310,57 +319,18 @@ CreativeFXAccum collect_creative_fx_for_track(const AppState& state, float t, in
     CreativeFXAccum acc;
     if (track_idx < 0 || track_idx >= (int)state.tracks.size()) return acc;
     for (auto& cl : state.tracks[track_idx].clips) {
+        if (cl.clip_type == ClipType::MultiFX) {
+            if (t < cl.start || t >= cl.end) continue;
+            if (fx_clip_is_glass(state, track_idx, cl)) continue;
+            EffectAccum dummy;
+            accum_multifx_effects(dummy, acc, state, cl, t);
+            continue;
+        }
         if (cl.clip_type != ClipType::Effect) continue;
-        if (cl.fx_type == FXType::Grade    ||
-            cl.fx_type == FXType::Blur     ||
-            cl.fx_type == FXType::Vignette) continue;
         if (t < cl.start || t >= cl.end)      continue;
         if (fx_clip_is_glass(state, track_idx, cl)) continue;
         float _cl_beat_pulse = beat_pulse_at(state, cl.beat_src_track, cl.beat_src_clip, t, cl.beat_decay);
-        switch (cl.fx_type) {
-            case FXType::Glitch:
-                acc.glitch_on         = true; acc.any_cfx = true;
-                acc.glitch_chroma     = fmaxf(acc.glitch_chroma,     cl.fx_glitch_chroma);
-                acc.glitch_jitter     = fmaxf(acc.glitch_jitter,     cl.fx_glitch_jitter);
-                acc.glitch_corruption       = fmaxf(acc.glitch_corruption,       cl.fx_glitch_corruption);
-                acc.glitch_corruption_bleed = fmaxf(acc.glitch_corruption_bleed, cl.fx_glitch_corruption_bleed);
-                break;
-            case FXType::ZoomPunch:
-                acc.zoom_on       = true; acc.any_cfx = true;
-                acc.zoom_strength = fmaxf(acc.zoom_strength, cl.fx_zoom_strength);
-                acc.zoom_decay    = fmaxf(acc.zoom_decay,    cl.fx_zoom_decay);
-                acc.zoom_shake    = fmaxf(acc.zoom_shake,    cl.fx_zoom_shake);
-                acc.zoom_src_track = cl.beat_src_track;
-                acc.zoom_src_clip  = cl.beat_src_clip;
-                break;
-            case FXType::LightLeak:
-                acc.leak_on        = true; acc.any_cfx = true;
-                acc.leak_intensity = fmaxf(acc.leak_intensity, cl.fx_leak_intensity);
-                acc.leak_speed     = fmaxf(acc.leak_speed,     cl.fx_leak_speed);
-                break;
-            case FXType::VHS:
-                acc.vhs_on       = true; acc.any_cfx = true;
-                acc.vhs_noise    = fmaxf(acc.vhs_noise,    cl.fx_vhs_noise);
-                acc.vhs_bleed    = fmaxf(acc.vhs_bleed,    cl.fx_vhs_bleed);
-                acc.vhs_tracking = fmaxf(acc.vhs_tracking, cl.fx_vhs_tracking);
-                break;
-            case FXType::Datamosh:
-                acc.datamosh_on        = true; acc.any_cfx = true;
-                acc.datamosh_intensity = fmaxf(acc.datamosh_intensity, cl.fx_datamosh_intensity);
-                acc.datamosh_spread    = fmaxf(acc.datamosh_spread,    cl.fx_datamosh_spread);
-                break;
-            case FXType::ChromaKey:
-                acc.chroma_key_on        = true; acc.any_cfx = true;
-                acc.chroma_key_r         = cl.fx_chroma_key_r;
-                acc.chroma_key_g         = cl.fx_chroma_key_g;
-                acc.chroma_key_b         = cl.fx_chroma_key_b;
-                acc.chroma_key_threshold = cl.fx_chroma_key_threshold;
-                acc.chroma_key_softness  = cl.fx_chroma_key_softness;
-                break;
-            default:
-#include "generated/fx_collect_cases.h"
-                break;
-        }
+        accum_creative_clip(acc, cl, _cl_beat_pulse);
     }
     return acc;
 }

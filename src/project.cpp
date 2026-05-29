@@ -7,7 +7,7 @@
 // ── Binary serialization helpers ──────────────────────────────────────────────
 
 static const uint32_t MAGIC   = 0x534D5001u; // "PMS\x01"
-static const uint32_t VERSION = 29u;
+static const uint32_t VERSION = 30u;
 
 struct Writer {
     std::ofstream f;
@@ -179,6 +179,11 @@ static void write_clip(Writer& w, const Clip& c) {
     w.pod((uint8_t)c.ts.bg_enabled);
     for (int i=0;i<4;++i) w.pod(c.ts.bg_col[i]);
     w.pod(c.ts.bg_pad_x); w.pod(c.ts.bg_pad_y); w.pod(c.ts.bg_corner);
+    // v30: MultiFX chain
+    w.pod(c.rel_start); w.pod(c.rel_end);
+    uint32_t nchain = (uint32_t)c.fx_chain.size();
+    w.pod(nchain);
+    for (auto& se : c.fx_chain) write_clip(w, se);
 }
 
 static Clip read_clip(Reader& r, uint32_t version) {
@@ -309,6 +314,14 @@ static Clip read_clip(Reader& r, uint32_t version) {
         c.ts.bg_enabled = (bool)r.pod<uint8_t>();
         for (int i=0;i<4;++i) c.ts.bg_col[i] = r.pod<float>();
         c.ts.bg_pad_x = r.pod<float>(); c.ts.bg_pad_y = r.pod<float>(); c.ts.bg_corner = r.pod<float>();
+    }
+    // v30: MultiFX chain
+    if (version >= 30u) {
+        c.rel_start = r.pod<float>(); c.rel_end = r.pod<float>();
+        uint32_t nchain = r.pod<uint32_t>();
+        c.fx_chain.reserve(nchain);
+        for (uint32_t i = 0; i < nchain && r.ok; ++i)
+            c.fx_chain.push_back(read_clip(r, version));
     }
     return c;
 }

@@ -952,7 +952,7 @@ static std::vector<std::string> build_args(AppState& state) {
     for (int ti = (int)state.tracks.size() - 1; ti >= 0; --ti) {
         for (int ci = 0; ci < (int)state.tracks[ti].clips.size(); ++ci) {
             const Clip& cl = state.tracks[ti].clips[ci];
-            if (cl.clip_type == ClipType::Effect) {
+            if (cl.clip_type == ClipType::Effect || cl.clip_type == ClipType::MultiFX) {
                 continue;  // applied per-layer via collect_effects, not as a render layer
             } else if (cl.clip_type == ClipType::Video) {
                 if (cl.text.empty() || !fs::exists(cl.text)) continue;
@@ -1142,7 +1142,7 @@ static std::vector<std::string> build_snapshot_args(AppState& state,
         if (!state.tracks[ti].visible) continue;
         for (int ci = 0; ci < (int)state.tracks[ti].clips.size(); ++ci) {
             const Clip& cl = state.tracks[ti].clips[ci];
-            if (cl.clip_type == ClipType::Effect) continue;
+            if (cl.clip_type == ClipType::Effect || cl.clip_type == ClipType::MultiFX) continue;
             if (cl.clip_type == ClipType::Video) {
                 if (cl.text.empty() || !fs::exists(cl.text)) continue;
                 int arr_idx = get_vid_input(cl.text);

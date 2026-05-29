@@ -10,7 +10,7 @@
 enum class PanelView {
     Clip, Animation, Typography, Project, History,       // tab-bar views
     LibBG, LibFX, LibAdj, LibAFX, LibVID, LibIMG, LibAUD, // library browsers
-    OverrideFX, OverrideAdj, OverrideBG, OverrideAudioFX, // clip-type overrides
+    OverrideFX, OverrideAdj, OverrideBG, OverrideAudioFX, OverrideMultiFX, // clip-type overrides
 };
 
 // ── Timeline layout constants ─────────────────────────────────────────────────
