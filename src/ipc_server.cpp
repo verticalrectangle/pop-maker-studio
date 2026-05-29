@@ -79,6 +79,80 @@ static std::string clip_type_str(ClipType t) {
     return "unknown";
 }
 
+static AnimStyle parse_anim_style(const std::string& s) {
+    if (s == "fade")       return AnimStyle::Fade;
+    if (s == "glitch")     return AnimStyle::Glitch;
+    if (s == "typewriter") return AnimStyle::Typewriter;
+    if (s == "bounce")     return AnimStyle::Bounce;
+    if (s == "scale")      return AnimStyle::Scale;
+    if (s == "slide")      return AnimStyle::Slide;
+    if (s == "stack")      return AnimStyle::Stack;
+    if (s == "block")      return AnimStyle::Block;
+    return AnimStyle::None;
+}
+
+static FXType parse_fx_type(const std::string& s) {
+    if (s == "grade")      return FXType::Grade;
+    if (s == "blur")       return FXType::Blur;
+    if (s == "vignette")   return FXType::Vignette;
+    if (s == "glitch")     return FXType::Glitch;
+    if (s == "zoom_punch") return FXType::ZoomPunch;
+    if (s == "lut")        return FXType::LUT;
+    if (s == "light_leak") return FXType::LightLeak;
+    if (s == "vhs")        return FXType::VHS;
+    if (s == "datamosh")   return FXType::Datamosh;
+    if (s == "chroma_key") return FXType::ChromaKey;
+    return FXType::Grade;
+}
+
+// Set fx-specific params on an Effect clip from a string-keyed params object.
+// Covers all built-in FX types; returns false and sets err for unknown keys.
+static bool apply_effect_params(Clip& cl, const json& params, std::string& err) {
+    for (auto& [k, v] : params.items()) {
+        if (!v.is_number()) { err = "param '" + k + "' must be a number"; return false; }
+        float fv = v.get<float>();
+        // Grade
+        if (k == "brightness")   { cl.fx_color_on = true; cl.fx_brightness  = fv; }
+        else if (k == "contrast")     { cl.fx_color_on = true; cl.fx_contrast    = fv; }
+        else if (k == "saturation")   { cl.fx_color_on = true; cl.fx_saturation  = fv; }
+        else if (k == "hue")          { cl.fx_color_on = true; cl.fx_hue         = fv; }
+        // Blur
+        else if (k == "blur")         { cl.fx_blur_on  = true; cl.fx_blur        = fv; }
+        // Vignette
+        else if (k == "vignette")     { cl.fx_vignette_on = true; cl.fx_vignette = fv; }
+        // Text override
+        else if (k == "opacity_mul")  { cl.fx_text_on  = true; cl.fx_opacity_mul = fv; }
+        else if (k == "scale_mul")    { cl.fx_text_on  = true; cl.fx_scale_mul   = fv; }
+        // Glitch
+        else if (k == "glitch_chroma")            { cl.fx_glitch_chroma            = fv; }
+        else if (k == "glitch_jitter")            { cl.fx_glitch_jitter            = fv; }
+        else if (k == "glitch_corruption")        { cl.fx_glitch_corruption        = fv; }
+        else if (k == "glitch_corruption_bleed")  { cl.fx_glitch_corruption_bleed  = fv; }
+        // ZoomPunch
+        else if (k == "zoom_strength") { cl.fx_zoom_strength = fv; }
+        else if (k == "zoom_decay")    { cl.fx_zoom_decay    = fv; }
+        else if (k == "zoom_shake")    { cl.fx_zoom_shake    = fv; }
+        // LightLeak
+        else if (k == "leak_intensity") { cl.fx_leak_intensity = fv; }
+        else if (k == "leak_speed")     { cl.fx_leak_speed     = fv; }
+        // VHS
+        else if (k == "vhs_noise")    { cl.fx_vhs_noise    = fv; }
+        else if (k == "vhs_bleed")    { cl.fx_vhs_bleed    = fv; }
+        else if (k == "vhs_tracking") { cl.fx_vhs_tracking = fv; }
+        // Datamosh
+        else if (k == "datamosh_intensity") { cl.fx_datamosh_intensity = fv; }
+        else if (k == "datamosh_spread")    { cl.fx_datamosh_spread    = fv; }
+        // ChromaKey
+        else if (k == "chroma_key_r")         { cl.fx_chroma_key_r         = fv; }
+        else if (k == "chroma_key_g")         { cl.fx_chroma_key_g         = fv; }
+        else if (k == "chroma_key_b")         { cl.fx_chroma_key_b         = fv; }
+        else if (k == "chroma_key_threshold") { cl.fx_chroma_key_threshold = fv; }
+        else if (k == "chroma_key_softness")  { cl.fx_chroma_key_softness  = fv; }
+        else { err = "unknown effect param: " + k; return false; }
+    }
+    return true;
+}
+
 static std::string anim_style_str(AnimStyle s) {
     switch (s) {
         case AnimStyle::None:       return "none";
@@ -396,19 +470,41 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         if (!check_clip(state, ti, ci, err)) return {};
         Clip& cl = state.tracks[ti].clips[ci];
 
-        if (prop == "volume")   { cl.volume   = params["value"].get<float>(); }
-        else if (prop == "speed")    { cl.speed    = params["value"].get<float>(); }
-        else if (prop == "opacity")  { cl.opacity  = params["value"].get<float>(); }
-        else if (prop == "muted")    { cl.muted    = params["value"].get<bool>(); }
-        else if (prop == "in_point") { cl.in_point = params["value"].get<float>(); }
-        else if (prop == "fade_in")  { cl.fade_in  = params["value"].get<float>(); }
-        else if (prop == "fade_out") { cl.fade_out = params["value"].get<float>(); }
-        else if (prop == "pos_x")    { cl.pos_x    = params["value"].get<float>(); }
-        else if (prop == "pos_y")    { cl.pos_y    = params["value"].get<float>(); }
-        else if (prop == "scale_x")  { cl.scale_x  = params["value"].get<float>(); }
-        else if (prop == "scale_y")  { cl.scale_y  = params["value"].get<float>(); }
-        else if (prop == "rotation") { cl.rotation = params["value"].get<float>(); }
-        else if (prop == "text")     { cl.text     = params["value"].get<std::string>(); }
+        auto& val = params["value"];
+        // ── A/V props ────────────────────────────────────────────────────────
+        if      (prop == "volume")   { cl.volume   = val.get<float>(); }
+        else if (prop == "speed")    { cl.speed    = val.get<float>(); }
+        else if (prop == "opacity")  { cl.opacity  = val.get<float>(); }
+        else if (prop == "muted")    { cl.muted    = val.get<bool>(); }
+        else if (prop == "in_point") { cl.in_point = val.get<float>(); }
+        else if (prop == "fade_in")  { cl.fade_in  = val.get<float>(); }
+        else if (prop == "fade_out") { cl.fade_out = val.get<float>(); }
+        else if (prop == "blend_mode") { cl.blend_mode = val.get<int>(); }
+        // ── Transform props ──────────────────────────────────────────────────
+        else if (prop == "pos_x")    { cl.pos_x    = val.get<float>(); }
+        else if (prop == "pos_y")    { cl.pos_y    = val.get<float>(); }
+        else if (prop == "scale_x")  { cl.scale_x  = val.get<float>(); }
+        else if (prop == "scale_y")  { cl.scale_y  = val.get<float>(); }
+        else if (prop == "rotation") { cl.rotation = val.get<float>(); }
+        // ── Text props ───────────────────────────────────────────────────────
+        else if (prop == "text")       { cl.text     = val.get<std::string>(); }
+        else if (prop == "font_size")  { cl.font_size = val.get<float>(); }
+        else if (prop == "sub_pos")    { cl.sub_pos  = val.get<int>(); }   // 0=bot 1=ctr 2=top 3=custom
+        else if (prop == "sub_pos_x")  { cl.sub_pos_x = val.get<float>(); }
+        else if (prop == "sub_pos_y")  { cl.sub_pos_y = val.get<float>(); }
+        else if (prop == "sub_anchor_h") { cl.sub_anchor_h = val.get<int>(); } // 0=left 1=ctr 2=right
+        else if (prop == "sub_wrap_w") { cl.sub_wrap_w = val.get<float>(); }
+        else if (prop == "karaoke")    { cl.karaoke  = val.get<bool>(); }
+        else if (prop == "clip_style") { cl.clip_style = parse_anim_style(val.get<std::string>()); }
+        else if (prop == "sub_color") {
+            if (!val.is_array() || val.size() != 4) { err = "sub_color must be [r,g,b,a]"; return {}; }
+            for (int i = 0; i < 4; ++i) cl.sub_color[i] = val[i].get<float>();
+            cl.sub_color_override = true;
+        }
+        else if (prop == "karaoke_highlight_color") {
+            if (!val.is_array() || val.size() != 4) { err = "karaoke_highlight_color must be [r,g,b,a]"; return {}; }
+            for (int i = 0; i < 4; ++i) cl.karaoke_highlight_color[i] = val[i].get<float>();
+        }
         else { err = "unknown prop: " + prop; return {}; }
         return json::object();
     }
@@ -501,6 +597,41 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         }
         // Set FX type so the effect clip renders
         cl.fx_type = FXType::Grade;  // will be overridden if clip is Effect type
+        return json::object();
+    }
+
+    if (method == "add_effect_brick") {
+        int ti = params.value("track", -1);
+        if (ti < 0 || ti >= (int)state.tracks.size()) { err = "track index out of range"; return {}; }
+        if (state.tracks[ti].locked) { err = "track is locked"; return {}; }
+        std::string fx_s = params.value("fx_type", "grade");
+        float start = params.value("start", 0.f);
+        float end   = params.value("end",   start + 2.f);
+
+        Clip cl;
+        cl.clip_type = ClipType::Effect;
+        cl.fx_type   = parse_fx_type(fx_s);
+        cl.start     = start;
+        cl.end       = end;
+
+        if (params.contains("params") && params["params"].is_object()) {
+            if (!apply_effect_params(cl, params["params"], err)) return {};
+        }
+
+        state.tracks[ti].clips.push_back(cl);
+        json r; r["clip"] = (int)state.tracks[ti].clips.size() - 1;
+        return r;
+    }
+
+    if (method == "new_project") {
+        state = AppState{};
+        return json::object();
+    }
+
+    if (method == "rename_track") {
+        int ti = params.value("track", -1);
+        if (!check_track(state, ti, err)) return {};
+        state.tracks[ti].name = params.value("name", state.tracks[ti].name);
         return json::object();
     }
 

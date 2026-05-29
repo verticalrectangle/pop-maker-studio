@@ -243,9 +243,22 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="set_clip_prop",
             description=(
-                "Set a scalar property on a clip. Valid props: volume (0–2), speed (0.25–4), "
-                "opacity (0–1), muted (bool), in_point, fade_in, fade_out, pos_x, pos_y, "
-                "scale_x, scale_y, rotation, text. Requires batch."
+                "Set a scalar property on a clip. Requires batch.\n\n"
+                "General props:\n"
+                "  volume (0–2), speed (0.25–4), opacity (0–1), muted (bool),\n"
+                "  in_point, fade_in, fade_out, pos_x, pos_y, scale_x, scale_y, rotation, text\n\n"
+                "Subtitle / text layout:\n"
+                "  sub_pos (0=bottom 1=center 2=top 3=custom), sub_pos_x, sub_pos_y (0–1 normalised),\n"
+                "  sub_anchor_h (0=left 1=center 2=right), sub_wrap_w (0–1, 0=auto),\n"
+                "  font_size (pixels, 0=auto)\n\n"
+                "Color arrays are [r, g, b, a] with values 0–1:\n"
+                "  sub_color (text fill, also sets sub_color_override=true),\n"
+                "  karaoke_highlight_color\n\n"
+                "Animation / behaviour:\n"
+                "  clip_style (string: none|pop|fade|slide_up|slide_down|typewriter|wave|bounce|\n"
+                "              zoom_in|zoom_out|spin|flip|glitch|blur_in|split|drop|rise),\n"
+                "  blend_mode (string: normal|add|multiply|screen|overlay),\n"
+                "  karaoke (bool)"
             ),
             inputSchema={
                 "type": "object",
@@ -377,6 +390,66 @@ async def list_tools() -> list[Tool]:
                 "type": "object",
                 "properties": {"path": {"type": "string"}},
                 "required": ["path"],
+            },
+        ),
+        Tool(
+            name="new_project",
+            description=(
+                "Reset the project to a blank state (clears all tracks, clips, audio, beats). "
+                "Call this before building a project from scratch. Requires batch."
+            ),
+            inputSchema={"type": "object", "properties": {}},
+        ),
+        Tool(
+            name="rename_track",
+            description="Rename a track. Requires batch.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "track": {"type": "integer"},
+                    "name": {"type": "string"},
+                },
+                "required": ["track", "name"],
+            },
+        ),
+        Tool(
+            name="add_effect_brick",
+            description=(
+                "Add a standalone FX brick (ClipType::Effect) to a track. "
+                "FX bricks overlay the video render — they don't appear in the clip list "
+                "the same way text/video do, but they affect everything below them on the timeline.\n\n"
+                "fx_type options: grade | blur | vignette | glitch | zoom_punch | lut | "
+                "light_leak | vhs | datamosh | chroma_key\n\n"
+                "params for each type:\n"
+                "  grade: brightness (-1–1), contrast (0–2), saturation (0–2), hue (0–1)\n"
+                "  blur: amount (0–1)\n"
+                "  vignette: amount (0–1)\n"
+                "  glitch: chroma (0–20), jitter (0–1), corruption (0–1), corruption_bleed (0–1)\n"
+                "  zoom_punch: strength (0–0.5), decay (0.01–1), shake (0–1)\n"
+                "  light_leak: intensity (0–1), speed (0–3)\n"
+                "  vhs: noise (0–1), bleed (0–20), tracking (0–1)\n"
+                "  datamosh: intensity (0–1), spread (0–1)\n"
+                "  chroma_key: key_r, key_g, key_b (0–1 each), threshold (0–1), softness (0–1)\n"
+                "  lut: (no numeric params — set lut_path via set_clip_prop instead)\n\n"
+                "Requires batch."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "track": {"type": "integer"},
+                    "fx_type": {
+                        "type": "string",
+                        "enum": ["grade", "blur", "vignette", "glitch", "zoom_punch",
+                                 "lut", "light_leak", "vhs", "datamosh", "chroma_key"],
+                    },
+                    "start": {"type": "number"},
+                    "end": {"type": "number"},
+                    "params": {
+                        "type": "object",
+                        "description": "Effect-specific parameter values by name (see description)",
+                    },
+                },
+                "required": ["track", "fx_type", "start", "end"],
             },
         ),
         Tool(
