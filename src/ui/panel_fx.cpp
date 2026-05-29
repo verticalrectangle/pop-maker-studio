@@ -1692,7 +1692,7 @@ void panel_multifx(AppState& state, float w) {
 
     // ── Chain list ─────────────────────────────────────────────────────────
     int del_idx = -1, swap_a = -1, swap_b = -1;
-    float bar_w = w - 100.f;  // width for the duration mini-bar
+    const float del_btn_reserve = 22.f;  // SmallButton "x" + SameLine gap
     for (int i = 0; i < (int)brick.fx_chain.size(); ++i) {
         Clip& se = brick.fx_chain[i];
         bool sel = (brick.fx_chain_selected == i);
@@ -1730,9 +1730,11 @@ void panel_multifx(AppState& state, float w) {
         ImGui::SameLine(0.f, 6.f);
         {
             float rel_end_eff = (se.rel_end <= 0.f) ? brick_dur : se.rel_end;
-            float x0 = ImGui::GetCursorScreenPos().x;
-            float y0 = ImGui::GetCursorScreenPos().y + 8.f;
-            float bh = row_h - 16.f;
+            float x0  = ImGui::GetCursorScreenPos().x;
+            float y0  = ImGui::GetCursorScreenPos().y + 8.f;
+            float bh  = row_h - 16.f;
+            float bar_w = ImGui::GetContentRegionAvail().x - del_btn_reserve;
+            if (bar_w < 10.f) bar_w = 10.f;
             // Track background
             dl->AddRectFilled({x0, y0}, {x0 + bar_w, y0 + bh}, IM_COL32(40,40,40,200), 2.f);
             // Active region
