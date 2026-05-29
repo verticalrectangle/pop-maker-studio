@@ -18,6 +18,7 @@ Claude Desktop config (claude_desktop_config.json):
   }
 """
 
+import asyncio
 import json
 import os
 import socket
@@ -516,6 +517,30 @@ async def list_tools() -> list[Tool]:
             },
         ),
         Tool(
+            name="find_audio_cue",
+            description=(
+                "Analyse an audio file using the app's beat detector and find a good "
+                "beat-aligned in_point timestamp matching a natural-language description "
+                "of what you're looking for. The app must be running.\n\n"
+                "description examples: 'after the intro', 'first big drop', 'energetic buildup', "
+                "'quiet bridge', 'chorus', 'before the outro', 'most energetic part'\n\n"
+                "Returns: recommended_in_point (seconds, beat-aligned), bpm, duration, "
+                "reasoning, and 2 alternative timestamps."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Absolute path to the audio file"},
+                    "description": {"type": "string", "description": "What you're looking for"},
+                    "clip_duration": {
+                        "type": "number",
+                        "description": "How long the clip will be in seconds (optional — used to verify the window fits)",
+                    },
+                },
+                "required": ["path", "description"],
+            },
+        ),
+        Tool(
             name="validate_glsl",
             description=(
                 "Test-compile a GLSL fragment shader body without registering it as a runtime effect. "
@@ -547,8 +572,172 @@ async def list_tools() -> list[Tool]:
     ]
 
 
+# ── find_audio_cue ────────────────────────────────────────────────────────────
+
+def _snap_to_beat(t: float, beats: list[float]) -> float:
+    if not beats:
+        return t
+    return min(beats, key=lambda b: abs(b - t))
+
+
+def _match_cue(description: str, rms: list[float], beats: list[float],
+               duration: float, clip_duration: float) -> tuple[float, str, list[dict]]:
+    desc = description.lower()
+    n = len(rms)
+
+    def rms_at(t: float) -> float:
+        idx = int(t)
+        return rms[idx] if 0 <= idx < n else 0.0
+
+    def rolling_max(start_s: int, end_s: int, window: int = 3) -> tuple[int, float]:
+        best_s, best_v = start_s, 0.0
+        for s in range(start_s, min(end_s - window + 1, n)):
+            v = sum(rms[s:s + window]) / window
+            if v > best_v:
+                best_v = v
+                best_s = s
+        return best_s, best_v
+
+    def find_drop(skip_intro_frac: float = 0.15) -> tuple[int, str]:
+        skip = int(n * skip_intro_frac)
+        best_s, best_v = skip, 0.0
+        for s in range(skip + 1, n - 1):
+            if rms[s] > best_v and rms[s] > rms[s - 1] and rms[s] >= rms[s + 1]:
+                best_v = rms[s]
+                best_s = s
+        return best_s, f"Highest onset peak at {best_s}s (rms={best_v:.2f})"
+
+    # Keyword → candidate second
+    if any(k in desc for k in ("intro", "beginning", "start")) and "after" not in desc:
+        candidate = int(n * 0.05)
+        reasoning = f"Start of track (~{candidate}s)"
+
+    elif any(k in desc for k in ("after intro", "verse", "first verse", "first section")):
+        # Rising rms in 15–30% zone
+        start_s = int(n * 0.15)
+        end_s   = int(n * 0.35)
+        candidate = start_s
+        best_rise = 0.0
+        for s in range(start_s, end_s - 1):
+            rise = rms[s + 1] - rms[s]
+            if rise > best_rise:
+                best_rise = rise
+                candidate = s
+        reasoning = f"Rising energy at {candidate}s in first-verse zone"
+
+    elif any(k in desc for k in ("drop", "big drop", "chorus", "hook", "peak")):
+        candidate, reasoning = find_drop(0.12)
+        reasoning = f"Biggest onset peak outside intro at {candidate}s"
+
+    elif any(k in desc for k in ("build", "buildup", "ramp", "rise")):
+        # Longest monotonic rise of ≥3s
+        best_start, best_len = 0, 0
+        s = 0
+        while s < n - 1:
+            if rms[s + 1] >= rms[s]:
+                run_start = s
+                while s < n - 1 and rms[s + 1] >= rms[s]:
+                    s += 1
+                run_len = s - run_start
+                if run_len > best_len:
+                    best_len = run_len
+                    best_start = run_start
+            else:
+                s += 1
+        candidate = best_start
+        reasoning = f"Longest rising rms run ({best_len}s) starts at {candidate}s"
+
+    elif any(k in desc for k in ("breakdown", "bridge", "quiet", "soft", "low")):
+        # Lowest 3s window between two high-rms sections
+        mid_start = int(n * 0.2)
+        mid_end   = int(n * 0.8)
+        best_s, best_v = mid_start, float("inf")
+        for s in range(mid_start, mid_end - 2):
+            v = sum(rms[s:s + 3]) / 3
+            if v < best_v:
+                best_v = v
+                best_s = s
+        candidate = best_s
+        reasoning = f"Quietest 3s window at {candidate}s (rms={best_v:.2f})"
+
+    elif any(k in desc for k in ("outro", "end", "fade", "closing")):
+        candidate = int(n * 0.80)
+        reasoning = f"Outro zone at {candidate}s (~80% through track)"
+
+    else:
+        # Generic: highest sustained 3s window outside first 15%
+        skip = int(n * 0.15)
+        best_s, best_v = rolling_max(skip, n)
+        candidate = best_s
+        reasoning = f"Highest sustained energy at {candidate}s (rms={best_v:.2f})"
+
+    # Ensure clip_duration fits
+    if clip_duration and candidate + clip_duration > duration:
+        candidate = max(0, int(duration - clip_duration - 2))
+        reasoning += f" (adjusted to fit {clip_duration}s clip)"
+
+    primary = _snap_to_beat(float(candidate), beats)
+
+    # Two alternatives: next-best drop and a different region
+    alt_drop_s, _ = find_drop(0.35)
+    alt1 = _snap_to_beat(float(alt_drop_s), beats)
+
+    quiet_zone = int(n * 0.55)
+    alt2 = _snap_to_beat(float(quiet_zone), beats)
+
+    alternatives = [
+        {"in_point": alt1, "reasoning": f"Second energy peak at ~{alt_drop_s}s"},
+        {"in_point": alt2, "reasoning": f"Mid-track entry at ~{quiet_zone}s"},
+    ]
+
+    return primary, reasoning, alternatives
+
+
+async def _find_audio_cue(arguments: dict) -> dict:
+    path = arguments.get("path", "")
+    description = arguments.get("description", "")
+    clip_duration = float(arguments.get("clip_duration", 0) or 0)
+
+    if not path:
+        raise ValueError("path is required")
+
+    # Start analysis
+    _call("analyze_audio", {"path": path})
+
+    # Poll until done (up to 120s)
+    for _ in range(240):
+        await asyncio.sleep(0.5)
+        res = _call("get_audio_analysis", {})
+        if res.get("status") == "done":
+            break
+        if res.get("status") == "error":
+            raise ValueError("beat detection failed for: " + path)
+    else:
+        raise TimeoutError("audio analysis timed out")
+
+    bpm      = res["bpm"]
+    duration = res["duration"]
+    beats    = res["beats"]
+    rms      = res["rms"]
+
+    primary, reasoning, alternatives = _match_cue(
+        description, rms, beats, duration, clip_duration
+    )
+
+    return {
+        "recommended_in_point": primary,
+        "bpm": bpm,
+        "duration": duration,
+        "reasoning": reasoning,
+        "alternatives": alternatives,
+    }
+
+
 @server.call_tool()
 async def call_tool(name: str, arguments: dict) -> list[TextContent]:
+    if name == "find_audio_cue":
+        result = await _find_audio_cue(arguments)
+        return [TextContent(type="text", text=json.dumps(result, indent=2))]
     try:
         result = _call(name, arguments)
         return [TextContent(type="text", text=json.dumps(result, indent=2))]

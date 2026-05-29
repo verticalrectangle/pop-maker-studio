@@ -4,6 +4,7 @@
 #include "ui/pipeline.h"
 #include "ui/panel_animation.h"
 #include "project.h"
+#include "beat_detect.h"
 #include "generated/fx_clip_set_dispatch.h"
 #include "json.hpp"
 
@@ -18,11 +19,19 @@
 #include <string>
 #include <vector>
 #include <algorithm>
+#include <atomic>
+#include <thread>
 #include <fstream>
 
 using json = nlohmann::json;
 
 // ── Static state ──────────────────────────────────────────────────────────────
+
+static struct {
+    std::atomic<bool> running{false};
+    std::atomic<bool> done{false};
+    BeatResult        result;
+} s_audio_analysis;
 
 static int  g_srv_fd   = -1;
 static std::string g_sock_path;
@@ -674,6 +683,35 @@ static json dispatch(AppState& state, const std::string& method, const json& par
 
         state.tracks[ti].clips.push_back(brick);
         json r; r["clip"] = (int)state.tracks[ti].clips.size() - 1;
+        return r;
+    }
+
+    if (method == "analyze_audio") {
+        std::string path = params.value("path", "");
+        if (path.empty()) { err = "path required"; return {}; }
+        if (s_audio_analysis.running.load()) { err = "analysis already running"; return {}; }
+        s_audio_analysis.running.store(true);
+        s_audio_analysis.done.store(false);
+        std::thread([path]() {
+            s_audio_analysis.result = beat_detect(path);
+            s_audio_analysis.done.store(true);
+            s_audio_analysis.running.store(false);
+        }).detach();
+        json r; r["status"] = "started";
+        return r;
+    }
+
+    if (method == "get_audio_analysis") {
+        if (s_audio_analysis.running.load()) { json r; r["status"] = "running"; return r; }
+        if (!s_audio_analysis.done.load())   { json r; r["status"] = "idle"; return r; }
+        auto& res = s_audio_analysis.result;
+        if (!res.ok) { json r; r["status"] = "error"; r["message"] = "beat detection failed"; return r; }
+        json r;
+        r["status"]   = "done";
+        r["bpm"]      = res.bpm;
+        r["duration"] = res.duration;
+        r["beats"]    = res.beats;
+        r["rms"]      = res.rms;
         return r;
     }
 

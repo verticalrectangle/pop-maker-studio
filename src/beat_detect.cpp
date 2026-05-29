@@ -99,6 +99,25 @@ BeatResult beat_detect(const std::string& path) {
 
     if (pcm.empty()) return result;
 
+    // ── Per-second RMS energy (normalised 0–1) ────────────────────────────────
+    result.duration = (float)pcm.size() / (float)AUBIO_SR;
+    {
+        int nsec = (int)std::ceil(result.duration);
+        result.rms.resize((size_t)nsec, 0.f);
+        float peak = 0.f;
+        for (int s = 0; s < nsec; ++s) {
+            size_t i0 = (size_t)s * AUBIO_SR;
+            size_t i1 = std::min(i0 + AUBIO_SR, pcm.size());
+            float sq = 0.f;
+            for (size_t i = i0; i < i1; ++i) sq += pcm[i] * pcm[i];
+            float r = std::sqrt(sq / (float)(i1 - i0));
+            result.rms[s] = r;
+            if (r > peak) peak = r;
+        }
+        if (peak > 0.f)
+            for (auto& r : result.rms) r /= peak;
+    }
+
     // ── Run aubio beat tracker ────────────────────────────────────────────────
     aubio_tempo_t* tempo = new_aubio_tempo("default", AUBIO_WIN, AUBIO_HOP, AUBIO_SR);
     if (!tempo) return result;
