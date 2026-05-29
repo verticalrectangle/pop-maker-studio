@@ -343,6 +343,35 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         return j;
     }
 
+    if (method == "analyze_audio") {
+        std::string path = params.value("path", "");
+        if (path.empty()) { err = "path required"; return {}; }
+        if (s_audio_analysis.running.load()) { err = "analysis already running"; return {}; }
+        s_audio_analysis.running.store(true);
+        s_audio_analysis.done.store(false);
+        std::thread([path]() {
+            s_audio_analysis.result = beat_detect(path);
+            s_audio_analysis.done.store(true);
+            s_audio_analysis.running.store(false);
+        }).detach();
+        json r; r["status"] = "started";
+        return r;
+    }
+
+    if (method == "get_audio_analysis") {
+        if (s_audio_analysis.running.load()) { json r; r["status"] = "running"; return r; }
+        if (!s_audio_analysis.done.load())   { json r; r["status"] = "idle"; return r; }
+        auto& res = s_audio_analysis.result;
+        if (!res.ok) { json r; r["status"] = "error"; r["message"] = "beat detection failed"; return r; }
+        json r;
+        r["status"]   = "done";
+        r["bpm"]      = res.bpm;
+        r["duration"] = res.duration;
+        r["beats"]    = res.beats;
+        r["rms"]      = res.rms;
+        return r;
+    }
+
     if (method == "save_project") {
         std::string path = params.value("path", state.project_path);
         if (path.empty()) { err = "no project path — provide 'path' param or save once from UI"; return {}; }
@@ -683,35 +712,6 @@ static json dispatch(AppState& state, const std::string& method, const json& par
 
         state.tracks[ti].clips.push_back(brick);
         json r; r["clip"] = (int)state.tracks[ti].clips.size() - 1;
-        return r;
-    }
-
-    if (method == "analyze_audio") {
-        std::string path = params.value("path", "");
-        if (path.empty()) { err = "path required"; return {}; }
-        if (s_audio_analysis.running.load()) { err = "analysis already running"; return {}; }
-        s_audio_analysis.running.store(true);
-        s_audio_analysis.done.store(false);
-        std::thread([path]() {
-            s_audio_analysis.result = beat_detect(path);
-            s_audio_analysis.done.store(true);
-            s_audio_analysis.running.store(false);
-        }).detach();
-        json r; r["status"] = "started";
-        return r;
-    }
-
-    if (method == "get_audio_analysis") {
-        if (s_audio_analysis.running.load()) { json r; r["status"] = "running"; return r; }
-        if (!s_audio_analysis.done.load())   { json r; r["status"] = "idle"; return r; }
-        auto& res = s_audio_analysis.result;
-        if (!res.ok) { json r; r["status"] = "error"; r["message"] = "beat detection failed"; return r; }
-        json r;
-        r["status"]   = "done";
-        r["bpm"]      = res.bpm;
-        r["duration"] = res.duration;
-        r["beats"]    = res.beats;
-        r["rms"]      = res.rms;
         return r;
     }
 
