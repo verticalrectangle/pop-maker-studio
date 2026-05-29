@@ -62,6 +62,25 @@ static void send_err_id(int fd, const std::string& id, const std::string& msg) {
     send_json(fd, r);
 }
 
+// MCP sends numeric values as JSON strings when the schema type is "{}".
+// These helpers coerce either form to the target type.
+static float jval_float(const json& v) {
+    if (v.is_number()) return v.get<float>();
+    if (v.is_string()) return std::stof(v.get<std::string>());
+    return 0.f;
+}
+static int jval_int(const json& v) {
+    if (v.is_number()) return v.get<int>();
+    if (v.is_string()) return std::stoi(v.get<std::string>());
+    return 0;
+}
+static bool jval_bool(const json& v) {
+    if (v.is_boolean()) return v.get<bool>();
+    if (v.is_number())  return v.get<int>() != 0;
+    if (v.is_string()) { auto s = v.get<std::string>(); return s=="true"||s=="1"; }
+    return false;
+}
+
 // ── AppState → JSON serialization ─────────────────────────────────────────────
 
 static std::string clip_type_str(ClipType t) {
@@ -472,38 +491,38 @@ static json dispatch(AppState& state, const std::string& method, const json& par
 
         auto& val = params["value"];
         // ── A/V props ────────────────────────────────────────────────────────
-        if      (prop == "volume")   { cl.volume   = val.get<float>(); }
-        else if (prop == "speed")    { cl.speed    = val.get<float>(); }
-        else if (prop == "opacity")  { cl.opacity  = val.get<float>(); }
-        else if (prop == "muted")    { cl.muted    = val.get<bool>(); }
-        else if (prop == "in_point") { cl.in_point = val.get<float>(); }
-        else if (prop == "fade_in")  { cl.fade_in  = val.get<float>(); }
-        else if (prop == "fade_out") { cl.fade_out = val.get<float>(); }
-        else if (prop == "blend_mode") { cl.blend_mode = val.get<int>(); }
+        if      (prop == "volume")   { cl.volume     = jval_float(val); }
+        else if (prop == "speed")    { cl.speed      = jval_float(val); }
+        else if (prop == "opacity")  { cl.opacity    = jval_float(val); }
+        else if (prop == "muted")    { cl.muted      = jval_bool(val); }
+        else if (prop == "in_point") { cl.in_point   = jval_float(val); }
+        else if (prop == "fade_in")  { cl.fade_in    = jval_float(val); }
+        else if (prop == "fade_out") { cl.fade_out   = jval_float(val); }
+        else if (prop == "blend_mode") { cl.blend_mode = jval_int(val); }
         // ── Transform props ──────────────────────────────────────────────────
-        else if (prop == "pos_x")    { cl.pos_x    = val.get<float>(); }
-        else if (prop == "pos_y")    { cl.pos_y    = val.get<float>(); }
-        else if (prop == "scale_x")  { cl.scale_x  = val.get<float>(); }
-        else if (prop == "scale_y")  { cl.scale_y  = val.get<float>(); }
-        else if (prop == "rotation") { cl.rotation = val.get<float>(); }
+        else if (prop == "pos_x")    { cl.pos_x    = jval_float(val); }
+        else if (prop == "pos_y")    { cl.pos_y    = jval_float(val); }
+        else if (prop == "scale_x")  { cl.scale_x  = jval_float(val); }
+        else if (prop == "scale_y")  { cl.scale_y  = jval_float(val); }
+        else if (prop == "rotation") { cl.rotation = jval_float(val); }
         // ── Text props ───────────────────────────────────────────────────────
-        else if (prop == "text")       { cl.text     = val.get<std::string>(); }
-        else if (prop == "font_size")  { cl.font_size = val.get<float>(); }
-        else if (prop == "sub_pos")    { cl.sub_pos  = val.get<int>(); }   // 0=bot 1=ctr 2=top 3=custom
-        else if (prop == "sub_pos_x")  { cl.sub_pos_x = val.get<float>(); }
-        else if (prop == "sub_pos_y")  { cl.sub_pos_y = val.get<float>(); }
-        else if (prop == "sub_anchor_h") { cl.sub_anchor_h = val.get<int>(); } // 0=left 1=ctr 2=right
-        else if (prop == "sub_wrap_w") { cl.sub_wrap_w = val.get<float>(); }
-        else if (prop == "karaoke")    { cl.karaoke  = val.get<bool>(); }
+        else if (prop == "text")       { cl.text      = val.get<std::string>(); }
+        else if (prop == "font_size")  { cl.font_size = jval_float(val); }
+        else if (prop == "sub_pos")    { cl.sub_pos   = jval_int(val); }
+        else if (prop == "sub_pos_x")  { cl.sub_pos_x = jval_float(val); }
+        else if (prop == "sub_pos_y")  { cl.sub_pos_y = jval_float(val); }
+        else if (prop == "sub_anchor_h") { cl.sub_anchor_h = jval_int(val); }
+        else if (prop == "sub_wrap_w") { cl.sub_wrap_w = jval_float(val); }
+        else if (prop == "karaoke")    { cl.karaoke   = jval_bool(val); }
         else if (prop == "clip_style") { cl.clip_style = parse_anim_style(val.get<std::string>()); }
         else if (prop == "sub_color") {
             if (!val.is_array() || val.size() != 4) { err = "sub_color must be [r,g,b,a]"; return {}; }
-            for (int i = 0; i < 4; ++i) cl.sub_color[i] = val[i].get<float>();
+            for (int i = 0; i < 4; ++i) cl.sub_color[i] = jval_float(val[i]);
             cl.sub_color_override = true;
         }
         else if (prop == "karaoke_highlight_color") {
             if (!val.is_array() || val.size() != 4) { err = "karaoke_highlight_color must be [r,g,b,a]"; return {}; }
-            for (int i = 0; i < 4; ++i) cl.karaoke_highlight_color[i] = val[i].get<float>();
+            for (int i = 0; i < 4; ++i) cl.karaoke_highlight_color[i] = jval_float(val[i]);
         }
         else { err = "unknown prop: " + prop; return {}; }
         return json::object();
