@@ -40,6 +40,7 @@ struct TlState {
     float glass_drag_ref_pre=0.f, glass_drag_ref_post=0.f;
     float glass_drag_ref_start=0.f;
     bool ruler_drag=false;
+    int drag_merge_ci=-1;  // FX brick index to merge into on drop (-1 = none)
 };
 
 // Defined in timeline.cpp

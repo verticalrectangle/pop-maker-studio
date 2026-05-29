@@ -1643,6 +1643,74 @@ void panel_fx_clip(AppState& state, float w) {
     if (track.locked) ImGui::EndDisabled();
 }
 
+// ── Shader FX catalogue for MultiFX picker ───────────────────────────────────
+struct ShaderFXCard { FXType type; const char* name; const char* category; };
+static const ShaderFXCard k_shader_fx[] = {
+    // Glitch & Distortion
+    { FXType::Pixelate,            "Pixelate",           "Glitch" },
+    { FXType::GlitchBlock,         "Glitch Block",       "Glitch" },
+    { FXType::InterlaceGlitch,     "Interlace Glitch",   "Glitch" },
+    { FXType::DataCorrupt,         "Data Corrupt",       "Glitch" },
+    { FXType::DoubleGhost,         "Double Ghost",       "Glitch" },
+    { FXType::RgbSplitWave,        "RGB Split Wave",     "Glitch" },
+    { FXType::BitCrush,            "Bit Crush",          "Glitch" },
+    { FXType::TVStatic,            "TV Static",          "Glitch" },
+    { FXType::DitherBayer,         "Dither",             "Glitch" },
+    { FXType::VHSDrop,             "VHS Drop",           "Glitch" },
+    // Film & Texture
+    { FXType::FilmGrain,           "Film Grain",         "Film" },
+    { FXType::OldFilm,             "Old Film",           "Film" },
+    { FXType::Lomo,                "Lomo",               "Film" },
+    { FXType::Super8Film,          "Super 8",            "Film" },
+    { FXType::Daguerreotype,       "Daguerreotype",      "Film" },
+    { FXType::BleachBypass,        "Bleach Bypass",      "Film" },
+    { FXType::FilmHalation,        "Film Halation",      "Film" },
+    { FXType::FilmBurn,            "Film Burn",          "Film" },
+    // Color
+    { FXType::ChromaticAberration, "Chromatic Aberration","Color" },
+    { FXType::Duotone,             "Duotone",            "Color" },
+    { FXType::GradientMap,         "Gradient Map",       "Color" },
+    { FXType::CrossProcess,        "Cross Process",      "Color" },
+    { FXType::Technicolor,         "Technicolor",        "Color" },
+    { FXType::Kodachrome,          "Kodachrome",         "Color" },
+    { FXType::MiamiVice,           "Miami Vice",         "Color" },
+    { FXType::GoldenHour,          "Golden Hour",        "Color" },
+    { FXType::SplitToning,         "Split Toning",       "Color" },
+    { FXType::Solarize,            "Solarize",           "Color" },
+    // Glow & Light
+    { FXType::NeonGlow,            "Neon Glow",          "Light" },
+    { FXType::GodRays,             "God Rays",           "Light" },
+    { FXType::AuroraBorealis,      "Aurora",             "Light" },
+    { FXType::StarburstSpike,      "Starburst",          "Light" },
+    { FXType::BokehDream,          "Bokeh Dream",        "Light" },
+    { FXType::NeonEdgeGlow,        "Neon Edge",          "Light" },
+    { FXType::NeonSign,            "Neon Sign",          "Light" },
+    // Distort & Warp
+    { FXType::Fisheye,             "Fisheye",            "Warp" },
+    { FXType::Twirl,               "Twirl",              "Warp" },
+    { FXType::Ripple,              "Ripple",             "Warp" },
+    { FXType::WaveWarp,            "Wave Warp",          "Warp" },
+    { FXType::Kaleidoscope,        "Kaleidoscope",       "Warp" },
+    { FXType::MirrorFold,          "Mirror Fold",        "Warp" },
+    { FXType::VortexDistort,       "Vortex",             "Warp" },
+    { FXType::BarrelWarp,          "Barrel Warp",        "Warp" },
+    { FXType::TiltShift,           "Tilt Shift",         "Warp" },
+    { FXType::MirrorTunnel,        "Mirror Tunnel",      "Warp" },
+    { FXType::LiquidChrome,        "Liquid Chrome",      "Warp" },
+    // Scan & Pattern
+    { FXType::Scanlines,           "Scanlines",          "Pattern" },
+    { FXType::Halftone,            "Halftone",           "Pattern" },
+    { FXType::Posterize,           "Posterize",          "Pattern" },
+    { FXType::CRT,                 "CRT",                "Pattern" },
+    { FXType::CrtBarrel,           "CRT Barrel",         "Pattern" },
+    { FXType::LaserGrid,           "Laser Grid",         "Pattern" },
+    { FXType::PixelMosaic,         "Pixel Mosaic",       "Pattern" },
+    { FXType::AsciiArt,            "ASCII Art",          "Pattern" },
+    { FXType::ComicDots,           "Comic Dots",         "Pattern" },
+    { FXType::Crosshatch,          "Crosshatch",         "Pattern" },
+};
+static const int k_n_shader_fx = (int)(sizeof(k_shader_fx)/sizeof(k_shader_fx[0]));
+
 // ── Multi-FX chain panel ──────────────────────────────────────────────────────
 
 void panel_multifx(AppState& state, float w) {
@@ -1717,6 +1785,32 @@ void panel_multifx(AppState& state, float w) {
                     history_push(state, std::string("Multi-FX: add Body FX ") + info.name);
                 }
                 ImGui::PopStyleColor();
+            }
+        }
+        // Shader FX section
+        ImGui::Separator();
+        ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(200, 160, 255, 160));
+        ImGui::TextUnformatted("Shader FX");
+        ImGui::PopStyleColor();
+        {
+            const char* last_shader_cat = nullptr;
+            for (int k = 0; k < k_n_shader_fx; ++k) {
+                const ShaderFXCard& sc = k_shader_fx[k];
+                if (!last_shader_cat || strcmp(last_shader_cat, sc.category) != 0) {
+                    last_shader_cat = sc.category;
+                    ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(130, 130, 150, 180));
+                    ImGui::TextUnformatted(sc.category);
+                    ImGui::PopStyleColor();
+                }
+                if (ImGui::Selectable(sc.name)) {
+                    Clip se;
+                    se.clip_type = ClipType::Effect;
+                    se.fx_type   = sc.type;
+                    se.rel_start = 0.f; se.rel_end = 0.f;
+                    brick.fx_chain.push_back(std::move(se));
+                    brick.fx_chain_selected = (int)brick.fx_chain.size() - 1;
+                    history_push(state, std::string("Multi-FX: add shader ") + sc.name);
+                }
             }
         }
         ImGui::EndCombo();
@@ -2063,9 +2157,12 @@ void panel_multifx(AppState& state, float w) {
                 }
                 break;
 
+            // Shader FX — generated inspector covers these
+#include "generated/fx_ui_inspector.h"
+
             default:
                 ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
-                ImGui::TextWrapped("Parameters for this effect type are not yet supported in Multi-FX.");
+                ImGui::TextWrapped("No parameters for this effect.");
                 ImGui::PopStyleColor();
                 break;
         }

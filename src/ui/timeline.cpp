@@ -48,6 +48,34 @@ static bool clips_conflict(const Clip& a, const Clip& b) {
         a.clip_type == ClipType::BodyFX  || b.clip_type == ClipType::BodyFX) return false;
     return a.start < b.end && a.end > b.start;
 }
+static void merge_fx_clips(Clip& target, Clip dragged) {
+    if (target.clip_type == ClipType::MultiFX) {
+        if (dragged.clip_type == ClipType::MultiFX) {
+            for (auto& se : dragged.fx_chain)
+                target.fx_chain.push_back(se);
+        } else {
+            target.fx_chain.push_back(dragged);
+        }
+    } else {
+        // target is Effect or BodyFX — promote to MultiFX
+        Clip sub0 = target;
+        sub0.clip_type = (target.clip_type == ClipType::BodyFX) ? ClipType::BodyFX : ClipType::Effect;
+        sub0.rel_start = 0.f; sub0.rel_end = 0.f;
+        target.clip_type = ClipType::MultiFX;
+        target.fx_chain.clear();
+        target.fx_chain.push_back(sub0);
+        if (dragged.clip_type == ClipType::MultiFX) {
+            for (auto& se : dragged.fx_chain)
+                target.fx_chain.push_back(se);
+        } else {
+            Clip sub1 = dragged;
+            sub1.rel_start = 0.f; sub1.rel_end = 0.f;
+            target.fx_chain.push_back(sub1);
+        }
+        target.fx_chain_selected = 0;
+    }
+}
+
 // ── Timeline ──────────────────────────────────────────────────────────────────
 
 void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h) {
@@ -916,6 +944,11 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                 }
                 ImGui::PopClipRect();
                 clip_interact(ci, clip, vis_x0, vis_x1, cy0, cy1, sel);
+                if (g_tl.drag_merge_ci == ci && drag_track == ti) {
+                    float pulse = 0.5f + 0.5f * sinf((float)ImGui::GetTime() * 6.f);
+                    ImU32 mc = IM_COL32(80, 255, 220, (int)(120 + 80 * pulse));
+                    dl->AddRect({vis_x0, cy0}, {vis_x1, cy1}, mc, 2.f, 0, 2.5f);
+                }
                 continue;
             }
 
@@ -983,6 +1016,11 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
             ImGui::PopClipRect();
 
             clip_interact(ci, clip, vis_x0, vis_x1, cy0, cy1, sel);
+            if (g_tl.drag_merge_ci == ci && drag_track == ti) {
+                float pulse = 0.5f + 0.5f * sinf((float)ImGui::GetTime() * 6.f);
+                ImU32 mc = IM_COL32(255, 180, 60, (int)(130 + 80 * pulse));
+                dl->AddRect({vis_x0, cy0}, {vis_x1, cy1}, mc, 2.f, 0, 2.5f);
+            }
         }
 
         // Left-click empty track body (no clip hit) — deselect
@@ -1525,9 +1563,31 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                 int hot = (int)((mouse.y - track_origin_y) / TL_TRACK_H);
                 drag_hot_track = (hot >= 0 && hot <= n_tracks) ? hot : -1;
             }
+            // Merge-target detection: FX-on-FX overlap on the same track.
+            g_tl.drag_merge_ci = -1;
+            if (!drag_left && !drag_right && drag_hot_track == drag_track) {
+                const Clip& dc_ref = state.tracks[drag_track].clips[drag_clip];
+                bool dc_is_fx = (dc_ref.clip_type == ClipType::Effect ||
+                                 dc_ref.clip_type == ClipType::MultiFX ||
+                                 dc_ref.clip_type == ClipType::BodyFX);
+                if (dc_is_fx) {
+                    for (int ci2 = 0; ci2 < (int)state.tracks[drag_track].clips.size(); ++ci2) {
+                        if (ci2 == drag_clip) continue;
+                        const Clip& oc = state.tracks[drag_track].clips[ci2];
+                        if (oc.clip_type != ClipType::Effect &&
+                            oc.clip_type != ClipType::MultiFX &&
+                            oc.clip_type != ClipType::BodyFX) continue;
+                        if (dc_ref.start < oc.end && dc_ref.end > oc.start) {
+                            g_tl.drag_merge_ci = ci2;
+                            break;
+                        }
+                    }
+                }
+            }
         }
     } else {
         s_snap_indicator = -1.f;
+        g_tl.drag_merge_ci = -1;
     }
     if (ImGui::IsMouseReleased(0)) {
         if (drag_track >= 0 && drag_clip >= 0) {
@@ -1591,6 +1651,23 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                     }
                 }
             } else {
+                // Merge: FX brick dropped on top of another FX brick (same track)
+                if (!drag_left && !drag_right && g_tl.drag_merge_ci >= 0) {
+                    int tgt_ci = g_tl.drag_merge_ci;
+                    Clip dragged_copy = state.tracks[drag_track].clips[drag_clip];
+                    merge_fx_clips(state.tracks[drag_track].clips[tgt_ci], dragged_copy);
+                    // Erase the dragged clip; adjust index if target is after it
+                    state.tracks[drag_track].clips.erase(
+                        state.tracks[drag_track].clips.begin() + drag_clip);
+                    int sel_ci = (tgt_ci > drag_clip) ? tgt_ci - 1 : tgt_ci;
+                    state.selected_track = drag_track;
+                    state.selected_clip  = sel_ci;
+                    state.clip_selection.clear();
+                    state.clip_selection.insert({drag_track, sel_ci});
+                    g_tl.drag_merge_ci = -1;
+                    history_push(state, "Merge FX bricks");
+                    goto drag_done;
+                }
                 // Body drag on same track — validate with conflict predicate, restore on conflict
                 bool overlaps = false;
                 if (!drag_left && !drag_right) {
@@ -1645,8 +1722,10 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
             }
             }
         }
+        drag_done:
         drag_track=-1; drag_clip=-1; drag_left=false; drag_right=false;
         drag_hot_track=-1; drag_hot_gap=-1;
+        g_tl.drag_merge_ci = -1;
         s_drag_moved = false;
         s_body_snap_held_start = -1.f; s_body_snap_held_cand = -1.f;
         g_tl.drag_multi.clear();
