@@ -265,7 +265,7 @@ async def list_tools() -> list[Tool]:
                 "Set a scalar property on a clip. Requires batch.\n\n"
                 "General props:\n"
                 "  volume (0–2), speed (0.25–4), opacity (0–1), muted (bool),\n"
-                "  in_point, fade_in, fade_out, pos_x, pos_y, scale_x, scale_y, rotation, text\n\n"
+                "  fade_in, fade_out, pos_x, pos_y, scale_x, scale_y, rotation, text\n\n"
                 "Subtitle / text layout:\n"
                 "  sub_pos (0=bottom 1=center 2=top 3=custom), sub_pos_x, sub_pos_y (0–1 normalised),\n"
                 "  sub_anchor_h (0=left 1=center 2=right), sub_wrap_w (0–1, 0=auto),\n"
@@ -288,6 +288,63 @@ async def list_tools() -> list[Tool]:
                     "value": {},
                 },
                 "required": ["track", "clip", "prop", "value"],
+            },
+        ),
+        Tool(
+            name="add_clip_sequence",
+            description=(
+                "Add multiple clips to a single track in one round-trip. Equivalent to calling "
+                "add_clip N times but dramatically faster for beat-sync edits or any bulk layout. "
+                "Returns an array of assigned clip IDs in order. Requires batch.\n\n"
+                "Each entry in 'clips': {type, start, end, text (file path for video/audio)}"
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "track": {"type": "integer"},
+                    "clips": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "type": {"type": "string"},
+                                "start": {"type": "number"},
+                                "end": {"type": "number"},
+                                "text": {"type": "string", "default": ""},
+                            },
+                            "required": ["type", "start", "end"],
+                        },
+                    },
+                },
+                "required": ["track", "clips"],
+            },
+        ),
+        Tool(
+            name="set_clip_props",
+            description=(
+                "Set properties on multiple clips in one round-trip. Equivalent to calling "
+                "set_clip_prop N times. Use for bulk muting, opacity changes, fade setup, etc. "
+                "Requires batch.\n\n"
+                "Each entry in 'ops': {track, clip, prop, value} — same props as set_clip_prop."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "ops": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "track": {"type": "integer"},
+                                "clip": {"type": "integer"},
+                                "prop": {"type": "string"},
+                                "value": {},
+                            },
+                            "required": ["track", "clip", "prop", "value"],
+                        },
+                    },
+                },
+                "required": ["ops"],
             },
         ),
         Tool(

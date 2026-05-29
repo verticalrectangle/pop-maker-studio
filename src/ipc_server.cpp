@@ -522,6 +522,73 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         return r;
     }
 
+    if (method == "add_clip_sequence") {
+        int ti = params.value("track", -1);
+        if (!check_track(state, ti, err)) return {};
+        if (state.tracks[ti].locked) { err = "track is locked"; return {}; }
+        if (!params.contains("clips") || !params["clips"].is_array()) { err = "clips array required"; return {}; }
+        json ids = json::array();
+        for (auto& entry : params["clips"]) {
+            std::string type_s = entry.value("type", "text");
+            float start = entry.value("start", 0.f);
+            float end   = entry.value("end", start + 2.f);
+            std::string text = entry.value("text", "");
+            Clip cl;
+            cl.clip_type = parse_clip_type(type_s);
+            cl.start = start; cl.end = end; cl.text = text;
+            if (cl.clip_type == ClipType::Video || cl.clip_type == ClipType::Audio)
+                cl.source_id = text;
+            state.tracks[ti].clips.push_back(cl);
+            if (cl.clip_type == ClipType::Video) state.proxy_scan_needed = true;
+            ids.push_back((int)state.tracks[ti].clips.size() - 1);
+        }
+        json r; r["clips"] = ids;
+        return r;
+    }
+
+    if (method == "set_clip_props") {
+        if (!params.contains("ops") || !params["ops"].is_array()) { err = "ops array required"; return {}; }
+        for (auto& op : params["ops"]) {
+            int ti = op.value("track", -1), ci = op.value("clip", -1);
+            std::string prop = op.value("prop", "");
+            if (!check_clip(state, ti, ci, err)) return {};
+            Clip& cl = state.tracks[ti].clips[ci];
+            auto& val = op["value"];
+            if      (prop == "volume")    { cl.volume    = jval_float(val); }
+            else if (prop == "speed")     { cl.speed     = jval_float(val); }
+            else if (prop == "opacity")   { cl.opacity   = jval_float(val); }
+            else if (prop == "muted")     { cl.muted     = jval_bool(val); }
+            else if (prop == "fade_in")   { cl.fade_in   = jval_float(val); }
+            else if (prop == "fade_out")  { cl.fade_out  = jval_float(val); }
+            else if (prop == "blend_mode"){ cl.blend_mode= jval_int(val); }
+            else if (prop == "pos_x")     { cl.pos_x     = jval_float(val); }
+            else if (prop == "pos_y")     { cl.pos_y     = jval_float(val); }
+            else if (prop == "scale_x")   { cl.scale_x   = jval_float(val); }
+            else if (prop == "scale_y")   { cl.scale_y   = jval_float(val); }
+            else if (prop == "rotation")  { cl.rotation  = jval_float(val); }
+            else if (prop == "text")      { cl.text      = val.get<std::string>(); }
+            else if (prop == "font_size") { cl.font_size = jval_float(val); }
+            else if (prop == "sub_pos")   { cl.sub_pos   = jval_int(val); }
+            else if (prop == "sub_pos_x") { cl.sub_pos_x = jval_float(val); }
+            else if (prop == "sub_pos_y") { cl.sub_pos_y = jval_float(val); }
+            else if (prop == "sub_anchor_h") { cl.sub_anchor_h = jval_int(val); }
+            else if (prop == "sub_wrap_w"){ cl.sub_wrap_w= jval_float(val); }
+            else if (prop == "karaoke")   { cl.karaoke   = jval_bool(val); }
+            else if (prop == "clip_style"){ cl.clip_style= parse_anim_style(val.get<std::string>()); }
+            else if (prop == "sub_color") {
+                if (!val.is_array() || val.size() != 4) { err = "sub_color must be [r,g,b,a]"; return {}; }
+                for (int i = 0; i < 4; ++i) cl.sub_color[i] = jval_float(val[i]);
+                cl.sub_color_override = true;
+            }
+            else if (prop == "karaoke_highlight_color") {
+                if (!val.is_array() || val.size() != 4) { err = "karaoke_highlight_color must be [r,g,b,a]"; return {}; }
+                for (int i = 0; i < 4; ++i) cl.karaoke_highlight_color[i] = jval_float(val[i]);
+            }
+            else { err = "unknown prop: " + prop; return {}; }
+        }
+        return json::object();
+    }
+
     if (method == "set_clip_prop") {
         int ti = params.value("track", -1), ci = params.value("clip", -1);
         std::string prop = params.value("prop", "");
@@ -534,7 +601,6 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         else if (prop == "speed")    { cl.speed      = jval_float(val); }
         else if (prop == "opacity")  { cl.opacity    = jval_float(val); }
         else if (prop == "muted")    { cl.muted      = jval_bool(val); }
-        else if (prop == "in_point") { cl.in_point   = jval_float(val); }
         else if (prop == "fade_in")  { cl.fade_in    = jval_float(val); }
         else if (prop == "fade_out") { cl.fade_out   = jval_float(val); }
         else if (prop == "blend_mode") { cl.blend_mode = jval_int(val); }
