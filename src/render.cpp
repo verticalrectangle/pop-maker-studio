@@ -1997,56 +1997,55 @@ void render_start_gl(AppState& state) {
         }
         args.push_back("-i"); args.push_back(ai.path);
     }
-    args.push_back("-map"); args.push_back("0:v");
-    if (!audio_ins.empty()) {
-        if (audio_ins.size() == 1) {
-            args.push_back("-map"); args.push_back("1:a");
-        } else {
-            // Build filter_complex correctly:
-            //   Step 1: volume-adjust each non-unity stream  →  [aN_v]
-            //   Step 2: amix all streams (labeled or raw) into [aout]
-            //
-            // Broken previous form: "[1:a][2:a]volume=1.39amix=…" — no output
-            // label on volume, and amix concatenated directly with no separator.
-            std::string fc;
-            std::vector<std::string> mix_ins;
-            for (int i = 0; i < (int)audio_ins.size(); ++i) {
-                if (fabsf(audio_ins[i].vol - 1.f) > 0.001f) {
-                    char buf[128];
-                    snprintf(buf, sizeof(buf), "[%d:a]volume=%.4f[a%dv];",
-                             i + 1, (double)audio_ins[i].vol, i + 1);
-                    fc += buf;
-                    char lbl[32]; snprintf(lbl, sizeof(lbl), "[a%dv]", i + 1);
-                    mix_ins.push_back(lbl);
-                } else {
-                    char lbl[32]; snprintf(lbl, sizeof(lbl), "[%d:a]", i + 1);
-                    mix_ins.push_back(lbl);
-                }
-            }
-            for (auto& s : mix_ins) fc += s;
-            char mixbuf[64];
-            snprintf(mixbuf, sizeof(mixbuf), "amix=inputs=%d:duration=longest[aout]",
-                     (int)audio_ins.size());
-            fc += mixbuf;
-            args.push_back("-filter_complex"); args.push_back(fc);
-            args.push_back("-map"); args.push_back("[aout]");
-        }
-    }
     if (is_gif) {
         // Animated GIF: single-pass palettegen+paletteuse via filter_complex.
         // vflip corrects GL's bottom-up pixel order; fps downsamples to gif_fps.
         // split feeds the same stream to palettegen (palette analysis) and
         // paletteuse (dithered remapping).  bayer dithering hides banding well.
+        // Do NOT also push -map 0:v — filter_complex auto-maps its unlabeled output.
         char gif_vf[256];
         snprintf(gif_vf, sizeof(gif_vf),
-            "vflip,fps=%d,split[s0][s1];[s0]palettegen=stats_mode=full[p];"
-            "[s1][p]paletteuse=dither=bayer:bayer_scale=5",
+            "[0:v]vflip,fps=%d,split[s0][s1];[s0]palettegen=stats_mode=full[p];"
+            "[s1][p]paletteuse=dither=bayer:bayer_scale=5[out]",
             state.render_settings.gif_fps);
         args.push_back("-filter_complex"); args.push_back(gif_vf);
+        args.push_back("-map");   args.push_back("[out]");
         args.push_back("-loop");  args.push_back("0");   // infinite loop
         args.push_back("-f");     args.push_back("gif");
         args.push_back(state.out_gif);
     } else {
+        args.push_back("-map"); args.push_back("0:v");
+        if (!audio_ins.empty()) {
+            if (audio_ins.size() == 1) {
+                args.push_back("-map"); args.push_back("1:a");
+            } else {
+                // Build filter_complex:
+                //   Step 1: volume-adjust each non-unity stream  →  [aN_v]
+                //   Step 2: amix all streams into [aout]
+                std::string fc;
+                std::vector<std::string> mix_ins;
+                for (int i = 0; i < (int)audio_ins.size(); ++i) {
+                    if (fabsf(audio_ins[i].vol - 1.f) > 0.001f) {
+                        char buf[128];
+                        snprintf(buf, sizeof(buf), "[%d:a]volume=%.4f[a%dv];",
+                                 i + 1, (double)audio_ins[i].vol, i + 1);
+                        fc += buf;
+                        char lbl[32]; snprintf(lbl, sizeof(lbl), "[a%dv]", i + 1);
+                        mix_ins.push_back(lbl);
+                    } else {
+                        char lbl[32]; snprintf(lbl, sizeof(lbl), "[%d:a]", i + 1);
+                        mix_ins.push_back(lbl);
+                    }
+                }
+                for (auto& s : mix_ins) fc += s;
+                char mixbuf[64];
+                snprintf(mixbuf, sizeof(mixbuf), "amix=inputs=%d:duration=longest[aout]",
+                         (int)audio_ins.size());
+                fc += mixbuf;
+                args.push_back("-filter_complex"); args.push_back(fc);
+                args.push_back("-map"); args.push_back("[aout]");
+            }
+        }
         if (use_vaapi) {
             // RGBA → NV12 (CPU) → hwupload → h264_vaapi on the GPU's VCE engine.
             // vflip corrects GL's bottom-up pixel order.
