@@ -799,27 +799,6 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                                           cl_ptr->runtime_fx_amount, t_anim);
                 }
 
-                // Body FX (glass BodyFX brick on same track)
-                for (auto& bfx_cl : track.clips) {
-                    if (bfx_cl.clip_type != ClipType::BodyFX) continue;
-                    if (at_time < bfx_cl.start || at_time >= bfx_cl.end) continue;
-                    // Get mask for this frame
-                    std::string mask_dir = bg_remove_proxy_dir(cl_ptr->source_id);
-                    if (mask_dir.empty()) break;
-                    float mask_fps = bg_remove_read_fps(mask_dir);
-                    float local_t  = at_time - cl_ptr->start + cl_ptr->in_point;
-                    int   frame_i  = (int)(local_t * mask_fps);
-                    unsigned mask_tex_id = body_fx_mask_texture(mask_dir, frame_i);
-                    if (!mask_tex_id) break;
-                    VideoInfo vi_b = (slot >= 0) ? video_info(slot) : VideoInfo{};
-                    int bw = vi_b.width  > 0 ? vi_b.width  : (int)w;
-                    int bh = vi_b.height > 0 ? vi_b.height : (int)h;
-                    tex = body_fx_apply(bfx_cl.body_fx_type, tex, mask_tex_id,
-                                        bw, bh, bfx_cl.body_fx_params,
-                                        bfx_cl.body_fx_amount, t_anim);
-                    break; // only first BodyFX brick applies
-                }
-
                 float px    = cl_ptr->eval_prop("pos_x",    at_time);
                 float py    = cl_ptr->eval_prop("pos_y",    at_time);
                 float sx    = cl_ptr->eval_prop("scale_x",  at_time);
@@ -959,10 +938,51 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
         scene_apply_fx((int)w, (int)h, global_ea, global_cfx, t_anim);
     }
 
-    // ── Draw scene FBO to ImGui draw list ─────────────────────────────────────
-    // Y-flip UVs: GL FBO t=0 is at the bottom, ImGui tl=(0,0) is at the top.
+    // ── Solid BodyFX bricks: post-composite pass ──────────────────────────────
+    // Tracks iterate 0 (top) to N-1 (bottom). A solid BodyFX brick has no video
+    // clip on its own track; it affects the composited scene below it.
     if (uintptr_t scene_tex = scene_result()) {
-        dl->AddImageQuad(ImTextureRef((ImTextureID)scene_tex),
+        uintptr_t final_tex = scene_tex;
+        for (int ti = 0; ti < (int)state.tracks.size(); ++ti) {
+            auto& bfx_track = state.tracks[ti];
+            for (auto& bfx_cl : bfx_track.clips) {
+                if (bfx_cl.clip_type != ClipType::BodyFX) continue;
+                if (state.playhead < bfx_cl.start || state.playhead >= bfx_cl.end) continue;
+                // Confirm solid (no video clip co-inhabiting this track at this time)
+                bool is_glass = false;
+                for (auto& tc : bfx_track.clips) {
+                    if (tc.clip_type == ClipType::Video &&
+                        state.playhead >= tc.start && state.playhead < tc.end)
+                        { is_glass = true; break; }
+                }
+                if (is_glass) continue;
+                // Find topmost video clip on a track below (higher index = lower in stack)
+                const Clip* vid_cl = nullptr;
+                for (int vi = ti + 1; vi < (int)state.tracks.size(); ++vi) {
+                    for (auto& vc : state.tracks[vi].clips) {
+                        if (vc.clip_type == ClipType::Video &&
+                            state.playhead >= vc.start && state.playhead < vc.end)
+                            { vid_cl = &vc; break; }
+                    }
+                    if (vid_cl) break;
+                }
+                if (!vid_cl) continue;
+                std::string mask_dir = bg_remove_proxy_dir(vid_cl->source_id);
+                if (mask_dir.empty()) continue;
+                float mask_fps = bg_remove_read_fps(mask_dir);
+                float src_t    = vid_cl->in_point + (state.playhead - vid_cl->start) / vid_cl->speed;
+                int   frame_i  = (int)(src_t * mask_fps);
+                unsigned mask_tex_id = body_fx_mask_texture(mask_dir, frame_i);
+                if (!mask_tex_id) continue;
+                final_tex = body_fx_apply(bfx_cl.body_fx_type, final_tex, mask_tex_id,
+                                          (int)w, (int)h, bfx_cl.body_fx_params,
+                                          bfx_cl.body_fx_amount, t_anim);
+            }
+        }
+
+        // ── Draw scene FBO to ImGui draw list ─────────────────────────────────
+        // Y-flip UVs: GL FBO t=0 is at the bottom, ImGui tl=(0,0) is at the top.
+        dl->AddImageQuad(ImTextureRef((ImTextureID)final_tex),
             p,                      {p.x + w, p.y},
             {p.x + w, p.y + h},    {p.x, p.y + h},
             {0.f, 1.f}, {1.f, 1.f}, {1.f, 0.f}, {0.f, 0.f},

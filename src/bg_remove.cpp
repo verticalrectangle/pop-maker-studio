@@ -25,6 +25,7 @@ struct JobData {
     std::atomic<int>   status{0};   // 0=running 1=done 2=error
     std::string        error_msg;
     std::mutex         mu;
+    bool               append_mode = false;  // open bg_masks.mjpeg in "ab" mode
 };
 
 struct BgJob {
@@ -55,6 +56,65 @@ float bg_remove_read_fps(const std::string& mask_dir) {
     fscanf(f, "%f", &fps);
     fclose(f);
     return (fps > 0.f && fps < 1000.f) ? fps : 30.f;
+}
+
+int bg_remove_read_start_frame(const std::string& mask_dir) {
+    std::string fp = mask_dir + "/start_frame.txt";
+    FILE* f = fopen(fp.c_str(), "r");
+    if (!f) return 0;
+    int sf = 0;
+    fscanf(f, "%d", &sf);
+    fclose(f);
+    return sf;
+}
+
+int bg_remove_read_frame_count(const std::string& mask_dir) {
+    std::string idx = mask_dir + "/bg_masks.idx";
+    // Build .idx from bg_masks.mjpeg if missing
+    if (!fs::exists(idx)) {
+        std::string mjpeg = mask_dir + "/bg_masks.mjpeg";
+        if (!fs::exists(mjpeg)) return 0;
+        FILE* mf = fopen(mjpeg.c_str(), "rb");
+        if (!mf) return 0;
+        std::vector<uint64_t> offsets;
+        offsets.reserve(8192);
+        uint8_t carry[2] = {0, 0};
+        bool has_carry = false;
+        uint8_t chunk[65536];
+        int64_t abs_off = 0;
+        while (true) {
+            size_t nr = fread(chunk, 1, sizeof(chunk), mf);
+            if (nr == 0) break;
+            if (has_carry && nr > 0) {
+                if (carry[0] == 0xFF && carry[1] == 0xD8 && chunk[0] == 0xFF)
+                    offsets.push_back((uint64_t)(abs_off - 2));
+            }
+            for (size_t i = 0; i + 2 < nr; ++i) {
+                if (chunk[i] == 0xFF && chunk[i+1] == 0xD8 && chunk[i+2] == 0xFF)
+                    offsets.push_back((uint64_t)(abs_off + (int64_t)i));
+            }
+            if (nr >= 2) { carry[0] = chunk[nr-2]; carry[1] = chunk[nr-1]; }
+            else if (nr == 1) { carry[0] = 0; carry[1] = chunk[0]; }
+            has_carry = (nr > 0);
+            abs_off += (int64_t)nr;
+        }
+        fclose(mf);
+        if (!offsets.empty()) {
+            FILE* idxf = fopen(idx.c_str(), "wb");
+            if (idxf) {
+                uint32_t cnt = (uint32_t)offsets.size();
+                fwrite(&cnt, sizeof(cnt), 1, idxf);
+                fwrite(offsets.data(), sizeof(uint64_t), cnt, idxf);
+                fclose(idxf);
+            }
+        }
+    }
+    FILE* idxf = fopen(idx.c_str(), "rb");
+    if (!idxf) return 0;
+    uint32_t cnt = 0;
+    fread(&cnt, sizeof(cnt), 1, idxf);
+    fclose(idxf);
+    return (int)cnt;
 }
 
 // ── u2net helpers ─────────────────────────────────────────────────────────────
@@ -188,14 +248,16 @@ static void run_job(std::shared_ptr<JobData> data,
     if (fps <= 0.f || fps > 1000.f) fps = 30.f;
 
     fs::create_directories(output_dir);
-    {
-        FILE* f = fopen((output_dir + "/fps.txt").c_str(), "w");
-        if (f) { fprintf(f, "%.6f\n", fps); fclose(f); }
-    }
-    {
-        int sf = (start_frame >= 0) ? start_frame : (int)(start_time * fps);
-        FILE* f = fopen((output_dir + "/start_frame.txt").c_str(), "w");
-        if (f) { fprintf(f, "%d\n", sf); fclose(f); }
+    if (!data->append_mode) {
+        {
+            FILE* f = fopen((output_dir + "/fps.txt").c_str(), "w");
+            if (f) { fprintf(f, "%.6f\n", fps); fclose(f); }
+        }
+        {
+            int sf = (start_frame >= 0) ? start_frame : (int)(start_time * fps);
+            FILE* f = fopen((output_dir + "/start_frame.txt").c_str(), "w");
+            if (f) { fprintf(f, "%d\n", sf); fclose(f); }
+        }
     }
 
     // Load ONNX model
@@ -267,7 +329,7 @@ static void run_job(std::shared_ptr<JobData> data,
 
     int total = (int)frames.size();
     std::string mjpeg_path = output_dir + "/bg_masks.mjpeg";
-    FILE* mjpeg_f = fopen(mjpeg_path.c_str(), "wb");
+    FILE* mjpeg_f = fopen(mjpeg_path.c_str(), data->append_mode ? "ab" : "wb");
     if (!mjpeg_f) {
         fs::remove_all(tmpdir);
         std::lock_guard<std::mutex> lk(data->mu);
@@ -321,6 +383,8 @@ static void run_job(std::shared_ptr<JobData> data,
     }
 
     fclose(mjpeg_f);
+    // Remove stale seek-table so it gets rebuilt on next read
+    fs::remove(output_dir + "/bg_masks.idx");
     fs::remove_all(tmpdir);
     data->status.store(1);
 }
@@ -418,6 +482,202 @@ void bg_remove_poll(AppState& state) {
 void bg_remove_cancel_all() {
     std::lock_guard<std::mutex> lk(g_jobs_mu);
     g_jobs.clear();
+}
+
+// ── BodyFX solid brick mask generation ────────────────────────────────────────
+
+// Job key for a BodyFX brick: "bfx:<track>:<clip>:<source_path>"
+static std::string bfx_job_key(int ti, int ci, const std::string& src) {
+    return "bfx:" + std::to_string(ti) + ":" + std::to_string(ci) + ":" + src;
+}
+
+static std::map<std::string, BgJob> g_bfx_jobs;
+static std::mutex                   g_bfx_jobs_mu;
+
+void bg_remove_body_fx_start(AppState& state, int track_idx, int clip_idx) {
+    if (track_idx < 0 || track_idx >= (int)state.tracks.size()) return;
+    auto& track = state.tracks[track_idx];
+    if (clip_idx < 0 || clip_idx >= (int)track.clips.size()) return;
+    Clip& brick = track.clips[clip_idx];
+    if (brick.clip_type != ClipType::BodyFX) return;
+
+    // Find the dominant video source beneath this brick's track.
+    // Use the video clip active at brick.start on any track below track_idx.
+    std::string src_path;
+    float src_in_point = 0.f, src_speed = 1.f;
+    float src_clip_start = 0.f;
+    for (int ti = track_idx + 1; ti < (int)state.tracks.size() && src_path.empty(); ++ti) {
+        for (auto& cl : state.tracks[ti].clips) {
+            if (cl.clip_type != ClipType::Video || cl.text.empty()) continue;
+            if (cl.start <= brick.start && cl.end > brick.start) {
+                src_path      = cl.text;
+                src_in_point  = cl.in_point;
+                src_speed     = cl.speed;
+                src_clip_start = cl.start;
+                break;
+            }
+        }
+    }
+    if (src_path.empty()) {
+        brick.body_fx_mask_status  = BgRemoveStatus::Error;
+        brick.body_fx_mask_error   = "No video clip found below this brick.";
+        return;
+    }
+
+    // Compute needed source frame range
+    float brick_dur  = brick.end - brick.start;
+    float src_start  = src_in_point + (brick.start - src_clip_start) * src_speed;
+    float src_end    = src_start + brick_dur * src_speed;
+
+    ProxyInfo pinfo;
+    int start_frame = 0, num_frames = -1;
+    bool has_rational = proxy_load(src_path, pinfo) && pinfo.fps_num > 0 && pinfo.fps_den > 0;
+    if (has_rational) {
+        start_frame = (int)((int64_t)(src_start * (double)pinfo.fps_num) / pinfo.fps_den);
+        int end_f   = (int)((int64_t)(src_end   * (double)pinfo.fps_num) / pinfo.fps_den) + 1;
+        num_frames  = end_f - start_frame;
+    } else if (pinfo.fps > 0.0) {
+        start_frame = (int)(src_start * (float)pinfo.fps);
+        num_frames  = (int)((src_end - src_start) * (float)pinfo.fps) + 1;
+    }
+
+    std::string mdir = bg_remove_hires_dir(src_path);
+    fs::create_directories(mdir);
+
+    // Check existing coverage for potential append
+    bool append_mode = false;
+    {
+        int existing_sf    = bg_remove_read_start_frame(mdir);
+        int existing_count = bg_remove_read_frame_count(mdir);
+        int existing_end   = existing_sf + existing_count;
+        bool has_fps_txt   = fs::exists(mdir + "/fps.txt");
+        if (has_fps_txt && existing_count > 0 && start_frame >= existing_sf) {
+            if (start_frame + num_frames <= existing_end) {
+                // Fully covered — nothing to do
+                brick.body_fx_mask_status  = BgRemoveStatus::Ready;
+                brick.body_fx_needs_expand = false;
+                return;
+            }
+            // Right-expand only: append from existing_end
+            start_frame = existing_end;
+            num_frames  = (start_frame + num_frames) - existing_end;
+            if (num_frames <= 0) {
+                brick.body_fx_mask_status  = BgRemoveStatus::Ready;
+                brick.body_fx_needs_expand = false;
+                return;
+            }
+            append_mode = true;
+        } else if (has_fps_txt && existing_count > 0) {
+            // Left-expand or mismatch — full rewrite
+            fs::remove(mdir + "/bg_masks.mjpeg");
+            fs::remove(mdir + "/bg_masks.idx");
+            fs::remove(mdir + "/start_frame.txt");
+            // Recompute full range
+            if (has_rational) {
+                start_frame = (int)((int64_t)(src_start * (double)pinfo.fps_num) / pinfo.fps_den);
+                int end_f   = (int)((int64_t)(src_end   * (double)pinfo.fps_num) / pinfo.fps_den) + 1;
+                num_frames  = end_f - start_frame;
+            } else if (pinfo.fps > 0.0) {
+                start_frame = (int)(src_start * (float)pinfo.fps);
+                num_frames  = (int)((src_end - src_start) * (float)pinfo.fps) + 1;
+            }
+        }
+    }
+
+    // Use original video for hires pass (not proxy)
+    std::string input_src = src_path;
+
+    brick.body_fx_mask_status  = BgRemoveStatus::Processing;
+    brick.body_fx_mask_progress = 0.f;
+    brick.body_fx_mask_error.clear();
+    brick.body_fx_needs_expand = false;
+
+    std::string jkey = bfx_job_key(track_idx, clip_idx, src_path);
+    {
+        std::lock_guard<std::mutex> lk(g_bfx_jobs_mu);
+        g_bfx_jobs.erase(jkey);
+    }
+
+    auto data = std::make_shared<JobData>();
+    // In append mode, reuse the open-append variant: we pass start_frame_for_write = start_frame
+    // run_job writes fps.txt only if missing, writes start_frame.txt (overwrite not needed for append).
+    // For append: open the mjpeg in "ab" mode inside run_job by passing append_flag via start_frame < 0 trick.
+    // Simpler: for append, start_frame.txt already has the right value. We just need run_job to not
+    // overwrite fps.txt or start_frame.txt, and to open the MJPEG in append mode.
+    // We signal append mode by negating start_frame + setting a flag in JobData.
+    data->append_mode = append_mode;
+
+    BgJob job;
+    job.data   = data;
+    job.thread = std::thread(run_job, data, input_src, mdir,
+                             src_start, src_end - src_start, start_frame, num_frames);
+    job.thread.detach();
+
+    {
+        std::lock_guard<std::mutex> lk(g_bfx_jobs_mu);
+        g_bfx_jobs[jkey] = std::move(job);
+    }
+}
+
+void bg_remove_body_fx_poll(AppState& state) {
+    std::lock_guard<std::mutex> lk(g_bfx_jobs_mu);
+
+    for (auto& [jkey, job] : g_bfx_jobs) {
+        int   st   = job.data->status.load();
+        float prog = job.data->progress.load();
+
+        // Parse track/clip indices from key "bfx:<ti>:<ci>:<src>"
+        int ti = -1, ci = -1;
+        sscanf(jkey.c_str(), "bfx:%d:%d:", &ti, &ci);
+        if (ti < 0 || ti >= (int)state.tracks.size()) continue;
+        if (ci < 0 || ci >= (int)state.tracks[ti].clips.size()) continue;
+        Clip& brick = state.tracks[ti].clips[ci];
+
+        brick.body_fx_mask_progress = prog;
+        if (st == 1) {
+            brick.body_fx_mask_status  = BgRemoveStatus::Ready;
+            brick.body_fx_needs_expand = false;
+            // bg_masks.idx was deleted by run_job on completion — it will be rebuilt
+            // on next body_fx_mask_texture() call automatically.
+        } else if (st == 2) {
+            brick.body_fx_mask_status = BgRemoveStatus::Error;
+            std::lock_guard<std::mutex> lk2(job.data->mu);
+            brick.body_fx_mask_error  = job.data->error_msg;
+        }
+    }
+
+    for (auto it = g_bfx_jobs.begin(); it != g_bfx_jobs.end(); ) {
+        if (it->second.data->status.load() != 0)
+            it = g_bfx_jobs.erase(it);
+        else
+            ++it;
+    }
+
+    // Check coverage expansion for all Ready solid BodyFX bricks
+    for (int ti = 0; ti < (int)state.tracks.size(); ++ti) {
+        auto& bfx_track = state.tracks[ti];
+        for (auto& brick : bfx_track.clips) {
+            if (brick.clip_type != ClipType::BodyFX) continue;
+            if (brick.body_fx_mask_status != BgRemoveStatus::Ready) continue;
+            // Find source video below
+            const Clip* vid_cl = nullptr;
+            for (int vi = ti + 1; vi < (int)state.tracks.size() && !vid_cl; ++vi) {
+                for (auto& vc : state.tracks[vi].clips)
+                    if (vc.clip_type == ClipType::Video) { vid_cl = &vc; break; }
+            }
+            if (!vid_cl) continue;
+            std::string mask_dir = bg_remove_proxy_dir(vid_cl->source_id);
+            if (mask_dir.empty()) continue;
+            float fps      = bg_remove_read_fps(mask_dir);
+            int start_f    = bg_remove_read_start_frame(mask_dir);
+            int frame_cnt  = bg_remove_read_frame_count(mask_dir);
+            int covered_end = start_f + frame_cnt;
+
+            float src_end  = vid_cl->in_point + (brick.end - vid_cl->start) / vid_cl->speed;
+            int needed_end = (int)(src_end * fps) + 1;
+            brick.body_fx_needs_expand = (needed_end > covered_end);
+        }
+    }
 }
 
 bool bg_remove_run_hires(const std::string& video_path,

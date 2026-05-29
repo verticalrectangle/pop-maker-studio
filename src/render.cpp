@@ -1844,21 +1844,7 @@ static bool gl_render_vid_clip(ImDrawList& dl, const Clip* cl, float at_time,
         cur_tex = runtime_fx_apply(cl->runtime_fx_id, cur_tex, vid_w, vid_h,
                                    cl->runtime_fx_params, cl->runtime_fx_amount, at_time);
 
-    // BodyFX — AI body-mask effect brick on the same track.
-    for (auto& bfx_cl : state.tracks[ti].clips) {
-        if (bfx_cl.clip_type != ClipType::BodyFX) continue;
-        if (at_time < bfx_cl.start || at_time >= bfx_cl.end) continue;
-        // Use hires masks (PNG per frame) from the video clip's bg_remove mask dir.
-        std::string mask_dir = bg_remove_hires_dir(cl->text);
-        float bfx_fps   = bg_remove_read_fps(mask_dir);
-        int   bfx_frame = (int)(src_t * bfx_fps);
-        unsigned mask_tex = body_fx_mask_texture(mask_dir, bfx_frame);
-        if (!mask_tex) break;  // hires masks not computed yet — skip silently
-        cur_tex = body_fx_apply(bfx_cl.body_fx_type, cur_tex, mask_tex,
-                                vid_w, vid_h, bfx_cl.body_fx_params,
-                                bfx_cl.body_fx_amount, at_time);
-        break;  // only first BodyFX brick applies
-    }
+    // BodyFX is now a solid brick on its own track — applied post-composite (see below).
 
     // Global FX are applied once to the full composited frame after all clips are
     // rendered — not per-clip. See render_tick_gl post-process step.
@@ -2505,9 +2491,50 @@ void render_tick_gl(AppState& state) {
 
     rlog("  fx_done\n");
 
+    // ── Phase 3b: Solid BodyFX bricks — post-composite pass ──────────────────
+    // Tracks: index 0 = top, N-1 = bottom. Solid brick has no video on its track.
+    for (int ti = 0; ti < (int)state.tracks.size(); ++ti) {
+        auto& bfx_track = state.tracks[ti];
+        for (auto& bfx_cl : bfx_track.clips) {
+            if (bfx_cl.clip_type != ClipType::BodyFX) continue;
+            if (t < bfx_cl.start || t >= bfx_cl.end) continue;
+            bool is_glass = false;
+            for (auto& tc : bfx_track.clips) {
+                if (tc.clip_type == ClipType::Video && t >= tc.start && t < tc.end)
+                    { is_glass = true; break; }
+            }
+            if (is_glass) continue;
+            const Clip* vid_cl = nullptr;
+            for (int vi = ti + 1; vi < (int)state.tracks.size(); ++vi) {
+                for (auto& vc : state.tracks[vi].clips) {
+                    if (vc.clip_type == ClipType::Video && t >= vc.start && t < vc.end)
+                        { vid_cl = &vc; break; }
+                }
+                if (vid_cl) break;
+            }
+            if (!vid_cl) continue;
+            std::string mask_dir = bg_remove_hires_dir(vid_cl->text);
+            if (mask_dir.empty()) continue;
+            float mask_fps = bg_remove_read_fps(mask_dir);
+            float src_t    = vid_cl->in_point + (t - vid_cl->start) / vid_cl->speed;
+            int   frame_i  = (int)(src_t * mask_fps);
+            unsigned mask_tex_id = body_fx_mask_texture(mask_dir, frame_i);
+            if (!mask_tex_id) continue;
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            uintptr_t out = body_fx_apply(bfx_cl.body_fx_type,
+                                          (uintptr_t)g_gl_ex.color_tex, mask_tex_id,
+                                          g_gl_ex.out_w, g_gl_ex.out_h,
+                                          bfx_cl.body_fx_params, bfx_cl.body_fx_amount, t);
+            glBindFramebuffer(GL_FRAMEBUFFER, g_gl_ex.fbo);
+            glViewport(0, 0, g_gl_ex.out_w, g_gl_ex.out_h);
+            if (out != (uintptr_t)g_gl_ex.color_tex)
+                fx_blit(out, g_gl_ex.fbo, g_gl_ex.out_w, g_gl_ex.out_h);
+        }
+    }
+
     // ── Phase 4: Text overlays (ImDrawList on top of the composited frame) ────
     // Export FBO must be bound — it is, either from Phase 2 (no global FX) or
-    // re-bound explicitly in Phase 3.
+    // re-bound explicitly in Phase 3 / Phase 3b.
     glBindFramebuffer(GL_FRAMEBUFFER, g_gl_ex.fbo);
     glViewport(0, 0, g_gl_ex.out_w, g_gl_ex.out_h);
     {

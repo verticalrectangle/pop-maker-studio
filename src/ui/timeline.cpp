@@ -15,6 +15,8 @@
 #include "waveform.h"
 #include "bg_presets.h"
 #include "theme.h"
+#include "body_fx.h"
+#include "bg_remove.h"
 #include "render.h"
 #include <imgui.h>
 #include <imgui_internal.h>
@@ -804,6 +806,34 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                 dl->AddText({vis_x0+4.f, cy0+(cy1-cy0-13.f)*0.5f},
                     sel ? IM_COL32(40,0,40,255) : IM_COL32(220,150,220,255), lbl);
                 ImGui::PopClipRect();
+            } else if (clip.clip_type == ClipType::BodyFX) {
+                // Solid BodyFX brick: teal/cyan accent
+                ImU32 bfx_fill   = sel ? IM_COL32( 20,180,160,255) : IM_COL32(10, 80, 75, 255);
+                ImU32 bfx_border = sel ? IM_COL32( 80,255,220,255) : IM_COL32(30,160,130,200);
+                dl->AddRectFilled({vis_x0,cy0},{vis_x1,cy1}, bfx_fill, 2.f);
+                dl->AddRect({vis_x0,cy0},{vis_x1,cy1}, bfx_border, 2.f, 0, 1.5f);
+                // Label: "BodyFX — EffectName"
+                ImGui::PushClipRect({vis_x0,cy0},{vis_x1,cy1},true);
+                {
+                    const BodyFXInfo* info = body_fx_find_info(clip.body_fx_type);
+                    char lbl[64];
+                    snprintf(lbl, sizeof(lbl), "Body FX%s%s",
+                             info ? " \xe2\x80\x94 " : "", info ? info->name : "");
+                    ImU32 ltcol = sel ? IM_COL32(0,30,25,255) : IM_COL32(160,240,220,255);
+                    dl->AddText({vis_x0+4.f, cy0+(cy1-cy0-13.f)*0.5f}, ltcol, lbl);
+                }
+                ImGui::PopClipRect();
+                // Status dot (top-right corner): gray=Idle, yellow=Processing, green=Ready, red=Error
+                if (vis_x1 - vis_x0 > 14.f) {
+                    ImU32 dot_col = IM_COL32(120,120,120,200); // Idle = gray
+                    if      (clip.body_fx_mask_status == BgRemoveStatus::Processing)
+                        dot_col = IM_COL32(255,180,  0,220);
+                    else if (clip.body_fx_mask_status == BgRemoveStatus::Ready)
+                        dot_col = IM_COL32( 60,220, 80,220);
+                    else if (clip.body_fx_mask_status == BgRemoveStatus::Error)
+                        dot_col = IM_COL32(240, 60, 60,220);
+                    dl->AddCircleFilled({vis_x1-7.f, cy0+5.f}, 3.5f, dot_col);
+                }
             } else {
                 ImVec4 clip_fill = (clip.clip_type==ClipType::Lyrics)   ? Col::clip_lyrics
                                  : (clip.clip_type==ClipType::Subtitle) ? Col::clip_subtitle
@@ -1966,6 +1996,10 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                 std::string p = filepicker_open("Add audio clip",
                     "Audio", "*.wav *.mp3 *.m4a *.flac *.aac");
                 if (!p.empty()) add_clip_to_track(state, ti, p, ClipType::Audio);
+            }
+            if (ImGui::MenuItem("Add Body FX Brick")) {
+                add_clip_to_track(state, ti, "", ClipType::BodyFX);
+                history_push(state, "Add Body FX Brick");
             }
             ImGui::Separator();
         }

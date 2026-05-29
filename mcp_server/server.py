@@ -846,6 +846,60 @@ async def list_tools() -> list[Tool]:
                 "required": ["track", "start", "end", "text", "pos_x", "pos_y"],
             },
         ),
+        Tool(
+            name="add_body_fx_brick",
+            description=(
+                "Add a Body FX solid brick to a track. The brick applies a body/silhouette-based "
+                "visual effect (e.g. neon outline, depth blur, glitch, retro TV) to the composited "
+                "frame below it — it is NOT a glass effect and does NOT attach to a specific video clip.\n\n"
+                "After adding the brick, call process_body_fx_masks to compute the body masks from "
+                "the video clip(s) on tracks below. Processing is async; poll get_project or "
+                "get_pipeline_status to monitor progress.\n\n"
+                "fx_type options (40 effects, case-sensitive names from the BodyFX library):\n"
+                "  Retro: RetroTV, VHSGlitch, Scanlines, Halftone, CRTDistort\n"
+                "  Depth: DepthBlur, DepthFog, TiltShift, CinematicDOF\n"
+                "  Glitch: GlitchDisplace, ChromaShift, SignalNoise, DataBurst\n"
+                "  Color: NeonOutline, ThermalCamera, XRayBody, InfraredGlow\n"
+                "  Light: AuraGlow, HoloShimmer, LightTrails, RimLight\n"
+                "  Abstract: LiquidMorph, ParticleDissolve, PixelSort, FractalEdge\n"
+                "  Party: DiscoBall, Confetti, RainbowAura, GlitterBurst\n"
+                "(If unsure, use 'NeonOutline' or 'DepthBlur'.)\n\n"
+                "Returns {track, clip} of the created brick."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "track":    {"type": "integer", "description": "Track index for the brick (should be above video tracks)"},
+                    "start":    {"type": "number",  "description": "Start time in seconds"},
+                    "end":      {"type": "number",  "description": "End time in seconds"},
+                    "fx_type":  {"type": "string",  "description": "BodyFX effect name (see list above)"},
+                    "amount":   {"type": "number",  "description": "Blend strength 0–1 (default 0.8)"},
+                    "param_0":  {"type": "number",  "description": "Effect-specific param 0 (optional)"},
+                    "param_1":  {"type": "number",  "description": "Effect-specific param 1 (optional)"},
+                    "param_2":  {"type": "number",  "description": "Effect-specific param 2 (optional)"},
+                    "param_3":  {"type": "number",  "description": "Effect-specific param 3 (optional)"},
+                },
+                "required": ["track", "start", "end"],
+            },
+        ),
+        Tool(
+            name="process_body_fx_masks",
+            description=(
+                "Start body mask processing for a Body FX brick. This analyses the video clip(s) "
+                "on tracks below the brick and writes body-segmentation masks for the brick's time "
+                "range. Async — returns immediately; poll get_project for body_fx_mask_status "
+                "('Processing' → 'Ready'). Only needed once per brick; re-run if you extend the "
+                "brick's right edge past the already-processed range."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "track": {"type": "integer", "description": "Track index of the BodyFX brick"},
+                    "clip":  {"type": "integer", "description": "Clip index of the BodyFX brick"},
+                },
+                "required": ["track", "clip"],
+            },
+        ),
     ]
 
 
@@ -1501,6 +1555,35 @@ async def _add_callout(arguments: dict) -> dict:
     return {"track": track, "clip": clip_idx}
 
 
+# ── add_body_fx_brick / process_body_fx_masks ─────────────────────────────────
+
+async def _add_body_fx_brick(arguments: dict) -> dict:
+    track   = int(arguments["track"])
+    start   = float(arguments["start"])
+    end     = float(arguments["end"])
+    fx_type = str(arguments.get("fx_type", "NeonOutline"))
+    amount  = float(arguments.get("amount", 0.8))
+
+    clip_idx = _call("add_clip", {
+        "track": track,
+        "type":  "body_fx",
+        "start": start,
+        "end":   end,
+    })["clip"]
+
+    props = [
+        {"track": track, "clip": clip_idx, "prop": "body_fx_type",   "value": fx_type},
+        {"track": track, "clip": clip_idx, "prop": "body_fx_amount",  "value": amount},
+    ]
+    for i, key in enumerate(["param_0", "param_1", "param_2", "param_3"]):
+        if key in arguments:
+            props.append({"track": track, "clip": clip_idx,
+                          "prop": f"body_fx_{key}", "value": float(arguments[key])})
+    _call("set_clip_props", {"ops": props})
+
+    return {"track": track, "clip": clip_idx}
+
+
 @server.call_tool()
 async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     if name == "remove_silence":
@@ -1523,6 +1606,12 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         return [TextContent(type="text", text=json.dumps(result, indent=2))]
     if name == "add_callout":
         result = await _add_callout(arguments)
+        return [TextContent(type="text", text=json.dumps(result, indent=2))]
+    if name == "add_body_fx_brick":
+        result = await _add_body_fx_brick(arguments)
+        return [TextContent(type="text", text=json.dumps(result, indent=2))]
+    if name == "process_body_fx_masks":
+        result = _call("start_body_fx_process", arguments)
         return [TextContent(type="text", text=json.dumps(result, indent=2))]
     if name == "find_audio_cue":
         result = await _find_audio_cue(arguments)

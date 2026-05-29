@@ -7,7 +7,7 @@
 // ── Binary serialization helpers ──────────────────────────────────────────────
 
 static const uint32_t MAGIC   = 0x534D5001u; // "PMS\x01"
-static const uint32_t VERSION = 31u;
+static const uint32_t VERSION = 32u;
 
 struct Writer {
     std::ofstream f;
@@ -187,6 +187,10 @@ static void write_clip(Writer& w, const Clip& c) {
     // v31: callout overlay fields
     w.pod(c.callout_style); w.pod((uint8_t)c.callout_arrow);
     w.pod(c.arrow_tx); w.pod(c.arrow_ty);
+    // v32: BodyFX brick mask state
+    w.pod((uint8_t)c.body_fx_mask_status);
+    w.pod(c.body_fx_mask_progress);
+    w.str(c.body_fx_mask_error);
 }
 
 static Clip read_clip(Reader& r, uint32_t version) {
@@ -332,6 +336,15 @@ static Clip read_clip(Reader& r, uint32_t version) {
         c.callout_arrow = (bool)r.pod<uint8_t>();
         c.arrow_tx      = r.pod<float>();
         c.arrow_ty      = r.pod<float>();
+    }
+    // v32: BodyFX brick mask state
+    if (version >= 32u) {
+        c.body_fx_mask_status   = (BgRemoveStatus)r.pod<uint8_t>();
+        c.body_fx_mask_progress = r.pod<float>();
+        c.body_fx_mask_error    = r.str();
+        // Revert processing state — don't resume mid-job after reload
+        if (c.body_fx_mask_status == BgRemoveStatus::Processing)
+            c.body_fx_mask_status = BgRemoveStatus::Idle;
     }
     return c;
 }

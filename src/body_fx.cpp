@@ -8,6 +8,7 @@
 // Just include the header without the implementation define
 #include "stb_image.h"
 
+#include "bg_remove.h"
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -988,6 +989,98 @@ static std::list<std::string>                          g_mask_lru;
 static std::unordered_map<std::string, std::pair<GLuint, std::list<std::string>::iterator>> g_mask_cache;
 static const int k_mask_cache_max = 128;
 
+// ── MJPEG seek-table cache ────────────────────────────────────────────────────
+// Maps mask_dir → {offsets vector, start_frame}.
+// Built lazily on first access; cleared entry when masks are updated (append/rewrite).
+struct MaskIndex {
+    std::vector<uint64_t> offsets;
+    int start_frame = 0;
+};
+static std::unordered_map<std::string, MaskIndex> g_mask_index;
+
+// Returns pointer to a loaded MaskIndex for mask_dir, or nullptr if unavailable.
+static const MaskIndex* get_mask_index(const std::string& mask_dir) {
+    auto it = g_mask_index.find(mask_dir);
+    if (it != g_mask_index.end()) return &it->second;
+
+    std::string mjpeg = mask_dir + "/bg_masks.mjpeg";
+    std::string idx   = mask_dir + "/bg_masks.idx";
+
+    // Build .idx from MJPEG if missing or stale
+    {
+        FILE* mf = fopen(mjpeg.c_str(), "rb");
+        if (!mf) return nullptr;
+        fclose(mf);
+    }
+
+    bool need_build = true;
+    {
+        FILE* idxf = fopen(idx.c_str(), "rb");
+        if (idxf) { need_build = false; fclose(idxf); }
+    }
+
+    if (need_build) {
+        FILE* mf = fopen(mjpeg.c_str(), "rb");
+        if (!mf) return nullptr;
+        std::vector<uint64_t> offsets;
+        offsets.reserve(8192);
+        uint8_t carry[2] = {0, 0};
+        bool has_carry = false;
+        uint8_t chunk[65536];
+        int64_t abs_off = 0;
+        while (true) {
+            size_t nr = fread(chunk, 1, sizeof(chunk), mf);
+            if (nr == 0) break;
+            size_t start = 0;
+            if (has_carry) {
+                // Check boundary: carry[0] carry[1] chunk[0]
+                if (carry[0] == 0xFF && carry[1] == 0xD8 &&
+                    nr > 0 && chunk[0] == 0xFF) {
+                    offsets.push_back((uint64_t)(abs_off - 2));
+                }
+                start = 0;
+            }
+            for (size_t i = start; i + 2 < nr; ++i) {
+                if (chunk[i] == 0xFF && chunk[i+1] == 0xD8 && chunk[i+2] == 0xFF)
+                    offsets.push_back((uint64_t)(abs_off + (int64_t)i));
+            }
+            if (nr >= 2) {
+                carry[0] = chunk[nr-2]; carry[1] = chunk[nr-1];
+            } else if (nr == 1) {
+                carry[0] = 0; carry[1] = chunk[0];
+            }
+            has_carry = (nr > 0);
+            abs_off += (int64_t)nr;
+        }
+        fclose(mf);
+
+        if (!offsets.empty()) {
+            FILE* idxf = fopen(idx.c_str(), "wb");
+            if (idxf) {
+                uint32_t cnt = (uint32_t)offsets.size();
+                fwrite(&cnt, sizeof(cnt), 1, idxf);
+                fwrite(offsets.data(), sizeof(uint64_t), cnt, idxf);
+                fclose(idxf);
+            }
+        }
+    }
+
+    // Load .idx
+    FILE* idxf = fopen(idx.c_str(), "rb");
+    if (!idxf) return nullptr;
+    uint32_t cnt = 0;
+    if (fread(&cnt, sizeof(cnt), 1, idxf) != 1 || cnt == 0) { fclose(idxf); return nullptr; }
+    MaskIndex mi;
+    mi.offsets.resize(cnt);
+    fread(mi.offsets.data(), sizeof(uint64_t), cnt, idxf);
+    fclose(idxf);
+    mi.start_frame = bg_remove_read_start_frame(mask_dir);
+
+    auto& entry = g_mask_index[mask_dir];
+    entry = std::move(mi);
+    return &g_mask_index[mask_dir];
+}
+
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
 static GLuint compile_shader(GLenum type, const char* src) {
@@ -1101,24 +1194,53 @@ const BodyFXInfo* body_fx_find_info(BodyFXType t) {
     return nullptr;
 }
 
+// Invalidate the seek-table cache for a mask directory (call after append/rewrite).
+void body_fx_invalidate_mask_index(const std::string& mask_dir) {
+    g_mask_index.erase(mask_dir);
+}
+
 unsigned body_fx_mask_texture(const std::string& mask_dir, int frame_idx) {
     char buf[32];
-    snprintf(buf, sizeof(buf), "%06d.png", frame_idx);
+    snprintf(buf, sizeof(buf), "m%07d", frame_idx);
     std::string key = mask_dir + "/" + buf;
 
-    // Check cache
+    // Check texture cache
     auto it = g_mask_cache.find(key);
     if (it != g_mask_cache.end()) {
-        // Move to front of LRU
         g_mask_lru.erase(it->second.second);
         g_mask_lru.push_front(key);
         it->second.second = g_mask_lru.begin();
         return it->second.first;
     }
 
-    // Load PNG
+    // Load from bg_masks.mjpeg via seek table
+    const MaskIndex* mi = get_mask_index(mask_dir);
+    if (!mi) return 0;
+    int local_idx = frame_idx - mi->start_frame;
+    if (local_idx < 0 || local_idx >= (int)mi->offsets.size()) return 0;
+
+    std::string mjpeg = mask_dir + "/bg_masks.mjpeg";
+    FILE* f = fopen(mjpeg.c_str(), "rb");
+    if (!f) return 0;
+
+    if (fseek(f, (long)mi->offsets[local_idx], SEEK_SET) != 0) { fclose(f); return 0; }
+
+    // Determine JPEG size: distance to next frame offset (or EOF)
+    size_t jpeg_size;
+    if (local_idx + 1 < (int)mi->offsets.size())
+        jpeg_size = (size_t)(mi->offsets[local_idx + 1] - mi->offsets[local_idx]);
+    else {
+        fseek(f, 0, SEEK_END);
+        jpeg_size = (size_t)(ftell(f) - (long)mi->offsets[local_idx]);
+        fseek(f, (long)mi->offsets[local_idx], SEEK_SET);
+    }
+
+    std::vector<unsigned char> jpeg_buf(jpeg_size);
+    if (fread(jpeg_buf.data(), 1, jpeg_size, f) != jpeg_size) { fclose(f); return 0; }
+    fclose(f);
+
     int w, h, n;
-    unsigned char* data = stbi_load(key.c_str(), &w, &h, &n, 1);
+    unsigned char* data = stbi_load_from_memory(jpeg_buf.data(), (int)jpeg_size, &w, &h, &n, 1);
     if (!data) return 0;
 
     GLuint tex;

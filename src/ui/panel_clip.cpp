@@ -1981,41 +1981,119 @@ void panel_clip(AppState& state, float w) {
         ui_label("Mask Status");
         ImGui::Dummy({0.f, 6.f});
         {
-            // Find the video clip on the same track to check its bg_remove status
-            bool found_vid = false;
-            for (auto& sibling : track.clips) {
-                if (sibling.clip_type != ClipType::Video) continue;
-                if (sibling.source_id != clip.source_id) continue;
-                found_vid = true;
-                if (sibling.bg_remove_status == BgRemoveStatus::Ready) {
-                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.25f, 0.85f, 0.4f, 1.f));
-                    ImGui::TextUnformatted("Masks ready");
+            // Determine if this is a glass brick (co-track video) or solid brick
+            bool is_glass = false;
+            for (auto& sibling : track.clips)
+                if (sibling.clip_type == ClipType::Video) { is_glass = true; break; }
+
+            if (is_glass) {
+                // Glass brick: show status of sibling video's bg_remove masks
+                bool found_vid = false;
+                for (auto& sibling : track.clips) {
+                    if (sibling.clip_type != ClipType::Video) continue;
+                    if (sibling.source_id != clip.source_id) continue;
+                    found_vid = true;
+                    if (sibling.bg_remove_status == BgRemoveStatus::Ready) {
+                        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.25f, 0.85f, 0.4f, 1.f));
+                        ImGui::TextUnformatted("Masks ready");
+                        ImGui::PopStyleColor();
+                    } else if (sibling.bg_remove_status == BgRemoveStatus::Processing) {
+                        char pct[64];
+                        int p = (int)(fmaxf(0.f, fminf(1.f, sibling.bg_remove_progress)) * 100.f);
+                        snprintf(pct, sizeof(pct), "Generating masks %d%%", p);
+                        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, 0.65f, 0.f, 1.f));
+                        ImGui::TextUnformatted(pct);
+                        ImGui::PopStyleColor();
+                    } else if (sibling.bg_remove_status == BgRemoveStatus::Error) {
+                        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.3f, 0.3f, 1.f));
+                        ImGui::TextUnformatted("Mask generation failed");
+                        ImGui::PopStyleColor();
+                        ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+                        ImGui::TextWrapped("%s", sibling.bg_remove_error.c_str());
+                        ImGui::PopStyleColor();
+                    } else {
+                        ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+                        ImGui::TextWrapped("No masks — select the video clip and run Remove Background.");
+                        ImGui::PopStyleColor();
+                    }
+                    break;
+                }
+                if (!found_vid) {
+                    ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+                    ImGui::TextWrapped("No matching video clip found on this track.");
                     ImGui::PopStyleColor();
-                } else if (sibling.bg_remove_status == BgRemoveStatus::Processing) {
-                    char pct[64];
-                    int p = (int)(fmaxf(0.f, fminf(1.f, sibling.bg_remove_progress)) * 100.f);
-                    snprintf(pct, sizeof(pct), "Generating masks %d%%", p);
+                }
+            } else {
+                // Solid brick: has its own mask pipeline
+                static BgRemoveStatus s_prev_bfx_status = BgRemoveStatus::Idle;
+                static bool           s_show_bfx_ok     = false;
+                static float          s_bfx_ok_timer    = 0.f;
+
+                BgRemoveStatus bfx_status = clip.body_fx_mask_status;
+
+                if (bfx_status == BgRemoveStatus::Ready &&
+                    s_prev_bfx_status == BgRemoveStatus::Processing) {
+                    s_show_bfx_ok  = true;
+                    s_bfx_ok_timer = (float)ImGui::GetTime() + 3.f;
+                }
+                s_prev_bfx_status = bfx_status;
+                if (s_show_bfx_ok && ImGui::GetTime() > s_bfx_ok_timer) s_show_bfx_ok = false;
+
+                if (bfx_status == BgRemoveStatus::Processing) {
+                    float prog = fmaxf(0.f, fminf(1.f, clip.body_fx_mask_progress));
+                    char pct[64]; snprintf(pct, sizeof(pct), "Processing  %d%%", (int)(prog * 100.f));
                     ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, 0.65f, 0.f, 1.f));
                     ImGui::TextUnformatted(pct);
                     ImGui::PopStyleColor();
-                } else if (sibling.bg_remove_status == BgRemoveStatus::Error) {
+                    ImGui::PushStyleColor(ImGuiCol_PlotHistogram, ImVec4(1.f, 0.65f, 0.f, 1.f));
+                    ImGui::ProgressBar(prog, ImVec2(bar_w, 6.f), "");
+                    ImGui::PopStyleColor();
+                } else if (bfx_status == BgRemoveStatus::Ready || s_show_bfx_ok) {
+                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.25f, 0.85f, 0.4f, 1.f));
+                    ImGui::TextUnformatted("Masks ready \xE2\x9C\x93");
+                    ImGui::PopStyleColor();
+                } else if (bfx_status == BgRemoveStatus::Error) {
                     ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.3f, 0.3f, 1.f));
                     ImGui::TextUnformatted("Mask generation failed");
                     ImGui::PopStyleColor();
-                    ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
-                    ImGui::TextWrapped("%s", sibling.bg_remove_error.c_str());
-                    ImGui::PopStyleColor();
+                    if (!clip.body_fx_mask_error.empty()) {
+                        ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+                        ImGui::TextWrapped("%s", clip.body_fx_mask_error.c_str());
+                        ImGui::PopStyleColor();
+                    }
                 } else {
                     ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
-                    ImGui::TextWrapped("No masks — select the video clip and run Remove Background.");
+                    ImGui::TextUnformatted("No masks processed yet.");
                     ImGui::PopStyleColor();
                 }
-                break;
-            }
-            if (!found_vid) {
-                ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
-                ImGui::TextWrapped("No matching video clip found on this track.");
-                ImGui::PopStyleColor();
+
+                // Expand warning
+                if (clip.body_fx_needs_expand) {
+                    ImGui::Dummy({0.f, 4.f});
+                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, 0.8f, 0.2f, 1.f));
+                    ImGui::TextWrapped("Brick extended past processed range — re-run Process Masks to cover new frames.");
+                    ImGui::PopStyleColor();
+                }
+
+                // Process Masks button
+                ImGui::Dummy({0.f, 6.f});
+                bool has_video_below = false;
+                int my_ti = state.selected_track;
+                for (int vi = my_ti + 1; vi < (int)state.tracks.size(); ++vi) {
+                    for (auto& vc : state.tracks[vi].clips)
+                        if (vc.clip_type == ClipType::Video) { has_video_below = true; break; }
+                    if (has_video_below) break;
+                }
+                bool busy = (bfx_status == BgRemoveStatus::Processing);
+                if (!has_video_below || busy) ImGui::BeginDisabled();
+                if (ImGui::Button("Process Masks", ImVec2(bar_w, 0.f)))
+                    bg_remove_body_fx_start(state, state.selected_track, state.selected_clip);
+                if (!has_video_below || busy) ImGui::EndDisabled();
+                if (!has_video_below) {
+                    ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+                    ImGui::TextWrapped("Add a video clip on a track below to enable mask processing.");
+                    ImGui::PopStyleColor();
+                }
             }
         }
 

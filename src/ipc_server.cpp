@@ -1,4 +1,5 @@
 #include "ipc_server.h"
+#include "bg_remove.h"
 #include "history.h"
 #include "runtime_fx.h"
 #include "ui/pipeline.h"
@@ -261,6 +262,17 @@ static json clip_to_json(int idx, const Clip& c) {
     if (!c.runtime_fx_id.empty()) {
         j["runtime_fx_id"]     = c.runtime_fx_id;
         j["runtime_fx_amount"] = c.runtime_fx_amount;
+    }
+    if (c.clip_type == ClipType::BodyFX) {
+        const BodyFXInfo* info = body_fx_find_info(c.body_fx_type);
+        j["body_fx_type"]          = info ? info->name : "None";
+        j["body_fx_amount"]        = c.body_fx_amount;
+        j["body_fx_params"]        = {c.body_fx_params[0], c.body_fx_params[1],
+                                      c.body_fx_params[2], c.body_fx_params[3]};
+        static const char* bfx_status_str[] = {"Idle","Processing","Ready","Error"};
+        j["body_fx_mask_status"]   = bfx_status_str[(int)c.body_fx_mask_status];
+        j["body_fx_mask_progress"] = c.body_fx_mask_progress;
+        j["body_fx_needs_expand"]  = c.body_fx_needs_expand;
     }
     return j;
 }
@@ -782,7 +794,37 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         else if (prop == "callout_arrow") { cl.callout_arrow = jval_bool(val); }
         else if (prop == "arrow_tx")      { cl.arrow_tx      = jval_float(val); }
         else if (prop == "arrow_ty")      { cl.arrow_ty      = jval_float(val); }
+        // ── BodyFX props ─────────────────────────────────────────────────────
+        else if (prop == "body_fx_type") {
+            std::string name = val.get<std::string>();
+            int n = body_fx_info_count();
+            const BodyFXInfo* infos = body_fx_info_list();
+            bool found = false;
+            for (int i = 0; i < n; ++i) {
+                if (infos[i].name == name) {
+                    cl.body_fx_type = infos[i].type;
+                    for (int pi = 0; pi < 4; ++pi)
+                        cl.body_fx_params[pi] = pi < infos[i].n_params ? infos[i].params[pi].default_val : 0.5f;
+                    found = true; break;
+                }
+            }
+            if (!found) { err = "unknown body_fx_type: " + name; return {}; }
+        }
+        else if (prop == "body_fx_amount")  { cl.body_fx_amount     = jval_float(val); }
+        else if (prop == "body_fx_param_0") { cl.body_fx_params[0]  = jval_float(val); }
+        else if (prop == "body_fx_param_1") { cl.body_fx_params[1]  = jval_float(val); }
+        else if (prop == "body_fx_param_2") { cl.body_fx_params[2]  = jval_float(val); }
+        else if (prop == "body_fx_param_3") { cl.body_fx_params[3]  = jval_float(val); }
         else { err = "unknown prop: " + prop; return {}; }
+        return json::object();
+    }
+
+    if (method == "start_body_fx_process") {
+        int ti = params.value("track", -1), ci = params.value("clip", -1);
+        if (!check_clip(state, ti, ci, err)) return {};
+        if (state.tracks[ti].clips[ci].clip_type != ClipType::BodyFX)
+            { err = "clip is not a BodyFX brick"; return {}; }
+        bg_remove_body_fx_start(state, ti, ci);
         return json::object();
     }
 

@@ -258,9 +258,13 @@ struct Clip {
     float                runtime_fx_amount = 1.f;
 
     // BodyFX brick (ClipType::BodyFX)
-    BodyFXType   body_fx_type        = BodyFXType::NeonOutline;
-    float        body_fx_params[4]   = {0.5f, 0.5f, 0.5f, 0.5f};
-    float        body_fx_amount      = 1.f;
+    BodyFXType     body_fx_type          = BodyFXType::NeonOutline;
+    float          body_fx_params[4]     = {0.5f, 0.5f, 0.5f, 0.5f};
+    float          body_fx_amount        = 1.f;
+    BgRemoveStatus body_fx_mask_status   = BgRemoveStatus::Idle;
+    float          body_fx_mask_progress = 0.f;
+    std::string    body_fx_mask_error;
+    bool           body_fx_needs_expand  = false;
 
     // Beat sync fields (Audio/Video clips: analyzed beats; FX clips: source reference)
     std::vector<float> beats;           // beat timestamps (Audio/Video clips only)

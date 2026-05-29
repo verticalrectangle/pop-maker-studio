@@ -263,8 +263,9 @@ void ui_studio(AppState& state) {
         reopen_video_slots(state);
     }
 
-    // Poll background removal and voice conversion jobs.
+    // Poll background removal, voice conversion, and BodyFX mask jobs.
     bg_remove_poll(state);
+    bg_remove_body_fx_poll(state);
     vc_poll(state);
 
     // Poll noise reduction — on completion, set denoised WAV as playback source.
