@@ -203,7 +203,7 @@ void panel_media_browser(AppState& state, float w, bool is_video) {
         ImGui::PushStyleColor(ImGuiCol_ButtonActive,  IM_COL32(60,60,90,255));
         if (ImGui::SmallButton("Browse…")) {
             std::string picked = is_video
-                ? filepicker_open("Open video", "Video", "*.mp4 *.mov *.mkv *.avi *.webm")
+                ? filepicker_open("Open video", "Video", "*.mp4 *.mov *.mkv *.avi *.webm *.gif")
                 : filepicker_open("Open image", "Image", "*.jpg *.jpeg *.png *.bmp *.webp *.heic *.heif");
             if (!picked.empty()) {
                 recent_media_push(picked, is_video ? MediaKind::Video : MediaKind::Image);

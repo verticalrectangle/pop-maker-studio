@@ -189,6 +189,20 @@ async def list_tools() -> list[Tool]:
             },
         ),
         Tool(
+            name="add_track",
+            description=(
+                "Add a new track to the project at a given position (default 0 = top). "
+                "Returns the track index. Requires batch."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Track name"},
+                    "position": {"type": "integer", "description": "Insert position (0 = top)", "default": 0},
+                },
+            },
+        ),
+        Tool(
             name="delete_clip",
             description="Delete a clip. Requires batch.",
             inputSchema={
@@ -420,16 +434,16 @@ async def list_tools() -> list[Tool]:
                 "the same way text/video do, but they affect everything below them on the timeline.\n\n"
                 "fx_type options: grade | blur | vignette | glitch | zoom_punch | lut | "
                 "light_leak | vhs | datamosh | chroma_key\n\n"
-                "params for each type:\n"
+                "params for each type (use these exact key names):\n"
                 "  grade: brightness (-1–1), contrast (0–2), saturation (0–2), hue (0–1)\n"
-                "  blur: amount (0–1)\n"
-                "  vignette: amount (0–1)\n"
-                "  glitch: chroma (0–20), jitter (0–1), corruption (0–1), corruption_bleed (0–1)\n"
-                "  zoom_punch: strength (0–0.5), decay (0.01–1), shake (0–1)\n"
-                "  light_leak: intensity (0–1), speed (0–3)\n"
-                "  vhs: noise (0–1), bleed (0–20), tracking (0–1)\n"
-                "  datamosh: intensity (0–1), spread (0–1)\n"
-                "  chroma_key: key_r, key_g, key_b (0–1 each), threshold (0–1), softness (0–1)\n"
+                "  blur: blur (0–1)\n"
+                "  vignette: vignette (0–1)\n"
+                "  glitch: glitch_chroma (0–20), glitch_jitter (0–1), glitch_corruption (0–1), glitch_corruption_bleed (0–1)\n"
+                "  zoom_punch: zoom_strength (0–0.5), zoom_decay (0.01–1), zoom_shake (0–1)\n"
+                "  light_leak: leak_intensity (0–1), leak_speed (0–3)\n"
+                "  vhs: vhs_noise (0–1), vhs_bleed (0–20), vhs_tracking (0–1)\n"
+                "  datamosh: datamosh_intensity (0–1), datamosh_spread (0–1)\n"
+                "  chroma_key: chroma_key_r, chroma_key_g, chroma_key_b (0–1 each), chroma_key_threshold (0–1), chroma_key_softness (0–1)\n"
                 "  lut: (no numeric params — set lut_path via set_clip_prop instead)\n\n"
                 "Requires batch."
             ),
