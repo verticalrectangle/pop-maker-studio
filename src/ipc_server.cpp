@@ -249,6 +249,12 @@ static json clip_to_json(int idx, const Clip& c) {
     ts["bg_corner"]      = c.ts.bg_corner;
     j["text_style"]      = ts;
 
+    // Callout overlay fields
+    j["callout_style"] = c.callout_style;
+    j["callout_arrow"] = c.callout_arrow;
+    j["arrow_tx"]      = c.arrow_tx;
+    j["arrow_ty"]      = c.arrow_ty;
+
     if (!c.source_id.empty())
         j["source"] = c.source_id;
 
@@ -290,6 +296,22 @@ static json state_to_json(const AppState& state) {
         tracks_arr.push_back(tj);
     }
     j["tracks"] = tracks_arr;
+
+    // Chapter markers
+    json markers_arr = json::array();
+    for (int mi = 0; mi < (int)state.markers.size(); ++mi) {
+        const auto& m = state.markers[mi];
+        char hex[12];
+        snprintf(hex, sizeof(hex), "#%06X", m.color & 0x00FFFFFFu);
+        json mj;
+        mj["index"] = mi;
+        mj["time"]  = m.time;
+        mj["label"] = m.label;
+        mj["color"] = hex;
+        markers_arr.push_back(mj);
+    }
+    j["markers"] = markers_arr;
+
     return j;
 }
 
@@ -705,6 +727,10 @@ static json dispatch(AppState& state, const std::string& method, const json& par
                 if (!val.is_array() || val.size() != 4) { err = "karaoke_highlight_color must be [r,g,b,a]"; return {}; }
                 for (int i = 0; i < 4; ++i) cl.karaoke_highlight_color[i] = jval_float(val[i]);
             }
+            else if (prop == "callout_style") { cl.callout_style = jval_int(val); }
+            else if (prop == "callout_arrow") { cl.callout_arrow = jval_bool(val); }
+            else if (prop == "arrow_tx")      { cl.arrow_tx      = jval_float(val); }
+            else if (prop == "arrow_ty")      { cl.arrow_ty      = jval_float(val); }
             else { err = "unknown prop: " + prop; return {}; }
         }
         return json::object();
@@ -751,6 +777,11 @@ static json dispatch(AppState& state, const std::string& method, const json& par
             if (!val.is_array() || val.size() != 4) { err = "karaoke_highlight_color must be [r,g,b,a]"; return {}; }
             for (int i = 0; i < 4; ++i) cl.karaoke_highlight_color[i] = jval_float(val[i]);
         }
+        // ── Callout props ────────────────────────────────────────────────────
+        else if (prop == "callout_style") { cl.callout_style = jval_int(val); }
+        else if (prop == "callout_arrow") { cl.callout_arrow = jval_bool(val); }
+        else if (prop == "arrow_tx")      { cl.arrow_tx      = jval_float(val); }
+        else if (prop == "arrow_ty")      { cl.arrow_ty      = jval_float(val); }
         else { err = "unknown prop: " + prop; return {}; }
         return json::object();
     }
@@ -773,6 +804,51 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         state.tracks.erase(state.tracks.begin() + ti);
         if (state.selected_track == ti) { state.selected_track = -1; state.selected_clip = -1; }
         return json::object();
+    }
+
+    if (method == "add_marker") {
+        float mtime  = params.value("time", 0.f);
+        std::string mlabel = params.value("label", "");
+        uint32_t mcolor = 0xFF4A90E2u;
+        if (params.contains("color") && params["color"].is_string()) {
+            std::string cs = params["color"].get<std::string>();
+            if (!cs.empty() && cs[0] == '#') cs = cs.substr(1);
+            mcolor = (uint32_t)std::stoul(cs, nullptr, 16) | 0xFF000000u;
+        }
+        Marker m;
+        m.time  = mtime;
+        m.label = mlabel;
+        m.color = mcolor;
+        auto it = state.markers.begin();
+        while (it != state.markers.end() && it->time <= mtime) ++it;
+        int idx = (int)(it - state.markers.begin());
+        state.markers.insert(it, m);
+        json r; r["index"] = idx;
+        return r;
+    }
+
+    if (method == "remove_marker") {
+        int mi = params.value("index", -1);
+        if (mi < 0 || mi >= (int)state.markers.size()) { err = "invalid marker index"; return {}; }
+        state.markers.erase(state.markers.begin() + mi);
+        return json::object();
+    }
+
+    if (method == "get_markers") {
+        json arr = json::array();
+        for (int mi = 0; mi < (int)state.markers.size(); ++mi) {
+            const auto& m = state.markers[mi];
+            char hex[12];
+            snprintf(hex, sizeof(hex), "#%06X", m.color & 0x00FFFFFFu);
+            json mj;
+            mj["index"] = mi;
+            mj["time"]  = m.time;
+            mj["label"] = m.label;
+            mj["color"] = hex;
+            arr.push_back(mj);
+        }
+        json r; r["markers"] = arr;
+        return r;
     }
 
     if (method == "trigger_pipeline") {

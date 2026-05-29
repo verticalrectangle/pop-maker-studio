@@ -99,3 +99,4 @@
         case FXType::AsciiArt: return "ASCII Art";
         case FXType::DnaHelix: return "DNA Helix Grid";
         case FXType::DoubleExposure: return "Double Exposure";
+        case FXType::KenBurns: return "Ken Burns";

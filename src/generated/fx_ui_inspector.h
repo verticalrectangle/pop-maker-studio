@@ -6506,3 +6506,40 @@
                 }
             }
             break;
+
+        case FXType::KenBurns:
+            ui_label("Amount");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##gen_ken_burns_amount", &clip.fx_ken_burns_amount, 0.0f, 1.0f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Ken Burns: Amount");
+            ImGui::Dummy({0.f, 4.f});
+            ui_label("Start Scale");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##gen_ken_burns_start_scale", &clip.fx_ken_burns_start_scale, 0.5f, 4.0f, "%.2f×");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Ken Burns: Start Scale");
+            ImGui::Dummy({0.f, 4.f});
+            ui_label("End Scale");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##gen_ken_burns_end_scale", &clip.fx_ken_burns_end_scale, 0.5f, 4.0f, "%.2f×");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Ken Burns: End Scale");
+            ImGui::Dummy({0.f, 4.f});
+            ui_label("Start X");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##gen_ken_burns_start_x", &clip.fx_ken_burns_start_x, 0.0f, 1.0f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Ken Burns: Start X");
+            ImGui::Dummy({0.f, 4.f});
+            ui_label("Start Y");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##gen_ken_burns_start_y", &clip.fx_ken_burns_start_y, 0.0f, 1.0f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Ken Burns: Start Y");
+            ImGui::Dummy({0.f, 4.f});
+            ui_label("End X");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##gen_ken_burns_end_x", &clip.fx_ken_burns_end_x, 0.0f, 1.0f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Ken Burns: End X");
+            ImGui::Dummy({0.f, 4.f});
+            ui_label("End Y");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##gen_ken_burns_end_y", &clip.fx_ken_burns_end_y, 0.0f, 1.0f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Ken Burns: End Y");
+            break;

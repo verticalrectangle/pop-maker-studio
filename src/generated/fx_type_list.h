@@ -100,5 +100,6 @@ static const FXType k_gen_fx_types[] = {
     FXType::AsciiArt,
     FXType::DnaHelix,
     FXType::DoubleExposure,
+    FXType::KenBurns,
 };
-static const int k_gen_fx_count = 100;
+static const int k_gen_fx_count = 101;

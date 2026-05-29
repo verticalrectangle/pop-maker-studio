@@ -643,3 +643,10 @@
     w.pod(c.fx_double_exposure_desaturate2_beat);
     w.pod(c.fx_double_exposure_opacity);
     w.pod(c.fx_double_exposure_opacity_beat);
+    w.pod(c.fx_ken_burns_amount);
+    w.pod(c.fx_ken_burns_start_scale);
+    w.pod(c.fx_ken_burns_end_scale);
+    w.pod(c.fx_ken_burns_start_x);
+    w.pod(c.fx_ken_burns_start_y);
+    w.pod(c.fx_ken_burns_end_x);
+    w.pod(c.fx_ken_burns_end_y);

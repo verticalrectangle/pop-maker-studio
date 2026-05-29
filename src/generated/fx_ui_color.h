@@ -99,3 +99,4 @@
         case FXType::AsciiArt: return IM_COL32(60,220,60,255);
         case FXType::DnaHelix: return IM_COL32(80,255,200,255);
         case FXType::DoubleExposure: return IM_COL32(160,100,255,255);
+        case FXType::KenBurns: return IM_COL32(80,180,255,255);

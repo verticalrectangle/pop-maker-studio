@@ -135,7 +135,8 @@ static void accum_effect_clip(EffectAccum& acc, const Clip& cl) {
 
 // Accumulate a single creative-FX clip into acc. _cl_beat_pulse must be
 // pre-computed by the caller (pass 0.f for MultiFX sub-clips).
-static void accum_creative_clip(CreativeFXAccum& acc, const Clip& cl, float _cl_beat_pulse) {
+// _cl_t is the current playhead time (needed for transform effects' progress).
+static void accum_creative_clip(CreativeFXAccum& acc, const Clip& cl, float _cl_beat_pulse, float _cl_t = 0.f) {
     if (cl.fx_type == FXType::Grade    ||
         cl.fx_type == FXType::Blur     ||
         cl.fx_type == FXType::Vignette) return;
@@ -206,7 +207,7 @@ static void accum_multifx_effects(EffectAccum& ea, CreativeFXAccum& ca,
         float se_end = (se.rel_end <= 0.f) ? parent_dur : se.rel_end;
         if (rel < se.rel_start || rel >= se_end) continue;
         accum_effect_clip(ea, se);
-        accum_creative_clip(ca, se, beat_pulse);
+        accum_creative_clip(ca, se, beat_pulse, t);
     }
 }
 
@@ -266,7 +267,7 @@ CreativeFXAccum collect_creative_fx(const AppState& state, float t, int below_tr
             if (t < cl.start || t >= cl.end)       continue;
             if (fx_clip_is_glass(state, ti, cl))   continue;
             float _cl_beat_pulse = beat_pulse_at(state, cl.beat_src_track, cl.beat_src_clip, t, cl.beat_decay);
-            accum_creative_clip(acc, cl, _cl_beat_pulse);
+            accum_creative_clip(acc, cl, _cl_beat_pulse, t);
         }
     }
     return acc;
@@ -288,7 +289,7 @@ CreativeFXAccum collect_glass_fx(const AppState& state, float t, int video_track
         if (t < cl.start || t >= cl.end)       continue;
         if (!fx_clip_is_glass(state, video_track_idx, cl)) continue;
         float _cl_beat_pulse = beat_pulse_at(state, cl.beat_src_track, cl.beat_src_clip, t, cl.beat_decay);
-        accum_creative_clip(acc, cl, _cl_beat_pulse);
+        accum_creative_clip(acc, cl, _cl_beat_pulse, t);
     }
     return acc;
 }
@@ -330,7 +331,7 @@ CreativeFXAccum collect_creative_fx_for_track(const AppState& state, float t, in
         if (t < cl.start || t >= cl.end)      continue;
         if (fx_clip_is_glass(state, track_idx, cl)) continue;
         float _cl_beat_pulse = beat_pulse_at(state, cl.beat_src_track, cl.beat_src_clip, t, cl.beat_decay);
-        accum_creative_clip(acc, cl, _cl_beat_pulse);
+        accum_creative_clip(acc, cl, _cl_beat_pulse, t);
     }
     return acc;
 }

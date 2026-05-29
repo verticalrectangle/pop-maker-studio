@@ -541,7 +541,7 @@ async def list_tools() -> list[Tool]:
                 "FX bricks overlay the video render — they don't appear in the clip list "
                 "the same way text/video do, but they affect everything below them on the timeline.\n\n"
                 "fx_type options: grade | blur | vignette | glitch | zoom_punch | lut | "
-                "light_leak | vhs | datamosh | chroma_key\n\n"
+                "light_leak | vhs | datamosh | chroma_key | ken_burns\n\n"
                 "params for each type (use these exact key names):\n"
                 "  grade: brightness (-1–1), contrast (0–2), saturation (0–2), hue (0–1)\n"
                 "  blur: blur (0–1)\n"
@@ -552,7 +552,10 @@ async def list_tools() -> list[Tool]:
                 "  vhs: vhs_noise (0–1), vhs_bleed (0–20), vhs_tracking (0–1)\n"
                 "  datamosh: datamosh_intensity (0–1), datamosh_spread (0–1)\n"
                 "  chroma_key: chroma_key_r, chroma_key_g, chroma_key_b (0–1 each), chroma_key_threshold (0–1), chroma_key_softness (0–1)\n"
-                "  lut: (no numeric params — set lut_path via set_clip_prop instead)\n\n"
+                "  lut: (no numeric params — set lut_path via set_clip_prop instead)\n"
+                "  ken_burns: start_scale (0.5–4.0), end_scale (0.5–4.0), start_x (0–1), start_y (0–1), end_x (0–1), end_y (0–1)\n"
+                "    Animated zoom & pan — push in or pull back across the clip duration.\n"
+                "    Scale 1.0=fit, 1.3=30% zoom. x/y are canvas fractions (0.5=center).\n\n"
                 "Requires batch."
             ),
             inputSchema={
@@ -562,7 +565,8 @@ async def list_tools() -> list[Tool]:
                     "fx_type": {
                         "type": "string",
                         "enum": ["grade", "blur", "vignette", "glitch", "zoom_punch",
-                                 "lut", "light_leak", "vhs", "datamosh", "chroma_key"],
+                                 "lut", "light_leak", "vhs", "datamosh", "chroma_key",
+                                 "ken_burns"],
                     },
                     "start": {"type": "number"},
                     "end": {"type": "number"},
@@ -764,6 +768,82 @@ async def list_tools() -> list[Tool]:
                     },
                 },
                 "required": ["glsl"],
+            },
+        ),
+        Tool(
+            name="add_chapter_marker",
+            description=(
+                "Add a chapter/section marker at a specific timeline position. "
+                "Markers appear as colored vertical lines with labels in the timeline ruler. "
+                "They are sorted by time automatically. "
+                "Returns {index} of the inserted marker."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "time":  {"type": "number",  "description": "Timeline position in seconds"},
+                    "label": {"type": "string",  "description": "Chapter label (short text displayed in ruler)"},
+                    "color": {"type": "string",  "description": "Hex color e.g. '#4A90E2' (optional, defaults to cornflower blue)"},
+                },
+                "required": ["time", "label"],
+            },
+        ),
+        Tool(
+            name="remove_chapter_marker",
+            description="Remove a chapter marker by its index (from get_project markers array or add_chapter_marker response).",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "index": {"type": "integer", "description": "Marker index to remove"},
+                },
+                "required": ["index"],
+            },
+        ),
+        Tool(
+            name="generate_chapters",
+            description=(
+                "Auto-generate chapter markers from the transcript by finding natural pause points. "
+                "Call get_transcript first — this tool requires a ready transcript.\n\n"
+                "Two modes (mutually exclusive):\n"
+                "  num_chapters: place exactly N chapters by splitting at the N-1 longest pauses\n"
+                "  min_pause_seconds: place a chapter wherever a pause exceeds this threshold (default 3.0s)\n\n"
+                "Always adds a first chapter at t=0 labeled from the first few words. "
+                "Returns {chapters: [{time, label}]}."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "num_chapters":       {"type": "integer", "description": "Exact number of chapters to generate (overrides min_pause_seconds)"},
+                    "min_pause_seconds":  {"type": "number",  "description": "Minimum gap in seconds to trigger a chapter boundary (default 3.0)"},
+                },
+            },
+        ),
+        Tool(
+            name="add_callout",
+            description=(
+                "Add a callout text overlay — a positioned text box with optional arrow pointing at a canvas location. "
+                "Good for labelling objects, people, or actions on screen.\n\n"
+                "Position (pos_x, pos_y) and arrow target (arrow_x, arrow_y) are canvas fractions: "
+                "0,0 = top-left, 1,1 = bottom-right, 0.5,0.5 = center.\n\n"
+                "callout_style: 0=plain box, 1=box (default), 2=pill (high corner radius), 3=speech bubble\n\n"
+                "Returns {track, clip} indices of the created text clip."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "track":    {"type": "integer", "description": "Track index to place the callout on"},
+                    "start":    {"type": "number",  "description": "Start time in seconds"},
+                    "end":      {"type": "number",  "description": "End time in seconds"},
+                    "text":     {"type": "string",  "description": "Callout label text"},
+                    "pos_x":    {"type": "number",  "description": "Canvas X position of the text box (0–1)"},
+                    "pos_y":    {"type": "number",  "description": "Canvas Y position of the text box (0–1)"},
+                    "arrow_x":  {"type": "number",  "description": "Canvas X of the arrow tip target (0–1). Enables arrow if provided."},
+                    "arrow_y":  {"type": "number",  "description": "Canvas Y of the arrow tip target (0–1). Enables arrow if provided."},
+                    "callout_style": {"type": "integer", "description": "Box style: 0=plain, 1=box, 2=pill, 3=speech bubble (default 1)"},
+                    "font_size":     {"type": "number",  "description": "Font size as fraction of canvas height (default 0.04)"},
+                    "bg_color":      {"type": "array",   "description": "[r,g,b,a] background color 0–1 (default semi-transparent dark)"},
+                },
+                "required": ["track", "start", "end", "text", "pos_x", "pos_y"],
             },
         ),
     ]
@@ -1297,6 +1377,130 @@ async def _apply_multicam_cuts(arguments: dict) -> dict:
     return {"windows": windows, "deleted_count": deleted}
 
 
+# ── add_chapter_marker / remove_chapter_marker / generate_chapters ───────────
+
+async def _add_chapter_marker(arguments: dict) -> dict:
+    return _call("add_marker", {
+        "time":  float(arguments["time"]),
+        "label": arguments.get("label", ""),
+        "color": arguments.get("color", "#4A90E2"),
+    })
+
+
+async def _remove_chapter_marker(arguments: dict) -> dict:
+    return _call("remove_marker", {"index": int(arguments["index"])})
+
+
+async def _generate_chapters(arguments: dict) -> dict:
+    tr = _call("get_transcript", {})
+    if tr.get("status") != "ready":
+        raise ValueError(f"transcript not ready (status={tr.get('status')})")
+
+    words = tr.get("words", [])
+    if not words:
+        raise ValueError("transcript has no words")
+
+    # Remove existing markers
+    existing = _call("get_markers", {}).get("markers", [])
+    for m in reversed(existing):
+        _call("remove_marker", {"index": m["index"]})
+
+    # Compute inter-word gaps
+    gaps = []
+    for i in range(len(words) - 1):
+        gap = float(words[i + 1]["start"]) - float(words[i]["end"])
+        gaps.append((gap, i))  # (gap_duration, index_of_word_before_gap)
+
+    num_chapters = arguments.get("num_chapters")
+    min_pause    = float(arguments.get("min_pause_seconds", 3.0))
+
+    if num_chapters is not None:
+        num_chapters = int(num_chapters)
+        # Pick the N-1 longest gaps as boundaries
+        sorted_gaps = sorted(gaps, key=lambda g: g[0], reverse=True)
+        boundary_indices = sorted({idx for _, idx in sorted_gaps[:max(0, num_chapters - 1)]})
+    else:
+        boundary_indices = sorted(idx for gap, idx in gaps if gap >= min_pause)
+
+    # Build chapter list: first chapter at t=0
+    def first_words(start_idx: int, n: int = 4) -> str:
+        parts = []
+        for w in words[start_idx:start_idx + n]:
+            parts.append(str(w.get("word", w.get("text", ""))).strip(" .,!?"))
+        return " ".join(p for p in parts if p)[:40]
+
+    chapters = [{"time": 0.0, "label": first_words(0)}]
+    for idx in boundary_indices:
+        # Chapter starts at the word *after* the gap
+        next_word_idx = idx + 1
+        if next_word_idx >= len(words):
+            continue
+        t = float(words[next_word_idx]["start"])
+        label = first_words(next_word_idx)
+        chapters.append({"time": round(t, 3), "label": label})
+
+    # Insert markers via IPC
+    for ch in chapters:
+        _call("add_marker", {"time": ch["time"], "label": ch["label"]})
+
+    return {"chapters": chapters}
+
+
+# ── add_callout ───────────────────────────────────────────────────────────────
+
+async def _add_callout(arguments: dict) -> dict:
+    track      = int(arguments["track"])
+    start      = float(arguments["start"])
+    end        = float(arguments["end"])
+    text       = str(arguments["text"])
+    pos_x      = float(arguments["pos_x"])
+    pos_y      = float(arguments["pos_y"])
+    arrow_x    = arguments.get("arrow_x")
+    arrow_y    = arguments.get("arrow_y")
+    style      = int(arguments.get("callout_style", 1))
+    font_size  = float(arguments.get("font_size", 0.04))
+    bg_color   = arguments.get("bg_color", [0.05, 0.05, 0.05, 0.82])
+
+    # Create the text clip
+    clip_idx = _call("add_clip", {
+        "track": track,
+        "type":  "text",
+        "start": start,
+        "end":   end,
+        "text":  text,
+    })["clip"]
+
+    # Set positioning + callout fields
+    props = [
+        {"track": track, "clip": clip_idx, "prop": "sub_pos",     "value": 3},
+        {"track": track, "clip": clip_idx, "prop": "sub_pos_x",   "value": pos_x},
+        {"track": track, "clip": clip_idx, "prop": "sub_pos_y",   "value": pos_y},
+        {"track": track, "clip": clip_idx, "prop": "font_size",   "value": font_size},
+        {"track": track, "clip": clip_idx, "prop": "callout_style","value": style},
+    ]
+    if arrow_x is not None and arrow_y is not None:
+        props += [
+            {"track": track, "clip": clip_idx, "prop": "callout_arrow", "value": True},
+            {"track": track, "clip": clip_idx, "prop": "arrow_tx",      "value": float(arrow_x)},
+            {"track": track, "clip": clip_idx, "prop": "arrow_ty",      "value": float(arrow_y)},
+        ]
+    _call("set_clip_props", {"ops": props})
+
+    # Set text style: background enabled with given color, corner radius for pill/bubble
+    corner = 8.0 if style == 1 else (999.0 if style == 2 else 6.0)
+    _call("set_text_style", {
+        "track": track,
+        "clip":  clip_idx,
+        "bg_enabled": True,
+        "bg_col": bg_color,
+        "bg_pad_x": 10.0,
+        "bg_pad_y": 6.0,
+        "bg_corner": corner,
+    })
+
+    return {"track": track, "clip": clip_idx}
+
+
 @server.call_tool()
 async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     if name == "remove_silence":
@@ -1307,6 +1511,18 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         return [TextContent(type="text", text=json.dumps(result, indent=2))]
     if name == "apply_multicam_cuts":
         result = await _apply_multicam_cuts(arguments)
+        return [TextContent(type="text", text=json.dumps(result, indent=2))]
+    if name == "add_chapter_marker":
+        result = await _add_chapter_marker(arguments)
+        return [TextContent(type="text", text=json.dumps(result, indent=2))]
+    if name == "remove_chapter_marker":
+        result = await _remove_chapter_marker(arguments)
+        return [TextContent(type="text", text=json.dumps(result, indent=2))]
+    if name == "generate_chapters":
+        result = await _generate_chapters(arguments)
+        return [TextContent(type="text", text=json.dumps(result, indent=2))]
+    if name == "add_callout":
+        result = await _add_callout(arguments)
         return [TextContent(type="text", text=json.dumps(result, indent=2))]
     if name == "find_audio_cue":
         result = await _find_audio_cue(arguments)

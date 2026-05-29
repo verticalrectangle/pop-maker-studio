@@ -7,7 +7,7 @@
 // ── Binary serialization helpers ──────────────────────────────────────────────
 
 static const uint32_t MAGIC   = 0x534D5001u; // "PMS\x01"
-static const uint32_t VERSION = 30u;
+static const uint32_t VERSION = 31u;
 
 struct Writer {
     std::ofstream f;
@@ -184,6 +184,9 @@ static void write_clip(Writer& w, const Clip& c) {
     uint32_t nchain = (uint32_t)c.fx_chain.size();
     w.pod(nchain);
     for (auto& se : c.fx_chain) write_clip(w, se);
+    // v31: callout overlay fields
+    w.pod(c.callout_style); w.pod((uint8_t)c.callout_arrow);
+    w.pod(c.arrow_tx); w.pod(c.arrow_ty);
 }
 
 static Clip read_clip(Reader& r, uint32_t version) {
@@ -323,6 +326,13 @@ static Clip read_clip(Reader& r, uint32_t version) {
         for (uint32_t i = 0; i < nchain && r.ok; ++i)
             c.fx_chain.push_back(read_clip(r, version));
     }
+    // v31: callout overlay fields
+    if (version >= 31u) {
+        c.callout_style = r.pod<int>();
+        c.callout_arrow = (bool)r.pod<uint8_t>();
+        c.arrow_tx      = r.pod<float>();
+        c.arrow_ty      = r.pod<float>();
+    }
     return c;
 }
 
@@ -398,6 +408,15 @@ bool project_save(const AppState& state, const std::string& path) {
     // Project settings (v5)
     w.pod(state.fps);
 
+    // v31: chapter markers
+    uint32_t nm = (uint32_t)state.markers.size();
+    w.pod(nm);
+    for (auto& m : state.markers) {
+        w.pod(m.time);
+        w.str(m.label);
+        w.pod(m.color);
+    }
+
     return w.ok;
 }
 
@@ -460,6 +479,19 @@ bool project_load(AppState& state, const std::string& path) {
 
     // Project settings (v5)
     if (version >= 5u) state.fps = r.pod<int>();
+
+    // v31: chapter markers
+    if (version >= 31u) {
+        uint32_t nm = r.pod<uint32_t>();
+        state.markers.reserve(nm);
+        for (uint32_t i = 0; i < nm && r.ok; ++i) {
+            Marker m;
+            m.time  = r.pod<float>();
+            m.label = r.str();
+            m.color = r.pod<uint32_t>();
+            state.markers.push_back(std::move(m));
+        }
+    }
 
     return r.ok;
 }

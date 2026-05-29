@@ -240,6 +240,24 @@ struct RLayer {
     float mask_fps    = 30.f; // fps of the mask image sequence
 };
 
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+// Find the first non-glass ken_burns Effect brick on any track that overlaps
+// [cl_start, cl_end). Returns nullptr if none.
+static const Clip* find_ken_burns_brick(const AppState& state, int video_ti,
+                                        float cl_start, float cl_end) {
+    for (int ti = 0; ti < (int)state.tracks.size(); ++ti) {
+        for (auto& fc : state.tracks[ti].clips) {
+            if (fc.clip_type != ClipType::Effect) continue;
+            if (fc.fx_type   != FXType::KenBurns) continue;
+            if (fc.end <= cl_start || fc.start >= cl_end) continue;
+            if (fx_clip_is_glass(state, ti, fc)) continue;
+            return &fc;
+        }
+    }
+    return nullptr;
+}
+
 // ── Filter-complex script writer ──────────────────────────────────────────────
 
 static bool write_filter_script(
@@ -322,15 +340,30 @@ static bool write_filter_script(
             }
 
             // Step 2: User scale relative to the letterbox-fitted size (KF-aware).
+            // Ken Burns bricks override scale with a time-varying interpolation.
             {
+                const Clip* kb = find_ken_burns_brick(state, rl.track_idx, cl.start, cl.end);
                 bool has_sx_kf = cl.ktracks.count("scale_x") > 0;
                 bool has_sy_kf = cl.ktracks.count("scale_y") > 0;
-                bool need_scale = has_sx_kf || has_sy_kf ||
+                bool need_scale = kb || has_sx_kf || has_sy_kf ||
                                   fabsf(cl.scale_x - 1.f) > 0.001f ||
                                   fabsf(cl.scale_y - 1.f) > 0.001f;
                 if (need_scale) {
-                    std::string sx = prop_expr(cl, "scale_x", 1.f, cl.scale_x, snap_eval_t);
-                    std::string sy = prop_expr(cl, "scale_y", 1.f, cl.scale_y, snap_eval_t);
+                    std::string sx, sy;
+                    if (kb) {
+                        float dur = kb->end - kb->start;
+                        if (dur < 0.001f) dur = 0.001f;
+                        char buf[256];
+                        snprintf(buf, sizeof(buf),
+                            "%.4f+%.4f*clip((t+%.4f-%.4f)/%.4f\\,0\\,1)",
+                            (double)kb->fx_ken_burns_start_scale,
+                            (double)(kb->fx_ken_burns_end_scale - kb->fx_ken_burns_start_scale),
+                            (double)rl.vid_ss, (double)kb->start, (double)dur);
+                        sx = buf; sy = buf;
+                    } else {
+                        sx = prop_expr(cl, "scale_x", 1.f, cl.scale_x, snap_eval_t);
+                        sy = prop_expr(cl, "scale_y", 1.f, cl.scale_y, snap_eval_t);
+                    }
                     std::string scl_tag = "[vscl" + std::to_string(vid_idx) + "]";
                     line() << layer_in
                            << "scale=iw*(" << sx << "):ih*(" << sy << "):eval=frame"
@@ -542,10 +575,34 @@ static bool write_filter_script(
             } // for fti
 
             // Position — all layers use pos_x/pos_y; eval=frame when KFs animate it.
+            // Ken Burns bricks override position with a time-varying interpolation.
             // overlay filter uses overlay_w/overlay_h (not iw/ih) for the overlay input dimensions.
-            std::string x_e = "(" + prop_expr(cl, "pos_x", (float)out_w, cl.pos_x, snap_eval_t) + "-overlay_w/2)";
-            std::string y_e = "(" + prop_expr(cl, "pos_y", (float)out_h, cl.pos_y, snap_eval_t) + "-overlay_h/2)";
-            bool has_pos_kf = cl.ktracks.count("pos_x") > 0 || cl.ktracks.count("pos_y") > 0;
+            std::string x_e, y_e;
+            bool has_pos_kf;
+            {
+                const Clip* kb = find_ken_burns_brick(state, rl.track_idx, cl.start, cl.end);
+                if (kb) {
+                    float dur = kb->end - kb->start;
+                    if (dur < 0.001f) dur = 0.001f;
+                    char xbuf[256], ybuf[256];
+                    snprintf(xbuf, sizeof(xbuf),
+                        "((%.4f+%.4f*clip((t+%.4f-%.4f)/%.4f\\,0\\,1))*%d-overlay_w/2)",
+                        (double)kb->fx_ken_burns_start_x,
+                        (double)(kb->fx_ken_burns_end_x - kb->fx_ken_burns_start_x),
+                        (double)rl.vid_ss, (double)kb->start, (double)dur, out_w);
+                    snprintf(ybuf, sizeof(ybuf),
+                        "((%.4f+%.4f*clip((t+%.4f-%.4f)/%.4f\\,0\\,1))*%d-overlay_h/2)",
+                        (double)kb->fx_ken_burns_start_y,
+                        (double)(kb->fx_ken_burns_end_y - kb->fx_ken_burns_start_y),
+                        (double)rl.vid_ss, (double)kb->start, (double)dur, out_h);
+                    x_e = xbuf; y_e = ybuf;
+                    has_pos_kf = true;
+                } else {
+                    x_e = "(" + prop_expr(cl, "pos_x", (float)out_w, cl.pos_x, snap_eval_t) + "-overlay_w/2)";
+                    y_e = "(" + prop_expr(cl, "pos_y", (float)out_h, cl.pos_y, snap_eval_t) + "-overlay_h/2)";
+                    has_pos_kf = cl.ktracks.count("pos_x") > 0 || cl.ktracks.count("pos_y") > 0;
+                }
+            }
 
             // Enable window
             float en0 = fmaxf(0.f, cl.start - rl.vid_ss);
@@ -1838,6 +1895,17 @@ static bool gl_render_vid_clip(ImDrawList& dl, const Clip* cl, float at_time,
                 cy += cosf(tf * 311.7f) * sa;
             }
         }
+    }
+
+    if (cfx.ken_burns_on) {
+        float p   = cfx.ken_burns_progress;
+        float kbs = cfx.ken_burns_start_scale + (cfx.ken_burns_end_scale - cfx.ken_burns_start_scale) * p;
+        float kbx = cfx.ken_burns_start_x     + (cfx.ken_burns_end_x     - cfx.ken_burns_start_x)     * p;
+        float kby = cfx.ken_burns_start_y     + (cfx.ken_burns_end_y     - cfx.ken_burns_start_y)     * p;
+        hw = fit_w * kbs * 0.5f;
+        hh = fit_h * kbs * 0.5f;
+        cx = kbx * W;
+        cy = kby * H;
     }
 
     float rad = rot * 3.14159265f / 180.f;

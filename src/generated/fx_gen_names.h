@@ -99,3 +99,4 @@
     "ascii_art",
     "dna_helix",
     "double_exposure",
+    "ken_burns",

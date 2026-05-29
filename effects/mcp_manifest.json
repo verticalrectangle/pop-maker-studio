@@ -2806,5 +2806,60 @@
         "fmt": "%.2f"
       }
     ]
+  },
+  {
+    "id": "ken_burns",
+    "label": "Ken Burns",
+    "description": "Animated zoom & pan \u2014 push in or pull back across the clip duration",
+    "params": [
+      {
+        "name": "start_scale",
+        "label": "Start Scale",
+        "min": 0.5,
+        "max": 4.0,
+        "default": 1.0,
+        "fmt": "%.2f\u00d7"
+      },
+      {
+        "name": "end_scale",
+        "label": "End Scale",
+        "min": 0.5,
+        "max": 4.0,
+        "default": 1.3,
+        "fmt": "%.2f\u00d7"
+      },
+      {
+        "name": "start_x",
+        "label": "Start X",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.5,
+        "fmt": "%.2f"
+      },
+      {
+        "name": "start_y",
+        "label": "Start Y",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.5,
+        "fmt": "%.2f"
+      },
+      {
+        "name": "end_x",
+        "label": "End X",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.5,
+        "fmt": "%.2f"
+      },
+      {
+        "name": "end_y",
+        "label": "End Y",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.5,
+        "fmt": "%.2f"
+      }
+    ]
   }
 ]

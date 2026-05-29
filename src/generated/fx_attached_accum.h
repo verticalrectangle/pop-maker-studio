@@ -765,6 +765,16 @@ static void fx_accum_from_attached(CreativeFXAccum& acc, FXType type, float amou
             if ((int)pv.size() > 4) acc.double_exposure_opacity = fmaxf(acc.double_exposure_opacity, pv[4]);
             acc.any_gen_fx = true;
             break;
+        case FXType::KenBurns:
+            acc.ken_burns_on = true;
+            acc.ken_burns_amount = fmaxf(acc.ken_burns_amount, amount);
+            if ((int)pv.size() > 0) acc.ken_burns_start_scale = fmaxf(acc.ken_burns_start_scale, pv[0]);
+            if ((int)pv.size() > 1) acc.ken_burns_end_scale = fmaxf(acc.ken_burns_end_scale, pv[1]);
+            if ((int)pv.size() > 2) acc.ken_burns_start_x = fmaxf(acc.ken_burns_start_x, pv[2]);
+            if ((int)pv.size() > 3) acc.ken_burns_start_y = fmaxf(acc.ken_burns_start_y, pv[3]);
+            if ((int)pv.size() > 4) acc.ken_burns_end_x = fmaxf(acc.ken_burns_end_x, pv[4]);
+            if ((int)pv.size() > 5) acc.ken_burns_end_y = fmaxf(acc.ken_burns_end_y, pv[5]);
+            break;
         default: break;
     }
 }

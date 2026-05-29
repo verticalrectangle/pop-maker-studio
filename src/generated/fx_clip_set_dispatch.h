@@ -945,5 +945,15 @@ static bool fx_clip_set_param(Clip& c, const std::string& fx_id,
         if (param == "opacity_beat") { c.fx_double_exposure_opacity_beat = value; return true; }
         return false;
     }
+    if (fx_id == "ken_burns") {
+        if (param == "amount") { c.fx_ken_burns_amount = value; return true; }
+        if (param == "start_scale") { c.fx_ken_burns_start_scale = value; return true; }
+        if (param == "end_scale") { c.fx_ken_burns_end_scale = value; return true; }
+        if (param == "start_x") { c.fx_ken_burns_start_x = value; return true; }
+        if (param == "start_y") { c.fx_ken_burns_start_y = value; return true; }
+        if (param == "end_x") { c.fx_ken_burns_end_x = value; return true; }
+        if (param == "end_y") { c.fx_ken_burns_end_y = value; return true; }
+        return false;
+    }
     return false;
 }

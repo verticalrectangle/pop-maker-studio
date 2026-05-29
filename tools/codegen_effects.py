@@ -55,7 +55,10 @@ def main():
     with open(REG) as f:
         reg = json.load(f)
     effects = reg["effects"]
-    print(f"codegen: {len(effects)} effects")
+    pv_default = reg["project_version"]
+    shader_effects    = [e for e in effects if e.get("kind") != "transform"]
+    transform_effects = [e for e in effects if e.get("kind") == "transform"]
+    print(f"codegen: {len(effects)} effects ({len(transform_effects)} transform)")
 
     # ── fx_enum_entries.h ─────────────────────────────────────────────────────
     lines = []
@@ -65,11 +68,14 @@ def main():
 
     # ── fx_accum_fields.h ─────────────────────────────────────────────────────
     # Amount is a system field alongside the params.
+    # Transform effects also carry a "progress" field (0–1 position within the brick).
     lines = []
     for e in effects:
         eid = e["id"]
         lines.append(f'    bool  {eid}_on = false;')
         lines.append(f'    float {eid}_amount = 0.0f;')
+        if e.get("kind") == "transform":
+            lines.append(f'    float {eid}_progress = 0.0f;')
         for p in e["params"]:
             lines.append(f'    float {eid}_{p["name"]} = {float(p["min"])}f;')
     write(os.path.join(GEN_DIR, "fx_accum_fields.h"), "\n".join(lines) + "\n")
@@ -81,32 +87,47 @@ def main():
         lines.append(f'    float fx_{eid}_amount = 1.0f;')
         for p in e["params"]:
             lines.append(f'    float fx_{eid}_{p["name"]} = {float(p["default"])}f;')
-            lines.append(f'    float fx_{eid}_{p["name"]}_beat = 0.0f;')  # beat sync intensity dial (0=off)
+            if e.get("kind") != "transform":
+                lines.append(f'    float fx_{eid}_{p["name"]}_beat = 0.0f;')  # beat sync (shader effects only)
     write(os.path.join(GEN_DIR, "fx_clip_fields.h"), "\n".join(lines) + "\n")
 
     # ── fx_collect_cases.h ────────────────────────────────────────────────────
-    # Note: _cl_beat_pulse must be computed in the calling scope before the switch.
+    # Note: for shader effects, _cl_beat_pulse must be pre-computed.
+    # For transform effects, _cl_t must be pre-computed (current playhead time).
     lines = []
     for e in effects:
         eid = e["id"]
+        is_transform = e.get("kind") == "transform"
         lines.append(f'        case FXType::{e["enum"]}:')
         lines.append(f'            acc.{eid}_on = true;')
-        lines.append(f'            acc.any_gen_fx = true;')
-        lines.append(f'            acc.{eid}_amount = fmaxf(acc.{eid}_amount, cl.fx_{eid}_amount);')
-        for p in e["params"]:
-            pmin = float(p["min"])
-            pmax = float(p["max"])
+        if not is_transform:
+            lines.append(f'            acc.any_gen_fx = true;')
+            lines.append(f'            acc.{eid}_amount = fmaxf(acc.{eid}_amount, cl.fx_{eid}_amount);')
+            for p in e["params"]:
+                pmin = float(p["min"])
+                pmax = float(p["max"])
+                lines.append(f'            {{')
+                lines.append(f'                float _bi = cl.fx_{eid}_{p["name"]}_beat;')
+                lines.append(f'                float _bv = cl.fx_{eid}_{p["name"]};')
+                lines.append(f'                acc.{eid}_{p["name"]} = fmaxf(acc.{eid}_{p["name"]}, (_bi > 0.001f) ? ({pmin}f + ({pmax}f - {pmin}f) * _bi * _cl_beat_pulse) : _bv);')
+                lines.append(f'            }}')
+        else:
+            # Transform effect: compute normalised progress within the brick's time span.
             lines.append(f'            {{')
-            lines.append(f'                float _bi = cl.fx_{eid}_{p["name"]}_beat;')
-            lines.append(f'                float _bv = cl.fx_{eid}_{p["name"]};')
-            lines.append(f'                acc.{eid}_{p["name"]} = fmaxf(acc.{eid}_{p["name"]}, (_bi > 0.001f) ? ({pmin}f + ({pmax}f - {pmin}f) * _bi * _cl_beat_pulse) : _bv);')
+            lines.append(f'                float _dur = cl.end - cl.start;')
+            lines.append(f'                float _p = (_dur > 0.001f) ? (_cl_t - cl.start) / _dur : 0.f;')
+            lines.append(f'                _p = (_p < 0.f) ? 0.f : (_p > 1.f ? 1.f : _p);')
+            lines.append(f'                acc.{eid}_progress = _p;')
+            lines.append(f'                acc.{eid}_amount   = fmaxf(acc.{eid}_amount, cl.fx_{eid}_amount);')
+            for p in e["params"]:
+                lines.append(f'                acc.{eid}_{p["name"]} = cl.fx_{eid}_{p["name"]};')
             lines.append(f'            }}')
         lines.append(f'            break;')
     write(os.path.join(GEN_DIR, "fx_collect_cases.h"), "\n".join(lines) + "\n")
 
     # ── fx_shader_strings.h ───────────────────────────────────────────────────
     lines = []
-    for e in effects:
+    for e in shader_effects:
         src = load_shader(e["shader"])
         var = f'k_{e["id"]}_frag'
         lines.append(glsl_multiline(src, var))
@@ -115,7 +136,7 @@ def main():
 
     # ── fx_shader_init.h ──────────────────────────────────────────────────────
     lines = ["void fx_generated_init() {"]
-    for e in effects:
+    for e in shader_effects:
         lines.append(f'    g_gen_progs[(int)FXType::{e["enum"]}] = link_prog(k_{e["id"]}_frag);')
     lines.append("}")
     write(os.path.join(GEN_DIR, "fx_shader_init.h"), "\n".join(lines) + "\n")
@@ -124,8 +145,9 @@ def main():
     # Guard: effect_on && amount > 0.01.
     # Pipeline: save pre_tex, run effect, then blend if amount < 1.
     # Power curve applied per-param when setting uniforms.
+    # Transform effects have no shader — skip them entirely here.
     lines = []
-    for e in effects:
+    for e in shader_effects:
         eid = e["id"]
         cond = f'cfx.{eid}_on && cfx.{eid}_amount > 0.01f'
         lines.append(f'    if ({cond}) {{')
@@ -158,19 +180,29 @@ def main():
         lines.append(f'    w.pod(c.fx_{eid}_amount);')
         for p in e["params"]:
             lines.append(f'    w.pod(c.fx_{eid}_{p["name"]});')
-            lines.append(f'    w.pod(c.fx_{eid}_{p["name"]}_beat);')
+            if e.get("kind") != "transform":
+                lines.append(f'    w.pod(c.fx_{eid}_{p["name"]}_beat);')
     write(os.path.join(GEN_DIR, "fx_project_write.h"), "\n".join(lines) + "\n")
 
     # ── fx_project_read.h ─────────────────────────────────────────────────────
-    pv = reg["project_version"]
-    lines = [f'    if (version >= {pv}u) {{']
+    # Each effect is gated by its own since_version (defaults to project_version).
+    lines = []
+    cur_pv = None
     for e in effects:
         eid = e["id"]
+        pv = e.get("since_version", pv_default)
+        if pv != cur_pv:
+            if cur_pv is not None:
+                lines.append('    }')
+            lines.append(f'    if (version >= {pv}u) {{')
+            cur_pv = pv
         lines.append(f'        c.fx_{eid}_amount = r.pod<float>();')
         for p in e["params"]:
             lines.append(f'        c.fx_{eid}_{p["name"]} = r.pod<float>();')
-            lines.append(f'        c.fx_{eid}_{p["name"]}_beat = r.pod<float>();')
-    lines.append('    }')
+            if e.get("kind") != "transform":
+                lines.append(f'        c.fx_{eid}_{p["name"]}_beat = r.pod<float>();')
+    if cur_pv is not None:
+        lines.append('    }')
     write(os.path.join(GEN_DIR, "fx_project_read.h"), "\n".join(lines) + "\n")
 
     # ── fx_ui_inspector.h ─────────────────────────────────────────────────────
@@ -188,28 +220,35 @@ def main():
             if p.get("hidden"): continue
             pname = p["name"]
             plabel = p["label"]
+            is_transform = e.get("kind") == "transform"
             lines.append('            ImGui::Dummy({0.f, 4.f});')
             lines.append(f'            ui_label("{plabel}");')
-            lines.append(f'            {{')
-            lines.append(f'                bool _bon = clip.fx_{eid}_{pname}_beat > 0.001f;')
-            lines.append(f'                if (_bon) ImGui::BeginDisabled();')
-            lines.append(f'                ImGui::SetNextItemWidth(sw - 26.f);')
-            lines.append(f'                ImGui::SliderFloat("##gen_{eid}_{pname}", &clip.fx_{eid}_{pname}, {float(p["min"])}f, {float(p["max"])}f, "{p["fmt"]}");')
-            lines.append(f'                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "{elabel}: {plabel}");')
-            lines.append(f'                if (_bon) ImGui::EndDisabled();')
-            lines.append(f'                ImGui::SameLine(0.f, 4.f);')
-            lines.append(f'                ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));')
-            lines.append(f'                if (ImGui::SmallButton("B##bt_{eid}_{pname}")) {{')
-            lines.append(f'                    clip.fx_{eid}_{pname}_beat = _bon ? 0.f : 0.5f;')
-            lines.append(f'                    history_push(state, "{elabel}: Beat Sync");')
-            lines.append(f'                }}')
-            lines.append(f'                ImGui::PopStyleColor();')
-            lines.append(f'                if (_bon) {{')
-            lines.append(f'                    ImGui::SetNextItemWidth(sw);')
-            lines.append(f'                    ImGui::SliderFloat("##bi_{eid}_{pname}", &clip.fx_{eid}_{pname}_beat, 0.0f, 1.0f, "beat %.2f");')
-            lines.append(f'                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "{elabel}: Beat Intensity");')
-            lines.append(f'                }}')
-            lines.append(f'            }}')
+            if is_transform:
+                # Transform effects: simple slider only (no beat sync)
+                lines.append(f'            ImGui::SetNextItemWidth(sw);')
+                lines.append(f'            ImGui::SliderFloat("##gen_{eid}_{pname}", &clip.fx_{eid}_{pname}, {float(p["min"])}f, {float(p["max"])}f, "{p["fmt"]}");')
+                lines.append(f'            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "{elabel}: {plabel}");')
+            else:
+                lines.append(f'            {{')
+                lines.append(f'                bool _bon = clip.fx_{eid}_{pname}_beat > 0.001f;')
+                lines.append(f'                if (_bon) ImGui::BeginDisabled();')
+                lines.append(f'                ImGui::SetNextItemWidth(sw - 26.f);')
+                lines.append(f'                ImGui::SliderFloat("##gen_{eid}_{pname}", &clip.fx_{eid}_{pname}, {float(p["min"])}f, {float(p["max"])}f, "{p["fmt"]}");')
+                lines.append(f'                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "{elabel}: {plabel}");')
+                lines.append(f'                if (_bon) ImGui::EndDisabled();')
+                lines.append(f'                ImGui::SameLine(0.f, 4.f);')
+                lines.append(f'                ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));')
+                lines.append(f'                if (ImGui::SmallButton("B##bt_{eid}_{pname}")) {{')
+                lines.append(f'                    clip.fx_{eid}_{pname}_beat = _bon ? 0.f : 0.5f;')
+                lines.append(f'                    history_push(state, "{elabel}: Beat Sync");')
+                lines.append(f'                }}')
+                lines.append(f'                ImGui::PopStyleColor();')
+                lines.append(f'                if (_bon) {{')
+                lines.append(f'                    ImGui::SetNextItemWidth(sw);')
+                lines.append(f'                    ImGui::SliderFloat("##bi_{eid}_{pname}", &clip.fx_{eid}_{pname}_beat, 0.0f, 1.0f, "beat %.2f");')
+                lines.append(f'                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "{elabel}: Beat Intensity");')
+                lines.append(f'                }}')
+                lines.append(f'            }}')
         lines.append('            break;')
         lines.append('')
     write(os.path.join(GEN_DIR, "fx_ui_inspector.h"), "\n".join(lines))
@@ -264,7 +303,8 @@ def main():
         lines.append(f'            acc.{eid}_amount = fmaxf(acc.{eid}_amount, amount);')
         for i, p in enumerate(visible_params):
             lines.append(f'            if ((int)pv.size() > {i}) acc.{eid}_{p["name"]} = fmaxf(acc.{eid}_{p["name"]}, pv[{i}]);')
-        lines.append(f'            acc.any_gen_fx = true;')
+        if e.get("kind") != "transform":
+            lines.append(f'            acc.any_gen_fx = true;')
         lines.append(f'            break;')
     lines.append("        default: break;")
     lines.append("    }")
@@ -326,7 +366,8 @@ def main():
         for p in all_params:
             pname = p["name"]
             lines.append(f'        if (param == "{pname}") {{ c.fx_{eid}_{pname} = value; return true; }}')
-            lines.append(f'        if (param == "{pname}_beat") {{ c.fx_{eid}_{pname}_beat = value; return true; }}')
+            if e.get("kind") != "transform":
+                lines.append(f'        if (param == "{pname}_beat") {{ c.fx_{eid}_{pname}_beat = value; return true; }}')
         lines.append(f'        return false;')
         lines.append(f'    }}')
     lines.append("    return false;")

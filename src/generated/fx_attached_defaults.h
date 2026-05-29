@@ -101,6 +101,7 @@ static std::vector<float> fx_attached_defaults(FXType type) {
         case FXType::AsciiArt: return {10.0f, 0.0f, 1.0f, 0.15f, 0.85f};
         case FXType::DnaHelix: return {12.0f, 0.5f, 0.05f, 0.55f, 0.6f};
         case FXType::DoubleExposure: return {0.15f, -0.1f, 1.15f, 0.6f, 0.8f};
+        case FXType::KenBurns: return {1.0f, 1.3f, 0.5f, 0.5f, 0.5f, 0.5f};
         default: return {};
     }
 }

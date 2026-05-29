@@ -152,6 +152,12 @@ struct Clip {
 
     TextStyle ts;
 
+    // callout overlay fields (text clips only)
+    int   callout_style = 0;    // 0=none 1=box 2=pill 3=speech_bubble
+    bool  callout_arrow = false;
+    float arrow_tx      = 0.5f; // canvas 0–1, arrow target point
+    float arrow_ty      = 0.5f;
+
     // per-clip word list for deep lyrics editing (populated by apply_subtitle_mode)
     std::vector<WordEntry> words;
 
@@ -405,6 +411,14 @@ enum class SubtitleMode {
     Karaoke,    // line-grouped clips with per-word highlight enabled
 };
 
+// ── Chapter markers ───────────────────────────────────────────────────────────
+
+struct Marker {
+    float       time  = 0.f;
+    std::string label;
+    uint32_t    color = 0xFF4A90E2u;  // ABGR, default cornflower blue
+};
+
 // ── Central app state ─────────────────────────────────────────────────────────
 
 struct AppState {
@@ -418,6 +432,9 @@ struct AppState {
     std::string words_json_path;    // <stem>_words.json
     std::string segments_json_path; // <stem>_segments.json
     std::vector<WordEntry> words_cache; // flat word list loaded from words_json_path
+
+    // chapter markers (sorted by time)
+    std::vector<Marker> markers;
 
     // beat sync
     std::vector<float> beats;           // beat timestamps in seconds

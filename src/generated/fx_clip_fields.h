@@ -643,3 +643,10 @@
     float fx_double_exposure_desaturate2_beat = 0.0f;
     float fx_double_exposure_opacity = 0.8f;
     float fx_double_exposure_opacity_beat = 0.0f;
+    float fx_ken_burns_amount = 1.0f;
+    float fx_ken_burns_start_scale = 1.0f;
+    float fx_ken_burns_end_scale = 1.3f;
+    float fx_ken_burns_start_x = 0.5f;
+    float fx_ken_burns_start_y = 0.5f;
+    float fx_ken_burns_end_x = 0.5f;
+    float fx_ken_burns_end_y = 0.5f;

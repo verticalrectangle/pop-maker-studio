@@ -1859,3 +1859,19 @@
                 acc.double_exposure_opacity = fmaxf(acc.double_exposure_opacity, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
+        case FXType::KenBurns:
+            acc.ken_burns_on = true;
+            {
+                float _dur = cl.end - cl.start;
+                float _p = (_dur > 0.001f) ? (_cl_t - cl.start) / _dur : 0.f;
+                _p = (_p < 0.f) ? 0.f : (_p > 1.f ? 1.f : _p);
+                acc.ken_burns_progress = _p;
+                acc.ken_burns_amount   = fmaxf(acc.ken_burns_amount, cl.fx_ken_burns_amount);
+                acc.ken_burns_start_scale = cl.fx_ken_burns_start_scale;
+                acc.ken_burns_end_scale = cl.fx_ken_burns_end_scale;
+                acc.ken_burns_start_x = cl.fx_ken_burns_start_x;
+                acc.ken_burns_start_y = cl.fx_ken_burns_start_y;
+                acc.ken_burns_end_x = cl.fx_ken_burns_end_x;
+                acc.ken_burns_end_y = cl.fx_ken_burns_end_y;
+            }
+            break;

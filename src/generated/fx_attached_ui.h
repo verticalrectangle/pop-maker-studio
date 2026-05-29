@@ -2122,6 +2122,44 @@ static void fx_attached_inspector(AttachedFX& afx, float sw, AppState& state, Cl
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Double Exposure: Opacity");
             break;
         }
+        case FXType::KenBurns: {
+            if ((int)afx.params.size() < 6) afx.params.resize(6, 0.f);
+            ui_label("Amount");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##afx_ken_burns_amount", &afx.amount, 0.0f, 1.0f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Ken Burns: Amount");
+            ImGui::Dummy({0.f, 4.f});
+            ui_label("Start Scale");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##afx_ken_burns_start_scale", &afx.params[0], 0.5f, 4.0f, "%.2f×");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Ken Burns: Start Scale");
+            ImGui::Dummy({0.f, 4.f});
+            ui_label("End Scale");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##afx_ken_burns_end_scale", &afx.params[1], 0.5f, 4.0f, "%.2f×");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Ken Burns: End Scale");
+            ImGui::Dummy({0.f, 4.f});
+            ui_label("Start X");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##afx_ken_burns_start_x", &afx.params[2], 0.0f, 1.0f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Ken Burns: Start X");
+            ImGui::Dummy({0.f, 4.f});
+            ui_label("Start Y");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##afx_ken_burns_start_y", &afx.params[3], 0.0f, 1.0f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Ken Burns: Start Y");
+            ImGui::Dummy({0.f, 4.f});
+            ui_label("End X");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##afx_ken_burns_end_x", &afx.params[4], 0.0f, 1.0f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Ken Burns: End X");
+            ImGui::Dummy({0.f, 4.f});
+            ui_label("End Y");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##afx_ken_burns_end_y", &afx.params[5], 0.0f, 1.0f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Ken Burns: End Y");
+            break;
+        }
         default: break;
     }
 }

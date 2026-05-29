@@ -268,6 +268,18 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
         }
     }
 
+    // Chapter marker lines — colored vertical lines + labels in the ruler
+    for (auto& m : state.markers) {
+        float px = origin.x + TL_LABEL_W + m.time * zoom - scroll;
+        if (px < origin.x + TL_LABEL_W || px > origin.x + total_w) continue;
+        ImU32 mc = (m.color & 0x00FFFFFFu) | 0xCC000000u;  // use stored RGB, force alpha=0xCC
+        dl->AddLine({px, ruler_y}, {px, origin.y + total_h}, mc, 1.5f);
+        if (!m.label.empty()) {
+            ImVec2 tp = {px + 3.f, ruler_y + 2.f};
+            dl->AddText(tp, mc, m.label.c_str());
+        }
+    }
+
     // Tracks
     // Vertical scroll: mouse wheel in the track body area
     float track_area_top = origin.y + TL_RULER_H;

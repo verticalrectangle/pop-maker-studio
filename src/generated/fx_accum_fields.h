@@ -471,3 +471,12 @@
     float double_exposure_scale2 = 0.5f;
     float double_exposure_desaturate2 = 0.0f;
     float double_exposure_opacity = 0.0f;
+    bool  ken_burns_on = false;
+    float ken_burns_amount = 0.0f;
+    float ken_burns_progress = 0.0f;
+    float ken_burns_start_scale = 0.5f;
+    float ken_burns_end_scale = 0.5f;
+    float ken_burns_start_x = 0.0f;
+    float ken_burns_start_y = 0.0f;
+    float ken_burns_end_x = 0.0f;
+    float ken_burns_end_y = 0.0f;

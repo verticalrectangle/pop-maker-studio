@@ -99,3 +99,4 @@
         {FXType::AsciiArt, "ASCII Art", "ASCII character density rendering", IM_COL32(60,220,60,255)},
         {FXType::DnaHelix, "DNA Helix Grid", "Animated DNA helix wire overlay", IM_COL32(80,255,200,255)},
         {FXType::DoubleExposure, "Double Exposure", "Screen-blended double exposure", IM_COL32(160,100,255,255)},
+        {FXType::KenBurns, "Ken Burns", "Animated zoom & pan — push in or pull back across the clip duration", IM_COL32(80,180,255,255)},

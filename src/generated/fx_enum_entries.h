@@ -99,3 +99,4 @@
     AsciiArt,   // ASCII Art
     DnaHelix,   // DNA Helix Grid
     DoubleExposure,   // Double Exposure
+    KenBurns,   // Ken Burns

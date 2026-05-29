@@ -99,3 +99,4 @@
         case FXType::AsciiArt: return "ASCII";
         case FXType::DnaHelix: return "DNA";
         case FXType::DoubleExposure: return "DEXP";
+        case FXType::KenBurns: return "KB";

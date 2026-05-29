@@ -671,3 +671,13 @@
             cfx.double_exposure_desaturate2 = 0.6f;
             cfx.double_exposure_opacity = 0.8f;
             break;
+        case FXType::KenBurns:
+            cfx.ken_burns_on = true;
+            cfx.ken_burns_amount = 1.0f;
+            cfx.ken_burns_start_scale = 1.0f;
+            cfx.ken_burns_end_scale = 1.3f;
+            cfx.ken_burns_start_x = 0.5f;
+            cfx.ken_burns_start_y = 0.5f;
+            cfx.ken_burns_end_x = 0.5f;
+            cfx.ken_burns_end_y = 0.5f;
+            break;

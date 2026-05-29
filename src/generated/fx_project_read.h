@@ -645,3 +645,12 @@
         c.fx_double_exposure_opacity = r.pod<float>();
         c.fx_double_exposure_opacity_beat = r.pod<float>();
     }
+    if (version >= 31u) {
+        c.fx_ken_burns_amount = r.pod<float>();
+        c.fx_ken_burns_start_scale = r.pod<float>();
+        c.fx_ken_burns_end_scale = r.pod<float>();
+        c.fx_ken_burns_start_x = r.pod<float>();
+        c.fx_ken_burns_start_y = r.pod<float>();
+        c.fx_ken_burns_end_x = r.pod<float>();
+        c.fx_ken_burns_end_y = r.pod<float>();
+    }

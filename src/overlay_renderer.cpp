@@ -226,6 +226,41 @@ void draw_text_overlays(ImDrawList* dl, const AppState& state, float t,
             render_text_block(trc, txt_lines);
         }
 
+        // Callout arrow: triangle from text box edge toward arrow target point
+        if (active->callout_arrow) {
+            float max_rw = 0.f;
+            for (auto& ln : txt_lines)
+                max_rw = fmaxf(max_rw, txt_font->CalcTextSizeA(fsz, FLT_MAX, -1.f, ln.c_str()).x);
+            const auto& cts = active->ts;
+            float pad_x = cts.bg_pad_x, pad_y = cts.bg_pad_y;
+            float bx_anchor;
+            if (active->sub_anchor_h == 0)      bx_anchor = block_cx;
+            else if (active->sub_anchor_h == 2) bx_anchor = block_cx - max_rw;
+            else                                bx_anchor = block_cx - max_rw * 0.5f;
+            float bx0 = bx_anchor - pad_x,  bx1 = bx_anchor + max_rw + pad_x;
+            float by0 = ty_anim   - pad_y,  by1 = ty_anim   + block_h + pad_y;
+            float atx = p.x + active->arrow_tx * w;
+            float aty = p.y + active->arrow_ty * h;
+            float cx = (bx0 + bx1) * 0.5f, cy = (by0 + by1) * 0.5f;
+            float dx = atx - cx, dy = aty - cy;
+            float hw = (bx1 - bx0) * 0.5f, hh_box = (by1 - by0) * 0.5f;
+            float ex, ey;
+            if (fabsf(dx) < 0.001f && fabsf(dy) < 0.001f) {
+                ex = cx; ey = by1;
+            } else {
+                float te_x = (fabsf(dx) > 0.001f) ? hw     / fabsf(dx) : FLT_MAX;
+                float te_y = (fabsf(dy) > 0.001f) ? hh_box / fabsf(dy) : FLT_MAX;
+                float te   = fminf(te_x, te_y);
+                ex = cx + dx * te; ey = cy + dy * te;
+            }
+            float len = sqrtf(dx*dx + dy*dy);
+            float nx = (len > 0.001f) ? -dy / len * 8.f : 8.f;
+            float ny = (len > 0.001f) ?  dx / len * 8.f : 0.f;
+            ImU32 acol = IM_COL32((int)(cts.bg_col[0]*255), (int)(cts.bg_col[1]*255),
+                                   (int)(cts.bg_col[2]*255), (int)(cts.bg_col[3]*255));
+            dl->AddTriangleFilled({ex + nx, ey + ny}, {ex - nx, ey - ny}, {atx, aty}, acol);
+        }
+
         ++text_rendered;
     }
 }
