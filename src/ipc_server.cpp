@@ -249,6 +249,9 @@ static json clip_to_json(int idx, const Clip& c) {
     ts["bg_corner"]      = c.ts.bg_corner;
     j["text_style"]      = ts;
 
+    if (!c.source_id.empty())
+        j["source"] = c.source_id;
+
     if (!c.runtime_fx_id.empty()) {
         j["runtime_fx_id"]     = c.runtime_fx_id;
         j["runtime_fx_amount"] = c.runtime_fx_amount;
@@ -470,6 +473,22 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         if (vision_models_ready()) { json r; r["status"] = "ready"; return r; }
         vision_download_start();
         json r; r["status"] = "started";
+        return r;
+    }
+
+    if (method == "get_transcript") {
+        json r;
+        if (state.words_json_path.empty()) { r["status"] = "idle"; return r; }
+        std::ifstream f(state.words_json_path);
+        if (!f.is_open()) { r["status"] = "idle"; return r; }
+        try {
+            json words = json::parse(f);
+            r["status"] = "ready";
+            r["words"]  = words;
+        } catch (...) {
+            r["status"]  = "error";
+            r["message"] = "failed to parse words JSON";
+        }
         return r;
     }
 

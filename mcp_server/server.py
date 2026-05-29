@@ -641,6 +641,103 @@ async def list_tools() -> list[Tool]:
             },
         ),
         Tool(
+            name="get_transcript",
+            description=(
+                "Return the word-level transcript produced by the transcription pipeline. "
+                "Returns {status: 'idle'|'ready'|'error', words?: [{word, start, end}]}. "
+                "Run trigger_pipeline first if status is 'idle'. "
+                "Word timestamps are source-file-relative seconds."
+            ),
+            inputSchema={"type": "object", "properties": {}},
+        ),
+        Tool(
+            name="remove_silence",
+            description=(
+                "Automatically detect and remove silent segments from a video or audio clip. "
+                "Uses per-second RMS energy (1-second resolution — pauses shorter than ~0.5s "
+                "may not be detected). Works back-to-front so clip indices stay valid. "
+                "Returns {removed: [{start, end, duration}, ...], count}.\n\n"
+                "Typical threshold: 0.04–0.08 for speech; min_duration: 0.5–1.0s; "
+                "padding: 0.1–0.2s to avoid clipping words."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "track":        {"type": "integer", "description": "Track index"},
+                    "clip":         {"type": "integer", "description": "Clip index within the track"},
+                    "threshold":    {"type": "number",  "description": "RMS below this = silence (0–1). Default 0.05"},
+                    "min_duration": {"type": "number",  "description": "Minimum silence length in seconds to remove. Default 0.5"},
+                    "padding":      {"type": "number",  "description": "Seconds of audio to preserve on each side of a cut. Default 0.15"},
+                },
+                "required": ["track", "clip"],
+            },
+        ),
+        Tool(
+            name="cut_filler_words",
+            description=(
+                "Remove filler words ('um', 'uh', 'like', etc.) from a clip using the "
+                "word-level transcript. Run trigger_pipeline and wait for it to finish first. "
+                "Use dry_run=true to preview matches before committing. "
+                "Returns {removed: [{word, start, end}, ...], count} or "
+                "{matches: [...]} in dry-run mode."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "track":    {"type": "integer", "description": "Track index"},
+                    "clip":     {"type": "integer", "description": "Clip index within the track"},
+                    "words":    {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": (
+                            "Filler words/phrases to remove. "
+                            "Default: [\"um\",\"uh\",\"uh-huh\",\"like\",\"you know\","
+                            "\"kind of\",\"sort of\",\"basically\",\"literally\","
+                            "\"actually\",\"right\",\"okay\"]"
+                        ),
+                    },
+                    "padding":  {"type": "number",  "description": "Seconds to trim from each side to avoid clipping. Default 0.04"},
+                    "dry_run":  {"type": "boolean", "description": "If true, return matches without making cuts. Default false"},
+                },
+                "required": ["track", "clip"],
+            },
+        ),
+        Tool(
+            name="apply_multicam_cuts",
+            description=(
+                "Given multiple camera-angle clips on parallel tracks, apply a cut list that "
+                "keeps only the selected camera in each time window. All other camera-track "
+                "clips in that window are deleted. Non-camera tracks (captions, FX, etc.) are "
+                "left untouched.\n\n"
+                "Precondition: each camera track has a clip covering the full range. "
+                "Returns {windows: [{start, end, track}], deleted_count}.\n\n"
+                "Example: cuts=[{time:0,track:2},{time:8.3,track:3}], camera_tracks=[2,3]"
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "cuts": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "time":  {"type": "number",  "description": "Timeline time (seconds) where this camera takes over"},
+                                "track": {"type": "integer", "description": "Track index to use from this time onward"},
+                            },
+                            "required": ["time", "track"],
+                        },
+                        "description": "Ordered list of camera switches. Must start at or before the earliest clip start.",
+                    },
+                    "camera_tracks": {
+                        "type": "array",
+                        "items": {"type": "integer"},
+                        "description": "Which track indices are camera tracks. Only these will have segments deleted.",
+                    },
+                },
+                "required": ["cuts", "camera_tracks"],
+            },
+        ),
+        Tool(
             name="validate_glsl",
             description=(
                 "Test-compile a GLSL fragment shader body without registering it as a runtime effect. "
@@ -915,8 +1012,302 @@ async def _find_video_moment(arguments: dict) -> list[dict]:
     return scored[:3]
 
 
+# ── remove_silence ────────────────────────────────────────────────────────────
+
+async def _remove_silence(arguments: dict) -> dict:
+    track        = int(arguments["track"])
+    clip_idx     = int(arguments["clip"])
+    threshold    = float(arguments.get("threshold",    0.05))
+    min_duration = float(arguments.get("min_duration", 0.5))
+    padding      = float(arguments.get("padding",      0.15))
+
+    proj = _call("get_project", {})
+    tracks = proj.get("tracks", [])
+    if track >= len(tracks):
+        raise ValueError(f"track {track} does not exist")
+    clips = tracks[track].get("clips", [])
+    if clip_idx >= len(clips):
+        raise ValueError(f"clip {clip_idx} does not exist on track {track}")
+
+    c = clips[clip_idx]
+    source   = c.get("source", "")
+    tl_start = float(c["start"])
+    in_point = float(c["in_point"])
+    duration = float(c["duration"])
+
+    if not source:
+        raise ValueError("clip has no source file (is it a video/audio clip?)")
+
+    # Analyze audio
+    _call("analyze_audio", {"path": source})
+    for _ in range(240):
+        await asyncio.sleep(0.5)
+        res = _call("get_audio_analysis", {})
+        if res.get("status") == "done":
+            break
+        if res.get("status") == "error":
+            raise ValueError("audio analysis failed for: " + source)
+    else:
+        raise TimeoutError("audio analysis timed out")
+
+    rms = res["rms"]  # per-second list, 0-indexed by second
+
+    # Find silence runs within the clip's source range
+    src_start_s = int(in_point)
+    src_end_s   = int(in_point + duration)
+
+    silence_spans: list[tuple[int, int]] = []  # (src_start_sec, src_end_sec) exclusive
+    run_start = None
+    for s in range(src_start_s, min(src_end_s + 1, len(rms))):
+        val = rms[s] if s < len(rms) else 0.0
+        if val < threshold:
+            if run_start is None:
+                run_start = s
+        else:
+            if run_start is not None:
+                if (s - run_start) >= min_duration:
+                    silence_spans.append((run_start, s))
+                run_start = None
+    if run_start is not None and (src_end_s - run_start) >= min_duration:
+        silence_spans.append((run_start, src_end_s))
+
+    if not silence_spans:
+        return {"removed": [], "count": 0}
+
+    # Convert to timeline positions and apply padding
+    cuts: list[tuple[float, float]] = []
+    for (ss, se) in silence_spans:
+        tl_s = tl_start + (ss - in_point) + padding
+        tl_e = tl_start + (se - in_point) - padding
+        if tl_e - tl_s > 0.05:  # at least 50ms after padding
+            cuts.append((tl_s, tl_e))
+
+    removed = []
+    # Process back-to-front to keep earlier indices valid
+    for (cut_s, cut_e) in reversed(cuts):
+        # Re-fetch to get current clip indices
+        proj2 = _call("get_project", {})
+        tr_clips = proj2["tracks"][track]["clips"]
+
+        # Find clip covering cut_e (split right boundary first)
+        right_clip = next((i for i, cl in enumerate(tr_clips)
+                           if cl["start"] <= cut_e < cl["end"]), None)
+        if right_clip is not None and abs(tr_clips[right_clip]["end"] - cut_e) > 0.02:
+            _call("split_clip", {"track": track, "clip": right_clip, "time": cut_e})
+            proj2 = _call("get_project", {})
+            tr_clips = proj2["tracks"][track]["clips"]
+
+        # Find clip covering cut_s (split left boundary)
+        left_clip = next((i for i, cl in enumerate(tr_clips)
+                          if cl["start"] <= cut_s < cl["end"]), None)
+        if left_clip is not None and abs(tr_clips[left_clip]["start"] - cut_s) > 0.02:
+            _call("split_clip", {"track": track, "clip": left_clip, "time": cut_s})
+            proj2 = _call("get_project", {})
+            tr_clips = proj2["tracks"][track]["clips"]
+
+        # Find and delete the silence segment (clip whose start >= cut_s and end <= cut_e)
+        seg_idx = next((i for i, cl in enumerate(tr_clips)
+                        if cl["start"] >= cut_s - 0.02 and cl["end"] <= cut_e + 0.02), None)
+        if seg_idx is not None:
+            _call("delete_clip", {"track": track, "clip": seg_idx})
+            removed.append({"start": round(cut_s, 3), "end": round(cut_e, 3),
+                            "duration": round(cut_e - cut_s, 3)})
+
+    return {"removed": list(reversed(removed)), "count": len(removed)}
+
+
+# ── cut_filler_words ──────────────────────────────────────────────────────────
+
+_DEFAULT_FILLERS = [
+    "um", "uh", "uh-huh", "like", "you know", "kind of", "sort of",
+    "basically", "literally", "actually", "right", "okay",
+]
+
+
+async def _cut_filler_words(arguments: dict) -> dict:
+    track    = int(arguments["track"])
+    clip_idx = int(arguments["clip"])
+    fillers  = [w.lower() for w in arguments.get("words", _DEFAULT_FILLERS)]
+    padding  = float(arguments.get("padding", 0.04))
+    dry_run  = bool(arguments.get("dry_run", False))
+
+    tr_res = _call("get_transcript", {})
+    if tr_res.get("status") != "ready":
+        raise ValueError("no transcript available — run trigger_pipeline first and wait for it to complete")
+
+    proj = _call("get_project", {})
+    tracks = proj.get("tracks", [])
+    if track >= len(tracks):
+        raise ValueError(f"track {track} does not exist")
+    clips = tracks[track].get("clips", [])
+    if clip_idx >= len(clips):
+        raise ValueError(f"clip {clip_idx} does not exist on track {track}")
+
+    c        = clips[clip_idx]
+    tl_start = float(c["start"])
+    tl_end   = float(c["end"])
+    in_point = float(c["in_point"])
+    duration = float(c["duration"])
+
+    words = tr_res["words"]
+
+    # Build multi-word filler list (longest first so greedy matching works)
+    multi_fillers = sorted([f for f in fillers if " " in f], key=len, reverse=True)
+    single_fillers = [f for f in fillers if " " not in f]
+
+    # Filter words to those within this clip's source range
+    src_end = in_point + duration
+    clip_words = [w for w in words if in_point <= float(w["start"]) < src_end]
+
+    # Greedy match: walk through clip_words looking for filler runs
+    matches: list[dict] = []
+    i = 0
+    while i < len(clip_words):
+        matched = False
+        # Try multi-word fillers first
+        for mf in multi_fillers:
+            mf_parts = mf.split()
+            n = len(mf_parts)
+            if i + n <= len(clip_words):
+                window = [clip_words[i + j]["word"].lower().strip(".,!?") for j in range(n)]
+                if window == mf_parts:
+                    w_start = float(clip_words[i]["start"])
+                    w_end   = float(clip_words[i + n - 1]["end"])
+                    tl_s    = tl_start + (w_start - in_point)
+                    tl_e    = tl_start + (w_end   - in_point)
+                    matches.append({"word": mf, "source_start": w_start, "source_end": w_end,
+                                    "timeline_start": round(tl_s, 3), "timeline_end": round(tl_e, 3)})
+                    i += n
+                    matched = True
+                    break
+        if not matched:
+            w = clip_words[i]["word"].lower().strip(".,!?")
+            if w in single_fillers:
+                w_start = float(clip_words[i]["start"])
+                w_end   = float(clip_words[i]["end"])
+                tl_s    = tl_start + (w_start - in_point)
+                tl_e    = tl_start + (w_end   - in_point)
+                matches.append({"word": clip_words[i]["word"], "source_start": w_start, "source_end": w_end,
+                                "timeline_start": round(tl_s, 3), "timeline_end": round(tl_e, 3)})
+            i += 1
+
+    if dry_run:
+        return {"matches": matches}
+
+    if not matches:
+        return {"removed": [], "count": 0}
+
+    removed = []
+    for m in reversed(matches):
+        cut_s = m["timeline_start"] - padding
+        cut_e = m["timeline_end"]   + padding
+
+        proj2    = _call("get_project", {})
+        tr_clips = proj2["tracks"][track]["clips"]
+
+        right_clip = next((i for i, cl in enumerate(tr_clips)
+                           if cl["start"] <= cut_e < cl["end"]), None)
+        if right_clip is not None and abs(tr_clips[right_clip]["end"] - cut_e) > 0.02:
+            _call("split_clip", {"track": track, "clip": right_clip, "time": cut_e})
+            proj2    = _call("get_project", {})
+            tr_clips = proj2["tracks"][track]["clips"]
+
+        left_clip = next((i for i, cl in enumerate(tr_clips)
+                          if cl["start"] <= cut_s < cl["end"]), None)
+        if left_clip is not None and abs(tr_clips[left_clip]["start"] - cut_s) > 0.02:
+            _call("split_clip", {"track": track, "clip": left_clip, "time": cut_s})
+            proj2    = _call("get_project", {})
+            tr_clips = proj2["tracks"][track]["clips"]
+
+        seg_idx = next((i for i, cl in enumerate(tr_clips)
+                        if cl["start"] >= cut_s - 0.02 and cl["end"] <= cut_e + 0.02), None)
+        if seg_idx is not None:
+            _call("delete_clip", {"track": track, "clip": seg_idx})
+            removed.append({"word": m["word"], "start": round(cut_s, 3), "end": round(cut_e, 3)})
+
+    return {"removed": list(reversed(removed)), "count": len(removed)}
+
+
+# ── apply_multicam_cuts ───────────────────────────────────────────────────────
+
+async def _apply_multicam_cuts(arguments: dict) -> dict:
+    cuts          = arguments["cuts"]           # [{time, track}]
+    camera_tracks = [int(t) for t in arguments["camera_tracks"]]
+
+    if not cuts:
+        raise ValueError("cuts list is empty")
+    cuts = sorted(cuts, key=lambda c: float(c["time"]))
+
+    # Fetch project to find the overall time range
+    proj   = _call("get_project", {})
+    tracks = proj.get("tracks", [])
+
+    # Determine end time from camera track clips
+    end_time = 0.0
+    for ct in camera_tracks:
+        if ct < len(tracks):
+            for cl in tracks[ct].get("clips", []):
+                end_time = max(end_time, float(cl["end"]))
+
+    if end_time == 0.0:
+        raise ValueError("no clips found on camera_tracks")
+
+    # Build windows: [{start, end, track}]
+    windows = []
+    for i, cut in enumerate(cuts):
+        t_start = float(cut["time"])
+        t_end   = float(cuts[i + 1]["time"]) if i + 1 < len(cuts) else end_time
+        windows.append({"start": t_start, "end": t_end, "track": int(cut["track"])})
+
+    # All split times (exclude 0 and end_time)
+    split_times = sorted({float(c["time"]) for c in cuts if float(c["time"]) > 0.001})
+    split_times = [t for t in split_times if t < end_time - 0.02]
+
+    # Phase 1: split all camera clips at every cut time (forward order)
+    for t in split_times:
+        for ct in camera_tracks:
+            proj2    = _call("get_project", {})
+            tr_clips = proj2["tracks"][ct]["clips"] if ct < len(proj2["tracks"]) else []
+            clip_at  = next((i for i, cl in enumerate(tr_clips)
+                             if float(cl["start"]) < t < float(cl["end"])), None)
+            if clip_at is not None:
+                _call("split_clip", {"track": ct, "clip": clip_at, "time": t})
+
+    # Phase 2: delete unwanted segments back-to-front
+    deleted = 0
+    for w in reversed(windows):
+        w_start  = w["start"]
+        w_end    = w["end"]
+        keep_trk = w["track"]
+
+        for ct in camera_tracks:
+            if ct == keep_trk:
+                continue
+            proj2    = _call("get_project", {})
+            tr_clips = proj2["tracks"][ct]["clips"] if ct < len(proj2["tracks"]) else []
+
+            # Find segment(s) fully within [w_start, w_end]
+            segs = [i for i, cl in enumerate(tr_clips)
+                    if float(cl["start"]) >= w_start - 0.02
+                    and float(cl["end"]) <= w_end + 0.02]
+            for seg_idx in reversed(segs):
+                _call("delete_clip", {"track": ct, "clip": seg_idx})
+                deleted += 1
+
+    return {"windows": windows, "deleted_count": deleted}
+
+
 @server.call_tool()
 async def call_tool(name: str, arguments: dict) -> list[TextContent]:
+    if name == "remove_silence":
+        result = await _remove_silence(arguments)
+        return [TextContent(type="text", text=json.dumps(result, indent=2))]
+    if name == "cut_filler_words":
+        result = await _cut_filler_words(arguments)
+        return [TextContent(type="text", text=json.dumps(result, indent=2))]
+    if name == "apply_multicam_cuts":
+        result = await _apply_multicam_cuts(arguments)
+        return [TextContent(type="text", text=json.dumps(result, indent=2))]
     if name == "find_audio_cue":
         result = await _find_audio_cue(arguments)
         return [TextContent(type="text", text=json.dumps(result, indent=2))]
