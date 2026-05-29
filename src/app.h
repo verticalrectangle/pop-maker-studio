@@ -5,6 +5,7 @@
 #include <string>
 #include <vector>
 #include <chrono>
+#include <map>
 #include <unordered_map>
 #include <set>
 #include <array>
@@ -436,6 +437,7 @@ struct AppState {
     std::string words_json_path;    // <stem>_words.json
     std::string segments_json_path; // <stem>_segments.json
     std::vector<WordEntry> words_cache; // flat word list loaded from words_json_path
+    std::map<int, std::string> lyrics_edits; // key: int(word.start * fps), value: edited word text
 
     // chapter markers (sorted by time)
     std::vector<Marker> markers;

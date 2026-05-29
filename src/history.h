@@ -13,6 +13,7 @@ struct TimelineSnapshot {
     AnimStyle          style          = AnimStyle::Block;
     int                font_weight    = 900;
     OutputFormat       format         = OutputFormat::Vertical;
+    std::map<int, std::string> lyrics_edits;
 };
 
 // Push the current state onto the history stack with a descriptive action name.

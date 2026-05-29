@@ -7,7 +7,7 @@
 // ── Binary serialization helpers ──────────────────────────────────────────────
 
 static const uint32_t MAGIC   = 0x534D5001u; // "PMS\x01"
-static const uint32_t VERSION = 32u;
+static const uint32_t VERSION = 33u;
 
 struct Writer {
     std::ofstream f;
@@ -430,6 +430,13 @@ bool project_save(const AppState& state, const std::string& path) {
         w.pod(m.color);
     }
 
+    // v33: lyrics word edits
+    w.pod((uint32_t)state.lyrics_edits.size());
+    for (auto& [k, v] : state.lyrics_edits) {
+        w.pod(k);
+        w.str(v);
+    }
+
     return w.ok;
 }
 
@@ -503,6 +510,16 @@ bool project_load(AppState& state, const std::string& path) {
             m.label = r.str();
             m.color = r.pod<uint32_t>();
             state.markers.push_back(std::move(m));
+        }
+    }
+
+    // v33: lyrics word edits
+    if (version >= 33u) {
+        uint32_t ne = r.pod<uint32_t>();
+        for (uint32_t i = 0; i < ne && r.ok; ++i) {
+            int k = r.pod<int>();
+            std::string v = r.str();
+            state.lyrics_edits[k] = std::move(v);
         }
     }
 

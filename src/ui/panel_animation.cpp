@@ -223,9 +223,9 @@ void generate_typography(AppState& state) {
     auto grouped = from_segments ? raw
                                  : group_words(raw, grouping, pr->custom_n, pr->pause_gap, pr->max_words);
 
-    // Per-clip word data (for karaoke)
+    // Per-clip word data (always needed for edit replay; karaoke also uses it)
     std::vector<WordEntry> all_words;
-    if (!from_segments && pr->karaoke) {
+    if (!from_segments) {
         for (auto& w : raw) {
             WordEntry we; we.text = w.text; we.start = w.start; we.end = w.end;
             all_words.push_back(we);
@@ -252,12 +252,14 @@ void generate_typography(AppState& state) {
             c.sub_pos_x = 0.1f  + hash2 * 0.8f;
         }
 
-        if (pr->karaoke && !all_words.empty()) {
+        if (!all_words.empty()) {
             c.words.clear();
             for (auto& we : all_words)
                 if (we.start >= c.start - 0.001f && we.end <= c.end + 0.001f)
                     c.words.push_back(we);
         }
+
+        apply_lyrics_edits(state, c);
 
         typo_track->clips.push_back(c);
     }

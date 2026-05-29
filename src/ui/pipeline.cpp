@@ -350,6 +350,44 @@ void load_words_cache(AppState& state) {
     } catch (...) {}
 }
 
+// Split a string on ASCII whitespace into tokens.
+static std::vector<std::string> split_words(const std::string& s) {
+    std::vector<std::string> out;
+    size_t i = 0;
+    while (i < s.size()) {
+        while (i < s.size() && (s[i] == ' ' || s[i] == '\t' || s[i] == '\n' || s[i] == '\r')) ++i;
+        if (i >= s.size()) break;
+        size_t j = i;
+        while (j < s.size() && s[j] != ' ' && s[j] != '\t' && s[j] != '\n' && s[j] != '\r') ++j;
+        out.push_back(s.substr(i, j - i));
+        i = j;
+    }
+    return out;
+}
+
+void apply_lyrics_edits(AppState& state, Clip& c) {
+    if (state.lyrics_edits.empty() || c.words.empty()) return;
+    auto tokens = split_words(c.text);
+    if (tokens.size() != c.words.size()) return;  // mismatched grouping — skip
+    bool changed = false;
+    for (int i = 0; i < (int)c.words.size(); ++i) {
+        int frame = (int)(c.words[i].start * (float)state.fps);
+        auto it = state.lyrics_edits.find(frame);
+        if (it != state.lyrics_edits.end() && it->second != tokens[i]) {
+            tokens[i]       = it->second;
+            c.words[i].text = it->second;
+            changed = true;
+        }
+    }
+    if (changed) {
+        c.text.clear();
+        for (int i = 0; i < (int)tokens.size(); ++i) {
+            if (i) c.text += ' ';
+            c.text += tokens[i];
+        }
+    }
+}
+
 // Load word JSON and apply current grouping mode.
 // generate_typography is defined in panel_animation.cpp, declared in panel_animation.h
 
@@ -462,6 +500,7 @@ void apply_subtitle_mode(AppState& state) {
             for (auto& we : all_words)
                 if (we.start >= c.start - 0.001f && we.end <= c.end + 0.001f)
                     c.words.push_back(we);
+            apply_lyrics_edits(state, c);
         }
 
         Track* lyrics = nullptr;

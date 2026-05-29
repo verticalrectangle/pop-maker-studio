@@ -14,6 +14,7 @@ static void capture(TimelineSnapshot& snap, const AppState& state) {
     snap.style          = state.style;
     snap.font_weight    = state.font_weight;
     snap.format         = state.format;
+    snap.lyrics_edits   = state.lyrics_edits;
 }
 
 static void restore(AppState& state, const TimelineSnapshot& snap) {
@@ -25,6 +26,7 @@ static void restore(AppState& state, const TimelineSnapshot& snap) {
     state.style          = snap.style;
     state.font_weight    = snap.font_weight;
     state.format         = snap.format;
+    state.lyrics_edits   = snap.lyrics_edits;
 }
 
 void history_push(const AppState& state, const std::string& action) {

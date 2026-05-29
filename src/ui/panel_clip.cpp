@@ -30,6 +30,20 @@ namespace fs = std::filesystem;
 extern ImFont* g_font_bold;
 extern ImFont* g_font_black;
 
+static std::vector<std::string> split_words_panel(const std::string& s) {
+    std::vector<std::string> out;
+    size_t i = 0;
+    while (i < s.size()) {
+        while (i < s.size() && (unsigned char)s[i] <= ' ') ++i;
+        if (i >= s.size()) break;
+        size_t j = i;
+        while (j < s.size() && (unsigned char)s[j] > ' ') ++j;
+        out.push_back(s.substr(i, j - i));
+        i = j;
+    }
+    return out;
+}
+
 // Text edit state — declared extern in panel_clip.h
 char s_edit_buf[512] = {};
 bool s_edit_focus_next = false;
@@ -844,8 +858,26 @@ void panel_clip(AppState& state, float w) {
                     ImGuiInputTextFlags_EnterReturnsTrue))
                 clip.text = s_edit_buf;
             if (ImGui::IsItemDeactivated()) {
-                if (clip.text != s_edit_buf) history_push(state, "Edit lyrics text");
-                clip.text = s_edit_buf;
+                std::string new_text = s_edit_buf;
+                if (new_text != clip.text) {
+                    // Diff against original word entries to record which words changed.
+                    // Only store when token count matches — structural edits (adding/
+                    // removing words) can't be reliably replayed across regroupings.
+                    if (!clip.words.empty()) {
+                        auto tokens = split_words_panel(new_text);
+                        if (tokens.size() == clip.words.size()) {
+                            for (int wi = 0; wi < (int)clip.words.size(); ++wi) {
+                                if (tokens[wi] != clip.words[wi].text) {
+                                    int frame = (int)(clip.words[wi].start * (float)state.fps);
+                                    state.lyrics_edits[frame] = tokens[wi];
+                                    clip.words[wi].text = tokens[wi];
+                                }
+                            }
+                        }
+                    }
+                    history_push(state, "Edit lyrics text");
+                }
+                clip.text = new_text;
             }
             ImGui::PopStyleColor(2);
             ImGui::Dummy({0.f, 4.f});

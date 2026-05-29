@@ -12,6 +12,9 @@ std::vector<Clip> parse_srt(const std::string& path);
 void apply_subtitle_mode(AppState& state);
 void apply_subtitle_pipeline(AppState& state);
 void save_all_srts(AppState& state);
+// Apply stored word edits to a freshly-grouped lyrics clip. Matches by word
+// start frame (int(word.start * fps)). Call after clip.words is populated.
+void apply_lyrics_edits(AppState& state, Clip& c);
 
 // ── File import ───────────────────────────────────────────────────────────────
 void import_file(AppState& state, const std::string& path);
