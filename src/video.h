@@ -140,6 +140,28 @@ uintptr_t video_adj_preview_texture(int unique_id,
 // Reads container header only — safe to call on the main thread, < 100 ms.
 float video_probe_duration(const std::string& path);
 
+struct MediaFileInfo {
+    double duration    = 0.0;
+    int    width       = 0;
+    int    height      = 0;
+    double fps         = 0.0;
+    bool   has_video   = false;
+    bool   has_audio   = false;
+    std::string video_codec;
+    std::string audio_codec;
+    int    sample_rate = 0;
+    int    channels    = 0;
+    std::string error;
+};
+MediaFileInfo video_probe_file(const std::string& path);
+
+// Extract a time segment from src into dst via stream-copy (no re-encode).
+// Returns an empty string on success, or an error message on failure.
+// dst should be a .webm or .mkv path; the container is inferred from the extension.
+std::string video_extract_segment(const std::string& src,
+                                  double start_sec, double end_sec,
+                                  const std::string& dst);
+
 // Browser thumbnail cache: load any JPEG/PNG file as a GL texture.
 // Returns 0 if the file does not exist yet. Textures are cached by path
 // for the session and never freed (one texture per source file, ~few KB each).

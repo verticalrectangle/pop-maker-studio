@@ -4,3 +4,5 @@ build/
 *.so
 *.d
 build_debug/
+code-search/chroma_db/
+code-search/.venv/

@@ -7,6 +7,10 @@
     "vr-docs": {
       "command": "/home/alexis/dev/vertrectdirectory/.venv/bin/python3",
       "args": ["/home/alexis/dev/vertrectdirectory/server.py"]
+    },
+    "pms-code-search": {
+      "command": "/home/alexis/dev/pop-maker-studio/code-search/.venv/bin/python3",
+      "args": ["/home/alexis/dev/pop-maker-studio/code-search/server.py"]
     }
   }
 }

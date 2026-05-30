@@ -9,8 +9,14 @@
 #include "scene_detect.h"
 #include "vision_caption.h"
 #include "vision_download.h"
+#include "video.h"
 #include "generated/fx_clip_set_dispatch.h"
+#include "generated/fx_type_list.h"
 #include "json.hpp"
+
+static const char* k_gen_fx_names[] = {
+#include "generated/fx_gen_names.h"
+};
 
 #include <sys/socket.h>
 #include <sys/un.h>
@@ -141,53 +147,61 @@ static FXType parse_fx_type(const std::string& s) {
     if (s == "vhs")        return FXType::VHS;
     if (s == "datamosh")   return FXType::Datamosh;
     if (s == "chroma_key") return FXType::ChromaKey;
+    if (s == "ken_burns")  return FXType::KenBurns;
+    for (int i = 0; i < k_gen_fx_count; ++i)
+        if (s == k_gen_fx_names[i]) return k_gen_fx_types[i];
     return FXType::Grade;
 }
 
 // Set fx-specific params on an Effect clip from a string-keyed params object.
-// Covers all built-in FX types; returns false and sets err for unknown keys.
-static bool apply_effect_params(Clip& cl, const json& params, std::string& err) {
+// fx_id is the snake_case type name (e.g. "mirror_tunnel") used to dispatch shader params.
+static bool apply_effect_params(Clip& cl, const json& params,
+                                const std::string& fx_id, std::string& err) {
     for (auto& [k, v] : params.items()) {
         if (!v.is_number()) { err = "param '" + k + "' must be a number"; return false; }
         float fv = v.get<float>();
         // Grade
-        if (k == "brightness")   { cl.fx_color_on = true; cl.fx_brightness  = fv; }
-        else if (k == "contrast")     { cl.fx_color_on = true; cl.fx_contrast    = fv; }
-        else if (k == "saturation")   { cl.fx_color_on = true; cl.fx_saturation  = fv; }
-        else if (k == "hue")          { cl.fx_color_on = true; cl.fx_hue         = fv; }
+        if      (k == "brightness")              { cl.fx_color_on = true; cl.fx_brightness  = fv; }
+        else if (k == "contrast")                { cl.fx_color_on = true; cl.fx_contrast    = fv; }
+        else if (k == "saturation")              { cl.fx_color_on = true; cl.fx_saturation  = fv; }
+        else if (k == "hue")                     { cl.fx_color_on = true; cl.fx_hue         = fv; }
         // Blur
-        else if (k == "blur")         { cl.fx_blur_on  = true; cl.fx_blur        = fv; }
+        else if (k == "blur")                    { cl.fx_blur_on  = true; cl.fx_blur        = fv; }
         // Vignette
-        else if (k == "vignette")     { cl.fx_vignette_on = true; cl.fx_vignette = fv; }
+        else if (k == "vignette")                { cl.fx_vignette_on = true; cl.fx_vignette = fv; }
         // Text override
-        else if (k == "opacity_mul")  { cl.fx_text_on  = true; cl.fx_opacity_mul = fv; }
-        else if (k == "scale_mul")    { cl.fx_text_on  = true; cl.fx_scale_mul   = fv; }
+        else if (k == "opacity_mul")             { cl.fx_text_on = true; cl.fx_opacity_mul  = fv; }
+        else if (k == "scale_mul")               { cl.fx_text_on = true; cl.fx_scale_mul    = fv; }
         // Glitch
-        else if (k == "glitch_chroma")            { cl.fx_glitch_chroma            = fv; }
-        else if (k == "glitch_jitter")            { cl.fx_glitch_jitter            = fv; }
-        else if (k == "glitch_corruption")        { cl.fx_glitch_corruption        = fv; }
-        else if (k == "glitch_corruption_bleed")  { cl.fx_glitch_corruption_bleed  = fv; }
+        else if (k == "glitch_chroma")           { cl.fx_glitch_chroma           = fv; }
+        else if (k == "glitch_jitter")           { cl.fx_glitch_jitter           = fv; }
+        else if (k == "glitch_corruption")       { cl.fx_glitch_corruption       = fv; }
+        else if (k == "glitch_corruption_bleed") { cl.fx_glitch_corruption_bleed = fv; }
         // ZoomPunch
-        else if (k == "zoom_strength") { cl.fx_zoom_strength = fv; }
-        else if (k == "zoom_decay")    { cl.fx_zoom_decay    = fv; }
-        else if (k == "zoom_shake")    { cl.fx_zoom_shake    = fv; }
+        else if (k == "zoom_strength")           { cl.fx_zoom_strength = fv; }
+        else if (k == "zoom_decay")              { cl.fx_zoom_decay    = fv; }
+        else if (k == "zoom_shake")              { cl.fx_zoom_shake    = fv; }
         // LightLeak
-        else if (k == "leak_intensity") { cl.fx_leak_intensity = fv; }
-        else if (k == "leak_speed")     { cl.fx_leak_speed     = fv; }
+        else if (k == "leak_intensity")          { cl.fx_leak_intensity = fv; }
+        else if (k == "leak_speed")              { cl.fx_leak_speed     = fv; }
         // VHS
-        else if (k == "vhs_noise")    { cl.fx_vhs_noise    = fv; }
-        else if (k == "vhs_bleed")    { cl.fx_vhs_bleed    = fv; }
-        else if (k == "vhs_tracking") { cl.fx_vhs_tracking = fv; }
+        else if (k == "vhs_noise")               { cl.fx_vhs_noise    = fv; }
+        else if (k == "vhs_bleed")               { cl.fx_vhs_bleed    = fv; }
+        else if (k == "vhs_tracking")            { cl.fx_vhs_tracking = fv; }
         // Datamosh
-        else if (k == "datamosh_intensity") { cl.fx_datamosh_intensity = fv; }
-        else if (k == "datamosh_spread")    { cl.fx_datamosh_spread    = fv; }
+        else if (k == "datamosh_intensity")      { cl.fx_datamosh_intensity = fv; }
+        else if (k == "datamosh_spread")         { cl.fx_datamosh_spread    = fv; }
         // ChromaKey
-        else if (k == "chroma_key_r")         { cl.fx_chroma_key_r         = fv; }
-        else if (k == "chroma_key_g")         { cl.fx_chroma_key_g         = fv; }
-        else if (k == "chroma_key_b")         { cl.fx_chroma_key_b         = fv; }
-        else if (k == "chroma_key_threshold") { cl.fx_chroma_key_threshold = fv; }
-        else if (k == "chroma_key_softness")  { cl.fx_chroma_key_softness  = fv; }
-        else { err = "unknown effect param: " + k; return false; }
+        else if (k == "chroma_key_r")            { cl.fx_chroma_key_r         = fv; }
+        else if (k == "chroma_key_g")            { cl.fx_chroma_key_g         = fv; }
+        else if (k == "chroma_key_b")            { cl.fx_chroma_key_b         = fv; }
+        else if (k == "chroma_key_threshold")    { cl.fx_chroma_key_threshold = fv; }
+        else if (k == "chroma_key_softness")     { cl.fx_chroma_key_softness  = fv; }
+        // All generated shader FX params — dispatched by fx_id + param name
+        else if (!fx_clip_set_param(cl, fx_id, k, fv)) {
+            err = "unknown param '" + k + "' for fx_type '" + fx_id + "'";
+            return false;
+        }
     }
     return true;
 }
@@ -507,6 +521,41 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         return r;
     }
 
+    if (method == "extract_clip_segment") {
+        std::string src = params.value("src", "");
+        std::string dst = params.value("dst", "");
+        double start    = params.value("start", 0.0);
+        double end      = params.value("end", 0.0);
+        if (src.empty()) { err = "src required"; return {}; }
+        if (dst.empty()) { err = "dst required"; return {}; }
+        if (end <= start) { err = "end must be greater than start"; return {}; }
+        std::string extract_err = video_extract_segment(src, start, end, dst);
+        if (!extract_err.empty()) { err = extract_err; return {}; }
+        json r;
+        r["dst"]      = dst;
+        r["duration"] = end - start;
+        return r;
+    }
+
+    if (method == "get_media_info") {
+        std::string path = params.value("path", "");
+        if (path.empty()) { err = "path required"; return {}; }
+        MediaFileInfo mi = video_probe_file(path);
+        if (!mi.error.empty()) { err = mi.error; return {}; }
+        json r;
+        r["duration"]    = mi.duration;
+        r["width"]       = mi.width;
+        r["height"]      = mi.height;
+        r["fps"]         = mi.fps;
+        r["has_video"]   = mi.has_video;
+        r["has_audio"]   = mi.has_audio;
+        r["video_codec"] = mi.video_codec;
+        r["audio_codec"] = mi.audio_codec;
+        r["sample_rate"] = mi.sample_rate;
+        r["channels"]    = mi.channels;
+        return r;
+    }
+
     if (method == "get_transcript") {
         json r;
         if (state.words_json_path.empty()) { r["status"] = "idle"; return r; }
@@ -666,6 +715,8 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         cl.text  = text;
         if (cl.clip_type == ClipType::Video || cl.clip_type == ClipType::Audio)
             cl.source_id = text;
+        if ((cl.clip_type == ClipType::Video || cl.clip_type == ClipType::Audio) && state.audio_path.empty())
+            state.audio_path = state.vocals_path = text;
         state.tracks[ti].clips.push_back(cl);
         int new_ci = (int)state.tracks[ti].clips.size() - 1;
         if (cl.clip_type == ClipType::Video) state.proxy_scan_needed = true;
@@ -881,6 +932,14 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         return r;
     }
 
+    if (method == "set_audio_path") {
+        std::string path = params.value("path", "");
+        if (path.empty()) { err = "path required"; return {}; }
+        state.audio_path   = path;
+        state.vocals_path  = path;
+        return json::object();
+    }
+
     if (method == "trigger_pipeline") {
         std::string mode_s = params.value("mode", "both");
         PipelineMode mode = PipelineMode::Both;
@@ -967,7 +1026,7 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         cl.end       = end;
 
         if (params.contains("params") && params["params"].is_object()) {
-            if (!apply_effect_params(cl, params["params"], err)) return {};
+            if (!apply_effect_params(cl, params["params"], fx_s, err)) return {};
         }
 
         state.tracks[ti].clips.push_back(cl);
@@ -991,14 +1050,32 @@ static json dispatch(AppState& state, const std::string& method, const json& par
             float dur = end - start;
             for (auto& e : params["effects"]) {
                 Clip se;
-                se.clip_type  = ClipType::Effect;
-                se.fx_type    = parse_fx_type(e.value("fx_type", "grade"));
-                se.rel_start  = e.value("rel_start", 0.f);
-                se.rel_end    = e.value("rel_end",   0.f);
-                // clamp rel_end to parent duration
+                std::string fxt = e.value("fx_type", "grade");
+                se.rel_start = e.value("rel_start", 0.f);
+                se.rel_end   = e.value("rel_end",   0.f);
                 if (se.rel_end > dur) se.rel_end = dur;
-                if (e.contains("params") && e["params"].is_object()) {
-                    if (!apply_effect_params(se, e["params"], err)) return {};
+
+                if (fxt == "body_fx") {
+                    se.clip_type = ClipType::BodyFX;
+                    std::string bname = e.value("body_fx_type", "NeonOutline");
+                    int n_body = body_fx_info_count();
+                    const BodyFXInfo* infos = body_fx_info_list();
+                    bool found = false;
+                    for (int i = 0; i < n_body; ++i) {
+                        if (infos[i].name == bname) {
+                            se.body_fx_type = infos[i].type;
+                            for (int pi = 0; pi < 4; ++pi)
+                                se.body_fx_params[pi] = pi < infos[i].n_params ? infos[i].params[pi].default_val : 0.5f;
+                            found = true; break;
+                        }
+                    }
+                    if (!found) { err = "unknown body_fx_type: " + bname; return {}; }
+                } else {
+                    se.clip_type = ClipType::Effect;
+                    se.fx_type   = parse_fx_type(fxt);
+                    if (e.contains("params") && e["params"].is_object()) {
+                        if (!apply_effect_params(se, e["params"], fxt, err)) return {};
+                    }
                 }
                 brick.fx_chain.push_back(se);
             }
@@ -1018,6 +1095,16 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         int ti = params.value("track", -1);
         if (!check_track(state, ti, err)) return {};
         state.tracks[ti].name = params.value("name", state.tracks[ti].name);
+        return json::object();
+    }
+
+    if (method == "set_format") {
+        std::string fmt = params.value("format", "");
+        if      (fmt == "vertical"   || fmt == "9:16") state.format = OutputFormat::Vertical;
+        else if (fmt == "horizontal" || fmt == "16:9") state.format = OutputFormat::Horizontal;
+        else if (fmt == "square"     || fmt == "1:1")  state.format = OutputFormat::Square;
+        else { err = "unknown format: " + fmt + " (use vertical/9:16, horizontal/16:9, square/1:1)"; return {}; }
+        history_push(state, "Set format: " + fmt);
         return json::object();
     }
 

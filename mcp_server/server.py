@@ -25,6 +25,7 @@ import socket
 import threading
 import time
 import uuid
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -70,7 +71,7 @@ def _get_sock() -> socket.socket:
 def _call(method: str, params: dict | None = None) -> Any:
     """Send one IPC request and return the result, or raise on error."""
     req_id = str(uuid.uuid4())
-    payload = json.dumps({"id": req_id, "method": method, "params": params or {}}) + "\n"
+    payload = json.dumps({"id": req_id, "method": method, "params": params or {}}, ensure_ascii=False) + "\n"
 
     with _sock_lock:
         global _sock
@@ -94,6 +95,15 @@ def _call(method: str, params: dict | None = None) -> Any:
                 _sock = None
                 if attempt == 1:
                     raise
+
+
+@contextmanager
+def _batch(label: str):
+    _call("begin_batch", {"label": label})
+    try:
+        yield
+    finally:
+        _call("end_batch", {})
 
 
 # ── Effect manifest (codegen'd) ────────────────────────────────────────────────
@@ -142,6 +152,20 @@ async def list_tools() -> list[Tool]:
                 "(shadow/stroke/glow/bg), and karaoke settings. Read-only — no batch needed."
             ),
             inputSchema={"type": "object", "properties": {}},
+        ),
+        Tool(
+            name="get_media_info",
+            description=(
+                "Probe a media file and return its codec/format metadata: duration (seconds), "
+                "width, height, fps, has_video, has_audio, video_codec, audio_codec, "
+                "sample_rate, channels. Use this to diagnose audio/video stream issues "
+                "before adding a clip. Read-only — no batch needed."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {"path": {"type": "string", "description": "Absolute path to the media file"}},
+                "required": ["path"],
+            },
         ),
         Tool(
             name="get_pipeline_status",
@@ -417,7 +441,8 @@ async def list_tools() -> list[Tool]:
                 "Start the ML processing pipeline (vocal separation + Whisper transcription + "
                 "CTC alignment). Returns immediately — poll get_pipeline_status until "
                 "stage is 'done' or 'error'. mode: both | transcribe_only | separate_only. "
-                "Requires an audio file to be loaded. Requires batch."
+                "Add a video or audio clip first — audio_path is set automatically from the first clip. "
+                "Requires batch. (Use find_and_add_clip to do all of this in one step.)"
             ),
             inputSchema={
                 "type": "object",
@@ -472,18 +497,20 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="add_multifx_brick",
             description=(
-                "Add a Multi-FX brick — a single timeline brick containing an ordered chain of "
-                "sub-effects, each with its own timing window inside the brick's span. "
-                "Use this instead of multiple overlapping add_effect_brick calls when effects "
-                "share the same time range or partially overlap.\n\n"
+                "Add a Multi-FX brick containing an ordered chain of sub-effects. "
+                "Use instead of multiple overlapping add_effect_brick calls.\n\n"
                 "GLASS behaviour: if placed on the same track as a video/audio clip it overlaps, "
-                "it becomes a 'glass' FX and applies only to that specific clip before compositing. "
-                "Place it on a separate FX track for global (all-layers) effect.\n\n"
+                "it becomes a 'glass' FX and applies only to that clip. "
+                "Place on a separate FX track for a global (all-layers) effect.\n\n"
                 "effects array: each entry is an object with:\n"
-                "  fx_type (required) — same options as add_effect_brick\n"
+                "  fx_type (required) — any fx_type from add_effect_brick, or 'body_fx'\n"
+                "  body_fx_type — required when fx_type is 'body_fx' (see add_body_fx_brick for valid names)\n"
                 "  rel_start (default 0) — seconds from brick start\n"
                 "  rel_end   (default 0 = until brick end) — seconds from brick start\n"
-                "  params — same effect-specific param dict as add_effect_brick\n\n"
+                "  params — same param dict as add_effect_brick for the given fx_type\n\n"
+                "⚠️ BodyFX constraint: if any sub-effect has fx_type 'body_fx', the MultiFX brick "
+                "MUST be placed on the same track as a video clip (glass mode only). "
+                "BodyFX requires a sibling video clip to source the mask from.\n\n"
                 "Requires batch."
             ),
             inputSchema={
@@ -498,11 +525,8 @@ async def list_tools() -> list[Tool]:
                         "items": {
                             "type": "object",
                             "properties": {
-                                "fx_type": {
-                                    "type": "string",
-                                    "enum": ["grade", "blur", "vignette", "glitch", "zoom_punch",
-                                             "lut", "light_leak", "vhs", "datamosh", "chroma_key"],
-                                },
+                                "fx_type": {"type": "string", "description": "Any fx_type from add_effect_brick, or 'body_fx'"},
+                                "body_fx_type": {"type": "string", "description": "Required when fx_type is 'body_fx'"},
                                 "rel_start": {"type": "number", "default": 0},
                                 "rel_end": {"type": "number", "default": 0, "description": "0 = until brick end"},
                                 "params": {"type": "object"},
@@ -537,37 +561,79 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="add_effect_brick",
             description=(
-                "Add a standalone FX brick (ClipType::Effect) to a track. "
-                "FX bricks overlay the video render — they don't appear in the clip list "
-                "the same way text/video do, but they affect everything below them on the timeline.\n\n"
-                "fx_type options: grade | blur | vignette | glitch | zoom_punch | lut | "
-                "light_leak | vhs | datamosh | chroma_key | ken_burns\n\n"
-                "params for each type (use these exact key names):\n"
-                "  grade: brightness (-1–1), contrast (0–2), saturation (0–2), hue (0–1)\n"
-                "  blur: blur (0–1)\n"
-                "  vignette: vignette (0–1)\n"
-                "  glitch: glitch_chroma (0–20), glitch_jitter (0–1), glitch_corruption (0–1), glitch_corruption_bleed (0–1)\n"
-                "  zoom_punch: zoom_strength (0–0.5), zoom_decay (0.01–1), zoom_shake (0–1)\n"
-                "  light_leak: leak_intensity (0–1), leak_speed (0–3)\n"
-                "  vhs: vhs_noise (0–1), vhs_bleed (0–20), vhs_tracking (0–1)\n"
-                "  datamosh: datamosh_intensity (0–1), datamosh_spread (0–1)\n"
-                "  chroma_key: chroma_key_r, chroma_key_g, chroma_key_b (0–1 each), chroma_key_threshold (0–1), chroma_key_softness (0–1)\n"
-                "  lut: (no numeric params — set lut_path via set_clip_prop instead)\n"
-                "  ken_burns: start_scale (0.5–4.0), end_scale (0.5–4.0), start_x (0–1), start_y (0–1), end_x (0–1), end_y (0–1)\n"
-                "    Animated zoom & pan — push in or pull back across the clip duration.\n"
-                "    Scale 1.0=fit, 1.3=30% zoom. x/y are canvas fractions (0.5=center).\n\n"
+                "Add a standalone FX brick to a track. Affects everything below on the timeline "
+                "(or only the sibling video clip if on the same track — glass mode).\n\n"
+                "fx_type — use the exact snake_case name. All params are floats. "
+                "'body_fx' is NOT valid here — use add_body_fx_brick instead.\n\n"
+                "BASIC: grade (brightness,contrast,saturation,hue) | blur (blur) | vignette (vignette) | "
+                "glitch (glitch_chroma 0-20,glitch_jitter,glitch_corruption,glitch_corruption_bleed) | "
+                "zoom_punch (zoom_strength,zoom_decay,zoom_shake) | light_leak (leak_intensity,leak_speed) | "
+                "vhs (vhs_noise,vhs_bleed,vhs_tracking) | datamosh (datamosh_intensity,datamosh_spread) | "
+                "chroma_key (chroma_key_r/g/b,chroma_key_threshold,chroma_key_softness) | "
+                "lut (no params—set lut_path via set_clip_prop) | "
+                "ken_burns (start_scale,end_scale,start_x,start_y,end_x,end_y)\n\n"
+                "GLITCH: pixelate (amount,size 1-64) | glitch_block (amount,intensity,speed) | "
+                "interlace_glitch (amount,intensity,speed) | data_corrupt (amount,density,block_size,intensity) | "
+                "double_ghost (amount,offset,opacity,angle) | rgb_split_wave (amount,amplitude,frequency,speed) | "
+                "bit_crush (amount,levels 2-32,dither) | tv_static (amount,intensity,color_mix) | "
+                "dither_bayer (amount,levels,scale,color) | vhs_dropout (amount,density,speed)\n\n"
+                "FILM: film_grain (amount,intensity,size) | old_film (amount,sepia,scratch,flicker) | "
+                "lomo (amount,vignette,saturation,fade) | super8_film (amount,grain,gate,fade) | "
+                "daguerreotype (amount,tone,vignette,scratch) | bleach_bypass (amount) | "
+                "film_halation (amount,threshold,radius,red_shift) | film_burn (amount,intensity,speed,edge)\n\n"
+                "COLOR: chromatic_aberration (amount) | duotone (amount,shadow_r/g/b,highlight_r/g/b) | "
+                "gradient_map (amount,hue1,hue2) | cross_process (amount,contrast) | "
+                "technicolor (amount,saturation,contrast,warmth) | kodachrome (amount,saturation,reds,shadows) | "
+                "miami_vice (amount,saturation) | golden_hour (amount,warmth,glow_str,shadow_lift,vignette) | "
+                "split_toning (amount,shadow_hue,hi_hue) | solarize (amount,threshold) | "
+                "warhol_pop (amount,levels,hue_shift,saturation) | cyberpunk_grade (amount,shadow_teal,hi_orange,contrast) | "
+                "sepia_rich (amount,vignette,contrast) | color_burn (amount,hue) | "
+                "horror_grade (amount,desat,red,crush) | desert_gold (amount,warmth,fade,haze) | "
+                "infrared_film (amount,channel_mix,glow,contrast) | x_ray (amount,contrast,blue_tint) | "
+                "vintage_negative (amount,orange_mask,contrast,grain) | "
+                "zone_system_bw (amount,zones,contrast,grain,paper_white) | "
+                "thermal (amount) | night_vision (amount,noise,gain) | holographic (amount,speed) | "
+                "rgb_split (amount,intensity,speed) | color_dodge (amount,intensity,hue,glow) | "
+                "sketch (amount,invert) | emboss_relief (amount,angle,colorize)\n\n"
+                "LIGHT: neon_glow (amount,width) | god_rays (amount,intensity,decay,cx,cy) | "
+                "aurora_borealis (amount,intensity,speed,color_shift) | "
+                "starburst_spike (amount,threshold,length,rays) | bokeh_dream (amount,radius,threshold,intensity) | "
+                "neon_edge_glow (amount,threshold,glow,hue) | neon_sign (amount,edge_str,glow_radius,hue_shift,bg_darken) | "
+                "plasma_field (amount,scale,speed,intensity) | fire_edge (amount,intensity,speed,height) | "
+                "laser_grid (amount,grid_size,hue,intensity) | anamorphic_streak (amount,threshold,length,intensity) | "
+                "prism_disperse (amount,spread,intensity) | glitter_dust (amount,density,size,sparkle,color_var) | "
+                "dna_helix (amount,grid_scale,wave_amp,line_width,hue,bg_darken)\n\n"
+                "WARP: fisheye (amount) | twirl (amount,radius) | ripple (amount,frequency,amplitude,speed) | "
+                "wave_warp (amount,freq_x,freq_y,amplitude,speed) | kaleidoscope (amount,segments,rotation,zoom) | "
+                "mirror_fold (amount,axis,vertical) | vortex_distort (amount,scale,speed) | "
+                "barrel_warp (amount,k1,k2,scale) | tilt_shift (amount,focus_y,focus_band,blur_radius,saturation) | "
+                "mirror_tunnel (amount,depth,rotation,zoom) | liquid_chrome (amount,flow,metallic,tint_r,tint_g,tint_b) | "
+                "zoom_blur_rad (amount,intensity,cx,cy) | spin_blur (amount,angle) | "
+                "heat_haze (amount,intensity,speed) | frosted_glass (amount,blur,noise,tint) | "
+                "echo_trails (amount,offset,fade,angle) | "
+                "double_exposure (amount,offset_x,offset_y,scale2,desaturate2,opacity) | "
+                "ice_crystal (amount,scale,refract,tint) | raindrop_refract (amount,density,size,refract_str) | "
+                "oil_paint (amount,radius,sharpness) | watercolor (amount,bleeding,paper,saturation)\n\n"
+                "PATTERN: scanlines (amount,density) | halftone (amount,size) | posterize (amount,levels) | "
+                "crt (amount,curvature,glow) | crt_barrel (amount,distort,corner_dark,rgb_shift,scanline) | "
+                "pixel_mosaic (amount,block_size,color_steps) | ascii_art (amount,char_size,fg_r,fg_g,fg_b,bg_dark) | "
+                "comic_dots (amount,dot_size,ink_threshold,color_levels) | crosshatch (amount,density,thickness,angle) | "
+                "stained_glass (amount,cell_size,border,saturation) | matrix_rain (amount,density,speed,green_mix) | "
+                "pixel_sort (amount,threshold,intensity,direction) | pointillist (amount,dot_size,scatter) | "
+                "scanline_color (amount,line_width,intensity,rgb_sep) | "
+                "contour_map (amount,levels,line_width,line_hue,fill_sat) | "
+                "risograph (amount,hue1,hue2,dot_size,misreg,paper) | "
+                "pencil_sketch (amount,line_str,paper_tone,hatching) | "
+                "long_exposure (amount,threshold,trail,glow) | "
+                "thermal_map (amount,cold_hue,hot_hue,contrast,scanlines) | "
+                "digital_noise (amount,intensity,color_sep,luma_bias)\n\n"
                 "Requires batch."
             ),
             inputSchema={
                 "type": "object",
                 "properties": {
                     "track": {"type": "integer"},
-                    "fx_type": {
-                        "type": "string",
-                        "enum": ["grade", "blur", "vignette", "glitch", "zoom_punch",
-                                 "lut", "light_leak", "vhs", "datamosh", "chroma_key",
-                                 "ken_burns"],
-                    },
+                    "fx_type": {"type": "string", "description": "Snake_case FX type name (see description)"},
                     "start": {"type": "number"},
                     "end": {"type": "number"},
                     "params": {
@@ -640,6 +706,32 @@ async def list_tools() -> list[Tool]:
                 "properties": {
                     "path": {"type": "string", "description": "Absolute path to the video file"},
                     "query": {"type": "string", "description": "Natural-language description of the moment to find"},
+                },
+                "required": ["path", "query"],
+            },
+        ),
+        Tool(
+            name="find_and_add_clip",
+            description=(
+                "Find a specific moment in a video file by searching the transcript, then add "
+                "it to the timeline already trimmed to that segment. Avoids generating a proxy "
+                "for the full file — proxy only generates for the trimmed clip.\n\n"
+                "Workflow (all internal):\n"
+                "  1. Add video to a new track → audio_path auto-set\n"
+                "  2. Run transcription pipeline and wait for completion\n"
+                "  3. Search transcript for query text\n"
+                "  4. Trim the clip to the matched segment (+ context padding)\n\n"
+                "query examples: 'I did not wake up a loser', 'talking about failure', "
+                "'the part where he mentions semiconductors'\n\n"
+                "Returns: {track, clip, start, end, transcript_excerpt, found_at_source}"
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "path":    {"type": "string", "description": "Absolute path to the video file"},
+                    "query":   {"type": "string", "description": "What to search for in the transcript"},
+                    "track":   {"type": "integer", "description": "Track to add the clip to (default 0)"},
+                    "padding": {"type": "number",  "description": "Seconds of context before/after the matched segment (default 5.0)"},
                 },
                 "required": ["path", "query"],
             },
@@ -898,6 +990,27 @@ async def list_tools() -> list[Tool]:
                     "clip":  {"type": "integer", "description": "Clip index of the BodyFX brick"},
                 },
                 "required": ["track", "clip"],
+            },
+        ),
+        Tool(
+            name="set_format",
+            description=(
+                "Set the project canvas format / aspect ratio. Three presets:\n"
+                "  square     — 1:1   1080×1080  (Instagram square)\n"
+                "  vertical   — 9:16  1080×1920  (TikTok / Reels / Shorts)\n"
+                "  horizontal — 16:9  1920×1080  (YouTube / widescreen)\n"
+                "No batch needed."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "format": {
+                        "type": "string",
+                        "enum": ["square", "vertical", "horizontal"],
+                        "description": "square=1:1, vertical=9:16, horizontal=16:9",
+                    },
+                },
+                "required": ["format"],
             },
         ),
     ]
@@ -1584,6 +1697,117 @@ async def _add_body_fx_brick(arguments: dict) -> dict:
     return {"track": track, "clip": clip_idx}
 
 
+# ── find_and_add_clip ─────────────────────────────────────────────────────────
+
+async def _find_and_add_clip(arguments: dict) -> dict:
+    path    = arguments.get("path", "")
+    query   = arguments.get("query", "")
+    track   = int(arguments.get("track", 0))
+    padding = float(arguments.get("padding", 5.0))
+
+    if not path:
+        raise ValueError("path is required")
+    if not query:
+        raise ValueError("query is required")
+
+    # Check for a cached words JSON next to the source file (saved by a previous transcription)
+    p = Path(path)
+    cached_words_path = p.parent / p.stem / f"{p.stem}_words.json"  # convention used by the app
+    words = None
+    if cached_words_path.exists():
+        with open(cached_words_path) as f:
+            words = json.load(f)
+
+    # Fall back to app transcript state if no cache on disk
+    if not words:
+        proj = _call("get_project", {})
+        tr = _call("get_transcript", {})
+        if tr.get("status") == "ready" and proj.get("audio_path", "") == path:
+            words = tr["words"]
+
+    if not words:
+        # No cached transcript — set audio_path directly (no clip in timeline) then transcribe
+        with _batch("find_and_add_clip: set audio path"):
+            _call("set_audio_path", {"path": path})
+
+        with _batch("find_and_add_clip: transcribe"):
+            _call("trigger_pipeline", {"mode": "transcribe_only"})
+
+        for _ in range(3600):
+            await asyncio.sleep(0.5)
+            st = _call("get_pipeline_status", {})
+            if st.get("stage") == "done":
+                break
+            if st.get("stage") == "error":
+                raise ValueError("transcription failed: " + st.get("message", "unknown error"))
+        else:
+            raise TimeoutError("transcription timed out after 30 minutes")
+
+        tr = _call("get_transcript", {})
+        if tr.get("status") != "ready":
+            raise ValueError("transcript not available after pipeline completed")
+        words = tr["words"]
+
+    if not words:
+        raise ValueError("transcript is empty")
+
+    # Sliding window search
+    query_words = set(query.lower().split())
+    best_score, best_start, best_end, best_text = -1.0, 0.0, 0.0, ""
+    window_size = max(len(query_words) * 2, 20)
+
+    for i in range(len(words)):
+        window = words[i:i + window_size]
+        if not window:
+            break
+        text = " ".join(w["word"] for w in window).lower()
+        score = len(query_words & set(text.split())) / len(query_words) if query_words else 0.0
+        if score > best_score:
+            best_score = score
+            best_start = float(window[0]["start"])
+            best_end   = float(window[-1]["end"])
+            best_text  = " ".join(w["word"] for w in window)
+
+    if best_score < 0.3:
+        raise ValueError(f"could not find '{query}' in transcript (best match score: {best_score:.2f})")
+
+    source_start = max(0.0, best_start - padding)
+    source_end   = best_end + padding
+    duration     = source_end - source_start
+
+    # Extract the short segment to a new file so the proxy stays small
+    dst = str(p.parent / p.stem / f"{p.stem}_{int(source_start)}_{int(source_end)}.webm")
+    extract_result = _call("extract_clip_segment", {
+        "src": path, "dst": dst,
+        "start": source_start, "end": source_end,
+    })
+
+    # Ensure the track exists (may already exist if we went through transcription path)
+    proj = _call("get_project", {})
+    while len(proj.get("tracks", [])) <= track:
+        with _batch("find_and_add_clip: add track"):
+            _call("add_track", {"name": f"Track {track}", "position": track})
+        proj = _call("get_project", {})
+
+    with _batch(f"find_and_add_clip: add '{query}'"):
+        clip_result = _call("add_clip", {
+            "track": track, "type": "video",
+            "text": dst, "start": 0, "end": duration,
+        })
+    clip_idx = clip_result["clip"]
+
+    return {
+        "track":              track,
+        "clip":               clip_idx,
+        "start":              0.0,
+        "end":                round(duration, 3),
+        "found_at_source":    round(best_start, 3),
+        "segment_file":       dst,
+        "transcript_excerpt": best_text[:300],
+        "match_score":        round(best_score, 3),
+    }
+
+
 @server.call_tool()
 async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     if name == "remove_silence":
@@ -1612,6 +1836,9 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         return [TextContent(type="text", text=json.dumps(result, indent=2))]
     if name == "process_body_fx_masks":
         result = _call("start_body_fx_process", arguments)
+        return [TextContent(type="text", text=json.dumps(result, indent=2))]
+    if name == "find_and_add_clip":
+        result = await _find_and_add_clip(arguments)
         return [TextContent(type="text", text=json.dumps(result, indent=2))]
     if name == "find_audio_cue":
         result = await _find_audio_cue(arguments)

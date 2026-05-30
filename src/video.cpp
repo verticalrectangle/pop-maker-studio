@@ -946,6 +946,145 @@ float video_probe_duration(const std::string& path) {
     return dur;
 }
 
+MediaFileInfo video_probe_file(const std::string& path) {
+    MediaFileInfo info;
+    AVFormatContext* fc = nullptr;
+    if (avformat_open_input(&fc, path.c_str(), nullptr, nullptr) != 0) {
+        info.error = "cannot open file";
+        return info;
+    }
+    if (avformat_find_stream_info(fc, nullptr) < 0) {
+        avformat_close_input(&fc);
+        info.error = "cannot read stream info";
+        return info;
+    }
+    if (fc->duration != AV_NOPTS_VALUE)
+        info.duration = (double)fc->duration / AV_TIME_BASE;
+
+    for (unsigned i = 0; i < fc->nb_streams; ++i) {
+        AVStream* st = fc->streams[i];
+        AVCodecParameters* cp = st->codecpar;
+        if (cp->codec_type == AVMEDIA_TYPE_VIDEO && !info.has_video) {
+            info.has_video   = true;
+            info.width       = cp->width;
+            info.height      = cp->height;
+            if (st->avg_frame_rate.den > 0)
+                info.fps = av_q2d(st->avg_frame_rate);
+            const AVCodecDescriptor* desc = avcodec_descriptor_get(cp->codec_id);
+            if (desc) info.video_codec = desc->name;
+        } else if (cp->codec_type == AVMEDIA_TYPE_AUDIO && !info.has_audio) {
+            info.has_audio   = true;
+            info.sample_rate = cp->sample_rate;
+            info.channels    = cp->ch_layout.nb_channels;
+            const AVCodecDescriptor* desc = avcodec_descriptor_get(cp->codec_id);
+            if (desc) info.audio_codec = desc->name;
+        }
+    }
+    avformat_close_input(&fc);
+    return info;
+}
+
+std::string video_extract_segment(const std::string& src,
+                                  double start_sec, double end_sec,
+                                  const std::string& dst) {
+    AVFormatContext* in_ctx = nullptr;
+    if (avformat_open_input(&in_ctx, src.c_str(), nullptr, nullptr) < 0)
+        return "cannot open source file";
+    if (avformat_find_stream_info(in_ctx, nullptr) < 0) {
+        avformat_close_input(&in_ctx);
+        return "cannot read source stream info";
+    }
+
+    AVFormatContext* out_ctx = nullptr;
+    if (avformat_alloc_output_context2(&out_ctx, nullptr, nullptr, dst.c_str()) < 0) {
+        avformat_close_input(&in_ctx);
+        return "cannot create output context for: " + dst;
+    }
+
+    // Map streams: copy each stream header into the output
+    std::vector<int> stream_map(in_ctx->nb_streams, -1);
+    int out_stream_idx = 0;
+    for (unsigned i = 0; i < in_ctx->nb_streams; ++i) {
+        AVStream* in_st = in_ctx->streams[i];
+        AVCodecParameters* cp = in_st->codecpar;
+        if (cp->codec_type != AVMEDIA_TYPE_VIDEO &&
+            cp->codec_type != AVMEDIA_TYPE_AUDIO)
+            continue;
+        AVStream* out_st = avformat_new_stream(out_ctx, nullptr);
+        if (!out_st) {
+            avformat_close_input(&in_ctx);
+            avformat_free_context(out_ctx);
+            return "cannot allocate output stream";
+        }
+        if (avcodec_parameters_copy(out_st->codecpar, cp) < 0) {
+            avformat_close_input(&in_ctx);
+            avformat_free_context(out_ctx);
+            return "cannot copy codec parameters";
+        }
+        out_st->codecpar->codec_tag = 0;
+        stream_map[i] = out_stream_idx++;
+    }
+
+    if (!(out_ctx->oformat->flags & AVFMT_NOFILE)) {
+        if (avio_open(&out_ctx->pb, dst.c_str(), AVIO_FLAG_WRITE) < 0) {
+            avformat_close_input(&in_ctx);
+            avformat_free_context(out_ctx);
+            return "cannot open output file: " + dst;
+        }
+    }
+
+    if (avformat_write_header(out_ctx, nullptr) < 0) {
+        avformat_close_input(&in_ctx);
+        if (!(out_ctx->oformat->flags & AVFMT_NOFILE)) avio_closep(&out_ctx->pb);
+        avformat_free_context(out_ctx);
+        return "cannot write output header";
+    }
+
+    // Seek to just before start
+    int64_t seek_ts = (int64_t)(start_sec * AV_TIME_BASE);
+    av_seek_frame(in_ctx, -1, seek_ts, AVSEEK_FLAG_BACKWARD);
+
+    AVPacket* pkt = av_packet_alloc();
+    while (av_read_frame(in_ctx, pkt) >= 0) {
+        int si = pkt->stream_index;
+        if (si < 0 || si >= (int)in_ctx->nb_streams || stream_map[si] < 0) {
+            av_packet_unref(pkt);
+            continue;
+        }
+        AVStream* in_st  = in_ctx->streams[si];
+        AVStream* out_st = out_ctx->streams[stream_map[si]];
+
+        double pts_sec = (pkt->pts != AV_NOPTS_VALUE)
+            ? pkt->pts * av_q2d(in_st->time_base)
+            : start_sec;
+
+        if (pts_sec < start_sec) { av_packet_unref(pkt); continue; }
+        if (pts_sec > end_sec)   { av_packet_unref(pkt); break; }
+
+        // Restamp relative to segment start
+        int64_t offset = av_rescale_q(
+            (int64_t)(start_sec * AV_TIME_BASE), AV_TIME_BASE_Q, in_st->time_base);
+        if (pkt->pts != AV_NOPTS_VALUE) pkt->pts -= offset;
+        if (pkt->dts != AV_NOPTS_VALUE) pkt->dts -= offset;
+        if (pkt->duration > 0)
+            pkt->duration = av_rescale_q(pkt->duration, in_st->time_base, out_st->time_base);
+        pkt->pts      = av_rescale_q_rnd(pkt->pts, in_st->time_base, out_st->time_base,
+                                         (AVRounding)(AV_ROUND_NEAR_INF | AV_ROUND_PASS_MINMAX));
+        pkt->dts      = av_rescale_q_rnd(pkt->dts, in_st->time_base, out_st->time_base,
+                                         (AVRounding)(AV_ROUND_NEAR_INF | AV_ROUND_PASS_MINMAX));
+        pkt->stream_index = stream_map[si];
+        av_interleaved_write_frame(out_ctx, pkt);
+        av_packet_unref(pkt);
+    }
+    av_packet_free(&pkt);
+
+    av_write_trailer(out_ctx);
+    if (!(out_ctx->oformat->flags & AVFMT_NOFILE)) avio_closep(&out_ctx->pb);
+    avformat_close_input(&in_ctx);
+    avformat_free_context(out_ctx);
+    return "";
+}
+
 // ── Browser thumbnail cache ───────────────────────────────────────────────────
 
 uintptr_t video_load_thumb(const std::string& path, int* out_w, int* out_h) {
