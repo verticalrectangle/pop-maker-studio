@@ -676,27 +676,45 @@ async def list_tools() -> list[Tool]:
             },
         ),
         Tool(
+            name="analyze_audio",
+            description=(
+                "Start beat/RMS analysis on an audio file. Returns immediately with "
+                "{status: 'started'}. Poll get_audio_analysis until status='done'."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {"path": {"type": "string", "description": "Absolute path to audio file"}},
+                "required": ["path"],
+            },
+        ),
+        Tool(
+            name="get_audio_analysis",
+            description=(
+                "Poll beat/RMS analysis started by analyze_audio. "
+                "Returns {status: 'idle'|'running'|'done'|'error', bpm?, duration?, beats?, rms?}. "
+                "Poll every 2s until status='done'."
+            ),
+            inputSchema={"type": "object", "properties": {}},
+        ),
+        Tool(
             name="find_audio_cue",
             description=(
-                "Analyse an audio file using the app's beat detector and find a good "
-                "beat-aligned source timestamp matching a natural-language description "
-                "of what you're looking for. The app must be running.\n\n"
-                "description examples: 'after the intro', 'first big drop', 'energetic buildup', "
-                "'quiet bridge', 'chorus', 'before the outro', 'most energetic part'\n\n"
-                "Returns: source_timestamp (seconds, beat-aligned) — use as a negative clip "
-                "start to position the audio brick: clip start = -source_timestamp, "
-                "clip end = video_duration - source_timestamp. Also returns bpm, duration, "
-                "reasoning, and 2 alternative timestamps."
+                "Find a beat-aligned source timestamp in an audio file matching a description.\n\n"
+                "STEP 1 — Call analyze_audio(path) → {status: 'started'}\n"
+                "STEP 2 — Poll get_audio_analysis every 2s until status='done'\n"
+                "STEP 3 — Call find_audio_cue(path, description, clip_duration) — this does the "
+                "matching against the already-analysed data and returns immediately.\n\n"
+                "description examples: 'first big drop', 'quiet bridge', 'chorus', 'outro'\n\n"
+                "Returns: source_timestamp (beat-aligned seconds), bpm, duration, reasoning, "
+                "and 2 alternative timestamps. Use source_timestamp to position the audio brick: "
+                "clip start = -source_timestamp, clip end = video_duration - source_timestamp."
             ),
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "path": {"type": "string", "description": "Absolute path to the audio file"},
-                    "description": {"type": "string", "description": "What you're looking for"},
-                    "clip_duration": {
-                        "type": "number",
-                        "description": "How long the clip will be in seconds (optional — used to verify the window fits)",
-                    },
+                    "path":          {"type": "string", "description": "Absolute path to the audio file"},
+                    "description":   {"type": "string", "description": "What you're looking for"},
+                    "clip_duration": {"type": "number", "description": "Clip length in seconds (optional, for fit check)"},
                 },
                 "required": ["path", "description"],
             },
@@ -704,39 +722,58 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="get_vision_model_status",
             description=(
-                "Check whether the local Moondream2 vision model (~1.1 GB) is installed. "
+                "Check whether the local Moondream2 vision model is installed. "
                 "Returns {status: 'ready'|'downloading'|'idle'|'error', progress?, message?}. "
-                "Call this before find_video_moment to decide if download_vision_model is needed."
+                "Poll every 3s after download_vision_model until status='ready'."
             ),
             inputSchema={"type": "object", "properties": {}},
         ),
         Tool(
             name="download_vision_model",
             description=(
-                "Download the Moondream2 q4 ONNX vision model (~1.1 GB one-time download). "
-                "Checks the local HuggingFace cache first — if the weights are already there "
-                "it just copies them (~seconds). Otherwise downloads from HuggingFace. "
-                "The app shows a progress bar while this runs. "
-                "Blocks until the download is complete or fails (up to 5 minutes)."
+                "Start the Moondream2 vision model download (~1.1 GB, one-time). "
+                "Returns immediately with {status: 'started'} or {status: 'ready'} if already installed. "
+                "Poll get_vision_model_status every 3s until status='ready' or 'error'."
+            ),
+            inputSchema={"type": "object", "properties": {}},
+        ),
+        Tool(
+            name="describe_video",
+            description=(
+                "Start Moondream2 scene analysis on a video file. Returns immediately with "
+                "{status: 'started'}. Poll get_video_description every 3s until status='done'. "
+                "Requires vision model to be installed (check get_vision_model_status first)."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {"path": {"type": "string", "description": "Absolute path to the video file"}},
+                "required": ["path"],
+            },
+        ),
+        Tool(
+            name="get_video_description",
+            description=(
+                "Poll scene analysis started by describe_video. "
+                "Returns {status: 'idle'|'running'|'done'|'error', frames?, capped?}. "
+                "When done, frames is [{timestamp, description}]. Pass to find_video_moment to score."
             ),
             inputSchema={"type": "object", "properties": {}},
         ),
         Tool(
             name="find_video_moment",
             description=(
-                "Analyse a video file with the local Moondream2 vision model (runs on device, "
-                "no API cost) and find the timestamp(s) that best match a natural-language query. "
-                "The app must be running. Analysis takes up to ~3 minutes for a long video.\n\n"
-                "query examples: 'close-up face reaction', 'crowd shot', 'energetic dancing', "
-                "'aerial establishing shot', 'someone laughing'\n\n"
-                "Returns a list of up to 3 matches sorted by relevance: "
-                "{timestamp, description, confidence}."
+                "Score already-analysed video frames against a query and return the best matches.\n\n"
+                "STEP 1 — Call describe_video(path) → {status: 'started'}\n"
+                "STEP 2 — Poll get_video_description every 3s until status='done'\n"
+                "STEP 3 — Call find_video_moment(path, query) — scores the frames instantly.\n\n"
+                "query examples: 'close-up face', 'crowd shot', 'someone laughing'\n\n"
+                "Returns up to 3 matches sorted by confidence: {timestamp, description, confidence}."
             ),
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "path": {"type": "string", "description": "Absolute path to the video file"},
-                    "query": {"type": "string", "description": "Natural-language description of the moment to find"},
+                    "path":  {"type": "string", "description": "Absolute path to the video file"},
+                    "query": {"type": "string", "description": "Natural-language description of the moment"},
                 },
                 "required": ["path", "query"],
             },
@@ -1172,26 +1209,23 @@ def _match_cue(description: str, rms: list[float], beats: list[float],
 
 
 async def _find_audio_cue(arguments: dict) -> dict:
-    path = arguments.get("path", "")
-    description = arguments.get("description", "")
+    """
+    Requires beat analysis to already be done (call analyze_audio then poll
+    get_audio_analysis until done, then call this). Does the cue matching instantly.
+    """
+    path          = arguments.get("path", "")
+    description   = arguments.get("description", "")
     clip_duration = float(arguments.get("clip_duration", 0) or 0)
 
     if not path:
         raise ValueError("path is required")
 
-    # Start analysis
-    _call("analyze_audio", {"path": path})
-
-    # Poll until done (up to 120s)
-    for _ in range(240):
-        await asyncio.sleep(0.5)
-        res = _call("get_audio_analysis", {})
-        if res.get("status") == "done":
-            break
-        if res.get("status") == "error":
-            raise ValueError("beat detection failed for: " + path)
-    else:
-        raise TimeoutError("audio analysis timed out")
+    res = _call("get_audio_analysis", {})
+    if res.get("status") != "done":
+        raise ValueError(
+            "Audio analysis not ready. Call analyze_audio(path) first, "
+            "then poll get_audio_analysis every 2s until status='done', then call find_audio_cue."
+        )
 
     bpm      = res["bpm"]
     duration = res["duration"]
@@ -1204,31 +1238,22 @@ async def _find_audio_cue(arguments: dict) -> dict:
 
     return {
         "source_timestamp": primary,
-        "bpm": bpm,
-        "duration": duration,
-        "reasoning": reasoning,
-        "alternatives": alternatives,
+        "bpm":              bpm,
+        "duration":         duration,
+        "reasoning":        reasoning,
+        "alternatives":     alternatives,
     }
 
 
 # ── vision model download ─────────────────────────────────────────────────────
 
 async def _download_vision_model() -> dict:
-    status = _call("get_vision_model_status", {})
-    if status.get("status") == "ready":
+    """Start the download and return immediately. Claude polls get_vision_model_status."""
+    st = _call("get_vision_model_status", {})
+    if st.get("status") == "ready":
         return {"status": "ready", "message": "Vision model already installed."}
-
     _call("download_vision_model", {})
-
-    for _ in range(300):  # up to 5 minutes
-        await asyncio.sleep(1.0)
-        st = _call("get_vision_model_status", {})
-        s = st.get("status")
-        if s == "ready":
-            return {"status": "ready", "message": "Vision model installed successfully."}
-        if s == "error":
-            raise ValueError("Vision model download failed: " + st.get("error", "unknown"))
-    raise TimeoutError("Vision model download timed out after 5 minutes")
+    return {"status": "started", "message": "Download started. Poll get_vision_model_status every 3s until status='ready'."}
 
 
 # ── find_video_moment ─────────────────────────────────────────────────────────
@@ -1243,45 +1268,35 @@ def _tfidf_score(query: str, text: str) -> float:
 
 
 async def _find_video_moment(arguments: dict) -> list[dict]:
-    path        = arguments.get("path", "")
-    query       = arguments.get("query", "")
+    """
+    Requires scene analysis to already be done (call describe_video then poll
+    get_video_description until done, then call this). Scores frames instantly.
+    """
+    path  = arguments.get("path", "")
+    query = arguments.get("query", "")
     if not path:
         raise ValueError("path is required")
     if not query:
         raise ValueError("query is required")
 
-    # Gate on vision model being installed
     st = _call("get_vision_model_status", {})
     if st.get("status") != "ready":
         raise ValueError(
-            "Vision model not installed. Call download_vision_model first "
-            "(~1.1 GB one-time download — the app will show a progress bar)."
+            "Vision model not installed. Call download_vision_model, "
+            "then poll get_vision_model_status every 3s until status='ready'."
         )
 
-    # Trigger analysis (or pick up a previously completed one)
-    try:
-        _call("describe_video", {"path": path})
-    except ValueError as e:
-        if "already running" not in str(e):
-            raise
-
-    # Poll until done (up to 180 s)
-    for _ in range(360):
-        await asyncio.sleep(0.5)
-        res = _call("get_video_description", {})
-        status = res.get("status")
-        if status == "done":
-            break
-        if status == "error":
-            raise ValueError("scene analysis failed: " + res.get("message", "unknown"))
-    else:
-        raise TimeoutError("scene analysis timed out after 180 s")
+    res = _call("get_video_description", {})
+    if res.get("status") != "done":
+        raise ValueError(
+            "Scene analysis not ready. Call describe_video(path) first, "
+            "then poll get_video_description every 3s until status='done', then call find_video_moment."
+        )
 
     frames = res.get("frames", [])
     if not frames:
         return [{"timestamp": 0.0, "description": "(no frames)", "confidence": 0.0}]
 
-    # Score each frame against the query
     scored = []
     for f in frames:
         desc  = f.get("description", "")
