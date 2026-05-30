@@ -1712,21 +1712,27 @@ async def _find_and_add_clip(arguments: dict) -> dict:
 
     # Check for a cached words JSON next to the source file (saved by a previous transcription)
     p = Path(path)
-    cached_words_path = p.parent / p.stem / f"{p.stem}_words.json"  # convention used by the app
+    cached_words_path = p.parent / p.stem / f"{p.stem}_words.json"
     words = None
+    print(f"[find_and_add_clip] path={path} query={query!r} padding={padding}", flush=True)
+    print(f"[find_and_add_clip] checking cache: {cached_words_path}", flush=True)
     if cached_words_path.exists():
         with open(cached_words_path) as f:
             words = json.load(f)
+        print(f"[find_and_add_clip] cache hit — {len(words)} words loaded", flush=True)
 
     # Fall back to app transcript state if no cache on disk
     if not words:
+        print("[find_and_add_clip] no disk cache, checking app transcript state...", flush=True)
         proj = _call("get_project", {})
         tr = _call("get_transcript", {})
+        print(f"[find_and_add_clip] transcript status={tr.get('status')} audio_path={proj.get('audio_path')!r}", flush=True)
         if tr.get("status") == "ready" and proj.get("audio_path", "") == path:
             words = tr["words"]
+            print(f"[find_and_add_clip] app transcript hit — {len(words)} words", flush=True)
 
     if words:
-        # Search cached transcript
+        print(f"[find_and_add_clip] searching {len(words)} cached words...", flush=True)
         query_words_list = query.lower().split()
         query_words_set  = set(query_words_list)
         best_score, best_start, best_end, best_text = -1.0, 0.0, 0.0, ""
@@ -1744,28 +1750,33 @@ async def _find_and_add_clip(arguments: dict) -> dict:
                 best_end   = float(window[-1]["end"])
                 best_text  = " ".join(w["word"] for w in window)
 
+        print(f"[find_and_add_clip] best score={best_score:.2f} start={best_start:.1f} end={best_end:.1f}", flush=True)
         if best_score < 0.3:
             raise ValueError(f"could not find '{query}' in transcript (best match score: {best_score:.2f})")
     else:
         # No cached transcript — fire-and-forget search, poll get_search_status
-        _call("search_transcript", {
+        print("[find_and_add_clip] no transcript — starting chunked Whisper search...", flush=True)
+        sr = _call("search_transcript", {
             "path":        path,
             "query_words": query.lower().split(),
             "buffer_sec":  padding + 30.0,
         })
+        print(f"[find_and_add_clip] search_transcript returned: {sr}", flush=True)
 
         last_msg = ""
         st: dict = {}
-        for _ in range(1800):  # up to 30 minutes
+        for i in range(1800):  # up to 30 minutes
             await asyncio.sleep(1.0)
             st = _call("get_search_status", {})
-            msg = st.get("message", "")
-            pct = int(st.get("progress", 0) * 100)
-            if msg and msg != last_msg:
+            msg     = st.get("message", "")
+            pct     = int(st.get("progress", 0) * 100)
+            running = st.get("running", True)
+            if i % 5 == 0 or msg != last_msg:
                 bar = "█" * (pct // 5) + "░" * (20 - pct // 5)
-                print(f"[{bar}] {pct:3d}%  {msg}", flush=True)
+                print(f"[find_and_add_clip] [{bar}] {pct:3d}%  running={running}  {msg}", flush=True)
                 last_msg = msg
-            if not st.get("running", True):
+            if not running:
+                print(f"[find_and_add_clip] search finished: {st}", flush=True)
                 break
         else:
             raise TimeoutError("transcript search timed out after 30 minutes")
@@ -1780,16 +1791,19 @@ async def _find_and_add_clip(arguments: dict) -> dict:
         best_end   = float(st["end"])
         best_text  = st.get("excerpt", "")
 
+    print(f"[find_and_add_clip] match: start={best_start:.2f} end={best_end:.2f}", flush=True)
     source_start = max(0.0, best_start - padding)
     source_end   = best_end + padding
     duration     = source_end - source_start
 
     # Extract the short segment to a new file so the proxy stays small
     dst = str(p.parent / p.stem / f"{p.stem}_{int(source_start)}_{int(source_end)}.webm")
+    print(f"[find_and_add_clip] extracting segment {source_start:.1f}–{source_end:.1f}s → {dst}", flush=True)
     extract_result = _call("extract_clip_segment", {
         "src": path, "dst": dst,
         "start": source_start, "end": source_end,
     })
+    print(f"[find_and_add_clip] extract result: {extract_result}", flush=True)
 
     # Ensure the track exists (may already exist if we went through transcription path)
     proj = _call("get_project", {})
