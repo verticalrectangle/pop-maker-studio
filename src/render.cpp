@@ -1432,34 +1432,11 @@ void extract_audio_start(AppState& state, const std::string& video_path) {
         fs::path vp(video_path);
         fs::path outdir = vp.parent_path() / vp.stem();
         fs::create_directories(outdir);
-        std::string out_wav = (outdir / (vp.stem().string() + "_audio.wav")).string();
+        std::string out_audio = (outdir / (vp.stem().string() + "_audio.webm")).string();
 
-        std::vector<std::string> args = {
-            "ffmpeg", "-hide_banner", "-loglevel", "error",
-            "-y", "-i", video_path,
-            "-vn", "-acodec", "pcm_s16le", out_wav
-        };
-
-        pid_t pid = fork();
-        if (pid == 0) {
-            int devnull = open("/dev/null", O_WRONLY);
-            if (devnull >= 0) {
-                dup2(devnull, STDOUT_FILENO);
-                dup2(devnull, STDERR_FILENO);
-                close(devnull);
-            }
-            std::vector<char*> argv_ptrs;
-            for (auto& s : args) argv_ptrs.push_back(const_cast<char*>(s.c_str()));
-            argv_ptrs.push_back(nullptr);
-            execvp("ffmpeg", argv_ptrs.data());
-            _exit(127);
-        }
-
-        int wstat = 0;
-        waitpid(pid, &wstat, 0);
-
-        bool ok = WIFEXITED(wstat) && WEXITSTATUS(wstat) == 0 && fs::exists(out_wav);
-        if (ok) state.extract_wav_path = out_wav;
+        std::string err = video_extract_segment(video_path, 0.0, 1e9, out_audio);
+        bool ok = err.empty() && fs::exists(out_audio);
+        if (ok) state.extract_wav_path = out_audio;
         state.extract_running = false;
         state.extract_done    = ok;
     }).detach();

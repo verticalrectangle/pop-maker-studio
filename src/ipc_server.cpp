@@ -935,8 +935,7 @@ static json dispatch(AppState& state, const std::string& method, const json& par
     if (method == "set_audio_path") {
         std::string path = params.value("path", "");
         if (path.empty()) { err = "path required"; return {}; }
-        state.audio_path   = path;
-        state.vocals_path  = path;
+        state.audio_path = path;
         return json::object();
     }
 
