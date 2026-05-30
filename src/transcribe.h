@@ -28,3 +28,20 @@ void transcribe_start(
 
 void transcribe_cancel();
 bool transcribe_running();
+
+// Search a media file for a spoken query using chunked Whisper inference.
+// Decodes and transcribes 5-minute windows until the query is found, then stops.
+// Returns timestamps relative to the source file.
+// buffer_sec: extra seconds to collect past the match end before stopping.
+struct TranscribeSearchResult {
+    bool        found   = false;
+    float       start   = 0.f;  // source-relative start of matched region
+    float       end     = 0.f;  // source-relative end of matched region
+    std::string excerpt;        // words around the match
+    std::string error;
+};
+TranscribeSearchResult transcribe_search(
+    const std::string&              path,
+    const std::vector<std::string>& query_words,
+    float                           buffer_sec = 60.f
+);

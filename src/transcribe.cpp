@@ -2,6 +2,7 @@
 #include "separate.h"
 #include "paths.h"
 #include "forced_align.h"
+#include "video.h"
 #include <whisper.h>
 #include <thread>
 #include <atomic>
@@ -416,6 +417,131 @@ static void do_transcribe(
     status.progress = 1.0f;
     status.message  = std::to_string(words_arr.size()) + " words transcribed";
     g_running.store(false);
+}
+
+// ── Chunked search ────────────────────────────────────────────────────────────
+
+static whisper_context* load_whisper_ctx() {
+    fs::path mp = whisper_model_path();
+    if (!fs::exists(mp)) return nullptr;
+    whisper_context_params cparams = whisper_context_default_params();
+    cparams.use_gpu = true;
+    return whisper_init_from_file_with_params(mp.string().c_str(), cparams);
+}
+
+// Score a word list against query words (intersection / query_size).
+static float score_words(const nlohmann::json& words,
+                         const std::vector<std::string>& query_words) {
+    if (query_words.empty()) return 0.f;
+    std::set<std::string> qset(query_words.begin(), query_words.end());
+    int hits = 0;
+    int window = (int)query_words.size() * 3;
+    // Slide a window over the words list looking for the best match
+    for (int i = 0; i < (int)words.size(); ++i) {
+        std::set<std::string> seen;
+        for (int j = i; j < std::min((int)words.size(), i + window); ++j) {
+            std::string w = words[j].value("word", "");
+            // lowercase
+            for (auto& c : w) c = (char)std::tolower((unsigned char)c);
+            if (qset.count(w)) seen.insert(w);
+        }
+        hits = std::max(hits, (int)seen.size());
+    }
+    return (float)hits / (float)query_words.size();
+}
+
+TranscribeSearchResult transcribe_search(
+    const std::string&              path,
+    const std::vector<std::string>& query_words,
+    float                           buffer_sec)
+{
+    TranscribeSearchResult res;
+
+    whisper_context* ctx = load_whisper_ctx();
+    if (!ctx) { res.error = "whisper model not found"; return res; }
+
+    whisper_full_params wp = whisper_full_default_params(WHISPER_SAMPLING_BEAM_SEARCH);
+    wp.language         = "en";
+    wp.n_threads        = 4;
+    wp.token_timestamps = true;
+    wp.thold_pt         = 0.01f;
+    wp.thold_ptsum      = 0.01f;
+    wp.print_progress   = false;
+    wp.print_realtime   = false;
+    wp.print_timestamps = false;
+    wp.print_special    = false;
+
+    // Probe file duration so we know how many windows to run
+    MediaFileInfo info = video_probe_file(path);
+    if (!info.error.empty()) { whisper_free(ctx); res.error = info.error; return res; }
+    float total_dur = (float)info.duration;
+
+    const float window_sec  = 300.f;   // 5-minute chunks
+    const float overlap_sec = 30.f;    // 30s overlap to not miss cross-boundary speech
+    const float step_sec    = window_sec - overlap_sec;
+
+    float window_start = 0.f;
+    bool  collecting_buffer = false;
+    float buffer_end = 0.f;
+
+    while (window_start < total_dur) {
+        if (g_cancel.load()) break;
+
+        float dur = std::min(window_sec, total_dur - window_start);
+        std::vector<float> pcm = decode_16k(path, window_start, dur);
+        if (pcm.empty()) { window_start += step_sec; continue; }
+
+        if (whisper_full(ctx, wp, pcm.data(), (int)pcm.size()) != 0) {
+            window_start += step_sec; continue;
+        }
+
+        nlohmann::json words_arr = nlohmann::json::array();
+        nlohmann::json segs_arr  = nlohmann::json::array();
+        extract_words_segments(ctx, words_arr, segs_arr);
+
+        // Shift timestamps to be source-relative
+        for (auto& w : words_arr) {
+            w["start"] = w.value("start", 0.f) + window_start;
+            w["end"]   = w.value("end",   0.f) + window_start;
+        }
+
+        float score = score_words(words_arr, query_words);
+        if (score >= 0.5f && !res.found) {
+            // Find the best window in this chunk
+            int qwin = (int)query_words.size() * 3;
+            std::set<std::string> qset(query_words.begin(), query_words.end());
+            int best_hits = 0, best_i = 0;
+            for (int i = 0; i < (int)words_arr.size(); ++i) {
+                std::set<std::string> seen;
+                for (int j = i; j < std::min((int)words_arr.size(), i + qwin); ++j) {
+                    std::string w = words_arr[j].value("word", "");
+                    for (auto& c : w) c = (char)std::tolower((unsigned char)c);
+                    if (qset.count(w)) seen.insert(w);
+                }
+                if ((int)seen.size() > best_hits) { best_hits = (int)seen.size(); best_i = i; }
+            }
+            int end_i = std::min((int)words_arr.size() - 1, best_i + qwin - 1);
+            res.found  = true;
+            res.start  = words_arr[best_i].value("start", 0.f);
+            res.end    = words_arr[end_i].value("end",   0.f);
+            // Collect excerpt
+            std::string ex;
+            for (int k = best_i; k <= end_i && k < (int)words_arr.size(); ++k)
+                ex += words_arr[k].value("word", "") + " ";
+            res.excerpt = ex;
+            collecting_buffer = true;
+            buffer_end = res.end + buffer_sec;
+        }
+
+        // Stop once we've collected enough buffer past the match
+        if (collecting_buffer && window_start + dur >= buffer_end) break;
+
+        window_start += step_sec;
+    }
+
+    whisper_free(ctx);
+    if (!res.found) res.error = "query not found in transcript";
+    return res;
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────

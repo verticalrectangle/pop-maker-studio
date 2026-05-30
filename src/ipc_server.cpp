@@ -10,6 +10,7 @@
 #include "vision_caption.h"
 #include "vision_download.h"
 #include "video.h"
+#include "transcribe.h"
 #include "generated/fx_clip_set_dispatch.h"
 #include "generated/fx_type_list.h"
 #include "json.hpp"
@@ -930,6 +931,24 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         }
         json r; r["markers"] = arr;
         return r;
+    }
+
+    if (method == "search_transcript") {
+        std::string path  = params.value("path", "");
+        float buffer_sec  = params.value("buffer_sec", 60.f);
+        if (path.empty()) { err = "path required"; return {}; }
+        auto qj = params.value("query_words", json::array());
+        std::vector<std::string> qw;
+        for (auto& w : qj) if (w.is_string()) qw.push_back(w.get<std::string>());
+        if (qw.empty()) { err = "query_words required"; return {}; }
+        auto r = transcribe_search(path, qw, buffer_sec);
+        if (!r.error.empty()) { err = r.error; return {}; }
+        json res;
+        res["found"]   = r.found;
+        res["start"]   = r.start;
+        res["end"]     = r.end;
+        res["excerpt"] = r.excerpt;
+        return res;
     }
 
     if (method == "set_audio_path") {

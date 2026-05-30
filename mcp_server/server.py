@@ -1725,51 +1725,37 @@ async def _find_and_add_clip(arguments: dict) -> dict:
         if tr.get("status") == "ready" and proj.get("audio_path", "") == path:
             words = tr["words"]
 
-    if not words:
-        # No cached transcript — set audio_path directly (no clip in timeline) then transcribe
-        with _batch("find_and_add_clip: set audio path"):
-            _call("set_audio_path", {"path": path})
+    if words:
+        # Search cached transcript
+        query_words_list = query.lower().split()
+        query_words_set  = set(query_words_list)
+        best_score, best_start, best_end, best_text = -1.0, 0.0, 0.0, ""
+        window_size = max(len(query_words_list) * 2, 20)
 
-        with _batch("find_and_add_clip: transcribe"):
-            _call("trigger_pipeline", {"mode": "transcribe_only"})
-
-        for _ in range(3600):
-            await asyncio.sleep(0.5)
-            st = _call("get_pipeline_status", {})
-            if st.get("stage") == "done":
+        for i in range(len(words)):
+            window = words[i:i + window_size]
+            if not window:
                 break
-            if st.get("stage") == "error":
-                raise ValueError("transcription failed: " + st.get("message", "unknown error"))
-        else:
-            raise TimeoutError("transcription timed out after 30 minutes")
+            text  = " ".join(w["word"] for w in window).lower()
+            score = len(query_words_set & set(text.split())) / len(query_words_set) if query_words_set else 0.0
+            if score > best_score:
+                best_score = score
+                best_start = float(window[0]["start"])
+                best_end   = float(window[-1]["end"])
+                best_text  = " ".join(w["word"] for w in window)
 
-        tr = _call("get_transcript", {})
-        if tr.get("status") != "ready":
-            raise ValueError("transcript not available after pipeline completed")
-        words = tr["words"]
-
-    if not words:
-        raise ValueError("transcript is empty")
-
-    # Sliding window search
-    query_words = set(query.lower().split())
-    best_score, best_start, best_end, best_text = -1.0, 0.0, 0.0, ""
-    window_size = max(len(query_words) * 2, 20)
-
-    for i in range(len(words)):
-        window = words[i:i + window_size]
-        if not window:
-            break
-        text = " ".join(w["word"] for w in window).lower()
-        score = len(query_words & set(text.split())) / len(query_words) if query_words else 0.0
-        if score > best_score:
-            best_score = score
-            best_start = float(window[0]["start"])
-            best_end   = float(window[-1]["end"])
-            best_text  = " ".join(w["word"] for w in window)
-
-    if best_score < 0.3:
-        raise ValueError(f"could not find '{query}' in transcript (best match score: {best_score:.2f})")
+        if best_score < 0.3:
+            raise ValueError(f"could not find '{query}' in transcript (best match score: {best_score:.2f})")
+    else:
+        # No cached transcript — use chunked Whisper search with early exit (no clip added)
+        sr = _call("search_transcript", {
+            "path":        path,
+            "query_words": query.lower().split(),
+            "buffer_sec":  padding + 30.0,
+        })
+        best_start = float(sr["start"])
+        best_end   = float(sr["end"])
+        best_text  = sr.get("excerpt", "")
 
     source_start = max(0.0, best_start - padding)
     source_end   = best_end + padding
