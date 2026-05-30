@@ -246,14 +246,7 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="add_track",
-            description=(
-                "Add a new track to the project at a given position (default 0 = top). "
-                "Returns the track index. Requires batch.\n\n"
-                "LAYERING: tracks are stacked like Photoshop layers — track 0 is the TOP "
-                "(foreground) and the highest-index track is the BOTTOM (background). "
-                "Always put video/background clips on higher-index tracks and text/FX/overlays "
-                "on lower-index tracks so they render on top."
-            ),
+            description="Add a track at position (0=top/foreground, higher=background). Returns track index. Requires batch.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -316,25 +309,7 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="set_clip_prop",
-            description=(
-                "Set a scalar property on a clip. Requires batch.\n\n"
-                "General props:\n"
-                "  volume (0–2), speed (0.25–4), opacity (0–1), muted (bool),\n"
-                "  in_point (seconds into source — equivalent to trimming the brick's left edge),\n"
-                "  fade_in, fade_out, pos_x, pos_y, scale_x, scale_y, rotation, text\n\n"
-                "Subtitle / text layout:\n"
-                "  sub_pos (0=bottom 1=center 2=top 3=custom), sub_pos_x, sub_pos_y (0–1 normalised),\n"
-                "  sub_anchor_h (0=left 1=center 2=right), sub_wrap_w (0–1, 0=auto),\n"
-                "  font_size (pixels, 0=auto)\n\n"
-                "Color arrays are [r, g, b, a] with values 0–1:\n"
-                "  sub_color (text fill, also sets sub_color_override=true),\n"
-                "  karaoke_highlight_color\n\n"
-                "Animation / behaviour:\n"
-                "  clip_style (string: none|pop|fade|slide_up|slide_down|typewriter|wave|bounce|\n"
-                "              zoom_in|zoom_out|spin|flip|glitch|blur_in|split|drop|rise),\n"
-                "  blend_mode (string: normal|add|multiply|screen|overlay),\n"
-                "  karaoke (bool)"
-            ),
+            description="Set one property on a clip. All props listed in CLAUDE.md. Requires batch.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -377,12 +352,7 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="set_clip_props",
-            description=(
-                "Set properties on multiple clips in one round-trip. Equivalent to calling "
-                "set_clip_prop N times. Use for bulk muting, opacity changes, fade setup, etc. "
-                "Requires batch.\n\n"
-                "Each entry in 'ops': {track, clip, prop, value} — same props as set_clip_prop."
-            ),
+            description="Set properties on multiple clips in one call. ops: [{track, clip, prop, value}]. Requires batch.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -459,21 +429,15 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="generate_typography",
-            description=(
-                "Generate lyric clips from the loaded word JSON using the currently selected "
-                "typography preset. Fires synchronously. After calling, you can check "
-                "get_project to see the new clips. Requires batch."
-            ),
+            description="Generate subtitle/lyric clips from the loaded transcript using the active typography preset. Requires batch.",
             inputSchema={"type": "object", "properties": {}},
         ),
         Tool(
             name="trigger_pipeline",
             description=(
-                "Start the ML processing pipeline (vocal separation + Whisper transcription + "
-                "CTC alignment). Returns immediately — poll get_pipeline_status until "
-                "stage is 'done' or 'error'. mode: both | transcribe_only | separate_only. "
-                "Add a video or audio clip first — audio_path is set automatically from the first clip. "
-                "Requires batch. (Use find_and_add_clip to do all of this in one step.)"
+                "Start vocal separation + Whisper transcription + CTC alignment on the loaded audio. "
+                "Requires a clip to be added first. Returns immediately — poll get_pipeline_status. "
+                "mode: both | transcribe_only | separate_only. Requires batch."
             ),
             inputSchema={
                 "type": "object",
@@ -528,21 +492,11 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="add_multifx_brick",
             description=(
-                "Add a Multi-FX brick containing an ordered chain of sub-effects. "
-                "Use instead of multiple overlapping add_effect_brick calls.\n\n"
-                "GLASS behaviour: if placed on the same track as a video/audio clip it overlaps, "
-                "it becomes a 'glass' FX and applies only to that clip. "
-                "Place on a separate FX track for a global (all-layers) effect.\n\n"
-                "effects array: each entry is an object with:\n"
-                "  fx_type (required) — any fx_type from add_effect_brick, or 'body_fx'\n"
-                "  body_fx_type — required when fx_type is 'body_fx' (see add_body_fx_brick for valid names)\n"
-                "  rel_start (default 0) — seconds from brick start\n"
-                "  rel_end   (default 0 = until brick end) — seconds from brick start\n"
-                "  params — same param dict as add_effect_brick for the given fx_type\n\n"
-                "⚠️ BodyFX constraint: if any sub-effect has fx_type 'body_fx', the MultiFX brick "
-                "MUST be placed on the same track as a video clip (glass mode only). "
-                "BodyFX requires a sibling video clip to source the mask from.\n\n"
-                "Requires batch."
+                "Add an ordered chain of FX sub-effects as one brick. Prefer over multiple overlapping add_effect_brick calls.\n\n"
+                "Same-track as a video clip = glass mode (affects that clip only). "
+                "Separate FX track = global (affects all layers below).\n\n"
+                "effects[]: {fx_type, rel_start (0), rel_end (0=brick end), params, body_fx_type (if fx_type='body_fx')}\n"
+                "body_fx constraint: must be glass mode (same track as video clip). Requires batch."
             ),
             inputSchema={
                 "type": "object",
@@ -699,15 +653,10 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="find_audio_cue",
             description=(
-                "Find a beat-aligned source timestamp in an audio file matching a description.\n\n"
-                "STEP 1 — Call analyze_audio(path) → {status: 'started'}\n"
-                "STEP 2 — Poll get_audio_analysis every 2s until status='done'\n"
-                "STEP 3 — Call find_audio_cue(path, description, clip_duration) — this does the "
-                "matching against the already-analysed data and returns immediately.\n\n"
-                "description examples: 'first big drop', 'quiet bridge', 'chorus', 'outro'\n\n"
-                "Returns: source_timestamp (beat-aligned seconds), bpm, duration, reasoning, "
-                "and 2 alternative timestamps. Use source_timestamp to position the audio brick: "
-                "clip start = -source_timestamp, clip end = video_duration - source_timestamp."
+                "Find a beat-aligned timestamp matching a description ('first drop', 'chorus', 'outro', etc.).\n"
+                "Requires: get_audio_analysis status='done' (call analyze_audio first, then poll).\n"
+                "Returns: source_timestamp, bpm, duration, reasoning, alternatives. "
+                "Audio positioning: clip start = -source_timestamp, end = video_duration - source_timestamp."
             ),
             inputSchema={
                 "type": "object",
@@ -730,11 +679,7 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="download_vision_model",
-            description=(
-                "Start the Moondream2 vision model download (~1.1 GB, one-time). "
-                "Returns immediately with {status: 'started'} or {status: 'ready'} if already installed. "
-                "Poll get_vision_model_status every 3s until status='ready' or 'error'."
-            ),
+            description="Start Moondream2 download (~1.1 GB, one-time). Returns immediately. Poll get_vision_model_status until status='ready'.",
             inputSchema={"type": "object", "properties": {}},
         ),
         Tool(
@@ -762,12 +707,9 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="find_video_moment",
             description=(
-                "Score already-analysed video frames against a query and return the best matches.\n\n"
-                "STEP 1 — Call describe_video(path) → {status: 'started'}\n"
-                "STEP 2 — Poll get_video_description every 3s until status='done'\n"
-                "STEP 3 — Call find_video_moment(path, query) — scores the frames instantly.\n\n"
-                "query examples: 'close-up face', 'crowd shot', 'someone laughing'\n\n"
-                "Returns up to 3 matches sorted by confidence: {timestamp, description, confidence}."
+                "Score analysed video frames against a query. Returns top 3 matches by confidence: {timestamp, description, confidence}.\n"
+                "Requires: get_video_description status='done' (call describe_video first, then poll).\n"
+                "Requires: get_vision_model_status='ready'."
             ),
             inputSchema={
                 "type": "object",
@@ -781,20 +723,13 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="find_and_add_clip",
             description=(
-                "Find a spoken moment in a video file and add just that segment to the timeline.\n\n"
-                "This tool starts a background Whisper transcript search and returns immediately. "
-                "You MUST then drive the following steps yourself — do not treat this as a single blocking call:\n\n"
-                "STEP 1 — Call this tool. It starts the search and returns {status, cached, path, query, padding, track}.\n"
-                "  • If cached=true the result is already in 'result' — skip to STEP 3.\n\n"
-                "STEP 2 — Poll get_search_status every 3 seconds until running=false.\n"
-                "  Report progress to the user each poll (e.g. 'Searching 2:30 / 18:00...').\n"
-                "  When running=false check 'found' and 'error'.\n\n"
-                "STEP 3 — Call extract_clip_segment with:\n"
-                "  src=path, start=max(0, result.start - padding), end=result.end + padding\n"
-                "  dst={parent}/{stem}/{stem}_{start_int}_{end_int}.webm\n\n"
-                "STEP 4 — Inside a begin_batch/end_batch, call add_clip with:\n"
-                "  track=track, type=video, text=dst, start=0, end=duration\n\n"
-                "query examples: 'I did not wake up a loser', 'talking about failure'"
+                "Find a spoken moment in a video by transcript search, then add only that segment to the timeline.\n\n"
+                "Returns immediately. Two cases:\n"
+                "  cached=true  → result already in response; go straight to extract_clip_segment + add_clip\n"
+                "  cached=false → poll get_search_status until running=false, then extract_clip_segment + add_clip\n\n"
+                "Segment path: {parent}/{stem}/{stem}_{start_int}_{end_int}.webm\n"
+                "extract_clip_segment: src=path, start=max(0,result.start-padding), end=result.end+padding\n"
+                "add_clip: type=video, text=dst, start=0, end=duration — inside a batch."
             ),
             inputSchema={
                 "type": "object",
