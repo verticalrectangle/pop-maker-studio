@@ -45,3 +45,26 @@ TranscribeSearchResult transcribe_search(
     const std::vector<std::string>& query_words,
     float                           buffer_sec = 60.f
 );
+
+struct SearchStatus {
+    bool        running       = false;
+    float       progress      = 0.f;
+    float       current_sec   = 0.f;
+    float       total_sec     = 0.f;
+    std::string message;
+    // result fields — valid when running == false and error is empty
+    bool        found         = false;
+    float       start         = 0.f;
+    float       end           = 0.f;
+    std::string excerpt;
+    std::string error;
+};
+
+// Kick off a background search (returns immediately). Poll transcribe_search_status().
+void transcribe_search_start(
+    const std::string&              path,
+    const std::vector<std::string>& query_words,
+    float                           buffer_sec = 60.f
+);
+SearchStatus transcribe_search_status();
+bool         transcribe_search_running();

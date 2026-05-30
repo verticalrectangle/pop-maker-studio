@@ -22,7 +22,6 @@ import asyncio
 import json
 import os
 import socket
-import threading
 import time
 import uuid
 from contextlib import contextmanager
@@ -1747,15 +1746,38 @@ async def _find_and_add_clip(arguments: dict) -> dict:
         if best_score < 0.3:
             raise ValueError(f"could not find '{query}' in transcript (best match score: {best_score:.2f})")
     else:
-        # No cached transcript — use chunked Whisper search with early exit (no clip added)
-        sr = _call("search_transcript", {
+        # No cached transcript — fire-and-forget search, poll get_search_status
+        _call("search_transcript", {
             "path":        path,
             "query_words": query.lower().split(),
             "buffer_sec":  padding + 30.0,
         })
-        best_start = float(sr["start"])
-        best_end   = float(sr["end"])
-        best_text  = sr.get("excerpt", "")
+
+        last_msg = ""
+        st: dict = {}
+        for _ in range(1800):  # up to 30 minutes
+            await asyncio.sleep(1.0)
+            st = _call("get_search_status", {})
+            msg = st.get("message", "")
+            pct = int(st.get("progress", 0) * 100)
+            if msg and msg != last_msg:
+                bar = "█" * (pct // 5) + "░" * (20 - pct // 5)
+                print(f"[{bar}] {pct:3d}%  {msg}", flush=True)
+                last_msg = msg
+            if not st.get("running", True):
+                break
+        else:
+            raise TimeoutError("transcript search timed out after 30 minutes")
+
+        if st.get("error"):
+            raise ValueError(st["error"])
+        if not st.get("found"):
+            raise ValueError(f"could not find '{query}' in transcript")
+
+        best_score = 1.0
+        best_start = float(st["start"])
+        best_end   = float(st["end"])
+        best_text  = st.get("excerpt", "")
 
     source_start = max(0.0, best_start - padding)
     source_end   = best_end + padding

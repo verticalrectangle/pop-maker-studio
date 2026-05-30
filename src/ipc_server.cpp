@@ -538,6 +538,43 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         return r;
     }
 
+    if (method == "get_search_status") {
+        SearchStatus s = transcribe_search_status();
+        json r;
+        r["running"]     = s.running;
+        r["progress"]    = s.progress;
+        r["current_sec"] = s.current_sec;
+        r["total_sec"]   = s.total_sec;
+        r["message"]     = s.message;
+        r["found"]       = s.found;
+        r["start"]       = s.start;
+        r["end"]         = s.end;
+        r["excerpt"]     = s.excerpt;
+        r["error"]       = s.error;
+        return r;
+    }
+
+    if (method == "search_transcript") {
+        std::string path = params.value("path", "");
+        float buffer_sec = params.value("buffer_sec", 60.f);
+        if (path.empty()) { err = "path required"; return {}; }
+        auto qj = params.value("query_words", json::array());
+        std::vector<std::string> qw;
+        for (auto& w : qj) if (w.is_string()) qw.push_back(w.get<std::string>());
+        if (qw.empty()) { err = "query_words required"; return {}; }
+        if (transcribe_search_running()) { err = "search already running"; return {}; }
+        transcribe_search_start(path, qw, buffer_sec);
+        json res; res["status"] = "started";
+        return res;
+    }
+
+    if (method == "set_audio_path") {
+        std::string path = params.value("path", "");
+        if (path.empty()) { err = "path required"; return {}; }
+        state.audio_path = path;
+        return json::object();
+    }
+
     if (method == "get_media_info") {
         std::string path = params.value("path", "");
         if (path.empty()) { err = "path required"; return {}; }
@@ -931,31 +968,6 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         }
         json r; r["markers"] = arr;
         return r;
-    }
-
-    if (method == "search_transcript") {
-        std::string path  = params.value("path", "");
-        float buffer_sec  = params.value("buffer_sec", 60.f);
-        if (path.empty()) { err = "path required"; return {}; }
-        auto qj = params.value("query_words", json::array());
-        std::vector<std::string> qw;
-        for (auto& w : qj) if (w.is_string()) qw.push_back(w.get<std::string>());
-        if (qw.empty()) { err = "query_words required"; return {}; }
-        auto r = transcribe_search(path, qw, buffer_sec);
-        if (!r.error.empty()) { err = r.error; return {}; }
-        json res;
-        res["found"]   = r.found;
-        res["start"]   = r.start;
-        res["end"]     = r.end;
-        res["excerpt"] = r.excerpt;
-        return res;
-    }
-
-    if (method == "set_audio_path") {
-        std::string path = params.value("path", "");
-        if (path.empty()) { err = "path required"; return {}; }
-        state.audio_path = path;
-        return json::object();
     }
 
     if (method == "trigger_pipeline") {

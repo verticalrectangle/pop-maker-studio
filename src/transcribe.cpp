@@ -6,6 +6,7 @@
 #include <whisper.h>
 #include <thread>
 #include <atomic>
+#include <mutex>
 #include <filesystem>
 #include <fstream>
 #include <cstdlib>
@@ -25,6 +26,10 @@ namespace fs = std::filesystem;
 static std::thread       g_thread;
 static std::atomic<bool> g_running{false};
 static std::atomic<bool> g_cancel{false};
+
+static std::mutex      g_search_mu;
+static SearchStatus    g_search_status;
+static std::thread     g_search_thread;
 
 // ── Whisper ggml model path ───────────────────────────────────────────────────
 
@@ -450,6 +455,28 @@ static float score_words(const nlohmann::json& words,
     return (float)hits / (float)query_words.size();
 }
 
+SearchStatus transcribe_search_status() {
+    std::lock_guard<std::mutex> lk(g_search_mu);
+    return g_search_status;
+}
+
+static void set_search_status(bool running, float current, float total, const std::string& msg) {
+    std::lock_guard<std::mutex> lk(g_search_mu);
+    g_search_status.running     = running;
+    g_search_status.current_sec = current;
+    g_search_status.total_sec   = total;
+    g_search_status.progress    = (total > 0.f) ? std::min(current / total, 1.f) : 0.f;
+    g_search_status.message     = msg;
+}
+
+static std::string fmt_time(float sec) {
+    int h = (int)sec / 3600, m = ((int)sec % 3600) / 60, s = (int)sec % 60;
+    char buf[16];
+    if (h > 0) snprintf(buf, sizeof(buf), "%d:%02d:%02d", h, m, s);
+    else       snprintf(buf, sizeof(buf), "%d:%02d", m, s);
+    return buf;
+}
+
 TranscribeSearchResult transcribe_search(
     const std::string&              path,
     const std::vector<std::string>& query_words,
@@ -457,8 +484,14 @@ TranscribeSearchResult transcribe_search(
 {
     TranscribeSearchResult res;
 
+    set_search_status(true, 0.f, 0.f, "Loading Whisper model...");
+
     whisper_context* ctx = load_whisper_ctx();
-    if (!ctx) { res.error = "whisper model not found"; return res; }
+    if (!ctx) {
+        set_search_status(false, 0.f, 0.f, "whisper model not found");
+        res.error = "whisper model not found";
+        return res;
+    }
 
     whisper_full_params wp = whisper_full_default_params(WHISPER_SAMPLING_BEAM_SEARCH);
     wp.language         = "en";
@@ -471,23 +504,33 @@ TranscribeSearchResult transcribe_search(
     wp.print_timestamps = false;
     wp.print_special    = false;
 
-    // Probe file duration so we know how many windows to run
     MediaFileInfo info = video_probe_file(path);
-    if (!info.error.empty()) { whisper_free(ctx); res.error = info.error; return res; }
+    if (!info.error.empty()) {
+        whisper_free(ctx);
+        set_search_status(false, 0.f, 0.f, info.error);
+        res.error = info.error;
+        return res;
+    }
     float total_dur = (float)info.duration;
 
-    const float window_sec  = 300.f;   // 5-minute chunks
-    const float overlap_sec = 30.f;    // 30s overlap to not miss cross-boundary speech
+    const float window_sec  = 300.f;
+    const float overlap_sec = 30.f;
     const float step_sec    = window_sec - overlap_sec;
 
-    float window_start = 0.f;
+    float window_start      = 0.f;
     bool  collecting_buffer = false;
-    float buffer_end = 0.f;
+    float buffer_end        = 0.f;
 
     while (window_start < total_dur) {
         if (g_cancel.load()) break;
 
         float dur = std::min(window_sec, total_dur - window_start);
+        float win_end = window_start + dur;
+
+        set_search_status(true, window_start, total_dur,
+            "Searching " + fmt_time(window_start) + " – " + fmt_time(win_end) +
+            " / " + fmt_time(total_dur));
+
         std::vector<float> pcm = decode_16k(path, window_start, dur);
         if (pcm.empty()) { window_start += step_sec; continue; }
 
@@ -499,7 +542,6 @@ TranscribeSearchResult transcribe_search(
         nlohmann::json segs_arr  = nlohmann::json::array();
         extract_words_segments(ctx, words_arr, segs_arr);
 
-        // Shift timestamps to be source-relative
         for (auto& w : words_arr) {
             w["start"] = w.value("start", 0.f) + window_start;
             w["end"]   = w.value("end",   0.f) + window_start;
@@ -507,7 +549,6 @@ TranscribeSearchResult transcribe_search(
 
         float score = score_words(words_arr, query_words);
         if (score >= 0.5f && !res.found) {
-            // Find the best window in this chunk
             int qwin = (int)query_words.size() * 3;
             std::set<std::string> qset(query_words.begin(), query_words.end());
             int best_hits = 0, best_i = 0;
@@ -521,19 +562,20 @@ TranscribeSearchResult transcribe_search(
                 if ((int)seen.size() > best_hits) { best_hits = (int)seen.size(); best_i = i; }
             }
             int end_i = std::min((int)words_arr.size() - 1, best_i + qwin - 1);
-            res.found  = true;
-            res.start  = words_arr[best_i].value("start", 0.f);
-            res.end    = words_arr[end_i].value("end",   0.f);
-            // Collect excerpt
+            res.found = true;
+            res.start = words_arr[best_i].value("start", 0.f);
+            res.end   = words_arr[end_i].value("end",   0.f);
             std::string ex;
             for (int k = best_i; k <= end_i && k < (int)words_arr.size(); ++k)
                 ex += words_arr[k].value("word", "") + " ";
-            res.excerpt = ex;
+            res.excerpt      = ex;
             collecting_buffer = true;
-            buffer_end = res.end + buffer_sec;
+            buffer_end       = res.end + buffer_sec;
+
+            set_search_status(true, res.start, total_dur,
+                "Found at " + fmt_time(res.start) + " — collecting buffer...");
         }
 
-        // Stop once we've collected enough buffer past the match
         if (collecting_buffer && window_start + dur >= buffer_end) break;
 
         window_start += step_sec;
@@ -541,6 +583,21 @@ TranscribeSearchResult transcribe_search(
 
     whisper_free(ctx);
     if (!res.found) res.error = "query not found in transcript";
+    {
+        std::lock_guard<std::mutex> lk(g_search_mu);
+        g_search_status.running     = false;
+        g_search_status.found       = res.found;
+        g_search_status.start       = res.start;
+        g_search_status.end         = res.end;
+        g_search_status.excerpt     = res.excerpt;
+        g_search_status.error       = res.error;
+        g_search_status.progress    = 1.f;
+        g_search_status.current_sec = res.found ? res.start : total_dur;
+        g_search_status.total_sec   = total_dur;
+        g_search_status.message     = res.found
+                                    ? "Found at " + fmt_time(res.start)
+                                    : "Not found";
+    }
     return res;
 }
 
@@ -573,3 +630,26 @@ void transcribe_start(
 
 void transcribe_cancel() { g_cancel.store(true); }
 bool transcribe_running() { return g_running.load(); }
+
+void transcribe_search_start(
+    const std::string&              path,
+    const std::vector<std::string>& query_words,
+    float                           buffer_sec)
+{
+    {
+        std::lock_guard<std::mutex> lk(g_search_mu);
+        if (g_search_status.running) return;
+        g_search_status = SearchStatus{};
+        g_search_status.running = true;
+        g_search_status.message = "Starting search...";
+    }
+    g_search_thread = std::thread([path, query_words, buffer_sec]() {
+        transcribe_search(path, query_words, buffer_sec);
+    });
+    g_search_thread.detach();
+}
+
+bool transcribe_search_running() {
+    std::lock_guard<std::mutex> lk(g_search_mu);
+    return g_search_status.running;
+}
