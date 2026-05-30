@@ -22,6 +22,7 @@ import asyncio
 import json
 import os
 import socket
+import sys
 import threading
 import time
 import uuid
@@ -1710,29 +1711,46 @@ async def _find_and_add_clip(arguments: dict) -> dict:
     if not query:
         raise ValueError("query is required")
 
-    # Check for a cached words JSON next to the source file (saved by a previous transcription)
+    def _log(msg: str):
+        print(f"[find_and_add_clip] {msg}", file=sys.stderr, flush=True)
+
+    async def _progress(prog: float, total: float = 1.0, message: str = ""):
+        _log(f"{int(prog/total*100) if total else 0}%  {message}")
+        try:
+            ctx = server.request_context
+            if ctx.meta and ctx.meta.progressToken is not None:
+                await ctx.session.send_progress_notification(
+                    progress_token=ctx.meta.progressToken,
+                    progress=prog,
+                    total=total,
+                    message=message,
+                )
+        except Exception:
+            pass
+
+    # Check for a cached words JSON next to the source file
     p = Path(path)
     cached_words_path = p.parent / p.stem / f"{p.stem}_words.json"
     words = None
-    print(f"[find_and_add_clip] path={path} query={query!r} padding={padding}", flush=True)
-    print(f"[find_and_add_clip] checking cache: {cached_words_path}", flush=True)
+    _log(f"checking cache: {cached_words_path}")
     if cached_words_path.exists():
         with open(cached_words_path) as f:
             words = json.load(f)
-        print(f"[find_and_add_clip] cache hit — {len(words)} words loaded", flush=True)
+        _log(f"cache hit — {len(words)} words")
 
     # Fall back to app transcript state if no cache on disk
     if not words:
-        print("[find_and_add_clip] no disk cache, checking app transcript state...", flush=True)
+        _log("no disk cache, checking app transcript state...")
         proj = _call("get_project", {})
         tr = _call("get_transcript", {})
-        print(f"[find_and_add_clip] transcript status={tr.get('status')} audio_path={proj.get('audio_path')!r}", flush=True)
+        _log(f"transcript status={tr.get('status')} audio_path={proj.get('audio_path')!r}")
         if tr.get("status") == "ready" and proj.get("audio_path", "") == path:
             words = tr["words"]
-            print(f"[find_and_add_clip] app transcript hit — {len(words)} words", flush=True)
+            _log(f"app transcript hit — {len(words)} words")
 
     if words:
-        print(f"[find_and_add_clip] searching {len(words)} cached words...", flush=True)
+        _log(f"searching {len(words)} cached words...")
+        await _progress(0.05, 1.0, f"Searching {len(words)}-word transcript...")
         query_words_list = query.lower().split()
         query_words_set  = set(query_words_list)
         best_score, best_start, best_end, best_text = -1.0, 0.0, 0.0, ""
@@ -1750,33 +1768,32 @@ async def _find_and_add_clip(arguments: dict) -> dict:
                 best_end   = float(window[-1]["end"])
                 best_text  = " ".join(w["word"] for w in window)
 
-        print(f"[find_and_add_clip] best score={best_score:.2f} start={best_start:.1f} end={best_end:.1f}", flush=True)
+        _log(f"best score={best_score:.2f} start={best_start:.1f} end={best_end:.1f}")
         if best_score < 0.3:
             raise ValueError(f"could not find '{query}' in transcript (best match score: {best_score:.2f})")
+        await _progress(0.7, 1.0, f"Found at {best_start:.1f}s — extracting clip...")
     else:
-        # No cached transcript — fire-and-forget search, poll get_search_status
-        print("[find_and_add_clip] no transcript — starting chunked Whisper search...", flush=True)
-        sr = _call("search_transcript", {
+        # No cached transcript — fire-and-forget Whisper search with progress
+        _log("no transcript — starting chunked Whisper search...")
+        await _progress(0.0, 1.0, "Starting Whisper transcript search...")
+        _call("search_transcript", {
             "path":        path,
             "query_words": query.lower().split(),
             "buffer_sec":  padding + 30.0,
         })
-        print(f"[find_and_add_clip] search_transcript returned: {sr}", flush=True)
 
         last_msg = ""
         st: dict = {}
-        for i in range(1800):  # up to 30 minutes
+        for _ in range(1800):  # up to 30 minutes
             await asyncio.sleep(1.0)
             st = _call("get_search_status", {})
-            msg     = st.get("message", "")
-            pct     = int(st.get("progress", 0) * 100)
-            running = st.get("running", True)
-            if i % 5 == 0 or msg != last_msg:
-                bar = "█" * (pct // 5) + "░" * (20 - pct // 5)
-                print(f"[find_and_add_clip] [{bar}] {pct:3d}%  running={running}  {msg}", flush=True)
+            msg  = st.get("message", "")
+            prog = float(st.get("progress", 0))
+            if msg != last_msg:
+                await _progress(prog * 0.9, 1.0, msg)
                 last_msg = msg
-            if not running:
-                print(f"[find_and_add_clip] search finished: {st}", flush=True)
+            if not st.get("running", True):
+                _log(f"search finished: found={st.get('found')} start={st.get('start')}")
                 break
         else:
             raise TimeoutError("transcript search timed out after 30 minutes")
@@ -1790,20 +1807,21 @@ async def _find_and_add_clip(arguments: dict) -> dict:
         best_start = float(st["start"])
         best_end   = float(st["end"])
         best_text  = st.get("excerpt", "")
+        await _progress(0.9, 1.0, f"Found at {best_start:.1f}s — extracting clip...")
 
-    print(f"[find_and_add_clip] match: start={best_start:.2f} end={best_end:.2f}", flush=True)
     source_start = max(0.0, best_start - padding)
     source_end   = best_end + padding
     duration     = source_end - source_start
 
     # Extract the short segment to a new file so the proxy stays small
     dst = str(p.parent / p.stem / f"{p.stem}_{int(source_start)}_{int(source_end)}.webm")
-    print(f"[find_and_add_clip] extracting segment {source_start:.1f}–{source_end:.1f}s → {dst}", flush=True)
+    _log(f"extracting {source_start:.1f}–{source_end:.1f}s → {dst}")
     extract_result = _call("extract_clip_segment", {
         "src": path, "dst": dst,
         "start": source_start, "end": source_end,
     })
-    print(f"[find_and_add_clip] extract result: {extract_result}", flush=True)
+    _log(f"extract done: {extract_result}")
+    await _progress(0.95, 1.0, "Adding clip to timeline...")
 
     # Ensure the track exists (may already exist if we went through transcription path)
     proj = _call("get_project", {})
