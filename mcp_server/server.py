@@ -169,6 +169,36 @@ async def list_tools() -> list[Tool]:
             },
         ),
         Tool(
+            name="get_search_status",
+            description=(
+                "Poll the status of a running transcript search started by find_and_add_clip. "
+                "Returns: running (bool), progress (0–1), current_sec, total_sec, message, "
+                "found (bool), start (seconds), end (seconds), excerpt (text), error.\n\n"
+                "Poll every 3 seconds until running=false. Report message to the user each poll. "
+                "When running=false: check error first, then use start/end to extract the clip."
+            ),
+            inputSchema={"type": "object", "properties": {}},
+        ),
+        Tool(
+            name="extract_clip_segment",
+            description=(
+                "Stream-copy a time range from a source media file to a new file (no re-encode). "
+                "Near-instant for any codec. Use after find_and_add_clip reports a match to "
+                "extract just the relevant segment before adding it to the timeline.\n\n"
+                "Returns: {dst, duration}. dst is the path to add as a video clip."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "src":   {"type": "string", "description": "Source media file path"},
+                    "dst":   {"type": "string", "description": "Output file path (use .webm extension)"},
+                    "start": {"type": "number", "description": "Start time in seconds"},
+                    "end":   {"type": "number", "description": "End time in seconds"},
+                },
+                "required": ["src", "dst", "start", "end"],
+            },
+        ),
+        Tool(
             name="get_pipeline_status",
             description=(
                 "Returns the current ML pipeline status: stage (idle/extract/transcribe/"
@@ -714,25 +744,28 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="find_and_add_clip",
             description=(
-                "Find a specific moment in a video file by searching the transcript, then add "
-                "it to the timeline already trimmed to that segment. Avoids generating a proxy "
-                "for the full file — proxy only generates for the trimmed clip.\n\n"
-                "Workflow (all internal):\n"
-                "  1. Add video to a new track → audio_path auto-set\n"
-                "  2. Run transcription pipeline and wait for completion\n"
-                "  3. Search transcript for query text\n"
-                "  4. Trim the clip to the matched segment (+ context padding)\n\n"
-                "query examples: 'I did not wake up a loser', 'talking about failure', "
-                "'the part where he mentions semiconductors'\n\n"
-                "Returns: {track, clip, start, end, transcript_excerpt, found_at_source}"
+                "Find a spoken moment in a video file and add just that segment to the timeline.\n\n"
+                "This tool starts a background Whisper transcript search and returns immediately. "
+                "You MUST then drive the following steps yourself — do not treat this as a single blocking call:\n\n"
+                "STEP 1 — Call this tool. It starts the search and returns {status, cached, path, query, padding, track}.\n"
+                "  • If cached=true the result is already in 'result' — skip to STEP 3.\n\n"
+                "STEP 2 — Poll get_search_status every 3 seconds until running=false.\n"
+                "  Report progress to the user each poll (e.g. 'Searching 2:30 / 18:00...').\n"
+                "  When running=false check 'found' and 'error'.\n\n"
+                "STEP 3 — Call extract_clip_segment with:\n"
+                "  src=path, start=max(0, result.start - padding), end=result.end + padding\n"
+                "  dst={parent}/{stem}/{stem}_{start_int}_{end_int}.webm\n\n"
+                "STEP 4 — Inside a begin_batch/end_batch, call add_clip with:\n"
+                "  track=track, type=video, text=dst, start=0, end=duration\n\n"
+                "query examples: 'I did not wake up a loser', 'talking about failure'"
             ),
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "path":    {"type": "string", "description": "Absolute path to the video file"},
-                    "query":   {"type": "string", "description": "What to search for in the transcript"},
+                    "path":    {"type": "string",  "description": "Absolute path to the video file"},
+                    "query":   {"type": "string",  "description": "What to search for in the transcript"},
                     "track":   {"type": "integer", "description": "Track to add the clip to (default 0)"},
-                    "padding": {"type": "number",  "description": "Seconds of context before/after the matched segment (default 5.0)"},
+                    "padding": {"type": "number",  "description": "Seconds of context before/after match (default 5.0)"},
                 },
                 "required": ["path", "query"],
             },
@@ -1701,6 +1734,13 @@ async def _add_body_fx_brick(arguments: dict) -> dict:
 # ── find_and_add_clip ─────────────────────────────────────────────────────────
 
 async def _find_and_add_clip(arguments: dict) -> dict:
+    """
+    Step 1 of the find-and-add workflow.
+    Checks the disk cache first; if a transcript exists, searches it immediately and
+    returns the result so Claude can proceed directly to extract_clip_segment + add_clip.
+    If no transcript exists, starts a background Whisper search and returns {status:searching}
+    so Claude knows to poll get_search_status before continuing.
+    """
     path    = arguments.get("path", "")
     query   = arguments.get("query", "")
     track   = int(arguments.get("track", 0))
@@ -1711,51 +1751,28 @@ async def _find_and_add_clip(arguments: dict) -> dict:
     if not query:
         raise ValueError("query is required")
 
-    def _log(msg: str):
-        print(f"[find_and_add_clip] {msg}", file=sys.stderr, flush=True)
-
-    async def _progress(prog: float, total: float = 1.0, message: str = ""):
-        _log(f"{int(prog/total*100) if total else 0}%  {message}")
-        try:
-            ctx = server.request_context
-            if ctx.meta and ctx.meta.progressToken is not None:
-                await ctx.session.send_progress_notification(
-                    progress_token=ctx.meta.progressToken,
-                    progress=prog,
-                    total=total,
-                    message=message,
-                )
-        except Exception:
-            pass
-
-    # Check for a cached words JSON next to the source file
     p = Path(path)
+
+    # Check disk cache first
     cached_words_path = p.parent / p.stem / f"{p.stem}_words.json"
     words = None
-    _log(f"checking cache: {cached_words_path}")
     if cached_words_path.exists():
         with open(cached_words_path) as f:
             words = json.load(f)
-        _log(f"cache hit — {len(words)} words")
 
-    # Fall back to app transcript state if no cache on disk
+    # Fall back to app transcript state
     if not words:
-        _log("no disk cache, checking app transcript state...")
         proj = _call("get_project", {})
-        tr = _call("get_transcript", {})
-        _log(f"transcript status={tr.get('status')} audio_path={proj.get('audio_path')!r}")
+        tr   = _call("get_transcript", {})
         if tr.get("status") == "ready" and proj.get("audio_path", "") == path:
             words = tr["words"]
-            _log(f"app transcript hit — {len(words)} words")
 
     if words:
-        _log(f"searching {len(words)} cached words...")
-        await _progress(0.05, 1.0, f"Searching {len(words)}-word transcript...")
+        # Search cached transcript synchronously — fast, no Whisper needed
         query_words_list = query.lower().split()
         query_words_set  = set(query_words_list)
         best_score, best_start, best_end, best_text = -1.0, 0.0, 0.0, ""
         window_size = max(len(query_words_list) * 2, 20)
-
         for i in range(len(words)):
             window = words[i:i + window_size]
             if not window:
@@ -1767,85 +1784,38 @@ async def _find_and_add_clip(arguments: dict) -> dict:
                 best_start = float(window[0]["start"])
                 best_end   = float(window[-1]["end"])
                 best_text  = " ".join(w["word"] for w in window)
-
-        _log(f"best score={best_score:.2f} start={best_start:.1f} end={best_end:.1f}")
         if best_score < 0.3:
-            raise ValueError(f"could not find '{query}' in transcript (best match score: {best_score:.2f})")
-        await _progress(0.7, 1.0, f"Found at {best_start:.1f}s — extracting clip...")
-    else:
-        # No cached transcript — fire-and-forget Whisper search with progress
-        _log("no transcript — starting chunked Whisper search...")
-        await _progress(0.0, 1.0, "Starting Whisper transcript search...")
-        _call("search_transcript", {
-            "path":        path,
-            "query_words": query.lower().split(),
-            "buffer_sec":  padding + 30.0,
-        })
+            raise ValueError(f"could not find '{query}' in transcript (best score: {best_score:.2f})")
+        return {
+            "status":  "found",
+            "cached":  True,
+            "path":    path,
+            "query":   query,
+            "track":   track,
+            "padding": padding,
+            "result": {
+                "found":   True,
+                "start":   round(best_start, 3),
+                "end":     round(best_end, 3),
+                "excerpt": best_text[:200],
+                "score":   round(best_score, 3),
+            },
+        }
 
-        last_msg = ""
-        st: dict = {}
-        for _ in range(1800):  # up to 30 minutes
-            await asyncio.sleep(1.0)
-            st = _call("get_search_status", {})
-            msg  = st.get("message", "")
-            prog = float(st.get("progress", 0))
-            if msg != last_msg:
-                await _progress(prog * 0.9, 1.0, msg)
-                last_msg = msg
-            if not st.get("running", True):
-                _log(f"search finished: found={st.get('found')} start={st.get('start')}")
-                break
-        else:
-            raise TimeoutError("transcript search timed out after 30 minutes")
-
-        if st.get("error"):
-            raise ValueError(st["error"])
-        if not st.get("found"):
-            raise ValueError(f"could not find '{query}' in transcript")
-
-        best_score = 1.0
-        best_start = float(st["start"])
-        best_end   = float(st["end"])
-        best_text  = st.get("excerpt", "")
-        await _progress(0.9, 1.0, f"Found at {best_start:.1f}s — extracting clip...")
-
-    source_start = max(0.0, best_start - padding)
-    source_end   = best_end + padding
-    duration     = source_end - source_start
-
-    # Extract the short segment to a new file so the proxy stays small
-    dst = str(p.parent / p.stem / f"{p.stem}_{int(source_start)}_{int(source_end)}.webm")
-    _log(f"extracting {source_start:.1f}–{source_end:.1f}s → {dst}")
-    extract_result = _call("extract_clip_segment", {
-        "src": path, "dst": dst,
-        "start": source_start, "end": source_end,
+    # No transcript — kick off background Whisper search
+    _call("search_transcript", {
+        "path":        path,
+        "query_words": query.lower().split(),
+        "buffer_sec":  padding + 30.0,
     })
-    _log(f"extract done: {extract_result}")
-    await _progress(0.95, 1.0, "Adding clip to timeline...")
-
-    # Ensure the track exists (may already exist if we went through transcription path)
-    proj = _call("get_project", {})
-    while len(proj.get("tracks", [])) <= track:
-        with _batch("find_and_add_clip: add track"):
-            _call("add_track", {"name": f"Track {track}", "position": track})
-        proj = _call("get_project", {})
-
-    with _batch(f"find_and_add_clip: add '{query}'"):
-        clip_result = _call("add_clip", {
-            "track": track, "type": "video",
-            "text": dst, "start": 0, "end": duration,
-        })
-    clip_idx = clip_result["clip"]
-
     return {
-        "track":              track,
-        "clip":               clip_idx,
-        "start":              0.0,
-        "end":                round(duration, 3),
-        "found_at_source":    round(best_start, 3),
-        "segment_file":       dst,
-        "transcript_excerpt": best_text[:300],
-        "match_score":        round(best_score, 3),
+        "status":  "searching",
+        "cached":  False,
+        "path":    path,
+        "query":   query,
+        "track":   track,
+        "padding": padding,
+        "message": "Whisper search started. Poll get_search_status every 3s until running=false.",
     }
 
 
