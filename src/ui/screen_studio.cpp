@@ -237,6 +237,15 @@ void ui_studio(AppState& state) {
             ProxyInfo pi;
             if (!proxy_load(src, pi)) continue;
             video_open_proxy(slot, pi);
+            // Retry bg_remove for any clips that were waiting on this proxy
+            for (int ti2 = 0; ti2 < (int)state.tracks.size(); ++ti2)
+                for (int ci2 = 0; ci2 < (int)state.tracks[ti2].clips.size(); ++ci2) {
+                    Clip& vc = state.tracks[ti2].clips[ci2];
+                    if (vc.clip_type == ClipType::Video &&
+                        vc.text == src &&
+                        vc.bg_remove_status == BgRemoveStatus::WaitingForProxy)
+                        bg_remove_start(state, ti2, ci2);
+                }
             if (slot == 0) {
                 state.proxy_ready = true;
                 float pd = (float)video_info(0).duration;

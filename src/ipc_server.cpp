@@ -935,12 +935,13 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         int new_ci = (int)state.tracks[ti].clips.size() - 1;
         if (cl.clip_type == ClipType::Video) state.proxy_scan_needed = true;
         if (cl.clip_type == ClipType::BodyFX) {
-            state.selected_track = ti;
-            state.selected_clip  = new_ci;
             for (int vi = 0; vi < new_ci; ++vi) {
                 Clip& vc = state.tracks[ti].clips[vi];
                 if (vc.clip_type != ClipType::Video) continue;
                 if (vc.end <= cl.start || vc.start >= cl.end) continue;
+                // Select the video clip so its existing bg_remove progress bar shows
+                state.selected_track = ti;
+                state.selected_clip  = vi;
                 if (vc.bg_remove_status != BgRemoveStatus::Ready)
                     bg_remove_start(state, ti, vi);
                 break;

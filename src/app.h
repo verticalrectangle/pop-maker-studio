@@ -46,7 +46,7 @@ enum class AnimStyle {
 
 // ── Background removal status ─────────────────────────────────────────────────
 
-enum class BgRemoveStatus { Idle, Processing, Ready, Error };
+enum class BgRemoveStatus { Idle, WaitingForProxy, Processing, Ready, Error };
 enum class VcStatus       { Idle, Processing, Ready, Error };
 
 // ── Creative FX type ─────────────────────────────────────────────────────────

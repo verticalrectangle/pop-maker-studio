@@ -430,8 +430,7 @@ void bg_remove_start(AppState& state, int track_idx, int clip_idx) {
 
     std::string mjpeg = proxy_mjpeg_path(clip.text);
     if (!fs::exists(mjpeg)) {
-        clip.bg_remove_status = BgRemoveStatus::Error;
-        clip.bg_remove_error  = "Proxy not ready — wait for proxy generation to finish.";
+        clip.bg_remove_status = BgRemoveStatus::WaitingForProxy;
         return;
     }
 

@@ -1856,13 +1856,55 @@ async def _remove_background(arguments: dict) -> dict:
     start = float(clip_info["start"])
     end   = float(clip_info["end"])
 
-    result = _call("add_clip", {
-        "track": track,
-        "type":  "body_fx",
-        "start": start,
-        "end":   end,
-    })
+    with _batch("Add RemoveBackground brick"):
+        result = _call("add_clip", {
+            "track": track,
+            "type":  "body_fx",
+            "start": start,
+            "end":   end,
+        })
     return {"brick_clip": result["clip"], "track": track, "start": start, "end": end}
+
+
+# ── add_clip (with auto-extract guard) ────────────────────────────────────────
+
+async def _add_clip(arguments: dict) -> dict:
+    """
+    Intercept video add_clip calls: if the source file is more than 2× longer
+    than the segment we actually need, extract that segment first so the proxy
+    generator only has to process a short file instead of the full source.
+    """
+    clip_type = arguments.get("type", "")
+    text = arguments.get("text", "")
+
+    if clip_type == "video" and text:
+        in_point = float(arguments.get("in_point", 0.0))
+        clip_duration = float(arguments["end"]) - float(arguments["start"])
+        needed_end = in_point + clip_duration + 2.0  # 2 s safety buffer
+
+        try:
+            info = _call("get_media_info", {"path": text})
+            source_dur = float(info.get("duration", 0.0))
+        except Exception:
+            source_dur = 0.0
+
+        if source_dur > needed_end * 2:
+            p = Path(text)
+            s_int = int(in_point)
+            e_int = int(needed_end) + 1
+            cache_dir = p.parent / p.stem
+            dst = str(cache_dir / f"{p.stem}_{s_int}_{e_int}.webm")
+            if not Path(dst).exists():
+                cache_dir.mkdir(parents=True, exist_ok=True)
+                _call("extract_clip_segment", {
+                    "src":   text,
+                    "dst":   dst,
+                    "start": in_point,
+                    "end":   needed_end,
+                })
+            arguments = {**arguments, "text": dst, "in_point": 0.0}
+
+    return _call("add_clip", arguments)
 
 
 # ── find_and_add_clip ─────────────────────────────────────────────────────────
@@ -2010,6 +2052,15 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         return [TextContent(type="text", text=json.dumps(result, indent=2))]
     if name == "process_body_fx_masks":
         result = _call("start_body_fx_process", arguments)
+        return [TextContent(type="text", text=json.dumps(result, indent=2))]
+    if name == "extract_clip_segment":
+        dst = arguments.get("dst", "")
+        if dst:
+            Path(dst).parent.mkdir(parents=True, exist_ok=True)
+        result = _call("extract_clip_segment", arguments)
+        return [TextContent(type="text", text=json.dumps(result, indent=2))]
+    if name == "add_clip":
+        result = await _add_clip(arguments)
         return [TextContent(type="text", text=json.dumps(result, indent=2))]
     if name == "remove_background":
         result = await _remove_background(arguments)

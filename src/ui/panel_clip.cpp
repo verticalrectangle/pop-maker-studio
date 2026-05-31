@@ -1944,15 +1944,16 @@ void panel_clip(AppState& state, float w) {
         ui_label("Remove Background");
         ImGui::Dummy({0.f, 6.f});
 
-        // Find the sibling video clip on this track
+        // Find the video clip that overlaps this brick's time range
         Clip* vid_clip = nullptr;
         int   vid_ci   = -1;
         for (int ci2 = 0; ci2 < (int)track.clips.size(); ++ci2) {
-            if (track.clips[ci2].clip_type == ClipType::Video) {
-                vid_clip = &track.clips[ci2];
-                vid_ci   = ci2;
-                break;
-            }
+            Clip& vc = track.clips[ci2];
+            if (vc.clip_type != ClipType::Video) continue;
+            if (vc.end <= clip.start || vc.start >= clip.end) continue;
+            vid_clip = &vc;
+            vid_ci   = ci2;
+            break;
         }
 
         if (!vid_clip) {
@@ -1975,7 +1976,20 @@ void panel_clip(AppState& state, float w) {
             }
             s_prev_bfx_bgr = status; s_prev_bfx_ci = vid_ci;
 
-            if (status == BgRemoveStatus::Processing) {
+            if (status == BgRemoveStatus::WaitingForProxy) {
+                ImVec2 bp = ImGui::GetCursorScreenPos();
+                ImU32 fill_col  = IM_COL32(120, 160, 255, 255);
+                ImU32 track_col = IM_COL32(120, 160, 255, 40);
+                bgdl->AddRectFilled(bp, {bp.x + bar_w, bp.y + 4.f}, track_col, 2.f);
+                float t = fmodf((float)ImGui::GetTime() * 0.6f, 1.f);
+                float x0 = bp.x + (bar_w - bar_w * 0.35f) * t;
+                bgdl->AddRectFilled({x0, bp.y}, {x0 + bar_w * 0.35f, bp.y + 4.f}, fill_col, 2.f);
+                ImGui::Dummy({0.f, 8.f});
+                ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+                ImGui::TextUnformatted("Waiting for proxy…");
+                ImGui::PopStyleColor();
+                ImGui::Dummy({0.f, 4.f});
+            } else if (status == BgRemoveStatus::Processing) {
                 ImVec2 bp = ImGui::GetCursorScreenPos();
                 ImU32 fill_col  = IM_COL32(255, 165, 0, 255);
                 ImU32 track_col = IM_COL32(255, 165, 0, 40);
