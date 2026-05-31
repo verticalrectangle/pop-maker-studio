@@ -316,11 +316,14 @@ static json clip_to_json(int idx, const Clip& c) {
 
 static json state_to_json(const AppState& state) {
     json j;
-    j["duration"]   = state.duration;
-    j["fps"]        = state.fps;
-    j["bpm"]        = state.beat_bpm;
-    j["audio_path"] = state.audio_path;
-    j["playhead"]   = state.playhead;
+    j["duration"]        = state.duration;
+    j["fps"]             = state.fps;
+    j["bpm"]             = state.beat_bpm;
+    j["audio_path"]      = state.audio_path;
+    j["project_path"]    = state.project_path;
+    j["transcript_ready"] = !state.words_json_path.empty() &&
+                            (bool)std::ifstream(state.words_json_path);
+    j["playhead"]        = state.playhead;
 
     // Beats (truncated to 3 decimal places)
     json beats_arr = json::array();
@@ -934,6 +937,9 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         state.tracks[ti].clips.push_back(cl);
         int new_ci = (int)state.tracks[ti].clips.size() - 1;
         if (cl.clip_type == ClipType::Video) state.proxy_scan_needed = true;
+        if (cl.clip_type == ClipType::Video && !state.audio_path.empty() &&
+            state.words_json_path.empty() && !transcribe_running())
+            kick_pipeline(state, state.audio_path, PipelineMode::TranscribeOnly);
         if (cl.clip_type == ClipType::BodyFX) {
             for (int vi = 0; vi < new_ci; ++vi) {
                 Clip& vc = state.tracks[ti].clips[vi];

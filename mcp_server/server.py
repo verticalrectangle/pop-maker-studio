@@ -43,6 +43,7 @@ LOCK_FILE = "/tmp/pop-maker-studio.lock"
 _sock: socket.socket | None = None
 _sock_lock = threading.Lock()
 _pending: dict[str, Any] = {}
+_last_project_path: str = ""  # auto-reload on reconnect
 
 
 def _connect() -> socket.socket:
@@ -132,11 +133,22 @@ def _call(method: str, params: dict | None = None, *, _pms_retries: int = 5) -> 
 
         try:
             with _sock_lock:
-                global _sock
+                global _sock, _last_project_path
                 for attempt in range(2):
                     try:
+                        was_none = _sock is None
                         if _sock is None:
                             _sock = _connect()
+                        if was_none and _last_project_path and method != "load_project":
+                            try:
+                                _sock.sendall((json.dumps({"id": "reload", "method": "load_project",
+                                    "params": {"path": _last_project_path}}, ensure_ascii=False) + "\n").encode())
+                                rbuf = b""
+                                while b"\n" not in rbuf:
+                                    rbuf += _sock.recv(65536)
+                                print(f"[pms] auto-reloaded {_last_project_path}", flush=True)
+                            except Exception:
+                                pass
                         _sock.sendall(payload.encode())
                         buf = b""
                         while True:
@@ -152,7 +164,10 @@ def _call(method: str, params: dict | None = None, *, _pms_retries: int = 5) -> 
                                 continue  # intermediate progress line — keep reading
                             if "error" in resp:
                                 raise ValueError(resp["error"])
-                            return resp.get("result", {})
+                            result = resp.get("result", {})
+                            if isinstance(result, dict) and result.get("project_path"):
+                                _last_project_path = result["project_path"]
+                            return result
                     except (ConnectionError, OSError, BrokenPipeError):
                         _sock = None
                         if attempt == 1:
@@ -871,6 +886,47 @@ async def list_tools() -> list[Tool]:
                     "gap_threshold": {"type": "number", "description": "Pause length in seconds that splits utterances (default 0.8)"},
                 },
                 "required": ["path", "time"],
+            },
+        ),
+        Tool(
+            name="search_transcript",
+            description=(
+                "Search the transcript for ALL occurrences of a phrase. Returns every match with "
+                "source-file timestamps — use this before any phrase-based cut to see if the phrase "
+                "appears more than once. Timestamps are source-file seconds (subtract clip in_point "
+                "to get timeline position). Requires trigger_pipeline or find_and_add_clip to have "
+                "run first."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "phrase": {"type": "string", "description": "The phrase to search for"},
+                    "path":   {"type": "string", "description": "Source video path (defaults to project audio_path)"},
+                },
+                "required": ["phrase"],
+            },
+        ),
+        Tool(
+            name="cut_at_phrase",
+            description=(
+                "Trim a clip to end (or start) right at a phrase. Collapses trigger_pipeline + "
+                "transcript lookup + trim into one call.\n\n"
+                "side='after' (default): trims clip end to just after the last word of the phrase.\n"
+                "side='before': trims clip start to just before the first word.\n\n"
+                "If the phrase appears more than once, returns all matches and does NOT trim — "
+                "re-call with occurrence=N (0-indexed) to select which one.\n"
+                "Requires trigger_pipeline to have run first; returns an error otherwise."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "track":      {"type": "integer"},
+                    "clip":       {"type": "integer"},
+                    "phrase":     {"type": "string"},
+                    "side":       {"type": "string", "enum": ["after", "before"], "default": "after"},
+                    "occurrence": {"type": "integer", "description": "0-indexed match to use when multiple exist"},
+                },
+                "required": ["track", "clip", "phrase"],
             },
         ),
         Tool(
@@ -2061,6 +2117,135 @@ async def _find_and_add_clip(arguments: dict) -> dict:
     }
 
 
+# ── search_transcript ─────────────────────────────────────────────────────────
+
+def _all_transcript_matches(words: list, phrase: str, threshold: float = 0.6) -> list[dict]:
+    """Return all non-overlapping windows that match phrase above threshold, sorted by time."""
+    query_words = phrase.lower().split()
+    if not query_words:
+        return []
+    qset = set(query_words)
+    window_size = max(len(query_words) * 2, 8)
+    matches: list[dict] = []
+    i = 0
+    while i < len(words):
+        window = words[i:i + window_size]
+        if not window:
+            break
+        text  = " ".join(w["word"] for w in window).lower()
+        score = len(qset & set(text.split())) / len(qset)
+        if score >= threshold:
+            # Narrow the window to just the matched phrase span
+            wtext = text.split()
+            # Find best contiguous subspan covering query words
+            best_span = (0, len(window) - 1)
+            for s in range(len(window)):
+                for e in range(s, len(window)):
+                    span_text = " ".join(w["word"] for w in window[s:e+1]).lower()
+                    span_score = len(qset & set(span_text.split())) / len(qset)
+                    if span_score >= 1.0:
+                        best_span = (s, e)
+                        break
+                else:
+                    continue
+                break
+            s_idx, e_idx = best_span
+            matches.append({
+                "start":   round(float(window[s_idx]["start"]), 3),
+                "end":     round(float(window[e_idx]["end"]), 3),
+                "excerpt": " ".join(w["word"] for w in window[s_idx:e_idx+1]),
+                "score":   round(score, 2),
+            })
+            i += e_idx + 1  # skip past this match
+        else:
+            i += 1
+    # Deduplicate overlapping entries (keep highest score)
+    deduped: list[dict] = []
+    for m in sorted(matches, key=lambda x: x["start"]):
+        if deduped and m["start"] < deduped[-1]["end"]:
+            if m["score"] > deduped[-1]["score"]:
+                deduped[-1] = m
+        else:
+            deduped.append(m)
+    return deduped
+
+
+def _search_transcript(arguments: dict) -> dict:
+    phrase = arguments.get("phrase", "")
+    path   = arguments.get("path", "") or _call("get_project", {}).get("audio_path", "")
+    if not path:
+        raise ValueError("No path provided and no audio_path on project")
+    p = Path(_resolve_path(path))
+    words_path = p.parent / p.stem / f"{p.stem}_words.json"
+    if not words_path.exists():
+        raise ValueError(f"No transcript for {p.name} — run trigger_pipeline first")
+    with open(words_path) as f:
+        all_words = json.load(f)
+    matches = _all_transcript_matches(all_words, phrase)
+    return {"phrase": phrase, "count": len(matches), "matches": matches}
+
+
+# ── cut_at_phrase ──────────────────────────────────────────────────────────────
+
+def _cut_at_phrase(arguments: dict) -> dict:
+    track  = int(arguments["track"])
+    clip   = int(arguments["clip"])
+    phrase = arguments["phrase"]
+    side   = arguments.get("side", "after")
+    occurrence = arguments.get("occurrence", None)
+
+    proj = _call("get_project", {})
+    audio_path = proj.get("audio_path", "")
+    if not audio_path:
+        raise ValueError("No audio_path on project — add a video clip first")
+    if not proj.get("transcript_ready"):
+        raise ValueError("Transcript not ready — run trigger_pipeline first")
+
+    p = Path(_resolve_path(audio_path))
+    words_path = p.parent / p.stem / f"{p.stem}_words.json"
+    if not words_path.exists():
+        raise ValueError(f"No transcript for {p.name}")
+    with open(words_path) as f:
+        all_words = json.load(f)
+
+    matches = _all_transcript_matches(all_words, phrase)
+    if not matches:
+        raise ValueError(f"Phrase not found in transcript: {phrase!r}")
+
+    if len(matches) > 1 and occurrence is None:
+        return {
+            "ambiguous": True,
+            "message": f"Found {len(matches)} occurrences — re-call with occurrence=N (0-indexed)",
+            "matches": matches,
+        }
+
+    idx = int(occurrence) if occurrence is not None else 0
+    if idx >= len(matches):
+        raise ValueError(f"occurrence={idx} out of range (found {len(matches)} matches)")
+
+    match = matches[idx]
+
+    # Get clip in_point to convert source → timeline time
+    tracks = proj.get("tracks", [])
+    in_point = 0.0
+    clip_start = 0.0
+    if track < len(tracks) and clip < len(tracks[track]["clips"]):
+        cl = tracks[track]["clips"][clip]
+        in_point  = float(cl.get("in_point", 0))
+        clip_start = float(cl.get("start", 0))
+
+    if side == "after":
+        timeline_t = clip_start + (match["end"] - in_point)
+        with _batch("cut_at_phrase") as result:
+            _call("trim_clip", {"track": track, "clip": clip, "end": round(timeline_t, 3)})
+        return {"trimmed_end": round(timeline_t, 3), "excerpt": match["excerpt"], **result}
+    else:
+        timeline_t = clip_start + (match["start"] - in_point)
+        with _batch("cut_at_phrase") as result:
+            _call("trim_clip", {"track": track, "clip": clip, "start": round(timeline_t, 3)})
+        return {"trimmed_start": round(timeline_t, 3), "excerpt": match["excerpt"], **result}
+
+
 @server.call_tool()
 async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     if name == "remove_silence":
@@ -2113,6 +2298,12 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         return [TextContent(type="text", text=json.dumps(result, indent=2))]
     if name == "download_vision_model":
         result = await _download_vision_model()
+        return [TextContent(type="text", text=json.dumps(result, indent=2))]
+    if name == "search_transcript":
+        result = _search_transcript(arguments)
+        return [TextContent(type="text", text=json.dumps(result, indent=2))]
+    if name == "cut_at_phrase":
+        result = _cut_at_phrase(arguments)
         return [TextContent(type="text", text=json.dumps(result, indent=2))]
     if name == "read_transcript_context":
         path   = _resolve_path(arguments["path"])
