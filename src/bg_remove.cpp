@@ -153,7 +153,10 @@ int bg_remove_read_frame_count(const std::string& mask_dir) {
 // ── u2net helpers ─────────────────────────────────────────────────────────────
 
 static std::string u2net_model_path() {
-    return app_models_dir() + "/u2net_human_seg.onnx";
+    std::string dir  = app_models_dir();
+    std::string lite = dir + "/u2netp_human_seg.onnx";
+    if (fs::exists(lite)) return lite;
+    return dir + "/u2net_human_seg.onnx";
 }
 
 static const float U2NET_MEAN[3] = {0.485f, 0.456f, 0.406f};
@@ -289,6 +292,7 @@ static void run_job(std::shared_ptr<JobData> data,
     Ort::Env env(ORT_LOGGING_LEVEL_ERROR, "rembg");
     Ort::SessionOptions opts;
     opts.SetIntraOpNumThreads((int)std::thread::hardware_concurrency());
+    opts.SetInterOpNumThreads((int)std::thread::hardware_concurrency());
     opts.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
 
     std::unique_ptr<Ort::Session> session;
@@ -368,48 +372,74 @@ static void run_job(std::shared_ptr<JobData> data,
         return;
     }
 
-    std::vector<float> input_data(3 * U2NET_SIZE * U2NET_SIZE);
-    int64_t shape[] = {1, 3, U2NET_SIZE, U2NET_SIZE};
     auto mem_info = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
 
-    for (int i = 0; i < total; i++) {
-        int w, h, ch;
-        uint8_t* img = stbi_load(frames[i].string().c_str(), &w, &h, &ch, 3);
-        if (!img) {
-            data->progress.store((float)(i+1) / total);
-            continue;
+    // Probe whether the model supports dynamic batch sizes.
+    int BATCH = std::min(8, (int)std::thread::hardware_concurrency());
+    if (BATCH > 1) {
+        std::vector<float> probe(2 * 3 * U2NET_SIZE * U2NET_SIZE, 0.f);
+        int64_t pshape[] = {2, 3, U2NET_SIZE, U2NET_SIZE};
+        try {
+            Ort::Value pt = Ort::Value::CreateTensor<float>(
+                mem_info, probe.data(), probe.size(), pshape, 4);
+            session->Run(Ort::RunOptions{nullptr}, in_names, &pt, 1, out_names, 1);
+        } catch (...) {
+            BATCH = 1;  // model has fixed batch=1, fall back to serial
+        }
+    }
+
+    std::vector<float> input_batch((size_t)BATCH * 3 * U2NET_SIZE * U2NET_SIZE);
+
+    for (int i = 0; i < total; i += BATCH) {
+        const int bs = std::min(BATCH, total - i);
+
+        std::vector<int> frame_ws(bs, 0), frame_hs(bs, 0);
+        for (int b = 0; b < bs; ++b) {
+            int w, h, ch;
+            uint8_t* img = stbi_load(frames[i + b].string().c_str(), &w, &h, &ch, 3);
+            if (!img) continue;
+            frame_ws[b] = w;
+            frame_hs[b] = h;
+            bilinear_resize_rgb(img, w, h,
+                input_batch.data() + (size_t)b * 3 * U2NET_SIZE * U2NET_SIZE,
+                U2NET_SIZE, U2NET_SIZE);
+            stbi_image_free(img);
         }
 
-        bilinear_resize_rgb(img, w, h, input_data.data(), U2NET_SIZE, U2NET_SIZE);
-        stbi_image_free(img);
-
+        int64_t shape[] = {bs, 3, U2NET_SIZE, U2NET_SIZE};
         Ort::Value in_tensor = Ort::Value::CreateTensor<float>(
-            mem_info, input_data.data(), input_data.size(), shape, 4);
+            mem_info, input_batch.data(),
+            (size_t)bs * 3 * U2NET_SIZE * U2NET_SIZE, shape, 4);
 
         std::vector<Ort::Value> outputs;
         try {
             outputs = session->Run(Ort::RunOptions{nullptr},
-                                   in_names, &in_tensor, 1,
-                                   out_names, 1);
+                                   in_names, &in_tensor, 1, out_names, 1);
         } catch (...) {
-            data->progress.store((float)(i+1) / total);
+            data->progress.store((float)(i + bs) / total);
             continue;
         }
 
-        float* mask = outputs[0].GetTensorMutableData<float>();
+        float* mask_data = outputs[0].GetTensorMutableData<float>();
         auto mshape = outputs[0].GetTensorTypeAndShapeInfo().GetShape();
-        int mh = (int)mshape[2], mw = (int)mshape[3];
+        int mh = (int)mshape[mshape.size() - 2];
+        int mw = (int)mshape[mshape.size() - 1];
+        size_t mask_stride = (size_t)mh * mw;
 
-        std::vector<uint8_t> alpha(w * h);
-        bilinear_resize_mask(mask, mw, mh, alpha.data(), w, h);
-        gaussian_blur_mask(alpha.data(), w, h);
+        for (int b = 0; b < bs; ++b) {
+            if (frame_ws[b] == 0) continue;
+            int w = frame_ws[b], h = frame_hs[b];
+            std::vector<uint8_t> alpha(w * h);
+            bilinear_resize_mask(mask_data + b * mask_stride, mw, mh,
+                                 alpha.data(), w, h);
+            gaussian_blur_mask(alpha.data(), w, h);
+            JpegBuf buf;
+            stbi_write_jpg_to_func(JpegBuf::cb, &buf, w, h, 1, alpha.data(), 90);
+            fwrite(buf.data.data(), 1, buf.data.size(), mjpeg_f);
+            fflush(mjpeg_f);
+        }
 
-        JpegBuf buf;
-        stbi_write_jpg_to_func(JpegBuf::cb, &buf, w, h, 1, alpha.data(), 90);
-        fwrite(buf.data.data(), 1, buf.data.size(), mjpeg_f);
-        fflush(mjpeg_f);
-
-        data->progress.store((float)(i+1) / total);
+        data->progress.store((float)(i + bs) / total);
     }
 
     fclose(mjpeg_f);
