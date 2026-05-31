@@ -163,6 +163,13 @@ add_dependencies(pop-maker-studio embed_portrait)
 
 install(TARGETS pop-maker-studio DESTINATION bin)
 
+# Copy bundled models to build dir so the binary can find them next to itself
+add_custom_command(TARGET pop-maker-studio POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:pop-maker-studio>/models
+    COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/models $<TARGET_FILE_DIR:pop-maker-studio>/models
+    COMMENT "Copying bundled models to build dir"
+)
+
 # ── export-hubert CLI tool ────────────────────────────────────────────────────
 add_executable(export-hubert
     tools/export_hubert.cpp

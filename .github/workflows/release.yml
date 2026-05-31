@@ -80,9 +80,8 @@ jobs:
           curl -fsSL -o release/models/Kim_Vocal_2.onnx \
             "https://huggingface.co/Politrees/UVR_resources/resolve/main/models/MDXNet/Kim_Vocal_2.onnx"
 
-          echo "Downloading u2net..."
-          curl -fsSL -o release/models/u2net_human_seg.onnx \
-            "https://github.com/danielgatis/rembg/releases/download/v0.0.0/u2net_human_seg.onnx"
+          echo "Copying bundled u2netp model..."
+          cp models/u2netp_human_seg.onnx release/models/u2netp_human_seg.onnx
 
           echo "Downloading HuBERT checkpoint..."
           curl -fsSL -o hubert_base.pt \
