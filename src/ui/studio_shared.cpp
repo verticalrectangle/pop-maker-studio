@@ -110,7 +110,6 @@ void reopen_video_slots(AppState& state) {
             std::string key = clip_slot_key(cl.text, cl.start);
             int slot = slot_for_video(state, key, cl.text);
             if (slot < 0) continue;
-            proxy_start(cl.text);
             video_open_still(slot, proxy_still_path(cl.text));
             if (proxy_is_ready(cl.text)) {
                 ProxyInfo pi;

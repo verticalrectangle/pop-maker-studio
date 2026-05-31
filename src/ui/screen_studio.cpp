@@ -266,6 +266,24 @@ void ui_studio(AppState& state) {
     // GC slots whose clips have been deleted or moved.
     gc_video_slots(state);
 
+    // Proxy queue: if nothing is generating, start the next pending clip.
+    // Iterating every frame is cheap — proxy_is_ready is just two fs::exists calls.
+    if (!proxy_is_generating()) {
+        for (auto& tr : state.tracks) {
+            bool started = false;
+            for (auto& cl : tr.clips) {
+                if (cl.clip_type != ClipType::Video) continue;
+                if (cl.text.empty() || is_image_path(cl.text)) continue;
+                if (!proxy_is_ready(cl.text)) {
+                    proxy_start(cl.text);
+                    started = true;
+                    break;
+                }
+            }
+            if (started) break;
+        }
+    }
+
     // IPC may have added new video clips — trigger proxy scan on next frame.
     if (state.proxy_scan_needed) {
         state.proxy_scan_needed = false;

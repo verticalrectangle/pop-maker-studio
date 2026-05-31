@@ -321,7 +321,7 @@ void proxy_start(const std::string& video_path) {
         const char* proxy_args[] = {
             "ffmpeg", "-hide_banner", "-loglevel", "error",
             "-y", "-i", proxy_src.c_str(),
-            "-vf", "scale=iw/2:ih/2",
+            "-vf", "scale=min(iw/2\\,960):-2",
             "-c:v", "mjpeg", "-q:v", "13",
             "-an",
             mjpeg.c_str(), nullptr
