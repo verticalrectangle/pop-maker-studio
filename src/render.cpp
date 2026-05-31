@@ -1559,6 +1559,41 @@ void render_snapshot_gl(AppState& state, float snap_t) {
         int slot_pri = ti % MAX_VIDEO_TRACKS;
         int slot_sec = MAX_VIDEO_TRACKS + slot_pri;
 
+        // ── Background (color-pattern) clips ─────────────────────────────────
+        for (auto& bg_cl : track.clips) {
+            if (bg_cl.clip_type != ClipType::Background) continue;
+            if (t < bg_cl.start || t >= bg_cl.end) continue;
+            if (bg_cl.text.empty()) break;
+
+            int bg_slot_idx = ti % MAX_BG_SLOTS;
+            uintptr_t bg_tex = bg_render_to_texture(
+                bg_cl.text.c_str(), bg_slot_idx, out_w, out_h,
+                t, bg_cl.bg_speed, bg_cl.bg_intensity,
+                bg_cl.bg_c1, bg_cl.bg_c2, bg_cl.bg_c3);
+            if (!bg_tex) break;
+
+            float bpx = bg_cl.eval_prop("pos_x",    t);
+            float bpy = bg_cl.eval_prop("pos_y",    t);
+            float bsx = bg_cl.eval_prop("scale_x",  t);
+            float bsy = bg_cl.eval_prop("scale_y",  t);
+            float brt = bg_cl.eval_prop("rotation", t);
+            float ba  = bg_cl.eval_prop("opacity",  t);
+            float bcx = bpx * W, bcy = bpy * H;
+            float bhw = W * bsx * 0.5f, bhh = H * bsy * 0.5f;
+            float brad = brt * 3.14159265f / 180.f;
+            float bcos = cosf(brad), bsin = sinf(brad);
+            auto brot = [&](float ox, float oy) -> ImVec2 {
+                return { bcx + ox*bcos - oy*bsin, bcy + ox*bsin + oy*bcos };
+            };
+            ImU32 bcol = IM_COL32(255, 255, 255,
+                                  (int)(fmaxf(0.f, fminf(1.f, ba)) * 255.f));
+            dl.AddImageQuad(ImTextureRef((ImTextureID)bg_tex),
+                brot(-bhw, -bhh), brot(bhw, -bhh), brot(bhw, bhh), brot(-bhw, bhh),
+                {0,1}, {1,1}, {1,0}, {0,0}, bcol);
+            break;
+        }
+
+        // ── Video clips ───────────────────────────────────────────────────────
         const Clip* active = nullptr; int active_ci = -1;
         for (int ci = 0; ci < (int)track.clips.size(); ++ci) {
             auto& cl = track.clips[ci];
