@@ -375,72 +375,137 @@ static void run_job(std::shared_ptr<JobData> data,
     auto mem_info = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
 
     // Probe whether the model supports dynamic batch sizes.
-    int BATCH = std::min(8, (int)std::thread::hardware_concurrency());
-    if (BATCH > 1) {
-        std::vector<float> probe(2 * 3 * U2NET_SIZE * U2NET_SIZE, 0.f);
-        int64_t pshape[] = {2, 3, U2NET_SIZE, U2NET_SIZE};
-        try {
-            Ort::Value pt = Ort::Value::CreateTensor<float>(
-                mem_info, probe.data(), probe.size(), pshape, 4);
-            session->Run(Ort::RunOptions{nullptr}, in_names, &pt, 1, out_names, 1);
-        } catch (...) {
-            BATCH = 1;  // model has fixed batch=1, fall back to serial
+    bool dynamic_batch = false;
+    {
+        int probe_n = std::min(8, (int)std::thread::hardware_concurrency());
+        if (probe_n > 1) {
+            std::vector<float> probe(2 * 3 * U2NET_SIZE * U2NET_SIZE, 0.f);
+            int64_t pshape[] = {2, 3, U2NET_SIZE, U2NET_SIZE};
+            try {
+                Ort::Value pt = Ort::Value::CreateTensor<float>(
+                    mem_info, probe.data(), probe.size(), pshape, 4);
+                session->Run(Ort::RunOptions{nullptr}, in_names, &pt, 1, out_names, 1);
+                dynamic_batch = true;
+            } catch (...) {}
         }
     }
 
-    std::vector<float> input_batch((size_t)BATCH * 3 * U2NET_SIZE * U2NET_SIZE);
+    if (dynamic_batch) {
+        // Model supports variable batch — run all frames in batches of N.
+        int BATCH = std::min(8, (int)std::thread::hardware_concurrency());
+        std::vector<float> input_batch((size_t)BATCH * 3 * U2NET_SIZE * U2NET_SIZE);
 
-    for (int i = 0; i < total; i += BATCH) {
-        if (g_shutdown.load()) { fclose(mjpeg_f); fs::remove_all(tmpdir); return; }
-        const int bs = std::min(BATCH, total - i);
+        for (int i = 0; i < total; i += BATCH) {
+            if (g_shutdown.load()) { fclose(mjpeg_f); fs::remove_all(tmpdir); return; }
+            const int bs = std::min(BATCH, total - i);
 
-        std::vector<int> frame_ws(bs, 0), frame_hs(bs, 0);
-        for (int b = 0; b < bs; ++b) {
-            int w, h, ch;
-            uint8_t* img = stbi_load(frames[i + b].string().c_str(), &w, &h, &ch, 3);
-            if (!img) continue;
-            frame_ws[b] = w;
-            frame_hs[b] = h;
-            bilinear_resize_rgb(img, w, h,
-                input_batch.data() + (size_t)b * 3 * U2NET_SIZE * U2NET_SIZE,
-                U2NET_SIZE, U2NET_SIZE);
-            stbi_image_free(img);
-        }
+            std::vector<int> frame_ws(bs, 0), frame_hs(bs, 0);
+            for (int b = 0; b < bs; ++b) {
+                int w, h, ch;
+                uint8_t* img = stbi_load(frames[i + b].string().c_str(), &w, &h, &ch, 3);
+                if (!img) continue;
+                frame_ws[b] = w; frame_hs[b] = h;
+                bilinear_resize_rgb(img, w, h,
+                    input_batch.data() + (size_t)b * 3 * U2NET_SIZE * U2NET_SIZE,
+                    U2NET_SIZE, U2NET_SIZE);
+                stbi_image_free(img);
+            }
 
-        int64_t shape[] = {bs, 3, U2NET_SIZE, U2NET_SIZE};
-        Ort::Value in_tensor = Ort::Value::CreateTensor<float>(
-            mem_info, input_batch.data(),
-            (size_t)bs * 3 * U2NET_SIZE * U2NET_SIZE, shape, 4);
+            int64_t shape[] = {bs, 3, U2NET_SIZE, U2NET_SIZE};
+            Ort::Value in_tensor = Ort::Value::CreateTensor<float>(
+                mem_info, input_batch.data(),
+                (size_t)bs * 3 * U2NET_SIZE * U2NET_SIZE, shape, 4);
 
-        std::vector<Ort::Value> outputs;
-        try {
-            outputs = session->Run(Ort::RunOptions{nullptr},
-                                   in_names, &in_tensor, 1, out_names, 1);
-        } catch (...) {
+            std::vector<Ort::Value> outputs;
+            try {
+                outputs = session->Run(Ort::RunOptions{nullptr},
+                                       in_names, &in_tensor, 1, out_names, 1);
+            } catch (...) { data->progress.store((float)(i + bs) / total); continue; }
+
+            float* mask_data = outputs[0].GetTensorMutableData<float>();
+            auto mshape = outputs[0].GetTensorTypeAndShapeInfo().GetShape();
+            int mh = (int)mshape[mshape.size() - 2];
+            int mw = (int)mshape[mshape.size() - 1];
+            size_t mask_stride = (size_t)mh * mw;
+
+            for (int b = 0; b < bs; ++b) {
+                if (frame_ws[b] == 0) continue;
+                int w = frame_ws[b], h = frame_hs[b];
+                std::vector<uint8_t> alpha(w * h);
+                bilinear_resize_mask(mask_data + b * mask_stride, mw, mh, alpha.data(), w, h);
+                gaussian_blur_mask(alpha.data(), w, h);
+                JpegBuf buf;
+                stbi_write_jpg_to_func(JpegBuf::cb, &buf, w, h, 1, alpha.data(), 90);
+                fwrite(buf.data.data(), 1, buf.data.size(), mjpeg_f);
+                fflush(mjpeg_f);
+            }
             data->progress.store((float)(i + bs) / total);
-            continue;
+        }
+    } else {
+        // Fixed batch=1 model — run N parallel sessions, each processing a different frame.
+        // One session per logical core; each session is single-threaded to avoid oversubscription.
+        const int N = std::max(1, (int)std::thread::hardware_concurrency());
+        Ort::SessionOptions wopts;
+        wopts.SetIntraOpNumThreads(1);
+        wopts.SetInterOpNumThreads(1);
+        wopts.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
+
+        std::vector<std::unique_ptr<Ort::Session>> sessions(N);
+        sessions[0] = std::move(session);  // reuse already-loaded session
+        for (int i = 1; i < N; ++i) {
+            try { sessions[i] = std::make_unique<Ort::Session>(env, model.c_str(), wopts); }
+            catch (...) { sessions.resize(i); break; }
         }
 
-        float* mask_data = outputs[0].GetTensorMutableData<float>();
-        auto mshape = outputs[0].GetTensorTypeAndShapeInfo().GetShape();
-        int mh = (int)mshape[mshape.size() - 2];
-        int mw = (int)mshape[mshape.size() - 1];
-        size_t mask_stride = (size_t)mh * mw;
+        // Results stored in order, written sequentially after all workers finish.
+        std::vector<std::vector<uint8_t>> results(total);
+        std::atomic<int> next_frame{0};
+        std::atomic<bool> aborted{false};
 
-        for (int b = 0; b < bs; ++b) {
-            if (frame_ws[b] == 0) continue;
-            int w = frame_ws[b], h = frame_hs[b];
-            std::vector<uint8_t> alpha(w * h);
-            bilinear_resize_mask(mask_data + b * mask_stride, mw, mh,
-                                 alpha.data(), w, h);
-            gaussian_blur_mask(alpha.data(), w, h);
-            JpegBuf buf;
-            stbi_write_jpg_to_func(JpegBuf::cb, &buf, w, h, 1, alpha.data(), 90);
-            fwrite(buf.data.data(), 1, buf.data.size(), mjpeg_f);
-            fflush(mjpeg_f);
+        auto worker = [&](Ort::Session* sess) {
+            auto wm = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
+            std::vector<float> inp(3 * U2NET_SIZE * U2NET_SIZE);
+            while (true) {
+                if (g_shutdown.load()) { aborted.store(true); return; }
+                int i = next_frame.fetch_add(1);
+                if (i >= total) return;
+
+                int w, h, ch;
+                uint8_t* img = stbi_load(frames[i].string().c_str(), &w, &h, &ch, 3);
+                if (!img) { data->progress.store((float)i / total); continue; }
+                bilinear_resize_rgb(img, w, h, inp.data(), U2NET_SIZE, U2NET_SIZE);
+                stbi_image_free(img);
+
+                int64_t shape[] = {1, 3, U2NET_SIZE, U2NET_SIZE};
+                Ort::Value in_t = Ort::Value::CreateTensor<float>(wm, inp.data(), inp.size(), shape, 4);
+                std::vector<Ort::Value> outs;
+                try { outs = sess->Run(Ort::RunOptions{nullptr}, in_names, &in_t, 1, out_names, 1); }
+                catch (...) { data->progress.store((float)i / total); continue; }
+
+                float* md = outs[0].GetTensorMutableData<float>();
+                auto ms = outs[0].GetTensorTypeAndShapeInfo().GetShape();
+                int mh = (int)ms[ms.size()-2], mw2 = (int)ms[ms.size()-1];
+
+                std::vector<uint8_t> alpha(w * h);
+                bilinear_resize_mask(md, mw2, mh, alpha.data(), w, h);
+                gaussian_blur_mask(alpha.data(), w, h);
+                JpegBuf buf;
+                stbi_write_jpg_to_func(JpegBuf::cb, &buf, w, h, 1, alpha.data(), 90);
+                results[i] = std::move(buf.data);
+                data->progress.store((float)next_frame.load() / total);
+            }
+        };
+
+        std::vector<std::thread> threads;
+        threads.reserve(sessions.size());
+        for (auto& s : sessions) threads.emplace_back(worker, s.get());
+        for (auto& t : threads) t.join();
+
+        if (aborted.load()) { fclose(mjpeg_f); fs::remove_all(tmpdir); return; }
+
+        for (auto& res : results) {
+            if (!res.empty()) fwrite(res.data(), 1, res.size(), mjpeg_f);
         }
-
-        data->progress.store((float)(i + bs) / total);
     }
 
     fclose(mjpeg_f);
