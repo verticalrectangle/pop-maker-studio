@@ -1,4 +1,5 @@
 #include "app.h"
+#include "paths.h"
 #include "audio.h"
 #include "video.h"
 #include "transcribe.h"
@@ -425,6 +426,7 @@ void app_frame(AppState& state) {
 }
 
 void app_shutdown(AppState& state) {
+    g_shutdown.store(true);
     ipc_server_stop();
     runtime_fx_shutdown();
     audio_shutdown();

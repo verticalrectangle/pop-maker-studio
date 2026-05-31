@@ -1,4 +1,5 @@
 #include "proxy.h"
+#include "paths.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -47,9 +48,14 @@ static pid_t spawn_ffmpeg(const char** args) {
 
 static bool wait_ok(pid_t pid) {
     if (pid <= 0) return false;
-    int st = 0;
-    waitpid(pid, &st, 0);
-    return WIFEXITED(st) && WEXITSTATUS(st) == 0;
+    while (true) {
+        int st = 0;
+        pid_t r = waitpid(pid, &st, WNOHANG);
+        if (r == pid) return WIFEXITED(st) && WEXITSTATUS(st) == 0;
+        if (r < 0)    return false;
+        if (g_shutdown.load()) { kill(pid, SIGTERM); waitpid(pid, nullptr, 0); return false; }
+        usleep(50'000); // 50 ms poll
+    }
 }
 
 // ── Seek-table builder ────────────────────────────────────────────────────────
@@ -272,6 +278,15 @@ void proxy_start(const std::string& video_path) {
     }
 
     if (proxy_is_ready(video_path)) return;
+
+    // Sweep up any zombie mjpeg left by a previous interrupted generation
+    // (mjpeg exists but idx is missing). Only safe when not currently generating.
+    if (!g_generating.load()) {
+        std::string mj = proxy_mjpeg_path(video_path);
+        if (fs::exists(mj) && !fs::exists(proxy_idx_path(video_path)))
+            fs::remove(mj);
+    }
+
     if (g_generating.load()) proxy_cancel();
 
     g_generating.store(true);
@@ -318,6 +333,7 @@ void proxy_start(const std::string& video_path) {
         if (!wait_ok(pp)) {
             g_proxy_pid.store(-1);
             g_generating.store(false);
+            fs::remove(mjpeg);  // don't leave a partial mjpeg without an idx
             return;
         }
         g_proxy_pid.store(-1);

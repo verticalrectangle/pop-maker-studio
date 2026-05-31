@@ -72,9 +72,13 @@ jobs:
         run: |
           mkdir -p release/models/piper
 
-          echo "Downloading Whisper model..."
+          echo "Downloading Whisper large model (pipeline/subtitles)..."
           curl -fsSL -o release/models/ggml-large-v3-turbo-q5_0.bin \
             "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin"
+
+          echo "Downloading Whisper tiny.en model (fast search)..."
+          curl -fsSL -o release/models/ggml-tiny.en.bin \
+            "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin"
 
           echo "Downloading Kim_Vocal_2..."
           curl -fsSL -o release/models/Kim_Vocal_2.onnx \

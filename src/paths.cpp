@@ -1,4 +1,5 @@
 #include "paths.h"
+std::atomic<bool> g_shutdown{false};
 #include <unistd.h>
 #include <filesystem>
 namespace fs = std::filesystem;

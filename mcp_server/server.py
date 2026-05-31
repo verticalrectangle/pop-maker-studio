@@ -117,38 +117,52 @@ def _resolve_paths(params: dict) -> dict:
     return out
 
 
-def _call(method: str, params: dict | None = None) -> Any:
-    """Send one IPC request and return the result, or raise on error."""
-    req_id = str(uuid.uuid4())
-    resolved = _resolve_paths(params or {})
-    payload = json.dumps({"id": req_id, "method": method, "params": resolved}, ensure_ascii=False) + "\n"
+def _call(method: str, params: dict | None = None, *, _pms_retries: int = 5) -> Any:
+    """Send one IPC request and return the result, or raise on error.
 
-    with _sock_lock:
-        global _sock
-        for attempt in range(2):
-            try:
-                if _sock is None:
-                    _sock = _connect()
-                _sock.sendall(payload.encode())
-                buf = b""
-                while True:
-                    while b"\n" not in buf:
-                        chunk = _sock.recv(65536)
-                        if not chunk:
-                            raise ConnectionError("IPC socket closed")
-                        buf += chunk
-                    nl = buf.index(b"\n")
-                    line, buf = buf[:nl], buf[nl + 1:]
-                    resp = json.loads(line)
-                    if resp.get("type") == "progress":
-                        continue  # intermediate progress line — keep reading
-                    if "error" in resp:
-                        raise ValueError(resp["error"])
-                    return resp.get("result", {})
-            except (ConnectionError, OSError, BrokenPipeError):
-                _sock = None
-                if attempt == 1:
-                    raise
+    Retries up to _pms_retries times (3s apart) if PMS is not yet running,
+    so callers work correctly right after PMS restarts.
+    """
+    for pms_attempt in range(_pms_retries):
+        resolved = _resolve_paths(params or {})
+        payload = json.dumps(
+            {"id": str(uuid.uuid4()), "method": method, "params": resolved},
+            ensure_ascii=False,
+        ) + "\n"
+
+        try:
+            with _sock_lock:
+                global _sock
+                for attempt in range(2):
+                    try:
+                        if _sock is None:
+                            _sock = _connect()
+                        _sock.sendall(payload.encode())
+                        buf = b""
+                        while True:
+                            while b"\n" not in buf:
+                                chunk = _sock.recv(65536)
+                                if not chunk:
+                                    raise ConnectionError("IPC socket closed")
+                                buf += chunk
+                            nl = buf.index(b"\n")
+                            line, buf = buf[:nl], buf[nl + 1:]
+                            resp = json.loads(line)
+                            if resp.get("type") == "progress":
+                                continue  # intermediate progress line — keep reading
+                            if "error" in resp:
+                                raise ValueError(resp["error"])
+                            return resp.get("result", {})
+                    except (ConnectionError, OSError, BrokenPipeError):
+                        _sock = None
+                        if attempt == 1:
+                            raise
+        except (RuntimeError, ConnectionError, OSError, BrokenPipeError) as e:
+            if pms_attempt < _pms_retries - 1:
+                print(f"[pms] not ready ({e}), retrying in 3s…", flush=True)
+                time.sleep(3)
+                continue
+            raise
 
 
 @contextmanager
@@ -807,12 +821,11 @@ async def list_tools() -> list[Tool]:
                 "Find a specific spoken moment in a video and add it to the timeline. "
                 "Does windowed Whisper search — stops transcribing as soon as the match is found. "
                 "Much faster than trigger_pipeline on long files.\n\n"
-                "Three cases on return:\n"
+                "Blocks until the match is found — no polling needed. Returns status=found.\n\n"
+                "Two cases on return:\n"
                 "  extracted=true → segment file already on disk; call add_clip(dst, clip_duration, in_point) now\n"
                 "                   result includes in_point = offset into dst where your content starts\n"
-                "  cached=true    → transcript cached; call extract_clip_segment + add_clip now\n"
-                "  cached=false   → search started; poll get_search_status every 3s, print message each time,\n"
-                "                   then call extract_clip_segment + add_clip when found=true\n\n"
+                "  extracted=false → transcript cached; call extract_clip_segment + add_clip now\n\n"
                 "extract_clip_segment: src=path, start=max(0, result.start-padding), end=result.end+padding\n"
                 "add_clip: track=<target>, type=video, text=dst, start=0, end=clip_duration, in_point=result.in_point (extracted case only)"
             ),
@@ -842,16 +855,20 @@ async def list_tools() -> list[Tool]:
             description=(
                 "Read words from the saved transcript for a source video file around a specific timestamp. "
                 "Use after find_and_add_clip to find exact speaker boundaries, sentence starts, etc.\n\n"
-                "Reads the cached _words.json saved during search. Returns {words: [{word, start, end}]} "
-                "for the time window [time - before, time + after]. Timestamps are source-file-relative seconds."
+                "Returns {utterances, words}.\n"
+                "utterances: words grouped by pauses — each is {start, end, gap_before, text}. "
+                "gap_before > 0 marks a likely speaker change (default threshold 0.8s). "
+                "Use utterances to read the transcript; use words only when you need per-word timestamps.\n"
+                "words: raw [{word, start, end}] for the window [time-before, time+after]."
             ),
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "path":   {"type": "string", "description": "Absolute path to the source video file"},
-                    "time":   {"type": "number", "description": "Center timestamp in source-file seconds"},
-                    "before": {"type": "number", "description": "Seconds before 'time' to include (default 30)"},
-                    "after":  {"type": "number", "description": "Seconds after 'time' to include (default 60)"},
+                    "path":          {"type": "string", "description": "Absolute path to the source video file"},
+                    "time":          {"type": "number", "description": "Center timestamp in source-file seconds"},
+                    "before":        {"type": "number", "description": "Seconds before 'time' to include (default 30)"},
+                    "after":         {"type": "number", "description": "Seconds after 'time' to include (default 60)"},
+                    "gap_threshold": {"type": "number", "description": "Pause length in seconds that splits utterances (default 0.8)"},
                 },
                 "required": ["path", "time"],
             },
@@ -1888,7 +1905,8 @@ async def _add_clip(arguments: dict) -> dict:
         except Exception:
             source_dur = 0.0
 
-        if source_dur > needed_end * 2:
+        already_extracted = bool(re.search(r'_\d+_\d+\.webm$', text))
+        if not already_extracted and source_dur > needed_end * 2:
             p = Path(text)
             s_int = int(in_point)
             e_int = int(needed_end) + 1
@@ -2008,19 +2026,38 @@ async def _find_and_add_clip(arguments: dict) -> dict:
             "excerpt": excerpt,
         }
 
-    # No transcript — start Whisper search; Claude polls get_search_status
+    # No transcript — start Whisper search and block until done
     _call("search_transcript", {
         "path":        path,
         "query_words": query.lower().split(),
         "buffer_sec":  padding + 30.0,
     })
+    last_msg = ""
+    while True:
+        await asyncio.sleep(3)
+        status = _call("get_search_status", {})
+        msg = status.get("message", "")
+        if msg and msg != last_msg:
+            print(f"[find_and_add_clip] {msg}", flush=True)
+            last_msg = msg
+        if not status.get("running", False):
+            break
+
+    if not status.get("found", False):
+        raise ValueError(f"could not find '{query}' in transcript: {status.get('error', 'not found')}")
+
+    start   = float(status["start"])
+    end     = float(status["end"])
+    excerpt = status.get("excerpt", "")
     return {
-        "status":  "searching",
+        "status":  "found",
         "cached":  False,
         "path":    path,
-        "query":   query,
         "track":   track,
         "padding": padding,
+        "start":   round(start, 3),
+        "end":     round(end, 3),
+        "excerpt": excerpt,
     }
 
 
@@ -2082,6 +2119,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         time   = float(arguments["time"])
         before = float(arguments.get("before", 30))
         after  = float(arguments.get("after",  60))
+        gap_threshold = float(arguments.get("gap_threshold", 0.8))
         p = Path(path)
         words_path = p.parent / p.stem / f"{p.stem}_words.json"
         if not words_path.exists():
@@ -2090,7 +2128,35 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             all_words = json.load(f)
         lo, hi = time - before, time + after
         window = [w for w in all_words if lo <= float(w["start"]) <= hi]
-        return [TextContent(type="text", text=json.dumps({"words": window}, indent=2))]
+
+        # Group into utterances split by pauses >= gap_threshold seconds.
+        # gap_before > 0 on an utterance marks a likely speaker change.
+        utterances = []
+        current: list = []
+        for w in window:
+            if current:
+                gap = float(w["start"]) - float(current[-1]["end"])
+                if gap >= gap_threshold:
+                    utterances.append({
+                        "start":      float(current[0]["start"]),
+                        "end":        float(current[-1]["end"]),
+                        "gap_before": round(gap, 3),
+                        "text":       " ".join(x["word"] for x in current),
+                    })
+                    current = []
+            current.append(w)
+        if current:
+            utterances.append({
+                "start":      float(current[0]["start"]),
+                "end":        float(current[-1]["end"]),
+                "gap_before": 0.0,
+                "text":       " ".join(x["word"] for x in current),
+            })
+
+        return [TextContent(type="text", text=json.dumps({
+            "utterances": utterances,
+            "words":      window,
+        }, indent=2))]
     if name == "get_search_status":
         # Long-poll: block until the message changes or the search finishes,
         # so rapid successive calls don't return stale identical results.

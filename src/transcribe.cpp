@@ -34,6 +34,14 @@ fs::path whisper_model_path() {
     return fs::path(app_models_dir()) / "ggml-large-v3-turbo-q5_0.bin";
 }
 
+// Faster model used by find_and_add_clip search (tiny.en ≈ 10× faster than large).
+// Falls back to large if tiny isn't present.
+fs::path whisper_search_model_path() {
+    fs::path tiny = fs::path(app_models_dir()) / "ggml-tiny.en.bin";
+    if (fs::exists(tiny)) return tiny;
+    return whisper_model_path();
+}
+
 bool whisper_model_exists() { return fs::exists(whisper_model_path()); }
 
 // ── Audio helpers ─────────────────────────────────────────────────────────────
@@ -377,7 +385,7 @@ static void do_transcribe(
 // ── Chunked search ────────────────────────────────────────────────────────────
 
 static whisper_context* load_whisper_ctx() {
-    fs::path mp = whisper_model_path();
+    fs::path mp = whisper_search_model_path();
     if (!fs::exists(mp)) return nullptr;
     whisper_context_params cparams = whisper_context_default_params();
     cparams.use_gpu = true;

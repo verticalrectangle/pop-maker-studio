@@ -4,6 +4,7 @@
 #include <GLFW/glfw3.h>
 #include <cstdio>
 #include <cstdlib>
+#include <unistd.h>
 #include <string>
 #include <filesystem>
 
@@ -211,5 +212,5 @@ int main(int argc, char** argv) {
     ImGui::DestroyContext();
     glfwDestroyWindow(window);
     glfwTerminate();
-    return 0;
+    _exit(0); // skip C++ static destructors — detached threads are already signalled via g_shutdown
 }

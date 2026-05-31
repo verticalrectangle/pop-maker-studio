@@ -391,6 +391,7 @@ static void run_job(std::shared_ptr<JobData> data,
     std::vector<float> input_batch((size_t)BATCH * 3 * U2NET_SIZE * U2NET_SIZE);
 
     for (int i = 0; i < total; i += BATCH) {
+        if (g_shutdown.load()) { fclose(mjpeg_f); fs::remove_all(tmpdir); return; }
         const int bs = std::min(BATCH, total - i);
 
         std::vector<int> frame_ws(bs, 0), frame_hs(bs, 0);

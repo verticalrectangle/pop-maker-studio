@@ -6,3 +6,4 @@ build/
 build_debug/
 code-search/chroma_db/
 code-search/.venv/
+models/ggml-tiny.en.bin
