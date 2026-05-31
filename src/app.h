@@ -566,6 +566,12 @@ struct AppState {
     double      snapshot_msg_t    = 0.0; // ImGui::GetTime() when message was set
     bool        snapshot_msg_new  = false; // render thread sets; UI stamps time
 
+    // IPC-requested snapshot (ipc_server sets request; GL thread fulfills and sets done)
+    bool        snapshot_request    = false;
+    bool        snapshot_done       = false;
+    std::string snapshot_done_path;
+    std::string snapshot_done_err;
+
     // noise reduction
     bool        noise_reduce_running  = false;
     float       noise_reduce_progress = 0.f;

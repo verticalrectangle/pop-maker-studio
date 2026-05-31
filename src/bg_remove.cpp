@@ -15,8 +15,41 @@
 #include <algorithm>
 #include "stb_image.h"
 #include "stb_image_write.h"
+#include <unistd.h>
+#include <fcntl.h>
+#include <sys/wait.h>
 
 namespace fs = std::filesystem;
+
+// ── ffprobe helper — no shell, safe for Unicode/special-char paths ────────────
+
+static float probe_fps(const std::string& path) {
+    std::string file_arg = "file:" + path;
+    const char* argv[] = {"ffprobe", "-v", "error", "-select_streams", "v:0",
+                          "-show_entries", "stream=r_frame_rate",
+                          "-of", "csv=p=0", file_arg.c_str(), nullptr};
+    int pipefd[2];
+    if (pipe(pipefd) != 0) return 30.f;
+    pid_t pid = fork();
+    if (pid == 0) {
+        close(pipefd[0]);
+        dup2(pipefd[1], STDOUT_FILENO);
+        close(pipefd[1]);
+        int devnull = open("/dev/null", O_RDWR);
+        if (devnull >= 0) { dup2(devnull, STDIN_FILENO); dup2(devnull, STDERR_FILENO); close(devnull); }
+        execvp("ffprobe", const_cast<char**>(argv));
+        _exit(127);
+    }
+    close(pipefd[1]);
+    char buf[64] = {};
+    (void)read(pipefd[0], buf, sizeof(buf) - 1);
+    close(pipefd[0]);
+    waitpid(pid, nullptr, 0);
+    int nr = 0, dr = 0;
+    if (sscanf(buf, "%d/%d", &nr, &dr) == 2 && dr > 0) return (float)nr / dr;
+    float v = (float)atof(buf);
+    return (v > 0.f && v < 1000.f) ? v : 30.f;
+}
 
 // ── Job data shared between dispatch thread and poll ──────────────────────────
 
@@ -227,24 +260,7 @@ static void run_job(std::shared_ptr<JobData> data,
                     int start_frame,
                     int num_frames) {
     // Probe fps
-    float fps = 30.f;
-    {
-        std::string probe = "ffprobe -v error -select_streams v:0"
-                            " -show_entries stream=r_frame_rate"
-                            " -of csv=p=0 \"" + input_path + "\" 2>/dev/null";
-        FILE* p = popen(probe.c_str(), "r");
-        if (p) {
-            char buf[64] = {};
-            if (fgets(buf, sizeof(buf), p)) {
-                int nr, dr;
-                if (sscanf(buf, "%d/%d", &nr, &dr) == 2 && dr > 0)
-                    fps = (float)nr / dr;
-                else
-                    fps = (float)atof(buf);
-            }
-            pclose(p);
-        }
-    }
+    float fps = probe_fps(input_path);
     if (fps <= 0.f || fps > 1000.f) fps = 30.f;
 
     fs::create_directories(output_dir);
@@ -297,18 +313,32 @@ static void run_job(std::shared_ptr<JobData> data,
     fs::create_directories(tmpdir);
 
     {
-        std::string ffcmd = "ffmpeg -hide_banner -loglevel error"
-                            " -i \"" + input_path + "\"";
+        std::string file_arg    = "file:" + input_path;
+        std::string out_pattern = tmpdir + "/%06d.jpg";
+        std::string select_filter, ss_val;
+
+        std::vector<const char*> fargv = {"ffmpeg", "-hide_banner", "-loglevel", "error",
+                                           "-i", file_arg.c_str()};
         if (num_frames > 0 && start_frame >= 0) {
             int ef = start_frame + num_frames - 1;
-            ffcmd += " -vf \"select='between(n," + std::to_string(start_frame)
-                     + "," + std::to_string(ef) + ")'\" -vsync vfr";
+            select_filter = "select='between(n," + std::to_string(start_frame)
+                            + "," + std::to_string(ef) + ")'";
+            fargv.insert(fargv.end(), {"-vf", select_filter.c_str(), "-vsync", "vfr"});
         } else if (start_time > 0.001f) {
-            char ss[32]; snprintf(ss, sizeof(ss), " -ss %.6f", start_time);
-            ffcmd += ss;
+            char ss[32]; snprintf(ss, sizeof(ss), "%.6f", start_time);
+            ss_val = ss;
+            fargv.insert(fargv.end(), {"-ss", ss_val.c_str()});
         }
-        ffcmd += " -f image2 \"" + tmpdir + "/%06d.jpg\" 2>/dev/null";
-        system(ffcmd.c_str());  // NOLINT
+        fargv.insert(fargv.end(), {"-f", "image2", out_pattern.c_str(), nullptr});
+
+        pid_t pid = fork();
+        if (pid == 0) {
+            int devnull = open("/dev/null", O_RDWR);
+            if (devnull >= 0) { dup2(devnull, STDIN_FILENO); dup2(devnull, STDOUT_FILENO); dup2(devnull, STDERR_FILENO); close(devnull); }
+            execvp("ffmpeg", const_cast<char**>(fargv.data()));
+            _exit(127);
+        }
+        waitpid(pid, nullptr, 0);
     }
 
     // Collect frames
@@ -498,24 +528,7 @@ bool bg_remove_run_hires(const std::string& video_path,
     // Used at export time — blocking call from render thread.
     auto data = std::make_shared<JobData>();
 
-    float fps = 30.f;
-    {
-        std::string probe = "ffprobe -v error -select_streams v:0"
-                            " -show_entries stream=r_frame_rate"
-                            " -of csv=p=0 \"" + video_path + "\" 2>/dev/null";
-        FILE* p = popen(probe.c_str(), "r");
-        if (p) {
-            char buf[64] = {};
-            if (fgets(buf, sizeof(buf), p)) {
-                int nr, dr;
-                if (sscanf(buf, "%d/%d", &nr, &dr) == 2 && dr > 0)
-                    fps = (float)nr / dr;
-                else
-                    fps = (float)atof(buf);
-            }
-            pclose(p);
-        }
-    }
+    float fps = probe_fps(video_path);
     if (fps <= 0.f || fps > 1000.f) fps = 30.f;
 
     // Delegate to run_job (synchronous: we block until done)

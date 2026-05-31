@@ -145,43 +145,71 @@ bool proxy_load(const std::string& video_path, ProxyInfo& out) {
     // Probe fps from the ORIGINAL video — raw MJPEG streams have no reliable
     // fps metadata so ffprobe on the proxy frequently returns a wrong default.
     // Width/height come from the proxy itself (it's half-res).
-    char cmd[1024];
-    snprintf(cmd, sizeof(cmd),
-        "ffprobe -v error -select_streams v:0 "
-        "-show_entries stream=r_frame_rate "
-        "-of default=nw=1 '%s' 2>/dev/null",
-        video_path.c_str());
-
-    FILE* probe = popen(cmd, "r");
-    if (probe) {
-        char line[256];
-        long long fn = 0, fd = 1;
-        while (fgets(line, sizeof(line), probe)) {
-            if (sscanf(line, "r_frame_rate=%lld/%lld", &fn, &fd) == 2 && fd > 0) {
-                out.fps_num = (int64_t)fn;
-                out.fps_den = (int64_t)fd;
-                out.fps     = (double)fn / (double)fd;
+    {
+        std::string file_arg = "file:" + video_path;
+        const char* pargv[] = {"ffprobe", "-v", "error", "-select_streams", "v:0",
+                               "-show_entries", "stream=r_frame_rate",
+                               "-of", "default=nw=1", file_arg.c_str(), nullptr};
+        int pfd[2];
+        if (pipe(pfd) == 0) {
+            pid_t pid = fork();
+            if (pid == 0) {
+                close(pfd[0]);
+                dup2(pfd[1], STDOUT_FILENO);
+                close(pfd[1]);
+                int dn = open("/dev/null", O_RDWR);
+                if (dn >= 0) { dup2(dn, STDIN_FILENO); dup2(dn, STDERR_FILENO); close(dn); }
+                execvp("ffprobe", const_cast<char**>(pargv));
+                _exit(127);
             }
+            close(pfd[1]);
+            FILE* probe = fdopen(pfd[0], "r");
+            if (probe) {
+                char line[256];
+                long long fn = 0, fd = 1;
+                while (fgets(line, sizeof(line), probe)) {
+                    if (sscanf(line, "r_frame_rate=%lld/%lld", &fn, &fd) == 2 && fd > 0) {
+                        out.fps_num = (int64_t)fn;
+                        out.fps_den = (int64_t)fd;
+                        out.fps     = (double)fn / (double)fd;
+                    }
+                }
+                fclose(probe);
+            } else { close(pfd[0]); }
+            waitpid(pid, nullptr, 0);
         }
-        pclose(probe);
     }
 
     // Probe dimensions from the proxy (actual half-res pixel size).
-    snprintf(cmd, sizeof(cmd),
-        "ffprobe -v error -select_streams v:0 "
-        "-show_entries stream=width,height "
-        "-of default=nw=1 '%s' 2>/dev/null",
-        out.mjpeg_path.c_str());
-
-    probe = popen(cmd, "r");
-    if (probe) {
-        char line[256];
-        int w = 0, h = 0;
-        while (fgets(line, sizeof(line), probe)) {
-            if (sscanf(line, "width=%d",  &w) == 1) out.width  = w;
-            if (sscanf(line, "height=%d", &h) == 1) out.height = h;
+    {
+        const char* dargv[] = {"ffprobe", "-v", "error", "-select_streams", "v:0",
+                               "-show_entries", "stream=width,height",
+                               "-of", "default=nw=1", out.mjpeg_path.c_str(), nullptr};
+        int dfd[2];
+        if (pipe(dfd) == 0) {
+            pid_t pid = fork();
+            if (pid == 0) {
+                close(dfd[0]);
+                dup2(dfd[1], STDOUT_FILENO);
+                close(dfd[1]);
+                int dn = open("/dev/null", O_RDWR);
+                if (dn >= 0) { dup2(dn, STDIN_FILENO); dup2(dn, STDERR_FILENO); close(dn); }
+                execvp("ffprobe", const_cast<char**>(dargv));
+                _exit(127);
+            }
+            close(dfd[1]);
+            FILE* dim_probe = fdopen(dfd[0], "r");
+            if (dim_probe) {
+                char line[256];
+                int w = 0, h = 0;
+                while (fgets(line, sizeof(line), dim_probe)) {
+                    if (sscanf(line, "width=%d",  &w) == 1) out.width  = w;
+                    if (sscanf(line, "height=%d", &h) == 1) out.height = h;
+                }
+                fclose(dim_probe);
+            } else { close(dfd[0]); }
+            waitpid(pid, nullptr, 0);
         }
-        pclose(probe);
     }
 
     return out.width > 0 && out.height > 0 && out.fps > 0.0;
@@ -212,9 +240,10 @@ void proxy_start(const std::string& video_path) {
     if (is_image_ext(video_path)) {
         std::string still = proxy_still_path(video_path);
         if (!fs::exists(still)) {
+            std::string img_src = "file:" + video_path;
             const char* args[] = {
                 "ffmpeg", "-hide_banner", "-loglevel", "error",
-                "-y", "-i", video_path.c_str(),
+                "-y", "-i", img_src.c_str(),
                 "-vf", "scale=iw/2:ih/2",
                 still.c_str(), nullptr
             };
@@ -251,9 +280,10 @@ void proxy_start(const std::string& video_path) {
     // This gives the preview panel something to show immediately.
     std::string still = proxy_still_path(video_path);
     if (!fs::exists(still)) {
+        std::string still_src = "file:" + video_path;
         const char* still_args[] = {
             "ffmpeg", "-hide_banner", "-loglevel", "error",
-            "-y", "-i", video_path.c_str(),
+            "-y", "-i", still_src.c_str(),
             "-ss", "0", "-vframes", "1",
             "-vf", "scale=iw/4:ih/4",
             still.c_str(), nullptr
@@ -272,9 +302,10 @@ void proxy_start(const std::string& video_path) {
         // Quarter-resolution MJPEG, no audio.
         // -q:v 5 gives good quality/size balance for MJPEG (1=best, 31=worst).
         // We do NOT specify a frame rate — the proxy matches the original fps.
+        std::string proxy_src = "file:" + video_path;
         const char* proxy_args[] = {
             "ffmpeg", "-hide_banner", "-loglevel", "error",
-            "-y", "-i", video_path.c_str(),
+            "-y", "-i", proxy_src.c_str(),
             "-vf", "scale=iw/2:ih/2",
             "-c:v", "mjpeg", "-q:v", "4",
             "-an",

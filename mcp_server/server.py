@@ -21,6 +21,7 @@ Claude Desktop config (claude_desktop_config.json):
 import asyncio
 import json
 import os
+import re
 import socket
 import sys
 import threading
@@ -69,10 +70,58 @@ def _get_sock() -> socket.socket:
         return _sock
 
 
+def _resolve_path(path: str) -> str:
+    """Return the exact filesystem path for a given path string.
+
+    Handles cases where the passed-in path uses Unicode look-alikes (e.g.
+    straight apostrophe U+0027 vs curly quote U+2019) that differ from the
+    actual on-disk filename.  Lists the parent directory and returns the first
+    entry whose name matches when both sides are NFC-normalised and common
+    typographic substitutions are collapsed.
+    """
+    import os, unicodedata
+    if os.path.exists(path):
+        return path
+    parent = os.path.dirname(path)
+    name   = os.path.basename(path)
+    if not os.path.isdir(parent):
+        return path
+
+    _APOSTROPHE_VARIANTS = str.maketrans({
+        "‘": "'", "’": "'", "ʼ": "'",  # curly/modifier → straight
+        "＇": "'",                                   # fullwidth apostrophe
+        "“": '"', "”": '"',                   # curly double quotes
+        "？": "?", "！": "!",                   # fullwidth punctuation
+        "–": "-", "—": "-",                   # dashes
+        "：": ":", "；": ";",
+    })
+
+    def _fold(s: str) -> str:
+        return unicodedata.normalize("NFC", s).translate(_APOSTROPHE_VARIANTS).casefold()
+
+    name_folded = _fold(name)
+    for entry in os.listdir(parent):
+        if _fold(entry) == name_folded:
+            return os.path.join(parent, entry)
+    return path
+
+
+def _resolve_paths(params: dict) -> dict:
+    """Walk params dict and resolve any 'path', 'src', 'dst' values."""
+    out = {}
+    for k, v in params.items():
+        if isinstance(v, str) and k in ("path", "src", "dst"):
+            out[k] = _resolve_path(v)
+        else:
+            out[k] = v
+    return out
+
+
 def _call(method: str, params: dict | None = None) -> Any:
     """Send one IPC request and return the result, or raise on error."""
     req_id = str(uuid.uuid4())
-    payload = json.dumps({"id": req_id, "method": method, "params": params or {}}, ensure_ascii=False) + "\n"
+    resolved = _resolve_paths(params or {})
+    payload = json.dumps({"id": req_id, "method": method, "params": resolved}, ensure_ascii=False) + "\n"
 
     with _sock_lock:
         global _sock
@@ -82,16 +131,20 @@ def _call(method: str, params: dict | None = None) -> Any:
                     _sock = _connect()
                 _sock.sendall(payload.encode())
                 buf = b""
-                while b"\n" not in buf:
-                    chunk = _sock.recv(65536)
-                    if not chunk:
-                        raise ConnectionError("IPC socket closed")
-                    buf += chunk
-                line = buf.split(b"\n", 1)[0]
-                resp = json.loads(line)
-                if "error" in resp:
-                    raise ValueError(resp["error"])
-                return resp.get("result", {})
+                while True:
+                    while b"\n" not in buf:
+                        chunk = _sock.recv(65536)
+                        if not chunk:
+                            raise ConnectionError("IPC socket closed")
+                        buf += chunk
+                    nl = buf.index(b"\n")
+                    line, buf = buf[:nl], buf[nl + 1:]
+                    resp = json.loads(line)
+                    if resp.get("type") == "progress":
+                        continue  # intermediate progress line — keep reading
+                    if "error" in resp:
+                        raise ValueError(resp["error"])
+                    return resp.get("result", {})
             except (ConnectionError, OSError, BrokenPipeError):
                 _sock = None
                 if attempt == 1:
@@ -101,10 +154,29 @@ def _call(method: str, params: dict | None = None) -> Any:
 @contextmanager
 def _batch(label: str):
     _call("begin_batch", {"label": label})
+    result = {}
     try:
-        yield
+        yield result
     finally:
-        _call("end_batch", {})
+        result.update(_call("end_batch", {}))
+
+
+async def _notify_progress(progress: float, total: float = 1.0) -> None:
+    """Send an MCP progress notification if the client provided a progress token."""
+    try:
+        ctx = server.request_context
+        if not ctx.meta:
+            return
+        token = getattr(ctx.meta, "progressToken", None)
+        if token is None:
+            return
+        await ctx.session.send_progress_notification(
+            progress_token=token,
+            progress=progress,
+            total=total,
+        )
+    except Exception:
+        pass
 
 
 # ── Effect manifest (codegen'd) ────────────────────────────────────────────────
@@ -171,11 +243,11 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="get_search_status",
             description=(
-                "Poll the status of a running transcript search started by find_and_add_clip. "
-                "Returns: running (bool), progress (0–1), current_sec, total_sec, message, "
-                "found (bool), start (seconds), end (seconds), excerpt (text), error.\n\n"
-                "Poll every 3 seconds until running=false. Report message to the user each poll. "
-                "When running=false: check error first, then use start/end to extract the clip."
+                "Poll a running transcript search started by find_and_add_clip. "
+                "Returns: running (bool), progress (0–1), message, "
+                "found (bool), start (seconds), end (seconds), excerpt, error.\n\n"
+                "Call every 3s until running=false. Print message each poll so the user sees progress. "
+                "When done: if found=true, call extract_clip_segment then add_clip."
             ),
             inputSchema={"type": "object", "properties": {}},
         ),
@@ -435,9 +507,13 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="trigger_pipeline",
             description=(
-                "Start vocal separation + Whisper transcription + CTC alignment on the loaded audio. "
-                "Requires a clip to be added first. Returns immediately — poll get_pipeline_status. "
-                "mode: both | transcribe_only | separate_only. Requires batch."
+                "Transcribe + align ALL audio in the project for subtitle/typography generation. "
+                "USE THIS only when you want to generate subtitles or karaoke for clips already on the timeline. "
+                "DO NOT use this to search for a specific moment — use find_and_add_clip instead, "
+                "which does windowed search and stops as soon as it finds the match (much faster on long files). "
+                "Pass 'path' to transcribe a file without adding it to the timeline. "
+                "Blocks until complete — returns final pipeline status. No polling needed. "
+                "mode: both | transcribe_only | separate_only. No batch needed."
             ),
             inputSchema={
                 "type": "object",
@@ -446,7 +522,11 @@ async def list_tools() -> list[Tool]:
                         "type": "string",
                         "enum": ["both", "transcribe_only", "separate_only"],
                         "default": "both",
-                    }
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": "Absolute path to media file. Transcribes this file without adding it to the timeline.",
+                    },
                 },
             },
         ),
@@ -632,8 +712,9 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="analyze_audio",
             description=(
-                "Start beat/RMS analysis on an audio file. Returns immediately with "
-                "{status: 'started'}. Poll get_audio_analysis until status='done'."
+                "Run beat/RMS analysis on an audio file. Blocks until complete — "
+                "returns {status: 'done', bpm, duration, beats, rms} when finished. "
+                "No polling needed."
             ),
             inputSchema={
                 "type": "object",
@@ -723,13 +804,17 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="find_and_add_clip",
             description=(
-                "Find a spoken moment in a video by transcript search, then add only that segment to the timeline.\n\n"
-                "Returns immediately. Two cases:\n"
-                "  cached=true  → result already in response; go straight to extract_clip_segment + add_clip\n"
-                "  cached=false → poll get_search_status until running=false, then extract_clip_segment + add_clip\n\n"
-                "Segment path: {parent}/{stem}/{stem}_{start_int}_{end_int}.webm\n"
-                "extract_clip_segment: src=path, start=max(0,result.start-padding), end=result.end+padding\n"
-                "add_clip: type=video, text=dst, start=0, end=duration — inside a batch."
+                "Find a specific spoken moment in a video and add it to the timeline. "
+                "Does windowed Whisper search — stops transcribing as soon as the match is found. "
+                "Much faster than trigger_pipeline on long files.\n\n"
+                "Three cases on return:\n"
+                "  extracted=true → segment file already on disk; call add_clip(dst, clip_duration, in_point) now\n"
+                "                   result includes in_point = offset into dst where your content starts\n"
+                "  cached=true    → transcript cached; call extract_clip_segment + add_clip now\n"
+                "  cached=false   → search started; poll get_search_status every 3s, print message each time,\n"
+                "                   then call extract_clip_segment + add_clip when found=true\n\n"
+                "extract_clip_segment: src=path, start=max(0, result.start-padding), end=result.end+padding\n"
+                "add_clip: track=<target>, type=video, text=dst, start=0, end=clip_duration, in_point=result.in_point (extracted case only)"
             ),
             inputSchema={
                 "type": "object",
@@ -751,6 +836,25 @@ async def list_tools() -> list[Tool]:
                 "Word timestamps are source-file-relative seconds."
             ),
             inputSchema={"type": "object", "properties": {}},
+        ),
+        Tool(
+            name="read_transcript_context",
+            description=(
+                "Read words from the saved transcript for a source video file around a specific timestamp. "
+                "Use after find_and_add_clip to find exact speaker boundaries, sentence starts, etc.\n\n"
+                "Reads the cached _words.json saved during search. Returns {words: [{word, start, end}]} "
+                "for the time window [time - before, time + after]. Timestamps are source-file-relative seconds."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "path":   {"type": "string", "description": "Absolute path to the source video file"},
+                    "time":   {"type": "number", "description": "Center timestamp in source-file seconds"},
+                    "before": {"type": "number", "description": "Seconds before 'time' to include (default 30)"},
+                    "after":  {"type": "number", "description": "Seconds after 'time' to include (default 60)"},
+                },
+                "required": ["path", "time"],
+            },
         ),
         Tool(
             name="remove_silence",
@@ -999,6 +1103,22 @@ async def list_tools() -> list[Tool]:
             },
         ),
         Tool(
+            name="remove_background",
+            description=(
+                "Remove the background from a video clip using U2Net body segmentation. "
+                "Adds a 'Remove Background' body_fx brick on the same track as the video clip "
+                "(mask processing starts automatically). Blocks until masks are ready. No batch needed."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "track": {"type": "integer", "description": "Track index of the video clip"},
+                    "clip":  {"type": "integer", "description": "Clip index of the video clip"},
+                },
+                "required": ["track", "clip"],
+            },
+        ),
+        Tool(
             name="set_format",
             description=(
                 "Set the project canvas format / aspect ratio. Three presets:\n"
@@ -1018,6 +1138,50 @@ async def list_tools() -> list[Tool]:
                 },
                 "required": ["format"],
             },
+        ),
+        Tool(
+            name="take_snapshot",
+            description=(
+                "Renders the current canvas frame to a PNG file and returns the file path. "
+                "Use this to visually verify edits. Polls internally until the GL thread completes. "
+                "Read-only — no batch needed."
+            ),
+            inputSchema={"type": "object", "properties": {}},
+        ),
+        Tool(
+            name="verify_clips",
+            description=(
+                "Seek to each time and snapshot to visually confirm clip content. "
+                "Use after placing video clips from transcript timestamps — pass the midpoint of each clip. "
+                "Returns [{time, path}] in order. Read-only — no batch needed."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "times": {
+                        "type": "array",
+                        "items": {"type": "number"},
+                        "description": "Timeline positions (seconds) to snapshot, one per clip to verify",
+                    },
+                },
+                "required": ["times"],
+            },
+        ),
+        Tool(
+            name="undo",
+            description=(
+                "Undo the last edit. Returns updated project state so you can verify the revert. "
+                "Read-only — no batch needed."
+            ),
+            inputSchema={"type": "object", "properties": {}},
+        ),
+        Tool(
+            name="redo",
+            description=(
+                "Redo the last undone edit. Returns updated project state. "
+                "Read-only — no batch needed."
+            ),
+            inputSchema={"type": "object", "properties": {}},
         ),
     ]
 
@@ -1269,17 +1433,10 @@ async def _remove_silence(arguments: dict) -> dict:
     if not source:
         raise ValueError("clip has no source file (is it a video/audio clip?)")
 
-    # Analyze audio
-    _call("analyze_audio", {"path": source})
-    for _ in range(240):
-        await asyncio.sleep(0.5)
-        res = _call("get_audio_analysis", {})
-        if res.get("status") == "done":
-            break
-        if res.get("status") == "error":
-            raise ValueError("audio analysis failed for: " + source)
-    else:
-        raise TimeoutError("audio analysis timed out")
+    # Analyze audio — blocks until done (streaming IPC)
+    res = _call("analyze_audio", {"path": source})
+    if res.get("status") != "done":
+        raise ValueError("audio analysis failed for: " + source)
 
     rms = res["rms"]  # per-second list, 0-indexed by second
 
@@ -1661,35 +1818,80 @@ async def _add_body_fx_brick(arguments: dict) -> dict:
     fx_type = str(arguments.get("fx_type", "NeonOutline"))
     amount  = float(arguments.get("amount", 0.8))
 
-    clip_idx = _call("add_clip", {
-        "track": track,
-        "type":  "body_fx",
-        "start": start,
-        "end":   end,
-    })["clip"]
+    with _batch("Add BodyFX brick"):
+        clip_idx = _call("add_clip", {
+            "track": track,
+            "type":  "body_fx",
+            "start": start,
+            "end":   end,
+        })["clip"]
 
-    props = [
-        {"track": track, "clip": clip_idx, "prop": "body_fx_type",   "value": fx_type},
-        {"track": track, "clip": clip_idx, "prop": "body_fx_amount",  "value": amount},
-    ]
-    for i, key in enumerate(["param_0", "param_1", "param_2", "param_3"]):
-        if key in arguments:
-            props.append({"track": track, "clip": clip_idx,
-                          "prop": f"body_fx_{key}", "value": float(arguments[key])})
-    _call("set_clip_props", {"ops": props})
+        props = [
+            {"track": track, "clip": clip_idx, "prop": "body_fx_type",   "value": fx_type},
+            {"track": track, "clip": clip_idx, "prop": "body_fx_amount",  "value": amount},
+        ]
+        for i, key in enumerate(["param_0", "param_1", "param_2", "param_3"]):
+            if key in arguments:
+                props.append({"track": track, "clip": clip_idx,
+                              "prop": f"body_fx_{key}", "value": float(arguments[key])})
+        _call("set_clip_props", {"ops": props})
 
     return {"track": track, "clip": clip_idx}
 
 
+# ── remove_background ────────────────────────────────────────────────────────
+
+async def _remove_background(arguments: dict) -> dict:
+    track = int(arguments["track"])
+    clip  = int(arguments["clip"])
+
+    proj = _call("get_project", {})
+    tracks_list = proj.get("tracks", [])
+    if track >= len(tracks_list):
+        raise ValueError(f"track {track} not found")
+    clips_list = tracks_list[track].get("clips", [])
+    if clip >= len(clips_list):
+        raise ValueError(f"clip {clip} not found on track {track}")
+    clip_info = clips_list[clip]
+    start = float(clip_info["start"])
+    end   = float(clip_info["end"])
+
+    result = _call("add_clip", {
+        "track": track,
+        "type":  "body_fx",
+        "start": start,
+        "end":   end,
+    })
+    return {"brick_clip": result["clip"], "track": track, "start": start, "end": end}
+
+
 # ── find_and_add_clip ─────────────────────────────────────────────────────────
+
+def _search_transcript_in_words(words: list, query: str) -> tuple[float, float, str, float]:
+    """Search a words list for a query. Returns (start, end, excerpt, score)."""
+    query_words_list = query.lower().split()
+    query_words_set  = set(query_words_list)
+    best_score, best_start, best_end, best_text = -1.0, 0.0, 0.0, ""
+    window_size = max(len(query_words_list) * 2, 20)
+    for i in range(len(words)):
+        window = words[i:i + window_size]
+        if not window:
+            break
+        text  = " ".join(w["word"] for w in window).lower()
+        score = len(query_words_set & set(text.split())) / len(query_words_set) if query_words_set else 0.0
+        if score > best_score:
+            best_score = score
+            best_start = float(window[0]["start"])
+            best_end   = float(window[-1]["end"])
+            best_text  = " ".join(w["word"] for w in window)
+    return best_start, best_end, best_text[:200], best_score
+
 
 async def _find_and_add_clip(arguments: dict) -> dict:
     """
-    Step 1 of the find-and-add workflow.
-    Checks the disk cache first; if a transcript exists, searches it immediately and
-    returns the result so Claude can proceed directly to extract_clip_segment + add_clip.
-    If no transcript exists, starts a background Whisper search and returns {status:searching}
-    so Claude knows to poll get_search_status before continuing.
+    Step 1: check cache or start Whisper search. Returns immediately.
+    If cached=true, returns found result so Claude can call extract_clip_segment + add_clip.
+    If cached=false, starts background search; Claude polls get_search_status then continues.
     """
     path    = arguments.get("path", "")
     query   = arguments.get("query", "")
@@ -1710,7 +1912,6 @@ async def _find_and_add_clip(arguments: dict) -> dict:
         with open(cached_words_path) as f:
             words = json.load(f)
 
-    # Fall back to app transcript state
     if not words:
         proj = _call("get_project", {})
         tr   = _call("get_transcript", {})
@@ -1718,41 +1919,54 @@ async def _find_and_add_clip(arguments: dict) -> dict:
             words = tr["words"]
 
     if words:
-        # Search cached transcript synchronously — fast, no Whisper needed
-        query_words_list = query.lower().split()
-        query_words_set  = set(query_words_list)
-        best_score, best_start, best_end, best_text = -1.0, 0.0, 0.0, ""
-        window_size = max(len(query_words_list) * 2, 20)
-        for i in range(len(words)):
-            window = words[i:i + window_size]
-            if not window:
-                break
-            text  = " ".join(w["word"] for w in window).lower()
-            score = len(query_words_set & set(text.split())) / len(query_words_set) if query_words_set else 0.0
-            if score > best_score:
-                best_score = score
-                best_start = float(window[0]["start"])
-                best_end   = float(window[-1]["end"])
-                best_text  = " ".join(w["word"] for w in window)
-        if best_score < 0.3:
-            raise ValueError(f"could not find '{query}' in transcript (best score: {best_score:.2f})")
+        start, end, excerpt, score = _search_transcript_in_words(words, query)
+        if score < 0.3:
+            raise ValueError(f"could not find '{query}' in transcript (best score: {score:.2f})")
+
+        # Check if any previously extracted segment covers the needed range
+        seg_start = max(0.0, start - padding)
+        seg_end   = end + padding
+        cache_dir = p.parent / p.stem
+        existing_dst = None
+        seg_pat = re.compile(rf"^{re.escape(p.stem)}_(\d+)_(\d+)\.webm$")
+        if cache_dir.is_dir():
+            for f in cache_dir.iterdir():
+                m = seg_pat.match(f.name)
+                if m and int(m.group(1)) <= seg_start and int(m.group(2)) >= seg_end:
+                    existing_dst = str(f)
+                    break
+        if existing_dst:
+            dur_result = _call("get_media_info", {"path": existing_dst})
+            duration   = float(dur_result.get("duration", seg_end - seg_start))
+            # in_point into the found file (content starts at seg_start - file_seg_start)
+            file_seg_start = int(seg_pat.match(Path(existing_dst).name).group(1))
+            return {
+                "status":        "found",
+                "cached":        True,
+                "extracted":     True,
+                "path":          path,
+                "track":         track,
+                "padding":       padding,
+                "start":         round(start, 3),
+                "end":           round(end, 3),
+                "excerpt":       excerpt,
+                "dst":           existing_dst,
+                "clip_duration": round(duration, 3),
+                "in_point":      round(seg_start - file_seg_start, 3),
+            }
+
         return {
             "status":  "found",
             "cached":  True,
             "path":    path,
-            "query":   query,
             "track":   track,
             "padding": padding,
-            "result": {
-                "found":   True,
-                "start":   round(best_start, 3),
-                "end":     round(best_end, 3),
-                "excerpt": best_text[:200],
-                "score":   round(best_score, 3),
-            },
+            "start":   round(start, 3),
+            "end":     round(end, 3),
+            "excerpt": excerpt,
         }
 
-    # No transcript — kick off background Whisper search
+    # No transcript — start Whisper search; Claude polls get_search_status
     _call("search_transcript", {
         "path":        path,
         "query_words": query.lower().split(),
@@ -1765,7 +1979,6 @@ async def _find_and_add_clip(arguments: dict) -> dict:
         "query":   query,
         "track":   track,
         "padding": padding,
-        "message": "Whisper search started. Poll get_search_status every 3s until running=false.",
     }
 
 
@@ -1798,6 +2011,9 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     if name == "process_body_fx_masks":
         result = _call("start_body_fx_process", arguments)
         return [TextContent(type="text", text=json.dumps(result, indent=2))]
+    if name == "remove_background":
+        result = await _remove_background(arguments)
+        return [TextContent(type="text", text=json.dumps(result, indent=2))]
     if name == "find_and_add_clip":
         result = await _find_and_add_clip(arguments)
         return [TextContent(type="text", text=json.dumps(result, indent=2))]
@@ -1810,9 +2026,60 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     if name == "download_vision_model":
         result = await _download_vision_model()
         return [TextContent(type="text", text=json.dumps(result, indent=2))]
+    if name == "read_transcript_context":
+        path   = _resolve_path(arguments["path"])
+        time   = float(arguments["time"])
+        before = float(arguments.get("before", 30))
+        after  = float(arguments.get("after",  60))
+        p = Path(path)
+        words_path = p.parent / p.stem / f"{p.stem}_words.json"
+        if not words_path.exists():
+            raise ValueError(f"no transcript cached for {p.name} — run find_and_add_clip or trigger_pipeline first")
+        with open(words_path) as f:
+            all_words = json.load(f)
+        lo, hi = time - before, time + after
+        window = [w for w in all_words if lo <= float(w["start"]) <= hi]
+        return [TextContent(type="text", text=json.dumps({"words": window}, indent=2))]
+    if name == "get_search_status":
+        # Long-poll: block until the message changes or the search finishes,
+        # so rapid successive calls don't return stale identical results.
+        first = _call("get_search_status", {})
+        if not first.get("running", False):
+            return [TextContent(type="text", text=json.dumps(first, indent=2))]
+        last_msg = first.get("message", "")
+        for _ in range(60):  # wait up to 30s for a change
+            await asyncio.sleep(0.5)
+            st = _call("get_search_status", {})
+            if not st.get("running", False) or st.get("message", "") != last_msg:
+                return [TextContent(type="text", text=json.dumps(st, indent=2))]
+        return [TextContent(type="text", text=json.dumps(st, indent=2))]
     if name == "get_vision_model_status":
         result = _call("get_vision_model_status", {})
         return [TextContent(type="text", text=json.dumps(result, indent=2))]
+    if name == "take_snapshot":
+        _call("take_snapshot", {})
+        for _ in range(50):
+            await asyncio.sleep(0.2)
+            st = _call("get_snapshot_status", {})
+            if st.get("done"):
+                if "error" in st:
+                    raise ValueError(f"Snapshot failed: {st['error']}")
+                return [TextContent(type="text", text=st["path"])]
+        raise RuntimeError("take_snapshot timed out")
+    if name == "verify_clips":
+        async def _snap_at(t: float) -> str:
+            _call("seek", {"time": t})
+            _call("take_snapshot", {})
+            for _ in range(50):
+                await asyncio.sleep(0.2)
+                st = _call("get_snapshot_status", {})
+                if st.get("done"):
+                    if "error" in st:
+                        raise ValueError(f"Snapshot failed at t={t}: {st['error']}")
+                    return st["path"]
+            raise RuntimeError(f"verify_clips snapshot timed out at t={t}")
+        results = [{"time": t, "path": await _snap_at(t)} for t in arguments["times"]]
+        return [TextContent(type="text", text=json.dumps(results, indent=2))]
     try:
         result = _call(name, arguments)
         return [TextContent(type="text", text=json.dumps(result, indent=2))]

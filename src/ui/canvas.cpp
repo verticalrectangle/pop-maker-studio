@@ -593,6 +593,12 @@ void draw_canvas_handles(AppState& state, ImDrawList* dl, ImVec2 p, float w, flo
 // ── Preview ───────────────────────────────────────────────────────────────────
 
 void draw_preview(AppState& state, ImVec2 p, float w, float h) {
+    // IPC-triggered snapshot — fulfilled here on the GL thread
+    if (state.snapshot_request) {
+        state.snapshot_request = false;
+        render_snapshot_gl(state, state.playhead);
+    }
+
     ImDrawList* dl = ImGui::GetWindowDrawList();
 
     // Stage background: fine transparency checker so chroma-keyed holes look intentional.

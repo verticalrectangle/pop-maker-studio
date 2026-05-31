@@ -33,6 +33,7 @@ extern "C" {
 
 namespace fs = std::filesystem;
 
+
 // ── CPU pixel FX helpers ──────────────────────────────────────────────────────
 
 static inline uint32_t uhash(uint32_t x) {
@@ -935,7 +936,8 @@ uintptr_t video_get_thumbnail(double t, int* out_w, int* out_h) {
 
 float video_probe_duration(const std::string& path) {
     AVFormatContext* fc = nullptr;
-    if (avformat_open_input(&fc, path.c_str(), nullptr, nullptr) != 0) return 0.f;
+    const std::string& url0 = path;
+    if (avformat_open_input(&fc, url0.c_str(), nullptr, nullptr) != 0) return 0.f;
     // find_stream_info is required for files where the container header doesn't
     // carry a reliable duration (e.g. some MP4/MKV variants).
     avformat_find_stream_info(fc, nullptr);
@@ -949,7 +951,8 @@ float video_probe_duration(const std::string& path) {
 MediaFileInfo video_probe_file(const std::string& path) {
     MediaFileInfo info;
     AVFormatContext* fc = nullptr;
-    if (avformat_open_input(&fc, path.c_str(), nullptr, nullptr) != 0) {
+    const std::string& url1 = path;
+    if (avformat_open_input(&fc, url1.c_str(), nullptr, nullptr) != 0) {
         info.error = "cannot open file";
         return info;
     }
@@ -988,7 +991,8 @@ std::string video_extract_segment(const std::string& src,
                                   double start_sec, double end_sec,
                                   const std::string& dst) {
     AVFormatContext* in_ctx = nullptr;
-    if (avformat_open_input(&in_ctx, src.c_str(), nullptr, nullptr) < 0)
+    const std::string& url2 = src;
+    if (avformat_open_input(&in_ctx, url2.c_str(), nullptr, nullptr) < 0)
         return "cannot open source file";
     if (avformat_find_stream_info(in_ctx, nullptr) < 0) {
         avformat_close_input(&in_ctx);
@@ -1156,7 +1160,8 @@ bool video_open_export(int slot, const std::string& path) {
     if (ex.cur_path == path && ex.fmt_ctx) return true;
     video_close_export(slot);
 
-    if (avformat_open_input(&ex.fmt_ctx, path.c_str(), nullptr, nullptr) < 0)
+    const std::string& url3 = path;
+    if (avformat_open_input(&ex.fmt_ctx, url3.c_str(), nullptr, nullptr) < 0)
         return false;
     if (avformat_find_stream_info(ex.fmt_ctx, nullptr) < 0) {
         avformat_close_input(&ex.fmt_ctx); return false;

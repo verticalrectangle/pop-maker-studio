@@ -13,13 +13,10 @@
 #include <vector>
 #include <string>
 #include "json.hpp"
+#include <unistd.h>
+#include <fcntl.h>
+#include <sys/wait.h>
 
-extern "C" {
-#include <libavformat/avformat.h>
-#include <libavcodec/avcodec.h>
-#include <libavutil/opt.h>
-#include <libswresample/swresample.h>
-}
 
 namespace fs = std::filesystem;
 
@@ -41,90 +38,43 @@ bool whisper_model_exists() { return fs::exists(whisper_model_path()); }
 
 // ── Audio helpers ─────────────────────────────────────────────────────────────
 
-// Decode audio to 16 kHz mono float32 via libavformat/libavcodec/libswresample.
+// Decode audio to 16 kHz mono float32 via ffmpeg pipe — same pattern as separate.cpp.
 // clip_in / clip_dur: when clip_dur > 0, only decode [clip_in, clip_in+clip_dur] seconds.
 static std::vector<float> decode_16k(const std::string& path,
                                       float clip_in = 0.f, float clip_dur = 0.f) {
-    AVFormatContext* fmt_ctx = nullptr;
-    if (avformat_open_input(&fmt_ctx, path.c_str(), nullptr, nullptr) < 0) return {};
-    if (avformat_find_stream_info(fmt_ctx, nullptr) < 0) {
-        avformat_close_input(&fmt_ctx); return {};
+    std::string file_arg = "file:" + path;
+    std::string ss_val   = std::to_string(clip_in);
+    std::string t_val    = std::to_string(clip_dur);
+
+    std::vector<const char*> argv = {"ffmpeg", "-hide_banner", "-loglevel", "error"};
+    if (clip_in  > 0.f) { argv.push_back("-ss"); argv.push_back(ss_val.c_str()); }
+    argv.push_back("-i"); argv.push_back(file_arg.c_str());
+    if (clip_dur > 0.f) { argv.push_back("-t");  argv.push_back(t_val.c_str()); }
+    argv.insert(argv.end(), {"-vn", "-ar", "16000", "-ac", "1", "-f", "f32le", "pipe:1", nullptr});
+
+    int pipefd[2];
+    if (pipe(pipefd) != 0) return {};
+    pid_t pid = fork();
+    if (pid == 0) {
+        close(pipefd[0]);
+        dup2(pipefd[1], STDOUT_FILENO);
+        close(pipefd[1]);
+        int devnull = open("/dev/null", O_RDWR);
+        if (devnull >= 0) { dup2(devnull, STDIN_FILENO); dup2(devnull, STDERR_FILENO); close(devnull); }
+        execvp("ffmpeg", const_cast<char**>(argv.data()));
+        _exit(127);
     }
-
-    int audio_idx = av_find_best_stream(fmt_ctx, AVMEDIA_TYPE_AUDIO, -1, -1, nullptr, 0);
-    if (audio_idx < 0) { avformat_close_input(&fmt_ctx); return {}; }
-
-    AVStream*         stream    = fmt_ctx->streams[audio_idx];
-    const AVCodec*    codec     = avcodec_find_decoder(stream->codecpar->codec_id);
-    AVCodecContext*   codec_ctx = avcodec_alloc_context3(codec);
-    avcodec_parameters_to_context(codec_ctx, stream->codecpar);
-    if (avcodec_open2(codec_ctx, codec, nullptr) < 0) {
-        avcodec_free_context(&codec_ctx); avformat_close_input(&fmt_ctx); return {};
-    }
-
-    if (clip_in > 0.f) {
-        int64_t ts = av_rescale_q((int64_t)(clip_in * AV_TIME_BASE),
-                                  AV_TIME_BASE_Q, stream->time_base);
-        av_seek_frame(fmt_ctx, audio_idx, ts, AVSEEK_FLAG_BACKWARD);
-        avcodec_flush_buffers(codec_ctx);
-    }
-
-    SwrContext* swr = swr_alloc();
-#if LIBAVUTIL_VERSION_MAJOR >= 57
-    av_opt_set_chlayout(swr, "in_chlayout",  &codec_ctx->ch_layout, 0);
-    AVChannelLayout mono = AV_CHANNEL_LAYOUT_MONO;
-    av_opt_set_chlayout(swr, "out_chlayout", &mono, 0);
-#else
-    av_opt_set_int(swr, "in_channel_count",   codec_ctx->channels, 0);
-    av_opt_set_int(swr, "in_channel_layout",  (int64_t)codec_ctx->channel_layout, 0);
-    av_opt_set_int(swr, "out_channel_count",  1, 0);
-    av_opt_set_int(swr, "out_channel_layout", AV_CH_LAYOUT_MONO, 0);
-#endif
-    av_opt_set_int(swr, "in_sample_rate",    codec_ctx->sample_rate, 0);
-    av_opt_set_sample_fmt(swr, "in_sample_fmt",  codec_ctx->sample_fmt, 0);
-    av_opt_set_int(swr, "out_sample_rate",   16000, 0);
-    av_opt_set_sample_fmt(swr, "out_sample_fmt", AV_SAMPLE_FMT_FLT, 0);
-    swr_init(swr);
+    close(pipefd[1]);
+    FILE* fp = fdopen(pipefd[0], "r");
+    if (!fp) { close(pipefd[0]); waitpid(pid, nullptr, 0); return {}; }
 
     std::vector<float> pcm;
-    const double end_sec = (clip_dur > 0.f) ? (double)(clip_in + clip_dur) : 1e9;
-    AVPacket* pkt   = av_packet_alloc();
-    AVFrame*  frame = av_frame_alloc();
-
-    while (av_read_frame(fmt_ctx, pkt) >= 0) {
-        if (pkt->stream_index != audio_idx) { av_packet_unref(pkt); continue; }
-        if (pkt->pts != AV_NOPTS_VALUE &&
-            pkt->pts * av_q2d(stream->time_base) > end_sec) {
-            av_packet_unref(pkt); break;
-        }
-        avcodec_send_packet(codec_ctx, pkt);
-        while (avcodec_receive_frame(codec_ctx, frame) == 0) {
-            int out_samples = (int)av_rescale_rnd(
-                swr_get_delay(swr, codec_ctx->sample_rate) + frame->nb_samples,
-                16000, codec_ctx->sample_rate, AV_ROUND_UP);
-            std::vector<float> buf(out_samples);
-            uint8_t* out_ptr = (uint8_t*)buf.data();
-            int got = swr_convert(swr, &out_ptr, out_samples,
-                                  (const uint8_t**)frame->data, frame->nb_samples);
-            if (got > 0) pcm.insert(pcm.end(), buf.begin(), buf.begin() + got);
-            av_frame_unref(frame);
-        }
-        av_packet_unref(pkt);
-    }
-
-    // Flush resampler
-    for (int got = 1; got > 0;) {
-        std::vector<float> buf(1024);
-        uint8_t* out_ptr = (uint8_t*)buf.data();
-        got = swr_convert(swr, &out_ptr, 1024, nullptr, 0);
-        if (got > 0) pcm.insert(pcm.end(), buf.begin(), buf.begin() + got);
-    }
-
-    av_frame_free(&frame);
-    av_packet_free(&pkt);
-    swr_free(&swr);
-    avcodec_free_context(&codec_ctx);
-    avformat_close_input(&fmt_ctx);
+    float buf[4096];
+    size_t r;
+    while ((r = fread(buf, sizeof(float), 4096, fp)) > 0)
+        pcm.insert(pcm.end(), buf, buf + r);
+    fclose(fp);
+    waitpid(pid, nullptr, 0);
     return pcm;
 }
 
@@ -513,6 +463,12 @@ TranscribeSearchResult transcribe_search(
     }
     float total_dur = (float)info.duration;
 
+    // Derive output path for the accumulated transcript
+    fs::path src(path);
+    fs::path outdir = src.parent_path() / src.stem();
+    fs::create_directories(outdir);
+    std::string words_json_path = (outdir / (src.stem().string() + "_words.json")).string();
+
     const float window_sec  = 300.f;
     const float overlap_sec = 30.f;
     const float step_sec    = window_sec - overlap_sec;
@@ -520,6 +476,12 @@ TranscribeSearchResult transcribe_search(
     float window_start      = 0.f;
     bool  collecting_buffer = false;
     float buffer_end        = 0.f;
+
+    // Accumulate all words across windows; only keep words from each window's
+    // non-overlapping region (word.start >= window_start && word.start < window_start + step_sec)
+    // to avoid duplicates at overlap boundaries.
+    nlohmann::json all_words = nlohmann::json::array();
+    float last_saved_end = 0.f; // high-water mark: skip words we've already saved
 
     while (window_start < total_dur) {
         if (g_cancel.load()) break;
@@ -545,6 +507,20 @@ TranscribeSearchResult transcribe_search(
         for (auto& w : words_arr) {
             w["start"] = w.value("start", 0.f) + window_start;
             w["end"]   = w.value("end",   0.f) + window_start;
+        }
+
+        // Accumulate non-duplicate words (past the high-water mark)
+        for (const auto& w : words_arr) {
+            float ws = w.value("start", 0.f);
+            if (ws >= last_saved_end)
+                all_words.push_back(w);
+        }
+        if (!words_arr.empty()) {
+            float new_end = words_arr.back().value("end", 0.f);
+            // Advance high-water mark to the non-overlap boundary so the next
+            // window's overlap region doesn't re-add the same words.
+            last_saved_end = std::max(last_saved_end, window_start + step_sec);
+            (void)new_end;
         }
 
         float score = score_words(words_arr, query_words);
@@ -579,6 +555,12 @@ TranscribeSearchResult transcribe_search(
         if (collecting_buffer && window_start + dur >= buffer_end) break;
 
         window_start += step_sec;
+    }
+
+    // Save accumulated transcript to disk so get_transcript / find_video_moment can use it
+    if (!all_words.empty()) {
+        std::ofstream f(words_json_path);
+        if (f) f << all_words.dump(2);
     }
 
     whisper_free(ctx);

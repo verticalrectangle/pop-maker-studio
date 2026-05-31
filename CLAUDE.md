@@ -7,22 +7,36 @@ The app runs locally; Claude connects via `mcp_server/server.py`.
 
 ## Two rules that apply everywhere
 
-**1. Edits require a batch.**
-All mutations (add_clip, set_clip_prop, move_clip, delete_clip, etc.) must be wrapped:
-`begin_batch("label")` → edits → `end_batch()`
+**1. Batches are optional for single edits** (auto-applied and returns updated state).
+Use `begin_batch("label")` → edits → `end_batch()` only when grouping multiple edits into one undo step.
 Read-only calls (get_project, get_pipeline_status, etc.) need no batch.
 
-**2. Long-running ops are async — start, then poll.**
-Every background operation returns `{status: 'started'}` immediately.
-Poll the matching `get_*` tool every 2–3 seconds and report progress to the user.
+**2. Long-running ops block until complete — no manual polling needed.**
+These tools handle polling internally and return only when done:
+
+| Tool | Returns when done | Then |
+|------|------------------|------|
+| `trigger_pipeline` | stage=`done` result | `generate_typography` |
+| `analyze_audio(path)` | status=`done` result with beats/rms | `find_audio_cue` |
+| `find_and_add_clip(path, query)` | status=`found` result | `extract_clip_segment` → `add_clip` |
+| `remove_background` | status=`ready` | — |
+
+Still requires manual polling (vision tools — slower cadence):
 
 | Start | Poll until | Then |
 |-------|-----------|------|
-| `trigger_pipeline` | `get_pipeline_status` stage=`done` | `generate_typography` |
-| `analyze_audio(path)` | `get_audio_analysis` status=`done` | `find_audio_cue` |
-| `find_and_add_clip(path, query)` | `get_search_status` running=`false` | `extract_clip_segment` → `add_clip` |
 | `describe_video(path)` | `get_video_description` status=`done` | `find_video_moment` |
 | `download_vision_model` | `get_vision_model_status` status=`ready` | use vision tools |
+
+## Verifying clip placement
+
+After placing video clips from transcript timestamps, always call `verify_clips` with the midpoint of each clip before proceeding. This catches wrong timestamps (e.g. wrong speaker) without stopping to ask.
+
+## Searching vs. transcribing
+
+**Searching for a specific moment** → always use `find_and_add_clip`. It does windowed search and stops when the match is found. Fast on long files. Never add the full source video to the timeline just to transcribe it.
+
+**Generating subtitles/karaoke for clips already on the timeline** → use `trigger_pipeline`. This transcribes the full audio and is slow on long files.
 
 ## Track layering
 

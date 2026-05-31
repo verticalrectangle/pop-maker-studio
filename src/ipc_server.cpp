@@ -31,7 +31,9 @@ static const char* k_gen_fx_names[] = {
 #include <vector>
 #include <algorithm>
 #include <atomic>
+#include <mutex>
 #include <thread>
+#include <unordered_set>
 #include <fstream>
 
 using json = nlohmann::json;
@@ -61,10 +63,24 @@ struct Client {
 };
 static std::vector<Client> g_clients;
 
-// Batch state: IPC edits are rejected unless inside a batch.
+// Batch state: explicit batch wraps multiple edits into one undo step.
+// Auto-batch: single mutations without an explicit batch get one automatically.
 static bool        g_in_batch    = false;
+static bool        g_auto_batched = false;   // true when batch was opened implicitly
 static std::string g_batch_label;
-static AppState*   g_batch_state = nullptr;  // state pointer for end_batch
+static AppState*   g_batch_state = nullptr;
+
+// ── Async progress streaming ──────────────────────────────────────────────────
+// Long-running ops mark the client fd "busy", stream {"type":"progress"} lines,
+// then send the final {"id":…,"result":…} line and clear busy.
+// process_client() skips busy fds so it doesn't interleave reads.
+
+static std::mutex           g_busy_mtx;
+static std::unordered_set<int> g_busy_fds;
+
+static void fd_mark_busy(int fd) { std::lock_guard<std::mutex> lk(g_busy_mtx); g_busy_fds.insert(fd); }
+static void fd_mark_free(int fd) { std::lock_guard<std::mutex> lk(g_busy_mtx); g_busy_fds.erase(fd); }
+static bool fd_is_busy  (int fd) { std::lock_guard<std::mutex> lk(g_busy_mtx); return g_busy_fds.count(fd) > 0; }
 
 // ── Socket helpers ────────────────────────────────────────────────────────────
 
@@ -87,6 +103,15 @@ static void send_ok_id(int fd, const std::string& id, const json& result = json:
 static void send_err_id(int fd, const std::string& id, const std::string& msg) {
     json r; r["id"] = id; r["error"] = msg;
     send_json(fd, r);
+}
+
+static void send_progress(int fd, const std::string& id, float progress, const std::string& message = "") {
+    json j;
+    j["id"]       = id;
+    j["type"]     = "progress";
+    j["progress"] = progress;
+    if (!message.empty()) j["message"] = message;
+    send_json(fd, j);
 }
 
 // MCP sends numeric values as JSON strings when the schema type is "{}".
@@ -367,7 +392,8 @@ static bool check_clip(const AppState& state, int ti, int ci, std::string& err) 
 
 // ── Command dispatch ──────────────────────────────────────────────────────────
 
-static json dispatch(AppState& state, const std::string& method, const json& params, std::string& err) {
+static json dispatch(AppState& state, const std::string& method, const json& params, std::string& err,
+                     int client_fd = -1, const std::string& req_id = "") {
     // ── Read-only: no batch required ─────────────────────────────────────────
     if (method == "get_project") {
         return state_to_json(state);
@@ -408,13 +434,35 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         if (s_audio_analysis.running.load()) { err = "analysis already running"; return {}; }
         s_audio_analysis.running.store(true);
         s_audio_analysis.done.store(false);
+        if (client_fd >= 0) {
+            fd_mark_busy(client_fd);
+            std::thread([path, client_fd, req_id]() {
+                s_audio_analysis.result = beat_detect(path);
+                s_audio_analysis.done.store(true);
+                s_audio_analysis.running.store(false);
+                auto& res = s_audio_analysis.result;
+                json r;
+                if (res.ok) {
+                    r["status"]   = "done";
+                    r["bpm"]      = res.bpm;
+                    r["duration"] = res.duration;
+                    r["beats"]    = res.beats;
+                    r["rms"]      = res.rms;
+                } else {
+                    r["status"]  = "error";
+                    r["message"] = "beat detection failed";
+                }
+                send_ok_id(client_fd, req_id, r);
+                fd_mark_free(client_fd);
+            }).detach();
+            json sentinel; sentinel["__async"] = true; return sentinel;
+        }
         std::thread([path]() {
             s_audio_analysis.result = beat_detect(path);
             s_audio_analysis.done.store(true);
             s_audio_analysis.running.store(false);
         }).detach();
-        json r; r["status"] = "started";
-        return r;
+        json r; r["status"] = "started"; return r;
     }
 
     if (method == "get_audio_analysis") {
@@ -564,8 +612,7 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         if (qw.empty()) { err = "query_words required"; return {}; }
         if (transcribe_search_running()) { err = "search already running"; return {}; }
         transcribe_search_start(path, qw, buffer_sec);
-        json res; res["status"] = "started";
-        return res;
+        json res; res["status"] = "started"; return res;
     }
 
     if (method == "set_audio_path") {
@@ -671,16 +718,145 @@ static json dispatch(AppState& state, const std::string& method, const json& par
     if (method == "end_batch") {
         if (!g_in_batch) { err = "not in a batch"; return {}; }
         history_push(state, g_batch_label);
-        g_in_batch    = false;
+        g_in_batch     = false;
+        g_auto_batched = false;
         g_batch_label.clear();
         g_batch_state = nullptr;
+        return state_to_json(state);
+    }
+
+    // ── Snapshot (GL-thread flag — fulfilled by draw_preview) ─────────────────
+    if (method == "take_snapshot") {
+        state.snapshot_done      = false;
+        state.snapshot_done_path.clear();
+        state.snapshot_done_err.clear();
+        state.snapshot_request   = true;
         return json::object();
     }
 
-    // ── Editing: require batch ────────────────────────────────────────────────
+    if (method == "get_snapshot_status") {
+        json r;
+        r["done"] = state.snapshot_done;
+        if (state.snapshot_done) {
+            if (state.snapshot_done_err.empty())
+                r["path"] = state.snapshot_done_path;
+            else
+                r["error"] = state.snapshot_done_err;
+        }
+        return r;
+    }
+
+    // ── Undo / redo ───────────────────────────────────────────────────────────
+    if (method == "undo") {
+        if (!history_can_undo()) { err = "nothing to undo"; return {}; }
+        history_undo(state);
+        return state_to_json(state);
+    }
+
+    if (method == "redo") {
+        if (!history_can_redo()) { err = "nothing to redo"; return {}; }
+        history_redo(state);
+        return state_to_json(state);
+    }
+
+    // ── Background removal / BodyFX mask processing ───────────────────────────
+    if (method == "start_body_fx_process") {
+        int ti = params.value("track", -1), ci = params.value("clip", -1);
+        if (!check_clip(state, ti, ci, err)) return {};
+        const Clip& brick = state.tracks[ti].clips[ci];
+        if (brick.clip_type != ClipType::BodyFX) { err = "clip is not a body_fx brick"; return {}; }
+        int vci = -1;
+        for (int vi = 0; vi < (int)state.tracks[ti].clips.size(); ++vi) {
+            const Clip& vc = state.tracks[ti].clips[vi];
+            if (vc.clip_type != ClipType::Video) continue;
+            if (vc.end <= brick.start || vc.start >= brick.end) continue;
+            if (vc.bg_remove_status == BgRemoveStatus::Idle ||
+                vc.bg_remove_status == BgRemoveStatus::Error)
+                bg_remove_start(state, ti, vi);
+            vci = vi;
+            break;
+        }
+        if (vci < 0) { err = "no video clip found on the same track overlapping the brick"; return {}; }
+        if (client_fd < 0) {
+            json r; r["video_track"] = ti; r["video_clip"] = vci; return r;
+        }
+        fd_mark_busy(client_fd);
+        Clip* clip_ptr = &state.tracks[ti].clips[vci];
+        int vti = ti;
+        std::thread([client_fd, req_id, clip_ptr, vti, vci]() {
+            while (true) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(500));
+                float           prog = clip_ptr->bg_remove_progress;
+                BgRemoveStatus  st   = clip_ptr->bg_remove_status;
+                send_progress(client_fd, req_id, prog, "");
+                if (st == BgRemoveStatus::Ready || st == BgRemoveStatus::Error) {
+                    json r;
+                    r["status"]      = (st == BgRemoveStatus::Ready) ? "ready" : "error";
+                    r["progress"]    = prog;
+                    r["error"]       = clip_ptr->bg_remove_error;
+                    r["video_track"] = vti;
+                    r["video_clip"]  = vci;
+                    send_ok_id(client_fd, req_id, r);
+                    fd_mark_free(client_fd);
+                    return;
+                }
+            }
+        }).detach();
+        json sentinel; sentinel["__async"] = true; return sentinel;
+    }
+
+    if (method == "start_bg_remove") {
+        int ti = params.value("track", -1), ci = params.value("clip", -1);
+        if (!check_clip(state, ti, ci, err)) return {};
+        bg_remove_start(state, ti, ci);
+        if (client_fd < 0) { return json::object(); }
+        fd_mark_busy(client_fd);
+        Clip* clip_ptr = &state.tracks[ti].clips[ci];
+        std::thread([client_fd, req_id, clip_ptr]() {
+            while (true) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(500));
+                float           prog = clip_ptr->bg_remove_progress;
+                BgRemoveStatus  st   = clip_ptr->bg_remove_status;
+                send_progress(client_fd, req_id, prog, "");
+                if (st == BgRemoveStatus::Ready || st == BgRemoveStatus::Error) {
+                    json r;
+                    r["status"]   = (st == BgRemoveStatus::Ready) ? "ready" : "error";
+                    r["progress"] = prog;
+                    r["error"]    = clip_ptr->bg_remove_error;
+                    send_ok_id(client_fd, req_id, r);
+                    fd_mark_free(client_fd);
+                    return;
+                }
+            }
+        }).detach();
+        json sentinel; sentinel["__async"] = true; return sentinel;
+    }
+
+    if (method == "get_bg_remove_status") {
+        int ti = params.value("track", -1), ci = params.value("clip", -1);
+        if (!check_clip(state, ti, ci, err)) return {};
+        const Clip& cl = state.tracks[ti].clips[ci];
+        json r;
+        std::string st;
+        switch (cl.bg_remove_status) {
+            case BgRemoveStatus::Idle:       st = "idle";       break;
+            case BgRemoveStatus::Processing: st = "processing"; break;
+            case BgRemoveStatus::Ready:      st = "ready";      break;
+            case BgRemoveStatus::Error:      st = "error";      break;
+            default:                          st = "idle";       break;
+        }
+        r["status"]   = st;
+        r["progress"] = cl.bg_remove_progress;
+        r["error"]    = cl.bg_remove_error;
+        return r;
+    }
+
+    // ── Editing: auto-batch single mutations if not already in a batch ────────
     if (!g_in_batch) {
-        err = "editing calls must be inside a begin_batch / end_batch";
-        return {};
+        g_in_batch     = true;
+        g_auto_batched = true;
+        g_batch_label  = method;
+        g_batch_state  = &state;
     }
 
     if (method == "move_clip") {
@@ -758,6 +934,18 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         state.tracks[ti].clips.push_back(cl);
         int new_ci = (int)state.tracks[ti].clips.size() - 1;
         if (cl.clip_type == ClipType::Video) state.proxy_scan_needed = true;
+        if (cl.clip_type == ClipType::BodyFX) {
+            state.selected_track = ti;
+            state.selected_clip  = new_ci;
+            for (int vi = 0; vi < new_ci; ++vi) {
+                Clip& vc = state.tracks[ti].clips[vi];
+                if (vc.clip_type != ClipType::Video) continue;
+                if (vc.end <= cl.start || vc.start >= cl.end) continue;
+                if (vc.bg_remove_status != BgRemoveStatus::Ready)
+                    bg_remove_start(state, ti, vi);
+                break;
+            }
+        }
         json r; r["clip"] = new_ci;
         return r;
     }
@@ -829,6 +1017,26 @@ static json dispatch(AppState& state, const std::string& method, const json& par
             else if (prop == "callout_arrow") { cl.callout_arrow = jval_bool(val); }
             else if (prop == "arrow_tx")      { cl.arrow_tx      = jval_float(val); }
             else if (prop == "arrow_ty")      { cl.arrow_ty      = jval_float(val); }
+            else if (prop == "body_fx_type") {
+                std::string name = val.get<std::string>();
+                int n = body_fx_info_count();
+                const BodyFXInfo* infos = body_fx_info_list();
+                bool found = false;
+                for (int i = 0; i < n; ++i) {
+                    if (infos[i].name == name) {
+                        cl.body_fx_type = infos[i].type;
+                        for (int pi = 0; pi < 4; ++pi)
+                            cl.body_fx_params[pi] = pi < infos[i].n_params ? infos[i].params[pi].default_val : 0.5f;
+                        found = true; break;
+                    }
+                }
+                if (!found) { err = "unknown body_fx_type: " + name; return {}; }
+            }
+            else if (prop == "body_fx_amount")  { cl.body_fx_amount     = jval_float(val); }
+            else if (prop == "body_fx_param_0") { cl.body_fx_params[0]  = jval_float(val); }
+            else if (prop == "body_fx_param_1") { cl.body_fx_params[1]  = jval_float(val); }
+            else if (prop == "body_fx_param_2") { cl.body_fx_params[2]  = jval_float(val); }
+            else if (prop == "body_fx_param_3") { cl.body_fx_params[3]  = jval_float(val); }
             else { err = "unknown prop: " + prop; return {}; }
         }
         return json::object();
@@ -975,9 +1183,34 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         PipelineMode mode = PipelineMode::Both;
         if (mode_s == "transcribe_only") mode = PipelineMode::TranscribeOnly;
         else if (mode_s == "separate_only") mode = PipelineMode::SeparateOnly;
+        std::string src = params.value("path", "");
+        if (!src.empty()) state.audio_path = src;
         if (state.audio_path.empty()) { err = "no audio file loaded"; return {}; }
         kick_pipeline(state, state.audio_path, mode);
-        return json::object();
+        if (client_fd < 0) { return json::object(); }
+        fd_mark_busy(client_fd);
+        auto* pipe = &state.pipeline;
+        std::thread([client_fd, req_id, pipe]() {
+            for (int ticks = 0; ticks < 7200; ++ticks) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(500));
+                float     prog  = pipe->progress;
+                auto      stage = pipe->stage;
+                send_progress(client_fd, req_id, prog, "");
+                if (stage == PipelineStage::Done || stage == PipelineStage::Error) {
+                    json r;
+                    r["stage"]    = (stage == PipelineStage::Done) ? "done" : "error";
+                    r["progress"] = prog;
+                    r["error"]    = pipe->error;
+                    send_ok_id(client_fd, req_id, r);
+                    fd_mark_free(client_fd);
+                    return;
+                }
+            }
+            json r; r["stage"] = "error"; r["error"] = "pipeline timed out";
+            send_ok_id(client_fd, req_id, r);
+            fd_mark_free(client_fd);
+        }).detach();
+        json sentinel; sentinel["__async"] = true; return sentinel;
     }
 
     if (method == "generate_typography") {
@@ -1117,7 +1350,11 @@ static json dispatch(AppState& state, const std::string& method, const json& par
     }
 
     if (method == "new_project") {
+        bool mr = state.models_ready;
+        bool ms = state.models_skipped;
         state = AppState{};
+        state.models_ready   = mr;
+        state.models_skipped = ms;
         return json::object();
     }
 
@@ -1145,17 +1382,19 @@ static json dispatch(AppState& state, const std::string& method, const json& par
 // ── Per-client message processing ─────────────────────────────────────────────
 
 static void process_client(Client& cl, AppState& state) {
+    if (fd_is_busy(cl.fd)) return;  // waiting for async background op to send its response
+
     // Try to read more data
     char buf[4096];
     ssize_t n = read(cl.fd, buf, sizeof(buf));
     if (n == 0 || (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK)) {
         // Connection closed or error
         if (g_in_batch && g_batch_state == &state) {
-            // Close open batch: push history and reset
             history_push(state, g_batch_label + " (incomplete)");
-            g_in_batch    = false;
+            g_in_batch     = false;
+            g_auto_batched = false;
             g_batch_label.clear();
-            g_batch_state = nullptr;
+            g_batch_state  = nullptr;
         }
         close(cl.fd);
         cl.fd = -1;
@@ -1178,11 +1417,23 @@ static void process_client(Client& cl, AppState& state) {
             json params = req.value("params", json::object());
 
             std::string err;
-            json result = dispatch(state, method, params, err);
-            if (!err.empty()) {
-                send_err_id(cl.fd, req_id, err);
-            } else {
-                send_ok_id(cl.fd, req_id, result);
+            json result = dispatch(state, method, params, err, cl.fd, req_id);
+            bool is_async = result.is_object() && result.value("__async", false);
+            if (!is_async) {
+                // Close auto-batch and attach state diff
+                if (g_auto_batched && g_in_batch) {
+                    history_push(state, g_batch_label);
+                    g_in_batch     = false;
+                    g_auto_batched = false;
+                    g_batch_label.clear();
+                    g_batch_state  = nullptr;
+                    if (err.empty()) result = state_to_json(state);
+                }
+                if (!err.empty()) {
+                    send_err_id(cl.fd, req_id, err);
+                } else {
+                    send_ok_id(cl.fd, req_id, result);
+                }
             }
         } catch (const json::exception& e) {
             json r; r["id"] = req_id; r["error"] = std::string("JSON parse error: ") + e.what();
@@ -1260,5 +1511,5 @@ void ipc_server_stop() {
     if (!g_sock_path.empty()) ::unlink(g_sock_path.c_str());
     ::unlink(g_lock_path.c_str());
 
-    if (g_in_batch) { g_in_batch = false; g_batch_state = nullptr; }
+    if (g_in_batch) { g_in_batch = false; g_auto_batched = false; g_batch_state = nullptr; }
 }

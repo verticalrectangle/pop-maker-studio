@@ -1702,12 +1702,16 @@ void render_snapshot_gl(AppState& state, float snap_t) {
     bool ok = stbi_write_png(out.c_str(), out_w, out_h, 4, flipped.data(), rb) != 0;
     state.snapshot_running = false;
     if (ok) {
-        state.snapshot_msg = "Saved " + fs::path(out).filename().string();
+        state.snapshot_msg       = "Saved " + fs::path(out).filename().string();
+        state.snapshot_done_path = out;
+        state.snapshot_done_err.clear();
         system(("xdg-open \"" + dir + "\" &").c_str());
     } else {
-        state.snapshot_msg = "Snapshot failed — PNG write error";
+        state.snapshot_msg      = "Snapshot failed — PNG write error";
+        state.snapshot_done_err = "PNG write failed";
     }
     state.snapshot_msg_new = true;
+    state.snapshot_done    = true;
 }
 
 // ── GL-based export ───────────────────────────────────────────────────────────

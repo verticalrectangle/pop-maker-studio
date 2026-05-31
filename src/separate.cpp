@@ -15,6 +15,9 @@
 #include <complex>
 #include <cstdlib>
 #include <cstdio>
+#include <unistd.h>
+#include <fcntl.h>
+#include <sys/wait.h>
 
 namespace fs = std::filesystem;
 using cx = std::complex<float>;
@@ -49,24 +52,39 @@ std::string separate_download(
 
 static std::vector<float> read_stereo(const std::string& p, int& n,
                                        float clip_in = 0.f, float clip_dur = 0.f) {
-    // Build optional seek/duration args.  -ss before -i = fast keyframe seek;
-    // -t after -i = precise output duration limit.
-    std::string seek_args;
-    if (clip_in  > 0.f) seek_args += " -ss " + std::to_string(clip_in);
-    std::string dur_args;
-    if (clip_dur > 0.f) dur_args  += " -t "  + std::to_string(clip_dur);
+    std::string file_arg = "file:" + p;
+    std::string ss_val   = std::to_string(clip_in);
+    std::string t_val    = std::to_string(clip_dur);
+    std::string rate_val = std::to_string(kRate);
 
-    std::string cmd = "ffmpeg -hide_banner -loglevel error" + seek_args +
-                      " -i \"" + p + "\"" + dur_args +
-                      " -vn -ar " + std::to_string(kRate) +
-                      " -ac 2 -f f32le pipe:1 2>/dev/null";
-    FILE* fp = popen(cmd.c_str(), "r");
-    if (!fp) { n = 0; return {}; }
+    std::vector<const char*> argv = {"ffmpeg", "-hide_banner", "-loglevel", "error"};
+    if (clip_in  > 0.f) { argv.push_back("-ss"); argv.push_back(ss_val.c_str()); }
+    argv.push_back("-i"); argv.push_back(file_arg.c_str());
+    if (clip_dur > 0.f) { argv.push_back("-t");  argv.push_back(t_val.c_str()); }
+    argv.insert(argv.end(), {"-vn", "-ar", rate_val.c_str(), "-ac", "2", "-f", "f32le", "pipe:1", nullptr});
+
+    int pipefd[2];
+    if (pipe(pipefd) != 0) { n = 0; return {}; }
+    pid_t pid = fork();
+    if (pid == 0) {
+        close(pipefd[0]);
+        dup2(pipefd[1], STDOUT_FILENO);
+        close(pipefd[1]);
+        int devnull = open("/dev/null", O_RDWR);
+        if (devnull >= 0) { dup2(devnull, STDIN_FILENO); dup2(devnull, STDERR_FILENO); close(devnull); }
+        execvp("ffmpeg", const_cast<char**>(argv.data()));
+        _exit(127);
+    }
+    close(pipefd[1]);
+    FILE* fp = fdopen(pipefd[0], "r");
+    if (!fp) { close(pipefd[0]); waitpid(pid, nullptr, 0); n = 0; return {}; }
+
     std::vector<float> buf;
     float tmp[4096]; size_t r;
     while ((r = fread(tmp, sizeof(float), 4096, fp)) > 0)
         buf.insert(buf.end(), tmp, tmp + r);
-    pclose(fp);
+    fclose(fp);
+    waitpid(pid, nullptr, 0);
     n = (int)(buf.size() / 2);
     return buf;
 }
