@@ -251,6 +251,20 @@ EffectAccum collect_glass_effects(const AppState& state, float t, int video_trac
         if (!fx_clip_is_glass(state, video_track_idx, cl)) continue;
         accum_effect_clip(acc, cl);
     }
+    // Per-clip grade from the video clip itself
+    for (auto& cl : state.tracks[video_track_idx].clips) {
+        if (cl.clip_type != ClipType::Video && cl.clip_type != ClipType::Background) continue;
+        if (t < cl.start || t >= cl.end) continue;
+        if (cl.grade_brightness != 0.f || cl.grade_contrast != 1.f ||
+            cl.grade_saturation != 1.f || cl.grade_hue      != 0.f) {
+            acc.brightness += cl.grade_brightness;
+            acc.contrast   *= cl.grade_contrast;
+            acc.saturation *= cl.grade_saturation;
+            acc.hue        += cl.grade_hue;
+            acc.any_color   = true;
+        }
+        break;
+    }
     return acc;
 }
 

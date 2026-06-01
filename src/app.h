@@ -172,6 +172,12 @@ struct Clip {
     // per-clip animation style (None = inherit project default)
     AnimStyle   clip_style = AnimStyle::None;
 
+    // per-clip color grade (Video/Background; accumulated in collect_glass_effects)
+    float grade_brightness = 0.f;
+    float grade_contrast   = 1.f;
+    float grade_saturation = 1.f;
+    float grade_hue        = 0.f;
+
     // Effect clip properties (ClipType::Effect only)
     bool  fx_color_on    = false;
     float fx_brightness  = 0.f;

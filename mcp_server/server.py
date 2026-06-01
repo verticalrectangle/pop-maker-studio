@@ -19,6 +19,8 @@ Claude Desktop config (claude_desktop_config.json):
 """
 
 import asyncio
+import base64
+import io
 import json
 import os
 import re
@@ -34,7 +36,7 @@ from typing import Any
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp import types
-from mcp.types import Tool, TextContent
+from mcp.types import Tool, TextContent, ImageContent
 
 # ── IPC connection ─────────────────────────────────────────────────────────────
 
@@ -478,7 +480,13 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="set_clip_prop",
-            description="Set one property on a clip. All props listed in CLAUDE.md. Requires batch.",
+            description=(
+                "Set one property on a clip. Common props: volume (0–2), speed (0.25–4), opacity (0–1), "
+                "muted (bool), fade_in, fade_out, in_point, pos_x/y, scale_x/y, rotation, text, "
+                "sub_pos/color/wrap_w/pos_x/y, font_size, clip_style, blend_mode, karaoke. "
+                "Color grade (video clips): grade_brightness (-1–1), grade_contrast (0–3), "
+                "grade_saturation (0–3), grade_hue (-180–180). Requires batch."
+            ),
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -1287,11 +1295,16 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="take_snapshot",
             description=(
-                "Renders the current canvas frame to a PNG file and returns the file path. "
-                "Use this to visually verify edits. Polls internally until the GL thread completes. "
+                "Renders the canvas frame to PNG and returns the image inline so you can see it. "
+                "Pass an optional time (seconds) to snap at that timestamp without seeking first. "
                 "Read-only — no batch needed."
             ),
-            inputSchema={"type": "object", "properties": {}},
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "time": {"type": "number", "description": "Timeline position to snap (default: current playhead)"},
+                },
+            },
         ),
         Tool(
             name="verify_clips",
@@ -2443,14 +2456,32 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         result = _call("get_vision_model_status", {})
         return [TextContent(type="text", text=json.dumps(result, indent=2))]
     if name == "take_snapshot":
-        _call("take_snapshot", {})
+        ipc_args = {}
+        if "time" in arguments:
+            ipc_args["time"] = arguments["time"]
+        _call("take_snapshot", ipc_args)
         for _ in range(50):
             await asyncio.sleep(0.2)
             st = _call("get_snapshot_status", {})
             if st.get("done"):
                 if "error" in st:
                     raise ValueError(f"Snapshot failed: {st['error']}")
-                return [TextContent(type="text", text=st["path"])]
+                path = st["path"]
+                with open(path, "rb") as f:
+                    raw = f.read()
+                try:
+                    from PIL import Image as _PILImage
+                    img = _PILImage.open(io.BytesIO(raw))
+                    img.thumbnail((540, 960))
+                    buf = io.BytesIO()
+                    img.save(buf, format="PNG")
+                    raw = buf.getvalue()
+                except Exception:
+                    pass
+                return [
+                    TextContent(type="text", text=path),
+                    ImageContent(type="image", data=base64.b64encode(raw).decode(), mimeType="image/png"),
+                ]
         raise RuntimeError("take_snapshot timed out")
     if name == "verify_clips":
         async def _snap_at(t: float) -> str:
@@ -2464,8 +2495,23 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                         raise ValueError(f"Snapshot failed at t={t}: {st['error']}")
                     return st["path"]
             raise RuntimeError(f"verify_clips snapshot timed out at t={t}")
-        results = [{"time": t, "path": await _snap_at(t)} for t in arguments["times"]]
-        return [TextContent(type="text", text=json.dumps(results, indent=2))]
+        content = []
+        for t in arguments["times"]:
+            path = await _snap_at(t)
+            with open(path, "rb") as f:
+                raw = f.read()
+            try:
+                from PIL import Image as _PILImage
+                img = _PILImage.open(io.BytesIO(raw))
+                img.thumbnail((540, 960))
+                buf = io.BytesIO()
+                img.save(buf, format="PNG")
+                raw = buf.getvalue()
+            except Exception:
+                pass
+            content.append(TextContent(type="text", text=f"t={t} → {path}"))
+            content.append(ImageContent(type="image", data=base64.b64encode(raw).decode(), mimeType="image/png"))
+        return content
     try:
         result = _call(name, arguments)
         return [TextContent(type="text", text=json.dumps(result, indent=2))]

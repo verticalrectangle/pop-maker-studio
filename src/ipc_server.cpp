@@ -323,7 +323,13 @@ static json clip_to_json(int idx, const Clip& c) {
         j["body_fx_amount"]        = c.body_fx_amount;
         j["body_fx_params"]        = {c.body_fx_params[0], c.body_fx_params[1],
                                       c.body_fx_params[2], c.body_fx_params[3]};
-        // mask status comes from the sibling video clip's bg_remove_status
+    }
+    if (c.grade_brightness != 0.f || c.grade_contrast != 1.f ||
+        c.grade_saturation != 1.f || c.grade_hue      != 0.f) {
+        j["grade_brightness"] = c.grade_brightness;
+        j["grade_contrast"]   = c.grade_contrast;
+        j["grade_saturation"] = c.grade_saturation;
+        j["grade_hue"]        = c.grade_hue;
     }
     return j;
 }
@@ -895,6 +901,8 @@ static json dispatch(AppState& state, const std::string& method, const json& par
 
     // ── Snapshot (GL-thread flag — fulfilled by draw_preview) ─────────────────
     if (method == "take_snapshot") {
+        if (params.contains("time"))
+            state.playhead = params["time"].get<float>();
         state.snapshot_done      = false;
         state.snapshot_done_path.clear();
         state.snapshot_done_err.clear();
@@ -1209,6 +1217,10 @@ static json dispatch(AppState& state, const std::string& method, const json& par
             else if (prop == "body_fx_param_1") { cl.body_fx_params[1]  = jval_float(val); }
             else if (prop == "body_fx_param_2") { cl.body_fx_params[2]  = jval_float(val); }
             else if (prop == "body_fx_param_3") { cl.body_fx_params[3]  = jval_float(val); }
+            else if (prop == "grade_brightness") { cl.grade_brightness = jval_float(val); }
+            else if (prop == "grade_contrast")   { cl.grade_contrast   = jval_float(val); }
+            else if (prop == "grade_saturation") { cl.grade_saturation = jval_float(val); }
+            else if (prop == "grade_hue")        { cl.grade_hue        = jval_float(val); }
             else { err = "unknown prop: " + prop; return {}; }
         }
         return json::object();
@@ -1281,6 +1293,10 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         else if (prop == "body_fx_param_1") { cl.body_fx_params[1]  = jval_float(val); }
         else if (prop == "body_fx_param_2") { cl.body_fx_params[2]  = jval_float(val); }
         else if (prop == "body_fx_param_3") { cl.body_fx_params[3]  = jval_float(val); }
+        else if (prop == "grade_brightness") { cl.grade_brightness = jval_float(val); }
+        else if (prop == "grade_contrast")   { cl.grade_contrast   = jval_float(val); }
+        else if (prop == "grade_saturation") { cl.grade_saturation = jval_float(val); }
+        else if (prop == "grade_hue")        { cl.grade_hue        = jval_float(val); }
         else { err = "unknown prop: " + prop; return {}; }
         return json::object();
     }

@@ -7,7 +7,7 @@
 // ── Binary serialization helpers ──────────────────────────────────────────────
 
 static const uint32_t MAGIC   = 0x534D5001u; // "PMS\x01"
-static const uint32_t VERSION = 34u;
+static const uint32_t VERSION = 35u;
 
 struct Writer {
     std::ofstream f;
@@ -188,6 +188,9 @@ static void write_clip(Writer& w, const Clip& c) {
     w.pod(c.callout_style); w.pod((uint8_t)c.callout_arrow);
     w.pod(c.arrow_tx); w.pod(c.arrow_ty);
     // v32–33: body_fx_mask_status/progress/error were written here; removed in v34
+    // v35: per-clip color grade
+    w.pod(c.grade_brightness); w.pod(c.grade_contrast);
+    w.pod(c.grade_saturation); w.pod(c.grade_hue);
 }
 
 static Clip read_clip(Reader& r, uint32_t version) {
@@ -339,6 +342,10 @@ static Clip read_clip(Reader& r, uint32_t version) {
     // v32–33: body_fx_mask_status/progress/error — read and discard (removed in v34)
     if (version >= 32u && version < 34u) {
         r.pod<uint8_t>(); r.pod<float>(); r.str();
+    }
+    if (version >= 35u) {
+        c.grade_brightness = r.pod<float>(); c.grade_contrast   = r.pod<float>();
+        c.grade_saturation = r.pod<float>(); c.grade_hue        = r.pod<float>();
     }
     return c;
 }
