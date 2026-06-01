@@ -248,12 +248,33 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="get_project",
             description=(
-                "Returns the full project state: duration, fps, bpm, audio path, "
-                "playhead position, beats array, and all tracks with their clips. "
-                "Each clip includes text, timing, volume, animation style, TextStyle "
-                "(shadow/stroke/glow/bg), and karaoke settings. Read-only — no batch needed."
+                "Returns project state. Slim by default: {duration, fps, bpm, audio_path, "
+                "project_path, transcript_ready, playhead, tracks: [{index, name, muted, locked, clip_count}], markers}. "
+                "Use verbose=true for full clip details (all styling, FX props). "
+                "Prefer get_clips(track_name=...) when you only need clip positions on one track. "
+                "Read-only — no batch needed."
             ),
-            inputSchema={"type": "object", "properties": {}},
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "verbose": {"type": "boolean", "description": "Return full clip details (default false)"},
+                },
+            },
+        ),
+        Tool(
+            name="get_clips",
+            description=(
+                "Return the clips on one track: [{index, type, start, end, duration, in_point, source, text}]. "
+                "Use this instead of get_project when you only need clip positions on a specific track — "
+                "much smaller response. Accepts track index or track_name. Read-only — no batch needed."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "track":      {"type": "integer"},
+                    "track_name": {"type": "string", "description": "Track name (alternative to track index)"},
+                },
+            },
         ),
         Tool(
             name="get_media_info",
@@ -1529,11 +1550,7 @@ async def _remove_silence(arguments: dict) -> dict:
     min_duration = float(arguments.get("min_duration", 0.5))
     padding      = float(arguments.get("padding",      0.15))
 
-    proj = _call("get_project", {})
-    tracks = proj.get("tracks", [])
-    if track >= len(tracks):
-        raise ValueError(f"track {track} does not exist")
-    clips = tracks[track].get("clips", [])
+    clips = _call("get_clips", {"track": track})
     if clip_idx >= len(clips):
         raise ValueError(f"clip {clip_idx} does not exist on track {track}")
 
@@ -1587,24 +1604,21 @@ async def _remove_silence(arguments: dict) -> dict:
     # Process back-to-front to keep earlier indices valid
     for (cut_s, cut_e) in reversed(cuts):
         # Re-fetch to get current clip indices
-        proj2 = _call("get_project", {})
-        tr_clips = proj2["tracks"][track]["clips"]
+        tr_clips = _call("get_clips", {"track": track})
 
         # Find clip covering cut_e (split right boundary first)
         right_clip = next((i for i, cl in enumerate(tr_clips)
                            if cl["start"] <= cut_e < cl["end"]), None)
         if right_clip is not None and abs(tr_clips[right_clip]["end"] - cut_e) > 0.02:
             _call("split_clip", {"track": track, "clip": right_clip, "time": cut_e})
-            proj2 = _call("get_project", {})
-            tr_clips = proj2["tracks"][track]["clips"]
+            tr_clips = _call("get_clips", {"track": track})
 
         # Find clip covering cut_s (split left boundary)
         left_clip = next((i for i, cl in enumerate(tr_clips)
                           if cl["start"] <= cut_s < cl["end"]), None)
         if left_clip is not None and abs(tr_clips[left_clip]["start"] - cut_s) > 0.02:
             _call("split_clip", {"track": track, "clip": left_clip, "time": cut_s})
-            proj2 = _call("get_project", {})
-            tr_clips = proj2["tracks"][track]["clips"]
+            tr_clips = _call("get_clips", {"track": track})
 
         # Find and delete the silence segment (clip whose start >= cut_s and end <= cut_e)
         seg_idx = next((i for i, cl in enumerate(tr_clips)
@@ -1636,11 +1650,7 @@ async def _cut_filler_words(arguments: dict) -> dict:
     if tr_res.get("status") != "ready":
         raise ValueError("no transcript available — run trigger_pipeline first and wait for it to complete")
 
-    proj = _call("get_project", {})
-    tracks = proj.get("tracks", [])
-    if track >= len(tracks):
-        raise ValueError(f"track {track} does not exist")
-    clips = tracks[track].get("clips", [])
+    clips = _call("get_clips", {"track": track})
     if clip_idx >= len(clips):
         raise ValueError(f"clip {clip_idx} does not exist on track {track}")
 
@@ -1703,22 +1713,19 @@ async def _cut_filler_words(arguments: dict) -> dict:
         cut_s = m["timeline_start"] - padding
         cut_e = m["timeline_end"]   + padding
 
-        proj2    = _call("get_project", {})
-        tr_clips = proj2["tracks"][track]["clips"]
+        tr_clips = _call("get_clips", {"track": track})
 
         right_clip = next((i for i, cl in enumerate(tr_clips)
                            if cl["start"] <= cut_e < cl["end"]), None)
         if right_clip is not None and abs(tr_clips[right_clip]["end"] - cut_e) > 0.02:
             _call("split_clip", {"track": track, "clip": right_clip, "time": cut_e})
-            proj2    = _call("get_project", {})
-            tr_clips = proj2["tracks"][track]["clips"]
+            tr_clips = _call("get_clips", {"track": track})
 
         left_clip = next((i for i, cl in enumerate(tr_clips)
                           if cl["start"] <= cut_s < cl["end"]), None)
         if left_clip is not None and abs(tr_clips[left_clip]["start"] - cut_s) > 0.02:
             _call("split_clip", {"track": track, "clip": left_clip, "time": cut_s})
-            proj2    = _call("get_project", {})
-            tr_clips = proj2["tracks"][track]["clips"]
+            tr_clips = _call("get_clips", {"track": track})
 
         seg_idx = next((i for i, cl in enumerate(tr_clips)
                         if cl["start"] >= cut_s - 0.02 and cl["end"] <= cut_e + 0.02), None)
@@ -1739,16 +1746,11 @@ async def _apply_multicam_cuts(arguments: dict) -> dict:
         raise ValueError("cuts list is empty")
     cuts = sorted(cuts, key=lambda c: float(c["time"]))
 
-    # Fetch project to find the overall time range
-    proj   = _call("get_project", {})
-    tracks = proj.get("tracks", [])
-
     # Determine end time from camera track clips
     end_time = 0.0
     for ct in camera_tracks:
-        if ct < len(tracks):
-            for cl in tracks[ct].get("clips", []):
-                end_time = max(end_time, float(cl["end"]))
+        for cl in _call("get_clips", {"track": ct}):
+            end_time = max(end_time, float(cl["end"]))
 
     if end_time == 0.0:
         raise ValueError("no clips found on camera_tracks")
@@ -1767,8 +1769,7 @@ async def _apply_multicam_cuts(arguments: dict) -> dict:
     # Phase 1: split all camera clips at every cut time (forward order)
     for t in split_times:
         for ct in camera_tracks:
-            proj2    = _call("get_project", {})
-            tr_clips = proj2["tracks"][ct]["clips"] if ct < len(proj2["tracks"]) else []
+            tr_clips = _call("get_clips", {"track": ct})
             clip_at  = next((i for i, cl in enumerate(tr_clips)
                              if float(cl["start"]) < t < float(cl["end"])), None)
             if clip_at is not None:
@@ -1784,8 +1785,7 @@ async def _apply_multicam_cuts(arguments: dict) -> dict:
         for ct in camera_tracks:
             if ct == keep_trk:
                 continue
-            proj2    = _call("get_project", {})
-            tr_clips = proj2["tracks"][ct]["clips"] if ct < len(proj2["tracks"]) else []
+            tr_clips = _call("get_clips", {"track": ct})
 
             # Find segment(s) fully within [w_start, w_end]
             segs = [i for i, cl in enumerate(tr_clips)
@@ -1958,11 +1958,7 @@ async def _remove_background(arguments: dict) -> dict:
     track = int(arguments["track"])
     clip  = int(arguments["clip"])
 
-    proj = _call("get_project", {})
-    tracks_list = proj.get("tracks", [])
-    if track >= len(tracks_list):
-        raise ValueError(f"track {track} not found")
-    clips_list = tracks_list[track].get("clips", [])
+    clips_list = _call("get_clips", {"track": track})
     if clip >= len(clips_list):
         raise ValueError(f"clip {clip} not found on track {track}")
     clip_info = clips_list[clip]
@@ -2266,11 +2262,11 @@ def _cut_at_phrase(arguments: dict) -> dict:
     match = matches[idx]
 
     # Get clip in_point to convert source → timeline time
-    tracks = proj.get("tracks", [])
     in_point = 0.0
     clip_start = 0.0
-    if track < len(tracks) and clip < len(tracks[track]["clips"]):
-        cl = tracks[track]["clips"][clip]
+    track_clips = _call("get_clips", {"track": track})
+    if clip < len(track_clips):
+        cl = track_clips[clip]
         in_point  = float(cl.get("in_point", 0))
         clip_start = float(cl.get("start", 0))
 

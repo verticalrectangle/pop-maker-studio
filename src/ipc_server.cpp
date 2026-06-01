@@ -247,6 +247,19 @@ static std::string anim_style_str(AnimStyle s) {
     }
 }
 
+static json clip_to_json_slim(int idx, const Clip& c) {
+    json j;
+    j["index"]    = idx;
+    j["type"]     = clip_type_str(c.clip_type);
+    j["start"]    = c.start;
+    j["end"]      = c.end;
+    j["duration"] = c.end - c.start;
+    j["in_point"] = c.in_point;
+    if (!c.source_id.empty()) j["source"] = c.source_id;
+    if (!c.text.empty())      j["text"]   = c.text;
+    return j;
+}
+
 static json clip_to_json(int idx, const Clip& c) {
     json j;
     j["index"]       = idx;
@@ -311,6 +324,42 @@ static json clip_to_json(int idx, const Clip& c) {
                                       c.body_fx_params[2], c.body_fx_params[3]};
         // mask status comes from the sibling video clip's bg_remove_status
     }
+    return j;
+}
+
+static json state_to_json_slim(const AppState& state) {
+    json j;
+    j["duration"]         = state.duration;
+    j["fps"]              = state.fps;
+    j["bpm"]              = state.beat_bpm;
+    j["audio_path"]       = state.audio_path;
+    j["project_path"]     = state.project_path;
+    j["transcript_ready"] = !state.words_json_path.empty() &&
+                            (bool)std::ifstream(state.words_json_path);
+    j["playhead"]         = state.playhead;
+    json tracks_arr = json::array();
+    for (int ti = 0; ti < (int)state.tracks.size(); ++ti) {
+        const Track& t = state.tracks[ti];
+        json tj;
+        tj["index"]      = ti;
+        tj["name"]       = t.name;
+        tj["muted"]      = t.muted;
+        tj["locked"]     = t.locked;
+        tj["clip_count"] = (int)t.clips.size();
+        tracks_arr.push_back(tj);
+    }
+    j["tracks"] = tracks_arr;
+    json markers_arr = json::array();
+    for (int mi = 0; mi < (int)state.markers.size(); ++mi) {
+        const auto& m = state.markers[mi];
+        char hex[12];
+        snprintf(hex, sizeof(hex), "#%06X", m.color & 0x00FFFFFFu);
+        json mj;
+        mj["index"] = mi; mj["time"] = m.time;
+        mj["label"] = m.label; mj["color"] = hex;
+        markers_arr.push_back(mj);
+    }
+    j["markers"] = markers_arr;
     return j;
 }
 
@@ -409,7 +458,17 @@ static json dispatch(AppState& state, const std::string& method, const json& par
                      int client_fd = -1, const std::string& req_id = "") {
     // ── Read-only: no batch required ─────────────────────────────────────────
     if (method == "get_project") {
-        return state_to_json(state);
+        bool verbose = params.value("verbose", false);
+        return verbose ? state_to_json(state) : state_to_json_slim(state);
+    }
+
+    if (method == "get_clips") {
+        int ti = track_by_name_or_index(state, params);
+        if (!check_track(state, ti, err)) return {};
+        json arr = json::array();
+        for (int ci = 0; ci < (int)state.tracks[ti].clips.size(); ++ci)
+            arr.push_back(clip_to_json_slim(ci, state.tracks[ti].clips[ci]));
+        return arr;
     }
 
     if (method == "get_beats") {
@@ -768,13 +827,13 @@ static json dispatch(AppState& state, const std::string& method, const json& par
     if (method == "undo") {
         if (!history_can_undo()) { err = "nothing to undo"; return {}; }
         history_undo(state);
-        return state_to_json(state);
+        return state_to_json_slim(state);
     }
 
     if (method == "redo") {
         if (!history_can_redo()) { err = "nothing to redo"; return {}; }
         history_redo(state);
-        return state_to_json(state);
+        return state_to_json_slim(state);
     }
 
     // ── Background removal / BodyFX mask processing ───────────────────────────
