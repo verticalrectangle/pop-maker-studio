@@ -1318,7 +1318,7 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
         dl->AddText({btn_tl.x + btn_pad, btn_tl.y + btn_pad}, lbl_col, snap_lbl);
 
         if (snap_hov && snap_ena && lclick)
-            render_snapshot_gl(state, state.playhead);
+            render_snapshot_gl(state, state.playhead, true);
     }
 
     // Stamp time when render thread signals a new snapshot message

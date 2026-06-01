@@ -10,7 +10,7 @@ const std::string& render_font_path();
 void render_start(AppState& state);
 void render_cancel();
 void render_snapshot_start(AppState& state, float snap_t);  // legacy ffmpeg path
-void render_snapshot_gl(AppState& state, float snap_t);     // GL path — matches preview exactly
+void render_snapshot_gl(AppState& state, float snap_t, bool open_folder = false); // GL path — matches preview exactly
 bool render_export_srt(const AppState& state, const std::string& out_path);
 
 // GL-based export: identical to live preview (same renderer, FBO → ffmpeg pipe).

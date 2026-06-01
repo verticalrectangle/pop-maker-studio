@@ -1470,7 +1470,7 @@ static bool gl_render_vid_clip(ImDrawList& dl, const Clip* cl, float at_time,
 
 // ── GL snapshot — identical to preview ───────────────────────────────────────
 
-void render_snapshot_gl(AppState& state, float snap_t) {
+void render_snapshot_gl(AppState& state, float snap_t, bool open_folder) {
     if (state.snapshot_running) return;
 
     // Build output path (same logic as render_snapshot_start)
@@ -1705,7 +1705,8 @@ void render_snapshot_gl(AppState& state, float snap_t) {
         state.snapshot_msg       = "Saved " + fs::path(out).filename().string();
         state.snapshot_done_path = out;
         state.snapshot_done_err.clear();
-        system(("xdg-open \"" + dir + "\" &").c_str());
+        if (open_folder)
+            system(("xdg-open \"" + dir + "\" &").c_str());
     } else {
         state.snapshot_msg      = "Snapshot failed — PNG write error";
         state.snapshot_done_err = "PNG write failed";
