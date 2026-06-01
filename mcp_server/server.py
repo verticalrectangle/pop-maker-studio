@@ -342,23 +342,32 @@ async def list_tools() -> list[Tool]:
                 "Call this before add_clip whenever the user asks to crop source files, or "
                 "when the source aspect ratio differs from the canvas.\n\n"
                 "aspect: 'square' (1:1), 'vertical' (9:16), 'horizontal' (16:9), or 'W:H'.\n"
-                "x_pct / y_pct: where to center the crop as a fraction of the source (0–1). "
-                "Default 0.5/0.5 = dead center. Use y_pct≈0.3 for portrait face shots "
-                "(face is in upper portion of frame).\n\n"
-                "Returns {path, width, height, crop: {x, y, w, h}}. "
-                "Use the returned path as the source in add_clip. "
+                "face_detect: when true (default), automatically detects the face bounding box "
+                "and centers the crop on it with padding — no need to guess x_pct/y_pct.\n"
+                "x_pct / y_pct: manual fallback when face_detect=false or no face is found. "
+                "Default 0.5/0.5 = dead center.\n"
+                "pad_top / pad_bottom: extra padding above/below the detected face as a fraction "
+                "of face height (default 0.4 / 0.3).\n\n"
+                "Returns {path, width, height, crop, face_detected} plus an inline thumbnail "
+                "so you can verify framing immediately. "
                 "Supports HEIC, JPG, PNG (images) and MOV, MP4, etc. (video). Read-only — no batch needed."
             ),
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "source_path": {"type": "string", "description": "Absolute path to source file"},
-                    "aspect":      {"type": "string", "default": "square",
-                                    "description": "square | vertical | horizontal | W:H"},
-                    "x_pct":       {"type": "number", "default": 0.5,
-                                    "description": "Horizontal center of crop (0=left, 1=right)"},
-                    "y_pct":       {"type": "number", "default": 0.5,
-                                    "description": "Vertical center of crop (0=top, 1=bottom)"},
+                    "source_path":  {"type": "string", "description": "Absolute path to source file"},
+                    "aspect":       {"type": "string", "default": "square",
+                                     "description": "square | vertical | horizontal | W:H"},
+                    "face_detect":  {"type": "boolean", "default": True,
+                                     "description": "Auto-detect face and center crop on it"},
+                    "pad_top":      {"type": "number", "default": 0.4,
+                                     "description": "Padding above face as fraction of face height"},
+                    "pad_bottom":   {"type": "number", "default": 0.3,
+                                     "description": "Padding below face as fraction of face height"},
+                    "x_pct":        {"type": "number", "default": 0.5,
+                                     "description": "Horizontal center of crop (0=left, 1=right) — used when face_detect=false"},
+                    "y_pct":        {"type": "number", "default": 0.5,
+                                     "description": "Vertical center of crop (0=top, 1=bottom) — used when face_detect=false"},
                 },
                 "required": ["source_path"],
             },
@@ -2542,10 +2551,15 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             content.append(ImageContent(type="image", data=base64.b64encode(raw).decode(), mimeType="image/png"))
         return content
     if name == "crop_media":
+        import cv2 as _cv2
+
         src = arguments["source_path"]
-        aspect_str = arguments.get("aspect", "square")
-        x_pct = float(arguments.get("x_pct", 0.5))
-        y_pct = float(arguments.get("y_pct", 0.5))
+        aspect_str  = arguments.get("aspect", "square")
+        face_detect = arguments.get("face_detect", True)
+        pad_top     = float(arguments.get("pad_top",    0.4))
+        pad_bottom  = float(arguments.get("pad_bottom", 0.3))
+        x_pct       = float(arguments.get("x_pct", 0.5))
+        y_pct       = float(arguments.get("y_pct", 0.5))
 
         aspect_map = {"square": (1, 1), "vertical": (9, 16), "horizontal": (16, 9)}
         if aspect_str in aspect_map:
@@ -2568,16 +2582,91 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             streams = json.loads(probe)["streams"]
             vs = next(s for s in streams if s.get("codec_type") == "video")
             src_w, src_h = int(vs["width"]), int(vs["height"])
+            # apply frame cropping side data (e.g. MOV files with encoded borders)
+            for sd in vs.get("side_data_list", []):
+                if sd.get("side_data_type") == "Frame Cropping":
+                    src_w -= int(sd.get("crop_left", 0)) + int(sd.get("crop_right", 0))
+                    src_h -= int(sd.get("crop_top", 0)) + int(sd.get("crop_bottom", 0))
+            # apply display rotation (swap w/h for ±90° rotations)
+            rot = int(float(vs.get("tags", {}).get("rotate", "0")))
+            if abs(rot) == 90 or abs(rot) == 270:
+                src_w, src_h = src_h, src_w
 
-        if src_w / src_h > ar_w / ar_h:
-            crop_h = src_h
-            crop_w = int(crop_h * ar_w / ar_h)
-        else:
-            crop_w = src_w
-            crop_h = int(crop_w * ar_h / ar_w)
+        # ── Face detection ───────────────────────────────────────────────────
+        face_cx, face_cy = None, None
+        face_detected = False
+        if face_detect:
+            try:
+                # get a representative frame (image or mid-video frame)
+                if is_image:
+                    tmp_frame = f"/tmp/_crop_face_probe_{Path(src).stem}.png"
+                    subprocess.run(["magick", src + "[0]", "-resize", "1308x1744>",
+                                    tmp_frame], capture_output=True)
+                else:
+                    tmp_frame = f"/tmp/_crop_face_probe_{Path(src).stem}.png"
+                    mid = subprocess.check_output(
+                        ["ffprobe", "-v", "quiet", "-show_entries", "format=duration",
+                         "-print_format", "json", src], stderr=subprocess.DEVNULL)
+                    dur = float(json.loads(mid)["format"].get("duration", 1.0))
+                    subprocess.run(
+                        ["ffmpeg", "-y", "-i", src, "-ss", str(dur * 0.3),
+                         "-frames:v", "1", tmp_frame],
+                        capture_output=True)
 
-        x = max(0, min(int((src_w - crop_w) * x_pct), src_w - crop_w))
-        y = max(0, min(int((src_h - crop_h) * y_pct), src_h - crop_h))
+                frame = _cv2.imread(tmp_frame)
+                if frame is not None:
+                    fh, fw = frame.shape[:2]
+                    # scale probe frame to match post-rotation display dimensions
+                    if fw != src_w or fh != src_h:
+                        frame = _cv2.resize(frame, (src_w, src_h))
+                    gray = _cv2.cvtColor(frame, _cv2.COLOR_BGR2GRAY)
+                    det  = _cv2.CascadeClassifier(
+                        _cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+                    faces = det.detectMultiScale(
+                        gray, scaleFactor=1.05, minNeighbors=3,
+                        minSize=(int(min(src_w, src_h) * 0.1), int(min(src_w, src_h) * 0.1)))
+                    if len(faces) > 0:
+                        # pick largest face
+                        fx, fy, fw2, fh2 = max(faces, key=lambda f: f[2] * f[3])
+                        # add padding: more above (hair) than below (chin)
+                        pad_px_top    = int(fh2 * pad_top)
+                        pad_px_bottom = int(fh2 * pad_bottom)
+                        pad_px_side   = int(fw2 * 0.15)
+                        face_cx = fx + fw2 // 2
+                        face_cy = (fy - pad_px_top + fy + fh2 + pad_px_bottom) // 2
+                        # make the crop square (or target aspect) around the padded face
+                        padded_h = fh2 + pad_px_top + pad_px_bottom
+                        padded_w = fw2 + pad_px_side * 2
+                        # expand to match target aspect ratio
+                        if padded_w / padded_h > ar_w / ar_h:
+                            crop_w = padded_w
+                            crop_h = int(crop_w * ar_h / ar_w)
+                        else:
+                            crop_h = padded_h
+                            crop_w = int(crop_h * ar_w / ar_h)
+                        # clamp to source dimensions while preserving aspect ratio
+                        if crop_w > src_w:
+                            crop_w = src_w
+                            crop_h = int(crop_w * ar_h / ar_w)
+                        if crop_h > src_h:
+                            crop_h = src_h
+                            crop_w = int(crop_h * ar_w / ar_h)
+                        x = max(0, min(face_cx - crop_w // 2, src_w - crop_w))
+                        y = max(0, min(face_cy - crop_h // 2, src_h - crop_h))
+                        face_detected = True
+            except Exception as _e:
+                pass  # fall through to manual pct path
+
+        # ── Manual pct fallback ──────────────────────────────────────────────
+        if not face_detected:
+            if src_w / src_h > ar_w / ar_h:
+                crop_h = src_h
+                crop_w = int(crop_h * ar_w / ar_h)
+            else:
+                crop_w = src_w
+                crop_h = int(crop_w * ar_h / ar_w)
+            x = max(0, min(int((src_w - crop_w) * x_pct), src_w - crop_w))
+            y = max(0, min(int((src_h - crop_h) * y_pct), src_h - crop_h))
 
         p = Path(src)
         out_ext = ".png" if is_image else ".mp4"
@@ -2596,11 +2685,34 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                  "-c:a", "copy", out_path],
                 check=True, stderr=subprocess.DEVNULL)
 
-        return [TextContent(type="text", text=json.dumps({
+        # ── Inline thumbnail ─────────────────────────────────────────────────
+        thumb_parts = []
+        try:
+            from PIL import Image as _PilImage
+            if is_image:
+                im = _PilImage.open(out_path)
+            else:
+                tmp_thumb = f"/tmp/_crop_thumb_{Path(src).stem}.png"
+                subprocess.run(
+                    ["ffmpeg", "-y", "-i", out_path, "-ss", str(0.3 * 2.0),
+                     "-frames:v", "1", tmp_thumb],
+                    capture_output=True)
+                im = _PilImage.open(tmp_thumb)
+            im.thumbnail((540, 540))
+            buf = io.BytesIO()
+            im.save(buf, format="PNG")
+            thumb_parts = [ImageContent(type="image", data=base64.b64encode(buf.getvalue()).decode(),
+                                        mimeType="image/png")]
+        except Exception:
+            pass
+
+        result_text = json.dumps({
             "path": out_path,
             "width": crop_w, "height": crop_h,
+            "face_detected": face_detected,
             "crop": {"x": x, "y": y, "w": crop_w, "h": crop_h},
-        }, indent=2))]
+        }, indent=2)
+        return [TextContent(type="text", text=result_text)] + thumb_parts
     try:
         result = _call(name, arguments)
         return [TextContent(type="text", text=json.dumps(result, indent=2))]

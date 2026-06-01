@@ -56,6 +56,13 @@ Track 0 = top (foreground). Highest index = bottom (background).
 - `find_and_add_clip` only adds the short extracted segment — never the full source file
 - When the user provides files to crop, call `crop_media` before `add_clip`
 
+## crop_media — face-aware cropping
+
+`crop_media` runs face detection by default (`face_detect=true`). It finds the largest face, adds padding (default `pad_top=0.4`, `pad_bottom=0.3` × face height), and computes the crop rect automatically. Returns an **inline thumbnail** so you can verify framing immediately — check the image before proceeding.
+
+- If the thumbnail looks wrong (face cut, too much headroom, etc.), re-call with adjusted `pad_top`/`pad_bottom` or `face_detect=false` + manual `x_pct`/`y_pct`.
+- Always verify the inline thumbnail before calling `add_clip`.
+
 ## Audio positioning
 
 To sync an audio track to a video at a specific source moment, use a negative start:
