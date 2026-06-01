@@ -23,6 +23,7 @@ import base64
 import io
 import json
 import os
+import subprocess
 import re
 import socket
 import sys
@@ -332,6 +333,34 @@ async def list_tools() -> list[Tool]:
                 "type": "object",
                 "properties": {"path": {"type": "string", "description": "Absolute path to the media file"}},
                 "required": ["path"],
+            },
+        ),
+        Tool(
+            name="crop_media",
+            description=(
+                "Crop a video or image file to a target aspect ratio and save the result. "
+                "Call this before add_clip whenever the user asks to crop source files, or "
+                "when the source aspect ratio differs from the canvas.\n\n"
+                "aspect: 'square' (1:1), 'vertical' (9:16), 'horizontal' (16:9), or 'W:H'.\n"
+                "x_pct / y_pct: where to center the crop as a fraction of the source (0–1). "
+                "Default 0.5/0.5 = dead center. Use y_pct≈0.3 for portrait face shots "
+                "(face is in upper portion of frame).\n\n"
+                "Returns {path, width, height, crop: {x, y, w, h}}. "
+                "Use the returned path as the source in add_clip. "
+                "Supports HEIC, JPG, PNG (images) and MOV, MP4, etc. (video). Read-only — no batch needed."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "source_path": {"type": "string", "description": "Absolute path to source file"},
+                    "aspect":      {"type": "string", "default": "square",
+                                    "description": "square | vertical | horizontal | W:H"},
+                    "x_pct":       {"type": "number", "default": 0.5,
+                                    "description": "Horizontal center of crop (0=left, 1=right)"},
+                    "y_pct":       {"type": "number", "default": 0.5,
+                                    "description": "Vertical center of crop (0=top, 1=bottom)"},
+                },
+                "required": ["source_path"],
             },
         ),
         Tool(
@@ -2512,6 +2541,66 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             content.append(TextContent(type="text", text=f"t={t} → {path}"))
             content.append(ImageContent(type="image", data=base64.b64encode(raw).decode(), mimeType="image/png"))
         return content
+    if name == "crop_media":
+        src = arguments["source_path"]
+        aspect_str = arguments.get("aspect", "square")
+        x_pct = float(arguments.get("x_pct", 0.5))
+        y_pct = float(arguments.get("y_pct", 0.5))
+
+        aspect_map = {"square": (1, 1), "vertical": (9, 16), "horizontal": (16, 9)}
+        if aspect_str in aspect_map:
+            ar_w, ar_h = aspect_map[aspect_str]
+        else:
+            parts = aspect_str.split(":")
+            ar_w, ar_h = int(parts[0]), int(parts[1])
+
+        is_image = Path(src).suffix.lower() in {".heic", ".heif", ".jpg", ".jpeg",
+                                                 ".png", ".bmp", ".webp", ".tiff"}
+        if is_image:
+            out = subprocess.check_output(
+                ["magick", "identify", "-format", "%w %h", src + "[0]"],
+                stderr=subprocess.DEVNULL).decode().split()
+            src_w, src_h = int(out[0]), int(out[1])
+        else:
+            probe = subprocess.check_output(
+                ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_streams", src],
+                stderr=subprocess.DEVNULL)
+            streams = json.loads(probe)["streams"]
+            vs = next(s for s in streams if s.get("codec_type") == "video")
+            src_w, src_h = int(vs["width"]), int(vs["height"])
+
+        if src_w / src_h > ar_w / ar_h:
+            crop_h = src_h
+            crop_w = int(crop_h * ar_w / ar_h)
+        else:
+            crop_w = src_w
+            crop_h = int(crop_w * ar_h / ar_w)
+
+        x = max(0, min(int((src_w - crop_w) * x_pct), src_w - crop_w))
+        y = max(0, min(int((src_h - crop_h) * y_pct), src_h - crop_h))
+
+        p = Path(src)
+        out_ext = ".png" if is_image else ".mp4"
+        out_path = str(p.parent / f"{p.stem}_crop{out_ext}")
+
+        if is_image:
+            subprocess.run(
+                ["magick", src + "[0]", "-crop", f"{crop_w}x{crop_h}+{x}+{y}",
+                 "+repage", out_path],
+                check=True, stderr=subprocess.DEVNULL)
+        else:
+            subprocess.run(
+                ["ffmpeg", "-y", "-i", src,
+                 "-vf", f"crop={crop_w}:{crop_h}:{x}:{y}",
+                 "-c:v", "libx264", "-crf", "18", "-preset", "fast",
+                 "-c:a", "copy", out_path],
+                check=True, stderr=subprocess.DEVNULL)
+
+        return [TextContent(type="text", text=json.dumps({
+            "path": out_path,
+            "width": crop_w, "height": crop_h,
+            "crop": {"x": x, "y": y, "w": crop_w, "h": crop_h},
+        }, indent=2))]
     try:
         result = _call(name, arguments)
         return [TextContent(type="text", text=json.dumps(result, indent=2))]

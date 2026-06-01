@@ -52,7 +52,9 @@ Track 0 = top (foreground). Highest index = bottom (background).
 
 - Transcripts: `{parent}/{stem}/{stem}_words.json`
 - Extracted segments: `{parent}/{stem}/{stem}_{start_int}_{end_int}.webm`
+- Cropped media: `{parent}/{stem}_crop.png` (images) or `{parent}/{stem}_crop.mp4` (video)
 - `find_and_add_clip` only adds the short extracted segment — never the full source file
+- When the user provides files to crop, call `crop_media` before `add_clip`
 
 ## Audio positioning
 
