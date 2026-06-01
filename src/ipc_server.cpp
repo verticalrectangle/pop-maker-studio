@@ -392,6 +392,16 @@ static bool check_clip(const AppState& state, int ti, int ci, std::string& err) 
     if (ci < 0 || ci >= (int)state.tracks[ti].clips.size()) { err = "clip index out of range"; return false; }
     return true;
 }
+// Resolve track by name (track_name param) or integer index (track param).
+static int track_by_name_or_index(const AppState& state, const json& params) {
+    if (params.contains("track_name") && params["track_name"].is_string()) {
+        const std::string name = params["track_name"].get<std::string>();
+        for (int i = 0; i < (int)state.tracks.size(); ++i)
+            if (state.tracks[i].name == name) return i;
+        return -1;
+    }
+    return params.value("track", -1);
+}
 
 // ── Command dispatch ──────────────────────────────────────────────────────────
 
@@ -725,7 +735,12 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         g_auto_batched = false;
         g_batch_label.clear();
         g_batch_state = nullptr;
-        return state_to_json(state);
+        json r;
+        r["duration"]         = state.duration;
+        r["project_path"]     = state.project_path;
+        r["transcript_ready"] = !state.words_json_path.empty() &&
+                                (bool)std::ifstream(state.words_json_path);
+        return r;
     }
 
     // ── Snapshot (GL-thread flag — fulfilled by draw_preview) ─────────────────
@@ -863,7 +878,7 @@ static json dispatch(AppState& state, const std::string& method, const json& par
     }
 
     if (method == "move_clip") {
-        int ti = params.value("track", -1), ci = params.value("clip", -1);
+        int ti = track_by_name_or_index(state, params), ci = params.value("clip", -1);
         float start = params.value("start", 0.f);
         if (!check_clip(state, ti, ci, err)) return {};
         Clip& cl = state.tracks[ti].clips[ci];
@@ -874,7 +889,7 @@ static json dispatch(AppState& state, const std::string& method, const json& par
     }
 
     if (method == "trim_clip") {
-        int ti = params.value("track", -1), ci = params.value("clip", -1);
+        int ti = track_by_name_or_index(state, params), ci = params.value("clip", -1);
         if (!check_clip(state, ti, ci, err)) return {};
         Clip& cl = state.tracks[ti].clips[ci];
         float old_start = cl.start;
@@ -889,7 +904,7 @@ static json dispatch(AppState& state, const std::string& method, const json& par
     }
 
     if (method == "split_clip") {
-        int ti = params.value("track", -1), ci = params.value("clip", -1);
+        int ti = track_by_name_or_index(state, params), ci = params.value("clip", -1);
         float t = params.value("time", -1.f);
         if (!check_clip(state, ti, ci, err)) return {};
         Clip& cl = state.tracks[ti].clips[ci];
@@ -908,7 +923,7 @@ static json dispatch(AppState& state, const std::string& method, const json& par
     }
 
     if (method == "delete_clip") {
-        int ti = params.value("track", -1), ci = params.value("clip", -1);
+        int ti = track_by_name_or_index(state, params), ci = params.value("clip", -1);
         if (!check_clip(state, ti, ci, err)) return {};
         state.tracks[ti].clips.erase(state.tracks[ti].clips.begin() + ci);
         if (state.selected_track == ti && state.selected_clip == ci)
@@ -917,7 +932,7 @@ static json dispatch(AppState& state, const std::string& method, const json& par
     }
 
     if (method == "add_clip") {
-        int ti = params.value("track", -1);
+        int ti = track_by_name_or_index(state, params);
         if (!check_track(state, ti, err)) return {};
         if (state.tracks[ti].locked) { err = "track is locked"; return {}; }
         std::string type_s = params.value("type", "text");
@@ -1050,7 +1065,7 @@ static json dispatch(AppState& state, const std::string& method, const json& par
     }
 
     if (method == "set_clip_prop") {
-        int ti = params.value("track", -1), ci = params.value("clip", -1);
+        int ti = track_by_name_or_index(state, params), ci = params.value("clip", -1);
         std::string prop = params.value("prop", "");
         if (!check_clip(state, ti, ci, err)) return {};
         Clip& cl = state.tracks[ti].clips[ci];
@@ -1133,7 +1148,7 @@ static json dispatch(AppState& state, const std::string& method, const json& par
     }
 
     if (method == "delete_track") {
-        int ti = params.value("track", -1);
+        int ti = track_by_name_or_index(state, params);
         if (!check_track(state, ti, err)) return {};
         state.tracks.erase(state.tracks.begin() + ti);
         if (state.selected_track == ti) { state.selected_track = -1; state.selected_clip = -1; }
@@ -1282,7 +1297,7 @@ static json dispatch(AppState& state, const std::string& method, const json& par
     }
 
     if (method == "add_effect_brick") {
-        int ti = params.value("track", -1);
+        int ti = track_by_name_or_index(state, params);
         if (ti < 0 || ti >= (int)state.tracks.size()) { err = "track index out of range"; return {}; }
         if (state.tracks[ti].locked) { err = "track is locked"; return {}; }
         std::string fx_s = params.value("fx_type", "grade");
@@ -1305,7 +1320,7 @@ static json dispatch(AppState& state, const std::string& method, const json& par
     }
 
     if (method == "add_multifx_brick") {
-        int ti = params.value("track", -1);
+        int ti = track_by_name_or_index(state, params);
         if (!check_track(state, ti, err)) return {};
         if (state.tracks[ti].locked) { err = "track is locked"; return {}; }
         float start = params.value("start", 0.f);
@@ -1366,7 +1381,7 @@ static json dispatch(AppState& state, const std::string& method, const json& par
     }
 
     if (method == "rename_track") {
-        int ti = params.value("track", -1);
+        int ti = track_by_name_or_index(state, params);
         if (!check_track(state, ti, err)) return {};
         state.tracks[ti].name = params.value("name", state.tracks[ti].name);
         return json::object();
@@ -1379,6 +1394,34 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         else if (fmt == "square"     || fmt == "1:1")  state.format = OutputFormat::Square;
         else { err = "unknown format: " + fmt + " (use vertical/9:16, horizontal/16:9, square/1:1)"; return {}; }
         history_push(state, "Set format: " + fmt);
+        return json::object();
+    }
+
+    if (method == "trim_all_to") {
+        double t = params.value("time", -1.0);
+        if (t < 0.0) { err = "time is required"; return {}; }
+        for (auto& tr : state.tracks) {
+            std::vector<Clip> kept;
+            for (auto& cl : tr.clips) {
+                if (cl.start >= t) continue;          // delete clips starting at or after t
+                if (cl.end > t) cl.end = (float)t;   // clamp clips that straddle t
+                kept.push_back(cl);
+            }
+            tr.clips = std::move(kept);
+        }
+        history_push(state, "trim_all_to");
+        json r; r["time"] = t; return r;
+    }
+
+    if (method == "delete_clips_after") {
+        int ti = track_by_name_or_index(state, params);
+        if (!check_track(state, ti, err)) return {};
+        double t = params.value("time", -1.0);
+        if (t < 0.0) { err = "time is required"; return {}; }
+        auto& clips = state.tracks[ti].clips;
+        clips.erase(std::remove_if(clips.begin(), clips.end(),
+            [t](const Clip& c){ return c.start >= (float)t; }), clips.end());
+        history_push(state, "delete_clips_after");
         return json::object();
     }
 

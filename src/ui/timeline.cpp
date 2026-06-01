@@ -1565,7 +1565,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
             }
             // Merge-target detection: FX-on-FX overlap on the same track.
             g_tl.drag_merge_ci = -1;
-            if (!drag_left && !drag_right && drag_hot_track == drag_track) {
+            if (!drag_left && !drag_right) {
                 const Clip& dc_ref = state.tracks[drag_track].clips[drag_clip];
                 bool dc_is_fx = (dc_ref.clip_type == ClipType::Effect ||
                                  dc_ref.clip_type == ClipType::MultiFX ||

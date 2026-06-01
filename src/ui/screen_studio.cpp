@@ -349,7 +349,7 @@ void ui_studio(AppState& state) {
         if (state.pipeline_produces_subtitles) {
             state.lyrics_edits.clear();
             load_words_cache(state);
-            apply_subtitle_pipeline(state);
+            // TranscribeOnly: populate word cache and SRTs without adding any tracks.
             save_all_srts(state);
         } else if (!state.pipeline_is_separate_only) {
             // Both mode: has words + vocals

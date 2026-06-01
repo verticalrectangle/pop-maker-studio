@@ -336,13 +336,14 @@ async def list_tools() -> list[Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "track": {"type": "integer"},
+                    "track":      {"type": "integer"},
+                    "track_name": {"type": "string", "description": "Track name (alternative to track index)"},
                     "type": {"type": "string"},
                     "start": {"type": "number"},
                     "end": {"type": "number"},
                     "text": {"type": "string", "default": ""},
                 },
-                "required": ["track", "type", "start", "end"],
+                "required": ["type", "start", "end"],
             },
         ),
         Tool(
@@ -362,10 +363,11 @@ async def list_tools() -> list[Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "track": {"type": "integer"},
+                    "track":      {"type": "integer"},
+                    "track_name": {"type": "string", "description": "Track name (alternative to track index)"},
                     "clip": {"type": "integer"},
                 },
-                "required": ["track", "clip"],
+                "required": ["clip"],
             },
         ),
         Tool(
@@ -374,11 +376,12 @@ async def list_tools() -> list[Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "track": {"type": "integer"},
+                    "track":      {"type": "integer"},
+                    "track_name": {"type": "string", "description": "Track name (alternative to track index)"},
                     "clip": {"type": "integer"},
                     "start": {"type": "number"},
                 },
-                "required": ["track", "clip", "start"],
+                "required": ["clip", "start"],
             },
         ),
         Tool(
@@ -387,12 +390,13 @@ async def list_tools() -> list[Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "track": {"type": "integer"},
+                    "track":      {"type": "integer"},
+                    "track_name": {"type": "string", "description": "Track name (alternative to track index)"},
                     "clip": {"type": "integer"},
                     "start": {"type": "number"},
                     "end": {"type": "number"},
                 },
-                "required": ["track", "clip"],
+                "required": ["clip"],
             },
         ),
         Tool(
@@ -401,11 +405,12 @@ async def list_tools() -> list[Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "track": {"type": "integer"},
+                    "track":      {"type": "integer"},
+                    "track_name": {"type": "string", "description": "Track name (alternative to track index)"},
                     "clip": {"type": "integer"},
                     "time": {"type": "number"},
                 },
-                "required": ["track", "clip", "time"],
+                "required": ["clip", "time"],
             },
         ),
         Tool(
@@ -414,12 +419,13 @@ async def list_tools() -> list[Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "track": {"type": "integer"},
+                    "track":      {"type": "integer"},
+                    "track_name": {"type": "string", "description": "Track name (alternative to track index)"},
                     "clip": {"type": "integer"},
                     "prop": {"type": "string"},
                     "value": {},
                 },
-                "required": ["track", "clip", "prop", "value"],
+                "required": ["clip", "prop", "value"],
             },
         ),
         Tool(
@@ -610,7 +616,8 @@ async def list_tools() -> list[Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "track": {"type": "integer"},
+                    "track":      {"type": "integer"},
+                    "track_name": {"type": "string", "description": "Track name (alternative to track index)"},
                     "start": {"type": "number"},
                     "end": {"type": "number"},
                     "effects": {
@@ -629,7 +636,7 @@ async def list_tools() -> list[Tool]:
                         },
                     },
                 },
-                "required": ["track", "start", "end"],
+                "required": ["start", "end"],
             },
         ),
         Tool(
@@ -646,10 +653,11 @@ async def list_tools() -> list[Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "track": {"type": "integer"},
-                    "name": {"type": "string"},
+                    "track":      {"type": "integer"},
+                    "track_name": {"type": "string", "description": "Track name to look up (alternative to track index)"},
+                    "name": {"type": "string", "description": "New name to assign"},
                 },
-                "required": ["track", "name"],
+                "required": ["name"],
             },
         ),
         Tool(
@@ -726,7 +734,8 @@ async def list_tools() -> list[Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "track": {"type": "integer"},
+                    "track":      {"type": "integer"},
+                    "track_name": {"type": "string", "description": "Track name (alternative to track index)"},
                     "fx_type": {"type": "string", "description": "Snake_case FX type name (see description)"},
                     "start": {"type": "number"},
                     "end": {"type": "number"},
@@ -735,7 +744,7 @@ async def list_tools() -> list[Tool]:
                         "description": "Effect-specific parameter values by name (see description)",
                     },
                 },
-                "required": ["track", "fx_type", "start", "end"],
+                "required": ["fx_type", "start", "end"],
             },
         ),
         Tool(
@@ -1255,6 +1264,37 @@ async def list_tools() -> list[Tool]:
                 "Read-only — no batch needed."
             ),
             inputSchema={"type": "object", "properties": {}},
+        ),
+        Tool(
+            name="trim_all_to",
+            description=(
+                "Trim every clip on every track so nothing extends past 'time'. "
+                "Clips starting at or after 'time' are deleted; clips straddling 'time' are clamped. "
+                "One undo step. No batch needed."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "time": {"type": "number", "description": "Maximum end time in seconds"},
+                },
+                "required": ["time"],
+            },
+        ),
+        Tool(
+            name="delete_clips_after",
+            description=(
+                "Delete all clips on one track whose start >= time. "
+                "One undo step. No batch needed."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "track":      {"type": "integer"},
+                    "track_name": {"type": "string", "description": "Track name (alternative to track index)"},
+                    "time":       {"type": "number", "description": "Delete clips starting at or after this time (seconds)"},
+                },
+                "required": ["time"],
+            },
         ),
     ]
 
