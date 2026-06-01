@@ -277,6 +277,48 @@ async def list_tools() -> list[Tool]:
             },
         ),
         Tool(
+            name="get_all_clips",
+            description=(
+                "Return clips across ALL tracks: [{index, name, clips: [{index, type, start, end, "
+                "duration, in_point, source, text}]}]. Use for full-timeline orientation without "
+                "get_project(verbose=true). Read-only — no batch needed."
+            ),
+            inputSchema={"type": "object", "properties": {}},
+        ),
+        Tool(
+            name="trigger_export",
+            description=(
+                "Render and export the project to MP4 (or GIF). Blocks until complete — "
+                "returns {done, success, output, stage} when finished. No batch needed.\n\n"
+                "output_path: override default path (defaults to {project_dir}/{name}.mp4).\n"
+                "crf: quality 0–51, lower = better (default 23).\n"
+                "preset: ultrafast|fast|medium|slow (default medium).\n"
+                "gif: true to export animated GIF instead of MP4."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "output_path": {"type": "string", "description": "Override output file path"},
+                    "crf":    {"type": "integer", "description": "Quality 0–51 (default 23)"},
+                    "preset": {"type": "string", "enum": ["ultrafast", "fast", "medium", "slow"]},
+                    "gif":    {"type": "boolean", "description": "Export GIF instead of MP4"},
+                },
+            },
+        ),
+        Tool(
+            name="get_export_status",
+            description=(
+                "Poll export progress. Returns {running, progress (0–1), frame, total_frames, "
+                "eta_secs, stage, output}. Read-only — no batch needed."
+            ),
+            inputSchema={"type": "object", "properties": {}},
+        ),
+        Tool(
+            name="cancel_export",
+            description="Cancel a running export. No batch needed.",
+            inputSchema={"type": "object", "properties": {}},
+        ),
+        Tool(
             name="get_media_info",
             description=(
                 "Probe a media file and return its codec/format metadata: duration (seconds), "

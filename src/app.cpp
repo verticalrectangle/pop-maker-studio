@@ -406,6 +406,18 @@ void app_frame(AppState& state) {
         }
     }
 
+    // IPC-requested export: pick up on GL thread before ticking the render.
+    if (state.export_request && !state.render.running) {
+        state.export_request = false;
+        if (!state.export_out_path.empty())
+            state.out_mp4 = state.export_out_path;
+        // sync gif path
+        std::string mp4 = state.out_mp4;
+        size_t dot = mp4.rfind('.');
+        state.out_gif = (dot != std::string::npos ? mp4.substr(0, dot) : mp4) + ".gif";
+        render_start_gl(state);
+    }
+
     // Drive one export frame per app frame (GL calls must be on main thread).
     render_tick_gl(state);
 

@@ -572,6 +572,10 @@ struct AppState {
     std::string snapshot_done_path;
     std::string snapshot_done_err;
 
+    // IPC-requested export (ipc_server sets; GL thread calls render_start_gl)
+    bool        export_request  = false;
+    std::string export_out_path;
+
     // noise reduction
     bool        noise_reduce_running  = false;
     float       noise_reduce_progress = 0.f;

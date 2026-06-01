@@ -1,4 +1,5 @@
 #include "ipc_server.h"
+#include "render.h"
 #include "bg_remove.h"
 #include "history.h"
 #include "runtime_fx.h"
@@ -469,6 +470,96 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         for (int ci = 0; ci < (int)state.tracks[ti].clips.size(); ++ci)
             arr.push_back(clip_to_json_slim(ci, state.tracks[ti].clips[ci]));
         return arr;
+    }
+
+    if (method == "get_all_clips") {
+        json arr = json::array();
+        for (int ti = 0; ti < (int)state.tracks.size(); ++ti) {
+            const Track& t = state.tracks[ti];
+            json tj;
+            tj["index"]  = ti;
+            tj["name"]   = t.name;
+            json clips = json::array();
+            for (int ci = 0; ci < (int)t.clips.size(); ++ci)
+                clips.push_back(clip_to_json_slim(ci, t.clips[ci]));
+            tj["clips"] = clips;
+            arr.push_back(tj);
+        }
+        return arr;
+    }
+
+    if (method == "get_export_status") {
+        json r;
+        r["running"]      = state.render.running;
+        r["progress"]     = state.render.progress;
+        r["frame"]        = state.render.frame;
+        r["total_frames"] = state.render.total_frames;
+        r["eta_secs"]     = state.render.eta_secs;
+        r["stage"]        = state.render.stage;
+        r["output"]       = state.out_mp4;
+        return r;
+    }
+
+    if (method == "cancel_export") {
+        render_cancel();
+        return json::object();
+    }
+
+    if (method == "trigger_export") {
+        if (state.render.running) { err = "export already running"; return {}; }
+
+        // Resolve output path
+        if (params.contains("output_path") && !params["output_path"].get<std::string>().empty()) {
+            state.export_out_path = params["output_path"].get<std::string>();
+        } else if (!state.out_mp4.empty()) {
+            state.export_out_path = state.out_mp4;
+        } else {
+            // Default: {project_dir}/{stem}.mp4 or ~/Videos/pop_maker_export.mp4
+            std::string base;
+            if (!state.project_path.empty()) {
+                size_t sep  = state.project_path.rfind('/');
+                std::string dir  = (sep != std::string::npos) ? state.project_path.substr(0, sep) : ".";
+                std::string name = (sep != std::string::npos) ? state.project_path.substr(sep + 1) : state.project_path;
+                size_t dot  = name.rfind('.');
+                base = dir + "/" + (dot != std::string::npos ? name.substr(0, dot) : name);
+            } else {
+                const char* h = std::getenv("HOME");
+                base = std::string(h ? h : ".") + "/Videos/pop_maker_export";
+            }
+            state.export_out_path = base + ".mp4";
+        }
+
+        // Optional render settings
+        if (params.contains("crf"))    state.render_settings.crf          = params["crf"].get<int>();
+        if (params.contains("preset")) state.render_settings.preset       = params["preset"].get<std::string>();
+        if (params.contains("gif"))    state.render_settings.gif_export   = params["gif"].get<bool>();
+
+        state.export_request = true;
+
+        if (client_fd < 0) { json r; r["output"] = state.export_out_path; return r; }
+        fd_mark_busy(client_fd);
+        std::string out_path = state.export_out_path;
+        std::thread([client_fd, req_id, out_path, &state]() {
+            // Wait for GL thread to pick up the request and start rendering
+            for (int i = 0; i < 100 && !state.render.running; ++i)
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            while (state.render.running) {
+                send_progress(client_fd, req_id, state.render.progress, state.render.stage);
+                std::this_thread::sleep_for(std::chrono::milliseconds(200));
+            }
+            json r;
+            const std::string& stage = state.render.stage;
+            bool ok = !stage.empty() &&
+                      stage.rfind("Error", 0) == std::string::npos &&
+                      stage != "Building\xe2\x80\xa6";   // UTF-8 ellipsis
+            r["done"]    = true;
+            r["output"]  = out_path;
+            r["stage"]   = stage;
+            r["success"] = ok;
+            send_ok_id(client_fd, req_id, r);
+            fd_mark_free(client_fd);
+        }).detach();
+        json sentinel; sentinel["__async"] = true; return sentinel;
     }
 
     if (method == "get_beats") {
