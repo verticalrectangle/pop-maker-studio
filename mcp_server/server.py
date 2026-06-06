@@ -2291,9 +2291,11 @@ async def _add_clip(arguments: dict) -> dict:
 
 # ── find_and_add_clip ─────────────────────────────────────────────────────────
 
-def _search_transcript_in_words(words: list, query: str) -> tuple[float, float, str, float]:
-    """Search a words list for a query. Returns (start, end, excerpt, score).
-    end is the end of the last matched query word, not the end of the search window."""
+def _search_transcript_in_words(words: list, query: str) -> tuple[float, float, str, float, bool]:
+    """Search a words list for a query. Returns (start, end, excerpt, score, truncated).
+    end is the end of the last matched query word, not the end of the search window.
+    truncated=True means the match is partial AND lands near the tail of the word list,
+    which indicates the source chunk was cut off before capturing all query words."""
     query_words_list = query.lower().split()
     query_words_set  = set(query_words_list)
     best_score, best_start, best_end, best_text = -1.0, 0.0, 0.0, ""
@@ -2320,7 +2322,13 @@ def _search_transcript_in_words(words: list, query: str) -> tuple[float, float, 
             best_start = float(window[s_idx]["start"])
             best_end   = float(window[e_idx]["end"])
             best_text  = " ".join(w["word"] for w in window[s_idx:e_idx + 1])
-    return best_start, best_end, best_text[:200], best_score
+    # Flag chunk-boundary truncation: partial match that runs right up to the end of available words
+    truncated = (
+        0.0 < best_score < 1.0
+        and bool(words)
+        and float(words[-1]["end"]) - best_end < 4.0
+    )
+    return best_start, best_end, best_text[:200], best_score, truncated
 
 
 async def _find_and_add_clip(arguments: dict) -> dict:
@@ -2355,9 +2363,41 @@ async def _find_and_add_clip(arguments: dict) -> dict:
             words = tr["words"]
 
     if words:
-        start, end, excerpt, score = _search_transcript_in_words(words, query)
+        start, end, excerpt, score, truncated = _search_transcript_in_words(words, query)
         if score < 0.3:
             raise ValueError(f"could not find '{query}' in transcript (best score: {score:.2f})")
+
+        # Partial match at a chunk boundary — the cached word list was cut off before capturing
+        # the trailing query word(s). Re-run the windowed search with a larger buffer so the
+        # scanner reads one more chunk and returns the true end timestamp.
+        if truncated:
+            print(f"[find_and_add_clip] partial match ({score:.2f}) near cache tail — re-scanning for trailing words", flush=True)
+            _call("search_transcript", {
+                "path":        path,
+                "query_words": query.lower().split(),
+                "buffer_sec":  60.0,
+            })
+            last_msg = ""
+            st: dict = {}
+            for _ in range(120):
+                await asyncio.sleep(2)
+                st = _call("get_search_status", {})
+                msg = st.get("message", "")
+                if msg and msg != last_msg:
+                    print(f"[find_and_add_clip lookahead] {msg}", flush=True)
+                    last_msg = msg
+                if not st.get("running", False):
+                    break
+            if st.get("found"):
+                start   = float(st.get("start", start))
+                end     = float(st.get("end",   end))
+                excerpt = st.get("excerpt", excerpt)
+                # Reload the cache if the search extended it
+                if cached_words_path.exists():
+                    with open(cached_words_path) as f:
+                        refreshed = json.load(f)
+                    if refreshed and words and float(refreshed[-1]["end"]) > float(words[-1]["end"]):
+                        words = refreshed
 
         # Check if any previously extracted segment covers the needed range
         seg_start = max(0.0, start - padding)

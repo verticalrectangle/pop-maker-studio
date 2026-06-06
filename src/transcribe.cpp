@@ -342,7 +342,7 @@ static void do_transcribe(
         }
 
         // Pass whisper's segment boundaries so forced_align uses exact segment
-        // audio windows — the same strategy WhisperX uses for "god tier" timing.
+        // audio windows for best timing accuracy.
         std::vector<std::pair<float,float>> sb;
         sb.reserve(segs_arr.size());
         for (auto& s : segs_arr)

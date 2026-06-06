@@ -26,7 +26,7 @@ Has a folder on her desktop called `FINAL_EXPORT_v7_REAL_USE_THIS.mp4`.
 
 ## Harry the Hoodlum
 
-Doesn't download it, his boy sent him the folder over Discord. Runs the binary straight from Downloads. Drags in an unreleased drill track that he definitely shouldn't have. Clicks "Drill" preset immediately without looking at anything else because he saw the name. Doesn't know what WhisperX is, just hits the transcribe button and walks away to roll up.
+Doesn't download it, his boy sent him the folder over Discord. Runs the binary straight from Downloads. Drags in an unreleased drill track that he definitely shouldn't have. Clicks "Drill" preset immediately without looking at anything else because he saw the name. Doesn't know what transcription is, just hits the transcribe button and walks away to roll up.
 
 Comes back, half the lyrics are wrong because the mic quality on the track is genuinely terrible — it transcribed "on the block" as "on the flock" and "bro got hit" as "pro got it". Doesn't fix them. Exports anyway.
 

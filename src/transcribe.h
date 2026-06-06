@@ -3,8 +3,8 @@
 #include <string>
 
 enum class PipelineMode {
-    Both,        // Demucs + WhisperX
-    TranscribeOnly,  // WhisperX on original file (no Demucs)
+    Both,        // Demucs + transcription
+    TranscribeOnly,  // transcription on original file (no Demucs)
     SeparateOnly,    // Demucs only, no subtitles
 };
 

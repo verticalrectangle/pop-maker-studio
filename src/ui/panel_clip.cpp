@@ -931,7 +931,7 @@ void panel_clip(AppState& state, float w) {
                     {SubtitleMode::Word,    "Word",    "One clip per word"},
                     {SubtitleMode::Phrase,  "Phrase",  "Group by short pauses (>0.3s)"},
                     {SubtitleMode::Line,    "Line",    "Group by breath gaps (>0.8s)"},
-                    {SubtitleMode::Segment, "Segment", "WhisperX sentence boundaries"},
+                    {SubtitleMode::Segment, "Segment", "Sentence boundaries"},
                     {SubtitleMode::CustomN, "Custom",  "N words per clip"},
                 };
                 for (auto& mb : modes) {

@@ -70,6 +70,10 @@ Add to `.mcp.json` in the repo root:
 | `save_project` / `load_project` | Project persistence |
 | `validate_glsl` | Test-compile a GLSL shader |
 
+## Agent guidance
+
+Never run ML model inference outside of this server. All transcription, audio analysis, and video analysis runs inside Pop Maker Studio — use `trigger_pipeline`, `get_transcript`, `describe_video`, `get_stills`, and related tools instead.
+
 ## Workflow example
 
 ```

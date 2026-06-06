@@ -4,8 +4,7 @@
 #include <utility>
 
 // CTC forced alignment using wav2vec2-base-960h ONNX.
-// Ports WhisperX's alignment algorithm to C++:
-//   • stay/advance trellis (torchaudio forced-alignment tutorial)
+// stay/advance trellis algorithm (torchaudio forced-alignment tutorial):
 //   • per-segment inference — audio window = exact whisper segment bounds
 //   • NaN interpolation for characters not in the model vocabulary
 //

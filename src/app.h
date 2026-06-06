@@ -410,10 +410,10 @@ struct RenderStatus {
 // ── Subtitle grouping mode ────────────────────────────────────────────────────
 
 enum class SubtitleMode {
-    Word,       // one clip per word (WhisperX default)
+    Word,       // one clip per word
     Phrase,     // split on short pauses  > 0.3 s
     Line,       // split on breath gaps   > 0.8 s
-    Segment,    // WhisperX sentence segments
+    Segment,    // sentence segments
     CustomN,    // user-defined N words per clip
     Karaoke,    // line-grouped clips with per-word highlight enabled
 };

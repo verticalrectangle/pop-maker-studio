@@ -21,8 +21,8 @@ No internet required. No uploads. Everything runs on your machine.
 - **Keyframe animation** — per-clip property curves (position, scale, rotation, opacity)
 
 ### ML Pipeline
-- **Transcribe + Separate Vocals** — WhisperX + Demucs, runs locally
-- **Transcribe only** — WhisperX on original file
+- **Transcribe + Separate Vocals** — transcription + Demucs, runs locally
+- **Transcribe only** — transcription on original file
 - **Separate Vocals only** — Demucs, no subtitles
 - **Beat detection** — librosa, beat markers on timeline ruler, BPM in toolbar, snap-to-beat
 - **Amplitude envelope extraction** — per-audio RMS curve, drives reactive effects

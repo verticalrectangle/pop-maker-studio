@@ -53,11 +53,10 @@ static void log_softmax_row(float* row, int n) {
     for (int i = 0; i < n; ++i) row[i] -= ls;
 }
 
-// ── WhisperX/torchaudio stay-advance trellis ──────────────────────────────────
+// ── stay-advance trellis (torchaudio forced alignment) ───────────────────────
 //
-// Ported directly from:
+// Based on:
 //   https://pytorch.org/tutorials/intermediate/forced_alignment_with_torchaudio_tutorial.html
-// and WhisperX alignment.py (get_trellis / backtrack / merge_repeats).
 //
 // State j = "number of tokens consumed so far" (0..L).
 // At each frame: stay at j (emit blank) or advance to j+1 (emit tokens[j]).
@@ -166,18 +165,16 @@ static std::vector<CharSeg> merge_repeats(const std::vector<PathPoint>& path, in
 
 // ── Public API ────────────────────────────────────────────────────────────────
 //
-// Exact port of WhisperX's align() function strategy:
-//
-//   For each whisper segment [t1, t2]:
-//     1. Slice audio to exactly [t1, t2] (no extra padding).
-//     2. Run wav2vec2 ONNX on that slice → T × V log-probs.
-//     3. Build the character target for words in this segment (letters + "|").
-//     4. get_trellis → backtrack → merge_repeats → one CharSeg per target char.
-//     5. Map char frame indices to absolute time: t_abs = t1 + frame * ratio
-//        where ratio = (t2 - t1) / T.
-//     6. word.start = min char start, word.end = max char end (WhisperX style).
-//     7. Words with no vocabulary-mapped chars get NaN — filled by linear
-//        interpolation between the nearest aligned neighbours afterward.
+// For each whisper segment [t1, t2]:
+//   1. Slice audio to exactly [t1, t2] (no extra padding).
+//   2. Run wav2vec2 ONNX on that slice → T × V log-probs.
+//   3. Build the character target for words in this segment (letters + "|").
+//   4. get_trellis → backtrack → merge_repeats → one CharSeg per target char.
+//   5. Map char frame indices to absolute time: t_abs = t1 + frame * ratio
+//      where ratio = (t2 - t1) / T.
+//   6. word.start = min char start, word.end = max char end.
+//   7. Words with no vocabulary-mapped chars get NaN — filled by linear
+//      interpolation between the nearest aligned neighbours afterward.
 
 std::vector<WordEntry> forced_align(
     const std::vector<float>&               audio16k,
@@ -257,7 +254,7 @@ std::vector<WordEntry> forced_align(
     std::vector<bool>      aligned(N, false);
 
     for (auto& seg : segs) {
-        // Exact audio window — no extra padding (WhisperX slices precisely)
+        // Exact audio window — no extra padding
         int s0 = (int)(seg.t0 * SAMPLE_RATE);
         int s1 = std::min((int)(seg.t1 * SAMPLE_RATE), (int)audio16k.size());
         if (s1 <= s0) continue;
@@ -330,7 +327,7 @@ std::vector<WordEntry> forced_align(
         if (path.empty()) continue;
         auto csegs = merge_repeats(path, (int)target.size());
 
-        // Extract word timestamps from character spans (WhisperX style):
+        // Extract word timestamps from character spans:
         //   word.start = min char start,  word.end = max char end
         //   word.score = mean char score
         for (int k = 0; k < (int)wranges.size(); ++k) {
@@ -358,7 +355,7 @@ std::vector<WordEntry> forced_align(
         }
     }
 
-    // ── NaN interpolation (WhisperX interpolate_nans, method=nearest) ─────────
+    // ── NaN interpolation (method=nearest) ────────────────────────────────────
     // For each unaligned word, linearly interpolate its start/end between
     // the nearest aligned neighbours.  Falls back to the original Whisper
     // timestamp if there are no aligned neighbours on one or both sides.
