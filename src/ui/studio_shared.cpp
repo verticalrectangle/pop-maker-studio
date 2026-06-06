@@ -86,6 +86,8 @@ int slot_for_video(AppState& state, const std::string& key, const std::string& /
         if (state.proxy_paths[i] == key) return i;
     for (int i = 0; i < MAX_VIDEO_TRACKS; ++i)
         if (state.proxy_paths[i].empty()) { state.proxy_paths[i] = key; return i; }
+    fprintf(stderr, "[video] slot table full (%d slots) — proxy will not load for: %s\n",
+            MAX_VIDEO_TRACKS, key.c_str());
     return -1;
 }
 

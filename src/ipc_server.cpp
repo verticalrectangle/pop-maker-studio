@@ -1424,6 +1424,7 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         std::string path = params.value("path", "");
         if (path.empty()) { err = "path is required"; return {}; }
         if (!project_load(state, path)) { err = "project_load failed"; return {}; }
+        state.proxy_scan_needed = true;
         json r; r["path"] = path;
         return r;
     }

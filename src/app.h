@@ -34,7 +34,7 @@ struct PropTrack {
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-static const int MAX_VIDEO_TRACKS = 8;
+static const int MAX_VIDEO_TRACKS = 32;
 
 // ── Animation style ───────────────────────────────────────────────────────────
 
