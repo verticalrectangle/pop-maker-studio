@@ -623,21 +623,101 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
     dl->PushClipRect(p, {p.x+w, p.y+h}, true);
 
 
-    // Empty state prompt
+    // Empty state / agent loading panel
     if (state.tracks.empty()) {
-        ImGui::PushFont(g_font_bold);
-        float hint_sz = ImGui::GetFontSize() * 1.3f;
-        const char* hint = "Drop a file to start";
-        ImVec2 hsz = ImGui::GetFont()->CalcTextSizeA(hint_sz, FLT_MAX, -1.f, hint);
-        dl->AddText(ImGui::GetFont(), hint_sz,
-            {p.x + (w - hsz.x) * 0.5f, p.y + h * 0.5f - hsz.y},
-            to_u32(Col::muted), hint);
-        ImGui::PopFont();
+        // Auto-timeout: clear stale agent flag if no end_batch arrived within 8 s
+        static double s_agent_start = 0.0;
+        if (state.agent_active) {
+            if (s_agent_start == 0.0) s_agent_start = ImGui::GetTime();
+            if (ImGui::GetTime() - s_agent_start > 8.0) {
+                state.agent_active = false;
+                s_agent_start = 0.0;
+            }
+        } else {
+            s_agent_start = 0.0;
+        }
 
-        const char* sub = "or  File \xe2\x86\x92 Import Audio";
-        ImVec2 ssz = ImGui::GetFont()->CalcTextSizeA(ImGui::GetFontSize(), FLT_MAX, -1.f, sub);
-        dl->AddText({p.x + (w - ssz.x) * 0.5f, p.y + h * 0.5f + 8.f},
-            to_u32(Col::dim), sub);
+        if (state.agent_active) {
+            double t = ImGui::GetTime();
+
+            static const char* k_msgs[] = {
+                "finding the vibe...",
+                "building your world...",
+                "assembling the timeline...",
+                "the beats are loading...",
+                "it's giving...",
+                "setting the scene...",
+                "cooking something up...",
+            };
+            constexpr int k_msg_count = (int)(sizeof(k_msgs) / sizeof(k_msgs[0]));
+            const char* status_msg = k_msgs[(int)(t / 2.5) % k_msg_count];
+
+            float card_w = std::min(w * 0.65f, 220.f);
+            float card_h = 110.f;
+            float cx = p.x + w * 0.5f;
+            float cy = p.y + h * 0.5f;
+            ImVec2 tl2 = {cx - card_w * 0.5f, cy - card_h * 0.5f};
+            ImVec2 br2 = {cx + card_w * 0.5f, cy + card_h * 0.5f};
+
+            dl->AddRectFilled(tl2, br2, IM_COL32(22, 22, 28, 220), 10.f);
+            dl->AddRect(tl2, br2, IM_COL32(80, 60, 120, 160), 10.f);
+
+            // Spinning plumbob (diamond)
+            float spin = (float)(t * 1.8);
+            float cs = cosf(spin), sn = sinf(spin);
+            float pr = 13.f;
+            ImVec2 pc = {cx, tl2.y + 26.f};
+            auto rot = [&](float dx, float dy) -> ImVec2 {
+                return {pc.x + dx * cs - dy * sn, pc.y + dx * sn + dy * cs};
+            };
+            ImVec2 ptop   = rot(0,    -pr);
+            ImVec2 pright = rot(pr * 0.7f, 0);
+            ImVec2 pbot   = rot(0,     pr);
+            ImVec2 pleft  = rot(-pr * 0.7f, 0);
+            dl->AddTriangleFilled(ptop, pright, pbot, IM_COL32(160, 80, 255, 220));
+            dl->AddTriangleFilled(ptop, pleft,  pbot, IM_COL32(120, 50, 200, 220));
+            dl->AddTriangle(ptop, pright, pbot, IM_COL32(200, 140, 255, 180));
+            dl->AddTriangle(ptop, pleft,  pbot, IM_COL32(200, 140, 255, 180));
+
+            float tsz = ImGui::GetFontSize();
+            ImVec2 smid_sz = ImGui::GetFont()->CalcTextSizeA(tsz, FLT_MAX, -1.f, status_msg);
+            dl->AddText({cx - smid_sz.x * 0.5f, pc.y + pr + 8.f},
+                IM_COL32(200, 180, 230, 230), status_msg);
+
+            if (!state.agent_msg.empty()) {
+                float lsz = tsz * 0.78f;
+                ImVec2 lsz_v = ImGui::GetFont()->CalcTextSizeA(lsz, FLT_MAX, -1.f, state.agent_msg.c_str());
+                dl->AddText(ImGui::GetFont(), lsz,
+                    {cx - lsz_v.x * 0.5f, pc.y + pr + 8.f + smid_sz.y + 3.f},
+                    IM_COL32(120, 100, 150, 180), state.agent_msg.c_str());
+            }
+
+            // Fugazi progress bar — breathes between 20 % and 80 %
+            float bar_fill = 0.5f + 0.3f * sinf((float)t * 0.7f);
+            float bar_y    = br2.y - 22.f;
+            float bar_x0   = tl2.x + 16.f;
+            float bar_x1   = br2.x - 16.f;
+            float bar_h_px = 5.f;
+            dl->AddRectFilled({bar_x0, bar_y}, {bar_x1, bar_y + bar_h_px},
+                IM_COL32(50, 40, 70, 200), 3.f);
+            dl->AddRectFilled({bar_x0, bar_y},
+                {bar_x0 + (bar_x1 - bar_x0) * bar_fill, bar_y + bar_h_px},
+                IM_COL32(160, 80, 255, 220), 3.f);
+        } else {
+            ImGui::PushFont(g_font_bold);
+            float hint_sz = ImGui::GetFontSize() * 1.3f;
+            const char* hint = "Drop a file to start";
+            ImVec2 hsz = ImGui::GetFont()->CalcTextSizeA(hint_sz, FLT_MAX, -1.f, hint);
+            dl->AddText(ImGui::GetFont(), hint_sz,
+                {p.x + (w - hsz.x) * 0.5f, p.y + h * 0.5f - hsz.y},
+                to_u32(Col::muted), hint);
+            ImGui::PopFont();
+
+            const char* sub = "or  File \xe2\x86\x92 Import Audio";
+            ImVec2 ssz = ImGui::GetFont()->CalcTextSizeA(ImGui::GetFontSize(), FLT_MAX, -1.f, sub);
+            dl->AddText({p.x + (w - ssz.x) * 0.5f, p.y + h * 0.5f + 8.f},
+                to_u32(Col::dim), sub);
+        }
 
         dl->AddRect(p, {p.x+w, p.y+h}, to_u32(Col::line), 2.f);
         return;
@@ -1328,6 +1408,26 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
     }
 
     // Snapshot flash message — bottom-center, fades after 3 s
+    // Agent-active pill badge — top-right corner, shown when agent is working on a live project
+    if (state.agent_active && !state.tracks.empty()) {
+        double t2 = ImGui::GetTime();
+        float pulse = 0.6f + 0.4f * sinf((float)t2 * 3.f);  // pulsing dot
+        const char* badge = "  agent working";
+        float bsz = ImGui::GetFontSize() * 0.78f;
+        ImVec2 bext = ImGui::GetFont()->CalcTextSizeA(bsz, FLT_MAX, -1.f, badge);
+        float pad2  = 5.f;
+        float dot_r = 3.5f;
+        float bx    = p.x + w - bext.x - pad2 * 2.f - dot_r * 2.f - 8.f;
+        float by    = p.y + 8.f;
+        ImVec2 btl  = {bx - pad2, by - pad2 * 0.5f};
+        ImVec2 bbr  = {bx + bext.x + dot_r * 2.f + 6.f + pad2, by + bext.y + pad2 * 0.5f};
+        dl->AddRectFilled(btl, bbr, IM_COL32(22, 22, 28, 200), 8.f);
+        dl->AddCircleFilled({bx + dot_r, by + bext.y * 0.5f}, dot_r,
+            IM_COL32(160, 80, 255, (int)(pulse * 230.f)));
+        dl->AddText(ImGui::GetFont(), bsz, {bx + dot_r * 2.f + 4.f, by},
+            IM_COL32(180, 150, 220, 200), badge);
+    }
+
     if (!state.snapshot_msg.empty()) {
         double elapsed = ImGui::GetTime() - state.snapshot_msg_t;
         float  alpha   = elapsed < 2.0 ? 1.f : (float)(1.0 - (elapsed - 2.0) / 1.0);

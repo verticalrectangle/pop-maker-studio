@@ -881,16 +881,20 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         g_in_batch    = true;
         g_batch_label = params.value("label", "MCP edit");
         g_batch_state = &state;
+        state.agent_active = true;
+        state.agent_msg    = g_batch_label;
         return json::object();
     }
 
     if (method == "end_batch") {
         if (!g_in_batch) { err = "not in a batch"; return {}; }
         history_push(state, g_batch_label);
-        g_in_batch     = false;
-        g_auto_batched = false;
+        g_in_batch         = false;
+        g_auto_batched     = false;
         g_batch_label.clear();
-        g_batch_state = nullptr;
+        g_batch_state      = nullptr;
+        state.agent_active = false;
+        state.agent_msg.clear();
         json r;
         r["duration"]         = state.duration;
         r["project_path"]     = state.project_path;

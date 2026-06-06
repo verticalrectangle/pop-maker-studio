@@ -608,6 +608,10 @@ struct AppState {
     // right panel active tab: 0=Clip, 1=Animation, 2=Export, 3=History, 4=Lyrics, 5=FX Library
     int panel_tab = 0;
 
+    // MCP agent status — set by begin_batch / end_batch IPC calls
+    bool        agent_active = false;
+    std::string agent_msg;   // batch label shown in loading panel
+
     // user-created effect presets (persisted to ~/.config/pop-maker-studio/presets.json)
     std::vector<EffectPreset> user_presets;
 

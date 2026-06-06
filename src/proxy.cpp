@@ -322,6 +322,7 @@ void proxy_start(const std::string& video_path) {
             "ffmpeg", "-hide_banner", "-loglevel", "error",
             "-y", "-i", proxy_src.c_str(),
             "-vf", "scale=min(iw/2\\,960):-2",
+            "-r", "30",   // cap proxy at 30 fps — MJPEG muxer can't handle >30 fps raw streams
             "-c:v", "mjpeg", "-q:v", "13",
             "-an",
             mjpeg.c_str(), nullptr
