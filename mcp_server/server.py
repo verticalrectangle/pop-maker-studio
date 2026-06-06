@@ -2570,6 +2570,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
 
         is_image = Path(src).suffix.lower() in {".heic", ".heif", ".jpg", ".jpeg",
                                                  ".png", ".bmp", ".webp", ".tiff"}
+        rot = 0  # display rotation; only set for video with rotation metadata
         if is_image:
             out = subprocess.check_output(
                 ["magick", "identify", "-format", "%w %h", src + "[0]"],
@@ -2587,8 +2588,13 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 if sd.get("side_data_type") == "Frame Cropping":
                     src_w -= int(sd.get("crop_left", 0)) + int(sd.get("crop_right", 0))
                     src_h -= int(sd.get("crop_top", 0)) + int(sd.get("crop_bottom", 0))
-            # apply display rotation (swap w/h for ±90° rotations)
+            # track rotation: check tags first, then Display Matrix side data
             rot = int(float(vs.get("tags", {}).get("rotate", "0")))
+            if rot == 0:
+                for sd in vs.get("side_data_list", []):
+                    if sd.get("side_data_type") == "Display Matrix" and "rotation" in sd:
+                        rot = int(sd["rotation"])
+                        break
             if abs(rot) == 90 or abs(rot) == 270:
                 src_w, src_h = src_h, src_w
 
@@ -2626,8 +2632,8 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                         gray, scaleFactor=1.05, minNeighbors=3,
                         minSize=(int(min(src_w, src_h) * 0.1), int(min(src_w, src_h) * 0.1)))
                     if len(faces) > 0:
-                        # pick largest face
-                        fx, fy, fw2, fh2 = max(faces, key=lambda f: f[2] * f[3])
+                        # pick largest face (cast to int to avoid numpy int32 serialization issues)
+                        fx, fy, fw2, fh2 = (int(v) for v in max(faces, key=lambda f: f[2] * f[3]))
                         # add padding: more above (hair) than below (chin)
                         pad_px_top    = int(fh2 * pad_top)
                         pad_px_bottom = int(fh2 * pad_bottom)
@@ -2678,9 +2684,20 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                  "+repage", out_path],
                 check=True, stderr=subprocess.DEVNULL)
         else:
+            # Prepend a transpose filter so crop sees display-orientation coords.
+            # rotate=0 clears the stored rotation metadata (pixels are already rotated).
+            if rot == -90 or rot == 270:
+                vf = f"transpose=1,crop={crop_w}:{crop_h}:{x}:{y}"
+            elif rot == 90 or rot == -270:
+                vf = f"transpose=2,crop={crop_w}:{crop_h}:{x}:{y}"
+            elif abs(rot) == 180:
+                vf = f"vflip,hflip,crop={crop_w}:{crop_h}:{x}:{y}"
+            else:
+                vf = f"crop={crop_w}:{crop_h}:{x}:{y}"
             subprocess.run(
                 ["ffmpeg", "-y", "-i", src,
-                 "-vf", f"crop={crop_w}:{crop_h}:{x}:{y}",
+                 "-vf", vf,
+                 "-metadata:s:v:0", "rotate=0",
                  "-c:v", "libx264", "-crf", "18", "-preset", "fast",
                  "-c:a", "copy", out_path],
                 check=True, stderr=subprocess.DEVNULL)
