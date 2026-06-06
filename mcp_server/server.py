@@ -2457,6 +2457,11 @@ _AGENT_GUIDE = """
 A native C++ video editor controlled through an MCP server over a Unix socket IPC layer.
 The app runs locally; agents connect via this MCP server.
 
+## Asking the user questions
+When you have clarifying questions before starting a task (style preferences, pacing choices,
+layout decisions, etc.), always use the AskUserQuestion tool — the interactive panel UI — instead
+of asking in plain text. Group all questions into a single AskUserQuestion call.
+
 ## The two non-negotiable rules
 
 **1. ALL mutations require a batch.**
