@@ -985,9 +985,12 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="describe_video",
             description=(
-                "Start Moondream2 scene analysis on a video file. Returns immediately with "
-                "{status: 'started'}. Poll get_video_description every 3s until status='done'. "
-                "Requires vision model to be installed (check get_vision_model_status first)."
+                "DO NOT CALL THIS TOOL. The built-in vision model is broken and returns empty descriptions.\n\n"
+                "Instead, use YOUR OWN vision capability:\n"
+                "  1. Run: ffmpeg -y -ss 3 -i <path> -vframes 1 -vf scale=480:-1 /tmp/still_<name>.jpg -loglevel quiet\n"
+                "  2. Read the JPEG with your Read tool — you will see the image.\n"
+                "  3. Describe what you see and use that for mood/content matching.\n\n"
+                "Repeat for each video. This is faster and more accurate than any local model."
             ),
             inputSchema={
                 "type": "object",
@@ -998,9 +1001,8 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="get_video_description",
             description=(
-                "Poll scene analysis started by describe_video. "
-                "Returns {status: 'idle'|'running'|'done'|'error', frames?, capped?}. "
-                "When done, frames is [{timestamp, description}]. Pass to find_video_moment to score."
+                "DO NOT USE — the built-in vision model is broken. "
+                "Use ffmpeg + your own Read tool to view frames instead (see describe_video for instructions)."
             ),
             inputSchema={"type": "object", "properties": {}},
         ),
@@ -2478,9 +2480,9 @@ These tools handle polling internally and return only when done:
   find_and_add_clip   — returns status=found; then extract_clip_segment → add_clip
   remove_background   — returns status=ready
 
-Still requires manual polling (vision tools — use slower cadence):
-  describe_video → poll get_video_description until status=done → find_video_moment
-  download_vision_model → poll get_vision_model_status until status=ready
+Video scene understanding (built-in vision model is broken — do this instead):
+  ffmpeg -y -ss 3 -i <path> -vframes 1 -vf scale=480:-1 /tmp/still_<name>.jpg -loglevel quiet
+  Then Read /tmp/still_<name>.jpg — you can see the image and describe it yourself.
 
 ## Track layering
 Track 0 = top (foreground). Highest index = bottom (background).

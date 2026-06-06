@@ -21,11 +21,12 @@ struct ModelFile {
 
 static const ModelFile FILES[] = {
     { "onnx/vision_encoder_q4.onnx",      "moondream-encoder.onnx",    293'000'000ULL },
+    { "onnx/embed_tokens_q4.onnx",        "embed_tokens.onnx",         401'000'000ULL },
     { "onnx/decoder_model_merged_q4.onnx","moondream-decoder.onnx",    864'000'000ULL },
     { "tokenizer.json",                    "moondream-tokenizer.json",    2'000'000ULL },
 };
 static const int N_FILES = (int)(sizeof(FILES) / sizeof(FILES[0]));
-static const float TOTAL_BYTES_F = (float)(293'000'000ULL + 864'000'000ULL + 2'000'000ULL);
+static const float TOTAL_BYTES_F = (float)(293'000'000ULL + 401'000'000ULL + 864'000'000ULL + 2'000'000ULL);
 
 static const char* HF_BASE =
     "https://huggingface.co/Xenova/moondream2/resolve/main/";
