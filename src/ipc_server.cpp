@@ -56,7 +56,6 @@ static struct {
 
 static int  g_srv_fd   = -1;
 static std::string g_sock_path;
-static std::string g_lock_path = "/tmp/pop-maker-studio.lock";
 
 struct Client {
     int  fd = -1;
@@ -1668,10 +1667,7 @@ static void process_client(Client& cl, AppState& state) {
 // ── Public API ────────────────────────────────────────────────────────────────
 
 void ipc_server_start() {
-    // Build socket path using PID
-    char sock_buf[128];
-    snprintf(sock_buf, sizeof(sock_buf), "/tmp/pop-maker-studio-%d.sock", (int)getpid());
-    g_sock_path = sock_buf;
+    g_sock_path = "/tmp/pop-maker-studio.sock";
 
     // Remove stale socket
     ::unlink(g_sock_path.c_str());
@@ -1690,12 +1686,6 @@ void ipc_server_start() {
         perror("[ipc] listen"); ::close(g_srv_fd); g_srv_fd = -1; return;
     }
     set_nonblock(g_srv_fd);
-
-    // Write lock file
-    {
-        std::ofstream lf(g_lock_path);
-        lf << getpid() << " " << g_sock_path << "\n";
-    }
 
     fprintf(stdout, "[ipc] listening on %s\n", g_sock_path.c_str());
 }
@@ -1729,7 +1719,6 @@ void ipc_server_stop() {
 
     if (g_srv_fd >= 0) { ::close(g_srv_fd); g_srv_fd = -1; }
     if (!g_sock_path.empty()) ::unlink(g_sock_path.c_str());
-    ::unlink(g_lock_path.c_str());
 
     if (g_in_batch) { g_in_batch = false; g_auto_batched = false; g_batch_state = nullptr; }
 }

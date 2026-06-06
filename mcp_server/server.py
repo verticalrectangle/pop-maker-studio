@@ -41,7 +41,7 @@ from mcp.types import Tool, TextContent, ImageContent
 
 # ── IPC connection ─────────────────────────────────────────────────────────────
 
-LOCK_FILE = "/tmp/pop-maker-studio.lock"
+SOCK_PATH = "/tmp/pop-maker-studio.sock"
 
 _sock: socket.socket | None = None
 _sock_lock = threading.Lock()
@@ -49,19 +49,29 @@ _pending: dict[str, Any] = {}
 _last_project_path: str = ""  # auto-reload on reconnect
 
 
-def _connect() -> socket.socket:
-    if not os.path.exists(LOCK_FILE):
-        raise RuntimeError(
-            "Pop Maker Studio is not running (lock file not found: " + LOCK_FILE + ")"
-        )
-    with open(LOCK_FILE) as f:
-        parts = f.read().strip().split()
-    if len(parts) < 2:
-        raise RuntimeError("Malformed lock file")
-    sock_path = parts[1]
+def _autostart_pms() -> None:
+    """Launch the PMS binary if it's not already running."""
+    binary = Path(__file__).parent.parent / "build" / "pop-maker-studio"
+    if not binary.exists():
+        raise RuntimeError(f"PMS binary not found at {binary}. Build the project first.")
+    subprocess.Popen(
+        [str(binary)],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    for _ in range(30):
+        if os.path.exists(SOCK_PATH):
+            return
+        time.sleep(0.2)
+    raise RuntimeError("PMS launched but socket never appeared — check build/pop-maker-studio")
 
+
+def _connect() -> socket.socket:
+    if not os.path.exists(SOCK_PATH):
+        _autostart_pms()
     s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    s.connect(sock_path)
+    s.connect(SOCK_PATH)
     s.setblocking(True)
     return s
 
@@ -446,9 +456,11 @@ async def list_tools() -> list[Tool]:
                 "Add a new clip to a track. Requires batch.\n\n"
                 "type: text | lyrics | subtitle | video | audio | effect | background | body_fx\n"
                 "For text/lyrics/subtitle: set 'text' to the display string.\n"
-                "For video/audio: set 'text' to the absolute file path. "
-                "Images (PNG/JPG/HEIC) must be converted to video first with crop_media or ffmpeg — "
-                "use type='video' with an .mp4 path, not the raw image.\n\n"
+                "For video files (.mp4 .mov .webm etc): type='video', text=absolute path.\n"
+                "For audio-only files (.flac .mp3 .wav .ogg etc): type='audio', text=absolute path. "
+                "NEVER use type='video' for audio-only files — it will fail with 'cannot write output header'.\n"
+                "Images (PNG/JPG/HEIC) must be converted to video first with crop_media — "
+                "use type='video' with the resulting .mp4 path, not the raw image.\n\n"
                 "FILE PATH CONVENTIONS:\n"
                 "  Cropped media:       {parent}/{stem}_crop.mp4  (video)  or  {parent}/{stem}_crop.png  (image)\n"
                 "  Extracted segments:  {parent}/{stem}/{stem}_{start_int}_{end_int}.webm\n"
@@ -681,6 +693,9 @@ async def list_tools() -> list[Tool]:
             description=(
                 "Generate subtitle/lyric clips from the loaded transcript using a typography preset. "
                 "Must call trigger_pipeline first to produce the transcript. Requires batch.\n\n"
+                "BEFORE calling this: ensure the audio/video source file is already on the timeline as a clip. "
+                "If it isn't, add it now (add_track + add_clip) — the user must see an audio brick alongside "
+                "the lyric clips or the timeline looks broken.\n\n"
                 "PRESET SYSTEM: each preset bundles grouping, position, animation, color, and optional FX clips.\n"
                 "Karaoke is a preset — use preset='karaoke', do NOT set karaoke=true on clips manually.\n\n"
                 "Available presets (id → style):\n"
@@ -702,8 +717,16 @@ async def list_tools() -> list[Tool]:
                 "                    Transcribes the isolated vocal stem, not the raw mix. Much cleaner for music.\n"
                 "  transcribe_only — Skip separation, transcribe source audio directly. Faster, use for speech/podcasts.\n"
                 "  separate_only   — Run Demucs only, no transcription.\n\n"
-                "After this completes, call generate_typography(preset=...) to lay out lyric clips.\n\n"
-                "DO NOT use this to search for a moment — use find_and_add_clip instead (windowed search, much faster)."
+                "After this completes:\n"
+                "  1. Add the audio file to the timeline FIRST — add_track('Audio'), then add_clip on that track\n"
+                "     (type='video', text=path, start=0, end=duration). Without this the user sees floating\n"
+                "     lyric clips with no audio brick, which is very confusing.\n"
+                "  2. Then call generate_typography(preset=...) to lay out lyric clips on top.\n\n"
+                "DO NOT use this to search for a moment — use find_and_add_clip instead (windowed search, much faster).\n\n"
+                "NEVER run this on a full-length song/track when the user only wants a section. "
+                "Instead: (1) use find_and_add_clip to locate the end phrase (windowed, fast), "
+                "(2) use extract_clip_segment to cut just that intro section, "
+                "(3) run trigger_pipeline on the short extracted clip only."
             ),
             inputSchema={
                 "type": "object",
@@ -798,7 +821,9 @@ async def list_tools() -> list[Tool]:
             name="new_project",
             description=(
                 "Reset the project to a blank state (clears all tracks, clips, audio, beats). "
-                "Call this before building a project from scratch. Requires batch."
+                "Call get_project first — if tracks=[], audio_path='', and duration=0 the project is "
+                "already blank; skip this call and go straight to set_format. Only call new_project "
+                "when the project has existing content you need to discard. Requires batch."
             ),
             inputSchema={"type": "object", "properties": {}},
         ),
