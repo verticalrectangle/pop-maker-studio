@@ -477,8 +477,8 @@ TranscribeSearchResult transcribe_search(
     fs::create_directories(outdir);
     std::string words_json_path = (outdir / (src.stem().string() + "_words.json")).string();
 
-    const float window_sec  = 300.f;
-    const float overlap_sec = 30.f;
+    const float window_sec  = std::max(90.f, std::min(300.f, total_dur / 4.f));
+    const float overlap_sec = std::min(30.f, window_sec * 0.15f);
     const float step_sec    = window_sec - overlap_sec;
 
     float window_start      = 0.f;
