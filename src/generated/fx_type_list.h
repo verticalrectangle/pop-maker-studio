@@ -23,6 +23,7 @@ static const FXType k_gen_fx_types[] = {
     FXType::Twirl,
     FXType::Ripple,
     FXType::WaveWarp,
+    FXType::LsdBreathe,
     FXType::Kaleidoscope,
     FXType::ZoomBlurRad,
     FXType::SpinBlur,
@@ -102,4 +103,4 @@ static const FXType k_gen_fx_types[] = {
     FXType::DoubleExposure,
     FXType::KenBurns,
 };
-static const int k_gen_fx_count = 101;
+static const int k_gen_fx_count = 102;

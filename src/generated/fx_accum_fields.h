@@ -83,6 +83,13 @@
     float wave_warp_freq_y = 1.0f;
     float wave_warp_amplitude = 0.008f;
     float wave_warp_speed = 0.0f;
+    bool  lsd_breathe_on = false;
+    float lsd_breathe_amount = 0.0f;
+    float lsd_breathe_breathe_rate = 0.1f;
+    float lsd_breathe_warp_strength = 0.0f;
+    float lsd_breathe_color_speed = 0.0f;
+    float lsd_breathe_chroma_split = 0.0f;
+    float lsd_breathe_complexity = 0.0f;
     bool  kaleidoscope_on = false;
     float kaleidoscope_amount = 0.0f;
     float kaleidoscope_segments = 2.0f;

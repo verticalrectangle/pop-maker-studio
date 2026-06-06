@@ -471,6 +471,33 @@
         }
     }
 
+    if (cfx.lsd_breathe_on && cfx.lsd_breathe_amount > 0.01f) {
+        GLuint p = g_gen_progs[(int)FXType::LsdBreathe];
+        if (p) {
+            GLuint pre_tex = cur;
+            glUseProgram(p);
+            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
+            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
+            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
+            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.lsd_breathe_amount);
+            glUniform1f(glGetUniformLocation(p, "u_breathe_rate"), cfx.lsd_breathe_breathe_rate);
+            {
+                float _n = (cfx.lsd_breathe_warp_strength - 0.0f) / 0.15f;
+                _n = _n < 0.0f ? 0.0f : (_n > 1.0f ? 1.0f : _n);
+                glUniform1f(glGetUniformLocation(p, "u_warp_strength"), 0.0f + powf(_n, 0.5f) * 0.15f);
+            }
+            glUniform1f(glGetUniformLocation(p, "u_color_speed"), cfx.lsd_breathe_color_speed);
+            glUniform1f(glGetUniformLocation(p, "u_chroma_split"), cfx.lsd_breathe_chroma_split);
+            glUniform1f(glGetUniformLocation(p, "u_complexity"), cfx.lsd_breathe_complexity);
+            run1(p);
+            if (cfx.lsd_breathe_amount < 0.999f) {
+                draw_blend_pass(pre_tex, cur, cfx.lsd_breathe_amount, g_pp.fbo[pslot], w, h);
+                cur = g_pp.tex[pslot];
+                pslot ^= 1;
+            }
+        }
+    }
+
     if (cfx.kaleidoscope_on && cfx.kaleidoscope_amount > 0.01f) {
         GLuint p = g_gen_progs[(int)FXType::Kaleidoscope];
         if (p) {

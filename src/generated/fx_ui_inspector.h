@@ -996,6 +996,123 @@
             }
             break;
 
+        case FXType::LsdBreathe:
+            ui_label("Amount");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##gen_lsd_breathe_amount", &clip.fx_lsd_breathe_amount, 0.0f, 1.0f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "LSD Breathe: Amount");
+            ImGui::Dummy({0.f, 4.f});
+            ui_label("Breathe Rate");
+            {
+                bool _bon = clip.fx_lsd_breathe_breathe_rate_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_lsd_breathe_breathe_rate", &clip.fx_lsd_breathe_breathe_rate, 0.1f, 3.0f, "%.1f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "LSD Breathe: Breathe Rate");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
+                ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
+                if (ImGui::SmallButton("B##bt_lsd_breathe_breathe_rate")) {
+                    clip.fx_lsd_breathe_breathe_rate_beat = _bon ? 0.f : 0.5f;
+                    history_push(state, "LSD Breathe: Beat Sync");
+                }
+                ImGui::PopStyleColor();
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_lsd_breathe_breathe_rate", &clip.fx_lsd_breathe_breathe_rate_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "LSD Breathe: Beat Intensity");
+                }
+            }
+            ImGui::Dummy({0.f, 4.f});
+            ui_label("Warp");
+            {
+                bool _bon = clip.fx_lsd_breathe_warp_strength_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_lsd_breathe_warp_strength", &clip.fx_lsd_breathe_warp_strength, 0.0f, 0.15f, "%.3f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "LSD Breathe: Warp");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
+                ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
+                if (ImGui::SmallButton("B##bt_lsd_breathe_warp_strength")) {
+                    clip.fx_lsd_breathe_warp_strength_beat = _bon ? 0.f : 0.5f;
+                    history_push(state, "LSD Breathe: Beat Sync");
+                }
+                ImGui::PopStyleColor();
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_lsd_breathe_warp_strength", &clip.fx_lsd_breathe_warp_strength_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "LSD Breathe: Beat Intensity");
+                }
+            }
+            ImGui::Dummy({0.f, 4.f});
+            ui_label("Color Drift");
+            {
+                bool _bon = clip.fx_lsd_breathe_color_speed_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_lsd_breathe_color_speed", &clip.fx_lsd_breathe_color_speed, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "LSD Breathe: Color Drift");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
+                ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
+                if (ImGui::SmallButton("B##bt_lsd_breathe_color_speed")) {
+                    clip.fx_lsd_breathe_color_speed_beat = _bon ? 0.f : 0.5f;
+                    history_push(state, "LSD Breathe: Beat Sync");
+                }
+                ImGui::PopStyleColor();
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_lsd_breathe_color_speed", &clip.fx_lsd_breathe_color_speed_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "LSD Breathe: Beat Intensity");
+                }
+            }
+            ImGui::Dummy({0.f, 4.f});
+            ui_label("Chroma Split");
+            {
+                bool _bon = clip.fx_lsd_breathe_chroma_split_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_lsd_breathe_chroma_split", &clip.fx_lsd_breathe_chroma_split, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "LSD Breathe: Chroma Split");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
+                ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
+                if (ImGui::SmallButton("B##bt_lsd_breathe_chroma_split")) {
+                    clip.fx_lsd_breathe_chroma_split_beat = _bon ? 0.f : 0.5f;
+                    history_push(state, "LSD Breathe: Beat Sync");
+                }
+                ImGui::PopStyleColor();
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_lsd_breathe_chroma_split", &clip.fx_lsd_breathe_chroma_split_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "LSD Breathe: Beat Intensity");
+                }
+            }
+            ImGui::Dummy({0.f, 4.f});
+            ui_label("Complexity");
+            {
+                bool _bon = clip.fx_lsd_breathe_complexity_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_lsd_breathe_complexity", &clip.fx_lsd_breathe_complexity, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "LSD Breathe: Complexity");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
+                ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
+                if (ImGui::SmallButton("B##bt_lsd_breathe_complexity")) {
+                    clip.fx_lsd_breathe_complexity_beat = _bon ? 0.f : 0.5f;
+                    history_push(state, "LSD Breathe: Beat Sync");
+                }
+                ImGui::PopStyleColor();
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_lsd_breathe_complexity", &clip.fx_lsd_breathe_complexity_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "LSD Breathe: Beat Intensity");
+                }
+            }
+            break;
+
         case FXType::Kaleidoscope:
             ui_label("Amount");
             ImGui::SetNextItemWidth(sw);

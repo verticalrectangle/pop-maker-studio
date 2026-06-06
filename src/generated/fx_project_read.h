@@ -99,6 +99,17 @@
         c.fx_wave_warp_amplitude_beat = r.pod<float>();
         c.fx_wave_warp_speed = r.pod<float>();
         c.fx_wave_warp_speed_beat = r.pod<float>();
+        c.fx_lsd_breathe_amount = r.pod<float>();
+        c.fx_lsd_breathe_breathe_rate = r.pod<float>();
+        c.fx_lsd_breathe_breathe_rate_beat = r.pod<float>();
+        c.fx_lsd_breathe_warp_strength = r.pod<float>();
+        c.fx_lsd_breathe_warp_strength_beat = r.pod<float>();
+        c.fx_lsd_breathe_color_speed = r.pod<float>();
+        c.fx_lsd_breathe_color_speed_beat = r.pod<float>();
+        c.fx_lsd_breathe_chroma_split = r.pod<float>();
+        c.fx_lsd_breathe_chroma_split_beat = r.pod<float>();
+        c.fx_lsd_breathe_complexity = r.pod<float>();
+        c.fx_lsd_breathe_complexity_beat = r.pod<float>();
         c.fx_kaleidoscope_amount = r.pod<float>();
         c.fx_kaleidoscope_segments = r.pod<float>();
         c.fx_kaleidoscope_segments_beat = r.pod<float>();

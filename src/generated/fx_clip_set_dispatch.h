@@ -169,6 +169,20 @@ static bool fx_clip_set_param(Clip& c, const std::string& fx_id,
         if (param == "speed_beat") { c.fx_wave_warp_speed_beat = value; return true; }
         return false;
     }
+    if (fx_id == "lsd_breathe") {
+        if (param == "amount") { c.fx_lsd_breathe_amount = value; return true; }
+        if (param == "breathe_rate") { c.fx_lsd_breathe_breathe_rate = value; return true; }
+        if (param == "breathe_rate_beat") { c.fx_lsd_breathe_breathe_rate_beat = value; return true; }
+        if (param == "warp_strength") { c.fx_lsd_breathe_warp_strength = value; return true; }
+        if (param == "warp_strength_beat") { c.fx_lsd_breathe_warp_strength_beat = value; return true; }
+        if (param == "color_speed") { c.fx_lsd_breathe_color_speed = value; return true; }
+        if (param == "color_speed_beat") { c.fx_lsd_breathe_color_speed_beat = value; return true; }
+        if (param == "chroma_split") { c.fx_lsd_breathe_chroma_split = value; return true; }
+        if (param == "chroma_split_beat") { c.fx_lsd_breathe_chroma_split_beat = value; return true; }
+        if (param == "complexity") { c.fx_lsd_breathe_complexity = value; return true; }
+        if (param == "complexity_beat") { c.fx_lsd_breathe_complexity_beat = value; return true; }
+        return false;
+    }
     if (fx_id == "kaleidoscope") {
         if (param == "amount") { c.fx_kaleidoscope_amount = value; return true; }
         if (param == "segments") { c.fx_kaleidoscope_segments = value; return true; }

@@ -22,6 +22,7 @@
     Twirl,   // Twirl
     Ripple,   // Ripple
     WaveWarp,   // Wave Warp
+    LsdBreathe,   // LSD Breathe
     Kaleidoscope,   // Kaleidoscope
     ZoomBlurRad,   // Zoom Streak
     SpinBlur,   // Spin Blur

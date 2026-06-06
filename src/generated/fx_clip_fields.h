@@ -98,6 +98,17 @@
     float fx_wave_warp_amplitude_beat = 0.0f;
     float fx_wave_warp_speed = 1.5f;
     float fx_wave_warp_speed_beat = 0.0f;
+    float fx_lsd_breathe_amount = 1.0f;
+    float fx_lsd_breathe_breathe_rate = 0.8f;
+    float fx_lsd_breathe_breathe_rate_beat = 0.0f;
+    float fx_lsd_breathe_warp_strength = 0.04f;
+    float fx_lsd_breathe_warp_strength_beat = 0.0f;
+    float fx_lsd_breathe_color_speed = 0.3f;
+    float fx_lsd_breathe_color_speed_beat = 0.0f;
+    float fx_lsd_breathe_chroma_split = 0.6f;
+    float fx_lsd_breathe_chroma_split_beat = 0.0f;
+    float fx_lsd_breathe_complexity = 0.5f;
+    float fx_lsd_breathe_complexity_beat = 0.0f;
     float fx_kaleidoscope_amount = 1.0f;
     float fx_kaleidoscope_segments = 8.0f;
     float fx_kaleidoscope_segments_beat = 0.0f;

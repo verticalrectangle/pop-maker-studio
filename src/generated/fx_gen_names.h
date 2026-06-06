@@ -22,6 +22,7 @@
     "twirl",
     "ripple",
     "wave_warp",
+    "lsd_breathe",
     "kaleidoscope",
     "zoom_blur_rad",
     "spin_blur",

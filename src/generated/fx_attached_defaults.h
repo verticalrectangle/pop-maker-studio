@@ -24,6 +24,7 @@ static std::vector<float> fx_attached_defaults(FXType type) {
         case FXType::Twirl: return {0.55f};
         case FXType::Ripple: return {18.0f, 0.035f, 2.0f};
         case FXType::WaveWarp: return {8.0f, 6.0f, 0.08f, 1.5f};
+        case FXType::LsdBreathe: return {0.8f, 0.04f, 0.3f, 0.6f, 0.5f};
         case FXType::Kaleidoscope: return {8.0f, 0.0f, 0.55f};
         case FXType::ZoomBlurRad: return {0.12f, 0.5f, 0.5f};
         case FXType::SpinBlur: return {0.08f};

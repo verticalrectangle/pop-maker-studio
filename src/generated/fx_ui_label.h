@@ -22,6 +22,7 @@
         case FXType::Twirl: return "Twirl";
         case FXType::Ripple: return "Ripple";
         case FXType::WaveWarp: return "Wave Warp";
+        case FXType::LsdBreathe: return "LSD Breathe";
         case FXType::Kaleidoscope: return "Kaleidoscope";
         case FXType::ZoomBlurRad: return "Zoom Streak";
         case FXType::SpinBlur: return "Spin Blur";

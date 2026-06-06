@@ -22,6 +22,7 @@
         {FXType::Twirl, "Twirl", "Vortex rotation spiraling from center", IM_COL32(180,60,230,220)},
         {FXType::Ripple, "Ripple", "Expanding ring waves from center", IM_COL32(40,160,220,220)},
         {FXType::WaveWarp, "Wave Warp", "Perpendicular sine-wave displacement field", IM_COL32(60,200,160,220)},
+        {FXType::LsdBreathe, "LSD Breathe", "Psychedelic breathing walls with hue cycling and chromatic fringing", IM_COL32(180,60,255,220)},
         {FXType::Kaleidoscope, "Kaleidoscope", "N-way radial mirror symmetry", IM_COL32(230,80,150,220)},
         {FXType::ZoomBlurRad, "Zoom Streak", "Radial motion blur emanating from focal point", IM_COL32(200,220,40,220)},
         {FXType::SpinBlur, "Spin Blur", "Rotational motion blur around center", IM_COL32(160,230,80,220)},

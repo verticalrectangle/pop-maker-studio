@@ -23,6 +23,7 @@ void fx_generated_init() {
     g_gen_progs[(int)FXType::Twirl] = link_prog(k_twirl_frag);
     g_gen_progs[(int)FXType::Ripple] = link_prog(k_ripple_frag);
     g_gen_progs[(int)FXType::WaveWarp] = link_prog(k_wave_warp_frag);
+    g_gen_progs[(int)FXType::LsdBreathe] = link_prog(k_lsd_breathe_frag);
     g_gen_progs[(int)FXType::Kaleidoscope] = link_prog(k_kaleidoscope_frag);
     g_gen_progs[(int)FXType::ZoomBlurRad] = link_prog(k_zoom_blur_rad_frag);
     g_gen_progs[(int)FXType::SpinBlur] = link_prog(k_spin_blur_frag);
