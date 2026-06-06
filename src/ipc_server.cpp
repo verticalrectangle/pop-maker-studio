@@ -1423,7 +1423,11 @@ static json dispatch(AppState& state, const std::string& method, const json& par
     if (method == "load_project") {
         std::string path = params.value("path", "");
         if (path.empty()) { err = "path is required"; return {}; }
+        bool mr = state.models_ready;
+        bool ms = state.models_skipped;
         if (!project_load(state, path)) { err = "project_load failed"; return {}; }
+        state.models_ready   = mr;
+        state.models_skipped = ms;
         state.proxy_scan_needed = true;
         json r; r["path"] = path;
         return r;
