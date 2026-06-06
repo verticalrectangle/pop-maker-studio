@@ -717,11 +717,12 @@ async def list_tools() -> list[Tool]:
                 "                    Transcribes the isolated vocal stem, not the raw mix. Much cleaner for music.\n"
                 "  transcribe_only — Skip separation, transcribe source audio directly. Faster, use for speech/podcasts.\n"
                 "  separate_only   — Run Demucs only, no transcription.\n\n"
+                "BEFORE calling this: add the audio file to the timeline first — add_track('Audio'), "
+                "then add_clip(type='audio', text=path, start=0, end=duration) on that track. "
+                "Do this BEFORE trigger_pipeline, not after. The pipeline adds lyric clips and the user "
+                "must already see the audio brick underneath them — floating lyrics with no audio is very confusing.\n\n"
                 "After this completes:\n"
-                "  1. Add the audio file to the timeline FIRST — add_track('Audio'), then add_clip on that track\n"
-                "     (type='video', text=path, start=0, end=duration). Without this the user sees floating\n"
-                "     lyric clips with no audio brick, which is very confusing.\n"
-                "  2. Then call generate_typography(preset=...) to lay out lyric clips on top.\n\n"
+                "  Call generate_typography(preset=...) to lay out lyric clips on top.\n\n"
                 "DO NOT use this to search for a moment — use find_and_add_clip instead (windowed search, much faster).\n\n"
                 "NEVER run this on a full-length song/track when the user only wants a section. "
                 "Instead: (1) use find_and_add_clip to locate the end phrase (windowed, fast), "
@@ -2519,10 +2520,10 @@ Color grade (video clips only):
 Audio sync: start = -source_timestamp, end = video_duration - source_timestamp
 
 ## Lyric video / karaoke workflow
-1. Add source clip to timeline
+1. add_track("Audio") + add_clip(type='audio', ...) — audio brick on timeline FIRST, before pipeline runs
 2. trigger_pipeline(mode="both")  ← separates vocals with Demucs, then transcribes with WhisperX
    mode="transcribe_only" to skip separation (use for speech/podcasts, not music)
-3. generate_typography(preset="...") ← lays out timed lyric clips
+3. generate_typography(preset="...") ← lays out timed lyric clips on top of the audio brick
 
 Karaoke is a TYPOGRAPHY PRESET — use preset="karaoke".
 Do NOT set karaoke=true on individual clips manually.
