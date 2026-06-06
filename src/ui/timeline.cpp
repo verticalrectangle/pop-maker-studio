@@ -798,6 +798,9 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
             bool sel = state.clip_selection.count({ti, ci}) > 0;
 
             if (clip.clip_type == ClipType::Video) {
+                // Ensure proxy is queued for any video clip visible on the timeline,
+                // including ones added programmatically via IPC (not just drag-dropped).
+                if (!clip.text.empty()) proxy_start(clip.text);
                 // Film strip: dark body normally; inverted bright-purple when selected
                 ImU32 film_bg  = sel ? IM_COL32(160,  80, 255, 255) : IM_COL32(28, 28, 38, 255);
                 ImU32 film_bdr = sel ? IM_COL32(200, 140, 255, 255) : IM_COL32(60, 60, 80, 255);
@@ -819,6 +822,21 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                 ImU32 ftcol = sel ? IM_COL32(20, 8, 40, 255) : IM_COL32(200, 200, 220, 255);
                 dl->AddText({vis_x0+4.f, cy0+(cy1-cy0-13.f)*0.5f}, ftcol, fname);
                 ImGui::PopClipRect();
+                // Proxy progress bar — shown while transcoding, absent once ready
+                if (!clip.text.empty()) {
+                    auto pst = proxy_job_status(clip.text);
+                    const float bar_h = 3.f;
+                    if (pst.state == ProxyJobStatus::State::Generating) {
+                        float filled = (vis_x1 - vis_x0) * pst.progress;
+                        dl->AddRectFilled({vis_x0, cy1-bar_h}, {vis_x0+filled, cy1},
+                                          IM_COL32(100, 210, 255, 255));
+                        dl->AddRectFilled({vis_x0+filled, cy1-bar_h}, {vis_x1, cy1},
+                                          IM_COL32(30, 40, 60, 200));
+                    } else if (pst.state == ProxyJobStatus::State::Queued) {
+                        dl->AddRectFilled({vis_x0, cy1-bar_h}, {vis_x1, cy1},
+                                          IM_COL32(60, 70, 100, 160));
+                    }
+                }
             } else if (clip.clip_type == ClipType::Background) {
                 // Background brick: deep purple gradient with shimmer lines
                 ImU32 bg_fill   = sel ? IM_COL32(210,90,200,255) : IM_COL32(80,20,90,255);

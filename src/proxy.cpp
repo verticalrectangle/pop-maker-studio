@@ -5,6 +5,8 @@
 #include <cstdlib>
 #include <cstring>
 #include <atomic>
+#include <deque>
+#include <mutex>
 #include <thread>
 #include <filesystem>
 
@@ -22,13 +24,16 @@ std::string proxy_mjpeg_path(const std::string& vp) { return vp + ".pms_proxy.mj
 std::string proxy_idx_path  (const std::string& vp) { return vp + ".pms_proxy.idx";   }
 std::string proxy_still_path(const std::string& vp) { return vp + ".pms_still.jpg";   }
 
-// ── Internal state ────────────────────────────────────────────────────────────
+// ── Queue state ───────────────────────────────────────────────────────────────
 
-static std::atomic<bool> g_generating{false};
-static std::atomic<pid_t> g_proxy_pid{-1};
-static std::atomic<pid_t> g_still_pid{-1};
+static std::mutex          g_mu;
+static std::deque<std::string> g_queue;     // paths waiting (not yet started)
+static std::string         g_active;        // path currently being generated
+static std::atomic<float>  g_progress{0.f}; // 0–1 for the active job
+static std::atomic<pid_t>  g_pid{-1};       // ffmpeg PID for the active job
+static std::atomic<bool>   g_worker_alive{false};
 
-// ── Subprocess helpers ────────────────────────────────────────────────────────
+// ── Subprocess helper ─────────────────────────────────────────────────────────
 
 static pid_t spawn_ffmpeg(const char** args) {
     pid_t pid = fork();
@@ -46,22 +51,7 @@ static pid_t spawn_ffmpeg(const char** args) {
     return pid;
 }
 
-static bool wait_ok(pid_t pid) {
-    if (pid <= 0) return false;
-    while (true) {
-        int st = 0;
-        pid_t r = waitpid(pid, &st, WNOHANG);
-        if (r == pid) return WIFEXITED(st) && WEXITSTATUS(st) == 0;
-        if (r < 0)    return false;
-        if (g_shutdown.load()) { kill(pid, SIGTERM); waitpid(pid, nullptr, 0); return false; }
-        usleep(50'000); // 50 ms poll
-    }
-}
-
 // ── Seek-table builder ────────────────────────────────────────────────────────
-// Scans the MJPEG file for JPEG SOI markers (FF D8 FF) and records each frame's
-// byte offset.  In a valid MJPEG stream every FF in entropy-coded data is
-// followed by 00 (byte stuffing), so FF D8 FF always means a new frame start.
 
 static bool build_seek_table(const std::string& mjpeg_path,
                               const std::string& idx_path) {
@@ -75,10 +65,9 @@ static bool build_seek_table(const std::string& mjpeg_path,
     std::vector<uint64_t> offsets;
     offsets.reserve(8192);
 
-    static const size_t BUF = 1 << 20;  // 1 MB read chunks
+    static const size_t BUF = 1 << 20;
     std::vector<uint8_t> buf(BUF + 2);
 
-    // Carry-over: last 2 bytes of previous chunk to detect markers spanning chunks
     uint8_t carry[2] = {0, 0};
     long pos = 0;
 
@@ -87,22 +76,20 @@ static bool build_seek_table(const std::string& mjpeg_path,
         if (pos + (long)to_read > file_size)
             to_read = (size_t)(file_size - pos);
 
-        // Place carry bytes at the front
         buf[0] = carry[0];
         buf[1] = carry[1];
         size_t got = fread(buf.data() + 2, 1, to_read, f);
         if (got == 0) break;
 
-        // Scan for FF D8 FF (JPEG SOI + first marker prefix)
         for (size_t i = 0; i + 2 < got + 2; ++i) {
             if (buf[i] == 0xFF && buf[i+1] == 0xD8 && buf[i+2] == 0xFF) {
-                long abs_off = pos + (long)i - 2;  // -2 for the carry bytes
+                long abs_off = pos + (long)i - 2;
                 if (abs_off >= 0)
                     offsets.push_back((uint64_t)abs_off);
             }
         }
 
-        carry[0] = buf[got];      // last two bytes of this chunk
+        carry[0] = buf[got];
         carry[1] = buf[got + 1];
         pos += (long)got;
     }
@@ -110,7 +97,6 @@ static bool build_seek_table(const std::string& mjpeg_path,
 
     if (offsets.empty()) return false;
 
-    // Write binary idx: [uint32 count][uint64 offset] * count
     FILE* idx = fopen(idx_path.c_str(), "wb");
     if (!idx) return false;
     uint32_t count = (uint32_t)offsets.size();
@@ -120,9 +106,7 @@ static bool build_seek_table(const std::string& mjpeg_path,
     return true;
 }
 
-// ── Public API ────────────────────────────────────────────────────────────────
-
-bool proxy_is_generating() { return g_generating.load(); }
+// ── Public API — path/ready/load (unchanged) ──────────────────────────────────
 
 bool proxy_is_ready(const std::string& video_path) {
     return fs::exists(proxy_mjpeg_path(video_path)) &&
@@ -134,7 +118,6 @@ bool proxy_load(const std::string& video_path, ProxyInfo& out) {
     out.idx_path   = proxy_idx_path(video_path);
     out.still_path = proxy_still_path(video_path);
 
-    // Load seek table
     FILE* idx = fopen(out.idx_path.c_str(), "rb");
     if (!idx) return false;
     uint32_t count = 0;
@@ -148,9 +131,7 @@ bool proxy_load(const std::string& video_path, ProxyInfo& out) {
 
     out.frame_count = (int)count;
 
-    // Probe fps from the ORIGINAL video — raw MJPEG streams have no reliable
-    // fps metadata so ffprobe on the proxy frequently returns a wrong default.
-    // Width/height come from the proxy itself (it's half-res).
+    // Probe fps from the ORIGINAL video — raw MJPEG has no reliable fps metadata.
     {
         std::string file_arg = "file:" + video_path;
         const char* pargv[] = {"ffprobe", "-v", "error", "-select_streams", "v:0",
@@ -186,7 +167,7 @@ bool proxy_load(const std::string& video_path, ProxyInfo& out) {
         }
     }
 
-    // Probe dimensions from the proxy (actual half-res pixel size).
+    // Probe dimensions from the proxy itself (actual half-res pixel size).
     {
         const char* dargv[] = {"ffprobe", "-v", "error", "-select_streams", "v:0",
                                "-show_entries", "stream=width,height",
@@ -221,23 +202,16 @@ bool proxy_load(const std::string& video_path, ProxyInfo& out) {
     return out.width > 0 && out.height > 0 && out.fps > 0.0;
 }
 
-void proxy_cancel() {
-    g_generating.store(false);
-    pid_t pp = g_proxy_pid.exchange(-1);
-    pid_t sp = g_still_pid.exchange(-1);
-    if (pp > 0) kill(pp, SIGTERM);
-    if (sp > 0) kill(sp, SIGTERM);
-    if (pp > 0) waitpid(pp, nullptr, 0);
-    if (sp > 0) waitpid(sp, nullptr, 0);
-}
+// ── Image detection ───────────────────────────────────────────────────────────
 
-// Returns true for still-image extensions that never need an MJPEG proxy.
 static bool is_image_ext(const std::string& path) {
     auto ext = fs::path(path).extension().string();
     for (auto& c : ext) c = (char)std::tolower((unsigned char)c);
     return ext==".jpg"||ext==".jpeg"||ext==".png"||ext==".bmp"||ext==".webp"||ext==".tiff"
         || ext==".heic"||ext==".heif";
 }
+
+// ── Still generation ──────────────────────────────────────────────────────────
 
 void proxy_ensure_still(const std::string& video_path) {
     std::string still = proxy_still_path(video_path);
@@ -251,7 +225,8 @@ void proxy_ensure_still(const std::string& video_path) {
             "-vf", "scale=iw/2:ih/2",
             still.c_str(), nullptr
         };
-        wait_ok(spawn_ffmpeg(args));
+        pid_t p = spawn_ffmpeg(args);
+        int st; waitpid(p, &st, 0);
     } else {
         std::string src = "file:" + video_path;
         const char* args[] = {
@@ -261,116 +236,233 @@ void proxy_ensure_still(const std::string& video_path) {
             "-vf", "scale=iw/4:ih/4",
             still.c_str(), nullptr
         };
-        wait_ok(spawn_ffmpeg(args));
+        pid_t p = spawn_ffmpeg(args);
+        int st; waitpid(p, &st, 0);
     }
 }
 
+// ── Frame count probe (for progress %) ───────────────────────────────────────
+
+static int probe_total_frames(const std::string& video_path) {
+    std::string src = "file:" + video_path;
+    const char* args[] = {"ffprobe", "-v", "error", "-select_streams", "v:0",
+                          "-show_entries", "stream=r_frame_rate,duration",
+                          "-of", "default=nw=1", src.c_str(), nullptr};
+    int pfd[2];
+    if (pipe(pfd) != 0) return 0;
+    pid_t pid = fork();
+    if (pid == 0) {
+        close(pfd[0]);
+        dup2(pfd[1], STDOUT_FILENO);
+        close(pfd[1]);
+        int dn = open("/dev/null", O_RDWR);
+        if (dn >= 0) { dup2(dn, STDIN_FILENO); dup2(dn, STDERR_FILENO); close(dn); }
+        execvp("ffprobe", const_cast<char**>(args));
+        _exit(127);
+    }
+    close(pfd[1]);
+    FILE* f = fdopen(pfd[0], "r");
+    double dur = 0.0; long long fn = 30, fd2 = 1;
+    if (f) {
+        char line[256];
+        while (fgets(line, sizeof(line), f)) {
+            sscanf(line, "duration=%lf", &dur);
+            sscanf(line, "r_frame_rate=%lld/%lld", &fn, &fd2);
+        }
+        fclose(f);
+    }
+    waitpid(pid, nullptr, 0);
+    if (dur <= 0.0 || fd2 <= 0) return 0;
+    double src_fps = (double)fn / (double)fd2;
+    double proxy_fps = std::min(src_fps, 30.0);  // proxy is capped at 30
+    return (int)(dur * proxy_fps + 0.5);
+}
+
+// ── Worker thread ─────────────────────────────────────────────────────────────
+
+static void proxy_worker_fn() {
+    while (true) {
+        std::string path;
+        {
+            std::lock_guard<std::mutex> lk(g_mu);
+            if (g_queue.empty()) {
+                g_active.clear();
+                g_worker_alive.store(false);
+                return;
+            }
+            path = g_queue.front();
+            g_queue.pop_front();
+            g_active = path;
+            g_progress.store(0.f);
+        }
+
+        if (proxy_is_ready(path)) continue;
+        if (g_shutdown.load()) break;
+
+        // Sweep stale incomplete mjpeg (mjpeg exists but no idx)
+        std::string mj  = proxy_mjpeg_path(path);
+        std::string idx = proxy_idx_path(path);
+        if (fs::exists(mj) && !fs::exists(idx)) fs::remove(mj);
+
+        // Generate still so the preview panel shows something immediately
+        proxy_ensure_still(path);
+
+        // Probe total frame count for accurate progress percentage
+        int total_frames = probe_total_frames(path);
+
+        // Use ffmpeg -progress to write key=value updates to a temp file
+        std::string prog_file = mj + ".prog";
+        std::string src = "file:" + path;
+        const char* proxy_args[] = {
+            "ffmpeg", "-hide_banner", "-loglevel", "error",
+            "-y", "-i", src.c_str(),
+            "-vf", "scale=min(iw/2\\,960):-2",
+            "-r", "30",
+            "-c:v", "mjpeg", "-q:v", "13",
+            "-an",
+            "-progress", prog_file.c_str(),
+            mj.c_str(), nullptr
+        };
+
+        pid_t pp = spawn_ffmpeg(proxy_args);
+        g_pid.store(pp);
+
+        // Poll progress file while ffmpeg runs
+        bool ok = false;
+        while (true) {
+            int wst = 0;
+            pid_t r = waitpid(pp, &wst, WNOHANG);
+            if (r == pp) {
+                ok = WIFEXITED(wst) && WEXITSTATUS(wst) == 0;
+                break;
+            }
+            if (r < 0) break;
+            if (g_shutdown.load()) { kill(pp, SIGTERM); waitpid(pp, nullptr, 0); break; }
+
+            if (total_frames > 0) {
+                FILE* pf = fopen(prog_file.c_str(), "r");
+                if (pf) {
+                    char line[128]; int last_frame = 0;
+                    while (fgets(line, sizeof(line), pf)) {
+                        int fr; if (sscanf(line, "frame=%d", &fr) == 1) last_frame = fr;
+                    }
+                    fclose(pf);
+                    if (last_frame > 0)
+                        g_progress.store(std::min(0.98f, (float)last_frame / (float)total_frames));
+                }
+            }
+            usleep(100'000);  // 100 ms poll
+        }
+
+        g_pid.store(-1);
+        fs::remove(prog_file);
+
+        if (!ok) {
+            fs::remove(mj);
+        } else if (!build_seek_table(mj, idx)) {
+            fs::remove(mj);
+        } else {
+            g_progress.store(1.f);
+        }
+
+        if (g_shutdown.load()) break;
+    }
+
+    std::lock_guard<std::mutex> lk(g_mu);
+    g_active.clear();
+    g_worker_alive.store(false);
+}
+
+// ── Public API ────────────────────────────────────────────────────────────────
+
+bool proxy_is_generating() { return g_worker_alive.load(); }
+
+void proxy_cancel() {
+    {
+        std::lock_guard<std::mutex> lk(g_mu);
+        g_queue.clear();
+        g_active.clear();
+    }
+    pid_t pp = g_pid.exchange(-1);
+    if (pp > 0) { kill(pp, SIGTERM); waitpid(pp, nullptr, 0); }
+    g_worker_alive.store(false);
+}
+
 void proxy_start(const std::string& video_path) {
-    // Images: generate a scaled still and return — no MJPEG proxy needed.
-    // A single-frame MJPEG would cause proxy_load to spawn ffprobe every frame
-    // (fps comes back 0 → load fails → loop retries indefinitely).
     if (is_image_ext(video_path)) {
+        // Images: just generate a still, no MJPEG needed
         std::string still = proxy_still_path(video_path);
-        if (!fs::exists(still)) {
-            std::string img_src = "file:" + video_path;
+        if (fs::exists(still)) return;
+        std::string img_src = "file:" + video_path;
+        // Run in background thread so we don't block the render loop
+        std::thread([video_path, img_src, still]() {
             const char* args[] = {
                 "ffmpeg", "-hide_banner", "-loglevel", "error",
-                "-y", "-i", img_src.c_str(),
-                "-vf", "scale=iw/2:ih/2",
+                "-y", "-i", img_src.c_str(), "-vf", "scale=iw/2:ih/2",
                 still.c_str(), nullptr
             };
-            pid_t sp = spawn_ffmpeg(args);
-            wait_ok(sp);
+            pid_t p = spawn_ffmpeg(args);
+            if (p > 0) { int st; waitpid(p, &st, 0); }
 
-            // Fallback for formats ffmpeg can't decode (e.g. HEIC without libheif):
-            // try heif-convert → produce a JPEG → re-run ffmpeg to scale it.
             if (!fs::exists(still)) {
                 std::string tmp = still + ".tmp.jpg";
-                std::string cmd = "heif-convert " + std::string("\"") + video_path + "\" \"" + tmp + "\" 2>/dev/null";
+                std::string cmd = "heif-convert \"" + video_path + "\" \"" + tmp + "\" 2>/dev/null";
                 if (system(cmd.c_str()) == 0 && fs::exists(tmp)) { // NOLINT
-                    const char* scale_args[] = {
-                        "ffmpeg", "-hide_banner", "-loglevel", "error",
-                        "-y", "-i", tmp.c_str(),
-                        "-vf", "scale=iw/2:ih/2",
-                        still.c_str(), nullptr
-                    };
-                    pid_t sp2 = spawn_ffmpeg(scale_args);
-                    wait_ok(sp2);
+                    const char* a2[] = {"ffmpeg","-hide_banner","-loglevel","error",
+                                        "-y","-i",tmp.c_str(),"-vf","scale=iw/2:ih/2",
+                                        still.c_str(), nullptr};
+                    pid_t p2 = spawn_ffmpeg(a2);
+                    if (p2 > 0) { int st; waitpid(p2, &st, 0); }
                     fs::remove(tmp);
                 }
             }
-        }
+        }).detach();
         return;
     }
 
     if (proxy_is_ready(video_path)) return;
 
-    // Sweep up any zombie mjpeg left by a previous interrupted generation
-    // (mjpeg exists but idx is missing). Only safe when not currently generating.
-    if (!g_generating.load()) {
-        std::string mj = proxy_mjpeg_path(video_path);
-        if (fs::exists(mj) && !fs::exists(proxy_idx_path(video_path)))
-            fs::remove(mj);
+    {
+        std::lock_guard<std::mutex> lk(g_mu);
+        if (g_active == video_path) return;   // already generating this one
+        for (auto& q : g_queue)
+            if (q == video_path) return;      // already queued
+        g_queue.push_back(video_path);
     }
 
-    if (g_generating.load()) proxy_cancel();
+    // Kick off the worker if it isn't already running
+    bool was_alive = g_worker_alive.exchange(true);
+    if (!was_alive)
+        std::thread(proxy_worker_fn).detach();
+}
 
-    g_generating.store(true);
+// ── Status API ────────────────────────────────────────────────────────────────
 
-    // Extract preview still synchronously — blocks for < 1 s.
-    // This gives the preview panel something to show immediately.
-    std::string still = proxy_still_path(video_path);
-    if (!fs::exists(still)) {
-        std::string still_src = "file:" + video_path;
-        const char* still_args[] = {
-            "ffmpeg", "-hide_banner", "-loglevel", "error",
-            "-y", "-i", still_src.c_str(),
-            "-ss", "0", "-vframes", "1",
-            "-vf", "scale=iw/4:ih/4",
-            still.c_str(), nullptr
-        };
-        pid_t sp = spawn_ffmpeg(still_args);
-        g_still_pid.store(sp);
-        wait_ok(sp);
-        g_still_pid.store(-1);
+ProxyJobStatus proxy_job_status(const std::string& video_path) {
+    ProxyJobStatus st;
+    st.path = video_path;
+    if (proxy_is_ready(video_path)) { st.state = ProxyJobStatus::State::Ready; return st; }
+    std::lock_guard<std::mutex> lk(g_mu);
+    if (g_active == video_path) {
+        st.state    = ProxyJobStatus::State::Generating;
+        st.progress = g_progress.load();
+        return st;
     }
+    for (auto& q : g_queue) {
+        if (q == video_path) { st.state = ProxyJobStatus::State::Queued; return st; }
+    }
+    st.state = ProxyJobStatus::State::Idle;
+    return st;
+}
 
-    // Proxy generation runs in a background thread.
-    std::thread([video_path]() {
-        std::string mjpeg = proxy_mjpeg_path(video_path);
-        std::string idx   = proxy_idx_path(video_path);
+std::vector<ProxyJobStatus> proxy_status_all(const std::vector<std::string>& paths) {
+    std::vector<ProxyJobStatus> out;
+    out.reserve(paths.size());
+    for (auto& p : paths) out.push_back(proxy_job_status(p));
+    return out;
+}
 
-        // Quarter-resolution MJPEG, no audio.
-        // -q:v 5 gives good quality/size balance for MJPEG (1=best, 31=worst).
-        // We do NOT specify a frame rate — the proxy matches the original fps.
-        std::string proxy_src = "file:" + video_path;
-        const char* proxy_args[] = {
-            "ffmpeg", "-hide_banner", "-loglevel", "error",
-            "-y", "-i", proxy_src.c_str(),
-            "-vf", "scale=min(iw/2\\,960):-2",
-            "-r", "30",   // cap proxy at 30 fps — MJPEG muxer can't handle >30 fps raw streams
-            "-c:v", "mjpeg", "-q:v", "13",
-            "-an",
-            mjpeg.c_str(), nullptr
-        };
-
-        pid_t pp = spawn_ffmpeg(proxy_args);
-        g_proxy_pid.store(pp);
-
-        if (!wait_ok(pp)) {
-            g_proxy_pid.store(-1);
-            g_generating.store(false);
-            fs::remove(mjpeg);  // don't leave a partial mjpeg without an idx
-            return;
-        }
-        g_proxy_pid.store(-1);
-
-        // Build the seek table from the written MJPEG.
-        if (!build_seek_table(mjpeg, idx)) {
-            // Remove corrupt files so proxy_is_ready() stays false.
-            fs::remove(mjpeg);
-        }
-
-        g_generating.store(false);
-    }).detach();
+int proxy_queue_depth() {
+    std::lock_guard<std::mutex> lk(g_mu);
+    return (int)g_queue.size();
 }

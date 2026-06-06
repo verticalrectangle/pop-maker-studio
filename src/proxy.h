@@ -49,9 +49,25 @@ std::string proxy_mjpeg_path(const std::string& video_path);
 std::string proxy_idx_path(const std::string& video_path);
 std::string proxy_still_path(const std::string& video_path);
 
-// Cancel any running background generation (called on shutdown / re-import).
+// Cancel any running background generation and drain the queue (called on shutdown).
 void proxy_cancel();
 
 // Generate a preview still for video_path without starting the MJPEG proxy.
 // Blocking (< 1 s). No-op if the still already exists on disk.
 void proxy_ensure_still(const std::string& video_path);
+
+// Per-file proxy status, returned by proxy_job_status() and proxy_status_all().
+struct ProxyJobStatus {
+    std::string path;
+    enum class State { Ready, Generating, Queued, Idle } state = State::Idle;
+    float progress = 0.f;  // 0–1, only meaningful when state == Generating
+};
+
+// Status for a single path.
+ProxyJobStatus proxy_job_status(const std::string& video_path);
+
+// Batch status for a list of paths (same order as input).
+std::vector<ProxyJobStatus> proxy_status_all(const std::vector<std::string>& paths);
+
+// Number of paths waiting in the queue (not counting the active job).
+int proxy_queue_depth();
