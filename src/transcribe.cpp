@@ -485,6 +485,12 @@ TranscribeSearchResult transcribe_search(
     bool  collecting_buffer = false;
     float buffer_end        = 0.f;
 
+    // Separate vocals per chunk when the model is available — dramatically
+    // improves Whisper accuracy on music (avoids dropped first lines, bad timings).
+    const bool do_separate = separate_model_exists();
+    const std::string tmp_vocals = "/tmp/pms_search_vocals.wav";
+    const std::string tmp_inst   = "/tmp/pms_search_inst.wav";
+
     // Accumulate all words across windows; only keep words from each window's
     // non-overlapping region (word.start >= window_start && word.start < window_start + step_sec)
     // to avoid duplicates at overlap boundaries.
@@ -501,7 +507,21 @@ TranscribeSearchResult transcribe_search(
             "Searching " + fmt_time(window_start) + " – " + fmt_time(win_end) +
             " / " + fmt_time(total_dur));
 
-        std::vector<float> pcm = decode_16k(path, window_start, dur);
+        std::vector<float> pcm;
+        if (do_separate) {
+            set_search_status(true, window_start, total_dur,
+                "Separating vocals " + fmt_time(window_start) + " – " + fmt_time(win_end) + "…");
+            std::string sep_err = separate_run(path, tmp_vocals, tmp_inst,
+                [&](float /*p*/, const std::string& msg) {
+                    set_search_status(true, window_start, total_dur,
+                        fmt_time(window_start) + ": " + msg);
+                },
+                window_start, dur);
+            if (sep_err.empty() && fs::exists(tmp_vocals))
+                pcm = decode_16k(tmp_vocals);
+        }
+        if (pcm.empty())
+            pcm = decode_16k(path, window_start, dur);  // fallback: raw mix
         if (pcm.empty()) { window_start += step_sec; continue; }
 
         if (whisper_full(ctx, wp, pcm.data(), (int)pcm.size()) != 0) {
