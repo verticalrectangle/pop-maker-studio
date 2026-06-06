@@ -5,6 +5,7 @@
 #include "runtime_fx.h"
 #include "ui/pipeline.h"
 #include "ui/panel_animation.h"
+#include "ui/studio_shared.h"
 #include "project.h"
 #include "beat_detect.h"
 #include "scene_detect.h"
@@ -127,12 +128,7 @@ static int jval_int(const json& v) {
     if (v.is_string()) return std::stoi(v.get<std::string>());
     return 0;
 }
-// Snap t to the nearest frame boundary for the given fps (same formula as timeline UI).
-// Falls through unchanged when fps is 0 (no video loaded yet).
-static float snap_to_frame(float t, int fps) {
-    if (fps <= 0) return t;
-    return std::roundf(t * fps) / fps;
-}
+// snap_to_frame / snap_end_to_frame defined in ui/studio_shared.h
 static bool jval_bool(const json& v) {
     if (v.is_boolean()) return v.get<bool>();
     if (v.is_number())  return v.get<int>() != 0;
@@ -1067,7 +1063,7 @@ static json dispatch(AppState& state, const std::string& method, const json& par
             if (delta > 0.f) cl.in_point += delta;
             cl.start = ns;
         }
-        if (params.contains("end")) cl.end = snap_to_frame(params["end"].get<float>(), state.fps);
+        if (params.contains("end")) cl.end = snap_end_to_frame(params["end"].get<float>(), state.fps);
         return json::object();
     }
 
@@ -1105,7 +1101,7 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         if (state.tracks[ti].locked) { err = "track is locked"; return {}; }
         std::string type_s = params.value("type", "text");
         float start = snap_to_frame(params.value("start", 0.f), state.fps);
-        float end   = snap_to_frame(params.value("end", start + 2.f), state.fps);
+        float end   = snap_end_to_frame(params.value("end", start + 2.f), state.fps);
         std::string text = params.value("text", "");
 
         Clip cl;
@@ -1152,7 +1148,7 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         for (auto& entry : params["clips"]) {
             std::string type_s = entry.value("type", "text");
             float start = snap_to_frame(entry.value("start", 0.f), state.fps);
-            float end   = snap_to_frame(entry.value("end", start + 2.f), state.fps);
+            float end   = snap_end_to_frame(entry.value("end", start + 2.f), state.fps);
             std::string text = entry.value("text", "");
             Clip cl;
             cl.clip_type = parse_clip_type(type_s);
@@ -1485,8 +1481,8 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         if (ti < 0 || ti >= (int)state.tracks.size()) { err = "track index out of range"; return {}; }
         if (state.tracks[ti].locked) { err = "track is locked"; return {}; }
         std::string fx_s = params.value("fx_type", "grade");
-        float start = params.value("start", 0.f);
-        float end   = params.value("end",   start + 2.f);
+        float start = snap_to_frame(params.value("start", 0.f), state.fps);
+        float end   = snap_end_to_frame(params.value("end", start + 2.f), state.fps);
 
         Clip cl;
         cl.clip_type = ClipType::Effect;
@@ -1507,8 +1503,8 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         int ti = track_by_name_or_index(state, params);
         if (!check_track(state, ti, err)) return {};
         if (state.tracks[ti].locked) { err = "track is locked"; return {}; }
-        float start = params.value("start", 0.f);
-        float end   = params.value("end",   start + 2.f);
+        float start = snap_to_frame(params.value("start", 0.f), state.fps);
+        float end   = snap_end_to_frame(params.value("end", start + 2.f), state.fps);
 
         Clip brick;
         brick.clip_type = ClipType::MultiFX;

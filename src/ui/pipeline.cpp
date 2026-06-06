@@ -451,8 +451,8 @@ void apply_subtitle_mode(AppState& state) {
             for (auto& seg : j) {
                 Clip c;
                 c.text  = seg["text"].get<std::string>();
-                c.start = seg["start"].get<float>() + tl_offset - latency;
-                c.end   = seg["end"].get<float>()   + tl_offset - latency;
+                c.start = snap_to_frame(seg["start"].get<float>() + tl_offset - latency, state.fps);
+                c.end   = snap_end_to_frame(seg["end"].get<float>() + tl_offset - latency, state.fps);
                 if (c.end < 0.f) continue;  // skip clips shifted before timeline start
                 stamp(c);
                 lyrics->clips.push_back(c);
@@ -474,8 +474,8 @@ void apply_subtitle_mode(AppState& state) {
         for (auto& w : j) {
             Clip c;
             c.text  = w["word"].get<std::string>();
-            c.start = w["start"].get<float>() + tl_offset - latency;
-            c.end   = w["end"].get<float>()   + tl_offset - latency;
+            c.start = snap_to_frame(w["start"].get<float>() + tl_offset - latency, state.fps);
+            c.end   = snap_end_to_frame(w["end"].get<float>() + tl_offset - latency, state.fps);
             raw.push_back(c);
         }
         auto grouped = group_words(raw, state.subtitle_mode, state.subtitle_n);
@@ -568,8 +568,8 @@ void apply_subtitle_pipeline(AppState& state) {
             c.sub_pos   = 3;      // custom Y — slightly below center
             c.sub_pos_y = 0.62f;
             c.text  = seg["text"].get<std::string>();
-            c.start = seg["start"].get<float>() + tl_offset - latency;
-            c.end   = seg["end"].get<float>()   + tl_offset - latency;
+            c.start = snap_to_frame(seg["start"].get<float>() + tl_offset - latency, state.fps);
+            c.end   = snap_end_to_frame(seg["end"].get<float>() + tl_offset - latency, state.fps);
             if (c.end < 0.f) continue;  // skip clips shifted before timeline start
             tr->clips.push_back(c);
         }

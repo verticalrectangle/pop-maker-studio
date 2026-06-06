@@ -3142,6 +3142,14 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             "crop": {"x": x, "y": y, "w": crop_w, "h": crop_h},
         }, indent=2)
         return [TextContent(type="text", text=result_text)] + thumb_parts
+    if name == "get_transcript":
+        raw = _call("get_transcript", {})
+        slim = {"status": raw.get("status", "idle")}
+        if "words" in raw:
+            slim["words"] = raw["words"]
+        if "error" in raw:
+            slim["error"] = raw["error"]
+        return [TextContent(type="text", text=json.dumps(slim, indent=2))]
     try:
         result = _call(name, arguments)
         return [TextContent(type="text", text=json.dumps(result, indent=2))]

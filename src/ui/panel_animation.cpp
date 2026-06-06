@@ -220,6 +220,12 @@ void generate_typography(AppState& state) {
     raw.erase(std::remove_if(raw.begin(), raw.end(),
         [](const Clip& c){ return c.end < 0.f; }), raw.end());
 
+    // Snap all raw word clips to frame boundaries now that offsets are final.
+    for (auto& c : raw) {
+        c.start = snap_to_frame(c.start, state.fps);
+        c.end   = snap_end_to_frame(c.end, state.fps);
+    }
+
     auto grouped = from_segments ? raw
                                  : group_words(raw, grouping, pr->custom_n, pr->pause_gap, pr->max_words);
 

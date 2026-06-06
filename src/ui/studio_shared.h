@@ -3,6 +3,20 @@
 
 #include "studio_types.h"
 #include "app.h"
+#include <cmath>
+
+// ── Frame-boundary snapping ───────────────────────────────────────────────────
+inline float snap_to_frame(float t, int fps) {
+    if (fps <= 0) return t;
+    return std::roundf(t * fps) / fps;
+}
+// Clip ends always ceil to the next frame so no sub-frame gap is left before
+// the following clip. The 1e-4 epsilon absorbs float noise when t is already
+// exactly on a frame boundary.
+inline float snap_end_to_frame(float t, int fps) {
+    if (fps <= 0) return t;
+    return std::ceilf(t * fps - 1e-4f) / fps;
+}
 #include <string>
 
 // ── Time formatting ───────────────────────────────────────────────────────────
