@@ -249,6 +249,15 @@ server = Server("pop-maker-studio")
 async def list_tools() -> list[Tool]:
     return [
         Tool(
+            name="get_guide",
+            description=(
+                "Returns the complete agent guide for Pop Maker Studio. "
+                "Call this once at the start of a session to understand the architecture, "
+                "rules, and clip props reference. No batch needed."
+            ),
+            inputSchema={"type": "object", "properties": {}},
+        ),
+        Tool(
             name="get_project",
             description=(
                 "Returns project state. Slim by default: {duration, fps, bpm, audio_path, "
@@ -414,9 +423,11 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="begin_batch",
             description=(
-                "Start a named edit batch. All mutation calls (add_clip, set_clip_prop, etc.) "
-                "MUST be wrapped between begin_batch and end_batch. The label appears in the "
-                "undo history. You cannot nest batches."
+                "Start a named edit batch. REQUIRED before any mutation (add_clip, set_clip_prop, "
+                "add_track, delete_clip, apply_effect, etc.). Read-only calls (get_project, "
+                "get_clips, take_snapshot, trigger_pipeline, crop_media) need no batch. "
+                "Single-edit batches are fine — they still need begin/end_batch. "
+                "You cannot nest batches. The label appears in the undo history."
             ),
             inputSchema={
                 "type": "object",
@@ -432,9 +443,17 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="add_clip",
             description=(
-                "Add a new clip to a track. type: text | lyrics | subtitle | video | audio | "
-                "effect | background | body_fx. For text/lyrics/subtitle, set 'text'. "
-                "For video/audio, set 'text' to the file path. Requires batch."
+                "Add a new clip to a track. Requires batch.\n\n"
+                "type: text | lyrics | subtitle | video | audio | effect | background | body_fx\n"
+                "For text/lyrics/subtitle: set 'text' to the display string.\n"
+                "For video/audio: set 'text' to the absolute file path. "
+                "Images (PNG/JPG/HEIC) must be converted to video first with crop_media or ffmpeg — "
+                "use type='video' with an .mp4 path, not the raw image.\n\n"
+                "FILE PATH CONVENTIONS:\n"
+                "  Cropped media:       {parent}/{stem}_crop.mp4  (video)  or  {parent}/{stem}_crop.png  (image)\n"
+                "  Extracted segments:  {parent}/{stem}/{stem}_{start_int}_{end_int}.webm\n"
+                "  Transcripts:         {parent}/{stem}/{stem}_words.json\n\n"
+                "Always call crop_media before add_clip when the source aspect ratio differs from the canvas."
             ),
             inputSchema={
                 "type": "object",
@@ -451,7 +470,12 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="add_track",
-            description="Add a track at position (0=top/foreground, higher=background). Returns track index. Requires batch.",
+            description=(
+                "Add a track at position (0=top/foreground, higher=background). Returns track index. Requires batch.\n\n"
+                "LAYERING RULE: track 0 = top (foreground). Highest index = bottom (background).\n"
+                "  Text, FX, overlays → low-index tracks (0, 1, 2…)\n"
+                "  Video, background  → high-index tracks"
+            ),
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -519,11 +543,20 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="set_clip_prop",
             description=(
-                "Set one property on a clip. Common props: volume (0–2), speed (0.25–4), opacity (0–1), "
-                "muted (bool), fade_in, fade_out, in_point, pos_x/y, scale_x/y, rotation, text, "
-                "sub_pos/color/wrap_w/pos_x/y, font_size, clip_style, blend_mode, karaoke. "
-                "Color grade (video clips): grade_brightness (-1–1), grade_contrast (0–3), "
-                "grade_saturation (0–3), grade_hue (-180–180). Requires batch."
+                "Set one property on a clip. Requires batch.\n\n"
+                "LAYOUT:    pos_x, pos_y (0–1 canvas fraction), scale_x, scale_y, rotation\n"
+                "PLAYBACK:  volume (0–2), speed (0.25–4), opacity (0–1), muted (bool),\n"
+                "           fade_in, fade_out, in_point (source offset seconds)\n"
+                "TEXT:      text, font_size (0=auto), sub_pos (0=bottom 1=center 2=top 3=custom),\n"
+                "           sub_pos_x/y (0–1), sub_anchor_h (0=left 1=center 2=right),\n"
+                "           sub_wrap_w (0–1), sub_color ([r,g,b,a] 0–1)\n"
+                "ANIMATION: clip_style (none|fade|glitch|typewriter|bounce|scale|slide|stack|block),\n"
+                "           blend_mode (normal|add|multiply|screen|overlay)\n"
+                "COLOR GRADE (video clips only):\n"
+                "           grade_brightness (-1–1), grade_contrast (0–3),\n"
+                "           grade_saturation (0–3), grade_hue (-180–180)\n"
+                "AUDIO SYNC: To sync audio to a video at a specific source moment, use a negative\n"
+                "           clip start: start = -source_timestamp, end = video_duration - source_timestamp"
             ),
             inputSchema={
                 "type": "object",
@@ -645,19 +678,32 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="generate_typography",
-            description="Generate subtitle/lyric clips from the loaded transcript using the active typography preset. Requires batch.",
+            description=(
+                "Generate subtitle/lyric clips from the loaded transcript using a typography preset. "
+                "Must call trigger_pipeline first to produce the transcript. Requires batch.\n\n"
+                "PRESET SYSTEM: each preset bundles grouping, position, animation, color, and optional FX clips.\n"
+                "Karaoke is a preset — use preset='karaoke', do NOT set karaoke=true on clips manually.\n\n"
+                "Available presets (id → style):\n"
+                "  Hype:       flash, strobe, rave, cyberpunk, drill\n"
+                "  Aesthetic:  tumblr, indie2012, sadgirl, cottagecore, film\n"
+                "  Editorial:  headline, manifesto, zine, newspaper\n"
+                "  Clean:      minimal, spotify, apple, kinetic, karaoke\n"
+                "  Retro:      vhs, neon, lofi"
+            ),
             inputSchema={"type": "object", "properties": {}},
         ),
         Tool(
             name="trigger_pipeline",
             description=(
-                "Transcribe + align ALL audio in the project for subtitle/typography generation. "
-                "USE THIS only when you want to generate subtitles or karaoke for clips already on the timeline. "
-                "DO NOT use this to search for a specific moment — use find_and_add_clip instead, "
-                "which does windowed search and stops as soon as it finds the match (much faster on long files). "
-                "Pass 'path' to transcribe a file without adding it to the timeline. "
-                "Blocks until complete — returns final pipeline status. No polling needed. "
-                "mode: both | transcribe_only | separate_only. No batch needed."
+                "Transcribe the project audio for subtitle/typography/karaoke generation. "
+                "Blocks until complete — returns final pipeline status. No polling needed. No batch needed.\n\n"
+                "PIPELINE MODES:\n"
+                "  both            — (default) Demucs stem separation → vocals.wav → WhisperX transcription.\n"
+                "                    Transcribes the isolated vocal stem, not the raw mix. Much cleaner for music.\n"
+                "  transcribe_only — Skip separation, transcribe source audio directly. Faster, use for speech/podcasts.\n"
+                "  separate_only   — Run Demucs only, no transcription.\n\n"
+                "After this completes, call generate_typography(preset=...) to lay out lyric clips.\n\n"
+                "DO NOT use this to search for a moment — use find_and_add_clip instead (windowed search, much faster)."
             ),
             inputSchema={
                 "type": "object",
@@ -2375,8 +2421,100 @@ def _cut_at_phrase(arguments: dict) -> dict:
         return {"trimmed_start": round(timeline_t, 3), "excerpt": match["excerpt"], **result}
 
 
+_AGENT_GUIDE = """
+# Pop Maker Studio — Agent Guide
+
+## Architecture
+A native C++ video editor controlled through an MCP server over a Unix socket IPC layer.
+The app runs locally; agents connect via this MCP server.
+
+## The two non-negotiable rules
+
+**1. ALL mutations require a batch.**
+Wrap every write operation in begin_batch("label") … end_batch().
+Read-only calls (get_project, get_clips, get_all_clips, take_snapshot, trigger_pipeline,
+crop_media, analyze_audio, seek, play, pause, get_pipeline_status, verify_clips) need no batch.
+Single-edit batches are fine — they still need begin/end_batch. Never nest batches.
+
+**2. Long-running ops block until complete — no manual polling needed.**
+These tools handle polling internally and return only when done:
+  trigger_pipeline    — returns final stage=done result; then call generate_typography
+  analyze_audio(path) — returns status=done with beats/rms; then call find_audio_cue
+  find_and_add_clip   — returns status=found; then extract_clip_segment → add_clip
+  remove_background   — returns status=ready
+
+Still requires manual polling (vision tools — use slower cadence):
+  describe_video → poll get_video_description until status=done → find_video_moment
+  download_vision_model → poll get_vision_model_status until status=ready
+
+## Track layering
+Track 0 = top (foreground). Highest index = bottom (background).
+  Text, FX, overlays → low-index tracks (0, 1, 2…)
+  Video, background  → high-index tracks
+
+## Canvas formats
+set_format presets: vertical (9:16 TikTok/Reels), horizontal (16:9 YouTube), square (1:1 Instagram)
+
+## File path conventions
+  Cropped media:       {parent}/{stem}_crop.mp4  (video) or  {parent}/{stem}_crop.png  (image)
+  Extracted segments:  {parent}/{stem}/{stem}_{start_int}_{end_int}.webm
+  Transcripts:         {parent}/{stem}/{stem}_words.json
+  find_and_add_clip only adds the short extracted segment — never the full source file
+  Always call crop_media before add_clip when source aspect ratio differs from the canvas
+
+## crop_media — face-aware cropping
+crop_media runs face detection by default (face_detect=true). It finds the largest face,
+adds padding (pad_top=0.4, pad_bottom=0.3 × face height), and crops automatically.
+Returns an inline thumbnail — verify it before calling add_clip.
+If the thumbnail looks wrong, re-call with adjusted pad_top/pad_bottom or face_detect=false + x_pct/y_pct.
+Handles HEIC/JPG/PNG images and MOV/MP4 video including rotation metadata.
+
+## Clip props reference
+
+Layout:    pos_x, pos_y (0–1 canvas fraction), scale_x, scale_y, rotation
+Playback:  volume (0–2), speed (0.25–4), opacity (0–1), muted (bool),
+           fade_in, fade_out, in_point (source offset seconds)
+Text:      text, font_size (0=auto), sub_pos (0=bottom 1=center 2=top 3=custom),
+           sub_pos_x/y (0–1), sub_anchor_h (0=left 1=center 2=right),
+           sub_wrap_w (0–1), sub_color ([r,g,b,a] 0–1)
+Animation: clip_style (none|fade|glitch|typewriter|bounce|scale|slide|stack|block),
+           blend_mode (normal|add|multiply|screen|overlay)
+Color grade (video clips only):
+           grade_brightness (-1–1), grade_contrast (0–3),
+           grade_saturation (0–3), grade_hue (-180–180)
+Audio sync: start = -source_timestamp, end = video_duration - source_timestamp
+
+## Lyric video / karaoke workflow
+1. Add source clip to timeline
+2. trigger_pipeline(mode="both")  ← separates vocals with Demucs, then transcribes with WhisperX
+   mode="transcribe_only" to skip separation (use for speech/podcasts, not music)
+3. generate_typography(preset="...") ← lays out timed lyric clips
+
+Karaoke is a TYPOGRAPHY PRESET — use preset="karaoke".
+Do NOT set karaoke=true on individual clips manually.
+
+Available presets:
+  Hype:       flash, strobe, rave, cyberpunk, drill
+  Aesthetic:  tumblr, indie2012, sadgirl, cottagecore, film
+  Editorial:  headline, manifesto, zine, newspaper
+  Clean:      minimal, spotify, apple, kinetic, karaoke
+  Retro:      vhs, neon, lofi
+
+## Searching vs. transcribing
+Searching for a specific moment → always use find_and_add_clip (windowed search, stops on match, fast).
+Generating subtitles for clips on timeline → use trigger_pipeline (transcribes full audio, slow on long files).
+Never add a full source video to the timeline just to transcribe it.
+
+## Verifying clip placement
+After placing video clips from transcript timestamps, call verify_clips with the midpoint of each clip.
+This catches wrong timestamps (wrong speaker, wrong line) without stopping to ask.
+""".strip()
+
+
 @server.call_tool()
 async def call_tool(name: str, arguments: dict) -> list[TextContent]:
+    if name == "get_guide":
+        return [TextContent(type="text", text=_AGENT_GUIDE)]
     if name == "remove_silence":
         result = await _remove_silence(arguments)
         return [TextContent(type="text", text=json.dumps(result, indent=2))]
