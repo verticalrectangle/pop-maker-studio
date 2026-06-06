@@ -51,3 +51,7 @@ std::string proxy_still_path(const std::string& video_path);
 
 // Cancel any running background generation (called on shutdown / re-import).
 void proxy_cancel();
+
+// Generate a preview still for video_path without starting the MJPEG proxy.
+// Blocking (< 1 s). No-op if the still already exists on disk.
+void proxy_ensure_still(const std::string& video_path);

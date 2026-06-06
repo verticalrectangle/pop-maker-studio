@@ -239,6 +239,32 @@ static bool is_image_ext(const std::string& path) {
         || ext==".heic"||ext==".heif";
 }
 
+void proxy_ensure_still(const std::string& video_path) {
+    std::string still = proxy_still_path(video_path);
+    if (fs::exists(still)) return;
+
+    if (is_image_ext(video_path)) {
+        std::string img_src = "file:" + video_path;
+        const char* args[] = {
+            "ffmpeg", "-hide_banner", "-loglevel", "error",
+            "-y", "-i", img_src.c_str(),
+            "-vf", "scale=iw/2:ih/2",
+            still.c_str(), nullptr
+        };
+        wait_ok(spawn_ffmpeg(args));
+    } else {
+        std::string src = "file:" + video_path;
+        const char* args[] = {
+            "ffmpeg", "-hide_banner", "-loglevel", "error",
+            "-y", "-i", src.c_str(),
+            "-ss", "0", "-vframes", "1",
+            "-vf", "scale=iw/4:ih/4",
+            still.c_str(), nullptr
+        };
+        wait_ok(spawn_ffmpeg(args));
+    }
+}
+
 void proxy_start(const std::string& video_path) {
     // Images: generate a scaled still and return — no MJPEG proxy needed.
     // A single-frame MJPEG would cause proxy_load to spawn ffprobe every frame

@@ -11,6 +11,7 @@
 #include "vision_caption.h"
 #include "vision_download.h"
 #include "video.h"
+#include "proxy.h"
 #include "transcribe.h"
 #include "generated/fx_clip_set_dispatch.h"
 #include "generated/fx_type_list.h"
@@ -125,6 +126,12 @@ static int jval_int(const json& v) {
     if (v.is_number()) return v.get<int>();
     if (v.is_string()) return std::stoi(v.get<std::string>());
     return 0;
+}
+// Snap t to the nearest frame boundary for the given fps (same formula as timeline UI).
+// Falls through unchanged when fps is 0 (no video loaded yet).
+static float snap_to_frame(float t, int fps) {
+    if (fps <= 0) return t;
+    return std::roundf(t * fps) / fps;
 }
 static bool jval_bool(const json& v) {
     if (v.is_boolean()) return v.get<bool>();
@@ -1040,7 +1047,7 @@ static json dispatch(AppState& state, const std::string& method, const json& par
 
     if (method == "move_clip") {
         int ti = track_by_name_or_index(state, params), ci = params.value("clip", -1);
-        float start = params.value("start", 0.f);
+        float start = snap_to_frame(params.value("start", 0.f), state.fps);
         if (!check_clip(state, ti, ci, err)) return {};
         Clip& cl = state.tracks[ti].clips[ci];
         float dur = cl.end - cl.start;
@@ -1055,12 +1062,12 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         Clip& cl = state.tracks[ti].clips[ci];
         float old_start = cl.start;
         if (params.contains("start")) {
-            float ns = params["start"].get<float>();
+            float ns = snap_to_frame(params["start"].get<float>(), state.fps);
             float delta = ns - old_start;
             if (delta > 0.f) cl.in_point += delta;
             cl.start = ns;
         }
-        if (params.contains("end")) cl.end = params["end"].get<float>();
+        if (params.contains("end")) cl.end = snap_to_frame(params["end"].get<float>(), state.fps);
         return json::object();
     }
 
@@ -1097,8 +1104,8 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         if (!check_track(state, ti, err)) return {};
         if (state.tracks[ti].locked) { err = "track is locked"; return {}; }
         std::string type_s = params.value("type", "text");
-        float start = params.value("start", 0.f);
-        float end   = params.value("end", start + 2.f);
+        float start = snap_to_frame(params.value("start", 0.f), state.fps);
+        float end   = snap_to_frame(params.value("end", start + 2.f), state.fps);
         std::string text = params.value("text", "");
 
         Clip cl;
@@ -1112,7 +1119,10 @@ static json dispatch(AppState& state, const std::string& method, const json& par
             state.audio_path = state.vocals_path = text;
         state.tracks[ti].clips.push_back(cl);
         int new_ci = (int)state.tracks[ti].clips.size() - 1;
-        if (cl.clip_type == ClipType::Video) state.proxy_scan_needed = true;
+        if (cl.clip_type == ClipType::Video) {
+            proxy_start(text);
+            state.proxy_scan_needed = true;
+        }
         if (cl.clip_type == ClipType::Video && !state.audio_path.empty() &&
             state.words_json_path.empty() && !transcribe_running())
             kick_pipeline(state, state.audio_path, PipelineMode::TranscribeOnly);
@@ -1141,8 +1151,8 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         json ids = json::array();
         for (auto& entry : params["clips"]) {
             std::string type_s = entry.value("type", "text");
-            float start = entry.value("start", 0.f);
-            float end   = entry.value("end", start + 2.f);
+            float start = snap_to_frame(entry.value("start", 0.f), state.fps);
+            float end   = snap_to_frame(entry.value("end", start + 2.f), state.fps);
             std::string text = entry.value("text", "");
             Clip cl;
             cl.clip_type = parse_clip_type(type_s);
@@ -1150,7 +1160,10 @@ static json dispatch(AppState& state, const std::string& method, const json& par
             if (cl.clip_type == ClipType::Video || cl.clip_type == ClipType::Audio)
                 cl.source_id = text;
             state.tracks[ti].clips.push_back(cl);
-            if (cl.clip_type == ClipType::Video) state.proxy_scan_needed = true;
+            if (cl.clip_type == ClipType::Video) {
+                proxy_start(text);
+                state.proxy_scan_needed = true;
+            }
             ids.push_back((int)state.tracks[ti].clips.size() - 1);
         }
         json r; r["clips"] = ids;
@@ -1405,8 +1418,10 @@ static json dispatch(AppState& state, const std::string& method, const json& par
     }
 
     if (method == "generate_typography") {
+        std::string preset = params.value("preset", "");
+        if (!preset.empty()) state.typo_preset_id = preset;
         generate_typography(state);
-        return json::object();
+        json r; r["preset"] = state.typo_preset_id; return r;
     }
 
     if (method == "load_project") {
@@ -1592,6 +1607,31 @@ static json dispatch(AppState& state, const std::string& method, const json& par
             [t](const Clip& c){ return c.start >= (float)t; }), clips.end());
         history_push(state, "delete_clips_after");
         return json::object();
+    }
+
+    if (method == "get_stills") {
+        if (!params.contains("paths") || !params["paths"].is_array()) {
+            err = "paths array required"; return {};
+        }
+        std::vector<std::string> paths;
+        for (auto& p : params["paths"]) paths.push_back(p.get<std::string>());
+        if (client_fd < 0) { return json::object(); }
+        fd_mark_busy(client_fd);
+        std::thread([paths, client_fd, req_id]() {
+            json stills = json::array();
+            for (const auto& p : paths) {
+                proxy_ensure_still(p);
+                json entry;
+                entry["path"]  = p;
+                entry["still"] = proxy_still_path(p);
+                entry["ok"]    = std::filesystem::exists(proxy_still_path(p));
+                stills.push_back(std::move(entry));
+            }
+            json r; r["stills"] = stills;
+            send_ok_id(client_fd, req_id, r);
+            fd_mark_free(client_fd);
+        }).detach();
+        json sentinel; sentinel["__async"] = true; return sentinel;
     }
 
     err = "unknown method: " + method;

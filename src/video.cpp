@@ -999,8 +999,23 @@ std::string video_extract_segment(const std::string& src,
         return "cannot read source stream info";
     }
 
+    // For audio-only sources (e.g. FLAC), the dst extension (.webm) may be
+    // incompatible with the source codec. Pass the source format name explicitly
+    // so ffmpeg picks a container that can hold the codec rather than guessing
+    // from the dst extension.
+    bool has_video_stream = false;
+    for (unsigned i = 0; i < in_ctx->nb_streams; ++i) {
+        if (in_ctx->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
+            has_video_stream = true;
+            break;
+        }
+    }
+    const char* force_fmt = nullptr;
+    if (!has_video_stream && in_ctx->iformat)
+        force_fmt = in_ctx->iformat->name;
+
     AVFormatContext* out_ctx = nullptr;
-    if (avformat_alloc_output_context2(&out_ctx, nullptr, nullptr, dst.c_str()) < 0) {
+    if (avformat_alloc_output_context2(&out_ctx, nullptr, force_fmt, dst.c_str()) < 0) {
         avformat_close_input(&in_ctx);
         return "cannot create output context for: " + dst;
     }
