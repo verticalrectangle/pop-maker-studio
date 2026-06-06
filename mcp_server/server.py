@@ -997,9 +997,13 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="find_and_add_clip",
             description=(
-                "Find a specific spoken moment in a video and add it to the timeline. "
-                "Does windowed Whisper search — stops transcribing as soon as the match is found. "
+                "Find a specific spoken moment in a media file and add it to the timeline. "
+                "Does windowed Whisper search in 5-minute chunks — stops as soon as the match is found. "
                 "Much faster than trigger_pipeline on long files.\n\n"
+                "WORKS ON AUDIO-ONLY FILES TOO (FLAC, MP3, WAV, etc.) — not just video. "
+                "This means you can locate an exact timestamp in a song or podcast without running "
+                "the full pipeline. Useful for finding where a lyric or phrase occurs so you can "
+                "trim the project to that point before generating typography.\n\n"
                 "Blocks until the match is found — no polling needed. Returns status=found.\n\n"
                 "Two cases on return:\n"
                 "  extracted=true → segment file already on disk; call add_clip(dst, clip_duration, in_point) now\n"
@@ -1011,7 +1015,7 @@ async def list_tools() -> list[Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "path":    {"type": "string",  "description": "Absolute path to the video file"},
+                    "path":    {"type": "string",  "description": "Absolute path to the media file (video or audio)"},
                     "query":   {"type": "string",  "description": "What to search for in the transcript"},
                     "track":   {"type": "integer", "description": "Track to add the clip to (default 0)"},
                     "padding": {"type": "number",  "description": "Seconds of context before/after match (default 5.0)"},
@@ -2501,7 +2505,9 @@ Available presets:
   Retro:      vhs, neon, lofi
 
 ## Searching vs. transcribing
-Searching for a specific moment → always use find_and_add_clip (windowed search, stops on match, fast).
+Searching for a specific moment → always use find_and_add_clip (windowed 5-min chunks, stops on match, fast).
+  Works on audio-only files too (FLAC, MP3, WAV) — use it to find a lyric/phrase timestamp in a song
+  without running the full pipeline. Great for trimming a project to exactly where a line occurs.
 Generating subtitles for clips on timeline → use trigger_pipeline (transcribes full audio, slow on long files).
 Never add a full source video to the timeline just to transcribe it.
 
