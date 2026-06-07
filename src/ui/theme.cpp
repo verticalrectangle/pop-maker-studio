@@ -5,10 +5,12 @@
 #include <cctype>
 
 #include "inter_font.h"
+#include "mono_font.h"
 
 ImFont* g_font_regular = nullptr;
 ImFont* g_font_bold    = nullptr;
 ImFont* g_font_black   = nullptr;
+ImFont* g_font_mono    = nullptr;
 
 void theme_apply() {
     ImGuiIO& io = ImGui::GetIO();
@@ -24,6 +26,33 @@ void theme_apply() {
         (void*)inter_bold_ttf, (int)inter_bold_ttf_size, 16.f, &cfg);
     g_font_black = io.Fonts->AddFontFromMemoryTTF(
         (void*)inter_black_ttf, (int)inter_black_ttf_size, 16.f, &cfg);
+
+    // JetBrains Mono for the embedded terminal. Glyph ranges cover what fish,
+    // zsh, and TUIs actually emit: extended Latin, general punctuation
+    // (en/em dashes, fancy quotes, arrows like ❯), arrows, math operators,
+    // box-drawing and block elements for TUIs, geometric shapes, dingbats.
+    // Pointer must outlive the atlas — ImGui keeps the pointer, not a copy.
+    static const ImWchar mono_ranges[] = {
+        0x0020, 0x00FF, // Basic Latin + Latin-1 Supplement
+        0x0100, 0x024F, // Latin Extended-A and B
+        0x2000, 0x206F, // General Punctuation
+        0x2070, 0x209F, // Super/Subscripts
+        0x20A0, 0x20CF, // Currency Symbols
+        0x2100, 0x214F, // Letterlike Symbols
+        0x2150, 0x218F, // Number Forms
+        0x2190, 0x21FF, // Arrows
+        0x2200, 0x22FF, // Mathematical Operators
+        0x2300, 0x23FF, // Misc Technical
+        0x2500, 0x257F, // Box Drawing
+        0x2580, 0x259F, // Block Elements
+        0x25A0, 0x25FF, // Geometric Shapes
+        0x2600, 0x26FF, // Misc Symbols
+        0x2700, 0x27BF, // Dingbats
+        0,
+    };
+    g_font_mono = io.Fonts->AddFontFromMemoryTTF(
+        (void*)jetbrains_mono_regular_ttf, (int)jetbrains_mono_regular_ttf_size,
+        28.f, &cfg, mono_ranges);
 
     io.Fonts->Build();
 

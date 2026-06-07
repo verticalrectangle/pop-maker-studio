@@ -17,6 +17,7 @@ pkg_check_modules(SWRESAMPLE REQUIRED libswresample)
 pkg_check_modules(SWSCALE   REQUIRED libswscale)
 pkg_check_modules(FREETYPE  REQUIRED freetype2)
 pkg_check_modules(AUBIO     REQUIRED aubio)
+pkg_check_modules(VTERM     REQUIRED vterm)
 
 # ── ImGui ─────────────────────────────────────────────────────────────────────
 set(IMGUI_DIR ${CMAKE_SOURCE_DIR}/vendor/imgui)
@@ -65,6 +66,7 @@ set(SOURCES
     src/forced_align.cpp
     src/ui/screen_splash.cpp
     src/ui/screen_setup.cpp
+    src/terminal.cpp
     src/ui/screen_studio.cpp
     src/ui/studio_shared.cpp
     src/ui/canvas.cpp
@@ -75,6 +77,7 @@ set(SOURCES
     src/ui/panel_fx.cpp
     src/ui/panel_media.cpp
     src/ui/export_ui.cpp
+    src/ui/panel_terminal.cpp
     src/ui/theme.cpp
     src/project.cpp
     src/fx_shader.cpp
@@ -99,6 +102,7 @@ target_include_directories(pop-maker-studio PRIVATE
     ${SWSCALE_INCLUDE_DIRS}
     ${FREETYPE_INCLUDE_DIRS}
     ${AUBIO_INCLUDE_DIRS}
+    ${VTERM_INCLUDE_DIRS}
 )
 
 target_link_libraries(pop-maker-studio PRIVATE
@@ -111,6 +115,7 @@ target_link_libraries(pop-maker-studio PRIVATE
     ${SWSCALE_LIBRARIES}
     ${FREETYPE_LIBRARIES}
     ${AUBIO_LIBRARIES}
+    ${VTERM_LIBRARIES}
     onnxruntime
     $<IF:$<TARGET_EXISTS:whisper::whisper>,whisper::whisper,whisper>
     fftw3f
@@ -147,6 +152,20 @@ add_custom_command(
 )
 add_custom_target(embed_font DEPENDS ${CMAKE_BINARY_DIR}/inter_font.h)
 add_dependencies(pop-maker-studio embed_font)
+
+# Embed JetBrains Mono as a compiled byte array (used by the terminal panel)
+add_custom_command(
+    OUTPUT ${CMAKE_BINARY_DIR}/mono_font.h
+    COMMAND ${CMAKE_SOURCE_DIR}/scripts/embed_mono.sh
+            ${CMAKE_SOURCE_DIR}/assets/fonts/JetBrainsMono-Regular.ttf
+            ${CMAKE_BINARY_DIR}/mono_font.h
+    DEPENDS
+        ${CMAKE_SOURCE_DIR}/assets/fonts/JetBrainsMono-Regular.ttf
+    COMMENT "Embedding JetBrains Mono font"
+)
+add_custom_target(embed_mono DEPENDS ${CMAKE_BINARY_DIR}/mono_font.h)
+add_dependencies(pop-maker-studio embed_mono)
+
 target_include_directories(pop-maker-studio PRIVATE ${CMAKE_BINARY_DIR})
 
 # Embed portrait preview photo as raw RGB

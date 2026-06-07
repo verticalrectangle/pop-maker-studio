@@ -612,6 +612,9 @@ struct AppState {
     bool        agent_active = false;
     std::string agent_msg;   // batch label shown in loading panel
 
+    // Terminal panel
+    bool  terminal_open   = false;
+
     // user-created effect presets (persisted to ~/.config/pop-maker-studio/presets.json)
     std::vector<EffectPreset> user_presets;
 

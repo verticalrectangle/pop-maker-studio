@@ -27,6 +27,7 @@ jobs:
             libfreetype6-dev \
             libaubio-dev \
             libfftw3-dev \
+            libvterm-dev \
             xxd
 
       - name: Install whisper.cpp

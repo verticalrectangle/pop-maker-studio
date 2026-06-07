@@ -3,6 +3,8 @@
 
 void theme_apply();
 
+extern ImFont* g_font_mono;
+
 // ── Design tokens (match verticalrectangle.com) ───────────────────────────────
 namespace Col {
     inline constexpr ImVec4 bg            = {0.000f, 0.000f, 0.000f, 1.000f};
