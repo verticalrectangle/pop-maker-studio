@@ -15,7 +15,7 @@ inline float snap_to_frame(float t, int fps) {
 // exactly on a frame boundary.
 inline float snap_end_to_frame(float t, int fps) {
     if (fps <= 0) return t;
-    return std::ceilf(t * fps - 1e-4f) / fps;
+    return std::ceil(t * fps - 1e-4f) / fps;
 }
 #include <string>
 
