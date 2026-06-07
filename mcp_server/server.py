@@ -352,6 +352,11 @@ async def list_tools() -> list[Tool]:
             inputSchema={"type": "object", "properties": {}},
         ),
         Tool(
+            name="cancel_search",
+            description="Cancel a running find_and_add_clip / search_transcript operation. Safe to call even if no search is running. No batch needed.",
+            inputSchema={"type": "object", "properties": {}},
+        ),
+        Tool(
             name="get_stills",
             description=(
                 "Generate and return thumbnail images for a list of media files so you can "
@@ -2252,6 +2257,32 @@ async def _add_clip(arguments: dict) -> dict:
     than the segment we actually need, extract that segment first so the proxy
     generator only has to process a short file instead of the full source.
     """
+    # Overlap guardrail: reject if any existing clip on the target track
+    # occupies any part of [start, end], regardless of clip type.
+    new_start = float(arguments.get("start", 0))
+    new_end   = float(arguments.get("end",   0))
+    track_args: dict = {}
+    if "track" in arguments:
+        track_args["track"] = arguments["track"]
+    elif "track_name" in arguments:
+        track_args["track_name"] = arguments["track_name"]
+    if track_args:
+        try:
+            existing_clips = _call("get_clips", track_args)
+            for cl in existing_clips:
+                cl_start = float(cl.get("start", 0))
+                cl_end   = float(cl.get("end",   0))
+                if cl_start < new_end and new_start < cl_end:
+                    raise ValueError(
+                        f"Clip overlap on track: requested [{new_start:.3f}s – {new_end:.3f}s] "
+                        f"collides with existing clip [{cl_start:.3f}s – {cl_end:.3f}s]. "
+                        f"Place clips on separate tracks or adjust the time range."
+                    )
+        except ValueError:
+            raise
+        except Exception:
+            pass  # if we can't fetch clips, allow the call through
+
     clip_type = arguments.get("type", "")
     text = arguments.get("text", "")
 
@@ -3149,6 +3180,21 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             slim["words"] = raw["words"]
         if "error" in raw:
             slim["error"] = raw["error"]
+        # If IPC says idle, the words_json_path may not be synced to state yet
+        # even though the pipeline already wrote the file. Fall back to deriving
+        # the path from audio_path and reading directly from disk.
+        if slim["status"] == "idle":
+            try:
+                proj = _call("get_project", {})
+                audio = proj.get("audio_path", "")
+                if audio:
+                    ap = Path(audio)
+                    words_path = ap.parent / ap.stem / (ap.stem + "_words.json")
+                    if words_path.exists():
+                        with open(words_path) as f:
+                            slim = {"status": "ready", "words": json.load(f)}
+            except Exception:
+                pass
         return [TextContent(type="text", text=json.dumps(slim, indent=2))]
     try:
         result = _call(name, arguments)
