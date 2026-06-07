@@ -11,6 +11,7 @@
 #include "globals.h"
 #include "ui/theme.h"
 #include "ui/screens.h"
+#include "ui/panel_terminal.h"
 #include <imgui.h>
 #include <algorithm>
 #include <chrono>
@@ -459,5 +460,6 @@ void app_shutdown(AppState& state) {
     video_close();
     transcribe_cancel();
     fx_shader_shutdown();
+    terminal_panel_shutdown();
     (void)state;
 }

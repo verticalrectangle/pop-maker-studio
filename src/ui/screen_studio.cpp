@@ -9,6 +9,7 @@
 #include "panel_animation.h"
 #include "panel_fx.h"
 #include "panel_media.h"
+#include "panel_terminal.h"
 #include "export_ui.h"
 #include "theme.h"
 #include "app.h"
@@ -46,6 +47,7 @@ PanelView s_panel_view = PanelView::Project;
 static bool s_user_nav = false; // user explicitly chose Animation/History tab
 
 static void handle_shortcuts(AppState& state) {
+    if (terminal_is_focused()) return;
     if (ImGui::IsAnyItemActive()) return;
     ImGuiIO& io = ImGui::GetIO();
 
@@ -609,16 +611,33 @@ void ui_studio(AppState& state) {
             ImGui::EndMenu();
         }
 
-        // Project + Export buttons — far right of menu bar
+        // Terminal + Project + Export buttons — far right of menu bar
         {
-            float btn_export_w = 80.f;
-            float btn_proj_w   = 70.f;
+            float btn_export_w   = 80.f;
+            float btn_proj_w     = 70.f;
+            float btn_term_w     = 78.f;
             float avail = ImGui::GetContentRegionAvail().x;
-            float total_btns = btn_proj_w + 6.f + btn_export_w;
+            float total_btns = btn_term_w + 6.f + btn_proj_w + 6.f + btn_export_w;
             if (avail > total_btns)
                 ImGui::SetCursorPosX(ImGui::GetCursorPosX() + avail - total_btns);
 
             ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {10.f, 2.f});
+
+            // Terminal toggle — active state uses accent tint
+            // Snapshot BEFORE the button so push/pop are always balanced.
+            bool term_was_open = state.terminal_open;
+            if (term_was_open) {
+                ImGui::PushStyleColor(ImGuiCol_Button,        IM_COL32(60, 40, 100, 255));
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(80, 55, 130, 255));
+                ImGui::PushStyleColor(ImGuiCol_ButtonActive,  IM_COL32(50, 35,  85, 255));
+                ImGui::PushStyleColor(ImGuiCol_Text,          IM_COL32(200, 160, 255, 255));
+            }
+            if (ImGui::Button("Terminal"))
+                state.terminal_open = !state.terminal_open;
+            if (term_was_open)
+                ImGui::PopStyleColor(4);
+
+            ImGui::SameLine(0.f, 6.f);
             if (ImGui::Button("Project")) {
                 s_panel_view = PanelView::Project;
                 state.selected_track = -1;
@@ -711,7 +730,23 @@ void ui_studio(AppState& state) {
     float tl_h       = (state.tl_h_frac > 0.f)
                         ? fmaxf(TL_MIN_H, fminf(avail_h * 0.7f, state.tl_h_frac * avail_h))
                         : TL_MIN_H;
-    float body_h     = avail_h - tl_h;
+
+    // Terminal strip height — fixed, unresizable. libvterm cannot be safely
+    // resized after init, so the strip is locked to a single height and the
+    // splitter is intentionally absent.
+    static const float TERM_FIXED_H = 220.f;
+    float term_h = state.terminal_open ? TERM_FIXED_H : 0.f;
+
+    float body_h     = avail_h - tl_h - term_h;
+    // Keep body_h above a usable minimum. Terminal height is fixed, so only
+    // shrink the timeline if the window is very short.
+    static const float BODY_MIN_H = 80.f;
+    if (body_h < BODY_MIN_H) {
+        float need = BODY_MIN_H - body_h;
+        float give_tl = fminf(need, fmaxf(0.f, tl_h - TL_MIN_H));
+        tl_h -= give_tl;
+        body_h = fmaxf(BODY_MIN_H, avail_h - tl_h - term_h);
+    }
 
     // Right panel width — user-draggable, default auto
     float props_w   = (state.panel_w > 0.f)
@@ -1157,7 +1192,20 @@ void ui_studio(AppState& state) {
     ImGui::EndChild();
     ImGui::PopStyleColor(2);
 
+    // ── Terminal strip ────────────────────────────────────────────────────────
+    if (state.terminal_open && term_h > 0.f) {
+        ImGui::PushStyleColor(ImGuiCol_ChildBg, IM_COL32(10, 10, 14, 255));
+        ImGui::PushStyleColor(ImGuiCol_Border,  Col::line);
+        if (ImGui::BeginChild("##term_zone", {win_w, term_h}, ImGuiChildFlags_Borders)) {
+            draw_terminal_panel(state, win_w - 2.f, term_h - 2.f);
+        }
+        ImGui::EndChild();
+        ImGui::PopStyleColor(2);
+    }
+
     // ── Drag splitters ────────────────────────────────────────────────────────
+    // Terminal strip is intentionally fixed-height (libvterm cannot be resized
+    // safely after init), so no splitter is exposed for it.
     {
         static bool s_drag_vsplit = false, s_drag_hsplit = false;
         ImVec2 wpos = ImGui::GetWindowPos();
@@ -1178,7 +1226,7 @@ void ui_studio(AppState& state) {
         if (ImGui::IsMouseReleased(0)) s_drag_vsplit = false;
 
         // Horizontal splitter between body and timeline
-        float hborder_y = wpos.y + body_top + body_h + pipeline_h;
+        float hborder_y = wpos.y + body_top + body_h + term_h + pipeline_h;
         bool near_h = fabsf(mpos.y - hborder_y) < 6.f &&
                       mpos.x > wpos.x &&
                       mpos.x < wpos.x + win_w;

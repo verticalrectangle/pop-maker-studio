@@ -9,6 +9,7 @@
 ImFont* g_font_regular = nullptr;
 ImFont* g_font_bold    = nullptr;
 ImFont* g_font_black   = nullptr;
+ImFont* g_font_mono    = nullptr;
 
 void theme_apply() {
     ImGuiIO& io = ImGui::GetIO();
@@ -24,6 +25,8 @@ void theme_apply() {
         (void*)inter_bold_ttf, (int)inter_bold_ttf_size, 16.f, &cfg);
     g_font_black = io.Fonts->AddFontFromMemoryTTF(
         (void*)inter_black_ttf, (int)inter_black_ttf_size, 16.f, &cfg);
+
+    g_font_mono = io.Fonts->AddFontDefault();
 
     io.Fonts->Build();
 
