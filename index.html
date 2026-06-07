@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Pop Maker Studio</title>
 
+  <meta name="description" content="Local-first ML lyric video editor. C++ from scratch. No cloud." />
   <meta property="og:title" content="Pop Maker Studio" />
   <meta property="og:description" content="Local-first ML lyric video editor. C++ from scratch. No cloud." />
   <meta property="og:image" content="https://popmakerstudio.com/docs/og-image.png" />
@@ -178,6 +179,11 @@
     .pms-slide:nth-child(1) { animation: pms-cycle 9s infinite 0s; }
     .pms-slide:nth-child(2) { animation: pms-cycle 9s infinite 3s; }
     .pms-slide:nth-child(3) { animation: pms-cycle 9s infinite 6s; }
+
+    @media (prefers-reduced-motion: reduce) {
+      .pms-slide { animation: none !important; }
+      .pms-slide:nth-child(1) { opacity: 1; }
+    }
 
     #pms-1:checked ~ .pms-carousel .pms-slide,
     #pms-2:checked ~ .pms-carousel .pms-slide,
@@ -372,14 +378,14 @@
       </div>
     </div>
 
-    <p class="project-page-body">A complete music video and lyric video editor written entirely in C++ from scratch — no Electron, no Python runtime, no cloud. Drop your track and Pop Maker Studio separates the vocals, transcribes every word down to the millisecond via whisper.cpp, and lets you animate them against your footage with GPU-accelerated GLSL shaders. All ML inference runs fully on-device via ONNX Runtime: vocal separation with MDX-Net, background removal with u2net, voice conversion without ever touching Python. Eight subtitle animation styles. Pixel-identical preview and export. One binary. Zero dependencies.</p>
+    <p class="project-page-body">A complete music video and lyric video editor written entirely in C++ from scratch — no Electron, no Python runtime, no cloud. Drop your track and Pop Maker Studio separates the vocals, transcribes every word down to the millisecond via whisper.cpp, and lets you animate them against your footage with GPU-accelerated GLSL shaders. All ML inference runs fully on-device via ONNX Runtime: vocal separation with MDX-Net, background removal with u2net, voice conversion without ever touching Python. Eight subtitle animation styles. Pixel-identical preview and export. One binary. Nothing to install.</p>
 
     <div class="pms-examples">
       <div class="pms-examples-left">
-        <img src="docs/export_example1.gif" alt="Export example — lyric video">
-        <img src="docs/export_example2.gif" alt="Export example — When I Look at You">
+        <img src="docs/export_example1.gif" alt="Export example — lyric video" loading="lazy">
+        <img src="docs/export_example2.gif" alt="Export example — When I Look at You" loading="lazy">
       </div>
-      <video src="docs/pms-demo.mp4" autoplay loop muted playsinline></video>
+      <video src="docs/pms-demo.mp4" autoplay loop muted playsinline poster="docs/pms-demo-poster.jpg" loading="lazy"></video>
     </div>
 
     <div class="project-page-specs">
