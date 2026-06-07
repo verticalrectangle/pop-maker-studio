@@ -513,6 +513,11 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         return json::object();
     }
 
+    if (method == "cancel_search") {
+        transcribe_cancel();
+        return json::object();
+    }
+
     if (method == "trigger_export") {
         if (state.render.running) { err = "export already running"; return {}; }
 

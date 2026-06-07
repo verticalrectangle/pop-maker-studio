@@ -484,7 +484,7 @@ struct AppState {
     int          fps         = 30;              // 24 / 30 / 60
 
     // style
-    AnimStyle    style       = AnimStyle::Block;
+    AnimStyle    style       = AnimStyle::None;
     int          font_weight = 900;
     OutputFormat format      = OutputFormat::Vertical;
 
@@ -596,7 +596,7 @@ struct AppState {
     bool         typo_generate_when_done     = false;  // "Make lyric video" sets this; fires generate_typography after pipeline
 
     // typography
-    std::string  typo_preset_id  = "spotify";  // active preset id
+    std::string  typo_preset_id  = "flash";     // active preset id
     // tune overrides (-1 / 0 = use preset default)
     float        typo_font_size  = 0.f;       // 0 = use preset
     float        typo_color[4]   = {0.f,0.f,0.f,0.f}; // all-zero = use preset

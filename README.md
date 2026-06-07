@@ -1,5 +1,7 @@
 # Pop Maker Studio
 
+![BLUE-GRAY lyric on eye close-up](docs/screenshot1.png) ![Glitch effect with timeline](docs/screenshot2.png) ![FLOWED lyric over ocean with FX panel](docs/screenshot3.png)
+
 A native C++ music video and lyric video editor built for pop artists. No subscription. No cloud. No Python runtime. Everything — transcription, vocal separation, voice conversion, background removal, GPU effects — runs entirely on your machine.
 
 ---
@@ -88,6 +90,12 @@ See `mcp_server/README.md` for Claude Desktop and Claude Code CLI setup.
 ## Export
 
 Export uses the same OpenGL pipeline as the preview. Every frame rendered to the offscreen FBO is pixel-identical to what the preview showed. Raw RGBA frames are piped to ffmpeg for H.264/AAC encoding. The export path is not a separate renderer — it is the live renderer, pointed at a framebuffer instead of the screen.
+
+**Examples** (9:16 TikTok vertical, rendered in Pop Maker Studio):
+
+<video src="docs/export_example.mp4" autoplay loop muted playsinline width="270"></video>
+
+![Export example — lyric video](docs/export_example1.gif) ![Export example — When I Look at You](docs/export_example2.gif)
 
 ---
 

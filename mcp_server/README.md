@@ -65,7 +65,7 @@ Add to `.mcp.json` in the repo root:
 | `set_text_style` | Shadow, stroke, glow, background box |
 | `apply_effect` | Any of the 100 shader effects from registry |
 | `generate_typography` | Generate lyric clips from word JSON |
-| `trigger_pipeline` | Start Whisper transcription + vocal separation |
+| `trigger_pipeline` | Start transcription + vocal separation |
 | `seek` / `play` / `pause` | Playback control |
 | `save_project` / `load_project` | Project persistence |
 | `validate_glsl` | Test-compile a GLSL shader |

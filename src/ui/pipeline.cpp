@@ -102,8 +102,14 @@ std::vector<Clip> group_words(
     };
 
     switch (mode) {
-    case SubtitleMode::Word:
-        return words;
+    case SubtitleMode::Word: {
+        // Extend each word to the next word's start so inter-word gaps don't
+        // leave blank frames between clips.
+        std::vector<Clip> out = words;
+        for (size_t i = 0; i + 1 < out.size(); ++i)
+            out[i].end = out[i + 1].start;
+        return out;
+    }
 
     case SubtitleMode::Phrase: {
         float thresh = (pause_gap > 0.f) ? pause_gap : 0.3f;

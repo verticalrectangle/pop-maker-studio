@@ -8,7 +8,7 @@
 
 // ── Panel view ────────────────────────────────────────────────────────────────
 enum class PanelView {
-    Clip, Animation, Typography, Project, History,       // tab-bar views
+    Clip, Typography, Project, History,                  // tab-bar views
     LibBG, LibFX, LibAdj, LibAFX, LibVID, LibIMG, LibAUD, LibBFX, // library browsers
     OverrideFX, OverrideAdj, OverrideBG, OverrideAudioFX, OverrideMultiFX, // clip-type overrides
 };

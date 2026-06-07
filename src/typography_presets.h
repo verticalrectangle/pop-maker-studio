@@ -53,7 +53,7 @@ static const TypographyPreset g_typo_presets[] = {
         SubtitleMode::Word, 1,
         0.18f, 0.5f, 1, 0.5f, 1, 0.85f,
         {1.f, 1.f, 1.f, 1.f},
-        true, false, AnimStyle::Block,
+        true, false, AnimStyle::None,
         0.08f, 1,
         {}, 0
     },
@@ -65,7 +65,7 @@ static const TypographyPreset g_typo_presets[] = {
         SubtitleMode::Word, 1,
         0.18f, 0.5f, 1, 0.5f, 1, 0.85f,
         {1.f, 1.f, 1.f, 1.f},
-        true, false, AnimStyle::Block,
+        true, false, AnimStyle::None,
         0.08f, 1,
         {}, 0
     },
@@ -101,7 +101,7 @@ static const TypographyPreset g_typo_presets[] = {
         SubtitleMode::CustomN, 3,
         0.10f, 0.5f, 2, 0.15f, 1, 0.85f,
         {1.f, 0.95f, 0.0f, 1.f},
-        true, false, AnimStyle::Block,
+        true, false, AnimStyle::None,
         0.25f, 3,
         {}, 0
     },
@@ -189,7 +189,7 @@ static const TypographyPreset g_typo_presets[] = {
         SubtitleMode::Line, 3,
         0.11f, 0.05f, 1, 0.5f, 0, 0.92f,
         {1.f, 1.f, 1.f, 1.f},
-        true, false, AnimStyle::Block,
+        true, false, AnimStyle::None,
         0.45f, 5,
         {}, 0
     },
@@ -213,7 +213,7 @@ static const TypographyPreset g_typo_presets[] = {
         SubtitleMode::Segment, 3,
         0.07f, 0.5f, 1, 0.5f, 1, 0.75f,
         {1.f, 1.f, 1.f, 1.f},
-        true, false, AnimStyle::Block,
+        true, false, AnimStyle::None,
         0.80f, 10,
         {}, 0
     },

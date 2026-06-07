@@ -405,7 +405,7 @@ bool project_save(const AppState& state, const std::string& path) {
     w.pod(state.panel_w); w.pod(state.tl_h_frac);
 
     // Style
-    w.pod((uint8_t)state.style); w.pod(state.font_weight);
+    w.pod((uint8_t)AnimStyle::None); w.pod(state.font_weight);
     w.pod((uint8_t)state.format);
 
     // Subtitle
@@ -479,7 +479,7 @@ bool project_load(AppState& state, const std::string& path) {
     state.panel_w        = r.pod<float>(); state.tl_h_frac   = r.pod<float>();
 
     // Style
-    state.style       = (AnimStyle)r.pod<uint8_t>();
+    r.pod<uint8_t>(); state.style = AnimStyle::None; // project-level anim style is always None; presets own it
     state.font_weight = r.pod<int>();
     state.format      = (OutputFormat)r.pod<uint8_t>();
 

@@ -1118,8 +1118,6 @@ void ui_studio(AppState& state) {
                         { s_panel_view = PanelView::Clip; s_user_nav = false; ImGui::EndTabItem(); }
                     if (is_text_like && ImGui::BeginTabItem("Typography", nullptr, tf(PanelView::Typography)))
                         { s_panel_view = PanelView::Typography; s_user_nav = false; ImGui::EndTabItem(); }
-                    if (ImGui::BeginTabItem("Animation", nullptr, tf(PanelView::Animation)))
-                        { s_panel_view = PanelView::Animation; s_user_nav = true; ImGui::EndTabItem(); }
                 }
                 if (ImGui::BeginTabItem("History", nullptr, tf(PanelView::History)))
                     { s_panel_view = PanelView::History; s_user_nav = true; ImGui::EndTabItem(); }
@@ -1137,7 +1135,6 @@ void ui_studio(AppState& state) {
 
         switch (s_panel_view) {
             case PanelView::Clip:        panel_clip(state, pw);                  break;
-            case PanelView::Animation:   panel_animation(state, pw);             break;
             case PanelView::Typography:  panel_typography(state, pw);            break;
             case PanelView::Project:     panel_project(state, pw);               break;
             case PanelView::History:     panel_history(state, pw);               break;

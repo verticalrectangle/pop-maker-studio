@@ -22,6 +22,7 @@ import asyncio
 import base64
 import io
 import json
+import math
 import os
 import subprocess
 import re
@@ -1121,7 +1122,7 @@ async def list_tools() -> list[Tool]:
             name="find_and_add_clip",
             description=(
                 "Find a specific spoken moment in a media file and add it to the timeline. "
-                "Does windowed Whisper search — chunk size is calculated from the file length "
+                "Does windowed speech-to-text search — chunk size is calculated from the file length "
                 "(clamp(duration/4, 90s, 300s)) with 15% overlap — stops as soon as the match is found. "
                 "Much faster than trigger_pipeline on long files.\n\n"
                 "WORKS ON AUDIO-ONLY FILES TOO (FLAC, MP3, WAV, etc.) — not just video. "
@@ -2268,11 +2269,26 @@ async def _add_clip(arguments: dict) -> dict:
         track_args["track_name"] = arguments["track_name"]
     if track_args:
         try:
+            fps = float(_call("get_project", {}).get("fps", 30))
+            frame_dur = 1.0 / fps
             existing_clips = _call("get_clips", track_args)
+            # Match C++ snap_to_frame (roundf) and snap_end_to_frame (ceilf - ε).
+            snap_start = round(new_start * fps) / fps
+            snap_end   = math.ceil(new_end * fps - 1e-4) / fps
+            # Magnetic abutting: if snap_start lands within one frame before an
+            # existing clip's end (because ceil pushed that end past our intended
+            # boundary), snap start up to that end so clips abut cleanly.
+            for cl in existing_clips:
+                cl_end = float(cl.get("end", 0))
+                if 0 < cl_end - snap_start <= frame_dur + 1e-6:
+                    snap_start = cl_end
+                    new_start  = cl_end
+                    arguments  = {**arguments, "start": new_start}
+                    break
             for cl in existing_clips:
                 cl_start = float(cl.get("start", 0))
                 cl_end   = float(cl.get("end",   0))
-                if cl_start < new_end and new_start < cl_end:
+                if cl_start < snap_end and snap_start < cl_end:
                     raise ValueError(
                         f"Clip overlap on track: requested [{new_start:.3f}s – {new_end:.3f}s] "
                         f"collides with existing clip [{cl_start:.3f}s – {cl_end:.3f}s]. "
@@ -2364,7 +2380,7 @@ def _search_transcript_in_words(words: list, query: str) -> tuple[float, float, 
 
 async def _find_and_add_clip(arguments: dict) -> dict:
     """
-    Step 1: check cache or start Whisper search. Returns immediately.
+    Step 1: check cache or start transcription search. Returns immediately.
     If cached=true, returns found result so Claude can call extract_clip_segment + add_clip.
     If cached=false, starts background search; Claude polls get_search_status then continues.
     """
@@ -2435,7 +2451,8 @@ async def _find_and_add_clip(arguments: dict) -> dict:
         seg_end   = end + padding
         cache_dir = p.parent / p.stem
         existing_dst = None
-        seg_pat = re.compile(rf"^{re.escape(p.stem)}_(\d+)_(\d+)\.webm$")
+        seg_ext_escaped = re.escape(p.suffix.lstrip("."))
+        seg_pat = re.compile(rf"^{re.escape(p.stem)}_(\d+)_(\d+)\.{seg_ext_escaped}$")
         if cache_dir.is_dir():
             for f in cache_dir.iterdir():
                 m = seg_pat.match(f.name)
@@ -2470,11 +2487,20 @@ async def _find_and_add_clip(arguments: dict) -> dict:
         cache_dir = p.parent / p.stem
         seg_ext   = p.suffix
         dst = str(cache_dir / f"{p.stem}_{s_int}_{e_int}{seg_ext}")
-        if not Path(dst).exists():
+        expected_dur = seg_end - seg_start
+        dst_path = Path(dst)
+        need_extract = not dst_path.exists()
+        if not need_extract:
+            # Validate the cached file has roughly the expected duration; re-extract if stale/corrupt
+            existing_dur = float(_call("get_media_info", {"path": dst}).get("duration", 0))
+            if existing_dur < 1.0 or existing_dur > expected_dur * 2:
+                dst_path.unlink(missing_ok=True)
+                need_extract = True
+        if need_extract:
             cache_dir.mkdir(parents=True, exist_ok=True)
             _call("extract_clip_segment", {"src": path, "dst": dst, "start": seg_start, "end": seg_end})
         dur_result = _call("get_media_info", {"path": dst})
-        duration   = float(dur_result.get("duration", seg_end - seg_start))
+        duration   = float(dur_result.get("duration", expected_dur))
         return {
             "status":        "found",
             "cached":        True,
@@ -2490,7 +2516,7 @@ async def _find_and_add_clip(arguments: dict) -> dict:
             "in_point":      round(start - seg_start, 3),
         }
 
-    # No transcript — start Whisper search and block until done
+    # No transcript — start transcription search and block until done
     _call("search_transcript", {
         "path":        path,
         "query_words": query.lower().split(),
