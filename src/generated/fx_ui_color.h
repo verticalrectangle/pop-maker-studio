@@ -22,7 +22,7 @@
         case FXType::Twirl: return IM_COL32(180,60,230,220);
         case FXType::Ripple: return IM_COL32(40,160,220,220);
         case FXType::WaveWarp: return IM_COL32(60,200,160,220);
-        case FXType::LsdBreathe: return IM_COL32(180,60,255,220);
+        case FXType::Breathe: return IM_COL32(180,60,255,220);
         case FXType::Kaleidoscope: return IM_COL32(230,80,150,220);
         case FXType::ZoomBlurRad: return IM_COL32(200,220,40,220);
         case FXType::SpinBlur: return IM_COL32(160,230,80,220);

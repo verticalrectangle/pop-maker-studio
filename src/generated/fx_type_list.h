@@ -23,7 +23,7 @@ static const FXType k_gen_fx_types[] = {
     FXType::Twirl,
     FXType::Ripple,
     FXType::WaveWarp,
-    FXType::LsdBreathe,
+    FXType::Breathe,
     FXType::Kaleidoscope,
     FXType::ZoomBlurRad,
     FXType::SpinBlur,

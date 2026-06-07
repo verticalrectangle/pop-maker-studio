@@ -376,37 +376,37 @@ static void fx_attached_inspector(AttachedFX& afx, float sw, AppState& state, Cl
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Wave Warp: Speed");
             break;
         }
-        case FXType::LsdBreathe: {
+        case FXType::Breathe: {
             if ((int)afx.params.size() < 5) afx.params.resize(5, 0.f);
             ui_label("Amount");
             ImGui::SetNextItemWidth(sw);
-            ImGui::SliderFloat("##afx_lsd_breathe_amount", &afx.amount, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "LSD Breathe: Amount");
+            ImGui::SliderFloat("##afx_breathe_amount", &afx.amount, 0.0f, 1.0f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Breathe: Amount");
             ImGui::Dummy({0.f, 4.f});
             ui_label("Breathe Rate");
             ImGui::SetNextItemWidth(sw);
-            ImGui::SliderFloat("##afx_lsd_breathe_breathe_rate", &afx.params[0], 0.1f, 3.0f, "%.1f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "LSD Breathe: Breathe Rate");
+            ImGui::SliderFloat("##afx_breathe_breathe_rate", &afx.params[0], 0.1f, 3.0f, "%.1f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Breathe: Breathe Rate");
             ImGui::Dummy({0.f, 4.f});
             ui_label("Warp");
             ImGui::SetNextItemWidth(sw);
-            ImGui::SliderFloat("##afx_lsd_breathe_warp_strength", &afx.params[1], 0.0f, 0.15f, "%.3f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "LSD Breathe: Warp");
+            ImGui::SliderFloat("##afx_breathe_warp_strength", &afx.params[1], 0.0f, 0.15f, "%.3f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Breathe: Warp");
             ImGui::Dummy({0.f, 4.f});
             ui_label("Color Drift");
             ImGui::SetNextItemWidth(sw);
-            ImGui::SliderFloat("##afx_lsd_breathe_color_speed", &afx.params[2], 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "LSD Breathe: Color Drift");
+            ImGui::SliderFloat("##afx_breathe_color_speed", &afx.params[2], 0.0f, 1.0f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Breathe: Color Drift");
             ImGui::Dummy({0.f, 4.f});
             ui_label("Chroma Split");
             ImGui::SetNextItemWidth(sw);
-            ImGui::SliderFloat("##afx_lsd_breathe_chroma_split", &afx.params[3], 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "LSD Breathe: Chroma Split");
+            ImGui::SliderFloat("##afx_breathe_chroma_split", &afx.params[3], 0.0f, 1.0f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Breathe: Chroma Split");
             ImGui::Dummy({0.f, 4.f});
             ui_label("Complexity");
             ImGui::SetNextItemWidth(sw);
-            ImGui::SliderFloat("##afx_lsd_breathe_complexity", &afx.params[4], 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "LSD Breathe: Complexity");
+            ImGui::SliderFloat("##afx_breathe_complexity", &afx.params[4], 0.0f, 1.0f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Breathe: Complexity");
             break;
         }
         case FXType::Kaleidoscope: {
