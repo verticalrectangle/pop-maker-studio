@@ -21,16 +21,11 @@ namespace fs = std::filesystem;
 
 // Definitions of globals declared in globals.h
 std::string g_dropped_file;
-ImVec2      g_drop_pos;
 std::string g_managed_dir;
 
-static void glfw_drop_callback(GLFWwindow* win, int count, const char** paths) {
-    if (count > 0) {
+static void glfw_drop_callback(GLFWwindow*, int count, const char** paths) {
+    if (count > 0)
         g_dropped_file = paths[0];
-        double mx, my;
-        glfwGetCursorPos(win, &mx, &my);
-        g_drop_pos = {(float)mx, (float)my};
-    }
 }
 
 static void glfw_error_callback(int err, const char* desc) {

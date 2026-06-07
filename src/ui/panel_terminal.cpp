@@ -130,14 +130,11 @@ void draw_terminal_panel(AppState& state, float panel_w, float panel_h) {
     }
 
     // ── OS file drop onto terminal ────────────────────────────────────────────
-    if (!g_dropped_file.empty() && s_initialized) {
-        ImVec2 wp2 = ImGui::GetWindowPos();
-        ImVec2 ws2 = ImGui::GetWindowSize();
-        if (g_drop_pos.x >= wp2.x && g_drop_pos.x < wp2.x + ws2.x &&
-            g_drop_pos.y >= wp2.y && g_drop_pos.y < wp2.y + ws2.y) {
-            terminal_inject_path(g_dropped_file);
-            g_dropped_file.clear();
-        }
+    // The terminal claims drops only while focused — the studio handler is
+    // gated the same way, so there's exactly one owner per drop.
+    if (!g_dropped_file.empty() && s_initialized && s_focused) {
+        terminal_inject_path(g_dropped_file);
+        g_dropped_file.clear();
     }
 
     // ── Render cell grid ──────────────────────────────────────────────────────

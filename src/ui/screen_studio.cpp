@@ -154,8 +154,12 @@ void ui_studio(AppState& state) {
     }
 
     // Handle OS drop — SRT, audio, or video.
+    // If the terminal is focused, all drops belong to it so the studio
+    // handler stands down. The terminal panel will inject the path at the
+    // shell prompt later this frame.
     extern std::string g_dropped_file;
-    if (!g_dropped_file.empty()) {
+    bool term_claims_drop = state.terminal_open && terminal_is_focused();
+    if (!g_dropped_file.empty() && !term_claims_drop) {
         const std::string& dp = g_dropped_file;
         fs::path fp(dp);
         std::string ext = fp.extension().string();

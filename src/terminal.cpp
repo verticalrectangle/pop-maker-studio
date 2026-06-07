@@ -129,17 +129,40 @@ void terminal_init(TerminalState& t, int cols, int rows) {
 
 void terminal_destroy(TerminalState& t) {
     t.running = false;
+
+    // The reader thread is blocked in read() on the pty master. On Linux,
+    // close() from another thread does NOT reliably unblock an in-progress
+    // read() — the behavior is officially undefined. Closing first and
+    // hoping join() returns is what caused app shutdown to hang.
+    //
+    // The reliable wake-up: kill the child. When the shell exits and the
+    // slave side drops, read() on the master returns 0 (EOF), and the
+    // reader's `if (n <= 0) break;` exits the loop cleanly.
+    if (t.child_pid > 0) {
+        kill(t.child_pid, SIGHUP);  // graceful — shell saves history, etc.
+
+        bool reaped = false;
+        for (int i = 0; i < 50; ++i) {
+            int status;
+            pid_t r = waitpid(t.child_pid, &status, WNOHANG);
+            if (r != 0) { reaped = true; break; }   // exited or error
+            usleep(10 * 1000);                       // 10 ms × 50 = 500 ms budget
+        }
+        if (!reaped) {
+            kill(t.child_pid, SIGKILL);
+            waitpid(t.child_pid, nullptr, 0);
+        }
+        t.child_pid = -1;
+    }
+
+    if (t.reader.joinable())
+        t.reader.join();
+
     if (t.pty_master >= 0) {
         close(t.pty_master);
         t.pty_master = -1;
     }
-    if (t.reader.joinable())
-        t.reader.join();
-    if (t.child_pid > 0) {
-        kill(t.child_pid, SIGTERM);
-        waitpid(t.child_pid, nullptr, WNOHANG);
-        t.child_pid = -1;
-    }
+
     if (t.vt) {
         vterm_free(t.vt);
         t.vt  = nullptr;
