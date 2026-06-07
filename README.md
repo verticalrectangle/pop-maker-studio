@@ -93,9 +93,7 @@ Export uses the same OpenGL pipeline as the preview. Every frame rendered to the
 
 **Examples** (9:16 TikTok vertical, rendered in Pop Maker Studio):
 
-<video src="docs/export_example.mp4" autoplay loop muted playsinline width="270"></video>
-
-![Export example — lyric video](docs/export_example1.gif) ![Export example — When I Look at You](docs/export_example2.gif)
+![Export example — How Does It Feel](docs/export_example.gif) ![Export example — lyric video](docs/export_example1.gif) ![Export example — When I Look at You](docs/export_example2.gif)
 
 ---
 
