@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Pop Maker Studio</title>
+
+  <meta property="og:title" content="Pop Maker Studio" />
+  <meta property="og:description" content="Local-first ML lyric video editor. C++ from scratch. No cloud." />
+  <meta property="og:image" content="docs/screenshot1.png" />
+  <meta property="og:type" content="website" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="Pop Maker Studio" />
+  <meta name="twitter:description" content="Local-first ML lyric video editor. C++ from scratch. No cloud." />
+  <meta name="twitter:image" content="docs/screenshot1.png" />
+
+  <style>
+    @font-face {
+      font-family: 'Inter';
+      src: url('https://verticalrectangle.com/fonts/InterVariable.woff2') format('woff2-variations');
+      font-weight: 100 900;
+      font-style: normal;
+      font-display: swap;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --black: #000000;
+      --white: #ffffff;
+    }
+
+    body {
+      background: var(--black);
+      color: var(--white);
+      font-family: 'Inter', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+      min-height: 100vh;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* ── NAV ── */
+
+    nav {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 28px 48px;
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      background: rgba(0,0,0,0.85);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border-bottom: 1px solid rgba(255,255,255,0.06);
+    }
+
+    .nav-logo {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      text-decoration: none;
+      color: var(--white);
+    }
+
+    .nav-logo img { height: 28px; width: auto; opacity: 0.85; }
+
+    .nav-wordmark {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      opacity: 0.55;
+    }
+
+    .nav-dl {
+      display: inline-block;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: var(--white);
+      text-decoration: none;
+      border: 1px solid rgba(255,255,255,0.35);
+      padding: 9px 20px;
+      transition: border-color 0.2s ease, background 0.2s ease;
+    }
+
+    .nav-dl:hover { border-color: var(--white); background: rgba(255,255,255,0.06); }
+
+    @media (max-width: 600px) {
+      nav { padding: 20px 24px; }
+      .nav-wordmark { display: none; }
+    }
+
+    /* ── MAIN CONTENT ── */
+
+    .page {
+      max-width: 1000px;
+      margin: 0 auto;
+      padding: 64px 48px 120px;
+    }
+
+    @media (max-width: 600px) { .page { padding: 48px 24px 80px; } }
+
+    /* ── HEADER ── */
+
+    .project-page-title {
+      font-size: clamp(36px, 7vw, 80px);
+      font-weight: 900;
+      letter-spacing: -0.01em;
+      text-transform: uppercase;
+      line-height: 1;
+      margin-bottom: 14px;
+    }
+
+    .project-page-tagline {
+      font-size: 15px;
+      font-weight: 500;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      opacity: 0.6;
+      margin-bottom: 28px;
+    }
+
+    .header-links {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin-bottom: 56px;
+    }
+
+    .project-page-link {
+      display: inline-block;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: var(--white);
+      text-decoration: none;
+      border: 1px solid rgba(255,255,255,0.3);
+      padding: 10px 22px;
+      transition: border-color 0.2s ease;
+    }
+
+    .project-page-link:hover { border-color: rgba(255,255,255,0.8); }
+
+    .project-page-link--primary {
+      border-color: rgba(255,255,255,0.7);
+      background: rgba(255,255,255,0.05);
+    }
+
+    /* ── CAROUSEL ── */
+
+    .pms-radio { display: none; }
+
+    @keyframes pms-cycle {
+      0%     { opacity: 1; }
+      30%    { opacity: 1; }
+      33.34% { opacity: 0; }
+      100%   { opacity: 0; }
+    }
+
+    .pms-carousel {
+      position: relative;
+      max-width: 75%;
+      margin: 0 auto 56px;
+      aspect-ratio: 1120 / 1050;
+    }
+
+    .pms-slide {
+      position: absolute;
+      top: 0; left: 0; width: 100%;
+      opacity: 0;
+    }
+
+    .pms-slide:nth-child(1) { animation: pms-cycle 9s infinite 0s; }
+    .pms-slide:nth-child(2) { animation: pms-cycle 9s infinite 3s; }
+    .pms-slide:nth-child(3) { animation: pms-cycle 9s infinite 6s; }
+
+    #pms-1:checked ~ .pms-carousel .pms-slide,
+    #pms-2:checked ~ .pms-carousel .pms-slide,
+    #pms-3:checked ~ .pms-carousel .pms-slide { animation: none; opacity: 0; }
+    #pms-1:checked ~ .pms-carousel .pms-slide:nth-child(1) { opacity: 1; }
+    #pms-2:checked ~ .pms-carousel .pms-slide:nth-child(2) { opacity: 1; }
+    #pms-3:checked ~ .pms-carousel .pms-slide:nth-child(3) { opacity: 1; }
+
+    .pms-slide img {
+      width: 100%;
+      display: block;
+      border: 1px solid rgba(255,255,255,0.15);
+    }
+
+    .pms-arrow {
+      position: absolute;
+      top: 50%;
+      transform: translateY(-50%);
+      z-index: 1;
+    }
+
+    .pms-arrow-prev { left: 0; }
+    .pms-arrow-next { right: 0; }
+
+    .pms-arrow label {
+      display: none;
+      cursor: pointer;
+      font-size: 24px;
+      color: rgba(255,255,255,0.8);
+      padding: 10px 14px;
+      background: rgba(0,0,0,0.45);
+      line-height: 1;
+      user-select: none;
+    }
+
+    .pms-arrow label:hover { color: white; background: rgba(0,0,0,0.7); }
+
+    #pms-1:checked ~ .pms-carousel .pms-arrow label.pms-from-1,
+    #pms-2:checked ~ .pms-carousel .pms-arrow label.pms-from-2,
+    #pms-3:checked ~ .pms-carousel .pms-arrow label.pms-from-3 { display: block; }
+
+    @media (max-width: 600px) { .pms-carousel { max-width: 100%; } }
+
+    /* ── BODY TEXT ── */
+
+    .project-page-body {
+      font-size: 18px;
+      font-weight: 400;
+      line-height: 1.75;
+      opacity: 0.8;
+      max-width: 680px;
+      margin-bottom: 64px;
+    }
+
+    @media (max-width: 600px) { .project-page-body { font-size: 16px; } }
+
+    /* ── EXAMPLES ── */
+
+    .pms-examples {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin-bottom: 56px;
+      align-items: center;
+      max-width: 75%;
+      margin-left: auto;
+      margin-right: auto;
+    }
+
+    .pms-examples-left {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .pms-examples img {
+      width: 100%;
+      display: block;
+      border: 1px solid rgba(255,255,255,0.15);
+    }
+
+    @media (max-width: 600px) {
+      .pms-examples {
+        grid-template-columns: 1fr;
+        max-width: 100%;
+      }
+    }
+
+    /* ── SPECS ── */
+
+    .project-page-specs {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      border: 1px solid rgba(255,255,255,0.15);
+      border-right: none;
+      border-bottom: none;
+    }
+
+    .spec-item {
+      padding: 24px;
+      border-right: 1px solid rgba(255,255,255,0.15);
+      border-bottom: 1px solid rgba(255,255,255,0.15);
+    }
+
+    .spec-label {
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      opacity: 0.4;
+      margin-bottom: 8px;
+    }
+
+    .spec-value {
+      font-size: 15px;
+      font-weight: 800;
+      letter-spacing: -0.01em;
+      text-transform: uppercase;
+    }
+
+    @media (max-width: 600px) {
+      .project-page-specs { grid-template-columns: repeat(2, 1fr); }
+    }
+
+    /* ── FOOTER ── */
+
+    footer {
+      border-top: 1px solid rgba(255,255,255,0.08);
+      padding: 32px 48px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 24px;
+      flex-wrap: wrap;
+    }
+
+    .footer-credit {
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      opacity: 0.35;
+      text-decoration: none;
+      color: var(--white);
+      transition: opacity 0.2s ease;
+    }
+
+    .footer-credit:hover { opacity: 0.7; }
+
+    @media (max-width: 600px) { footer { padding: 24px; } }
+  </style>
+</head>
+<body>
+
+  <nav>
+    <a href="https://verticalrectangle.com" class="nav-logo" target="_blank" rel="noopener">
+      <img src="https://verticalrectangle.com/logo.png" alt="Vertical Rectangle" />
+      <span class="nav-wordmark">Vertical Rectangle</span>
+    </a>
+    <a href="https://github.com/verticalrectangle/pop-maker-studio/releases/latest" class="nav-dl" target="_blank" rel="noopener">Download ↓</a>
+  </nav>
+
+  <input type="radio" name="pms-carousel" id="pms-1" class="pms-radio">
+  <input type="radio" name="pms-carousel" id="pms-2" class="pms-radio">
+  <input type="radio" name="pms-carousel" id="pms-3" class="pms-radio">
+
+  <main class="page">
+
+    <div style="margin-bottom: 48px;">
+      <h1 class="project-page-title">Pop Maker Studio</h1>
+      <p class="project-page-tagline">Local-first ML lyric video editor &nbsp;·&nbsp; C++ from scratch &nbsp;·&nbsp; No cloud</p>
+      <div class="header-links">
+        <a class="project-page-link project-page-link--primary" href="https://github.com/verticalrectangle/pop-maker-studio/releases/latest" target="_blank" rel="noopener">Download latest release ↓</a>
+        <a class="project-page-link" href="https://github.com/verticalrectangle/pop-maker-studio" target="_blank" rel="noopener">GitHub ↗</a>
+      </div>
+    </div>
+
+    <div class="pms-carousel">
+      <div class="pms-slide"><img src="docs/screenshot2.png" alt="Pop Maker Studio: glitch effect applied to portrait clip"></div>
+      <div class="pms-slide"><img src="docs/screenshot3.png" alt="Pop Maker Studio: lyric animation with FX panel open"></div>
+      <div class="pms-slide"><img src="docs/screenshot1.png" alt="Pop Maker Studio: BLUE-GRAY lyric on eye close-up"></div>
+      <div class="pms-arrow pms-arrow-prev">
+        <label for="pms-3" class="pms-from-1">‹</label>
+        <label for="pms-1" class="pms-from-2">‹</label>
+        <label for="pms-2" class="pms-from-3">‹</label>
+      </div>
+      <div class="pms-arrow pms-arrow-next">
+        <label for="pms-2" class="pms-from-1">›</label>
+        <label for="pms-3" class="pms-from-2">›</label>
+        <label for="pms-1" class="pms-from-3">›</label>
+      </div>
+    </div>
+
+    <p class="project-page-body">A complete music video and lyric video editor written entirely in C++ from scratch — no Electron, no Python runtime, no cloud. Drop your track and Pop Maker Studio separates the vocals, transcribes every word down to the millisecond via whisper.cpp, and lets you animate them against your footage with GPU-accelerated GLSL shaders. All ML inference runs fully on-device via ONNX Runtime: vocal separation with MDX-Net, background removal with u2net, voice conversion without ever touching Python. Eight subtitle animation styles. Pixel-identical preview and export. One binary. Zero dependencies.</p>
+
+    <div class="pms-examples">
+      <div class="pms-examples-left">
+        <img src="docs/export_example1.gif" alt="Export example — lyric video">
+        <img src="docs/export_example2.gif" alt="Export example — When I Look at You">
+      </div>
+      <img src="docs/export_example.gif" alt="Export example — How Does It Feel, Spacemen 3">
+    </div>
+
+    <div class="project-page-specs">
+      <div class="spec-item"><div class="spec-label">Format</div><div class="spec-value">Desktop App</div></div>
+      <div class="spec-item"><div class="spec-label">Language</div><div class="spec-value">C++ / GLSL</div></div>
+      <div class="spec-item"><div class="spec-label">Platform</div><div class="spec-value">Linux</div></div>
+      <div class="spec-item"><div class="spec-label">Status</div><div class="spec-value">In Dev</div></div>
+      <div class="spec-item"><div class="spec-label">License</div><div class="spec-value">GPLv3</div></div>
+    </div>
+
+  </main>
+
+  <footer>
+    <a href="https://verticalrectangle.com" class="footer-credit" target="_blank" rel="noopener">Vertical Rectangle</a>
+    <a href="https://github.com/verticalrectangle/pop-maker-studio" class="footer-credit" target="_blank" rel="noopener">github.com/verticalrectangle/pop-maker-studio</a>
+  </footer>
+
+</body>
+</html>
