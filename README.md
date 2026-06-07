@@ -94,7 +94,7 @@ Export uses the same OpenGL pipeline as the preview. Every frame rendered to the
 **Examples** (9:16 TikTok vertical, rendered in Pop Maker Studio):
 
 <table><tr>
-<td valign="top"><img src="docs/export_example1.gif" width="378"><br><img src="docs/export_example2.gif" width="378"></td>
+<td valign="top"><img src="docs/export_example1.gif" width="284"><br><img src="docs/export_example2.gif" width="284"></td>
 <td valign="top"><img src="docs/export_example.gif" width="270"></td>
 </tr></table>
 
