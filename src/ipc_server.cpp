@@ -84,6 +84,24 @@ static void fd_mark_busy(int fd) { std::lock_guard<std::mutex> lk(g_busy_mtx); g
 static void fd_mark_free(int fd) { std::lock_guard<std::mutex> lk(g_busy_mtx); g_busy_fds.erase(fd); }
 static bool fd_is_busy  (int fd) { std::lock_guard<std::mutex> lk(g_busy_mtx); return g_busy_fds.count(fd) > 0; }
 
+// ── Agent activity indicator ──────────────────────────────────────────────────
+// Tracks which AppState to clear when a non-batch IPC call finishes.
+// Batch calls manage agent_active themselves via begin_batch/end_batch.
+static std::atomic<AppState*> g_agent_ptr{nullptr};
+
+static void agent_begin(AppState& state, const std::string& method) {
+    if (g_in_batch) return;
+    g_agent_ptr.store(&state);
+    state.agent_active = true;
+    state.agent_msg    = method;
+}
+
+static void agent_done() {
+    if (g_in_batch) return;
+    AppState* s = g_agent_ptr.exchange(nullptr);
+    if (s) { s->agent_active = false; s->agent_msg.clear(); }
+}
+
 // ── Socket helpers ────────────────────────────────────────────────────────────
 
 static void set_nonblock(int fd) {
@@ -570,6 +588,7 @@ static json dispatch(AppState& state, const std::string& method, const json& par
             r["stage"]   = stage;
             r["success"] = ok;
             send_ok_id(client_fd, req_id, r);
+            agent_done();
             fd_mark_free(client_fd);
         }).detach();
         json sentinel; sentinel["__async"] = true; return sentinel;
@@ -629,6 +648,7 @@ static json dispatch(AppState& state, const std::string& method, const json& par
                     r["message"] = "beat detection failed";
                 }
                 send_ok_id(client_fd, req_id, r);
+                agent_done();
                 fd_mark_free(client_fd);
             }).detach();
             json sentinel; sentinel["__async"] = true; return sentinel;
@@ -984,6 +1004,7 @@ static json dispatch(AppState& state, const std::string& method, const json& par
                     r["video_track"] = vti;
                     r["video_clip"]  = vci;
                     send_ok_id(client_fd, req_id, r);
+                    agent_done();
                     fd_mark_free(client_fd);
                     return;
                 }
@@ -1011,6 +1032,7 @@ static json dispatch(AppState& state, const std::string& method, const json& par
                     r["progress"] = prog;
                     r["error"]    = clip_ptr->bg_remove_error;
                     send_ok_id(client_fd, req_id, r);
+                    agent_done();
                     fd_mark_free(client_fd);
                     return;
                 }
@@ -1407,12 +1429,14 @@ static json dispatch(AppState& state, const std::string& method, const json& par
                     r["progress"] = prog;
                     r["error"]    = pipe->error;
                     send_ok_id(client_fd, req_id, r);
+                    agent_done();
                     fd_mark_free(client_fd);
                     return;
                 }
             }
             json r; r["stage"] = "error"; r["error"] = "pipeline timed out";
             send_ok_id(client_fd, req_id, r);
+            agent_done();
             fd_mark_free(client_fd);
         }).detach();
         json sentinel; sentinel["__async"] = true; return sentinel;
@@ -1635,6 +1659,7 @@ static json dispatch(AppState& state, const std::string& method, const json& par
             }
             json r; r["stills"] = stills;
             send_ok_id(client_fd, req_id, r);
+            agent_done();
             fd_mark_free(client_fd);
         }).detach();
         json sentinel; sentinel["__async"] = true; return sentinel;
@@ -1682,6 +1707,7 @@ static void process_client(Client& cl, AppState& state) {
             json params = req.value("params", json::object());
 
             std::string err;
+            agent_begin(state, method);
             json result = dispatch(state, method, params, err, cl.fd, req_id);
             bool is_async = result.is_object() && result.value("__async", false);
             if (!is_async) {
@@ -1699,6 +1725,7 @@ static void process_client(Client& cl, AppState& state) {
                 } else {
                     send_ok_id(cl.fd, req_id, result);
                 }
+                agent_done();
             }
         } catch (const json::exception& e) {
             json r; r["id"] = req_id; r["error"] = std::string("JSON parse error: ") + e.what();
