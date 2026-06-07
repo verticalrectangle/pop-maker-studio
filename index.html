@@ -48,51 +48,61 @@
       align-items: center;
       justify-content: space-between;
       padding: 28px 48px;
-      position: sticky;
-      top: 0;
-      z-index: 10;
-      background: rgba(0,0,0,0.85);
-      backdrop-filter: blur(12px);
-      -webkit-backdrop-filter: blur(12px);
-      border-bottom: 1px solid rgba(255,255,255,0.06);
     }
 
     .nav-logo {
       display: flex;
       align-items: center;
-      gap: 12px;
+      gap: 14px;
       text-decoration: none;
       color: var(--white);
     }
 
-    .nav-logo img { height: 28px; width: auto; opacity: 0.85; }
+    .nav-logo img { width: 32px; height: 32px; flex-shrink: 0; }
 
     .nav-wordmark {
-      font-size: 11px;
-      font-weight: 700;
-      letter-spacing: 0.18em;
+      font-size: 13px;
+      font-weight: 900;
+      letter-spacing: -0.01em;
       text-transform: uppercase;
-      opacity: 0.55;
     }
 
-    .nav-dl {
-      display: inline-block;
-      font-size: 11px;
+    .nav-links {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+      gap: 8px;
+      list-style: none;
+    }
+
+    .nav-links a {
+      font-size: 20px;
       font-weight: 700;
-      letter-spacing: 0.14em;
+      letter-spacing: 0.08em;
       text-transform: uppercase;
       color: var(--white);
       text-decoration: none;
-      border: 1px solid rgba(255,255,255,0.35);
-      padding: 9px 20px;
-      transition: border-color 0.2s ease, background 0.2s ease;
+      position: relative;
+      padding-bottom: 2px;
+      opacity: 0.5;
+      transition: opacity 0.2s ease;
     }
 
-    .nav-dl:hover { border-color: var(--white); background: rgba(255,255,255,0.06); }
+    .nav-links a::after {
+      content: '';
+      position: absolute;
+      bottom: 0; left: 0;
+      width: 0; height: 1px;
+      background: var(--white);
+      transition: width 0.25s ease;
+    }
+
+    .nav-links a:hover { opacity: 1; }
+    .nav-links a:hover::after { width: 100%; }
 
     @media (max-width: 600px) {
-      nav { padding: 20px 24px; }
-      .nav-wordmark { display: none; }
+      nav { padding: 20px 24px; align-items: flex-start; }
+      .nav-links a { font-size: 14px; }
     }
 
     /* ── MAIN CONTENT ── */
@@ -364,10 +374,14 @@
 
   <nav>
     <a href="https://verticalrectangle.com" class="nav-logo" target="_blank" rel="noopener">
-      <img src="https://verticalrectangle.com/logo.png" alt="Vertical Rectangle" />
+      <img src="docs/logo.png" alt="Vertical Rectangle" />
       <span class="nav-wordmark">Vertical Rectangle</span>
     </a>
-    <a href="https://github.com/verticalrectangle/pop-maker-studio/releases/latest" class="nav-dl" target="_blank" rel="noopener">Download ↓</a>
+    <ul class="nav-links">
+      <li><a href="https://verticalrectangle.com/#development" target="_blank" rel="noopener">Development</a></li>
+      <li><a href="https://verticalrectangle.com/#artists" target="_blank" rel="noopener">Artists</a></li>
+      <li><a href="https://github.com/verticalrectangle/pop-maker-studio/releases/latest" target="_blank" rel="noopener">Download</a></li>
+    </ul>
   </nav>
 
   <input type="radio" name="pms-carousel" id="pms-1" class="pms-radio">
