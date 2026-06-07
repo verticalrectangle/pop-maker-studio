@@ -129,14 +129,14 @@
             cfx.wave_warp_amplitude = 0.08f;
             cfx.wave_warp_speed = 1.5f;
             break;
-        case FXType::LsdBreathe:
-            cfx.lsd_breathe_on = true;
-            cfx.lsd_breathe_amount = 1.0f;
-            cfx.lsd_breathe_breathe_rate = 0.8f;
-            cfx.lsd_breathe_warp_strength = 0.04f;
-            cfx.lsd_breathe_color_speed = 0.3f;
-            cfx.lsd_breathe_chroma_split = 0.6f;
-            cfx.lsd_breathe_complexity = 0.5f;
+        case FXType::Breathe:
+            cfx.breathe_on = true;
+            cfx.breathe_amount = 1.0f;
+            cfx.breathe_breathe_rate = 0.8f;
+            cfx.breathe_warp_strength = 0.04f;
+            cfx.breathe_color_speed = 0.3f;
+            cfx.breathe_chroma_split = 0.6f;
+            cfx.breathe_complexity = 0.5f;
             break;
         case FXType::Kaleidoscope:
             cfx.kaleidoscope_on = true;

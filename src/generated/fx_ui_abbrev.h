@@ -22,7 +22,7 @@
         case FXType::Twirl: return "TWL";
         case FXType::Ripple: return "RPL";
         case FXType::WaveWarp: return "WWP";
-        case FXType::LsdBreathe: return "LSD";
+        case FXType::Breathe: return "BRT";
         case FXType::Kaleidoscope: return "KAL";
         case FXType::ZoomBlurRad: return "ZST";
         case FXType::SpinBlur: return "SPB";

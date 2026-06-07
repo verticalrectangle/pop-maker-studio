@@ -461,9 +461,9 @@
     ]
   },
   {
-    "id": "lsd_breathe",
-    "label": "LSD Breathe",
-    "description": "Psychedelic breathing walls with hue cycling and chromatic fringing",
+    "id": "breathe",
+    "label": "Breathe",
+    "description": "Edge-driven breathing \u2014 contours expand and contract along their normals with hue cycling and chromatic fringing",
     "params": [
       {
         "name": "breathe_rate",

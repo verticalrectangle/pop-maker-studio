@@ -501,7 +501,7 @@ void main() {
 }
 )glsl";
 
-static const char* k_lsd_breathe_frag = R"glsl(
+static const char* k_breathe_frag = R"glsl(
 #version 330 core
 in vec2 v_uv;
 out vec4 frag;
@@ -514,14 +514,12 @@ uniform float u_color_speed;
 uniform float u_chroma_split;
 uniform float u_complexity;
 
-// Convert RGB <-> HSV for hue cycling
 vec3 rgb2hsv(vec3 c) {
     vec4 K = vec4(0.0, -1.0/3.0, 2.0/3.0, -1.0);
     vec4 p = mix(vec4(c.bg, K.wz), vec4(c.gb, K.xy), step(c.b, c.g));
     vec4 q = mix(vec4(p.xyw, c.r), vec4(c.r, p.yzx), step(p.x, c.r));
     float d = q.x - min(q.w, q.y);
-    float e = 1.0e-10;
-    return vec3(abs(q.z + (q.w - q.y) / (6.0 * d + e)), d / (q.x + e), q.x);
+    return vec3(abs(q.z + (q.w - q.y) / (6.0 * d + 1e-10)), d / (q.x + 1e-10), q.x);
 }
 vec3 hsv2rgb(vec3 c) {
     vec4 K = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
@@ -530,52 +528,63 @@ vec3 hsv2rgb(vec3 c) {
 }
 
 void main() {
-    float t = u_time * u_breathe_rate;
+    vec4 src = texture(u_tex, v_uv);
+    float lum = dot(src.rgb, vec3(0.299, 0.587, 0.114));
 
-    // ── Breathing warp ────────────────────────────────────────────────────
-    // Layer 1: large slow waves — the walls expand and contract
-    float wave1x = sin(v_uv.y * 3.1 + t * 1.0) * cos(v_uv.x * 2.3 + t * 0.7);
-    float wave1y = cos(v_uv.x * 2.8 + t * 0.9) * sin(v_uv.y * 2.1 + t * 1.2);
+    // ── Edge detection via screen-space derivatives ────────────────────────
+    // dFdx/dFdy are GPU-native: computed from adjacent fragments in the 2×2
+    // rasterization quad — zero extra texture samples.
+    vec2 grad = vec2(dFdx(lum), dFdy(lum));
 
-    // Layer 2: finer ripples for surface texture breathing (blended by complexity)
-    float wave2x = sin(v_uv.y * 9.7 + t * 2.3 + v_uv.x * 5.1) * 0.4;
-    float wave2y = cos(v_uv.x * 8.3 + t * 1.9 + v_uv.y * 6.4) * 0.4;
+    // complexity blends in a wider-kernel estimate by sampling one step out,
+    // catching broader contours the derivative alone misses
+    if (u_complexity > 0.01) {
+        vec2 px = u_complexity * 0.004 * vec2(1.0);
+        float lum2 = dot(texture(u_tex, v_uv + px).rgb, vec3(0.299, 0.587, 0.114));
+        float lum3 = dot(texture(u_tex, v_uv - px).rgb, vec3(0.299, 0.587, 0.114));
+        vec2 wide_grad = vec2(dFdx(lum2 - lum3), dFdy(lum2 - lum3));
+        grad = mix(grad, wide_grad, u_complexity);
+    }
 
-    vec2 warp = vec2(
-        mix(wave1x, wave1x + wave2x, u_complexity),
-        mix(wave1y, wave1y + wave2y, u_complexity)
-    ) * u_warp_strength;
+    float edge_mag  = clamp(length(grad) * 4.0, 0.0, 1.0);
+    vec2  edge_norm = normalize(grad + 1e-6);
 
-    // Global breathe pulse — amplitude swells and contracts
-    float pulse = 0.7 + 0.3 * sin(t * 1.57);
-    warp *= pulse;
+    // ── Breathing pulse ───────────────────────────────────────────────────
+    float t       = u_time * u_breathe_rate;
+    float breath  = sin(t * 6.2832) * u_warp_strength;
+    // Second harmonic — slightly irrational ratio keeps it from feeling mechanical
+    float breath2 = sin(t * 10.1664 + 0.9) * u_warp_strength * 0.25;
+    float pulse   = breath + breath2;
 
-    // ── Chromatic split ───────────────────────────────────────────────────
-    // Sample R, G, B at slightly offset warp positions for color fringing
-    float split = u_chroma_split * u_warp_strength * 0.5;
-    vec2 uv_r = clamp(v_uv + warp + vec2( split,  split * 0.5), 0.0, 1.0);
-    vec2 uv_g = clamp(v_uv + warp,                               0.0, 1.0);
-    vec2 uv_b = clamp(v_uv + warp + vec2(-split, -split * 0.5), 0.0, 1.0);
+    // Edges breathe along their normals; flat areas get a tiny residual drift
+    vec2 edge_warp = edge_norm * edge_mag * pulse;
+    vec2 base_warp = vec2(sin(v_uv.y * 5.0 + t * 1.3),
+                          cos(v_uv.x * 4.2 + t * 1.1))
+                     * u_warp_strength * 0.08 * (1.0 - edge_mag);
+    vec2 warp = edge_warp + base_warp;
 
-    float r = texture(u_tex, uv_r).r;
-    float g = texture(u_tex, uv_g).g;
-    float b = texture(u_tex, uv_b).b;
+    // ── Chromatic split along edge normal ─────────────────────────────────
+    float split = u_chroma_split * u_warp_strength * 0.6;
+    vec2 uv_r = clamp(v_uv + warp + edge_norm *  split, 0.0, 1.0);
+    vec2 uv_g = clamp(v_uv + warp,                      0.0, 1.0);
+    vec2 uv_b = clamp(v_uv + warp - edge_norm *  split, 0.0, 1.0);
+
+    vec3 col = vec3(
+        texture(u_tex, uv_r).r,
+        texture(u_tex, uv_g).g,
+        texture(u_tex, uv_b).b
+    );
     float a = texture(u_tex, uv_g).a;
 
-    vec3 col = vec3(r, g, b);
-
-    // ── Hue cycling ───────────────────────────────────────────────────────
+    // ── Hue cycling — edges drift faster, giving a glowing outline feel ───
     vec3 hsv = rgb2hsv(col);
-    // Shift hue over time; shadows (low value) shift less so blacks stay black
-    float hue_delta = u_time * u_color_speed * 0.1;
-    hsv.x = fract(hsv.x + hue_delta * hsv.z);
-    // Boost saturation slightly so the cycling is vivid
-    hsv.y = clamp(hsv.y * (1.0 + 0.4 * u_color_speed), 0.0, 1.0);
+    float hue_shift = u_time * u_color_speed * 0.08
+                    + edge_mag * u_color_speed * 0.04;
+    hsv.x = fract(hsv.x + hue_shift * hsv.z);
+    hsv.y = clamp(hsv.y * (1.0 + 0.35 * u_color_speed), 0.0, 1.0);
     col = hsv2rgb(hsv);
 
-    // ── Blend with original by u_strength ─────────────────────────────────
-    vec4 orig = texture(u_tex, v_uv);
-    frag = vec4(mix(orig.rgb, col, u_strength), a);
+    frag = vec4(mix(src.rgb, col, u_strength), a);
 }
 )glsl";
 

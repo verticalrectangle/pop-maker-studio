@@ -154,14 +154,14 @@ static void fx_accum_from_attached(CreativeFXAccum& acc, FXType type, float amou
             if ((int)pv.size() > 3) acc.wave_warp_speed = fmaxf(acc.wave_warp_speed, pv[3]);
             acc.any_gen_fx = true;
             break;
-        case FXType::LsdBreathe:
-            acc.lsd_breathe_on = true;
-            acc.lsd_breathe_amount = fmaxf(acc.lsd_breathe_amount, amount);
-            if ((int)pv.size() > 0) acc.lsd_breathe_breathe_rate = fmaxf(acc.lsd_breathe_breathe_rate, pv[0]);
-            if ((int)pv.size() > 1) acc.lsd_breathe_warp_strength = fmaxf(acc.lsd_breathe_warp_strength, pv[1]);
-            if ((int)pv.size() > 2) acc.lsd_breathe_color_speed = fmaxf(acc.lsd_breathe_color_speed, pv[2]);
-            if ((int)pv.size() > 3) acc.lsd_breathe_chroma_split = fmaxf(acc.lsd_breathe_chroma_split, pv[3]);
-            if ((int)pv.size() > 4) acc.lsd_breathe_complexity = fmaxf(acc.lsd_breathe_complexity, pv[4]);
+        case FXType::Breathe:
+            acc.breathe_on = true;
+            acc.breathe_amount = fmaxf(acc.breathe_amount, amount);
+            if ((int)pv.size() > 0) acc.breathe_breathe_rate = fmaxf(acc.breathe_breathe_rate, pv[0]);
+            if ((int)pv.size() > 1) acc.breathe_warp_strength = fmaxf(acc.breathe_warp_strength, pv[1]);
+            if ((int)pv.size() > 2) acc.breathe_color_speed = fmaxf(acc.breathe_color_speed, pv[2]);
+            if ((int)pv.size() > 3) acc.breathe_chroma_split = fmaxf(acc.breathe_chroma_split, pv[3]);
+            if ((int)pv.size() > 4) acc.breathe_complexity = fmaxf(acc.breathe_complexity, pv[4]);
             acc.any_gen_fx = true;
             break;
         case FXType::Kaleidoscope:
