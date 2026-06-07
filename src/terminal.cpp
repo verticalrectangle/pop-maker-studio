@@ -24,6 +24,17 @@ static const VTermScreenCallbacks k_screen_cbs = {
     cb_bell, cb_resize, cb_sb_pushline, cb_sb_popline, cb_sb_clear
 };
 
+// libvterm queues terminal responses (Primary/Secondary DA, cursor position
+// report, device status, OSC color queries, etc.) and expects us to deliver
+// them back to the pty. Without this, fish/zsh hang on startup waiting for
+// the Primary DA reply and disable optional features (custom prompt glyphs,
+// title queries, true-color probing) when they time out.
+static void cb_output(const char* s, size_t len, void* user) {
+    TerminalState* t = (TerminalState*)user;
+    if (t->pty_master >= 0)
+        (void)write(t->pty_master, s, len);
+}
+
 void terminal_init(TerminalState& t, int cols, int rows) {
     t.cols = cols;
     t.rows = rows;
@@ -31,6 +42,7 @@ void terminal_init(TerminalState& t, int cols, int rows) {
     t.vt = vterm_new(rows, cols);
     if (!t.vt) return;
     vterm_set_utf8(t.vt, 1);
+    vterm_output_set_callback(t.vt, cb_output, &t);
     t.vts = vterm_obtain_screen(t.vt);
     vterm_screen_set_callbacks(t.vts, &k_screen_cbs, nullptr);
     vterm_screen_set_damage_merge(t.vts, VTERM_DAMAGE_SCROLL);

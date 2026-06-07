@@ -152,6 +152,20 @@ add_custom_command(
 )
 add_custom_target(embed_font DEPENDS ${CMAKE_BINARY_DIR}/inter_font.h)
 add_dependencies(pop-maker-studio embed_font)
+
+# Embed JetBrains Mono as a compiled byte array (used by the terminal panel)
+add_custom_command(
+    OUTPUT ${CMAKE_BINARY_DIR}/mono_font.h
+    COMMAND ${CMAKE_SOURCE_DIR}/scripts/embed_mono.sh
+            ${CMAKE_SOURCE_DIR}/assets/fonts/JetBrainsMono-Regular.ttf
+            ${CMAKE_BINARY_DIR}/mono_font.h
+    DEPENDS
+        ${CMAKE_SOURCE_DIR}/assets/fonts/JetBrainsMono-Regular.ttf
+    COMMENT "Embedding JetBrains Mono font"
+)
+add_custom_target(embed_mono DEPENDS ${CMAKE_BINARY_DIR}/mono_font.h)
+add_dependencies(pop-maker-studio embed_mono)
+
 target_include_directories(pop-maker-studio PRIVATE ${CMAKE_BINARY_DIR})
 
 # Embed portrait preview photo as raw RGB
