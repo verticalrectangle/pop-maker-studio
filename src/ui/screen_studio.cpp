@@ -1196,17 +1196,6 @@ void ui_studio(AppState& state) {
     ImGui::EndChild();
     ImGui::PopStyleColor(2);
 
-    // ── Terminal strip ────────────────────────────────────────────────────────
-    if (state.terminal_open && term_h > 0.f) {
-        ImGui::PushStyleColor(ImGuiCol_ChildBg, IM_COL32(10, 10, 14, 255));
-        ImGui::PushStyleColor(ImGuiCol_Border,  Col::line);
-        if (ImGui::BeginChild("##term_zone", {win_w, term_h}, ImGuiChildFlags_Borders)) {
-            draw_terminal_panel(state, win_w - 2.f, term_h - 2.f);
-        }
-        ImGui::EndChild();
-        ImGui::PopStyleColor(2);
-    }
-
     // ── Drag splitters ────────────────────────────────────────────────────────
     // Terminal strip is intentionally fixed-height (libvterm cannot be resized
     // safely after init), so no splitter is exposed for it.
@@ -1229,8 +1218,10 @@ void ui_studio(AppState& state) {
         }
         if (ImGui::IsMouseReleased(0)) s_drag_vsplit = false;
 
-        // Horizontal splitter between body and timeline
-        float hborder_y = wpos.y + body_top + body_h + term_h + pipeline_h;
+        // Horizontal splitter between body and timeline. Terminal sits below
+        // the timeline at the absolute bottom, so its height is excluded from
+        // the splitter math.
+        float hborder_y = wpos.y + body_top + body_h + pipeline_h;
         bool near_h = fabsf(mpos.y - hborder_y) < 6.f &&
                       mpos.x > wpos.x &&
                       mpos.x < wpos.x + win_w;
@@ -1239,7 +1230,7 @@ void ui_studio(AppState& state) {
             if (ImGui::IsMouseClicked(0)) s_drag_hsplit = true;
         }
         if (s_drag_hsplit) {
-            float new_tl_h = wpos.y + body_top + avail_h - mpos.y;
+            float new_tl_h = wpos.y + body_top + avail_h - term_h - mpos.y;
             state.tl_h_frac = fmaxf(0.1f, fminf(0.7f, new_tl_h / avail_h));
         }
         if (ImGui::IsMouseReleased(0)) s_drag_hsplit = false;
@@ -1299,6 +1290,20 @@ void ui_studio(AppState& state) {
     }
     ImGui::EndChild();
     ImGui::PopStyleColor(2);
+
+    // ── Terminal strip ────────────────────────────────────────────────────────
+    // Lives at the absolute bottom (below the timeline) so the editing surface
+    // sits directly under the preview canvas without an unrelated strip
+    // wedged between them.
+    if (state.terminal_open && term_h > 0.f) {
+        ImGui::PushStyleColor(ImGuiCol_ChildBg, IM_COL32(0x1a, 0x1b, 0x26, 255));
+        ImGui::PushStyleColor(ImGuiCol_Border,  Col::line);
+        if (ImGui::BeginChild("##term_zone", {win_w, term_h}, ImGuiChildFlags_Borders)) {
+            draw_terminal_panel(state, win_w - 2.f, term_h - 2.f);
+        }
+        ImGui::EndChild();
+        ImGui::PopStyleColor(2);
+    }
 
     // ── Tutorial floating panel ───────────────────────────────────────────────
     if (state.show_tutorial && state.tutorial_step < 5) {
