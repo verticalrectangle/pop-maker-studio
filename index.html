@@ -266,6 +266,29 @@
       border: 1px solid rgba(255,255,255,0.15);
     }
 
+    .pms-video-wrap {
+      position: relative;
+      cursor: pointer;
+    }
+
+    .pms-mute-btn {
+      position: absolute;
+      bottom: 10px;
+      right: 10px;
+      background: rgba(0,0,0,0.55);
+      border: none;
+      color: white;
+      font-size: 18px;
+      line-height: 1;
+      padding: 6px 8px;
+      cursor: pointer;
+      opacity: 0;
+      transition: opacity 0.2s ease;
+      border-radius: 2px;
+    }
+
+    .pms-video-wrap:hover .pms-mute-btn { opacity: 1; }
+
     @media (max-width: 600px) {
       .pms-examples {
         grid-template-columns: 1fr;
@@ -385,7 +408,10 @@
         <img src="docs/export_example1.gif" alt="Export example — lyric video" loading="lazy">
         <img src="docs/export_example2.gif" alt="Export example — When I Look at You" loading="lazy">
       </div>
-      <video src="docs/pms-demo.mp4" autoplay loop muted playsinline poster="docs/pms-demo-poster.jpg" loading="lazy"></video>
+      <div class="pms-video-wrap">
+        <video id="pms-demo" src="docs/pms-demo.mp4" autoplay loop muted playsinline poster="docs/pms-demo-poster.jpg" loading="lazy"></video>
+        <button class="pms-mute-btn" id="pms-mute-btn" aria-label="Unmute video">🔇</button>
+      </div>
     </div>
 
     <div class="project-page-specs">
@@ -403,5 +429,16 @@
     <a href="https://github.com/verticalrectangle/pop-maker-studio" class="footer-credit" target="_blank" rel="noopener">github.com/verticalrectangle/pop-maker-studio</a>
   </footer>
 
+  <script>
+    const video = document.getElementById('pms-demo');
+    const btn   = document.getElementById('pms-mute-btn');
+    function toggleMute() {
+      video.muted = !video.muted;
+      btn.textContent = video.muted ? '🔇' : '🔊';
+      btn.setAttribute('aria-label', video.muted ? 'Unmute video' : 'Mute video');
+    }
+    video.addEventListener('click', toggleMute);
+    btn.addEventListener('click', function(e) { e.stopPropagation(); toggleMute(); });
+  </script>
 </body>
 </html>
