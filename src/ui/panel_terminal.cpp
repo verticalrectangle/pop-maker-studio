@@ -51,11 +51,26 @@ static const ImU32 kTermPalette[16] = {
 static ImU32 vcolor_to_u32(VTermScreen* vts, VTermColor col, bool is_bg) {
     if (VTERM_COLOR_IS_DEFAULT_BG(&col)) return kTermBg;
     if (VTERM_COLOR_IS_DEFAULT_FG(&col)) return kTermFg;
-    if (VTERM_COLOR_IS_INDEXED(&col) && col.indexed.idx < 16)
-        return kTermPalette[col.indexed.idx];
-    vterm_screen_convert_color_to_rgb(vts, &col);
-    (void)is_bg;
-    return IM_COL32(col.rgb.red, col.rgb.green, col.rgb.blue, 255);
+
+    ImU32 out;
+    if (VTERM_COLOR_IS_INDEXED(&col) && col.indexed.idx < 16) {
+        out = kTermPalette[col.indexed.idx];
+    } else {
+        vterm_screen_convert_color_to_rgb(vts, &col);
+        out = IM_COL32(col.rgb.red, col.rgb.green, col.rgb.blue, 255);
+    }
+
+    // Foreground-only readability fix: any near-black text against the dark
+    // terminal background renders invisibly. Map it to the default fg instead
+    // so e.g. `\033[30m`, `\033[1;30m`, or dark 256-color picks stay legible.
+    if (!is_bg) {
+        const int r = (int)((out >> IM_COL32_R_SHIFT) & 0xFF);
+        const int g = (int)((out >> IM_COL32_G_SHIFT) & 0xFF);
+        const int b = (int)((out >> IM_COL32_B_SHIFT) & 0xFF);
+        // Rec. 601 luma; threshold sits just above the terminal bg (~0x1f).
+        if ((r * 299 + g * 587 + b * 114) / 1000 < 0x40) return kTermFg;
+    }
+    return out;
 }
 
 // Encode a Unicode codepoint to UTF-8; returns byte count.
