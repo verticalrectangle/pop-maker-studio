@@ -17,7 +17,8 @@ enum class PanelView {
 static constexpr float TL_LABEL_W     = 120.f;
 static constexpr float TL_TRACK_H     = 42.f;
 static constexpr float TL_RULER_H     = 24.f;
-static constexpr float TL_SCROLLBAR_H = 8.f;
+static constexpr float TL_SCROLLBAR_H = 14.f;
+static constexpr float TL_VSCROLLBAR_W = 10.f;
 
 // ── Timeline drag/select state ────────────────────────────────────────────────
 struct TlState {

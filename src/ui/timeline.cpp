@@ -80,7 +80,7 @@ static void merge_fx_clips(Clip& target, Clip dragged) {
 
 void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h) {
     ImDrawList* dl      = ImGui::GetWindowDrawList();
-    float clip_area_w        = total_w - TL_LABEL_W;
+    float clip_area_w        = total_w - TL_LABEL_W - TL_VSCROLLBAR_W;
     state.tl_clip_area_w     = clip_area_w;
     float dur                = fmaxf(state.duration, 1.f);
     float& zoom         = state.tl_zoom;
@@ -372,8 +372,13 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
     auto& s_glass_drag_ref_start= g_tl.glass_drag_ref_start;
     bool s_trans_hit_this_frame = false;
 
-    // Clip all track drawing to the scrollable area (below ruler, above add-track row)
-    dl->PushClipRect({origin.x, track_area_top}, {origin.x+total_w, track_area_bot}, true);
+    // Clip all track drawing to the scrollable area (below ruler, above add-track row).
+    // Use ImGui::PushClipRect (not dl->) so the window's ClipRect is updated too:
+    // ImGui::PopClipRect inside clip labels restores the window ClipRect from the
+    // draw-list stack top, and a dl-only push would leave the window ClipRect stuck
+    // at the track area for the rest of the frame — which then makes the scrollbar's
+    // IsMouseHoveringRect always return false because its rect is below track_area_bot.
+    ImGui::PushClipRect({origin.x, track_area_top}, {origin.x+total_w-TL_VSCROLLBAR_W, track_area_bot}, true);
 
     for (int ti = 0; ti < (int)state.tracks.size(); ++ti) {
         Track& track = state.tracks[ti];
@@ -386,10 +391,14 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
             to_u32(row_hov ? Col::bg_soft_hov : Col::bg_soft));
         dl->AddLine({origin.x, row_br.y}, {origin.x+total_w, row_br.y}, to_u32(Col::line));
 
-        // FX preset drag-drop target on the clip area of this row
+        // FX preset drag-drop target on the clip area of this row.
+        // Clamp to track_area_bot so the button doesn't overlap (and swallow
+        // clicks on) the horizontal scrollbar below.
         {
             ImVec2 drop_tl = {origin.x + TL_LABEL_W, track_y};
-            ImVec2 drop_br = {origin.x + total_w,     track_y + TL_TRACK_H};
+            ImVec2 drop_br = {origin.x + total_w,
+                              fminf(track_y + TL_TRACK_H, track_area_bot)};
+            if (drop_br.y > drop_tl.y) {
             ImGui::SetCursorScreenPos(drop_tl);
             ImGui::InvisibleButton(("##fxdrop" + std::to_string(ti)).c_str(),
                                    {drop_br.x - drop_tl.x, drop_br.y - drop_tl.y});
@@ -500,6 +509,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                 dl->AddRectFilled(drop_tl, drop_br, IM_COL32(180,130,255,40));
                 dl->AddRect(drop_tl, drop_br, IM_COL32(180,130,255,180), 2.f);
                 ImGui::EndDragDropTarget();
+            }
             }
         }
 
@@ -653,6 +663,10 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
         bool clip_ctx_opened_this_frame = false;
 
         auto clip_interact = [&](int ci, Clip& clip, float vis_x0, float vis_x1, float cy0, float cy1, bool sel) {
+            // Clamp the Y range used for mouse hit-testing to the track area.
+            // Without this, clips on tracks partially clipped at the bottom
+            // extend cy1 past track_area_bot and steal scrollbar clicks.
+            cy1 = std::min(cy1, track_area_bot);
             const float ew = 6.f, ew_hit = 12.f;
             // Edge handles
             if (sel) {
@@ -1247,7 +1261,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
         }
     }
 
-    dl->PopClipRect();  // end scrollable track area clip
+    ImGui::PopClipRect();  // end scrollable track area clip (restores window ClipRect)
 
     // ── Track reorder drag ────────────────────────────────────────────────────
     if (s_track_drag_src >= 0) {
@@ -1304,14 +1318,14 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
     // ── Box select ───────────────────────────────────────────────────────────
     {
         bool in_body = mouse.x > origin.x+TL_LABEL_W && mouse.x < origin.x+total_w &&
-                       mouse.y > origin.y+TL_RULER_H  && mouse.y < origin.y+total_h;
+                       mouse.y > origin.y+TL_RULER_H  && mouse.y < origin.y+total_h - TL_SCROLLBAR_H;
         bool ldown  = ImGui::IsMouseDown(0);
         bool lclick = ImGui::IsMouseClicked(0);
 
         // Deselect on click in the label column (any track row or below all tracks)
         bool in_label_empty = lclick && !ImGui::IsAnyItemActive() &&
                               mouse.x >= origin.x && mouse.x < origin.x+TL_LABEL_W &&
-                              mouse.y > origin.y+TL_RULER_H && mouse.y < origin.y+total_h &&
+                              mouse.y > origin.y+TL_RULER_H && mouse.y < origin.y+total_h - TL_SCROLLBAR_H &&
                               s_rename_track < 0;  // don't deselect while renaming
 
         // Start box select when clicking empty body space (no clip was hit)
@@ -1458,11 +1472,13 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
     // ── Horizontal scrollbar ─────────────────────────────────────────────────────
     {
         float sb_x0 = origin.x + TL_LABEL_W;
-        float sb_x1 = origin.x + total_w;
+        float sb_x1 = origin.x + total_w - TL_VSCROLLBAR_W;
         float sb_w  = sb_x1 - sb_x0;
         float sb_y0 = origin.y + total_h - TL_SCROLLBAR_H;
         float sb_y1 = origin.y + total_h;
 
+        // Bottom strip background spans the full width including the bottom-right
+        // dead-corner where the H and V scrollbars meet.
         dl->AddRectFilled({origin.x, sb_y0}, {origin.x + total_w, sb_y1},
                           IM_COL32(18, 18, 18, 255));
         dl->AddLine({origin.x, sb_y0}, {origin.x + total_w, sb_y0},
@@ -1508,6 +1524,65 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
             dl->AddRectFilled({thumb_x0 + 1.f, sb_y0 + 2.f},
                               {thumb_x1 - 1.f, sb_y1 - 2.f},
                               thumb_col, 2.f);
+        }
+    }
+
+    // ── Vertical scrollbar ──────────────────────────────────────────────────────
+    // Mirrors the horizontal scrollbar but for tl_v_scroll.  Spans only the track
+    // area (below the ruler, above the horizontal scrollbar) so the bottom-right
+    // corner where they would meet is left as a dead-corner.
+    {
+        float vb_x0 = origin.x + total_w - TL_VSCROLLBAR_W;
+        float vb_x1 = origin.x + total_w;
+        float vb_y0 = track_area_top;
+        float vb_y1 = track_area_bot;
+        float vb_h  = vb_y1 - vb_y0;
+
+        dl->AddRectFilled({vb_x0, vb_y0}, {vb_x1, vb_y1}, IM_COL32(18, 18, 18, 255));
+        dl->AddLine({vb_x0, vb_y0}, {vb_x0, vb_y1}, to_u32(Col::line));
+
+        float v_visible = track_area_bot - track_area_top;
+        if (tracks_total_h > v_visible + 1.f || state.tl_v_scroll > 0.f) {
+            float v_max_scroll   = fmaxf(1.f, tracks_total_h - v_visible);
+            float v_thumb_h      = fmaxf(20.f, vb_h * v_visible / tracks_total_h);
+            float v_thumb_travel = fmaxf(1.f, vb_h - v_thumb_h);
+            float v_thumb_y0     = vb_y0 + state.tl_v_scroll / v_max_scroll * v_thumb_travel;
+            float v_thumb_y1     = v_thumb_y0 + v_thumb_h;
+
+            bool hov_vthumb = ImGui::IsMouseHoveringRect({vb_x0, v_thumb_y0}, {vb_x1, v_thumb_y1});
+
+            static bool  s_vsb_drag     = false;
+            static float s_vsb_drag_oy  = 0.f;
+            static float s_vsb_drag_osc = 0.f;
+
+            if (hov_vthumb && ImGui::IsMouseClicked(0)) {
+                s_vsb_drag     = true;
+                s_vsb_drag_oy  = mouse.y;
+                s_vsb_drag_osc = state.tl_v_scroll;
+            }
+            if (s_vsb_drag) {
+                if (ImGui::IsMouseDown(0)) {
+                    float dy = mouse.y - s_vsb_drag_oy;
+                    state.tl_v_scroll = fmaxf(0.f,
+                        fminf(s_vsb_drag_osc + dy * v_max_scroll / v_thumb_travel, v_max_scroll));
+                } else {
+                    s_vsb_drag = false;
+                }
+            }
+
+            // Click in trough → jump (center thumb on click point)
+            if (!s_vsb_drag && !hov_vthumb && ImGui::IsMouseClicked(0) &&
+                ImGui::IsMouseHoveringRect({vb_x0, vb_y0}, {vb_x1, vb_y1})) {
+                float t = (mouse.y - vb_y0 - v_thumb_h * 0.5f) / v_thumb_travel;
+                state.tl_v_scroll = fmaxf(0.f, fminf(t * v_max_scroll, v_max_scroll));
+            }
+
+            ImU32 vthumb_col = s_vsb_drag  ? IM_COL32(170, 170, 170, 255)
+                             : hov_vthumb  ? IM_COL32(130, 130, 130, 255)
+                                           : IM_COL32(80,  80,  80,  255);
+            dl->AddRectFilled({vb_x0 + 2.f, v_thumb_y0 + 1.f},
+                              {vb_x1 - 2.f, v_thumb_y1 - 1.f},
+                              vthumb_col, 2.f);
         }
     }
 
@@ -1893,8 +1968,8 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
     // a preset card past the last track creates a new track on drop.
     {
         ImVec2 dz_tl = {origin.x + TL_LABEL_W, track_y};
-        ImVec2 dz_br = {origin.x + total_w, track_y + TL_TRACK_H};
-        if (dz_br.y > origin.y + TL_RULER_H && dz_br.y <= origin.y + total_h) {
+        ImVec2 dz_br = {origin.x + total_w, fminf(track_y + TL_TRACK_H, track_area_bot)};
+        if (dz_br.y > origin.y + TL_RULER_H && dz_br.y > dz_tl.y) {
             ImGui::SetCursorScreenPos(dz_tl);
             ImGui::InvisibleButton("##picker_new_track",
                                    {dz_br.x - dz_tl.x, dz_br.y - dz_tl.y});
@@ -2006,8 +2081,8 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
 
             if (disabled) ImGui::BeginDisabled();
             if (ImGui::MenuItem("Make lyric video")) {
+                state.pipeline_on_done = generate_typography;
                 kick_pipeline(state, cc->text, PipelineMode::Both);
-                state.typo_generate_when_done = true;
             }
             if (ImGui::MenuItem("Transcribe  (subtitles only)")) {
                 kick_pipeline(state, cc->text, PipelineMode::TranscribeOnly);
