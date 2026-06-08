@@ -222,7 +222,7 @@ void proxy_ensure_still(const std::string& video_path) {
         const char* args[] = {
             "ffmpeg", "-hide_banner", "-loglevel", "error",
             "-y", "-i", img_src.c_str(),
-            "-vf", "scale=iw/2:ih/2",
+            "-vf", "scale=iw/2:-2,format=yuvj420p",
             still.c_str(), nullptr
         };
         pid_t p = spawn_ffmpeg(args);
@@ -233,7 +233,7 @@ void proxy_ensure_still(const std::string& video_path) {
             "ffmpeg", "-hide_banner", "-loglevel", "error",
             "-y", "-i", src.c_str(),
             "-ss", "0", "-vframes", "1",
-            "-vf", "scale=iw/4:ih/4",
+            "-vf", "scale=iw/4:-2,format=yuvj420p",
             still.c_str(), nullptr
         };
         pid_t p = spawn_ffmpeg(args);
