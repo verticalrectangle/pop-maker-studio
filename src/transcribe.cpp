@@ -361,6 +361,24 @@ static void do_transcribe(
         }
     }
 
+    // ── CTC onset compensation ────────────────────────────────────────────────
+    // wav2vec2 peak CTC emission sits at the phoneme centre, not the onset,
+    // so timestamps feel slightly late on fast syllables.  Shift earlier, then
+    // re-snap to the nearest proxy frame so clip placement stays frame-accurate.
+    // Clamp to 0 so the first word can't be pushed before the clip's audio start.
+    {
+        constexpr float kOnsetShift = -0.050f;   // ~50 ms; tune if needed
+        auto snap_t = [&](float t) -> float {
+            return (proxy_fps > 0.0)
+                ? (float)(std::round((double)t * proxy_fps) / proxy_fps)
+                : t;
+        };
+        for (auto& w : words_arr) {
+            w["start"] = snap_t(std::max(0.f, w.value("start", 0.f) + kOnsetShift));
+            w["end"]   = snap_t(std::max(0.f, w.value("end",   0.f) + kOnsetShift));
+        }
+    }
+
     // Whisper timestamps are 0-based relative to the start of the decoded audio.
     // When we clipped the source to [clip_in, clip_in+clip_dur], timestamp 0 in
     // the JSON represents source position clip_in.  Add clip_in back so that the
