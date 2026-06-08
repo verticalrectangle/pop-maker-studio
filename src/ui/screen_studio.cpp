@@ -588,7 +588,7 @@ void ui_studio(AppState& state) {
 
         if (ImGui::BeginMenu("View")) {
             if (ImGui::MenuItem("Zoom in",  "Ctrl++")) state.tl_zoom = fminf(state.tl_zoom*1.25f, 4000.f);
-            if (ImGui::MenuItem("Zoom out", "Ctrl+-")) state.tl_zoom = fmaxf(state.tl_zoom*0.8f,  20.f);
+            if (ImGui::MenuItem("Zoom out", "Ctrl+-")) state.tl_zoom = fmaxf(state.tl_zoom*0.8f,  state.tl_zoom_min);
             if (ImGui::MenuItem("Fit timeline")) {
                 if (state.duration > 0.f) {
                     float avail = win_w - TL_LABEL_W - 20.f;
@@ -1352,7 +1352,7 @@ void ui_studio(AppState& state) {
             ImGui::PushStyleColor(ImGuiCol_Button,        Col::bg_soft);
             ImGui::PushStyleColor(ImGuiCol_ButtonHovered, Col::bg_soft_hov);
             ImGui::PushStyleColor(ImGuiCol_ButtonActive,  Col::bg_soft_hov);
-            if (ImGui::SmallButton("-##zout")) state.tl_zoom = fmaxf(state.tl_zoom*0.8f, 20.f);
+            if (ImGui::SmallButton("-##zout")) state.tl_zoom = fmaxf(state.tl_zoom*0.8f, state.tl_zoom_min);
             ImGui::SameLine(0.f,4.f);
             ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
             ImGui::SetNextItemWidth(48.f);

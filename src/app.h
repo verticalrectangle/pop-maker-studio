@@ -480,6 +480,7 @@ struct AppState {
     float tl_v_scroll     = 0.f;   // vertical scroll offset in the track area (pixels)
     float tl_clip_area_w      = 0.f;   // visible pixel width (written each frame by draw_timeline)
     float tl_zoom_to_fit_end  = 0.f;   // when >0, draw_timeline zooms out to fit this time + padding then clears it
+    float tl_zoom_min         = 1.f;   // fit-to-width floor, recomputed each frame by draw_timeline
 
     // project settings
     int          fps         = 30;              // 24 / 30 / 60

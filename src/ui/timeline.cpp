@@ -86,13 +86,19 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
     float& zoom         = state.tl_zoom;
     float& scroll       = state.tl_scroll;
 
+    // Minimum zoom that fits the entire timeline in the visible clip area.
+    // Recomputed every frame so it tracks window resize automatically.
+    float zoom_min = fmaxf(1.f, clip_area_w / dur);
+    state.tl_zoom_min = zoom_min;
+    zoom = fmaxf(zoom, zoom_min);  // lift zoom up if window resized or duration shrank
+
     // Deferred zoom-to-fit: set by add_clip_to_track / import whenever a new clip is added.
     // Always compute the target zoom for the clip; only apply it if it means zooming OUT
     // (new_zoom < current zoom). This means: if the user is already zoomed out enough to
     // see the full clip, nothing changes; if not, the timeline adjusts to show it with spacing.
     if (state.tl_zoom_to_fit_end > 0.f && clip_area_w > 0.f) {
         float target   = state.tl_zoom_to_fit_end * 1.15f;
-        float new_zoom = fmaxf(20.f, fminf(clip_area_w / target, 4000.f));
+        float new_zoom = fmaxf(zoom_min, fminf(clip_area_w / target, 4000.f));
         if (new_zoom < zoom) {
             float left_t = scroll / zoom;
             zoom   = new_zoom;
@@ -119,7 +125,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
             scroll = clip_px1 - clip_area_w + margin;
         // Vertical: ensure track row is visible
         float track_top = state.selected_track * TL_TRACK_H;
-        float vis_h     = total_h - TL_RULER_H;
+        float vis_h     = total_h - TL_RULER_H - TL_SCROLLBAR_H;
         if (track_top < state.tl_v_scroll)
             state.tl_v_scroll = track_top;
         else if (track_top + TL_TRACK_H > state.tl_v_scroll + vis_h)
@@ -137,11 +143,11 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
     if (in_tl) {
         float wheel = ImGui::GetIO().MouseWheel;
         if (fabsf(wheel) > 0.f) {
-            bool in_track_body = mouse.y >= origin.y + TL_RULER_H && mouse.y < origin.y + total_h;
+            bool in_track_body = mouse.y >= origin.y + TL_RULER_H && mouse.y < origin.y + total_h - TL_SCROLLBAR_H;
             if (ImGui::GetIO().KeyCtrl) {
                 // Ctrl+scroll = zoom (anchor under cursor)
                 float old_zoom = zoom;
-                zoom = fmaxf(20.f, fminf(zoom * (1.f + wheel * 0.1f), 4000.f));
+                zoom = fmaxf(zoom_min, fminf(zoom * (1.f + wheel * 0.1f), 4000.f));
                 float mouse_t = (mouse.x - origin.x - TL_LABEL_W + scroll) / old_zoom;
                 scroll = fmaxf(0.f, mouse_t * zoom - (mouse.x - origin.x - TL_LABEL_W));
                 scroll = fminf(scroll, fmaxf(0.f, dur * zoom - clip_area_w + 60.f));
@@ -314,7 +320,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
     // Tracks
     // Vertical scroll: mouse wheel in the track body area
     float track_area_top = origin.y + TL_RULER_H;
-    float track_area_bot = origin.y + total_h;
+    float track_area_bot = origin.y + total_h - TL_SCROLLBAR_H;
     float tracks_total_h = ((int)state.tracks.size() + 1) * TL_TRACK_H;  // +1 for add-track row
     float max_v_scroll   = fmaxf(0.f, tracks_total_h - (track_area_bot - track_area_top));
     if (ImGui::IsMouseHoveringRect({origin.x, track_area_top}, {origin.x+total_w, track_area_bot})) {
@@ -1438,13 +1444,69 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                 IM_COL32(0, 0, 0, 110));
             // Track rows
             dl->AddRectFilled({dim_x, origin.y + TL_RULER_H},
-                {origin.x + total_w, origin.y + total_h},
+                {origin.x + total_w, track_area_bot},
                 IM_COL32(0, 0, 0, 85));
             // Subtle end-of-project line
             if (end_x >= origin.x + TL_LABEL_W)
                 dl->AddLine({end_x, origin.y},
-                    {end_x, origin.y + total_h},
+                    {end_x, track_area_bot},
                     IM_COL32(255, 255, 255, 50));
+        }
+    }
+
+    // ── Horizontal scrollbar ─────────────────────────────────────────────────────
+    {
+        float sb_x0 = origin.x + TL_LABEL_W;
+        float sb_x1 = origin.x + total_w;
+        float sb_w  = sb_x1 - sb_x0;
+        float sb_y0 = origin.y + total_h - TL_SCROLLBAR_H;
+        float sb_y1 = origin.y + total_h;
+
+        dl->AddRectFilled({origin.x, sb_y0}, {origin.x + total_w, sb_y1},
+                          IM_COL32(18, 18, 18, 255));
+        dl->AddLine({origin.x, sb_y0}, {origin.x + total_w, sb_y0},
+                    to_u32(Col::line));
+
+        if (tl_content_w > clip_area_w + 1.f) {
+            float max_scroll   = tl_content_w - clip_area_w;
+            float thumb_w      = fmaxf(20.f, sb_w * clip_area_w / tl_content_w);
+            float thumb_travel = fmaxf(1.f, sb_w - thumb_w);
+            float thumb_x0     = sb_x0 + scroll / max_scroll * thumb_travel;
+            float thumb_x1     = thumb_x0 + thumb_w;
+
+            bool hov_thumb = ImGui::IsMouseHoveringRect({thumb_x0, sb_y0}, {thumb_x1, sb_y1});
+
+            static bool  s_sb_drag       = false;
+            static float s_sb_drag_ox    = 0.f;
+            static float s_sb_drag_osc   = 0.f;
+
+            if (hov_thumb && ImGui::IsMouseClicked(0)) {
+                s_sb_drag     = true;
+                s_sb_drag_ox  = mouse.x;
+                s_sb_drag_osc = scroll;
+            }
+            if (s_sb_drag) {
+                if (ImGui::IsMouseDown(0)) {
+                    float dx = mouse.x - s_sb_drag_ox;
+                    scroll = fmaxf(0.f, fminf(s_sb_drag_osc + dx * max_scroll / thumb_travel, max_scroll));
+                } else {
+                    s_sb_drag = false;
+                }
+            }
+
+            // Click in trough → jump
+            if (!s_sb_drag && !hov_thumb && ImGui::IsMouseClicked(0) &&
+                ImGui::IsMouseHoveringRect({sb_x0, sb_y0}, {sb_x1, sb_y1})) {
+                float t = (mouse.x - sb_x0 - thumb_w * 0.5f) / thumb_travel;
+                scroll = fmaxf(0.f, fminf(t * max_scroll, max_scroll));
+            }
+
+            ImU32 thumb_col = s_sb_drag  ? IM_COL32(170, 170, 170, 255)
+                            : hov_thumb  ? IM_COL32(130, 130, 130, 255)
+                                         : IM_COL32(80,  80,  80,  255);
+            dl->AddRectFilled({thumb_x0 + 1.f, sb_y0 + 2.f},
+                              {thumb_x1 - 1.f, sb_y1 - 2.f},
+                              thumb_col, 2.f);
         }
     }
 
