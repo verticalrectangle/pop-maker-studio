@@ -22,7 +22,7 @@ The ML stack runs fully locally. Nothing is uploaded.
 
 **Transcription** uses whisper.cpp (`large-v3-turbo-q5_0`, ~584 MB) with DTW token timestamps enabled via `WHISPER_AHEADS_LARGE_V3_TURBO`. BPE tokens are grouped into words by detecting leading spaces in the whisper token stream.
 
-**CTC forced alignment** refines Whisper timestamps to frame-accurate precision. A Viterbi CTC decoder (handrolled in C++, two-row DP with full back-pointer matrix) runs wav2vec2-base-960h (Xenova ONNX quantized, ~94 MB) over 30-second chunks to keep the DP matrix at ~750 KB/chunk. Word timestamps are snapped to MJPEG proxy frame boundaries so karaoke highlighting lands on exact video frames.
+**CTC forced alignment** refines Whisper timestamps to frame-accurate precision. A stay/advance trellis decoder (handrolled in C++, torchaudio forced-alignment algorithm) runs wav2vec2-base-960h (Xenova ONNX quantized, ~94 MB) per Whisper segment. The (T+1)×(L+1) trellis is built in log-prob space; backtracking yields one character span per target token, which are merged into word timestamps. Word timestamps are snapped to MJPEG proxy frame boundaries so karaoke highlighting lands on exact video frames.
 
 **Background removal** uses u2net_human_seg via ONNX. Each frame is bilinear-resized to 320×320 for inference, the output mask is bilinear-resized back to the original frame resolution, and a separable Gaussian blur (radius ~1px) smooths mask edges. Masks are streamed as grayscale MJPEG so the canvas updates in real time while the model processes.
 

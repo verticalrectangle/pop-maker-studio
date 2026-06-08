@@ -140,7 +140,7 @@ whisper.cpp with `ggml-large-v3-turbo-q5_0`. DTW token timestamps (`cparams.dtw_
 
 Runs after Whisper to produce frame-accurate word timestamps. Model: wav2vec2-base-960h ONNX (Xenova quantized, ~94 MB). The vocab is loaded from `wav2vec2_vocab.json` at runtime (character → token index map; `<pad>` = CTC blank; `|` = word separator).
 
-The Viterbi CTC decoder uses standard blank-padded expanded targets (`[B, t0, B, t1, ..., tL, B]`) with a two-row DP and a full `int8_t back[T×S]` back-pointer matrix for path reconstruction. Skip-blank transitions are allowed only when the current token differs from the token two positions back.
+The stay/advance trellis (torchaudio forced-alignment algorithm) uses a plain character target (no blank padding) and a (T+1)×(L+1) log-prob DP. Each state j = "tokens consumed so far"; transitions are stay-at-j (emit blank) or advance-to-j+1 (emit tokens[j]). Backtracking from the frame with the highest cell(t, L) score yields one PathPoint per frame; consecutive same-token points are merged into CharSeg spans, which are mapped to absolute word timestamps.
 
 Processing is chunked into 30-second windows. Each chunk is mean/variance normalized before ONNX inference (wav2vec2 feature extractor convention). The model's `attention_mask` input is optional — detected via `sess.GetInputCount() >= 2`.
 
@@ -250,7 +250,7 @@ src/
   render.h / render.cpp  GL export pipeline, ffmpeg pipe, snapshot
   transcribe.h/.cpp      ML pipeline orchestration (separate → whisper → align)
   separate.h/.cpp        MDX-Net vocal separation, FFTW3 STFT/iSTFT
-  forced_align.h/.cpp    CTC forced alignment, Viterbi DP, wav2vec2 ONNX
+  forced_align.h/.cpp    CTC forced alignment, stay/advance trellis DP, wav2vec2 ONNX
   ipc_server.h/.cpp      Unix socket IPC server, JSON command dispatch
   pth_reader.h/.cpp      PyTorch .pth reader (system unzip + handrolled pickle VM, no libtorch)
   rvc_onnx.h/.cpp        VITS→ONNX exporter (hand-rolled protobuf)
@@ -308,6 +308,6 @@ mcp_server/
 - **Datamosh ghost resets on `clip_start` change.** Moving or replacing a datamosh clip restarts the ghost from the first visible frame.
 - **Proxy FPS must be probed from the original file, not the proxy.** The proxy is always 12 fps. This value is passed to `forced_align` so CTC timestamps snap to real source frame boundaries.
 - **WN `n_layers` is derived from weight shapes.** `cond_layer` output channels ÷ (2 × hidden_channels) — not hardcoded.
-- **CTC alignment is chunked in 30-second windows.** The full-song Viterbi DP matrix would be ~60 MB; per-chunk it stays at ~750 KB. Whisper timestamps are the fallback if any chunk fails.
+- **CTC alignment runs per Whisper segment, not over the full audio.** The (T+1)×(L+1) trellis is tiny (T = frames in one segment, L = chars in that segment's text). Whisper timestamps are the fallback if any segment fails.
 - **IPC mutations land on the main thread.** `ipc_server_poll` runs in the main loop. There is no concurrency between MCP edits and UI interactions — they interleave frame by frame.
 - **`set_clip_fx` dispatches via generated code.** `fx_clip_set_dispatch.h` is a codegen output. If you add a new effect to the registry, re-run `codegen_effects.py` or `set_clip_fx` won't recognize the new effect id.
