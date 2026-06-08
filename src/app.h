@@ -521,8 +521,9 @@ struct AppState {
     std::string    out_srt;
 
     // UI layout — user-dragged splitter positions (0 = auto)
-    float panel_w   = 0.f;   // right panel width
-    float tl_h_frac = 0.f;   // timeline height as fraction of body height (0 = auto)
+    float panel_w    = 0.f;   // right panel width
+    float tl_h_frac  = 0.f;   // timeline height as fraction of avail_h (0 = auto)
+    float term_h_frac = 0.f;  // terminal height as fraction of avail_h (0 = auto)
 
     // audio extraction (ffmpeg demux, no ML)
     bool        extract_running      = false;

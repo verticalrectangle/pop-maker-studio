@@ -730,26 +730,32 @@ void ui_studio(AppState& state) {
     float avail_h    = win_h - menubar_h - body_top - pipeline_h - 2.f;
 
     // Timeline height — user-draggable, defaults to minimum on first open
-    static const float TL_MIN_H = TL_RULER_H + 4 * TL_TRACK_H;
-    float tl_h       = (state.tl_h_frac > 0.f)
-                        ? fmaxf(TL_MIN_H, fminf(avail_h * 0.7f, state.tl_h_frac * avail_h))
-                        : TL_MIN_H;
+    static const float TL_MIN_H   = TL_RULER_H + 4 * TL_TRACK_H;
+    float tl_h = (state.tl_h_frac > 0.f)
+                  ? fmaxf(TL_MIN_H, fminf(avail_h * 0.7f, state.tl_h_frac * avail_h))
+                  : TL_MIN_H;
 
-    // Terminal strip height — fixed, unresizable. libvterm cannot be safely
-    // resized after init, so the strip is locked to a single height and the
-    // splitter is intentionally absent.
-    static const float TERM_FIXED_H = 220.f;
-    float term_h = state.terminal_open ? TERM_FIXED_H : 0.f;
+    // Terminal strip height — user-draggable, defaults to 220 px
+    static const float TERM_MIN_H = 80.f;
+    static const float TERM_DEF_H = 220.f;
+    float term_h = 0.f;
+    if (state.terminal_open) {
+        term_h = (state.term_h_frac > 0.f)
+                  ? fmaxf(TERM_MIN_H, fminf(avail_h * 0.6f, state.term_h_frac * avail_h))
+                  : TERM_DEF_H;
+    }
 
-    float body_h     = avail_h - tl_h - term_h;
-    // Keep body_h above a usable minimum. Terminal height is fixed, so only
-    // shrink the timeline if the window is very short.
+    float body_h = avail_h - tl_h - term_h;
+    // Keep body_h above a usable minimum — steal from terminal first, then timeline.
     static const float BODY_MIN_H = 80.f;
     if (body_h < BODY_MIN_H) {
         float need = BODY_MIN_H - body_h;
+        float give_term = fminf(need, fmaxf(0.f, term_h - TERM_MIN_H));
+        term_h  -= give_term;
+        need    -= give_term;
         float give_tl = fminf(need, fmaxf(0.f, tl_h - TL_MIN_H));
-        tl_h -= give_tl;
-        body_h = fmaxf(BODY_MIN_H, avail_h - tl_h - term_h);
+        tl_h   -= give_tl;
+        body_h  = fmaxf(BODY_MIN_H, avail_h - tl_h - term_h);
     }
 
     // Right panel width — user-draggable, default auto
@@ -1197,10 +1203,8 @@ void ui_studio(AppState& state) {
     ImGui::PopStyleColor(2);
 
     // ── Drag splitters ────────────────────────────────────────────────────────
-    // Terminal strip is intentionally fixed-height (libvterm cannot be resized
-    // safely after init), so no splitter is exposed for it.
     {
-        static bool s_drag_vsplit = false, s_drag_hsplit = false;
+        static bool s_drag_vsplit = false, s_drag_hsplit = false, s_drag_termsplit = false;
         ImVec2 wpos = ImGui::GetWindowPos();
         ImVec2 mpos = ImGui::GetIO().MousePos;
 
@@ -1234,6 +1238,23 @@ void ui_studio(AppState& state) {
             state.tl_h_frac = fmaxf(0.1f, fminf(0.7f, new_tl_h / avail_h));
         }
         if (ImGui::IsMouseReleased(0)) s_drag_hsplit = false;
+
+        // Horizontal splitter at the top edge of the terminal strip
+        if (state.terminal_open && term_h > 0.f) {
+            float tborder_y = wpos.y + body_top + body_h + tl_h + pipeline_h;
+            bool near_t = fabsf(mpos.y - tborder_y) < 6.f &&
+                          mpos.x > wpos.x &&
+                          mpos.x < wpos.x + win_w;
+            if (near_t || s_drag_termsplit) {
+                ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
+                if (ImGui::IsMouseClicked(0)) s_drag_termsplit = true;
+            }
+            if (s_drag_termsplit) {
+                float new_term_h = wpos.y + body_top + avail_h - mpos.y;
+                state.term_h_frac = fmaxf(0.f, fminf(0.6f, new_term_h / avail_h));
+            }
+            if (ImGui::IsMouseReleased(0)) s_drag_termsplit = false;
+        }
     }
 
     // ── Pipeline strip ────────────────────────────────────────────────────────
