@@ -750,6 +750,10 @@ async def list_tools() -> list[Tool]:
                 "The preset IS the style — do NOT call set_text_style on the generated clips afterward to tweak "
                 "them; that breaks the global styling. Match the user's style request to the closest preset here "
                 "and use that preset. Karaoke is a preset — use preset='karaoke', do NOT set karaoke=true manually.\n\n"
+                "INTERPRET, DON'T HAND-ROLL: if the user describes a style (e.g. 'bold white caps with drop shadow', "
+                "'tiktok one-word', 'spotify bottom bar'), map it to the closest preset below and call this tool. "
+                "Do NOT build text clips manually via add_clip(type='text') just because the user's wording doesn't "
+                "match a preset name verbatim — the presets are deliberately broad and the closest fit is correct.\n\n"
                 "PRESET GUIDE — pick based on user's style request:\n"
                 "  flash      — ONE WORD · white · all-caps · hard cuts · no effects  ← TikTok lyric video default\n"
                 "  strobe     — same as flash but inverts color every word · ultra aggressive\n"
@@ -803,15 +807,19 @@ async def list_tools() -> list[Tool]:
             description=(
                 "Transcribe the project audio for subtitle/typography/karaoke generation. "
                 "Blocks until complete — returns final pipeline status. No polling needed. No batch needed.\n\n"
+                "PROBE FIRST: call get_transcript() — if status='ready' the transcript is already cached on disk, "
+                "skip this entirely and read from there. Only call trigger_pipeline when get_transcript returns 'idle'.\n\n"
                 "PIPELINE MODES:\n"
                 "  both            — (default) Demucs stem separation → vocals.wav → transcription.\n"
                 "                    Transcribes the isolated vocal stem, not the raw mix. Much cleaner for music.\n"
                 "  transcribe_only — Skip separation, transcribe source audio directly. Faster, use for speech/podcasts.\n"
                 "  separate_only   — Run Demucs only, no transcription.\n\n"
+                "DOES NOT MODIFY THE TIMELINE. Only produces the transcript (word-level JSON cache). "
+                "To place lyric clips, call generate_typography(preset=...) explicitly after this returns.\n\n"
                 "BEFORE calling this: add the audio file to the timeline first — add_track('Audio'), "
                 "then add_clip(type='audio', text=path, start=0, end=duration) on that track. "
-                "Do this BEFORE trigger_pipeline, not after. The pipeline adds lyric clips and the user "
-                "must already see the audio brick underneath them — floating lyrics with no audio is very confusing.\n\n"
+                "Do this BEFORE trigger_pipeline, not after — the agent activity overlay and pipeline "
+                "validation both expect to see the audio brick already.\n\n"
                 "After this completes:\n"
                 "  Call generate_typography(preset=...) to lay out lyric clips on top.\n\n"
                 "DO NOT use this to search for a moment — use find_and_add_clip instead (windowed search, much faster).\n\n"
@@ -1129,14 +1137,29 @@ async def list_tools() -> list[Tool]:
                 "This means you can locate an exact timestamp in a song or podcast without running "
                 "the full pipeline. Useful for finding where a lyric or phrase occurs so you can "
                 "trim the project to that point before generating typography.\n\n"
-                "FOR LYRIC VIDEOS — use this BEFORE trigger_pipeline when the user wants only a "
-                "section of a song: call find_and_add_clip(path=full_file, query='end phrase') to get "
-                "the exact end timestamp and extracted segment, then add_track + add_clip + trigger_pipeline "
-                "on the result.dst file.\n\n"
+                "FOR LYRIC VIDEOS / SCOPED SECTIONS — use this BEFORE trigger_pipeline when the user wants "
+                "only a section of a song. The canonical flow is:\n"
+                "  1. find_and_add_clip(path=full_file, query='start phrase')  → start timestamp\n"
+                "  2. find_and_add_clip(path=full_file, query='end phrase')    → end timestamp\n"
+                "  3. extract_clip_segment(src=full_file, dst='/tmp/scoped.flac', start=startA, end=endB + tail_sec)\n"
+                "  4. add_track + add_clip(audio, /tmp/scoped.flac) + trigger_pipeline\n"
+                "  5. generate_typography(preset=...) for the lyric layout\n"
+                "DO NOT skip step (2): the auto-extracted dst only covers a small window around the matched "
+                "phrase, not from start to end of section. You need both timestamps to extract the full span.\n\n"
+                "CHUNK-STRADDLING PHRASES are handled internally: when a partial match lands at the trailing "
+                "edge of a search chunk, the scanner extends into the next chunk before reporting found, so "
+                "result.end reflects the real phrase end (not the chunk boundary). Same goes for queries whose "
+                "match lives past an existing cached transcript — the cache is extended automatically.\n\n"
                 "Blocks until the match is found — no polling needed. Returns status=found.\n\n"
                 "Always returns extracted=true with a ready-to-use dst file. NEVER call extract_clip_segment "
-                "manually after this — the tool handles extraction internally with exact word-boundary timestamps.\n\n"
-                "result includes in_point = offset into dst where your content starts\n"
+                "manually after this — the tool handles extraction internally.\n\n"
+                "result includes in_point = offset into dst where your content starts.\n\n"
+                "MATCH QUALITY: result includes score (0-1, fraction of query words found) and "
+                "partial_match (true when score<1.0 OR the located span is wider than ~1.5s/word). "
+                "When partial_match=true, treat start/end as APPROXIMATE — the located span may include "
+                "leading/trailing context rather than just the query phrase. Do not derive exact word "
+                "timestamps from a partial match; re-run with a corrected query or use trigger_pipeline + "
+                "get_transcript on the matched segment for word-level alignment.\n\n"
                 "add_clip: track=<target>, type=video, text=result.dst, start=0, end=result.clip_duration, in_point=result.in_point"
             ),
             inputSchema={
@@ -2355,17 +2378,27 @@ def _search_transcript_in_words(words: list, query: str) -> tuple[float, float, 
         score = len(query_words_set & set(text.split())) / len(query_words_set) if query_words_set else 0.0
         if score > best_score:
             best_score = score
-            # Narrow to the tightest subspan that covers all query words
-            s_idx, e_idx = 0, len(window) - 1
+            # Narrow to the tightest subspan that achieves the window's score.
+            # Previously this required score >= 1.0, which left s_idx,e_idx at the
+            # full window edges on partial matches — callers then mistook the
+            # window span (often ~20 words / ~15-20s wide) for the located phrase
+            # and cut/extracted at the wrong timestamp. Now we pick the highest
+            # subspan-score and break ties by tighter span.
+            s_idx, e_idx     = 0, len(window) - 1
+            best_span_score  = -1.0
             for s in range(len(window)):
                 for e in range(s, len(window)):
-                    span_text = " ".join(w["word"] for w in window[s:e + 1]).lower()
-                    if len(query_words_set & set(span_text.split())) / len(query_words_set) >= 1.0:
-                        s_idx, e_idx = s, e
+                    span_text  = " ".join(w["word"] for w in window[s:e + 1]).lower()
+                    span_score = (
+                        len(query_words_set & set(span_text.split())) / len(query_words_set)
+                        if query_words_set else 0.0
+                    )
+                    tighter = (e - s) < (e_idx - s_idx)
+                    if span_score > best_span_score or (span_score == best_span_score and tighter):
+                        best_span_score, s_idx, e_idx = span_score, s, e
+                    if span_score >= 1.0:
+                        # full match — can't do better; stop scanning end positions
                         break
-                else:
-                    continue
-                break
             best_start = float(window[s_idx]["start"])
             best_end   = float(window[e_idx]["end"])
             best_text  = " ".join(w["word"] for w in window[s_idx:e_idx + 1])
@@ -2411,14 +2444,39 @@ async def _find_and_add_clip(arguments: dict) -> dict:
 
     if words:
         start, end, excerpt, score, truncated = _search_transcript_in_words(words, query)
-        if score < 0.3:
+
+        # Cached words may only cover an earlier scan window — e.g. a previous
+        # find_and_add_clip transcribed words 0–60s of a 200s file, and now the
+        # caller asks for a phrase that's actually at 150s. Detect "cache doesn't
+        # cover the file" and trigger a windowed re-scan, regardless of where the
+        # weak match landed inside the cache.
+        try:
+            file_dur = float(_call("get_media_info", {"path": path}).get("duration", 0.0))
+        except Exception:
+            file_dur = 0.0
+        cache_covers_file = bool(words) and (
+            file_dur <= 0.0 or float(words[-1]["end"]) >= file_dur - 5.0
+        )
+        cache_incomplete_match = (not cache_covers_file) and score < 0.85
+
+        if score < 0.3 and cache_covers_file:
             raise ValueError(f"could not find '{query}' in transcript (best score: {score:.2f})")
 
+        # Sanity guard: if the returned span is implausibly wide for the query length,
+        # the actual phrase location is ambiguous. Cap at ~1.5s per query word with a
+        # 6s floor. Wider than that almost always means a partial/noisy match — the
+        # caller should treat start/end as approximate and not extract at exact bounds.
+        n_qwords      = max(len(query.split()), 1)
+        max_plausible = max(6.0, 1.5 * n_qwords)
+        partial_match = score < 1.0 or (end - start) > max_plausible
+
         # Partial match at a chunk boundary — the cached word list was cut off before capturing
-        # the trailing query word(s). Re-run the windowed search with a larger buffer so the
-        # scanner reads one more chunk and returns the true end timestamp.
-        if truncated:
-            print(f"[find_and_add_clip] partial match ({score:.2f}) near cache tail — re-scanning for trailing words", flush=True)
+        # the trailing query word(s) — OR the cache covers only an earlier slice of the file and
+        # the query lives in the un-transcribed region. Re-run the windowed search so the scanner
+        # extends the cache and returns true word-boundary timestamps.
+        if truncated or cache_incomplete_match:
+            reason = "near cache tail" if truncated else "cache doesn't cover full file"
+            print(f"[find_and_add_clip] partial match ({score:.2f}) — re-scanning ({reason})", flush=True)
             _call("search_transcript", {
                 "path":        path,
                 "query_words": query.lower().split(),
@@ -2439,12 +2497,18 @@ async def _find_and_add_clip(arguments: dict) -> dict:
                 start   = float(st.get("start", start))
                 end     = float(st.get("end",   end))
                 excerpt = st.get("excerpt", excerpt)
-                # Reload the cache if the search extended it
+                # Reload the cache if the search extended it, then re-score
+                # against the refreshed words so partial_match reflects the
+                # extended search result, not the stale pre-rescan score.
                 if cached_words_path.exists():
                     with open(cached_words_path) as f:
                         refreshed = json.load(f)
                     if refreshed and words and float(refreshed[-1]["end"]) > float(words[-1]["end"]):
                         words = refreshed
+                        rs, re_, rex, rscore, _ = _search_transcript_in_words(words, query)
+                        if rscore >= score:
+                            start, end, excerpt, score = rs, re_, rex, rscore
+                            partial_match = score < 1.0 or (end - start) > max_plausible
 
         # Check if any previously extracted segment covers the needed range
         seg_start = max(0.0, start - padding)
@@ -2477,6 +2541,8 @@ async def _find_and_add_clip(arguments: dict) -> dict:
                 "dst":           existing_dst,
                 "clip_duration": round(duration, 3),
                 "in_point":      round(seg_start - file_seg_start, 3),
+                "score":         round(score, 2),
+                "partial_match": partial_match,
             }
 
         # Auto-extract the segment so the caller never needs to call extract_clip_segment manually
@@ -2514,6 +2580,8 @@ async def _find_and_add_clip(arguments: dict) -> dict:
             "dst":           dst,
             "clip_duration": round(duration, 3),
             "in_point":      round(start - seg_start, 3),
+            "score":         round(score, 2),
+            "partial_match": partial_match,
         }
 
     # No transcript — start transcription search and block until done
@@ -2811,6 +2879,16 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 "  2. begin_batch('Add audio clip') → add_clip(type='audio', text=<path>, start=0, end=<duration>) → end_batch()\n"
                 "Then call trigger_pipeline."
             )
+        target_path = arguments.get("path") or proj.get("audio_path")
+        if target_path:
+            p = Path(target_path)
+            cached_words = p.parent / p.stem / f"{p.stem}_words.json"
+            if cached_words.exists():
+                raise ValueError(
+                    f"Transcript already cached for {p.name} at {cached_words}.\n"
+                    "Call get_transcript() to read it — re-transcribing is wasted work.\n"
+                    f"To force re-transcription, delete {cached_words} first."
+                )
         duration = float(proj.get("duration") or 0)
         if duration > 300 and not arguments.get("path"):
             raise ValueError(
