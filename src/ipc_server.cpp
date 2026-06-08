@@ -483,6 +483,29 @@ static int track_by_name_or_index(const AppState& state, const json& params) {
 
 static json dispatch(AppState& state, const std::string& method, const json& params, std::string& err,
                      int client_fd = -1, const std::string& req_id = "") {
+    // ── Log to agent activity panel ───────────────────────────────────────────
+    {
+        std::string detail;
+        auto try_path = [&](const char* key) {
+            if (detail.empty() && params.contains(key)) {
+                std::string p = params[key].get<std::string>();
+                auto pos = p.find_last_of("/\\");
+                detail = (pos == std::string::npos) ? p : p.substr(pos + 1);
+            }
+        };
+        try_path("src"); try_path("path"); try_path("media_path");
+        if (detail.empty() && params.contains("query")) {
+            detail = params["query"].get<std::string>();
+            if (detail.size() > 28) detail = detail.substr(0, 25) + "...";
+        }
+        if (detail.empty() && params.contains("text")) {
+            detail = params["text"].get<std::string>();
+            if (detail.size() > 28) detail = detail.substr(0, 25) + "...";
+        }
+        state.agent_log.push_front({method, detail});
+        if (state.agent_log.size() > 6) state.agent_log.pop_back();
+    }
+
     // ── Read-only: no batch required ─────────────────────────────────────────
     if (method == "get_project") {
         bool verbose = params.value("verbose", false);

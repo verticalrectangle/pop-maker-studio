@@ -4,6 +4,7 @@
 #include "body_fx.h"
 #include <string>
 #include <vector>
+#include <deque>
 #include <chrono>
 #include <map>
 #include <unordered_map>
@@ -612,6 +613,13 @@ struct AppState {
     // MCP agent status — set by begin_batch / end_batch IPC calls
     bool        agent_active = false;
     std::string agent_msg;   // batch label shown in loading panel
+
+    // Rolling log of recent MCP tool calls (newest first, max 6)
+    struct AgentOp {
+        std::string method;   // raw method name
+        std::string detail;   // file basename, query snippet, etc.
+    };
+    std::deque<AgentOp> agent_log;
 
     // Terminal panel
     bool  terminal_open   = false;

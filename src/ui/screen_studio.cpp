@@ -1096,6 +1096,69 @@ void ui_studio(AppState& state) {
                 dl->AddText({st_x, tc_y}, IM_COL32(140,140,140,160), st);
             }
         }
+
+        // ── Agent activity overlay ────────────────────────────────────────────
+        if (!state.agent_log.empty()) {
+            ImDrawList* adl   = ImGui::GetWindowDrawList();
+            const float OP_H  = 17.f;
+            const float PAD_X = 10.f, PAD_Y = 7.f;
+            int   n      = (int)std::min(state.agent_log.size(), (size_t)5);
+            float card_w = 215.f;
+            float card_h = PAD_Y * 2.f + n * OP_H + (n - 1) * 2.f;
+            float cx0    = stage_p.x + sw - card_w - 10.f;
+            float cy0    = stage_p.y + 10.f;
+
+            adl->AddRectFilled({cx0, cy0}, {cx0 + card_w, cy0 + card_h},
+                               IM_COL32(0x13, 0x14, 0x1f, 210), 7.f);
+            adl->AddRect({cx0, cy0}, {cx0 + card_w, cy0 + card_h},
+                         IM_COL32(255, 255, 255, 18), 7.f);
+
+            float fsz  = ImGui::GetFontSize() * 0.82f;
+            float ey   = cy0 + PAD_Y;
+            for (int i = 0; i < n; ++i) {
+                const auto& op  = state.agent_log[(size_t)i];
+                float alpha     = (i == 0) ? 1.f : 0.9f - 0.15f * i;
+                int   a8        = (int)(255.f * alpha);
+
+                // Dot colour by method category
+                ImU32 dot;
+                if (op.method.rfind("get_", 0) == 0  ||
+                    op.method.rfind("search_", 0) == 0 ||
+                    op.method.rfind("find_", 0) == 0  ||
+                    op.method.rfind("read_", 0) == 0)
+                    dot = IM_COL32(0x7d, 0xcf, 0xff, a8);          // cyan  — reads
+                else if (op.method.find("pipeline") != std::string::npos ||
+                         op.method.find("export") != std::string::npos   ||
+                         op.method.find("trigger") != std::string::npos)
+                    dot = IM_COL32(0xe0, 0xaf, 0x68, a8);          // amber — processing
+                else if (op.method.rfind("delete_", 0) == 0 ||
+                         op.method.rfind("remove_", 0) == 0 ||
+                         op.method.rfind("cut_", 0) == 0)
+                    dot = IM_COL32(0xf7, 0x76, 0x8e, a8);          // red   — destructive
+                else
+                    dot = IM_COL32(0x9e, 0xce, 0x6a, a8);          // green — writes
+
+                float mid_y = ey + OP_H * 0.5f;
+                adl->AddCircleFilled({cx0 + PAD_X + 4.f, mid_y}, 3.f, dot);
+
+                // Label: "method name  detail"
+                std::string label = op.method;
+                for (char& c : label) if (c == '_') c = ' ';
+                if (!op.detail.empty()) label += "  " + op.detail;
+                // Truncate to fit card width
+                while (label.size() > 1) {
+                    float tw = ImGui::GetFont()->CalcTextSizeA(fsz, FLT_MAX, -1.f, label.c_str()).x;
+                    if (tw <= card_w - PAD_X * 2.f - 14.f) break;
+                    label.resize(label.size() - 1);
+                }
+
+                adl->AddText(ImGui::GetFont(), fsz,
+                             {cx0 + PAD_X + 12.f, mid_y - fsz * 0.5f},
+                             IM_COL32(0xc0, 0xca, 0xf5, a8), label.c_str());
+
+                ey += OP_H + 2.f;
+            }
+        }
     }
     ImGui::EndChild();
     ImGui::PopStyleColor(2);
