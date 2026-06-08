@@ -95,8 +95,10 @@ static std::vector<float> get_trellis(
     }
     // Force consuming all L tokens: last L rows of column 0 = +inf.
     // This makes backtrack always find t_start near the end of the segment.
-    for (int t = std::max(0, T + 1 - L); t <= T; ++t)
-        cell(t, 0) = 1e30f;
+    // BUG: this propagates into columns 1..L and collapses all tokens into the
+    // last L frames, producing severely wrong timestamps.  Disabled.
+    // for (int t = std::max(0, T + 1 - L); t <= T; ++t)
+    //     cell(t, 0) = 1e30f;
 
     // Forward DP
     for (int t = 0; t < T; ++t) {
