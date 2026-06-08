@@ -29,5 +29,6 @@ struct TerminalState {
 
 void terminal_init   (TerminalState& t, int cols, int rows);
 void terminal_destroy(TerminalState& t);
+void terminal_resize (TerminalState& t, int cols, int rows);
 void terminal_write  (TerminalState& t, const char* data, size_t len);
 bool terminal_alive  (const TerminalState& t);

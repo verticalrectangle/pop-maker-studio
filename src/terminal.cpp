@@ -196,6 +196,23 @@ void terminal_destroy(TerminalState& t) {
     }
 }
 
+void terminal_resize(TerminalState& t, int cols, int rows) {
+    if (!t.vt || (cols == t.cols && rows == t.rows)) return;
+    {
+        std::lock_guard<std::mutex> lk(t.mu);
+        vterm_set_size(t.vt, rows, cols);
+        vterm_screen_flush_damage(t.vts);
+        t.cols = cols;
+        t.rows = rows;
+    }
+    if (t.pty_master >= 0) {
+        struct winsize ws = {};
+        ws.ws_col = (unsigned short)cols;
+        ws.ws_row = (unsigned short)rows;
+        ioctl(t.pty_master, TIOCSWINSZ, &ws);
+    }
+}
+
 void terminal_write(TerminalState& t, const char* data, size_t len) {
     if (t.pty_master < 0 || !t.running) return;
     write(t.pty_master, data, len);

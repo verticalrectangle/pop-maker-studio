@@ -96,15 +96,14 @@ void draw_terminal_panel(AppState& state, float panel_w, float panel_h) {
     float output_h = panel_h - 2.f;
     if (output_h < cell_h) output_h = cell_h;
 
-    // The vterm grid is locked at first init — libvterm resizes are unreliable
-    // here (race-prone with the reader thread), so we size once and never call
-    // vterm_set_size again. The visible viewport may be larger or smaller than
-    // the grid; BeginChild's clip rect handles overflow.
     int init_cols = (int)((panel_w - 8.f) / cell_w);
     int init_rows = (int)(output_h / cell_h);
     if (init_cols < 10) init_cols = 10;
     if (init_rows < 2)  init_rows = 2;
     ensure_init(init_cols, init_rows);
+    // Resize vterm + pty whenever the panel dimensions change.  The mutex in
+    // terminal_resize keeps this safe against the reader thread.
+    terminal_resize(s_term, init_cols, init_rows);
 
     // ── Dismiss focus when clicking outside ──────────────────────────────────
     if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
