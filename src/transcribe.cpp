@@ -298,15 +298,19 @@ static void do_transcribe(
     status.message  = "Transcribing (whisper large-v3-turbo + DTW alignment)…";
 
     whisper_full_params wp = whisper_full_default_params(WHISPER_SAMPLING_BEAM_SEARCH);
-    wp.language         = "en";
-    wp.n_threads        = 4;
-    wp.token_timestamps = true;
-    wp.thold_pt         = 0.01f;
-    wp.thold_ptsum      = 0.01f;
-    wp.print_progress   = false;
-    wp.print_realtime   = false;
-    wp.print_timestamps = false;
-    wp.print_special    = false;
+    wp.language                   = "en";
+    wp.n_threads                  = 4;
+    wp.token_timestamps           = true;
+    wp.thold_pt                   = 0.01f;
+    wp.thold_ptsum                = 0.01f;
+    wp.print_progress             = false;
+    wp.print_realtime             = false;
+    wp.print_timestamps           = false;
+    wp.print_special              = false;
+    // Prevent hallucination loops: don't feed decoded tokens as context for next chunk.
+    wp.no_context      = true;
+    wp.no_speech_thold = 0.6f;
+    wp.entropy_thold   = 2.4f;
 
     if (whisper_full(ctx, wp, pcm.data(), (int)pcm.size()) != 0) {
         whisper_free(ctx);
@@ -452,15 +456,18 @@ TranscribeSearchResult transcribe_search(
     }
 
     whisper_full_params wp = whisper_full_default_params(WHISPER_SAMPLING_BEAM_SEARCH);
-    wp.language         = "en";
-    wp.n_threads        = 4;
-    wp.token_timestamps = true;
-    wp.thold_pt         = 0.01f;
-    wp.thold_ptsum      = 0.01f;
-    wp.print_progress   = false;
-    wp.print_realtime   = false;
-    wp.print_timestamps = false;
-    wp.print_special    = false;
+    wp.language                   = "en";
+    wp.n_threads                  = 4;
+    wp.token_timestamps           = true;
+    wp.thold_pt                   = 0.01f;
+    wp.thold_ptsum                = 0.01f;
+    wp.print_progress             = false;
+    wp.print_realtime             = false;
+    wp.print_timestamps           = false;
+    wp.print_special              = false;
+    wp.no_context      = true;
+    wp.no_speech_thold = 0.6f;
+    wp.entropy_thold   = 2.4f;
 
     MediaFileInfo info = video_probe_file(path);
     if (!info.error.empty()) {
