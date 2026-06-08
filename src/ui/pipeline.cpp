@@ -103,11 +103,14 @@ std::vector<Clip> group_words(
 
     switch (mode) {
     case SubtitleMode::Word: {
-        // Extend each word to the next word's start so inter-word gaps don't
-        // leave blank frames between clips.
+        // Extend each word to the next word's start to fill intra-sentence gaps,
+        // but stop at the word's natural CTC end when a sentence-level pause follows.
+        constexpr float kSentenceGap = 0.4f;
         std::vector<Clip> out = words;
-        for (size_t i = 0; i + 1 < out.size(); ++i)
-            out[i].end = out[i + 1].start;
+        for (size_t i = 0; i + 1 < out.size(); ++i) {
+            if (out[i + 1].start - out[i].end < kSentenceGap)
+                out[i].end = out[i + 1].start;
+        }
         return out;
     }
 

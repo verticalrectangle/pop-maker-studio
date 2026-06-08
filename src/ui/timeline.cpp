@@ -91,6 +91,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
     float zoom_min = fmaxf(1.f, clip_area_w / dur);
     state.tl_zoom_min = zoom_min;
     zoom = fmaxf(zoom, zoom_min);  // lift zoom up if window resized or duration shrank
+    if (zoom <= zoom_min) scroll = 0.f;  // fully zoomed out → always show from frame 0
 
     // Deferred zoom-to-fit: set by add_clip_to_track / import whenever a new clip is added.
     // Always compute the target zoom for the clip; only apply it if it means zooming OUT
@@ -1467,7 +1468,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
         dl->AddLine({origin.x, sb_y0}, {origin.x + total_w, sb_y0},
                     to_u32(Col::line));
 
-        if (tl_content_w > clip_area_w + 1.f) {
+        if (tl_content_w > clip_area_w + 1.f || scroll > 0.f) {
             float max_scroll   = tl_content_w - clip_area_w;
             float thumb_w      = fmaxf(20.f, sb_w * clip_area_w / tl_content_w);
             float thumb_travel = fmaxf(1.f, sb_w - thumb_w);

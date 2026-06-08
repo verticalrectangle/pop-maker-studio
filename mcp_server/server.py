@@ -2822,6 +2822,23 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 "  4. Then call trigger_pipeline on the short clip\n"
                 "Only call trigger_pipeline directly if you genuinely need a full transcript of everything."
             )
+        if not arguments.get("path") and proj.get("audio_path") and 30 < duration <= 300:
+            src_info = _call("get_media_info", {"path": proj["audio_path"]})
+            src_duration = float(src_info.get("duration") or 0)
+            if src_duration > 0 and duration / src_duration >= 0.9:
+                raise ValueError(
+                    f"trigger_pipeline called with {duration:.0f}s on the timeline "
+                    f"({duration / src_duration:.0%} of the source file, which is {src_duration:.0f}s). "
+                    "The audio clip covers nearly the full source, which means find_and_add_clip "
+                    "was probably skipped.\n\n"
+                    "If you only need a section of this file, use this pattern first:\n"
+                    "  1. find_and_add_clip(path=<audio_path>, query='<end phrase>') — locates the exact timestamp\n"
+                    "  2. extract_clip_segment(src=<audio_path>, dst=..., start=<start>, end=<found_end>)\n"
+                    "  3. Replace the timeline audio clip with the trimmed segment\n"
+                    "  4. Then call trigger_pipeline\n\n"
+                    "If you genuinely need the full file transcribed, pass path=<audio_path> "
+                    "to trigger_pipeline directly to bypass this check."
+                )
     if name == "remove_silence":
         result = await _remove_silence(arguments)
         return [TextContent(type="text", text=json.dumps(result, indent=2))]
