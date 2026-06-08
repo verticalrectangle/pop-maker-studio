@@ -797,6 +797,85 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
     // ── Pass 1: BG clips (ImGui draw list) + Video clips (→ scene FBO) ────────
     scene_begin((int)w, (int)h);
 
+    // Pre-walk: identify every video clip that will be decoded this frame
+    // (active clip per track + any transition partner) and dispatch a parallel
+    // JPEG decode batch. The draw loop below then hits a cached upload path.
+    // Mirrors the active-clip selection logic farther down — keep in sync.
+    {
+        auto make_pfx = [&](const Clip* cl_ptr, int ti) {
+            PixelFX pfx;
+            CreativeFXAccum cfx2 = collect_glass_fx(state, state.playhead, ti);
+            pfx.bg_remove_on       = cl_ptr->bg_remove_on &&
+                                     cl_ptr->bg_remove_status == BgRemoveStatus::Ready;
+            pfx.bg_remove_mask_dir = cl_ptr->bg_remove_mask_dir;
+            pfx.bg_remove_softness = cl_ptr->bg_remove_softness;
+            pfx.bg_remove_box_on   = cl_ptr->bg_remove_box_on;
+            pfx.bg_remove_box_l    = cl_ptr->bg_remove_box_l;
+            pfx.bg_remove_box_r    = cl_ptr->bg_remove_box_r;
+            pfx.bg_remove_box_t    = cl_ptr->bg_remove_box_t;
+            pfx.bg_remove_box_b    = cl_ptr->bg_remove_box_b;
+            pfx.datamosh_on        = cfx2.datamosh_on;
+            pfx.datamosh_intensity = cfx2.datamosh_intensity;
+            pfx.datamosh_spread    = cfx2.datamosh_spread;
+            pfx.time               = t_anim;
+            return pfx;
+        };
+        std::vector<VideoPrefetchReq> reqs;
+        reqs.reserve(MAX_VIDEO_TRACKS);
+        auto add_clip = [&](const Clip* cl, float at_time, int ti) {
+            if (!cl || cl->clip_type != ClipType::Video) return;
+            int slot = slot_for_video(const_cast<AppState&>(state),
+                                      clip_slot_key(cl->text, cl->start), cl->text);
+            if (slot < 0 || !video_is_open(slot)) return;
+            video_set_pixel_fx(slot, make_pfx(cl, ti));
+            float src_t = cl->in_point + (at_time - cl->start) * cl->speed;
+            reqs.push_back({slot, (double)(src_t + lookahead)});
+        };
+
+        for (int ti = (int)state.tracks.size() - 1; ti >= 0; --ti) {
+            auto& track = state.tracks[ti];
+            if (!track.visible) continue;
+
+            const Clip* active = nullptr; int active_ci = -1;
+            for (int ci = 0; ci < (int)track.clips.size(); ++ci) {
+                auto& cl = track.clips[ci];
+                if (cl.clip_type == ClipType::Video &&
+                    state.playhead >= cl.start && state.playhead < cl.end)
+                    { active = &cl; active_ci = ci; break; }
+            }
+            if (!active) {
+                for (int ci = 1; ci < (int)track.clips.size(); ++ci) {
+                    const Clip& prev = track.clips[ci - 1];
+                    const Clip& cl   = track.clips[ci];
+                    if (prev.clip_type != ClipType::Video || cl.clip_type != ClipType::Video) continue;
+                    if (prev.transition_type == TransitionType::None || prev.transition_post <= 0.f) continue;
+                    if (state.playhead >= cl.start && state.playhead < cl.start + prev.transition_post)
+                        { active = &track.clips[ci]; active_ci = ci; break; }
+                }
+            }
+            if (!active) continue;
+            add_clip(active, state.playhead, ti);
+
+            bool in_trans_out = (active->transition_type != TransitionType::None &&
+                                 active->transition_pre > 0.f &&
+                                 state.playhead >= active->end - active->transition_pre);
+            if (in_trans_out && active_ci + 1 < (int)track.clips.size()) {
+                const Clip& nc = track.clips[active_ci + 1];
+                if (nc.clip_type == ClipType::Video) add_clip(&nc, state.playhead, ti);
+            } else if (active_ci > 0) {
+                const Clip& pc = track.clips[active_ci - 1];
+                if (pc.clip_type == ClipType::Video &&
+                    pc.transition_type != TransitionType::None &&
+                    pc.transition_post > 0.f &&
+                    state.playhead < active->start + pc.transition_post) {
+                    float at = std::fminf(state.playhead, pc.end - 1e-4f);
+                    add_clip(&pc, at, ti);
+                }
+            }
+        }
+        video_prefetch_frames(reqs.data(), (int)reqs.size());
+    }
+
     for (int ti = (int)state.tracks.size() - 1; ti >= 0; --ti) {
         auto& track = state.tracks[ti];
         if (!track.visible) continue;

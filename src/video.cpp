@@ -19,6 +19,14 @@ extern "C" {
 #include <libswscale/swscale.h>
 }
 
+#include <turbojpeg.h>
+#include <thread>
+#include <mutex>
+#include <condition_variable>
+#include <atomic>
+#include <functional>
+#include <deque>
+
 #define GL_GLEXT_PROTOTYPES
 #include <GL/gl.h>
 #include <GL/glext.h>
@@ -49,7 +57,7 @@ static void cpu_apply_glitch(uint8_t* px, int w, int h,
     int chroma = (int)(chroma_px + 0.5f);
     uint32_t t1 = (uint32_t)(time * 12.f);
     uint32_t t2 = (uint32_t)(time * 8.f);
-    static std::vector<uint8_t> s_row;
+    thread_local std::vector<uint8_t> s_row;
     s_row.resize((size_t)w * 3);
     for (int y = 0; y < h; ++y) {
         uint8_t* row = px + (size_t)y * w * 3;
@@ -90,7 +98,7 @@ static void cpu_apply_chroma_key(
     int n = w * h;
 
     // Pass 1: raw alpha per pixel
-    static std::vector<float> s_alpha;
+    thread_local std::vector<float> s_alpha;
     s_alpha.resize(n);
     for (int i = 0; i < n; ++i) {
         float r = rgb[i*3+0] * (1.f/255.f);
@@ -108,7 +116,7 @@ static void cpu_apply_chroma_key(
     // Pass 2: separable box blur on alpha — radius scales with softness
     int radius = (int)(softness * w * 0.04f + 1.5f);
     if (radius > 12) radius = 12;
-    static std::vector<float> s_tmp;
+    thread_local std::vector<float> s_tmp;
     s_tmp.resize(n);
     // horizontal
     for (int y = 0; y < h; ++y) {
@@ -170,7 +178,7 @@ static void cpu_apply_corruption(uint8_t* px, int w, int h, float intensity, flo
     if (alpha_out && bleed > 0.f)
         memset(alpha_out, 0xFF, (size_t)w * h);
 
-    static std::vector<uint8_t> tmp;
+    thread_local std::vector<uint8_t> tmp;
     tmp.assign(px, px + (size_t)w * h * 3);
 
     // ── Pass 1: restart-interval bands ───────────────────────────────────────────
@@ -307,7 +315,7 @@ static void cpu_apply_vhs(uint8_t* px, int w, int h,
     uint32_t t_nx = (uint32_t)(fmodf(time * 37.3f, 1.f) * 65535.f);
     uint32_t t_ny = (uint32_t)(fmodf(time * 19.7f, 1.f) * 65535.f);
     uint32_t t_tr = (uint32_t)(time * 7.f);
-    static std::vector<uint8_t> s_row;
+    thread_local std::vector<uint8_t> s_row;
     s_row.resize((size_t)w * 3);
     for (int y = 0; y < h; ++y) {
         uint8_t* row = px + (size_t)y * w * 3;
@@ -438,7 +446,7 @@ static void cpu_apply_blur(uint8_t* px, int w, int h, float sigma) {
     int sizes[3];
     for (int i = 0; i < 3; ++i) sizes[i] = (i < m) ? wu : wl;
 
-    static std::vector<uint8_t> tmp;
+    thread_local std::vector<uint8_t> tmp;
     tmp.resize((size_t)w * h * 3);
     for (int pass = 0; pass < 3; ++pass) {
         int r = sizes[pass] / 2;
@@ -474,6 +482,21 @@ struct PreviewState {
     int                  bg_mask_w       = 0;
     int                  bg_mask_h       = 0;
     std::vector<uint8_t> bg_mask_alpha;                // w*h alpha values
+
+    // Per-slot scratch buffers — owned here so concurrent worker threads
+    // operating on different slots cannot collide.
+    std::vector<uint8_t> jpeg_buf;        // raw JPEG bytes read from mjpeg_file
+    std::vector<uint8_t> mask_jpeg_buf;   // raw JPEG bytes for bg mask
+    std::vector<uint8_t> rgb_pixels;      // decoded RGB pixels
+    std::vector<uint8_t> rgba_pixels;     // composited RGBA (when want_rgba)
+    std::vector<uint8_t> corr_alpha;      // corruption-bleed alpha mask
+
+    // Prepared (CPU-side decoded) frame, awaiting GL upload.
+    bool prepared_ready    = false;
+    int  prepared_frame    = -1;
+    int  prepared_w        = 0;
+    int  prepared_h        = 0;
+    bool prepared_rgba     = false;       // true → upload from rgba_pixels, false → rgb_pixels
 };
 
 static PreviewState g_pv[MAX_VIDEO_TRACKS];
@@ -486,25 +509,116 @@ static struct ThumbState {
     int    last_frame_idx = -1;
 } g_th;
 
-// Upload a JPEG buffer into a GL texture slot, optionally applying CPU pixel FX.
-// tex_rgba: in/out — tracks whether the current GL texture is RGBA or RGB.
-// bg_mask: pre-loaded alpha channel (w*h bytes, 0=transparent 255=opaque) or nullptr.
-static void upload_jpeg(GLuint* tex, int* tex_w, int* tex_h, bool* tex_rgba,
-                        const uint8_t* buf, size_t sz,
-                        const PixelFX* pfx = nullptr,
-                        const uint8_t* bg_mask = nullptr, int bg_mask_w = 0, int bg_mask_h = 0,
-                        float bg_softness = 0.f) {
-    int w, h, ch;
-    uint8_t* pixels = stbi_load_from_memory(buf, (int)sz, &w, &h, &ch, 3);
-    if (!pixels) return;
+// ── libjpeg-turbo decode helpers ─────────────────────────────────────────────
+//
+// One tjhandle per thread (decoder state is not thread-safe).
+static thread_local tjhandle s_tj_dec = nullptr;
+static tjhandle tj_dec() {
+    if (!s_tj_dec) s_tj_dec = tjInitDecompress();
+    return s_tj_dec;
+}
+
+// Decode JPEG buffer into `out` (resized to w*h*channels). Returns true on success.
+// channels = 3 → TJPF_RGB, 1 → TJPF_GRAY.
+static bool tj_decode(const uint8_t* buf, size_t sz, int channels,
+                      std::vector<uint8_t>& out, int& w, int& h) {
+    tjhandle tj = tj_dec();
+    int subsamp = 0, colorspace = 0;
+    if (tjDecompressHeader3(tj, buf, (unsigned long)sz, &w, &h, &subsamp, &colorspace) != 0)
+        return false;
+    int pf = (channels == 1) ? TJPF_GRAY : TJPF_RGB;
+    out.resize((size_t)w * h * channels);
+    if (tjDecompress2(tj, buf, (unsigned long)sz, out.data(),
+                      w, 0 /*pitch*/, h, pf, TJFLAG_FASTDCT) != 0)
+        return false;
+    return true;
+}
+
+// ── Tiny thread pool for parallel per-slot JPEG decode + cpu_fx ──────────────
+//
+// Workers stay alive for the process lifetime. Each prefetch round submits
+// up to MAX_VIDEO_TRACKS tasks and waits for the batch to complete before
+// the main thread does GL uploads.
+namespace {
+struct ThreadPool {
+    std::vector<std::thread>          workers;
+    std::deque<std::function<void()>> q;
+    std::mutex                        mu;
+    std::condition_variable           cv_task;
+    std::condition_variable           cv_done;
+    std::atomic<int>                  inflight{0};
+    bool                              stop = false;
+
+    void start(int n) {
+        if (!workers.empty()) return;
+        for (int i = 0; i < n; ++i) {
+            workers.emplace_back([this] {
+                for (;;) {
+                    std::function<void()> task;
+                    {
+                        std::unique_lock<std::mutex> lk(mu);
+                        cv_task.wait(lk, [this]{ return stop || !q.empty(); });
+                        if (stop && q.empty()) return;
+                        task = std::move(q.front()); q.pop_front();
+                    }
+                    task();
+                    if (--inflight == 0) {
+                        std::lock_guard<std::mutex> lk(mu);
+                        cv_done.notify_all();
+                    }
+                }
+            });
+        }
+    }
+
+    void submit(std::function<void()> f) {
+        ++inflight;
+        {
+            std::lock_guard<std::mutex> lk(mu);
+            q.emplace_back(std::move(f));
+        }
+        cv_task.notify_one();
+    }
+
+    void wait_idle() {
+        std::unique_lock<std::mutex> lk(mu);
+        cv_done.wait(lk, [this]{ return inflight.load() == 0; });
+    }
+};
+}  // namespace
+static ThreadPool& pool() {
+    static ThreadPool p;
+    if (p.workers.empty()) {
+        int n = (int)std::thread::hardware_concurrency();
+        if (n < 2) n = 2;
+        if (n > MAX_VIDEO_TRACKS) n = MAX_VIDEO_TRACKS;
+        p.start(n);
+    }
+    return p;
+}
+
+// CPU-only: decode JPEG bytes → RGB into `rgb_out`, then apply pixel FX and
+// (optionally) composite to RGBA in `rgba_out`. No GL. Safe to call on any
+// thread provided rgb_out/rgba_out/corr_alpha are caller-owned (per-slot or
+// thread_local). out_w/out_h are the decoded JPEG dimensions; want_rgba_out is
+// whether the consumer should upload rgba_out (true) or rgb_out (false).
+static bool process_jpeg_cpu(const uint8_t* buf, size_t sz,
+                             const PixelFX* pfx,
+                             const uint8_t* bg_mask, int bg_mask_w, int bg_mask_h,
+                             float bg_softness,
+                             std::vector<uint8_t>& rgb_out,
+                             std::vector<uint8_t>& rgba_out,
+                             std::vector<uint8_t>& corr_alpha,
+                             int& out_w, int& out_h, bool& want_rgba_out) {
+    int w = 0, h = 0;
+    if (!tj_decode(buf, sz, 3, rgb_out, w, h)) return false;
+    uint8_t* pixels = rgb_out.data();
 
     bool do_corr_bleed = pfx && pfx->glitch_on &&
                          pfx->glitch_corruption >= 0.01f &&
                          pfx->glitch_corruption_bleed > 0.01f;
     bool bg_active = (bg_mask != nullptr && bg_mask_w > 0 && bg_mask_h > 0);
     bool want_rgba = (pfx && pfx->chroma_key_on) || do_corr_bleed || bg_active;
-
-    static std::vector<uint8_t> s_corr_alpha;  // w*h alpha mask from corruption bleed
 
     if (pfx) {
         bool need_grade = fabsf(pfx->brightness) > 0.005f || fabsf(pfx->contrast - 1.f) > 0.005f ||
@@ -517,9 +631,9 @@ static void upload_jpeg(GLuint* tex, int* tex_w, int* tex_h, bool* tex_rgba,
             cpu_apply_glitch(pixels, w, h, pfx->glitch_chroma, pfx->glitch_jitter, pfx->time);
         if (pfx->glitch_on && pfx->glitch_corruption >= 0.01f) {
             if (do_corr_bleed) {
-                s_corr_alpha.resize((size_t)w * h);
+                corr_alpha.resize((size_t)w * h);
                 cpu_apply_corruption(pixels, w, h, pfx->glitch_corruption, pfx->time,
-                                     s_corr_alpha.data(), pfx->glitch_corruption_bleed);
+                                     corr_alpha.data(), pfx->glitch_corruption_bleed);
             } else {
                 cpu_apply_corruption(pixels, w, h, pfx->glitch_corruption, pfx->time);
             }
@@ -528,6 +642,44 @@ static void upload_jpeg(GLuint* tex, int* tex_w, int* tex_h, bool* tex_rgba,
             cpu_apply_vhs(pixels, w, h, pfx->vhs_noise, pfx->vhs_bleed, pfx->vhs_tracking, pfx->time);
     }
 
+    if (want_rgba) {
+        rgba_out.resize((size_t)w * h * 4);
+        int n = w * h;
+        bool ck = pfx && pfx->chroma_key_on;
+        if (ck) {
+            cpu_apply_chroma_key(pixels, rgba_out.data(), w, h,
+                                 pfx->chroma_key_r, pfx->chroma_key_g, pfx->chroma_key_b,
+                                 pfx->chroma_key_threshold, pfx->chroma_key_softness);
+            if (do_corr_bleed) {
+                for (int i = 0; i < n; ++i)
+                    rgba_out[i*4+3] = (uint8_t)((int)rgba_out[i*4+3] * (int)corr_alpha[i] / 255);
+            }
+        } else if (bg_active && bg_mask_w == w && bg_mask_h == h) {
+            for (int i = 0; i < n; ++i) {
+                rgba_out[i*4+0] = pixels[i*3+0];
+                rgba_out[i*4+1] = pixels[i*3+1];
+                rgba_out[i*4+2] = pixels[i*3+2];
+                float a = bg_mask[i] / 255.f;
+                if (bg_softness > 0.01f) a = powf(a, 1.f + bg_softness * 3.f);
+                rgba_out[i*4+3] = (uint8_t)(a * 255.f + 0.5f);
+            }
+        } else {
+            for (int i = 0; i < n; ++i) {
+                rgba_out[i*4+0] = pixels[i*3+0];
+                rgba_out[i*4+1] = pixels[i*3+1];
+                rgba_out[i*4+2] = pixels[i*3+2];
+                rgba_out[i*4+3] = corr_alpha[i];
+            }
+        }
+    }
+
+    out_w = w; out_h = h; want_rgba_out = want_rgba;
+    return true;
+}
+
+// Main-thread GL upload of pre-decoded pixels into the given texture slot.
+static void upload_pixels_gl(GLuint* tex, int* tex_w, int* tex_h, bool* tex_rgba,
+                             const uint8_t* pixels, int w, int h, bool want_rgba) {
     if (*tex == 0) {
         glGenTextures(1, tex);
         glBindTexture(GL_TEXTURE_2D, *tex);
@@ -541,64 +693,32 @@ static void upload_jpeg(GLuint* tex, int* tex_w, int* tex_h, bool* tex_rgba,
 
     bool format_changed = tex_rgba && (*tex_rgba != want_rgba);
     bool size_changed   = (w != *tex_w || h != *tex_h);
-
-    if (want_rgba) {
-        static std::vector<uint8_t> s_rgba;
-        s_rgba.resize((size_t)w * h * 4);
-        int n = w * h;
-
-        bool ck = pfx && pfx->chroma_key_on;
-        if (ck) {
-            // Chroma key → RGBA; then multiply by corruption bleed alpha if both active
-            cpu_apply_chroma_key(pixels, s_rgba.data(), w, h,
-                                 pfx->chroma_key_r, pfx->chroma_key_g, pfx->chroma_key_b,
-                                 pfx->chroma_key_threshold, pfx->chroma_key_softness);
-            if (do_corr_bleed) {
-                for (int i = 0; i < n; ++i)
-                    s_rgba[i*4+3] = (uint8_t)((int)s_rgba[i*4+3] * (int)s_corr_alpha[i] / 255);
-            }
-        } else if (bg_active && bg_mask_w == w && bg_mask_h == h) {
-            // BG remove: apply rembg alpha channel to source pixels
-            for (int i = 0; i < n; ++i) {
-                s_rgba[i*4+0] = pixels[i*3+0];
-                s_rgba[i*4+1] = pixels[i*3+1];
-                s_rgba[i*4+2] = pixels[i*3+2];
-                float a = bg_mask[i] / 255.f;
-                if (bg_softness > 0.01f) a = powf(a, 1.f + bg_softness * 3.f);
-                s_rgba[i*4+3] = (uint8_t)(a * 255.f + 0.5f);
-            }
-        } else {
-            // Corruption bleed only — copy RGB from processed pixels, alpha from mask
-            for (int i = 0; i < n; ++i) {
-                s_rgba[i*4+0] = pixels[i*3+0];
-                s_rgba[i*4+1] = pixels[i*3+1];
-                s_rgba[i*4+2] = pixels[i*3+2];
-                s_rgba[i*4+3] = s_corr_alpha[i];
-            }
-        }
-
-        if (size_changed || format_changed) {
-            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0,
-                         GL_RGBA, GL_UNSIGNED_BYTE, s_rgba.data());
-        } else {
-            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h,
-                            GL_RGBA, GL_UNSIGNED_BYTE, s_rgba.data());
-        }
+    GLenum fmt = want_rgba ? GL_RGBA : GL_RGB;
+    if (size_changed || format_changed) {
+        glTexImage2D(GL_TEXTURE_2D, 0, fmt, w, h, 0, fmt, GL_UNSIGNED_BYTE, pixels);
     } else {
-        if (size_changed || format_changed) {
-            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, w, h, 0,
-                         GL_RGB, GL_UNSIGNED_BYTE, pixels);
-        } else {
-            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h,
-                            GL_RGB, GL_UNSIGNED_BYTE, pixels);
-        }
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, fmt, GL_UNSIGNED_BYTE, pixels);
     }
-
     glBindTexture(GL_TEXTURE_2D, 0);
-    stbi_image_free(pixels);
 
     *tex_w = w; *tex_h = h;
     if (tex_rgba) *tex_rgba = want_rgba;
+}
+
+// Upload a JPEG buffer into a GL texture slot, optionally applying CPU pixel FX.
+// Single-shot: used by still loaders / thumbnail. Main thread only.
+static void upload_jpeg(GLuint* tex, int* tex_w, int* tex_h, bool* tex_rgba,
+                        const uint8_t* buf, size_t sz,
+                        const PixelFX* pfx = nullptr,
+                        const uint8_t* bg_mask = nullptr, int bg_mask_w = 0, int bg_mask_h = 0,
+                        float bg_softness = 0.f) {
+    thread_local std::vector<uint8_t> tl_rgb, tl_rgba, tl_corr;
+    int w = 0, h = 0; bool want_rgba = false;
+    if (!process_jpeg_cpu(buf, sz, pfx, bg_mask, bg_mask_w, bg_mask_h, bg_softness,
+                          tl_rgb, tl_rgba, tl_corr, w, h, want_rgba))
+        return;
+    const uint8_t* src = want_rgba ? tl_rgba.data() : tl_rgb.data();
+    upload_pixels_gl(tex, tex_w, tex_h, tex_rgba, src, w, h, want_rgba);
 }
 
 // ── BG mask MJPEG helpers ─────────────────────────────────────────────────────
@@ -646,45 +766,52 @@ static void bg_mjpeg_open(PreviewState& pv, const std::string& mdir) {
     if (pv.bg_mjpeg_file) bg_mjpeg_scan(pv);
 }
 
-// ── Internal: read one JPEG frame from a proxy at frame_idx ──────────────────
+// ── Internal: prepare (CPU-only) one proxy frame for upload ──────────────────
+//
+// Reads JPEG bytes from pv.mjpeg_file (per-slot FILE*, safe on a worker
+// thread), decodes via libjpeg-turbo, applies CPU FX and bg_remove mask
+// compositing. Result is left in pv.rgb_pixels / pv.rgba_pixels, with
+// pv.prepared_* describing the result. No GL calls — call upload_prepared_gl()
+// on the main thread afterwards.
+//
+// Returns true if a frame was prepared, false if the read/decode failed and
+// the caller should fall back to whatever texture is already bound.
+static bool prepare_proxy_frame_cpu(PreviewState& pv, int frame_idx) {
+    pv.prepared_ready = false;
+    if (!pv.mjpeg_file || pv.proxy.offsets.empty()) return false;
+    if (frame_idx < 0 || (size_t)frame_idx >= pv.proxy.offsets.size()) return false;
 
-static uintptr_t decode_proxy_frame(PreviewState& pv, int frame_idx) {
     uint64_t offset = pv.proxy.offsets[(size_t)frame_idx];
-    bool is_last = ((size_t)frame_idx + 1 >= pv.proxy.offsets.size());
+    bool is_last    = ((size_t)frame_idx + 1 >= pv.proxy.offsets.size());
 
     size_t frame_sz = 0;
     if (!is_last) {
         frame_sz = (size_t)(pv.proxy.offsets[(size_t)frame_idx + 1] - offset);
     } else {
-        fseeko(pv.mjpeg_file, (off_t)offset, SEEK_SET);
-        long cur = ftell(pv.mjpeg_file);
         fseeko(pv.mjpeg_file, 0, SEEK_END);
         long end = ftell(pv.mjpeg_file);
-        frame_sz = (end > cur) ? (size_t)(end - cur) : 0;
+        frame_sz = (end > (long)offset) ? (size_t)((long)end - (long)offset) : 0;
     }
-    if (frame_sz == 0) return pv.tex ? (uintptr_t)pv.tex : 0;
+    if (frame_sz == 0) return false;
 
-    static std::vector<uint8_t> s_buf;
-    s_buf.resize(frame_sz);
+    pv.jpeg_buf.resize(frame_sz);
     fseeko(pv.mjpeg_file, (off_t)offset, SEEK_SET);
-    size_t got = fread(s_buf.data(), 1, frame_sz, pv.mjpeg_file);
-    if (got == 0) return pv.tex ? (uintptr_t)pv.tex : 0;
+    size_t got = fread(pv.jpeg_buf.data(), 1, frame_sz, pv.mjpeg_file);
+    if (got == 0) return false;
 
     // Datamosh: corrupt JPEG bytes before decode for real Huffman decoder artifacts
     if (pv.pixel_fx.datamosh_on && pv.pixel_fx.datamosh_intensity > 0.01f) {
         uint32_t seed = (uint32_t)(pv.pixel_fx.time * 60.f);
-        corrupt_jpeg_buf(s_buf.data(), got, pv.pixel_fx.datamosh_intensity, seed);
+        corrupt_jpeg_buf(pv.jpeg_buf.data(), got, pv.pixel_fx.datamosh_intensity, seed);
     }
 
     // Load bg_remove mask for this frame from the streaming mask MJPEG.
     if (pv.pixel_fx.bg_remove_on && !pv.pixel_fx.bg_remove_mask_dir.empty()) {
         const std::string& mdir = pv.pixel_fx.bg_remove_mask_dir;
-
-        // (Re)open if mask dir changed.
         if (mdir != pv.bg_mjpeg_dir)
             bg_mjpeg_open(pv, mdir);
         else
-            bg_mjpeg_scan(pv);  // pick up newly appended frames
+            bg_mjpeg_scan(pv);
 
         int mask_idx = frame_idx - pv.bg_mjpeg_start_frame;
         bool need    = (frame_idx != pv.bg_mask_frame);
@@ -696,9 +823,9 @@ static uintptr_t decode_proxy_frame(PreviewState& pv, int frame_idx) {
             if (pv.bg_mjpeg_file && mask_idx >= 0 &&
                 mask_idx < (int)pv.bg_mjpeg_offsets.size()) {
                 uint64_t off     = pv.bg_mjpeg_offsets[(size_t)mask_idx];
-                bool     is_last = ((size_t)mask_idx + 1 >= pv.bg_mjpeg_offsets.size());
+                bool     m_last  = ((size_t)mask_idx + 1 >= pv.bg_mjpeg_offsets.size());
                 size_t   fsz     = 0;
-                if (!is_last) {
+                if (!m_last) {
                     fsz = (size_t)(pv.bg_mjpeg_offsets[(size_t)mask_idx + 1] - off);
                 } else {
                     fseeko(pv.bg_mjpeg_file, 0, SEEK_END);
@@ -706,20 +833,14 @@ static uintptr_t decode_proxy_frame(PreviewState& pv, int frame_idx) {
                     fsz = (end > (long)off) ? (size_t)(end - off) : 0;
                 }
                 if (fsz > 0) {
-                    static std::vector<uint8_t> s_mbuf;
-                    s_mbuf.resize(fsz);
+                    pv.mask_jpeg_buf.resize(fsz);
                     fseeko(pv.bg_mjpeg_file, (off_t)off, SEEK_SET);
-                    size_t got = fread(s_mbuf.data(), 1, fsz, pv.bg_mjpeg_file);
-                    if (got > 0) {
-                        int mw, mh, mc;
-                        uint8_t* dec = stbi_load_from_memory(
-                            s_mbuf.data(), (int)got, &mw, &mh, &mc, 1);
-                        if (dec) {
-                            pv.bg_mask_alpha.resize((size_t)mw * mh);
-                            memcpy(pv.bg_mask_alpha.data(), dec, (size_t)mw * mh);
+                    size_t mgot = fread(pv.mask_jpeg_buf.data(), 1, fsz, pv.bg_mjpeg_file);
+                    if (mgot > 0) {
+                        int mw = 0, mh = 0;
+                        if (tj_decode(pv.mask_jpeg_buf.data(), mgot, 1,
+                                      pv.bg_mask_alpha, mw, mh)) {
                             pv.bg_mask_w = mw; pv.bg_mask_h = mh;
-                            stbi_image_free(dec);
-
                             // Apply bounding box: zero alpha outside the user-defined rect.
                             if (pv.pixel_fx.bg_remove_box_on && mw > 0 && mh > 0) {
                                 int xl = (int)(pv.pixel_fx.bg_remove_box_l * mw);
@@ -747,10 +868,37 @@ static uintptr_t decode_proxy_frame(PreviewState& pv, int frame_idx) {
     const uint8_t* bg_ptr = (pv.pixel_fx.bg_remove_on && !pv.bg_mask_alpha.empty())
                             ? pv.bg_mask_alpha.data() : nullptr;
 
-    upload_jpeg(&pv.tex, &pv.tex_w, &pv.tex_h, &pv.tex_rgba, s_buf.data(), got, &pv.pixel_fx,
-                bg_ptr, pv.bg_mask_w, pv.bg_mask_h, pv.pixel_fx.bg_remove_softness);
+    int w = 0, h = 0; bool want_rgba = false;
+    if (!process_jpeg_cpu(pv.jpeg_buf.data(), got, &pv.pixel_fx,
+                          bg_ptr, pv.bg_mask_w, pv.bg_mask_h,
+                          pv.pixel_fx.bg_remove_softness,
+                          pv.rgb_pixels, pv.rgba_pixels, pv.corr_alpha,
+                          w, h, want_rgba))
+        return false;
 
+    pv.prepared_ready  = true;
+    pv.prepared_frame  = frame_idx;
+    pv.prepared_w      = w;
+    pv.prepared_h      = h;
+    pv.prepared_rgba   = want_rgba;
+    return true;
+}
+
+// Main-thread: upload the pixels prepared by prepare_proxy_frame_cpu().
+static uintptr_t upload_prepared_gl(PreviewState& pv) {
+    if (!pv.prepared_ready) return pv.tex ? (uintptr_t)pv.tex : 0;
+    const uint8_t* src = pv.prepared_rgba ? pv.rgba_pixels.data() : pv.rgb_pixels.data();
+    upload_pixels_gl(&pv.tex, &pv.tex_w, &pv.tex_h, &pv.tex_rgba,
+                     src, pv.prepared_w, pv.prepared_h, pv.prepared_rgba);
+    pv.prepared_ready = false;
     return pv.tex ? (uintptr_t)pv.tex : 0;
+}
+
+// Synchronous single-slot decode + upload (legacy path).
+static uintptr_t decode_proxy_frame(PreviewState& pv, int frame_idx) {
+    if (!prepare_proxy_frame_cpu(pv, frame_idx))
+        return pv.tex ? (uintptr_t)pv.tex : 0;
+    return upload_prepared_gl(pv);
 }
 
 // ── Preview API ───────────────────────────────────────────────────────────────
@@ -848,20 +996,14 @@ void video_set_pixel_fx(int track_id, const PixelFX& fx) {
     }
 }
 
-uintptr_t video_get_texture(int track_id, double playhead) {
-    if (track_id < 0 || track_id >= MAX_VIDEO_TRACKS) return 0;
-    PreviewState& pv = g_pv[track_id];
-    if (!pv.is_open) return 0;
-
-    if (!pv.is_proxy)
-        return pv.tex ? (uintptr_t)pv.tex : 0;
-
-    if (!pv.mjpeg_file || pv.proxy.offsets.empty()) return 0;
-
+// Compute the proxy frame index for a given playhead time on the given slot.
+// Returns -1 if the slot is not a proxy / not open.
+static int playhead_to_frame_idx(const PreviewState& pv, double playhead) {
+    if (!pv.is_open || !pv.is_proxy) return -1;
+    if (!pv.mjpeg_file || pv.proxy.offsets.empty()) return -1;
     double dur = pv.info.duration;
     if (playhead < 0.0) playhead = 0.0;
     if (dur > 0.0 && playhead > dur) playhead = dur;
-
     int64_t num = pv.proxy.fps_num;
     int64_t den = pv.proxy.fps_den;
     int frame_idx = (num > 0 && den > 0)
@@ -870,6 +1012,27 @@ uintptr_t video_get_texture(int track_id, double playhead) {
     if (frame_idx >= (int)pv.proxy.offsets.size())
         frame_idx = (int)pv.proxy.offsets.size() - 1;
     if (frame_idx < 0) frame_idx = 0;
+    return frame_idx;
+}
+
+uintptr_t video_get_texture(int track_id, double playhead) {
+    if (track_id < 0 || track_id >= MAX_VIDEO_TRACKS) return 0;
+    PreviewState& pv = g_pv[track_id];
+    if (!pv.is_open) return 0;
+
+    if (!pv.is_proxy)
+        return pv.tex ? (uintptr_t)pv.tex : 0;
+
+    int frame_idx = playhead_to_frame_idx(pv, playhead);
+    if (frame_idx < 0) return 0;
+
+    // Fast path: a prefetch round already prepared this exact frame on a
+    // worker thread — just push it to GL.
+    if (pv.prepared_ready && pv.prepared_frame == frame_idx) {
+        pv.pixel_fx_dirty = false;
+        pv.last_frame_idx = frame_idx;
+        return upload_prepared_gl(pv);
+    }
 
     if (frame_idx == pv.last_frame_idx && pv.tex && !pv.pixel_fx_dirty)
         return (uintptr_t)pv.tex;
@@ -877,6 +1040,46 @@ uintptr_t video_get_texture(int track_id, double playhead) {
     pv.pixel_fx_dirty = false;
     pv.last_frame_idx = frame_idx;
     return decode_proxy_frame(pv, frame_idx);
+}
+
+void video_prefetch_frames(const VideoPrefetchReq* reqs, int n) {
+    if (!reqs || n <= 0) return;
+
+    // Build the work list: only slots that actually need a fresh decode.
+    struct Job { PreviewState* pv; int frame_idx; };
+    Job jobs[MAX_VIDEO_TRACKS];
+    int njobs = 0;
+    for (int i = 0; i < n && njobs < MAX_VIDEO_TRACKS; ++i) {
+        int t = reqs[i].track_id;
+        if (t < 0 || t >= MAX_VIDEO_TRACKS) continue;
+        PreviewState& pv = g_pv[t];
+        if (!pv.is_open || !pv.is_proxy) continue;
+        int fidx = playhead_to_frame_idx(pv, reqs[i].playhead);
+        if (fidx < 0) continue;
+        // Cached and no fx change → nothing to do.
+        if (fidx == pv.last_frame_idx && pv.tex && !pv.pixel_fx_dirty) continue;
+        // Already prepared for this frame → upload not yet done; reuse.
+        if (pv.prepared_ready && pv.prepared_frame == fidx) continue;
+        jobs[njobs++] = {&pv, fidx};
+    }
+    if (njobs == 0) return;
+
+    // 0/1 job: skip the pool entirely (no thread hand-off cost).
+    if (njobs == 1) {
+        prepare_proxy_frame_cpu(*jobs[0].pv, jobs[0].frame_idx);
+        return;
+    }
+
+    // Dispatch parallel CPU prepare across worker threads. The GL upload is
+    // deliberately left for video_get_texture()'s fast path (which runs on the
+    // main thread when the canvas draw loop reaches each track).
+    ThreadPool& tp = pool();
+    for (int i = 0; i < njobs; ++i) {
+        PreviewState* pv = jobs[i].pv;
+        int fidx = jobs[i].frame_idx;
+        tp.submit([pv, fidx]{ prepare_proxy_frame_cpu(*pv, fidx); });
+    }
+    tp.wait_idle();
 }
 
 uintptr_t video_get_thumbnail(double t, int* out_w, int* out_h) {

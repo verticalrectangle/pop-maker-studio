@@ -18,6 +18,7 @@ pkg_check_modules(SWSCALE   REQUIRED libswscale)
 pkg_check_modules(FREETYPE  REQUIRED freetype2)
 pkg_check_modules(AUBIO     REQUIRED aubio)
 pkg_check_modules(VTERM     REQUIRED vterm)
+pkg_check_modules(TURBOJPEG REQUIRED libturbojpeg)
 
 # ── ImGui ─────────────────────────────────────────────────────────────────────
 set(IMGUI_DIR ${CMAKE_SOURCE_DIR}/vendor/imgui)
@@ -103,6 +104,7 @@ target_include_directories(pop-maker-studio PRIVATE
     ${FREETYPE_INCLUDE_DIRS}
     ${AUBIO_INCLUDE_DIRS}
     ${VTERM_INCLUDE_DIRS}
+    ${TURBOJPEG_INCLUDE_DIRS}
 )
 
 target_link_libraries(pop-maker-studio PRIVATE
@@ -116,6 +118,7 @@ target_link_libraries(pop-maker-studio PRIVATE
     ${FREETYPE_LIBRARIES}
     ${AUBIO_LIBRARIES}
     ${VTERM_LIBRARIES}
+    ${TURBOJPEG_LIBRARIES}
     onnxruntime
     $<IF:$<TARGET_EXISTS:whisper::whisper>,whisper::whisper,whisper>
     fftw3f

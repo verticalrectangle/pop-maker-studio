@@ -1618,6 +1618,7 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         state = AppState{};
         state.models_ready   = mr;
         state.models_skipped = ms;
+        state.splash_timer   = 0.f;
         return json::object();
     }
 
