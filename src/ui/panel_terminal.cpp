@@ -241,17 +241,21 @@ void draw_terminal_panel(AppState& state, float panel_w, float panel_h) {
                     vterm_screen_get_cell(s_term.vts, pos, &cell);
                 }
 
-                float cx = origin.x + col * cell_w;
-                float cy = origin.y + row * cell_h;
+                // Skip vterm continuation cells (right half of a double-wide char).
+                if (cell.width == 0) continue;
+
+                float w   = cell_w * (cell.width >= 2 ? 2.f : 1.f);
+                float cx  = origin.x + col * cell_w;
+                float cy  = origin.y + row * cell_h;
 
                 ImU32 bg = vcolor_to_u32(s_term.vts, cell.bg, true);
                 bool  is_cursor = !in_history &&
                                   (row == cursor_pos.row && col == cursor_pos.col);
                 if (is_cursor && s_focused) {
-                    dl->AddRectFilled({cx, cy}, {cx + cell_w, cy + cell_h},
+                    dl->AddRectFilled({cx, cy}, {cx + w, cy + cell_h},
                                       IM_COL32(200, 200, 255, 200));
                 } else if (bg != kTermBg) {
-                    dl->AddRectFilled({cx, cy}, {cx + cell_w, cy + cell_h}, bg);
+                    dl->AddRectFilled({cx, cy}, {cx + w, cy + cell_h}, bg);
                 }
 
                 if (cell.chars[0] && cell.chars[0] != ' ') {
@@ -262,6 +266,9 @@ void draw_terminal_panel(AppState& state, float panel_w, float panel_h) {
                         : vcolor_to_u32(s_term.vts, cell.fg, false);
                     dl->AddText({cx, cy}, fg, utf8);
                 }
+
+                // Advance past the continuation cell for double-wide chars.
+                if (cell.width >= 2) ++col;
             }
         }
 
