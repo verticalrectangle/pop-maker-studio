@@ -15,6 +15,11 @@ static TerminalState s_term;
 static bool          s_initialized = false;
 static bool          s_focused     = false;
 
+// Text selection (visible row/col coordinates, -1 = no selection)
+static int  s_sel_r0 = -1, s_sel_c0 = -1;  // anchor
+static int  s_sel_r1 = -1, s_sel_c1 = -1;  // cursor
+static bool s_selecting = false;
+
 
 // Tokyo Night palette — designed for low eye strain and readable contrast.
 // libvterm's default ANSI palette has very dark blues that disappear against
@@ -92,6 +97,57 @@ void draw_terminal_panel(AppState& state, float panel_w, float panel_h) {
     float cell_h = ImGui::GetTextLineHeight();
     ImGui::PopFont();
 
+    // ── Selection helpers ─────────────────────────────────────────────────────
+    auto sel_has  = [&]() {
+        return s_sel_r0 >= 0 && !(s_sel_r0 == s_sel_r1 && s_sel_c0 == s_sel_c1);
+    };
+    auto sel_norm = [&](int& r0, int& c0, int& r1, int& c1) {
+        r0 = s_sel_r0; c0 = s_sel_c0; r1 = s_sel_r1; c1 = s_sel_c1;
+        if (r0 > r1 || (r0 == r1 && c0 > c1)) { std::swap(r0, r1); std::swap(c0, c1); }
+    };
+    auto in_sel   = [&](int row, int col) -> bool {
+        if (!sel_has()) return false;
+        int r0, c0, r1, c1; sel_norm(r0, c0, r1, c1);
+        if (row < r0 || row > r1) return false;
+        if (row == r0 && col < c0) return false;
+        if (row == r1 && col > c1) return false;
+        return true;
+    };
+    auto sel_copy = [&]() {
+        std::string text;
+        std::lock_guard<std::mutex> lk(s_term.mu);
+        int r0, c0, r1, c1; sel_norm(r0, c0, r1, c1);
+        int sb = (int)s_term.scrollback.size();
+        for (int row = r0; row <= r1; ++row) {
+            int col0 = (row == r0) ? c0 : 0;
+            int col1 = (row == r1) ? c1 : s_term.cols - 1;
+            int vrow = sb - s_term.scroll_offset + row;
+            std::string line;
+            for (int col = col0; col <= col1; ++col) {
+                VTermScreenCell cell = {};
+                if (vrow < sb) {
+                    const auto& sbrow = s_term.scrollback[(size_t)vrow];
+                    if (col < (int)sbrow.cells.size()) cell = sbrow.cells[col];
+                } else {
+                    VTermPos pos = {vrow - sb, col};
+                    vterm_screen_get_cell(s_term.vts, pos, &cell);
+                }
+                if (cell.chars[0] && cell.chars[0] != ' ') {
+                    char utf8[8] = {};
+                    cp_to_utf8(cell.chars[0], utf8);
+                    line += utf8;
+                } else {
+                    line += ' ';
+                }
+            }
+            while (!line.empty() && line.back() == ' ') line.pop_back();
+            text += line;
+            if (row < r1) text += '\n';
+        }
+        ImGui::SetClipboardText(text.c_str());
+        s_sel_r0 = -1;
+    };
+
     // Reserve 1px top border + bottom padding
     float output_h = panel_h - 2.f;
     if (output_h < cell_h) output_h = cell_h;
@@ -152,8 +208,17 @@ void draw_terminal_panel(AppState& state, float panel_w, float panel_h) {
         wp(ImGuiKey_PageUp,    "\x1b[5~",  4, false);
         wp(ImGuiKey_PageDown,  "\x1b[6~",  4, false);
 
-        // Ctrl+letter (A=1 … Z=26)
-        if (io.KeyCtrl) {
+        // Ctrl+Shift+C/V: copy/paste (intercepted before Ctrl+letter passthrough)
+        if (io.KeyCtrl && io.KeyShift) {
+            if (ImGui::IsKeyPressed(ImGuiKey_C, false) && sel_has()) { sel_copy(); }
+            if (ImGui::IsKeyPressed(ImGuiKey_V, false)) {
+                const char* cb = ImGui::GetClipboardText();
+                if (cb && *cb) { terminal_write(s_term, cb, std::strlen(cb)); wrote_something = true; }
+            }
+        }
+
+        // Ctrl+letter (A=1 … Z=26) — skip when Shift is held (Ctrl+Shift+C/V above)
+        if (io.KeyCtrl && !io.KeyShift) {
             for (int k = ImGuiKey_A; k <= ImGuiKey_Z; k++) {
                 if (ImGui::IsKeyPressed((ImGuiKey)k, true)) {
                     char ctrl = (char)(1 + (k - ImGuiKey_A));
@@ -163,7 +228,7 @@ void draw_terminal_panel(AppState& state, float panel_w, float panel_h) {
             }
         }
 
-        if (wrote_something) s_term.scroll_offset = 0;
+        if (wrote_something) { s_term.scroll_offset = 0; s_sel_r0 = -1; }
     }
 
     // ── OS file drop onto terminal ────────────────────────────────────────────
@@ -189,8 +254,43 @@ void draw_terminal_panel(AppState& state, float panel_w, float panel_h) {
     ImGui::SetCursorScreenPos(origin);
     ImGui::SetNextItemAllowOverlap();
     ImGui::InvisibleButton("##term_focus_btn", {panel_w, output_h});
-    if (ImGui::IsItemClicked())
-        s_focused = true;
+    {
+        ImVec2 mp = ImGui::GetIO().MousePos;
+        // Left click: focus + start selection
+        if (ImGui::IsItemClicked(ImGuiMouseButton_Left)) {
+            s_focused = true;
+            s_sel_r0 = s_sel_r1 = std::clamp((int)((mp.y - origin.y) / cell_h), 0, s_term.rows - 1);
+            s_sel_c0 = s_sel_c1 = std::clamp((int)((mp.x - origin.x) / cell_w), 0, s_term.cols - 1);
+            s_selecting = true;
+        }
+        // Drag: extend selection
+        if (s_selecting && ImGui::IsItemActive()) {
+            s_sel_r1 = std::clamp((int)((mp.y - origin.y) / cell_h), 0, s_term.rows - 1);
+            s_sel_c1 = std::clamp((int)((mp.x - origin.x) / cell_w), 0, s_term.cols - 1);
+        }
+        if (s_selecting && ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
+            s_selecting = false;
+            if (s_sel_r0 == s_sel_r1 && s_sel_c0 == s_sel_c1) s_sel_r0 = -1;
+        }
+        // Right-click: context menu
+        if (ImGui::IsItemClicked(ImGuiMouseButton_Right)) ImGui::OpenPopup("##term_ctx");
+        if (ImGui::BeginPopup("##term_ctx")) {
+            ImGui::PushStyleColor(ImGuiCol_PopupBg, IM_COL32(0x1e, 0x1f, 0x2e, 245));
+            if (ImGui::MenuItem("Copy",  "Ctrl+Shift+C", false, sel_has())) sel_copy();
+            ImGui::BeginDisabled();
+            ImGui::MenuItem("Cut", "Ctrl+Shift+X");
+            ImGui::EndDisabled();
+            ImGui::Separator();
+            const char* cb = ImGui::GetClipboardText();
+            bool has_cb = cb && *cb;
+            if (ImGui::MenuItem("Paste", "Ctrl+Shift+V", false, has_cb)) {
+                terminal_write(s_term, cb, std::strlen(cb));
+                s_term.scroll_offset = 0;
+            }
+            ImGui::PopStyleColor();
+            ImGui::EndPopup();
+        }
+    }
 
     if (!terminal_alive(s_term)) {
         // Shell exited — show status text
@@ -257,6 +357,8 @@ void draw_terminal_panel(AppState& state, float panel_w, float panel_h) {
                 } else if (bg != kTermBg) {
                     dl->AddRectFilled({cx, cy}, {cx + w, cy + cell_h}, bg);
                 }
+                if (in_sel(row, col))
+                    dl->AddRectFilled({cx, cy}, {cx + w, cy + cell_h}, IM_COL32(0x3d, 0x59, 0xa1, 150));
 
                 if (cell.chars[0] && cell.chars[0] != ' ') {
                     char utf8[8] = {};
