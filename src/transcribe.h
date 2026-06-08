@@ -1,12 +1,7 @@
 #pragma once
 #include "app.h"
 #include <string>
-
-enum class PipelineMode {
-    Both,        // Demucs + transcription
-    TranscribeOnly,  // transcription on original file (no Demucs)
-    SeparateOnly,    // Demucs only, no subtitles
-};
+// PipelineMode is defined in app.h so AppState can hold last_pipeline_mode.
 
 // Kick off ml_pipeline.py as a subprocess.
 // Writes progress to `status` from a background thread.

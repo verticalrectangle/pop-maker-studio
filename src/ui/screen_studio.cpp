@@ -352,24 +352,21 @@ void ui_studio(AppState& state) {
     if (last_stage != PipelineStage::Done &&
         state.pipeline.stage == PipelineStage::Done) {
 
-        if (state.pipeline_produces_subtitles) {
+        // Pipeline completion is data-only: load the transcript / save SRTs / add
+        // the vocals track for SeparateOnly runs. It NEVER mutates the timeline
+        // with lyric clips on its own — callers (UI buttons, MCP) decide what
+        // to do next via state.pipeline_on_done.
+        PipelineMode m = state.last_pipeline_mode;
+        if (m == PipelineMode::TranscribeOnly) {
             state.lyrics_edits.clear();
             load_words_cache(state);
-            // TranscribeOnly: populate word cache and SRTs without adding any tracks.
             save_all_srts(state);
-        } else if (!state.pipeline_is_separate_only) {
-            // Both mode: has words + vocals
+        } else if (m == PipelineMode::Both) {
             state.lyrics_edits.clear();
             load_words_cache(state);
-            // Skip apply_subtitle_mode when typography will regenerate from words_cache immediately after
-            if (!state.typo_generate_when_done)
-                apply_subtitle_mode(state);
             save_all_srts(state);
-        }
-        // SeparateOnly: no words, skip subtitle machinery entirely
-
-        // Add vocals stem to timeline only for explicit "Separate vocals" runs
-        if (state.pipeline_is_separate_only && !state.vocals_path.empty() && fs::exists(state.vocals_path)) {
+        } else if (m == PipelineMode::SeparateOnly &&
+                   !state.vocals_path.empty() && fs::exists(state.vocals_path)) {
             bool already_present = false;
             for (auto& t : state.tracks)
                 for (auto& c : t.clips)
@@ -392,12 +389,14 @@ void ui_studio(AppState& state) {
         run_beat_detect(state);
         run_envelope_extract(state);
 
-        if (state.typo_generate_when_done) {
-            state.typo_generate_when_done = false;
-            generate_typography(state);
+        // Run the caller-supplied completion action exactly once, then clear it.
+        // UI buttons set this to apply_subtitle_mode or generate_typography;
+        // MCP trigger_pipeline leaves it null so the timeline stays clean.
+        if (state.pipeline_on_done) {
+            auto cb = std::move(state.pipeline_on_done);
+            state.pipeline_on_done = {};
+            cb(state);
         }
-
-        state.pipeline_is_separate_only = false;
     }
     last_stage = state.pipeline.stage;
 

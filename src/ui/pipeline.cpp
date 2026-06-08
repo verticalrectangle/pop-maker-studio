@@ -800,8 +800,7 @@ void kick_pipeline(AppState& state, const std::string& path, PipelineMode mode) 
     state.vocals_path        = vocals_out;
     state.out_wav            = vocals_out;
 
-    state.pipeline_produces_subtitles = (mode == PipelineMode::TranscribeOnly);
-    state.pipeline_is_separate_only   = (mode == PipelineMode::SeparateOnly);
+    state.last_pipeline_mode = mode;
 
     // Get MJPEG proxy FPS so forced alignment can snap timestamps to frame boundaries
     double proxy_fps = 0.0;

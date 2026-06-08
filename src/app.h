@@ -12,6 +12,15 @@
 #include <array>
 #include <algorithm>
 #include <cmath>
+#include <functional>
+
+struct AppState;
+
+enum class PipelineMode {
+    Both,            // Demucs + transcription
+    TranscribeOnly,  // transcription on original file (no Demucs)
+    SeparateOnly,    // Demucs only, no subtitles
+};
 
 // ── Keyframing ────────────────────────────────────────────────────────────────
 
@@ -594,9 +603,15 @@ struct AppState {
     // subtitle grouping (legacy, kept for project compat)
     SubtitleMode subtitle_mode = SubtitleMode::Word;
     int          subtitle_n    = 3;
-    bool         pipeline_produces_subtitles  = false;
-    bool         pipeline_is_separate_only   = false;  // SeparateOnly run: skip subtitle apply, add vocals track
-    bool         typo_generate_when_done     = false;  // "Make lyric video" sets this; fires generate_typography after pipeline
+
+    // Pipeline completion state. kick_pipeline() records the mode it was launched
+    // with so the async completion handler knows what kind of work just finished
+    // (transcript vs separation). pipeline_on_done is an optional callback the
+    // caller sets *before* kicking the pipeline — UI buttons use it to chain
+    // apply_subtitle_mode or generate_typography after completion. MCP
+    // trigger_pipeline leaves it null so the timeline is never mutated.
+    PipelineMode                       last_pipeline_mode = PipelineMode::Both;
+    std::function<void(AppState&)>     pipeline_on_done;
 
     // typography
     std::string  typo_preset_id  = "flash";     // active preset id

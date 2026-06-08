@@ -1436,6 +1436,10 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         std::string src = params.value("path", "");
         if (!src.empty()) state.audio_path = src;
         if (state.audio_path.empty()) { err = "no audio file loaded"; return {}; }
+        // MCP callers expect the transcript only — no surprise lyric clips on the
+        // timeline. Leaving pipeline_on_done null means the completion handler
+        // does its data-loading work and stops there.
+        state.pipeline_on_done = {};
         kick_pipeline(state, state.audio_path, mode);
         if (client_fd < 0) { return json::object(); }
         fd_mark_busy(client_fd);

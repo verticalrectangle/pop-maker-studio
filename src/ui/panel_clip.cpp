@@ -1345,9 +1345,9 @@ void panel_clip(AppState& state, float w) {
                 if (ui_btn("Cancel##aipipe", false, true)) transcribe_cancel();
             };
 
-            bool is_lyrics   = busy && !state.pipeline_is_separate_only && !state.pipeline_produces_subtitles;
-            bool is_subs     = busy && state.pipeline_produces_subtitles && !state.pipeline_is_separate_only;
-            bool is_separate = busy && state.pipeline_is_separate_only;
+            bool is_lyrics   = busy && state.last_pipeline_mode == PipelineMode::Both;
+            bool is_subs     = busy && state.last_pipeline_mode == PipelineMode::TranscribeOnly;
+            bool is_separate = busy && state.last_pipeline_mode == PipelineMode::SeparateOnly;
 
             // Extract Lyrics
             ImGui::Dummy({0.f, 10.f}); ui_separator(); ImGui::Dummy({0.f, 6.f});
@@ -1359,7 +1359,10 @@ void panel_clip(AppState& state, float w) {
             ImGui::Dummy({0.f, 4.f});
             if (is_lyrics) { ai_progress(); }
             else { if (!has_path || busy) ImGui::BeginDisabled();
-                   if (ui_btn("Extract Lyrics", false, true)) kick_pipeline(state, clip.text, PipelineMode::Both);
+                   if (ui_btn("Extract Lyrics", false, true)) {
+                       state.pipeline_on_done = apply_subtitle_mode;
+                       kick_pipeline(state, clip.text, PipelineMode::Both);
+                   }
                    if (!has_path || busy) ImGui::EndDisabled(); }
 
             // Extract Subtitles
@@ -1372,7 +1375,10 @@ void panel_clip(AppState& state, float w) {
             ImGui::Dummy({0.f, 4.f});
             if (is_subs) { ai_progress(); }
             else { if (!has_path || busy) ImGui::BeginDisabled();
-                   if (ui_btn("Extract Subtitles", false, true)) kick_pipeline(state, clip.text, PipelineMode::TranscribeOnly);
+                   if (ui_btn("Extract Subtitles", false, true)) {
+                       state.pipeline_on_done = apply_subtitle_mode;
+                       kick_pipeline(state, clip.text, PipelineMode::TranscribeOnly);
+                   }
                    if (!has_path || busy) ImGui::EndDisabled(); }
 
             // Separate Vocals
@@ -1779,9 +1785,9 @@ void panel_clip(AppState& state, float w) {
                 if (ui_btn("Cancel##aipipe_a", false, true)) transcribe_cancel();
             };
 
-            bool is_lyrics   = busy && !state.pipeline_is_separate_only && !state.pipeline_produces_subtitles;
-            bool is_subs     = busy && state.pipeline_produces_subtitles && !state.pipeline_is_separate_only;
-            bool is_separate = busy && state.pipeline_is_separate_only;
+            bool is_lyrics   = busy && state.last_pipeline_mode == PipelineMode::Both;
+            bool is_subs     = busy && state.last_pipeline_mode == PipelineMode::TranscribeOnly;
+            bool is_separate = busy && state.last_pipeline_mode == PipelineMode::SeparateOnly;
 
             // Extract Lyrics
             ImGui::Dummy({0.f, 10.f}); ui_separator(); ImGui::Dummy({0.f, 6.f});
@@ -1793,7 +1799,10 @@ void panel_clip(AppState& state, float w) {
             ImGui::Dummy({0.f, 4.f});
             if (is_lyrics) { ai_progress(); }
             else { if (!has_path || busy) ImGui::BeginDisabled();
-                   if (ui_btn("Extract Lyrics##a", false, true)) kick_pipeline(state, clip.text, PipelineMode::Both);
+                   if (ui_btn("Extract Lyrics##a", false, true)) {
+                       state.pipeline_on_done = apply_subtitle_mode;
+                       kick_pipeline(state, clip.text, PipelineMode::Both);
+                   }
                    if (!has_path || busy) ImGui::EndDisabled(); }
 
             // Extract Subtitles
@@ -1806,7 +1815,10 @@ void panel_clip(AppState& state, float w) {
             ImGui::Dummy({0.f, 4.f});
             if (is_subs) { ai_progress(); }
             else { if (!has_path || busy) ImGui::BeginDisabled();
-                   if (ui_btn("Extract Subtitles##a", false, true)) kick_pipeline(state, clip.text, PipelineMode::TranscribeOnly);
+                   if (ui_btn("Extract Subtitles##a", false, true)) {
+                       state.pipeline_on_done = apply_subtitle_mode;
+                       kick_pipeline(state, clip.text, PipelineMode::TranscribeOnly);
+                   }
                    if (!has_path || busy) ImGui::EndDisabled(); }
 
             // Separate Vocals
