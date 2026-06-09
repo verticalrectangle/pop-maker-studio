@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <unistd.h>
+#include <deque>
 #include <string>
 #include <filesystem>
 
@@ -23,9 +24,27 @@ namespace fs = std::filesystem;
 std::string g_dropped_file;
 std::string g_managed_dir;
 
+// Multi-file drop queue. GLFW delivers all N paths in a single callback when
+// the user drags multiple files from the file browser, but downstream readers
+// (screen_studio, screen_upload, panel_terminal) consume g_dropped_file one
+// path at a time. We capture every path here and the main loop drains one
+// per frame into g_dropped_file, so the existing readers don't need to know
+// about multi-file drops and rapid sequential processing can't trip up the
+// per-file pipelines (proxy open, native decode, audio probe).
+static std::deque<std::string> g_dropped_queue;
+
 static void glfw_drop_callback(GLFWwindow*, int count, const char** paths) {
-    if (count > 0)
-        g_dropped_file = paths[0];
+    if (count <= 0 || !paths) return;
+    for (int i = 0; i < count; ++i) {
+        if (!paths[i] || !paths[i][0]) continue;
+        g_dropped_queue.emplace_back(paths[i]);
+    }
+}
+
+static void drain_dropped_queue() {
+    if (!g_dropped_file.empty() || g_dropped_queue.empty()) return;
+    g_dropped_file = std::move(g_dropped_queue.front());
+    g_dropped_queue.pop_front();
 }
 
 static void glfw_error_callback(int err, const char* desc) {
@@ -187,6 +206,7 @@ int main(int argc, char** argv) {
 
     while (!glfwWindowShouldClose(window)) {
         glfwPollEvents();
+        drain_dropped_queue();  // multi-file drops: feed one path per frame
 
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplGlfw_NewFrame();

@@ -1282,6 +1282,7 @@ void video_open_still(int track_id, const std::string& jpeg_path) {
 // h264 1080p preview frames is ~15-30 ms per frame; HW is ~5-15 ms.
 bool video_open_native(int track_id, const std::string& path) {
     if (track_id < 0 || track_id >= MAX_VIDEO_TRACKS) return false;
+    if (path.empty()) return false;
     close_slot(g_pv[track_id]);
     PreviewState& pv = g_pv[track_id];
 
@@ -1300,9 +1301,15 @@ bool video_open_native(int track_id, const std::string& path) {
     AVStream* st = pv.fmt_ctx->streams[pv.stream_idx];
     pv.stream_tb = st->time_base;
     const AVCodec* codec = avcodec_find_decoder(st->codecpar->codec_id);
-    if (!codec) { avformat_close_input(&pv.fmt_ctx); return false; }
+    if (!codec) { avformat_close_input(&pv.fmt_ctx); pv.stream_idx = -1; return false; }
     pv.dec_ctx = avcodec_alloc_context3(codec);
-    avcodec_parameters_to_context(pv.dec_ctx, st->codecpar);
+    if (!pv.dec_ctx) { avformat_close_input(&pv.fmt_ctx); pv.stream_idx = -1; return false; }
+    if (avcodec_parameters_to_context(pv.dec_ctx, st->codecpar) < 0) {
+        avcodec_free_context(&pv.dec_ctx);
+        avformat_close_input(&pv.fmt_ctx);
+        pv.stream_idx = -1;
+        return false;
+    }
 
     // Try HW first; ignore failure — we'll just run in software mode.
     try_attach_hw(pv, pv.dec_ctx, &pv.hw_dev_ctx);
