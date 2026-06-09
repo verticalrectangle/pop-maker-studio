@@ -470,7 +470,11 @@ static void cpu_apply_blur(uint8_t* px, int w, int h, float sigma) {
 // stay in memory but get skipped by ring_find()). Pure-time changes do NOT
 // bump fx_stamp unless a time-driven FX is on, so playback under static
 // FX keeps cache hits.
-static constexpr int RING_FRAMES = 4;
+//
+// 8-frame ring (~135 ms at 60 fps) gives the canvas pre-walk room to warm
+// both the active clip and a 1-second-boundary neighbor without thrashing
+// each other's entries.
+static constexpr int RING_FRAMES = 8;
 
 struct DecodedFrame {
     int      frame_idx = -1;       // -1 = empty, -2 = reserved (in-flight)
@@ -1155,6 +1159,8 @@ void video_prefetch_frames(const VideoPrefetchReq* reqs, int n) {
         if (base_fidx < 0) continue;
 
         int window = pfx_is_time_driven(pv.pixel_fx) ? 1 : RING_FRAMES;
+        if (reqs[i].max_frames > 0 && reqs[i].max_frames < window)
+            window = reqs[i].max_frames;
         int max_fidx = (int)pv.proxy.offsets.size();
         for (int k = 0; k < window; ++k) {
             int fidx = base_fidx + k;

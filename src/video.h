@@ -53,7 +53,11 @@ uintptr_t video_get_texture(int track_id, double playhead);
 // for the same (track, playhead) return the pre-decoded texture without
 // redoing work. Safe to call with 0 or 1 entries (it falls through to direct
 // decode in that case).
-struct VideoPrefetchReq { int track_id; double playhead; };
+//
+// max_frames caps the per-slot prefetch window. 0 = use the default ring size,
+// which is what active clips want. Boundary-warm neighbors use a small cap
+// (e.g. 3) so they don't drag main-thread wait_idle alongside the active clip.
+struct VideoPrefetchReq { int track_id; double playhead; int max_frames = 0; };
 void video_prefetch_frames(const VideoPrefetchReq* reqs, int n);
 
 // Thumbnail for the scrub bar hover — always uses track 0's proxy.

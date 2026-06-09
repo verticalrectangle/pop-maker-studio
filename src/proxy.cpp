@@ -5,9 +5,12 @@
 #include <cstdlib>
 #include <cstring>
 #include <atomic>
+#include <chrono>
 #include <deque>
 #include <mutex>
 #include <thread>
+#include <unordered_map>
+#include <unordered_set>
 #include <filesystem>
 
 #include <unistd.h>
@@ -17,6 +20,31 @@
 #include <fcntl.h>
 
 namespace fs = std::filesystem;
+
+// ── Ready-state cache ─────────────────────────────────────────────────────────
+//
+// Without this, proxy_is_ready() and proxy_job_status() are called from the
+// timeline draw loop on every visible video clip every frame. With 20+ clips at
+// 60 fps that's thousands of stat() syscalls per second, plus shared-mutex
+// contention with the proxy worker thread.
+//
+// "Ready" is a terminal state in a session: once a proxy exists on disk it stays
+// there until the user removes the file outside the app. So we cache positive
+// hits forever (in-session) and throttle negative re-stats to ~4 Hz per path.
+static std::mutex                              g_ready_cache_mu;
+static std::unordered_set<std::string>         g_ready_cache;
+static std::unordered_map<std::string, double> g_last_stat_ts;
+
+static double mono_now_seconds() {
+    using clock = std::chrono::steady_clock;
+    static const auto start = clock::now();
+    return std::chrono::duration<double>(clock::now() - start).count();
+}
+
+static void mark_ready_cached(const std::string& path) {
+    std::lock_guard<std::mutex> lk(g_ready_cache_mu);
+    g_ready_cache.insert(path);
+}
 
 // ── Path helpers ──────────────────────────────────────────────────────────────
 
@@ -109,8 +137,18 @@ static bool build_seek_table(const std::string& mjpeg_path,
 // ── Public API — path/ready/load (unchanged) ──────────────────────────────────
 
 bool proxy_is_ready(const std::string& video_path) {
-    return fs::exists(proxy_mjpeg_path(video_path)) &&
-           fs::exists(proxy_idx_path(video_path));
+    {
+        std::lock_guard<std::mutex> lk(g_ready_cache_mu);
+        if (g_ready_cache.count(video_path)) return true;
+        double now = mono_now_seconds();
+        auto it = g_last_stat_ts.find(video_path);
+        if (it != g_last_stat_ts.end() && now - it->second < 0.25) return false;
+        g_last_stat_ts[video_path] = now;
+    }
+    bool ready = fs::exists(proxy_mjpeg_path(video_path)) &&
+                 fs::exists(proxy_idx_path(video_path));
+    if (ready) mark_ready_cached(video_path);
+    return ready;
 }
 
 bool proxy_load(const std::string& video_path, ProxyInfo& out) {
@@ -362,6 +400,7 @@ static void proxy_worker_fn() {
         } else if (!build_seek_table(mj, idx)) {
             fs::remove(mj);
         } else {
+            mark_ready_cached(path);
             g_progress.store(1.f);
         }
 

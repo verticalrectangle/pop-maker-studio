@@ -821,16 +821,29 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
             return pfx;
         };
         std::vector<VideoPrefetchReq> reqs;
-        reqs.reserve(MAX_VIDEO_TRACKS);
-        auto add_clip = [&](const Clip* cl, float at_time, int ti) {
+        reqs.reserve(MAX_VIDEO_TRACKS * 2);
+        // Dedup by slot: each slot only needs one prefetch window per frame. The
+        // ring caches RING_FRAMES forward, so a second req for the same slot
+        // would just race for the same ring entries.
+        auto already_queued = [&](int slot) {
+            for (auto& r : reqs) if (r.track_id == slot) return true;
+            return false;
+        };
+        auto add_clip = [&](const Clip* cl, float at_time, int ti, int max_frames = 0) {
             if (!cl || cl->clip_type != ClipType::Video) return;
             int slot = slot_for_video(const_cast<AppState&>(state),
                                       clip_slot_key(cl->text, cl->start), cl->text);
             if (slot < 0 || !video_is_open(slot)) return;
+            if (already_queued(slot)) return;
             video_set_pixel_fx(slot, make_pfx(cl, ti));
             float src_t = cl->in_point + (at_time - cl->start) * cl->speed;
-            reqs.push_back({slot, (double)(src_t + lookahead)});
+            reqs.push_back({slot, (double)(src_t + lookahead), max_frames});
         };
+
+        // Boundary warm distance: prefetch the next/previous clip's slot when
+        // the playhead is within this many seconds of a clip boundary, so a
+        // scrub across the cut hits a warm ring instead of a sync JPEG decode.
+        constexpr float BOUNDARY_WARM_S = 1.0f;
 
         for (int ti = (int)state.tracks.size() - 1; ti >= 0; --ti) {
             auto& track = state.tracks[ti];
@@ -870,6 +883,26 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                     state.playhead < active->start + pc.transition_post) {
                     float at = std::fminf(state.playhead, pc.end - 1e-4f);
                     add_clip(&pc, at, ti);
+                }
+            }
+
+            // Boundary warm: forward into the upcoming clip's first frame,
+            // backward into the previous clip's last frame. add_clip's slot
+            // dedupe makes this a no-op when active/neighbor share a source.
+            // Cap warm window so we don't drag the active clip's prefetch.
+            constexpr int BOUNDARY_WARM_FRAMES = 3;
+            float t_to_end   = active->end       - state.playhead;
+            float t_to_start = state.playhead    - active->start;
+            if (t_to_end < BOUNDARY_WARM_S && active_ci + 1 < (int)track.clips.size()) {
+                const Clip& nc = track.clips[active_ci + 1];
+                if (nc.clip_type == ClipType::Video)
+                    add_clip(&nc, nc.start, ti, BOUNDARY_WARM_FRAMES);
+            }
+            if (t_to_start < BOUNDARY_WARM_S && active_ci > 0) {
+                const Clip& pc = track.clips[active_ci - 1];
+                if (pc.clip_type == ClipType::Video) {
+                    float prev_at = std::fmaxf(pc.start, pc.end - 1e-3f);
+                    add_clip(&pc, prev_at, ti, BOUNDARY_WARM_FRAMES);
                 }
             }
         }
