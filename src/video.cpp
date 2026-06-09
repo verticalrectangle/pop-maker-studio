@@ -488,14 +488,36 @@ struct DecodedFrame {
 };
 
 struct PreviewState {
+    PreviewSource source = PreviewSource::None;
+
+    // ── MJPEG proxy state (source == Proxy) ───────────────────────────────
     FILE*     mjpeg_file     = nullptr;
     ProxyInfo proxy          = {};
+
+    // ── Native libav decode state (source == Native) ──────────────────────
+    // Populated by video_open_native(). dec_ctx is HW-attached when
+    // hw_dev_ctx is non-null; sws scales decoded frames into (preview_w,
+    // preview_h) RGB so they slot straight into DecodedFrame.rgb. The
+    // last_decoded_pts lets sequential play / forward scrub skip the
+    // av_seek_frame + avcodec_flush_buffers that would otherwise restart
+    // the decoder from a keyframe on every frame.
+    AVFormatContext* fmt_ctx          = nullptr;
+    AVCodecContext*  dec_ctx          = nullptr;
+    AVBufferRef*     hw_dev_ctx       = nullptr;
+    AVPixelFormat    hw_pix_fmt       = AV_PIX_FMT_NONE;
+    SwsContext*      sws              = nullptr;
+    int              stream_idx       = -1;
+    AVRational       stream_tb        = {0, 1};
+    double           last_decoded_pts = -1.0;
+    int              preview_w        = 0;
+    int              preview_h        = 0;
+
+    // ── Common ────────────────────────────────────────────────────────────
     int       last_frame_idx = -1;
     GLuint    tex      = 0;
     int       tex_w    = 0;
     int       tex_h    = 0;
     bool      tex_rgba = false;
-    bool      is_proxy = false;
     bool      is_open  = false;
     VideoInfo info = {};
     PixelFX   pixel_fx;
@@ -514,10 +536,10 @@ struct PreviewState {
     std::vector<uint8_t> bg_mask_alpha;                // w*h alpha values
     std::vector<uint8_t> mask_jpeg_buf;                // raw JPEG bytes for bg mask (sync path)
 
-    // Serializes access to mjpeg_file / bg_mjpeg_file and the bg_mask_*
-    // streaming state. Workers hold this only for the JPEG read; CPU decode
-    // and FX run unlocked so frames N, N+1, N+2 on one slot can decode in
-    // parallel.
+    // Serializes access to mjpeg_file / fmt_ctx / dec_ctx / bg_mjpeg_file
+    // and the bg_mask_* streaming state. Workers hold this only for the
+    // disk read + decode; CPU FX runs unlocked so frames N, N+1, N+2 across
+    // different slots decode in parallel.
     std::mutex file_mu;
 
     DecodedFrame ring[RING_FRAMES];
@@ -622,23 +644,18 @@ static ThreadPool& pool() {
     return p;
 }
 
-// CPU-only: decode JPEG bytes → RGB into `rgb_out`, then apply pixel FX and
+// CPU-only: apply pixel FX to an existing RGB buffer (in-place) and
 // (optionally) composite to RGBA in `rgba_out`. No GL. Safe to call on any
-// thread provided rgb_out/rgba_out/corr_alpha are caller-owned (per-slot or
-// thread_local). out_w/out_h are the decoded JPEG dimensions; want_rgba_out is
-// whether the consumer should upload rgba_out (true) or rgb_out (false).
-static bool process_jpeg_cpu(const uint8_t* buf, size_t sz,
-                             const PixelFX* pfx,
-                             const uint8_t* bg_mask, int bg_mask_w, int bg_mask_h,
-                             float bg_softness,
-                             std::vector<uint8_t>& rgb_out,
-                             std::vector<uint8_t>& rgba_out,
-                             std::vector<uint8_t>& corr_alpha,
-                             int& out_w, int& out_h, bool& want_rgba_out) {
-    int w = 0, h = 0;
-    if (!tj_decode(buf, sz, 3, rgb_out, w, h)) return false;
-    uint8_t* pixels = rgb_out.data();
-
+// thread provided rgba_out/corr_alpha are caller-owned (per-slot or thread_local).
+// Used by both prepare_proxy_frame_cpu (after tj_decode) and prepare_native_frame_cpu
+// (after sws_scale).
+static void apply_pixel_fx_rgb(uint8_t* pixels, int w, int h,
+                               const PixelFX* pfx,
+                               const uint8_t* bg_mask, int bg_mask_w, int bg_mask_h,
+                               float bg_softness,
+                               std::vector<uint8_t>& rgba_out,
+                               std::vector<uint8_t>& corr_alpha,
+                               bool& want_rgba_out) {
     bool do_corr_bleed = pfx && pfx->glitch_on &&
                          pfx->glitch_corruption >= 0.01f &&
                          pfx->glitch_corruption_bleed > 0.01f;
@@ -698,7 +715,27 @@ static bool process_jpeg_cpu(const uint8_t* buf, size_t sz,
         }
     }
 
-    out_w = w; out_h = h; want_rgba_out = want_rgba;
+    want_rgba_out = want_rgba;
+}
+
+// CPU-only: decode JPEG bytes → RGB into `rgb_out`, then apply pixel FX and
+// (optionally) composite to RGBA in `rgba_out`. No GL. Safe to call on any
+// thread provided rgb_out/rgba_out/corr_alpha are caller-owned (per-slot or
+// thread_local). out_w/out_h are the decoded JPEG dimensions; want_rgba_out is
+// whether the consumer should upload rgba_out (true) or rgb_out (false).
+static bool process_jpeg_cpu(const uint8_t* buf, size_t sz,
+                             const PixelFX* pfx,
+                             const uint8_t* bg_mask, int bg_mask_w, int bg_mask_h,
+                             float bg_softness,
+                             std::vector<uint8_t>& rgb_out,
+                             std::vector<uint8_t>& rgba_out,
+                             std::vector<uint8_t>& corr_alpha,
+                             int& out_w, int& out_h, bool& want_rgba_out) {
+    int w = 0, h = 0;
+    if (!tj_decode(buf, sz, 3, rgb_out, w, h)) return false;
+    apply_pixel_fx_rgb(rgb_out.data(), w, h, pfx, bg_mask, bg_mask_w, bg_mask_h,
+                       bg_softness, rgba_out, corr_alpha, want_rgba_out);
+    out_w = w; out_h = h;
     return true;
 }
 
@@ -990,15 +1027,221 @@ static uintptr_t decode_proxy_frame(PreviewState& pv, int frame_idx) {
     return upload_ring_gl(pv, f);
 }
 
+// ── Native libav decode path ─────────────────────────────────────────────────
+//
+// Used as the "instant load" tier: a clip is editable / previewable the moment
+// it's added, before its MJPEG proxy finishes transcoding. libav's hwaccel auto
+// gives us GPU decode on h264 / hevc / av1 when the platform supports it
+// (VAAPI / NVDEC / VideoToolbox), with silent software fallback. Frames decode
+// → CPU transfer (or just CPU decode in software mode) → sws_scale to the same
+// preview resolution the proxy uses → write into the existing DecodedFrame ring
+// so the rest of the pipeline (FX, prefetch, GL upload) is unchanged.
+//
+// Once the proxy is on disk, screen_studio swaps the slot to PreviewSource::Proxy
+// because proxy decode is still 2-3× cheaper than native HW decode for
+// steady-state scrubbing.
+
+// HW format selection callback. The decoder picks the format that matches the
+// HW context we attached; falling back to the first SW format if HW isn't
+// usable means we still get a working picture, just slower.
+static AVPixelFormat hw_get_format(AVCodecContext* ctx, const AVPixelFormat* fmts) {
+    PreviewState* pv = (PreviewState*)ctx->opaque;
+    if (pv && pv->hw_pix_fmt != AV_PIX_FMT_NONE) {
+        for (const AVPixelFormat* p = fmts; *p != AV_PIX_FMT_NONE; ++p)
+            if (*p == pv->hw_pix_fmt) return *p;
+    }
+    return fmts[0];  // first SW fallback the decoder offered
+}
+
+// Walk the candidate HW backends in priority order and return the first one
+// that initialises. Stores the matching pixel format on the slot so
+// hw_get_format can recognise it later. Caller is responsible for unref'ing
+// *dev_out via av_buffer_unref() in close_slot.
+static bool try_attach_hw(PreviewState& pv, AVCodecContext* ctx,
+                          AVBufferRef** dev_out) {
+    static const AVHWDeviceType candidates[] = {
+        AV_HWDEVICE_TYPE_VAAPI,         // Linux Intel/AMD/NVIDIA (Mesa)
+        AV_HWDEVICE_TYPE_CUDA,          // NVIDIA proprietary
+        AV_HWDEVICE_TYPE_VDPAU,         // Older NVIDIA
+        AV_HWDEVICE_TYPE_VIDEOTOOLBOX,  // macOS
+    };
+    for (AVHWDeviceType type : candidates) {
+        AVBufferRef* dev = nullptr;
+        if (av_hwdevice_ctx_create(&dev, type, nullptr, nullptr, 0) < 0) continue;
+
+        // Find the codec's HW config that matches this device type.
+        AVPixelFormat hwfmt = AV_PIX_FMT_NONE;
+        for (int i = 0; ; ++i) {
+            const AVCodecHWConfig* cfg = avcodec_get_hw_config(ctx->codec, i);
+            if (!cfg) break;
+            if ((cfg->methods & AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX) &&
+                cfg->device_type == type) {
+                hwfmt = cfg->pix_fmt;
+                break;
+            }
+        }
+        if (hwfmt == AV_PIX_FMT_NONE) { av_buffer_unref(&dev); continue; }
+
+        pv.hw_pix_fmt    = hwfmt;
+        ctx->opaque      = &pv;
+        ctx->hw_device_ctx = av_buffer_ref(dev);
+        ctx->get_format    = hw_get_format;
+        *dev_out = dev;
+        return true;
+    }
+    return false;
+}
+
+static int max_frame_idx_for(const PreviewState& pv) {
+    if (pv.source == PreviewSource::Proxy)
+        return (int)pv.proxy.offsets.size();
+    if (pv.source == PreviewSource::Native && pv.info.fps > 0.0)
+        return (int)(pv.info.duration * pv.info.fps + 0.5);
+    return 0;
+}
+
+// Decode (or sequentially advance) to the given frame index, transfer to CPU
+// if it landed in HW memory, sws_scale into f.rgb at preview resolution, then
+// apply CPU pixel FX. Mirrors prepare_proxy_frame_cpu's "phase 1 locked, phase
+// 2 unlocked" pattern. last_decoded_pts lets sequential play / forward scrub
+// skip the av_seek_frame + avcodec_flush_buffers that would otherwise restart
+// the decoder from the prior keyframe on every single frame — for a 5 s GOP
+// at 30 fps that's the difference between decoding 1 frame vs. 150.
+static void prepare_native_frame_cpu(PreviewState& pv, DecodedFrame& f, int frame_idx) {
+    auto release_empty = [&]{ f.frame_idx = -1; };
+    if (!pv.fmt_ctx || !pv.dec_ctx) { release_empty(); return; }
+    if (pv.info.fps <= 0.0)         { release_empty(); return; }
+
+    double target_t   = (double)frame_idx / pv.info.fps;
+    double frame_dur  = 1.0 / pv.info.fps;
+
+    PixelFX pfx;
+    uint64_t stamp_at_decode = 0;
+    int out_w = 0, out_h = 0;
+
+    // ── Phase 1 (locked): demux + decode + sws_scale ────────────────────────
+    {
+        std::lock_guard<std::mutex> lk(pv.file_mu);
+        pfx             = pv.pixel_fx;
+        stamp_at_decode = pv.fx_stamp;
+
+        // Sequential decode: skip seek+flush when target is the natural next
+        // frame (or within ~8 frames forward — bigger jumps justify a seek).
+        bool need_seek = (pv.last_decoded_pts < 0.0)
+                      || (target_t <= pv.last_decoded_pts - frame_dur * 0.5)
+                      || (target_t >  pv.last_decoded_pts + frame_dur * 8.0);
+        if (need_seek) {
+            int64_t ts = (int64_t)(target_t / av_q2d(pv.stream_tb));
+            av_seek_frame(pv.fmt_ctx, pv.stream_idx, ts, AVSEEK_FLAG_BACKWARD);
+            avcodec_flush_buffers(pv.dec_ctx);
+        }
+
+        AVPacket* pkt    = av_packet_alloc();
+        AVFrame*  frm    = av_frame_alloc();
+        AVFrame*  sw_frm = av_frame_alloc();
+        bool got = false;
+        double got_pts = -1.0;
+
+        // Decode forward to (or just past) target_t. AVSEEK_FLAG_BACKWARD lands
+        // on a keyframe ≤ target, so we may chew through GOP frames first.
+        while (!got && av_read_frame(pv.fmt_ctx, pkt) >= 0) {
+            if (pkt->stream_index != pv.stream_idx) { av_packet_unref(pkt); continue; }
+            avcodec_send_packet(pv.dec_ctx, pkt);
+            av_packet_unref(pkt);
+            while (!got && avcodec_receive_frame(pv.dec_ctx, frm) == 0) {
+                double pts = (frm->pts == AV_NOPTS_VALUE)
+                             ? got_pts + frame_dur
+                             : frm->pts * av_q2d(pv.stream_tb);
+                if (pts < target_t - frame_dur * 0.5) {
+                    av_frame_unref(frm);
+                    continue;  // before target — keep advancing
+                }
+                // At/past target — convert this frame and we're done.
+                AVFrame* src = frm;
+                if (pv.hw_dev_ctx && frm->format == pv.hw_pix_fmt) {
+                    if (av_hwframe_transfer_data(sw_frm, frm, 0) >= 0)
+                        src = sw_frm;
+                    // If transfer fails (broken HW context), fall through and
+                    // sws_scale on the HW format will fail cleanly below.
+                }
+
+                // (Re)build the scaler if input format or geometry changed.
+                int sw = src->width, sh = src->height;
+                AVPixelFormat sfmt = (AVPixelFormat)src->format;
+                if (!pv.sws || pv.preview_w == 0) {
+                    if (pv.sws) { sws_freeContext(pv.sws); pv.sws = nullptr; }
+                    pv.preview_w = (sw > 1920) ? sw / 2 : (sw > 960 ? 960 : sw);
+                    pv.preview_h = (int)((double)sh * pv.preview_w / (double)sw + 0.5);
+                    if (pv.preview_h & 1) pv.preview_h--;  // even rows for swscaler
+                    pv.sws = sws_getContext(sw, sh, sfmt,
+                                            pv.preview_w, pv.preview_h, AV_PIX_FMT_RGB24,
+                                            SWS_FAST_BILINEAR, nullptr, nullptr, nullptr);
+                }
+                if (pv.sws) {
+                    f.rgb.resize((size_t)pv.preview_w * pv.preview_h * 3);
+                    uint8_t* dst[1] = { f.rgb.data() };
+                    int      lsz[1] = { pv.preview_w * 3 };
+                    sws_scale(pv.sws, (const uint8_t* const*)src->data, src->linesize,
+                              0, sh, dst, lsz);
+                    out_w = pv.preview_w; out_h = pv.preview_h;
+                    got_pts = pts;
+                    got = true;
+                }
+                av_frame_unref(frm);
+                av_frame_unref(sw_frm);
+            }
+        }
+
+        av_packet_free(&pkt);
+        av_frame_free(&frm);
+        av_frame_free(&sw_frm);
+
+        if (!got) { release_empty(); return; }
+        pv.last_decoded_pts = got_pts;
+    }
+
+    // ── Phase 2 (unlocked): pixel FX + optional RGBA composite ──────────────
+    bool want_rgba = false;
+    // Native path doesn't currently wire bg_remove masks (those are keyed by
+    // proxy frame index). FX without bg_remove still works fine.
+    apply_pixel_fx_rgb(f.rgb.data(), out_w, out_h, &pfx,
+                       nullptr, 0, 0, 0.f,
+                       f.rgba_buf, f.corr_alpha, want_rgba);
+
+    f.w         = out_w;
+    f.h         = out_h;
+    f.rgba      = want_rgba;
+    f.fx_stamp  = stamp_at_decode;
+    f.frame_idx = frame_idx;   // publish
+}
+
+// Synchronous single-slot native decode + upload (fallback when prefetch missed).
+static uintptr_t decode_native_frame(PreviewState& pv, int frame_idx) {
+    DecodedFrame& f = ring_alloc(pv);
+    prepare_native_frame_cpu(pv, f, frame_idx);
+    if (f.frame_idx != frame_idx) return pv.tex ? (uintptr_t)pv.tex : 0;
+    return upload_ring_gl(pv, f);
+}
+
 // ── Preview API ───────────────────────────────────────────────────────────────
 
 static void close_slot(PreviewState& pv) {
     if (pv.mjpeg_file)    { fclose(pv.mjpeg_file);    pv.mjpeg_file    = nullptr; }
     if (pv.bg_mjpeg_file) { fclose(pv.bg_mjpeg_file); pv.bg_mjpeg_file = nullptr; }
+    if (pv.sws)           { sws_freeContext(pv.sws);  pv.sws           = nullptr; }
+    if (pv.dec_ctx)       { avcodec_free_context(&pv.dec_ctx); }
+    if (pv.hw_dev_ctx)    { av_buffer_unref(&pv.hw_dev_ctx); }
+    if (pv.fmt_ctx)       { avformat_close_input(&pv.fmt_ctx); }
     if (pv.tex)           { glDeleteTextures(1, &pv.tex); pv.tex = 0; }
+    pv.stream_idx       = -1;
+    pv.stream_tb        = {0, 1};
+    pv.last_decoded_pts = -1.0;
+    pv.preview_w = pv.preview_h = 0;
+    pv.hw_pix_fmt = AV_PIX_FMT_NONE;
     pv.tex_w = pv.tex_h = 0;
     pv.last_frame_idx = -1;
-    pv.is_open = pv.is_proxy = false;
+    pv.is_open = false;
+    pv.source  = PreviewSource::None;
     pv.proxy = {}; pv.info = {};
     pv.bg_mjpeg_offsets.clear();
     pv.bg_mjpeg_dir.clear();
@@ -1025,10 +1268,76 @@ void video_open_still(int track_id, const std::string& jpeg_path) {
     upload_jpeg(&g_pv[track_id].tex, &g_pv[track_id].tex_w, &g_pv[track_id].tex_h,
                 &g_pv[track_id].tex_rgba, buf.data(), (size_t)sz);
     g_pv[track_id].is_open       = true;
-    g_pv[track_id].is_proxy      = false;
+    g_pv[track_id].source        = PreviewSource::Still;
     // Expose dimensions via video_info() so canvas aspect-ratio fit works for stills.
     g_pv[track_id].info.width    = g_pv[track_id].tex_w;
     g_pv[track_id].info.height   = g_pv[track_id].tex_h;
+}
+
+// Open the source file with libav for direct decode — used as the "instant
+// load" path before the MJPEG proxy finishes transcoding. Tries HW decode
+// (VAAPI / NVDEC / VideoToolbox) first, falls back to software decode if no
+// usable HW path is available. Returns false only when the file can't be
+// opened at all (corrupt container, missing codec). Software decode of typical
+// h264 1080p preview frames is ~15-30 ms per frame; HW is ~5-15 ms.
+bool video_open_native(int track_id, const std::string& path) {
+    if (track_id < 0 || track_id >= MAX_VIDEO_TRACKS) return false;
+    close_slot(g_pv[track_id]);
+    PreviewState& pv = g_pv[track_id];
+
+    if (avformat_open_input(&pv.fmt_ctx, path.c_str(), nullptr, nullptr) < 0)
+        return false;
+    if (avformat_find_stream_info(pv.fmt_ctx, nullptr) < 0) {
+        avformat_close_input(&pv.fmt_ctx); return false;
+    }
+    for (unsigned i = 0; i < pv.fmt_ctx->nb_streams; ++i) {
+        if (pv.fmt_ctx->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
+            pv.stream_idx = (int)i; break;
+        }
+    }
+    if (pv.stream_idx < 0) { avformat_close_input(&pv.fmt_ctx); return false; }
+
+    AVStream* st = pv.fmt_ctx->streams[pv.stream_idx];
+    pv.stream_tb = st->time_base;
+    const AVCodec* codec = avcodec_find_decoder(st->codecpar->codec_id);
+    if (!codec) { avformat_close_input(&pv.fmt_ctx); return false; }
+    pv.dec_ctx = avcodec_alloc_context3(codec);
+    avcodec_parameters_to_context(pv.dec_ctx, st->codecpar);
+
+    // Try HW first; ignore failure — we'll just run in software mode.
+    try_attach_hw(pv, pv.dec_ctx, &pv.hw_dev_ctx);
+
+    // Mirror the proxy worker's threading budget: a couple of threads per slot
+    // so multiple parallel slots don't all fight for the full core count.
+    pv.dec_ctx->thread_count = 2;
+
+    if (avcodec_open2(pv.dec_ctx, codec, nullptr) < 0) {
+        avcodec_free_context(&pv.dec_ctx);
+        if (pv.hw_dev_ctx) av_buffer_unref(&pv.hw_dev_ctx);
+        avformat_close_input(&pv.fmt_ctx);
+        pv.stream_idx = -1;
+        return false;
+    }
+
+    pv.info.width    = pv.dec_ctx->width;
+    pv.info.height   = pv.dec_ctx->height;
+    pv.info.duration = (pv.fmt_ctx->duration != AV_NOPTS_VALUE && pv.fmt_ctx->duration > 0)
+                       ? (double)pv.fmt_ctx->duration / AV_TIME_BASE : 0.0;
+    pv.info.fps      = (st->avg_frame_rate.num > 0 && st->avg_frame_rate.den > 0)
+                       ? av_q2d(st->avg_frame_rate) : 30.0;
+    pv.source        = PreviewSource::Native;
+    pv.is_open       = true;
+    pv.last_frame_idx = -1;
+    pv.last_decoded_pts = -1.0;
+
+    // Decode frame 0 so the canvas has something to show immediately.
+    (void)video_get_texture(track_id, 0.0);
+    return true;
+}
+
+PreviewSource video_source(int track_id) {
+    if (track_id < 0 || track_id >= MAX_VIDEO_TRACKS) return PreviewSource::None;
+    return g_pv[track_id].source;
 }
 
 bool video_open_proxy(int track_id, const ProxyInfo& proxy) {
@@ -1041,7 +1350,7 @@ bool video_open_proxy(int track_id, const ProxyInfo& proxy) {
     PreviewState& pv = g_pv[track_id];
     pv.mjpeg_file      = f;
     pv.proxy           = proxy;
-    pv.is_proxy        = true;
+    pv.source          = PreviewSource::Proxy;
     pv.is_open         = true;
     pv.last_frame_idx  = -1;
     pv.info.width      = proxy.width;
@@ -1093,31 +1402,49 @@ void video_set_pixel_fx(int track_id, const PixelFX& fx) {
     if (non_time_changed || tdriven_now || tdriven_prev) pv.fx_stamp++;
 }
 
-// Compute the proxy frame index for a given playhead time on the given slot.
-// Returns -1 if the slot is not a proxy / not open.
+// Compute the frame index for a given playhead time on the given slot. Works
+// for both Proxy (using the offsets table for clamp) and Native (using info.fps).
+// Returns -1 if the slot is not open or not a frame-indexable source.
 static int playhead_to_frame_idx(const PreviewState& pv, double playhead) {
-    if (!pv.is_open || !pv.is_proxy) return -1;
-    if (!pv.mjpeg_file || pv.proxy.offsets.empty()) return -1;
-    double dur = pv.info.duration;
+    if (!pv.is_open) return -1;
     if (playhead < 0.0) playhead = 0.0;
+    double dur = pv.info.duration;
     if (dur > 0.0 && playhead > dur) playhead = dur;
-    int64_t num = pv.proxy.fps_num;
-    int64_t den = pv.proxy.fps_den;
-    int frame_idx = (num > 0 && den > 0)
-        ? (int)((int64_t)(playhead * (double)num) / den)
-        : (int)(playhead * pv.proxy.fps);
-    if (frame_idx >= (int)pv.proxy.offsets.size())
-        frame_idx = (int)pv.proxy.offsets.size() - 1;
-    if (frame_idx < 0) frame_idx = 0;
-    return frame_idx;
+
+    if (pv.source == PreviewSource::Proxy) {
+        if (!pv.mjpeg_file || pv.proxy.offsets.empty()) return -1;
+        int64_t num = pv.proxy.fps_num;
+        int64_t den = pv.proxy.fps_den;
+        int frame_idx = (num > 0 && den > 0)
+            ? (int)((int64_t)(playhead * (double)num) / den)
+            : (int)(playhead * pv.proxy.fps);
+        if (frame_idx >= (int)pv.proxy.offsets.size())
+            frame_idx = (int)pv.proxy.offsets.size() - 1;
+        if (frame_idx < 0) frame_idx = 0;
+        return frame_idx;
+    }
+
+    if (pv.source == PreviewSource::Native) {
+        if (pv.info.fps <= 0.0 || !pv.fmt_ctx || !pv.dec_ctx) return -1;
+        int frame_idx = (int)(playhead * pv.info.fps);
+        if (frame_idx < 0) frame_idx = 0;
+        return frame_idx;
+    }
+
+    return -1;
 }
+
+// Forward decls — implementations live further down in the Native section.
+static void      prepare_native_frame_cpu(PreviewState& pv, DecodedFrame& f, int frame_idx);
+static uintptr_t decode_native_frame      (PreviewState& pv, int frame_idx);
+static int       max_frame_idx_for        (const PreviewState& pv);
 
 uintptr_t video_get_texture(int track_id, double playhead) {
     if (track_id < 0 || track_id >= MAX_VIDEO_TRACKS) return 0;
     PreviewState& pv = g_pv[track_id];
     if (!pv.is_open) return 0;
 
-    if (!pv.is_proxy)
+    if (pv.source == PreviewSource::Still || pv.source == PreviewSource::None)
         return pv.tex ? (uintptr_t)pv.tex : 0;
 
     int frame_idx = playhead_to_frame_idx(pv, playhead);
@@ -1136,7 +1463,9 @@ uintptr_t video_get_texture(int track_id, double playhead) {
 
     pv.pixel_fx_dirty = false;
     pv.last_frame_idx = frame_idx;
-    return decode_proxy_frame(pv, frame_idx);
+    return (pv.source == PreviewSource::Proxy)
+        ? decode_proxy_frame (pv, frame_idx)
+        : decode_native_frame(pv, frame_idx);
 }
 
 void video_prefetch_frames(const VideoPrefetchReq* reqs, int n) {
@@ -1153,7 +1482,8 @@ void video_prefetch_frames(const VideoPrefetchReq* reqs, int n) {
         int t = reqs[i].track_id;
         if (t < 0 || t >= MAX_VIDEO_TRACKS) continue;
         PreviewState& pv = g_pv[t];
-        if (!pv.is_open || !pv.is_proxy) continue;
+        if (!pv.is_open) continue;
+        if (pv.source != PreviewSource::Proxy && pv.source != PreviewSource::Native) continue;
 
         int base_fidx = playhead_to_frame_idx(pv, reqs[i].playhead);
         if (base_fidx < 0) continue;
@@ -1161,10 +1491,10 @@ void video_prefetch_frames(const VideoPrefetchReq* reqs, int n) {
         int window = pfx_is_time_driven(pv.pixel_fx) ? 1 : RING_FRAMES;
         if (reqs[i].max_frames > 0 && reqs[i].max_frames < window)
             window = reqs[i].max_frames;
-        int max_fidx = (int)pv.proxy.offsets.size();
+        int max_fidx = max_frame_idx_for(pv);
         for (int k = 0; k < window; ++k) {
             int fidx = base_fidx + k;
-            if (fidx >= max_fidx) break;
+            if (max_fidx > 0 && fidx >= max_fidx) break;
             if (ring_find(pv, fidx)) continue;  // already cached
             jobs.push_back({&pv, fidx, nullptr});
         }
@@ -1174,9 +1504,16 @@ void video_prefetch_frames(const VideoPrefetchReq* reqs, int n) {
     // Reserve ring slots on the main thread (ring_alloc is not thread-safe).
     for (auto& j : jobs) j.target = &ring_alloc(*j.pv);
 
+    auto run_one = [](PreviewState* pv, DecodedFrame* tgt, int fidx) {
+        if (pv->source == PreviewSource::Native)
+            prepare_native_frame_cpu(*pv, *tgt, fidx);
+        else
+            prepare_proxy_frame_cpu(*pv, *tgt, fidx);
+    };
+
     // 1 job: skip the pool entirely (no thread hand-off cost).
     if (jobs.size() == 1) {
-        prepare_proxy_frame_cpu(*jobs[0].pv, *jobs[0].target, jobs[0].frame_idx);
+        run_one(jobs[0].pv, jobs[0].target, jobs[0].frame_idx);
         return;
     }
 
@@ -1185,7 +1522,7 @@ void video_prefetch_frames(const VideoPrefetchReq* reqs, int n) {
         PreviewState* pv = j.pv;
         DecodedFrame* tgt = j.target;
         int fidx = j.frame_idx;
-        tp.submit([pv, tgt, fidx]{ prepare_proxy_frame_cpu(*pv, *tgt, fidx); });
+        tp.submit([pv, tgt, fidx, run_one]{ run_one(pv, tgt, fidx); });
     }
     tp.wait_idle();
 }
@@ -1193,9 +1530,12 @@ void video_prefetch_frames(const VideoPrefetchReq* reqs, int n) {
 uintptr_t video_get_thumbnail(double t, int* out_w, int* out_h) {
     if (out_w) *out_w = 0;
     if (out_h) *out_h = 0;
-    // Uses track 0's proxy for scrub bar hover preview
+    // Uses track 0's proxy for scrub bar hover preview. Native sources don't
+    // serve thumbnails — they'd require a sync libav decode per hover frame
+    // which is way too expensive; the proxy upgrade in screen_studio's per-frame
+    // loop swaps in fast scrubbable thumbnails as soon as transcode finishes.
     PreviewState& pv = g_pv[0];
-    if (!pv.is_open || !pv.is_proxy) return 0;
+    if (!pv.is_open || pv.source != PreviewSource::Proxy) return 0;
     if (!pv.mjpeg_file || pv.proxy.offsets.empty()) return 0;
 
     double dur = pv.info.duration;

@@ -112,14 +112,19 @@ void reopen_video_slots(AppState& state) {
             std::string key = clip_slot_key(cl.text, cl.start);
             int slot = slot_for_video(state, key, cl.text);
             if (slot < 0) continue;
-            video_open_still(slot, proxy_still_path(cl.text));
             if (proxy_is_ready(cl.text)) {
                 ProxyInfo pi;
                 if (proxy_load(cl.text, pi)) {
                     video_open_proxy(slot, pi);
                     if (slot == 0) state.proxy_ready = true;
+                    continue;
                 }
             }
+            // No proxy yet — try native (libav direct decode) for instant
+            // preview. Falls back to the still placeholder if libav can't open
+            // the file (unusual codec, corrupt container).
+            if (!video_open_native(slot, cl.text))
+                video_open_still(slot, proxy_still_path(cl.text));
         }
     }
 }
@@ -157,10 +162,11 @@ void add_clip_to_track(AppState& state, int ti, const std::string& path, ClipTyp
         int slot = slot_for_video(state, clip_slot_key(path, cl.start), path);
         proxy_start(path);
         if (slot >= 0) {
-            video_open_still(slot, proxy_still_path(path));
             if (proxy_is_ready(path)) {
                 ProxyInfo pi;
                 if (proxy_load(path, pi)) video_open_proxy(slot, pi);
+            } else if (!video_open_native(slot, path)) {
+                video_open_still(slot, proxy_still_path(path));
             }
         }
         state.video_loaded = true;

@@ -227,15 +227,18 @@ void ui_studio(AppState& state) {
         g_dropped_file.clear();
     }
 
-    // Per-slot video open/upgrade — handles three states:
-    //   1. Already a full proxy (fps > 0)  → nothing to do
-    //   2. Proxy ready but slot not open   → open proxy directly (covers split/moved clips)
-    //   3. No proxy yet, slot not open     → open still as placeholder
+    // Per-slot video open/upgrade — handles four states:
+    //   1. Already on the Proxy tier        → nothing to do (steady state)
+    //   2. Proxy ready, slot is Still/Native → upgrade to Proxy (fastest scrub)
+    //   3. No proxy yet, slot unopened       → open Native (libav direct decode)
+    //                                          for instant preview, fall back to
+    //                                          Still placeholder if libav can't
+    //                                          open the file
     // Images never get an MJPEG proxy — skip them to avoid per-frame ffprobe spawns.
     for (int slot = 0; slot < MAX_VIDEO_TRACKS; ++slot) {
         const std::string& key = state.proxy_paths[slot];
         if (key.empty()) continue;
-        if (video_info(slot).fps > 0.0) continue;  // already fully open
+        if (video_source(slot) == PreviewSource::Proxy) continue;  // terminal state
 
         std::string src = source_from_key(key);
         if (is_image_path(src)) continue;  // stills only — proxy never generated
@@ -264,8 +267,10 @@ void ui_studio(AppState& state) {
                 }
             }
         } else if (!video_is_open(slot)) {
-            // Proxy not ready yet — show the still thumbnail while it generates.
-            video_open_still(slot, proxy_still_path(src));
+            // Proxy not ready yet — open native (instant) and fall back to
+            // still if libav can't read the file.
+            if (!video_open_native(slot, src))
+                video_open_still(slot, proxy_still_path(src));
         }
     }
 
