@@ -855,12 +855,45 @@ void ui_studio(AppState& state) {
         draw_preview(state, stage_p, sw, sh);
 
         // ── Glass transport overlay ───────────────────────────────────────────
+        // Fades in when the mouse enters the preview area and out when it
+        // leaves — keeps the canvas clean while editing, surfaces on demand.
+        // Stays visible while a button is being held mid-drag (s_active_latch)
+        // and during long-running ops (`busy`) so progress is always readable.
         {
             ImDrawList* dl  = ImGui::GetWindowDrawList();
             float fps_v     = tl_fps(state);
             float f_dt_v    = fps_v > 0.f ? 1.f / fps_v : 1.f / 30.f;
             float dur       = fmaxf(state.duration, 0.01f);
             bool  busy      = audio_loading() || proxy_is_generating() || state.extract_running;
+
+            // Hover hit-test against the preview rect (whole stage, not just
+            // the pill — pill becomes interactable as soon as you enter).
+            bool over_preview = ImGui::IsMouseHoveringRect(
+                stage_p, {stage_p.x + sw, stage_p.y + sh});
+
+            // Latched from prior frame: a transport button was active last
+            // frame, so keep the pill visible through the drag even if the
+            // mouse left the preview rect (released-outside cancels nicely).
+            static bool s_active_latch = false;
+
+            float target_op = (over_preview || s_active_latch || busy) ? 1.f : 0.f;
+            static float s_op = 0.f;
+            float rate = (target_op > s_op) ? 16.f : 6.f;  // fade in fast, out slow
+            s_op += (target_op - s_op) * std::min(1.f, ImGui::GetIO().DeltaTime * rate);
+
+            // Skip the entire block when invisible — no draws AND no
+            // InvisibleButtons means hidden controls don't eat clicks.
+            if (s_op < 0.02f) { s_active_latch = false; goto transport_overlay_end; }
+
+            // Lambda can't capture the static — shadow it as a local.
+            {
+                float op = s_op;
+                auto fa = [op](ImU32 c) -> ImU32 {
+                    int a = (int)(((c >> 24) & 0xFF) * op + 0.5f);
+                    if (a > 255) a = 255;
+                    return (c & 0x00FFFFFFu) | ((uint32_t)a << 24);
+                };
+                bool any_active_this_frame = false;
 
             // ── Geometry ──────────────────────────────────────────────────────
             const float PILL_PAD_X = 16.f;
@@ -881,19 +914,19 @@ void ui_studio(AppState& state) {
             // Gradient shadow behind pill
             dl->AddRectFilledMultiColor(
                 {stage_p.x, pill_y0 - 40.f}, {stage_p.x + sw, pill_y1 + 8.f},
-                IM_COL32(0,0,0,0),   IM_COL32(0,0,0,0),
-                IM_COL32(0,0,0,160), IM_COL32(0,0,0,160));
+                fa(IM_COL32(0,0,0,0)),   fa(IM_COL32(0,0,0,0)),
+                fa(IM_COL32(0,0,0,160)), fa(IM_COL32(0,0,0,160)));
 
             // Glass pill body
             dl->AddRectFilled({pill_x0, pill_y0}, {pill_x1, pill_y1},
-                              IM_COL32(18, 18, 22, 210), PILL_R);
+                              fa(IM_COL32(18, 18, 22, 210)), PILL_R);
             // Top-edge glass highlight
             dl->AddLine({pill_x0 + PILL_R, pill_y0 + 1.f},
                         {pill_x1 - PILL_R, pill_y0 + 1.f},
-                        IM_COL32(255,255,255,28), 1.f);
+                        fa(IM_COL32(255,255,255,28)), 1.f);
             // Outer border
             dl->AddRect({pill_x0, pill_y0}, {pill_x1, pill_y1},
-                        IM_COL32(255,255,255,22), PILL_R, 0, 1.f);
+                        fa(IM_COL32(255,255,255,22)), PILL_R, 0, 1.f);
 
             // ── Scrubber ──────────────────────────────────────────────────────
             float scrub_margin = PILL_PAD_X + 4.f;
@@ -928,33 +961,35 @@ void ui_studio(AppState& state) {
 
             // Track
             dl->AddRectFilled({scrub_x0, scrub_cy - bh2}, {scrub_x1, scrub_cy + bh2},
-                              IM_COL32(255,255,255,30), bh2);
+                              fa(IM_COL32(255,255,255,30)), bh2);
             // Played
             dl->AddRectFilled({scrub_x0, scrub_cy - bh2}, {play_sx, scrub_cy + bh2},
-                              IM_COL32(220,220,255,200), bh2);
+                              fa(IM_COL32(220,220,255,200)), bh2);
+
+            if (scrub_held) any_active_this_frame = true;
 
             // Hover ghost
             if (has_scrub_hov) {
                 float hsx = scrub_x0 + (mouse_t / dur) * scrub_w;
                 dl->AddRectFilled({scrub_x0, scrub_cy - bh2}, {hsx, scrub_cy + bh2},
-                                  IM_COL32(255,255,255,20), bh2);
+                                  fa(IM_COL32(255,255,255,20)), bh2);
                 // Timecode bubble
                 char htc[16]; snprintf(htc, sizeof(htc), "%s", fmt_time(mouse_t).c_str());
                 float htc_w = ImGui::CalcTextSize(htc).x + 10.f;
                 float htc_x = fmaxf(scrub_x0, fminf(hsx - htc_w*0.5f, scrub_x1 - htc_w));
                 float htc_y = scrub_cy - bh2 - 22.f;
                 dl->AddRectFilled({htc_x-2.f, htc_y-2.f}, {htc_x+htc_w+2.f, htc_y+16.f},
-                                  IM_COL32(30,30,35,220), 4.f);
-                dl->AddText({htc_x+5.f, htc_y+1.f}, IM_COL32(220,220,220,220), htc);
+                                  fa(IM_COL32(30,30,35,220)), 4.f);
+                dl->AddText({htc_x+5.f, htc_y+1.f}, fa(IM_COL32(220,220,220,220)), htc);
                 // Hover dot
-                dl->AddCircleFilled({hsx, scrub_cy}, s_scrub_h_anim + 1.f, IM_COL32(0,0,0,80));
-                dl->AddCircleFilled({hsx, scrub_cy}, s_scrub_h_anim,       IM_COL32(255,255,255,160));
+                dl->AddCircleFilled({hsx, scrub_cy}, s_scrub_h_anim + 1.f, fa(IM_COL32(0,0,0,80)));
+                dl->AddCircleFilled({hsx, scrub_cy}, s_scrub_h_anim,       fa(IM_COL32(255,255,255,160)));
             }
 
             // Playhead knob
             float knob_r = (scrub_hov || scrub_held) ? s_scrub_h_anim + 2.f : s_scrub_h_anim;
-            dl->AddCircleFilled({play_sx, scrub_cy}, knob_r + 1.5f, IM_COL32(0,0,0,120));
-            dl->AddCircleFilled({play_sx, scrub_cy}, knob_r,        IM_COL32(255,255,255,255));
+            dl->AddCircleFilled({play_sx, scrub_cy}, knob_r + 1.5f, fa(IM_COL32(0,0,0,120)));
+            dl->AddCircleFilled({play_sx, scrub_cy}, knob_r,        fa(IM_COL32(255,255,255,255)));
 
             // ── Thumbnail above pill on scrub hover ───────────────────────────
             if (has_scrub_hov) {
@@ -967,8 +1002,9 @@ void ui_studio(AppState& state) {
                     float tx = fmaxf(scrub_x0, fminf(hsx - td_w*0.5f, scrub_x1 - td_w));
                     float ty = pill_y0 - td_h - 8.f;
                     dl->AddRectFilled({tx-3.f,ty-3.f},{tx+td_w+3.f,ty+td_h+3.f},
-                                      IM_COL32(20,20,20,220), 4.f);
-                    dl->AddImage((ImTextureID)(uintptr_t)th_tex, {tx,ty}, {tx+td_w,ty+td_h});
+                                      fa(IM_COL32(20,20,20,220)), 4.f);
+                    dl->AddImage((ImTextureID)(uintptr_t)th_tex, {tx,ty}, {tx+td_w,ty+td_h},
+                                 {0,0}, {1,1}, fa(IM_COL32_WHITE));
                 }
             }
 
@@ -989,13 +1025,14 @@ void ui_studio(AppState& state) {
                 bool h = ImGui::IsItemHovered();
                 bool a = ImGui::IsItemActive();
                 bool c = ImGui::IsItemClicked();
+                if (a) any_active_this_frame = true;
                 float cx2 = bx + sz * 0.5f, cy3 = cy2 + sz * 0.5f;
                 // Glass circle bg
                 dl->AddCircleFilled({cx2, cy3}, sz * 0.5f,
-                    IM_COL32(255,255,255, a ? 45 : h ? 28 : 12));
+                    fa(IM_COL32(255,255,255, a ? 45 : h ? 28 : 12)));
                 dl->AddCircle({cx2, cy3}, sz * 0.5f - 0.5f,
-                    IM_COL32(255,255,255, a ? 80 : h ? 50 : 22), 0, 1.f);
-                ImU32 ic = IM_COL32(255,255,255, a ? 255 : h ? 230 : 180);
+                    fa(IM_COL32(255,255,255, a ? 80 : h ? 50 : 22)), 0, 1.f);
+                ImU32 ic = fa(IM_COL32(255,255,255, a ? 255 : h ? 230 : 180));
                 bx += sz + GAP;
                 return {c, ic};
             };
@@ -1028,26 +1065,27 @@ void ui_studio(AppState& state) {
                 bool h = ImGui::IsItemHovered();
                 bool a = ImGui::IsItemActive();
                 bool c = ImGui::IsItemClicked();
+                if (a) any_active_this_frame = true;
                 float cx2 = bx + sz*0.5f, cy3 = cy2 + sz*0.5f;
                 // Glow ring
-                dl->AddCircleFilled({cx2, cy3}, sz*0.5f + 2.f, IM_COL32(180,180,255, h||a ? 18 : 8));
+                dl->AddCircleFilled({cx2, cy3}, sz*0.5f + 2.f, fa(IM_COL32(180,180,255, h||a ? 18 : 8)));
                 // Glass body
                 dl->AddCircleFilled({cx2, cy3}, sz*0.5f,
-                    IM_COL32(255,255,255, a ? 60 : h ? 42 : 25));
+                    fa(IM_COL32(255,255,255, a ? 60 : h ? 42 : 25)));
                 dl->AddCircle({cx2, cy3}, sz*0.5f - 0.5f,
-                    IM_COL32(255,255,255, a ? 100 : h ? 70 : 40), 0, 1.2f);
+                    fa(IM_COL32(255,255,255, a ? 100 : h ? 70 : 40)), 0, 1.2f);
                 // Top highlight arc — fake refraction
                 dl->AddCircle({cx2, cy3 - 1.f}, sz*0.5f - 2.f,
-                    IM_COL32(255,255,255, 18), 0, 1.f);
+                    fa(IM_COL32(255,255,255, 18)), 0, 1.f);
 
-                ImU32 ic = IM_COL32(255,255,255, a ? 255 : h ? 235 : 200);
+                ImU32 ic = fa(IM_COL32(255,255,255, a ? 255 : h ? 235 : 200));
                 float r = sz * 0.18f;
                 if (busy) {
                     float t_spin = fmodf((float)ImGui::GetTime(), 1.2f) / 1.2f;
                     for (int i = 0; i < 3; ++i) {
                         float ang = (t_spin + i / 3.f) * 6.2832f;
                         dl->AddCircleFilled({cx2 + cosf(ang)*r, cy3 + sinf(ang)*r},
-                                            2.2f, IM_COL32(255,255,255,200));
+                                            2.2f, fa(IM_COL32(255,255,255,200)));
                     }
                 } else if (state.playing) {
                     float bw = r*0.5f, bh3 = r*1.5f;
@@ -1088,7 +1126,7 @@ void ui_studio(AppState& state) {
             float tc_w = ImGui::CalcTextSize(tcbuf).x;
             float tc_y = btn_row_y + BTN_ROW_H + 2.f;
             float tc_x = pill_x0 + (PILL_W - tc_w) * 0.5f;
-            dl->AddText({tc_x, tc_y}, IM_COL32(160,160,160,160), tcbuf);
+            dl->AddText({tc_x, tc_y}, fa(IM_COL32(160,160,160,160)), tcbuf);
 
             // Status text left of timecode when busy
             if (busy) {
@@ -1097,70 +1135,113 @@ void ui_studio(AppState& state) {
                                                        : "extracting…";
                 float st_w = ImGui::CalcTextSize(st).x;
                 float st_x = pill_x0 + (PILL_W - st_w) * 0.5f;
-                dl->AddText({st_x, tc_y}, IM_COL32(140,140,140,160), st);
+                dl->AddText({st_x, tc_y}, fa(IM_COL32(140,140,140,160)), st);
             }
+
+            s_active_latch = any_active_this_frame;
+            }  // close inner scope opened with `float op = s_op;`
+            transport_overlay_end:;
         }
 
-        // ── Agent activity overlay ────────────────────────────────────────────
-        if (!state.agent_log.empty()) {
-            ImDrawList* adl   = ImGui::GetWindowDrawList();
-            const float OP_H  = 17.f;
-            const float PAD_X = 10.f, PAD_Y = 7.f;
-            int   n      = (int)std::min(state.agent_log.size(), (size_t)5);
-            float card_w = 215.f;
-            float card_h = PAD_Y * 2.f + n * OP_H + (n - 1) * 2.f;
-            float cx0    = stage_p.x + sw - card_w - 10.f;
-            float cy0    = stage_p.y + 10.f;
+        // ── Agent activity overlay (cute notifications) ───────────────────────
+        // Visible while there's recent activity, then fades out. New entries
+        // wake it back up. Slides in from the right edge on appear.
+        {
+            // Detect activity: log size changed, or top entry changed in-place.
+            static double      s_last_change = -1e9;
+            static size_t      s_prev_size   = 0;
+            static std::string s_prev_top;
 
-            adl->AddRectFilled({cx0, cy0}, {cx0 + card_w, cy0 + card_h},
-                               IM_COL32(0x13, 0x14, 0x1f, 210), 7.f);
-            adl->AddRect({cx0, cy0}, {cx0 + card_w, cy0 + card_h},
-                         IM_COL32(255, 255, 255, 18), 7.f);
+            std::string cur_top;
+            if (!state.agent_log.empty()) {
+                cur_top  = state.agent_log.front().method;
+                cur_top += '\x01';
+                cur_top += state.agent_log.front().detail;
+            }
+            if (state.agent_log.size() != s_prev_size || cur_top != s_prev_top) {
+                s_last_change = ImGui::GetTime();
+                s_prev_size   = state.agent_log.size();
+                s_prev_top    = cur_top;
+            }
 
-            float fsz  = ImGui::GetFontSize() * 0.82f;
-            float ey   = cy0 + PAD_Y;
-            for (int i = 0; i < n; ++i) {
-                const auto& op  = state.agent_log[(size_t)i];
-                float alpha     = (i == 0) ? 1.f : 0.9f - 0.15f * i;
-                int   a8        = (int)(255.f * alpha);
+            const double SHOW_FOR = 3.5;  // s of post-activity visibility
+            double age = ImGui::GetTime() - s_last_change;
+            float target = (!state.agent_log.empty() && age < SHOW_FOR) ? 1.f : 0.f;
 
-                // Dot colour by method category
-                ImU32 dot;
-                if (op.method.rfind("get_", 0) == 0  ||
-                    op.method.rfind("search_", 0) == 0 ||
-                    op.method.rfind("find_", 0) == 0  ||
-                    op.method.rfind("read_", 0) == 0)
-                    dot = IM_COL32(0x7d, 0xcf, 0xff, a8);          // cyan  — reads
-                else if (op.method.find("pipeline") != std::string::npos ||
-                         op.method.find("export") != std::string::npos   ||
-                         op.method.find("trigger") != std::string::npos)
-                    dot = IM_COL32(0xe0, 0xaf, 0x68, a8);          // amber — processing
-                else if (op.method.rfind("delete_", 0) == 0 ||
-                         op.method.rfind("remove_", 0) == 0 ||
-                         op.method.rfind("cut_", 0) == 0)
-                    dot = IM_COL32(0xf7, 0x76, 0x8e, a8);          // red   — destructive
-                else
-                    dot = IM_COL32(0x9e, 0xce, 0x6a, a8);          // green — writes
+            static float s_op = 0.f;
+            float rate = (target > s_op) ? 14.f : 4.5f;  // fade in fast, out slow
+            s_op += (target - s_op) * std::min(1.f, ImGui::GetIO().DeltaTime * rate);
 
-                float mid_y = ey + OP_H * 0.5f;
-                adl->AddCircleFilled({cx0 + PAD_X + 4.f, mid_y}, 3.f, dot);
+            if (s_op > 0.02f && !state.agent_log.empty()) {
+                float op = s_op;
+                auto fa = [op](ImU32 c) -> ImU32 {
+                    int a = (int)(((c >> 24) & 0xFF) * op + 0.5f);
+                    if (a > 255) a = 255;
+                    return (c & 0x00FFFFFFu) | ((uint32_t)a << 24);
+                };
+                // Easing for slide: ease-out cubic so it lands softly.
+                float ease     = 1.f - op;
+                float slide_dx = ease * ease * ease * 28.f;
 
-                // Label: "method name  detail"
-                std::string label = op.method;
-                for (char& c : label) if (c == '_') c = ' ';
-                if (!op.detail.empty()) label += "  " + op.detail;
-                // Truncate to fit card width
-                while (label.size() > 1) {
-                    float tw = ImGui::GetFont()->CalcTextSizeA(fsz, FLT_MAX, -1.f, label.c_str()).x;
-                    if (tw <= card_w - PAD_X * 2.f - 14.f) break;
-                    label.resize(label.size() - 1);
+                ImDrawList* adl   = ImGui::GetWindowDrawList();
+                const float OP_H  = 17.f;
+                const float PAD_X = 10.f, PAD_Y = 7.f;
+                int   n      = (int)std::min(state.agent_log.size(), (size_t)5);
+                float card_w = 215.f;
+                float card_h = PAD_Y * 2.f + n * OP_H + (n - 1) * 2.f;
+                float cx0    = stage_p.x + sw - card_w - 10.f + slide_dx;
+                float cy0    = stage_p.y + 10.f;
+
+                adl->AddRectFilled({cx0, cy0}, {cx0 + card_w, cy0 + card_h},
+                                   fa(IM_COL32(0x13, 0x14, 0x1f, 210)), 7.f);
+                adl->AddRect({cx0, cy0}, {cx0 + card_w, cy0 + card_h},
+                             fa(IM_COL32(255, 255, 255, 18)), 7.f);
+
+                float fsz  = ImGui::GetFontSize() * 0.82f;
+                float ey   = cy0 + PAD_Y;
+                for (int i = 0; i < n; ++i) {
+                    const auto& op  = state.agent_log[(size_t)i];
+                    float alpha     = (i == 0) ? 1.f : 0.9f - 0.15f * i;
+                    int   a8        = (int)(255.f * alpha);
+
+                    // Dot colour by method category
+                    ImU32 dot;
+                    if (op.method.rfind("get_", 0) == 0  ||
+                        op.method.rfind("search_", 0) == 0 ||
+                        op.method.rfind("find_", 0) == 0  ||
+                        op.method.rfind("read_", 0) == 0)
+                        dot = IM_COL32(0x7d, 0xcf, 0xff, a8);          // cyan  — reads
+                    else if (op.method.find("pipeline") != std::string::npos ||
+                             op.method.find("export") != std::string::npos   ||
+                             op.method.find("trigger") != std::string::npos)
+                        dot = IM_COL32(0xe0, 0xaf, 0x68, a8);          // amber — processing
+                    else if (op.method.rfind("delete_", 0) == 0 ||
+                             op.method.rfind("remove_", 0) == 0 ||
+                             op.method.rfind("cut_", 0) == 0)
+                        dot = IM_COL32(0xf7, 0x76, 0x8e, a8);          // red   — destructive
+                    else
+                        dot = IM_COL32(0x9e, 0xce, 0x6a, a8);          // green — writes
+
+                    float mid_y = ey + OP_H * 0.5f;
+                    adl->AddCircleFilled({cx0 + PAD_X + 4.f, mid_y}, 3.f, fa(dot));
+
+                    // Label: "method name  detail"
+                    std::string label = op.method;
+                    for (char& c : label) if (c == '_') c = ' ';
+                    if (!op.detail.empty()) label += "  " + op.detail;
+                    // Truncate to fit card width
+                    while (label.size() > 1) {
+                        float tw = ImGui::GetFont()->CalcTextSizeA(fsz, FLT_MAX, -1.f, label.c_str()).x;
+                        if (tw <= card_w - PAD_X * 2.f - 14.f) break;
+                        label.resize(label.size() - 1);
+                    }
+
+                    adl->AddText(ImGui::GetFont(), fsz,
+                                 {cx0 + PAD_X + 12.f, mid_y - fsz * 0.5f},
+                                 fa(IM_COL32(0xc0, 0xca, 0xf5, a8)), label.c_str());
+
+                    ey += OP_H + 2.f;
                 }
-
-                adl->AddText(ImGui::GetFont(), fsz,
-                             {cx0 + PAD_X + 12.f, mid_y - fsz * 0.5f},
-                             IM_COL32(0xc0, 0xca, 0xf5, a8), label.c_str());
-
-                ey += OP_H + 2.f;
             }
         }
     }
