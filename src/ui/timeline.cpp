@@ -568,8 +568,25 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                 dl->AddRectFilled({origin.x, track_y+2.f},
                                   {origin.x+3.f, track_y+TL_TRACK_H-2.f},
                                   to_u32(Col::clip_lyrics));
+            // Truncate with ellipsis if the name would overflow into the
+            // icon buttons (lock at TL_LABEL_W-45, then mute, eye).
+            float max_w = TL_LABEL_W - 8.f - 54.f;
+            std::string label = track.name;
+            if (ImGui::CalcTextSize(label.c_str()).x > max_w) {
+                const char* ell = "\xE2\x80\xA6";  // U+2026
+                float ell_w = ImGui::CalcTextSize(ell).x;
+                while (!label.empty() &&
+                       ImGui::CalcTextSize(label.c_str()).x + ell_w > max_w) {
+                    // pop one UTF-8 code point off the end
+                    size_t n = label.size();
+                    while (n > 0 && (label[n-1] & 0xC0) == 0x80) --n;
+                    if (n > 0) --n;
+                    label.resize(n);
+                }
+                label += ell;
+            }
             dl->AddText({origin.x+8.f, track_y+(TL_TRACK_H-13.f)*0.5f},
-                to_u32(track_sel ? Col::fg : Col::muted), track.name.c_str());
+                to_u32(track_sel ? Col::fg : Col::muted), label.c_str());
             if (ImGui::IsMouseClicked(0) && in_label) {
                 state.selected_track  = ti;
                 state.selected_clip   = -1;

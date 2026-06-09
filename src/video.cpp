@@ -458,6 +458,31 @@ static void cpu_apply_blur(uint8_t* px, int w, int h, float sigma) {
 
 // ── Preview state ─────────────────────────────────────────────────────────────
 
+// ── Per-slot decoded-frame ring ──────────────────────────────────────────────
+//
+// Each slot keeps a small ring of CPU-decoded frames. video_prefetch_frames()
+// fills the ring with current + N future frames on worker threads; the main
+// thread's video_get_texture() then uploads the matching cached frame with
+// zero JPEG decode work on the critical path.
+//
+// fx_stamp captures the identity of decode-affecting FX params. When FX
+// params change, fx_stamp bumps and the ring's entries become stale (they
+// stay in memory but get skipped by ring_find()). Pure-time changes do NOT
+// bump fx_stamp unless a time-driven FX is on, so playback under static
+// FX keeps cache hits.
+static constexpr int RING_FRAMES = 4;
+
+struct DecodedFrame {
+    int      frame_idx = -1;       // -1 = empty, -2 = reserved (in-flight)
+    uint64_t fx_stamp  = 0;
+    int      w = 0, h = 0;
+    bool     rgba = false;
+    std::vector<uint8_t> jpeg_buf;   // raw JPEG bytes (per-frame so workers don't share)
+    std::vector<uint8_t> rgb;        // decoded RGB pixels (always populated)
+    std::vector<uint8_t> rgba_buf;   // composited RGBA (populated when rgba=true)
+    std::vector<uint8_t> corr_alpha; // corruption-bleed alpha mask scratch
+};
+
 struct PreviewState {
     FILE*     mjpeg_file     = nullptr;
     ProxyInfo proxy          = {};
@@ -471,6 +496,7 @@ struct PreviewState {
     VideoInfo info = {};
     PixelFX   pixel_fx;
     bool      pixel_fx_dirty = false;
+    uint64_t  fx_stamp       = 1;   // bumped on decode-affecting FX change
     // BG remove mask MJPEG (streamed, one grayscale-alpha JPEG per frame)
     FILE*                bg_mjpeg_file        = nullptr;
     std::vector<uint64_t> bg_mjpeg_offsets;            // SOI byte offsets
@@ -482,21 +508,16 @@ struct PreviewState {
     int                  bg_mask_w       = 0;
     int                  bg_mask_h       = 0;
     std::vector<uint8_t> bg_mask_alpha;                // w*h alpha values
+    std::vector<uint8_t> mask_jpeg_buf;                // raw JPEG bytes for bg mask (sync path)
 
-    // Per-slot scratch buffers — owned here so concurrent worker threads
-    // operating on different slots cannot collide.
-    std::vector<uint8_t> jpeg_buf;        // raw JPEG bytes read from mjpeg_file
-    std::vector<uint8_t> mask_jpeg_buf;   // raw JPEG bytes for bg mask
-    std::vector<uint8_t> rgb_pixels;      // decoded RGB pixels
-    std::vector<uint8_t> rgba_pixels;     // composited RGBA (when want_rgba)
-    std::vector<uint8_t> corr_alpha;      // corruption-bleed alpha mask
+    // Serializes access to mjpeg_file / bg_mjpeg_file and the bg_mask_*
+    // streaming state. Workers hold this only for the JPEG read; CPU decode
+    // and FX run unlocked so frames N, N+1, N+2 on one slot can decode in
+    // parallel.
+    std::mutex file_mu;
 
-    // Prepared (CPU-side decoded) frame, awaiting GL upload.
-    bool prepared_ready    = false;
-    int  prepared_frame    = -1;
-    int  prepared_w        = 0;
-    int  prepared_h        = 0;
-    bool prepared_rgba     = false;       // true → upload from rgba_pixels, false → rgb_pixels
+    DecodedFrame ring[RING_FRAMES];
+    int          ring_head = 0;   // next eviction target (round-robin)
 };
 
 static PreviewState g_pv[MAX_VIDEO_TRACKS];
@@ -766,139 +787,203 @@ static void bg_mjpeg_open(PreviewState& pv, const std::string& mdir) {
     if (pv.bg_mjpeg_file) bg_mjpeg_scan(pv);
 }
 
-// ── Internal: prepare (CPU-only) one proxy frame for upload ──────────────────
-//
-// Reads JPEG bytes from pv.mjpeg_file (per-slot FILE*, safe on a worker
-// thread), decodes via libjpeg-turbo, applies CPU FX and bg_remove mask
-// compositing. Result is left in pv.rgb_pixels / pv.rgba_pixels, with
-// pv.prepared_* describing the result. No GL calls — call upload_prepared_gl()
-// on the main thread afterwards.
-//
-// Returns true if a frame was prepared, false if the read/decode failed and
-// the caller should fall back to whatever texture is already bound.
-static bool prepare_proxy_frame_cpu(PreviewState& pv, int frame_idx) {
-    pv.prepared_ready = false;
-    if (!pv.mjpeg_file || pv.proxy.offsets.empty()) return false;
-    if (frame_idx < 0 || (size_t)frame_idx >= pv.proxy.offsets.size()) return false;
+// ── Ring helpers ────────────────────────────────────────────────────────────
 
-    uint64_t offset = pv.proxy.offsets[(size_t)frame_idx];
-    bool is_last    = ((size_t)frame_idx + 1 >= pv.proxy.offsets.size());
+// Find a ring entry holding (frame_idx, current fx_stamp). Reserved slots
+// (frame_idx = -2) are skipped — only fully-decoded entries match.
+static DecodedFrame* ring_find(PreviewState& pv, int frame_idx) {
+    for (auto& f : pv.ring)
+        if (f.frame_idx == frame_idx && f.fx_stamp == pv.fx_stamp)
+            return &f;
+    return nullptr;
+}
 
-    size_t frame_sz = 0;
-    if (!is_last) {
-        frame_sz = (size_t)(pv.proxy.offsets[(size_t)frame_idx + 1] - offset);
-    } else {
-        fseeko(pv.mjpeg_file, 0, SEEK_END);
-        long end = ftell(pv.mjpeg_file);
-        frame_sz = (end > (long)offset) ? (size_t)((long)end - (long)offset) : 0;
+// Reserve a ring slot for decode. Round-robin eviction, but skip slots that
+// are already reserved (-2) so a prefetch batch of N ≤ RING_FRAMES jobs
+// doesn't stomp its own pending decodes.
+static DecodedFrame& ring_alloc(PreviewState& pv) {
+    for (int tries = 0; tries < RING_FRAMES; ++tries) {
+        DecodedFrame& f = pv.ring[pv.ring_head];
+        pv.ring_head = (pv.ring_head + 1) % RING_FRAMES;
+        if (f.frame_idx != -2) { f.frame_idx = -2; return f; }
     }
-    if (frame_sz == 0) return false;
+    // All slots reserved (shouldn't happen). Stomp head anyway.
+    DecodedFrame& f = pv.ring[pv.ring_head];
+    pv.ring_head = (pv.ring_head + 1) % RING_FRAMES;
+    f.frame_idx = -2;
+    return f;
+}
 
-    pv.jpeg_buf.resize(frame_sz);
-    fseeko(pv.mjpeg_file, (off_t)offset, SEEK_SET);
-    size_t got = fread(pv.jpeg_buf.data(), 1, frame_sz, pv.mjpeg_file);
-    if (got == 0) return false;
+static void ring_invalidate(PreviewState& pv) {
+    for (auto& f : pv.ring) f.frame_idx = -1;
+    pv.ring_head = 0;
+}
 
-    // Datamosh: corrupt JPEG bytes before decode for real Huffman decoder artifacts
-    if (pv.pixel_fx.datamosh_on && pv.pixel_fx.datamosh_intensity > 0.01f) {
-        uint32_t seed = (uint32_t)(pv.pixel_fx.time * 60.f);
-        corrupt_jpeg_buf(pv.jpeg_buf.data(), got, pv.pixel_fx.datamosh_intensity, seed);
-    }
+// True if any FX in `fx` reads pfx.time — i.e. the decoded output changes
+// every frame even with identical params. Disables ring lookahead caching.
+static bool pfx_is_time_driven(const PixelFX& fx) {
+    bool glitch_active = fx.glitch_on &&
+        (fx.glitch_chroma >= 0.1f || fx.glitch_jitter >= 0.01f ||
+         fx.glitch_corruption >= 0.01f);
+    bool vhs_active    = fx.vhs_on &&
+        (fx.vhs_noise >= 0.01f || fx.vhs_bleed >= 0.1f || fx.vhs_tracking >= 0.01f);
+    bool dmosh_active  = fx.datamosh_on && fx.datamosh_intensity > 0.01f;
+    return glitch_active || vhs_active || dmosh_active;
+}
 
-    // Load bg_remove mask for this frame from the streaming mask MJPEG.
-    if (pv.pixel_fx.bg_remove_on && !pv.pixel_fx.bg_remove_mask_dir.empty()) {
-        const std::string& mdir = pv.pixel_fx.bg_remove_mask_dir;
-        if (mdir != pv.bg_mjpeg_dir)
-            bg_mjpeg_open(pv, mdir);
-        else
-            bg_mjpeg_scan(pv);
+// Equal except for `time`. Used to decide whether a pfx change should bump
+// fx_stamp (and thereby invalidate the ring): time-only deltas under static
+// FX should NOT invalidate.
+static bool pfx_eq_modulo_time(const PixelFX& a, const PixelFX& b) {
+    PixelFX a2 = a, b2 = b;
+    a2.time = 0.f; b2.time = 0.f;
+    return a2 == b2;
+}
 
-        int mask_idx = frame_idx - pv.bg_mjpeg_start_frame;
-        bool need    = (frame_idx != pv.bg_mask_frame);
-        if (need) {
-            pv.bg_mask_frame = frame_idx;
-            pv.bg_mask_alpha.clear();
-            pv.bg_mask_w = pv.bg_mask_h = 0;
+// ── Internal: prepare (CPU-only) one proxy frame into a ring slot ────────────
+//
+// Decodes pv.mjpeg_file[frame_idx] into `f` and applies CPU FX. The file read
+// (and bg_mask state mutation) is serialized under pv.file_mu; the CPU decode
+// + FX work is unlocked so the thread pool can run multiple frames of the
+// same slot in parallel.
+//
+// On success, sets f.frame_idx = frame_idx (publishes the entry to readers).
+// On failure, sets f.frame_idx = -1 (releases the reservation).
+static void prepare_proxy_frame_cpu(PreviewState& pv, DecodedFrame& f, int frame_idx) {
+    auto release_empty = [&]{ f.frame_idx = -1; };
 
-            if (pv.bg_mjpeg_file && mask_idx >= 0 &&
-                mask_idx < (int)pv.bg_mjpeg_offsets.size()) {
-                uint64_t off     = pv.bg_mjpeg_offsets[(size_t)mask_idx];
-                bool     m_last  = ((size_t)mask_idx + 1 >= pv.bg_mjpeg_offsets.size());
-                size_t   fsz     = 0;
-                if (!m_last) {
-                    fsz = (size_t)(pv.bg_mjpeg_offsets[(size_t)mask_idx + 1] - off);
-                } else {
-                    fseeko(pv.bg_mjpeg_file, 0, SEEK_END);
-                    long end = ftell(pv.bg_mjpeg_file);
-                    fsz = (end > (long)off) ? (size_t)(end - off) : 0;
-                }
-                if (fsz > 0) {
-                    pv.mask_jpeg_buf.resize(fsz);
-                    fseeko(pv.bg_mjpeg_file, (off_t)off, SEEK_SET);
-                    size_t mgot = fread(pv.mask_jpeg_buf.data(), 1, fsz, pv.bg_mjpeg_file);
-                    if (mgot > 0) {
-                        int mw = 0, mh = 0;
-                        if (tj_decode(pv.mask_jpeg_buf.data(), mgot, 1,
-                                      pv.bg_mask_alpha, mw, mh)) {
-                            pv.bg_mask_w = mw; pv.bg_mask_h = mh;
-                            // Apply bounding box: zero alpha outside the user-defined rect.
-                            if (pv.pixel_fx.bg_remove_box_on && mw > 0 && mh > 0) {
-                                int xl = (int)(pv.pixel_fx.bg_remove_box_l * mw);
-                                int xr = (int)(pv.pixel_fx.bg_remove_box_r * mw);
-                                int yt = (int)(pv.pixel_fx.bg_remove_box_t * mh);
-                                int yb = (int)(pv.pixel_fx.bg_remove_box_b * mh);
-                                for (int y = 0; y < mh; ++y)
-                                    for (int x = 0; x < mw; ++x)
-                                        if (x < xl || x >= xr || y < yt || y >= yb)
-                                            pv.bg_mask_alpha[(size_t)y * mw + x] = 0;
+    if (!pv.mjpeg_file || pv.proxy.offsets.empty()) { release_empty(); return; }
+    if (frame_idx < 0 || (size_t)frame_idx >= pv.proxy.offsets.size())
+        { release_empty(); return; }
+
+    // ── Phase 1 (locked): file read + bg_mask state update ──────────────────
+    PixelFX pfx;
+    std::vector<uint8_t> bg_mask_snapshot;
+    int  bg_mask_w_snap = 0, bg_mask_h_snap = 0;
+    size_t got = 0;
+    uint64_t stamp_at_decode = 0;
+    {
+        std::lock_guard<std::mutex> lk(pv.file_mu);
+
+        pfx              = pv.pixel_fx;
+        stamp_at_decode  = pv.fx_stamp;
+
+        uint64_t offset = pv.proxy.offsets[(size_t)frame_idx];
+        bool is_last    = ((size_t)frame_idx + 1 >= pv.proxy.offsets.size());
+        size_t frame_sz = 0;
+        if (!is_last) {
+            frame_sz = (size_t)(pv.proxy.offsets[(size_t)frame_idx + 1] - offset);
+        } else {
+            fseeko(pv.mjpeg_file, 0, SEEK_END);
+            long end = ftell(pv.mjpeg_file);
+            frame_sz = (end > (long)offset) ? (size_t)((long)end - (long)offset) : 0;
+        }
+        if (frame_sz == 0) { release_empty(); return; }
+
+        f.jpeg_buf.resize(frame_sz);
+        fseeko(pv.mjpeg_file, (off_t)offset, SEEK_SET);
+        got = fread(f.jpeg_buf.data(), 1, frame_sz, pv.mjpeg_file);
+        if (got == 0) { release_empty(); return; }
+
+        // Load bg_remove mask under the same lock (bg_mask_* is shared state).
+        if (pfx.bg_remove_on && !pfx.bg_remove_mask_dir.empty()) {
+            if (pfx.bg_remove_mask_dir != pv.bg_mjpeg_dir)
+                bg_mjpeg_open(pv, pfx.bg_remove_mask_dir);
+            else
+                bg_mjpeg_scan(pv);
+
+            int mask_idx = frame_idx - pv.bg_mjpeg_start_frame;
+            if (frame_idx != pv.bg_mask_frame) {
+                pv.bg_mask_frame = frame_idx;
+                pv.bg_mask_alpha.clear();
+                pv.bg_mask_w = pv.bg_mask_h = 0;
+                if (pv.bg_mjpeg_file && mask_idx >= 0 &&
+                    mask_idx < (int)pv.bg_mjpeg_offsets.size()) {
+                    uint64_t off    = pv.bg_mjpeg_offsets[(size_t)mask_idx];
+                    bool     m_last = ((size_t)mask_idx + 1 >= pv.bg_mjpeg_offsets.size());
+                    size_t   fsz    = 0;
+                    if (!m_last) {
+                        fsz = (size_t)(pv.bg_mjpeg_offsets[(size_t)mask_idx + 1] - off);
+                    } else {
+                        fseeko(pv.bg_mjpeg_file, 0, SEEK_END);
+                        long end = ftell(pv.bg_mjpeg_file);
+                        fsz = (end > (long)off) ? (size_t)(end - off) : 0;
+                    }
+                    if (fsz > 0) {
+                        pv.mask_jpeg_buf.resize(fsz);
+                        fseeko(pv.bg_mjpeg_file, (off_t)off, SEEK_SET);
+                        size_t mgot = fread(pv.mask_jpeg_buf.data(), 1, fsz, pv.bg_mjpeg_file);
+                        if (mgot > 0) {
+                            int mw = 0, mh = 0;
+                            if (tj_decode(pv.mask_jpeg_buf.data(), mgot, 1,
+                                          pv.bg_mask_alpha, mw, mh)) {
+                                pv.bg_mask_w = mw; pv.bg_mask_h = mh;
+                                if (pfx.bg_remove_box_on && mw > 0 && mh > 0) {
+                                    int xl = (int)(pfx.bg_remove_box_l * mw);
+                                    int xr = (int)(pfx.bg_remove_box_r * mw);
+                                    int yt = (int)(pfx.bg_remove_box_t * mh);
+                                    int yb = (int)(pfx.bg_remove_box_b * mh);
+                                    for (int y = 0; y < mh; ++y)
+                                        for (int x = 0; x < mw; ++x)
+                                            if (x < xl || x >= xr || y < yt || y >= yb)
+                                                pv.bg_mask_alpha[(size_t)y * mw + x] = 0;
+                                }
                             }
                         }
                     }
                 }
             }
+            // Snapshot for unlocked decode.
+            bg_mask_w_snap = pv.bg_mask_w;
+            bg_mask_h_snap = pv.bg_mask_h;
+            bg_mask_snapshot = pv.bg_mask_alpha;
+        } else if (!pfx.bg_remove_on) {
+            if (pv.bg_mjpeg_file) { fclose(pv.bg_mjpeg_file); pv.bg_mjpeg_file = nullptr; }
+            pv.bg_mjpeg_offsets.clear();
+            pv.bg_mjpeg_dir.clear();
+            pv.bg_mask_alpha.clear();
+            pv.bg_mask_w = pv.bg_mask_h = 0;
         }
-    } else if (!pv.pixel_fx.bg_remove_on) {
-        if (pv.bg_mjpeg_file) { fclose(pv.bg_mjpeg_file); pv.bg_mjpeg_file = nullptr; }
-        pv.bg_mjpeg_offsets.clear();
-        pv.bg_mjpeg_dir.clear();
-        pv.bg_mask_alpha.clear();
-        pv.bg_mask_w = pv.bg_mask_h = 0;
     }
 
-    const uint8_t* bg_ptr = (pv.pixel_fx.bg_remove_on && !pv.bg_mask_alpha.empty())
-                            ? pv.bg_mask_alpha.data() : nullptr;
+    // Datamosh: corrupt JPEG bytes (per-frame buffer, no shared state).
+    if (pfx.datamosh_on && pfx.datamosh_intensity > 0.01f) {
+        uint32_t seed = (uint32_t)(pfx.time * 60.f);
+        corrupt_jpeg_buf(f.jpeg_buf.data(), got, pfx.datamosh_intensity, seed);
+    }
 
+    // ── Phase 2 (unlocked): JPEG decode + CPU FX ────────────────────────────
+    const uint8_t* bg_ptr = (pfx.bg_remove_on && !bg_mask_snapshot.empty())
+                            ? bg_mask_snapshot.data() : nullptr;
     int w = 0, h = 0; bool want_rgba = false;
-    if (!process_jpeg_cpu(pv.jpeg_buf.data(), got, &pv.pixel_fx,
-                          bg_ptr, pv.bg_mask_w, pv.bg_mask_h,
-                          pv.pixel_fx.bg_remove_softness,
-                          pv.rgb_pixels, pv.rgba_pixels, pv.corr_alpha,
+    if (!process_jpeg_cpu(f.jpeg_buf.data(), got, &pfx,
+                          bg_ptr, bg_mask_w_snap, bg_mask_h_snap,
+                          pfx.bg_remove_softness,
+                          f.rgb, f.rgba_buf, f.corr_alpha,
                           w, h, want_rgba))
-        return false;
+        { release_empty(); return; }
 
-    pv.prepared_ready  = true;
-    pv.prepared_frame  = frame_idx;
-    pv.prepared_w      = w;
-    pv.prepared_h      = h;
-    pv.prepared_rgba   = want_rgba;
-    return true;
+    f.w         = w;
+    f.h         = h;
+    f.rgba      = want_rgba;
+    f.fx_stamp  = stamp_at_decode;
+    f.frame_idx = frame_idx;   // publish
 }
 
-// Main-thread: upload the pixels prepared by prepare_proxy_frame_cpu().
-static uintptr_t upload_prepared_gl(PreviewState& pv) {
-    if (!pv.prepared_ready) return pv.tex ? (uintptr_t)pv.tex : 0;
-    const uint8_t* src = pv.prepared_rgba ? pv.rgba_pixels.data() : pv.rgb_pixels.data();
+// Main-thread GL upload from a ring entry.
+static uintptr_t upload_ring_gl(PreviewState& pv, DecodedFrame& f) {
+    const uint8_t* src = f.rgba ? f.rgba_buf.data() : f.rgb.data();
     upload_pixels_gl(&pv.tex, &pv.tex_w, &pv.tex_h, &pv.tex_rgba,
-                     src, pv.prepared_w, pv.prepared_h, pv.prepared_rgba);
-    pv.prepared_ready = false;
+                     src, f.w, f.h, f.rgba);
     return pv.tex ? (uintptr_t)pv.tex : 0;
 }
 
-// Synchronous single-slot decode + upload (legacy path).
+// Synchronous single-slot decode + upload (fallback when prefetch missed).
 static uintptr_t decode_proxy_frame(PreviewState& pv, int frame_idx) {
-    if (!prepare_proxy_frame_cpu(pv, frame_idx))
-        return pv.tex ? (uintptr_t)pv.tex : 0;
-    return upload_prepared_gl(pv);
+    DecodedFrame& f = ring_alloc(pv);
+    prepare_proxy_frame_cpu(pv, f, frame_idx);
+    if (f.frame_idx != frame_idx) return pv.tex ? (uintptr_t)pv.tex : 0;
+    return upload_ring_gl(pv, f);
 }
 
 // ── Preview API ───────────────────────────────────────────────────────────────
@@ -914,6 +999,8 @@ static void close_slot(PreviewState& pv) {
     pv.bg_mjpeg_offsets.clear();
     pv.bg_mjpeg_dir.clear();
     pv.bg_mask_alpha.clear();
+    ring_invalidate(pv);
+    pv.fx_stamp++;
 }
 
 void video_open_still(int track_id, const std::string& jpeg_path) {
@@ -988,12 +1075,18 @@ VideoInfo video_info(int track_id) {
 void video_set_pixel_fx(int track_id, const PixelFX& fx) {
     if (track_id < 0 || track_id >= MAX_VIDEO_TRACKS) return;
     auto& pv = g_pv[track_id];
-    // Animated effects (glitch/VHS/datamosh) always re-decode since time advances each frame.
-    // Static effects (grade/blur) re-decode only when params change.
-    if (!(pv.pixel_fx == fx)) {
-        pv.pixel_fx = fx;
-        pv.pixel_fx_dirty = true;
-    }
+    if (pv.pixel_fx == fx) return;
+
+    // Bump fx_stamp (= invalidate ring cache) only when the change actually
+    // affects decoded pixels. Pure pfx.time advances under static FX leave
+    // the cache valid; time changes under time-driven FX invalidate.
+    bool non_time_changed = !pfx_eq_modulo_time(pv.pixel_fx, fx);
+    bool tdriven_now      = pfx_is_time_driven(fx);
+    bool tdriven_prev     = pfx_is_time_driven(pv.pixel_fx);
+
+    pv.pixel_fx       = fx;
+    pv.pixel_fx_dirty = true;
+    if (non_time_changed || tdriven_now || tdriven_prev) pv.fx_stamp++;
 }
 
 // Compute the proxy frame index for a given playhead time on the given slot.
@@ -1026,16 +1119,16 @@ uintptr_t video_get_texture(int track_id, double playhead) {
     int frame_idx = playhead_to_frame_idx(pv, playhead);
     if (frame_idx < 0) return 0;
 
-    // Fast path: a prefetch round already prepared this exact frame on a
-    // worker thread — just push it to GL.
-    if (pv.prepared_ready && pv.prepared_frame == frame_idx) {
-        pv.pixel_fx_dirty = false;
-        pv.last_frame_idx = frame_idx;
-        return upload_prepared_gl(pv);
-    }
-
+    // Same frame, same FX, already on the GPU → no work.
     if (frame_idx == pv.last_frame_idx && pv.tex && !pv.pixel_fx_dirty)
         return (uintptr_t)pv.tex;
+
+    // Ring cache hit (prefetched by an earlier video_prefetch_frames call).
+    if (DecodedFrame* f = ring_find(pv, frame_idx)) {
+        pv.pixel_fx_dirty = false;
+        pv.last_frame_idx = frame_idx;
+        return upload_ring_gl(pv, *f);
+    }
 
     pv.pixel_fx_dirty = false;
     pv.last_frame_idx = frame_idx;
@@ -1045,39 +1138,48 @@ uintptr_t video_get_texture(int track_id, double playhead) {
 void video_prefetch_frames(const VideoPrefetchReq* reqs, int n) {
     if (!reqs || n <= 0) return;
 
-    // Build the work list: only slots that actually need a fresh decode.
-    struct Job { PreviewState* pv; int frame_idx; };
-    Job jobs[MAX_VIDEO_TRACKS];
-    int njobs = 0;
-    for (int i = 0; i < n && njobs < MAX_VIDEO_TRACKS; ++i) {
+    // Per-slot prefetch window: 1 frame for time-driven FX (every frame is
+    // unique, no point caching), RING_FRAMES otherwise. The current frame
+    // counts as one slot of the window.
+    struct Job { PreviewState* pv; int frame_idx; DecodedFrame* target; };
+    std::vector<Job> jobs;
+    jobs.reserve((size_t)n * RING_FRAMES);
+
+    for (int i = 0; i < n; ++i) {
         int t = reqs[i].track_id;
         if (t < 0 || t >= MAX_VIDEO_TRACKS) continue;
         PreviewState& pv = g_pv[t];
         if (!pv.is_open || !pv.is_proxy) continue;
-        int fidx = playhead_to_frame_idx(pv, reqs[i].playhead);
-        if (fidx < 0) continue;
-        // Cached and no fx change → nothing to do.
-        if (fidx == pv.last_frame_idx && pv.tex && !pv.pixel_fx_dirty) continue;
-        // Already prepared for this frame → upload not yet done; reuse.
-        if (pv.prepared_ready && pv.prepared_frame == fidx) continue;
-        jobs[njobs++] = {&pv, fidx};
-    }
-    if (njobs == 0) return;
 
-    // 0/1 job: skip the pool entirely (no thread hand-off cost).
-    if (njobs == 1) {
-        prepare_proxy_frame_cpu(*jobs[0].pv, jobs[0].frame_idx);
+        int base_fidx = playhead_to_frame_idx(pv, reqs[i].playhead);
+        if (base_fidx < 0) continue;
+
+        int window = pfx_is_time_driven(pv.pixel_fx) ? 1 : RING_FRAMES;
+        int max_fidx = (int)pv.proxy.offsets.size();
+        for (int k = 0; k < window; ++k) {
+            int fidx = base_fidx + k;
+            if (fidx >= max_fidx) break;
+            if (ring_find(pv, fidx)) continue;  // already cached
+            jobs.push_back({&pv, fidx, nullptr});
+        }
+    }
+    if (jobs.empty()) return;
+
+    // Reserve ring slots on the main thread (ring_alloc is not thread-safe).
+    for (auto& j : jobs) j.target = &ring_alloc(*j.pv);
+
+    // 1 job: skip the pool entirely (no thread hand-off cost).
+    if (jobs.size() == 1) {
+        prepare_proxy_frame_cpu(*jobs[0].pv, *jobs[0].target, jobs[0].frame_idx);
         return;
     }
 
-    // Dispatch parallel CPU prepare across worker threads. The GL upload is
-    // deliberately left for video_get_texture()'s fast path (which runs on the
-    // main thread when the canvas draw loop reaches each track).
     ThreadPool& tp = pool();
-    for (int i = 0; i < njobs; ++i) {
-        PreviewState* pv = jobs[i].pv;
-        int fidx = jobs[i].frame_idx;
-        tp.submit([pv, fidx]{ prepare_proxy_frame_cpu(*pv, fidx); });
+    for (auto& j : jobs) {
+        PreviewState* pv = j.pv;
+        DecodedFrame* tgt = j.target;
+        int fidx = j.frame_idx;
+        tp.submit([pv, tgt, fidx]{ prepare_proxy_frame_cpu(*pv, *tgt, fidx); });
     }
     tp.wait_idle();
 }
