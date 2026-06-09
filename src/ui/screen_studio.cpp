@@ -188,6 +188,7 @@ void ui_studio(AppState& state) {
         } else if (is_image_path(dp)) {
             // Dropped image: new track + 5-second clip at playhead, same as Browse
             recent_media_push(dp, MediaKind::Image);
+            bin_add(state, dp);
             Track nt; nt.name = fp.stem().string();
             Clip cl;
             cl.clip_type = ClipType::Video;
@@ -209,6 +210,7 @@ void ui_studio(AppState& state) {
         } else if (is_audio_file(dp)) {
             bool is_vid = (ext==".mp4"||ext==".mov"||ext==".mkv"||ext==".avi"||ext==".webm");
             ClipType drop_ct = is_vid ? ClipType::Video : ClipType::Audio;
+            bin_add(state, dp);
 
             if (s_tl_hover_track >= 0 && s_tl_hover_track < (int)state.tracks.size()) {
                 add_clip_to_track(state, s_tl_hover_track, dp, drop_ct);
@@ -790,7 +792,8 @@ void ui_studio(AppState& state) {
 
         struct BtnDef { const char* id; PanelView lib_view; ImU32 accent; bool sep_before; };
         static const BtnDef btns[] = {
-            { "Backgrounds", PanelView::LibBG,   IM_COL32(180,  60, 160, 255), false },
+            { "Bin",         PanelView::LibBin,  IM_COL32(220, 200, 120, 255), false },
+            { "Backgrounds", PanelView::LibBG,   IM_COL32(180,  60, 160, 255), true  },
             { "Effects",     PanelView::LibFX,   IM_COL32(210, 110,  30, 255), true  },
             { "Filters",     PanelView::LibAdj,  IM_COL32(100,  80, 200, 255), false },
             { "Body FX",     PanelView::LibBFX,  IM_COL32( 20, 180, 160, 255), false },
@@ -1339,6 +1342,7 @@ void ui_studio(AppState& state) {
             case PanelView::LibVID:          panel_media_browser(state, pw, true);   break;
             case PanelView::LibIMG:          panel_media_browser(state, pw, false);  break;
             case PanelView::LibAUD:          panel_audio_browser(state, pw);         break;
+            case PanelView::LibBin:          panel_bin(state, pw);                   break;
             case PanelView::OverrideFX:      panel_fx_clip(state, pw);               break;
             case PanelView::OverrideAdj:     panel_adjustment(state, pw);            break;
             case PanelView::OverrideBG:      panel_background(state, pw, true);      break;

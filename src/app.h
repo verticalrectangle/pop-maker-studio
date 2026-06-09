@@ -510,6 +510,14 @@ struct AppState {
     // Keyed by file path so two clips sharing a source share one proxy.
     std::string proxy_paths[MAX_VIDEO_TRACKS];
 
+    // Bin — project-scoped media library. Files added here are "available to
+    // the project" but not necessarily on the timeline. Drag from bin → track
+    // to place. Multi-file drops land here without auto-placement so the
+    // timeline doesn't get a stack of overlapping tracks. Persisted in the
+    // project file; backfilled from existing clip paths on load when missing
+    // for backward compat with pre-bin projects.
+    std::vector<std::string> bin;
+
     // keyframe selection
     int         kf_sel_track = -1;
     int         kf_sel_clip  = -1;

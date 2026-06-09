@@ -1,5 +1,6 @@
 #include "studio_types.h"
 #include "studio_shared.h"
+#include "panel_media.h"
 #include "app.h"
 #include "audio.h"
 #include "video.h"
@@ -148,6 +149,12 @@ void add_clip_to_track(AppState& state, int ti, const std::string& path, ClipTyp
     if (ti < 0 || ti >= (int)state.tracks.size()) return;
     Track& tr = state.tracks[ti];
 
+    // Every video/audio that lands on the timeline is also in the project, so
+    // mirror it into the bin. No-op for duplicates, so Browse-then-drag flows
+    // don't double-list.
+    if ((ct == ClipType::Video || ct == ClipType::Audio) && !path.empty())
+        bin_add(state, path);
+
     Clip cl;
     cl.clip_type = ct;
     cl.start     = state.playhead;
@@ -205,7 +212,7 @@ void add_clip_to_track(AppState& state, int ti, const std::string& path, ClipTyp
 bool pv_is_lib(PanelView v) {
     return v == PanelView::LibBG    || v == PanelView::LibFX  || v == PanelView::LibAdj ||
            v == PanelView::LibBFX   || v == PanelView::LibAFX || v == PanelView::LibVID ||
-           v == PanelView::LibIMG   || v == PanelView::LibAUD;
+           v == PanelView::LibIMG   || v == PanelView::LibAUD || v == PanelView::LibBin;
 }
 
 bool pv_is_override(PanelView v) {

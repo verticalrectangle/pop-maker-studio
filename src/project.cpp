@@ -1,5 +1,6 @@
 #include "project.h"
 #include "body_fx.h"
+#include "ui/panel_media.h"  // bin_backfill_from_timeline
 #include <fstream>
 #include <cstdint>
 #include <filesystem>
@@ -7,7 +8,7 @@
 // ── Binary serialization helpers ──────────────────────────────────────────────
 
 static const uint32_t MAGIC   = 0x534D5001u; // "PMS\x01"
-static const uint32_t VERSION = 35u;
+static const uint32_t VERSION = 36u;
 
 struct Writer {
     std::ofstream f;
@@ -438,6 +439,10 @@ bool project_save(const AppState& state, const std::string& path) {
         w.str(v);
     }
 
+    // v36: project bin
+    w.pod((uint32_t)state.bin.size());
+    for (auto& p : state.bin) w.str(p);
+
     return w.ok;
 }
 
@@ -523,6 +528,17 @@ bool project_load(AppState& state, const std::string& path) {
             state.lyrics_edits[k] = std::move(v);
         }
     }
+
+    // v36: project bin
+    if (version >= 36u) {
+        uint32_t nb = r.pod<uint32_t>();
+        state.bin.reserve(nb);
+        for (uint32_t i = 0; i < nb && r.ok; ++i)
+            state.bin.push_back(r.str());
+    }
+    // Backfill for pre-v36 projects: derive the bin from existing clip paths
+    // so users opening older projects still see their media in the bin.
+    bin_backfill_from_timeline(state);
 
     return r.ok;
 }

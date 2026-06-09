@@ -490,9 +490,56 @@ async def list_tools() -> list[Tool]:
             inputSchema={"type": "object", "properties": {}},
         ),
         Tool(
+            name="add_to_bin",
+            description=(
+                "Add a media file to the project Bin. The Bin is the project-scoped media library "
+                "shown in the right-side panel — files here are 'available to use' but are not on the "
+                "timeline yet. The user (or you, via add_clip) drags from the Bin onto a track to "
+                "actually place them.\n\n"
+                "When to call this:\n"
+                "  - You discovered several candidate files and want to surface them to the user "
+                "without committing placements yet.\n"
+                "  - The user said something like 'have a look at these clips' or 'find me good "
+                "options' — load them into the Bin, then ask which to place.\n"
+                "  - You're processing a batch import (extracted segments, cropped variants) where "
+                "not every file will end up on the timeline.\n\n"
+                "When NOT to call this: don't call it before every add_clip. add_clip on a "
+                "video/audio path automatically mirrors the file into the Bin, so for direct "
+                "placements just call add_clip and skip this. No batch needed."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Absolute path to a media file"},
+                },
+                "required": ["path"],
+            },
+        ),
+        Tool(
+            name="remove_from_bin",
+            description=(
+                "Remove a media file from the project Bin. Does NOT remove clips already placed "
+                "on the timeline that reference the file — those keep working (the timeline holds "
+                "its own path reference). Use delete_clip first if you also want to remove its "
+                "placements. No batch needed."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Absolute path of the bin entry to remove"},
+                },
+                "required": ["path"],
+            },
+        ),
+        Tool(
             name="add_clip",
             description=(
-                "Add a new clip to a track. Requires batch.\n\n"
+                "Place a clip on a track. Requires batch.\n\n"
+                "BIN vs TIMELINE: add_to_bin makes a media file 'available to the project' (shows in "
+                "the Bin panel). add_clip actually places it on the timeline. Use add_to_bin when you've "
+                "discovered files the user might want but you're not sure yet; use add_clip when you're "
+                "committing to a placement. add_clip on a video/audio path automatically also adds the "
+                "file to the bin, so you don't need both calls for files you're placing right away.\n\n"
                 "type: video | audio | text | lyrics | subtitle | effect | background | body_fx\n"
                 "For video files (.mp4 .mov .webm etc): type='video', text=absolute path.\n"
                 "For audio-only files (.flac .mp3 .wav .ogg etc): type='audio', text=absolute path. "

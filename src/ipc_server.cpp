@@ -5,6 +5,7 @@
 #include "runtime_fx.h"
 #include "ui/pipeline.h"
 #include "ui/panel_animation.h"
+#include "ui/panel_media.h"
 #include "ui/studio_shared.h"
 #include "project.h"
 #include "beat_detect.h"
@@ -387,6 +388,12 @@ static json state_to_json_slim(const AppState& state) {
         markers_arr.push_back(mj);
     }
     j["markers"] = markers_arr;
+    // Project bin — paths available to the project (not necessarily on the
+    // timeline). New media goes here on multi-file drops or via add_to_bin.
+    // Use add_clip with text=<path> to actually place a bin item.
+    json bin_arr = json::array();
+    for (auto& p : state.bin) bin_arr.push_back(p);
+    j["bin"] = bin_arr;
     return j;
 }
 
@@ -439,6 +446,11 @@ static json state_to_json(const AppState& state) {
         markers_arr.push_back(mj);
     }
     j["markers"] = markers_arr;
+
+    // Project bin
+    json bin_arr = json::array();
+    for (auto& p : state.bin) bin_arr.push_back(p);
+    j["bin"] = bin_arr;
 
     return j;
 }
@@ -1184,8 +1196,14 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         cl.start = start;
         cl.end   = end;
         cl.text  = text;
-        if (cl.clip_type == ClipType::Video || cl.clip_type == ClipType::Audio)
+        if (cl.clip_type == ClipType::Video || cl.clip_type == ClipType::Audio) {
             cl.source_id = text;
+            // Mirror into the bin so any media that ends up on the timeline is
+            // also listed in the project — agents calling add_clip with a path
+            // they discovered via search or filesystem don't need a separate
+            // add_to_bin round-trip.
+            if (!text.empty()) bin_add(state, text);
+        }
         if ((cl.clip_type == ClipType::Video || cl.clip_type == ClipType::Audio) && state.audio_path.empty())
             state.audio_path = state.vocals_path = text;
         state.tracks[ti].clips.push_back(cl);
@@ -1211,6 +1229,31 @@ static json dispatch(AppState& state, const std::string& method, const json& par
             }
         }
         json r; r["clip"] = new_ci;
+        return r;
+    }
+
+    if (method == "add_to_bin") {
+        if (!params.contains("path") || !params["path"].is_string()) {
+            err = "path required"; return {};
+        }
+        std::string path = params["path"].get<std::string>();
+        if (path.empty()) { err = "path required"; return {}; }
+        bin_add(state, path);
+        json r;
+        r["path"]     = path;
+        r["bin_size"] = (int)state.bin.size();
+        return r;
+    }
+
+    if (method == "remove_from_bin") {
+        if (!params.contains("path") || !params["path"].is_string()) {
+            err = "path required"; return {};
+        }
+        std::string path = params["path"].get<std::string>();
+        bin_remove(state, path);
+        json r;
+        r["path"]     = path;
+        r["bin_size"] = (int)state.bin.size();
         return r;
     }
 

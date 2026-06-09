@@ -18,26 +18,31 @@
 #include "globals.h"
 #include "stb_image_write.h"
 #include "portrait_preview.h"
+#include "ui/panel_media.h"  // bin_add for drain_bin_pending()
 namespace fs = std::filesystem;
 
 // Definitions of globals declared in globals.h
 std::string g_dropped_file;
 std::string g_managed_dir;
 
-// Multi-file drop queue. GLFW delivers all N paths in a single callback when
-// the user drags multiple files from the file browser, but downstream readers
-// (screen_studio, screen_upload, panel_terminal) consume g_dropped_file one
-// path at a time. We capture every path here and the main loop drains one
-// per frame into g_dropped_file, so the existing readers don't need to know
-// about multi-file drops and rapid sequential processing can't trip up the
-// per-file pipelines (proxy open, native decode, audio probe).
-static std::deque<std::string> g_dropped_queue;
+// Drop queues. Single-file drops follow the legacy g_dropped_file path so the
+// existing readers (screen_studio, screen_upload, panel_terminal) handle
+// hover-track placement as before. Multi-file drops bypass that entirely and
+// go straight to the bin, because "place all 5 files at the playhead on one
+// track" is essentially never what the user wants — it just stacks them.
+static std::deque<std::string> g_dropped_queue;   // single-file: one path per frame
+static std::deque<std::string> g_bin_pending;     // multi-file: drained into AppState.bin
 
 static void glfw_drop_callback(GLFWwindow*, int count, const char** paths) {
     if (count <= 0 || !paths) return;
+    if (count == 1) {
+        if (paths[0] && paths[0][0])
+            g_dropped_queue.emplace_back(paths[0]);
+        return;
+    }
     for (int i = 0; i < count; ++i) {
-        if (!paths[i] || !paths[i][0]) continue;
-        g_dropped_queue.emplace_back(paths[i]);
+        if (paths[i] && paths[i][0])
+            g_bin_pending.emplace_back(paths[i]);
     }
 }
 
@@ -45,6 +50,16 @@ static void drain_dropped_queue() {
     if (!g_dropped_file.empty() || g_dropped_queue.empty()) return;
     g_dropped_file = std::move(g_dropped_queue.front());
     g_dropped_queue.pop_front();
+}
+
+// Drain the multi-file pending list into the project bin. Needs AppState
+// access, so this lives in main.cpp where state is in scope and is called
+// from the main loop right after drain_dropped_queue.
+static void drain_bin_pending(AppState& state) {
+    while (!g_bin_pending.empty()) {
+        bin_add(state, g_bin_pending.front());
+        g_bin_pending.pop_front();
+    }
 }
 
 static void glfw_error_callback(int err, const char* desc) {
@@ -206,7 +221,8 @@ int main(int argc, char** argv) {
 
     while (!glfwWindowShouldClose(window)) {
         glfwPollEvents();
-        drain_dropped_queue();  // multi-file drops: feed one path per frame
+        drain_dropped_queue();   // single-file drops: feed one path per frame
+        drain_bin_pending(state); // multi-file drops: dump all into the bin
 
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplGlfw_NewFrame();
