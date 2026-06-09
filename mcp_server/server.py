@@ -472,11 +472,19 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="begin_batch",
             description=(
-                "Start a named edit batch. REQUIRED before any mutation (add_clip, set_clip_prop, "
-                "add_track, delete_clip, add_effect_brick, etc.). Read-only calls (get_project, "
-                "get_clips, take_snapshot, crop_media, get_pipeline_status) need no batch. "
-                "Single-edit batches are fine — they still need begin/end_batch. "
-                "You cannot nest batches. The label appears in the undo history."
+                "Group multiple mutations into one undo step.\n\n"
+                "YOU PROBABLY DON'T NEED THIS for a single mutation. The server auto-batches every "
+                "individual mutation call (add_clip, set_clip_prop, add_track, delete_clip, "
+                "add_effect_brick, etc.) using the method name as the undo label, so a one-off "
+                "set_clip_prop on its own becomes one undo step automatically.\n\n"
+                "USE begin_batch when you want a SEQUENCE of mutations to undo as a single step — "
+                "e.g. add_track + add_clip + set_clip_prop to set up a clip in one motion, or a "
+                "loop of set_clip_prop calls applying a style to many clips. Pass a descriptive "
+                "label that reads well in the undo menu (\"Set up intro lyrics\", \"Apply karaoke "
+                "preset\").\n\n"
+                "Batches can't be nested. Always pair with end_batch — if the connection drops "
+                "mid-batch the in-flight changes are saved as \"<label> (incomplete)\" so nothing "
+                "is lost."
             ),
             inputSchema={
                 "type": "object",
@@ -534,7 +542,7 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="add_clip",
             description=(
-                "Place a clip on a track. Requires batch.\n\n"
+                "Place a clip on a track.\n\n"
                 "BIN vs TIMELINE: add_to_bin makes a media file 'available to the project' (shows in "
                 "the Bin panel). add_clip actually places it on the timeline. Use add_to_bin when you've "
                 "discovered files the user might want but you're not sure yet; use add_clip when you're "
@@ -585,7 +593,7 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="add_track",
             description=(
-                "Add a track at position (0=top/foreground, higher=background). Returns track index. Requires batch.\n\n"
+                "Add a track at position (0=top/foreground, higher=background). Returns track index.\n\n"
                 "LAYERING RULE: track 0 = top (foreground). Highest index = bottom (background).\n"
                 "  Text, FX, overlays → low-index tracks (0, 1, 2…)\n"
                 "  Video, background  → high-index tracks"
@@ -600,7 +608,7 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="delete_clip",
-            description="Delete a clip. Requires batch.",
+            description="Delete a clip.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -613,7 +621,7 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="move_clip",
-            description="Move a clip to a new start time (preserves duration). Requires batch.",
+            description="Move a clip to a new start time (preserves duration).",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -627,7 +635,7 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="trim_clip",
-            description="Trim a clip's start and/or end time. Requires batch.",
+            description="Trim a clip's start and/or end time.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -642,7 +650,7 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="split_clip",
-            description="Split a clip at a time point. Returns left_clip and right_clip indices. Requires batch.",
+            description="Split a clip at a time point. Returns left_clip and right_clip indices.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -657,7 +665,7 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="set_clip_prop",
             description=(
-                "Set one property on a clip. Requires batch.\n\n"
+                "Set one property on a clip.\n\n"
                 "LAYOUT:    pos_x, pos_y (0–1 canvas fraction), scale_x, scale_y, rotation\n"
                 "PLAYBACK:  volume (0–2), speed (0.25–4), opacity (0–1), muted (bool),\n"
                 "           fade_in, fade_out, in_point (source offset seconds)\n"
@@ -689,7 +697,7 @@ async def list_tools() -> list[Tool]:
             description=(
                 "Add multiple clips to a single track in one round-trip. Equivalent to calling "
                 "add_clip N times but dramatically faster for beat-sync edits or any bulk layout. "
-                "Returns an array of assigned clip IDs in order. Requires batch.\n\n"
+                "Returns an array of assigned clip IDs in order.\n\n"
                 "Each entry in 'clips': {type, start, end, text (file path for video/audio)}"
             ),
             inputSchema={
@@ -715,7 +723,7 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="set_clip_props",
-            description="Set properties on multiple clips in one call. ops: [{track, clip, prop, value}]. Requires batch.",
+            description="Set properties on multiple clips in one call. ops: [{track, clip, prop, value}].",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -740,7 +748,7 @@ async def list_tools() -> list[Tool]:
             name="set_text_style",
             description=(
                 "Set visual text styling on a clip. All fields are optional — only provided "
-                "fields are updated. Color arrays are [r, g, b, a] with values 0–1. Requires batch.\n"
+                "fields are updated. Color arrays are [r, g, b, a] with values 0–1.\n"
                 "Fields: shadow_enabled (bool), shadow_ox, shadow_oy, shadow_col,\n"
                 "  stroke_enabled, stroke_w, stroke_col,\n"
                 "  glow_enabled, glow_r, glow_col,\n"
@@ -784,7 +792,7 @@ async def list_tools() -> list[Tool]:
                 "trigger_pipeline finishes (stage='done' via get_pipeline_status) — that's how lyrics "
                 "get onto the timeline. Also call again to swap to a different visual style: idempotent, "
                 "clears the existing lyric clips for the current audio source and re-lays them with the "
-                "new preset. Requires batch.\n\n"
+                "new preset.\n\n"
                 "PRESET SYSTEM: each preset bundles grouping, position, animation, color, and optional FX clips. "
                 "The preset IS the style — do NOT call set_text_style on the generated clips afterward to tweak "
                 "them; that breaks the global styling. Match the user's style request to the closest preset here "
@@ -928,7 +936,7 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="load_project",
-            description="Load a .pms project file, replacing the current project. Requires batch.",
+            description="Load a .pms project file, replacing the current project.",
             inputSchema={
                 "type": "object",
                 "properties": {"path": {"type": "string", "description": "Absolute path to a .pms file"}},
@@ -942,7 +950,7 @@ async def list_tools() -> list[Tool]:
                 "Same-track as a video clip = glass mode (affects that clip only). "
                 "Separate FX track = global (affects all layers below).\n\n"
                 "effects[]: {fx_type, rel_start (0), rel_end (0=brick end), params, body_fx_type (if fx_type='body_fx')}\n"
-                "body_fx constraint: must be glass mode (same track as video clip). Requires batch."
+                "body_fx constraint: must be glass mode (same track as video clip)."
             ),
             inputSchema={
                 "type": "object",
@@ -976,7 +984,7 @@ async def list_tools() -> list[Tool]:
                 "Reset the project to a blank state (clears all tracks, clips, audio, beats). "
                 "Call get_project first — if tracks=[], audio_path='', and duration=0 the project is "
                 "already blank; skip this call and go straight to set_format. Only call new_project "
-                "when the project has existing content you need to discard. Requires batch.\n\n"
+                "when the project has existing content you need to discard.\n\n"
                 "PROBE BEFORE ASKING: When the user provides media files, use tools to answer factual "
                 "questions yourself before asking the user. See get_project description for the full rule."
             ),
@@ -984,7 +992,7 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="rename_track",
-            description="Rename a track. Requires batch.",
+            description="Rename a track.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -1063,8 +1071,7 @@ async def list_tools() -> list[Tool]:
                 "pencil_sketch (amount,line_str,paper_tone,hatching) | "
                 "long_exposure (amount,threshold,trail,glow) | "
                 "thermal_map (amount,cold_hue,hot_hue,contrast,scanlines) | "
-                "digital_noise (amount,intensity,color_sep,luma_bias)\n\n"
-                "Requires batch."
+                "digital_noise (amount,intensity,color_sep,luma_bias)"
             ),
             inputSchema={
                 "type": "object",

@@ -136,7 +136,9 @@ or on error:
 
 The app processes IPC messages on the **main thread** between frames (polled from `app_frame`), so all edits are applied atomically with respect to rendering. No locking needed beyond the socket read.
 
-**Batch semantics:** `begin_batch` pushes one `history_push` entry before the first edit. All subsequent edits in the batch are applied without additional history pushes. `end_batch` closes the batch. If the connection drops mid-batch, the batch is silently closed (partial edits remain in history).
+**Batch semantics:** `begin_batch` pushes one `history_push` entry before the first edit. All subsequent edits in the batch are applied without additional history pushes. `end_batch` closes the batch. If the connection drops mid-batch, the in-flight changes are saved as `"<label> (incomplete)"` so nothing is lost.
+
+**Auto-batching:** mutation calls received outside an explicit batch are wrapped in an implicit one-call batch (labelled with the method name) and committed when the call returns. So `add_clip` on its own is one undo step automatically; `begin_batch` is only needed to coalesce *multiple* mutations into one undo step.
 
 ---
 
@@ -183,7 +185,9 @@ Pushes one undo history entry. All edits until `end_batch` are grouped under one
 
 Params: `{label: "Sync clips to beat"}` — label shown in undo history.
 
-Must be called before any editing tools. The app rejects edit calls that arrive outside a batch (returns error). This prevents Claude from making untracked edits.
+Optional — single edit calls are auto-batched using the method name as the label. Use `begin_batch` when you want multiple edits to undo as one step (e.g. `add_track` + `add_clip` + `set_clip_prop` setting up a clip from scratch).
+
+Batches cannot nest. The app rejects a second `begin_batch` while one is open.
 
 #### `end_batch`
 Closes the current batch. No params.

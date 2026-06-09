@@ -190,11 +190,11 @@ Protocol: newline-delimited JSON. Request: `{"id": "...", "method": "...", "para
 
 `ipc_server_poll(state)` is called from the main loop — same thread as the UI. All mutations land on the main thread between frames, identical to a UI interaction. No locking required.
 
-**Batch system**: mutation commands are rejected outside a `begin_batch`/`end_batch` pair. `end_batch` calls `history_push`, making MCP edits undoable from the UI. If the client disconnects with an open batch, the partial batch is pushed with an `(incomplete)` label.
+**Batch system**: mutation commands run inside a `begin_batch`/`end_batch` pair so the entire sequence becomes one `history_push` and one undo step. Mutations called outside an explicit batch are auto-wrapped in a single-call batch labelled with the method name, so clients only need `begin_batch` when grouping multiple mutations. If the client disconnects with an open batch, the partial batch is pushed with an `(incomplete)` label so nothing is lost.
 
-**Commands** (read-only — no batch required): `get_project`, `get_pipeline_status`, `get_beats`, `seek`, `play`, `pause`, `validate_glsl`, `save_project`.
+**Commands** (read-only — no batch effect): `get_project`, `get_pipeline_status`, `get_beats`, `seek`, `play`, `pause`, `validate_glsl`, `save_project`.
 
-**Commands** (mutation — require batch): `add_clip`, `delete_clip`, `move_clip`, `trim_clip`, `split_clip`, `set_clip_prop`, `set_text_style`, `set_clip_fx`, `add_track`, `delete_track`, `trigger_pipeline`, `generate_typography`, `load_project`.
+**Commands** (mutation — auto-batched if standalone): `add_clip`, `delete_clip`, `move_clip`, `trim_clip`, `split_clip`, `set_clip_prop`, `set_text_style`, `set_clip_fx`, `add_track`, `delete_track`, `trigger_pipeline`, `generate_typography`, `load_project`.
 
 `set_clip_fx` dispatches to the generated `fx_clip_set_param()` function in `src/generated/fx_clip_set_dispatch.h`, which covers all 100 codegen effects by id and param name.
 
