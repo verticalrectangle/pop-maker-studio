@@ -1097,7 +1097,20 @@ async def list_tools() -> list[Tool]:
                 "  1. Run: ffmpeg -y -ss 0.5 -i <path> -vframes 1 -vf scale=480:-1 /tmp/still_<name>.jpg -loglevel quiet\n"
                 "  2. Read the JPEG with your Read tool — you will see the image.\n"
                 "  3. Describe what you see and use that for mood/content matching.\n\n"
-                "Repeat for each video. This is faster and more accurate than any local model."
+                "ONE STILL IS NOT ENOUGH IF YOU DON'T SEE WHAT YOU'RE LOOKING FOR. The first 500 ms "
+                "frame may be a black intro, a logo, a wide establishing shot, or a transition with "
+                "none of the actual subject. When the still doesn't show the thing the user asked "
+                "about (person, action, object, setting), DO NOT conclude the video lacks it — sample "
+                "more frames before deciding:\n"
+                "  a. Get duration via get_media_info(path) (or ffprobe).\n"
+                "  b. Sample ~5 stills spread across the timeline — e.g. at 10%, 30%, 50%, 70%, 90% "
+                "of duration. Generate them in parallel: one bash command with multiple ffmpeg "
+                "invocations joined by '&' and a final 'wait', or 5 Bash tool calls in a single message.\n"
+                "  c. Read all of them and synthesise — describe the video as a whole, not as one frame.\n"
+                "  d. If you're scanning for a specific moment, narrow down: once you find the rough "
+                "neighbourhood (between still N and N+1), sample 3–5 more stills inside that window "
+                "to pin the timestamp more precisely. Binary-search style.\n\n"
+                "Repeat the full process for each video. Faster and more accurate than any local model."
             ),
             inputSchema={
                 "type": "object",
