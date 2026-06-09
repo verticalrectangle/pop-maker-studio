@@ -1441,32 +1441,13 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         // does its data-loading work and stops there.
         state.pipeline_on_done = {};
         kick_pipeline(state, state.audio_path, mode);
-        if (client_fd < 0) { return json::object(); }
-        fd_mark_busy(client_fd);
-        auto* pipe = &state.pipeline;
-        std::thread([client_fd, req_id, pipe]() {
-            for (int ticks = 0; ticks < 7200; ++ticks) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(500));
-                float     prog  = pipe->progress;
-                auto      stage = pipe->stage;
-                send_progress(client_fd, req_id, prog, "");
-                if (stage == PipelineStage::Done || stage == PipelineStage::Error) {
-                    json r;
-                    r["stage"]    = (stage == PipelineStage::Done) ? "done" : "error";
-                    r["progress"] = prog;
-                    r["error"]    = pipe->error;
-                    send_ok_id(client_fd, req_id, r);
-                    agent_done();
-                    fd_mark_free(client_fd);
-                    return;
-                }
-            }
-            json r; r["stage"] = "error"; r["error"] = "pipeline timed out";
-            send_ok_id(client_fd, req_id, r);
-            agent_done();
-            fd_mark_free(client_fd);
-        }).detach();
-        json sentinel; sentinel["__async"] = true; return sentinel;
+        // Non-blocking: return immediately with stage=running so the caller can
+        // poll get_pipeline_status. The pipeline runs in the background thread
+        // launched by kick_pipeline.
+        json r;
+        r["stage"]    = "running";
+        r["progress"] = state.pipeline.progress;
+        return r;
     }
 
     if (method == "generate_typography") {

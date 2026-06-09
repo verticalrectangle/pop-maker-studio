@@ -235,38 +235,33 @@ async def _notify_progress(progress: float, total: float = 1.0) -> None:
         pass
 
 
-# ── Effect manifest (codegen'd) ────────────────────────────────────────────────
-
-_MANIFEST_PATH = Path(__file__).parent.parent / "effects" / "mcp_manifest.json"
-
-def _load_manifest() -> list[dict]:
-    if _MANIFEST_PATH.exists():
-        with open(_MANIFEST_PATH) as f:
-            return json.load(f)
-    return []
-
-_EFFECTS = _load_manifest()
-
-def _build_effect_catalog() -> str:
-    if not _EFFECTS:
-        return "(effect manifest not found — run tools/codegen_effects.py)"
-    lines = []
-    for e in _EFFECTS:
-        param_strs = ", ".join(
-            f'{p["name"]} ({p["min"]}–{p["max"]}, default {p["default"]})'
-            for p in e["params"]
-        )
-        lines.append(f'  {e["id"]}: {e["label"]} — {e["description"]}')
-        if param_strs:
-            lines.append(f'    params: {param_strs}')
-    return "\n".join(lines)
-
-_EFFECT_CATALOG = _build_effect_catalog()
-
-
 # ── MCP server ─────────────────────────────────────────────────────────────────
 
 server = Server("pop-maker-studio")
+
+
+async def _send_search_progress(status: dict, last_msg: str) -> str:
+    """Forward C++ search status to the MCP client as a progress notification.
+
+    Returns the new last_msg (unchanged if no notification was sent). Safe to
+    call from any tool handler — silently no-ops when the client did not
+    include a progressToken with the request, or when no request context
+    exists (e.g. unit tests).
+    """
+    msg = status.get("message", "")
+    if not msg or msg == last_msg:
+        return last_msg
+    try:
+        ctx = server.request_context
+        token = ctx.meta.progressToken if ctx.meta else None
+        if token is not None:
+            progress = float(status.get("progress", 0.0))
+            await ctx.session.send_progress_notification(token, progress, 1.0, msg)
+    except LookupError:
+        pass
+    except Exception as e:
+        print(f"[search progress] notification failed: {e}", flush=True)
+    return msg
 
 
 @server.list_tools()
@@ -283,7 +278,7 @@ async def list_tools() -> list[Tool]:
                 "PROBE BEFORE ASKING: When the user provides media files, use tools to gather facts "
                 "before asking them anything. Call get_media_info on each file to learn resolution, "
                 "duration, and codec. To understand video content, capture a still: "
-                "ffmpeg -y -ss 3 -i <path> -vframes 1 -vf scale=480:-1 /tmp/still_<name>.jpg -loglevel quiet "
+                "ffmpeg -y -ss 0.5 -i <path> -vframes 1 -vf scale=480:-1 /tmp/still_<name>.jpg -loglevel quiet "
                 "then Read the jpg — you can see and describe it yourself. "
                 "For lyrics/transcript, run trigger_pipeline on the audio first. "
                 "Only ask the user about subjective choices (style, pacing, colors) that tools cannot determine."
@@ -469,7 +464,8 @@ async def list_tools() -> list[Tool]:
             description=(
                 "Returns the current ML pipeline status: stage (idle/extract/transcribe/"
                 "align/done/error), progress (0–1), message, and error string. "
-                "Poll this after trigger_pipeline or generate_typography."
+                "trigger_pipeline returns immediately with stage='running' — poll this every 2–3s "
+                "until stage='done' (or 'error'). No batch needed."
             ),
             inputSchema={"type": "object", "properties": {}},
         ),
@@ -477,8 +473,8 @@ async def list_tools() -> list[Tool]:
             name="begin_batch",
             description=(
                 "Start a named edit batch. REQUIRED before any mutation (add_clip, set_clip_prop, "
-                "add_track, delete_clip, apply_effect, etc.). Read-only calls (get_project, "
-                "get_clips, take_snapshot, trigger_pipeline, crop_media) need no batch. "
+                "add_track, delete_clip, add_effect_brick, etc.). Read-only calls (get_project, "
+                "get_clips, take_snapshot, crop_media, get_pipeline_status) need no batch. "
                 "Single-edit batches are fine — they still need begin/end_batch. "
                 "You cannot nest batches. The label appears in the undo history."
             ),
@@ -497,13 +493,29 @@ async def list_tools() -> list[Tool]:
             name="add_clip",
             description=(
                 "Add a new clip to a track. Requires batch.\n\n"
-                "type: text | lyrics | subtitle | video | audio | effect | background | body_fx\n"
-                "For text/lyrics/subtitle: set 'text' to the display string.\n"
+                "type: video | audio | text | lyrics | subtitle | effect | background | body_fx\n"
                 "For video files (.mp4 .mov .webm etc): type='video', text=absolute path.\n"
                 "For audio-only files (.flac .mp3 .wav .ogg etc): type='audio', text=absolute path. "
                 "NEVER use type='video' for audio-only files — it will fail with 'cannot write output header'.\n"
                 "Images (PNG/JPG/HEIC) must be converted to video first with crop_media — "
                 "use type='video' with the resulting .mp4 path, not the raw image.\n\n"
+                "TEXT CLIPS — read this before adding any:\n"
+                "  For LYRICS / CAPTIONS / KARAOKE: do NOT hand-build clips here. Call trigger_pipeline "
+                "(it transcribes and lays styled lyric bricks for you), then optionally generate_typography "
+                "(preset=...) to swap the visual style. type='lyrics' clips placed here will render with "
+                "default positioning that may be off-canvas and won't follow the global typography preset.\n"
+                "  For a SINGLE LABELED CALLOUT (label an object, person, action on screen): use add_callout "
+                "instead — it sets correct positioning and gives you an arrow option.\n"
+                "  type='text' is only for genuine one-off text not covered by the above. If you do use it, "
+                "you MUST set sub_pos_x (0.5 = center) and font_size via set_clip_prop or the text will "
+                "render off-canvas.\n\n"
+                "FRAME SNAPPING — start/end always snap to the project's frame grid (1/fps seconds). The "
+                "engine rounds start to the nearest frame and rounds end UP. If you place clips back-to-back "
+                "by passing next.start = prev.end (your intended values), the snapped previous-end may push "
+                "one frame past your intended next.start, causing an overlap error. RECOVERY: read the error "
+                "message — it includes the colliding clip's snapped end (e.g. \"[90.100s – 90.767s]\"). Use "
+                "that snapped end as the next clip's start. Better: call get_clips after each add and use the "
+                "returned 'end' field as the next clip's start.\n\n"
                 "FILE PATH CONVENTIONS:\n"
                 "  Cropped media:       {parent}/{stem}_crop.mp4  (video)  or  {parent}/{stem}_crop.png  (image)\n"
                 "  Extracted segments:  {parent}/{stem}/{stem}_{start_int}_{end_int}.webm\n"
@@ -719,35 +731,13 @@ async def list_tools() -> list[Tool]:
             },
         ),
         Tool(
-            name="apply_effect",
-            description=(
-                "Apply a shader effect to a clip. Set amount (0–1). "
-                "Provide params dict with effect-specific parameter values.\n\n"
-                "Available effects:\n" + _EFFECT_CATALOG + "\n\n"
-                "Requires batch."
-            ),
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "track": {"type": "integer"},
-                    "clip": {"type": "integer"},
-                    "fx_id": {"type": "string", "description": "Effect id from the list above"},
-                    "amount": {"type": "number", "description": "0–1 blend amount"},
-                    "params": {"type": "object", "description": "Effect-specific params by name"},
-                },
-                "required": ["track", "clip", "fx_id"],
-            },
-        ),
-        Tool(
             name="generate_typography",
             description=(
-                "Swap the typography preset for the lyric/subtitle bricks already on the timeline. "
-                "Idempotent — clears the existing lyric clips for the current audio source and re-lays them "
-                "with the new preset. Requires batch.\n\n"
-                "USE THIS only to change the visual style AFTER trigger_pipeline has auto-placed the initial "
-                "bricks. You do NOT need to call this just to get lyrics on the timeline — trigger_pipeline "
-                "now does that automatically using the app's current preset. Only call this when the user "
-                "asks for a different look.\n\n"
+                "Lay lyric/subtitle bricks on the timeline using a typography preset. Call this AFTER "
+                "trigger_pipeline finishes (stage='done' via get_pipeline_status) — that's how lyrics "
+                "get onto the timeline. Also call again to swap to a different visual style: idempotent, "
+                "clears the existing lyric clips for the current audio source and re-lays them with the "
+                "new preset. Requires batch.\n\n"
                 "PRESET SYSTEM: each preset bundles grouping, position, animation, color, and optional FX clips. "
                 "The preset IS the style — do NOT call set_text_style on the generated clips afterward to tweak "
                 "them; that breaks the global styling. Match the user's style request to the closest preset here "
@@ -807,29 +797,36 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="trigger_pipeline",
             description=(
-                "Transcribe the project audio AND auto-place lyric/subtitle bricks on the timeline using "
-                "the app's current typography preset. Blocks until complete — returns final pipeline status. "
-                "No polling needed. No batch needed (the auto-placement runs inside its own internal batch).\n\n"
+                "Kick off the ML pipeline (Demucs + transcription) on the project audio. NON-BLOCKING: "
+                "returns immediately with stage='running'. Poll get_pipeline_status every 2–3s until "
+                "stage='done', then call generate_typography(preset='...') to lay the lyric/subtitle "
+                "bricks on the timeline. No batch needed.\n\n"
+                "FULL WORKFLOW:\n"
+                "  1. add_track('Audio') + add_clip(type='audio', text=<path>) — audio MUST be on the\n"
+                "     timeline before this tool will accept the call.\n"
+                "  2. trigger_pipeline(mode='both')  → returns stage='running'\n"
+                "  3. loop: get_pipeline_status() every 2–3s until stage='done' (or 'error').\n"
+                "  4. generate_typography(preset='flash')  ← lays the lyric bricks in the chosen style.\n"
+                "  5. (optional) generate_typography(preset='...') again to swap the visual style.\n\n"
                 "PROBE FIRST: call get_transcript() — if status='ready' the transcript is already cached on disk. "
-                "If you also see lyric bricks on the timeline already, skip this entirely. "
-                "Only call trigger_pipeline when no transcript+bricks exist for this audio.\n\n"
+                "If lyric bricks are already on the timeline you can skip this entirely. "
+                "Only call trigger_pipeline when no transcript exists for this audio.\n\n"
                 "PIPELINE MODES:\n"
-                "  both            — (default) Demucs stem separation → vocals.wav → transcription → auto-place lyric bricks.\n"
-                "                    Transcribes the isolated vocal stem, not the raw mix. Much cleaner for music.\n"
-                "  transcribe_only — Skip separation, transcribe source audio directly, then auto-place bricks. Faster, use for speech/podcasts.\n"
-                "  separate_only   — Run Demucs only, no transcription, no brick placement.\n\n"
-                "AUTO-PLACEMENT: after the transcript is ready (modes both / transcribe_only), this tool also "
-                "lays lyric clips on a managed 'Lyrics' track using the app's current preset. To change the "
-                "visual style after the fact, call generate_typography(preset=...) — it clears and re-lays the "
-                "bricks with the new preset.\n\n"
-                "BEFORE calling this: add the audio file to the timeline first — add_track('Audio'), "
-                "then add_clip(type='audio', text=path, start=0, end=duration) on that track. "
-                "Do this BEFORE trigger_pipeline, not after — the agent activity overlay and pipeline "
-                "validation both expect to see the audio brick already.\n\n"
-                "DO NOT use this to search for a moment — use find_and_add_clip instead (windowed search, much faster).\n\n"
+                "  both            — (default) Demucs stem separation → vocals.wav → transcription. "
+                "Transcribes the isolated vocal stem, not the raw mix. Best for music.\n"
+                "  transcribe_only — Skip separation, transcribe source audio directly. Faster; use for speech/podcasts.\n"
+                "  separate_only   — Run Demucs only, no transcription. No bricks to lay afterward.\n\n"
+                "PRESET QUICK-PICKS for step 4 (full list in generate_typography):\n"
+                "  flash    — one word, white, all caps, hard cuts (TikTok default)\n"
+                "  apple    — one word, white, large, smooth fade\n"
+                "  spotify  — phrases, white, bottom center, clean fade\n"
+                "  karaoke  — line with current word highlighted, bottom\n"
+                "  headline — one word, massive, scale animation\n\n"
+                "DO NOT use this to search for a specific moment — use find_and_add_clip instead "
+                "(windowed search, much faster).\n\n"
                 "NEVER run this on a full-length song/track when the user only wants a section. "
-                "Instead: (1) find_and_add_clip(path=full_file, query='end phrase') — windowed "
-                "search, returns exact end timestamp AND auto-extracts the segment to result.dst; "
+                "Instead: (1) find_and_add_clip(path=full_file, query='end phrase') — returns exact end "
+                "timestamp AND auto-extracts the segment to result.dst; "
                 "(2) extract_clip_segment(src=full_file, start=0, end=result.end) → short clip; "
                 "(3) add_track + add_clip(audio, short clip); "
                 "(4) trigger_pipeline on the short clip only. "
@@ -872,12 +869,14 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="save_project",
             description=(
-                "Save the project to disk. If path is omitted, saves to the last-used path. "
-                "Returns the path written. No batch needed."
+                "Save the project to disk as a .pms file. Always use the .pms extension — the UI "
+                "file picker filters by *.pms, so any other extension (.pmsproj, .json, etc.) "
+                "produces a file the user can't reopen from the app. "
+                "If path is omitted, saves to the last-used path. Returns the path written. No batch needed."
             ),
             inputSchema={
                 "type": "object",
-                "properties": {"path": {"type": "string"}},
+                "properties": {"path": {"type": "string", "description": "Absolute path ending in .pms"}},
             },
         ),
         Tool(
@@ -885,7 +884,7 @@ async def list_tools() -> list[Tool]:
             description="Load a .pms project file, replacing the current project. Requires batch.",
             inputSchema={
                 "type": "object",
-                "properties": {"path": {"type": "string"}},
+                "properties": {"path": {"type": "string", "description": "Absolute path to a .pms file"}},
                 "required": ["path"],
             },
         ),
@@ -1095,7 +1094,7 @@ async def list_tools() -> list[Tool]:
             description=(
                 "DO NOT CALL THIS TOOL. The built-in vision model is broken and returns empty descriptions.\n\n"
                 "Instead, use YOUR OWN vision capability:\n"
-                "  1. Run: ffmpeg -y -ss 3 -i <path> -vframes 1 -vf scale=480:-1 /tmp/still_<name>.jpg -loglevel quiet\n"
+                "  1. Run: ffmpeg -y -ss 0.5 -i <path> -vframes 1 -vf scale=480:-1 /tmp/still_<name>.jpg -loglevel quiet\n"
                 "  2. Read the JPEG with your Read tool — you will see the image.\n"
                 "  3. Describe what you see and use that for mood/content matching.\n\n"
                 "Repeat for each video. This is faster and more accurate than any local model."
@@ -1117,9 +1116,10 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="find_video_moment",
             description=(
-                "Score analysed video frames against a query. Returns top 3 matches by confidence: {timestamp, description, confidence}.\n"
-                "Requires: get_video_description status='done' (call describe_video first, then poll).\n"
-                "Requires: get_vision_model_status='ready'."
+                "DO NOT USE — depends on the broken built-in vision model (see describe_video).\n\n"
+                "To find a moment in a video by visual content: capture a still per timestamp with\n"
+                "  ffmpeg -y -ss <t> -i <path> -vframes 1 -vf scale=480:-1 /tmp/still_<t>.jpg -loglevel quiet\n"
+                "then Read each JPEG and pick the one matching the query yourself."
             ),
             inputSchema={
                 "type": "object",
@@ -1147,7 +1147,7 @@ async def list_tools() -> list[Tool]:
                 "  2. find_and_add_clip(path=full_file, query='end phrase')    → end timestamp\n"
                 "  3. extract_clip_segment(src=full_file, dst='/tmp/scoped.flac', start=startA, end=endB + tail_sec)\n"
                 "  4. add_track + add_clip(audio, /tmp/scoped.flac) + trigger_pipeline\n"
-                "     (trigger_pipeline auto-places the lyric bricks — no separate typography call needed)\n"
+                "  5. poll get_pipeline_status until stage='done', then generate_typography(preset='flash')\n"
                 "DO NOT skip step (2): the auto-extracted dst only covers a small window around the matched "
                 "phrase, not from start to end of section. You need both timestamps to extract the full span.\n\n"
                 "CHUNK-STRADDLING PHRASES are handled internally: when a partial match lands at the trailing "
@@ -1457,15 +1457,21 @@ async def list_tools() -> list[Tool]:
                 "After adding the brick, call process_body_fx_masks to compute the body masks from "
                 "the video clip(s) on tracks below. Processing is async; poll get_project or "
                 "get_pipeline_status to monitor progress.\n\n"
-                "fx_type options (40 effects, case-sensitive names from the BodyFX library):\n"
-                "  Retro: RetroTV, VHSGlitch, Scanlines, Halftone, CRTDistort\n"
-                "  Depth: DepthBlur, DepthFog, TiltShift, CinematicDOF\n"
-                "  Glitch: GlitchDisplace, ChromaShift, SignalNoise, DataBurst\n"
-                "  Color: NeonOutline, ThermalCamera, XRayBody, InfraredGlow\n"
-                "  Light: AuraGlow, HoloShimmer, LightTrails, RimLight\n"
-                "  Abstract: LiquidMorph, ParticleDissolve, PixelSort, FractalEdge\n"
-                "  Party: DiscoBall, Confetti, RainbowAura, GlitterBurst\n"
-                "(If unsure, use 'NeonOutline' or 'DepthBlur'.)\n\n"
+                "fx_type options — pass the exact display name (space-separated Title Case, as listed):\n"
+                "  Mask:         Remove Background\n"
+                "  Retro / 80s:  Neon Outline | VHS Body | Scanlines | Chromatic Body | Retrowave | "
+                "TV Static Bg | Arcade | Film Grain Body\n"
+                "  Depth/Focus:  Depth Blur | Tilt-Shift Bg | Spotlight | Fog Bg | Bokeh Bg\n"
+                "  Glitch:       Glitch Body | Glitch Bg | Split Reality | Data Corruption | "
+                "Signal Loss Bg | Chromafall\n"
+                "  Color:        Color Isolation | Invert Bg | Duotone Body | Duotone Bg | Thermal Body | X-Ray\n"
+                "  Light/Glow:   Electric Aura | Rim Light | God Rays | Halo | Bloom Body | Bioluminescent\n"
+                "  Abstract:     Hologram | Matrix Rain Bg | Body Mosaic | Wireframe Bg | Vaporwave\n"
+                "  Party:        Strobe Bg | Disco Body | UV Paint | Fire Aura\n"
+                "Names are case-sensitive AND space-separated — these are different effects from the "
+                "snake_case shader names used by add_effect_brick (e.g. BodyFX 'Scanlines' uses body masks; "
+                "add_effect_brick fx_type='scanlines' is a fullscreen shader). If unsure, use 'Neon Outline' "
+                "or 'Depth Blur'.\n\n"
                 "Returns {track, clip} of the created brick."
             ),
             inputSchema={
@@ -2494,7 +2500,7 @@ async def _find_and_add_clip(arguments: dict) -> dict:
                 msg = st.get("message", "")
                 if msg and msg != last_msg:
                     print(f"[find_and_add_clip lookahead] {msg}", flush=True)
-                    last_msg = msg
+                last_msg = await _send_search_progress(st, last_msg)
                 if not st.get("running", False):
                     break
             if st.get("found"):
@@ -2601,7 +2607,7 @@ async def _find_and_add_clip(arguments: dict) -> dict:
         msg = status.get("message", "")
         if msg and msg != last_msg:
             print(f"[find_and_add_clip] {msg}", flush=True)
-            last_msg = msg
+        last_msg = await _send_search_progress(status, last_msg)
         if not status.get("running", False):
             break
 
@@ -2752,127 +2758,8 @@ def _cut_at_phrase(arguments: dict) -> dict:
         return {"trimmed_start": round(timeline_t, 3), "excerpt": match["excerpt"], **result}
 
 
-_AGENT_GUIDE = """
-# Pop Maker Studio — Agent Guide
-
-## Architecture
-A native C++ video editor controlled through an MCP server over a Unix socket IPC layer.
-The app runs locally; agents connect via this MCP server.
-
-## Asking the user questions
-When you have clarifying questions before starting a task (style preferences, pacing choices,
-layout decisions, etc.), always use the AskUserQuestion tool — the interactive panel UI — instead
-of asking in plain text. Group all questions into a single AskUserQuestion call.
-
-## The two non-negotiable rules
-
-**1. ALL mutations require a batch.**
-Wrap every write operation in begin_batch("label") … end_batch().
-Read-only calls (get_project, get_clips, get_all_clips, take_snapshot, trigger_pipeline,
-crop_media, analyze_audio, seek, play, pause, get_pipeline_status, verify_clips) need no batch.
-Single-edit batches are fine — they still need begin/end_batch. Never nest batches.
-
-**2. Long-running ops block until complete — no manual polling needed.**
-These tools handle polling internally and return only when done:
-  trigger_pipeline    — returns final stage=done result AND auto-places lyric bricks; use generate_typography only to swap the preset later
-  analyze_audio(path) — returns status=done with beats/rms; then call find_audio_cue
-  find_and_add_clip   — returns status=found; then extract_clip_segment → add_clip
-  remove_background   — returns status=ready
-
-Video scene understanding (built-in vision model is broken — do this instead):
-  ffmpeg -y -ss 3 -i <path> -vframes 1 -vf scale=480:-1 /tmp/still_<name>.jpg -loglevel quiet
-  Then Read /tmp/still_<name>.jpg — you can see the image and describe it yourself.
-
-## Track layering
-Track 0 = top (foreground). Highest index = bottom (background).
-  Text, FX, overlays → low-index tracks (0, 1, 2…)
-  Video, background  → high-index tracks
-
-## Canvas formats
-set_format presets: vertical (9:16 TikTok/Reels), horizontal (16:9 YouTube), square (1:1 Instagram)
-
-## File path conventions
-  Cropped media:       {parent}/{stem}_crop.mp4  (video) or  {parent}/{stem}_crop.png  (image)
-  Extracted segments:  {parent}/{stem}/{stem}_{start_int}_{end_int}.webm
-  Transcripts:         {parent}/{stem}/{stem}_words.json
-  find_and_add_clip only adds the short extracted segment — never the full source file
-  Always call crop_media before add_clip when source aspect ratio differs from the canvas
-
-## crop_media — face-aware cropping
-crop_media runs face detection by default (face_detect=true). It finds the largest face,
-adds padding (pad_top=0.4, pad_bottom=0.3 × face height), and crops automatically.
-Returns an inline thumbnail — verify it before calling add_clip.
-If the thumbnail looks wrong, re-call with adjusted pad_top/pad_bottom or face_detect=false + x_pct/y_pct.
-Handles HEIC/JPG/PNG images and MOV/MP4 video including rotation metadata.
-
-## Clip props reference
-
-Layout:    pos_x, pos_y (0–1 canvas fraction), scale_x, scale_y, rotation
-Playback:  volume (0–2), speed (0.25–4), opacity (0–1), muted (bool),
-           fade_in, fade_out, in_point (source offset seconds)
-Text:      text, font_size (0=auto), sub_pos (0=bottom 1=center 2=top 3=custom),
-           sub_pos_x/y (0–1), sub_anchor_h (0=left 1=center 2=right),
-           sub_wrap_w (0–1), sub_color ([r,g,b,a] 0–1)
-Animation: clip_style (none|fade|glitch|typewriter|bounce|scale|slide|stack|block),
-           blend_mode (normal|add|multiply|screen|overlay)
-Color grade (video clips only):
-           grade_brightness (-1–1), grade_contrast (0–3),
-           grade_saturation (0–3), grade_hue (-180–180)
-Audio sync: start = -source_timestamp, end = video_duration - source_timestamp
-
-## Lyric video / karaoke workflow
-1. add_track("Audio") + add_clip(type='audio', ...) — audio brick on timeline FIRST, before pipeline runs
-2. trigger_pipeline(mode="both")  ← separates vocals with Demucs, transcribes, and auto-places lyric bricks
-   mode="transcribe_only" to skip separation (use for speech/podcasts, not music)
-3. (optional) generate_typography(preset="...") ← swap to a different visual preset; clears and re-lays bricks
-
-Karaoke is a TYPOGRAPHY PRESET — use preset="karaoke".
-Do NOT set karaoke=true on individual clips manually.
-
-Available presets:
-  Hype:       flash, strobe, rave, cyberpunk, drill
-  Aesthetic:  tumblr, indie2012, sadgirl, cottagecore, film
-  Editorial:  headline, manifesto, zine, newspaper
-  Clean:      minimal, spotify, apple, kinetic, karaoke
-  Retro:      vhs, neon, lofi
-
-## Searching vs. transcribing — decision rule (read this first)
-
-**"Find where they say X" / "trim to the line X" / "locate the moment X" → find_and_add_clip**
-  Windowed search (5-min chunks), stops as soon as the phrase is found. Works on video AND audio.
-  DO NOT call trigger_pipeline first. DO NOT call get_transcript and then trigger_pipeline because it says idle.
-  find_and_add_clip builds its own windowed transcript internally — no separate pipeline step needed.
-
-**"Generate subtitles / karaoke / typography for the full clip" → trigger_pipeline**
-  Full Demucs + transcription pass over the whole file. Only appropriate when you need a complete transcript
-  of everything already on the timeline. Slow on long files.
-
-Never add a full source video to the timeline just to transcribe it.
-
-## Cutting a file to a specific phrase (intro-to-line pattern)
-When the user wants audio/video from the START of a file up to a specific phrase (e.g. "from the
-beginning until he says X"):
-  1. find_and_add_clip(query="X", path=full_file) — windowed search, fast, auto-extracts segment,
-     returns result.end (exact word boundary), result.dst (ready file), result.clip_duration
-  2. extract_clip_segment(src=full_file, dst=..., start=0, end=result.end) — cut from 0 to exact phrase end
-  3. Use the extracted file as the project audio clip
-NEVER use ffmpeg or shell commands to cut the audio manually — extract_clip_segment is the right tool,
-is instant, and handles every codec including FLAC.
-NEVER add arbitrary padding seconds after result.end — use result.end directly.
-
-## Verifying clip placement
-After placing video clips from transcript timestamps, call verify_clips with the midpoint of each clip.
-This catches wrong timestamps (wrong speaker, wrong line) without stopping to ask.
-""".strip()
-
-
 @server.call_tool()
 async def call_tool(name: str, arguments: dict) -> list[TextContent]:
-    if name == "get_guide":
-        return [TextContent(type="text", text=(
-            "get_guide is deprecated — all workflow rules are in each tool's description. "
-            "Use get_project to check the current timeline state and proceed from there."
-        ))]
     if name == "trigger_pipeline":
         proj = _call("get_project", {})
         if not proj.get("audio_path") and not arguments.get("path"):
@@ -2921,19 +2808,11 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                     "If you genuinely need the full file transcribed, pass path=<audio_path> "
                     "to trigger_pipeline directly to bypass this check."
                 )
-        # Run the pipeline, then auto-place lyric bricks (mirrors the UI flow).
-        # Skip auto-placement when separate_only (no transcript) or when the caller
-        # passed an out-of-project `path` (transcribes a file off-timeline).
+        # Kick off the pipeline and return immediately. The engine runs separation
+        # + transcription in a background thread; the caller polls get_pipeline_status
+        # until stage='done', then (for modes 'both' / 'transcribe_only') calls
+        # generate_typography(preset=...) to lay the lyric bricks.
         result = _call("trigger_pipeline", arguments)
-        mode = arguments.get("mode", "both")
-        off_timeline = bool(arguments.get("path"))
-        if mode != "separate_only" and not off_timeline and result.get("stage") == "done":
-            _call("begin_batch", {"label": "Auto-place lyric bricks"})
-            try:
-                typo = _call("generate_typography", {})
-                result["typography"] = typo
-            finally:
-                _call("end_batch", {})
         return [TextContent(type="text", text=json.dumps(result, indent=2))]
     if name == "remove_silence":
         result = await _remove_silence(arguments)
