@@ -1248,14 +1248,88 @@ async def list_tools() -> list[Tool]:
             name="get_transcript",
             description=(
                 "Return the word-level transcript produced by the transcription pipeline. "
-                "Returns {status: 'idle'|'ready'|'error', words?: [{word, start, end}]}. "
+                "Returns {status: 'idle'|'ready'|'error', words?: [{word, start, end}], path?}. "
                 "Word timestamps are source-file-relative seconds.\n\n"
+                "By default reads the project's current transcript. Pass `path` to inspect "
+                "the cached transcript of any previously-transcribed file (e.g. the full song "
+                "before you sectioned it) without changing project state.\n\n"
                 "STATUS IDLE — what to do next depends on your task:\n"
                 "  Finding a specific moment/phrase → use find_and_add_clip (windowed, stops early, MUCH faster).\n"
                 "    DO NOT run trigger_pipeline just to search.\n"
-                "  Generating full subtitles/karaoke for a clip already on the timeline → use trigger_pipeline."
+                "  Generating full subtitles/karaoke for a clip already on the timeline → use trigger_pipeline.\n"
+                "  Re-using a previously-transcribed file's words for a new section audio → use shift_transcript."
             ),
-            inputSchema={"type": "object", "properties": {}},
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Optional: read the cached transcript for this file path instead of the project's current one. Read-only — does not change project state."},
+                },
+            },
+        ),
+        Tool(
+            name="set_transcript",
+            description=(
+                "Install a custom word-level transcript for the project's current audio. "
+                "Writes the canonical cache JSON next to the audio file and reloads the "
+                "in-memory word cache so generate_typography uses your words immediately.\n\n"
+                "USE THIS WHEN:\n"
+                "  - WhisperX on the current audio produced wrong / sparse word timings and "
+                "you want to override with hand-edited words.\n"
+                "  - You computed words from another source (different transcriber, manual "
+                "alignment) and want the managed Lyrics path to use them.\n\n"
+                "DON'T USE THIS FOR: shifting/clipping a transcript across audio files — call "
+                "shift_transcript, which handles the offset and source-file selection for you.\n\n"
+                "After this call, generate_typography(preset='flash'|...) will lay lyric clips at "
+                "the timings you provided. words: [{word: str, start: float, end: float}, ...]"
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "words": {
+                        "type": "array",
+                        "description": "Word list to install as the project transcript",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "word":  {"type": "string"},
+                                "start": {"type": "number", "description": "Seconds, audio-relative"},
+                                "end":   {"type": "number", "description": "Seconds, audio-relative"},
+                            },
+                            "required": ["word", "start", "end"],
+                        },
+                    },
+                },
+                "required": ["words"],
+            },
+        ),
+        Tool(
+            name="shift_transcript",
+            description=(
+                "Repurpose another file's cached transcript as the project's transcript, "
+                "with a time shift and optional clipping. Closes the gap when a long source "
+                "(e.g. full song) has a clean WhisperX transcript but you're working on an "
+                "extracted section where re-transcribing produces worse results.\n\n"
+                "FLOW: extract section /tmp/section.flac from full.flac starting at 88.71s → "
+                "add the section as the project audio → "
+                "shift_transcript(source_path='/path/to/full.flac', offset=-88.71, start=88.71, end=127) → "
+                "generate_typography(preset='flash'). Done.\n\n"
+                "source_path: optional — the file whose cached transcript to read. Defaults to "
+                "the project's current transcript (useful for shifting in place).\n"
+                "start, end: optional — keep only words overlapping this range in SOURCE-file "
+                "time (pre-shift). Use to clip to the section you extracted.\n"
+                "offset: required — seconds added to every word's start/end. Pass the negative "
+                "of the section's start timestamp to convert source-time to section-time."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "offset":      {"type": "number", "description": "Seconds added to every word timestamp (pass -section_start to convert source time → section time)"},
+                    "start":       {"type": "number", "description": "Lower bound in source-file seconds (pre-shift) for clipping"},
+                    "end":         {"type": "number", "description": "Upper bound in source-file seconds (pre-shift) for clipping"},
+                    "source_path": {"type": "string", "description": "Optional source file whose transcript to read. Defaults to project's current transcript."},
+                },
+                "required": ["offset"],
+            },
         ),
         Tool(
             name="read_transcript_context",
@@ -2447,6 +2521,29 @@ async def _add_clip(arguments: dict) -> dict:
 
 # ── find_and_add_clip ─────────────────────────────────────────────────────────
 
+def _words_cache_paths(audio_path: str) -> tuple[Path, Path]:
+    """Return (canonical, search) words.json paths for a given audio file.
+
+    Canonical (_words.json) is owned by the full pipeline (do_transcribe):
+    DTW + forced alignment + segment splits. Authoritative when present.
+    Search (_words_search.json) is the windowed find_and_add_clip output:
+    best-effort, used as fallback when canonical hasn't been produced yet.
+    """
+    p = Path(audio_path)
+    return (
+        p.parent / p.stem / f"{p.stem}_words.json",
+        p.parent / p.stem / f"{p.stem}_words_search.json",
+    )
+
+
+def _best_words_cache(audio_path: str) -> Path | None:
+    """Pick the best available words.json for an audio file (canonical > search)."""
+    canon, search = _words_cache_paths(audio_path)
+    if canon.exists():  return canon
+    if search.exists(): return search
+    return None
+
+
 def _search_transcript_in_words(words: list, query: str) -> tuple[float, float, str, float, bool]:
     """Search a words list for a query. Returns (start, end, excerpt, score, truncated).
     end is the end of the last matched query word, not the end of the search window.
@@ -2515,8 +2612,13 @@ async def _find_and_add_clip(arguments: dict) -> dict:
 
     p = Path(path)
 
-    # Check disk cache first
-    cached_words_path = p.parent / p.stem / f"{p.stem}_words.json"
+    # Check disk cache first.
+    # PROVENANCE: prefer the canonical full-pipeline cache (_words.json) over
+    # the windowed-search cache (_words_search.json).  The full pipeline runs
+    # DTW + forced alignment and is authoritative.  Search cache is best-effort
+    # — used only when the canonical cache hasn't been produced yet.
+    canonical_words_path, search_words_path = _words_cache_paths(path)
+    cached_words_path = _best_words_cache(path) or search_words_path
     words = None
     if cached_words_path.exists():
         with open(cached_words_path) as f:
@@ -2586,8 +2688,13 @@ async def _find_and_add_clip(arguments: dict) -> dict:
                 # Reload the cache if the search extended it, then re-score
                 # against the refreshed words so partial_match reflects the
                 # extended search result, not the stale pre-rescan score.
-                if cached_words_path.exists():
-                    with open(cached_words_path) as f:
+                # The re-scan always writes to _words_search.json (the
+                # canonical _words.json is owned by the full pipeline), so
+                # read from the search path here regardless of which cache
+                # we originally loaded.
+                reload_path = search_words_path
+                if reload_path.exists():
+                    with open(reload_path) as f:
                         refreshed = json.load(f)
                     if refreshed and words and float(refreshed[-1]["end"]) > float(words[-1]["end"]):
                         words = refreshed
@@ -2688,6 +2795,19 @@ async def _find_and_add_clip(arguments: dict) -> dict:
             break
 
     if not status.get("found", False):
+        # Surface top-N fuzzy candidates instead of a blank failure.  The C++
+        # search returns up to 3 disjoint windows with coverage >= 0.5 so the
+        # agent / human can disambiguate ("did you mean phrase X at 0:42?")
+        # without re-running another search.
+        cands = status.get("candidates", []) or []
+        if cands:
+            tip = ", ".join(
+                f"{round(c.get('start',0.0),2)}s '{(c.get('excerpt','') or '').strip()[:60]}' (score={c.get('score',0):.2f})"
+                for c in cands[:3]
+            )
+            raise ValueError(
+                f"could not find '{query}' exactly. Closest fuzzy hits: {tip}"
+            )
         raise ValueError(f"could not find '{query}' in transcript: {status.get('error', 'not found')}")
 
     start   = float(status["start"])
@@ -2764,8 +2884,8 @@ def _search_transcript(arguments: dict) -> dict:
     if not path:
         raise ValueError("No path provided and no audio_path on project")
     p = Path(_resolve_path(path))
-    words_path = p.parent / p.stem / f"{p.stem}_words.json"
-    if not words_path.exists():
+    words_path = _best_words_cache(str(p))
+    if words_path is None:
         raise ValueError(f"No transcript for {p.name} — run trigger_pipeline first")
     with open(words_path) as f:
         all_words = json.load(f)
@@ -2790,8 +2910,8 @@ def _cut_at_phrase(arguments: dict) -> dict:
         raise ValueError("Transcript not ready — run trigger_pipeline first")
 
     p = Path(_resolve_path(audio_path))
-    words_path = p.parent / p.stem / f"{p.stem}_words.json"
-    if not words_path.exists():
+    words_path = _best_words_cache(str(p))
+    if words_path is None:
         raise ValueError(f"No transcript for {p.name}")
     with open(words_path) as f:
         all_words = json.load(f)
@@ -2854,7 +2974,10 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 raise ValueError(
                     f"Transcript already cached for {p.name} at {cached_words}.\n"
                     "Call get_transcript() to read it — re-transcribing is wasted work.\n"
-                    f"To force re-transcription, delete {cached_words} first."
+                    "If the cached transcript is wrong, you have two cleaner options than re-transcribing:\n"
+                    "  - shift_transcript(source_path=..., offset=..., start=..., end=...) to repurpose another file's transcript\n"
+                    "  - set_transcript(words=[...]) to install a hand-edited word list\n"
+                    f"Or to force a fresh re-transcription, delete {cached_words} first."
                 )
         duration = float(proj.get("duration") or 0)
         if duration > 300 and not arguments.get("path"):
@@ -2954,8 +3077,8 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         after  = float(arguments.get("after",  60))
         gap_threshold = float(arguments.get("gap_threshold", 0.8))
         p = Path(path)
-        words_path = p.parent / p.stem / f"{p.stem}_words.json"
-        if not words_path.exists():
+        words_path = _best_words_cache(str(p))
+        if words_path is None:
             raise ValueError(f"no transcript cached for {p.name} — run find_and_add_clip or trigger_pipeline first")
         with open(words_path) as f:
             all_words = json.load(f)
@@ -3268,25 +3391,36 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         }, indent=2)
         return [TextContent(type="text", text=result_text)] + thumb_parts
     if name == "get_transcript":
-        raw = _call("get_transcript", {})
+        forward = {}
+        if "path" in arguments:
+            forward["path"] = arguments["path"]
+        raw = _call("get_transcript", forward)
         slim = {"status": raw.get("status", "idle")}
         if "words" in raw:
             slim["words"] = raw["words"]
+        if "path" in raw:
+            slim["path"] = raw["path"]
         if "error" in raw:
             slim["error"] = raw["error"]
         # If IPC says idle, the words_json_path may not be synced to state yet
         # even though the pipeline already wrote the file. Fall back to deriving
-        # the path from audio_path and reading directly from disk.
+        # the path from the explicit `path` arg, or the project audio_path.
         if slim["status"] == "idle":
             try:
-                proj = _call("get_project", {})
-                audio = proj.get("audio_path", "")
-                if audio:
-                    ap = Path(audio)
-                    words_path = ap.parent / ap.stem / (ap.stem + "_words.json")
-                    if words_path.exists():
+                fallback_audio = arguments.get("path")
+                if not fallback_audio:
+                    proj = _call("get_project", {})
+                    fallback_audio = proj.get("audio_path", "")
+                if fallback_audio:
+                    words_path = _best_words_cache(str(fallback_audio))
+                    if words_path is not None:
                         with open(words_path) as f:
-                            slim = {"status": "ready", "words": json.load(f)}
+                            slim = {
+                                "status":     "ready",
+                                "words":      json.load(f),
+                                "path":       str(words_path),
+                                "provenance": "search" if words_path.name.endswith("_words_search.json") else "canonical",
+                            }
             except Exception:
                 pass
         return [TextContent(type="text", text=json.dumps(slim, indent=2))]

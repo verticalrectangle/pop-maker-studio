@@ -733,7 +733,10 @@ void ui_studio(AppState& state) {
     float pipeline_h = (state.pipeline.stage != PipelineStage::Idle &&
                         state.pipeline.stage != PipelineStage::Done &&
                         state.pipeline.stage != PipelineStage::Error) ? 28.f : 0.f;
-    float avail_h    = win_h - menubar_h - body_top - pipeline_h - 2.f;
+    // Reserve an extra row of layout when a windowed search is running so
+    // the new search strip doesn't overlap the timeline.
+    float search_h   = transcribe_search_running() ? 28.f : 0.f;
+    float avail_h    = win_h - menubar_h - body_top - pipeline_h - search_h - 2.f;
 
     // Timeline height — user-draggable, defaults to minimum on first open
     static const float TL_MIN_H   = TL_RULER_H + 4 * TL_TRACK_H;
@@ -1415,6 +1418,9 @@ void ui_studio(AppState& state) {
         draw_pipeline_strip(state, win_w);
     }
     draw_vision_download_strip(win_w);
+    // Surface agent-driven find_and_add_clip / search_transcript runs in the
+    // same strip lane so the human can see what's being scanned.
+    draw_search_strip(win_w);
 
     // ── Timeline panel ────────────────────────────────────────────────────────
     ImGui::PushStyleColor(ImGuiCol_ChildBg, Col::bg);

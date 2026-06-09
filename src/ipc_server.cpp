@@ -39,6 +39,8 @@ static const char* k_gen_fx_names[] = {
 #include <thread>
 #include <unordered_set>
 #include <fstream>
+#include <filesystem>
+#include <limits>
 
 using json = nlohmann::json;
 
@@ -655,6 +657,20 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         j["progress"] = state.pipeline.progress;
         j["message"]  = state.pipeline.message;
         j["error"]    = state.pipeline.error;
+        // When the pipeline lands on done, point callers at the managed lyrics
+        // path. Suppress the hint if a Lyrics track already exists for the
+        // current audio so re-polls during further edits aren't noisy.
+        if (state.pipeline.stage == PipelineStage::Done && !state.audio_path.empty()) {
+            bool lyrics_present = false;
+            for (auto& t : state.tracks) {
+                for (auto& c : t.clips)
+                    if (c.clip_type == ClipType::Lyrics && c.source_id == state.audio_path)
+                        { lyrics_present = true; break; }
+                if (lyrics_present) break;
+            }
+            if (!lyrics_present)
+                j["next_action_hint"] = "Transcript is ready. To lay lyric clips, call generate_typography(preset='flash'|'apple'|'spotify'|'karaoke'|'headline'|...). For raw word access without bricks, call get_transcript.";
+        }
         return j;
     }
 
@@ -830,6 +846,18 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         r["end"]         = s.end;
         r["excerpt"]     = s.excerpt;
         r["error"]       = s.error;
+        // Top-N closest fuzzy matches when found=false.  Empty when found=true
+        // or the accumulated transcript was too sparse to score candidates.
+        json cands = json::array();
+        for (const auto& c : s.candidates) {
+            json cc;
+            cc["start"]   = c.start;
+            cc["end"]     = c.end;
+            cc["score"]   = c.score;
+            cc["excerpt"] = c.excerpt;
+            cands.push_back(cc);
+        }
+        r["candidates"] = cands;
         return r;
     }
 
@@ -872,19 +900,156 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         return r;
     }
 
+    // Canonical cache path: <dir>/<stem>/<stem>_words.json (matches pipeline writer)
+    auto words_cache_path_for = [](const std::string& audio_path) -> std::filesystem::path {
+        if (audio_path.empty()) return {};
+        std::filesystem::path p(audio_path);
+        return p.parent_path() / p.stem() / (p.stem().string() + "_words.json");
+    };
+    // Search cache path: <dir>/<stem>/<stem>_words_search.json (windowed
+    // find_and_add_clip writes here).  Used as a fallback when the
+    // canonical (full-pipeline) cache hasn't been produced yet.
+    auto search_words_path_for = [](const std::string& audio_path) -> std::filesystem::path {
+        if (audio_path.empty()) return {};
+        std::filesystem::path p(audio_path);
+        return p.parent_path() / p.stem() / (p.stem().string() + "_words_search.json");
+    };
+
     if (method == "get_transcript") {
         json r;
-        if (state.words_json_path.empty()) { r["status"] = "idle"; return r; }
-        std::ifstream f(state.words_json_path);
+        std::string ext_path = params.value("path", std::string());
+        std::filesystem::path src;
+        std::string provenance = "canonical";
+        if (!ext_path.empty()) {
+            src = words_cache_path_for(ext_path);
+            if (!std::filesystem::exists(src)) {
+                auto fallback = search_words_path_for(ext_path);
+                if (std::filesystem::exists(fallback)) {
+                    src        = fallback;
+                    provenance = "search";
+                }
+            }
+        }
+        else if (!state.words_json_path.empty()) src = state.words_json_path;
+        else { r["status"] = "idle"; return r; }
+
+        if (!std::filesystem::exists(src)) { r["status"] = "idle"; return r; }
+        std::ifstream f(src.string());
         if (!f.is_open()) { r["status"] = "idle"; return r; }
         try {
             json words = json::parse(f);
-            r["status"] = "ready";
-            r["words"]  = words;
+            r["status"]     = "ready";
+            r["words"]      = words;
+            r["path"]       = src.string();
+            r["provenance"] = provenance;  // "canonical" or "search"
         } catch (...) {
             r["status"]  = "error";
             r["message"] = "failed to parse words JSON";
         }
+        return r;
+    }
+
+    if (method == "set_transcript") {
+        if (!params.contains("words") || !params["words"].is_array()) {
+            err = "words array required: [{word, start, end}, ...]"; return {};
+        }
+        if (state.audio_path.empty()) {
+            err = "no audio source on project — add an audio clip first so the transcript has a target"; return {};
+        }
+        auto target = words_cache_path_for(state.audio_path);
+        std::error_code ec;
+        std::filesystem::create_directories(target.parent_path(), ec);
+        if (ec) { err = "failed to create cache dir: " + ec.message(); return {}; }
+
+        json out = json::array();
+        int skipped = 0;
+        for (auto& w : params["words"]) {
+            if (!w.contains("word") || !w.contains("start") || !w.contains("end")) {
+                skipped++; continue;
+            }
+            json entry;
+            entry["word"]  = w["word"].get<std::string>();
+            entry["start"] = w["start"].get<float>();
+            entry["end"]   = w["end"].get<float>();
+            out.push_back(entry);
+        }
+
+        std::ofstream f(target.string());
+        if (!f) { err = "failed to write " + target.string(); return {}; }
+        f << out.dump(2);
+        f.close();
+
+        state.words_json_path = target.string();
+        load_words_cache(state);
+
+        json r;
+        r["path"]    = target.string();
+        r["count"]   = (int)state.words_cache.size();
+        r["skipped"] = skipped;
+        r["next_action_hint"] = "Custom transcript installed at " + target.string()
+            + ". Call generate_typography(preset='flash'|'apple'|'spotify'|...) to lay lyric clips against it.";
+        return r;
+    }
+
+    if (method == "shift_transcript") {
+        if (state.audio_path.empty()) {
+            err = "no audio source on project — add an audio clip first"; return {};
+        }
+        float offset      = params.value("offset", 0.f);
+        float range_start = params.value("start", -std::numeric_limits<float>::infinity());
+        float range_end   = params.value("end",    std::numeric_limits<float>::infinity());
+        std::string sp    = params.value("source_path", std::string());
+
+        std::filesystem::path src_cache;
+        if (!sp.empty())                          src_cache = words_cache_path_for(sp);
+        else if (!state.words_json_path.empty())  src_cache = state.words_json_path;
+
+        if (src_cache.empty() || !std::filesystem::exists(src_cache)) {
+            err = "source transcript not found"
+                + std::string(src_cache.empty() ? "" : " at " + src_cache.string())
+                + " — run trigger_pipeline first or pass source_path of a previously transcribed file";
+            return {};
+        }
+
+        std::ifstream f(src_cache.string());
+        json src_words;
+        try { src_words = json::parse(f); }
+        catch (...) { err = "failed to parse source transcript at " + src_cache.string(); return {}; }
+        if (!src_words.is_array()) { err = "source transcript is not a JSON array"; return {}; }
+
+        json out = json::array();
+        for (auto& w : src_words) {
+            if (!w.contains("start") || !w.contains("end") || !w.contains("word")) continue;
+            float s = w["start"].get<float>();
+            float e = w["end"].get<float>();
+            // Range is in SOURCE-file time (pre-shift); keep words that overlap the range
+            if (e < range_start || s > range_end) continue;
+            json entry;
+            entry["word"]  = w["word"].get<std::string>();
+            entry["start"] = s + offset;
+            entry["end"]   = e + offset;
+            out.push_back(entry);
+        }
+
+        auto target = words_cache_path_for(state.audio_path);
+        std::error_code ec;
+        std::filesystem::create_directories(target.parent_path(), ec);
+        if (ec) { err = "failed to create cache dir: " + ec.message(); return {}; }
+
+        std::ofstream wf(target.string());
+        if (!wf) { err = "failed to write " + target.string(); return {}; }
+        wf << out.dump(2);
+        wf.close();
+
+        state.words_json_path = target.string();
+        load_words_cache(state);
+
+        json r;
+        r["path"]   = target.string();
+        r["count"]  = (int)state.words_cache.size();
+        r["source"] = src_cache.string();
+        r["offset"] = offset;
+        r["next_action_hint"] = "Transcript shifted/clipped and installed. Call generate_typography(preset='flash'|...) to lay lyric clips.";
         return r;
     }
 
@@ -1208,6 +1373,30 @@ static json dispatch(AppState& state, const std::string& method, const json& par
             state.audio_path = state.vocals_path = text;
         state.tracks[ti].clips.push_back(cl);
         int new_ci = (int)state.tracks[ti].clips.size() - 1;
+
+        // Auto-refresh audio_path when the project's current audio source is no
+        // longer on the timeline. Agents adding a *different* audio file as the
+        // sole audio clip otherwise hit "transcript already cached" because
+        // audio_path stayed pinned to the previous source. Mirrors the UI flow
+        // where dropping a new audio file makes that file the project audio.
+        if (cl.clip_type == ClipType::Audio && !text.empty() && state.audio_path != text) {
+            bool referenced = false;
+            for (int tt = 0; tt < (int)state.tracks.size() && !referenced; ++tt) {
+                for (int cc = 0; cc < (int)state.tracks[tt].clips.size() && !referenced; ++cc) {
+                    if (tt == ti && cc == new_ci) continue;
+                    auto& other = state.tracks[tt].clips[cc];
+                    if ((other.clip_type == ClipType::Audio || other.clip_type == ClipType::Video)
+                        && other.text == state.audio_path) referenced = true;
+                }
+            }
+            if (!referenced) {
+                state.audio_path = text;
+                state.vocals_path.clear();
+                state.words_json_path.clear();
+                state.words_cache.clear();
+            }
+        }
+
         if (cl.clip_type == ClipType::Video) {
             proxy_start(text);
             state.proxy_scan_needed = true;
@@ -1229,6 +1418,27 @@ static json dispatch(AppState& state, const std::string& method, const json& par
             }
         }
         json r; r["clip"] = new_ci;
+
+        // Soft-warn when an agent hand-builds a text clip while a fresh
+        // transcript is available and no managed Lyrics track exists yet.
+        // The managed path (generate_typography) is almost always the right
+        // call for lyrics/captions; type='text' should be reserved for one-off
+        // labels or callouts. This is a hint only — the clip is still created.
+        if (cl.clip_type == ClipType::Text && !state.audio_path.empty()) {
+            bool transcript_ready = !state.words_json_path.empty()
+                && (bool)std::ifstream(state.words_json_path);
+            if (transcript_ready) {
+                bool lyrics_present = false;
+                for (auto& t : state.tracks) {
+                    for (auto& cc : t.clips)
+                        if (cc.clip_type == ClipType::Lyrics && cc.source_id == state.audio_path)
+                            { lyrics_present = true; break; }
+                    if (lyrics_present) break;
+                }
+                if (!lyrics_present)
+                    r["warning"] = "A transcript is ready for this project's audio but no managed Lyrics track exists. For lyric videos / captions, prefer generate_typography(preset='flash'|'apple'|'spotify'|...) — it lays styled, idempotent lyric clips on a managed track. type='text' is intended for one-off labels (or use add_callout).";
+            }
+        }
         return r;
     }
 
@@ -1515,6 +1725,7 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         json r;
         r["stage"]    = "running";
         r["progress"] = state.pipeline.progress;
+        r["next_action_hint"] = "Poll get_pipeline_status every 2-3s until stage='done', then call generate_typography(preset='flash'|'apple'|'spotify'|'karaoke'|'headline'|...) to lay lyric clips. Do NOT hand-roll text clips with add_clip(type='text') for lyrics — generate_typography handles styling, grouping and idempotency.";
         return r;
     }
 

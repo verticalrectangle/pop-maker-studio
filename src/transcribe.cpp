@@ -34,11 +34,12 @@ fs::path whisper_model_path() {
     return fs::path(app_models_dir()) / "ggml-large-v3-turbo-q5_0.bin";
 }
 
-// Faster model used by find_and_add_clip search (tiny.en ≈ 10× faster than large).
-// Falls back to large if tiny isn't present.
+// find_and_add_clip search uses the SAME model as the full pipeline.
+// Tiny.en used to be the search model for speed, but it hallucinated [Music]/♪♪
+// on quiet (low-amplitude) vocals and forced a tiny-vs-large quality fork
+// between the search cache and the canonical cache.  Demucs per-chunk
+// dominates latency anyway, so the large-v3-turbo cost delta is small.
 fs::path whisper_search_model_path() {
-    fs::path tiny = fs::path(app_models_dir()) / "ggml-tiny.en.bin";
-    if (fs::exists(tiny)) return tiny;
     return whisper_model_path();
 }
 
@@ -589,8 +590,42 @@ static whisper_context* load_whisper_ctx() {
     fs::path mp = whisper_search_model_path();
     if (!fs::exists(mp)) return nullptr;
     whisper_context_params cparams = whisper_context_default_params();
-    cparams.use_gpu = true;
+    cparams.use_gpu              = true;
+    cparams.dtw_token_timestamps = true;
+    cparams.dtw_aheads_preset    = WHISPER_AHEADS_LARGE_V3_TURBO;
     return whisper_init_from_file_with_params(mp.string().c_str(), cparams);
+}
+
+// Whisper's known music/non-speech surface tokens.  When fed silence or
+// instrumental-only audio (e.g. a dead Demucs stem or a raw mix during an
+// instrumental break), whisper emits these as "transcribed" content.  We
+// strip them at the word level before stitching/saving, so the cache stays
+// clean even when we let whisper run on dubious chunks (raw-mix fallback,
+// borderline gate trips, etc).
+static bool is_music_token(const std::string& w) {
+    if (w.empty()) return false;
+    // Strip trailing punctuation and lowercase for matching.
+    std::string s = w;
+    while (!s.empty() && !std::isalnum((unsigned char)s.back()) &&
+           (unsigned char)s.back() < 0x80) s.pop_back();
+    for (auto& c : s) c = (char)std::tolower((unsigned char)c);
+
+    if (s == "[music]" || s == "(music)" || s == "music"
+        || s == "[applause]" || s == "(applause)"
+        || s == "[silence]" || s == "(silence)"
+        || s == "[blank_audio]" || s == "[inaudible]") return true;
+    // Music-note glyphs (♪ U+266A, ♫ U+266B). Whisper emits various run-lengths.
+    if (s.empty()) return false;
+    bool all_notes = true;
+    for (size_t i = 0; i < s.size(); ) {
+        // U+266A "♪" is bytes E2 99 AA; U+266B "♫" is E2 99 AB.
+        if (i + 2 < s.size() &&
+            (unsigned char)s[i] == 0xE2 && (unsigned char)s[i+1] == 0x99 &&
+            ((unsigned char)s[i+2] == 0xAA || (unsigned char)s[i+2] == 0xAB)) {
+            i += 3;
+        } else { all_notes = false; break; }
+    }
+    return all_notes;
 }
 
 // Score a word list against query words (intersection / query_size).
@@ -658,11 +693,16 @@ TranscribeSearchResult transcribe_search(
     }
     float total_dur = (float)info.duration;
 
-    // Derive output path for the accumulated transcript
+    // Derive output path for the accumulated transcript.
+    // PROVENANCE: search writes to *_words_search.json, NOT *_words.json.
+    // The full pipeline (do_transcribe) owns *_words.json — its output is
+    // canonical (DTW + forced alignment + segment splits) and must not be
+    // shadowed by the windowed search cache.  get_transcript / find_and_add_clip
+    // prefer the canonical path and fall back to the search path.
     fs::path src(path);
     fs::path outdir = src.parent_path() / src.stem();
     fs::create_directories(outdir);
-    std::string words_json_path = (outdir / (src.stem().string() + "_words.json")).string();
+    std::string words_json_path = (outdir / (src.stem().string() + "_words_search.json")).string();
 
     const float window_sec  = std::max(90.f, std::min(300.f, total_dur / 4.f));
     const float overlap_sec = std::min(30.f, window_sec * 0.15f);
@@ -722,12 +762,21 @@ TranscribeSearchResult transcribe_search(
         // [Music]/♪♪ tokens out of the cached transcript and avoids burning
         // a whisper pass on dead audio.  Not applied to raw-mix PCM — that
         // would gate on music energy and skip everything.
+        // Vocal-presence gate: previously this skipped the chunk entirely
+        // when Demucs produced a dead stem — but that silently dropped
+        // chunks where Demucs failed on quiet/whispered vocals (soft outro
+        // fades, low-amplitude breaths).  Now: when the stem reads dead,
+        // fall back to running whisper on the RAW MIX for that chunk.
+        // Music-token hallucinations whisper-large emits on instrumental
+        // audio (♪♪, [Music], …) are post-filtered after extraction below.
         if (used_vocal_stem && !has_vocal_presence(pcm)) {
             set_search_status(true, window_start, total_dur,
-                "Skipped " + fmt_time(window_start) + " – " + fmt_time(win_end) +
-                " (no vocals in stem)");
-            window_start += step_sec;
-            continue;
+                "Dead vocal stem — raw-mix fallback for "
+                + fmt_time(window_start) + " – " + fmt_time(win_end));
+            std::vector<float> raw_pcm = decode_16k(path, window_start, dur);
+            if (raw_pcm.empty()) { window_start += step_sec; continue; }
+            pcm = std::move(raw_pcm);
+            used_vocal_stem = false;
         }
 
         vad_gate_inplace(pcm);
@@ -742,6 +791,19 @@ TranscribeSearchResult transcribe_search(
         nlohmann::json words_arr = nlohmann::json::array();
         nlohmann::json segs_arr  = nlohmann::json::array();
         extract_words_segments(ctx, words_arr, segs_arr);
+
+        // Post-filter music-token hallucinations ([Music], ♪♪, etc.).
+        // Whisper-large emits these on instrumental audio (raw-mix fallback
+        // chunks, or stems where Demucs leaked instrumental).  Stripping at
+        // the word level keeps the cached transcript clean.
+        {
+            nlohmann::json filtered = nlohmann::json::array();
+            for (auto& w : words_arr) {
+                std::string wt = w.value("word", "");
+                if (!is_music_token(wt)) filtered.push_back(w);
+            }
+            words_arr = std::move(filtered);
+        }
 
         for (auto& w : words_arr) {
             w["start"] = w.value("start", 0.f) + window_start;
@@ -862,7 +924,64 @@ TranscribeSearchResult transcribe_search(
     }
 
     whisper_free(ctx);
-    if (!res.found) res.error = "query not found in transcript";
+
+    // On no-match, surface the top-N closest fuzzy windows so the caller
+    // / human can disambiguate or re-query instead of getting a blank
+    // failure.  Scans the accumulated transcript for the highest-coverage
+    // disjoint windows above 0.5 coverage.
+    std::vector<SearchCandidate> candidates;
+    if (!res.found && !all_words.empty()) {
+        auto lower = [](std::string s) {
+            for (auto& c : s) c = (char)std::tolower((unsigned char)c);
+            return s;
+        };
+        std::set<std::string> qset;
+        for (const auto& q : query_words) qset.insert(lower(q));
+        const int qsize = (int)query_words.size();
+        const int qwin  = std::max(qsize * 3, qsize + 2);
+        if (qsize > 0) {
+            struct Hit { int i, e; float score; };
+            std::vector<Hit> hits;
+            for (int i = 0; i < (int)all_words.size(); ++i) {
+                std::set<std::string> seen;
+                int e = std::min((int)all_words.size(), i + qwin);
+                for (int j = i; j < e; ++j) {
+                    std::string w = lower(all_words[j].value("word", ""));
+                    if (qset.count(w)) seen.insert(w);
+                }
+                float cov = (float)seen.size() / (float)qsize;
+                if (cov >= 0.5f) hits.push_back({i, e - 1, cov});
+            }
+            std::sort(hits.begin(), hits.end(),
+                [](const Hit& a, const Hit& b) { return a.score > b.score; });
+            // Greedily keep up to 3 disjoint hits.
+            for (const auto& h : hits) {
+                if (candidates.size() >= 3) break;
+                bool overlap = false;
+                for (const auto& c : candidates) {
+                    float hs = all_words[h.i].value("start", 0.f);
+                    float he = all_words[h.e].value("end",   0.f);
+                    if (!(he < c.start || hs > c.end)) { overlap = true; break; }
+                }
+                if (overlap) continue;
+                SearchCandidate sc;
+                sc.start = all_words[h.i].value("start", 0.f);
+                sc.end   = all_words[h.e].value("end",   0.f);
+                sc.score = h.score;
+                std::string ex;
+                for (int k = h.i; k <= h.e && k < (int)all_words.size(); ++k)
+                    ex += all_words[k].value("word", "") + " ";
+                sc.excerpt = ex;
+                candidates.push_back(sc);
+            }
+        }
+    }
+
+    if (!res.found) {
+        res.error = candidates.empty()
+            ? "query not found in transcript"
+            : "query not found exactly — see candidates for closest fuzzy hits";
+    }
     {
         std::lock_guard<std::mutex> lk(g_search_mu);
         g_search_status.running     = false;
@@ -870,6 +989,7 @@ TranscribeSearchResult transcribe_search(
         g_search_status.start       = res.start;
         g_search_status.end         = res.end;
         g_search_status.excerpt     = res.excerpt;
+        g_search_status.candidates  = std::move(candidates);
         g_search_status.error       = res.error;
         g_search_status.progress    = 1.f;
         g_search_status.current_sec = res.found ? res.start : total_dur;
