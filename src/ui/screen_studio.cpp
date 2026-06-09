@@ -48,8 +48,31 @@ static bool s_user_nav = false; // user explicitly chose Animation/History tab
 
 static void handle_shortcuts(AppState& state) {
     if (terminal_is_focused()) return;
-    if (ImGui::IsAnyItemActive()) return;
     ImGuiIO& io = ImGui::GetIO();
+
+    // Arrow-key playhead nudge — runs before the IsAnyItemActive guard so that
+    // a stale slider activation can't lock the user out of seeking. RouteGlobal
+    // also prevents ImGui's keyboard nav from rerouting arrows to a focused
+    // slider after the nav cursor drifts onto one.
+    if (!io.WantTextInput) {
+        float fps_a  = tl_fps(state);
+        float f_dt_a = fps_a > 0.f ? 1.f / fps_a : 1.f / 30.f;
+        float dur_a  = fmaxf(state.duration, 0.f);
+        ImGuiInputFlags arrow_flags = ImGuiInputFlags_RouteGlobal | ImGuiInputFlags_Repeat;
+        bool right = ImGui::Shortcut(ImGuiKey_RightArrow, arrow_flags) ||
+                     ImGui::Shortcut(ImGuiMod_Shift | ImGuiKey_RightArrow, arrow_flags);
+        bool left  = ImGui::Shortcut(ImGuiKey_LeftArrow,  arrow_flags) ||
+                     ImGui::Shortcut(ImGuiMod_Shift | ImGuiKey_LeftArrow,  arrow_flags);
+        if (right || left) {
+            float step = io.KeyShift ? 5.f : f_dt_a;
+            float ph = state.playhead + (right ? step : -step);
+            seek_to(state, fmaxf(0.f, fminf(ph, dur_a)));
+            if (ImGui::GetActiveID() != 0) ImGui::ClearActiveID();
+            return;
+        }
+    }
+
+    if (ImGui::IsAnyItemActive()) return;
 
     // ── Undo / Redo ───────────────────────────────────────────────────────────
     if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_Z)) {
@@ -91,16 +114,6 @@ static void handle_shortcuts(AppState& state) {
     }
     if (ImGui::IsKeyPressed(ImGuiKey_L) && !state.playing) {
         toggle_play(state); return;
-    }
-    if (ImGui::IsKeyPressed(ImGuiKey_RightArrow)) {
-        float step = io.KeyShift ? 5.f : f_dt;
-        seek_to(state, fminf(state.playhead + step, dur));
-        return;
-    }
-    if (ImGui::IsKeyPressed(ImGuiKey_LeftArrow)) {
-        float step = io.KeyShift ? 5.f : f_dt;
-        seek_to(state, fmaxf(state.playhead - step, 0.f));
-        return;
     }
     if (ImGui::IsKeyPressed(ImGuiKey_Home)) { seek_to(state, 0.f);  return; }
     if (ImGui::IsKeyPressed(ImGuiKey_End))  { seek_to(state, dur);  return; }
@@ -507,7 +520,7 @@ void ui_studio(AppState& state) {
             if (ImGui::MenuItem("Import Audio / Video…", "Ctrl+O")) {
                 std::string picked = filepicker_open(
                     "Import audio or video",
-                    "Audio & Video", "*.wav *.mp3 *.m4a *.flac *.aac *.mp4 *.mov *.mkv");
+                    "Audio & Video", "*.wav *.mp3 *.m4a *.flac *.aac *.mp4 *.mov *.mkv *.webm");
                 if (!picked.empty()) import_file(state, picked);
             }
             ImGui::Separator();

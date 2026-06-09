@@ -49,7 +49,8 @@ static bool is_audio_file(const std::string& path) {
     std::string ext = fs::path(path).extension().string();
     for (auto& c : ext) c = (char)tolower((unsigned char)c);
     return ext == ".wav" || ext == ".mp3" || ext == ".m4a" ||
-           ext == ".flac" || ext == ".mp4" || ext == ".mov" || ext == ".aac";
+           ext == ".flac" || ext == ".mp4" || ext == ".mov" || ext == ".aac" ||
+           ext == ".mkv" || ext == ".webm";
 }
 
 // ── Screen ────────────────────────────────────────────────────────────────────
@@ -175,7 +176,7 @@ void ui_screen_upload(AppState& state) {
         std::string picked = filepicker_open(
             "Select audio or video file",
             "Audio & Video",
-            "*.wav *.mp3 *.m4a *.flac *.aac *.mp4 *.mov *.mkv");
+            "*.wav *.mp3 *.m4a *.flac *.aac *.mp4 *.mov *.mkv *.webm");
         if (!picked.empty()) {
             g_dropped_file = picked;
         }

@@ -142,7 +142,8 @@ bool is_audio_file(const std::string& path) {
     std::string ext = fs::path(path).extension().string();
     for (auto& c : ext) c = (char)tolower((unsigned char)c);
     return ext==".wav"||ext==".mp3"||ext==".m4a"||
-           ext==".flac"||ext==".mp4"||ext==".mov"||ext==".aac";
+           ext==".flac"||ext==".mp4"||ext==".mov"||ext==".aac"||
+           ext==".mkv"||ext==".webm";
 }
 
 void add_clip_to_track(AppState& state, int ti, const std::string& path, ClipType ct) {
