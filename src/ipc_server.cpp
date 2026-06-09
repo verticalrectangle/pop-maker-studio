@@ -1000,13 +1000,23 @@ static json dispatch(AppState& state, const std::string& method, const json& par
             const Clip& vc = state.tracks[ti].clips[vi];
             if (vc.clip_type != ClipType::Video) continue;
             if (vc.end <= brick.start || vc.start >= brick.end) continue;
-            if (vc.bg_remove_status == BgRemoveStatus::Idle ||
-                vc.bg_remove_status == BgRemoveStatus::Error)
-                bg_remove_start(state, ti, vi);
             vci = vi;
             break;
         }
         if (vci < 0) { err = "no video clip found on the same track overlapping the brick"; return {}; }
+        // Pre-check proxy: body_fx masks need the same proxy frames bg_remove
+        // does. Fail synchronously when the proxy isn't ready instead of
+        // parking the clip in WaitingForProxy and spinning the wait loop.
+        const Clip& vc_pre = state.tracks[ti].clips[vci];
+        if (vc_pre.text.empty() || !proxy_is_ready(vc_pre.text)) {
+            err = "video proxy not ready yet — body_fx masks require the MJPEG "
+                  "proxy on disk; wait for it to finish generating, then retry";
+            return {};
+        }
+        Clip& vc_mut = state.tracks[ti].clips[vci];
+        if (vc_mut.bg_remove_status == BgRemoveStatus::Idle ||
+            vc_mut.bg_remove_status == BgRemoveStatus::Error)
+            bg_remove_start(state, ti, vci);
         if (client_fd < 0) {
             json r; r["video_track"] = ti; r["video_clip"] = vci; return r;
         }
@@ -1039,6 +1049,21 @@ static json dispatch(AppState& state, const std::string& method, const json& par
     if (method == "start_bg_remove") {
         int ti = params.value("track", -1), ci = params.value("clip", -1);
         if (!check_clip(state, ti, ci, err)) return {};
+        const Clip& cl_pre = state.tracks[ti].clips[ci];
+        if (cl_pre.clip_type != ClipType::Video || cl_pre.text.empty()) {
+            err = "clip is not a video clip"; return {};
+        }
+        // Refuse fast when the MJPEG proxy isn't on disk yet — the bg_remove
+        // mask pipeline reads frames from the proxy, so without it we'd
+        // silently park the clip in WaitingForProxy and the caller's wait loop
+        // would spin until proxy generation eventually finishes. Make it an
+        // explicit, actionable error so the agent can poll get_pipeline_status
+        // / proxy progress and retry.
+        if (!proxy_is_ready(cl_pre.text)) {
+            err = "video proxy not ready yet — bg_remove requires the MJPEG "
+                  "proxy on disk; wait for it to finish generating, then retry";
+            return {};
+        }
         bg_remove_start(state, ti, ci);
         if (client_fd < 0) { return json::object(); }
         fd_mark_busy(client_fd);
@@ -1071,11 +1096,11 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         json r;
         std::string st;
         switch (cl.bg_remove_status) {
-            case BgRemoveStatus::Idle:       st = "idle";       break;
-            case BgRemoveStatus::Processing: st = "processing"; break;
-            case BgRemoveStatus::Ready:      st = "ready";      break;
-            case BgRemoveStatus::Error:      st = "error";      break;
-            default:                          st = "idle";       break;
+            case BgRemoveStatus::Idle:             st = "idle";              break;
+            case BgRemoveStatus::WaitingForProxy:  st = "waiting_for_proxy"; break;
+            case BgRemoveStatus::Processing:       st = "processing";        break;
+            case BgRemoveStatus::Ready:            st = "ready";             break;
+            case BgRemoveStatus::Error:            st = "error";             break;
         }
         r["status"]   = st;
         r["progress"] = cl.bg_remove_progress;

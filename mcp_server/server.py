@@ -1497,7 +1497,12 @@ async def list_tools() -> list[Tool]:
                 "on tracks below the brick and writes body-segmentation masks for the brick's time "
                 "range. Async — returns immediately; poll get_project for body_fx_mask_status "
                 "('Processing' → 'Ready'). Only needed once per brick; re-run if you extend the "
-                "brick's right edge past the already-processed range."
+                "brick's right edge past the already-processed range.\n\n"
+                "REQUIRES PROXY: the video clip's MJPEG proxy must be on disk before calling this. "
+                "Newly-imported clips show instantly via direct decode but proxy generation runs "
+                "in the background — this call fails with 'video proxy not ready yet' until the "
+                "proxy finishes. Poll get_project for proxy_status on the source video clip and "
+                "retry when it reports 'ready'."
             ),
             inputSchema={
                 "type": "object",
@@ -1513,7 +1518,11 @@ async def list_tools() -> list[Tool]:
             description=(
                 "Remove the background from a video clip using U2Net body segmentation. "
                 "Adds a 'Remove Background' body_fx brick on the same track as the video clip "
-                "(mask processing starts automatically). Blocks until masks are ready. No batch needed."
+                "(mask processing starts automatically). Blocks until masks are ready. No batch needed.\n\n"
+                "REQUIRES PROXY: fails with 'video proxy not ready yet' when the clip's MJPEG "
+                "proxy hasn't finished transcoding. Newly-imported clips preview instantly via "
+                "direct libav decode but bg_remove specifically reads from the proxy. Poll "
+                "get_project for the source clip's proxy_status and retry when it reports 'ready'."
             ),
             inputSchema={
                 "type": "object",
