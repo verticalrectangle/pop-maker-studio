@@ -34,6 +34,7 @@ jobs:
             libaubio-dev \
             libfftw3-dev \
             libvterm-dev \
+            libturbojpeg0-dev \
             pkg-config \
             curl
 
