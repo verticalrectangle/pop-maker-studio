@@ -52,14 +52,40 @@ std::string proxy_mjpeg_path(const std::string& vp) { return vp + ".pms_proxy.mj
 std::string proxy_idx_path  (const std::string& vp) { return vp + ".pms_proxy.idx";   }
 std::string proxy_still_path(const std::string& vp) { return vp + ".pms_still.jpg";   }
 
-// ── Queue state ───────────────────────────────────────────────────────────────
+// ── Queue + worker pool state ─────────────────────────────────────────────────
+//
+// Multiple worker threads pull from g_queue in parallel so an import of 20+
+// clips actually fans out across CPU cores instead of serializing on a single
+// ffmpeg subprocess. Each worker holds at most one in-flight path; tracking
+// is per-path via the g_active / g_progress_map / g_pid_map containers so two
+// workers never grab the same source. PROXY_MAX_WORKERS caps concurrency so
+// we don't trash a busy machine; per-process -threads is sized so the workers
+// × threads product stays at ~hardware_concurrency without oversubscription.
+static std::mutex                                  g_mu;
+static std::deque<std::string>                     g_queue;        // pending
+static std::unordered_set<std::string>             g_active;       // in-flight
+static std::unordered_map<std::string, float>      g_progress_map; // per-active 0-1
+static std::unordered_map<std::string, pid_t>      g_pid_map;      // per-active pid
+static int                                         g_workers_alive = 0;
 
-static std::mutex          g_mu;
-static std::deque<std::string> g_queue;     // paths waiting (not yet started)
-static std::string         g_active;        // path currently being generated
-static std::atomic<float>  g_progress{0.f}; // 0–1 for the active job
-static std::atomic<pid_t>  g_pid{-1};       // ffmpeg PID for the active job
-static std::atomic<bool>   g_worker_alive{false};
+static int proxy_max_workers() {
+    int hw = (int)std::thread::hardware_concurrency();
+    if (hw < 2) hw = 2;
+    int n = hw / 2;
+    if (n < 1) n = 1;
+    if (n > 4) n = 4;
+    return n;
+}
+
+static int proxy_threads_per_job() {
+    int hw = (int)std::thread::hardware_concurrency();
+    if (hw < 2) hw = 2;
+    int n = proxy_max_workers();
+    int k = hw / n;
+    if (k < 2) k = 2;
+    if (k > 4) k = 4;
+    return k;
+}
 
 // ── Subprocess helper ─────────────────────────────────────────────────────────
 
@@ -73,6 +99,10 @@ static pid_t spawn_ffmpeg(const char** args) {
             dup2(devnull, STDERR_FILENO);
             close(devnull);
         }
+        // Lower priority so the UI stays smooth while the worker pool churns.
+        // Best-effort: ignore failure (we don't have CAP_SYS_NICE for negatives,
+        // but going positive is unprivileged on Linux).
+        (void)nice(10);
         execvp("ffmpeg", const_cast<char**>(args));
         _exit(127);
     }
@@ -319,23 +349,31 @@ static int probe_total_frames(const std::string& video_path) {
 // ── Worker thread ─────────────────────────────────────────────────────────────
 
 static void proxy_worker_fn() {
+    const std::string threads_str = std::to_string(proxy_threads_per_job());
+
     while (true) {
         std::string path;
         {
             std::lock_guard<std::mutex> lk(g_mu);
-            if (g_queue.empty()) {
-                g_active.clear();
-                g_worker_alive.store(false);
+            if (g_queue.empty() || g_shutdown.load()) {
+                if (--g_workers_alive < 0) g_workers_alive = 0;
                 return;
             }
             path = g_queue.front();
             g_queue.pop_front();
-            g_active = path;
-            g_progress.store(0.f);
+            g_active.insert(path);
+            g_progress_map[path] = 0.f;
         }
 
-        if (proxy_is_ready(path)) continue;
-        if (g_shutdown.load()) break;
+        auto release_active = [&]{
+            std::lock_guard<std::mutex> lk(g_mu);
+            g_active.erase(path);
+            g_pid_map.erase(path);
+            g_progress_map.erase(path);
+        };
+
+        if (proxy_is_ready(path)) { release_active(); continue; }
+        if (g_shutdown.load())    { release_active(); break;    }
 
         // Sweep stale incomplete mjpeg (mjpeg exists but no idx)
         std::string mj  = proxy_mjpeg_path(path);
@@ -348,22 +386,34 @@ static void proxy_worker_fn() {
         // Probe total frame count for accurate progress percentage
         int total_frames = probe_total_frames(path);
 
-        // Use ffmpeg -progress to write key=value updates to a temp file
+        // Use ffmpeg -progress to write key=value updates to a temp file.
+        // -hwaccel auto uses GPU decode when available (vaapi/nvdec/qsv/etc.),
+        // silently falls back to software when not. -threads K caps per-process
+        // thread count so N workers × K threads stays near hardware_concurrency.
+        // fast_bilinear scaler trades a little chroma fidelity for ~20% faster
+        // scaling — fine for preview-quality output. -q:v 16 is a touch coarser
+        // than the prior 13 with no visible difference at half-res, shaves bytes
+        // and encode time.
         std::string prog_file = mj + ".prog";
         std::string src = "file:" + path;
         const char* proxy_args[] = {
             "ffmpeg", "-hide_banner", "-loglevel", "error",
+            "-hwaccel", "auto",
+            "-threads", threads_str.c_str(),
             "-y", "-i", src.c_str(),
-            "-vf", "scale=min(iw/2\\,960):-2",
+            "-vf", "scale=min(iw/2\\,960):-2:flags=fast_bilinear",
             "-r", "30",
-            "-c:v", "mjpeg", "-q:v", "13",
+            "-c:v", "mjpeg", "-q:v", "16",
             "-an",
             "-progress", prog_file.c_str(),
             mj.c_str(), nullptr
         };
 
         pid_t pp = spawn_ffmpeg(proxy_args);
-        g_pid.store(pp);
+        {
+            std::lock_guard<std::mutex> lk(g_mu);
+            g_pid_map[path] = pp;
+        }
 
         // Poll progress file while ffmpeg runs
         bool ok = false;
@@ -385,14 +435,17 @@ static void proxy_worker_fn() {
                         int fr; if (sscanf(line, "frame=%d", &fr) == 1) last_frame = fr;
                     }
                     fclose(pf);
-                    if (last_frame > 0)
-                        g_progress.store(std::min(0.98f, (float)last_frame / (float)total_frames));
+                    if (last_frame > 0) {
+                        float p = std::min(0.98f, (float)last_frame / (float)total_frames);
+                        std::lock_guard<std::mutex> lk(g_mu);
+                        auto it = g_progress_map.find(path);
+                        if (it != g_progress_map.end()) it->second = p;
+                    }
                 }
             }
             usleep(100'000);  // 100 ms poll
         }
 
-        g_pid.store(-1);
         fs::remove(prog_file);
 
         if (!ok) {
@@ -401,30 +454,33 @@ static void proxy_worker_fn() {
             fs::remove(mj);
         } else {
             mark_ready_cached(path);
-            g_progress.store(1.f);
         }
+
+        release_active();
 
         if (g_shutdown.load()) break;
     }
-
-    std::lock_guard<std::mutex> lk(g_mu);
-    g_active.clear();
-    g_worker_alive.store(false);
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
-bool proxy_is_generating() { return g_worker_alive.load(); }
+bool proxy_is_generating() {
+    std::lock_guard<std::mutex> lk(g_mu);
+    return g_workers_alive > 0;
+}
 
 void proxy_cancel() {
+    std::vector<pid_t> pids;
     {
         std::lock_guard<std::mutex> lk(g_mu);
         g_queue.clear();
-        g_active.clear();
+        for (auto& [_p, pid] : g_pid_map) pids.push_back(pid);
+        // Don't wipe g_active / g_pid_map here — workers themselves erase their
+        // own entries when their ffmpeg exits. Killing the pid (below) makes
+        // waitpid return so the worker exits its inner poll loop promptly.
     }
-    pid_t pp = g_pid.exchange(-1);
-    if (pp > 0) { kill(pp, SIGTERM); waitpid(pp, nullptr, 0); }
-    g_worker_alive.store(false);
+    for (pid_t pp : pids)
+        if (pp > 0) { kill(pp, SIGTERM); waitpid(pp, nullptr, 0); }
 }
 
 void proxy_start(const std::string& video_path) {
@@ -461,17 +517,27 @@ void proxy_start(const std::string& video_path) {
 
     if (proxy_is_ready(video_path)) return;
 
+    int workers_to_spawn = 0;
     {
         std::lock_guard<std::mutex> lk(g_mu);
-        if (g_active == video_path) return;   // already generating this one
+        if (g_active.count(video_path)) return;     // already generating
         for (auto& q : g_queue)
-            if (q == video_path) return;      // already queued
+            if (q == video_path) return;            // already queued
         g_queue.push_back(video_path);
+
+        // Spin up parallel workers up to PROXY_MAX_WORKERS, capped by how much
+        // work is actually pending (queue + in-flight). New workers exit on
+        // their own when the queue drains, so this is steady-state correct.
+        int max_w = proxy_max_workers();
+        int pending = (int)g_queue.size() + (int)g_active.size();
+        int target = std::min(max_w, pending);
+        if (g_workers_alive < target) {
+            workers_to_spawn = target - g_workers_alive;
+            g_workers_alive += workers_to_spawn;
+        }
     }
 
-    // Kick off the worker if it isn't already running
-    bool was_alive = g_worker_alive.exchange(true);
-    if (!was_alive)
+    for (int i = 0; i < workers_to_spawn; ++i)
         std::thread(proxy_worker_fn).detach();
 }
 
@@ -482,9 +548,10 @@ ProxyJobStatus proxy_job_status(const std::string& video_path) {
     st.path = video_path;
     if (proxy_is_ready(video_path)) { st.state = ProxyJobStatus::State::Ready; return st; }
     std::lock_guard<std::mutex> lk(g_mu);
-    if (g_active == video_path) {
-        st.state    = ProxyJobStatus::State::Generating;
-        st.progress = g_progress.load();
+    if (g_active.count(video_path)) {
+        st.state = ProxyJobStatus::State::Generating;
+        auto it = g_progress_map.find(video_path);
+        if (it != g_progress_map.end()) st.progress = it->second;
         return st;
     }
     for (auto& q : g_queue) {
