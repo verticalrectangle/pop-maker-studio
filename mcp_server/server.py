@@ -863,7 +863,12 @@ async def list_tools() -> list[Tool]:
                 "           display orientation). Non-destructive render-time UV window —\n"
                 "           prefer this over crop_media when the media is already on the\n"
                 "           timeline; the fit box follows the cropped aspect.\n"
-                "PLAYBACK:  volume (0–2), speed (0.25–4), opacity (0–1), muted (bool),\n"
+                "PLAYBACK:  volume (0–2), speed (0.25–100; retimes like the UI — the clip's\n"
+                "           timeline width rescales to keep the same source span, and FX\n"
+                "           bricks riding the clip rescale with it. Downstream clips do NOT\n"
+                "           ripple: a shrunk clip leaves a gap — close it with move_clip.\n"
+                "           Pass retime=false to keep start/end and change which source\n"
+                "           range plays instead), opacity (0–1), muted (bool),\n"
                 "           fade_in, fade_out, in_point (source offset seconds)\n"
                 "TEXT:      text, font_size (0=auto), sub_pos (0=bottom 1=center 2=top 3=custom),\n"
                 "           sub_pos_x/y (0–1), sub_anchor_h (0=left 1=center 2=right),\n"
@@ -888,6 +893,7 @@ async def list_tools() -> list[Tool]:
                     "clip": {"type": "integer"},
                     "prop": {"type": "string"},
                     "value": {},
+                    "retime": {"type": "boolean", "description": "speed only: false keeps the clip's start/end instead of rescaling its timeline width (default true)"},
                 },
                 "required": ["clip", "prop", "value"],
             },
@@ -963,7 +969,11 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="set_clip_props",
-            description="Set properties on multiple clips in one call. ops: [{track, clip, prop, value}].",
+            description=(
+                "Set properties on multiple clips in one call. ops: [{track, clip, prop, value}]. "
+                "Setting speed retimes like the UI (clip width rescales; see set_clip_prop) — "
+                "per-op retime=false opts out."
+            ),
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -977,6 +987,7 @@ async def list_tools() -> list[Tool]:
                                 "clip": {"type": "integer"},
                                 "prop": {"type": "string"},
                                 "value": {},
+                                "retime": {"type": "boolean", "description": "speed only: false keeps start/end instead of rescaling timeline width (default true)"},
                             },
                             "required": ["track", "clip", "prop", "value"],
                         },

@@ -1731,7 +1731,20 @@ static json dispatch(AppState& state, const std::string& method, const json& par
             Clip& cl = state.tracks[ti].clips[ci];
             auto& val = op["value"];
             if      (prop == "volume")    { cl.volume    = jval_float(val); }
-            else if (prop == "speed")     { cl.speed = fmaxf(0.25f, fminf(100.f, jval_float(val))); }
+            else if (prop == "speed")     {
+                // Match the UI speed control: retime the clip's timeline width
+                // (and overlapping FX bricks) so the same source span plays at
+                // the new speed. Without this a 100x timelapse kept its old
+                // width and read source minutes past EOF — invisible in the UI
+                // and lethal to exports. retime=false keeps start/end and
+                // changes which source range plays instead.
+                float ns = fmaxf(0.25f, fminf(100.f, jval_float(val)));
+                float ratio = ns / fmaxf(0.01f, cl.speed);
+                cl.speed = ns;
+                if ((cl.clip_type == ClipType::Video || cl.clip_type == ClipType::Audio) &&
+                    op.value("retime", true))
+                    rescale_glass_bricks(state, ti, ci, ratio);
+            }
             else if (prop == "opacity")   { cl.opacity   = jval_float(val); }
             else if (prop == "muted")     { cl.muted     = jval_bool(val); }
             else if (prop == "in_point")  { cl.in_point  = jval_float(val); }
@@ -1854,7 +1867,15 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         auto& val = params["value"];
         // ── A/V props ────────────────────────────────────────────────────────
         if      (prop == "volume")   { cl.volume     = jval_float(val); }
-        else if (prop == "speed")    { cl.speed = fmaxf(0.25f, fminf(100.f, jval_float(val))); }
+        else if (prop == "speed")    {
+            // Same retime semantics as the UI speed control — see set_clip_props.
+            float ns = fmaxf(0.25f, fminf(100.f, jval_float(val)));
+            float ratio = ns / fmaxf(0.01f, cl.speed);
+            cl.speed = ns;
+            if ((cl.clip_type == ClipType::Video || cl.clip_type == ClipType::Audio) &&
+                params.value("retime", true))
+                rescale_glass_bricks(state, ti, ci, ratio);
+        }
         else if (prop == "opacity")  { cl.opacity    = jval_float(val); }
         else if (prop == "muted")    { cl.muted      = jval_bool(val); }
         else if (prop == "in_point") { cl.in_point   = jval_float(val); }

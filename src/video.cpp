@@ -2017,6 +2017,14 @@ VideoFrame* video_decode_frame_at(int slot, double seconds) {
     AVStream* st = ex.fmt_ctx->streams[ex.stream_idx];
     double frame_dur = (ex.info.fps > 0.0) ? (1.0 / ex.info.fps) : (1.0 / 30.0);
 
+    // Past-EOF requests freeze on the last frame. A bad retime can ask for
+    // source time far beyond the file; unclamped, every such output frame
+    // seeks to the tail keyframe and re-decodes to EOF — which wedges an
+    // export. Clamped, the first request decodes the final frame and every
+    // subsequent one is a cache hit.
+    if (ex.info.duration > 0.0 && seconds > ex.info.duration - frame_dur)
+        seconds = ex.info.duration - frame_dur;
+
     // Cache hit: same source frame as last call (slow-mo, stills, hold frames).
     if (ex.cache_data && ex.cache_pts >= 0.0 &&
         fabs(seconds - ex.cache_pts) < frame_dur * 0.5) {

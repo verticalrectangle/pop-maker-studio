@@ -28,6 +28,14 @@ void seek_to(AppState& state, float t);
 void toggle_play(AppState& state);
 float tl_fps(const AppState& state);
 
+// ── Retime ────────────────────────────────────────────────────────────────────
+// Rescale a media clip's timeline width and any FX bricks overlapping it,
+// anchored at the clip's start. ratio = new_speed / old_speed. Used by the
+// clip panel's speed control and the IPC set_clip_prop(s) speed path so both
+// have the same semantics: changing speed keeps the source span, not the
+// timeline width.
+void rescale_glass_bricks(AppState& state, int media_ti, int media_ci, float speed_ratio);
+
 // ── Multi-selection ops ───────────────────────────────────────────────────────
 // Both fall back to the primary single selection when clip_selection has <=1
 // entry. Return true if anything changed (caller pushes history).

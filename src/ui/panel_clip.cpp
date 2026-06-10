@@ -30,44 +30,6 @@ namespace fs = std::filesystem;
 extern ImFont* g_font_bold;
 extern ImFont* g_font_black;
 
-// Rescale a media clip's own timeline width AND any FX bricks (Effect / BodyFX
-// / MultiFX / Background) that overlap it, anchored at the clip's start. Speed
-// ratio = new_speed / old_speed; widths divide by it so the clip plays the
-// same source content in less/more wall-clock time and brick boundaries stay
-// locked to the same source-content moments. MultiFX sub-effects'
-// rel_start/rel_end scale with their parent so internal timing stays coherent.
-static void rescale_glass_bricks(AppState& state, int media_ti, int media_ci, float speed_ratio) {
-    if (speed_ratio <= 0.f || !std::isfinite(speed_ratio)) return;
-    if (fabsf(speed_ratio - 1.f) < 1e-5f) return;
-    if (media_ti < 0 || media_ti >= (int)state.tracks.size()) return;
-    Track& mtr = state.tracks[media_ti];
-    if (media_ci < 0 || media_ci >= (int)mtr.clips.size()) return;
-    const Clip media = mtr.clips[media_ci];  // snapshot — old start/end used for overlap test
-    float anchor = media.start;
-    for (int ti = 0; ti < (int)state.tracks.size(); ++ti) {
-        Track& tr = state.tracks[ti];
-        for (auto& cl : tr.clips) {
-            if (ti == media_ti && &cl == &mtr.clips[media_ci]) continue;
-            if (cl.clip_type != ClipType::Effect &&
-                cl.clip_type != ClipType::BodyFX &&
-                cl.clip_type != ClipType::MultiFX &&
-                cl.clip_type != ClipType::Background) continue;
-            if (cl.start >= media.end || cl.end <= media.start) continue;
-            cl.start = anchor + (cl.start - anchor) / speed_ratio;
-            cl.end   = anchor + (cl.end   - anchor) / speed_ratio;
-            for (auto& se : cl.fx_chain) {
-                se.rel_start /= speed_ratio;
-                if (se.rel_end > 0.f) se.rel_end /= speed_ratio;
-            }
-        }
-    }
-    // Resize the media clip itself so its timeline width matches the new
-    // playback duration (source_dur / speed). Anchored at the start so nothing
-    // upstream shifts.
-    Clip& m = mtr.clips[media_ci];
-    m.end = anchor + (m.end - anchor) / speed_ratio;
-}
-
 static std::vector<std::string> split_words_panel(const std::string& s) {
     std::vector<std::string> out;
     size_t i = 0;
