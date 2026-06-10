@@ -9,6 +9,7 @@
 #include "presets.h"
 #include "runtime_fx.h"
 #include "ipc_server.h"
+#include "agent_harness.h"
 #include "globals.h"
 #include "ui/theme.h"
 #include "ui/screens.h"
@@ -509,6 +510,7 @@ void app_frame(AppState& state) {
 
 void app_shutdown(AppState& state) {
     g_shutdown.store(true);
+    agent_shutdown();
     ipc_server_stop();
     runtime_fx_shutdown();
     audio_shutdown();

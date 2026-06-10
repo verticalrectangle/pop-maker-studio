@@ -667,6 +667,7 @@ struct AppState {
 
     // Terminal panel
     bool  terminal_open   = false;
+    bool  agent_panel_open = false;  // in-app agent chat strip (AGENT_HARNESS.md)
 
     // user-created effect presets (persisted to ~/.config/pop-maker-studio/presets.json)
     std::vector<EffectPreset> user_presets;

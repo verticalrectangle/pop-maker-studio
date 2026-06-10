@@ -10,6 +10,8 @@
 #include "panel_fx.h"
 #include "panel_media.h"
 #include "panel_terminal.h"
+#include "panel_agent.h"
+#include "../agent_harness.h"
 #include "export_ui.h"
 #include "theme.h"
 #include "app.h"
@@ -668,31 +670,37 @@ void ui_studio(AppState& state) {
             ImGui::EndMenu();
         }
 
-        // Terminal + Project + Export buttons — far right of menu bar
+        // Agent + Terminal + Project + Export buttons — far right of menu bar
         {
             float btn_export_w   = 80.f;
             float btn_proj_w     = 70.f;
             float btn_term_w     = 78.f;
+            float btn_agent_w    = 62.f;
             float avail = ImGui::GetContentRegionAvail().x;
-            float total_btns = btn_term_w + 6.f + btn_proj_w + 6.f + btn_export_w;
+            float total_btns = btn_agent_w + 6.f + btn_term_w + 6.f +
+                               btn_proj_w + 6.f + btn_export_w;
             if (avail > total_btns)
                 ImGui::SetCursorPosX(ImGui::GetCursorPosX() + avail - total_btns);
 
             ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {10.f, 2.f});
 
-            // Terminal toggle — active state uses accent tint
-            // Snapshot BEFORE the button so push/pop are always balanced.
-            bool term_was_open = state.terminal_open;
-            if (term_was_open) {
-                ImGui::PushStyleColor(ImGuiCol_Button,        IM_COL32(60, 40, 100, 255));
-                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(80, 55, 130, 255));
-                ImGui::PushStyleColor(ImGuiCol_ButtonActive,  IM_COL32(50, 35,  85, 255));
-                ImGui::PushStyleColor(ImGuiCol_Text,          IM_COL32(200, 160, 255, 255));
-            }
-            if (ImGui::Button("Terminal"))
-                state.terminal_open = !state.terminal_open;
-            if (term_was_open)
-                ImGui::PopStyleColor(4);
+            // Accent-tint helper for toggles — snapshot BEFORE the button so
+            // push/pop are always balanced.
+            auto accent_btn = [&](const char* label, bool& flag) {
+                bool was_open = flag;
+                if (was_open) {
+                    ImGui::PushStyleColor(ImGuiCol_Button,        IM_COL32(60, 40, 100, 255));
+                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(80, 55, 130, 255));
+                    ImGui::PushStyleColor(ImGuiCol_ButtonActive,  IM_COL32(50, 35,  85, 255));
+                    ImGui::PushStyleColor(ImGuiCol_Text,          IM_COL32(200, 160, 255, 255));
+                }
+                if (ImGui::Button(label)) flag = !flag;
+                if (was_open) ImGui::PopStyleColor(4);
+            };
+
+            accent_btn("Agent", state.agent_panel_open);
+            ImGui::SameLine(0.f, 6.f);
+            accent_btn("Terminal", state.terminal_open);
 
             ImGui::SameLine(0.f, 6.f);
             if (ImGui::Button("Project")) {
@@ -761,6 +769,75 @@ void ui_studio(AppState& state) {
                 }
             }
 
+            // ── Agent (in-app AI) ─────────────────────────────────────────────
+            ImGui::Dummy({0.f, 16.f});
+            ui_label("Agent");
+            ImGui::Dummy({0.f, 4.f});
+            {
+                float lx = ImGui::GetStyle().WindowPadding.x + 8.f;
+                static char s_key_buf[256] = {};
+                AgentConfig acfg = agent_get_config();
+                static char s_url_buf[256] = {};
+                static char s_model_buf[128] = {};
+                static bool s_synced = false;
+                if (!s_synced) {
+                    strncpy(s_url_buf,   acfg.base_url.c_str(), sizeof(s_url_buf)-1);
+                    strncpy(s_model_buf, acfg.model.c_str(),    sizeof(s_model_buf)-1);
+                    s_synced = true;
+                }
+
+                ImGui::SetCursorPosX(lx);
+                if (!agent_key_available()) {
+                    ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+                    ImGui::TextWrapped("secret-tool not found — install "
+                        "libsecret to store the API key in the system keyring.");
+                    ImGui::PopStyleColor();
+                } else {
+                    bool has_key = agent_key_present();
+                    ImGui::PushStyleColor(ImGuiCol_Text,
+                        has_key ? IM_COL32(100, 220, 130, 255) : to_u32(Col::muted));
+                    ImGui::TextUnformatted(has_key ? "API key: stored in keyring"
+                                                   : "API key: not set");
+                    ImGui::PopStyleColor();
+                    ImGui::SetCursorPosX(lx);
+                    ImGui::SetNextItemWidth(260.f);
+                    ImGui::InputText("##agent_key", s_key_buf, sizeof(s_key_buf),
+                                     ImGuiInputTextFlags_Password);
+                    ImGui::SameLine(0.f, 6.f);
+                    if (ui_btn("Save key", false, true) && s_key_buf[0]) {
+                        if (agent_key_store(s_key_buf))
+                            memset(s_key_buf, 0, sizeof(s_key_buf));
+                    }
+                    if (has_key) {
+                        ImGui::SameLine(0.f, 6.f);
+                        if (ui_btn("Clear", false, true)) agent_key_clear();
+                    }
+                }
+
+                ImGui::Dummy({0.f, 6.f});
+                ImGui::SetCursorPosX(lx);
+                ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+                ImGui::TextUnformatted("Base URL"); ImGui::PopStyleColor();
+                ImGui::SameLine(0.f, 8.f);
+                ImGui::SetNextItemWidth(230.f);
+                if (ImGui::InputText("##agent_url", s_url_buf, sizeof(s_url_buf))) {
+                    acfg.base_url = s_url_buf; agent_set_config(acfg);
+                }
+                ImGui::SetCursorPosX(lx);
+                ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+                ImGui::TextUnformatted("Model   "); ImGui::PopStyleColor();
+                ImGui::SameLine(0.f, 8.f);
+                ImGui::SetNextItemWidth(230.f);
+                if (ImGui::InputText("##agent_model", s_model_buf, sizeof(s_model_buf))) {
+                    acfg.model = s_model_buf; agent_set_config(acfg);
+                }
+                ImGui::SetCursorPosX(lx);
+                bool vis = acfg.vision;
+                if (ImGui::Checkbox("Send snapshot images to the model (vision)", &vis)) {
+                    acfg.vision = vis; agent_set_config(acfg);
+                }
+            }
+
             ImGui::Dummy({0.f, 16.f});
             ImGui::SetCursorPosX(ImGui::GetStyle().WindowPadding.x + 8.f);
             if (ui_btn("Close", false, false)) {
@@ -791,11 +868,12 @@ void ui_studio(AppState& state) {
                   ? fmaxf(TL_MIN_H, fminf(avail_h * 0.7f, state.tl_h_frac * avail_h))
                   : TL_MIN_H;
 
-    // Terminal strip height — user-draggable, defaults to 220 px
+    // Terminal strip height — user-draggable, defaults to 220 px. The agent
+    // panel shares the same bottom strip (side-by-side when both are open).
     static const float TERM_MIN_H = 80.f;
     static const float TERM_DEF_H = 220.f;
     float term_h = 0.f;
-    if (state.terminal_open) {
+    if (state.terminal_open || state.agent_panel_open) {
         term_h = (state.term_h_frac > 0.f)
                   ? fmaxf(TERM_MIN_H, fminf(avail_h * 0.6f, state.term_h_frac * avail_h))
                   : TERM_DEF_H;
@@ -1441,8 +1519,8 @@ void ui_studio(AppState& state) {
         }
         if (ImGui::IsMouseReleased(0)) s_drag_hsplit = false;
 
-        // Horizontal splitter at the top edge of the terminal strip
-        if (state.terminal_open && term_h > 0.f) {
+        // Horizontal splitter at the top edge of the terminal/agent strip
+        if ((state.terminal_open || state.agent_panel_open) && term_h > 0.f) {
             float tborder_y = wpos.y + body_top + body_h + tl_h + pipeline_h;
             bool near_t = fabsf(mpos.y - tborder_y) < 6.f &&
                           mpos.x > wpos.x &&
@@ -1517,18 +1595,34 @@ void ui_studio(AppState& state) {
     ImGui::EndChild();
     ImGui::PopStyleColor(2);
 
-    // ── Terminal strip ────────────────────────────────────────────────────────
+    // ── Terminal / Agent strip ───────────────────────────────────────────────
     // Lives at the absolute bottom (below the timeline) so the editing surface
     // sits directly under the preview canvas without an unrelated strip
-    // wedged between them.
-    if (state.terminal_open && term_h > 0.f) {
-        ImGui::PushStyleColor(ImGuiCol_ChildBg, IM_COL32(0x1a, 0x1b, 0x26, 255));
-        ImGui::PushStyleColor(ImGuiCol_Border,  Col::line);
-        if (ImGui::BeginChild("##term_zone", {win_w, term_h}, ImGuiChildFlags_Borders)) {
-            draw_terminal_panel(state, win_w - 2.f, term_h - 2.f);
+    // wedged between them. Terminal and Agent share the strip 50/50 when both
+    // are open; either alone takes the full width.
+    if ((state.terminal_open || state.agent_panel_open) && term_h > 0.f) {
+        bool both = state.terminal_open && state.agent_panel_open;
+        float agent_w = state.agent_panel_open ? (both ? win_w * 0.5f : win_w) : 0.f;
+        float termw   = state.terminal_open    ? (win_w - agent_w)             : 0.f;
+        if (state.agent_panel_open) {
+            ImGui::PushStyleColor(ImGuiCol_ChildBg, IM_COL32(0x16, 0x16, 0x20, 255));
+            ImGui::PushStyleColor(ImGuiCol_Border,  Col::line);
+            if (ImGui::BeginChild("##agent_zone", {agent_w, term_h}, ImGuiChildFlags_Borders)) {
+                draw_agent_panel(state, agent_w - 2.f, term_h - 2.f);
+            }
+            ImGui::EndChild();
+            ImGui::PopStyleColor(2);
+            if (both) ImGui::SameLine(0.f, 0.f);
         }
-        ImGui::EndChild();
-        ImGui::PopStyleColor(2);
+        if (state.terminal_open) {
+            ImGui::PushStyleColor(ImGuiCol_ChildBg, IM_COL32(0x1a, 0x1b, 0x26, 255));
+            ImGui::PushStyleColor(ImGuiCol_Border,  Col::line);
+            if (ImGui::BeginChild("##term_zone", {termw, term_h}, ImGuiChildFlags_Borders)) {
+                draw_terminal_panel(state, termw - 2.f, term_h - 2.f);
+            }
+            ImGui::EndChild();
+            ImGui::PopStyleColor(2);
+        }
     }
 
     // ── Tutorial floating panel ───────────────────────────────────────────────

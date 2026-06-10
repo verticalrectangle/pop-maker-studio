@@ -1,4 +1,5 @@
 #include "ipc_server.h"
+#include "agent_harness.h"
 #include "render.h"
 #include "bg_remove.h"
 #include "history.h"
@@ -1174,6 +1175,34 @@ static json dispatch(AppState& state, const std::string& method, const json& par
             state.agent_msg    = params.value("msg", "working…");
         }
         return json::object();
+    }
+
+    // ── In-app agent debug surface (AGENT_HARNESS.md) ────────────────────────
+    // Not exposed as MCP tools; used to drive/inspect the embedded agent
+    // headlessly (tests, debugging). agent_send opens the panel so the
+    // activity is visible in the UI.
+    if (method == "agent_send") {
+        std::string text = params.value("text", "");
+        if (text.empty()) { err = "text required"; return {}; }
+        if (agent_running()) { err = "agent is already running a turn"; return {}; }
+        state.agent_panel_open = true;
+        agent_send(text);
+        return json::object();
+    }
+
+    if (method == "agent_chat_state") {
+        json rows = json::array();
+        for (auto& r : agent_rows_snapshot()) {
+            const char* role =
+                r.role == AgentRole::User      ? "user"      :
+                r.role == AgentRole::Assistant ? "assistant" :
+                r.role == AgentRole::Tool      ? "tool"      :
+                r.role == AgentRole::Error     ? "error"     :
+                r.role == AgentRole::Image     ? "image"     : "info";
+            rows.push_back({{"role", role}, {"text", r.text},
+                            {"streaming", r.streaming}});
+        }
+        return json{{"running", agent_running()}, {"rows", rows}};
     }
 
     if (method == "take_snapshot") {

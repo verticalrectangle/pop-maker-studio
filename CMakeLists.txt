@@ -79,6 +79,8 @@ set(SOURCES
     src/ui/panel_media.cpp
     src/ui/export_ui.cpp
     src/ui/panel_terminal.cpp
+    src/ui/panel_agent.cpp
+    src/agent_harness.cpp
     src/ui/theme.cpp
     src/project.cpp
     src/fx_shader.cpp

@@ -3880,6 +3880,27 @@ async def main():
         await server.run(read_stream, write_stream, server.create_initialization_options())
 
 
+def dump_tools():
+    """--dump-tools: print the tool list as JSON and exit. No socket, no MCP
+    loop — consumed by tools/gen_agent_tools.py to generate the C++ header
+    for the in-app agent harness (see AGENT_HARNESS.md)."""
+    import asyncio as _asyncio
+    tools = _asyncio.run(list_tools())
+    out = [
+        {
+            "name": t.name,
+            "description": t.description or "",
+            "inputSchema": t.inputSchema,
+        }
+        for t in tools
+    ]
+    print(json.dumps(out, indent=1))
+
+
 if __name__ == "__main__":
+    import sys as _sys
+    if "--dump-tools" in _sys.argv:
+        dump_tools()
+        raise SystemExit(0)
     import asyncio
     asyncio.run(main())

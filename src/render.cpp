@@ -1498,6 +1498,12 @@ void render_snapshot_gl(AppState& state, float snap_t, bool open_folder) {
     if (base_path.empty()) {
         state.snapshot_msg     = "Snapshot failed — no media loaded";
         state.snapshot_msg_new = true;
+        // Complete the IPC handshake too — without this, agents polling
+        // get_snapshot_status on a text-only project hang until timeout.
+        state.snapshot_done_err = "no video/audio media loaded — render "
+                                  "snapshots need at least one media clip; "
+                                  "use source='canvas' for text-only scenes";
+        state.snapshot_done     = true;
         return;
     }
 
