@@ -218,7 +218,7 @@ static std::string image_file_to_data_url(const std::string& path, int max_edge)
             auto* v = (std::vector<unsigned char>*)ctx;
             v->insert(v->end(), (unsigned char*)data, (unsigned char*)data + size);
         },
-        &jpg, ow, oh, 3, small.data(), 70);
+        &jpg, ow, oh, 3, small.data(), 90);
     if (jpg.empty()) return "";
     return "data:image/jpeg;base64," + b64_encode(jpg.data(), jpg.size());
 }
@@ -357,7 +357,7 @@ static json exec_tool(const std::string& name, json args,
                 std::string path = st.value("path", "");
                 std::string note = "snapshot saved to " + path;
                 if (vision && !path.empty()) {
-                    std::string url = image_file_to_data_url(path, 512);
+                    std::string url = image_file_to_data_url(path, 1024);
                     if (!url.empty()) {
                         row_add(AgentRole::Image, path);
                         extra_wire_msgs.push_back({
