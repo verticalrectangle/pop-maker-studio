@@ -1396,6 +1396,11 @@ async def list_tools() -> list[Tool]:
                 "(get_vision_model_status / download_vision_model).\n\n"
                 "Use this to map a WHOLE video (summaries, find_video_moment scoring) — or when you "
                 "have no vision capability of your own.\n\n"
+                "TEXT-MODE CONTACT SHEET: pass times=[...] (max 48) to caption exactly those "
+                "timestamps instead of auto-detected scenes — e.g. to verify segment boundaries "
+                "from detect_screen_activity without vision. Custom-times runs skip the sidecar "
+                "cache. Vision-capable agents should prefer make_contact_sheet (one image, "
+                "no ~10s-per-frame captioning cost).\n\n"
                 "IF you have Bash + Read tools and native vision, sampling stills yourself is "
                 "faster for spot checks:\n"
                 "  ffmpeg -y -ss <t> -i <path> -vframes 1 -vf scale=480:-1 /tmp/still.jpg, then Read it.\n"
@@ -1408,6 +1413,8 @@ async def list_tools() -> list[Tool]:
                 "properties": {
                     "path": {"type": "string", "description": "Absolute path to the video file"},
                     "force": {"type": "boolean", "description": "Recompute even if a cached sidecar exists"},
+                    "times": {"type": "array", "items": {"type": "number"},
+                              "description": "Caption exactly these source times in seconds (max 48) instead of auto-detected scenes"},
                 },
                 "required": ["path"],
             },
@@ -2035,7 +2042,9 @@ async def list_tools() -> list[Tool]:
                 "times on a source file, returned inline — visually verify ambiguous segment "
                 "boundaries (e.g. from detect_screen_activity) in ONE image call instead of N "
                 "stills. Decodes from the proxy seek table when available (fast), falls back "
-                "to ffmpeg on the original. Up to 48 times per call. Read-only."
+                "to ffmpeg on the original. Up to 48 times per call. Read-only.\n\n"
+                "Requires vision: the result is an image. Text-only agents should use "
+                "describe_video(times=[...]) instead — same idea, local captions as text."
             ),
             inputSchema={
                 "type": "object",

@@ -820,9 +820,19 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         std::string path = params.value("path", "");
         if (path.empty()) { err = "path required"; return {}; }
         if (s_scene_analysis.running.load()) { err = "scene analysis already running"; return {}; }
+        // Optional times[]: caption exactly these timestamps instead of
+        // auto-detected scene changes — the text-mode contact sheet for
+        // agents without vision. Capped like make_contact_sheet.
+        std::vector<float> req_times;
+        if (params.contains("times") && params["times"].is_array())
+            for (auto& t : params["times"]) {
+                req_times.push_back(t.get<float>());
+                if (req_times.size() >= 48) break;
+            }
         // Captioning costs ~10 s per scene — reuse a fresh sidecar instead of
-        // recomputing. force=true bypasses the cache.
-        if (!params.value("force", false)) {
+        // recomputing. Custom-times runs never reuse or write the scene
+        // sidecar. force=true bypasses the cache.
+        if (req_times.empty() && !params.value("force", false)) {
             std::string sp = path + ".pms_scene.json";
             std::error_code ec;
             if (std::filesystem::exists(sp, ec) &&
@@ -841,11 +851,15 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         s_scene_analysis.done.store(false);
         s_scene_analysis.error.clear();
         s_scene_analysis.sidecar_path.clear();
-        std::thread([path]() {
+        std::thread([path, req_times]() {
             bool capped = false;
-            std::vector<KeyFrame> frames = extract_keyframes(path, 60, &capped);
+            std::vector<KeyFrame> frames = req_times.empty()
+                ? extract_keyframes(path, 60, &capped)
+                : extract_frames_at(path, req_times);
             if (frames.empty()) {
-                s_scene_analysis.error = "keyframe extraction failed or no scene changes detected";
+                s_scene_analysis.error = req_times.empty()
+                    ? "keyframe extraction failed or no scene changes detected"
+                    : "frame extraction failed — are the times within the video?";
                 s_scene_analysis.done.store(true);
                 s_scene_analysis.running.store(false);
                 return;
@@ -864,7 +878,8 @@ static json dispatch(AppState& state, const std::string& method, const json& par
                 frames_arr.push_back(entry);
             }
             sidecar["frames"] = frames_arr;
-            std::string sidecar_path = path + ".pms_scene.json";
+            std::string sidecar_path = path +
+                (req_times.empty() ? ".pms_scene.json" : ".pms_times.json");
             {
                 std::ofstream f(sidecar_path);
                 f << sidecar.dump(2);
