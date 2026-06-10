@@ -13,6 +13,8 @@
 #include "json.hpp"
 
 #include <atomic>
+#include <chrono>
+#include <filesystem>
 #include <mutex>
 #include <thread>
 #include <cstdio>
@@ -20,6 +22,7 @@
 #include <cstdlib>
 #include <unistd.h>
 #include <fcntl.h>
+#include <poll.h>
 #include <signal.h>
 #include <sys/socket.h>
 #include <sys/un.h>
@@ -78,17 +81,19 @@ static void row_stream_end() {
     }
 }
 
-// ── Tool table (generated from server.py, filtered to IPC-servable) ──────────
+// ── Tool table (generated from server.py) ─────────────────────────────────────
+// Every tool is available: ipc:true tools go straight to the editor socket,
+// ipc:false (python-implemented) tools go through the server.py MCP bridge.
 
-struct ToolInfo { json decl; bool has_quiet = false; };
+struct ToolInfo { json decl; bool has_quiet = false; bool ipc = false; };
 
 static const std::vector<std::pair<std::string, ToolInfo>>& tool_table() {
     static std::vector<std::pair<std::string, ToolInfo>> table = [] {
         std::vector<std::pair<std::string, ToolInfo>> t;
         json all = json::parse(AGENT_TOOLS_JSON);
         for (auto& tool : all) {
-            if (!tool.value("ipc", false)) continue;
             ToolInfo info;
+            info.ipc = tool.value("ipc", false);
             info.decl = {
                 {"type", "function"},
                 {"function", {
@@ -157,7 +162,210 @@ static bool ipc_request(const std::string& method, const json& params,
     return true;
 }
 
+// ── server.py MCP bridge ──────────────────────────────────────────────────────
+// Python-implemented tools (ipc:false — activity scans, contact sheets,
+// transcript-search orchestration, smart clip finding, ...) are served by a
+// persistent server.py child speaking MCP over stdio: newline-delimited
+// JSON-RPC, the exact transport external agents use. server.py stays the
+// single source of truth for those tools; the editor calls it makes loop
+// back into our own IPC socket.
+
+static struct {
+    pid_t       pid     = 0;
+    int         to_fd   = -1;   // child stdin (we write requests)
+    int         from_fd = -1;   // child stdout (we read responses)
+    int         next_id = 1;    // 0 is reserved for initialize
+    std::string rbuf;           // partial-line read buffer
+} s_bridge;
+static std::mutex  s_bridge_mu;     // lifecycle (worker thread vs shutdown)
+static std::string s_bridge_err;
+
+static void bridge_close_locked() {
+    if (s_bridge.to_fd   >= 0) close(s_bridge.to_fd);
+    if (s_bridge.from_fd >= 0) close(s_bridge.from_fd);
+    if (s_bridge.pid > 0) {
+        kill(s_bridge.pid, SIGTERM);
+        int st = 0;
+        waitpid(s_bridge.pid, &st, 0);
+    }
+    s_bridge = {};
+}
+
+static std::string mcp_server_path() {
+    if (const char* p = getenv("PMS_MCP_SERVER")) return p;
+    char exe[4096];
+    ssize_t n = readlink("/proc/self/exe", exe, sizeof(exe) - 1);
+    if (n <= 0) return "";
+    exe[n] = 0;
+    namespace fs = std::filesystem;
+    fs::path bin_dir = fs::path(exe).parent_path();
+    for (const fs::path& cand : { bin_dir / ".." / "mcp_server" / "server.py",
+                                  bin_dir / "mcp_server" / "server.py" }) {
+        std::error_code ec;
+        if (fs::exists(cand, ec)) return fs::weakly_canonical(cand, ec).string();
+    }
+    return "";
+}
+
+static bool bridge_write(const json& msg) {
+    if (s_bridge.to_fd < 0) return false;
+    std::string line = msg.dump();
+    line += "\n";
+    size_t off = 0;
+    while (off < line.size()) {
+        ssize_t n = write(s_bridge.to_fd, line.data() + off, line.size() - off);
+        if (n <= 0) return false;
+        off += (size_t)n;
+    }
+    return true;
+}
+
+// Read one newline-terminated message. Polls in 200 ms slices so Stop can
+// abort a long-running python tool instead of leaving the worker blocked.
+static bool bridge_read_line(std::string& line, double timeout_sec,
+                             std::string& err) {
+    auto t0 = std::chrono::steady_clock::now();
+    char chunk[65536];
+    for (;;) {
+        size_t nl = s_bridge.rbuf.find('\n');
+        if (nl != std::string::npos) {
+            line = s_bridge.rbuf.substr(0, nl);
+            s_bridge.rbuf.erase(0, nl + 1);
+            return true;
+        }
+        if (s_stop) { err = "stopped"; return false; }
+        if (std::chrono::duration<double>(
+                std::chrono::steady_clock::now() - t0).count() > timeout_sec) {
+            err = "python tool bridge timed out";
+            return false;
+        }
+        pollfd pf = { s_bridge.from_fd, POLLIN, 0 };
+        int pr = poll(&pf, 1, 200);
+        if (pr < 0)  { err = "bridge poll failed";  return false; }
+        if (pr == 0) continue;
+        ssize_t n = read(s_bridge.from_fd, chunk, sizeof(chunk));
+        if (n <= 0)  { err = "python tool bridge exited"; return false; }
+        s_bridge.rbuf.append(chunk, (size_t)n);
+    }
+}
+
+// Send a request and wait for the response with the matching id, skipping
+// notifications and any other traffic.
+static bool bridge_rpc(const json& req, json& result, double timeout_sec,
+                       std::string& err) {
+    if (!bridge_write(req)) { err = "bridge write failed"; return false; }
+    int want_id = req["id"].get<int>();
+    for (;;) {
+        std::string line;
+        if (!bridge_read_line(line, timeout_sec, err)) return false;
+        json msg = json::parse(line, nullptr, false);
+        if (msg.is_discarded()) continue;
+        if (!msg.contains("id") || !msg["id"].is_number() ||
+            msg["id"].get<int>() != want_id) continue;
+        if (msg.contains("error")) {
+            err = msg["error"].is_object()
+                      ? msg["error"].value("message", msg["error"].dump())
+                      : msg["error"].dump();
+            return false;
+        }
+        result = msg.value("result", json::object());
+        return true;
+    }
+}
+
+// Spawn server.py and run the MCP initialize handshake. Reuses a live child.
+static bool bridge_ensure() {
+    std::lock_guard<std::mutex> lk(s_bridge_mu);
+    if (s_bridge.pid > 0) {
+        int st = 0;
+        if (waitpid(s_bridge.pid, &st, WNOHANG) == 0) return true;  // alive
+        s_bridge.pid = 0;   // already reaped above
+        bridge_close_locked();
+    }
+    std::string srv = mcp_server_path();
+    if (srv.empty()) {
+        s_bridge_err = "server.py not found next to the app "
+                       "(set PMS_MCP_SERVER to its path)";
+        return false;
+    }
+
+    int in_pipe[2], out_pipe[2];   // in: us → child stdin, out: child stdout → us
+    if (pipe(in_pipe) != 0) { s_bridge_err = "pipe() failed"; return false; }
+    if (pipe(out_pipe) != 0) {
+        close(in_pipe[0]); close(in_pipe[1]);
+        s_bridge_err = "pipe() failed";
+        return false;
+    }
+    pid_t pid = fork();
+    if (pid < 0) {
+        close(in_pipe[0]);  close(in_pipe[1]);
+        close(out_pipe[0]); close(out_pipe[1]);
+        s_bridge_err = "fork() failed";
+        return false;
+    }
+    if (pid == 0) {
+        dup2(in_pipe[0], STDIN_FILENO);
+        dup2(out_pipe[1], STDOUT_FILENO);
+        close(in_pipe[0]);  close(in_pipe[1]);
+        close(out_pipe[0]); close(out_pipe[1]);
+        // stderr → log file; stray prints there can't corrupt the protocol.
+        int log = open("/tmp/pms_agent_bridge.log",
+                       O_WRONLY | O_CREAT | O_APPEND, 0600);
+        if (log >= 0) { dup2(log, STDERR_FILENO); close(log); }
+        const char* py = getenv("PMS_MCP_PYTHON");
+        if (!py) py = "python3";
+        execlp(py, py, srv.c_str(), (char*)nullptr);
+        _exit(127);
+    }
+    close(in_pipe[0]);
+    close(out_pipe[1]);
+    s_bridge.pid     = pid;
+    s_bridge.to_fd   = in_pipe[1];
+    s_bridge.from_fd = out_pipe[0];
+    s_bridge.next_id = 1;
+    s_bridge.rbuf.clear();
+
+    json init = {{"jsonrpc", "2.0"}, {"id", 0}, {"method", "initialize"},
+                 {"params", {{"protocolVersion", "2024-11-05"},
+                             {"capabilities", json::object()},
+                             {"clientInfo", {{"name", "pms-agent-harness"},
+                                             {"version", "1.0"}}}}}};
+    json res; std::string err;
+    if (!bridge_rpc(init, res, 30.0, err)) {
+        s_bridge_err = "server.py failed to initialize: " + err +
+                       " (see /tmp/pms_agent_bridge.log)";
+        bridge_close_locked();
+        return false;
+    }
+    bridge_write({{"jsonrpc", "2.0"}, {"method", "notifications/initialized"}});
+    return true;
+}
+
 // ── Image helpers (vision) ────────────────────────────────────────────────────
+
+static std::vector<unsigned char> b64_decode(const std::string& in) {
+    auto val = [](char c) -> int {
+        if (c >= 'A' && c <= 'Z') return c - 'A';
+        if (c >= 'a' && c <= 'z') return c - 'a' + 26;
+        if (c >= '0' && c <= '9') return c - '0' + 52;
+        if (c == '+') return 62;
+        if (c == '/') return 63;
+        return -1;
+    };
+    std::vector<unsigned char> out;
+    unsigned acc = 0; int bits = 0;
+    for (char c : in) {
+        int v = val(c);
+        if (v < 0) continue;
+        acc = (acc << 6) | (unsigned)v;
+        bits += 6;
+        if (bits >= 8) {
+            bits -= 8;
+            out.push_back((unsigned char)((acc >> bits) & 0xFF));
+        }
+    }
+    return out;
+}
 
 static std::string b64_encode(const unsigned char* data, size_t len) {
     static const char* tbl =
@@ -355,6 +563,75 @@ static std::string truncate_result(std::string s) {
     return s;
 }
 
+// Execute an ipc:false tool through the server.py bridge. MCP text parts are
+// concatenated; image parts (contact sheets, stills) are written to temp
+// files and attached to the wire for vision models, same as take_snapshot.
+static std::string bridge_tool_exec(const std::string& name, const json& args,
+                                    std::vector<json>& extra_wire_msgs,
+                                    bool vision) {
+    if (!bridge_ensure())
+        return "error: python tool bridge unavailable — " + s_bridge_err;
+
+    json req = {{"jsonrpc", "2.0"}, {"id", s_bridge.next_id++},
+                {"method", "tools/call"},
+                {"params", {{"name", name}, {"arguments", args}}}};
+    json res; std::string err;
+    // Generous deadline: some python tools legitimately run for minutes
+    // (windowed transcript search, activity scans). Stop aborts early.
+    if (!bridge_rpc(req, res, 600.0, err)) {
+        std::lock_guard<std::mutex> lk(s_bridge_mu);
+        bridge_close_locked();   // crashed / hung / stopped — respawn next call
+        return "error: " + err;
+    }
+
+    bool is_err = res.value("isError", false);
+    std::string text;
+    for (auto& part : res.value("content", json::array())) {
+        std::string type = part.value("type", "");
+        if (type == "text") {
+            if (!text.empty()) text += "\n";
+            text += part.value("text", "");
+        } else if (type == "image") {
+            std::vector<unsigned char> bytes =
+                b64_decode(part.value("data", ""));
+            char tmpl[] = "/tmp/pms_agent_img_XXXXXX";
+            int fd = bytes.empty() ? -1 : mkstemp(tmpl);
+            if (fd >= 0) {
+                bool ok = write(fd, bytes.data(), bytes.size()) ==
+                          (ssize_t)bytes.size();
+                close(fd);
+                if (ok) {
+                    if (!text.empty()) text += "\n";
+                    if (vision) {
+                        std::string url = image_file_to_data_url(tmpl, 1024);
+                        if (!url.empty()) {
+                            row_add(AgentRole::Image, tmpl);
+                            extra_wire_msgs.push_back({
+                                {"role", "user"},
+                                {"content", json::array({
+                                    {{"type", "text"},
+                                     {"text", "[tool output image: " + name + "]"}},
+                                    {{"type", "image_url"},
+                                     {"image_url", {{"url", url}}}},
+                                })},
+                            });
+                            text += "(image attached)";
+                        } else {
+                            text += "[image output saved to " +
+                                    std::string(tmpl) + "]";
+                        }
+                    } else {
+                        text += "[image output saved to " + std::string(tmpl) +
+                                " — enable vision in settings to see it]";
+                    }
+                }
+            }
+        }
+    }
+    if (is_err && text.rfind("error", 0) != 0) text = "error: " + text;
+    return truncate_result(text);
+}
+
 // Returns tool-role content (a text string, for API compatibility).
 // extra_wire_msgs: appended AFTER the tool_result — used for snapshot images
 // that must trail the tool_call_id response to keep the wire legal everywhere.
@@ -363,8 +640,12 @@ static std::string exec_tool(const std::string& name, json args,
     // Default to small acks — the model can re-read state explicitly.
     const ToolInfo* info = nullptr;
     for (auto& [n, i] : tool_table()) if (n == name) { info = &i; break; }
-    if (!info) return "error: unknown tool '" + name + "' (not servable in-app)";
+    if (!info) return "error: unknown tool '" + name + "'";
     if (info->has_quiet && !args.contains("quiet")) args["quiet"] = true;
+
+    // Python-implemented tools route through the server.py MCP bridge.
+    if (!info->ipc)
+        return bridge_tool_exec(name, args, extra_wire_msgs, vision);
 
     json result; std::string err;
     // Default to the render source — canvas grabs the preview rect at display
@@ -442,9 +723,10 @@ static const char* kSystemPrompt =
     "PERCEPTION: to understand video content, use describe_video + "
     "get_video_description — local scene captions as text, they work even "
     "without vision. For spoken content use get_transcript / "
-    "search_transcript. take_snapshot shows the canvas composition; it only "
-    "helps if you are a vision model, and it is the wrong tool for reading "
-    "video content — do not scrub the playhead taking snapshots.\n"
+    "search_transcript. For screen recordings use detect_screen_activity + "
+    "get_activity_status. take_snapshot shows the canvas composition; it "
+    "only helps if you are a vision model, and it is the wrong tool for "
+    "reading video content — do not scrub the playhead taking snapshots.\n"
     "Be concise in prose — do the work with tools and summarize briefly.";
 
 static void worker_turn() {
@@ -644,6 +926,8 @@ void agent_clear() {
 void agent_shutdown() {
     agent_stop();
     if (s_worker.joinable()) s_worker.join();
+    std::lock_guard<std::mutex> lk(s_bridge_mu);
+    bridge_close_locked();
 }
 
 AgentConfig agent_get_config() {

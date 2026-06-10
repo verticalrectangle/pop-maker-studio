@@ -2,7 +2,8 @@
 // Source of truth: mcp_server/server.py (--dump-tools) intersected with
 // the IPC methods in src/ipc_server.cpp. Regenerate after changing tool
 // definitions:  python3 tools/gen_agent_tools.py
-// 75 tools, 55 servable over IPC by the in-app harness.
+// 75 tools: 55 dispatched straight to the IPC socket,
+// the rest through the harness's server.py MCP stdio bridge.
 #pragma once
 
 // JSON array of {name, description, inputSchema, ipc}.

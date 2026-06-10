@@ -5,11 +5,12 @@ Sources of truth (see AGENT_HARNESS.md):
   - mcp_server/server.py --dump-tools   → names, descriptions, input schemas
   - src/ipc_server.cpp                  → which methods the socket actually serves
 
-A tool is available to the in-app harness iff its name is a real IPC method;
-tools implemented inside server.py (activity scans, contact sheets, transcript
-search orchestration, ...) are tagged "ipc": false and omitted from the
-model's tool list at runtime. The intersection is computed here so neither
-side hand-maintains a list that can rot.
+Each tool is tagged "ipc": true when its name is a real IPC method (the
+harness dispatches those straight to the editor socket) or "ipc": false when
+it is implemented inside server.py (activity scans, contact sheets,
+transcript search orchestration, ...) — those route through the harness's
+server.py MCP stdio bridge. The flag is computed here so neither side
+hand-maintains a list that can rot.
 
 Run from the repo root after changing tool definitions in server.py:
     python3 tools/gen_agent_tools.py
@@ -54,7 +55,8 @@ def main():
         "// Source of truth: mcp_server/server.py (--dump-tools) intersected with\n"
         "// the IPC methods in src/ipc_server.cpp. Regenerate after changing tool\n"
         "// definitions:  python3 tools/gen_agent_tools.py\n"
-        f"// {len(tools)} tools, {n_ipc} servable over IPC by the in-app harness.\n"
+        f"// {len(tools)} tools: {n_ipc} dispatched straight to the IPC socket,\n"
+        "// the rest through the harness's server.py MCP stdio bridge.\n"
         "#pragma once\n\n"
         "// JSON array of {name, description, inputSchema, ipc}.\n"
         "static const char* AGENT_TOOLS_JSON = R\"PMSTOOLS(" + payload + ")PMSTOOLS\";\n"
@@ -70,9 +72,9 @@ def main():
         return
 
     OUT.write_text(header)
-    print(f"wrote {OUT.relative_to(ROOT)}: {len(tools)} tools, {n_ipc} ipc-servable")
-    skipped = sorted(t["name"] for t in tools if not t["ipc"])
-    print("python-only (omitted from in-app toolset):", ", ".join(skipped))
+    print(f"wrote {OUT.relative_to(ROOT)}: {len(tools)} tools, {n_ipc} direct-IPC")
+    bridged = sorted(t["name"] for t in tools if not t["ipc"])
+    print("python-only (served via the server.py bridge):", ", ".join(bridged))
 
 
 if __name__ == "__main__":

@@ -64,17 +64,26 @@ the most curated prose in the repo and live best in Python.
   workflow as the fx codegen — run it after changing tool definitions and
   commit the result. No build-time Python dependency.
 
-### python_only tools
+### python_only tools — the server.py bridge
 
 Not every MCP tool is an IPC passthrough — `detect_screen_activity`,
 `make_contact_sheet`, transcript searches, etc. are implemented *in*
-server.py. The harness talks straight to the socket, so those don't exist
-for it. Rather than a hand-curated set, the generator computes the truth
+server.py. Rather than a hand-curated set, the generator computes the truth
 mechanically: it greps the actual `method == "..."` dispatch strings out of
-ipc_server.cpp and tags each tool `ipc: true/false` by intersection. The
-harness omits non-IPC tools from the model's tool list — the in-app agent
-never hallucinates a tool the socket can't serve, and there is no list that
-can rot. (Currently 55 of 75 tools are IPC-servable.)
+ipc_server.cpp and tags each tool `ipc: true/false` by intersection — there
+is no list that can rot.
+
+`ipc: true` tools (currently 55 of 75) dispatch straight to the editor
+socket. `ipc: false` tools route through a persistent **server.py child**
+spawned lazily on first use: MCP over stdio, newline-delimited JSON-RPC —
+the exact transport external agents use, so server.py stays the single
+source of truth and the loop closes neatly (app → server.py child → back
+into the app's own IPC socket for its editor calls). The child's stderr
+goes to `/tmp/pms_agent_bridge.log`; `PMS_MCP_SERVER` / `PMS_MCP_PYTHON`
+override the script path and interpreter. MCP image parts (contact sheets,
+stills) are attached to the wire for vision models the same way snapshots
+are. If python or server.py is missing, those tools fail with a clear
+error and everything IPC-served keeps working.
 
 ## 3. The chat loop
 
