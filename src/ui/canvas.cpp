@@ -97,7 +97,13 @@ void draw_canvas_handles(AppState& state, ImDrawList* dl, ImVec2 p, float w, flo
 
     ImVec2 mpos   = ImGui::GetIO().MousePos;
     bool   ldown  = ImGui::IsMouseDown(0);
-    bool   lclick = ImGui::IsMouseClicked(0);
+    // No drag-start while a popup is open (popups don't block IsMouseClicked)
+    // or during Alt+click — Alt cycles the layer selection in draw_preview,
+    // and immediately grabbing the newly selected layer would move it.
+    bool   lclick = ImGui::IsMouseClicked(0) &&
+                    !ImGui::GetIO().KeyAlt &&
+                    !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId |
+                                            ImGuiPopupFlags_AnyPopupLevel);
 
     bool in_preview  = mpos.x >= p.x && mpos.x <= p.x+w &&
                        mpos.y >= p.y && mpos.y <= p.y+h;
@@ -726,7 +732,11 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
     // Unified z-order pass: track index 0 = frontmost, so iterate high→low (background first).
     // Each track draws whichever clip type is active — video and text are interleaved correctly.
     ImVec2 mpos  = ImGui::GetIO().MousePos;
-    bool   lclick = ImGui::IsMouseClicked(0);
+    // Popups don't intercept IsMouseClicked — without this guard a click on a
+    // context-menu item overlapping the preview also ran layer selection.
+    bool   lclick = ImGui::IsMouseClicked(0) &&
+                    !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId |
+                                            ImGuiPopupFlags_AnyPopupLevel);
 
     // Click-to-select using tight bboxes: video computed inline, text from previous-frame layouts.
     bool in_preview_area = mpos.x >= p.x && mpos.x <= p.x+w &&
@@ -772,14 +782,30 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                 }
             }
         }
+        // Front-to-back: track 0 draws last, i.e. frontmost, so the lowest ti
+        // hit is the layer the user actually sees under the cursor. The old
+        // smallest-bbox-wins pick kept selecting clips that were completely
+        // hidden behind larger ones.
         std::sort(hits.begin(), hits.end(), [](const HitCandidate& a, const HitCandidate& b) {
-            if (a.area != b.area) return a.area < b.area;
-            return a.ti < b.ti;
+            if (a.ti != b.ti) return a.ti < b.ti;
+            return a.ci < b.ci;
         });
         if (!hits.empty()) {
-            if (state.selected_track != hits[0].ti || state.selected_clip != hits[0].ci) {
-                state.selected_track = hits[0].ti;
-                state.selected_clip  = hits[0].ci;
+            int pick = 0;
+            // Alt+click digs through the stack: from the currently selected
+            // layer, advance to the next hit beneath it (wrapping to the top),
+            // so covered layers stay reachable from the canvas.
+            if (ImGui::GetIO().KeyAlt) {
+                for (int i = 0; i < (int)hits.size(); ++i)
+                    if (hits[i].ti == state.selected_track &&
+                        hits[i].ci == state.selected_clip) {
+                        pick = (i + 1) % (int)hits.size();
+                        break;
+                    }
+            }
+            if (state.selected_track != hits[pick].ti || state.selected_clip != hits[pick].ci) {
+                state.selected_track = hits[pick].ti;
+                state.selected_clip  = hits[pick].ci;
                 state.request_scroll_to_clip = true;
             }
         } else {

@@ -80,6 +80,15 @@ static void merge_fx_clips(Clip& target, Clip dragged) {
 
 void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h) {
     ImDrawList* dl      = ImGui::GetWindowDrawList();
+    // Any open popup (clip/track context menus, transition picker, modals)
+    // silences the timeline's raw hit-testing below: ImGui popups don't
+    // intercept IsMouseClicked, so clicks on menu items — and the click that
+    // dismisses a popup — were also landing on whatever sat underneath
+    // (toggling track icons, deselecting, starting drags, opening another
+    // menu). Drag continuation (IsMouseDown/Dragging/Released) stays live so
+    // an in-flight drag still finishes if a popup opens mid-gesture.
+    const bool tl_any_popup = ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId |
+                                                     ImGuiPopupFlags_AnyPopupLevel);
     float clip_area_w        = total_w - TL_LABEL_W - TL_VSCROLLBAR_W;
     state.tl_clip_area_w     = clip_area_w;
     float dur                = fmaxf(state.duration, 1.f);
@@ -236,7 +245,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
         float th = ImGui::CalcTextSize(lbl).y;
         dl->AddText({btn_min.x + ((btn_max.x-btn_min.x)-tw)*0.5f,
                      btn_min.y + ((btn_max.y-btn_min.y)-th)*0.5f}, txt_col, lbl);
-        if (hov && ImGui::IsMouseClicked(0))
+        if (hov && (!tl_any_popup && ImGui::IsMouseClicked(0)))
             s_snap_enabled = !s_snap_enabled;
     }
 
@@ -587,7 +596,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
             }
             dl->AddText({origin.x+8.f, track_y+(TL_TRACK_H-13.f)*0.5f},
                 to_u32(track_sel ? Col::fg : Col::muted), label.c_str());
-            if (ImGui::IsMouseClicked(0) && in_label) {
+            if ((!tl_any_popup && ImGui::IsMouseClicked(0)) && in_label) {
                 state.selected_track  = ti;
                 state.selected_clip   = -1;
                 state.clip_selection.clear();
@@ -595,7 +604,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                 s_track_drag_start_y  = mouse.y;
                 s_track_dragging      = false;
             }
-            if (ImGui::IsMouseDoubleClicked(0) && in_label && !s_track_dragging) {
+            if ((!tl_any_popup && ImGui::IsMouseDoubleClicked(0)) && in_label && !s_track_dragging) {
                 s_track_drag_src = -1;
                 s_rename_track = ti;
                 strncpy(s_rename_buf, track.name.c_str(), sizeof(s_rename_buf)-1);
@@ -617,7 +626,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                 dl->AddLine({eye_c.x-5.f, eye_c.y-4.f}, {eye_c.x+5.f, eye_c.y+4.f},
                             to_u32(Col::dim), 1.5f);
             }
-            if (hov && ImGui::IsMouseClicked(0)) {
+            if (hov && (!tl_any_popup && ImGui::IsMouseClicked(0))) {
                 track.visible = !track.visible;
                 history_push(state, "Toggle track visibility");
             }
@@ -635,7 +644,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
             else               // open shackle — right side lifted
                 dl->AddBezierQuadratic({lock_c.x-3.f, lock_c.y-1.f},
                     {lock_c.x-3.f, lock_c.y-5.f}, {lock_c.x+3.f, lock_c.y-5.f}, lc, 1.2f);
-            if (hov && ImGui::IsMouseClicked(0)) {
+            if (hov && (!tl_any_popup && ImGui::IsMouseClicked(0))) {
                 track.locked = !track.locked;
                 history_push(state, track.locked ? "Lock track" : "Unlock track");
             }
@@ -656,7 +665,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                 dl->AddLine({mut_c.x+6.f, mut_c.y-3.f}, {mut_c.x+2.f, mut_c.y+3.f},
                             IM_COL32(255,80,80,230), 1.5f);
             }
-            if (hov && ImGui::IsMouseClicked(0)) {
+            if (hov && (!tl_any_popup && ImGui::IsMouseClicked(0))) {
                 track.muted = !track.muted;
                 history_push(state, "Toggle track mute");
             }
@@ -666,7 +675,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                     {origin.x+TL_LABEL_W, track_y+TL_TRACK_H}, to_u32(Col::line));
 
         // Right-click track label
-        if (ImGui::IsMouseClicked(1) &&
+        if ((!tl_any_popup && ImGui::IsMouseClicked(1)) &&
             mouse.x >= origin.x && mouse.x < origin.x+TL_LABEL_W &&
             mouse.y >= track_y  && mouse.y < track_y+TL_TRACK_H) {
             ctx_track = ti; ctx_clip = -1;
@@ -719,7 +728,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                         dl->AddQuadFilled(
                             {kx, kf_mid_y-d}, {kx+d, kf_mid_y},
                             {kx, kf_mid_y+d}, {kx-d, kf_mid_y}, kc);
-                        if (ImGui::IsMouseClicked(0) &&
+                        if ((!tl_any_popup && ImGui::IsMouseClicked(0)) &&
                             fabsf(mouse.x - kx) < d+2.f &&
                             fabsf(mouse.y - kf_mid_y) < d+2.f) {
                             state.kf_sel_track = ti;
@@ -735,7 +744,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
             }
             // Left click — select / drag
             bool any_popup = ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
-            if (!s_trans_hit_this_frame && !any_popup && ImGui::IsMouseClicked(0)) {
+            if (!s_trans_hit_this_frame && !any_popup && (!tl_any_popup && ImGui::IsMouseClicked(0))) {
                 if (mouse.y>=cy0 && mouse.y<=cy1 && mouse.x>=vis_x0 && mouse.x<=vis_x1) {
                     s_clip_hit = true;
                     auto key = std::make_pair(ti, ci);
@@ -811,7 +820,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                 }
             }
             // Right-click context
-            if (!clip_ctx_opened_this_frame && ImGui::IsMouseClicked(1) &&
+            if (!clip_ctx_opened_this_frame && (!tl_any_popup && ImGui::IsMouseClicked(1)) &&
                 mouse.y>=cy0 && mouse.y<=cy1 && mouse.x>=vis_x0 && mouse.x<=vis_x1) {
                 ctx_track = ti; ctx_clip = ci;
                 state.selected_track = ti; state.selected_clip = ci;
@@ -1080,7 +1089,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
         }
 
         // Left-click empty track body (no clip hit) — deselect
-        if (!s_clip_hit && ImGui::IsMouseClicked(0) &&
+        if (!s_clip_hit && (!tl_any_popup && ImGui::IsMouseClicked(0)) &&
             mouse.y >= track_y && mouse.y < track_y+TL_TRACK_H &&
             mouse.x > origin.x+TL_LABEL_W && mouse.x < origin.x+total_w) {
             state.clip_selection.clear();
@@ -1089,7 +1098,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
         }
 
         // Right-click empty timeline area (this track row, no clip hit)
-        if (!clip_ctx_opened_this_frame && ImGui::IsMouseClicked(1) &&
+        if (!clip_ctx_opened_this_frame && (!tl_any_popup && ImGui::IsMouseClicked(1)) &&
             mouse.y >= track_y && mouse.y < track_y+TL_TRACK_H &&
             mouse.x >= origin.x+TL_LABEL_W && mouse.x <= origin.x+total_w) {
             open_tl_ctx = true;
@@ -1122,7 +1131,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                 dl->AddConvexPolyFilled(pts, 4, IM_COL32(18,18,18,220));
                 dl->AddPolyline(pts, 4, hov ? IM_COL32(255,255,255,230) : IM_COL32(210,210,210,200),
                                 ImDrawFlags_Closed, 1.5f);
-                if (hov && ImGui::IsMouseClicked(0)) {
+                if (hov && (!tl_any_popup && ImGui::IsMouseClicked(0))) {
                     s_trans_track    = ti; s_trans_left_ci = ci;
                     s_trans_popup_pos = {cut_x - 80.f, cy0 - 8.f};
                     s_trans_hit_this_frame = true;
@@ -1183,7 +1192,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                 }
 
                 // Mouse down — start drag or open picker
-                if (ImGui::IsMouseClicked(0) && in_glass) {
+                if ((!tl_any_popup && ImGui::IsMouseClicked(0)) && in_glass) {
                     s_trans_track    = ti; s_trans_left_ci = ci;
                     s_trans_hit_this_frame = true;
                     s_glass_drag_ref_x    = mouse.x;
@@ -1198,7 +1207,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                 }
 
                 // Right-click removes transition
-                if (ImGui::IsMouseClicked(1) && in_glass) {
+                if ((!tl_any_popup && ImGui::IsMouseClicked(1)) && in_glass) {
                     a.transition_type = TransitionType::None;
                     a.transition_pre  = 0.f; a.transition_post = 0.f;
                     s_glass_drag = 0;
@@ -1271,7 +1280,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
         float lh = ImGui::GetTextLineHeight();
         dl->AddText({origin.x + 8.f, track_y + (TL_TRACK_H - lh) * 0.5f},
                     to_u32(add_label_hov ? Col::fg : Col::muted), "+ Add Track");
-        if (add_label_hov && ImGui::IsMouseClicked(0)) {
+        if (add_label_hov && (!tl_any_popup && ImGui::IsMouseClicked(0))) {
             Track t;
             char name[32]; snprintf(name, sizeof(name), "Track %d", (int)state.tracks.size() + 1);
             t.name = name; state.tracks.insert(state.tracks.begin(), std::move(t));
@@ -1337,7 +1346,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
         bool in_body = mouse.x > origin.x+TL_LABEL_W && mouse.x < origin.x+total_w &&
                        mouse.y > origin.y+TL_RULER_H  && mouse.y < origin.y+total_h - TL_SCROLLBAR_H;
         bool ldown  = ImGui::IsMouseDown(0);
-        bool lclick = ImGui::IsMouseClicked(0);
+        bool lclick = (!tl_any_popup && ImGui::IsMouseClicked(0));
 
         // Deselect on click in the label column (any track row or below all tracks)
         bool in_label_empty = lclick && !ImGui::IsAnyItemActive() &&
@@ -1514,7 +1523,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
             static float s_sb_drag_ox    = 0.f;
             static float s_sb_drag_osc   = 0.f;
 
-            if (hov_thumb && ImGui::IsMouseClicked(0)) {
+            if (hov_thumb && (!tl_any_popup && ImGui::IsMouseClicked(0))) {
                 s_sb_drag     = true;
                 s_sb_drag_ox  = mouse.x;
                 s_sb_drag_osc = scroll;
@@ -1529,7 +1538,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
             }
 
             // Click in trough → jump
-            if (!s_sb_drag && !hov_thumb && ImGui::IsMouseClicked(0) &&
+            if (!s_sb_drag && !hov_thumb && (!tl_any_popup && ImGui::IsMouseClicked(0)) &&
                 ImGui::IsMouseHoveringRect({sb_x0, sb_y0}, {sb_x1, sb_y1})) {
                 float t = (mouse.x - sb_x0 - thumb_w * 0.5f) / thumb_travel;
                 scroll = fmaxf(0.f, fminf(t * max_scroll, max_scroll));
@@ -1572,7 +1581,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
             static float s_vsb_drag_oy  = 0.f;
             static float s_vsb_drag_osc = 0.f;
 
-            if (hov_vthumb && ImGui::IsMouseClicked(0)) {
+            if (hov_vthumb && (!tl_any_popup && ImGui::IsMouseClicked(0))) {
                 s_vsb_drag     = true;
                 s_vsb_drag_oy  = mouse.y;
                 s_vsb_drag_osc = state.tl_v_scroll;
@@ -1588,7 +1597,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
             }
 
             // Click in trough → jump (center thumb on click point)
-            if (!s_vsb_drag && !hov_vthumb && ImGui::IsMouseClicked(0) &&
+            if (!s_vsb_drag && !hov_vthumb && (!tl_any_popup && ImGui::IsMouseClicked(0)) &&
                 ImGui::IsMouseHoveringRect({vb_x0, vb_y0}, {vb_x1, vb_y1})) {
                 float t = (mouse.y - vb_y0 - v_thumb_h * 0.5f) / v_thumb_travel;
                 state.tl_v_scroll = fmaxf(0.f, fminf(t * v_max_scroll, v_max_scroll));
@@ -1922,7 +1931,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
     if (!any_popup_global && drag_track < 0) {
         bool in_ruler = mouse.y >= origin.y && mouse.y <= origin.y + TL_RULER_H &&
                         mouse.x >= origin.x + TL_LABEL_W && mouse.x <= origin.x + total_w;
-        if (in_ruler && ImGui::IsMouseClicked(0)) s_ruler_drag = true;
+        if (in_ruler && (!tl_any_popup && ImGui::IsMouseClicked(0))) s_ruler_drag = true;
         if (s_ruler_drag && ImGui::IsMouseDown(0)) {
             float raw = (mouse.x - origin.x - TL_LABEL_W + scroll) / zoom;
             std::vector<float> edge_cands;
@@ -2024,7 +2033,9 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                         cl.start = drop_t; cl.end = drop_t + proj_dur;
                         cl.bg_speed = pr->default_speed; cl.bg_intensity = 0.85f;
                         memcpy(cl.bg_c1, pr->dc1, 16); memcpy(cl.bg_c2, pr->dc2, 16); memcpy(cl.bg_c3, pr->dc3, 16);
-                        make_new_track(std::move(cl), (std::string("Drop Background: ") + pr->label).c_str(), false);
+                        // Backgrounds are content (a generated texture layer),
+                        // not position-sensitive like FX bricks — reuse-empty.
+                        make_new_track(std::move(cl), (std::string("Drop Background: ") + pr->label).c_str(), true);
                     }
                 }
                 if (const ImGuiPayload* pay = ImGui::AcceptDragDropPayload("FX_CREATIVE")) {

@@ -696,18 +696,26 @@ void panel_background(AppState& state, float w, bool clip_only) {
         ImGui::PopStyleColor();
         ImGui::Dummy({0.f, 4.f});
         if (ImGui::Button("+ Add Background Track", {w, 0.f})) {
+            // A background brick is just a generated-texture layer — place it
+            // like any other content clip (empty track if free, else a new
+            // track at the top, at the playhead) instead of push_back to the
+            // bottom, which made every new background a full-composition
+            // backdrop behind everything.
             float dur = 7.f;
-            Track t;
-            t.name = "Background";
             Clip c;
             c.clip_type = ClipType::Background;
-            c.start = 0.f; c.end = dur;
+            c.start = state.playhead; c.end = c.start + dur;
             c.text  = "blob";  // default preset
-            t.clips.push_back(c);
-            state.tracks.push_back(t);
-            state.selected_track = (int)state.tracks.size() - 1;
-            state.selected_clip  = 0;
-            bgclip = &state.tracks[state.selected_track].clips[0];
+            int target = find_empty_track(state);
+            if (target < 0) {
+                Track t; t.name = "Background";
+                state.tracks.insert(state.tracks.begin(), std::move(t));
+                target = 0;
+            }
+            state.tracks[target].clips.push_back(std::move(c));
+            state.selected_track = target;
+            state.selected_clip  = (int)state.tracks[target].clips.size() - 1;
+            bgclip = &state.tracks[target].clips[state.selected_clip];
             history_push(state, "Add background");
         }
         ImGui::Dummy({0.f, 8.f});
@@ -811,18 +819,24 @@ void panel_background(AppState& state, float w, bool clip_only) {
         ImGui::InvisibleButton(pr.id, {cell_w, cell_h});
         if (ImGui::IsItemClicked()) {
             if (!bgclip) {
-                // No bg clip selected — create one
+                // No bg clip selected — create one, placed like any content
+                // clip (empty track or new track on top, at the playhead).
                 float dur = 7.f;
-                Track t; t.name = "Background";
-                Clip c; c.clip_type = ClipType::Background; c.start = 0.f; c.end = dur;
+                Clip c; c.clip_type = ClipType::Background;
+                c.start = state.playhead; c.end = c.start + dur;
                 c.text = pr.id;
                 memcpy(c.bg_c1, pr.dc1, sizeof(float)*4);
                 memcpy(c.bg_c2, pr.dc2, sizeof(float)*4);
                 memcpy(c.bg_c3, pr.dc3, sizeof(float)*4);
-                t.clips.push_back(c);
-                state.tracks.push_back(t);
-                state.selected_track = (int)state.tracks.size()-1;
-                state.selected_clip  = 0;
+                int target = find_empty_track(state);
+                if (target < 0) {
+                    Track t; t.name = "Background";
+                    state.tracks.insert(state.tracks.begin(), std::move(t));
+                    target = 0;
+                }
+                state.tracks[target].clips.push_back(std::move(c));
+                state.selected_track = target;
+                state.selected_clip  = (int)state.tracks[target].clips.size()-1;
             } else {
                 bgclip->text = pr.id;
                 memcpy(bgclip->bg_c1, pr.dc1, sizeof(float)*4);
