@@ -43,7 +43,9 @@ struct TlState {
     float glass_drag_ref_pre=0.f, glass_drag_ref_post=0.f;
     float glass_drag_ref_start=0.f;
     bool ruler_drag=false;
-    int drag_merge_ci=-1;  // FX brick index to merge into on drop (-1 = none)
+    // FX brick (track, clip) to weld into — follows the mouse row, so
+    // cross-track welds work. -1 = no candidate.
+    int drag_merge_ti=-1, drag_merge_ci=-1;
 };
 
 // Defined in timeline.cpp
