@@ -834,7 +834,12 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="split_clip",
-            description="Split a clip at a time point. Returns left_clip and right_clip indices.",
+            description=(
+                "Split a clip at one or more time points. Pass times=[...] to make "
+                "every cut in one call — never loop split_clip for a multi-cut edit. "
+                "Returns left_clip/right_clip for a single cut, plus clips (all "
+                "resulting indices, leftmost first) for multiple cuts."
+            ),
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -842,9 +847,11 @@ async def list_tools() -> list[Tool]:
                     "track":      {"type": "integer"},
                     "track_name": {"type": "string", "description": "Track name (alternative to track index)"},
                     "clip": {"type": "integer"},
-                    "time": {"type": "number"},
+                    "time": {"type": "number", "description": "Single cut point (seconds)"},
+                    "times": {"type": "array", "items": {"type": "number"},
+                              "description": "Multiple cut points (seconds); all must fall inside the clip"},
                 },
-                "required": ["clip", "time"],
+                "required": ["clip"],
             },
         ),
         Tool(

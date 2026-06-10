@@ -1506,18 +1506,52 @@ static json dispatch(AppState& state, const std::string& method, const json& par
 
     if (method == "split_clip") {
         int ti = track_by_name_or_index(state, params), ci = params.value("clip", -1);
-        float t = params.value("time", -1.f);
         if (!check_clip(state, ti, ci, err)) return {};
-        Clip& cl = state.tracks[ti].clips[ci];
-        if (t <= cl.start || t >= cl.end) { err = "split time outside clip range"; return {}; }
+
+        // Scalar 'time' or array 'times' — agents making a multi-cut edit get
+        // all the cuts in one call instead of burning a model round per cut.
+        std::vector<float> times;
+        if (params.contains("times") && params["times"].is_array())
+            for (auto& v : params["times"])
+                if (v.is_number()) times.push_back(v.get<float>());
+        if (params.contains("time") && params["time"].is_number())
+            times.push_back(params["time"].get<float>());
+        if (times.empty()) { err = "missing 'time' or 'times'"; return {}; }
+        std::sort(times.begin(), times.end());
+        times.erase(std::unique(times.begin(), times.end(),
+                                [](float a, float b) { return fabsf(a - b) < 1e-4f; }),
+                    times.end());
+        // Validate everything against the original bounds before touching the
+        // track, so a bad entry can't leave a half-applied multi-split.
+        {
+            const Clip& cl = state.tracks[ti].clips[ci];
+            for (float t : times)
+                if (t <= cl.start || t >= cl.end) {
+                    char buf[96];
+                    snprintf(buf, sizeof(buf),
+                             "split time %.3f outside clip range %.3f-%.3f",
+                             t, cl.start, cl.end);
+                    err = buf;
+                    return {};
+                }
+        }
 
         // clip_split_at also scales in_point by speed (this path used to forget
         // that, desyncing splits of retimed clips) and remaps keyframe tracks.
-        Clip right = clip_split_at(cl, t);
-        state.tracks[ti].clips.insert(state.tracks[ti].clips.begin() + ci + 1, std::move(right));
+        // Split right-to-left so the remaining cut points stay inside clip ci.
+        for (int k = (int)times.size() - 1; k >= 0; --k) {
+            Clip right = clip_split_at(state.tracks[ti].clips[ci], times[k]);
+            state.tracks[ti].clips.insert(
+                state.tracks[ti].clips.begin() + ci + 1, std::move(right));
+        }
         json r;
         r["left_clip"]  = ci;
         r["right_clip"] = ci + 1;
+        if (times.size() > 1) {
+            json idx = json::array();
+            for (size_t k = 0; k <= times.size(); ++k) idx.push_back(ci + (int)k);
+            r["clips"] = idx;  // every piece, leftmost first
+        }
         return r;
     }
 
