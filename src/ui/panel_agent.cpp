@@ -108,11 +108,15 @@ void draw_agent_log(AppState& state, float panel_w, float panel_h) {
 
 void draw_agent_input(AppState& state, float panel_w) {
     (void)state;
+    (void)panel_w;
     bool running = agent_running();
     float send_w = 64.f, clear_w = 60.f;
     ImGui::PushFont(g_font_mono);
     ImGui::PushStyleColor(ImGuiCol_FrameBg, IM_COL32(0x1e, 0x1e, 0x2c, 255));
-    ImGui::SetNextItemWidth(panel_w - send_w - clear_w - 18.f);
+    // Size off the content region so the row ends at the same window padding
+    // on the right as it starts with on the left (two 6 px SameLine gaps).
+    ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x -
+                            send_w - clear_w - 12.f);
     bool submit = ImGui::InputText("##agent_in", s_input, sizeof(s_input),
                                    ImGuiInputTextFlags_EnterReturnsTrue);
     ImGui::PopStyleColor();
