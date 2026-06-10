@@ -67,6 +67,19 @@ static void row_add(AgentRole role, std::string text, std::string detail = "") {
     s_rows.push_back({role, std::move(text), std::move(detail), false});
 }
 
+// Add a row and return its index so it can be updated in place (used for
+// live "waiting on …" progress while the harness absorbs a poll loop).
+static int row_add_idx(AgentRole role, std::string text) {
+    std::lock_guard<std::mutex> lk(s_mu);
+    s_rows.push_back({role, std::move(text), "", false});
+    return (int)s_rows.size() - 1;
+}
+
+static void row_set_text(int idx, const std::string& text) {
+    std::lock_guard<std::mutex> lk(s_mu);
+    if (idx >= 0 && idx < (int)s_rows.size()) s_rows[idx].text = text;
+}
+
 static void row_stream_begin() {
     std::lock_guard<std::mutex> lk(s_mu);
     s_rows.push_back({AgentRole::Assistant, "", "", true});
@@ -636,6 +649,73 @@ static std::string bridge_tool_exec(const std::string& name, const json& args,
     return truncate_result(text);
 }
 
+// ── Poll absorption ───────────────────────────────────────────────────────────
+// The get_*_status tools are designed around agents that poll once per model
+// round — but every poll costs a full model round-trip, so a long operation
+// (a 40-scene describe_video is minutes of 'running') exhausts the tool
+// budget doing nothing. The harness absorbs the loop instead: one status
+// call from the model blocks here, re-polling every few seconds with a live
+// progress row in the panel, and returns the terminal result.
+
+static bool poll_tool_in_progress(const std::string& name, const json& r) {
+    auto sval = [&](const char* k) -> std::string {
+        return (r.contains(k) && r[k].is_string()) ? r[k].get<std::string>() : "";
+    };
+    if (name == "get_export_status")       return r.value("running", false);
+    if (name == "get_search_status")       return r.value("running", false);
+    if (name == "get_pipeline_status") {
+        std::string st = sval("stage");
+        return st == "extract" || st == "transcribe" || st == "align";
+    }
+    if (name == "get_activity_status")     return sval("state") == "running";
+    if (name == "get_vision_model_status") return sval("status") == "downloading";
+    if (name == "get_video_description" || name == "get_audio_analysis")
+        return sval("status") == "running";
+    if (name == "get_bg_remove_status") {
+        std::string st = sval("status");
+        return st == "processing" || st == "waiting_for_proxy";
+    }
+    return false;  // not a poll tool
+}
+
+// result_str holds the first response; refetch() re-issues the same call.
+// Returns the terminal response (or the last one on stop/timeout).
+template <typename Refetch>
+static std::string absorb_polls(const std::string& name, std::string result_str,
+                                Refetch refetch) {
+    json r = json::parse(result_str, nullptr, false);
+    if (r.is_discarded() || !poll_tool_in_progress(name, r)) return result_str;
+
+    auto t0 = std::chrono::steady_clock::now();
+    int wrow = row_add_idx(AgentRole::Info, "\xe2\x8f\xb3 waiting on " + name + "\xe2\x80\xa6");
+    const double kPollCapSec = 900.0;   // 15 min, then hand back to the model
+    while (!s_stop) {
+        double el = std::chrono::duration<double>(
+                        std::chrono::steady_clock::now() - t0).count();
+        if (el > kPollCapSec) {
+            row_set_text(wrow, "\xe2\x8f\xb3 " + name +
+                         " still running after 15 min \xe2\x80\x94 handing back");
+            return result_str;
+        }
+        usleep(2500 * 1000);
+        if (s_stop) break;
+        result_str = refetch();
+        char buf[160];
+        snprintf(buf, sizeof(buf), "\xe2\x8f\xb3 waiting on %s\xe2\x80\xa6 %ds",
+                 name.c_str(), (int)el);
+        row_set_text(wrow, buf);
+        r = json::parse(result_str, nullptr, false);
+        if (r.is_discarded() || !poll_tool_in_progress(name, r)) {
+            snprintf(buf, sizeof(buf), "\xe2\x8f\xb3 %s finished after %ds",
+                     name.c_str(), (int)el);
+            row_set_text(wrow, buf);
+            return result_str;
+        }
+    }
+    row_set_text(wrow, "\xe2\x8f\xb3 " + name + " wait stopped");
+    return result_str;
+}
+
 // Returns tool-role content (a text string, for API compatibility).
 // extra_wire_msgs: appended AFTER the tool_result — used for snapshot images
 // that must trail the tool_call_id response to keep the wire legal everywhere.
@@ -649,7 +729,12 @@ static std::string exec_tool(const std::string& name, json args,
 
     // Python-implemented tools route through the server.py MCP bridge.
     if (!info->ipc)
-        return bridge_tool_exec(name, args, extra_wire_msgs, vision);
+        return absorb_polls(name,
+                            bridge_tool_exec(name, args, extra_wire_msgs, vision),
+                            [&] {
+                                return bridge_tool_exec(name, args,
+                                                        extra_wire_msgs, vision);
+                            });
 
     json result; std::string err;
     // Default to the render source — canvas grabs the preview rect at display
@@ -693,7 +778,11 @@ static std::string exec_tool(const std::string& name, json args,
         }
         return "error: snapshot timed out";
     }
-    return truncate_result(result.dump());
+    return absorb_polls(name, truncate_result(result.dump()), [&] {
+        json r2; std::string e2;
+        if (!ipc_request(name, args, r2, e2)) return "error: " + e2;
+        return truncate_result(r2.dump());
+    });
 }
 
 // Keep only the newest snapshot image on the wire. Each image part is
@@ -731,6 +820,10 @@ static const char* kSystemPrompt =
     "get_activity_status. take_snapshot shows the canvas composition; it "
     "only helps if you are a vision model, and it is the wrong tool for "
     "reading video content — do not scrub the playhead taking snapshots.\n"
+    "ASYNC OPS: after starting one (describe_video, trigger_pipeline, "
+    "trigger_export, detect_screen_activity, ...) call its get_*_status tool "
+    "ONCE — it blocks internally until the operation finishes and returns "
+    "the final result. Never poll in a loop.\n"
     "Be concise in prose — do the work with tools and summarize briefly.";
 
 static void worker_turn() {
