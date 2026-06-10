@@ -594,6 +594,11 @@ struct AppState {
 
     // IPC-requested snapshot (ipc_server sets request; GL thread fulfills and sets done)
     bool        snapshot_request    = false;
+    // source == "canvas": capture the live preview rect from the window
+    // framebuffer after ImGui renders — the exact pixels the user sees
+    // (scene compositor + text overlays) — instead of re-rendering through
+    // the export path. Ground truth for diagnosing preview/export divergence.
+    bool        snapshot_source_canvas = false;
     bool        snapshot_done       = false;
     std::string snapshot_done_path;
     std::string snapshot_done_err;

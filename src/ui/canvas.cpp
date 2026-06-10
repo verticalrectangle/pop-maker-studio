@@ -598,11 +598,29 @@ void draw_canvas_handles(AppState& state, ImDrawList* dl, ImVec2 p, float w, flo
 
 // ── Preview ───────────────────────────────────────────────────────────────────
 
+// Canvas-source snapshot: capture the live preview rect from the window
+// framebuffer after ImGui renders this frame. frames_left counts down a few
+// frames after the request so an IPC seek's async proxy decode has time to
+// land before we grab the pixels; the rect is refreshed every frame so it
+// tracks the live layout.
+static struct {
+    int    frames_left = -1;   // -1 idle, >0 warming, 0 capture after render
+    ImVec2 p           = {};
+    float  w = 0.f, h = 0.f;
+} g_canvas_cap;
+
 void draw_preview(AppState& state, ImVec2 p, float w, float h) {
     // IPC-triggered snapshot — fulfilled here on the GL thread
     if (state.snapshot_request) {
         state.snapshot_request = false;
-        render_snapshot_gl(state, state.playhead);
+        if (state.snapshot_source_canvas)
+            g_canvas_cap.frames_left = 3;
+        else
+            render_snapshot_gl(state, state.playhead);
+    }
+    if (g_canvas_cap.frames_left > 0) {
+        g_canvas_cap.p = p; g_canvas_cap.w = w; g_canvas_cap.h = h;
+        --g_canvas_cap.frames_left;  // 0 → canvas_capture_after_render fires
     }
 
     ImDrawList* dl = ImGui::GetWindowDrawList();
@@ -1583,4 +1601,79 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                         IM_COL32(220, 220, 220, (int)(alpha * 255.f)), msg);
         }
     }
+}
+
+// ── Canvas-source snapshot capture ───────────────────────────────────────────
+// Runs after ImGui_ImplOpenGL3_RenderDrawData and before buffer swap (called
+// from the main loop) so the back buffer holds the fully drawn frame. Reads
+// the preview rect — the exact pixels the user sees, scene compositor output
+// plus text overlays — and writes it as the snapshot PNG. This is the
+// "source: canvas" ground-truth path; render_snapshot_gl is the export path.
+#define GL_GLEXT_PROTOTYPES
+#include <GL/gl.h>
+#include <GL/glext.h>
+#include "stb_image_write.h"
+
+void canvas_capture_after_render(AppState& state) {
+    if (g_canvas_cap.frames_left != 0) return;
+    g_canvas_cap.frames_left = -1;
+
+    auto fail = [&](const char* why) {
+        state.snapshot_done_err = why;
+        state.snapshot_done     = true;
+    };
+
+    ImGuiIO& io = ImGui::GetIO();
+    float sx = io.DisplayFramebufferScale.x, sy = io.DisplayFramebufferScale.y;
+    int fb_h = (int)(io.DisplaySize.y * sy);
+    int rx = (int)(g_canvas_cap.p.x * sx);
+    int rw = (int)(g_canvas_cap.w   * sx);
+    int rh = (int)(g_canvas_cap.h   * sy);
+    // GL reads from the bottom-left; the rect's top is p.y in UI coords.
+    int ry = fb_h - (int)((g_canvas_cap.p.y + g_canvas_cap.h) * sy);
+    if (rw <= 0 || rh <= 0) { fail("canvas rect is empty"); return; }
+
+    std::vector<uint8_t> raw((size_t)rw * rh * 4);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glPixelStorei(GL_PACK_ALIGNMENT, 1);
+    glReadPixels(rx, ry, rw, rh, GL_RGBA, GL_UNSIGNED_BYTE, raw.data());
+
+    // Flip rows (GL bottom-up → PNG top-down) and force opaque alpha — the
+    // window backbuffer's alpha channel is whatever compositing left there,
+    // which makes the PNG look blank in viewers if kept.
+    std::vector<uint8_t> img((size_t)rw * rh * 4);
+    int rb = rw * 4;
+    for (int y = 0; y < rh; ++y) {
+        uint8_t* dst = img.data() + (size_t)y * rb;
+        memcpy(dst, raw.data() + (size_t)(rh - 1 - y) * rb, rb);
+        for (int x = 0; x < rw; ++x) dst[x*4 + 3] = 255;
+    }
+
+    // Same naming scheme as render_snapshot_gl, with a _canvas_ marker.
+    std::string base_path = state.audio_path;
+    if (base_path.empty()) {
+        for (auto& tr : state.tracks) {
+            for (auto& cl : tr.clips)
+                if (cl.clip_type == ClipType::Video && !cl.text.empty())
+                    { base_path = cl.text; break; }
+            if (!base_path.empty()) break;
+        }
+    }
+    int total_ms = (int)(state.playhead * 1000.f);
+    int ms = total_ms % 1000, ss = (total_ms / 1000) % 60, mm = total_ms / 60000;
+    char ts[32]; snprintf(ts, sizeof(ts), "%02dm%02ds%03dms", mm, ss, ms);
+    std::string out = base_path.empty()
+        ? std::string("/tmp/pop-maker-studio_canvas_") + ts + ".png"
+        : fs::path(base_path).parent_path().string() + "/" +
+          fs::path(base_path).stem().string() + "_canvas_" + ts + ".png";
+
+    if (!stbi_write_png(out.c_str(), rw, rh, 4, img.data(), rb)) {
+        fail("PNG write failed");
+        return;
+    }
+    state.snapshot_msg       = "Saved " + fs::path(out).filename().string();
+    state.snapshot_msg_new   = true;
+    state.snapshot_done_path = out;
+    state.snapshot_done_err.clear();
+    state.snapshot_done      = true;
 }

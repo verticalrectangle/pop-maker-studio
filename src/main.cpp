@@ -19,6 +19,7 @@
 #include "globals.h"
 #include "stb_image_write.h"
 #include "portrait_preview.h"
+#include "ui/canvas.h"
 #include "ui/panel_media.h"  // bin_add for drain_bin_pending()
 namespace fs = std::filesystem;
 
@@ -260,6 +261,10 @@ int main(int argc, char** argv) {
         glClearColor(0.f, 0.f, 0.f, 1.f);
         glClear(GL_COLOR_BUFFER_BIT);
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+
+        // "source: canvas" snapshot — grab the preview rect from the back
+        // buffer now that the full frame is drawn (no-op unless armed).
+        canvas_capture_after_render(state);
 
         glfwSwapBuffers(window);
     }

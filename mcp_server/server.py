@@ -1700,12 +1700,22 @@ async def list_tools() -> list[Tool]:
             description=(
                 "Renders the canvas frame to PNG and returns the image inline so you can see it. "
                 "Pass an optional time (seconds) to snap at that timestamp without seeking first. "
+                "source='render' (default) re-renders the frame through the export pipeline — what an "
+                "exported video will contain. source='canvas' captures the live preview rect from the "
+                "app's framebuffer — the exact pixels the user is looking at (interactive scene "
+                "compositor + text overlays). If the two disagree, the preview compositor and export "
+                "renderer have diverged — capture both to diagnose which side is wrong. "
                 "Read-only — no batch needed."
             ),
             inputSchema={
                 "type": "object",
                 "properties": {
                     "time": {"type": "number", "description": "Timeline position to snap (default: current playhead)"},
+                    "source": {
+                        "type": "string",
+                        "enum": ["render", "canvas"],
+                        "description": "render = export pipeline (default); canvas = live preview ground truth",
+                    },
                 },
             },
         ),
@@ -3133,6 +3143,8 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         ipc_args = {}
         if "time" in arguments:
             ipc_args["time"] = arguments["time"]
+        if "source" in arguments:
+            ipc_args["source"] = arguments["source"]
         _call("take_snapshot", ipc_args)
         for _ in range(50):
             await asyncio.sleep(0.2)

@@ -1137,6 +1137,7 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         state.snapshot_done      = false;
         state.snapshot_done_path.clear();
         state.snapshot_done_err.clear();
+        state.snapshot_source_canvas = (params.value("source", "render") == "canvas");
         state.snapshot_request   = true;
         return json::object();
     }

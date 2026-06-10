@@ -338,6 +338,49 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
         if (wheel != 0.f && !ImGui::GetIO().KeyCtrl)
             state.tl_v_scroll -= wheel * TL_TRACK_H;
     }
+
+    // ── Edge auto-scroll while dragging ───────────────────────────────────────
+    // Dragging a clip (body or trim edge), a transition glass, or a marquee box
+    // past the visible clip area scrolls the timeline toward the mouse so the
+    // gesture can continue beyond the current view. Speed scales with how far
+    // the mouse overshoots the edge. Drag math recomputes positions from
+    // mouse + scroll every frame, so the dragged clip rides along; the marquee
+    // anchor is screen-space and gets shifted so its corner stays pinned to
+    // the same timeline position.
+    if ((g_tl.drag_track >= 0 || g_tl.box_selecting || g_tl.glass_drag != 0) &&
+        ImGui::IsMouseDown(0)) {
+        ImVec2 mp = ImGui::GetIO().MousePos;
+        float  dt = ImGui::GetIO().DeltaTime;
+        auto edge_step = [&](float overshoot) {
+            return fminf(overshoot, 160.f) * 8.f * dt;  // px this frame, capped
+        };
+        // Horizontal
+        {
+            float x_lo = origin.x + TL_LABEL_W;
+            float x_hi = x_lo + clip_area_w;
+            float max_scroll = fmaxf(0.f, tl_content_w - clip_area_w);
+            float ds = 0.f;
+            if      (mp.x < x_lo) ds = -edge_step(x_lo - mp.x);
+            else if (mp.x > x_hi) ds =  edge_step(mp.x - x_hi);
+            if (ds != 0.f) {
+                float ns = fmaxf(0.f, fminf(max_scroll, scroll + ds));
+                if (g_tl.box_selecting) g_tl.box_start.x -= ns - scroll;
+                scroll = ns;
+            }
+        }
+        // Vertical (clip drags move across tracks; marquee spans them)
+        if (g_tl.drag_track >= 0 || g_tl.box_selecting) {
+            float dv = 0.f;
+            if      (mp.y < track_area_top) dv = -edge_step(track_area_top - mp.y);
+            else if (mp.y > track_area_bot) dv =  edge_step(mp.y - track_area_bot);
+            if (dv != 0.f) {
+                float nv = fmaxf(0.f, fminf(max_v_scroll, state.tl_v_scroll + dv));
+                if (g_tl.box_selecting) g_tl.box_start.y -= nv - state.tl_v_scroll;
+                state.tl_v_scroll = nv;
+            }
+        }
+    }
+
     state.tl_v_scroll = fmaxf(0.f, fminf(max_v_scroll, state.tl_v_scroll));
 
     float track_y = track_area_top - state.tl_v_scroll;

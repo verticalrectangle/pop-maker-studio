@@ -752,6 +752,19 @@ void scene_add_layer(uintptr_t clip_tex, float cx, float cy, float hw, float hh,
     GLint prev_vp[4];
     glGetIntegerv(GL_VIEWPORT, prev_vp);
 
+    // The composite shader blends src-over in-shader and relies on every
+    // fragment of the fullscreen triangle OVERWRITING the destination FBO.
+    // GL blending must be off: with GL_BLEND on (left enabled by
+    // bg_render_to_texture or the ImGui backend), fragments outside the
+    // clip quad output alpha 0 and KEEP the destination's stale pixels from
+    // previous frames — moving a layer smears it across the canvas and a
+    // background brick appears to cover everything forever. Scissor would
+    // similarly leave stale pixels outside its rect.
+    GLboolean prev_blend   = glIsEnabled(GL_BLEND);
+    GLboolean prev_scissor = glIsEnabled(GL_SCISSOR_TEST);
+    glDisable(GL_BLEND);
+    glDisable(GL_SCISSOR_TEST);
+
     int next = g_scene.active ^ 1;
     glBindVertexArray(g_vao);
     glBindFramebuffer(GL_FRAMEBUFFER, g_scene.fbo[next]);
@@ -777,6 +790,8 @@ void scene_add_layer(uintptr_t clip_tex, float cx, float cy, float hw, float hh,
     glActiveTexture(GL_TEXTURE0);
 
     g_scene.active = next;
+    if (prev_blend)   glEnable(GL_BLEND);
+    if (prev_scissor) glEnable(GL_SCISSOR_TEST);
     glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)prev_fbo);
     glViewport(prev_vp[0], prev_vp[1], prev_vp[2], prev_vp[3]);
     glBindVertexArray(0);
