@@ -179,6 +179,22 @@ struct Clip {
     float scale_y  = 1.f;
     float rotation = 0.f;    // degrees, clockwise
 
+    // Non-destructive crop (video/image clips): fractions of the source frame
+    // trimmed from each side, in DISPLAY orientation (after rotation tags).
+    // Pure render-time UV window — source media is never touched. All four 0
+    // = no crop. crop_l + crop_r and crop_t + crop_b are kept <= 0.95 so a
+    // sliver always remains visible.
+    float crop_l = 0.f, crop_t = 0.f, crop_r = 0.f, crop_b = 0.f;
+    bool  has_crop() const { return crop_l > 0.f || crop_t > 0.f ||
+                                    crop_r > 0.f || crop_b > 0.f; }
+    // Aspect of the visible (cropped) region — use this everywhere the
+    // canvas-fit box is computed so preview, export, and click-picking agree.
+    float cropped_aspect(int src_w, int src_h) const {
+        float cw = (float)src_w * (1.f - crop_l - crop_r);
+        float ch = (float)src_h * (1.f - crop_t - crop_b);
+        return (cw > 0.f && ch > 0.f) ? cw / ch : 1.f;
+    }
+
     // per-clip animation style (None = inherit project default)
     AnimStyle   clip_style = AnimStyle::None;
 
@@ -473,6 +489,12 @@ struct AppState {
     std::vector<Track> tracks;
     int   selected_track = -1;
     int   selected_clip  = -1;
+
+    // Canvas crop-edit mode (UI-only, not serialized). Targets one clip; the
+    // canvas shows its full frame ghosted with draggable crop-window handles.
+    // -1/-1 = mode off. Entered from the Clip panel / context menu.
+    int   crop_edit_track = -1;
+    int   crop_edit_clip  = -1;
 
     // playback
     float playhead = 0.f;

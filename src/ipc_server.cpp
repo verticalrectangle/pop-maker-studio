@@ -1370,7 +1370,12 @@ static json dispatch(AppState& state, const std::string& method, const json& par
             // add_to_bin round-trip.
             if (!text.empty()) bin_add(state, text);
         }
-        if ((cl.clip_type == ClipType::Video || cl.clip_type == ClipType::Audio) && state.audio_path.empty())
+        // Images are ClipType::Video but carry no audio — never let a PNG
+        // become the project's audio source (it used to, and even kicked a
+        // WhisperX transcription on the pixels below).
+        bool is_image_clip = cl.clip_type == ClipType::Video && is_image_path(text);
+        if ((cl.clip_type == ClipType::Video || cl.clip_type == ClipType::Audio) &&
+            !is_image_clip && state.audio_path.empty())
             state.audio_path = state.vocals_path = text;
         state.tracks[ti].clips.push_back(cl);
         int new_ci = (int)state.tracks[ti].clips.size() - 1;
@@ -1402,7 +1407,7 @@ static json dispatch(AppState& state, const std::string& method, const json& par
             proxy_start(text);
             state.proxy_scan_needed = true;
         }
-        if (cl.clip_type == ClipType::Video && !state.audio_path.empty() &&
+        if (cl.clip_type == ClipType::Video && !is_image_clip && !state.audio_path.empty() &&
             state.words_json_path.empty() && !transcribe_running())
             kick_pipeline(state, state.audio_path, PipelineMode::TranscribeOnly);
         if (cl.clip_type == ClipType::BodyFX) {
@@ -1516,6 +1521,11 @@ static json dispatch(AppState& state, const std::string& method, const json& par
             else if (prop == "scale_x")   { cl.scale_x   = jval_float(val); }
             else if (prop == "scale_y")   { cl.scale_y   = jval_float(val); }
             else if (prop == "rotation")  { cl.rotation  = jval_float(val); }
+            // Crop: clamp against the opposite side so a sliver stays visible
+            else if (prop == "crop_l")    { cl.crop_l = fmaxf(0.f, fminf(jval_float(val), 0.95f - cl.crop_r)); }
+            else if (prop == "crop_r")    { cl.crop_r = fmaxf(0.f, fminf(jval_float(val), 0.95f - cl.crop_l)); }
+            else if (prop == "crop_t")    { cl.crop_t = fmaxf(0.f, fminf(jval_float(val), 0.95f - cl.crop_b)); }
+            else if (prop == "crop_b")    { cl.crop_b = fmaxf(0.f, fminf(jval_float(val), 0.95f - cl.crop_t)); }
             else if (prop == "text")      { cl.text      = val.get<std::string>(); }
             else if (prop == "font_size") { cl.font_size = jval_float(val); }
             else if (prop == "sub_pos")   { cl.sub_pos   = jval_int(val); }
@@ -1589,6 +1599,11 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         else if (prop == "scale_x")  { cl.scale_x  = jval_float(val); }
         else if (prop == "scale_y")  { cl.scale_y  = jval_float(val); }
         else if (prop == "rotation") { cl.rotation = jval_float(val); }
+        // Crop: clamp against the opposite side so a sliver stays visible
+        else if (prop == "crop_l")   { cl.crop_l = fmaxf(0.f, fminf(jval_float(val), 0.95f - cl.crop_r)); }
+        else if (prop == "crop_r")   { cl.crop_r = fmaxf(0.f, fminf(jval_float(val), 0.95f - cl.crop_l)); }
+        else if (prop == "crop_t")   { cl.crop_t = fmaxf(0.f, fminf(jval_float(val), 0.95f - cl.crop_b)); }
+        else if (prop == "crop_b")   { cl.crop_b = fmaxf(0.f, fminf(jval_float(val), 0.95f - cl.crop_t)); }
         // ── Text props ───────────────────────────────────────────────────────
         else if (prop == "text")       { cl.text      = val.get<std::string>(); }
         else if (prop == "font_size")  { cl.font_size = jval_float(val); }

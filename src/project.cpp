@@ -8,7 +8,7 @@
 // ── Binary serialization helpers ──────────────────────────────────────────────
 
 static const uint32_t MAGIC   = 0x534D5001u; // "PMS\x01"
-static const uint32_t VERSION = 36u;
+static const uint32_t VERSION = 37u;  // v37: per-clip non-destructive crop
 
 struct Writer {
     std::ofstream f;
@@ -192,6 +192,8 @@ static void write_clip(Writer& w, const Clip& c) {
     // v35: per-clip color grade
     w.pod(c.grade_brightness); w.pod(c.grade_contrast);
     w.pod(c.grade_saturation); w.pod(c.grade_hue);
+    // v37: non-destructive crop
+    w.pod(c.crop_l); w.pod(c.crop_t); w.pod(c.crop_r); w.pod(c.crop_b);
 }
 
 static Clip read_clip(Reader& r, uint32_t version) {
@@ -347,6 +349,10 @@ static Clip read_clip(Reader& r, uint32_t version) {
     if (version >= 35u) {
         c.grade_brightness = r.pod<float>(); c.grade_contrast   = r.pod<float>();
         c.grade_saturation = r.pod<float>(); c.grade_hue        = r.pod<float>();
+    }
+    if (version >= 37u) {
+        c.crop_l = r.pod<float>(); c.crop_t = r.pod<float>();
+        c.crop_r = r.pod<float>(); c.crop_b = r.pod<float>();
     }
     return c;
 }

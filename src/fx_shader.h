@@ -41,8 +41,12 @@ uintptr_t fx_preview_gen_effect(FXType ft, uintptr_t src_tex, int w, int h, floa
 static const int kSceneFxSlot = MAX_VIDEO_TRACKS * 2 - 2;  // reserved for global FX
 
 void      scene_begin    (int canvas_w, int canvas_h);
+// u0..v1: source UV window (non-destructive crop) — the quad samples only this
+// sub-rect of clip_tex. Defaults sample the full texture.
 void      scene_add_layer(uintptr_t clip_tex, float cx, float cy, float hw, float hh,
-                          float cos_r, float sin_r, float alpha);
+                          float cos_r, float sin_r, float alpha,
+                          float u0 = 0.f, float v0 = 0.f,
+                          float u1 = 1.f, float v1 = 1.f);
 void      scene_add_solid(float r, float g, float b, float a);
 void      scene_apply_fx (int canvas_w, int canvas_h,
                           const EffectAccum& ea, const CreativeFXAccum& cfx, float t);

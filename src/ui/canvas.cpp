@@ -88,7 +88,8 @@ void compute_video_bbox(AppState& state, Clip& cl, ImVec2 p, float w, float h,
     std::string vkey = clip_slot_key(cl.text, cl.start);
     for (int s = 0; s < MAX_VIDEO_TRACKS; ++s) {
         if (state.proxy_paths[s] == vkey && video_info(s).width > 0) {
-            float va = (float)video_info(s).width / (float)video_info(s).height;
+            // Crop changes the displayed aspect — bbox must match the render.
+            float va = cl.cropped_aspect(video_info(s).width, video_info(s).height);
             float ca = w / h;
             if (va > ca) { fit_w = w; fit_h = w / va; }
             else         { fit_h = h; fit_w = h * va; }
@@ -100,7 +101,258 @@ void compute_video_bbox(AppState& state, Clip& cl, ImVec2 p, float w, float h,
     bx1 = px + hw; by1 = py + hh;
 }
 
+// ── Crop-edit mode ────────────────────────────────────────────────────────────
+// Targets state.crop_edit_track/clip. The scene shows the clip's full frame
+// (unrotated); this draws the dimmed surround, the crop window with drag
+// handles, and a small pill with aspect presets + Reset / Cancel / Apply.
+// Crop values are applied live to the clip; Cancel restores the entry values,
+// Apply pushes one history entry. Esc = cancel, Enter = apply.
+static struct {
+    int    target_track = -1, target_clip = -1;     // entry snapshot owner
+    float  entry_l = 0.f, entry_t = 0.f, entry_r = 0.f, entry_b = 0.f;
+    int    aspect = 0;   // 0 free, 1 = 1:1, 2 = 9:16, 3 = 16:9
+    int    drag   = 0;   // 0 none, 1 TL, 2 TR, 3 BR, 4 BL, 5 T, 6 B, 7 L, 8 R, 9 body
+    float  ref_l = 0.f, ref_t = 0.f, ref_r = 0.f, ref_b = 0.f;
+    ImVec2 ref_mouse = {};
+} s_crop;
+
+static void crop_mode_exit(AppState& state) {
+    state.crop_edit_track = state.crop_edit_clip = -1;
+    s_crop.target_track   = s_crop.target_clip   = -1;
+    s_crop.drag = 0;
+}
+
+static void draw_crop_mode(AppState& state, ImDrawList* dl, ImVec2 p, float w, float h) {
+    // Validate target — clip deleted / track hidden ends the mode.
+    if (state.crop_edit_track < 0 || state.crop_edit_track >= (int)state.tracks.size())
+        { crop_mode_exit(state); return; }
+    Track& tr = state.tracks[state.crop_edit_track];
+    if (state.crop_edit_clip < 0 || state.crop_edit_clip >= (int)tr.clips.size())
+        { crop_mode_exit(state); return; }
+    Clip& cl = tr.clips[state.crop_edit_clip];
+    if (cl.clip_type != ClipType::Video || !tr.visible)
+        { crop_mode_exit(state); return; }
+
+    // First frame on this target: snapshot for Cancel.
+    if (s_crop.target_track != state.crop_edit_track ||
+        s_crop.target_clip  != state.crop_edit_clip) {
+        s_crop.target_track = state.crop_edit_track;
+        s_crop.target_clip  = state.crop_edit_clip;
+        s_crop.entry_l = cl.crop_l; s_crop.entry_t = cl.crop_t;
+        s_crop.entry_r = cl.crop_r; s_crop.entry_b = cl.crop_b;
+        s_crop.aspect  = 0;
+        s_crop.drag    = 0;
+    }
+
+    // Source dims (for the px readout and aspect-lock math).
+    int src_w = 0, src_h = 0;
+    {
+        std::string vkey = clip_slot_key(cl.text, cl.start);
+        for (int s = 0; s < MAX_VIDEO_TRACKS; ++s)
+            if (state.proxy_paths[s] == vkey && video_info(s).width > 0)
+                { src_w = video_info(s).width; src_h = video_info(s).height; break; }
+    }
+
+    // Full-frame fit box — must mirror the editing_crop branch of the scene
+    // draw: full aspect, no rotation, pos/scale applied.
+    float px = cl.eval_prop("pos_x",   state.playhead) * w + p.x;
+    float py = cl.eval_prop("pos_y",   state.playhead) * h + p.y;
+    float sx = cl.eval_prop("scale_x", state.playhead);
+    float sy = cl.eval_prop("scale_y", state.playhead);
+    float fit_w = w, fit_h = h;
+    if (src_w > 0 && src_h > 0) {
+        float va = (float)src_w / (float)src_h, ca = w / h;
+        if (va > ca) { fit_w = w; fit_h = w / va; }
+        else         { fit_h = h; fit_w = h * va; }
+    }
+    float fw = fit_w * sx, fh = fit_h * sy;
+    float fx0 = px - fw * 0.5f, fy0 = py - fh * 0.5f;
+    float fx1 = fx0 + fw,       fy1 = fy0 + fh;
+
+    // Crop window in screen space.
+    float cx0 = fx0 + cl.crop_l * fw, cy0 = fy0 + cl.crop_t * fh;
+    float cx1 = fx1 - cl.crop_r * fw, cy1 = fy1 - cl.crop_b * fh;
+
+    ImVec2 mpos = ImGui::GetIO().MousePos;
+    bool ldown  = ImGui::IsMouseDown(0);
+    bool lclick = ImGui::IsMouseClicked(0) && !ui_widget_claims_mouse() &&
+                  !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId |
+                                          ImGuiPopupFlags_AnyPopupLevel);
+
+    // ── Dimmed surround + window border ───────────────────────────────────────
+    const ImU32 DIM = IM_COL32(0, 0, 0, 150);
+    dl->AddRectFilled({fx0, fy0}, {fx1, cy0}, DIM);                  // top band
+    dl->AddRectFilled({fx0, cy1}, {fx1, fy1}, DIM);                  // bottom band
+    dl->AddRectFilled({fx0, cy0}, {cx0, cy1}, DIM);                  // left band
+    dl->AddRectFilled({cx1, cy0}, {fx1, cy1}, DIM);                  // right band
+    dl->AddRect({fx0, fy0}, {fx1, fy1}, IM_COL32(255,255,255,50));   // full frame
+    dl->AddRect({cx0, cy0}, {cx1, cy1}, IM_COL32(255,255,255,230), 0.f, 0, 1.5f);
+    // Thirds grid
+    for (int i = 1; i <= 2; ++i) {
+        float gx = cx0 + (cx1 - cx0) * (i / 3.f);
+        float gy = cy0 + (cy1 - cy0) * (i / 3.f);
+        dl->AddLine({gx, cy0}, {gx, cy1}, IM_COL32(255,255,255,40));
+        dl->AddLine({cx0, gy}, {cx1, gy}, IM_COL32(255,255,255,40));
+    }
+    // Pixel readout under the window
+    if (src_w > 0) {
+        char dim_lbl[48];
+        snprintf(dim_lbl, sizeof(dim_lbl), "%d x %d",
+                 (int)roundf(src_w * (1.f - cl.crop_l - cl.crop_r)),
+                 (int)roundf(src_h * (1.f - cl.crop_t - cl.crop_b)));
+        dl->AddText({cx0 + 4.f, cy1 + 4.f}, IM_COL32(220,220,220,200), dim_lbl);
+    }
+
+    // ── Handles ───────────────────────────────────────────────────────────────
+    const float CR = 4.5f, HIT = 8.f;
+    float cmx = (cx0 + cx1) * 0.5f, cmy = (cy0 + cy1) * 0.5f;
+    struct H { float x, y; int id; };
+    H corners[4] = {{cx0,cy0,1},{cx1,cy0,2},{cx1,cy1,3},{cx0,cy1,4}};
+    H edges[4]   = {{cmx,cy0,5},{cmx,cy1,6},{cx0,cmy,7},{cx1,cmy,8}};
+    bool aspect_locked = s_crop.aspect != 0;
+
+    auto draw_handle = [&](float hx, float hy, int id) {
+        bool hov = fabsf(mpos.x - hx) <= HIT && fabsf(mpos.y - hy) <= HIT;
+        ImU32 c = (hov || s_crop.drag == id) ? IM_COL32(100,180,255,255)
+                                             : IM_COL32(255,255,255,230);
+        dl->AddRectFilled({hx-CR, hy-CR}, {hx+CR, hy+CR}, c, 2.f);
+        dl->AddRect      ({hx-CR, hy-CR}, {hx+CR, hy+CR}, IM_COL32(0,0,0,180), 2.f, 0, 0.8f);
+        if (hov && lclick && s_crop.drag == 0) {
+            s_crop.drag = id;
+            s_crop.ref_l = cl.crop_l; s_crop.ref_t = cl.crop_t;
+            s_crop.ref_r = cl.crop_r; s_crop.ref_b = cl.crop_b;
+            s_crop.ref_mouse = mpos;
+        }
+    };
+    for (auto& hc : corners) draw_handle(hc.x, hc.y, hc.id);
+    if (!aspect_locked)                       // edges break a locked ratio
+        for (auto& he : edges) draw_handle(he.x, he.y, he.id);
+
+    // Body drag (move the window)
+    bool in_window = mpos.x > cx0+CR*2 && mpos.x < cx1-CR*2 &&
+                     mpos.y > cy0+CR*2 && mpos.y < cy1-CR*2;
+    if (in_window && s_crop.drag == 0)
+        ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
+    if (in_window && lclick && s_crop.drag == 0) {
+        s_crop.drag = 9;
+        s_crop.ref_l = cl.crop_l; s_crop.ref_t = cl.crop_t;
+        s_crop.ref_r = cl.crop_r; s_crop.ref_b = cl.crop_b;
+        s_crop.ref_mouse = mpos;
+    }
+
+    // ── Drag update ───────────────────────────────────────────────────────────
+    const float MIN_WIN = 0.05f;  // smallest visible window per axis
+    if (s_crop.drag != 0 && ldown && fw > 0.f && fh > 0.f) {
+        float dxf = (mpos.x - s_crop.ref_mouse.x) / fw;
+        float dyf = (mpos.y - s_crop.ref_mouse.y) / fh;
+        float l = s_crop.ref_l, t = s_crop.ref_t, r = s_crop.ref_r, b = s_crop.ref_b;
+        auto clampf = [](float v, float lo, float hi) {
+            return v < lo ? lo : (v > hi ? hi : v);
+        };
+        if (s_crop.drag == 9) {                       // move window
+            float shift_x = clampf(dxf, -l, r);
+            float shift_y = clampf(dyf, -t, b);
+            cl.crop_l = l + shift_x; cl.crop_r = r - shift_x;
+            cl.crop_t = t + shift_y; cl.crop_b = b - shift_y;
+        } else if (aspect_locked && s_crop.drag <= 4 && src_w > 0) {
+            // Corner drag with ratio lock: opposite corner anchored; the new
+            // width (from x motion) drives the height via the fraction ratio
+            // k = cw/ch that yields the target pixel aspect.
+            float A = (s_crop.aspect == 1) ? 1.f : (s_crop.aspect == 2) ? 9.f/16.f : 16.f/9.f;
+            float k = A * (float)src_h / (float)src_w;
+            bool left_c = (s_crop.drag == 1 || s_crop.drag == 4);
+            bool top_c  = (s_crop.drag == 1 || s_crop.drag == 2);
+            float cw = left_c ? (1.f - r) - (l + dxf) : (1.f - l) - (r - dxf);
+            cw = clampf(cw, MIN_WIN, left_c ? 1.f - r : 1.f - l);
+            // keep the derived height inside its own bounds
+            float ch_max = top_c ? 1.f - b : 1.f - t;
+            cw = fminf(cw, ch_max * k);
+            cw = fmaxf(cw, MIN_WIN);
+            float ch = cw / k;
+            if (left_c) cl.crop_l = (1.f - r) - cw; else cl.crop_r = (1.f - l) - cw;
+            if (top_c)  cl.crop_t = (1.f - b) - ch; else cl.crop_b = (1.f - t) - ch;
+        } else {                                       // free corner / edge
+            bool eL = s_crop.drag == 1 || s_crop.drag == 4 || s_crop.drag == 7;
+            bool eR = s_crop.drag == 2 || s_crop.drag == 3 || s_crop.drag == 8;
+            bool eT = s_crop.drag == 1 || s_crop.drag == 2 || s_crop.drag == 5;
+            bool eB = s_crop.drag == 3 || s_crop.drag == 4 || s_crop.drag == 6;
+            if (eL) cl.crop_l = clampf(l + dxf, 0.f, 1.f - r - MIN_WIN);
+            if (eR) cl.crop_r = clampf(r - dxf, 0.f, 1.f - l - MIN_WIN);
+            if (eT) cl.crop_t = clampf(t + dyf, 0.f, 1.f - b - MIN_WIN);
+            if (eB) cl.crop_b = clampf(b - dyf, 0.f, 1.f - t - MIN_WIN);
+        }
+    }
+    if (!ldown) s_crop.drag = 0;
+
+    // ── Pill: aspect presets + Reset / Cancel / Apply ─────────────────────────
+    auto apply_preset = [&](int preset) {
+        s_crop.aspect = preset;
+        if (preset == 0 || src_w <= 0) return;
+        float A  = (preset == 1) ? 1.f : (preset == 2) ? 9.f/16.f : 16.f/9.f;
+        float k  = A * (float)src_h / (float)src_w;   // cw/ch fraction ratio
+        float cw = fminf(1.f, k), ch = cw / k;
+        cl.crop_l = cl.crop_r = (1.f - cw) * 0.5f;
+        cl.crop_t = cl.crop_b = (1.f - ch) * 0.5f;
+    };
+
+    struct PB { const char* lbl; int preset; };  // preset >= 0; -1 Reset, -2 Cancel, -3 Apply
+    PB btns[] = {{"Free",0},{"1:1",1},{"9:16",2},{"16:9",3},
+                 {"Reset",-1},{"Cancel",-2},{"Apply",-3}};
+    float bh = 24.f, gap = 6.f, pad = 10.f, total_w = 0.f;
+    for (auto& pb : btns) total_w += ImGui::CalcTextSize(pb.lbl).x + 16.f + gap;
+    total_w += pad * 2.f - gap;
+    float bx = p.x + (w - total_w) * 0.5f, by = p.y + 12.f;
+    dl->AddRectFilled({bx, by}, {bx + total_w, by + bh + pad},
+                      IM_COL32(18,18,22,215), 14.f);
+    dl->AddRect({bx, by}, {bx + total_w, by + bh + pad},
+                IM_COL32(255,255,255,25), 14.f);
+    float cur_x = bx + pad;
+    for (auto& pb : btns) {
+        float bw2 = ImGui::CalcTextSize(pb.lbl).x + 16.f;
+        ImGui::SetCursorScreenPos({cur_x, by + pad * 0.5f});
+        ImGui::InvisibleButton(pb.lbl, {bw2, bh});
+        bool hov = ImGui::IsItemHovered();
+        bool sel = (pb.preset >= 0 && s_crop.aspect == pb.preset);
+        ImU32 bg = sel ? IM_COL32(130,100,255,220)
+                 : hov ? IM_COL32(62,62,82,230)
+                 : pb.preset == -3 ? IM_COL32(46,46,66,230) : IM_COL32(34,34,44,200);
+        dl->AddRectFilled({cur_x, by + pad*0.5f}, {cur_x + bw2, by + pad*0.5f + bh}, bg, 12.f);
+        dl->AddText({cur_x + 8.f, by + pad*0.5f + (bh - ImGui::GetFontSize()) * 0.5f},
+                    IM_COL32(232,232,238,255), pb.lbl);
+        if (ImGui::IsItemClicked()) {
+            if      (pb.preset >= 0)  apply_preset(pb.preset);
+            else if (pb.preset == -1) { cl.crop_l=cl.crop_t=cl.crop_r=cl.crop_b=0.f; s_crop.aspect=0; }
+            else if (pb.preset == -2) {
+                cl.crop_l = s_crop.entry_l; cl.crop_t = s_crop.entry_t;
+                cl.crop_r = s_crop.entry_r; cl.crop_b = s_crop.entry_b;
+                crop_mode_exit(state);
+                return;
+            } else {                   // Apply
+                history_push(state, "Crop clip");
+                crop_mode_exit(state);
+                return;
+            }
+        }
+        cur_x += bw2 + gap;
+    }
+
+    // Keyboard: Esc = cancel, Enter = apply.
+    if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+        cl.crop_l = s_crop.entry_l; cl.crop_t = s_crop.entry_t;
+        cl.crop_r = s_crop.entry_r; cl.crop_b = s_crop.entry_b;
+        crop_mode_exit(state);
+        return;
+    }
+    if (ImGui::IsKeyPressed(ImGuiKey_Enter) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter)) {
+        history_push(state, "Crop clip");
+        crop_mode_exit(state);
+        return;
+    }
+}
+
 void draw_canvas_handles(AppState& state, ImDrawList* dl, ImVec2 p, float w, float h) {
+    // Crop-edit mode replaces the normal transform handles entirely.
+    if (state.crop_edit_track >= 0) { draw_crop_mode(state, dl, p, w, h); return; }
     if (state.selected_track < 0 || state.selected_clip < 0) return;
     if (state.selected_track >= (int)state.tracks.size()) return;
     Track& tr = state.tracks[state.selected_track];
@@ -777,7 +1029,10 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
     bool in_preview_area = mpos.x >= p.x && mpos.x <= p.x+w &&
                            mpos.y >= p.y && mpos.y <= p.y+h;
 
-    if (lclick && in_preview_area && s_ctx.handle == CanvasHandle::None) {
+    // Layer picking stands down during crop-edit mode — clicks there belong
+    // to the crop window/handles (draw_crop_mode).
+    if (lclick && in_preview_area && s_ctx.handle == CanvasHandle::None &&
+        state.crop_edit_track < 0) {
         struct HitCandidate { int ti, ci; float area; };
         std::vector<HitCandidate> hits;
         for (int ti = 0; ti < (int)state.tracks.size(); ++ti) {
@@ -1107,9 +1362,20 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                 float rot   = cl_ptr->eval_prop("rotation", at_time);
                 float alpha = cl_ptr->eval_prop("opacity",  at_time) * alpha_mul;
                 VideoInfo vi = video_info(slot);
+                // While THIS clip is in crop-edit mode the full frame is shown
+                // (full aspect, full UVs) so the user can drag the crop window
+                // over it; otherwise the cropped sub-rect IS the clip.
+                bool editing_crop = (state.crop_edit_track == ti &&
+                                     state.crop_edit_clip  >= 0 &&
+                                     state.crop_edit_clip  < (int)track.clips.size() &&
+                                     &track.clips[state.crop_edit_clip] == cl_ptr);
                 float fit_w = w, fit_h = h;
                 if (vi.width > 0 && vi.height > 0) {
-                    float vid_asp = (float)vi.width / (float)vi.height;
+                    // Fit box follows the CROPPED region's aspect — the crop
+                    // sub-rect fills the same role the full frame used to.
+                    float vid_asp = editing_crop
+                        ? (float)vi.width / (float)vi.height
+                        : cl_ptr->cropped_aspect(vi.width, vi.height);
                     float can_asp = w / h;
                     if (vid_asp > can_asp) { fit_w = w; fit_h = w / vid_asp; }
                     else                   { fit_h = h; fit_w = h * vid_asp; }
@@ -1142,7 +1408,17 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                 }
 
                 alpha = std::fmaxf(0.f, std::fminf(1.f, alpha));
-                scene_add_layer(tex, cx, cy, hw, hh, cos_r, sin_r, alpha);
+                if (editing_crop)
+                    // Crop-edit shows the full frame, unrotated — the crop is
+                    // defined in source space, so the editing view is source
+                    // view (the overlay rect in draw_crop_mode matches this).
+                    scene_add_layer(tex, cx, cy, hw, hh, 1.f, 0.f, alpha);
+                else if (cl_ptr->has_crop())
+                    scene_add_layer(tex, cx, cy, hw, hh, cos_r, sin_r, alpha,
+                                    cl_ptr->crop_l, cl_ptr->crop_t,
+                                    1.f - cl_ptr->crop_r, 1.f - cl_ptr->crop_b);
+                else
+                    scene_add_layer(tex, cx, cy, hw, hh, cos_r, sin_r, alpha);
             };
 
             // Find the active video clip and check for transitions

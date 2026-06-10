@@ -209,6 +209,15 @@ void reopen_video_slots(AppState& state) {
             std::string key = clip_slot_key(cl.text, cl.start);
             int slot = slot_for_video(state, key, cl.text);
             if (slot < 0) continue;
+            // Images go straight to Still — never native. libav happily opens
+            // a PNG as a one-frame video, but then any decode past t=0 fails
+            // and the clip renders blank (this is how MCP-added images
+            // vanished from the preview: add_clip → proxy_scan → native PNG).
+            if (is_image_path(cl.text)) {
+                if (video_source(slot) != PreviewSource::Still)
+                    video_open_still(slot, proxy_still_path(cl.text));
+                continue;
+            }
             if (proxy_is_ready(cl.text)) {
                 ProxyInfo pi;
                 if (proxy_load(cl.text, pi)) {

@@ -667,6 +667,10 @@ async def list_tools() -> list[Tool]:
             description=(
                 "Set one property on a clip.\n\n"
                 "LAYOUT:    pos_x, pos_y (0–1 canvas fraction), scale_x, scale_y, rotation\n"
+                "CROP:      crop_l, crop_t, crop_r, crop_b (0–0.95 fraction trimmed per side,\n"
+                "           display orientation). Non-destructive render-time UV window —\n"
+                "           prefer this over crop_media when the media is already on the\n"
+                "           timeline; the fit box follows the cropped aspect.\n"
                 "PLAYBACK:  volume (0–2), speed (0.25–4), opacity (0–1), muted (bool),\n"
                 "           fade_in, fade_out, in_point (source offset seconds)\n"
                 "TEXT:      text, font_size (0=auto), sub_pos (0=bottom 1=center 2=top 3=custom),\n"

@@ -1457,8 +1457,9 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
             }
         }
 
-        // Escape clears selection
-        if (ImGui::IsKeyPressed(ImGuiKey_Escape) && s_rename_track < 0) {
+        // Escape clears selection (unless crop-edit mode owns Esc this frame)
+        if (ImGui::IsKeyPressed(ImGuiKey_Escape) && s_rename_track < 0 &&
+            state.crop_edit_track < 0) {
             state.clip_selection.clear();
             state.selected_track = -1;
             state.selected_clip  = -1;
@@ -2250,6 +2251,13 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                 ct->clips.insert(ct->clips.begin()+ci+1, dup);
                 history_push(state, "Duplicate clip");
             }
+        }
+        if (valid && cc->clip_type == ClipType::Video &&
+            ImGui::MenuItem(cc->has_crop() ? "Crop clip *" : "Crop clip")) {
+            state.selected_track  = ctx_track;
+            state.selected_clip   = ci;
+            state.crop_edit_track = ctx_track;
+            state.crop_edit_clip  = ci;
         }
         if (trk_locked) ImGui::EndDisabled();
         ImGui::Separator();

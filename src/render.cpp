@@ -1851,7 +1851,8 @@ static bool gl_render_vid_clip(ImDrawList& dl, const Clip* cl, float at_time,
 
         float fit_w = W, fit_h = H;
         if (vid_w > 0 && vid_h > 0) {
-            float va = (float)vid_w / (float)vid_h, ca = W / H;
+            // Fit box follows the cropped region's aspect (matches preview).
+            float va = cl->cropped_aspect(vid_w, vid_h), ca = W / H;
             if (va > ca) { fit_w = W; fit_h = W / va; }
             else         { fit_h = H; fit_w = H * va; }
         }
@@ -1862,11 +1863,14 @@ static bool gl_render_vid_clip(ImDrawList& dl, const Clip* cl, float at_time,
         auto rot_pt = [&](float ox, float oy) -> ImVec2 {
             return { cx + ox*cos_r - oy*sin_r, cy + ox*sin_r + oy*cos_r };
         };
+        // Non-destructive crop: sample only the clip's UV window.
+        ImVec2 uv0{cl->crop_l,       cl->crop_t};
+        ImVec2 uv1{1.f - cl->crop_r, 1.f - cl->crop_b};
         if (use_scene) {
             scene_add_layer(cur_tex, cx, cy, hw, hh, cos_r, sin_r,
-                            fmaxf(0.f, fminf(1.f, alpha)));
+                            fmaxf(0.f, fminf(1.f, alpha)),
+                            uv0.x, uv0.y, uv1.x, uv1.y);
         } else {
-            ImVec2 uv0{0,0}, uv1{1,1};
             ImU32 col = IM_COL32(255,255,255,(int)(alpha*255));
             dl.AddImageQuad((ImTextureID)(uintptr_t)cur_tex,
                 rot_pt(-hw,-hh), rot_pt(hw,-hh), rot_pt(hw,hh), rot_pt(-hw,hh),
@@ -1974,7 +1978,8 @@ static bool gl_render_vid_clip(ImDrawList& dl, const Clip* cl, float at_time,
 
     float fit_w = W, fit_h = H;
     if (vid_w > 0 && vid_h > 0) {
-        float vid_asp = (float)vid_w / (float)vid_h;
+        // Fit box follows the cropped region's aspect (matches preview).
+        float vid_asp = cl->cropped_aspect(vid_w, vid_h);
         float can_asp = W / H;
         if (vid_asp > can_asp) { fit_w = W; fit_h = W / vid_asp; }
         else                   { fit_h = H; fit_w = H * vid_asp; }
@@ -2013,14 +2018,18 @@ static bool gl_render_vid_clip(ImDrawList& dl, const Clip* cl, float at_time,
     auto rot_pt = [&](float ox, float oy) -> ImVec2 {
         return { cx + ox*cos_r - oy*sin_r, cy + ox*sin_r + oy*cos_r };
     };
+    // Non-destructive crop: sample only the clip's UV window.
+    float cu0 = cl->crop_l,       cv0 = cl->crop_t;
+    float cu1 = 1.f - cl->crop_r, cv1 = 1.f - cl->crop_b;
     if (use_scene) {
         scene_add_layer(draw_tex, cx, cy, hw, hh, cos_r, sin_r,
-                        fmaxf(0.f, fminf(1.f, alpha)));
+                        fmaxf(0.f, fminf(1.f, alpha)),
+                        cu0, cv0, cu1, cv1);
     } else {
         ImU32 col = IM_COL32(255, 255, 255, (int)(fmaxf(0.f, fminf(1.f, alpha)) * 255.f));
         dl.AddImageQuad(ImTextureRef((ImTextureID)draw_tex),
             rot_pt(-hw,-hh), rot_pt(hw,-hh), rot_pt(hw,hh), rot_pt(-hw,hh),
-            {0,0}, {1,0}, {1,1}, {0,1}, col);
+            {cu0,cv0}, {cu1,cv0}, {cu1,cv1}, {cu0,cv1}, col);
     }
     return true;
 }

@@ -270,13 +270,12 @@ void ui_studio(AppState& state) {
         std::string src = source_from_key(key);
         if (is_image_path(src)) {
             // Images never get an MJPEG proxy — keep them out of the generic
-            // native/proxy logic below (per-frame libav opens). Their only
-            // upgrade is Closed → Still: the add-time video_open_still races
-            // the background proxy_ensure_still and loses for brand-new
-            // files, leaving the clip invisible in preview (export was fine —
-            // it reads the still from disk much later). Retry here until the
-            // still lands; fs::exists per frame is as cheap as proxy_is_ready.
-            if (!video_is_open(slot)) {
+            // native/proxy logic below (per-frame libav opens). Still is their
+            // terminal state; repair both Closed slots (the add-time open
+            // races the background still generator for brand-new files) and
+            // slots stuck in Native (libav opens a PNG as a one-frame video,
+            // then every decode past t=0 fails and the clip renders blank).
+            if (video_source(slot) != PreviewSource::Still) {
                 std::string still = proxy_still_path(src);
                 if (fs::exists(still)) {
                     video_open_still(slot, still);

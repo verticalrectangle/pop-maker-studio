@@ -120,6 +120,21 @@ static void draw_clip_header(AppState& state, Clip& clip, Track& track, float w)
 
     // Action row
     ImGui::Dummy({0.f, 4.f});
+    if (clip.clip_type == ClipType::Video) {
+        bool cropping = (state.crop_edit_track == state.selected_track &&
+                         state.crop_edit_clip  == state.selected_clip);
+        // Toggle canvas crop-edit mode; "*" marks an existing crop.
+        if (ui_btn(cropping ? "Cropping…" : (clip.has_crop() ? "Crop *" : "Crop"),
+                   cropping, true)) {
+            if (cropping) {
+                state.crop_edit_track = state.crop_edit_clip = -1;
+            } else {
+                state.crop_edit_track = state.selected_track;
+                state.crop_edit_clip  = state.selected_clip;
+            }
+        }
+        ImGui::SameLine(0.f, 6.f);
+    }
     if (ui_btn("Split", false, true)) {
         float cut = state.playhead;
         if (cut > clip.start + 0.02f && cut < clip.end - 0.02f) {
@@ -1318,6 +1333,31 @@ void panel_clip(AppState& state, float w) {
             }
             ImGui::Dummy({0.f, 4.f});
             plain_slider("##vid_rot", "Rotation", &clip.rotation, -180.f, 180.f, "%.1f\xc2\xb0");
+        }
+
+        // ── Crop (non-destructive UV window; edit visually via Crop button) ──
+        ImGui::Dummy({0.f, 10.f}); ui_separator(); ImGui::Dummy({0.f, 6.f});
+        ui_label("Crop");
+        ImGui::Dummy({0.f, 6.f});
+        {
+            // Sliders in percent; each side clamps against its opposite so a
+            // sliver always stays visible (same rule as set_clip_prop).
+            struct CS { const char* id; const char* lbl; float* v; float* opp; };
+            CS sides[] = {{"##crop_l", "Left",   &clip.crop_l, &clip.crop_r},
+                          {"##crop_r", "Right",  &clip.crop_r, &clip.crop_l},
+                          {"##crop_t", "Top",    &clip.crop_t, &clip.crop_b},
+                          {"##crop_b", "Bottom", &clip.crop_b, &clip.crop_t}};
+            for (auto& s : sides) {
+                float pct = *s.v * 100.f;
+                if (plain_slider(s.id, s.lbl, &pct, 0.f, 95.f, "%.0f%%"))
+                    *s.v = fmaxf(0.f, fminf(pct / 100.f, 0.95f - *s.opp));
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Crop clip");
+                ImGui::Dummy({0.f, 4.f});
+            }
+            if (clip.has_crop() && ui_btn("Reset crop", false, true)) {
+                clip.crop_l = clip.crop_t = clip.crop_r = clip.crop_b = 0.f;
+                history_push(state, "Reset crop");
+            }
         }
 
         // ── Speed ────────────────────────────────────────────────────────────
