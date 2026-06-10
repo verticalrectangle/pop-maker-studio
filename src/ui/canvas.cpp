@@ -66,6 +66,18 @@ struct CanvasTransform {
 };
 static CanvasTransform s_ctx;
 
+// True when a real ImGui widget claims the mouse — the transport pill's
+// scrubber/buttons and other overlays float INSIDE the preview rect, so the
+// canvas's raw hit-testing must stand down or clicks on them fall through to
+// layer-select / drag-start underneath. Widgets are submitted after this code
+// runs each frame, so same-frame HoveredId is always still 0 here:
+// HoveredIdPreviousFrame catches the click frame (hover precedes click),
+// ActiveId catches a drag already in progress (it persists across frames).
+static bool ui_widget_claims_mouse() {
+    ImGuiContext& g = *GImGui;
+    return g.HoveredIdPreviousFrame != 0 || g.ActiveId != 0;
+}
+
 void compute_video_bbox(AppState& state, Clip& cl, ImVec2 p, float w, float h,
                                 float& bx0, float& by0, float& bx1, float& by1) {
     float px = cl.eval_prop("pos_x",   state.playhead) * w + p.x;
@@ -97,11 +109,13 @@ void draw_canvas_handles(AppState& state, ImDrawList* dl, ImVec2 p, float w, flo
 
     ImVec2 mpos   = ImGui::GetIO().MousePos;
     bool   ldown  = ImGui::IsMouseDown(0);
-    // No drag-start while a popup is open (popups don't block IsMouseClicked)
+    // No drag-start while a popup is open (popups don't block IsMouseClicked),
+    // while a real widget claims the mouse (transport pill over the canvas),
     // or during Alt+click — Alt cycles the layer selection in draw_preview,
     // and immediately grabbing the newly selected layer would move it.
     bool   lclick = ImGui::IsMouseClicked(0) &&
                     !ImGui::GetIO().KeyAlt &&
+                    !ui_widget_claims_mouse() &&
                     !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId |
                                             ImGuiPopupFlags_AnyPopupLevel);
 
@@ -751,8 +765,11 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
     // Each track draws whichever clip type is active — video and text are interleaved correctly.
     ImVec2 mpos  = ImGui::GetIO().MousePos;
     // Popups don't intercept IsMouseClicked — without this guard a click on a
-    // context-menu item overlapping the preview also ran layer selection.
+    // context-menu item overlapping the preview also ran layer selection. The
+    // widget guard does the same for the transport pill floating over the
+    // canvas: scrubbing or hitting play must not select/deselect layers.
     bool   lclick = ImGui::IsMouseClicked(0) &&
+                    !ui_widget_claims_mouse() &&
                     !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId |
                                             ImGuiPopupFlags_AnyPopupLevel);
 
