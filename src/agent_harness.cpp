@@ -227,13 +227,19 @@ static std::string image_file_to_data_url(const std::string& path, int max_edge)
 
 struct CurlStream { FILE* out = nullptr; pid_t pid = 0; std::string hdr_path, body_path; };
 
+static void curl_end(CurlStream& cs);
+
 static bool curl_begin(const std::string& url, const std::string& api_key,
                        const std::string& body, CurlStream& cs) {
     char hdr_tmpl[]  = "/tmp/pms_agent_hdr_XXXXXX";
     char body_tmpl[] = "/tmp/pms_agent_body_XXXXXX";
     int hfd = mkstemp(hdr_tmpl);
     int bfd = mkstemp(body_tmpl);
-    if (hfd < 0 || bfd < 0) { if (hfd >= 0) close(hfd); if (bfd >= 0) close(bfd); return false; }
+    if (hfd < 0 || bfd < 0) {
+        if (hfd >= 0) { close(hfd); unlink(hdr_tmpl); }
+        if (bfd >= 0) { close(bfd); unlink(body_tmpl); }
+        return false;
+    }
     fchmod(hfd, 0600); fchmod(bfd, 0600);
     // The Authorization header goes through a 0600 config file, never argv —
     // argv is world-readable in /proc while curl runs.
@@ -243,10 +249,15 @@ static bool curl_begin(const std::string& url, const std::string& api_key,
     close(hfd); close(bfd);
     cs.hdr_path = hdr_tmpl; cs.body_path = body_tmpl;
 
+    // From here on, failure paths go through curl_end so the 0600 header
+    // file holding the Bearer key never outlives the attempt.
     int pipefd[2];
-    if (pipe(pipefd) != 0) return false;
+    if (pipe(pipefd) != 0) { curl_end(cs); return false; }
     pid_t pid = fork();
-    if (pid < 0) { close(pipefd[0]); close(pipefd[1]); return false; }
+    if (pid < 0) {
+        close(pipefd[0]); close(pipefd[1]);
+        curl_end(cs); return false;
+    }
     if (pid == 0) {
         dup2(pipefd[1], STDOUT_FILENO);
         close(pipefd[0]); close(pipefd[1]);
@@ -262,10 +273,16 @@ static bool curl_begin(const std::string& url, const std::string& api_key,
         _exit(127);
     }
     close(pipefd[1]);
-    cs.out = fdopen(pipefd[0], "r");
     cs.pid = pid;
+    cs.out = fdopen(pipefd[0], "r");
+    if (!cs.out) {
+        close(pipefd[0]);
+        kill(pid, SIGTERM);
+        curl_end(cs);  // reaps the child, unlinks the temp files
+        return false;
+    }
     s_curl_pid = pid;
-    return cs.out != nullptr;
+    return true;
 }
 
 static void curl_end(CurlStream& cs) {
@@ -304,7 +321,12 @@ static std::string key_lookup() {
     return out;
 }
 
-bool agent_key_present() { return agent_key_available() && !key_lookup().empty(); }
+bool agent_key_present() {
+    // PMS_AGENT_KEY counts: otherwise the settings UI claims "no key" while
+    // the agent works fine off the env override.
+    if (const char* k = getenv("PMS_AGENT_KEY")) return *k != '\0';
+    return agent_key_available() && !key_lookup().empty();
+}
 
 bool agent_key_store(const std::string& key) {
     if (!agent_key_available() || key.empty()) return false;
@@ -324,16 +346,20 @@ bool agent_key_clear() {
 
 static std::string truncate_result(std::string s) {
     if (s.size() <= kToolResultCap) return s;
-    s.resize(kToolResultCap);
+    // Back up to a UTF-8 sequence boundary — a string cut mid-sequence is
+    // invalid UTF-8 and json::dump() throws on it next request.
+    size_t cut = kToolResultCap;
+    while (cut > 0 && (s[cut] & 0xC0) == 0x80) --cut;
+    s.resize(cut);
     s += "\n…[truncated — re-query with a slimmer tool if you need more]";
     return s;
 }
 
-// Returns tool-role content (always a text string for API compatibility).
+// Returns tool-role content (a text string, for API compatibility).
 // extra_wire_msgs: appended AFTER the tool_result — used for snapshot images
 // that must trail the tool_call_id response to keep the wire legal everywhere.
-static json exec_tool(const std::string& name, json args,
-                      std::vector<json>& extra_wire_msgs, bool vision) {
+static std::string exec_tool(const std::string& name, json args,
+                             std::vector<json>& extra_wire_msgs, bool vision) {
     // Default to small acks — the model can re-read state explicitly.
     const ToolInfo* info = nullptr;
     for (auto& [n, i] : tool_table()) if (n == name) { info = &i; break; }
@@ -341,10 +367,12 @@ static json exec_tool(const std::string& name, json args,
     if (info->has_quiet && !args.contains("quiet")) args["quiet"] = true;
 
     json result; std::string err;
-    // Force render source — canvas grabs the preview rect at display size
-    // which can be tiny (e.g. 175x312) when panels are open, making text
-    // illegible for the model.
-    if (name == "take_snapshot") args.erase("source");
+    // Default to the render source — canvas grabs the preview rect at display
+    // size, which can be tiny (e.g. 175x312) when panels are open, making
+    // text illegible for the model. An explicit source is honored: render
+    // snapshots fail on text-only projects with a hint to use canvas.
+    if (name == "take_snapshot" && !args.contains("source"))
+        args["source"] = "render";
     if (!ipc_request(name, args, result, err))
         return "error: " + err;
 
@@ -383,6 +411,25 @@ static json exec_tool(const std::string& name, json args,
     return truncate_result(result.dump());
 }
 
+// Keep only the newest snapshot image on the wire. Each image part is
+// ~100-200 KB of base64 re-sent with every request, and a stale frame of the
+// canvas misleads the model more than it helps. Caller holds s_mu.
+static void prune_stale_images_locked() {
+    int newest = -1;
+    for (int i = (int)s_wire.size() - 1; i >= 0 && newest < 0; --i)
+        if (s_wire[i]["content"].is_array())
+            for (auto& part : s_wire[i]["content"])
+                if (part.value("type", "") == "image_url") { newest = i; break; }
+    for (int i = 0; i < newest; ++i) {
+        if (!s_wire[i]["content"].is_array()) continue;
+        for (auto& part : s_wire[i]["content"])
+            if (part.value("type", "") == "image_url")
+                part = {{"type", "text"},
+                        {"text", "[stale snapshot omitted — take_snapshot "
+                                 "again for the current canvas]"}};
+    }
+}
+
 // ── The chat loop ─────────────────────────────────────────────────────────────
 
 static const char* kSystemPrompt =
@@ -392,8 +439,8 @@ static const char* kSystemPrompt =
     "Track 0 is the top/foreground layer. Times are in seconds. Mutations "
     "return small acks; call get_project or get_clips when you need to read "
     "state. take_snapshot shows you the canvas. Be concise in prose — do the "
-    "work with tools and summarize briefly. You can put videos and images"
-    "on the timeline.";;
+    "work with tools and summarize briefly. You can put videos and images "
+    "on the timeline.";
 
 static void worker_turn() {
     std::string api_key = key_lookup();
@@ -416,6 +463,7 @@ static void worker_turn() {
         json body;
         {
             std::lock_guard<std::mutex> lk(s_mu);
+            prune_stale_images_locked();
             body = {{"model", cfg.model}, {"messages", s_wire},
                     {"tools", tools_decl}, {"stream", true}};
         }
@@ -505,48 +553,42 @@ static void worker_turn() {
             s_wire.push_back(amsg);
         }
 
-        if (calls.empty() || finish == "stop") break;
+        if (calls.empty()) break;
 
         // ── Execute tool calls serially ───────────────────────────────────────
+        size_t answered = 0;
         for (auto& call : calls) {
             if (s_stop) break;
             std::string tname = call["function"]["name"].get<std::string>();
             std::string targs_s = call["function"]["arguments"].get<std::string>();
             json targs = json::parse(targs_s.empty() ? "{}" : targs_s,
                                      nullptr, false);
-            json content;
             std::vector<json> extra;
-            std::string result_str;
-            if (targs.is_discarded()) {
-                result_str = "error: tool arguments were not valid JSON";
-                content    = result_str;
-            } else {
-                content = exec_tool(tname, targs, extra, cfg.vision);
-                if (content.is_string()) {
-                    result_str = content.get<std::string>();
-                } else if (content.is_array()) {
-                    for (auto& part : content) {
-                        if (part.value("type", "") == "text") {
-                            result_str = part.value("text", "");
-                            break;
-                        }
-                    }
-                    if (result_str.empty()) result_str = content.dump();
-                } else {
-                    result_str = content.dump();
-                }
-            }
+            std::string result = targs.is_discarded()
+                ? "error: tool arguments were not valid JSON"
+                : exec_tool(tname, targs, extra, cfg.vision);
             std::string summary = "\xe2\x96\xb8 " + tname + " " +
                 (targs_s.size() > 120 ? targs_s.substr(0, 117) + "…" : targs_s);
-            bool failed = result_str.rfind("error:", 0) == 0;
+            bool failed = result.rfind("error:", 0) == 0;
             row_add(failed ? AgentRole::Error : AgentRole::Tool,
                     summary + (failed ? "  \xe2\x9c\x97" : ""),
-                    "args: " + targs_s + "\n\nresult: " + result_str);
+                    "args: " + targs_s + "\n\nresult: " + result);
             std::lock_guard<std::mutex> lk(s_mu);
             s_wire.push_back({{"role", "tool"},
                               {"tool_call_id", call["id"]},
-                              {"content", content}});
+                              {"content", result}});
             for (auto& m : extra) s_wire.push_back(m);
+            ++answered;
+        }
+        // Every tool_call_id must get a tool message or the API rejects the
+        // whole history next turn. Synthesize results for calls skipped by
+        // Stop so the conversation stays usable.
+        if (answered < calls.size()) {
+            std::lock_guard<std::mutex> lk(s_mu);
+            for (size_t i = answered; i < calls.size(); ++i)
+                s_wire.push_back({{"role", "tool"},
+                                  {"tool_call_id", calls[i]["id"]},
+                                  {"content", "(cancelled by user before execution)"}});
         }
         if (iter == kMaxToolIters - 1)
             row_add(AgentRole::Error, "tool budget exhausted for this turn");

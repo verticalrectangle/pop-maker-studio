@@ -17,9 +17,11 @@ void draw_agent_log(AppState& state, float panel_w, float panel_h) {
 
     ImGui::PushFont(g_font_mono);
     ImGui::PushStyleColor(ImGuiCol_ChildBg, IM_COL32(0x16, 0x16, 0x20, 255));
+    // Padding must be pushed before BeginChild to apply to this child.
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {16.f, 8.f});
     ImGui::BeginChild("##agent_log", {panel_w, panel_h},
                       ImGuiChildFlags_AlwaysUseWindowPadding);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {16.f, 8.f});
+    ImGui::PopStyleVar();
 
     std::vector<AgentRow> rows = agent_rows_snapshot();
     if (rows.empty()) {
@@ -99,7 +101,6 @@ void draw_agent_log(AppState& state, float panel_w, float panel_h) {
         ImGui::SetScrollHereY(1.f);
         s_last_rows = rows.size();
     }
-    ImGui::PopStyleVar();
     ImGui::EndChild();
     ImGui::PopStyleColor();
     ImGui::PopFont();

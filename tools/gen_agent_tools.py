@@ -14,6 +14,8 @@ side hand-maintains a list that can rot.
 Run from the repo root after changing tool definitions in server.py:
     python3 tools/gen_agent_tools.py
 The output header is committed, same policy as the fx_* generated headers.
+Pass --check to verify the committed header is fresh without rewriting it
+(exit 1 if stale) — for CI or a pre-commit hook.
 """
 import json
 import re
@@ -57,6 +59,16 @@ def main():
         "// JSON array of {name, description, inputSchema, ipc}.\n"
         "static const char* AGENT_TOOLS_JSON = R\"PMSTOOLS(" + payload + ")PMSTOOLS\";\n"
     )
+    if "--check" in sys.argv:
+        current = OUT.read_text() if OUT.exists() else ""
+        if current != header:
+            raise SystemExit(
+                f"{OUT.relative_to(ROOT)} is stale — "
+                "run: python3 tools/gen_agent_tools.py"
+            )
+        print(f"{OUT.relative_to(ROOT)} is up to date")
+        return
+
     OUT.write_text(header)
     print(f"wrote {OUT.relative_to(ROOT)}: {len(tools)} tools, {n_ipc} ipc-servable")
     skipped = sorted(t["name"] for t in tools if not t["ipc"])
