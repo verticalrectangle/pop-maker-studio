@@ -861,6 +861,45 @@ async def list_tools() -> list[Tool]:
             },
         ),
         Tool(
+            name="set_clip_keyframes",
+            description=(
+                "Replace the keyframe track for one animatable property on a clip — this is how "
+                "you animate position, scale, rotation, opacity, volume, or pan over time. "
+                "Keyframable props: pos_x, pos_y, scale_x, scale_y, rotation, opacity, volume, pan.\n\n"
+                "keys: full list of {t, v, interp?} replacing any existing keys for that prop. "
+                "t is SECONDS RELATIVE TO CLIP START; interp is the easing toward the NEXT key: "
+                "linear | ease_in | ease_out | ease_both (default) | hold. "
+                "Pass keys=[] to clear the track (the static property value takes over again). "
+                "While keys exist the static field for that prop is ignored.\n\n"
+                "Keys render in both preview and export, survive split/trim (remapped), and show "
+                "as diamonds on the clip in the timeline. Existing keyframes appear under "
+                "'keyframes' on each clip in get_project(verbose=true)."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "quiet": {"type": "boolean", "description": "Return a small ack instead of the full project state (big token saver — use unless you need to re-read state)"},
+                    "track":      {"type": "integer"},
+                    "track_name": {"type": "string", "description": "Track name (alternative to track index)"},
+                    "clip": {"type": "integer"},
+                    "prop": {"type": "string", "description": "pos_x | pos_y | scale_x | scale_y | rotation | opacity | volume | pan"},
+                    "keys": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "t":      {"type": "number", "description": "Seconds relative to clip start"},
+                                "v":      {"type": "number"},
+                                "interp": {"type": "string", "description": "linear|ease_in|ease_out|ease_both|hold (easing toward next key)"},
+                            },
+                            "required": ["t", "v"],
+                        },
+                    },
+                },
+                "required": ["clip", "prop", "keys"],
+            },
+        ),
+        Tool(
             name="add_clip_sequence",
             description=(
                 "Add multiple clips to a single track in one round-trip. Equivalent to calling "

@@ -37,6 +37,14 @@ extern ImFont* g_font_black;
 // g_tl — timeline drag/select state (declared extern in studio_types.h)
 TlState g_tl;
 
+// In-progress keyframe-diamond retime drag (one at a time, like clip drags).
+static struct {
+    bool        active = false;
+    int         ti = -1, ci = -1, idx = -1;
+    std::string prop;
+    bool        moved = false;   // only push undo history if it actually moved
+} s_kf_drag;
+
 // Drop state — declared extern in timeline.h
 int   s_tl_hover_track   = -1;
 float s_drop_flash_t     = 0.f;
@@ -301,17 +309,6 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
         } else {
             dl->AddLine({px, ruler_y + 10.f}, {px, ruler_y + TL_RULER_H},
                         to_u32(Col::dim));
-        }
-    }
-
-    // Beat tick marks (small orange triangles at the bottom of the ruler)
-    if (!state.beats.empty()) {
-        ImU32 beat_col = IM_COL32(255, 160, 50, 180);
-        float ty = ruler_y + TL_RULER_H - 5.f;
-        for (float bt : state.beats) {
-            float px = origin.x + TL_LABEL_W + bt * zoom - scroll;
-            if (px < origin.x + TL_LABEL_W || px > origin.x + total_w) continue;
-            dl->AddTriangleFilled({px-3.f, ty}, {px+3.f, ty}, {px, ty+5.f}, beat_col);
         }
     }
 
@@ -753,41 +750,98 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                     (mouse.x <= orig_cx0h+ew_hit || mouse.x >= orig_cx1h-ew_hit))
                     ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
             }
-            // Keyframe diamond markers
+            // Keyframe diamond markers — click selects, drag retimes
+            bool kf_claimed = false;  // diamond consumed this click; skip clip select/drag
             if (!clip.ktracks.empty()) {
-                float kf_mid_y = (cy0 + cy1) * 0.5f;
-                float d = 4.f;
+                // Dedicated lane at the bottom of the clip body: a dark strip
+                // the diamonds sit on, so they stay legible over any thumbnail
+                // (4px grey floating mid-clip was invisible on busy video).
+                float lane_b = cy1 - 2.f, lane_t = fmaxf(cy0 + 2.f, cy1 - 13.f);
+                dl->AddRectFilled({vis_x0, lane_t}, {vis_x1, lane_b},
+                                  IM_COL32(8, 8, 12, 170), 3.f);
+                float kf_mid_y = (lane_t + lane_b) * 0.5f;
+                float d = 5.f;
                 for (auto& [pname, pt] : clip.ktracks) {
-                    for (auto& kf : pt.keys) {
+                    for (int ki = 0; ki < (int)pt.keys.size(); ++ki) {
+                        Keyframe& kf = pt.keys[ki];
                         float kx = origin.x + TL_LABEL_W + (clip.start + kf.time) * zoom - scroll;
-                        if (kx < vis_x0 || kx > vis_x1) continue;
+                        if (kx < vis_x0 - d || kx > vis_x1 + d) continue;
+                        bool dragging_this = s_kf_drag.active &&
+                            s_kf_drag.ti == ti && s_kf_drag.ci == ci &&
+                            s_kf_drag.prop == pname && s_kf_drag.idx == ki;
                         bool kf_sel = (state.kf_sel_track == ti &&
                                        state.kf_sel_clip  == ci &&
                                        state.kf_sel_prop  == pname &&
-                                       &kf == &pt.keys[state.kf_sel_idx > 0 &&
-                                           state.kf_sel_idx < (int)pt.keys.size()
-                                           ? state.kf_sel_idx : 0]);
-                        ImU32 kc = kf_sel ? IM_COL32(255,200,60,255) : IM_COL32(220,220,220,200);
+                                       state.kf_sel_idx   == ki);
+                        bool hovered = !s_kf_drag.active && !tl_any_popup &&
+                                       fabsf(mouse.x - kx) < d + 3.f &&
+                                       fabsf(mouse.y - kf_mid_y) < d + 3.f;
+                        ImU32 kc = (kf_sel || dragging_this) ? IM_COL32(255,200,60,255)
+                                 : hovered                   ? IM_COL32(255,235,160,230)
+                                                             : IM_COL32(235,235,235,255);
                         dl->AddQuadFilled(
                             {kx, kf_mid_y-d}, {kx+d, kf_mid_y},
                             {kx, kf_mid_y+d}, {kx-d, kf_mid_y}, kc);
-                        if ((!tl_any_popup && ImGui::IsMouseClicked(0)) &&
-                            fabsf(mouse.x - kx) < d+2.f &&
-                            fabsf(mouse.y - kf_mid_y) < d+2.f) {
-                            state.kf_sel_track = ti;
-                            state.kf_sel_clip  = ci;
-                            state.kf_sel_prop  = pname;
-                            int idx = (int)(&kf - pt.keys.data());
-                            state.kf_sel_idx   = idx;
-                            state.selected_track = ti;
-                            state.selected_clip  = ci;
+                        dl->AddQuad(
+                            {kx, kf_mid_y-d}, {kx+d, kf_mid_y},
+                            {kx, kf_mid_y+d}, {kx-d, kf_mid_y},
+                            IM_COL32(0, 0, 0, 200), 1.f);
+                        if (hovered) {
+                            ImGui::SetTooltip("%s   %.2fs   = %.3f\n"
+                                              "click to select \xc2\xb7 drag to move",
+                                              pname.c_str(), kf.time, kf.value);
+                            if (ImGui::IsMouseClicked(0)) {
+                                state.kf_sel_track = ti;
+                                state.kf_sel_clip  = ci;
+                                state.kf_sel_prop  = pname;
+                                state.kf_sel_idx   = ki;
+                                state.selected_track = ti;
+                                state.selected_clip  = ci;
+                                s_kf_drag.active = true;
+                                s_kf_drag.ti = ti; s_kf_drag.ci = ci;
+                                s_kf_drag.idx = ki; s_kf_drag.prop = pname;
+                                s_kf_drag.moved = false;
+                                kf_claimed = true;
+                                s_clip_hit = true;  // it's still a clip hit — don't deselect
+                            }
                         }
+                    }
+                }
+                // Retime drag in progress on one of this clip's keys
+                if (s_kf_drag.active && s_kf_drag.ti == ti && s_kf_drag.ci == ci) {
+                    auto it_kt = clip.ktracks.find(s_kf_drag.prop);
+                    if (it_kt == clip.ktracks.end() ||
+                        s_kf_drag.idx >= (int)it_kt->second.keys.size()) {
+                        s_kf_drag.active = false;
+                    } else if (ImGui::IsMouseDown(0)) {
+                        auto& keys = it_kt->second.keys;
+                        float t_new = (mouse.x - origin.x - TL_LABEL_W + scroll) / zoom
+                                      - clip.start;
+                        t_new = fmaxf(0.f, fminf(t_new, clip.end - clip.start));
+                        if (fabsf(t_new - keys[s_kf_drag.idx].time) > 1e-4f)
+                            s_kf_drag.moved = true;
+                        keys[s_kf_drag.idx].time = t_new;
+                        // Bubble past neighbors so the track stays time-sorted.
+                        while (s_kf_drag.idx > 0 &&
+                               keys[s_kf_drag.idx].time < keys[s_kf_drag.idx-1].time) {
+                            std::swap(keys[s_kf_drag.idx], keys[s_kf_drag.idx-1]);
+                            --s_kf_drag.idx;
+                        }
+                        while (s_kf_drag.idx + 1 < (int)keys.size() &&
+                               keys[s_kf_drag.idx].time > keys[s_kf_drag.idx+1].time) {
+                            std::swap(keys[s_kf_drag.idx], keys[s_kf_drag.idx+1]);
+                            ++s_kf_drag.idx;
+                        }
+                        state.kf_sel_idx = s_kf_drag.idx;
+                    } else {
+                        if (s_kf_drag.moved) history_push(state, "Move keyframe");
+                        s_kf_drag.active = false;
                     }
                 }
             }
             // Left click — select / drag
             bool any_popup = ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
-            if (!s_trans_hit_this_frame && !any_popup && (!tl_any_popup && ImGui::IsMouseClicked(0))) {
+            if (!kf_claimed && !s_trans_hit_this_frame && !any_popup && (!tl_any_popup && ImGui::IsMouseClicked(0))) {
                 if (mouse.y>=cy0 && mouse.y<=cy1 && mouse.x>=vis_x0 && mouse.x<=vis_x1) {
                     s_clip_hit = true;
                     auto key = std::make_pair(ti, ci);
@@ -1707,7 +1761,13 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
             float src_floor = (src_dur > 0.f && !still_img_l)
                 ? dc.start - dc.in_point / fmaxf(0.01f, dc.speed) : 0.f;
             float new_start = fmaxf(src_floor, fmaxf(0.f, fminf(t, dc.end - f1)));
-            dc.in_point = fmaxf(0.f, dc.in_point + (new_start - dc.start));
+            float d = new_start - dc.start;
+            // in_point is in source seconds — scale the timeline delta by speed
+            // (matches src_floor above, which divides by speed).
+            dc.in_point = fmaxf(0.f, dc.in_point + d * fmaxf(0.01f, dc.speed));
+            // Keys are relative to clip.start; shift them back so the
+            // animation stays put on the timeline while the edge moves.
+            clip_keys_shift(dc, -d);
             dc.start = new_start;
             sync_proxy_key();
         } else if (drag_right && !right_locked) {
@@ -2238,9 +2298,8 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
             if (valid) {
                 float cut = state.playhead;
                 if (cut > cc->start+0.02f && cut < cc->end-0.02f) {
-                    Clip right = *cc; cc->end = cut; right.start = cut;
-                    right.in_point += (cut - cc->start) * cc->speed;
-                    ct->clips.insert(ct->clips.begin()+ci+1, right);
+                    Clip right = clip_split_at(*cc, cut);
+                    ct->clips.insert(ct->clips.begin()+ci+1, std::move(right));
                     history_push(state, "Split clip");
                 }
             }

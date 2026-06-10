@@ -90,8 +90,59 @@ float Clip::eval_prop(const std::string& name, float playhead) const {
         return fmaxf(0.f, fminf(1.f, base));
     }
     if (name == "volume")    return volume;
+    if (name == "pan")       return pan;
     if (name == "sub_pos_y") return sub_pos_y;
     return 0.f;
+}
+
+// ── Split / trim keyframe handling ────────────────────────────────────────────
+
+Clip clip_split_at(Clip& cl, float cut) {
+    float c = cut - cl.start;  // split point relative to clip start (timeline s)
+    Clip right = cl;
+    right.start    = cut;
+    right.in_point = cl.in_point + c * cl.speed;
+    cl.end = cut;
+
+    // Key times are relative to clip.start, so the right half's keys must
+    // shift by -c. Both halves get a synthesized boundary key holding the
+    // value at the cut so neither side's animation changes visibly.
+    for (auto& [name, pt] : cl.ktracks) {
+        if (pt.empty()) continue;
+        const std::vector<Keyframe> orig = pt.keys;
+        float v_cut = pt.eval(c);
+
+        // Interp of the segment the cut lands in — carried onto the right
+        // half's boundary key so easing continues roughly as before.
+        InterpType seg_it = InterpType::Linear;
+        for (int i = (int)orig.size() - 1; i >= 0; --i)
+            if (orig[i].time <= c) { seg_it = orig[i].interp; break; }
+
+        std::vector<Keyframe> lk, rk;
+        for (const auto& k : orig) {
+            if (k.time <= c) lk.push_back(k);
+            else             rk.push_back({k.time - c, k.value, k.interp});
+        }
+        if (!rk.empty() && (lk.empty() || lk.back().time < c - 1e-4f))
+            lk.push_back({c, v_cut, InterpType::Linear});
+        if (rk.empty() || rk.front().time > 1e-4f)
+            rk.insert(rk.begin(), {0.f, v_cut, seg_it});
+
+        pt.keys = std::move(lk);
+        right.ktracks[name].keys = std::move(rk);
+    }
+    for (auto it = cl.ktracks.begin(); it != cl.ktracks.end(); )
+        it = it->second.empty() ? cl.ktracks.erase(it) : std::next(it);
+    for (auto it = right.ktracks.begin(); it != right.ktracks.end(); )
+        it = it->second.empty() ? right.ktracks.erase(it) : std::next(it);
+    return right;
+}
+
+void clip_keys_shift(Clip& cl, float dt) {
+    if (dt == 0.f) return;
+    for (auto& [name, pt] : cl.ktracks)
+        for (auto& k : pt.keys)
+            k.time += dt;
 }
 
 // ── AppState ──────────────────────────────────────────────────────────────────

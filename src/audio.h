@@ -1,5 +1,6 @@
 #pragma once
 #include "audio_fx.h"
+#include "keyframe.h"
 #include <string>
 #include <vector>
 #include <cstdint>
@@ -37,6 +38,8 @@ struct AudioClipDesc {
     float       pan       = 0.f;  // -1=L, 0=center, +1=R
     float       fade_in   = 0.f;
     float       fade_out  = 0.f;
+    PropTrack   vol_keys;         // volume keyframes (times rel. tl_start); empty = use volume
+    PropTrack   pan_keys;         // pan keyframes; empty = use pan
     std::string path;
     AudioFX     fx;
     uint64_t    fx_hash   = 0;    // audio_fx_hash(fx); 0 = no FX

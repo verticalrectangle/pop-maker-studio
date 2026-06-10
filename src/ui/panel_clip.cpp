@@ -138,9 +138,8 @@ static void draw_clip_header(AppState& state, Clip& clip, Track& track, float w)
     if (ui_btn("Split", false, true)) {
         float cut = state.playhead;
         if (cut > clip.start + 0.02f && cut < clip.end - 0.02f) {
-            Clip right = clip; clip.end = cut; right.start = cut;
-            right.in_point += (cut - clip.start) * clip.speed;
-            track.clips.insert(track.clips.begin() + state.selected_clip + 1, right);
+            Clip right = clip_split_at(clip, cut);
+            track.clips.insert(track.clips.begin() + state.selected_clip + 1, std::move(right));
             history_push(state, "Split clip");
         }
     }
@@ -358,11 +357,9 @@ static void draw_word_strip(AppState& state, Clip& clip, float w) {
             // Split clip at this word's start, word goes to right clip
             float split_t = sel.start;
             if (split_t > clip.start + 0.02f && split_t < clip.end - 0.02f) {
-                Clip right = clip;
-                right.start = split_t;
+                Clip right = clip_split_at(clip, split_t);
                 right.words.assign(clip.words.begin() + s_word_sel, clip.words.end());
                 clip.words.erase(clip.words.begin() + s_word_sel, clip.words.end());
-                clip.end = split_t;
                 // Rebuild texts
                 std::string lt, rt;
                 for (auto& we3 : clip.words)  { if (!lt.empty()) lt+=' '; lt+=we3.text; }
@@ -794,43 +791,79 @@ void panel_clip(AppState& state, float w) {
     float t_local = state.playhead - clip.start;
     int   sel_ti  = state.selected_track, sel_ci = state.selected_clip;
 
+    // Keyframable slider: ◆ toggle + label row, full-width slider beneath
+    // (same layout as the plain sliders so sections stay visually uniform).
+    // disp scales the field value for display (100 → percent sliders);
+    // vmin/vmax/fmt are in display units, the field and keys store raw.
+    // prop2 mirrors key add/remove/update onto a second track — used by the
+    // unified Size slider which drives scale_x + scale_y together.
     auto kf_slider = [&](const char* prop, const char* label,
-                          float* val_ptr, float vmin, float vmax, const char* fmt) -> bool
+                          float* val_ptr, float vmin, float vmax, const char* fmt,
+                          float disp = 1.f, const char* prop2 = nullptr) -> bool
     {
         bool changed = false;
-        PropTrack& pt = clip.ktracks[prop];
-        bool has_kf   = (pt.find_nearest(t_local, 0.05f) >= 0);
+        auto  it_pt  = clip.ktracks.find(prop);
+        PropTrack* pt = (it_pt != clip.ktracks.end()) ? &it_pt->second : nullptr;
+        bool has_keys = pt && !pt->empty();
+        bool has_kf   = pt && pt->find_nearest(t_local, 0.05f) >= 0;
 
         ImGui::PushStyleColor(ImGuiCol_Button,
-            has_kf ? IM_COL32(255,200,60,200) : IM_COL32(80,80,80,180));
+            has_kf ? IM_COL32(255,200,60,200)
+                   : has_keys ? IM_COL32(140,120,60,180) : IM_COL32(80,80,80,180));
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(255,220,80,220));
         char kbid[64]; snprintf(kbid, sizeof(kbid), "\xe2\x97\x86##kf_%s", prop);
         if (ImGui::Button(kbid, {20.f, 0.f})) {
             if (has_kf) {
-                pt.remove_at(t_local, 0.05f);
-                if (pt.empty()) clip.ktracks.erase(prop);
+                pt->remove_at(t_local, 0.05f);
+                if (pt->empty()) clip.ktracks.erase(prop);
+                if (prop2) {
+                    auto it2 = clip.ktracks.find(prop2);
+                    if (it2 != clip.ktracks.end()) {
+                        it2->second.remove_at(t_local, 0.05f);
+                        if (it2->second.empty()) clip.ktracks.erase(it2);
+                    }
+                }
                 history_push(state, std::string("Remove KF ") + prop);
             } else {
-                float cur = clip.eval_prop(prop, state.playhead);
-                pt.set(t_local, cur);
+                clip.ktracks[prop].set(t_local, clip.eval_prop(prop, state.playhead));
+                if (prop2)
+                    clip.ktracks[prop2].set(t_local, clip.eval_prop(prop2, state.playhead));
                 state.kf_sel_track = sel_ti; state.kf_sel_clip = sel_ci;
                 state.kf_sel_prop  = prop;
-                state.kf_sel_idx   = pt.find_nearest(t_local, 0.1f);
+                state.kf_sel_idx   = clip.ktracks[prop].find_nearest(t_local, 0.1f);
                 history_push(state, std::string("Add KF ") + prop);
             }
         }
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip(has_kf ? "Remove keyframe at playhead"
+                                     : "Add keyframe at playhead");
         ImGui::PopStyleColor(2);
-        ImGui::SameLine(0.f, 4.f);
+        ImGui::SameLine(0.f, 6.f);
         ImGui::PushStyleColor(ImGuiCol_Text, Col::muted); ImGui::TextUnformatted(label); ImGui::PopStyleColor();
-        ImGui::SameLine(0.f, 4.f);
-        ImGui::PushStyleColor(ImGuiCol_SliderGrab, has_kf ? IM_COL32(255,200,60,255) : to_u32(Col::fg));
+        ImGui::PushStyleColor(ImGuiCol_SliderGrab, has_keys ? IM_COL32(255,200,60,255) : to_u32(Col::fg));
         ImGui::PushStyleColor(ImGuiCol_FrameBg, Col::bg_soft);
-        float sw = w - 20.f - ImGui::CalcTextSize(label).x - 28.f;
-        ImGui::SetNextItemWidth(fmaxf(40.f, sw));
+        ImGui::SetNextItemWidth(w - 16.f);
         char sid[64]; snprintf(sid, sizeof(sid), "##kfs_%s", prop);
-        if (ImGui::SliderFloat(sid, val_ptr, vmin, vmax, fmt)) {
+        // When keys exist, the slider shows/edits the animated value at the
+        // playhead — editing it retargets the key under the playhead (if any)
+        // instead of the static field, which the renderer would ignore.
+        float dv = (has_keys ? clip.eval_prop(prop, state.playhead) : *val_ptr) * disp;
+        if (ImGui::SliderFloat(sid, &dv, vmin, vmax, fmt)) {
             changed = true;
-            if (has_kf) { int ki = pt.find_nearest(t_local, 0.05f); if (ki >= 0) pt.keys[ki].value = *val_ptr; }
+            float raw = dv / disp;
+            *val_ptr = raw;
+            if (has_keys) {
+                // Auto-key: retarget the key under the playhead, or drop a new
+                // one there — otherwise the edit would go to the static field,
+                // which the renderer ignores once keys exist.
+                int ki = pt->find_nearest(t_local, 0.05f);
+                if (ki >= 0) pt->keys[ki].value = raw; else pt->set(t_local, raw);
+                if (prop2) {
+                    PropTrack& p2 = clip.ktracks[prop2];
+                    int k2 = p2.find_nearest(t_local, 0.05f);
+                    if (k2 >= 0) p2.keys[k2].value = raw; else p2.set(t_local, raw);
+                }
+            }
         }
         ImGui::PopStyleColor(2);
         if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, std::string("Edit ") + prop);
@@ -852,7 +885,21 @@ void panel_clip(AppState& state, float w) {
         IT its[] = {{InterpType::Linear,"Lin"},{InterpType::EaseIn,"In"},
                     {InterpType::EaseOut,"Out"},{InterpType::EaseBoth,"Both"},{InterpType::Hold,"Hold"}};
         for (auto& it3 : its) {
-            if (ui_btn(it3.n, kf.interp == it3.t, true)) { kf.interp = it3.t; history_push(state, "KF interp"); }
+            if (ui_btn(it3.n, kf.interp == it3.t, true)) {
+                kf.interp = it3.t;
+                // Size keys come in scale_x/scale_y pairs — keep their easing
+                // in lockstep when a twin key sits at the same time.
+                const char* twin = state.kf_sel_prop == "scale_x" ? "scale_y"
+                                 : state.kf_sel_prop == "scale_y" ? "scale_x" : nullptr;
+                if (twin) {
+                    auto tt = clip.ktracks.find(twin);
+                    if (tt != clip.ktracks.end()) {
+                        int k2 = tt->second.find_nearest(kf.time, 0.02f);
+                        if (k2 >= 0) tt->second.keys[k2].interp = it3.t;
+                    }
+                }
+                history_push(state, "KF interp");
+            }
             ImGui::SameLine(0.f, 4.f);
         }
         ImGui::NewLine();
@@ -1309,9 +1356,8 @@ void panel_clip(AppState& state, float w) {
         ui_label("Look");
         ImGui::Dummy({0.f, 6.f});
         {
-            float opacity_pct = clip.opacity * 100.f;
-            if (plain_slider("##vid_opacity", "Opacity", &opacity_pct, 0.f, 100.f, "%.0f%%"))
-                clip.opacity = opacity_pct / 100.f;
+            kf_slider("opacity", "Opacity", &clip.opacity, 0.f, 100.f, "%.0f%%", 100.f);
+            kf_interp_bar();
             ImGui::Dummy({0.f, 4.f});
             plain_slider("##vid_fi", "Fade in",  &clip.fade_in,  0.f, 4.f, "%.2fs");
             ImGui::Dummy({0.f, 4.f});
@@ -1323,17 +1369,21 @@ void panel_clip(AppState& state, float w) {
         ui_label("Layout");
         ImGui::Dummy({0.f, 6.f});
         {
-            plain_slider("##vid_px", "Left \xe2\x86\x94 Right", &clip.pos_x, -1.f, 2.f, "%.2f");
+            kf_slider("pos_x", "Left \xe2\x86\x94 Right", &clip.pos_x, -1.f, 2.f, "%.2f");
+            kf_interp_bar();
             ImGui::Dummy({0.f, 4.f});
-            plain_slider("##vid_py", "Up \xe2\x86\x95 Down",   &clip.pos_y, -1.f, 2.f, "%.2f");
+            kf_slider("pos_y", "Up \xe2\x86\x95 Down",   &clip.pos_y, -1.f, 2.f, "%.2f");
+            kf_interp_bar();
             ImGui::Dummy({0.f, 4.f});
-            // Unified size — drives scale_x and scale_y together
+            // Unified size — drives scale_x and scale_y together (keys included)
             float size = (clip.scale_x + clip.scale_y) * 0.5f;
-            if (plain_slider("##vid_sz", "Size", &size, 0.f, 4.f, "%.2f")) {
+            if (kf_slider("scale_x", "Size", &size, 0.f, 4.f, "%.2f", 1.f, "scale_y")) {
                 clip.scale_x = size; clip.scale_y = size;
             }
+            kf_interp_bar();
             ImGui::Dummy({0.f, 4.f});
-            plain_slider("##vid_rot", "Rotation", &clip.rotation, -180.f, 180.f, "%.1f\xc2\xb0");
+            kf_slider("rotation", "Rotation", &clip.rotation, -180.f, 180.f, "%.1f\xc2\xb0");
+            kf_interp_bar();
         }
 
         // ── Crop (non-destructive UV window; edit visually via Crop button) ──
@@ -1397,11 +1447,11 @@ void panel_clip(AppState& state, float w) {
         ui_label("Sound");
         ImGui::Dummy({0.f, 6.f});
         {
-            float vol_pct = clip.volume * 100.f;
-            if (plain_slider("##vid_vol", "Volume", &vol_pct, 0.f, 200.f, "%.0f%%"))
-                clip.volume = vol_pct / 100.f;
+            kf_slider("volume", "Volume", &clip.volume, 0.f, 200.f, "%.0f%%", 100.f);
+            kf_interp_bar();
             ImGui::Dummy({0.f, 4.f});
-            plain_slider("##vid_pan", "Pan  (left \xe2\x86\x94 right)", &clip.pan, -1.f, 1.f, "%.2f");
+            kf_slider("pan", "Pan  (left \xe2\x86\x94 right)", &clip.pan, -1.f, 1.f, "%.2f");
+            kf_interp_bar();
         }
 
         // ── AI Tools ─────────────────────────────────────────────────────────
@@ -1683,24 +1733,14 @@ void panel_clip(AppState& state, float w) {
         }
 
         // ── Advanced ─────────────────────────────────────────────────────────
+        // Everything keyframable lives in its own section now (Look / Layout /
+        // Sound); only asymmetric scaling stays tucked away here.
         ImGui::Dummy({0.f, 10.f}); ui_separator(); ImGui::Dummy({0.f, 6.f});
         if (ImGui::CollapsingHeader("Advanced##vid_adv")) {
             ImGui::Dummy({0.f, 4.f});
-            kf_slider("opacity",  "Opacity",          &clip.opacity,   0.f,   1.f,    "%.2f");           kf_interp_bar();
+            kf_slider("scale_x", "Scale X", &clip.scale_x, 0.f, 4.f, "%.2f"); kf_interp_bar();
             ImGui::Dummy({0.f, 2.f});
-            kf_slider("pos_x",    "Left \xe2\x86\x94 Right", &clip.pos_x, -1.f,   2.f,    "%.2f");       kf_interp_bar();
-            ImGui::Dummy({0.f, 2.f});
-            kf_slider("pos_y",    "Up \xe2\x86\x95 Down",    &clip.pos_y, -1.f,   2.f,    "%.2f");       kf_interp_bar();
-            ImGui::Dummy({0.f, 2.f});
-            kf_slider("scale_x",  "Scale X",          &clip.scale_x,   0.f,   4.f,    "%.2f");           kf_interp_bar();
-            ImGui::Dummy({0.f, 2.f});
-            kf_slider("scale_y",  "Scale Y",          &clip.scale_y,   0.f,   4.f,    "%.2f");           kf_interp_bar();
-            ImGui::Dummy({0.f, 2.f});
-            kf_slider("rotation", "Rotation",         &clip.rotation, -180.f, 180.f,  "%.1f\xc2\xb0");  kf_interp_bar();
-            ImGui::Dummy({0.f, 2.f});
-            kf_slider("volume",   "Volume",           &clip.volume,    0.f,   2.f,    "%.2f\xc3\x97");   kf_interp_bar();
-            ImGui::Dummy({0.f, 2.f});
-            kf_slider("pan",      "Pan",              &clip.pan,      -1.f,   1.f,    "%.2f");           kf_interp_bar();
+            kf_slider("scale_y", "Scale Y", &clip.scale_y, 0.f, 4.f, "%.2f"); kf_interp_bar();
             ImGui::Dummy({0.f, 4.f});
         }
 

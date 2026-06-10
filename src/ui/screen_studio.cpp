@@ -138,9 +138,8 @@ static void handle_shortcuts(AppState& state) {
         ImGui::IsKeyChordPressed(ImGuiMod_Ctrl|ImGuiKey_B)) {
         float cut = state.playhead;
         if (cut > clip.start + f_dt && cut < clip.end - f_dt) {
-            Clip right = clip; clip.end = cut; right.start = cut;
-            right.in_point += (cut - clip.start) * clip.speed;
-            track.clips.insert(track.clips.begin()+state.selected_clip+1, right);
+            Clip right = clip_split_at(clip, cut);
+            track.clips.insert(track.clips.begin()+state.selected_clip+1, std::move(right));
             history_push(state, "Split clip");
         }
         return;
@@ -466,6 +465,10 @@ void ui_studio(AppState& state) {
                 d.in_point = cl.in_point; d.speed    = cl.speed;
                 d.volume   = cl.volume;   d.pan      = cl.pan;
                 d.fade_in  = cl.fade_in;  d.fade_out = cl.fade_out;
+                if (auto it = cl.ktracks.find("volume"); it != cl.ktracks.end())
+                    d.vol_keys = it->second;
+                if (auto it = cl.ktracks.find("pan"); it != cl.ktracks.end())
+                    d.pan_keys = it->second;
                 // Use converted audio when voice conversion is ready
                 if (cl.clip_type == ClipType::Audio
                     && cl.vc_status == VcStatus::Ready
@@ -616,9 +619,8 @@ void ui_studio(AppState& state) {
                 Clip& c = t.clips[state.selected_clip];
                 float cut = state.playhead;
                 if (cut>c.start+0.02f && cut<c.end-0.02f) {
-                    Clip r=c; c.end=cut; r.start=cut;
-                    r.in_point += (cut - c.start) * c.speed;
-                    t.clips.insert(t.clips.begin()+state.selected_clip+1, r);
+                    Clip r = clip_split_at(c, cut);
+                    t.clips.insert(t.clips.begin()+state.selected_clip+1, std::move(r));
                     history_push(state, "Split clip");
                 }
             }

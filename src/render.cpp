@@ -125,9 +125,15 @@ static std::string esc(const std::string& s) {
 // linear if-chain expression over ffmpeg `t` (seconds from input start).
 // `bias` is added to `t` before evaluation (e.g. clip.start when -ss is used).
 // `scale` multiplies the output value (e.g. out_w for pos_x → pixel X).
+// t_scale/t_bias map keyframe times (timeline seconds relative to clip start)
+// into the time base the consuming filter actually sees: T = t_bias + t_scale*k.
+// Video overlay expressions use the default identity mapping; audio filters run
+// before atempo on streams whose pts = itsoffset + source time, so they pass
+// t_bias = delay + in_point and t_scale = clip speed.
 static std::string prop_expr(const Clip& cl, const std::string& prop,
                               float scale_factor, float default_val = -999.f,
-                              float eval_at = -1.f)
+                              float eval_at = -1.f,
+                              float t_scale = 1.f, float t_bias = 0.f)
 {
     // Snapshot mode: evaluate at a specific timeline time → constant output.
     if (eval_at >= 0.f) {
@@ -158,7 +164,8 @@ static std::string prop_expr(const Clip& cl, const std::string& prop,
     // Easing is baked as the alpha curve; Hold just clamps at start value.
     std::string expr;
     for (int i = (int)keys.size() - 2; i >= 0; --i) {
-        float t0  = keys[i].time,   t1  = keys[i+1].time;
+        float t0  = t_bias + t_scale * keys[i].time;
+        float t1  = t_bias + t_scale * keys[i+1].time;
         float v0  = keys[i].value,  v1  = keys[i+1].value;
         float dt  = (t1 - t0 < 1e-5f) ? 1e-5f : (t1 - t0);
 
@@ -225,7 +232,7 @@ static std::string prop_expr(const Clip& cl, const std::string& prop,
     char head[32];
     snprintf(head, sizeof(head), "%.4f",
              (double)(keys[0].value * scale_factor));
-    expr = std::string("if(lt(t,") + std::to_string(keys[0].time)
+    expr = std::string("if(lt(t,") + std::to_string(t_bias + t_scale * keys[0].time)
            + ")," + head + "," + expr + ")";
 
     return expr;
@@ -2105,6 +2112,14 @@ void render_start_gl(AppState& state) {
         float to    = -1.f;  // source end  (-to before -i, -1 = no limit)
         float delay = 0.f;   // timeline offset (-itsoffset before -i)
         float speed = 1.f;   // playback speed; non-unity → atempo in filter_complex
+        // Keyframed gain/pan + fades, applied pre-atempo. The stream's pts as
+        // the filter sees them = itsoffset + source time, so all times below
+        // are already mapped into that base (delay + in_point + rel*speed).
+        std::string vol_e;          // volume expression over t — overrides vol
+        float pan = 0.f;            // static pan (-1=L .. +1=R)
+        std::string pan_e;          // pan expression over t — overrides pan
+        float fade_in = 0.f,  fade_in_st = 0.f;   // afade in duration / start pts
+        float fade_out = 0.f, fade_out_st = 0.f;  // afade out duration / start pts
     };
     std::vector<AudioIn> audio_ins;
     if (!is_gif) {
@@ -2141,7 +2156,32 @@ void render_start_gl(AppState& state) {
                 // cl.start on the output timeline we need itsoffset = cl.start - in_point,
                 // not cl.start.  Clamped to 0 — negative itsoffset is unsupported.
                 float delay = fmaxf(0.f, cl.start - cl.in_point);
-                audio_ins.push_back({cl.text, vol, ss, to, delay, speed});
+                AudioIn ai;
+                ai.path = cl.text; ai.vol = vol;
+                ai.ss = ss; ai.to = to; ai.delay = delay; ai.speed = speed;
+                // Pre-atempo filter time base: pts of the clip's first sample.
+                float pts0 = delay + cl.in_point;
+                if (!state.tracks[ti].muted) {
+                    if (auto kv = cl.ktracks.find("volume");
+                        kv != cl.ktracks.end() && !kv->second.empty())
+                        ai.vol_e = prop_expr(cl, "volume", 1.f, cl.volume, -1.f,
+                                             speed, pts0);
+                    ai.pan = cl.pan;
+                    if (auto kp = cl.ktracks.find("pan");
+                        kp != cl.ktracks.end() && !kp->second.empty())
+                        ai.pan_e = prop_expr(cl, "pan", 1.f, cl.pan, -1.f,
+                                             speed, pts0);
+                }
+                // Audio fades, mirroring the preview mixer's clip_fade().
+                if (cl.fade_in > 0.f) {
+                    ai.fade_in    = cl.fade_in * speed;
+                    ai.fade_in_st = pts0;
+                }
+                if (cl.fade_out > 0.f) {
+                    ai.fade_out    = cl.fade_out * speed;
+                    ai.fade_out_st = pts0 + fmaxf(0.f, dur - cl.fade_out * speed);
+                }
+                audio_ins.push_back(std::move(ai));
                 covered_paths.insert(cl.text);
             }
         }
@@ -2150,8 +2190,10 @@ void render_start_gl(AppState& state) {
         // path still produces audio. For video-editing workflows the per-clip entries
         // above own the audio and the fallback would just produce an un-edited
         // duplicate that ignores cuts/speed.
-        if (!state.audio_path.empty() && !covered_paths.count(state.audio_path))
-            audio_ins.push_back({state.audio_path, 1.f, 0.f, -1.f, 0.f, 1.f});
+        if (!state.audio_path.empty() && !covered_paths.count(state.audio_path)) {
+            AudioIn ai; ai.path = state.audio_path; ai.to = -1.f;
+            audio_ins.push_back(std::move(ai));
+        }
     }
 
     // ── VAAPI detection ───────────────────────────────────────────────────────
@@ -2213,42 +2255,101 @@ void render_start_gl(AppState& state) {
     } else {
         args.push_back("-map"); args.push_back("0:v");
         if (!audio_ins.empty()) {
-            bool any_speed = false;
-            for (auto& ai : audio_ins)
-                if (fabsf(ai.speed - 1.f) > 0.001f) { any_speed = true; break; }
+            // Per-stream needs: gain (static or keyframed), pan, fades, atempo.
+            auto stream_needs_work = [](const AudioIn& ai) {
+                return fabsf(ai.speed - 1.f) > 0.001f ||
+                       fabsf(ai.vol   - 1.f) > 0.001f ||
+                       !ai.vol_e.empty() || !ai.pan_e.empty() ||
+                       fabsf(ai.pan) > 0.001f ||
+                       ai.fade_in > 0.f || ai.fade_out > 0.f;
+            };
             // Single stream with no edits → direct map (zero filter overhead).
             bool simple_passthrough = (audio_ins.size() == 1) &&
-                                       !any_speed &&
-                                       fabsf(audio_ins[0].vol - 1.f) < 0.001f;
+                                      !stream_needs_work(audio_ins[0]);
             if (simple_passthrough) {
                 args.push_back("-map"); args.push_back("1:a");
             } else {
-                // Per-stream atempo + volume, then amix. atempo accepts 0.5..100
-                // in modern ffmpeg so a single instance covers our 0.25..10 slider
-                // range — clamp to atempo's lower bound when slower than 0.5.
+                // Per-stream chain: volume → afade → pan → atempo, then amix.
+                // Volume/fade/pan run BEFORE atempo so their `t` is the
+                // pre-tempo pts the keyframe expressions were mapped into.
+                // atempo accepts 0.5..100 in modern ffmpeg so a single
+                // instance covers the speed slider — clamp at its lower bound.
                 std::string fc;
                 std::vector<std::string> mix_ins;
                 for (int i = 0; i < (int)audio_ins.size(); ++i) {
                     const auto& ai = audio_ins[i];
-                    bool has_speed = fabsf(ai.speed - 1.f) > 0.001f;
-                    bool has_vol   = fabsf(ai.vol   - 1.f) > 0.001f;
-                    if (!has_speed && !has_vol) {
+                    if (!stream_needs_work(ai)) {
                         char lbl[32]; snprintf(lbl, sizeof(lbl), "[%d:a]", i + 1);
                         mix_ins.push_back(lbl);
                         continue;
                     }
                     char head[16]; snprintf(head, sizeof(head), "[%d:a]", i + 1);
                     fc += head;
-                    bool first = true;
-                    if (has_speed) {
-                        char buf[64]; snprintf(buf, sizeof(buf), "atempo=%.5f",
-                                               (double)fmaxf(0.5f, fminf(100.f, ai.speed)));
-                        fc += buf; first = false;
-                    }
-                    if (has_vol) {
-                        if (!first) fc += ",";
+                    std::vector<std::string> chain;
+                    if (!ai.vol_e.empty())
+                        chain.push_back("volume='" + ai.vol_e + "':eval=frame");
+                    else if (fabsf(ai.vol - 1.f) > 0.001f) {
                         char buf[64]; snprintf(buf, sizeof(buf), "volume=%.4f", (double)ai.vol);
-                        fc += buf;
+                        chain.push_back(buf);
+                    }
+                    if (ai.fade_in > 0.f) {
+                        char buf[96]; snprintf(buf, sizeof(buf),
+                            "afade=t=in:st=%.4f:d=%.4f",
+                            (double)ai.fade_in_st, (double)ai.fade_in);
+                        chain.push_back(buf);
+                    }
+                    if (ai.fade_out > 0.f) {
+                        char buf[96]; snprintf(buf, sizeof(buf),
+                            "afade=t=out:st=%.4f:d=%.4f",
+                            (double)ai.fade_out_st, (double)ai.fade_out);
+                        chain.push_back(buf);
+                    }
+                    bool has_pan = !ai.pan_e.empty() || fabsf(ai.pan) > 0.001f;
+                    bool has_speed = fabsf(ai.speed - 1.f) > 0.001f;
+                    if (has_pan) {
+                        // Constant-gain pan law matching the preview mixer:
+                        // L gain = min(1, 1-pan), R gain = min(1, 1+pan).
+                        // Per-channel volume via channelsplit/join because the
+                        // `pan` filter can't take time expressions. aformat
+                        // first so mono mic sources don't break channelsplit.
+                        std::string gl, gr;
+                        if (!ai.pan_e.empty()) {
+                            gl = "'min(1,1-(" + ai.pan_e + "))':eval=frame";
+                            gr = "'min(1,1+(" + ai.pan_e + "))':eval=frame";
+                        } else {
+                            char bl[32], br[32];
+                            snprintf(bl, sizeof(bl), "%.4f", (double)fminf(1.f, 1.f - ai.pan));
+                            snprintf(br, sizeof(br), "%.4f", (double)fminf(1.f, 1.f + ai.pan));
+                            gl = bl; gr = br;
+                        }
+                        for (auto& f : chain) { fc += f; fc += ","; }
+                        char seg[256];
+                        snprintf(seg, sizeof(seg),
+                            "aformat=channel_layouts=stereo,"
+                            "channelsplit=channel_layout=stereo[l%d][r%d];", i, i);
+                        fc += seg;
+                        snprintf(seg, sizeof(seg), "[l%d]volume=%s[lo%d];", i, gl.c_str(), i);
+                        fc += seg;
+                        snprintf(seg, sizeof(seg), "[r%d]volume=%s[ro%d];", i, gr.c_str(), i);
+                        fc += seg;
+                        snprintf(seg, sizeof(seg),
+                            "[lo%d][ro%d]join=inputs=2:channel_layout=stereo", i, i);
+                        fc += seg;
+                        if (has_speed) {
+                            char buf[64]; snprintf(buf, sizeof(buf), ",atempo=%.5f",
+                                                   (double)fmaxf(0.5f, fminf(100.f, ai.speed)));
+                            fc += buf;
+                        }
+                    } else {
+                        if (has_speed) {
+                            char buf[64]; snprintf(buf, sizeof(buf), "atempo=%.5f",
+                                                   (double)fmaxf(0.5f, fminf(100.f, ai.speed)));
+                            chain.push_back(buf);
+                        }
+                        for (size_t k = 0; k < chain.size(); ++k) {
+                            if (k) fc += ",";
+                            fc += chain[k];
+                        }
                     }
                     char tail[32]; snprintf(tail, sizeof(tail), "[a%df];", i + 1);
                     fc += tail;

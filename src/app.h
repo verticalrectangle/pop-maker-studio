@@ -2,6 +2,7 @@
 #include "presets.h"
 #include "audio_fx.h"
 #include "body_fx.h"
+#include "keyframe.h"
 #include <string>
 #include <vector>
 #include <deque>
@@ -20,26 +21,6 @@ enum class PipelineMode {
     Both,            // Demucs + transcription
     TranscribeOnly,  // transcription on original file (no Demucs)
     SeparateOnly,    // Demucs only, no subtitles
-};
-
-// ── Keyframing ────────────────────────────────────────────────────────────────
-
-enum class InterpType { Linear, EaseIn, EaseOut, EaseBoth, Hold };
-
-struct Keyframe {
-    float      time   = 0.f;   // seconds relative to clip.start
-    float      value  = 0.f;
-    InterpType interp = InterpType::EaseBoth;
-};
-
-struct PropTrack {
-    std::vector<Keyframe> keys;  // always sorted by time
-
-    bool  empty()                                                     const { return keys.empty(); }
-    float eval(float t)                                               const;
-    void  set(float t, float v, InterpType it = InterpType::EaseBoth);
-    void  remove_at(float t, float tol = 0.05f);
-    int   find_nearest(float t, float tol = 0.1f)                    const;
 };
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -323,6 +304,17 @@ struct Clip {
     std::vector<Clip>  fx_chain;          // ordered sub-effects for MultiFX bricks
     int                fx_chain_selected = -1;
 };
+
+// Split `cl` at absolute timeline time `cut` and return the right half.
+// Handles in_point (speed-scaled) and remaps keyframe tracks so both halves
+// keep the animation they showed before the split. Caller inserts the
+// returned clip after `cl` on the track.
+Clip clip_split_at(Clip& cl, float cut);
+
+// Shift every keyframe time by dt seconds. Use when clip.start moves but the
+// content shouldn't (left-edge trim): pass -(new_start - old_start) so keys
+// stay put on the timeline.
+void clip_keys_shift(Clip& cl, float dt);
 
 struct Track {
     std::string       name;

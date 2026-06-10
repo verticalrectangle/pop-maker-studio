@@ -271,6 +271,24 @@ static std::string anim_style_str(AnimStyle s) {
     }
 }
 
+static const char* interp_str(InterpType it) {
+    switch (it) {
+        case InterpType::Linear:  return "linear";
+        case InterpType::EaseIn:  return "ease_in";
+        case InterpType::EaseOut: return "ease_out";
+        case InterpType::Hold:    return "hold";
+        default:                  return "ease_both";
+    }
+}
+
+static InterpType interp_from_str(const std::string& s) {
+    if (s == "linear")   return InterpType::Linear;
+    if (s == "ease_in")  return InterpType::EaseIn;
+    if (s == "ease_out") return InterpType::EaseOut;
+    if (s == "hold")     return InterpType::Hold;
+    return InterpType::EaseBoth;
+}
+
 static json clip_to_json_slim(int idx, const Clip& c) {
     json j;
     j["index"]    = idx;
@@ -353,6 +371,18 @@ static json clip_to_json(int idx, const Clip& c) {
         j["grade_contrast"]   = c.grade_contrast;
         j["grade_saturation"] = c.grade_saturation;
         j["grade_hue"]        = c.grade_hue;
+    }
+    if (!c.ktracks.empty()) {
+        json kfs = json::object();
+        for (auto& [prop, pt] : c.ktracks) {
+            if (pt.empty()) continue;
+            json arr = json::array();
+            for (auto& k : pt.keys)
+                arr.push_back({{"t", k.time}, {"v", k.value},
+                               {"interp", interp_str(k.interp)}});
+            kfs[prop] = std::move(arr);
+        }
+        if (!kfs.empty()) j["keyframes"] = std::move(kfs);
     }
     return j;
 }
@@ -1328,7 +1358,11 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         if (params.contains("start")) {
             float ns = snap_to_frame(params["start"].get<float>(), state.fps);
             float delta = ns - old_start;
-            if (delta > 0.f) cl.in_point += delta;
+            // in_point is in source seconds — scale the timeline delta by
+            // speed (this used to skip that, desyncing trims of retimed
+            // clips), and shift keyframes so they stay put on the timeline.
+            cl.in_point = fmaxf(0.f, cl.in_point + delta * fmaxf(0.01f, cl.speed));
+            clip_keys_shift(cl, -delta);
             cl.start = ns;
         }
         if (params.contains("end")) cl.end = snap_end_to_frame(params["end"].get<float>(), state.fps);
@@ -1342,12 +1376,10 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         Clip& cl = state.tracks[ti].clips[ci];
         if (t <= cl.start || t >= cl.end) { err = "split time outside clip range"; return {}; }
 
-        Clip right = cl;
-        right.in_point = cl.in_point + (t - cl.start);
-        right.start = t;
-
-        cl.end = t;
-        state.tracks[ti].clips.insert(state.tracks[ti].clips.begin() + ci + 1, right);
+        // clip_split_at also scales in_point by speed (this path used to forget
+        // that, desyncing splits of retimed clips) and remaps keyframe tracks.
+        Clip right = clip_split_at(cl, t);
+        state.tracks[ti].clips.insert(state.tracks[ti].clips.begin() + ci + 1, std::move(right));
         json r;
         r["left_clip"]  = ci;
         r["right_clip"] = ci + 1;
@@ -1590,6 +1622,44 @@ static json dispatch(AppState& state, const std::string& method, const json& par
             else { err = "unknown prop: " + prop; return {}; }
         }
         return json::object();
+    }
+
+    if (method == "set_clip_keyframes") {
+        int ti = track_by_name_or_index(state, params), ci = params.value("clip", -1);
+        std::string prop = params.value("prop", "");
+        if (!check_clip(state, ti, ci, err)) return {};
+        static const std::set<std::string> kf_props = {
+            "pos_x", "pos_y", "scale_x", "scale_y",
+            "rotation", "opacity", "volume", "pan"
+        };
+        if (!kf_props.count(prop)) {
+            err = "prop '" + prop + "' is not keyframable (allowed: pos_x pos_y "
+                  "scale_x scale_y rotation opacity volume pan)";
+            return {};
+        }
+        if (!params.contains("keys") || !params["keys"].is_array()) {
+            err = "keys must be an array of {t, v, interp?} (empty array clears)";
+            return {};
+        }
+        Clip& cl = state.tracks[ti].clips[ci];
+        PropTrack pt;
+        for (auto& k : params["keys"]) {
+            if (!k.contains("t") || !k.contains("v")) { err = "each key needs t and v"; return {}; }
+            float t = k["t"].get<float>();
+            if (t < 0.f || t > cl.end - cl.start + 1e-3f) {
+                err = "key t=" + std::to_string(t) + " outside clip duration (t is "
+                      "seconds relative to clip start)";
+                return {};
+            }
+            pt.set(t, k["v"].get<float>(),
+                   interp_from_str(k.value("interp", "ease_both")));
+        }
+        if (pt.empty()) cl.ktracks.erase(prop);
+        else            cl.ktracks[prop] = std::move(pt);
+        json r;
+        r["prop"] = prop;
+        r["key_count"] = cl.ktracks.count(prop) ? (int)cl.ktracks[prop].keys.size() : 0;
+        return r;
     }
 
     if (method == "set_clip_prop") {

@@ -68,6 +68,7 @@ struct ClipInfo {
     float in_point, speed;
     float volume, pan;
     float fade_in, fade_out;
+    PropTrack vol_keys, pan_keys;   // empty = use the static volume/pan
     int   buf_idx;  // index into g_src_bufs, -1 = not yet loaded
     std::shared_ptr<FXBuf> fx_buf;  // non-null = processed samples available
 };
@@ -127,9 +128,13 @@ static void data_callback(ma_device* pDevice, void* pOutput, const void*, ma_uin
             size_t sp = (size_t)(src_t * 44100.f) * 2;
             if (sp + 1 >= buf_ptr->size()) return;
             float fade = clip_fade(cl, t);
-            float vol  = cl.volume * global_vol * fade;
-            float panL = cl.pan <= 0.f ? 1.f : (1.f - cl.pan);
-            float panR = cl.pan >= 0.f ? 1.f : (1.f + cl.pan);
+            float vraw = cl.vol_keys.empty() ? cl.volume
+                       : cl.vol_keys.eval(t - cl.tl_start);
+            float pan  = cl.pan_keys.empty() ? cl.pan
+                       : std::fmaxf(-1.f, std::fminf(1.f, cl.pan_keys.eval(t - cl.tl_start)));
+            float vol  = std::fmaxf(0.f, vraw) * global_vol * fade;
+            float panL = pan <= 0.f ? 1.f : (1.f - pan);
+            float panR = pan >= 0.f ? 1.f : (1.f + pan);
             out[f*2]   += (*buf_ptr)[sp]   * vol * panL;
             out[f*2+1] += (*buf_ptr)[sp+1] * vol * panR;
         };
@@ -344,6 +349,7 @@ static void clips_fill(std::vector<ClipInfo>& out, const std::vector<AudioClipDe
         ci.in_point = d.in_point; ci.speed    = d.speed;
         ci.volume   = d.volume;   ci.pan      = d.pan;
         ci.fade_in  = d.fade_in;  ci.fade_out = d.fade_out;
+        ci.vol_keys = d.vol_keys; ci.pan_keys = d.pan_keys;
         ci.buf_idx  = -1;
         for (int i = 0; i < (int)g_src_bufs.size(); ++i) {
             if (g_src_bufs[i].path == d.path && g_src_bufs[i].ready) {
