@@ -1605,10 +1605,21 @@ void ui_studio(AppState& state) {
         float agent_w = state.agent_panel_open ? (both ? win_w * 0.5f : win_w) : 0.f;
         float termw   = state.terminal_open    ? (win_w - agent_w)             : 0.f;
         if (state.agent_panel_open) {
+            float inp_h = 38.f;
+            float log_h = term_h - inp_h;
             ImGui::PushStyleColor(ImGuiCol_ChildBg, IM_COL32(0x16, 0x16, 0x20, 255));
             ImGui::PushStyleColor(ImGuiCol_Border,  Col::line);
-            if (ImGui::BeginChild("##agent_zone", {agent_w, term_h}, ImGuiChildFlags_Borders)) {
-                draw_agent_panel(state, agent_w - 2.f, term_h - 2.f);
+            if (ImGui::BeginChild("##agent_log_zone", {agent_w, log_h},
+                                  ImGuiChildFlags_Borders)) {
+                draw_agent_log(state, agent_w - 2.f, log_h - 2.f);
+            }
+            ImGui::EndChild();
+            ImGui::PopStyleColor(2);
+            ImGui::PushStyleColor(ImGuiCol_ChildBg, IM_COL32(0x16, 0x16, 0x20, 255));
+            ImGui::PushStyleColor(ImGuiCol_Border,  Col::line);
+            if (ImGui::BeginChild("##agent_inp_zone", {agent_w, inp_h},
+                                  ImGuiChildFlags_Borders)) {
+                draw_agent_input(state, agent_w - 2.f);
             }
             ImGui::EndChild();
             ImGui::PopStyleColor(2);

@@ -12,15 +12,14 @@ static char s_input[4096] = {};
 static int  s_detail_row  = -1;   // row index with expanded detail, -1 = none
 static size_t s_last_rows = 0;    // autoscroll when new rows arrive
 
-void draw_agent_panel(AppState& state, float panel_w, float panel_h) {
+void draw_agent_log(AppState& state, float panel_w, float panel_h) {
     (void)state;
-    const float input_h = 30.f;
-    float log_h = panel_h - input_h - 6.f;
 
     ImGui::PushFont(g_font_mono);
     ImGui::PushStyleColor(ImGuiCol_ChildBg, IM_COL32(0x16, 0x16, 0x20, 255));
-    ImGui::BeginChild("##agent_log", {panel_w, log_h}, ImGuiChildFlags_None,
-                      ImGuiWindowFlags_NoScrollWithMouse * 0);
+    ImGui::BeginChild("##agent_log", {panel_w, panel_h},
+                      ImGuiChildFlags_AlwaysUseWindowPadding);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {16.f, 8.f});
 
     std::vector<AgentRow> rows = agent_rows_snapshot();
     if (rows.empty()) {
@@ -100,12 +99,17 @@ void draw_agent_panel(AppState& state, float panel_w, float panel_h) {
         ImGui::SetScrollHereY(1.f);
         s_last_rows = rows.size();
     }
+    ImGui::PopStyleVar();
     ImGui::EndChild();
     ImGui::PopStyleColor();
+    ImGui::PopFont();
+}
 
-    // ── Input row ─────────────────────────────────────────────────────────────
+void draw_agent_input(AppState& state, float panel_w) {
+    (void)state;
     bool running = agent_running();
     float send_w = 64.f, clear_w = 60.f;
+    ImGui::PushFont(g_font_mono);
     ImGui::PushStyleColor(ImGuiCol_FrameBg, IM_COL32(0x1e, 0x1e, 0x2c, 255));
     ImGui::SetNextItemWidth(panel_w - send_w - clear_w - 18.f);
     bool submit = ImGui::InputText("##agent_in", s_input, sizeof(s_input),

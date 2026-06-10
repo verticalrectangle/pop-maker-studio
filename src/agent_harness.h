@@ -17,7 +17,7 @@ struct AgentRow {
 struct AgentConfig {
     std::string base_url = "https://api.deepseek.com";
     std::string model    = "deepseek-chat";
-    bool        vision   = true;   // ship snapshot images to the model
+    bool        vision   = false;  // ship snapshot images to the model
 };
 
 // All functions are safe to call from the UI thread.

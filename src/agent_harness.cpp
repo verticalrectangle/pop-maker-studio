@@ -177,7 +177,8 @@ static std::string b64_encode(const unsigned char* data, size_t len) {
 }
 
 // Load a PNG/JPG, box-downscale so the longest edge ≤ max_edge, re-encode to
-// PNG in memory, return a data: URL. Empty string on failure.
+// JPEG in memory (much smaller token footprint than PNG for photos), return a
+// data: URL. Empty string on failure.
 static std::string image_file_to_data_url(const std::string& path, int max_edge) {
     int w = 0, h = 0, ch = 0;
     unsigned char* px = stbi_load(path.c_str(), &w, &h, &ch, 3);
@@ -192,8 +193,6 @@ static std::string image_file_to_data_url(const std::string& path, int max_edge)
     }
     std::vector<unsigned char> small((size_t)ow * oh * 3);
     for (int y = 0; y < oh; ++y) {
-        // Box average over the source span for each destination pixel —
-        // good enough for model vision input, no resize dependency needed.
         int sy0 = y * h / oh, sy1 = (y + 1) * h / oh;
         if (sy1 <= sy0) sy1 = sy0 + 1;
         for (int x = 0; x < ow; ++x) {
@@ -213,15 +212,15 @@ static std::string image_file_to_data_url(const std::string& path, int max_edge)
     }
     stbi_image_free(px);
 
-    std::vector<unsigned char> png;
-    stbi_write_png_to_func(
+    std::vector<unsigned char> jpg;
+    stbi_write_jpg_to_func(
         [](void* ctx, void* data, int size) {
             auto* v = (std::vector<unsigned char>*)ctx;
             v->insert(v->end(), (unsigned char*)data, (unsigned char*)data + size);
         },
-        &png, ow, oh, 3, small.data(), ow * 3);
-    if (png.empty()) return "";
-    return "data:image/png;base64," + b64_encode(png.data(), png.size());
+        &jpg, ow, oh, 3, small.data(), 70);
+    if (jpg.empty()) return "";
+    return "data:image/jpeg;base64," + b64_encode(jpg.data(), jpg.size());
 }
 
 // ── curl child ────────────────────────────────────────────────────────────────
@@ -330,10 +329,11 @@ static std::string truncate_result(std::string s) {
     return s;
 }
 
-// Returns the tool-role content; appends an image wire message when a
-// snapshot was taken and vision is on.
-static std::string exec_tool(const std::string& name, json args,
-                             std::vector<json>& extra_wire_msgs) {
+// Returns tool-role content (always a text string for API compatibility).
+// extra_wire_msgs: appended AFTER the tool_result — used for snapshot images
+// that must trail the tool_call_id response to keep the wire legal everywhere.
+static json exec_tool(const std::string& name, json args,
+                      std::vector<json>& extra_wire_msgs, bool vision) {
     // Default to small acks — the model can re-read state explicitly.
     const ToolInfo* info = nullptr;
     for (auto& [n, i] : tool_table()) if (n == name) { info = &i; break; }
@@ -344,7 +344,7 @@ static std::string exec_tool(const std::string& name, json args,
     if (!ipc_request(name, args, result, err))
         return "error: " + err;
 
-    // take_snapshot is async: poll status, then attach the image for vision.
+    // take_snapshot is async: poll status, attach image as trailing user msg.
     if (name == "take_snapshot") {
         for (int i = 0; i < 50 && !s_stop; ++i) {
             usleep(200 * 1000);
@@ -356,9 +356,10 @@ static std::string exec_tool(const std::string& name, json args,
                     return "error: " + st["error"].get<std::string>();
                 std::string path = st.value("path", "");
                 std::string note = "snapshot saved to " + path;
-                if (s_cfg.vision && !path.empty()) {
-                    std::string url = image_file_to_data_url(path, 1024);
+                if (vision && !path.empty()) {
+                    std::string url = image_file_to_data_url(path, 512);
                     if (!url.empty()) {
+                        row_add(AgentRole::Image, path);
                         extra_wire_msgs.push_back({
                             {"role", "user"},
                             {"content", json::array({
@@ -368,8 +369,6 @@ static std::string exec_tool(const std::string& name, json args,
                                  {"image_url", {{"url", url}}}},
                             })},
                         });
-                        note += " (image attached)";
-                        row_add(AgentRole::Image, path);
                     }
                 }
                 return note;
@@ -389,7 +388,8 @@ static const char* kSystemPrompt =
     "Track 0 is the top/foreground layer. Times are in seconds. Mutations "
     "return small acks; call get_project or get_clips when you need to read "
     "state. take_snapshot shows you the canvas. Be concise in prose — do the "
-    "work with tools and summarize briefly.";
+    "work with tools and summarize briefly. You can put videos and images"
+    "on the timeline.";;
 
 static void worker_turn() {
     std::string api_key = key_lookup();
@@ -510,25 +510,39 @@ static void worker_turn() {
             std::string targs_s = call["function"]["arguments"].get<std::string>();
             json targs = json::parse(targs_s.empty() ? "{}" : targs_s,
                                      nullptr, false);
-            std::string result;
+            json content;
+            std::vector<json> extra;
+            std::string result_str;
             if (targs.is_discarded()) {
-                result = "error: tool arguments were not valid JSON";
+                result_str = "error: tool arguments were not valid JSON";
+                content    = result_str;
             } else {
-                std::vector<json> extra;
-                result = exec_tool(tname, targs, extra);
-                std::lock_guard<std::mutex> lk(s_mu);
-                for (auto& m : extra) s_wire.push_back(m);
+                content = exec_tool(tname, targs, extra, cfg.vision);
+                if (content.is_string()) {
+                    result_str = content.get<std::string>();
+                } else if (content.is_array()) {
+                    for (auto& part : content) {
+                        if (part.value("type", "") == "text") {
+                            result_str = part.value("text", "");
+                            break;
+                        }
+                    }
+                    if (result_str.empty()) result_str = content.dump();
+                } else {
+                    result_str = content.dump();
+                }
             }
             std::string summary = "\xe2\x96\xb8 " + tname + " " +
                 (targs_s.size() > 120 ? targs_s.substr(0, 117) + "…" : targs_s);
-            bool failed = result.rfind("error:", 0) == 0;
+            bool failed = result_str.rfind("error:", 0) == 0;
             row_add(failed ? AgentRole::Error : AgentRole::Tool,
                     summary + (failed ? "  \xe2\x9c\x97" : ""),
-                    "args: " + targs_s + "\n\nresult: " + result);
+                    "args: " + targs_s + "\n\nresult: " + result_str);
             std::lock_guard<std::mutex> lk(s_mu);
             s_wire.push_back({{"role", "tool"},
                               {"tool_call_id", call["id"]},
-                              {"content", result}});
+                              {"content", content}});
+            for (auto& m : extra) s_wire.push_back(m);
         }
         if (iter == kMaxToolIters - 1)
             row_add(AgentRole::Error, "tool budget exhausted for this turn");
