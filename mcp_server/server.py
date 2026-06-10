@@ -1916,6 +1916,9 @@ async def list_tools() -> list[Tool]:
                 "app's framebuffer — the exact pixels the user is looking at (interactive scene "
                 "compositor + text overlays). If the two disagree, the preview compositor and export "
                 "renderer have diverged — capture both to diagnose which side is wrong. "
+                "source='ui' captures the ENTIRE app window — timeline, panels, canvas, popups — "
+                "use it to see the app state itself (e.g. verifying timeline markers, panel "
+                "layouts, or what the user is describing) rather than the composition. "
                 "Read-only — no batch needed."
             ),
             inputSchema={
@@ -1924,8 +1927,8 @@ async def list_tools() -> list[Tool]:
                     "time": {"type": "number", "description": "Timeline position to snap (default: current playhead)"},
                     "source": {
                         "type": "string",
-                        "enum": ["render", "canvas"],
-                        "description": "render = export pipeline (default); canvas = live preview ground truth",
+                        "enum": ["render", "canvas", "ui"],
+                        "description": "render = export pipeline (default); canvas = live preview ground truth; ui = whole app window",
                     },
                 },
             },
@@ -3450,7 +3453,12 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 try:
                     from PIL import Image as _PILImage
                     img = _PILImage.open(io.BytesIO(raw))
-                    img.thumbnail((540, 960))
+                    # UI grabs need to stay readable (timeline labels, panel
+                    # text); composition frames can shrink to canvas size.
+                    if arguments.get("source") == "ui":
+                        img.thumbnail((1568, 1568))
+                    else:
+                        img.thumbnail((540, 960))
                     buf = io.BytesIO()
                     img.save(buf, format="PNG")
                     raw = buf.getvalue()

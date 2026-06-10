@@ -371,8 +371,13 @@ void draw_canvas_handles(AppState& state, ImDrawList* dl, ImVec2 p, float w, flo
                     !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId |
                                             ImGuiPopupFlags_AnyPopupLevel);
 
-    bool in_preview  = mpos.x >= p.x && mpos.x <= p.x+w &&
-                       mpos.y >= p.y && mpos.y <= p.y+h;
+    // Interaction region is the whole preview zone (the letterbox surround
+    // included), not just the canvas — clips dragged off-canvas must stay
+    // grabbable. Drawing past the zone is cut by the child window clip rect.
+    ImVec2 zp = ImGui::GetWindowPos();
+    ImVec2 zs = ImGui::GetWindowSize();
+    bool in_preview  = mpos.x >= zp.x && mpos.x <= zp.x+zs.x &&
+                       mpos.y >= zp.y && mpos.y <= zp.y+zs.y;
     bool drag_active = (s_ctx.handle != CanvasHandle::None);
     if (!in_preview && !drag_active) return;
 
@@ -871,6 +876,7 @@ void draw_canvas_handles(AppState& state, ImDrawList* dl, ImVec2 p, float w, flo
 // tracks the live layout.
 static struct {
     int    frames_left = -1;   // -1 idle, >0 warming, 0 capture after render
+    bool   full_ui     = false; // capture the whole window, not the canvas rect
     ImVec2 p           = {};
     float  w = 0.f, h = 0.f;
 } g_canvas_cap;
@@ -879,10 +885,12 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
     // IPC-triggered snapshot — fulfilled here on the GL thread
     if (state.snapshot_request) {
         state.snapshot_request = false;
-        if (state.snapshot_source_canvas)
+        if (state.snapshot_source_canvas) {
             g_canvas_cap.frames_left = 3;
-        else
+            g_canvas_cap.full_ui     = state.snapshot_source_ui;
+        } else {
             render_snapshot_gl(state, state.playhead);
+        }
     }
     if (g_canvas_cap.frames_left > 0) {
         g_canvas_cap.p = p; g_canvas_cap.w = w; g_canvas_cap.h = h;
@@ -1025,9 +1033,14 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                     !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId |
                                             ImGuiPopupFlags_AnyPopupLevel);
 
-    // Click-to-select using tight bboxes: video computed inline, text from previous-frame layouts.
-    bool in_preview_area = mpos.x >= p.x && mpos.x <= p.x+w &&
-                           mpos.y >= p.y && mpos.y <= p.y+h;
+    // Click-to-select using tight bboxes: video computed inline, text from
+    // previous-frame layouts. The pickable region is the whole preview zone —
+    // clips dragged off-canvas park in the letterbox surround and must stay
+    // clickable there.
+    ImVec2 zone_p = ImGui::GetWindowPos();
+    ImVec2 zone_s = ImGui::GetWindowSize();
+    bool in_preview_area = mpos.x >= zone_p.x && mpos.x <= zone_p.x+zone_s.x &&
+                           mpos.y >= zone_p.y && mpos.y <= zone_p.y+zone_s.y;
 
     // Layer picking stands down during crop-edit mode — clicks there belong
     // to the crop window/handles (draw_crop_mode).
@@ -1777,6 +1790,43 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
 
     dl->PopClipRect();  // end video-frame clip region
 
+    // Ghost outlines for clips parked fully outside the canvas: their pixels
+    // can't render (the scene FBO is the canvas), but a dim dashed box in the
+    // letterbox surround keeps them visible and gives picking a target.
+    for (int gti = 0; gti < (int)state.tracks.size(); ++gti) {
+        auto& gtr = state.tracks[gti];
+        if (!gtr.visible) continue;
+        for (int gci = 0; gci < (int)gtr.clips.size(); ++gci) {
+            auto& gcl = gtr.clips[gci];
+            if (state.playhead < gcl.start || state.playhead >= gcl.end) continue;
+            if (gcl.clip_type != ClipType::Video &&
+                gcl.clip_type != ClipType::Background) continue;
+            float gx0, gy0, gx1, gy1;
+            if (gcl.clip_type == ClipType::Video) {
+                compute_video_bbox(state, gcl, p, w, h, gx0, gy0, gx1, gy1);
+            } else {
+                float gpx = gcl.eval_prop("pos_x",   state.playhead) * w + p.x;
+                float gpy = gcl.eval_prop("pos_y",   state.playhead) * h + p.y;
+                float ghw = w * gcl.eval_prop("scale_x", state.playhead) * 0.5f;
+                float ghh = h * gcl.eval_prop("scale_y", state.playhead) * 0.5f;
+                gx0 = gpx - ghw; gy0 = gpy - ghh; gx1 = gpx + ghw; gy1 = gpy + ghh;
+            }
+            bool overlaps_canvas = gx1 > p.x && gx0 < p.x + w &&
+                                   gy1 > p.y && gy0 < p.y + h;
+            if (overlaps_canvas) continue;
+            bool gsel = (gti == state.selected_track && gci == state.selected_clip);
+            ImU32 gc = gsel ? IM_COL32(255, 255, 255, 150)
+                            : IM_COL32(255, 255, 255, 60);
+            dl->AddRect({gx0, gy0}, {gx1, gy1}, gc, 3.f, 0, 1.5f);
+            std::string gname = gcl.text.empty() ? "clip"
+                              : fs::path(gcl.text).filename().string();
+            ImVec2 gsz = ImGui::CalcTextSize(gname.c_str());
+            if (gsz.x < gx1 - gx0 - 8.f)
+                dl->AddText({(gx0 + gx1 - gsz.x) * 0.5f,
+                             (gy0 + gy1 - gsz.y) * 0.5f}, gc, gname.c_str());
+        }
+    }
+
     // Safe zone guide — shown when a managed Lyrics track exists.
     // Represents the region guaranteed visible on TikTok/Reels/Shorts.
     {
@@ -1919,11 +1969,20 @@ void canvas_capture_after_render(AppState& state) {
     ImGuiIO& io = ImGui::GetIO();
     float sx = io.DisplayFramebufferScale.x, sy = io.DisplayFramebufferScale.y;
     int fb_h = (int)(io.DisplaySize.y * sy);
-    int rx = (int)(g_canvas_cap.p.x * sx);
-    int rw = (int)(g_canvas_cap.w   * sx);
-    int rh = (int)(g_canvas_cap.h   * sy);
-    // GL reads from the bottom-left; the rect's top is p.y in UI coords.
-    int ry = fb_h - (int)((g_canvas_cap.p.y + g_canvas_cap.h) * sy);
+    int rx, ry, rw, rh;
+    if (g_canvas_cap.full_ui) {
+        // "ui" source: the entire window backbuffer — full app state as the
+        // user sees it (timeline, panels, canvas, popups).
+        rx = 0; ry = 0;
+        rw = (int)(io.DisplaySize.x * sx);
+        rh = fb_h;
+    } else {
+        rx = (int)(g_canvas_cap.p.x * sx);
+        rw = (int)(g_canvas_cap.w   * sx);
+        rh = (int)(g_canvas_cap.h   * sy);
+        // GL reads from the bottom-left; the rect's top is p.y in UI coords.
+        ry = fb_h - (int)((g_canvas_cap.p.y + g_canvas_cap.h) * sy);
+    }
     if (rw <= 0 || rh <= 0) { fail("canvas rect is empty"); return; }
 
     std::vector<uint8_t> raw((size_t)rw * rh * 4);
@@ -1955,10 +2014,17 @@ void canvas_capture_after_render(AppState& state) {
     int total_ms = (int)(state.playhead * 1000.f);
     int ms = total_ms % 1000, ss = (total_ms / 1000) % 60, mm = total_ms / 60000;
     char ts[32]; snprintf(ts, sizeof(ts), "%02dm%02ds%03dms", mm, ss, ms);
-    std::string out = base_path.empty()
-        ? std::string("/tmp/pop-maker-studio_canvas_") + ts + ".png"
-        : fs::path(base_path).parent_path().string() + "/" +
-          fs::path(base_path).stem().string() + "_canvas_" + ts + ".png";
+    // UI grabs are agent-debugging artifacts — keep them in /tmp instead of
+    // littering the user's media folder like project snapshots do.
+    std::string out;
+    if (g_canvas_cap.full_ui) {
+        out = std::string("/tmp/pop-maker-studio_ui_") + ts + ".png";
+    } else if (base_path.empty()) {
+        out = std::string("/tmp/pop-maker-studio_canvas_") + ts + ".png";
+    } else {
+        out = fs::path(base_path).parent_path().string() + "/" +
+              fs::path(base_path).stem().string() + "_canvas_" + ts + ".png";
+    }
 
     if (!stbi_write_png(out.c_str(), rw, rh, 4, img.data(), rb)) {
         fail("PNG write failed");

@@ -1182,7 +1182,11 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         state.snapshot_done      = false;
         state.snapshot_done_path.clear();
         state.snapshot_done_err.clear();
-        state.snapshot_source_canvas = (params.value("source", "render") == "canvas");
+        // "ui" rides the canvas-capture path but grabs the whole window
+        // backbuffer — timeline, panels, everything the user is looking at.
+        std::string snap_src = params.value("source", "render");
+        state.snapshot_source_canvas = (snap_src == "canvas" || snap_src == "ui");
+        state.snapshot_source_ui     = (snap_src == "ui");
         state.snapshot_request   = true;
         return json::object();
     }
