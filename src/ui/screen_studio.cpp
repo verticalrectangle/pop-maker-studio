@@ -1607,7 +1607,9 @@ void ui_studio(AppState& state) {
         float agent_w = state.agent_panel_open ? (both ? win_w * 0.5f : win_w) : 0.f;
         float termw   = state.terminal_open    ? (win_w - agent_w)             : 0.f;
         if (state.agent_panel_open) {
-            float inp_h = 38.f;
+            // Tall enough for the input row + padding — content must never
+            // exceed this, since the zone deliberately can't scroll.
+            float inp_h = 42.f;
             float log_h = term_h - inp_h;
             ImGui::PushStyleColor(ImGuiCol_ChildBg, IM_COL32(0x16, 0x16, 0x20, 255));
             ImGui::PushStyleColor(ImGuiCol_Border,  Col::line);
@@ -1620,7 +1622,9 @@ void ui_studio(AppState& state) {
             ImGui::PushStyleColor(ImGuiCol_ChildBg, IM_COL32(0x16, 0x16, 0x20, 255));
             ImGui::PushStyleColor(ImGuiCol_Border,  Col::line);
             if (ImGui::BeginChild("##agent_inp_zone", {agent_w, inp_h},
-                                  ImGuiChildFlags_Borders)) {
+                                  ImGuiChildFlags_Borders,
+                                  ImGuiWindowFlags_NoScrollbar |
+                                  ImGuiWindowFlags_NoScrollWithMouse)) {
                 draw_agent_input(state, agent_w - 2.f);
             }
             ImGui::EndChild();
