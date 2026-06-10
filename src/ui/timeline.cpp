@@ -37,13 +37,31 @@ extern ImFont* g_font_black;
 // g_tl — timeline drag/select state (declared extern in studio_types.h)
 TlState g_tl;
 
-// In-progress keyframe-diamond retime drag (one at a time, like clip drags).
+// In-progress keyframe-diamond retime drag. Grabbing a super diamond drags
+// every key at that timestamp (one entry per member prop); member indices are
+// kept current as keys bubble through their sorted tracks.
 static struct {
-    bool        active = false;
-    int         ti = -1, ci = -1, idx = -1;
-    std::string prop;
-    bool        moved = false;   // only push undo history if it actually moved
+    bool active = false;
+    int  ti = -1, ci = -1;
+    struct Mem { std::string prop; int idx; };
+    std::vector<Mem> mems;
+    bool moved = false;          // only push undo history if it actually moved
+    // Hold-to-weld: parking the drag beside another diamond arms a 3 s timer;
+    // only when it completes do the keys snap together into a super diamond.
+    float  weld_target = -1.f;   // group time we're parked beside (-1 = none)
+    double weld_start  = 0.0;    // ImGui::GetTime() when the timer was armed
 } s_kf_drag;
+
+// Brief expanding-ring flash when a weld completes.
+static struct {
+    bool   active = false;
+    double t0     = 0.0;
+    int    ti = -1, ci = -1;
+    float  time   = 0.f;         // clip-relative time of the new super diamond
+} s_kf_flash;
+
+// Super-diamond right-click context (unpair menu).
+static struct { int ti = -1, ci = -1; float time = 0.f; } s_kf_ctx;
 
 // Drop state — declared extern in timeline.h
 int   s_tl_hover_track   = -1;
@@ -750,7 +768,10 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                     (mouse.x <= orig_cx0h+ew_hit || mouse.x >= orig_cx1h-ew_hit))
                     ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
             }
-            // Keyframe diamond markers — click selects, drag retimes
+            // Keyframe diamond markers. Simultaneous keys across props merge
+            // into one "super diamond" (stacked like the MultiFX brick icon):
+            // clicking selects / cycles through members, dragging retimes the
+            // whole group as one pose.
             bool kf_claimed = false;  // diamond consumed this click; skip clip select/drag
             if (!clip.ktracks.empty()) {
                 // Dedicated lane at the bottom of the clip body: a dark strip
@@ -760,82 +781,241 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                 dl->AddRectFilled({vis_x0, lane_t}, {vis_x1, lane_b},
                                   IM_COL32(8, 8, 12, 170), 3.f);
                 float kf_mid_y = (lane_t + lane_b) * 0.5f;
-                float d = 5.f;
+
+                // Group by actual timestamp (the PropTrack::set tolerance),
+                // NOT by screen overlap — a super diamond means "genuinely
+                // simultaneous", so zooming out never welds unrelated keys.
+                struct Mem { const std::string* prop; int idx; float value; };
+                struct Grp { float time; std::vector<Mem> mems; };
+                std::vector<Grp> groups;
                 for (auto& [pname, pt] : clip.ktracks) {
                     for (int ki = 0; ki < (int)pt.keys.size(); ++ki) {
-                        Keyframe& kf = pt.keys[ki];
-                        float kx = origin.x + TL_LABEL_W + (clip.start + kf.time) * zoom - scroll;
-                        if (kx < vis_x0 - d || kx > vis_x1 + d) continue;
-                        bool dragging_this = s_kf_drag.active &&
-                            s_kf_drag.ti == ti && s_kf_drag.ci == ci &&
-                            s_kf_drag.prop == pname && s_kf_drag.idx == ki;
-                        bool kf_sel = (state.kf_sel_track == ti &&
-                                       state.kf_sel_clip  == ci &&
-                                       state.kf_sel_prop  == pname &&
-                                       state.kf_sel_idx   == ki);
-                        bool hovered = !s_kf_drag.active && !tl_any_popup &&
-                                       fabsf(mouse.x - kx) < d + 3.f &&
-                                       fabsf(mouse.y - kf_mid_y) < d + 3.f;
-                        ImU32 kc = (kf_sel || dragging_this) ? IM_COL32(255,200,60,255)
-                                 : hovered                   ? IM_COL32(255,235,160,230)
-                                                             : IM_COL32(235,235,235,255);
-                        dl->AddQuadFilled(
-                            {kx, kf_mid_y-d}, {kx+d, kf_mid_y},
-                            {kx, kf_mid_y+d}, {kx-d, kf_mid_y}, kc);
-                        dl->AddQuad(
-                            {kx, kf_mid_y-d}, {kx+d, kf_mid_y},
-                            {kx, kf_mid_y+d}, {kx-d, kf_mid_y},
-                            IM_COL32(0, 0, 0, 200), 1.f);
-                        if (hovered) {
-                            ImGui::SetTooltip("%s   %.2fs   = %.3f\n"
-                                              "click to select \xc2\xb7 drag to move",
-                                              pname.c_str(), kf.time, kf.value);
-                            if (ImGui::IsMouseClicked(0)) {
-                                state.kf_sel_track = ti;
-                                state.kf_sel_clip  = ci;
-                                state.kf_sel_prop  = pname;
-                                state.kf_sel_idx   = ki;
-                                state.selected_track = ti;
-                                state.selected_clip  = ci;
-                                s_kf_drag.active = true;
-                                s_kf_drag.ti = ti; s_kf_drag.ci = ci;
-                                s_kf_drag.idx = ki; s_kf_drag.prop = pname;
-                                s_kf_drag.moved = false;
-                                kf_claimed = true;
-                                s_clip_hit = true;  // it's still a clip hit — don't deselect
-                            }
+                        float kt = pt.keys[ki].time;
+                        Grp* g = nullptr;
+                        for (auto& gg : groups)
+                            if (fabsf(gg.time - kt) < 0.02f) { g = &gg; break; }
+                        if (!g) { groups.push_back({kt, {}}); g = &groups.back(); }
+                        g->mems.push_back({&pname, ki, pt.keys[ki].value});
+                    }
+                }
+                for (auto& g : groups)
+                    std::sort(g.mems.begin(), g.mems.end(),
+                              [](const Mem& a, const Mem& b){ return *a.prop < *b.prop; });
+
+                for (auto& g : groups) {
+                    bool  super = g.mems.size() > 1;
+                    float d  = super ? 6.f : 5.f;
+                    float kx = origin.x + TL_LABEL_W + (clip.start + g.time) * zoom - scroll;
+                    if (kx < vis_x0 - d || kx > vis_x1 + d) continue;
+                    auto is_mem = [&](const std::string& prop, int idx) {
+                        for (auto& m : g.mems)
+                            if (*m.prop == prop && m.idx == idx) return true;
+                        return false;
+                    };
+                    bool dragging_this = s_kf_drag.active &&
+                        s_kf_drag.ti == ti && s_kf_drag.ci == ci &&
+                        !s_kf_drag.mems.empty() &&
+                        is_mem(s_kf_drag.mems[0].prop, s_kf_drag.mems[0].idx);
+                    bool kf_sel = state.kf_sel_track == ti &&
+                                  state.kf_sel_clip  == ci &&
+                                  is_mem(state.kf_sel_prop, state.kf_sel_idx);
+                    bool hovered = !s_kf_drag.active && !tl_any_popup &&
+                                   fabsf(mouse.x - kx) < d + 3.f &&
+                                   fabsf(mouse.y - kf_mid_y) < d + 3.f;
+                    // Singles stay white; super diamonds are blue so a merged
+                    // pose reads at a glance. Selection gold wins over both.
+                    ImU32 kc = (kf_sel || dragging_this) ? IM_COL32(255,200,60,255)
+                             : hovered ? (super ? IM_COL32(170,220,255,255)
+                                               : IM_COL32(255,235,160,230))
+                                       : (super ? IM_COL32(110,190,255,255)
+                                               : IM_COL32(235,235,235,255));
+                    auto diamond = [&](float cx, float cy, float r, ImU32 fill) {
+                        dl->AddQuadFilled({cx, cy-r}, {cx+r, cy},
+                                          {cx, cy+r}, {cx-r, cy}, fill);
+                        dl->AddQuad({cx, cy-r}, {cx+r, cy},
+                                    {cx, cy+r}, {cx-r, cy},
+                                    IM_COL32(0, 0, 0, 200), 1.f);
+                    };
+                    // Super diamonds get a dimmer echo peeking out behind —
+                    // same stacked-layers language as the MultiFX brick.
+                    if (super) diamond(kx + 3.f, kf_mid_y, d - 1.f,
+                                       IM_COL32(55, 110, 185, 255));
+                    diamond(kx, kf_mid_y, d, kc);
+
+                    if (hovered) {
+                        char tip[256]; int off = 0;
+                        off += snprintf(tip + off, sizeof(tip) - off,
+                                        "%.2fs", g.time);
+                        for (auto& m : g.mems) {
+                            if (off >= (int)sizeof(tip) - 32) break;
+                            off += snprintf(tip + off, sizeof(tip) - off,
+                                            "\n%s = %.3f", m.prop->c_str(), m.value);
+                        }
+                        snprintf(tip + off, sizeof(tip) - off,
+                                 super ? "\nclick cycles \xc2\xb7 drag moves all %d \xc2\xb7 right-click unpairs"
+                                       : "\nclick to select \xc2\xb7 drag to move",
+                                 (int)g.mems.size());
+                        ImGui::SetTooltip("%s", tip);
+                        if (super && ImGui::IsMouseClicked(1)) {
+                            s_kf_ctx.ti = ti; s_kf_ctx.ci = ci;
+                            s_kf_ctx.time = g.time;
+                            state.selected_track = ti;
+                            state.selected_clip  = ci;
+                            clip_ctx_opened_this_frame = true;  // not the clip menu
+                            ImGui::OpenPopup("##kf_ctx");
+                        }
+                        if (ImGui::IsMouseClicked(0)) {
+                            // Select: cycle through members if one is already
+                            // selected (same gesture as Alt+click layer cycle
+                            // on the canvas), else start at the first.
+                            int cur = -1;
+                            if (state.kf_sel_track == ti && state.kf_sel_clip == ci)
+                                for (int mi = 0; mi < (int)g.mems.size(); ++mi)
+                                    if (*g.mems[mi].prop == state.kf_sel_prop &&
+                                        g.mems[mi].idx   == state.kf_sel_idx) { cur = mi; break; }
+                            const Mem& pick = g.mems[(cur + 1) % (int)g.mems.size()];
+                            state.kf_sel_track = ti;
+                            state.kf_sel_clip  = ci;
+                            state.kf_sel_prop  = *pick.prop;
+                            state.kf_sel_idx   = pick.idx;
+                            state.selected_track = ti;
+                            state.selected_clip  = ci;
+                            s_kf_drag.active = true;
+                            s_kf_drag.ti = ti; s_kf_drag.ci = ci;
+                            s_kf_drag.mems.clear();
+                            for (auto& m : g.mems)
+                                s_kf_drag.mems.push_back({*m.prop, m.idx});
+                            s_kf_drag.moved = false;
+                            kf_claimed = true;
+                            s_clip_hit = true;  // it's still a clip hit — don't deselect
                         }
                     }
                 }
-                // Retime drag in progress on one of this clip's keys
+                // Retime drag in progress — move every member of the grabbed
+                // group to the same new time so the pose stays simultaneous.
                 if (s_kf_drag.active && s_kf_drag.ti == ti && s_kf_drag.ci == ci) {
-                    auto it_kt = clip.ktracks.find(s_kf_drag.prop);
-                    if (it_kt == clip.ktracks.end() ||
-                        s_kf_drag.idx >= (int)it_kt->second.keys.size()) {
+                    bool valid = !s_kf_drag.mems.empty();
+                    for (auto& m : s_kf_drag.mems) {
+                        auto it_kt = clip.ktracks.find(m.prop);
+                        if (it_kt == clip.ktracks.end() ||
+                            m.idx >= (int)it_kt->second.keys.size()) { valid = false; break; }
+                    }
+                    if (!valid) {
                         s_kf_drag.active = false;
                     } else if (ImGui::IsMouseDown(0)) {
-                        auto& keys = it_kt->second.keys;
                         float t_new = (mouse.x - origin.x - TL_LABEL_W + scroll) / zoom
                                       - clip.start;
+                        // Hold-to-weld: hovering the drag over another diamond
+                        // arms a 3 s ring timer instead of merging on contact.
+                        // Until it completes the drag parks just beside the
+                        // target, so releasing early leaves them neighbors;
+                        // when the ring closes, the keys snap to the exact
+                        // same time and become one (blue) super diamond.
+                        const double now = ImGui::GetTime();
+                        float weld_zone = fmaxf(0.02f, 8.f / zoom);
+                        float park_off  = fmaxf(0.03f, 4.f / zoom);
+                        const Grp* tgt = nullptr;
+                        bool tgt_weldable = false;
+                        for (auto& g : groups) {
+                            bool is_dragged = false;
+                            for (auto& m : g.mems)
+                                if (*m.prop == s_kf_drag.mems[0].prop &&
+                                    m.idx   == s_kf_drag.mems[0].idx) { is_dragged = true; break; }
+                            if (is_dragged) continue;
+                            if (fabsf(t_new - g.time) >= weld_zone) continue;
+                            if (tgt && fabsf(t_new - g.time) >= fabsf(t_new - tgt->time))
+                                continue;
+                            // A super diamond holds at most one key per prop —
+                            // groups sharing a prop with the drag park beside
+                            // each other but never weld (no timer either).
+                            bool shares_prop = false;
+                            for (auto& m : g.mems) {
+                                for (auto& dm : s_kf_drag.mems)
+                                    if (*m.prop == dm.prop) { shares_prop = true; break; }
+                                if (shares_prop) break;
+                            }
+                            tgt = &g;
+                            tgt_weldable = !shares_prop;
+                        }
+                        if (tgt && !tgt_weldable) {
+                            // Repel only: keep distinct keys of the same prop
+                            // from stacking into a degenerate group.
+                            t_new = tgt->time +
+                                    (t_new >= tgt->time ? park_off : -park_off);
+                            s_kf_drag.weld_target = -1.f;
+                        } else if (tgt) {
+                            if (fabsf(s_kf_drag.weld_target - tgt->time) > 0.0005f) {
+                                s_kf_drag.weld_target = tgt->time;   // new candidate
+                                s_kf_drag.weld_start  = now;         // arm the timer
+                            }
+                            float prog = (float)((now - s_kf_drag.weld_start) / 3.0);
+                            if (prog >= 1.f) {
+                                t_new = tgt->time;                   // weld!
+                                s_kf_flash.active = true;
+                                s_kf_flash.t0 = now;
+                                s_kf_flash.ti = ti; s_kf_flash.ci = ci;
+                                s_kf_flash.time = tgt->time;
+                                s_kf_drag.weld_target = -1.f;
+                                // Absorb the target's members so the merged
+                                // group keeps dragging as one from here on.
+                                for (auto& m : tgt->mems)
+                                    s_kf_drag.mems.push_back({*m.prop, m.idx});
+                            } else {
+                                t_new = tgt->time +
+                                        (t_new >= tgt->time ? park_off : -park_off);
+                                // The timer ring, filling clockwise around the
+                                // target with a gentle pulse.
+                                float tx = origin.x + TL_LABEL_W +
+                                           (clip.start + tgt->time) * zoom - scroll;
+                                float pr = 9.f * (1.f + 0.1f * sinf((float)now * 9.f));
+                                dl->PathArcTo({tx, kf_mid_y}, pr, -IM_PI * 0.5f,
+                                              -IM_PI * 0.5f + prog * 2.f * IM_PI, 24);
+                                dl->PathStroke(IM_COL32(110,190,255,230), 0, 2.f);
+                            }
+                        } else {
+                            s_kf_drag.weld_target = -1.f;
+                        }
                         t_new = fmaxf(0.f, fminf(t_new, clip.end - clip.start));
-                        if (fabsf(t_new - keys[s_kf_drag.idx].time) > 1e-4f)
-                            s_kf_drag.moved = true;
-                        keys[s_kf_drag.idx].time = t_new;
-                        // Bubble past neighbors so the track stays time-sorted.
-                        while (s_kf_drag.idx > 0 &&
-                               keys[s_kf_drag.idx].time < keys[s_kf_drag.idx-1].time) {
-                            std::swap(keys[s_kf_drag.idx], keys[s_kf_drag.idx-1]);
-                            --s_kf_drag.idx;
+                        for (auto& m : s_kf_drag.mems) {
+                            auto& keys = clip.ktracks[m.prop].keys;
+                            bool was_sel = state.kf_sel_prop == m.prop &&
+                                           state.kf_sel_idx  == m.idx;
+                            if (fabsf(t_new - keys[m.idx].time) > 1e-4f)
+                                s_kf_drag.moved = true;
+                            keys[m.idx].time = t_new;
+                            // Bubble past neighbors so the track stays sorted.
+                            while (m.idx > 0 &&
+                                   keys[m.idx].time < keys[m.idx-1].time) {
+                                std::swap(keys[m.idx], keys[m.idx-1]);
+                                --m.idx;
+                            }
+                            while (m.idx + 1 < (int)keys.size() &&
+                                   keys[m.idx].time > keys[m.idx+1].time) {
+                                std::swap(keys[m.idx], keys[m.idx+1]);
+                                ++m.idx;
+                            }
+                            if (was_sel) state.kf_sel_idx = m.idx;
                         }
-                        while (s_kf_drag.idx + 1 < (int)keys.size() &&
-                               keys[s_kf_drag.idx].time > keys[s_kf_drag.idx+1].time) {
-                            std::swap(keys[s_kf_drag.idx], keys[s_kf_drag.idx+1]);
-                            ++s_kf_drag.idx;
-                        }
-                        state.kf_sel_idx = s_kf_drag.idx;
                     } else {
-                        if (s_kf_drag.moved) history_push(state, "Move keyframe");
+                        if (s_kf_drag.moved)
+                            history_push(state, s_kf_drag.mems.size() > 1
+                                                ? "Move keyframe group" : "Move keyframe");
                         s_kf_drag.active = false;
+                    }
+                }
+                // Weld-complete flash: a quick expanding ring fading out over
+                // the freshly merged super diamond.
+                if (s_kf_flash.active && s_kf_flash.ti == ti && s_kf_flash.ci == ci) {
+                    float el = (float)(ImGui::GetTime() - s_kf_flash.t0);
+                    if (el > 0.45f) {
+                        s_kf_flash.active = false;
+                    } else {
+                        float fx = origin.x + TL_LABEL_W +
+                                   (clip.start + s_kf_flash.time) * zoom - scroll;
+                        float fr = 7.f + el * 34.f;
+                        int   fa = (int)(220.f * (1.f - el / 0.45f));
+                        dl->AddCircle({fx, kf_mid_y}, fr,
+                                      IM_COL32(140, 200, 255, fa), 20, 2.f);
                     }
                 }
             }
@@ -2195,6 +2375,73 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
 
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {8.f, 6.f});
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,   {8.f, 4.f});
+
+    // Super-diamond unpair menu — pulls members back out of a welded group by
+    // nudging their keys one frame apart (just past the grouping tolerance).
+    if (ImGui::BeginPopup("##kf_ctx")) {
+        bool ctx_ok = s_kf_ctx.ti >= 0 && s_kf_ctx.ti < (int)state.tracks.size() &&
+                      s_kf_ctx.ci >= 0 &&
+                      s_kf_ctx.ci < (int)state.tracks[s_kf_ctx.ti].clips.size();
+        if (!ctx_ok) {
+            ImGui::CloseCurrentPopup();
+        } else {
+            Clip& kclip = state.tracks[s_kf_ctx.ti].clips[s_kf_ctx.ci];
+            std::vector<std::string> mems;
+            for (auto& [p, pt] : kclip.ktracks)
+                if (pt.find_nearest(s_kf_ctx.time, 0.02f) >= 0) mems.push_back(p);
+            std::sort(mems.begin(), mems.end());
+
+            // First free timestamp stepping away from the group, frame-sized
+            // steps so unpaired keys land on the grid and never re-group.
+            auto free_spot = [&]() {
+                float dur  = kclip.end - kclip.start;
+                float step = fmaxf(1.f / (float)state.fps, 0.04f);
+                auto occupied = [&](float t) {
+                    for (auto& [p2, pt2] : kclip.ktracks)
+                        if (pt2.find_nearest(t, 0.025f) >= 0) return true;
+                    return false;
+                };
+                float nt = s_kf_ctx.time + step; int guard = 0;
+                while (nt <= dur && occupied(nt) && guard++ < 64) nt += step;
+                if (nt > dur) {
+                    nt = s_kf_ctx.time - step; guard = 0;
+                    while (nt >= 0.f && occupied(nt) && guard++ < 64) nt -= step;
+                    if (nt < 0.f) nt = s_kf_ctx.time;  // nowhere to go
+                }
+                return nt;
+            };
+            auto unpair_one = [&](const std::string& prop) {
+                auto it = kclip.ktracks.find(prop);
+                if (it == kclip.ktracks.end()) return;
+                int ki = it->second.find_nearest(s_kf_ctx.time, 0.02f);
+                if (ki < 0) return;
+                it->second.keys[ki].time = free_spot();
+                std::sort(it->second.keys.begin(), it->second.keys.end(),
+                          [](const Keyframe& a, const Keyframe& b){ return a.time < b.time; });
+            };
+
+            if (mems.size() < 2) {
+                ImGui::CloseCurrentPopup();  // weld dissolved meanwhile
+            } else {
+                if (ImGui::MenuItem("Unpair all")) {
+                    // Keep the first member in place, spread the rest out.
+                    for (size_t i = 1; i < mems.size(); ++i) unpair_one(mems[i]);
+                    state.kf_sel_idx = -1;  // selection index likely stale now
+                    history_push(state, "Unpair keyframes");
+                }
+                ImGui::Separator();
+                for (auto& p : mems) {
+                    char lbl[64]; snprintf(lbl, sizeof(lbl), "Unpair %s", p.c_str());
+                    if (ImGui::MenuItem(lbl)) {
+                        unpair_one(p);
+                        state.kf_sel_idx = -1;
+                        history_push(state, "Unpair keyframe");
+                    }
+                }
+            }
+        }
+        ImGui::EndPopup();
+    }
 
     if (ImGui::BeginPopup("##clip_ctx")) {
         open_clip_ctx = false;
