@@ -37,6 +37,10 @@ extern ImFont* g_font_black;
 // g_tl — timeline drag/select state (declared extern in studio_types.h)
 TlState g_tl;
 
+// How long a drag must dwell on a merge target before it welds — shared by
+// keyframe super diamonds and FX brick merging so the gesture feels the same.
+static const double kWeldHoldSec = 3.0;
+
 // In-progress keyframe-diamond retime drag. Grabbing a super diamond drags
 // every key at that timestamp (one entry per member prop); member indices are
 // kept current as keys bubble through their sorted tracks.
@@ -62,6 +66,45 @@ static struct {
 
 // Super-diamond right-click context (unpair menu).
 static struct { int ti = -1, ci = -1; float time = 0.f; } s_kf_ctx;
+
+// Hold-to-weld for FX brick merging — the keyframe-diamond gesture applied to
+// bricks: overlapping a merge target arms the dwell timer; the merge only
+// fires when it completes (or instantly on an Alt drop). An early release
+// just leaves the bricks overlapping, which is legal for FX (both render).
+static struct {
+    int    target_ci = -1;   // current merge candidate (mirrors drag_merge_ci)
+    double t0        = 0.0;  // when the timer was armed
+} s_fx_weld;
+
+// Expanding-ring flash over a freshly merged FX brick.
+static struct {
+    bool   active = false;
+    double t0     = 0.0;
+    int    ti = -1, ci = -1;
+} s_fx_flash;
+
+// The weld timer ring, filling clockwise at the merge target's center —
+// same visual language as the keyframe-diamond weld ring.
+static void draw_fx_weld_ring(ImDrawList* dl, float x0, float x1,
+                              float y0, float y1, ImU32 col) {
+    float prog = (float)((ImGui::GetTime() - s_fx_weld.t0) / kWeldHoldSec);
+    if (prog <= 0.f || prog >= 1.f) return;
+    ImVec2 c{(x0 + x1) * 0.5f, (y0 + y1) * 0.5f};
+    float pr = 10.f * (1.f + 0.1f * sinf((float)ImGui::GetTime() * 9.f));
+    dl->PathArcTo(c, pr, -IM_PI * 0.5f, -IM_PI * 0.5f + prog * 2.f * IM_PI, 24);
+    dl->PathStroke(col, 0, 2.f);
+}
+
+static void draw_fx_merge_flash(ImDrawList* dl, int ti, int ci,
+                                float x0, float x1, float y0, float y1) {
+    if (!s_fx_flash.active || s_fx_flash.ti != ti || s_fx_flash.ci != ci) return;
+    float el = (float)(ImGui::GetTime() - s_fx_flash.t0);
+    if (el > 0.45f) { s_fx_flash.active = false; return; }
+    float k  = el / 0.45f;
+    float ex = 14.f * k;
+    dl->AddRect({x0 - ex, y0 - ex}, {x1 + ex, y1 + ex},
+                IM_COL32(255, 200, 90, (int)(220.f * (1.f - k))), 3.f, 0, 2.5f);
+}
 
 // Drop state — declared extern in timeline.h
 int   s_tl_hover_track   = -1;
@@ -948,7 +991,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                                 s_kf_drag.weld_target = tgt->time;   // new candidate
                                 s_kf_drag.weld_start  = now;         // arm the timer
                             }
-                            float prog = (float)((now - s_kf_drag.weld_start) / 3.0);
+                            float prog = (float)((now - s_kf_drag.weld_start) / kWeldHoldSec);
                             if (prog >= 1.f) {
                                 t_new = tgt->time;                   // weld!
                                 s_kf_flash.active = true;
@@ -1290,6 +1333,8 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                     float pulse = 0.5f + 0.5f * sinf((float)ImGui::GetTime() * 6.f);
                     ImU32 mc = IM_COL32(80, 255, 220, (int)(120 + 80 * pulse));
                     dl->AddRect({vis_x0, cy0}, {vis_x1, cy1}, mc, 2.f, 0, 2.5f);
+                    draw_fx_weld_ring(dl, vis_x0, vis_x1, cy0, cy1,
+                                      IM_COL32(80, 255, 220, 230));
                 }
                 continue;
             }
@@ -1362,7 +1407,12 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                 float pulse = 0.5f + 0.5f * sinf((float)ImGui::GetTime() * 6.f);
                 ImU32 mc = IM_COL32(255, 180, 60, (int)(130 + 80 * pulse));
                 dl->AddRect({vis_x0, cy0}, {vis_x1, cy1}, mc, 2.f, 0, 2.5f);
+                draw_fx_weld_ring(dl, vis_x0, vis_x1, cy0, cy1,
+                                  IM_COL32(255, 180, 60, 230));
             }
+            // Weld-complete flash (the merged brick is always MultiFX, so it
+            // renders through this path, never the BodyFX one).
+            draw_fx_merge_flash(dl, ti, ci, vis_x0, vis_x1, cy0, cy1);
         }
 
         // Left-click empty track body (no clip hit) — deselect
@@ -2053,11 +2103,48 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                         }
                     }
                 }
+                // Hold-to-weld: overlapping a target only arms the dwell
+                // timer (ring drawn at the target brick); the merge fires when
+                // it completes. Multi-drags never merge.
+                if (g_tl.drag_multi.size() > 1) g_tl.drag_merge_ci = -1;
+                if (g_tl.drag_merge_ci != s_fx_weld.target_ci) {
+                    s_fx_weld.target_ci = g_tl.drag_merge_ci;   // new candidate
+                    s_fx_weld.t0        = ImGui::GetTime();     // arm the timer
+                }
+                if (g_tl.drag_merge_ci >= 0 &&
+                    ImGui::GetTime() - s_fx_weld.t0 >= kWeldHoldSec) {
+                    int tgt_ci = g_tl.drag_merge_ci;
+                    Clip dragged_copy = state.tracks[drag_track].clips[drag_clip];
+                    merge_fx_clips(state.tracks[drag_track].clips[tgt_ci], dragged_copy);
+                    state.tracks[drag_track].clips.erase(
+                        state.tracks[drag_track].clips.begin() + drag_clip);
+                    int sel_ci = (tgt_ci > drag_clip) ? tgt_ci - 1 : tgt_ci;
+                    state.selected_track = drag_track;
+                    state.selected_clip  = sel_ci;
+                    state.clip_selection.clear();
+                    state.clip_selection.insert({drag_track, sel_ci});
+                    s_fx_flash.active = true;
+                    s_fx_flash.t0     = ImGui::GetTime();
+                    s_fx_flash.ti     = drag_track;
+                    s_fx_flash.ci     = sel_ci;
+                    history_push(state, "Merge FX bricks");
+                    // End the drag — the merged brick stays selected, so
+                    // re-grabbing it is one click. (Diamonds keep dragging
+                    // their merged group; bricks stop, deliberately.)
+                    drag_track = -1; drag_clip = -1;
+                    drag_hot_track = -1; drag_hot_gap = -1;
+                    g_tl.drag_merge_ci  = -1;
+                    s_fx_weld.target_ci = -1;
+                    s_drag_moved = false;
+                    s_body_snap_held_start = -1.f; s_body_snap_held_cand = -1.f;
+                    g_tl.drag_multi.clear();
+                }
             }
         }
     } else {
         s_snap_indicator = -1.f;
         g_tl.drag_merge_ci = -1;
+        s_fx_weld.target_ci = -1;
     }
     if (ImGui::IsMouseReleased(0)) {
         if (drag_track >= 0 && drag_clip >= 0) {
@@ -2121,8 +2208,12 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                     }
                 }
             } else {
-                // Merge: FX brick dropped on top of another FX brick (same track)
-                if (!drag_left && !drag_right && g_tl.drag_merge_ci >= 0) {
+                // Merge: FX brick dropped on another with Alt held — instant
+                // merge, skipping the hold-to-weld dwell. Without Alt the
+                // drop just leaves the bricks overlapping (both render); the
+                // dwell timer mid-drag is the modifier-free way to merge.
+                if (!drag_left && !drag_right && g_tl.drag_merge_ci >= 0 &&
+                    ImGui::GetIO().KeyAlt) {
                     int tgt_ci = g_tl.drag_merge_ci;
                     Clip dragged_copy = state.tracks[drag_track].clips[drag_clip];
                     merge_fx_clips(state.tracks[drag_track].clips[tgt_ci], dragged_copy);
@@ -2135,6 +2226,10 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                     state.clip_selection.clear();
                     state.clip_selection.insert({drag_track, sel_ci});
                     g_tl.drag_merge_ci = -1;
+                    s_fx_flash.active = true;
+                    s_fx_flash.t0     = ImGui::GetTime();
+                    s_fx_flash.ti     = drag_track;
+                    s_fx_flash.ci     = sel_ci;
                     history_push(state, "Merge FX bricks");
                     goto drag_done;
                 }
@@ -2196,6 +2291,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
         drag_track=-1; drag_clip=-1; drag_left=false; drag_right=false;
         drag_hot_track=-1; drag_hot_gap=-1;
         g_tl.drag_merge_ci = -1;
+        s_fx_weld.target_ci = -1;
         s_drag_moved = false;
         s_body_snap_held_start = -1.f; s_body_snap_held_cand = -1.f;
         g_tl.drag_multi.clear();
