@@ -706,6 +706,8 @@ async def list_tools() -> list[Tool]:
                 "committing to a placement. add_clip on a video/audio path automatically also adds the "
                 "file to the bin, so you don't need both calls for files you're placing right away.\n\n"
                 "type: video | audio | text | lyrics | subtitle | effect | background | body_fx\n"
+                "effect/body_fx bricks cannot overlap another FX brick on the same track — "
+                "rejected; layer effects with add_multifx_brick instead.\n"
                 "For video files (.mp4 .mov .webm etc): type='video', text=absolute path.\n"
                 "For audio-only files (.flac .mp3 .wav .ogg etc): type='audio', text=absolute path. "
                 "NEVER use type='video' for audio-only files — it will fail with 'cannot write output header'.\n"
@@ -791,7 +793,12 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="move_clip",
-            description="Move a clip to a new start time (preserves duration).",
+            description=(
+                "Move a clip to a new start time (preserves duration). "
+                "Moving an FX brick onto another FX brick's time range on the same "
+                "track is rejected — FX bricks never overlap (use add_multifx_brick "
+                "to combine effects)."
+            ),
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -806,7 +813,11 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="trim_clip",
-            description="Trim a clip's start and/or end time.",
+            description=(
+                "Trim a clip's start and/or end time. Trimming an FX brick so it "
+                "would lap another FX brick on the same track is rejected — FX "
+                "bricks never overlap."
+            ),
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -1169,7 +1180,9 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="add_multifx_brick",
             description=(
-                "Add an ordered chain of FX sub-effects as one brick. Prefer over multiple overlapping add_effect_brick calls.\n\n"
+                "Add an ordered chain of FX sub-effects as one brick. This is THE way to layer "
+                "effects over the same time range: FX bricks cannot overlap each other on a track "
+                "(such calls are rejected), so stacked effects must be one MultiFX chain.\n\n"
                 "Same-track as a video clip = glass mode (affects that clip only). "
                 "Separate FX track = global (affects all layers below).\n\n"
                 "effects[]: {fx_type, rel_start (0), rel_end (0=brick end), params, body_fx_type (if fx_type='body_fx')}\n"
@@ -1232,6 +1245,9 @@ async def list_tools() -> list[Tool]:
             description=(
                 "Add a standalone FX brick to a track. Affects everything below on the timeline "
                 "(or only the sibling video clip if on the same track — glass mode).\n\n"
+                "FX bricks cannot overlap other FX bricks on a track — the call fails. To layer "
+                "several effects over the same time range use one add_multifx_brick chain; "
+                "overlapping a video/text clip (glass mode) is fine.\n\n"
                 "fx_type — use the exact snake_case name. All params are floats. "
                 "'body_fx' is NOT valid here — use add_body_fx_brick instead.\n\n"
                 "BASIC: grade (brightness,contrast,saturation,hue) | blur (blur) | vignette (vignette) | "

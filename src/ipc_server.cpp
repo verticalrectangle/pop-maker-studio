@@ -529,6 +529,38 @@ static bool apply_bg_preset(Clip& cl, const std::string& text, std::string& err)
     return true;
 }
 
+static bool clip_is_fx(const Clip& c) {
+    return c.clip_type == ClipType::Effect ||
+           c.clip_type == ClipType::MultiFX ||
+           c.clip_type == ClipType::BodyFX;
+}
+
+// FX bricks never stack: overlapping effects belong in one MultiFX chain.
+// Same invariant the timeline enforces with weld-or-bounce; FX over content
+// stays legal (glass bricks ride over video). skip_ci: the clip being moved
+// or trimmed, -1 when adding. Returns true and sets err on collision.
+static bool fx_overlap_on_track(const AppState& state, int ti,
+                                float start, float end, int skip_ci,
+                                std::string& err) {
+    for (int ci = 0; ci < (int)state.tracks[ti].clips.size(); ++ci) {
+        if (ci == skip_ci) continue;
+        const Clip& oc = state.tracks[ti].clips[ci];
+        if (!clip_is_fx(oc)) continue;
+        if (start < oc.end && end > oc.start) {
+            char buf[224];
+            snprintf(buf, sizeof(buf),
+                     "FX bricks cannot overlap on a track: requested "
+                     "[%.3fs \xe2\x80\x93 %.3fs] collides with FX clip %d "
+                     "[%.3fs \xe2\x80\x93 %.3fs]. Combine the effects in one "
+                     "add_multifx_brick chain, or use another track or time range.",
+                     start, end, ci, oc.start, oc.end);
+            err = buf;
+            return true;
+        }
+    }
+    return false;
+}
+
 // ── Bounds checking helpers ───────────────────────────────────────────────────
 
 static bool check_track(const AppState& state, int ti, std::string& err) {
@@ -1405,6 +1437,9 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         if (!check_clip(state, ti, ci, err)) return {};
         Clip& cl = state.tracks[ti].clips[ci];
         float dur = cl.end - cl.start;
+        if (clip_is_fx(cl) &&
+            fx_overlap_on_track(state, ti, start, start + dur, ci, err))
+            return {};
         cl.start = start;
         cl.end   = start + dur;
         return json::object();
@@ -1414,6 +1449,13 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         int ti = track_by_name_or_index(state, params), ci = params.value("clip", -1);
         if (!check_clip(state, ti, ci, err)) return {};
         Clip& cl = state.tracks[ti].clips[ci];
+        if (clip_is_fx(cl)) {
+            float ns = params.contains("start")
+                ? snap_to_frame(params["start"].get<float>(), state.fps) : cl.start;
+            float ne = params.contains("end")
+                ? snap_end_to_frame(params["end"].get<float>(), state.fps) : cl.end;
+            if (fx_overlap_on_track(state, ti, ns, ne, ci, err)) return {};
+        }
         float old_start = cl.start;
         if (params.contains("start")) {
             float ns = snap_to_frame(params["start"].get<float>(), state.fps);
@@ -1470,6 +1512,8 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         cl.end   = end;
         cl.text  = text;
         if (!apply_bg_preset(cl, text, err)) return {};
+        if (clip_is_fx(cl) && fx_overlap_on_track(state, ti, start, end, -1, err))
+            return {};
         if (cl.clip_type == ClipType::Video || cl.clip_type == ClipType::Audio) {
             cl.source_id = text;
             // Mirror into the bin so any media that ends up on the timeline is
@@ -1596,6 +1640,8 @@ static json dispatch(AppState& state, const std::string& method, const json& par
             cl.clip_type = parse_clip_type(type_s);
             cl.start = start; cl.end = end; cl.text = text;
             if (!apply_bg_preset(cl, text, err)) return {};
+            if (clip_is_fx(cl) && fx_overlap_on_track(state, ti, start, end, -1, err))
+                return {};
             if (cl.clip_type == ClipType::Video || cl.clip_type == ClipType::Audio)
                 cl.source_id = text;
             state.tracks[ti].clips.push_back(cl);
@@ -2000,6 +2046,7 @@ static json dispatch(AppState& state, const std::string& method, const json& par
             if (!apply_effect_params(cl, params["params"], fx_s, err)) return {};
         }
 
+        if (fx_overlap_on_track(state, ti, start, end, -1, err)) return {};
         state.tracks[ti].clips.push_back(cl);
         json r; r["clip"] = (int)state.tracks[ti].clips.size() - 1;
         return r;
@@ -2052,6 +2099,7 @@ static json dispatch(AppState& state, const std::string& method, const json& par
             }
         }
 
+        if (fx_overlap_on_track(state, ti, start, end, -1, err)) return {};
         state.tracks[ti].clips.push_back(brick);
         json r; r["clip"] = (int)state.tracks[ti].clips.size() - 1;
         return r;
