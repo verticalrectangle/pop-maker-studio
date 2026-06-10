@@ -438,9 +438,14 @@ static const char* kSystemPrompt =
     "calling tools; the user watches the canvas and timeline update live. "
     "Track 0 is the top/foreground layer. Times are in seconds. Mutations "
     "return small acks; call get_project or get_clips when you need to read "
-    "state. take_snapshot shows you the canvas. Be concise in prose — do the "
-    "work with tools and summarize briefly. You can put videos and images "
-    "on the timeline.";
+    "state. You can put videos and images on the timeline.\n"
+    "PERCEPTION: to understand video content, use describe_video + "
+    "get_video_description — local scene captions as text, they work even "
+    "without vision. For spoken content use get_transcript / "
+    "search_transcript. take_snapshot shows the canvas composition; it only "
+    "helps if you are a vision model, and it is the wrong tool for reading "
+    "video content — do not scrub the playhead taking snapshots.\n"
+    "Be concise in prose — do the work with tools and summarize briefly.";
 
 static void worker_turn() {
     std::string api_key = key_lookup();

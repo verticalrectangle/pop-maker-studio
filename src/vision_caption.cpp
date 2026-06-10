@@ -142,7 +142,8 @@ struct MoondreamSessions {
     Ort::Env env { ORT_LOGGING_LEVEL_ERROR, "moondream" };
     Ort::SessionOptions opts;
     std::unique_ptr<Ort::Session> encoder;
-    std::unique_ptr<Ort::Session> decoder;
+    std::unique_ptr<Ort::Session> embed;     // token ids → inputs_embeds
+    std::unique_ptr<Ort::Session> decoder;   // inputs_embeds + KV → logits
 
     // Tokenizer
     uint32_t byte_enc[256];
@@ -151,23 +152,21 @@ struct MoondreamSessions {
     std::unordered_map<int32_t, std::string> id2str;
     std::map<std::pair<std::string,std::string>, int> merge_rank;
 
-    int32_t eos_id   = -1;
-    int32_t image_id = -1;
+    int32_t eos_id = -1;   // <|endoftext|> — doubles as BOS in moondream2
 
-    // Encoder tensor names (queried at load time)
-    std::string enc_in_name;
-    std::string enc_out_name;
+    // Encoder / embed tensor names (queried at load time)
+    std::string enc_in_name, enc_out_name;
+    std::string emb_in_name, emb_out_name;
 
     // Decoder tensor names
     std::vector<std::string> dec_in_names;
     std::vector<std::string> dec_out_names;
 
     // Indices into dec_in_names / dec_out_names
-    int idx_input_ids    = -1;
-    int idx_attn_mask    = -1;
-    int idx_img_feat     = -1;
-    int idx_use_cache    = -1;
-    int idx_logits_out   = -1;
+    int idx_inputs_embeds = -1;
+    int idx_attn_mask     = -1;
+    int idx_pos_ids       = -1;
+    int idx_logits_out    = -1;
 
     // KV cache: pairs of (past_input_idx, present_output_idx)
     struct KVPair { int in_idx; int out_idx; };
@@ -212,17 +211,17 @@ static bool load_tokenizer(MoondreamSessions& s) {
         }
     }
 
-    // Special tokens
+    // Special tokens. Note: the "<image>" added token has id -200 — it is a
+    // placeholder sentinel for where image embeddings go, never a real vocab
+    // id, so negative-id tokens are skipped.
     if (j.contains("added_tokens")) {
         for (auto& at : j["added_tokens"]) {
             int32_t id = at.value("id", -1);
             std::string content = at.value("content", "");
+            if (id < 0) continue;
             if (content == "<|endoftext|>" || content == "</s>" || content == "<eos>")
                 s.eos_id = id;
-            if (content == "<image>")
-                s.image_id = id;
-            // Also add to vocab
-            if (id >= 0 && !content.empty()) {
+            if (!content.empty()) {
                 s.vocab[content] = id;
                 s.id2str[id]     = content;
             }
@@ -294,19 +293,18 @@ static bool discover_decoder_names(MoondreamSessions& s) {
     for (size_t i = 0; i < n_out; i++)
         s.dec_out_names.push_back(s.decoder->GetOutputNameAllocated(i, alloc).get());
 
-    // Identify well-known inputs by name substring
+    // Identify well-known inputs. The merged decoder takes pre-embedded
+    // tokens (inputs_embeds) — image features and text embeddings are
+    // concatenated by us before the call; there is no input_ids and no
+    // separate image input.
     for (int i = 0; i < (int)n_in; i++) {
         const auto& nm = s.dec_in_names[i];
-        if (nm == "input_ids")
-            s.idx_input_ids = i;
+        if (nm == "inputs_embeds")
+            s.idx_inputs_embeds = i;
         else if (nm == "attention_mask")
             s.idx_attn_mask = i;
-        else if (nm.find("image") != std::string::npos ||
-                 nm.find("encoder") != std::string::npos)
-            s.idx_img_feat = i;
-        else if (nm.find("cache_branch") != std::string::npos ||
-                 nm.find("use_cache") != std::string::npos)
-            s.idx_use_cache = i;
+        else if (nm == "position_ids")
+            s.idx_pos_ids = i;
     }
 
     // Logits output
@@ -331,8 +329,8 @@ static bool discover_decoder_names(MoondreamSessions& s) {
         present_out[key] = i;
     }
     for (int i = 0; i < (int)n_in; i++) {
-        if (i == s.idx_input_ids || i == s.idx_attn_mask ||
-            i == s.idx_img_feat  || i == s.idx_use_cache) continue;
+        if (i == s.idx_inputs_embeds || i == s.idx_attn_mask ||
+            i == s.idx_pos_ids) continue;
         const auto& nm = s.dec_in_names[i];
         std::string key = nm;
         for (auto& pfx : {"past_key_values.", "present."}) {
@@ -354,7 +352,8 @@ static bool discover_decoder_names(MoondreamSessions& s) {
         }
     }
 
-    return s.idx_input_ids >= 0;
+    return s.idx_inputs_embeds >= 0 && s.idx_attn_mask >= 0 &&
+           s.idx_pos_ids >= 0 && !s.kv_pairs.empty();
 }
 
 static MoondreamSessions* get_sessions() {
@@ -362,10 +361,12 @@ static MoondreamSessions* get_sessions() {
     if (g_sess) return g_sess.get();
 
     std::string enc_path = app_models_dir() + "/moondream-encoder.onnx";
+    std::string emb_path = app_models_dir() + "/embed_tokens.onnx";
     std::string dec_path = app_models_dir() + "/moondream-decoder.onnx";
 
-    if (!fs::exists(enc_path) || !fs::exists(dec_path)) {
-        g_sess_err = "Moondream2 ONNX models not found in models/";
+    if (!fs::exists(enc_path) || !fs::exists(emb_path) || !fs::exists(dec_path)) {
+        g_sess_err = "Moondream2 ONNX models not found in models/ "
+                     "(need encoder, embed_tokens and decoder)";
         return nullptr;
     }
 
@@ -377,21 +378,25 @@ static MoondreamSessions* get_sessions() {
 
     try {
         s->encoder = std::make_unique<Ort::Session>(s->env, enc_path.c_str(), s->opts);
+        s->embed   = std::make_unique<Ort::Session>(s->env, emb_path.c_str(), s->opts);
         s->decoder = std::make_unique<Ort::Session>(s->env, dec_path.c_str(), s->opts);
     } catch (const Ort::Exception& e) {
         g_sess_err = std::string("ONNX load failed: ") + e.what();
         return nullptr;
     }
 
-    // Encoder input/output names
+    // Encoder / embed input/output names
     {
         Ort::AllocatorWithDefaultOptions alloc;
         s->enc_in_name  = s->encoder->GetInputNameAllocated(0, alloc).get();
         s->enc_out_name = s->encoder->GetOutputNameAllocated(0, alloc).get();
+        s->emb_in_name  = s->embed->GetInputNameAllocated(0, alloc).get();
+        s->emb_out_name = s->embed->GetOutputNameAllocated(0, alloc).get();
     }
 
     if (!discover_decoder_names(*s)) {
-        g_sess_err = "Could not identify input_ids tensor in decoder";
+        g_sess_err = "Decoder is missing inputs_embeds/attention_mask/"
+                     "position_ids or KV cache inputs";
         return nullptr;
     }
 
@@ -459,29 +464,63 @@ SceneResult caption_frame(const std::string& jpeg_path) {
     size_t img_feat_size = 1;
     for (auto d : img_feat_shape) img_feat_size *= (size_t)d;
 
-    // ── Build prompt token IDs ───────────────────────────────────────────────
-    // Moondream prompt: <image>\n\nQuestion: {q}\n\nAnswer:
+    // ── Build the prefill embedding sequence ─────────────────────────────────
+    // Moondream2 prompt: "<image>\n\nQuestion: {q}\n\nAnswer:" where <image>
+    // is not a token — the decoder consumes pre-embedded inputs, and the
+    // image features are spliced raw between the BOS embedding and the text
+    // embeddings: [embed(BOS)] + image_features + [embed(text)].
     static const std::string QUESTION =
         "\n\nQuestion: Describe what is happening in this scene in one sentence.\n\nAnswer:";
 
     std::vector<int32_t> text_ids = tokenize_text(*s, QUESTION);
+    if (text_ids.empty() || s->eos_id < 0) return {};
 
-    // Prepend <image> token if we know its ID
-    std::vector<int32_t> prompt_ids;
-    if (s->image_id >= 0)
-        prompt_ids.push_back(s->image_id);
-    prompt_ids.insert(prompt_ids.end(), text_ids.begin(), text_ids.end());
+    int64_t num_img_tokens = (img_feat_shape.size() >= 2) ? img_feat_shape[1] : 0;
+    int64_t hidden         = (img_feat_shape.size() >= 3) ? img_feat_shape[2] : 0;
+    if (num_img_tokens <= 0 || hidden <= 0) return {};
 
-    if (prompt_ids.empty()) return {};
+    // Run embed_tokens on a list of ids → [len, hidden] floats.
+    auto run_embed = [&](const std::vector<int64_t>& ids,
+                         std::vector<float>& out) -> bool {
+        int64_t sh[] = {1, (int64_t)ids.size()};
+        Ort::Value in = Ort::Value::CreateTensor<int64_t>(
+            mem_info, const_cast<int64_t*>(ids.data()), ids.size(), sh, 2);
+        const char* in_names[]  = { s->emb_in_name.c_str() };
+        const char* out_names[] = { s->emb_out_name.c_str() };
+        try {
+            auto res = s->embed->Run(Ort::RunOptions{nullptr},
+                                     in_names, &in, 1, out_names, 1);
+            auto rs = res[0].GetTensorTypeAndShapeInfo().GetShape();
+            if (rs.size() != 3 || rs[2] != hidden) return false;
+            float* p = res[0].GetTensorMutableData<float>();
+            out.assign(p, p + (size_t)rs[1] * hidden);
+            return true;
+        } catch (const Ort::Exception& e) {
+            g_sess_err = std::string("embed_tokens run failed: ") + e.what();
+            return false;
+        }
+    };
+
+    // BOS + text embeddings in one call, then splice image features between.
+    std::vector<int64_t> bos_text_ids;
+    bos_text_ids.push_back(s->eos_id);  // moondream2 BOS == <|endoftext|>
+    bos_text_ids.insert(bos_text_ids.end(), text_ids.begin(), text_ids.end());
+    std::vector<float> bos_text_emb;
+    if (!run_embed(bos_text_ids, bos_text_emb)) return {};
+
+    int64_t text_len    = (int64_t)text_ids.size();
+    int64_t prefill_len = 1 + num_img_tokens + text_len;
+    std::vector<float> cur_embeds((size_t)prefill_len * hidden);
+    memcpy(cur_embeds.data(), bos_text_emb.data(), sizeof(float) * hidden);
+    memcpy(cur_embeds.data() + hidden, img_feat_ptr,
+           sizeof(float) * (size_t)num_img_tokens * hidden);
+    memcpy(cur_embeds.data() + (size_t)(1 + num_img_tokens) * hidden,
+           bos_text_emb.data() + hidden,
+           sizeof(float) * (size_t)text_len * hidden);
+    (void)img_feat_size;
+    int64_t cur_len = prefill_len;
 
     // ── Autoregressive decode ────────────────────────────────────────────────
-    // Number of image "tokens" as seen by the decoder's attention mask
-    int64_t num_img_tokens = (img_feat_shape.size() >= 2) ? img_feat_shape[1] : 0;
-
-    // Convert prompt_ids to int64
-    std::vector<int64_t> input_ids_data(prompt_ids.begin(), prompt_ids.end());
-
-    // Build named input/output vectors for the decoder
     int n_dec_in  = (int)s->dec_in_names.size();
     int n_dec_out = (int)s->dec_out_names.size();
 
@@ -489,51 +528,38 @@ SceneResult caption_frame(const std::string& jpeg_path) {
     for (int i = 0; i < n_dec_in;  i++) dec_in_cnames[i]  = s->dec_in_names[i].c_str();
     for (int i = 0; i < n_dec_out; i++) dec_out_cnames[i] = s->dec_out_names[i].c_str();
 
-    // KV cache: start with empty tensors (past_len = 0)
     int n_kv = (int)s->kv_pairs.size();
-    std::vector<std::vector<float>> kv_data(n_kv * 2);  // key and value separate
-    // (will be populated from decoder outputs after each step)
+    std::vector<std::vector<float>> kv_data(n_kv);  // per pair, [heads*past*dim]
+    int64_t past_len = 0;
 
     std::string output_text;
 
     static float s_kv_dummy = 0.f;  // backing for zero-size KV tensors
 
     for (int step = 0; step < MAX_TOKENS; step++) {
-        bool prefill = (step == 0);
-
-        int64_t text_len = (int64_t)input_ids_data.size();
-        int64_t past_len = (!kv_data.empty() && !kv_data[0].empty())
-                           ? (int64_t)(kv_data[0].size() / (s->kv_heads * s->kv_dim))
-                           : 0LL;
-        int64_t full_len = num_img_tokens + past_len + text_len;
+        int64_t full_len = past_len + cur_len;
 
         // Assemble decoder inputs in the same order as dec_in_names.
-        // We build each tensor inline so no Ort::Value needs to be null.
         std::vector<int64_t> attn_data(full_len, 1LL);
-        uint8_t cache_val = prefill ? 0u : 1u;
+        std::vector<int64_t> pos_data(cur_len);
+        for (int64_t i = 0; i < cur_len; i++) pos_data[i] = past_len + i;
 
         std::vector<Ort::Value> dec_inputs;
         dec_inputs.reserve(n_dec_in);
 
         for (int i = 0; i < n_dec_in; i++) {
-            if (i == s->idx_input_ids) {
-                int64_t sh[] = {1, text_len};
-                dec_inputs.push_back(Ort::Value::CreateTensor<int64_t>(
-                    mem_info, input_ids_data.data(), (size_t)text_len, sh, 2));
+            if (i == s->idx_inputs_embeds) {
+                int64_t sh[] = {1, cur_len, hidden};
+                dec_inputs.push_back(Ort::Value::CreateTensor<float>(
+                    mem_info, cur_embeds.data(), cur_embeds.size(), sh, 3));
             } else if (i == s->idx_attn_mask) {
                 int64_t sh[] = {1, full_len};
                 dec_inputs.push_back(Ort::Value::CreateTensor<int64_t>(
                     mem_info, attn_data.data(), (size_t)full_len, sh, 2));
-            } else if (i == s->idx_img_feat) {
-                dec_inputs.push_back(Ort::Value::CreateTensor<float>(
-                    mem_info, img_feat_ptr, img_feat_size,
-                    img_feat_shape.data(), img_feat_shape.size()));
-            } else if (i == s->idx_use_cache) {
-                // Scalar bool tensor (0 dimensions)
-                dec_inputs.push_back(Ort::Value::CreateTensor(
-                    mem_info, &cache_val, sizeof(cache_val),
-                    nullptr, 0,
-                    ONNX_TENSOR_ELEMENT_DATA_TYPE_BOOL));
+            } else if (i == s->idx_pos_ids) {
+                int64_t sh[] = {1, cur_len};
+                dec_inputs.push_back(Ort::Value::CreateTensor<int64_t>(
+                    mem_info, pos_data.data(), (size_t)cur_len, sh, 2));
             } else {
                 // KV cache input
                 int k = -1;
@@ -541,8 +567,6 @@ SceneResult caption_frame(const std::string& jpeg_path) {
                     if (s->kv_pairs[j].in_idx == i) { k = j; break; }
                 if (k >= 0) {
                     std::vector<float>& buf = kv_data[k];
-                    size_t expected = (size_t)(s->kv_heads * past_len * s->kv_dim);
-                    if (buf.size() != expected) buf.assign(expected, 0.f);
                     float* ptr = buf.empty() ? &s_kv_dummy : buf.data();
                     int64_t kv_sh[] = {1, s->kv_heads, past_len, s->kv_dim};
                     dec_inputs.push_back(Ort::Value::CreateTensor<float>(
@@ -563,8 +587,7 @@ SceneResult caption_frame(const std::string& jpeg_path) {
                                         dec_in_cnames.data(), dec_inputs.data(), n_dec_in,
                                         dec_out_cnames.data(), n_dec_out);
         } catch (const Ort::Exception& e) {
-            // Tolerate failures after we've got some output
-            (void)e;
+            g_sess_err = std::string("decoder run failed: ") + e.what();
             break;
         }
 
@@ -587,14 +610,15 @@ SceneResult caption_frame(const std::string& jpeg_path) {
             kv_data[k].assign(ptr, ptr + sz);
             if (sh.size() == 4) { s->kv_heads = sh[1]; s->kv_dim = sh[3]; }
         }
+        past_len += cur_len;
 
-        if (next_id == s->eos_id || next_id == 0) break;
+        if (next_id == s->eos_id) break;
 
-        std::string tok = decode_token(*s, next_id);
-        output_text += tok;
+        output_text += decode_token(*s, next_id);
 
-        // Next step: single token
-        input_ids_data = {(int64_t)next_id};
+        // Next step: embed the single new token
+        if (!run_embed({(int64_t)next_id}, cur_embeds)) break;
+        cur_len = 1;
     }
 
     // Trim leading/trailing whitespace

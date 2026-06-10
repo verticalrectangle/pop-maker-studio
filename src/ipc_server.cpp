@@ -820,6 +820,23 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         std::string path = params.value("path", "");
         if (path.empty()) { err = "path required"; return {}; }
         if (s_scene_analysis.running.load()) { err = "scene analysis already running"; return {}; }
+        // Captioning costs ~10 s per scene — reuse a fresh sidecar instead of
+        // recomputing. force=true bypasses the cache.
+        if (!params.value("force", false)) {
+            std::string sp = path + ".pms_scene.json";
+            std::error_code ec;
+            if (std::filesystem::exists(sp, ec) &&
+                std::filesystem::last_write_time(sp, ec) >=
+                std::filesystem::last_write_time(path, ec)) {
+                s_scene_analysis.error.clear();
+                s_scene_analysis.sidecar_path = sp;
+                s_scene_analysis.done.store(true);
+                s_scene_analysis.running.store(false);
+                json r; r["status"] = "cached";
+                r["hint"] = "sidecar already exists — get_video_description returns it immediately";
+                return r;
+            }
+        }
         s_scene_analysis.running.store(true);
         s_scene_analysis.done.store(false);
         s_scene_analysis.error.clear();

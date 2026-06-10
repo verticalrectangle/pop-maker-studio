@@ -434,10 +434,11 @@ async def list_tools() -> list[Tool]:
                 "Read-only — no batch needed.\n\n"
                 "PROBE BEFORE ASKING: When the user provides media files, use tools to gather facts "
                 "before asking them anything. Call get_media_info on each file to learn resolution, "
-                "duration, and codec. To understand video content, capture a still: "
-                "ffmpeg -y -ss 0.5 -i <path> -vframes 1 -vf scale=480:-1 /tmp/still_<name>.jpg -loglevel quiet "
-                "then Read the jpg — you can see and describe it yourself. "
-                "For lyrics/transcript, run trigger_pipeline on the audio first. "
+                "duration, and codec. To understand video content: if you have Bash + Read tools "
+                "and native vision, capture a still ("
+                "ffmpeg -y -ss 0.5 -i <path> -vframes 1 -vf scale=480:-1 /tmp/still_<name>.jpg -loglevel quiet"
+                ") and Read it; otherwise use describe_video → get_video_description for local "
+                "scene captions. For lyrics/transcript, run trigger_pipeline on the audio first. "
                 "Only ask the user about subjective choices (style, pacing, colors) that tools cannot determine."
             ),
             inputSchema={
@@ -1386,47 +1387,51 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="describe_video",
             description=(
-                "DO NOT CALL THIS TOOL. The built-in vision model is broken and returns empty descriptions.\n\n"
-                "Instead, use YOUR OWN vision capability:\n"
-                "  1. Run: ffmpeg -y -ss 0.5 -i <path> -vframes 1 -vf scale=480:-1 /tmp/still_<name>.jpg -loglevel quiet\n"
-                "  2. Read the JPEG with your Read tool — you will see the image.\n"
-                "  3. Describe what you see and use that for mood/content matching.\n\n"
-                "ONE STILL IS NOT ENOUGH IF YOU DON'T SEE WHAT YOU'RE LOOKING FOR. The first 500 ms "
-                "frame may be a black intro, a logo, a wide establishing shot, or a transition with "
-                "none of the actual subject. When the still doesn't show the thing the user asked "
-                "about (person, action, object, setting), DO NOT conclude the video lacks it — sample "
-                "more frames before deciding:\n"
-                "  a. Get duration via get_media_info(path) (or ffprobe).\n"
-                "  b. Sample ~5 stills spread across the timeline — e.g. at 10%, 30%, 50%, 70%, 90% "
-                "of duration. Generate them in parallel: one bash command with multiple ffmpeg "
-                "invocations joined by '&' and a final 'wait', or 5 Bash tool calls in a single message.\n"
-                "  c. Read all of them and synthesise — describe the video as a whole, not as one frame.\n"
-                "  d. If you're scanning for a specific moment, narrow down: once you find the rough "
-                "neighbourhood (between still N and N+1), sample 3–5 more stills inside that window "
-                "to pin the timestamp more precisely. Binary-search style.\n\n"
-                "Repeat the full process for each video. Faster and more accurate than any local model."
+                "Start local scene analysis: extract keyframes at scene changes and caption each "
+                "with the on-device Moondream2 model. Returns {status:'started'}, or "
+                "{status:'cached'} when a fresh sidecar already exists (then get_video_description "
+                "returns immediately). Poll get_video_description every ~10s — captioning costs "
+                "about 10 s per scene on CPU, so long videos take minutes. Results are cached in "
+                "<video>.pms_scene.json; pass force=true to recompute. Requires the vision model "
+                "(get_vision_model_status / download_vision_model).\n\n"
+                "Use this to map a WHOLE video (summaries, find_video_moment scoring) — or when you "
+                "have no vision capability of your own.\n\n"
+                "IF you have Bash + Read tools and native vision, sampling stills yourself is "
+                "faster for spot checks:\n"
+                "  ffmpeg -y -ss <t> -i <path> -vframes 1 -vf scale=480:-1 /tmp/still.jpg, then Read it.\n"
+                "One still is never enough to judge a video — the first frame may be a black intro "
+                "or a transition. Sample ~5 spread across the duration (10%/30%/50%/70%/90%), then "
+                "binary-search a window when hunting a specific moment."
             ),
             inputSchema={
                 "type": "object",
-                "properties": {"path": {"type": "string", "description": "Absolute path to the video file"}},
+                "properties": {
+                    "path": {"type": "string", "description": "Absolute path to the video file"},
+                    "force": {"type": "boolean", "description": "Recompute even if a cached sidecar exists"},
+                },
                 "required": ["path"],
             },
         ),
         Tool(
             name="get_video_description",
             description=(
-                "DO NOT USE — the built-in vision model is broken. "
-                "Use ffmpeg + your own Read tool to view frames instead (see describe_video for instructions)."
+                "Poll scene analysis started by describe_video. "
+                "Returns {status: 'idle'|'running'|'done'|'error', frames?, capped?}. "
+                "When done, frames is [{timestamp, description}] — pass to find_video_moment "
+                "to score against a query, or scan it yourself for the moment you need."
             ),
             inputSchema={"type": "object", "properties": {}},
         ),
         Tool(
             name="find_video_moment",
             description=(
-                "DO NOT USE — depends on the broken built-in vision model (see describe_video).\n\n"
-                "To find a moment in a video by visual content: capture a still per timestamp with\n"
-                "  ffmpeg -y -ss <t> -i <path> -vframes 1 -vf scale=480:-1 /tmp/still_<t>.jpg -loglevel quiet\n"
-                "then Read each JPEG and pick the one matching the query yourself."
+                "Find the best-matching moment in a video by visual content. Scores the scene "
+                "captions from describe_video against the query — run describe_video first "
+                "(this tool tells you if the sidecar is missing). Returns ranked "
+                "{timestamp, description, score} candidates.\n\n"
+                "Agents with Bash + Read and native vision can alternatively sample stills "
+                "around candidate timestamps to verify: ffmpeg -y -ss <t> -i <path> -vframes 1 "
+                "/tmp/still_<t>.jpg, then Read it."
             ),
             inputSchema={
                 "type": "object",
@@ -2314,8 +2319,9 @@ async def _find_video_moment(arguments: dict) -> list[dict]:
     res = _call("get_video_description", {})
     if res.get("status") != "done":
         raise ValueError(
-            "Scene analysis not ready. Call describe_video(path) first, "
-            "then poll get_video_description every 3s until status='done', then call find_video_moment."
+            "Scene analysis not ready. Call describe_video(path) first, then poll "
+            "get_video_description every ~10s until status='done' (captioning costs ~10s "
+            "per scene), then call find_video_moment."
         )
 
     frames = res.get("frames", [])
