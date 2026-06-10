@@ -31,6 +31,11 @@ import sys
 import threading
 import time
 import uuid
+
+# call_tool assigns a local named `time` (take_snapshot's argument), which
+# shadows the module inside that whole function — handlers there must use
+# _now() instead of time.time().
+_now = time.time
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
@@ -233,6 +238,158 @@ async def _notify_progress(progress: float, total: float = 1.0) -> None:
         )
     except Exception:
         pass
+
+
+# ── Screen-activity detection (proxy-based, purely mechanical) ────────────────
+#
+# Reads the existing .pms_proxy.mjpeg + .idx seek table — one sequential pass,
+# fseek + JPEG decode, never the original file. Outputs diff NUMBERS and
+# active/idle segments; semantic interpretation ("Claude working" vs "user
+# typing") is the calling agent's job, which keeps the tool reusable for any
+# screencast layout.
+
+_activity_jobs: dict[str, dict] = {}    # source path -> job state
+_activity_lock = threading.Lock()
+
+
+def _proxy_files(path: str) -> tuple[str, str]:
+    return path + ".pms_proxy.mjpeg", path + ".pms_proxy.idx"
+
+
+def _read_proxy_index(idx_path: str) -> list[int]:
+    """Binary seek table: [u32 count][u64 byte_offset x count]."""
+    import struct
+    with open(idx_path, "rb") as f:
+        count = struct.unpack("<I", f.read(4))[0]
+        return list(struct.unpack(f"<{count}Q", f.read(8 * count)))
+
+
+def _proxy_fps(path: str, frame_count: int) -> float:
+    """True proxy rate = frame_count / source container duration (the proxy is
+    transcoded CFR; the original's metadata rate does NOT apply — see the
+    engine's proxy_load for the same derivation)."""
+    try:
+        out = subprocess.check_output(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=nw=1:nk=1", "file:" + path],
+            stderr=subprocess.DEVNULL).decode().strip()
+        dur = float(out)
+        if dur > 0:
+            return frame_count / dur
+    except Exception:
+        pass
+    return 30.0  # proxy generation caps at 30 — sane fallback
+
+
+def _decode_proxy_gray(mjpeg, offsets: list[int], file_size: int, i: int):
+    """Decode proxy frame i to a small grayscale numpy array (JPEG draft mode
+    decodes at 1/8 scale — ~2 ms per frame instead of ~10-30)."""
+    import numpy as _np
+    from PIL import Image as _Img
+    start = offsets[i]
+    end   = offsets[i + 1] if i + 1 < len(offsets) else file_size
+    mjpeg.seek(start)
+    data = mjpeg.read(end - start)
+    img = _Img.open(io.BytesIO(data))
+    img.draft("L", (img.size[0] // 8, img.size[1] // 8))
+    return _np.asarray(img.convert("L"), dtype=_np.float32)
+
+
+def _merge_activity_segments(samples: list[tuple[float, float, bool]],
+                             min_segment: float) -> list[dict]:
+    """samples: (t, diff, active). Run-length encode, then absorb runs shorter
+    than min_segment into the previous run so brief flickers don't fragment."""
+    if not samples:
+        return []
+    runs: list[dict] = []
+    for t, d, a in samples:
+        if runs and runs[-1]["state"] == ("active" if a else "idle"):
+            runs[-1]["t1"] = t
+            runs[-1]["diffs"].append(d)
+        else:
+            runs.append({"t0": t, "t1": t,
+                         "state": "active" if a else "idle", "diffs": [d]})
+    merged: list[dict] = []
+    for r in runs:
+        if merged and (r["t1"] - r["t0"]) < min_segment:
+            merged[-1]["t1"] = r["t1"]            # too short — absorb
+            merged[-1]["diffs"].extend(r["diffs"])
+        elif merged and merged[-1]["state"] == r["state"]:
+            merged[-1]["t1"] = r["t1"]            # same state — extend
+            merged[-1]["diffs"].extend(r["diffs"])
+        else:
+            merged.append(r)
+    return [{"t0": round(m["t0"], 3), "t1": round(m["t1"], 3),
+             "state": m["state"],
+             "mean_diff": round(sum(m["diffs"]) / max(1, len(m["diffs"])), 3)}
+            for m in merged]
+
+
+def _activity_scan_worker(path: str, regions: dict, threshold: float,
+                          sample_fps: float, min_segment: float, job: dict) -> None:
+    """Background thread: sequential pass over the proxy, per-region frame
+    diffs, merged segments. Progress lands in the job dict AND in the app UI
+    via the agent_status IPC ping (visible like proxy generation)."""
+    import numpy as _np
+    try:
+        mjpeg_path, idx_path = _proxy_files(path)
+        offsets   = _read_proxy_index(idx_path)
+        file_size = os.path.getsize(mjpeg_path)
+        n         = len(offsets)
+        fps       = _proxy_fps(path, n)
+        step      = max(1, round(fps / max(0.1, sample_fps)))
+        indices   = list(range(0, n, step))
+
+        per_region: dict[str, list] = {name: [] for name in regions}
+        prev: dict[str, Any] = {}
+        last_ping = 0.0
+
+        with open(mjpeg_path, "rb") as mj:
+            for k, i in enumerate(indices):
+                if job.get("cancel"):
+                    job["state"] = "error"; job["error"] = "cancelled"; return
+                gray = _decode_proxy_gray(mj, offsets, file_size, i)
+                gh, gw = gray.shape
+                t = i / fps
+                for name, (x0, y0, x1, y1) in regions.items():
+                    crop = gray[int(y0 * gh):max(int(y0 * gh) + 1, int(y1 * gh)),
+                                int(x0 * gw):max(int(x0 * gw) + 1, int(x1 * gw))]
+                    if name in prev and prev[name].shape == crop.shape:
+                        diff = float(_np.mean(_np.abs(crop - prev[name])))
+                        per_region[name].append((t, diff, diff > threshold))
+                    prev[name] = crop
+                job["progress"] = (k + 1) / len(indices)
+                now = time.time()
+                if now - last_ping > 2.0:          # keep the app UI pill alive
+                    last_ping = now
+                    try:
+                        _call("agent_status",
+                              {"msg": f"activity scan {int(job['progress'] * 100)}%"})
+                    except Exception:
+                        pass
+
+        job["result"] = {
+            "path": path,
+            "proxy_fps": round(fps, 4),
+            "duration": round(n / fps, 3),
+            "frames_total": n,
+            "frames_sampled": len(indices),
+            "sample_fps_effective": round(fps / step, 3),
+            "threshold": threshold,
+            "min_segment": min_segment,
+            "regions": {name: _merge_activity_segments(samps, min_segment)
+                        for name, samps in per_region.items()},
+        }
+        job["state"] = "done"
+    except Exception as e:
+        job["state"] = "error"
+        job["error"] = str(e)
+    finally:
+        job["progress"] = 1.0
+        try:
+            _call("agent_status", {"done": True})
+        except Exception:
+            pass
 
 
 # ── MCP server ─────────────────────────────────────────────────────────────────
@@ -1724,6 +1881,87 @@ async def list_tools() -> list[Tool]:
             },
         ),
         Tool(
+            name="detect_screen_activity",
+            description=(
+                "Scan a screen recording for visual activity, for planning retimes/cuts of "
+                "technical footage. Runs server-side over the existing .pms_proxy.mjpeg + .idx "
+                "seek table (sequential pass, never touches the original file) — the proxy must "
+                "be ready (it generates automatically after add_clip; check proxy status if "
+                "unsure). Computes per-frame mean absolute pixel diff (0-255 grayscale) inside "
+                "one or more normalized screen regions and returns merged segments per region: "
+                "[{t0, t1, state: 'active'|'idle', mean_diff}].\n\n"
+                "PURELY MECHANICAL: the numbers say where pixels changed, nothing more. YOU "
+                "interpret what active/idle means for this recording (e.g. 'terminal spinner = "
+                "agent working', 'prompt box changing = user typing') — pick regions that make "
+                "that interpretation unambiguous.\n\n"
+                "regions: {name: [x0, y0, x1, y1]} normalized 0-1 (default {'frame': full}). "
+                "Watching a small region (a spinner, a prompt box) is far more selective than "
+                "whole-frame diff. threshold: mean-diff above this = active (default 1.5; raise "
+                "for noisy video). min_segment: shorter state runs are absorbed into the "
+                "previous segment (default 1.0 s) so blinking cursors don't fragment output. "
+                "sample_fps: scan rate (default 3 — a 40-min recording scans in a few seconds). "
+                "NOTE: diffs are between consecutive SAMPLES, so a higher sample_fps means "
+                "smaller per-sample diffs against the same threshold — if you raise sample_fps, "
+                "lower threshold proportionally (or keep both defaults).\n\n"
+                "ASYNC — returns immediately with {started}; poll get_activity_status every "
+                "2-3 s until state='done'. Progress also shows in the app UI. Typical flow: "
+                "detect → interpret segments → begin_batch + split_clip + set_clip_prop "
+                "(speed up to 100x) to retime the idle stretches."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Absolute path of the source video (proxy must exist)"},
+                    "regions": {
+                        "type": "object",
+                        "description": "Named normalized rects {name: [x0,y0,x1,y1]}. Default: {'frame': [0,0,1,1]}",
+                        "additionalProperties": {
+                            "type": "array", "items": {"type": "number"},
+                            "minItems": 4, "maxItems": 4,
+                        },
+                    },
+                    "threshold":   {"type": "number", "description": "Mean abs diff (0-255) above which a frame counts as active (default 1.5)"},
+                    "min_segment": {"type": "number", "description": "Minimum segment duration in seconds (default 1.0)"},
+                    "sample_fps":  {"type": "number", "description": "Frames per second to sample (default 3)"},
+                },
+                "required": ["path"],
+            },
+        ),
+        Tool(
+            name="get_activity_status",
+            description=(
+                "Poll a detect_screen_activity job: {state: 'running'|'done'|'error', progress "
+                "0-1, result?} — result carries the per-region segment lists when done. Pass "
+                "the same path; omit it to get the most recently started job. Read-only."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Source path passed to detect_screen_activity (optional)"},
+                },
+            },
+        ),
+        Tool(
+            name="make_contact_sheet",
+            description=(
+                "One tiled thumbnail grid with burned-in timestamps for a list of timeline "
+                "times on a source file, returned inline — visually verify ambiguous segment "
+                "boundaries (e.g. from detect_screen_activity) in ONE image call instead of N "
+                "stills. Decodes from the proxy seek table when available (fast), falls back "
+                "to ffmpeg on the original. Up to 48 times per call. Read-only."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "path":  {"type": "string", "description": "Absolute path of the source video"},
+                    "times": {"type": "array", "items": {"type": "number"},
+                              "description": "Source times in seconds, one tile per entry (max 48)"},
+                    "cols":  {"type": "integer", "description": "Grid columns (default 4)"},
+                },
+                "required": ["path", "times"],
+            },
+        ),
+        Tool(
             name="verify_clips",
             description=(
                 "Seek to each time and snapshot to visually confirm clip content. "
@@ -3173,6 +3411,133 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                     ImageContent(type="image", data=base64.b64encode(raw).decode(), mimeType="image/png"),
                 ]
         raise RuntimeError("take_snapshot timed out")
+    if name == "detect_screen_activity":
+        src = _resolve_path(arguments["path"])
+        mjpeg_path, idx_path = _proxy_files(src)
+        if not (os.path.exists(mjpeg_path) and os.path.exists(idx_path)):
+            raise ValueError(
+                f"No proxy for {src} — the scan reads .pms_proxy.mjpeg/.idx. Proxies "
+                "generate automatically once the file is on the timeline (add_clip); "
+                "wait for generation to finish and retry.")
+        regions = arguments.get("regions") or {"frame": [0.0, 0.0, 1.0, 1.0]}
+        for rname, rect in regions.items():
+            if (not isinstance(rect, (list, tuple)) or len(rect) != 4
+                    or not all(isinstance(v, (int, float)) for v in rect)
+                    or not (0 <= rect[0] < rect[2] <= 1 and 0 <= rect[1] < rect[3] <= 1)):
+                raise ValueError(f"region '{rname}' must be [x0,y0,x1,y1] normalized 0-1 with x0<x1, y0<y1")
+        threshold   = float(arguments.get("threshold", 1.5))
+        min_segment = float(arguments.get("min_segment", 1.0))
+        sample_fps  = float(arguments.get("sample_fps", 3.0))
+        with _activity_lock:
+            existing = _activity_jobs.get(src)
+            if existing and existing.get("state") == "running":
+                return [TextContent(type="text", text=json.dumps(
+                    {"state": "running", "progress": existing.get("progress", 0.0),
+                     "note": "scan already running for this path — poll get_activity_status"},
+                    indent=2))]
+            job = {"state": "running", "progress": 0.0, "path": src, "started": _now()}
+            _activity_jobs[src] = job
+        threading.Thread(target=_activity_scan_worker,
+                         args=(src, regions, threshold, sample_fps, min_segment, job),
+                         daemon=True).start()
+        n_frames = 0
+        try:
+            n_frames = len(_read_proxy_index(idx_path))
+        except Exception:
+            pass
+        return [TextContent(type="text", text=json.dumps(
+            {"started": True, "path": src, "frames_total": n_frames,
+             "regions": list(regions.keys()),
+             "note": "poll get_activity_status every 2-3 s until state='done'"},
+            indent=2))]
+    if name == "get_activity_status":
+        with _activity_lock:
+            if "path" in arguments and arguments["path"]:
+                job = _activity_jobs.get(_resolve_path(arguments["path"]))
+            else:
+                job = max(_activity_jobs.values(), key=lambda j: j.get("started", 0.0),
+                          default=None)
+        if job is None:
+            raise ValueError("no activity scan has been started — call detect_screen_activity first")
+        out = {"state": job.get("state"), "progress": round(job.get("progress", 0.0), 4),
+               "path": job.get("path")}
+        if job.get("state") == "done":
+            out["result"] = job.get("result")
+        if job.get("state") == "error":
+            out["error"] = job.get("error")
+        return [TextContent(type="text", text=json.dumps(out, indent=2))]
+    if name == "make_contact_sheet":
+        from PIL import Image as _Img, ImageDraw as _Draw, ImageFont as _Font
+        src   = _resolve_path(arguments["path"])
+        times = list(arguments.get("times") or [])[:48]
+        if not times:
+            raise ValueError("times must be a non-empty list of seconds")
+        cols  = max(1, min(int(arguments.get("cols", 4)), len(times)))
+        mjpeg_path, idx_path = _proxy_files(src)
+        use_proxy = os.path.exists(mjpeg_path) and os.path.exists(idx_path)
+        thumbs: list[tuple[float, Any]] = []
+        if use_proxy:
+            offsets   = _read_proxy_index(idx_path)
+            file_size = os.path.getsize(mjpeg_path)
+            fps       = _proxy_fps(src, len(offsets))
+            with open(mjpeg_path, "rb") as mj:
+                for t in times:
+                    i = max(0, min(len(offsets) - 1, round(t * fps)))
+                    start = offsets[i]
+                    end   = offsets[i + 1] if i + 1 < len(offsets) else file_size
+                    mj.seek(start)
+                    img = _Img.open(io.BytesIO(mj.read(end - start)))
+                    img.draft("RGB", (340, 200))
+                    img = img.convert("RGB")
+                    img.thumbnail((320, 320))
+                    thumbs.append((t, img))
+        else:
+            import tempfile
+            for t in times:
+                with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tf:
+                    tmp = tf.name
+                subprocess.run(
+                    ["ffmpeg", "-y", "-loglevel", "error", "-ss", str(t),
+                     "-i", "file:" + src, "-frames:v", "1",
+                     "-vf", "scale=320:-2", tmp], capture_output=True)
+                img = _Img.open(tmp).convert("RGB") if os.path.getsize(tmp) else                       _Img.new("RGB", (320, 180), (20, 20, 20))
+                thumbs.append((t, img))
+                os.unlink(tmp)
+        try:
+            font = _Font.truetype("/usr/share/fonts/TTF/DejaVuSans-Bold.ttf", 14)
+        except Exception:
+            try:
+                font = _Font.truetype("DejaVuSans-Bold.ttf", 14)
+            except Exception:
+                font = _Font.load_default()
+        tw = max(im.size[0] for _, im in thumbs)
+        th = max(im.size[1] for _, im in thumbs)
+        gap  = 4
+        rows = (len(thumbs) + cols - 1) // cols
+        sheet = _Img.new("RGB", (cols * (tw + gap) + gap, rows * (th + gap) + gap),
+                         (12, 12, 14))
+        draw = _Draw.Draw(sheet)
+        for k, (t, im) in enumerate(thumbs):
+            x = gap + (k % cols) * (tw + gap)
+            y = gap + (k // cols) * (th + gap)
+            sheet.paste(im, (x, y))
+            mm, ss = divmod(t, 60.0)
+            label = f"{int(mm)}:{ss:06.3f}"
+            tb = draw.textbbox((0, 0), label, font=font)
+            draw.rectangle([x + 2, y + th - (tb[3] - tb[1]) - 8,
+                            x + (tb[2] - tb[0]) + 10, y + th - 2], fill=(0, 0, 0))
+            draw.text((x + 6, y + th - (tb[3] - tb[1]) - 6), label,
+                      fill=(255, 255, 255), font=font)
+        buf = io.BytesIO()
+        sheet.save(buf, format="PNG")
+        meta = {"path": src, "tiles": len(thumbs), "cols": cols,
+                "decoded_from": "proxy" if use_proxy else "original (ffmpeg)"}
+        return [
+            TextContent(type="text", text=json.dumps(meta, indent=2)),
+            ImageContent(type="image",
+                         data=base64.b64encode(buf.getvalue()).decode(),
+                         mimeType="image/png"),
+        ]
     if name == "verify_clips":
         async def _snap_at(t: float) -> str:
             _call("seek", {"time": t})

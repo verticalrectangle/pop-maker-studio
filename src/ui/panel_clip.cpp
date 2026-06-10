@@ -1272,14 +1272,15 @@ void panel_clip(AppState& state, float w) {
     else if (clip.clip_type == ClipType::Video) {
         float bar_w = w - 16.f;
         auto plain_slider = [&](const char* id, const char* label, float* v,
-                                float vmin, float vmax, const char* fmt) {
+                                float vmin, float vmax, const char* fmt,
+                                ImGuiSliderFlags flags = 0) {
             ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
             ImGui::TextUnformatted(label);
             ImGui::PopStyleColor();
             ImGui::PushStyleColor(ImGuiCol_SliderGrab, to_u32(Col::fg));
             ImGui::PushStyleColor(ImGuiCol_FrameBg,    Col::bg_soft);
             ImGui::SetNextItemWidth(bar_w);
-            bool ch = ImGui::SliderFloat(id, v, vmin, vmax, fmt);
+            bool ch = ImGui::SliderFloat(id, v, vmin, vmax, fmt, flags);
             ImGui::PopStyleColor(2);
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, label);
             return ch;
@@ -1366,7 +1367,10 @@ void panel_clip(AppState& state, float w) {
         ImGui::Dummy({0.f, 6.f});
         {
             float old_spd = clip.speed;
-            plain_slider("##vid_spd", "Speed", &clip.speed, 0.25f, 10.f, "%.2f\xc3\x97");
+            // Log scale: 100× cap for screen-recording retimes — most of the
+            // slider's travel stays in the everyday 0.25–10× range.
+            plain_slider("##vid_spd", "Speed", &clip.speed, 0.25f, 100.f, "%.2f\xc3\x97",
+                         ImGuiSliderFlags_Logarithmic);
             if (fabsf(clip.speed - old_spd) > 1e-5f)
                 rescale_glass_bricks(state, state.selected_track, state.selected_clip,
                                      clip.speed / old_spd);
@@ -1374,7 +1378,7 @@ void panel_clip(AppState& state, float w) {
             struct SP { float f; const char* l; };
             SP spresets[] = {{0.25f,"\xc2\xbc\xc3\x97"},{0.5f,"\xc2\xbd\xc3\x97"},
                              {1.f,"1\xc3\x97"},{2.f,"2\xc3\x97"},{4.f,"4\xc3\x97"},
-                             {6.f,"6\xc3\x97"},{10.f,"10\xc3\x97"}};
+                             {10.f,"10\xc3\x97"},{30.f,"30\xc3\x97"},{100.f,"100\xc3\x97"}};
             for (auto& p : spresets) {
                 if (ui_btn(p.l, fabsf(clip.speed - p.f) < 0.01f, true)) {
                     float prev = clip.speed;
@@ -1708,14 +1712,15 @@ void panel_clip(AppState& state, float w) {
     else if (clip.clip_type == ClipType::Audio) {
         float bar_w = w - 16.f;
         auto plain_slider = [&](const char* id, const char* label, float* v,
-                                float vmin, float vmax, const char* fmt) {
+                                float vmin, float vmax, const char* fmt,
+                                ImGuiSliderFlags flags = 0) {
             ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
             ImGui::TextUnformatted(label);
             ImGui::PopStyleColor();
             ImGui::PushStyleColor(ImGuiCol_SliderGrab, to_u32(Col::fg));
             ImGui::PushStyleColor(ImGuiCol_FrameBg,    Col::bg_soft);
             ImGui::SetNextItemWidth(bar_w);
-            bool ch = ImGui::SliderFloat(id, v, vmin, vmax, fmt);
+            bool ch = ImGui::SliderFloat(id, v, vmin, vmax, fmt, flags);
             ImGui::PopStyleColor(2);
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, label);
             return ch;
@@ -1755,7 +1760,9 @@ void panel_clip(AppState& state, float w) {
         ImGui::Dummy({0.f, 6.f});
         {
             float old_spd = clip.speed;
-            plain_slider("##aud_spd", "Speed", &clip.speed, 0.25f, 10.f, "%.2f\xc3\x97");
+            // Log scale, 100× cap (atempo chain in export supports 0.5–100).
+            plain_slider("##aud_spd", "Speed", &clip.speed, 0.25f, 100.f, "%.2f\xc3\x97",
+                         ImGuiSliderFlags_Logarithmic);
             if (fabsf(clip.speed - old_spd) > 1e-5f)
                 rescale_glass_bricks(state, state.selected_track, state.selected_clip,
                                      clip.speed / old_spd);
@@ -1763,7 +1770,7 @@ void panel_clip(AppState& state, float w) {
             struct SP { float f; const char* l; };
             SP spresets[] = {{0.25f,"\xc2\xbc\xc3\x97"},{0.5f,"\xc2\xbd\xc3\x97"},
                              {1.f,"1\xc3\x97"},{2.f,"2\xc3\x97"},{4.f,"4\xc3\x97"},
-                             {6.f,"6\xc3\x97"},{10.f,"10\xc3\x97"}};
+                             {10.f,"10\xc3\x97"},{30.f,"30\xc3\x97"},{100.f,"100\xc3\x97"}};
             for (auto& p : spresets) {
                 if (ui_btn(p.l, fabsf(clip.speed - p.f) < 0.01f, true)) {
                     float prev = clip.speed;

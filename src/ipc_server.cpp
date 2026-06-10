@@ -1131,6 +1131,21 @@ static json dispatch(AppState& state, const std::string& method, const json& par
     }
 
     // ── Snapshot (GL-thread flag — fulfilled by draw_preview) ─────────────────
+    // Lightweight UI presence for server-side jobs (e.g. the MCP server's
+    // activity scan): refreshes the agent pill with a progress message each
+    // call; {"done": true} clears it. No batching, no history — the canvas
+    // auto-timeout still reaps a stale flag if the job dies mid-run.
+    if (method == "agent_status") {
+        if (params.value("done", false)) {
+            state.agent_active = false;
+            state.agent_msg.clear();
+        } else {
+            state.agent_active = true;
+            state.agent_msg    = params.value("msg", "working…");
+        }
+        return json::object();
+    }
+
     if (method == "take_snapshot") {
         if (params.contains("time"))
             state.playhead = params["time"].get<float>();
@@ -1509,7 +1524,7 @@ static json dispatch(AppState& state, const std::string& method, const json& par
             Clip& cl = state.tracks[ti].clips[ci];
             auto& val = op["value"];
             if      (prop == "volume")    { cl.volume    = jval_float(val); }
-            else if (prop == "speed")     { cl.speed     = jval_float(val); }
+            else if (prop == "speed")     { cl.speed = fmaxf(0.25f, fminf(100.f, jval_float(val))); }
             else if (prop == "opacity")   { cl.opacity   = jval_float(val); }
             else if (prop == "muted")     { cl.muted     = jval_bool(val); }
             else if (prop == "in_point")  { cl.in_point  = jval_float(val); }
@@ -1586,7 +1601,7 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         auto& val = params["value"];
         // ── A/V props ────────────────────────────────────────────────────────
         if      (prop == "volume")   { cl.volume     = jval_float(val); }
-        else if (prop == "speed")    { cl.speed      = jval_float(val); }
+        else if (prop == "speed")    { cl.speed = fmaxf(0.25f, fminf(100.f, jval_float(val))); }
         else if (prop == "opacity")  { cl.opacity    = jval_float(val); }
         else if (prop == "muted")    { cl.muted      = jval_bool(val); }
         else if (prop == "in_point") { cl.in_point   = jval_float(val); }
@@ -2019,7 +2034,10 @@ static void process_client(Client& cl, AppState& state) {
             json params = req.value("params", json::object());
 
             std::string err;
-            agent_begin(state, method);
+            // agent_status manages agent_active itself — wrapping it in
+            // begin/done would clear the message it just set.
+            bool manages_agent = (method == "agent_status");
+            if (!manages_agent) agent_begin(state, method);
             json result = dispatch(state, method, params, err, cl.fd, req_id);
             bool is_async = result.is_object() && result.value("__async", false);
             if (!is_async) {
@@ -2037,7 +2055,7 @@ static void process_client(Client& cl, AppState& state) {
                 } else {
                     send_ok_id(cl.fd, req_id, result);
                 }
-                agent_done();
+                if (!manages_agent) agent_done();
             }
         } catch (const json::exception& e) {
             json r; r["id"] = req_id; r["error"] = std::string("JSON parse error: ") + e.what();
