@@ -2048,7 +2048,28 @@ static void process_client(Client& cl, AppState& state) {
                     g_auto_batched = false;
                     g_batch_label.clear();
                     g_batch_state  = nullptr;
-                    if (err.empty()) result = state_to_json(state);
+                    if (err.empty()) {
+                        // quiet: keep the handler's own payload (plus an ok
+                        // ack) instead of replacing it with the full project
+                        // dump — verbose mutation responses cost agents
+                        // thousands of tokens per call, and the replacement
+                        // also swallowed useful returns like add_clip's
+                        // {"clip": n}.
+                        // Tolerant parse: clients sometimes send "true" as a
+                        // string; value() would throw a type error on that.
+                        bool quiet = false;
+                        if (params.contains("quiet")) {
+                            const auto& q = params["quiet"];
+                            quiet = q.is_boolean() ? q.get<bool>()
+                                  : (q.is_string() && q.get<std::string>() == "true");
+                        }
+                        if (quiet) {
+                            if (!result.is_object()) result = json::object();
+                            result["ok"] = true;
+                        } else {
+                            result = state_to_json(state);
+                        }
+                    }
                 }
                 if (!err.empty()) {
                     send_err_id(cl.fd, req_id, err);

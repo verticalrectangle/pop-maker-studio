@@ -737,6 +737,7 @@ async def list_tools() -> list[Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
+                    "quiet": {"type": "boolean", "description": "Return a small ack instead of the full project state (big token saver — use unless you need to re-read state)"},
                     "track":      {"type": "integer"},
                     "track_name": {"type": "string", "description": "Track name (alternative to track index)"},
                     "type": {"type": "string"},
@@ -758,6 +759,7 @@ async def list_tools() -> list[Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
+                    "quiet": {"type": "boolean", "description": "Return a small ack instead of the full project state (big token saver — use unless you need to re-read state)"},
                     "name": {"type": "string", "description": "Track name"},
                     "position": {"type": "integer", "description": "Insert position (0 = top)", "default": 0},
                 },
@@ -769,6 +771,7 @@ async def list_tools() -> list[Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
+                    "quiet": {"type": "boolean", "description": "Return a small ack instead of the full project state (big token saver — use unless you need to re-read state)"},
                     "track":      {"type": "integer"},
                     "track_name": {"type": "string", "description": "Track name (alternative to track index)"},
                     "clip": {"type": "integer"},
@@ -782,6 +785,7 @@ async def list_tools() -> list[Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
+                    "quiet": {"type": "boolean", "description": "Return a small ack instead of the full project state (big token saver — use unless you need to re-read state)"},
                     "track":      {"type": "integer"},
                     "track_name": {"type": "string", "description": "Track name (alternative to track index)"},
                     "clip": {"type": "integer"},
@@ -796,6 +800,7 @@ async def list_tools() -> list[Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
+                    "quiet": {"type": "boolean", "description": "Return a small ack instead of the full project state (big token saver — use unless you need to re-read state)"},
                     "track":      {"type": "integer"},
                     "track_name": {"type": "string", "description": "Track name (alternative to track index)"},
                     "clip": {"type": "integer"},
@@ -811,6 +816,7 @@ async def list_tools() -> list[Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
+                    "quiet": {"type": "boolean", "description": "Return a small ack instead of the full project state (big token saver — use unless you need to re-read state)"},
                     "track":      {"type": "integer"},
                     "track_name": {"type": "string", "description": "Track name (alternative to track index)"},
                     "clip": {"type": "integer"},
@@ -844,6 +850,7 @@ async def list_tools() -> list[Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
+                    "quiet": {"type": "boolean", "description": "Return a small ack instead of the full project state (big token saver — use unless you need to re-read state)"},
                     "track":      {"type": "integer"},
                     "track_name": {"type": "string", "description": "Track name (alternative to track index)"},
                     "clip": {"type": "integer"},
@@ -864,6 +871,7 @@ async def list_tools() -> list[Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
+                    "quiet": {"type": "boolean", "description": "Return a small ack instead of the full project state (big token saver — use unless you need to re-read state)"},
                     "track": {"type": "integer"},
                     "clips": {
                         "type": "array",
@@ -888,6 +896,7 @@ async def list_tools() -> list[Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
+                    "quiet": {"type": "boolean", "description": "Return a small ack instead of the full project state (big token saver — use unless you need to re-read state)"},
                     "ops": {
                         "type": "array",
                         "items": {
@@ -925,6 +934,7 @@ async def list_tools() -> list[Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
+                    "quiet": {"type": "boolean", "description": "Return a small ack instead of the full project state (big token saver — use unless you need to re-read state)"},
                     "track": {"type": "integer"},
                     "clip": {"type": "integer"},
                     "shadow_enabled": {"type": "boolean"},
@@ -1157,6 +1167,7 @@ async def list_tools() -> list[Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
+                    "quiet": {"type": "boolean", "description": "Return a small ack instead of the full project state (big token saver — use unless you need to re-read state)"},
                     "track":      {"type": "integer"},
                     "track_name": {"type": "string", "description": "Track name to look up (alternative to track index)"},
                     "name": {"type": "string", "description": "New name to assign"},
