@@ -4,6 +4,7 @@
 #include <GLFW/glfw3.h>
 #include <cstdio>
 #include <cstdlib>
+#include <csignal>
 #include <unistd.h>
 #include <deque>
 #include <string>
@@ -207,10 +208,20 @@ int main(int argc, char** argv) {
 
     glfwSetDropCallback(window, glfw_drop_callback);
 
+    // If ffmpeg dies mid-export (vaapi hiccup, encoder error, user kill, ...)
+    // our next write() to its stdin pipe would send SIGPIPE and the default
+    // handler silently terminates this process — losing the in-flight render
+    // and leaving the user with a truncated mp4. Ignore SIGPIPE so write()
+    // returns EPIPE and the render loop can log + clean up properly.
+    signal(SIGPIPE, SIG_IGN);
+
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
-    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+    // NavEnableKeyboard intentionally off: it reroutes arrow keys to whichever
+    // widget the nav cursor drifts onto (typically a slider), which then eats
+    // the arrows we want for playhead seeking.
+    io.ConfigFlags &= ~ImGuiConfigFlags_NavEnableKeyboard;
 
     ImGui_ImplGlfw_InitForOpenGL(window, true);
     ImGui_ImplOpenGL3_Init("#version 330");
@@ -219,10 +230,22 @@ int main(int argc, char** argv) {
     app_init(state);
     state.models_ready = models_detect();
 
+    // Vsync is on during normal interactive use (smooth UI, low CPU). While an
+    // export is running we let the main loop free-run so render_tick_gl isn't
+    // capped at the display refresh — otherwise the export's wall-clock speed
+    // is gated by the monitor (e.g. 60 Hz), and changing the libx264 preset
+    // has no observable effect because ffmpeg is starved on stdin.
+    bool vsync_on = true;
     while (!glfwWindowShouldClose(window)) {
         glfwPollEvents();
         drain_dropped_queue();   // single-file drops: feed one path per frame
         drain_bin_pending(state); // multi-file drops: dump all into the bin
+
+        bool want_vsync = !state.render.running;
+        if (want_vsync != vsync_on) {
+            glfwSwapInterval(want_vsync ? 1 : 0);
+            vsync_on = want_vsync;
+        }
 
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplGlfw_NewFrame();

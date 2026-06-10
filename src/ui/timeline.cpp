@@ -1650,7 +1650,8 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
 
         if (drag_left && !left_locked) {
             float t = edge_snap(snap(new_t), cands);
-            float src_floor = (src_dur > 0.f)
+            bool still_img_l = dc.clip_type == ClipType::Video && is_image_path(dc.text);
+            float src_floor = (src_dur > 0.f && !still_img_l)
                 ? dc.start - dc.in_point / fmaxf(0.01f, dc.speed) : 0.f;
             float new_start = fmaxf(src_floor, fmaxf(0.f, fminf(t, dc.end - f1)));
             dc.in_point = fmaxf(0.f, dc.in_point + (new_start - dc.start));
@@ -1659,7 +1660,10 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
         } else if (drag_right && !right_locked) {
             float et = (mouse.x - origin.x - TL_LABEL_W + scroll) / zoom;
             float t = edge_snap(snap(et), cands);
-            float max_end = (src_dur > 0.f)
+            // Stills hold a single frame indefinitely, so the source-duration
+            // cap doesn't apply — let the user stretch the brick freely.
+            bool still_img = dc.clip_type == ClipType::Video && is_image_path(dc.text);
+            float max_end = (src_dur > 0.f && !still_img)
                 ? dc.start + (src_dur - dc.in_point) / fmaxf(0.01f, dc.speed)
                 : t;
             dc.end = fmaxf(dc.start + f1, fminf(t, max_end));

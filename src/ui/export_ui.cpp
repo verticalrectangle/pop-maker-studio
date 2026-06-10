@@ -197,6 +197,13 @@ void draw_export_modal(AppState& state) {
             }
             ImGui::NewLine();
 
+            // Encode speed (libx264 preset). The VAAPI HW encoder ignores
+            // -preset entirely — encoding runs at a fixed silicon rate
+            // regardless — so grey the buttons out when VAAPI is the active
+            // encoder, otherwise picking "Fast" vs "Slow" silently does nothing
+            // and "Draft" feels the same speed as "Master."
+            bool vaapi_active_for_speed = state.render_settings.use_vaapi &&
+                                           fs::exists("/dev/dri/renderD128");
             ImGui::Dummy({0.f, 8.f});
             ImGui::SetCursorPosX(ImGui::GetStyle().WindowPadding.x + 8.f);
             ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
@@ -204,12 +211,20 @@ void draw_export_modal(AppState& state) {
             ImGui::PopStyleColor();
             ImGui::Dummy({0.f, 6.f});
             ImGui::SetCursorPosX(ImGui::GetStyle().WindowPadding.x + 8.f);
+            if (vaapi_active_for_speed) ImGui::BeginDisabled();
             if (ui_btn("Fast##spm", state.render_settings.preset == "fast", true))
                 state.render_settings.preset = "fast";
             ImGui::SameLine(0.f, 4.f);
             if (ui_btn("Slow##spm", state.render_settings.preset == "slow", true))
                 state.render_settings.preset = "slow";
+            if (vaapi_active_for_speed) ImGui::EndDisabled();
             ImGui::NewLine();
+            if (vaapi_active_for_speed) {
+                ImGui::SetCursorPosX(ImGui::GetStyle().WindowPadding.x + 8.f);
+                ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+                ImGui::TextUnformatted("Hardware encoder — speed fixed by GPU silicon.");
+                ImGui::PopStyleColor();
+            }
 
             ImGui::Dummy({0.f, 8.f});
             ImGui::SetCursorPosX(ImGui::GetStyle().WindowPadding.x + 8.f);
@@ -412,16 +427,22 @@ void panel_export(AppState& state, float w) {
         }
         ImGui::NewLine();
 
-        // Encode speed
+        // Encode speed — disabled under VAAPI (HW encoder ignores -preset).
+        bool vaapi_active_for_speed2 = state.render_settings.use_vaapi &&
+                                        std::filesystem::exists("/dev/dri/renderD128");
         ImGui::Dummy({0.f, 8.f}); ui_label("Encode speed"); ImGui::Dummy({0.f, 4.f});
+        if (vaapi_active_for_speed2) ImGui::BeginDisabled();
         if (ui_btn("Fast", state.render_settings.preset == "fast", true))
             state.render_settings.preset = "fast";
         ImGui::SameLine(0.f, 4.f);
         if (ui_btn("Slow", state.render_settings.preset == "slow", true))
             state.render_settings.preset = "slow";
+        if (vaapi_active_for_speed2) ImGui::EndDisabled();
         ImGui::NewLine();
         ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
-        ImGui::TextUnformatted("Slow = better compression, same quality.");
+        ImGui::TextUnformatted(vaapi_active_for_speed2
+            ? "Hardware encoder — speed fixed by GPU silicon."
+            : "Slow = better compression, same quality.");
         ImGui::PopStyleColor();
 
         // Hardware encoder

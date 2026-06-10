@@ -1745,6 +1745,11 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         state.models_ready   = mr;
         state.models_skipped = ms;
         state.proxy_scan_needed = true;
+        // Fresh history with a baseline snapshot: the old project's entries
+        // must not bleed into this one, and history_undo() can't step back
+        // past entry 0, so the first edit needs a predecessor to restore.
+        history_clear();
+        history_push(state, "Load project");
         json r; r["path"] = path;
         return r;
     }
@@ -1879,6 +1884,9 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         state.models_ready   = mr;
         state.models_skipped = ms;
         state.splash_timer   = 0.f;
+        // Fresh history + baseline snapshot (same reasoning as load_project).
+        history_clear();
+        history_push(state, "New project");
         return json::object();
     }
 

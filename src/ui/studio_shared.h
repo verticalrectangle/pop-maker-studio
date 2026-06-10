@@ -28,6 +28,12 @@ void seek_to(AppState& state, float t);
 void toggle_play(AppState& state);
 float tl_fps(const AppState& state);
 
+// ── Multi-selection ops ───────────────────────────────────────────────────────
+// Both fall back to the primary single selection when clip_selection has <=1
+// entry. Return true if anything changed (caller pushes history).
+bool delete_selected_clips(AppState& state);
+bool duplicate_selected_clips(AppState& state);
+
 // ── Clip / slot helpers ───────────────────────────────────────────────────────
 std::string clip_slot_key(const std::string& src, float start);
 std::string source_from_key(const std::string& key);

@@ -25,6 +25,9 @@
 #include <sstream>
 #include <iomanip>
 #include <map>
+#include <set>
+#include <unordered_map>
+#include <cerrno>
 #include <thread>
 #include <atomic>
 #include <vector>
@@ -1457,8 +1460,11 @@ static struct GlExport {
     int     pipe_write    = -1;
     pid_t   ffmpeg_pid    = 0;
     std::vector<uint8_t> pixel_buf;
-    // Double-buffered PBOs: GPU DMAs frame N into pbo[N%2] while CPU reads pbo[(N-1)%2].
-    GLuint  pbo[2]        = {};
+    // Triple-buffered PBOs: GPU DMAs frame N into pbo[N%3]; CPU reads frame N-2
+    // from pbo[(N-2)%3] two ticks later. The extra slot keeps two readbacks
+    // in flight at once so the GPU DMA can fully overlap with CPU encode work
+    // — shaves the per-frame glMapBuffer wait when GPU runs faster than CPU.
+    GLuint  pbo[3]        = {};
     bool    use_vaapi     = false;  // h264_vaapi encoder active
 } g_gl_ex;
 
@@ -1732,12 +1738,31 @@ static void rlog(const char* fmt, ...) {
     fflush(g_render_log);
 }
 
+// Per-stage timing accumulator. Resets every kPerfWindow frames so the printed
+// numbers reflect recent throughput, not the long-running average.
+static constexpr int kPerfWindow = 60;
+static struct PerfAccum {
+    double collect_us = 0, compose_us = 0, render_us = 0;
+    double fx_us = 0, text_us = 0, kick_us = 0, total_us = 0;
+    int    count     = 0;
+    void reset() { *this = {}; }
+} g_perf;
+
+using perf_clock = std::chrono::steady_clock;
+static inline double us_since(perf_clock::time_point t0) {
+    using namespace std::chrono;
+    return duration<double, std::micro>(perf_clock::now() - t0).count();
+}
+
 static void gl_cleanup_export() {
     if (g_gl_ex.fbo)       { glDeleteFramebuffers(1, &g_gl_ex.fbo);       g_gl_ex.fbo       = 0; }
     if (g_gl_ex.color_tex) { glDeleteTextures(1, &g_gl_ex.color_tex);     g_gl_ex.color_tex = 0; }
     glDeleteTextures(MAX_VIDEO_TRACKS * 2, g_gl_ex.vid_tex);
     memset(g_gl_ex.vid_tex, 0, sizeof(g_gl_ex.vid_tex));
-    if (g_gl_ex.pbo[0]) { glDeleteBuffers(2, g_gl_ex.pbo); g_gl_ex.pbo[0] = g_gl_ex.pbo[1] = 0; }
+    if (g_gl_ex.pbo[0]) {
+        glDeleteBuffers(3, g_gl_ex.pbo);
+        g_gl_ex.pbo[0] = g_gl_ex.pbo[1] = g_gl_ex.pbo[2] = 0;
+    }
     video_close_export_all();
     g_gl_ex.pixel_buf.clear();
     g_gl_ex.use_vaapi = false;
@@ -1761,18 +1786,51 @@ static bool gl_render_vid_clip(ImDrawList& dl, const Clip* cl, float at_time,
     if (!cl || cl->text.empty()) return false;
     float src_t = cl->in_point + (at_time - cl->start) * cl->speed;
 
+    // One-shot per-clip diagnostic: prints once on the first frame for each
+    // distinct (clip.start, clip.end, speed) tuple seen during the export so
+    // we can confirm the render path is actually reading the speed you set.
+    {
+        static std::set<uint64_t> seen;
+        uint64_t key = 0;
+        key ^= (uint64_t)(int)(cl->start * 1000.f) * 0x9E3779B97F4A7C15ULL;
+        key ^= (uint64_t)(int)(cl->end   * 1000.f) * 0xBF58476D1CE4E5B9ULL;
+        key ^= (uint64_t)(int)(cl->speed * 1000.f) * 0x94D049BB133111EBULL;
+        if (!seen.count(key)) {
+            seen.insert(key);
+            fprintf(stderr,
+                "[render diag] vid_clip ti=%d start=%.3f end=%.3f in_point=%.3f "
+                "speed=%.4f at_t=%.3f src_t=%.3f path=%s\n",
+                ti, (double)cl->start, (double)cl->end, (double)cl->in_point,
+                (double)cl->speed, (double)at_time, (double)src_t,
+                cl->text.c_str());
+        }
+    }
+
     // Still images (HEIC, JPEG, PNG…): FFmpeg can't reliably decode these,
     // especially HEIC without libheif. Use the proxy JPEG via stb_image instead.
     if (is_still_ext(cl->text)) {
         std::string still = proxy_still_path(cl->text);
         if (!fs::exists(still)) return false;
-        int sw = 0, sh = 0, sc = 0;
-        uint8_t* px = stbi_load(still.c_str(), &sw, &sh, &sc, 4);
-        if (!px) return false;
-        glBindTexture(GL_TEXTURE_2D, tex_id);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, sw, sh, 0, GL_RGBA, GL_UNSIGNED_BYTE, px);
-        stbi_image_free(px);
-        int vid_w = sw, vid_h = sh;
+        // Per-tex-slot cache: a still clip that spans the whole timeline would
+        // otherwise call stbi_load() + glTexImage2D() on every output frame
+        // (~5 ms × 10k frames × N still tracks). Key on (path, tex_id) so each
+        // slot reuses its own decoded upload until the source path changes.
+        struct StillCacheEntry { std::string path; int w = 0, h = 0; };
+        static std::unordered_map<GLuint, StillCacheEntry> s_still_cache;
+        auto& cache_entry = s_still_cache[tex_id];
+        int vid_w = cache_entry.w, vid_h = cache_entry.h;
+        if (cache_entry.path != still || vid_w == 0 || vid_h == 0) {
+            int sw = 0, sh = 0, sc = 0;
+            uint8_t* px = stbi_load(still.c_str(), &sw, &sh, &sc, 4);
+            if (!px) return false;
+            glBindTexture(GL_TEXTURE_2D, tex_id);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, sw, sh, 0, GL_RGBA, GL_UNSIGNED_BYTE, px);
+            stbi_image_free(px);
+            cache_entry.path = still;
+            cache_entry.w = sw;
+            cache_entry.h = sh;
+            vid_w = sw; vid_h = sh;
+        }
 
         uintptr_t cur_tex = (uintptr_t)tex_id;
         {
@@ -1973,6 +2031,7 @@ void render_start_gl(AppState& state) {
     // Open crash log — each line is flushed so the last line before a crash is visible.
     if (g_render_log) fclose(g_render_log);
     g_render_log = fopen("/tmp/pms_render_log.txt", "w");
+    g_perf.reset();
     rlog("render_start_gl: out_mp4=%s duration=%.2f fps=%d\n",
          state.out_mp4.c_str(), (double)state.duration, state.fps);
 
@@ -2036,39 +2095,54 @@ void render_start_gl(AppState& state) {
         float ss    = 0.f;   // source seek (-ss before -i)
         float to    = -1.f;  // source end  (-to before -i, -1 = no limit)
         float delay = 0.f;   // timeline offset (-itsoffset before -i)
+        float speed = 1.f;   // playback speed; non-unity → atempo in filter_complex
     };
     std::vector<AudioIn> audio_ins;
     if (!is_gif) {
-        // state.audio_path is the primary audio file (extracted stem / uploaded track).
-        // The preview audio callback does NOT play g_samples (audio_path content) directly —
-        // it only mixes Audio brick clips.  To keep export consistent with preview, only
-        // add audio_path as a background input when no Audio brick is already sourced
-        // from the same file.  If a brick covers it, the bricks are the sole audio source.
-        if (!state.audio_path.empty()) {
-            bool covered_by_brick = false;
-            for (auto& tr : state.tracks)
-                for (auto& cl : tr.clips)
-                    if (cl.clip_type == ClipType::Audio && cl.text == state.audio_path)
-                        { covered_by_brick = true; break; }
-            if (!covered_by_brick)
-                audio_ins.push_back({state.audio_path, 1.f, 0.f, -1.f, 0.f});
-        }
+        // Per-clip audio: each Audio brick AND each Video clip with audio contributes
+        // its own ffmpeg input with proper -ss / -to / -itsoffset and a per-stream
+        // atempo so cuts, in_point, and speed all survive the export. Video clips
+        // need this too because the source video's audio track is the user's audio.
+        std::set<std::string> covered_paths;  // sources already mixed in via clips
+        // Cache probe results: skip Video clips whose source has no audio track
+        // (ffmpeg would error trying to map a non-existent audio stream).
+        std::map<std::string, bool> has_audio_cache;
+        auto path_has_audio = [&](const std::string& p) {
+            auto it = has_audio_cache.find(p);
+            if (it != has_audio_cache.end()) return it->second;
+            MediaFileInfo info = video_probe_file(p);
+            bool ok = info.has_audio;
+            has_audio_cache[p] = ok;
+            return ok;
+        };
         for (int ti = (int)state.tracks.size() - 1; ti >= 0; --ti) {
             for (auto& cl : state.tracks[ti].clips) {
-                if (cl.clip_type != ClipType::Audio || cl.text.empty()) continue;
+                if (cl.text.empty()) continue;
+                if (cl.clip_type != ClipType::Audio &&
+                    cl.clip_type != ClipType::Video) continue;
                 if (!fs::exists(cl.text)) continue;
+                if (cl.clip_type == ClipType::Video && !path_has_audio(cl.text)) continue;
+                float speed = fmaxf(0.01f, cl.speed);
                 float vol   = state.tracks[ti].muted ? 0.f : cl.volume;
                 float ss    = cl.in_point;
-                float dur   = (cl.end - cl.start) * fmaxf(0.01f, cl.speed);
+                float dur   = (cl.end - cl.start) * speed;
                 float to    = ss + dur;
                 // Modern FFmpeg keeps absolute timestamps after -ss (input option),
                 // so the stream's pts starts at ~in_point, not 0.  To place audio at
                 // cl.start on the output timeline we need itsoffset = cl.start - in_point,
                 // not cl.start.  Clamped to 0 — negative itsoffset is unsupported.
                 float delay = fmaxf(0.f, cl.start - cl.in_point);
-                audio_ins.push_back({cl.text, vol, ss, to, delay});
+                audio_ins.push_back({cl.text, vol, ss, to, delay, speed});
+                covered_paths.insert(cl.text);
             }
         }
+        // state.audio_path fallback: only when no clip already contributes its audio.
+        // For lyric-video workflows there's just an audio file and Text clips, so this
+        // path still produces audio. For video-editing workflows the per-clip entries
+        // above own the audio and the fallback would just produce an un-edited
+        // duplicate that ignores cuts/speed.
+        if (!state.audio_path.empty() && !covered_paths.count(state.audio_path))
+            audio_ins.push_back({state.audio_path, 1.f, 0.f, -1.f, 0.f, 1.f});
     }
 
     // ── VAAPI detection ───────────────────────────────────────────────────────
@@ -2130,34 +2204,62 @@ void render_start_gl(AppState& state) {
     } else {
         args.push_back("-map"); args.push_back("0:v");
         if (!audio_ins.empty()) {
-            if (audio_ins.size() == 1) {
+            bool any_speed = false;
+            for (auto& ai : audio_ins)
+                if (fabsf(ai.speed - 1.f) > 0.001f) { any_speed = true; break; }
+            // Single stream with no edits → direct map (zero filter overhead).
+            bool simple_passthrough = (audio_ins.size() == 1) &&
+                                       !any_speed &&
+                                       fabsf(audio_ins[0].vol - 1.f) < 0.001f;
+            if (simple_passthrough) {
                 args.push_back("-map"); args.push_back("1:a");
             } else {
-                // Build filter_complex:
-                //   Step 1: volume-adjust each non-unity stream  →  [aN_v]
-                //   Step 2: amix all streams into [aout]
+                // Per-stream atempo + volume, then amix. atempo accepts 0.5..100
+                // in modern ffmpeg so a single instance covers our 0.25..10 slider
+                // range — clamp to atempo's lower bound when slower than 0.5.
                 std::string fc;
                 std::vector<std::string> mix_ins;
                 for (int i = 0; i < (int)audio_ins.size(); ++i) {
-                    if (fabsf(audio_ins[i].vol - 1.f) > 0.001f) {
-                        char buf[128];
-                        snprintf(buf, sizeof(buf), "[%d:a]volume=%.4f[a%dv];",
-                                 i + 1, (double)audio_ins[i].vol, i + 1);
-                        fc += buf;
-                        char lbl[32]; snprintf(lbl, sizeof(lbl), "[a%dv]", i + 1);
-                        mix_ins.push_back(lbl);
-                    } else {
+                    const auto& ai = audio_ins[i];
+                    bool has_speed = fabsf(ai.speed - 1.f) > 0.001f;
+                    bool has_vol   = fabsf(ai.vol   - 1.f) > 0.001f;
+                    if (!has_speed && !has_vol) {
                         char lbl[32]; snprintf(lbl, sizeof(lbl), "[%d:a]", i + 1);
                         mix_ins.push_back(lbl);
+                        continue;
                     }
+                    char head[16]; snprintf(head, sizeof(head), "[%d:a]", i + 1);
+                    fc += head;
+                    bool first = true;
+                    if (has_speed) {
+                        char buf[64]; snprintf(buf, sizeof(buf), "atempo=%.5f",
+                                               (double)fmaxf(0.5f, fminf(100.f, ai.speed)));
+                        fc += buf; first = false;
+                    }
+                    if (has_vol) {
+                        if (!first) fc += ",";
+                        char buf[64]; snprintf(buf, sizeof(buf), "volume=%.4f", (double)ai.vol);
+                        fc += buf;
+                    }
+                    char tail[32]; snprintf(tail, sizeof(tail), "[a%df];", i + 1);
+                    fc += tail;
+                    char lbl[32]; snprintf(lbl, sizeof(lbl), "[a%df]", i + 1);
+                    mix_ins.push_back(lbl);
                 }
-                for (auto& s : mix_ins) fc += s;
-                char mixbuf[64];
-                snprintf(mixbuf, sizeof(mixbuf), "amix=inputs=%d:duration=longest[aout]",
-                         (int)audio_ins.size());
-                fc += mixbuf;
-                args.push_back("-filter_complex"); args.push_back(fc);
-                args.push_back("-map"); args.push_back("[aout]");
+                if (mix_ins.size() == 1) {
+                    // One stream, no amix needed — map the processed label directly.
+                    // The trailing ';' from the filter chain above is harmless before EOF.
+                    args.push_back("-filter_complex"); args.push_back(fc);
+                    args.push_back("-map"); args.push_back(mix_ins[0]);
+                } else {
+                    for (auto& s : mix_ins) fc += s;
+                    char mixbuf[64];
+                    snprintf(mixbuf, sizeof(mixbuf), "amix=inputs=%d:duration=longest[aout]",
+                             (int)mix_ins.size());
+                    fc += mixbuf;
+                    args.push_back("-filter_complex"); args.push_back(fc);
+                    args.push_back("-map"); args.push_back("[aout]");
+                }
             }
         }
         if (use_vaapi) {
@@ -2222,13 +2324,13 @@ void render_start_gl(AppState& state) {
     }
     close(stdin_pipe[0]);
 
-    // ── Allocate double-buffered PBOs for async GPU→CPU readback ─────────────
+    // ── Allocate triple-buffered PBOs for async GPU→CPU readback ─────────────
     // With VAAPI, ffmpeg handles the vflip so we don't need the flip memcpy;
     // pixel_buf is still used for the libx264 path.
     size_t frame_bytes = (size_t)out_w * out_h * 4;
-    GLuint pbos[2] = {};
-    glGenBuffers(2, pbos);
-    for (int i = 0; i < 2; ++i) {
+    GLuint pbos[3] = {};
+    glGenBuffers(3, pbos);
+    for (int i = 0; i < 3; ++i) {
         glBindBuffer(GL_PIXEL_PACK_BUFFER, pbos[i]);
         glBufferData(GL_PIXEL_PACK_BUFFER, (GLsizeiptr)frame_bytes, nullptr, GL_STREAM_READ);
     }
@@ -2249,6 +2351,7 @@ void render_start_gl(AppState& state) {
     g_gl_ex.pixel_buf.resize(frame_bytes);
     g_gl_ex.pbo[0]        = pbos[0];
     g_gl_ex.pbo[1]        = pbos[1];
+    g_gl_ex.pbo[2]        = pbos[2];
     g_gl_ex.use_vaapi     = use_vaapi;
     video_close_export_all();  // reset all decoder slots for the new render session
     g_ffmpeg_pid.store(pid);
@@ -2268,35 +2371,52 @@ void render_start_gl(AppState& state) {
 // of tick N+1 to retrieve the pixels kicked during tick N.
 // With VAAPI, ffmpeg's vflip handles row inversion so we pipe raw bottom-up RGBA.
 static void gl_collect_pbo_frame(int frame_idx) {
-    int slot = frame_idx % 2;
+    int slot = frame_idx % 3;
     glBindBuffer(GL_PIXEL_PACK_BUFFER, g_gl_ex.pbo[slot]);
     uint8_t* src = (uint8_t*)glMapBuffer(GL_PIXEL_PACK_BUFFER, GL_READ_ONLY);
+    int out_w     = g_gl_ex.out_w;
+    int out_h     = g_gl_ex.out_h;
+    size_t total  = (size_t)out_w * out_h * 4;
+    const uint8_t* write_src = nullptr;
     if (src) {
-        int out_w     = g_gl_ex.out_w;
-        int out_h     = g_gl_ex.out_h;
         int row_bytes = out_w * 4;
         if (g_gl_ex.use_vaapi) {
-            // VAAPI: ffmpeg applies vflip — pipe raw GL bottom-up order directly.
-            memcpy(g_gl_ex.pixel_buf.data(), src, (size_t)out_w * out_h * 4);
+            // VAAPI: ffmpeg applies vflip — write directly from the mapped PBO,
+            // skip the intermediate full-frame memcpy entirely (~5 ms at 1080p).
+            write_src = src;
         } else {
-            // libx264: flip rows here (GL bottom-up → top-down for MP4).
+            // libx264: flip rows here (GL bottom-up → top-down for MP4). We still
+            // need the staging buffer because the flip can't be done in-place.
             for (int y = 0; y < out_h; ++y) {
                 int src_y = out_h - 1 - y;
                 memcpy(g_gl_ex.pixel_buf.data() + (size_t)y * row_bytes,
                        src + (size_t)src_y * row_bytes, row_bytes);
             }
+            write_src = g_gl_ex.pixel_buf.data();
         }
-        glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
     }
-    glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
 
-    const uint8_t* buf = g_gl_ex.pixel_buf.data();
-    size_t total = (size_t)g_gl_ex.out_w * g_gl_ex.out_h * 4;
-    while (total > 0) {
-        ssize_t n = write(g_gl_ex.pipe_write, buf, total);
-        if (n <= 0) break;
-        buf += n; total -= (size_t)n;
+    if (write_src) {
+        const uint8_t* buf = write_src;
+        size_t left = total;
+        while (left > 0) {
+            ssize_t n = write(g_gl_ex.pipe_write, buf, left);
+            if (n < 0) {
+                // ffmpeg died — note it and stop trying. Render loop will
+                // notice on next finalize attempt and clean up.
+                if (errno == EPIPE) {
+                    rlog("pipe_write: EPIPE — ffmpeg gone, abandoning frame %d\n", frame_idx);
+                    g_cancel.store(true);
+                }
+                break;
+            }
+            if (n == 0) break;
+            buf += n; left -= (size_t)n;
+        }
     }
+
+    if (src) glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
 }
 
 void render_tick_gl(AppState& state) {
@@ -2314,15 +2434,32 @@ void render_tick_gl(AppState& state) {
         return;
     }
 
-    // Collect the previous tick's PBO frame and write it to the pipe.
-    // On tick 0 there is no previous frame yet.
-    if (g_gl_ex.current_frame > 0)
-        gl_collect_pbo_frame(g_gl_ex.current_frame - 1);
+    auto tick_t0 = perf_clock::now();
+
+    // Triple-buffer pipeline: at tick N we collect frame N-2 (kicked at tick
+    // N-2). First two ticks skip collection because nothing has finished DMA
+    // yet. After the last frame is rendered we keep ticking for one more tick
+    // to drain the final two pending PBOs (handled by the finalize threshold
+    // bumping to total_frames + 1).
+    {
+        auto t0 = perf_clock::now();
+        if (g_gl_ex.current_frame > 1)
+            gl_collect_pbo_frame(g_gl_ex.current_frame - 2);
+        g_perf.collect_us += us_since(t0);
+    }
 
     rlog("  readpixels_done\n");   // previous frame collected (or first frame skipped)
 
-    // All frames rendered + last frame written → signal ffmpeg and wait.
-    if (g_gl_ex.current_frame >= g_gl_ex.total_frames) {
+    // Drain tick: all frames have been rendered/kicked, just collect what's
+    // left in flight on subsequent ticks. Skip the render+kick block below.
+    if (g_gl_ex.current_frame >= g_gl_ex.total_frames &&
+        g_gl_ex.current_frame <  g_gl_ex.total_frames + 1) {
+        g_gl_ex.current_frame++;
+        return;
+    }
+
+    // All frames rendered + last frames drained → signal ffmpeg and wait.
+    if (g_gl_ex.current_frame >= g_gl_ex.total_frames + 1) {
         close(g_gl_ex.pipe_write); g_gl_ex.pipe_write = -1;
         int wstat = 0;
         waitpid(g_gl_ex.ffmpeg_pid, &wstat, 0);
@@ -2365,6 +2502,7 @@ void render_tick_gl(AppState& state) {
     // Global FX use kSceneFxSlot (= MAX_VIDEO_TRACKS*2-2) — that slot is only
     // touched in Phase 3, *after* RenderDrawData has consumed the draw list, so
     // any overlap between slot_sec and kSceneFxSlot is harmless.
+    auto compose_t0 = perf_clock::now();
     ImDrawList dl(ImGui::GetDrawListSharedData());
     dl._ResetForNewFrame();
     dl.PushClipRect({0.f, 0.f}, {W, H});
@@ -2502,10 +2640,12 @@ void render_tick_gl(AppState& state) {
         }
     }
 
+    g_perf.compose_us += us_since(compose_t0);
     rlog("  vid_clips_done\n");
 
     // ── Phase 2: Render video clips to export FBO ─────────────────────────────
     // Bind and clear the export FBO, then render the ImDrawList into it.
+    auto render_t0 = perf_clock::now();
     glBindFramebuffer(GL_FRAMEBUFFER, g_gl_ex.fbo);
     glViewport(0, 0, g_gl_ex.out_w, g_gl_ex.out_h);
     glClearColor(0.f, 0.f, 0.f, 1.f);
@@ -2521,7 +2661,7 @@ void render_tick_gl(AppState& state) {
         dd.AddDrawList(&dl);
         ImGui_ImplOpenGL3_RenderDrawData(&dd);
     }
-
+    g_perf.render_us += us_since(render_t0);
     rlog("  vid_render_done\n");
 
     // ── Phase 3: Global FX ────────────────────────────────────────────────────
@@ -2529,6 +2669,7 @@ void render_tick_gl(AppState& state) {
     // referenced by a live draw list.  Unbind the export FBO before calling
     // fx_apply so g_gl_ex.color_tex (the FBO's colour attachment) can be safely
     // sampled without an undefined read-while-attached feedback loop.
+    auto fx_t0 = perf_clock::now();
     {
         EffectAccum     global_ea  = collect_effects    (state, t, (int)state.tracks.size());
         CreativeFXAccum global_cfx = collect_creative_fx(state, t, (int)state.tracks.size());
@@ -2544,12 +2685,13 @@ void render_tick_gl(AppState& state) {
                 fx_blit(out, g_gl_ex.fbo, g_gl_ex.out_w, g_gl_ex.out_h);
         }
     }
-
+    g_perf.fx_us += us_since(fx_t0);
     rlog("  fx_done\n");
 
     // ── Phase 4: Text overlays (ImDrawList on top of the composited frame) ────
     // Export FBO must be bound — it is, either from Phase 2 (no global FX) or
     // re-bound explicitly in Phase 3 / Phase 3b.
+    auto text_t0 = perf_clock::now();
     glBindFramebuffer(GL_FRAMEBUFFER, g_gl_ex.fbo);
     glViewport(0, 0, g_gl_ex.out_w, g_gl_ex.out_h);
     {
@@ -2575,14 +2717,17 @@ void render_tick_gl(AppState& state) {
         ImGui_ImplOpenGL3_RenderDrawData(&tdd);
         rlog("  imgui_render_done\n");
     }
+    g_perf.text_us += us_since(text_t0);
 
     // ── Kick async GPU→PBO DMA (non-blocking — returns immediately) ───────────
-    // The GPU will fill pbo[current_frame % 2] while the CPU processes the next
-    // frame. We collect these pixels at the top of the NEXT render_tick_gl call.
-    glBindBuffer(GL_PIXEL_PACK_BUFFER, g_gl_ex.pbo[g_gl_ex.current_frame % 2]);
+    // The GPU will fill pbo[current_frame % 3] while the CPU processes the next
+    // two frames; collection happens 2 ticks later.
+    auto kick_t0 = perf_clock::now();
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, g_gl_ex.pbo[g_gl_ex.current_frame % 3]);
     glReadPixels(0, 0, g_gl_ex.out_w, g_gl_ex.out_h,
                  GL_RGBA, GL_UNSIGNED_BYTE, nullptr); // nullptr = async into PBO
     glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+    g_perf.kick_us += us_since(kick_t0);
 
     rlog("  pipe_write_done\n");  // will be written at start of next tick
 
@@ -2594,4 +2739,31 @@ void render_tick_gl(AppState& state) {
     ++g_gl_ex.current_frame;
     state.render.frame    = g_gl_ex.current_frame;
     state.render.progress = (float)g_gl_ex.current_frame / (float)g_gl_ex.total_frames;
+
+    g_perf.total_us += us_since(tick_t0);
+    g_perf.count++;
+    if (g_perf.count >= kPerfWindow) {
+        double n = (double)g_perf.count;
+        double tot_ms = g_perf.total_us / n / 1000.0;
+        double fps    = (tot_ms > 0.0) ? 1000.0 / tot_ms : 0.0;
+        fprintf(stderr,
+            "[render perf %d-frame avg] %.2f ms/tick (~%.1f fps)  "
+            "collect=%.2f compose=%.2f render=%.2f fx=%.2f text=%.2f kick=%.2f ms\n",
+            kPerfWindow, tot_ms, fps,
+            g_perf.collect_us / n / 1000.0,
+            g_perf.compose_us / n / 1000.0,
+            g_perf.render_us  / n / 1000.0,
+            g_perf.fx_us      / n / 1000.0,
+            g_perf.text_us    / n / 1000.0,
+            g_perf.kick_us    / n / 1000.0);
+        rlog("perf60 collect=%.2f compose=%.2f render=%.2f fx=%.2f text=%.2f kick=%.2f total=%.2f ms (%.1f fps)\n",
+            g_perf.collect_us / n / 1000.0,
+            g_perf.compose_us / n / 1000.0,
+            g_perf.render_us  / n / 1000.0,
+            g_perf.fx_us      / n / 1000.0,
+            g_perf.text_us    / n / 1000.0,
+            g_perf.kick_us    / n / 1000.0,
+            tot_ms, fps);
+        g_perf.reset();
+    }
 }

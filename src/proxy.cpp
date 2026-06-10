@@ -1,6 +1,7 @@
 #include "proxy.h"
 #include "paths.h"
 
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -50,7 +51,15 @@ static void mark_ready_cached(const std::string& path) {
 
 std::string proxy_mjpeg_path(const std::string& vp) { return vp + ".pms_proxy.mjpeg"; }
 std::string proxy_idx_path  (const std::string& vp) { return vp + ".pms_proxy.idx";   }
-std::string proxy_still_path(const std::string& vp) { return vp + ".pms_still.jpg";   }
+std::string proxy_still_path(const std::string& vp) {
+    // PNGs are loaded directly so transparency is preserved — a JPEG proxy
+    // would flatten the alpha channel and the image would render as opaque.
+    fs::path p(vp);
+    std::string ext = p.extension().string();
+    for (auto& c : ext) c = (char)tolower((unsigned char)c);
+    if (ext == ".png") return vp;
+    return vp + ".pms_still.jpg";
+}
 
 // ── Queue + worker pool state ─────────────────────────────────────────────────
 //
@@ -199,11 +208,18 @@ bool proxy_load(const std::string& video_path, ProxyInfo& out) {
 
     out.frame_count = (int)count;
 
-    // Probe fps from the ORIGINAL video — raw MJPEG has no reliable fps metadata.
+    // Determine the proxy's frame rate. Raw MJPEG has no reliable fps
+    // metadata, and the original's r_frame_rate is NOT the proxy's rate
+    // either: the transcode forces "-r 30" (CFR), so a 60 fps screencast
+    // yields a 30 fps proxy — indexing that with the original's rate shows
+    // frames from 2× too deep into the source and diverges from the export.
+    // The proxy's true rate is frame_count / source duration; probe the
+    // ORIGINAL's container duration and derive it, keeping the original's
+    // r_frame_rate only as a fallback when the duration probe fails.
     {
         std::string file_arg = "file:" + video_path;
         const char* pargv[] = {"ffprobe", "-v", "error", "-select_streams", "v:0",
-                               "-show_entries", "stream=r_frame_rate",
+                               "-show_entries", "stream=r_frame_rate:format=duration",
                                "-of", "default=nw=1", file_arg.c_str(), nullptr};
         int pfd[2];
         if (pipe(pfd) == 0) {
@@ -219,6 +235,7 @@ bool proxy_load(const std::string& video_path, ProxyInfo& out) {
             }
             close(pfd[1]);
             FILE* probe = fdopen(pfd[0], "r");
+            double src_dur = 0.0;
             if (probe) {
                 char line[256];
                 long long fn = 0, fd = 1;
@@ -228,10 +245,18 @@ bool proxy_load(const std::string& video_path, ProxyInfo& out) {
                         out.fps_den = (int64_t)fd;
                         out.fps     = (double)fn / (double)fd;
                     }
+                    sscanf(line, "duration=%lf", &src_dur);
                 }
                 fclose(probe);
             } else { close(pfd[0]); }
             waitpid(pid, nullptr, 0);
+
+            if (src_dur > 0.0 && out.frame_count > 0) {
+                out.fps_num = (int64_t)out.frame_count * 1000;
+                out.fps_den = (int64_t)std::llround(src_dur * 1000.0);
+                if (out.fps_den <= 0) out.fps_den = 1;
+                out.fps = (double)out.fps_num / (double)out.fps_den;
+            }
         }
     }
 

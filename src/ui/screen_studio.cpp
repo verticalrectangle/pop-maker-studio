@@ -38,6 +38,7 @@
 namespace fs = std::filesystem;
 
 extern ImFont* g_font_bold;
+
 extern ImFont* g_font_black;
 
 // ── Panel view — single source of truth for the right-hand panel ─────────────
@@ -50,21 +51,25 @@ static void handle_shortcuts(AppState& state) {
     if (terminal_is_focused()) return;
     ImGuiIO& io = ImGui::GetIO();
 
-    // Arrow-key playhead nudge — runs before the IsAnyItemActive guard so that
-    // a stale slider activation can't lock the user out of seeking. RouteGlobal
-    // also prevents ImGui's keyboard nav from rerouting arrows to a focused
-    // slider after the nav cursor drifts onto one.
+    // Arrow-key playhead nudge — runs before the IsAnyItemActive guard so a
+    // stale slider activation can't lock the user out of seeking. Shift = 5s.
+    // Plain step scales to timeline zoom so the playhead moves at least ~5px
+    // per press, but never less than one video frame.
     if (!io.WantTextInput) {
         float fps_a  = tl_fps(state);
         float f_dt_a = fps_a > 0.f ? 1.f / fps_a : 1.f / 30.f;
         float dur_a  = fmaxf(state.duration, 0.f);
-        ImGuiInputFlags arrow_flags = ImGuiInputFlags_RouteGlobal | ImGuiInputFlags_Repeat;
-        bool right = ImGui::Shortcut(ImGuiKey_RightArrow, arrow_flags) ||
-                     ImGui::Shortcut(ImGuiMod_Shift | ImGuiKey_RightArrow, arrow_flags);
-        bool left  = ImGui::Shortcut(ImGuiKey_LeftArrow,  arrow_flags) ||
-                     ImGui::Shortcut(ImGuiMod_Shift | ImGuiKey_LeftArrow,  arrow_flags);
+        bool right = ImGui::IsKeyPressed(ImGuiKey_RightArrow, true);
+        bool left  = ImGui::IsKeyPressed(ImGuiKey_LeftArrow,  true);
         if (right || left) {
-            float step = io.KeyShift ? 5.f : f_dt_a;
+            float step;
+            if (io.KeyShift) {
+                step = 5.f;
+            } else {
+                float zoom_px_per_sec = state.tl_zoom;
+                float visible_step = (zoom_px_per_sec > 0.001f) ? 5.f / zoom_px_per_sec : f_dt_a;
+                step = fmaxf(f_dt_a, visible_step);
+            }
             float ph = state.playhead + (right ? step : -step);
             seek_to(state, fmaxf(0.f, fminf(ph, dur_a)));
             if (ImGui::GetActiveID() != 0) ImGui::ClearActiveID();
@@ -100,6 +105,7 @@ static void handle_shortcuts(AppState& state) {
         audio_shutdown(); audio_clips_clear(); video_close();
         state = AppState{}; state.splash_timer = 0.f;
         audio_init();
+        history_push(state, "New project");  // baseline so the first edit is undoable
         return;
     }
 
@@ -140,9 +146,9 @@ static void handle_shortcuts(AppState& state) {
     }
     if (ImGui::IsKeyPressed(ImGuiKey_Delete) ||
         ImGui::IsKeyPressed(ImGuiKey_Backspace)) {
-        track.clips.erase(track.clips.begin()+state.selected_clip);
-        state.selected_clip = -1;
-        history_push(state, "Delete clip");
+        bool multi = state.clip_selection.size() > 1;
+        if (delete_selected_clips(state))
+            history_push(state, multi ? "Delete clips" : "Delete clip");
         return;
     }
 }
@@ -486,6 +492,7 @@ void ui_studio(AppState& state) {
                 state.splash_timer = 0.f;
                 audio_shutdown(); audio_clips_clear(); audio_init();
                 video_close();
+                history_push(state, "New project");  // baseline so the first edit is undoable
             }
             if (ImGui::MenuItem("Open Project…", "Ctrl+Shift+O")) {
                 std::string picked = filepicker_open("Open project", "PMS Project", "*.pms");
@@ -504,6 +511,7 @@ void ui_studio(AppState& state) {
                             for (auto& cl : tr.clips)
                                 if (cl.clip_type == ClipType::Audio && !cl.text.empty())
                                     audio_source_ensure(cl.text);
+                        history_push(state, "Open project");  // baseline so the first edit is undoable
                     }
                 }
             }
@@ -587,19 +595,16 @@ void ui_studio(AppState& state) {
                     history_push(state, "Split clip");
                 }
             }
-            if (ImGui::MenuItem("Duplicate clip") && has_clip) {
-                Track& t = state.tracks[state.selected_track];
-                Clip dup = t.clips[state.selected_clip];
-                float len = dup.end - dup.start;
-                dup.start = dup.end; dup.end = dup.start+len;
-                t.clips.insert(t.clips.begin()+state.selected_clip+1, dup);
-                history_push(state, "Duplicate clip");
+            bool multi = state.clip_selection.size() > 1;
+            const char* dup_label = multi ? "Duplicate clips" : "Duplicate clip";
+            const char* del_label = multi ? "Delete clips"    : "Delete clip";
+            if (ImGui::MenuItem(dup_label) && has_clip) {
+                if (duplicate_selected_clips(state))
+                    history_push(state, dup_label);
             }
-            if (ImGui::MenuItem("Delete clip", "Del") && has_clip) {
-                state.tracks[state.selected_track].clips.erase(
-                    state.tracks[state.selected_track].clips.begin()+state.selected_clip);
-                state.selected_clip=-1;
-                history_push(state, "Delete clip");
+            if (ImGui::MenuItem(del_label, "Del") && has_clip) {
+                if (delete_selected_clips(state))
+                    history_push(state, del_label);
             }
             if (!has_clip) ImGui::EndDisabled();
             ImGui::EndMenu();

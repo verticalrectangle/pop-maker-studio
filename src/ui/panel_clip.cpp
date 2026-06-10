@@ -30,17 +30,19 @@ namespace fs = std::filesystem;
 extern ImFont* g_font_bold;
 extern ImFont* g_font_black;
 
-// Rescale all glass FX bricks that overlap a media clip, anchored at the clip's
-// start. Speed ratio = new_speed / old_speed; brick widths divide by it so that
-// brick boundaries stay locked to the same source-content moments after a speed
-// change. MultiFX sub-effects' rel_start/rel_end scale with the parent.
+// Rescale a media clip's own timeline width AND any FX bricks (Effect / BodyFX
+// / MultiFX / Background) that overlap it, anchored at the clip's start. Speed
+// ratio = new_speed / old_speed; widths divide by it so the clip plays the
+// same source content in less/more wall-clock time and brick boundaries stay
+// locked to the same source-content moments. MultiFX sub-effects'
+// rel_start/rel_end scale with their parent so internal timing stays coherent.
 static void rescale_glass_bricks(AppState& state, int media_ti, int media_ci, float speed_ratio) {
     if (speed_ratio <= 0.f || !std::isfinite(speed_ratio)) return;
     if (fabsf(speed_ratio - 1.f) < 1e-5f) return;
     if (media_ti < 0 || media_ti >= (int)state.tracks.size()) return;
     Track& mtr = state.tracks[media_ti];
     if (media_ci < 0 || media_ci >= (int)mtr.clips.size()) return;
-    const Clip media = mtr.clips[media_ci];
+    const Clip media = mtr.clips[media_ci];  // snapshot — old start/end used for overlap test
     float anchor = media.start;
     for (int ti = 0; ti < (int)state.tracks.size(); ++ti) {
         Track& tr = state.tracks[ti];
@@ -48,7 +50,8 @@ static void rescale_glass_bricks(AppState& state, int media_ti, int media_ci, fl
             if (ti == media_ti && &cl == &mtr.clips[media_ci]) continue;
             if (cl.clip_type != ClipType::Effect &&
                 cl.clip_type != ClipType::BodyFX &&
-                cl.clip_type != ClipType::MultiFX) continue;
+                cl.clip_type != ClipType::MultiFX &&
+                cl.clip_type != ClipType::Background) continue;
             if (cl.start >= media.end || cl.end <= media.start) continue;
             cl.start = anchor + (cl.start - anchor) / speed_ratio;
             cl.end   = anchor + (cl.end   - anchor) / speed_ratio;
@@ -58,6 +61,11 @@ static void rescale_glass_bricks(AppState& state, int media_ti, int media_ci, fl
             }
         }
     }
+    // Resize the media clip itself so its timeline width matches the new
+    // playback duration (source_dur / speed). Anchored at the start so nothing
+    // upstream shifts.
+    Clip& m = mtr.clips[media_ci];
+    m.end = anchor + (m.end - anchor) / speed_ratio;
 }
 
 static std::vector<std::string> split_words_panel(const std::string& s) {
@@ -122,19 +130,21 @@ static void draw_clip_header(AppState& state, Clip& clip, Track& track, float w)
         }
     }
     ImGui::SameLine(0.f, 6.f);
-    if (ui_btn("Duplicate", false, true)) {
-        float len = clip.end - clip.start;
-        Clip dup = clip; dup.start = clip.end; dup.end = clip.end + len;
-        track.clips.insert(track.clips.begin() + state.selected_clip + 1, dup);
-        history_push(state, "Duplicate clip");
-    }
-    ImGui::SameLine(0.f, 6.f);
-    if (ui_btn("Delete", false, true)) {
-        track.clips.erase(track.clips.begin() + state.selected_clip);
-        state.selected_clip = -1;
-        history_push(state, "Delete clip");
-        if (track.locked) ImGui::EndDisabled();
-        return;
+    {
+        bool multi = state.clip_selection.size() > 1;
+        const char* dup_label = multi ? "Duplicate group" : "Duplicate";
+        const char* del_label = multi ? "Delete group"    : "Delete";
+        if (ui_btn(dup_label, false, true)) {
+            if (duplicate_selected_clips(state))
+                history_push(state, multi ? "Duplicate clips" : "Duplicate clip");
+        }
+        ImGui::SameLine(0.f, 6.f);
+        if (ui_btn(del_label, false, true)) {
+            if (delete_selected_clips(state))
+                history_push(state, multi ? "Delete clips" : "Delete clip");
+            if (track.locked) ImGui::EndDisabled();
+            return;
+        }
     }
     if (track.locked) ImGui::EndDisabled();
 
@@ -1316,14 +1326,15 @@ void panel_clip(AppState& state, float w) {
         ImGui::Dummy({0.f, 6.f});
         {
             float old_spd = clip.speed;
-            plain_slider("##vid_spd", "Speed", &clip.speed, 0.25f, 4.f, "%.2f\xc3\x97");
+            plain_slider("##vid_spd", "Speed", &clip.speed, 0.25f, 10.f, "%.2f\xc3\x97");
             if (fabsf(clip.speed - old_spd) > 1e-5f)
                 rescale_glass_bricks(state, state.selected_track, state.selected_clip,
                                      clip.speed / old_spd);
             ImGui::Dummy({0.f, 6.f});
             struct SP { float f; const char* l; };
             SP spresets[] = {{0.25f,"\xc2\xbc\xc3\x97"},{0.5f,"\xc2\xbd\xc3\x97"},
-                             {1.f,"1\xc3\x97"},{2.f,"2\xc3\x97"},{4.f,"4\xc3\x97"}};
+                             {1.f,"1\xc3\x97"},{2.f,"2\xc3\x97"},{4.f,"4\xc3\x97"},
+                             {6.f,"6\xc3\x97"},{10.f,"10\xc3\x97"}};
             for (auto& p : spresets) {
                 if (ui_btn(p.l, fabsf(clip.speed - p.f) < 0.01f, true)) {
                     float prev = clip.speed;
@@ -1704,14 +1715,15 @@ void panel_clip(AppState& state, float w) {
         ImGui::Dummy({0.f, 6.f});
         {
             float old_spd = clip.speed;
-            plain_slider("##aud_spd", "Speed", &clip.speed, 0.25f, 4.f, "%.2f\xc3\x97");
+            plain_slider("##aud_spd", "Speed", &clip.speed, 0.25f, 10.f, "%.2f\xc3\x97");
             if (fabsf(clip.speed - old_spd) > 1e-5f)
                 rescale_glass_bricks(state, state.selected_track, state.selected_clip,
                                      clip.speed / old_spd);
             ImGui::Dummy({0.f, 6.f});
             struct SP { float f; const char* l; };
             SP spresets[] = {{0.25f,"\xc2\xbc\xc3\x97"},{0.5f,"\xc2\xbd\xc3\x97"},
-                             {1.f,"1\xc3\x97"},{2.f,"2\xc3\x97"},{4.f,"4\xc3\x97"}};
+                             {1.f,"1\xc3\x97"},{2.f,"2\xc3\x97"},{4.f,"4\xc3\x97"},
+                             {6.f,"6\xc3\x97"},{10.f,"10\xc3\x97"}};
             for (auto& p : spresets) {
                 if (ui_btn(p.l, fabsf(clip.speed - p.f) < 0.01f, true)) {
                     float prev = clip.speed;

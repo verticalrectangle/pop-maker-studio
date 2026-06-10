@@ -1023,7 +1023,22 @@ static uintptr_t upload_ring_gl(PreviewState& pv, DecodedFrame& f) {
 static uintptr_t decode_proxy_frame(PreviewState& pv, int frame_idx) {
     DecodedFrame& f = ring_alloc(pv);
     prepare_proxy_frame_cpu(pv, f, frame_idx);
-    if (f.frame_idx != frame_idx) return pv.tex ? (uintptr_t)pv.tex : 0;
+    if (f.frame_idx != frame_idx) {
+        // Decode failed — DO NOT fall back to pv.tex, that gives the caller the
+        // previously-decoded frame which is almost certainly the wrong source
+        // moment (and the user sees it as "the preview won't update past this
+        // old image"). Invalidate the cached upload so the next call can't keep
+        // serving the same stale frame either. Caller will see 0 and render
+        // blank — much better than rendering content that doesn't match the
+        // current clip configuration.
+        pv.last_frame_idx = -1;
+        static int s_warn_count = 0;
+        if (s_warn_count++ < 8)
+            fprintf(stderr, "[video] proxy decode failed at frame_idx=%d "
+                    "(stale-tex fallback disabled; preview will go blank)\n",
+                    frame_idx);
+        return 0;
+    }
     return upload_ring_gl(pv, f);
 }
 
@@ -1219,7 +1234,18 @@ static void prepare_native_frame_cpu(PreviewState& pv, DecodedFrame& f, int fram
 static uintptr_t decode_native_frame(PreviewState& pv, int frame_idx) {
     DecodedFrame& f = ring_alloc(pv);
     prepare_native_frame_cpu(pv, f, frame_idx);
-    if (f.frame_idx != frame_idx) return pv.tex ? (uintptr_t)pv.tex : 0;
+    if (f.frame_idx != frame_idx) {
+        // Same fix as decode_proxy_frame — don't serve a stale tex on failure,
+        // which masks the actual problem and shows the user content from a
+        // different source moment than the current clip points to.
+        pv.last_frame_idx = -1;
+        static int s_warn_count = 0;
+        if (s_warn_count++ < 8)
+            fprintf(stderr, "[video] native decode failed at frame_idx=%d "
+                    "(stale-tex fallback disabled; preview will go blank)\n",
+                    frame_idx);
+        return 0;
+    }
     return upload_ring_gl(pv, f);
 }
 
@@ -1264,6 +1290,24 @@ void video_open_still(int track_id, const std::string& jpeg_path) {
     std::vector<uint8_t> buf((size_t)sz);
     fread(buf.data(), 1, (size_t)sz, f);
     fclose(f);
+
+    // PNG magic — decode via stb_image so the alpha channel survives. The
+    // JPEG path below would otherwise flatten alpha to opaque black.
+    bool is_png = sz >= 8 &&
+                  buf[0] == 0x89 && buf[1] == 'P' && buf[2] == 'N' && buf[3] == 'G';
+    if (is_png) {
+        int w = 0, h = 0, ch = 0;
+        uint8_t* px = stbi_load_from_memory(buf.data(), (int)sz, &w, &h, &ch, 4);
+        if (!px) return;
+        upload_pixels_gl(&g_pv[track_id].tex, &g_pv[track_id].tex_w, &g_pv[track_id].tex_h,
+                        &g_pv[track_id].tex_rgba, px, w, h, true);
+        stbi_image_free(px);
+        g_pv[track_id].is_open     = true;
+        g_pv[track_id].source      = PreviewSource::Still;
+        g_pv[track_id].info.width  = g_pv[track_id].tex_w;
+        g_pv[track_id].info.height = g_pv[track_id].tex_h;
+        return;
+    }
 
     upload_jpeg(&g_pv[track_id].tex, &g_pv[track_id].tex_w, &g_pv[track_id].tex_h,
                 &g_pv[track_id].tex_rgba, buf.data(), (size_t)sz);
@@ -1823,6 +1867,16 @@ static struct ExportState {
     // Set to -1 when a seek is needed (first call, new file, backward jump, etc.).
     double           last_decoded_pts = -1.0;
     std::string      cur_path;   // path currently open in this slot (self-tracking)
+    // ── Last-frame cache ──────────────────────────────────────────────────────
+    // When multiple output frames map to the same source frame (slow-mo, stills,
+    // 0.25× speed → 4 outputs per source frame) the second+ request is served
+    // from this cached RGBA buffer instead of re-decoding. A clone is returned
+    // each time so the existing "caller frees" contract is preserved; the clone
+    // memcpy is ~2 ms at 1080p versus ~10–30 ms for a real decode.
+    uint8_t*         cache_data       = nullptr;
+    int              cache_w          = 0;
+    int              cache_h          = 0;
+    double           cache_pts        = -1.0;
 } g_ex[MAX_VIDEO_TRACKS * 2];
 
 bool video_open_export(int slot, const std::string& path) {
@@ -1850,6 +1904,14 @@ bool video_open_export(int slot, const std::string& path) {
     const AVCodec* codec = avcodec_find_decoder(st->codecpar->codec_id);
     ex.codec_ctx = avcodec_alloc_context3(codec);
     avcodec_parameters_to_context(ex.codec_ctx, st->codecpar);
+    // Multi-threaded decode. Default is 1 thread, which becomes the export
+    // bottleneck the moment a clip has speed > 1 (we then decode N source
+    // frames per output frame, single-threaded). thread_count=0 tells
+    // libavcodec to pick a sensible value based on CPU cores. FF_THREAD_FRAME
+    // scales best for sequential decode — it parallelises across consecutive
+    // frames, which is exactly the access pattern in our export loop.
+    ex.codec_ctx->thread_count = 0;
+    ex.codec_ctx->thread_type  = FF_THREAD_FRAME | FF_THREAD_SLICE;
     avcodec_open2(ex.codec_ctx, codec, nullptr);
 
     ex.info.width    = ex.codec_ctx->width;
@@ -1895,6 +1957,9 @@ void video_close_export(int slot) {
     if (ex.sws)       { sws_freeContext(ex.sws);       ex.sws       = nullptr; }
     if (ex.codec_ctx) { avcodec_free_context(&ex.codec_ctx); }
     if (ex.fmt_ctx)   { avformat_close_input(&ex.fmt_ctx); }
+    if (ex.cache_data){ av_free(ex.cache_data); ex.cache_data = nullptr; }
+    ex.cache_w = ex.cache_h = 0;
+    ex.cache_pts        = -1.0;
     ex.stream_idx       = -1;
     ex.info             = {};
     ex.last_decoded_pts = -1.0;
@@ -1951,6 +2016,20 @@ VideoFrame* video_decode_frame_at(int slot, double seconds) {
 
     AVStream* st = ex.fmt_ctx->streams[ex.stream_idx];
     double frame_dur = (ex.info.fps > 0.0) ? (1.0 / ex.info.fps) : (1.0 / 30.0);
+
+    // Cache hit: same source frame as last call (slow-mo, stills, hold frames).
+    if (ex.cache_data && ex.cache_pts >= 0.0 &&
+        fabs(seconds - ex.cache_pts) < frame_dur * 0.5) {
+        size_t bytes = (size_t)ex.cache_w * ex.cache_h * 4;
+        VideoFrame* hit = new VideoFrame();
+        hit->width  = ex.cache_w;
+        hit->height = ex.cache_h;
+        hit->pts    = ex.cache_pts;
+        hit->data   = (uint8_t*)av_malloc(bytes);
+        if (!hit->data) { delete hit; return nullptr; }
+        memcpy(hit->data, ex.cache_data, bytes);
+        return hit;
+    }
 
     // Sequential decode optimisation: avoid seeking on every frame during export.
     // A seek + avcodec_flush_buffers forces the decoder to restart from a keyframe
@@ -2010,6 +2089,16 @@ VideoFrame* video_decode_frame_at(int slot, double seconds) {
 
     if (result) {
         ex.last_decoded_pts = result->pts;
+        // Refresh cache with this decoded frame so subsequent same-frame requests hit.
+        size_t bytes = (size_t)result->width * result->height * 4;
+        if (ex.cache_w != result->width || ex.cache_h != result->height) {
+            if (ex.cache_data) { av_free(ex.cache_data); ex.cache_data = nullptr; }
+            ex.cache_data = (uint8_t*)av_malloc(bytes);
+            ex.cache_w = result->width;
+            ex.cache_h = result->height;
+        }
+        if (ex.cache_data) memcpy(ex.cache_data, result->data, bytes);
+        ex.cache_pts = result->pts;
     } else if (ex.last_decoded_pts >= 0.0) {
         // EOF or decode failure — hold the last successfully decoded frame rather
         // than returning null (which would produce a blank/black flash).

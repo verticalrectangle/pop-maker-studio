@@ -1,4 +1,5 @@
 #include "app.h"
+#include "history.h"
 #include "paths.h"
 #include "audio.h"
 #include "video.h"
@@ -380,6 +381,9 @@ void app_init(AppState& state) {
     std::string effects_dir = g_managed_dir + "/effects";
     runtime_fx_init(effects_dir);
     ipc_server_start();
+    // Baseline snapshot: history_undo() can't step back past entry 0, so
+    // without this the first edit of a session is never undoable.
+    history_push(state, "Session start");
 }
 
 void app_frame(AppState& state) {

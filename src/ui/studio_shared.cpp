@@ -40,9 +40,97 @@ std::string fmt_time_short(float s) {
     return buf;
 }
 
+// ── Multi-selection ops ───────────────────────────────────────────────────────
+bool delete_selected_clips(AppState& state) {
+    if (state.clip_selection.size() <= 1) {
+        if (state.selected_track < 0 || state.selected_clip < 0) return false;
+        if (state.selected_track >= (int)state.tracks.size()) return false;
+        Track& tr = state.tracks[state.selected_track];
+        if (state.selected_clip >= (int)tr.clips.size()) return false;
+        tr.clips.erase(tr.clips.begin() + state.selected_clip);
+        state.selected_clip = -1;
+        state.clip_selection.clear();
+        return true;
+    }
+    // Group by track; delete descending so erase() doesn't shift indices
+    // out from under us within a track.
+    std::vector<std::vector<int>> by_track(state.tracks.size());
+    for (auto& [ti, ci] : state.clip_selection)
+        if (ti >= 0 && ti < (int)state.tracks.size()) by_track[ti].push_back(ci);
+    for (int ti = 0; ti < (int)by_track.size(); ++ti) {
+        auto& cis = by_track[ti];
+        std::sort(cis.begin(), cis.end(), std::greater<int>());
+        for (int ci : cis)
+            if (ci >= 0 && ci < (int)state.tracks[ti].clips.size())
+                state.tracks[ti].clips.erase(state.tracks[ti].clips.begin() + ci);
+    }
+    state.clip_selection.clear();
+    state.selected_clip = -1;
+    return true;
+}
+
+bool duplicate_selected_clips(AppState& state) {
+    auto valid = [&](int ti, int ci) {
+        return ti >= 0 && ti < (int)state.tracks.size() &&
+               ci >= 0 && ci < (int)state.tracks[ti].clips.size();
+    };
+    if (state.clip_selection.size() <= 1) {
+        if (!valid(state.selected_track, state.selected_clip)) return false;
+        Track& tr = state.tracks[state.selected_track];
+        Clip dup = tr.clips[state.selected_clip];
+        float len = dup.end - dup.start;
+        dup.start = dup.end;
+        dup.end   = dup.start + len;
+        tr.clips.insert(tr.clips.begin() + state.selected_clip + 1, dup);
+        state.selected_clip = state.selected_clip + 1;
+        state.clip_selection.clear();
+        state.clip_selection.insert({state.selected_track, state.selected_clip});
+        return true;
+    }
+    float gmin =  1e30f, gmax = -1e30f;
+    for (auto& [ti, ci] : state.clip_selection) {
+        if (!valid(ti, ci)) continue;
+        const Clip& c = state.tracks[ti].clips[ci];
+        gmin = fminf(gmin, c.start);
+        gmax = fmaxf(gmax, c.end);
+    }
+    if (!(gmax > gmin)) return false;
+    float shift = gmax - gmin;
+    // Snapshot per-track originals first; append copies after so we don't
+    // duplicate clips we just inserted.
+    std::vector<std::vector<Clip>> dups(state.tracks.size());
+    for (auto& [ti, ci] : state.clip_selection) {
+        if (!valid(ti, ci)) continue;
+        Clip d = state.tracks[ti].clips[ci];
+        d.start += shift;
+        d.end   += shift;
+        dups[ti].push_back(std::move(d));
+    }
+    state.clip_selection.clear();
+    int new_primary_ti = -1, new_primary_ci = -1;
+    for (int ti = 0; ti < (int)dups.size(); ++ti) {
+        for (auto& d : dups[ti]) {
+            state.tracks[ti].clips.push_back(std::move(d));
+            int nci = (int)state.tracks[ti].clips.size() - 1;
+            state.clip_selection.insert({ti, nci});
+            if (new_primary_ti < 0) { new_primary_ti = ti; new_primary_ci = nci; }
+        }
+    }
+    if (new_primary_ti >= 0) {
+        state.selected_track = new_primary_ti;
+        state.selected_clip  = new_primary_ci;
+    }
+    return true;
+}
+
 // ── Playback helpers ──────────────────────────────────────────────────────────
 void seek_to(AppState& state, float t) {
-    t = roundf(t * 30.f) / 30.f;
+    // Quantize to the video's actual frame grid (falls back to 30 fps). A
+    // hard-coded 30 fps grid eats sub-frame steps for >30 fps content, which
+    // made back-arrow stick at high zoom on 60 fps footage.
+    float qfps = tl_fps(state);
+    if (!(qfps > 0.f)) qfps = 30.f;
+    t = roundf(t * qfps) / qfps;
     state.playhead = t;
     audio_seek(t);
     if (state.playing) {
