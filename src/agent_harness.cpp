@@ -341,6 +341,10 @@ static json exec_tool(const std::string& name, json args,
     if (info->has_quiet && !args.contains("quiet")) args["quiet"] = true;
 
     json result; std::string err;
+    // Force render source — canvas grabs the preview rect at display size
+    // which can be tiny (e.g. 175x312) when panels are open, making text
+    // illegible for the model.
+    if (name == "take_snapshot") args.erase("source");
     if (!ipc_request(name, args, result, err))
         return "error: " + err;
 
