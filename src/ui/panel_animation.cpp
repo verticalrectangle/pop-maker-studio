@@ -612,7 +612,7 @@ void panel_typography(AppState& state, float w) {
 // default can use, plus a "Project Style" card that inherits it.
 
 static const TextStyleCard TEXT_STYLES[] = {
-    {AnimStyle::None,       "Project Style", "Follows the project-wide animation style", "default"},
+    {AnimStyle::None,       "Plain",      "Static — no animation", "plain"},
     {AnimStyle::Fade,       "Fade",       "Opacity in/out — clean and invisible", "soft"},
     {AnimStyle::Glitch,     "Glitch",     "Digital artefact noise — corrupt feel", "glitch"},
     {AnimStyle::Typewriter, "Typewriter", "Character-by-character reveal", "retro"},
