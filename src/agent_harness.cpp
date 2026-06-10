@@ -53,7 +53,11 @@ static std::atomic<pid_t>    s_curl_pid{0};
 static std::thread           s_worker;
 
 static const char* kSockPath   = "/tmp/pop-maker-studio.sock";
-static const int   kMaxToolIters = 24;
+// Per-turn cap on model round-trips (each can carry several tool calls).
+// Runaway-loop protection, not a work limit — real editing tasks routinely
+// need dozens of rounds, and the wire survives exhaustion so 'continue'
+// resumes where the turn stopped.
+static const int   kMaxToolIters = 64;
 static const size_t kToolResultCap = 8 * 1024;
 
 // ── Display rows ──────────────────────────────────────────────────────────────
@@ -878,7 +882,9 @@ static void worker_turn() {
                                   {"content", "(cancelled by user before execution)"}});
         }
         if (iter == kMaxToolIters - 1)
-            row_add(AgentRole::Error, "tool budget exhausted for this turn");
+            row_add(AgentRole::Error,
+                    "tool budget exhausted for this turn \xe2\x80\x94 send "
+                    "'continue' to resume where it left off");
     }
 
     if (s_stop) row_add(AgentRole::Info, "(stopped)");
