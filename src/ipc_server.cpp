@@ -1,6 +1,7 @@
 #include "ipc_server.h"
 #include "agent_harness.h"
 #include "render.h"
+#include "bg_presets.h"
 #include "bg_remove.h"
 #include "history.h"
 #include "runtime_fx.h"
@@ -500,6 +501,32 @@ static ClipType parse_clip_type(const std::string& s) {
     if (s == "background") return ClipType::Background;
     if (s == "body_fx")   return ClipType::BodyFX;
     return ClipType::Text;
+}
+
+// Background clips render nothing unless text is a valid preset id, so reject
+// bad ids at creation instead of acking an invisible clip. On success, copy
+// the preset's default speed/colors — same as the UI creation paths.
+static bool apply_bg_preset(Clip& cl, const std::string& text, std::string& err) {
+    if (cl.clip_type != ClipType::Background) return true;
+    const BgPreset* pr = bg_preset_by_id(text.c_str());
+    if (!pr) {
+        std::string ids;
+        for (int i = 0; i < g_n_bg_presets; ++i) {
+            if (i) ids += ", ";
+            ids += g_bg_presets[i].id;
+        }
+        err = (text.empty()
+                   ? std::string("background clips need text = a preset id")
+                   : "unknown background preset '" + text + "'") +
+              ". For a flat color use 'solid', then set_clip_prop "
+              "bg_c1=[r,g,b,a]. Valid ids: " + ids;
+        return false;
+    }
+    cl.bg_speed = pr->default_speed;
+    memcpy(cl.bg_c1, pr->dc1, sizeof cl.bg_c1);
+    memcpy(cl.bg_c2, pr->dc2, sizeof cl.bg_c2);
+    memcpy(cl.bg_c3, pr->dc3, sizeof cl.bg_c3);
+    return true;
 }
 
 // ── Bounds checking helpers ───────────────────────────────────────────────────
@@ -1442,6 +1469,7 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         cl.start = start;
         cl.end   = end;
         cl.text  = text;
+        if (!apply_bg_preset(cl, text, err)) return {};
         if (cl.clip_type == ClipType::Video || cl.clip_type == ClipType::Audio) {
             cl.source_id = text;
             // Mirror into the bin so any media that ends up on the timeline is
@@ -1567,6 +1595,7 @@ static json dispatch(AppState& state, const std::string& method, const json& par
             Clip cl;
             cl.clip_type = parse_clip_type(type_s);
             cl.start = start; cl.end = end; cl.text = text;
+            if (!apply_bg_preset(cl, text, err)) return {};
             if (cl.clip_type == ClipType::Video || cl.clip_type == ClipType::Audio)
                 cl.source_id = text;
             state.tracks[ti].clips.push_back(cl);
@@ -1652,6 +1681,14 @@ static json dispatch(AppState& state, const std::string& method, const json& par
             else if (prop == "grade_contrast")   { cl.grade_contrast   = jval_float(val); }
             else if (prop == "grade_saturation") { cl.grade_saturation = jval_float(val); }
             else if (prop == "grade_hue")        { cl.grade_hue        = jval_float(val); }
+            else if (prop == "bg_speed")     { cl.bg_speed     = jval_float(val); }
+            else if (prop == "bg_intensity") { cl.bg_intensity = jval_float(val); }
+            else if (prop == "bg_c1" || prop == "bg_c2" || prop == "bg_c3") {
+                if (!val.is_array() || val.size() != 4) { err = prop + " must be [r,g,b,a]"; return {}; }
+                float* dst = prop == "bg_c1" ? cl.bg_c1
+                           : prop == "bg_c2" ? cl.bg_c2 : cl.bg_c3;
+                for (int i = 0; i < 4; ++i) dst[i] = jval_float(val[i]);
+            }
             else { err = "unknown prop: " + prop; return {}; }
         }
         return json::object();
@@ -1771,6 +1808,15 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         else if (prop == "grade_contrast")   { cl.grade_contrast   = jval_float(val); }
         else if (prop == "grade_saturation") { cl.grade_saturation = jval_float(val); }
         else if (prop == "grade_hue")        { cl.grade_hue        = jval_float(val); }
+        // ── Background props (ClipType::Background) ──────────────────────────
+        else if (prop == "bg_speed")     { cl.bg_speed     = jval_float(val); }
+        else if (prop == "bg_intensity") { cl.bg_intensity = jval_float(val); }
+        else if (prop == "bg_c1" || prop == "bg_c2" || prop == "bg_c3") {
+            if (!val.is_array() || val.size() != 4) { err = prop + " must be [r,g,b,a]"; return {}; }
+            float* dst = prop == "bg_c1" ? cl.bg_c1
+                       : prop == "bg_c2" ? cl.bg_c2 : cl.bg_c3;
+            for (int i = 0; i < 4; ++i) dst[i] = jval_float(val[i]);
+        }
         else { err = "unknown prop: " + prop; return {}; }
         return json::object();
     }
