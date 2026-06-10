@@ -14,6 +14,7 @@
 #include "filepicker.h"
 #include "waveform.h"
 #include "bg_presets.h"
+#include "text_styles.h"
 #include "theme.h"
 #include "body_fx.h"
 #include "bg_remove.h"
@@ -565,6 +566,16 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                         s_drop_flash_t     = 0.6f;
                         history_push(state, std::string("Drop Background: ") + pr->label);
                     }
+                }
+                if (const ImGuiPayload* pay = ImGui::AcceptDragDropPayload("TEXT_STYLE")) {
+                    AnimStyle st = (AnimStyle)*(const int*)pay->Data;
+                    float drop_t = fmaxf(0.f, (ImGui::GetMousePos().x - (origin.x + TL_LABEL_W) + scroll) / zoom);
+                    state.tracks[ti].clips.push_back(make_text_brick(st, drop_t));
+                    state.selected_track = ti;
+                    state.selected_clip  = (int)state.tracks[ti].clips.size() - 1;
+                    s_drop_flash_track = ti;
+                    s_drop_flash_t     = 0.6f;
+                    history_push(state, std::string("Drop text brick: ") + text_style_name(st));
                 }
                 if (const ImGuiPayload* pay = ImGui::AcceptDragDropPayload("FX_CREATIVE")) {
                     FXType ft = (FXType)*(const int*)pay->Data;
@@ -2451,6 +2462,11 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                         // not position-sensitive like FX bricks — reuse-empty.
                         make_new_track(std::move(cl), (std::string("Drop Background: ") + pr->label).c_str(), true);
                     }
+                }
+                if (const ImGuiPayload* pay = ImGui::AcceptDragDropPayload("TEXT_STYLE")) {
+                    AnimStyle st = (AnimStyle)*(const int*)pay->Data;
+                    make_new_track(make_text_brick(st, drop_t),
+                                   (std::string("Drop text brick: ") + text_style_name(st)).c_str(), true);
                 }
                 if (const ImGuiPayload* pay = ImGui::AcceptDragDropPayload("FX_CREATIVE")) {
                     FXType ft = (FXType)*(const int*)pay->Data;
