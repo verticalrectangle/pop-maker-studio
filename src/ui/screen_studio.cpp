@@ -698,9 +698,15 @@ void ui_studio(AppState& state) {
                 if (was_open) ImGui::PopStyleColor(4);
             };
 
+            bool was_agent = state.agent_panel_open;
+            bool was_term  = state.terminal_open;
             accent_btn("Agent", state.agent_panel_open);
             ImGui::SameLine(0.f, 6.f);
             accent_btn("Terminal", state.terminal_open);
+            // The bottom strip is single-occupancy: opening one closes the
+            // other (a 50/50 split cramped both panels).
+            if (state.agent_panel_open && !was_agent) state.terminal_open    = false;
+            if (state.terminal_open    && !was_term)  state.agent_panel_open = false;
 
             ImGui::SameLine(0.f, 6.f);
             if (ImGui::Button("Project")) {
@@ -1603,10 +1609,10 @@ void ui_studio(AppState& state) {
     // wedged between them. Terminal and Agent share the strip 50/50 when both
     // are open; either alone takes the full width.
     if ((state.terminal_open || state.agent_panel_open) && term_h > 0.f) {
-        bool both = state.terminal_open && state.agent_panel_open;
-        float agent_w = state.agent_panel_open ? (both ? win_w * 0.5f : win_w) : 0.f;
-        float termw   = state.terminal_open    ? (win_w - agent_w)             : 0.f;
+        // Single occupancy: the toggle buttons enforce that at most one of
+        // the two panels is open, and each gets the full strip width.
         if (state.agent_panel_open) {
+            float agent_w = win_w;
             // Tall enough for the input row + padding — content must never
             // exceed this, since the zone deliberately can't scroll.
             float inp_h = 42.f;
@@ -1629,13 +1635,11 @@ void ui_studio(AppState& state) {
             }
             ImGui::EndChild();
             ImGui::PopStyleColor(2);
-            if (both) ImGui::SameLine(0.f, 0.f);
-        }
-        if (state.terminal_open) {
+        } else {
             ImGui::PushStyleColor(ImGuiCol_ChildBg, IM_COL32(0x1a, 0x1b, 0x26, 255));
             ImGui::PushStyleColor(ImGuiCol_Border,  Col::line);
-            if (ImGui::BeginChild("##term_zone", {termw, term_h}, ImGuiChildFlags_Borders)) {
-                draw_terminal_panel(state, termw - 2.f, term_h - 2.f);
+            if (ImGui::BeginChild("##term_zone", {win_w, term_h}, ImGuiChildFlags_Borders)) {
+                draw_terminal_panel(state, win_w - 2.f, term_h - 2.f);
             }
             ImGui::EndChild();
             ImGui::PopStyleColor(2);

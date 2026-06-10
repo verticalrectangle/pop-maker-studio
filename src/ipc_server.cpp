@@ -1262,6 +1262,7 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         if (text.empty()) { err = "text required"; return {}; }
         if (agent_running()) { err = "agent is already running a turn"; return {}; }
         state.agent_panel_open = true;
+        state.terminal_open    = false;  // bottom strip is single-occupancy
         agent_send(text);
         return json::object();
     }
