@@ -35,6 +35,11 @@ bool delete_selected_clips(AppState& state);
 bool duplicate_selected_clips(AppState& state);
 
 // ── Clip / slot helpers ───────────────────────────────────────────────────────
+// First track that's safe to reuse for a newly added media clip: no clips,
+// visible, not locked, not managed (managed = lyric/typography tracks — those
+// keep their reserved spot even when empty). Returns -1 when none exists and
+// the caller should create a fresh track.
+int find_empty_track(const AppState& state);
 std::string clip_slot_key(const std::string& src, float start);
 std::string source_from_key(const std::string& key);
 void add_clip_to_track(AppState& state, int track_idx, const std::string& path, ClipType ct);

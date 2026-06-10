@@ -261,16 +261,22 @@ void panel_media_browser(AppState& state, float w, bool is_video) {
                 : filepicker_open("Open image", "Image", "*.jpg *.jpeg *.png *.bmp *.webp *.heic *.heif *.gif");
             if (!picked.empty()) {
                 recent_media_push(picked, is_video ? MediaKind::Video : MediaKind::Image);
-                // Insert new track + clip at playhead
+                // Clip at playhead — reuse an empty track if one exists,
+                // otherwise insert a new track at the top.
                 float dur = is_video ? video_probe_duration(picked) : 0.f;
                 if (dur <= 0.f) dur = is_video ? 4.f : 5.f;
-                Track nt; nt.name = fs::path(picked).stem().string();
                 Clip cl; cl.clip_type = ClipType::Video; cl.text = picked;
                 cl.source_id = picked; cl.start = state.playhead; cl.end = cl.start + dur;
                 s_source_durations[picked] = dur;
-                nt.clips.push_back(cl);
-                state.tracks.insert(state.tracks.begin(), std::move(nt));
-                state.selected_track = 0; state.selected_clip = 0;
+                int target = find_empty_track(state);
+                if (target < 0) {
+                    Track nt; nt.name = fs::path(picked).stem().string();
+                    state.tracks.insert(state.tracks.begin(), std::move(nt));
+                    target = 0;
+                }
+                state.tracks[target].clips.push_back(cl);
+                state.selected_track = target;
+                state.selected_clip  = (int)state.tracks[target].clips.size() - 1;
                 proxy_start(picked);
                 int slot = slot_for_video(state, clip_slot_key(picked, cl.start), picked);
                 if (slot >= 0) video_open_still(slot, proxy_still_path(picked));
@@ -379,17 +385,22 @@ void panel_media_browser(AppState& state, float w, bool is_video) {
                     hov ? IM_COL32(255,255,255,160) : IM_COL32(48,48,68,180),
                     6.f, 0, hov ? 1.5f : 1.f);
 
-        // Click → add new track + clip
+        // Click → add clip on an empty track (new track at top only if none)
         if (ImGui::IsItemClicked()) {
             float dur = is_video ? video_probe_duration(path) : 0.f;
             if (dur <= 0.f) dur = is_video ? 4.f : 5.f;
-            Track nt; nt.name = fp.stem().string();
             Clip cl; cl.clip_type = ClipType::Video; cl.text = path;
             cl.source_id = path; cl.start = state.playhead; cl.end = cl.start + dur;
             s_source_durations[path] = dur;
-            nt.clips.push_back(cl);
-            state.tracks.insert(state.tracks.begin(), std::move(nt));
-            state.selected_track = 0; state.selected_clip = 0;
+            int target = find_empty_track(state);
+            if (target < 0) {
+                Track nt; nt.name = fp.stem().string();
+                state.tracks.insert(state.tracks.begin(), std::move(nt));
+                target = 0;
+            }
+            state.tracks[target].clips.push_back(cl);
+            state.selected_track = target;
+            state.selected_clip  = (int)state.tracks[target].clips.size() - 1;
             proxy_start(path);
             int slot = slot_for_video(state, clip_slot_key(path, cl.start), path);
             if (slot >= 0) video_open_still(slot, proxy_still_path(path));
@@ -584,7 +595,7 @@ void panel_bin(AppState& state, float w) {
             int target;
             if (s_tl_hover_track >= 0 && s_tl_hover_track < (int)state.tracks.size()) {
                 target = s_tl_hover_track;
-            } else {
+            } else if ((target = find_empty_track(state)) < 0) {
                 Track nt; nt.name = fp.stem().string();
                 state.tracks.insert(state.tracks.begin(), std::move(nt));
                 target = 0;
@@ -639,13 +650,18 @@ void panel_audio_browser(AppState& state, float w) {
                 AudioMeta meta{};
                 float dur = audio_probe(picked, meta) ? meta.duration_secs : 4.f;
                 if (dur <= 0.f) dur = 4.f;
-                Track nt; nt.name = fs::path(picked).stem().string();
                 Clip cl; cl.clip_type = ClipType::Audio; cl.text = picked;
                 cl.source_id = picked; cl.start = state.playhead; cl.end = cl.start + dur;
                 s_source_durations[picked] = dur;
-                nt.clips.push_back(cl);
-                state.tracks.insert(state.tracks.begin(), std::move(nt));
-                state.selected_track = 0; state.selected_clip = 0;
+                int target = find_empty_track(state);
+                if (target < 0) {
+                    Track nt; nt.name = fs::path(picked).stem().string();
+                    state.tracks.insert(state.tracks.begin(), std::move(nt));
+                    target = 0;
+                }
+                state.tracks[target].clips.push_back(cl);
+                state.selected_track = target;
+                state.selected_clip  = (int)state.tracks[target].clips.size() - 1;
                 audio_source_ensure(picked);
                 s_panel_view = PanelView::Clip;
                 history_push(state, "Import audio: " + fs::path(picked).filename().string());
@@ -748,13 +764,18 @@ void panel_audio_browser(AppState& state, float w) {
             AudioMeta meta{};
             float dur = audio_probe(path, meta) ? meta.duration_secs : 4.f;
             if (dur <= 0.f) dur = 4.f;
-            Track nt; nt.name = fp.stem().string();
             Clip cl; cl.clip_type = ClipType::Audio; cl.text = path;
             cl.source_id = path; cl.start = state.playhead; cl.end = cl.start + dur;
             s_source_durations[path] = dur;
-            nt.clips.push_back(cl);
-            state.tracks.insert(state.tracks.begin(), std::move(nt));
-            state.selected_track = 0; state.selected_clip = 0;
+            int target = find_empty_track(state);
+            if (target < 0) {
+                Track nt; nt.name = fp.stem().string();
+                state.tracks.insert(state.tracks.begin(), std::move(nt));
+                target = 0;
+            }
+            state.tracks[target].clips.push_back(cl);
+            state.selected_track = target;
+            state.selected_clip  = (int)state.tracks[target].clips.size() - 1;
             audio_source_ensure(path);
             recent_media_push(path, MediaKind::Audio);
             s_panel_view = PanelView::Clip;

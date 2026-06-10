@@ -28,6 +28,7 @@
 #include "project.h"
 #include <imgui.h>
 #include <imgui_internal.h>
+#include <set>
 #include <filesystem>
 #include <algorithm>
 #include <cmath>
@@ -205,25 +206,30 @@ void ui_studio(AppState& state) {
                 history_push(state, "Import SRT \"" + fp.filename().string() + "\"");
             }
         } else if (is_image_path(dp)) {
-            // Dropped image: new track + 5-second clip at playhead, same as Browse
+            // Dropped image: 5-second clip at playhead on an empty track
+            // (new track at top only when none is free), same as Browse
             recent_media_push(dp, MediaKind::Image);
             bin_add(state, dp);
-            Track nt; nt.name = fp.stem().string();
             Clip cl;
             cl.clip_type = ClipType::Video;
             cl.text      = dp;
             cl.source_id = dp;
             cl.start     = state.playhead;
             cl.end       = cl.start + 5.f;
-            nt.clips.push_back(cl);
-            state.tracks.insert(state.tracks.begin(), std::move(nt));
-            state.selected_track = 0;
-            state.selected_clip  = 0;
+            int target = find_empty_track(state);
+            if (target < 0) {
+                Track nt; nt.name = fp.stem().string();
+                state.tracks.insert(state.tracks.begin(), std::move(nt));
+                target = 0;
+            }
+            state.tracks[target].clips.push_back(cl);
+            state.selected_track = target;
+            state.selected_clip  = (int)state.tracks[target].clips.size() - 1;
             proxy_start(dp);
             int slot = slot_for_video(state, clip_slot_key(dp, cl.start), dp);
             if (slot >= 0) video_open_still(slot, proxy_still_path(dp));
             state.video_loaded = true;
-            s_drop_flash_track = 0;
+            s_drop_flash_track = target;
             s_drop_flash_t     = 0.6f;
             history_push(state, "Import image: " + fp.filename().string());
         } else if (is_audio_file(dp)) {
@@ -262,7 +268,29 @@ void ui_studio(AppState& state) {
         if (video_source(slot) == PreviewSource::Proxy) continue;  // terminal state
 
         std::string src = source_from_key(key);
-        if (is_image_path(src)) continue;  // stills only — proxy never generated
+        if (is_image_path(src)) {
+            // Images never get an MJPEG proxy — keep them out of the generic
+            // native/proxy logic below (per-frame libav opens). Their only
+            // upgrade is Closed → Still: the add-time video_open_still races
+            // the background proxy_ensure_still and loses for brand-new
+            // files, leaving the clip invisible in preview (export was fine —
+            // it reads the still from disk much later). Retry here until the
+            // still lands; fs::exists per frame is as cheap as proxy_is_ready.
+            if (!video_is_open(slot)) {
+                std::string still = proxy_still_path(src);
+                if (fs::exists(still)) {
+                    video_open_still(slot, still);
+                } else {
+                    // Still missing entirely (generation failed once, or the
+                    // file was deleted). proxy_start regenerates it for images
+                    // in a background thread, but has no in-flight dedup —
+                    // kick it once per source, not per frame.
+                    static std::set<std::string> s_still_kicked;
+                    if (s_still_kicked.insert(src).second) proxy_start(src);
+                }
+            }
+            continue;
+        }
         if (proxy_is_ready(src)) {
             ProxyInfo pi;
             if (!proxy_load(src, pi)) continue;

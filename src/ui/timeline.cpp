@@ -1995,14 +1995,21 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
             ImGui::InvisibleButton("##picker_new_track",
                                    {dz_br.x - dz_tl.x, dz_br.y - dz_tl.y});
             if (ImGui::BeginDragDropTarget()) {
-                auto make_new_track = [&](Clip&& cl, const char* act) {
-                    Track nt;
-                    nt.name = clip_type_name(cl.clip_type);
-                    nt.clips.push_back(std::move(cl));
-                    state.tracks.push_back(std::move(nt));
-                    state.selected_track = (int)state.tracks.size() - 1;
-                    state.selected_clip  = 0;
-                    s_drop_flash_track   = state.selected_track;
+                // reuse_empty: media/audio land on an existing empty track when
+                // one is free. Background/FX bricks always get a real new track
+                // — their vertical position decides what they affect.
+                auto make_new_track = [&](Clip&& cl, const char* act, bool reuse_empty) {
+                    int target = reuse_empty ? find_empty_track(state) : -1;
+                    if (target < 0) {
+                        Track nt;
+                        nt.name = clip_type_name(cl.clip_type);
+                        state.tracks.push_back(std::move(nt));
+                        target = (int)state.tracks.size() - 1;
+                    }
+                    state.tracks[target].clips.push_back(std::move(cl));
+                    state.selected_track = target;
+                    state.selected_clip  = (int)state.tracks[target].clips.size() - 1;
+                    s_drop_flash_track   = target;
                     s_drop_flash_t       = 0.6f;
                     history_push(state, act);
                 };
@@ -2017,14 +2024,14 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                         cl.start = drop_t; cl.end = drop_t + proj_dur;
                         cl.bg_speed = pr->default_speed; cl.bg_intensity = 0.85f;
                         memcpy(cl.bg_c1, pr->dc1, 16); memcpy(cl.bg_c2, pr->dc2, 16); memcpy(cl.bg_c3, pr->dc3, 16);
-                        make_new_track(std::move(cl), (std::string("Drop Background: ") + pr->label).c_str());
+                        make_new_track(std::move(cl), (std::string("Drop Background: ") + pr->label).c_str(), false);
                     }
                 }
                 if (const ImGuiPayload* pay = ImGui::AcceptDragDropPayload("FX_CREATIVE")) {
                     FXType ft = (FXType)*(const int*)pay->Data;
                     Clip cl; cl.clip_type = ClipType::Effect; cl.fx_type = ft;
                     cl.start = drop_t; cl.end = drop_t + 5.f;
-                    make_new_track(std::move(cl), (std::string("Drop FX: ") + fx_type_name(ft)).c_str());
+                    make_new_track(std::move(cl), (std::string("Drop FX: ") + fx_type_name(ft)).c_str(), false);
                 }
                 auto new_track_media = [&](const char* ptype) {
                     if (const ImGuiPayload* pay = ImGui::AcceptDragDropPayload(ptype)) {
@@ -2037,7 +2044,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                         s_source_durations[path] = dur;
                         std::string act = (img ? "Drop image: " : "Drop video: ") +
                                           fs::path(path).filename().string();
-                        make_new_track(std::move(cl), act.c_str());
+                        make_new_track(std::move(cl), act.c_str(), true);
                         proxy_start(path);
                         int slot = slot_for_video(state, clip_slot_key(path, drop_t), path);
                         if (slot >= 0) video_open_still(slot, proxy_still_path(path));
@@ -2055,7 +2062,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                     cl.source_id = path; cl.start = drop_t; cl.end = drop_t + dur;
                     s_source_durations[path] = dur;
                     std::string act = "Drop audio: " + fs::path(path).filename().string();
-                    make_new_track(std::move(cl), act.c_str());
+                    make_new_track(std::move(cl), act.c_str(), true);
                     audio_source_ensure(path);
                     recent_media_push(path, MediaKind::Audio);
                 }

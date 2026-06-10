@@ -690,11 +690,16 @@ void import_file(AppState& state, const std::string& path) {
         audio_init();              // ensure device is alive (no-op if already running)
         audio_source_ensure(path); // decode video audio into per-clip buffer
 
-        state.tracks.insert(state.tracks.begin(), Track{});
-        Track& vt = state.tracks.front();
-        char vname[32];
-        snprintf(vname, sizeof(vname), "Track %d", (int)state.tracks.size());
-        vt.name = vname;
+        // Reuse an empty track when one exists; new track at top otherwise.
+        int vti = find_empty_track(state);
+        if (vti < 0) {
+            state.tracks.insert(state.tracks.begin(), Track{});
+            vti = 0;
+            char vname[32];
+            snprintf(vname, sizeof(vname), "Track %d", (int)state.tracks.size());
+            state.tracks[vti].name = vname;
+        }
+        Track& vt = state.tracks[vti];
         Clip vc; vc.clip_type = ClipType::Video;
         vc.source_id = path;
         vc.start=0.f; vc.end=state.duration; vc.text=path;
@@ -747,11 +752,15 @@ void import_file(AppState& state, const std::string& path) {
             if (!t.clips.empty() && t.clips[0].clip_type == ClipType::Audio &&
                 t.clips[0].source_id == path) { at=&t; break; }
         if (!at) {
-            state.tracks.insert(state.tracks.begin(), Track{});
-            at = &state.tracks.front();
-            char aname[32];
-            snprintf(aname, sizeof(aname), "Track %d", (int)state.tracks.size());
-            at->name = aname;
+            int ati = find_empty_track(state);  // reuse before creating
+            if (ati < 0) {
+                state.tracks.insert(state.tracks.begin(), Track{});
+                ati = 0;
+                char aname[32];
+                snprintf(aname, sizeof(aname), "Track %d", (int)state.tracks.size());
+                state.tracks[ati].name = aname;
+            }
+            at = &state.tracks[ati];
         }
         at->clips.clear();
         Clip ac; ac.clip_type = ClipType::Audio;

@@ -720,15 +720,18 @@ void panel_background(AppState& state, float w, bool clip_only) {
         ImGui::PopStyleColor();
         ImGui::Dummy({0.f, 4.f});
 
-        ImGui::SetNextItemWidth(w);
-        ImGui::SliderFloat("##bg_speed", &bgclip->bg_speed, 0.1f, 4.f, "Speed %.1fx");
-        if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "BG speed");
-        ImGui::SetNextItemWidth(w);
-        {
-            float pct = bgclip->bg_intensity * 100.f;
-            if (ImGui::SliderFloat("##bg_int", &pct, 0.f, 100.f, "Intensity %.0f%%"))
-                bgclip->bg_intensity = pct / 100.f;
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "BG intensity");
+        // Solid fill has no animation — speed/intensity would be dead sliders.
+        if (bgclip->text != "solid") {
+            ImGui::SetNextItemWidth(w);
+            ImGui::SliderFloat("##bg_speed", &bgclip->bg_speed, 0.1f, 4.f, "Speed %.1fx");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "BG speed");
+            ImGui::SetNextItemWidth(w);
+            {
+                float pct = bgclip->bg_intensity * 100.f;
+                if (ImGui::SliderFloat("##bg_int", &pct, 0.f, 100.f, "Intensity %.0f%%"))
+                    bgclip->bg_intensity = pct / 100.f;
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "BG intensity");
+            }
         }
         ImGui::Dummy({0.f, 4.f});
 

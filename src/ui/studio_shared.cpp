@@ -40,6 +40,14 @@ std::string fmt_time_short(float s) {
     return buf;
 }
 
+int find_empty_track(const AppState& state) {
+    for (int ti = 0; ti < (int)state.tracks.size(); ++ti) {
+        const Track& t = state.tracks[ti];
+        if (t.clips.empty() && t.visible && !t.locked && !t.managed) return ti;
+    }
+    return -1;
+}
+
 // ── Multi-selection ops ───────────────────────────────────────────────────────
 bool delete_selected_clips(AppState& state) {
     if (state.clip_selection.size() <= 1) {
