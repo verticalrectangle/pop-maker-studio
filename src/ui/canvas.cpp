@@ -1210,7 +1210,7 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                     pc.transition_type != TransitionType::None &&
                     pc.transition_post > 0.f &&
                     state.playhead < active->start + pc.transition_post) {
-                    float at = std::fminf(state.playhead, pc.end - 1e-4f);
+                    float at = fminf(state.playhead, pc.end - 1e-4f);
                     add_clip(&pc, at, ti);
                 }
             }
@@ -1230,7 +1230,7 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
             if (t_to_start < BOUNDARY_WARM_S && active_ci > 0) {
                 const Clip& pc = track.clips[active_ci - 1];
                 if (pc.clip_type == ClipType::Video) {
-                    float prev_at = std::fmaxf(pc.start, pc.end - 1e-3f);
+                    float prev_at = fmaxf(pc.start, pc.end - 1e-3f);
                     add_clip(&pc, prev_at, ti, BOUNDARY_WARM_FRAMES);
                 }
             }
@@ -1420,7 +1420,7 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                     }
                 }
 
-                alpha = std::fmaxf(0.f, std::fminf(1.f, alpha));
+                alpha = fmaxf(0.f, fminf(1.f, alpha));
                 if (editing_crop)
                     // Crop-edit shows the full frame, unrotated — the crop is
                     // defined in source space, so the editing view is source
@@ -1485,8 +1485,8 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                     // t_a: 0→1 over [end-pre .. end], t_b: 0→1 over [end .. end+post]
                     float pre = active->transition_pre, post = active->transition_post;
                     float cut = active->end;
-                    float t_a = std::fmaxf(0.f, std::fminf(1.f, (state.playhead - (cut - pre)) / fmaxf(pre, 1e-5f)));
-                    float t_b = std::fmaxf(0.f, std::fminf(1.f, (state.playhead - cut) / fmaxf(post, 1e-5f)));
+                    float t_a = fmaxf(0.f, fminf(1.f, (state.playhead - (cut - pre)) / fmaxf(pre, 1e-5f)));
+                    float t_b = fmaxf(0.f, fminf(1.f, (state.playhead - cut) / fmaxf(post, 1e-5f)));
 
                     if (active->transition_type == TransitionType::Dissolve) {
                         draw_vid_clip(active,  state.playhead, 1.f - t_a);
@@ -1502,10 +1502,10 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                         draw_vid_clip(next_cl, state.playhead, t_b);
                     }
                 } else if (in_trans_in && prev_cl) {
-                    float t = std::fmaxf(0.f, std::fminf(1.f,
+                    float t = fmaxf(0.f, fminf(1.f,
                         (state.playhead - active->start) / fmaxf(prev_cl->transition_post, 1e-5f)));
                     if (prev_cl->transition_type == TransitionType::Dissolve) {
-                        draw_vid_clip(prev_cl, std::fminf(state.playhead, prev_cl->end - 1e-4f), 1.f - t);
+                        draw_vid_clip(prev_cl, fminf(state.playhead, prev_cl->end - 1e-4f), 1.f - t);
                         draw_vid_clip(active,  state.playhead, t);
                     } else if (prev_cl->transition_type == TransitionType::FadeBlack) {
                         draw_vid_clip(active, state.playhead, t);

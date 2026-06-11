@@ -47,7 +47,7 @@ static bool write_wav16(const std::string& path, const float* smp, size_t n) {
     put("data", 4); put(&data_bytes, 4);
     std::vector<int16_t> pcm(n);
     for (size_t i = 0; i < n; ++i) {
-        float v = std::fmaxf(-1.f, std::fminf(1.f, smp[i]));
+        float v = fmaxf(-1.f, fminf(1.f, smp[i]));
         pcm[i] = (int16_t)lrintf(v * 32767.f);
     }
     put(pcm.data(), n * 2);
@@ -131,7 +131,7 @@ bool recorder_live_peaks(int n, float* out) {
     for (size_t i = 0; i < avail; i += stride) {
         int b = (int)(((unsigned long long)i * (unsigned long long)n) / s_take_len);
         if (b < 0 || b >= n) break;
-        out[b] = std::fmaxf(out[b], std::fabsf(s_buf[base + i]));
+        out[b] = fmaxf(out[b], fabsf(s_buf[base + i]));
     }
     return true;
 }
@@ -231,8 +231,8 @@ void recorder_tick(AppState& state) {
     // Mic meter: peak of the fresh block, with decay so it falls smoothly.
     float peak = 0.f;
     for (size_t i = before; i < s_buf.size(); ++i)
-        peak = std::fmaxf(peak, std::fabsf(s_buf[i]));
-    s_level = std::fmaxf(peak, s_level * 0.90f);
+        peak = fmaxf(peak, fabsf(s_buf[i]));
+    s_level = fmaxf(peak, s_level * 0.90f);
 
     // Every full loop length past the latency offset is one finished take.
     while (s_take_len > 0 &&

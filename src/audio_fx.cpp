@@ -471,8 +471,8 @@ std::vector<float> process_audio_fx(const std::vector<float>& raw,
             R = R * (1.f - fx.reverb_mix) + rR * fx.reverb_mix;
         }
 
-        out[f * 2]     = std::fmaxf(-1.f, std::fminf(1.f, L));
-        out[f * 2 + 1] = std::fmaxf(-1.f, std::fminf(1.f, R));
+        out[f * 2]     = fmaxf(-1.f, fminf(1.f, L));
+        out[f * 2 + 1] = fmaxf(-1.f, fminf(1.f, R));
     }
 
     return out;
