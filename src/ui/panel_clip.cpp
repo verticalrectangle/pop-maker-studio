@@ -1,6 +1,7 @@
 #include "studio_types.h"
 #include "studio_shared.h"
 #include "panel_clip.h"
+#include "panel_fx.h"
 #include "pipeline.h"
 #include "app.h"
 #include "audio.h"
@@ -2140,27 +2141,6 @@ void panel_clip(AppState& state, float w) {
             }
         }
 
-        // ── Layout ───────────────────────────────────────────────────────────
-        ImGui::Dummy({0.f, 10.f}); ui_separator(); ImGui::Dummy({0.f, 6.f});
-        ui_label("Layout");
-        ImGui::Dummy({0.f, 6.f});
-        {
-            ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
-            ImGui::TextUnformatted("Rotation");
-            ImGui::PopStyleColor();
-            ImGui::PushStyleColor(ImGuiCol_SliderGrab, to_u32(Col::fg));
-            ImGui::PushStyleColor(ImGuiCol_FrameBg,    Col::bg_soft);
-            ImGui::SetNextItemWidth(bar_w - 70.f);
-            ImGui::SliderFloat("##vrec_rot", &clip.rotation, -180.f, 180.f, "%.0f\xc2\xb0");
-            ImGui::PopStyleColor(2);
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Rotate camera");
-            ImGui::SameLine(0.f, 6.f);
-            if (ui_btn("\xe2\x9f\xb3 90\xc2\xb0", false, true)) {
-                clip.rotation = fmodf(clip.rotation + 90.f + 180.f, 360.f) - 180.f;
-                history_push(state, "Rotate camera");
-            }
-        }
-
         // ── Take tray ────────────────────────────────────────────────────────
         ImGui::Dummy({0.f, 10.f}); ui_separator(); ImGui::Dummy({0.f, 6.f});
         ui_label("Takes");
@@ -2341,6 +2321,27 @@ void panel_clip(AppState& state, float w) {
                 ImGui::TextUnformatted("Show the live camera on the canvas before\n"
                                        "recording \xe2\x80\x94 frame yourself, check the light.");
                 ImGui::EndTooltip();
+            }
+        }
+
+        // ── Layout ───────────────────────────────────────────────────────────
+        ImGui::Dummy({0.f, 10.f}); ui_separator(); ImGui::Dummy({0.f, 6.f});
+        ui_label("Layout");
+        ImGui::Dummy({0.f, 6.f});
+        {
+            ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+            ImGui::TextUnformatted("Rotation");
+            ImGui::PopStyleColor();
+            ImGui::PushStyleColor(ImGuiCol_SliderGrab, to_u32(Col::fg));
+            ImGui::PushStyleColor(ImGuiCol_FrameBg,    Col::bg_soft);
+            ImGui::SetNextItemWidth(bar_w - 70.f);
+            ImGui::SliderFloat("##vrec_rot", &clip.rotation, -180.f, 180.f, "%.0f\xc2\xb0");
+            ImGui::PopStyleColor(2);
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Rotate camera");
+            ImGui::SameLine(0.f, 6.f);
+            if (ui_btn("\xe2\x9f\xb3 90\xc2\xb0", false, true)) {
+                clip.rotation = fmodf(clip.rotation + 90.f + 180.f, 360.f) - 180.f;
+                history_push(state, "Rotate camera");
             }
         }
 
@@ -2588,5 +2589,7 @@ void panel_clip(AppState& state, float w) {
                 ImGui::Dummy({0.f, 4.f});
             }
         }
+
+        glass_host_layout(state, clip, w);
     }
 }

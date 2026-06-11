@@ -1498,6 +1498,32 @@ void panel_audio_fx_clip(AppState& state, float w) {
 }
 
 
+// Layout section for glass bricks: the brick has no transform of its own, so
+// this edits the HOST clip's rotation — same redirect as the canvas handles.
+void glass_host_layout(AppState& state, Clip& brick, float w) {
+    if (!fx_clip_is_glass(state, state.selected_track, brick)) return;
+    int host = fx_glass_host_index(state, state.selected_track, brick);
+    if (host < 0) return;
+    Clip& hc = state.tracks[state.selected_track].clips[(size_t)host];
+    ImGui::Dummy({0.f, 10.f}); ui_separator(); ImGui::Dummy({0.f, 6.f});
+    ui_label("Host clip layout");
+    ImGui::Dummy({0.f, 6.f});
+    ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+    ImGui::TextUnformatted("Rotation");
+    ImGui::PopStyleColor();
+    ImGui::PushStyleColor(ImGuiCol_SliderGrab, to_u32(Col::fg));
+    ImGui::PushStyleColor(ImGuiCol_FrameBg,    Col::bg_soft);
+    ImGui::SetNextItemWidth(w - 16.f - 70.f);
+    ImGui::SliderFloat("##glass_host_rot", &hc.rotation, -180.f, 180.f, "%.0f\xc2\xb0");
+    ImGui::PopStyleColor(2);
+    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Rotate clip");
+    ImGui::SameLine(0.f, 6.f);
+    if (ui_btn("\xe2\x9f\xb3 90\xc2\xb0", false, true)) {
+        hc.rotation = fmodf(hc.rotation + 90.f + 180.f, 360.f) - 180.f;
+        history_push(state, "Rotate clip");
+    }
+}
+
 void panel_fx_clip(AppState& state, float w) {
     if (state.selected_track < 0 || state.selected_track >= (int)state.tracks.size()) return;
     Track& track = state.tracks[state.selected_track];
@@ -1735,6 +1761,8 @@ void panel_fx_clip(AppState& state, float w) {
         ImGui::SliderFloat("##bdecay", &clip.beat_decay, 0.02f, 1.0f, "%.2fs");
         if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "FX: beat decay");
     }
+
+    glass_host_layout(state, clip, w);
 
     ImGui::Dummy({0.f, 12.f}); ui_separator(); ImGui::Dummy({0.f, 8.f});
     if (track.locked) ImGui::BeginDisabled();
@@ -2057,12 +2085,17 @@ void panel_multifx(AppState& state, float w) {
         ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
         ImGui::TextWrapped("No effects yet — use 'Add Effect' above.");
         ImGui::PopStyleColor();
+        glass_host_layout(state, brick, w);
         return;
     }
 
     // ── Parameters for selected sub-effect ────────────────────────────────
     int si = brick.fx_chain_selected;
-    if (si < 0 || si >= (int)brick.fx_chain.size()) { ImGui::Dummy({0.f, 8.f}); return; }
+    if (si < 0 || si >= (int)brick.fx_chain.size()) {
+        glass_host_layout(state, brick, w);
+        ImGui::Dummy({0.f, 8.f});
+        return;
+    }
     Clip& clip = brick.fx_chain[si];   // named 'clip' so generated includes work
 
     ImGui::Dummy({0.f, 8.f}); ui_separator(); ImGui::Dummy({0.f, 8.f});
@@ -2288,6 +2321,8 @@ void panel_multifx(AppState& state, float w) {
 
         ImGui::PopStyleColor(3);
     }
+
+    glass_host_layout(state, brick, w);
 
     ImGui::Dummy({0.f, 12.f}); ui_separator(); ImGui::Dummy({0.f, 8.f});
     if (track.locked) ImGui::BeginDisabled();

@@ -253,6 +253,17 @@ bool fx_clip_is_glass(const AppState& state, int fx_ti, const Clip& fx_cl) {
     return false;
 }
 
+int fx_glass_host_index(const AppState& state, int fx_ti, const Clip& fx_cl) {
+    if (fx_ti < 0 || fx_ti >= (int)state.tracks.size()) return -1;
+    const auto& clips = state.tracks[fx_ti].clips;
+    for (int ci = 0; ci < (int)clips.size(); ++ci) {
+        const Clip& hc = clips[(size_t)ci];
+        if (clip_is_videolike_type(hc.clip_type) &&
+            hc.start < fx_cl.end && hc.end > fx_cl.start) return ci;
+    }
+    return -1;
+}
+
 // Helper: accumulate all sub-effects of a MultiFX brick that are active at time t.
 static void accum_multifx_effects(EffectAccum& ea, CreativeFXAccum& ca,
                                   const AppState& state, const Clip& brick, float t) {

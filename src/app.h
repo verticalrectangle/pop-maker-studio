@@ -706,6 +706,10 @@ EffectAccum      collect_effects_for_track     (const AppState& state, float t, 
 CreativeFXAccum  collect_creative_fx_for_track (const AppState& state, float t, int track_idx);
 // Visual check: does this FX clip sit directly above any video/audio clip (time overlap)?
 bool             fx_clip_is_glass    (const AppState& state, int fx_ti, const Clip& fx_cl);
+// Index of the videolike host clip a glass FX brick rides (first time-overlap
+// on the same track), or -1. Canvas handles and FX panels both redirect
+// transform edits through this.
+int              fx_glass_host_index (const AppState& state, int fx_ti, const Clip& fx_cl);
 
 // Beat sync: returns exp-decay pulse [0..1] from most recent beat before t in the referenced clip.
 // src_track/src_clip = -1 → always returns 0.

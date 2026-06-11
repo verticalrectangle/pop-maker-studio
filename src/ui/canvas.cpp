@@ -405,11 +405,8 @@ void draw_canvas_handles(AppState& state, ImDrawList* dl, ImVec2 p, float w, flo
                      sc.clip_type == ClipType::MultiFX ||
                      sc.clip_type == ClipType::BodyFX;
         if (is_fx && fx_clip_is_glass(state, state.selected_track, sc)) {
-            for (int ci = 0; ci < (int)tr.clips.size(); ++ci) {
-                Clip& hc = tr.clips[(size_t)ci];
-                if (clip_is_videolike_type(hc.clip_type) &&
-                    hc.start < sc.end && hc.end > sc.start) { sel_ci = ci; break; }
-            }
+            int host = fx_glass_host_index(state, state.selected_track, sc);
+            if (host >= 0) sel_ci = host;
         }
     }
     Clip& cl = tr.clips[(size_t)sel_ci];
