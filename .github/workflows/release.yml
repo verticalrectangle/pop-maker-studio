@@ -97,10 +97,9 @@ jobs:
             done
           done
 
-          echo "All models downloaded from single HF repo."
+          curl -fsSL -o release/models/rvc_pitch_bases.bin              "${BASE}/rvc/rvc_pitch_bases.bin"
 
-          echo "Copying bundled pitch-base blob (auto-octave register detection)..."
-          cp models/rvc_pitch_bases.bin release/models/rvc_pitch_bases.bin
+          echo "All models downloaded from single HF repo."
 
       - name: Package release
         run: |
