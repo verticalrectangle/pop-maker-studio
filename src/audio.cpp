@@ -148,7 +148,7 @@ static void data_callback(ma_device* pDevice, void* pOutput, const void*, ma_uin
         float dt_in  = t - cl.tl_start;
         float dt_out = cl.tl_end - t;
         if (cl.fade_in  > 0.f && dt_in  < cl.fade_in)  fade = dt_in / cl.fade_in;
-        if (cl.fade_out > 0.f && dt_out < cl.fade_out) fade = std::fminf(fade, dt_out / cl.fade_out);
+        if (cl.fade_out > 0.f && dt_out < cl.fade_out) fade = fminf(fade, dt_out / cl.fade_out);
         return fade;
     };
 
@@ -186,8 +186,8 @@ static void data_callback(ma_device* pDevice, void* pOutput, const void*, ma_uin
             float vraw = cl.vol_keys.empty() ? cl.volume
                        : cl.vol_keys.eval(t - cl.tl_start);
             float pan  = cl.pan_keys.empty() ? cl.pan
-                       : std::fmaxf(-1.f, std::fminf(1.f, cl.pan_keys.eval(t - cl.tl_start)));
-            float vol  = std::fmaxf(0.f, vraw) * global_vol * fade;
+                       : fmaxf(-1.f, fminf(1.f, cl.pan_keys.eval(t - cl.tl_start)));
+            float vol  = fmaxf(0.f, vraw) * global_vol * fade;
             float panL = pan <= 0.f ? 1.f : (1.f - pan);
             float panR = pan >= 0.f ? 1.f : (1.f + pan);
             out[f*2]   += (*buf_ptr)[sp]   * vol * panL;
@@ -212,7 +212,7 @@ static void data_callback(ma_device* pDevice, void* pOutput, const void*, ma_uin
 
     // Hard-clamp to prevent inter-clip summing from clipping.
     for (size_t i = 0; i < need; ++i)
-        out[i] = std::fmaxf(-1.f, std::fminf(1.f, out[i]));
+        out[i] = fmaxf(-1.f, fminf(1.f, out[i]));
 }
 
 // ── Device init/shutdown ──────────────────────────────────────────────────────
