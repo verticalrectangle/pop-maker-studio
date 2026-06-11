@@ -2239,8 +2239,11 @@ void panel_clip(AppState& state, float w) {
             ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.95f, 0.38f, 0.12f, 1.f));
             ImGui::PushStyleColor(ImGuiCol_ButtonActive,  ImVec4(0.75f, 0.28f, 0.08f, 1.f));
             char stop_lbl[64];
-            snprintf(stop_lbl, sizeof(stop_lbl), "\xe2\x96\xa0 Stop  (%d take%s)",
-                     vrecorder_take_count(), vrecorder_take_count() == 1 ? "" : "s");
+            if (vrecorder_warming())
+                snprintf(stop_lbl, sizeof(stop_lbl), "Starting camera\xe2\x80\xa6");
+            else
+                snprintf(stop_lbl, sizeof(stop_lbl), "\xe2\x96\xa0 Stop  (%d take%s)",
+                         vrecorder_take_count(), vrecorder_take_count() == 1 ? "" : "s");
             if (ImGui::Button(stop_lbl, {bar_w, 34.f}))
                 vrecorder_stop(state);
             ImGui::PopStyleColor(3);
@@ -2256,13 +2259,68 @@ void panel_clip(AppState& state, float w) {
             ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.70f, 0.28f, 0.08f, 1.f));
             ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.85f, 0.34f, 0.10f, 1.f));
             ImGui::PushStyleColor(ImGuiCol_ButtonActive,  ImVec4(0.60f, 0.24f, 0.07f, 1.f));
-            if (ImGui::Button("\xe2\x97\x8f Record video", {bar_w, 34.f})) {
-                if (!vrecorder_start(state, state.selected_track, state.selected_clip))
-                    {} // brick too short or capture failed — button stays armed
-            }
+            if (ImGui::Button("\xe2\x97\x8f Record video", {bar_w, 34.f}))
+                vrecorder_start(state, state.selected_track, state.selected_clip);
             ImGui::PopStyleColor(3);
             if (busy) ImGui::EndDisabled();
             ImGui::Dummy({0.f, 6.f});
+        }
+        if (!vrecorder_error().empty()) {
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.3f, 0.3f, 1.f));
+            ImGui::TextWrapped("%s", vrecorder_error().c_str());
+            ImGui::PopStyleColor();
+            ImGui::Dummy({0.f, 4.f});
+        }
+
+        // ── Camera ───────────────────────────────────────────────────────────
+        ImGui::Dummy({0.f, 10.f}); ui_separator(); ImGui::Dummy({0.f, 6.f});
+        ui_label("Camera");
+        ImGui::Dummy({0.f, 6.f});
+        {
+            static std::vector<VCamDevice> s_cams;
+            static bool s_cams_init = false;
+            if (!s_cams_init) { s_cams = vrecorder_devices(); s_cams_init = true; }
+            bool busy_cam = vrecorder_active() || vrecorder_monitor_get();
+            int  cam_sel  = vrecorder_device_selected();
+            const char* cur = s_cams.empty() ? "No camera (test pattern)"
+                : (cam_sel >= 0 && cam_sel < (int)s_cams.size())
+                  ? s_cams[(size_t)cam_sel].name.c_str()
+                  : s_cams[0].name.c_str();
+            if (busy_cam) ImGui::BeginDisabled();
+            ImGui::PushStyleColor(ImGuiCol_FrameBg, Col::bg_soft);
+            ImGui::SetNextItemWidth(bar_w);
+            if (ImGui::BeginCombo("##vrec_cam", cur)) {
+                if (ImGui::IsWindowAppearing()) s_cams = vrecorder_devices();
+                for (int di = 0; di < (int)s_cams.size(); ++di) {
+                    ImGui::PushID(di);
+                    char lbl2[128];
+                    snprintf(lbl2, sizeof(lbl2), "%s  (%s)",
+                             s_cams[(size_t)di].name.c_str(),
+                             s_cams[(size_t)di].path.c_str());
+                    if (ImGui::Selectable(lbl2, cam_sel == di))
+                        vrecorder_device_select(di);
+                    ImGui::PopID();
+                }
+                if (s_cams.empty()) {
+                    ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+                    ImGui::TextUnformatted("No V4L2 capture devices");
+                    ImGui::PopStyleColor();
+                }
+                ImGui::EndCombo();
+            }
+            ImGui::PopStyleColor();
+            if (busy_cam) ImGui::EndDisabled();
+
+            ImGui::Dummy({0.f, 4.f});
+            bool mon = vrecorder_monitor_get();
+            if (ImGui::Checkbox("Preview camera", &mon))
+                vrecorder_monitor_set(mon);
+            if (ImGui::IsItemHovered()) {
+                ImGui::BeginTooltip();
+                ImGui::TextUnformatted("Show the live camera on the canvas before\n"
+                                       "recording \xe2\x80\x94 frame yourself, check the light.");
+                ImGui::EndTooltip();
+            }
         }
 
         // ── Take tray ────────────────────────────────────────────────────────

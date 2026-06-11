@@ -14,6 +14,8 @@
 #include <vector>
 
 #include <fcntl.h>
+#include <linux/videodev2.h>
+#include <sys/ioctl.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -29,8 +31,12 @@ struct VFrame {
     std::vector<uint8_t> jpeg;
 };
 
-static bool   s_active = false;
+enum class VRecState { Idle, Monitor, Warming, Recording };
+
+static VRecState s_state = VRecState::Idle;
+static bool   s_monitor_want = false;     // user asked for the live mirror
 static bool   s_test_pattern = false;
+static int    s_device_sel = -1;          // index into vrecorder_devices(); -1 auto
 static int    s_ti = -1, s_ci = -1;
 static float  s_lp_start = 0.f, s_lp_end = 0.f;
 static float  s_loop_len = 0.f;
@@ -38,8 +44,54 @@ static int    s_take_count = 0;
 static FILE*  s_cap = nullptr;            // capture child stdout (MJPEG stream)
 static std::vector<uint8_t> s_raw;        // undecoded byte tail from the pipe
 static std::vector<VFrame>  s_frames;     // frames of the take in progress
-static std::vector<uint8_t> s_last_jpeg;  // most recent frame (live preview)
-static std::chrono::steady_clock::time_point s_t0;  // capture stream origin
+static std::vector<uint8_t> s_last_jpeg;  // most recent frame (live mirror)
+static uint64_t s_frame_serial = 0;
+static std::string s_error;
+static std::chrono::steady_clock::time_point s_t0;       // capture stream origin
+static std::chrono::steady_clock::time_point s_warm_t0;  // warmup start
+
+// ── Devices ───────────────────────────────────────────────────────────────────
+
+std::vector<VCamDevice> vrecorder_devices() {
+    std::vector<VCamDevice> out;
+    for (int i = 0; i < 16; ++i) {
+        char path[32];
+        snprintf(path, sizeof(path), "/dev/video%d", i);
+        int fd = open(path, O_RDWR | O_NONBLOCK);
+        if (fd < 0) continue;
+        v4l2_capability cap{};
+        bool is_capture = false;
+        if (ioctl(fd, VIDIOC_QUERYCAP, &cap) == 0) {
+            uint32_t c = (cap.capabilities & V4L2_CAP_DEVICE_CAPS)
+                         ? cap.device_caps : cap.capabilities;
+            is_capture = (c & V4L2_CAP_VIDEO_CAPTURE) != 0;
+        }
+        if (is_capture)
+            out.push_back({path, (const char*)cap.card});
+        close(fd);
+    }
+    return out;
+}
+
+void vrecorder_device_select(int idx) { s_device_sel = idx; }
+int  vrecorder_device_selected()      { return s_device_sel; }
+
+// Does the device deliver MJPEG natively? (Stream-copy when it does; phone
+// bridges like v4l2loopback often only do planar YUV — re-encode those.)
+static bool device_has_mjpeg(const std::string& path) {
+    int fd = open(path.c_str(), O_RDWR | O_NONBLOCK);
+    if (fd < 0) return false;
+    bool found = false;
+    for (uint32_t i = 0; i < 64; ++i) {
+        v4l2_fmtdesc f{};
+        f.index = i;
+        f.type  = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+        if (ioctl(fd, VIDIOC_ENUM_FMT, &f) != 0) break;
+        if (f.pixelformat == V4L2_PIX_FMT_MJPEG) { found = true; break; }
+    }
+    close(fd);
+    return found;
+}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -50,12 +102,14 @@ static Clip* target_brick(AppState& state) {
         if (ci < 0 || ci >= (int)clips.size()) return nullptr;
         Clip* cl = &clips[ci];
         if (cl->clip_type != ClipType::VideoRecord) return nullptr;
-        if (s_active && (fabsf(cl->start - s_lp_start) > 1e-4f ||
-                         fabsf(cl->end   - s_lp_end)   > 1e-4f)) return nullptr;
+        bool rec = s_state == VRecState::Warming || s_state == VRecState::Recording;
+        if (rec && (fabsf(cl->start - s_lp_start) > 1e-4f ||
+                    fabsf(cl->end   - s_lp_end)   > 1e-4f)) return nullptr;
         return cl;
     };
     if (Clip* cl = match(s_ti, s_ci)) return cl;
-    if (!s_active) return nullptr;
+    if (s_state != VRecState::Warming && s_state != VRecState::Recording)
+        return nullptr;
     for (int ti = 0; ti < (int)state.tracks.size(); ++ti)
         for (int ci = 0; ci < (int)state.tracks[ti].clips.size(); ++ci)
             if (Clip* cl = match(ti, ci)) { s_ti = ti; s_ci = ci; return cl; }
@@ -184,19 +238,39 @@ static bool finalize_take(AppState& state) {
 // ── Capture child ─────────────────────────────────────────────────────────────
 
 static bool capture_start() {
-    s_test_pattern = !fs::exists("/dev/video0");
-    const char* cmd =
-        s_test_pattern
+    auto devs = vrecorder_devices();
+    s_test_pattern = devs.empty();
+    char cmd[512];
+    if (s_test_pattern) {
         // Camera-less dev fallback: timestamped test pattern at webcam-ish
         // specs. -re paces lavfi to real time (a camera self-paces).
-        ? "ffmpeg -hide_banner -loglevel error"
-          " -re -f lavfi -i testsrc2=size=1280x720:rate=30"
-          " -c:v mjpeg -q:v 4 -f mjpeg pipe:1 2>/dev/null"
-        : "ffmpeg -hide_banner -loglevel error"
-          " -f v4l2 -input_format mjpeg -framerate 30 -video_size 1280x720"
-          " -i /dev/video0 -c:v copy -f mjpeg pipe:1 2>/dev/null";
+        snprintf(cmd, sizeof(cmd),
+                 "ffmpeg -hide_banner -loglevel error"
+                 " -re -f lavfi -i testsrc2=size=1280x720:rate=30"
+                 " -c:v mjpeg -q:v 4 -f mjpeg pipe:1 2>/dev/null");
+    } else {
+        int idx = (s_device_sel >= 0 && s_device_sel < (int)devs.size())
+                  ? s_device_sel : 0;
+        const std::string& dev = devs[(size_t)idx].path;
+        if (device_has_mjpeg(dev)) {
+            // Native MJPEG → stream copy, no transcode.
+            snprintf(cmd, sizeof(cmd),
+                     "ffmpeg -hide_banner -loglevel error"
+                     " -f v4l2 -input_format mjpeg -framerate 30"
+                     " -video_size 1280x720 -i %s"
+                     " -c:v copy -f mjpeg pipe:1 2>/dev/null", dev.c_str());
+        } else {
+            // YUV-only device (e.g. phone bridges over v4l2loopback):
+            // let V4L2 negotiate format/size and encode to MJPEG ourselves.
+            snprintf(cmd, sizeof(cmd),
+                     "ffmpeg -hide_banner -loglevel error"
+                     " -f v4l2 -i %s"
+                     " -c:v mjpeg -q:v 4 -f mjpeg pipe:1 2>/dev/null",
+                     dev.c_str());
+        }
+    }
     s_cap = popen(cmd, "r");
-    if (!s_cap) return false;
+    if (!s_cap) { s_error = "could not start capture (ffmpeg missing?)"; return false; }
     int fd = fileno(s_cap);
     fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK);
     return true;
@@ -211,7 +285,7 @@ static void capture_stop() {
 // Drain the pipe and split the MJPEG byte stream into frames on JPEG
 // SOI (FFD8) / EOI (FFD9) markers. Each completed frame is stamped with the
 // current loop-stream time.
-static void capture_drain() {
+static void capture_drain(bool keep_frames) {
     if (!s_cap) return;
     uint8_t buf[1 << 16];
     ssize_t n;
@@ -224,22 +298,23 @@ static void capture_drain() {
 
     size_t pos = 0;
     while (true) {
-        // find SOI
         size_t soi = pos;
         while (soi + 1 < s_raw.size() &&
                !(s_raw[soi] == 0xFF && s_raw[soi+1] == 0xD8)) ++soi;
         if (soi + 1 >= s_raw.size()) break;
-        // find EOI after it
         size_t eoi = soi + 2;
         while (eoi + 1 < s_raw.size() &&
                !(s_raw[eoi] == 0xFF && s_raw[eoi+1] == 0xD9)) ++eoi;
         if (eoi + 1 >= s_raw.size()) break;
 
-        VFrame f;
-        f.t = now_t - kCamLatency;
-        f.jpeg.assign(s_raw.begin() + (long)soi, s_raw.begin() + (long)eoi + 2);
-        s_last_jpeg = f.jpeg;
-        s_frames.push_back(std::move(f));
+        s_last_jpeg.assign(s_raw.begin() + (long)soi, s_raw.begin() + (long)eoi + 2);
+        ++s_frame_serial;
+        if (keep_frames) {
+            VFrame f;
+            f.t = now_t - kCamLatency;
+            f.jpeg = s_last_jpeg;
+            s_frames.push_back(std::move(f));
+        }
         pos = eoi + 2;
     }
     if (pos > 0) s_raw.erase(s_raw.begin(), s_raw.begin() + (long)pos);
@@ -247,10 +322,17 @@ static void capture_drain() {
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
-bool vrecorder_active() { return s_active; }
-bool vrecorder_is_target(int ti, int ci) { return s_active && ti == s_ti && ci == s_ci; }
+bool vrecorder_active()    { return s_state == VRecState::Warming ||
+                                    s_state == VRecState::Recording; }
+bool vrecorder_recording() { return s_state == VRecState::Recording; }
+bool vrecorder_warming()   { return s_state == VRecState::Warming; }
+bool vrecorder_is_target(int ti, int ci) {
+    return vrecorder_active() && ti == s_ti && ci == s_ci;
+}
 int  vrecorder_take_count() { return s_take_count; }
-bool vrecorder_using_test_pattern() { return s_active && s_test_pattern; }
+bool vrecorder_using_test_pattern() { return s_cap && s_test_pattern; }
+std::string vrecorder_error() { return s_error; }
+uint64_t vrecorder_frame_serial() { return s_frame_serial; }
 
 bool vrecorder_latest_jpeg(std::vector<uint8_t>& out) {
     if (s_last_jpeg.empty()) return false;
@@ -258,39 +340,55 @@ bool vrecorder_latest_jpeg(std::vector<uint8_t>& out) {
     return true;
 }
 
+void vrecorder_monitor_set(bool on) {
+    s_monitor_want = on;
+    if (on && s_state == VRecState::Idle) {
+        s_error.clear();
+        if (capture_start()) {
+            s_state = VRecState::Monitor;
+            s_t0 = std::chrono::steady_clock::now();
+        }
+    } else if (!on && s_state == VRecState::Monitor) {
+        capture_stop();
+        s_last_jpeg.clear();
+        s_state = VRecState::Idle;
+    }
+}
+bool vrecorder_monitor_get() { return s_monitor_want; }
+
 bool vrecorder_start(AppState& state, int ti, int ci) {
-    if (s_active) return false;
+    if (vrecorder_active()) return false;
+    s_error.clear();
     s_ti = ti; s_ci = ci;
+    s_state = VRecState::Idle;   // so target_brick skips the bounds check
     Clip* cl = target_brick(state);
-    if (!cl || cl->end - cl->start < 0.25f) { s_ti = s_ci = -1; return false; }
+    if (!cl || cl->end - cl->start < 0.25f) {
+        s_ti = s_ci = -1;
+        s_error = "brick too short to loop (needs at least 0.25 s)";
+        s_state = s_monitor_want && s_cap ? VRecState::Monitor : VRecState::Idle;
+        return false;
+    }
     s_lp_start = cl->start;
     s_lp_end   = cl->end;
     s_loop_len = s_lp_end - s_lp_start;
 
-    if (!capture_start()) { s_ti = s_ci = -1; return false; }
-
-    // Wait for the camera to actually deliver a frame (device/child spin-up
-    // can take seconds); everything before the transport starts is discarded
-    // so the first take isn't padded with pre-roll. Mirrors the audio
-    // recorder's capture-drain spin.
-    {
-        s_t0 = std::chrono::steady_clock::now();   // provisional origin
-        bool got = false;
-        for (int i = 0; i < 100 && !got; ++i) {    // up to ~5 s
-            capture_drain();
-            got = !s_frames.empty() || !s_last_jpeg.empty();
-            if (!got) usleep(50 * 1000);
-        }
-        s_frames.clear();
-        if (!got) {
-            capture_stop();
-            s_ti = s_ci = -1;
-            return false;
-        }
+    // Reuse the monitor's capture child when it's already running.
+    if (!s_cap && !capture_start()) {
+        s_ti = s_ci = -1;
+        s_state = VRecState::Idle;
+        return false;
     }
 
-    // Join the loop transport if an audio Record brick already drives it on
-    // the same bounds (co-recording video + audio); otherwise start it.
+    // Async warmup: the tick starts the transport when the first frame
+    // arrives (or errors out) — the UI never blocks.
+    s_frames.clear();
+    s_take_count = 0;
+    s_warm_t0 = std::chrono::steady_clock::now();
+    s_state = VRecState::Warming;
+    return true;
+}
+
+static void begin_transport(AppState& state) {
     audio_init();
     bool join = state.playing && audio_loop_active();
     if (!join) {
@@ -301,38 +399,30 @@ bool vrecorder_start(AppState& state, int ti, int ci) {
         state.play_start_pos  = s_lp_start;
         state.play_start_wall = std::chrono::steady_clock::now();
         audio_play();
+        s_t0 = std::chrono::steady_clock::now();
+    } else {
+        float cur = fmodf(fmaxf(0.f,
+                        std::chrono::duration<float>(
+                            std::chrono::steady_clock::now()
+                            - state.play_start_wall).count()
+                        + state.play_start_pos - s_lp_start),
+                    fmaxf(s_loop_len, 1e-3f));
+        s_t0 = std::chrono::steady_clock::now() -
+               std::chrono::microseconds((long)(cur * 1e6f));
     }
-    // Loop-stream origin: "now" corresponds to the current loop position, so
-    // time 0 of the capture stream = that much before the current instant.
-    float cur = state.playhead - s_lp_start;
-    if (join)
-        cur = fmodf(fmaxf(0.f,
-                  std::chrono::duration<float>(std::chrono::steady_clock::now()
-                      - state.play_start_wall).count()
-                  + state.play_start_pos - s_lp_start),
-              fmaxf(s_loop_len, 1e-3f));
-    else
-        cur = 0.f;
-    s_t0 = std::chrono::steady_clock::now() - std::chrono::microseconds(
-               (long)(cur * 1e6f));
-
     s_frames.clear();
-    s_last_jpeg.clear();
-    s_take_count = 0;
-    s_active     = true;
-    return true;
+    s_state = VRecState::Recording;
 }
 
 void vrecorder_stop(AppState& state, bool keep_partial) {
-    if (!s_active) return;
-    capture_drain();
-    capture_stop();
+    if (!vrecorder_active()) return;
+    bool was_recording = s_state == VRecState::Recording;
+    if (was_recording) capture_drain(true);
 
     // Keep a partial last pass when it has at least half a second in it.
-    if (keep_partial && !s_frames.empty()) {
+    if (was_recording && keep_partial && !s_frames.empty()) {
         float span = s_frames.back().t - s_frames.front().t;
         if (span > 0.5f) {
-            // Mux at the natural rate of the partial (duration = real span).
             float keep_len = s_loop_len;
             s_loop_len = fmaxf(span, 0.5f);
             finalize_take(state);
@@ -347,19 +437,55 @@ void vrecorder_stop(AppState& state, bool keep_partial) {
 
     // Only tear the transport down if the audio recorder isn't still using it.
     extern bool recorder_active();
-    if (!recorder_active()) {
+    if (was_recording && !recorder_active()) {
         audio_clear_loop();
         state.playing = false;
         audio_pause();
     }
 
-    s_active = false;
     s_ti = s_ci = -1;
-    s_last_jpeg.clear();
+    if (s_monitor_want) {
+        s_state = VRecState::Monitor;   // keep the mirror running
+    } else {
+        capture_stop();
+        s_last_jpeg.clear();
+        s_state = VRecState::Idle;
+    }
 }
 
 void vrecorder_tick(AppState& state) {
-    if (!s_active) return;
+    if (s_state == VRecState::Monitor) {
+        capture_drain(false);
+        // Child died (device unplugged)? Surface it and stop.
+        if (s_cap && feof(s_cap)) {
+            capture_stop();
+            s_last_jpeg.clear();
+            s_error = "camera stream ended";
+            s_state = VRecState::Idle;
+        }
+        return;
+    }
+    if (s_state == VRecState::Warming) {
+        if (!target_brick(state)) { vrecorder_stop(state, false); return; }
+        uint64_t before = s_frame_serial;
+        capture_drain(false);
+        if (s_frame_serial != before) {
+            begin_transport(state);   // first frame arrived — go
+            return;
+        }
+        float waited = std::chrono::duration<float>(
+                           std::chrono::steady_clock::now() - s_warm_t0).count();
+        if (waited > 6.f) {
+            s_error = "camera produced no frames — check the device picker "
+                      "(is the camera app/stream running?)";
+            capture_stop();
+            s_last_jpeg.clear();
+            s_ti = s_ci = -1;
+            s_state = VRecState::Idle;
+        }
+        return;
+    }
+    if (s_state != VRecState::Recording) return;
 
     if (!target_brick(state) || !state.playing || !audio_loop_active()) {
         bool keep = target_brick(state) != nullptr;
@@ -367,14 +493,13 @@ void vrecorder_tick(AppState& state) {
         return;
     }
 
-    capture_drain();
+    capture_drain(true);
 
     // Every frame past (take_count+1)·loop_len closes a take. Frames are
     // bucketed by their stamped loop-stream time, so a slow camera can't
     // smear takes across boundaries.
     while (!s_frames.empty()) {
         float boundary = (float)(s_take_count + 1) * s_loop_len;
-        // Partition: frames with t < boundary belong to the current take.
         size_t split = 0;
         while (split < s_frames.size() && s_frames[split].t < boundary) ++split;
         if (split >= s_frames.size()) break;   // boundary not reached yet

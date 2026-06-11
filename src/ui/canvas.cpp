@@ -16,6 +16,11 @@
 #include "waveform.h"
 #include "body_fx.h"
 #include "bg_remove.h"
+#include "video_recorder.h"
+#include <turbojpeg.h>
+#define GL_GLEXT_PROTOTYPES
+#include <GL/gl.h>
+#include <GL/glext.h>
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <filesystem>
@@ -880,6 +885,68 @@ static struct {
     ImVec2 p           = {};
     float  w = 0.f, h = 0.f;
 } g_canvas_cap;
+
+// ── Live camera mirror ────────────────────────────────────────────────────────
+// While the camera brick monitors, warms up, or records, the latest camera
+// frame is drawn over the canvas (fit, slightly inset) so the performer can
+// frame themselves. Decode happens only when a new frame arrived.
+static void draw_camera_mirror(ImDrawList* dl, ImVec2 p, float w, float h) {
+    if (!vrecorder_monitor_get() && !vrecorder_active()) return;
+
+    static GLuint   s_cam_tex    = 0;
+    static int      s_cam_w      = 0, s_cam_h = 0;
+    static uint64_t s_cam_serial = 0;
+    static tjhandle s_cam_tj     = nullptr;
+    static std::vector<uint8_t> s_rgba;
+
+    uint64_t serial = vrecorder_frame_serial();
+    if (serial != s_cam_serial) {
+        std::vector<uint8_t> jpeg;
+        if (vrecorder_latest_jpeg(jpeg)) {
+            if (!s_cam_tj) s_cam_tj = tjInitDecompress();
+            int jw = 0, jh = 0, sub = 0, cs = 0;
+            if (s_cam_tj && tjDecompressHeader3(s_cam_tj, jpeg.data(),
+                    (unsigned long)jpeg.size(), &jw, &jh, &sub, &cs) == 0) {
+                s_rgba.resize((size_t)jw * jh * 4);
+                if (tjDecompress2(s_cam_tj, jpeg.data(),
+                        (unsigned long)jpeg.size(), s_rgba.data(),
+                        jw, 0, jh, TJPF_RGBA, TJFLAG_FASTDCT) == 0) {
+                    if (!s_cam_tex) glGenTextures(1, &s_cam_tex);
+                    glBindTexture(GL_TEXTURE_2D, s_cam_tex);
+                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+                    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, jw, jh, 0,
+                                 GL_RGBA, GL_UNSIGNED_BYTE, s_rgba.data());
+                    glBindTexture(GL_TEXTURE_2D, 0);
+                    s_cam_w = jw; s_cam_h = jh;
+                }
+            }
+        }
+        s_cam_serial = serial;
+    }
+    if (!s_cam_tex || s_cam_w <= 0) return;
+
+    // Fit inside the canvas with a small inset; mirror horizontally so it
+    // behaves like a mirror (recorded takes keep the true orientation).
+    float inset = 12.f;
+    float aw = w - inset * 2.f, ah = h - inset * 2.f;
+    float sc = fminf(aw / (float)s_cam_w, ah / (float)s_cam_h);
+    float dw = s_cam_w * sc, dh = s_cam_h * sc;
+    ImVec2 c  = {p.x + w * 0.5f, p.y + h * 0.5f};
+    ImVec2 q0 = {c.x - dw * 0.5f, c.y - dh * 0.5f};
+    ImVec2 q1 = {c.x + dw * 0.5f, c.y + dh * 0.5f};
+    dl->AddRectFilled({p.x, p.y}, {p.x + w, p.y + h}, IM_COL32(0, 0, 0, 160));
+    dl->AddImage((ImTextureID)(intptr_t)s_cam_tex, q0, q1,
+                 {1, 0}, {0, 1});   // u flipped → mirror
+    ImU32 frame_col = vrecorder_recording() ? IM_COL32(235, 90, 40, 255)
+                                            : IM_COL32(160, 160, 180, 160);
+    dl->AddRect(q0, q1, frame_col, 4.f, 0,
+                vrecorder_recording() ? 3.f : 1.5f);
+    const char* tag2 = vrecorder_recording() ? "\xe2\x97\x8f REC"
+                     : vrecorder_warming()   ? "starting\xe2\x80\xa6"
+                                             : "camera";
+    dl->AddText({q0.x + 10.f, q0.y + 8.f}, frame_col, tag2);
+}
 
 void draw_preview(AppState& state, ImVec2 p, float w, float h) {
     // IPC-triggered snapshot — fulfilled here on the GL thread
@@ -1944,6 +2011,8 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                         IM_COL32(220, 220, 220, (int)(alpha * 255.f)), msg);
         }
     }
+
+    draw_camera_mirror(dl, p, w, h);
 }
 
 // ── Canvas-source snapshot capture ───────────────────────────────────────────
@@ -1952,9 +2021,6 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
 // the preview rect — the exact pixels the user sees, scene compositor output
 // plus text overlays — and writes it as the snapshot PNG. This is the
 // "source: canvas" ground-truth path; render_snapshot_gl is the export path.
-#define GL_GLEXT_PROTOTYPES
-#include <GL/gl.h>
-#include <GL/glext.h>
 #include "stb_image_write.h"
 
 void canvas_capture_after_render(AppState& state) {
