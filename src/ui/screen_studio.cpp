@@ -12,6 +12,7 @@
 #include "panel_terminal.h"
 #include "panel_agent.h"
 #include "../agent_harness.h"
+#include "../recorder.h"
 #include "export_ui.h"
 #include "theme.h"
 #include "app.h"
@@ -454,13 +455,35 @@ void ui_studio(AppState& state) {
     }
     last_stage = state.pipeline.stage;
 
+    // Loop recorder: drain mic, slice takes on the loop-cycle clock.
+    recorder_tick(state);
+
     // Push clip snapshots to audio system every frame.
     // The callback reads these to position audio correctly — no separate volume hack needed.
     {
         std::vector<AudioClipDesc> vdescs, adescs;
         for (auto& tr : state.tracks) {
             if (tr.muted) continue;
+            int tr_idx = (int)(&tr - state.tracks.data());
             for (auto& cl : tr.clips) {
+                // Record brick: the selected take plays like an audio clip
+                // (in_point 0, speed 1). Muted while that brick is recording
+                // so the previous pass doesn't bleed under the new one.
+                if (cl.clip_type == ClipType::Record) {
+                    int ci = (int)(&cl - tr.clips.data());
+                    if (cl.muted || cl.rec_take_sel < 0 ||
+                        cl.rec_take_sel >= (int)cl.rec_takes.size() ||
+                        recorder_is_target(tr_idx, ci)) continue;
+                    AudioClipDesc d;
+                    d.tl_start = cl.start;    d.tl_end   = cl.end;
+                    d.in_point = 0.f;         d.speed    = 1.f;
+                    d.volume   = cl.volume;   d.pan      = cl.pan;
+                    d.fade_in  = cl.fade_in;  d.fade_out = cl.fade_out;
+                    d.path     = cl.rec_takes[cl.rec_take_sel];
+                    adescs.push_back(d);
+                    audio_source_ensure(d.path);
+                    continue;
+                }
                 if (cl.text.empty() || cl.muted) continue;
                 AudioClipDesc d;
                 d.tl_start = cl.start;    d.tl_end   = cl.end;

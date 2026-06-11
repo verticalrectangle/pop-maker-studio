@@ -469,7 +469,11 @@ void app_frame(AppState& state) {
             pos = state.play_start_pos + (float)elapsed;
         }
         state.playhead = pos;
-        if (state.duration > 0.f && state.playhead >= state.duration) {
+        // No end-of-project auto-stop while a loop region cycles (record
+        // brick): the brick may extend past current content, and the wrap
+        // keeps the playhead inside the loop anyway.
+        if (!audio_loop_active() &&
+            state.duration > 0.f && state.playhead >= state.duration) {
             state.playhead = state.duration;
             state.playing  = false;
             audio_pause();

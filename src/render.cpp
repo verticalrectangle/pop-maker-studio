@@ -2147,6 +2147,30 @@ void render_start_gl(AppState& state) {
         };
         for (int ti = (int)state.tracks.size() - 1; ti >= 0; --ti) {
             for (auto& cl : state.tracks[ti].clips) {
+                // Record brick: its selected take is its audio. Same math as
+                // an Audio clip with in_point 0 / speed 1 (takes are recorded
+                // on the loop grid, so they start exactly at cl.start).
+                if (cl.clip_type == ClipType::Record) {
+                    if (cl.muted || cl.rec_take_sel < 0 ||
+                        cl.rec_take_sel >= (int)cl.rec_takes.size()) continue;
+                    const std::string& tp = cl.rec_takes[cl.rec_take_sel];
+                    if (!fs::exists(tp)) continue;
+                    AudioIn ai;
+                    ai.path  = tp;
+                    ai.vol   = state.tracks[ti].muted ? 0.f : cl.volume;
+                    ai.ss    = 0.f;
+                    ai.to    = cl.end - cl.start;
+                    ai.delay = fmaxf(0.f, cl.start);
+                    ai.pan   = state.tracks[ti].muted ? 0.f : cl.pan;
+                    if (cl.fade_in > 0.f)  { ai.fade_in = cl.fade_in;  ai.fade_in_st = ai.delay; }
+                    if (cl.fade_out > 0.f) {
+                        ai.fade_out    = cl.fade_out;
+                        ai.fade_out_st = ai.delay + fmaxf(0.f, (cl.end - cl.start) - cl.fade_out);
+                    }
+                    audio_ins.push_back(std::move(ai));
+                    covered_paths.insert(tp);
+                    continue;
+                }
                 if (cl.text.empty()) continue;
                 if (cl.clip_type != ClipType::Audio &&
                     cl.clip_type != ClipType::Video) continue;

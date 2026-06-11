@@ -2833,6 +2833,23 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
             t.name=n; state.tracks.insert(state.tracks.begin(), std::move(t));
             history_push(state, "Add Track");
         }
+        if (ImGui::MenuItem("Add Record Brick")) {
+            // Loop-record region at the playhead: 8 s default, frame-snapped
+            // so the cycle wraps on a frame boundary.
+            float qfps = tl_fps(state);
+            Clip cl;
+            cl.clip_type = ClipType::Record;
+            cl.start     = snap_to_frame(state.playhead, (int)qfps);
+            cl.end       = snap_end_to_frame(cl.start + 8.f, (int)qfps);
+            Track t;
+            char n[32]; snprintf(n, sizeof(n), "Record %d", (int)state.tracks.size()+1);
+            t.name = n;
+            t.clips.push_back(std::move(cl));
+            state.tracks.insert(state.tracks.begin(), std::move(t));
+            state.selected_track = 0;
+            state.selected_clip  = 0;
+            history_push(state, "Add Record Brick");
+        }
         ImGui::EndPopup();
     }
 

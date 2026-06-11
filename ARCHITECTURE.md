@@ -32,7 +32,7 @@ main loop
 
 ## Clip data model
 
-Every piece of content on the timeline is a `Clip`. Clips are typed (`ClipType::Video`, `Audio`, `Text`, `Lyrics`, `Subtitle`, `Effect`, `Background`, `BodyFX`) but live in the same struct. Tracks are named containers.
+Every piece of content on the timeline is a `Clip`. Clips are typed (`ClipType::Video`, `Audio`, `Text`, `Lyrics`, `Subtitle`, `Effect`, `Background`, `BodyFX`, `MultiFX`, `Record`) but live in the same struct. Tracks are named containers.
 
 **Source time vs timeline time** is the single most important distinction in the codebase:
 
@@ -273,8 +273,9 @@ src/
   main.cpp               Entry point, GL/ImGui init, main loop, drop queues
   app.h                  AppState (incl. bin), Clip, Track, TextStyle, all data model types
   app.cpp                app_frame; collect_effects/creative_fx; glass variants
-  project.cpp            Binary save/load, VERSION=36
-  audio.h / audio.cpp    miniaudio device, PCM mixing, master clock
+  project.cpp            Binary save/load, VERSION=38
+  audio.h / audio.cpp    miniaudio device, PCM mixing, master clock, loop region, mic capture
+  recorder.h/.cpp        Loop recorder: cycle takes over a Record brick, WAV tray
   video.h / video.cpp    Three-tier preview (Native libav, MJPEG proxy, Still), GL upload
   proxy.h / proxy.cpp    Parallel MJPEG proxy generation (worker pool, ffmpeg + hwaccel)
   fx_shader.h/.cpp       GPU FX: GLSL shaders, fx_apply, scene compositor

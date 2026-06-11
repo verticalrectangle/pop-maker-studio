@@ -1,6 +1,7 @@
 #include "project.h"
 #include "body_fx.h"
 #include "ui/panel_media.h"  // bin_backfill_from_timeline
+#include <algorithm>
 #include <fstream>
 #include <cstdint>
 #include <filesystem>
@@ -8,7 +9,7 @@
 // ── Binary serialization helpers ──────────────────────────────────────────────
 
 static const uint32_t MAGIC   = 0x534D5001u; // "PMS\x01"
-static const uint32_t VERSION = 37u;  // v37: per-clip non-destructive crop
+static const uint32_t VERSION = 38u;  // v38: record brick takes
 
 struct Writer {
     std::ofstream f;
@@ -194,6 +195,11 @@ static void write_clip(Writer& w, const Clip& c) {
     w.pod(c.grade_saturation); w.pod(c.grade_hue);
     // v37: non-destructive crop
     w.pod(c.crop_l); w.pod(c.crop_t); w.pod(c.crop_r); w.pod(c.crop_b);
+    // v38: record brick takes
+    uint32_t ntk = (uint32_t)c.rec_takes.size();
+    w.pod(ntk);
+    for (auto& tp : c.rec_takes) w.str(tp);
+    w.pod(c.rec_take_sel);
 }
 
 static Clip read_clip(Reader& r, uint32_t version) {
@@ -353,6 +359,27 @@ static Clip read_clip(Reader& r, uint32_t version) {
     if (version >= 37u) {
         c.crop_l = r.pod<float>(); c.crop_t = r.pod<float>();
         c.crop_r = r.pod<float>(); c.crop_b = r.pod<float>();
+    }
+    if (version >= 38u) {
+        uint32_t ntk = r.pod<uint32_t>();
+        c.rec_takes.reserve(ntk);
+        for (uint32_t i = 0; i < ntk && r.ok; ++i) c.rec_takes.push_back(r.str());
+        c.rec_take_sel = r.pod<int>();
+        if (c.rec_take_sel >= (int)c.rec_takes.size()) c.rec_take_sel = -1;
+        // Drop takes whose files vanished (managed dir cleanup etc.).
+        if (!c.rec_takes.empty()) {
+            namespace fs = std::filesystem;
+            std::string sel = (c.rec_take_sel >= 0) ? c.rec_takes[c.rec_take_sel] : "";
+            c.rec_takes.erase(
+                std::remove_if(c.rec_takes.begin(), c.rec_takes.end(),
+                               [](const std::string& p) { return !fs::exists(p); }),
+                c.rec_takes.end());
+            c.rec_take_sel = -1;
+            for (int i = 0; i < (int)c.rec_takes.size(); ++i)
+                if (c.rec_takes[i] == sel) { c.rec_take_sel = i; break; }
+            if (c.rec_take_sel < 0 && !c.rec_takes.empty())
+                c.rec_take_sel = (int)c.rec_takes.size() - 1;
+        }
     }
     return c;
 }

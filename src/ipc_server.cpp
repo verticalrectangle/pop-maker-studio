@@ -172,6 +172,7 @@ static std::string clip_type_str(ClipType t) {
         case ClipType::Background: return "background";
         case ClipType::BodyFX:     return "body_fx";
         case ClipType::MultiFX:    return "multi_fx";
+        case ClipType::Record:     return "record";
     }
     return "unknown";
 }
@@ -301,6 +302,10 @@ static json clip_to_json_slim(int idx, const Clip& c) {
     j["in_point"] = c.in_point;
     if (!c.source_id.empty()) j["source"] = c.source_id;
     if (!c.text.empty())      j["text"]   = c.text;
+    if (c.clip_type == ClipType::Record) {
+        j["takes"]         = c.rec_takes;
+        j["selected_take"] = c.rec_take_sel;
+    }
     return j;
 }
 
@@ -385,6 +390,10 @@ static json clip_to_json(int idx, const Clip& c) {
             kfs[prop] = std::move(arr);
         }
         if (!kfs.empty()) j["keyframes"] = std::move(kfs);
+    }
+    if (c.clip_type == ClipType::Record) {
+        j["takes"]         = c.rec_takes;
+        j["selected_take"] = c.rec_take_sel;
     }
     return j;
 }
@@ -500,6 +509,7 @@ static ClipType parse_clip_type(const std::string& s) {
     if (s == "effect")     return ClipType::Effect;
     if (s == "background") return ClipType::Background;
     if (s == "body_fx")   return ClipType::BodyFX;
+    if (s == "record")    return ClipType::Record;
     return ClipType::Text;
 }
 
@@ -1751,6 +1761,10 @@ static json dispatch(AppState& state, const std::string& method, const json& par
             else if (prop == "fade_in")   { cl.fade_in   = jval_float(val); }
             else if (prop == "fade_out")  { cl.fade_out  = jval_float(val); }
             else if (prop == "blend_mode"){ cl.blend_mode= jval_int(val); }
+            else if (prop == "selected_take") {
+                cl.rec_take_sel = std::clamp(jval_int(val), -1,
+                                             (int)cl.rec_takes.size() - 1);
+            }
             else if (prop == "pos_x")     { cl.pos_x     = jval_float(val); }
             else if (prop == "pos_y")     { cl.pos_y     = jval_float(val); }
             else if (prop == "scale_x")   { cl.scale_x   = jval_float(val); }
@@ -1882,6 +1896,10 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         else if (prop == "fade_in")  { cl.fade_in    = jval_float(val); }
         else if (prop == "fade_out") { cl.fade_out   = jval_float(val); }
         else if (prop == "blend_mode") { cl.blend_mode = jval_int(val); }
+        else if (prop == "selected_take") {
+            cl.rec_take_sel = std::clamp(jval_int(val), -1,
+                                         (int)cl.rec_takes.size() - 1);
+        }
         // ── Transform props ──────────────────────────────────────────────────
         else if (prop == "pos_x")    { cl.pos_x    = jval_float(val); }
         else if (prop == "pos_y")    { cl.pos_y    = jval_float(val); }

@@ -41,6 +41,14 @@ static float                g_volume    = 1.f;
 
 static std::atomic<bool> g_loading{false};
 
+// ── Loop region ───────────────────────────────────────────────────────────────
+// Bounds are in g_read_pos units (interleaved floats: frame*2) so the callback
+// can wrap with integer math only. end==0 means no loop.
+static std::atomic<bool>     g_loop_on{false};
+static std::atomic<size_t>   g_loop_start{0};
+static std::atomic<size_t>   g_loop_end{0};
+static std::atomic<uint64_t> g_loop_cycles{0};
+
 // ── Per-clip source buffers ───────────────────────────────────────────────────
 
 struct SrcBuf {
@@ -90,7 +98,21 @@ static void data_callback(ma_device* pDevice, void* pOutput, const void*, ma_uin
     size_t need = (size_t)frameCount * 2;
 
     // Advance the timeline clock first — g_read_pos is our master clock, not a source cursor.
-    g_read_pos.store(pos + need, std::memory_order_relaxed);
+    // With a loop region set, the clock wraps end → start; one increment of
+    // g_loop_cycles per wrap is the recorder's take boundary signal.
+    const bool   loop_on = g_loop_on.load(std::memory_order_relaxed);
+    const size_t lp_s    = g_loop_start.load(std::memory_order_relaxed);
+    const size_t lp_e    = g_loop_end.load(std::memory_order_relaxed);
+    {
+        size_t new_pos = pos + need;
+        if (loop_on && lp_e > lp_s) {
+            while (new_pos >= lp_e) {
+                new_pos = lp_s + (new_pos - lp_e);
+                g_loop_cycles.fetch_add(1, std::memory_order_relaxed);
+            }
+        }
+        g_read_pos.store(new_pos, std::memory_order_relaxed);
+    }
 
     // Start with silence.
     memset(out, 0, need * sizeof(float));
@@ -108,10 +130,13 @@ static void data_callback(ma_device* pDevice, void* pOutput, const void*, ma_uin
     std::unique_lock<std::mutex> lk(g_clip_mutex, std::try_to_lock);
     if (!lk.owns_lock()) return;
 
-    float t0 = (float)(pos / 2) / 44100.f;
-
     for (ma_uint32 f = 0; f < frameCount; ++f) {
-        float t = t0 + (float)f / 44100.f;
+        // Per-frame position with loop wrap so the block that crosses the
+        // boundary mixes the loop start, not audio past the loop end.
+        size_t fpos = pos + (size_t)f * 2;
+        if (loop_on && lp_e > lp_s)
+            while (fpos >= lp_e) fpos = lp_s + (fpos - lp_e);
+        float t = (float)(fpos / 2) / 44100.f;
 
         // ── All clips (Video + Audio) read from per-source PCM buffers ──────────
         // Video and Audio clips use the same g_src_bufs system so they layer
@@ -172,6 +197,8 @@ void audio_shutdown() {
         ma_device_uninit(&g_device);
         g_device_init = false;
     }
+    audio_capture_stop();
+    audio_clear_loop();
     g_samples.clear();
     g_read_pos.store(0, std::memory_order_relaxed);
     g_duration = 0.f;
@@ -261,6 +288,82 @@ float audio_latency() {
     if (!g_device_init) return 0.f;
     ma_uint32 period = g_device.playback.internalPeriodSizeInFrames;
     ma_uint32 rate   = g_device.playback.internalSampleRate;
+    if (rate == 0) return 0.f;
+    return (float)period / (float)rate;
+}
+
+// ── Loop region ───────────────────────────────────────────────────────────────
+
+void audio_set_loop(float start_sec, float end_sec) {
+    if (end_sec <= start_sec) { audio_clear_loop(); return; }
+    g_loop_start.store((size_t)(start_sec * 44100.f) * 2, std::memory_order_relaxed);
+    g_loop_end.store((size_t)(end_sec * 44100.f) * 2, std::memory_order_relaxed);
+    g_loop_on.store(true, std::memory_order_relaxed);
+}
+
+void audio_clear_loop() {
+    g_loop_on.store(false, std::memory_order_relaxed);
+}
+
+bool     audio_loop_active() { return g_loop_on.load(std::memory_order_relaxed); }
+uint64_t audio_loop_cycles() { return g_loop_cycles.load(std::memory_order_relaxed); }
+
+// ── Mic capture ───────────────────────────────────────────────────────────────
+
+static ma_device         g_cap_device;
+static bool              g_cap_init = false;
+static std::mutex        g_cap_mutex;
+static std::vector<float> g_cap_buf;  // interleaved stereo f32 @ 44100
+
+static void capture_callback(ma_device*, void*, const void* pInput, ma_uint32 frameCount) {
+    if (!pInput) return;
+    const float* in = (const float*)pInput;
+    std::lock_guard<std::mutex> lk(g_cap_mutex);
+    // Hard cap (~2 min) so a forgotten device can't grow unbounded if the
+    // recorder stops draining.
+    if (g_cap_buf.size() > 44100u * 2u * 120u) return;
+    g_cap_buf.insert(g_cap_buf.end(), in, in + (size_t)frameCount * 2);
+}
+
+bool audio_capture_start() {
+    if (g_cap_init) return true;
+    ma_device_config cfg = ma_device_config_init(ma_device_type_capture);
+    cfg.capture.format   = ma_format_f32;
+    cfg.capture.channels = 2;   // miniaudio upmixes mono mics for us
+    cfg.sampleRate       = 44100;
+    cfg.dataCallback     = capture_callback;
+    if (ma_device_init(nullptr, &cfg, &g_cap_device) != MA_SUCCESS) return false;
+    {
+        std::lock_guard<std::mutex> lk(g_cap_mutex);
+        g_cap_buf.clear();
+    }
+    if (ma_device_start(&g_cap_device) != MA_SUCCESS) {
+        ma_device_uninit(&g_cap_device);
+        return false;
+    }
+    g_cap_init = true;
+    return true;
+}
+
+void audio_capture_stop() {
+    if (!g_cap_init) return;
+    ma_device_stop(&g_cap_device);
+    ma_device_uninit(&g_cap_device);
+    g_cap_init = false;
+}
+
+bool audio_capture_active() { return g_cap_init; }
+
+void audio_capture_drain(std::vector<float>& out) {
+    std::lock_guard<std::mutex> lk(g_cap_mutex);
+    out.insert(out.end(), g_cap_buf.begin(), g_cap_buf.end());
+    g_cap_buf.clear();
+}
+
+float audio_capture_latency() {
+    if (!g_cap_init) return 0.f;
+    ma_uint32 period = g_cap_device.capture.internalPeriodSizeInFrames;
+    ma_uint32 rate   = g_cap_device.capture.internalSampleRate;
     if (rate == 0) return 0.f;
     return (float)period / (float)rate;
 }

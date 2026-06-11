@@ -40,6 +40,7 @@ set(SOURCES
     src/main.cpp
     src/app.cpp
     src/audio.cpp
+    src/recorder.cpp
     src/transcribe.cpp
     src/stems.cpp
     src/render.cpp

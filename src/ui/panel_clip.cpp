@@ -18,6 +18,7 @@
 #include "bg_remove.h"
 #include "body_fx.h"
 #include "noise_reduce.h"
+#include "../recorder.h"
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <filesystem>
@@ -2002,6 +2003,158 @@ void panel_clip(AppState& state, float w) {
             ImGui::Dummy({0.f, 2.f});
             kf_slider("pan",    "Pan",    &clip.pan,   -1.f, 1.f, "%.2f");          kf_interp_bar();
             ImGui::Dummy({0.f, 4.f});
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // RECORD BRICK — cycle recording: transport loops the brick, every pass
+    // lands a take in the tray; the selected take plays like an audio clip.
+    // ═══════════════════════════════════════════════════════════════════════════
+    else if (clip.clip_type == ClipType::Record) {
+        float bar_w = w - 16.f;
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        bool rec_here  = recorder_is_target(state.selected_track, state.selected_clip);
+
+        auto plain_slider = [&](const char* id, const char* label, float* v,
+                                float vmin, float vmax, const char* fmt) {
+            ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+            ImGui::TextUnformatted(label);
+            ImGui::PopStyleColor();
+            ImGui::PushStyleColor(ImGuiCol_SliderGrab, to_u32(Col::fg));
+            ImGui::PushStyleColor(ImGuiCol_FrameBg,    Col::bg_soft);
+            ImGui::SetNextItemWidth(bar_w);
+            bool ch = ImGui::SliderFloat(id, v, vmin, vmax, fmt);
+            ImGui::PopStyleColor(2);
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, label);
+            return ch;
+        };
+
+        // ── Transport ────────────────────────────────────────────────────────
+        ImGui::Dummy({0.f, 4.f});
+        ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+        ImGui::TextWrapped("Loops %s \xe2\x80\x93 %s while recording. Every pass "
+                           "over the loop lands a take below; the newest take "
+                           "plays back on the brick.",
+                           fmt_time(clip.start).c_str(), fmt_time(clip.end).c_str());
+        ImGui::PopStyleColor();
+        ImGui::Dummy({0.f, 6.f});
+
+        if (rec_here) {
+            // Pulsing stop button + live mic meter.
+            float t = (float)ImGui::GetTime();
+            float pulse = 0.65f + 0.35f * sinf(t * 6.f);
+            ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.75f*pulse, 0.10f, 0.10f, 1.f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.85f, 0.15f, 0.15f, 1.f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive,  ImVec4(0.65f, 0.10f, 0.10f, 1.f));
+            char stop_lbl[64];
+            snprintf(stop_lbl, sizeof(stop_lbl), "\xe2\x96\xa0 Stop  (%d take%s)",
+                     recorder_take_count(), recorder_take_count() == 1 ? "" : "s");
+            if (ImGui::Button(stop_lbl, {bar_w, 34.f}))
+                recorder_stop(state);
+            ImGui::PopStyleColor(3);
+
+            // Mic level meter
+            ImGui::Dummy({0.f, 4.f});
+            ImVec2 mp = ImGui::GetCursorScreenPos();
+            float lvl = fminf(1.f, recorder_input_level());
+            dl->AddRectFilled(mp, {mp.x + bar_w, mp.y + 6.f}, IM_COL32(35, 35, 50, 255), 3.f);
+            ImU32 lc = lvl > 0.9f ? IM_COL32(230, 60, 60, 255)
+                     : lvl > 0.7f ? IM_COL32(230, 180, 60, 255)
+                                  : IM_COL32(70, 200, 110, 255);
+            dl->AddRectFilled(mp, {mp.x + bar_w * lvl, mp.y + 6.f}, lc, 3.f);
+            ImGui::Dummy({0.f, 10.f});
+        } else {
+            bool busy = recorder_active();   // recording a different brick
+            if (busy) ImGui::BeginDisabled();
+            ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.55f, 0.10f, 0.10f, 1.f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.75f, 0.12f, 0.12f, 1.f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive,  ImVec4(0.45f, 0.08f, 0.08f, 1.f));
+            static std::string s_rec_error;
+            if (ImGui::Button("\xe2\x97\x8f Record", {bar_w, 34.f})) {
+                s_rec_error.clear();
+                if (!recorder_start(state, state.selected_track, state.selected_clip))
+                    s_rec_error = "Could not open the microphone.";
+            }
+            ImGui::PopStyleColor(3);
+            if (busy) ImGui::EndDisabled();
+            if (!s_rec_error.empty()) {
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.3f, 0.3f, 1.f));
+                ImGui::TextWrapped("%s", s_rec_error.c_str());
+                ImGui::PopStyleColor();
+            }
+        }
+
+        // ── Take tray ────────────────────────────────────────────────────────
+        ImGui::Dummy({0.f, 10.f}); ui_separator(); ImGui::Dummy({0.f, 6.f});
+        ui_label("Takes");
+        ImGui::Dummy({0.f, 6.f});
+        if (clip.rec_takes.empty()) {
+            ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+            ImGui::TextUnformatted("No takes yet \xe2\x80\x94 hit Record.");
+            ImGui::PopStyleColor();
+        }
+        int   place_idx  = -1;   // deferred: placing mutates state.tracks
+        int   delete_idx = -1;
+        for (int i = 0; i < (int)clip.rec_takes.size(); ++i) {
+            ImGui::PushID(i);
+            bool sel = (clip.rec_take_sel == i);
+            float dur = recorder_wav_duration(clip.rec_takes[i]);
+            char lbl[80];
+            snprintf(lbl, sizeof(lbl), "%s Take %d  \xc2\xb7  %s",
+                     sel ? "\xe2\x96\xb6" : " ", i + 1, fmt_time_short(dur).c_str());
+            if (ImGui::Selectable(lbl, sel, 0, {bar_w - 110.f, 0.f})) {
+                clip.rec_take_sel = i;
+                history_push(state, "Select take");
+            }
+            ImGui::SameLine(bar_w - 100.f);
+            if (ui_btn("Place", false, true)) place_idx = i;
+            ImGui::SameLine(0.f, 4.f);
+            if (ui_btn("\xc3\x97", false, true)) delete_idx = i;
+            ImGui::PopID();
+        }
+        if (delete_idx >= 0) {
+            // Drop the tray entry; the WAV stays in the takes dir (cheap, and
+            // a placed copy of it may still be on the timeline).
+            clip.rec_takes.erase(clip.rec_takes.begin() + delete_idx);
+            if (clip.rec_take_sel == delete_idx) clip.rec_take_sel = -1;
+            else if (clip.rec_take_sel > delete_idx) --clip.rec_take_sel;
+            if (clip.rec_take_sel < 0 && !clip.rec_takes.empty())
+                clip.rec_take_sel = (int)clip.rec_takes.size() - 1;
+            history_push(state, "Delete take");
+        }
+
+        // ── Sound ────────────────────────────────────────────────────────────
+        ImGui::Dummy({0.f, 10.f}); ui_separator(); ImGui::Dummy({0.f, 6.f});
+        ui_label("Sound");
+        ImGui::Dummy({0.f, 6.f});
+        plain_slider("##rec_vol", "Volume", &clip.volume, 0.f, 2.f, "%.2f\xc3\x97");
+        ImGui::Dummy({0.f, 4.f});
+        plain_slider("##rec_pan", "Pan", &clip.pan, -1.f, 1.f, "%.2f");
+
+        // Deferred take placement — inserting a track invalidates `clip`, so
+        // copy everything first and touch nothing after the insert.
+        if (place_idx >= 0 && place_idx < (int)clip.rec_takes.size()) {
+            std::string path  = clip.rec_takes[place_idx];
+            float       start = clip.start;
+            float dur = recorder_wav_duration(path);
+            if (dur > 0.f) {
+                float qfps = tl_fps(state);
+                Clip nc;
+                nc.clip_type = ClipType::Audio;
+                nc.text      = path;
+                nc.source_id = path;
+                nc.start     = start;
+                nc.end       = snap_end_to_frame(start + dur, (int)qfps);
+                Track t;
+                char n[48];
+                snprintf(n, sizeof(n), "Take %d", place_idx + 1);
+                t.name = n;
+                t.clips.push_back(std::move(nc));
+                state.tracks.insert(state.tracks.begin(), std::move(t));
+                state.selected_track += 1;   // brick shifted down one row
+                history_push(state, "Place take on track");
+                return;
+            }
         }
     }
 

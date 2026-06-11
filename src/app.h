@@ -74,7 +74,7 @@ enum class OutputFormat { Vertical, Horizontal, Square };
 // ── Track / clip data model ───────────────────────────────────────────────────
 
 // Each clip carries its own type so any track can hold mixed content.
-enum class ClipType { Text, Lyrics, Subtitle, Video, Audio, Effect, Background, BodyFX, MultiFX };
+enum class ClipType { Text, Lyrics, Subtitle, Video, Audio, Effect, Background, BodyFX, MultiFX, Record };
 
 struct WordEntry {
     std::string text;
@@ -303,6 +303,12 @@ struct Clip {
     float              rel_end   = 0.f;
     std::vector<Clip>  fx_chain;          // ordered sub-effects for MultiFX bricks
     int                fx_chain_selected = -1;
+
+    // Record brick (ClipType::Record) — loop-recorded takes (WAV paths in the
+    // managed takes dir). The selected take plays in preview/export like an
+    // audio clip with in_point 0 / speed 1; the rest wait in the panel tray.
+    std::vector<std::string> rec_takes;
+    int                      rec_take_sel = -1;
 };
 
 // Split `cl` at absolute timeline time `cut` and return the right half.

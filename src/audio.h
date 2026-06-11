@@ -18,6 +18,24 @@ float audio_position();
 float audio_latency();
 bool  audio_is_playing();
 
+// ── Loop region (cycle playback for the record brick) ─────────────────────────
+// While set, the master clock wraps from end back to start; audio_position()
+// (and therefore the playhead and video preview) follows automatically.
+void     audio_set_loop(float start_sec, float end_sec);
+void     audio_clear_loop();
+bool     audio_loop_active();
+uint64_t audio_loop_cycles();  // increments once per wrap — recorder slices takes on this clock
+
+// ── Mic capture (record brick) ────────────────────────────────────────────────
+// Separate miniaudio capture device: interleaved stereo f32 @ 44100, same
+// format the mixer uses, so takes feed straight back into the clip system.
+bool  audio_capture_start();
+void  audio_capture_stop();
+bool  audio_capture_active();
+// Move all captured samples since the last drain into `out` (appends).
+void  audio_capture_drain(std::vector<float>& out);
+float audio_capture_latency();  // input period in seconds (0 if not capturing)
+
 // Decode audio file metadata without full load
 struct AudioMeta {
     float    duration_secs = 0.f;
