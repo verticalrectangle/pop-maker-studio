@@ -19,5 +19,10 @@ bool recorder_is_target(int ti, int ci);
 int  recorder_take_count();   // takes completed since recorder_start
 float recorder_input_level(); // smoothed mic peak 0–1 for the panel meter
 
+// Live waveform of the take currently being recorded: fills out[0..n) with a
+// peak per bucket across the full loop length; buckets not yet reached stay 0.
+// Returns false when not recording. UI-thread only (same thread as the tick).
+bool recorder_live_peaks(int n, float* out);
+
 // Duration in seconds of a WAV written by the recorder (header probe; 0 on error).
 float recorder_wav_duration(const std::string& path);

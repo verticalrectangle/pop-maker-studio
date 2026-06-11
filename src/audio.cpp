@@ -52,9 +52,11 @@ static std::atomic<uint64_t> g_loop_cycles{0};
 // ── Per-clip source buffers ───────────────────────────────────────────────────
 
 struct SrcBuf {
-    std::string        path;
-    std::vector<float> samples;  // interleaved stereo f32 @ 44100
-    bool               ready = false;
+    std::string path;
+    // Set exactly once when the decode lands and immutable afterwards, so
+    // ClipInfo snapshots can hold the shared_ptr and read lock-free.
+    std::shared_ptr<std::vector<float>> samples;  // interleaved stereo f32 @ 44100
+    bool        ready = false;
 };
 
 // ── Processed FX cache ────────────────────────────────────────────────────────
@@ -77,14 +79,23 @@ struct ClipInfo {
     float volume, pan;
     float fade_in, fade_out;
     PropTrack vol_keys, pan_keys;   // empty = use the static volume/pan
-    int   buf_idx;  // index into g_src_bufs, -1 = not yet loaded
+    std::shared_ptr<const std::vector<float>> buf;  // raw PCM; null = not loaded
     std::shared_ptr<FXBuf> fx_buf;  // non-null = processed samples available
 };
 
 static std::mutex            g_clip_mutex;
 static std::vector<SrcBuf>   g_src_bufs;   // guarded by g_clip_mutex
-static std::vector<ClipInfo> g_clips;      // Audio-track clips
-static std::vector<ClipInfo> g_vid_clips;  // Video-embedded clips (read from g_samples)
+
+// Published clip snapshot. The mixer callback must never wait on the UI
+// thread (a missed block is an audible silence splice — "static"), so the UI
+// builds a fresh immutable snapshot each frame and publishes it with a
+// pointer swap; the callback's lock hold is one shared_ptr copy.
+struct ClipSnapshot {
+    std::vector<ClipInfo> clips;      // Audio-track clips
+    std::vector<ClipInfo> vid_clips;  // Video-embedded audio
+};
+static std::mutex                          g_snap_mutex;
+static std::shared_ptr<const ClipSnapshot> g_snap = std::make_shared<ClipSnapshot>();
 
 // ── Audio callback ────────────────────────────────────────────────────────────
 
@@ -127,8 +138,13 @@ static void data_callback(ma_device* pDevice, void* pOutput, const void*, ma_uin
         return fade;
     };
 
-    std::unique_lock<std::mutex> lk(g_clip_mutex, std::try_to_lock);
-    if (!lk.owns_lock()) return;
+    // Grab the published snapshot — bounded wait (publisher holds the lock
+    // for one pointer swap), never a skipped block.
+    std::shared_ptr<const ClipSnapshot> snap;
+    {
+        std::lock_guard<std::mutex> lk(g_snap_mutex);
+        snap = g_snap;
+    }
 
     for (ma_uint32 f = 0; f < frameCount; ++f) {
         // Per-frame position with loop wrap so the block that crosses the
@@ -139,16 +155,15 @@ static void data_callback(ma_device* pDevice, void* pOutput, const void*, ma_uin
         float t = (float)(fpos / 2) / 44100.f;
 
         // ── All clips (Video + Audio) read from per-source PCM buffers ──────────
-        // Video and Audio clips use the same g_src_bufs system so they layer
+        // Video and Audio clips use the same source-buffer system so they layer
         // cleanly within their brick range regardless of clip type.
         auto mix_clip = [&](const ClipInfo& cl, float global_vol) {
             if (t < cl.tl_start || t >= cl.tl_end) return;
-            if (cl.buf_idx < 0 || cl.buf_idx >= (int)g_src_bufs.size()) return;
             // Prefer FX-processed buffer when ready; fall back to raw samples.
-            const std::vector<float>* buf_ptr = &g_src_bufs[cl.buf_idx].samples;
+            const std::vector<float>* buf_ptr = cl.buf ? cl.buf.get() : nullptr;
             if (cl.fx_buf && cl.fx_buf->ready.load(std::memory_order_acquire))
                 buf_ptr = &cl.fx_buf->samples;
-            if (buf_ptr->empty()) return;
+            if (!buf_ptr || buf_ptr->empty()) return;
             float src_t = cl.in_point + (t - cl.tl_start) * cl.speed;
             size_t sp = (size_t)(src_t * 44100.f) * 2;
             if (sp + 1 >= buf_ptr->size()) return;
@@ -164,8 +179,8 @@ static void data_callback(ma_device* pDevice, void* pOutput, const void*, ma_uin
             out[f*2+1] += (*buf_ptr)[sp+1] * vol * panR;
         };
 
-        for (const auto& cl : g_vid_clips) mix_clip(cl, g_volume);
-        for (const auto& cl : g_clips)     mix_clip(cl, 1.f);
+        for (const auto& cl : snap->vid_clips) mix_clip(cl, g_volume);
+        for (const auto& cl : snap->clips)     mix_clip(cl, 1.f);
     }
 
     // Hard-clamp to prevent inter-clip summing from clipping.
@@ -426,10 +441,10 @@ void audio_source_ensure(const std::string& path) {
         if (!f) return;
         fseek(f, 0, SEEK_END);
         long sz = ftell(f); rewind(f);
-        std::vector<float> buf;
+        auto buf = std::make_shared<std::vector<float>>();
         if (sz > 0) {
-            buf.resize((size_t)sz / sizeof(float));
-            fread(buf.data(), sizeof(float), buf.size(), f);
+            buf->resize((size_t)sz / sizeof(float));
+            fread(buf->data(), sizeof(float), buf->size(), f);
         }
         fclose(f);
 
@@ -444,6 +459,8 @@ void audio_source_ensure(const std::string& path) {
     }).detach();
 }
 
+// Build ClipInfos for one snapshot half. Caller holds g_clip_mutex (for
+// g_src_bufs); FX cache uses its own lock.
 static void clips_fill(std::vector<ClipInfo>& out, const std::vector<AudioClipDesc>& descs) {
     out.clear();
     for (const auto& d : descs) {
@@ -453,15 +470,12 @@ static void clips_fill(std::vector<ClipInfo>& out, const std::vector<AudioClipDe
         ci.volume   = d.volume;   ci.pan      = d.pan;
         ci.fade_in  = d.fade_in;  ci.fade_out = d.fade_out;
         ci.vol_keys = d.vol_keys; ci.pan_keys = d.pan_keys;
-        ci.buf_idx  = -1;
-        for (int i = 0; i < (int)g_src_bufs.size(); ++i) {
-            if (g_src_bufs[i].path == d.path && g_src_bufs[i].ready) {
-                ci.buf_idx = i; break;
-            }
+        for (auto& b : g_src_bufs) {
+            if (b.path == d.path && b.ready) { ci.buf = b.samples; break; }
         }
 
         // FX processing
-        if (d.fx_hash != 0 && ci.buf_idx >= 0) {
+        if (d.fx_hash != 0 && ci.buf) {
             auto key = std::make_pair(d.path, d.fx_hash);
             std::shared_ptr<FXBuf> fb;
             {
@@ -472,12 +486,13 @@ static void clips_fill(std::vector<ClipInfo>& out, const std::vector<AudioClipDe
                 } else {
                     fb = std::make_shared<FXBuf>();
                     g_fx_cache[key] = fb;
-                    // Kick off async processing
+                    // Kick off async processing. Capture the source as a
+                    // shared_ptr — it used to copy the whole PCM buffer.
                     uint64_t my_gen = fb->gen.fetch_add(1) + 1;
-                    const std::vector<float>& raw = g_src_bufs[ci.buf_idx].samples;
+                    std::shared_ptr<const std::vector<float>> src = ci.buf;
                     AudioFX fx = d.fx;
-                    std::thread([fb, raw, fx, my_gen]() {
-                        auto result = process_audio_fx(raw, fx, 44100.f,
+                    std::thread([fb, src, fx, my_gen]() {
+                        auto result = process_audio_fx(*src, fx, 44100.f,
                                                         &fb->gen, my_gen);
                         if (!result.empty()) {
                             fb->samples = std::move(result);
@@ -493,22 +508,46 @@ static void clips_fill(std::vector<ClipInfo>& out, const std::vector<AudioClipDe
     }
 }
 
+// Publish one half of the snapshot, carrying the other half over.
+static void snapshot_publish(std::vector<ClipInfo>&& filled, bool video_half) {
+    auto ns = std::make_shared<ClipSnapshot>();
+    std::lock_guard<std::mutex> lk(g_snap_mutex);
+    if (video_half) {
+        ns->vid_clips = std::move(filled);
+        ns->clips     = g_snap->clips;
+    } else {
+        ns->clips     = std::move(filled);
+        ns->vid_clips = g_snap->vid_clips;
+    }
+    g_snap = std::move(ns);
+}
+
 void audio_clips_update(const std::vector<AudioClipDesc>& descs) {
-    std::lock_guard<std::mutex> lk(g_clip_mutex);
-    clips_fill(g_clips, descs);
+    std::vector<ClipInfo> filled;
+    {
+        std::lock_guard<std::mutex> lk(g_clip_mutex);
+        clips_fill(filled, descs);
+    }
+    snapshot_publish(std::move(filled), false);
 }
 
 void video_audio_clips_update(const std::vector<AudioClipDesc>& descs) {
-    std::lock_guard<std::mutex> lk(g_clip_mutex);
-    clips_fill(g_vid_clips, descs);
+    std::vector<ClipInfo> filled;
+    {
+        std::lock_guard<std::mutex> lk(g_clip_mutex);
+        clips_fill(filled, descs);
+    }
+    snapshot_publish(std::move(filled), true);
 }
 
 void audio_clips_clear() {
     {
         std::lock_guard<std::mutex> lk(g_clip_mutex);
         g_src_bufs.clear();
-        g_clips.clear();
-        g_vid_clips.clear();
+    }
+    {
+        std::lock_guard<std::mutex> lk(g_snap_mutex);
+        g_snap = std::make_shared<ClipSnapshot>();
     }
     std::lock_guard<std::mutex> lk2(g_fx_mutex);
     // Bump generation on all in-flight jobs so they self-cancel, then evict.

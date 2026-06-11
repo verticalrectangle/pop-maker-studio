@@ -28,6 +28,12 @@ void seek_to(AppState& state, float t);
 void toggle_play(AppState& state);
 float tl_fps(const AppState& state);
 
+// ── Record brick ──────────────────────────────────────────────────────────────
+// Insert a fresh Record brick (8 s, frame-snapped) at the playhead on a new
+// top track, select it, and push history. Used by the toolbox rail and the
+// timeline context menu.
+void add_record_brick(AppState& state);
+
 // ── Retime ────────────────────────────────────────────────────────────────────
 // Rescale a media clip's timeline width and any FX bricks overlapping it,
 // anchored at the clip's start. ratio = new_speed / old_speed. Used by the

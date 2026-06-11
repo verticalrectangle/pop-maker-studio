@@ -510,6 +510,27 @@ bool fx_type_is_adjustment_style(FXType ft) {
     }
 }
 
+void add_record_brick(AppState& state) {
+    float qfps = tl_fps(state);
+    if (!(qfps > 0.f)) qfps = 30.f;
+    Clip cl;
+    cl.clip_type = ClipType::Record;
+    cl.start     = snap_to_frame(state.playhead, (int)qfps);
+    cl.end       = snap_end_to_frame(cl.start + 8.f, (int)qfps);
+    Track t;
+    char n[32];
+    snprintf(n, sizeof(n), "Record %d", (int)state.tracks.size() + 1);
+    t.name = n;
+    float clip_end = cl.end;
+    t.clips.push_back(std::move(cl));
+    state.tracks.insert(state.tracks.begin(), std::move(t));
+    state.selected_track = 0;
+    state.selected_clip  = 0;
+    // If the brick lands past the current view, zoom out to fit it.
+    state.tl_zoom_to_fit_end = fmaxf(state.tl_zoom_to_fit_end, clip_end);
+    history_push(state, "Add Record Brick");
+}
+
 // Rescale a media clip's own timeline width AND any FX bricks (Effect / BodyFX
 // / MultiFX / Background) that overlap it, anchored at the clip's start. Speed
 // ratio = new_speed / old_speed; widths divide by it so the clip plays the

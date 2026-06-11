@@ -13,6 +13,7 @@
 #include "history.h"
 #include "filepicker.h"
 #include "waveform.h"
+#include "../recorder.h"
 #include "bg_presets.h"
 #include "text_styles.h"
 #include "theme.h"
@@ -172,12 +173,34 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
     float& zoom         = state.tl_zoom;
     float& scroll       = state.tl_scroll;
 
-    // Minimum zoom that fits the entire timeline in the visible clip area.
-    // Recomputed every frame so it tracks window resize automatically.
-    float zoom_min = fmaxf(1.f, clip_area_w / dur);
+    // Minimum zoom that fits the entire timeline in the visible clip area,
+    // minus a small right margin so clip edges (and their trim handles) never
+    // sit flush against the vertical scrollbar at full zoom-out.
+    float fit_margin = fminf(fmaxf(clip_area_w * 0.05f, 24.f), 64.f);
+    float zoom_min = fmaxf(1.f, (clip_area_w - fit_margin) / dur);
     state.tl_zoom_min = zoom_min;
-    zoom = fmaxf(zoom, zoom_min);  // lift zoom up if window resized or duration shrank
-    if (zoom <= zoom_min) scroll = 0.f;  // fully zoomed out → always show from frame 0
+    // Lift zoom when the floor rises (window resized, duration shrank) — but
+    // never mid-gesture: trimming the last clip changes the duration every
+    // frame, and chasing the moving floor live rescales the whole timeline
+    // under the drag. Freeze while a clip drag is in flight, glide after.
+    if (g_tl.drag_track < 0 && zoom < zoom_min) {
+        float a = fminf(1.f, ImGui::GetIO().DeltaTime * 12.f);
+        zoom += (zoom_min - zoom) * a;
+        if (zoom_min - zoom < 0.01f) zoom = zoom_min;
+    }
+    // Glide scroll back into legal bounds once hands are off — trims may
+    // overscroll past the content end freely while dragging. The bound keeps
+    // the fit margin of empty timeline after the last clip (a trim-follow
+    // release usually lands exactly on it, so nothing visibly moves). At the
+    // zoom floor this converges to 0 (fully zoomed out shows frame 0).
+    if (g_tl.drag_track < 0) {
+        float smax = fmaxf(0.f, dur * zoom - clip_area_w + fit_margin);
+        if (scroll > smax) {
+            float a = fminf(1.f, ImGui::GetIO().DeltaTime * 12.f);
+            scroll += (smax - scroll) * a;
+            if (scroll - smax < 0.5f) scroll = smax;
+        }
+    }
 
     // Deferred zoom-to-fit: set by add_clip_to_track / import whenever a new clip is added.
     // Always compute the target zoom for the clip; only apply it if it means zooming OUT
@@ -185,7 +208,13 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
     // see the full clip, nothing changes; if not, the timeline adjusts to show it with spacing.
     if (state.tl_zoom_to_fit_end > 0.f && clip_area_w > 0.f) {
         float target   = state.tl_zoom_to_fit_end * 1.15f;
-        float new_zoom = fmaxf(zoom_min, fminf(clip_area_w / target, 4000.f));
+        // Floor against the duration AFTER the add lands, not this frame's
+        // zoom_min: the request fires the same frame as the click, before the
+        // duration sync sees the new clip, and the stale (shorter-project)
+        // floor used to swallow the whole zoom-out.
+        float fit_dur   = fmaxf(dur, state.tl_zoom_to_fit_end);
+        float floor_fit = fmaxf(1.f, (clip_area_w - fit_margin) / fit_dur);
+        float new_zoom  = fmaxf(floor_fit, fminf(clip_area_w / target, 4000.f));
         if (new_zoom < zoom) {
             float left_t = scroll / zoom;
             zoom   = new_zoom;
@@ -237,11 +266,11 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                 zoom = fmaxf(zoom_min, fminf(zoom * (1.f + wheel * 0.1f), 4000.f));
                 float mouse_t = (mouse.x - origin.x - TL_LABEL_W + scroll) / old_zoom;
                 scroll = fmaxf(0.f, mouse_t * zoom - (mouse.x - origin.x - TL_LABEL_W));
-                scroll = fminf(scroll, fmaxf(0.f, dur * zoom - clip_area_w + 60.f));
+                scroll = fminf(scroll, fmaxf(0.f, dur * zoom - clip_area_w + fit_margin));
             } else if (!in_track_body) {
                 // Plain scroll in ruler/header = horizontal pan only
                 scroll = fmaxf(0.f, scroll - wheel * 60.f);
-                scroll = fminf(scroll, fmaxf(0.f, tl_content_w - clip_area_w + 60.f));
+                scroll = fminf(scroll, fmaxf(0.f, tl_content_w - clip_area_w + fit_margin));
             }
             // Plain scroll in track body is handled by the vertical scroll block below
         }
@@ -326,58 +355,93 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
             s_snap_enabled = !s_snap_enabled;
     }
 
-    // Adaptive tick ladder {major_interval_secs, subdivisions}.
-    // Selected so that major ticks are always ≥ 80 px apart.
-    struct TickLevel { float secs; int subdivs; };
+    // Tick ladder derived from the project frame grid: every tick at every
+    // zoom sits on a frame boundary, and majors are always labeled as time —
+    // never raw frame counts. Seconds stay the unit; zoomed in, each second
+    // subdivides by a divisor of fps so minors land exactly on frames.
     const float f1 = 1.f / fps;
-    const TickLevel levels[] = {
-        {f1,      1},   // 1 frame
-        {2*f1,    2},   // 2 frames,  minor every 1f
-        {5*f1,    5},   // 5 frames,  minor every 1f
-        {10*f1,   2},   // 10 frames, minor every 5f
-        {0.5f,    5},   // 0.5 s,     minor every 0.1 s
-        {1.f,     4},   // 1 s,       minor every 0.25 s
-        {2.f,     4},   // 2 s,       minor every 0.5 s
-        {5.f,     5},   // 5 s,       minor every 1 s
-        {10.f,    2},   // 10 s,      minor every 5 s
-        {30.f,    3},   // 30 s,      minor every 10 s
-        {60.f,    4},   // 1 min,     minor every 15 s
-        {300.f,   5},   // 5 min,     minor every 1 min
-        {600.f,   2},   // 10 min,    minor every 5 min
-    };
-    const int NUM_LEVELS = (int)(sizeof(levels)/sizeof(levels[0]));
     const float MIN_MAJOR_PX = 80.f;
+    const float MIN_MINOR_PX = 7.f;
+    const int   ifps = (int)fmaxf(1.f, roundf(fps));
 
-    TickLevel chosen = levels[NUM_LEVELS-1];
-    for (int li = 0; li < NUM_LEVELS; ++li) {
-        if (levels[li].secs * zoom >= MIN_MAJOR_PX) { chosen = levels[li]; break; }
+    float major_secs;        // labeled tick interval (always whole-second based)
+    int   minors_per_major;  // minor ticks inside one major
+    bool  frame_grid = false;
+    int   frame_step = ifps; // frames between minors when frame_grid
+    if (zoom >= MIN_MAJOR_PX) {
+        // 1 s majors fit — subdivide the second on the frame grid with the
+        // smallest fps divisor that keeps minors ≥ MIN_MINOR_PX apart.
+        major_secs = 1.f;
+        for (int s = 1; s <= ifps; ++s) {
+            if (ifps % s) continue;
+            if ((float)s * zoom / (float)ifps >= MIN_MINOR_PX) { frame_step = s; break; }
+        }
+        frame_grid       = frame_step < ifps;
+        minors_per_major = ifps / frame_step;
+    } else {
+        // Whole-second ladder — minors are whole seconds (or skipped), so the
+        // grid stays frame-exact at any fps.
+        struct TickLevel { float secs; int subdivs; };
+        static const TickLevel levels[] = {
+            {2.f,    2},   // 2 s,    minor every 1 s
+            {5.f,    5},   // 5 s,    minor every 1 s
+            {10.f,   2},   // 10 s,   minor every 5 s
+            {30.f,   3},   // 30 s,   minor every 10 s
+            {60.f,   4},   // 1 min,  minor every 15 s
+            {300.f,  5},   // 5 min,  minor every 1 min
+            {600.f,  2},   // 10 min, minor every 5 min
+            {1800.f, 3},   // 30 min, minor every 10 min
+        };
+        const int NUM_LEVELS = (int)(sizeof(levels)/sizeof(levels[0]));
+        major_secs       = levels[NUM_LEVELS-1].secs;
+        minors_per_major = levels[NUM_LEVELS-1].subdivs;
+        for (int li = 0; li < NUM_LEVELS; ++li) {
+            if (levels[li].secs * zoom >= MIN_MAJOR_PX) {
+                major_secs       = levels[li].secs;
+                minors_per_major = levels[li].subdivs;
+                break;
+            }
+        }
     }
 
-    float minor_secs = chosen.secs / (float)chosen.subdivs;
-    float first_tick = floorf((scroll / zoom) / minor_secs) * minor_secs;
-
-    for (float t = first_tick; t <= dur + chosen.secs; t += minor_secs) {
+    // Index-based walk (no float accumulation drift on long timelines).
+    const double minor_d   = (double)major_secs / (double)minors_per_major;
+    const float  minor_px  = (float)(minor_d * zoom);
+    const bool   label_frames = frame_grid && minor_px >= 48.f;
+    long i0 = (long)floor((double)(scroll / zoom) / minor_d);
+    if (i0 < 0) i0 = 0;
+    for (long i = i0; (double)i * minor_d <= (double)dur + major_secs; ++i) {
+        float t  = (float)((double)i * minor_d);
         float px = origin.x + TL_LABEL_W + t * zoom - scroll;
-        if (px < origin.x + TL_LABEL_W - 1.f || px > origin.x + total_w) continue;
+        if (px < origin.x + TL_LABEL_W - 1.f) continue;
+        if (px > origin.x + total_w) break;
 
-        int   tick_idx = (int)roundf(t / minor_secs);
-        bool  is_major = (tick_idx % chosen.subdivs == 0);
+        int  sub      = (int)(i % minors_per_major);
+        bool is_major = (sub == 0);
 
         if (is_major) {
             dl->AddLine({px, ruler_y + 4.f}, {px, ruler_y + TL_RULER_H},
                         to_u32(Col::muted));
             char tbuf[16];
-            if (chosen.secs >= 1.f)
-                snprintf(tbuf, sizeof(tbuf), "%s", fmt_time_short(t).c_str());
-            else
-                snprintf(tbuf, sizeof(tbuf), "%d", (int)roundf(t * fps));
+            snprintf(tbuf, sizeof(tbuf), "%s", fmt_time_short(t).c_str());
             float tw = ImGui::CalcTextSize(tbuf).x;
             float lx = px - tw * 0.5f;
             if (lx >= origin.x + TL_LABEL_W + 2.f && lx + tw <= origin.x + total_w - 2.f)
                 dl->AddText({lx, ruler_y + 3.f}, to_u32(Col::muted), tbuf);
         } else {
-            dl->AddLine({px, ruler_y + 10.f}, {px, ruler_y + TL_RULER_H},
-                        to_u32(Col::dim));
+            // Frame ticks: emphasize every 5th frame so groups read at a
+            // glance; label frames as +offsets under their second when wide.
+            bool emph = frame_grid && frame_step == 1 && (sub % 5 == 0);
+            dl->AddLine({px, ruler_y + (emph ? 7.f : 10.f)}, {px, ruler_y + TL_RULER_H},
+                        to_u32(emph ? Col::muted : Col::dim));
+            if (label_frames) {
+                char fbuf[12];
+                snprintf(fbuf, sizeof(fbuf), "+%d", sub * frame_step);
+                float tw = ImGui::CalcTextSize(fbuf).x;
+                float lx = px - tw * 0.5f;
+                if (lx >= origin.x + TL_LABEL_W + 2.f && lx + tw <= origin.x + total_w - 2.f)
+                    dl->AddText({lx, ruler_y + 3.f}, to_u32(Col::dim), fbuf);
+            }
         }
     }
 
@@ -424,15 +488,30 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
         {
             float x_lo = origin.x + TL_LABEL_W;
             float x_hi = x_lo + clip_area_w;
-            float max_scroll = fmaxf(0.f, tl_content_w - clip_area_w);
+            // Edge trims scroll early (at the margin line, not the border)
+            // and — crucially — with NO content-derived ceiling: during a
+            // trim the user's push is the only scroll driver. The dragged
+            // edge rides margin-short of the border, so any ceiling tied to
+            // the (edge-defined) content end cancels against the setback and
+            // deadlocks the gesture. Post-release housekeeping glides the
+            // view back into legal bounds.
+            bool  trim  = (g_tl.drag_left || g_tl.drag_right) && g_tl.drag_track >= 0;
+            float inset = trim ? fit_margin : 0.f;
+            float max_scroll = fmaxf(0.f, tl_content_w - clip_area_w + fit_margin);
             float ds = 0.f;
-            if      (mp.x < x_lo) ds = -edge_step(x_lo - mp.x);
-            else if (mp.x > x_hi) ds =  edge_step(mp.x - x_hi);
+            if      (mp.x < x_lo + inset) ds = -edge_step(x_lo + inset - mp.x);
+            else if (mp.x > x_hi - inset) ds =  edge_step(mp.x - (x_hi - inset));
             if (ds != 0.f) {
-                float ns = fmaxf(0.f, fminf(max_scroll, scroll + ds));
+                float ns = scroll + ds;
+                if (!trim) ns = fminf(ns, max_scroll);
+                ns = fmaxf(0.f, ns);
                 if (g_tl.box_selecting) g_tl.box_start.x -= ns - scroll;
                 scroll = ns;
             }
+            // NOTE: edge trims deliberately never change zoom. A mid-gesture
+            // scale change — even cursor-anchored and floor-latched — swaps
+            // the user's frame of reference while they're measuring by eye.
+            // Auto-scroll at constant zoom is the entire follow behavior.
         }
         // Vertical (clip drags move across tracks; marquee spans them)
         if (g_tl.drag_track >= 0 || g_tl.box_selecting) {
@@ -813,10 +892,17 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
             // extend cy1 past track_area_bot and steal scrollbar clicks.
             cy1 = std::min(cy1, track_area_bot);
             const float ew = 6.f, ew_hit = 12.f;
-            // Edge handles
+            // Edge handles — only where the TRUE edge is on screen. vis_x0/x1
+            // are clamped to the viewport, so a zoomed-in view mid-clip would
+            // otherwise draw a phantom handle at the boundary where no
+            // trimmable edge exists.
             if (sel) {
-                dl->AddRectFilled({vis_x0,cy0},{vis_x0+ew,cy1},to_u32(Col::muted),1.f);
-                dl->AddRectFilled({vis_x1-ew,cy0},{vis_x1,cy1},to_u32(Col::muted),1.f);
+                float tx0 = origin.x + TL_LABEL_W + clip.start * zoom - scroll;
+                float tx1 = origin.x + TL_LABEL_W + clip.end   * zoom - scroll;
+                if (fabsf(tx0 - vis_x0) < 0.5f)
+                    dl->AddRectFilled({vis_x0,cy0},{vis_x0+ew,cy1},to_u32(Col::muted),1.f);
+                if (fabsf(tx1 - vis_x1) < 0.5f)
+                    dl->AddRectFilled({vis_x1-ew,cy0},{vis_x1,cy1},to_u32(Col::muted),1.f);
             }
             // Resize cursor
             {
@@ -1256,6 +1342,81 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                     ImU32 ltcol = sel ? IM_COL32(0,30,25,255) : IM_COL32(160,240,220,255);
                     dl->AddText({vis_x0+4.f, cy0+(cy1-cy0-13.f)*0.5f}, ltcol, lbl);
                 }
+                ImGui::PopClipRect();
+            } else if (clip.clip_type == ClipType::Record) {
+                // Record brick: neutral slate at rest with a red dot as the
+                // type marker; the whole brick goes red only while recording.
+                bool rec_live = recorder_is_target(ti, ci);
+                bool has_take = clip.rec_take_sel >= 0 &&
+                                clip.rec_take_sel < (int)clip.rec_takes.size();
+                ImU32 fill = rec_live ? IM_COL32(140, 22, 26, 255)
+                           : sel      ? IM_COL32(135, 135, 175, 255)
+                           : has_take ? IM_COL32( 42,  42,  56, 255)
+                                      : IM_COL32( 33,  33,  45, 255);
+                dl->AddRectFilled({vis_x0,cy0},{vis_x1,cy1}, fill, 2.f);
+                ImU32 border;
+                if (rec_live) {
+                    float t  = (float)ImGui::GetTime();
+                    int   a  = (int)(170.f + 85.f * sinf(t * 6.f));
+                    border = IM_COL32(255, 70, 70, a);
+                } else {
+                    border = sel ? IM_COL32(205, 205, 240, 255)
+                                 : IM_COL32( 80,  80, 105, 200);
+                }
+                dl->AddRect({vis_x0,cy0},{vis_x1,cy1}, border, 2.f, 0, rec_live ? 2.f : 1.f);
+
+                ImGui::PushClipRect({vis_x0,cy0},{vis_x1,cy1},true);
+                float mid  = (cy0 + cy1) * 0.5f;
+                float half = (cy1 - cy0) * 0.44f;
+                if (rec_live) {
+                    // Live waveform of the pass in progress, growing left→right.
+                    int n = (int)fminf(fmaxf(cx1 - cx0, 16.f), 4096.f);
+                    static std::vector<float> peaks;
+                    peaks.resize((size_t)n);
+                    if (recorder_live_peaks(n, peaks.data())) {
+                        ImU32 wcol = IM_COL32(255, 130, 130, 230);
+                        for (float px2 = vis_x0; px2 < vis_x1; px2 += 1.f) {
+                            int b = (int)((px2 - cx0) / (cx1 - cx0) * (float)n);
+                            if (b < 0 || b >= n) continue;
+                            float amp = fminf(peaks[(size_t)b], 1.f) * half;
+                            if (amp < 1.f) continue;  // not reached yet — stay flat
+                            dl->AddLine({px2, mid-amp}, {px2, mid+amp}, wcol);
+                        }
+                    }
+                } else if (has_take) {
+                    // Takes are recorded on the loop grid: in_point 0, speed 1.
+                    const WaveformData* wd = waveform_get(clip.rec_takes[clip.rec_take_sel]);
+                    if (wd && !wd->samples.empty()) {
+                        ImU32 wcol = sel ? IM_COL32(25, 25, 45, 190)
+                                         : IM_COL32(190, 190, 220, 130);
+                        for (float px2 = vis_x0; px2 < vis_x1; px2 += 1.f) {
+                            float t_src = (px2 - cx0) / zoom;
+                            int   fi    = (int)(t_src * WAVEFORM_FPS);
+                            if (fi < 0 || fi >= (int)wd->samples.size()) continue;
+                            float amp = wd->samples[fi] * half;
+                            if (amp < 1.f) amp = 1.f;
+                            dl->AddLine({px2, mid-amp}, {px2, mid+amp}, wcol);
+                        }
+                    }
+                }
+                // Red dot, top-left — the record-brick type marker. Brighter
+                // (and the brick itself red) while recording.
+                dl->AddCircleFilled({vis_x0 + 8.f, cy0 + 8.f}, 3.f,
+                    rec_live ? IM_COL32(255, 90, 90, 255) : IM_COL32(225, 55, 55, 255));
+                // Label badge, right of the dot.
+                char lbl[48];
+                if (rec_live)
+                    snprintf(lbl, sizeof(lbl), "Take %d", recorder_take_count() + 1);
+                else if (has_take)
+                    snprintf(lbl, sizeof(lbl), "Take %d", clip.rec_take_sel + 1);
+                else if (!clip.rec_takes.empty())
+                    snprintf(lbl, sizeof(lbl), "No take selected");
+                else
+                    snprintf(lbl, sizeof(lbl), "Empty audio record brick");
+                ImU32 lcol = rec_live ? IM_COL32(255, 220, 220, 255)
+                           : sel      ? IM_COL32( 25,  25,  45, 255)
+                                      : IM_COL32(195, 195, 220, 220);
+                dl->AddText({vis_x0 + 15.f, cy0 + 3.f}, lcol, lbl);
                 ImGui::PopClipRect();
             } else {
                 ImVec4 clip_fill = (clip.clip_type==ClipType::Lyrics)   ? Col::clip_lyrics
@@ -1857,8 +2018,11 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                     to_u32(Col::line));
 
         if (tl_content_w > clip_area_w + 1.f || scroll > 0.f) {
-            float max_scroll   = tl_content_w - clip_area_w;
-            float thumb_w      = fmaxf(20.f, sb_w * clip_area_w / tl_content_w);
+            // Scroll range includes the fit margin: fully scrolled right, the
+            // last clip end sits margin-short of the border, same as the
+            // zoomed-out fit and the trim-follow lead.
+            float max_scroll   = fmaxf(1.f, tl_content_w - clip_area_w + fit_margin);
+            float thumb_w      = fmaxf(20.f, sb_w * clip_area_w / (tl_content_w + fit_margin));
             float thumb_travel = fmaxf(1.f, sb_w - thumb_w);
             float thumb_x0     = sb_x0 + scroll / max_scroll * thumb_travel;
             float thumb_x1     = thumb_x0 + thumb_w;
@@ -2003,8 +2167,17 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
         auto src_dur_it = s_source_durations.find(dc.text);
         float src_dur = (src_dur_it != s_source_durations.end()) ? src_dur_it->second : 0.f;
 
+        // The dragged edge is locked inside the visible clip area minus the
+        // fit margin: the margin line is a wall, and auto-scroll feeding
+        // timeline under it is the only way the edge advances — so there is
+        // always that much empty timeline visible ahead of the edge. The left
+        // wall lifts when scrolled home so a left trim can still reach 0:00.
+        const float vis_t_lo = (scroll > 0.5f) ? (scroll + fit_margin) / zoom : 0.f;
+        const float vis_t_hi = (scroll + clip_area_w - fit_margin) / zoom;
+
         if (drag_left && !left_locked) {
             float t = edge_snap(snap(new_t), cands);
+            t = fmaxf(vis_t_lo, fminf(t, vis_t_hi));
             bool still_img_l = dc.clip_type == ClipType::Video && is_image_path(dc.text);
             float src_floor = (src_dur > 0.f && !still_img_l)
                 ? dc.start - dc.in_point / fmaxf(0.01f, dc.speed) : 0.f;
@@ -2021,6 +2194,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
         } else if (drag_right && !right_locked) {
             float et = (mouse.x - origin.x - TL_LABEL_W + scroll) / zoom;
             float t = edge_snap(snap(et), cands);
+            t = fmaxf(vis_t_lo, fminf(t, vis_t_hi));
             // Stills hold a single frame indefinitely, so the source-duration
             // cap doesn't apply — let the user stretch the brick freely.
             bool still_img = dc.clip_type == ClipType::Video && is_image_path(dc.text);
@@ -2178,6 +2352,43 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
         s_fx_weld.target_ti = -1;
         s_fx_weld.target_ci = -1;
     }
+
+    // Trim feedback: bright bar + inward arrow on the edge being dragged, and
+    // a floating chip with the edge timecode (M:SS:FF) and resulting duration.
+    if (drag_track >= 0 && drag_clip >= 0 && (drag_left || drag_right) &&
+        s_drag_moved && drag_track < (int)state.tracks.size() &&
+        drag_clip < (int)state.tracks[drag_track].clips.size()) {
+        const Clip& dc = state.tracks[drag_track].clips[drag_clip];
+        float edge_t = drag_left ? dc.start : dc.end;
+        float ex = origin.x + TL_LABEL_W + edge_t * zoom - scroll;
+        float ty = track_area_top - state.tl_v_scroll + drag_track * TL_TRACK_H;
+        float ecy0 = ty + 1.f, ecy1 = ty + TL_TRACK_H - 1.f;
+        if (ex >= origin.x + TL_LABEL_W && ex <= origin.x + total_w) {
+            dl->AddLine({ex, ecy0}, {ex, ecy1}, IM_COL32(255, 255, 255, 235), 2.5f);
+            float adir = drag_left ? 1.f : -1.f;   // arrow points into the clip
+            float amy  = (ecy0 + ecy1) * 0.5f;
+            dl->AddTriangleFilled({ex + adir * 3.f, amy - 5.f},
+                                  {ex + adir * 3.f, amy + 5.f},
+                                  {ex + adir * 9.f, amy}, IM_COL32(255, 255, 255, 235));
+        }
+        int total_f = (int)roundf(edge_t * fps);
+        int ifr     = (int)fmaxf(1.f, roundf(fps));
+        int ff      = total_f % ifr, ssec = total_f / ifr;
+        char chip[48];
+        snprintf(chip, sizeof(chip), "%d:%02d:%02d  \xc2\xb7  %.2fs",
+                 ssec / 60, ssec % 60, ff, dc.end - dc.start);
+        ImVec2 csz = ImGui::CalcTextSize(chip);
+        ImVec2 cp  = {mouse.x + 14.f, mouse.y - csz.y - 14.f};
+        if (cp.x + csz.x + 12.f > origin.x + total_w) cp.x = mouse.x - csz.x - 26.f;
+        dl->AddRectFilled({cp.x - 6.f, cp.y - 4.f},
+                          {cp.x + csz.x + 6.f, cp.y + csz.y + 4.f},
+                          IM_COL32(20, 20, 30, 235), 4.f);
+        dl->AddRect({cp.x - 6.f, cp.y - 4.f},
+                    {cp.x + csz.x + 6.f, cp.y + csz.y + 4.f},
+                    IM_COL32(120, 120, 160, 200), 4.f);
+        dl->AddText(cp, IM_COL32(230, 230, 245, 255), chip);
+    }
+
     if (ImGui::IsMouseReleased(0)) {
         if (drag_track >= 0 && drag_clip >= 0) {
             {
@@ -2434,6 +2645,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                 // — their vertical position decides what they affect.
                 auto make_new_track = [&](Clip&& cl, const char* act, bool reuse_empty) {
                     int target = reuse_empty ? find_empty_track(state) : -1;
+                    float clip_end = cl.end;
                     if (target < 0) {
                         Track nt;
                         nt.name = clip_type_name(cl.clip_type);
@@ -2445,6 +2657,9 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                     state.selected_clip  = (int)state.tracks[target].clips.size() - 1;
                     s_drop_flash_track   = target;
                     s_drop_flash_t       = 0.6f;
+                    // New clip longer than the current view → zoom out to fit
+                    // it once placed (consumer only ever zooms out, next frame).
+                    state.tl_zoom_to_fit_end = fmaxf(state.tl_zoom_to_fit_end, clip_end);
                     history_push(state, act);
                 };
                 float drop_t = fmaxf(0.f, (ImGui::GetMousePos().x - (origin.x + TL_LABEL_W) + scroll) / zoom);
@@ -2833,23 +3048,8 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
             t.name=n; state.tracks.insert(state.tracks.begin(), std::move(t));
             history_push(state, "Add Track");
         }
-        if (ImGui::MenuItem("Add Record Brick")) {
-            // Loop-record region at the playhead: 8 s default, frame-snapped
-            // so the cycle wraps on a frame boundary.
-            float qfps = tl_fps(state);
-            Clip cl;
-            cl.clip_type = ClipType::Record;
-            cl.start     = snap_to_frame(state.playhead, (int)qfps);
-            cl.end       = snap_end_to_frame(cl.start + 8.f, (int)qfps);
-            Track t;
-            char n[32]; snprintf(n, sizeof(n), "Record %d", (int)state.tracks.size()+1);
-            t.name = n;
-            t.clips.push_back(std::move(cl));
-            state.tracks.insert(state.tracks.begin(), std::move(t));
-            state.selected_track = 0;
-            state.selected_clip  = 0;
-            history_push(state, "Add Record Brick");
-        }
+        if (ImGui::MenuItem("Add Record Brick"))
+            add_record_brick(state);
         ImGui::EndPopup();
     }
 

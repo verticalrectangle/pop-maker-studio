@@ -990,6 +990,36 @@ void ui_studio(AppState& state) {
 
             BY += BTN_H + 6.f;
         }
+
+        // ── Record — action button, not a library view: drops a Record brick
+        // at the playhead and opens its panel ready to arm.
+        {
+            tdl->AddLine({sp.x + 6.f, BY - 5.f}, {sp.x + TB_W - 6.f, BY - 5.f},
+                         IM_COL32(50, 50, 65, 180), 1.f);
+            BY += 4.f;
+            const ImU32 accent = IM_COL32(220, 50, 50, 255);
+            ImVec2 bmin = { BX, BY }, bmax = { BX + BTN_W, BY + BTN_H };
+            bool hov = ImGui::IsMouseHoveringRect(bmin, bmax);
+            bool armed = recorder_active();
+            ImU32 fill = armed ? accent
+                       : hov   ? IM_COL32(58, 26, 30, 255)
+                                : IM_COL32(34, 18, 20, 255);
+            tdl->AddRectFilled(bmin, bmax, fill, 4.f);
+            if (armed || hov)
+                tdl->AddRect(bmin, bmax,
+                    armed ? accent : IM_COL32(150, 60, 65, 200), 4.f, 0, 1.2f);
+            const char* lbl = "\xe2\x97\x8f Record";
+            ImU32 tc = armed ? IM_COL32(255,255,255,255) : IM_COL32(220,140,145,220);
+            ImVec2 tsz = ImGui::CalcTextSize(lbl);
+            tdl->AddText({BX + (BTN_W - tsz.x) * 0.5f, BY + (BTN_H - tsz.y) * 0.5f}, tc, lbl);
+            ImGui::SetCursorScreenPos(bmin);
+            ImGui::InvisibleButton("##tb_record", { BTN_W, BTN_H });
+            if (ImGui::IsItemClicked() && !armed) {
+                add_record_brick(state);
+                s_panel_view = PanelView::Clip;
+                s_user_nav   = false;
+            }
+        }
     }
     ImGui::EndChild();
     ImGui::PopStyleColor(2);
@@ -1594,9 +1624,18 @@ void ui_studio(AppState& state) {
         tl_dl->AddText({hdr_tl.x+8.f, hdr_tl.y+4.f}, to_u32(Col::muted), "TIMELINE");
         ImGui::PopFont();
 
-        // Zoom controls in header
+        // Zoom controls in header. The readout is the position within the
+        // usable zoom range: 0% = fully zoomed out (whole project fits),
+        // 100% = maximum zoom. Log-mapped so steps feel uniform — raw px/s is
+        // meaningless to a person ("1347%" on an empty project).
         {
-            char zbuf[20]; snprintf(zbuf, sizeof(zbuf), "%.0f%%", state.tl_zoom / 80.f * 100.f);
+            const float zmax = 4000.f;
+            float zmin = fmaxf(1.f, state.tl_zoom_min);
+            float pct  = 0.f;
+            if (zmax > zmin * 1.001f)
+                pct = 100.f * logf(fmaxf(state.tl_zoom, zmin) / zmin) / logf(zmax / zmin);
+            pct = fmaxf(0.f, fminf(100.f, pct));
+            char zbuf[20]; snprintf(zbuf, sizeof(zbuf), "%.0f%%", pct);
             float zx = hdr_tl.x + hdr_w - 120.f;
             ImGui::SetCursorScreenPos({zx, hdr_tl.y+2.f});
             ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {4.f, 2.f});

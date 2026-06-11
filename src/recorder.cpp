@@ -3,6 +3,7 @@
 #include "history.h"
 #include "globals.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -117,6 +118,23 @@ static bool finalize_take(AppState& state, const float* smp, size_t n) {
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
+
+bool recorder_live_peaks(int n, float* out) {
+    if (!s_active || n <= 0 || s_take_len == 0) return false;
+    memset(out, 0, (size_t)n * sizeof(float));
+    size_t base = s_lat_off + (size_t)s_take_count * s_take_len;
+    if (s_buf.size() <= base) return true;  // recording, nothing landed yet
+    size_t avail = std::min(s_buf.size() - base, s_take_len);
+    // Stride so a long loop doesn't cost millions of reads per frame; peaks
+    // stay honest enough for a timeline-height waveform.
+    size_t stride = std::max<size_t>(2, s_take_len / ((size_t)n * 64) & ~1ull);
+    for (size_t i = 0; i < avail; i += stride) {
+        int b = (int)(((unsigned long long)i * (unsigned long long)n) / s_take_len);
+        if (b < 0 || b >= n) break;
+        out[b] = std::fmaxf(out[b], std::fabsf(s_buf[base + i]));
+    }
+    return true;
+}
 
 bool recorder_active() { return s_active; }
 bool recorder_is_target(int ti, int ci) { return s_active && ti == s_ti && ci == s_ci; }
