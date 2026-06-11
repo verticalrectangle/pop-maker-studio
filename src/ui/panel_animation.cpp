@@ -1,6 +1,7 @@
 #include "studio_types.h"
 #include "studio_shared.h"
 #include "panel_animation.h"
+#include "text_styles.h"
 #include "pipeline.h"
 #include "app.h"
 #include "audio.h"
@@ -603,4 +604,187 @@ void panel_typography(AppState& state, float w) {
 
         ImGui::TreePop();
     }
+}
+
+// ── Text brick library ────────────────────────────────────────────────────────
+// Human entry point for text bricks: a card per animation style — click to
+// add at the playhead, drag onto the timeline. The same styles the project
+// default can use, plus a "Project Style" card that inherits it.
+
+static const TextStyleCard TEXT_STYLES[] = {
+    {AnimStyle::None,       "Plain",      "Static — no animation", "plain"},
+    {AnimStyle::Fade,       "Fade",       "Opacity in/out — clean and invisible", "soft"},
+    {AnimStyle::Glitch,     "Glitch",     "Digital artefact noise — corrupt feel", "glitch"},
+    {AnimStyle::Typewriter, "Typewriter", "Character-by-character reveal", "retro"},
+    {AnimStyle::Bounce,     "Bounce",     "Drops in with spring overshoot", "lively"},
+    {AnimStyle::Scale,      "Scale",      "Punches in from small — zoom", "punchy"},
+    {AnimStyle::Slide,      "Slide",      "Enters from the left, holds, exits right", "motion"},
+    {AnimStyle::Stack,      "Stack",      "Lines pile — previous dims on entry", "dense"},
+    {AnimStyle::Block,      "Block",      "White background fill — high contrast", "sharp"},
+};
+
+const TextStyleCard* text_style_cards(int* count) {
+    *count = (int)(sizeof(TEXT_STYLES) / sizeof(TEXT_STYLES[0]));
+    return TEXT_STYLES;
+}
+
+const char* text_style_name(AnimStyle st) {
+    for (auto& sc : TEXT_STYLES)
+        if (sc.style == st) return sc.name;
+    return "Text";
+}
+
+void draw_text_style_preview(AnimStyle style, ImDrawList* dl, ImVec2 ppos,
+                             float prev_w, float prev_h, const char* sample) {
+    dl->AddRectFilled(ppos, {ppos.x + prev_w, ppos.y + prev_h},
+        to_u32(Col::accent_dark), 2.f);
+
+    float t = (float)ImGui::GetTime();
+    float phase = fmodf(t, 2.f) / 2.f;  // 0..1 loop every 2s
+
+    ImU32 txt_col = to_u32(Col::fg);
+    switch (style) {
+        case AnimStyle::Fade: {
+            float alpha = phase < 0.5f ? phase * 2.f : 1.f - (phase - 0.5f) * 2.f;
+            txt_col = ImGui::ColorConvertFloat4ToU32({1, 1, 1, alpha});
+            break;
+        }
+        case AnimStyle::Block: {
+            float bw = prev_w * 0.55f;
+            dl->AddRectFilled(
+                {ppos.x + (prev_w - bw) * 0.5f, ppos.y + prev_h * 0.22f},
+                {ppos.x + (prev_w + bw) * 0.5f, ppos.y + prev_h * 0.78f},
+                to_u32(Col::fg), 2.f);
+            txt_col = to_u32(Col::bg);
+            break;
+        }
+        case AnimStyle::Glitch: {
+            float shake = sinf(t * 40.f) * 3.f * phase;
+            ppos.x += shake;
+            break;
+        }
+        case AnimStyle::Bounce: {
+            float y_off = phase < 0.3f ? (0.3f - phase) / 0.3f * 9.f : 0.f;
+            ppos.y += y_off;
+            break;
+        }
+        case AnimStyle::Scale: {
+            // can't scale ImDrawList text easily — expanding rect hint
+            float sc_f = 0.4f + phase * 0.6f;
+            float rw = prev_w * 0.3f * sc_f;
+            dl->AddRect(
+                {ppos.x + (prev_w - rw) * 0.5f, ppos.y + prev_h * 0.28f},
+                {ppos.x + (prev_w + rw) * 0.5f, ppos.y + prev_h * 0.72f},
+                to_u32(Col::dim), 2.f);
+            break;
+        }
+        case AnimStyle::Slide: {
+            float x_off = phase < 0.3f ? (0.3f - phase) / 0.3f * -24.f :
+                          phase > 0.7f ? (phase - 0.7f) / 0.3f * 24.f : 0.f;
+            ppos.x += x_off;
+            break;
+        }
+        default: break;  // None / Typewriter / Stack: static sample
+    }
+
+    if (!sample) sample = text_style_name(style);
+    ImVec2 tsz = ImGui::CalcTextSize(sample);
+    dl->AddText(
+        {ppos.x + (prev_w - tsz.x) * 0.5f, ppos.y + (prev_h - tsz.y) * 0.5f},
+        txt_col, sample);
+}
+
+// Build the clip a card creates/drops. Centered on the canvas so it's never
+// off-screen (the Clip defaults put text at the bottom subtitle slot).
+// Also used by the timeline's TEXT_STYLE drop handlers.
+Clip make_text_brick(AnimStyle style, float start) {
+    Clip c;
+    c.clip_type  = ClipType::Text;
+    c.text       = "Your text";
+    c.clip_style = style;
+    c.sub_pos    = 1;            // canvas center
+    c.start      = start;
+    c.end        = start + 4.f;
+    return c;
+}
+
+void panel_text_library(AppState& state, float w) {
+    ImGui::Dummy({0.f, 6.f});
+    ImGui::PushFont(g_font_bold);
+    ImGui::TextUnformatted("Text");
+    ImGui::PopFont();
+    ImGui::PushStyleColor(ImGuiCol_Text, to_u32(Col::muted));
+    ImGui::TextWrapped("Click to add a text brick at the playhead, or drag "
+                       "onto the timeline. Edit the words and look in the "
+                       "Clip / Typography tabs.");
+    ImGui::PopStyleColor();
+    ImGui::Dummy({0.f, 6.f});
+
+    int n_cards = 0;
+    const TextStyleCard* cards = text_style_cards(&n_cards);
+
+    float cell_w = (w - 8.f) * 0.5f;
+    float cell_h = 72.f;
+    int col_idx  = 0;
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+
+    for (int i = 0; i < n_cards; ++i) {
+        const TextStyleCard& sc = cards[i];
+
+        ImVec2 cp = ImGui::GetCursorScreenPos();
+        dl->AddRectFilled(cp, {cp.x + cell_w, cp.y + cell_h},
+                          IM_COL32(22, 22, 28, 255), 4.f);
+
+        // Animated mini-preview
+        float pad = 5.f;
+        ImVec2 pp = {cp.x + pad, cp.y + pad};
+        float pw2 = cell_w - pad * 2, ph2 = cell_h * 0.58f;
+        dl->PushClipRect(pp, {pp.x + pw2, pp.y + ph2}, true);
+        draw_text_style_preview(sc.style, dl, pp, pw2, ph2, "Abc");
+        dl->PopClipRect();
+
+        dl->AddText({cp.x + 6.f, cp.y + cell_h * 0.66f}, to_u32(Col::fg), sc.name);
+
+        ImGui::SetCursorScreenPos(cp);
+        ImGui::InvisibleButton(sc.name, {cell_w, cell_h});
+        if (ImGui::IsItemHovered()) {
+            dl->AddRect(cp, {cp.x + cell_w, cp.y + cell_h},
+                        IM_COL32(80, 140, 220, 200), 4.f, 0, 1.5f);
+            ImGui::SetTooltip("%s", sc.desc);
+        }
+        if (ImGui::IsItemClicked()) {
+            // Same placement as background cards: empty track if one exists,
+            // else a new track on top (text is foreground content).
+            Clip c = make_text_brick(sc.style, state.playhead);
+            int target = find_empty_track(state);
+            if (target < 0) {
+                Track t; t.name = "Text";
+                state.tracks.insert(state.tracks.begin(), std::move(t));
+                target = 0;
+            }
+            state.tracks[target].clips.push_back(std::move(c));
+            state.selected_track = target;
+            state.selected_clip  = (int)state.tracks[target].clips.size() - 1;
+            history_push(state, std::string("Add text brick: ") + sc.name);
+        }
+        if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
+            int style_int = (int)sc.style;
+            ImGui::SetDragDropPayload("TEXT_STYLE", &style_int, sizeof(int));
+            // Ghost chip
+            ImDrawList* gdl = ImGui::GetWindowDrawList();
+            ImVec2 gp = ImGui::GetCursorScreenPos();
+            float gw = 140.f, gh = 36.f;
+            gdl->AddRectFilled(gp, {gp.x + gw, gp.y + gh}, IM_COL32(20, 40, 80, 230), 6.f);
+            gdl->AddRect(gp, {gp.x + gw, gp.y + gh}, IM_COL32(80, 140, 220, 200), 6.f, 0, 1.2f);
+            ImVec2 tsz = ImGui::CalcTextSize(sc.name);
+            gdl->AddText({gp.x + (gw - tsz.x) * 0.5f, gp.y + (gh - 13.f) * 0.5f},
+                         IM_COL32(255, 255, 255, 240), sc.name);
+            ImGui::EndDragDropSource();
+        }
+
+        if (col_idx == 0) { ImGui::SameLine(0.f, 8.f); col_idx = 1; }
+        else              { col_idx = 0; ImGui::Dummy({0.f, 6.f}); }
+    }
+    if (col_idx == 1) ImGui::NewLine();
+    ImGui::Dummy({0.f, 12.f});
 }

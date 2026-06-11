@@ -39,13 +39,33 @@ struct VideoInfo {
 // MAX_VIDEO_TRACKS is defined in app.h (included above).
 // Each video clip gets its own slot keyed by file path (see AppState::proxy_paths).
 // track_id=-1 in video_close() closes all slots.
+//
+// Each slot is in one of these states. Still and Native are openable before the
+// MJPEG proxy finishes transcoding; screen_studio's per-frame loop swaps to
+// Proxy once it's ready because proxy decode is the fastest steady-state path.
+enum class PreviewSource { None, Still, Proxy, Native };
 
-void      video_open_still(int track_id, const std::string& jpeg_path);
-bool      video_open_proxy(int track_id, const ProxyInfo& proxy);
-void      video_close(int track_id = -1);
-bool      video_is_open(int track_id = 0);
-VideoInfo video_info(int track_id = 0);
-uintptr_t video_get_texture(int track_id, double playhead);
+void          video_open_still (int track_id, const std::string& jpeg_path);
+bool          video_open_proxy (int track_id, const ProxyInfo& proxy);
+bool          video_open_native(int track_id, const std::string& path);
+void          video_close      (int track_id = -1);
+bool          video_is_open    (int track_id = 0);
+PreviewSource video_source     (int track_id);
+VideoInfo     video_info       (int track_id = 0);
+uintptr_t     video_get_texture(int track_id, double playhead);
+
+// Parallel pre-decode for multiple tracks. Each pair is (track_id, playhead).
+// Runs JPEG decode + CPU FX in worker threads, then performs the GL uploads
+// serially on the calling (main) thread. Subsequent video_get_texture() calls
+// for the same (track, playhead) return the pre-decoded texture without
+// redoing work. Safe to call with 0 or 1 entries (it falls through to direct
+// decode in that case).
+//
+// max_frames caps the per-slot prefetch window. 0 = use the default ring size,
+// which is what active clips want. Boundary-warm neighbors use a small cap
+// (e.g. 3) so they don't drag main-thread wait_idle alongside the active clip.
+struct VideoPrefetchReq { int track_id; double playhead; int max_frames = 0; };
+void video_prefetch_frames(const VideoPrefetchReq* reqs, int n);
 
 // Thumbnail for the scrub bar hover — always uses track 0's proxy.
 uintptr_t video_get_thumbnail(double t, int* out_w, int* out_h);

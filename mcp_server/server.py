@@ -31,6 +31,11 @@ import sys
 import threading
 import time
 import uuid
+
+# call_tool assigns a local named `time` (take_snapshot's argument), which
+# shadows the module inside that whole function — handlers there must use
+# _now() instead of time.time().
+_now = time.time
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
@@ -235,38 +240,185 @@ async def _notify_progress(progress: float, total: float = 1.0) -> None:
         pass
 
 
-# ── Effect manifest (codegen'd) ────────────────────────────────────────────────
+# ── Screen-activity detection (proxy-based, purely mechanical) ────────────────
+#
+# Reads the existing .pms_proxy.mjpeg + .idx seek table — one sequential pass,
+# fseek + JPEG decode, never the original file. Outputs diff NUMBERS and
+# active/idle segments; semantic interpretation ("Claude working" vs "user
+# typing") is the calling agent's job, which keeps the tool reusable for any
+# screencast layout.
 
-_MANIFEST_PATH = Path(__file__).parent.parent / "effects" / "mcp_manifest.json"
+_activity_jobs: dict[str, dict] = {}    # source path -> job state
+_activity_lock = threading.Lock()
 
-def _load_manifest() -> list[dict]:
-    if _MANIFEST_PATH.exists():
-        with open(_MANIFEST_PATH) as f:
-            return json.load(f)
-    return []
 
-_EFFECTS = _load_manifest()
+def _proxy_files(path: str) -> tuple[str, str]:
+    return path + ".pms_proxy.mjpeg", path + ".pms_proxy.idx"
 
-def _build_effect_catalog() -> str:
-    if not _EFFECTS:
-        return "(effect manifest not found — run tools/codegen_effects.py)"
-    lines = []
-    for e in _EFFECTS:
-        param_strs = ", ".join(
-            f'{p["name"]} ({p["min"]}–{p["max"]}, default {p["default"]})'
-            for p in e["params"]
-        )
-        lines.append(f'  {e["id"]}: {e["label"]} — {e["description"]}')
-        if param_strs:
-            lines.append(f'    params: {param_strs}')
-    return "\n".join(lines)
 
-_EFFECT_CATALOG = _build_effect_catalog()
+def _read_proxy_index(idx_path: str) -> list[int]:
+    """Binary seek table: [u32 count][u64 byte_offset x count]."""
+    import struct
+    with open(idx_path, "rb") as f:
+        count = struct.unpack("<I", f.read(4))[0]
+        return list(struct.unpack(f"<{count}Q", f.read(8 * count)))
+
+
+def _proxy_fps(path: str, frame_count: int) -> float:
+    """True proxy rate = frame_count / source container duration (the proxy is
+    transcoded CFR; the original's metadata rate does NOT apply — see the
+    engine's proxy_load for the same derivation)."""
+    try:
+        out = subprocess.check_output(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=nw=1:nk=1", "file:" + path],
+            stderr=subprocess.DEVNULL).decode().strip()
+        dur = float(out)
+        if dur > 0:
+            return frame_count / dur
+    except Exception:
+        pass
+    return 30.0  # proxy generation caps at 30 — sane fallback
+
+
+def _decode_proxy_gray(mjpeg, offsets: list[int], file_size: int, i: int):
+    """Decode proxy frame i to a small grayscale numpy array (JPEG draft mode
+    decodes at 1/8 scale — ~2 ms per frame instead of ~10-30)."""
+    import numpy as _np
+    from PIL import Image as _Img
+    start = offsets[i]
+    end   = offsets[i + 1] if i + 1 < len(offsets) else file_size
+    mjpeg.seek(start)
+    data = mjpeg.read(end - start)
+    img = _Img.open(io.BytesIO(data))
+    img.draft("L", (img.size[0] // 8, img.size[1] // 8))
+    return _np.asarray(img.convert("L"), dtype=_np.float32)
+
+
+def _merge_activity_segments(samples: list[tuple[float, float, bool]],
+                             min_segment: float) -> list[dict]:
+    """samples: (t, diff, active). Run-length encode, then absorb runs shorter
+    than min_segment into the previous run so brief flickers don't fragment."""
+    if not samples:
+        return []
+    runs: list[dict] = []
+    for t, d, a in samples:
+        if runs and runs[-1]["state"] == ("active" if a else "idle"):
+            runs[-1]["t1"] = t
+            runs[-1]["diffs"].append(d)
+        else:
+            runs.append({"t0": t, "t1": t,
+                         "state": "active" if a else "idle", "diffs": [d]})
+    merged: list[dict] = []
+    for r in runs:
+        if merged and (r["t1"] - r["t0"]) < min_segment:
+            merged[-1]["t1"] = r["t1"]            # too short — absorb
+            merged[-1]["diffs"].extend(r["diffs"])
+        elif merged and merged[-1]["state"] == r["state"]:
+            merged[-1]["t1"] = r["t1"]            # same state — extend
+            merged[-1]["diffs"].extend(r["diffs"])
+        else:
+            merged.append(r)
+    return [{"t0": round(m["t0"], 3), "t1": round(m["t1"], 3),
+             "state": m["state"],
+             "mean_diff": round(sum(m["diffs"]) / max(1, len(m["diffs"])), 3)}
+            for m in merged]
+
+
+def _activity_scan_worker(path: str, regions: dict, threshold: float,
+                          sample_fps: float, min_segment: float, job: dict) -> None:
+    """Background thread: sequential pass over the proxy, per-region frame
+    diffs, merged segments. Progress lands in the job dict AND in the app UI
+    via the agent_status IPC ping (visible like proxy generation)."""
+    import numpy as _np
+    try:
+        mjpeg_path, idx_path = _proxy_files(path)
+        offsets   = _read_proxy_index(idx_path)
+        file_size = os.path.getsize(mjpeg_path)
+        n         = len(offsets)
+        fps       = _proxy_fps(path, n)
+        step      = max(1, round(fps / max(0.1, sample_fps)))
+        indices   = list(range(0, n, step))
+
+        per_region: dict[str, list] = {name: [] for name in regions}
+        prev: dict[str, Any] = {}
+        last_ping = 0.0
+
+        with open(mjpeg_path, "rb") as mj:
+            for k, i in enumerate(indices):
+                if job.get("cancel"):
+                    job["state"] = "error"; job["error"] = "cancelled"; return
+                gray = _decode_proxy_gray(mj, offsets, file_size, i)
+                gh, gw = gray.shape
+                t = i / fps
+                for name, (x0, y0, x1, y1) in regions.items():
+                    crop = gray[int(y0 * gh):max(int(y0 * gh) + 1, int(y1 * gh)),
+                                int(x0 * gw):max(int(x0 * gw) + 1, int(x1 * gw))]
+                    if name in prev and prev[name].shape == crop.shape:
+                        diff = float(_np.mean(_np.abs(crop - prev[name])))
+                        per_region[name].append((t, diff, diff > threshold))
+                    prev[name] = crop
+                job["progress"] = (k + 1) / len(indices)
+                now = time.time()
+                if now - last_ping > 2.0:          # keep the app UI pill alive
+                    last_ping = now
+                    try:
+                        _call("agent_status",
+                              {"msg": f"activity scan {int(job['progress'] * 100)}%"})
+                    except Exception:
+                        pass
+
+        job["result"] = {
+            "path": path,
+            "proxy_fps": round(fps, 4),
+            "duration": round(n / fps, 3),
+            "frames_total": n,
+            "frames_sampled": len(indices),
+            "sample_fps_effective": round(fps / step, 3),
+            "threshold": threshold,
+            "min_segment": min_segment,
+            "regions": {name: _merge_activity_segments(samps, min_segment)
+                        for name, samps in per_region.items()},
+        }
+        job["state"] = "done"
+    except Exception as e:
+        job["state"] = "error"
+        job["error"] = str(e)
+    finally:
+        job["progress"] = 1.0
+        try:
+            _call("agent_status", {"done": True})
+        except Exception:
+            pass
 
 
 # ── MCP server ─────────────────────────────────────────────────────────────────
 
 server = Server("pop-maker-studio")
+
+
+async def _send_search_progress(status: dict, last_msg: str) -> str:
+    """Forward C++ search status to the MCP client as a progress notification.
+
+    Returns the new last_msg (unchanged if no notification was sent). Safe to
+    call from any tool handler — silently no-ops when the client did not
+    include a progressToken with the request, or when no request context
+    exists (e.g. unit tests).
+    """
+    msg = status.get("message", "")
+    if not msg or msg == last_msg:
+        return last_msg
+    try:
+        ctx = server.request_context
+        token = ctx.meta.progressToken if ctx.meta else None
+        if token is not None:
+            progress = float(status.get("progress", 0.0))
+            await ctx.session.send_progress_notification(token, progress, 1.0, msg)
+    except LookupError:
+        pass
+    except Exception as e:
+        print(f"[search progress] notification failed: {e}", flush=True)
+    return msg
 
 
 @server.list_tools()
@@ -282,10 +434,11 @@ async def list_tools() -> list[Tool]:
                 "Read-only — no batch needed.\n\n"
                 "PROBE BEFORE ASKING: When the user provides media files, use tools to gather facts "
                 "before asking them anything. Call get_media_info on each file to learn resolution, "
-                "duration, and codec. To understand video content, capture a still: "
-                "ffmpeg -y -ss 3 -i <path> -vframes 1 -vf scale=480:-1 /tmp/still_<name>.jpg -loglevel quiet "
-                "then Read the jpg — you can see and describe it yourself. "
-                "For lyrics/transcript, run trigger_pipeline on the audio first. "
+                "duration, and codec. To understand video content: if you have Bash + Read tools "
+                "and native vision, capture a still ("
+                "ffmpeg -y -ss 0.5 -i <path> -vframes 1 -vf scale=480:-1 /tmp/still_<name>.jpg -loglevel quiet"
+                ") and Read it; otherwise use describe_video → get_video_description for local "
+                "scene captions. For lyrics/transcript, run trigger_pipeline on the audio first. "
                 "Only ask the user about subjective choices (style, pacing, colors) that tools cannot determine."
             ),
             inputSchema={
@@ -469,18 +622,27 @@ async def list_tools() -> list[Tool]:
             description=(
                 "Returns the current ML pipeline status: stage (idle/extract/transcribe/"
                 "align/done/error), progress (0–1), message, and error string. "
-                "Poll this after trigger_pipeline or generate_typography."
+                "trigger_pipeline returns immediately with stage='running' — poll this every 2–3s "
+                "until stage='done' (or 'error'). No batch needed."
             ),
             inputSchema={"type": "object", "properties": {}},
         ),
         Tool(
             name="begin_batch",
             description=(
-                "Start a named edit batch. REQUIRED before any mutation (add_clip, set_clip_prop, "
-                "add_track, delete_clip, apply_effect, etc.). Read-only calls (get_project, "
-                "get_clips, take_snapshot, trigger_pipeline, crop_media) need no batch. "
-                "Single-edit batches are fine — they still need begin/end_batch. "
-                "You cannot nest batches. The label appears in the undo history."
+                "Group multiple mutations into one undo step.\n\n"
+                "YOU PROBABLY DON'T NEED THIS for a single mutation. The server auto-batches every "
+                "individual mutation call (add_clip, set_clip_prop, add_track, delete_clip, "
+                "add_effect_brick, etc.) using the method name as the undo label, so a one-off "
+                "set_clip_prop on its own becomes one undo step automatically.\n\n"
+                "USE begin_batch when you want a SEQUENCE of mutations to undo as a single step — "
+                "e.g. add_track + add_clip + set_clip_prop to set up a clip in one motion, or a "
+                "loop of set_clip_prop calls applying a style to many clips. Pass a descriptive "
+                "label that reads well in the undo menu (\"Set up intro lyrics\", \"Apply karaoke "
+                "preset\").\n\n"
+                "Batches can't be nested. Always pair with end_batch — if the connection drops "
+                "mid-batch the in-flight changes are saved as \"<label> (incomplete)\" so nothing "
+                "is lost."
             ),
             inputSchema={
                 "type": "object",
@@ -494,16 +656,96 @@ async def list_tools() -> list[Tool]:
             inputSchema={"type": "object", "properties": {}},
         ),
         Tool(
+            name="add_to_bin",
+            description=(
+                "Add a media file to the project Bin. The Bin is the project-scoped media library "
+                "shown in the right-side panel — files here are 'available to use' but are not on the "
+                "timeline yet. The user (or you, via add_clip) drags from the Bin onto a track to "
+                "actually place them.\n\n"
+                "When to call this:\n"
+                "  - You discovered several candidate files and want to surface them to the user "
+                "without committing placements yet.\n"
+                "  - The user said something like 'have a look at these clips' or 'find me good "
+                "options' — load them into the Bin, then ask which to place.\n"
+                "  - You're processing a batch import (extracted segments, cropped variants) where "
+                "not every file will end up on the timeline.\n\n"
+                "When NOT to call this: don't call it before every add_clip. add_clip on a "
+                "video/audio path automatically mirrors the file into the Bin, so for direct "
+                "placements just call add_clip and skip this. No batch needed."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Absolute path to a media file"},
+                },
+                "required": ["path"],
+            },
+        ),
+        Tool(
+            name="remove_from_bin",
+            description=(
+                "Remove a media file from the project Bin. Does NOT remove clips already placed "
+                "on the timeline that reference the file — those keep working (the timeline holds "
+                "its own path reference). Use delete_clip first if you also want to remove its "
+                "placements. No batch needed."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Absolute path of the bin entry to remove"},
+                },
+                "required": ["path"],
+            },
+        ),
+        Tool(
             name="add_clip",
             description=(
-                "Add a new clip to a track. Requires batch.\n\n"
-                "type: text | lyrics | subtitle | video | audio | effect | background | body_fx\n"
-                "For text/lyrics/subtitle: set 'text' to the display string.\n"
+                "Place a clip on a track.\n\n"
+                "BIN vs TIMELINE: add_to_bin makes a media file 'available to the project' (shows in "
+                "the Bin panel). add_clip actually places it on the timeline. Use add_to_bin when you've "
+                "discovered files the user might want but you're not sure yet; use add_clip when you're "
+                "committing to a placement. add_clip on a video/audio path automatically also adds the "
+                "file to the bin, so you don't need both calls for files you're placing right away.\n\n"
+                "type: video | audio | text | lyrics | subtitle | effect | background | body_fx | record\n"
+                "effect/body_fx bricks cannot overlap another FX brick on the same track — "
+                "rejected; layer effects with add_multifx_brick instead.\n"
+                "type='record' is a loop-record brick: the user records mic takes over its "
+                "range in the app (agents cannot record). Its 'takes' (WAV paths) and "
+                "'selected_take' appear in get_project/get_clips; the selected take plays in "
+                "preview and export. Switch takes with set_clip_prop(prop='selected_take'); "
+                "place a take as a normal audio clip with add_clip type='audio' text=<take path>.\n"
                 "For video files (.mp4 .mov .webm etc): type='video', text=absolute path.\n"
                 "For audio-only files (.flac .mp3 .wav .ogg etc): type='audio', text=absolute path. "
                 "NEVER use type='video' for audio-only files — it will fail with 'cannot write output header'.\n"
                 "Images (PNG/JPG/HEIC) must be converted to video first with crop_media — "
                 "use type='video' with the resulting .mp4 path, not the raw image.\n\n"
+                "TEXT CLIPS — read this before adding any:\n"
+                "  For LYRICS / CAPTIONS / KARAOKE: do NOT hand-build clips here. Call trigger_pipeline "
+                "(it transcribes and lays styled lyric bricks for you), then optionally generate_typography "
+                "(preset=...) to swap the visual style. type='lyrics' clips placed here will render with "
+                "default positioning that may be off-canvas and won't follow the global typography preset.\n"
+                "  For a SINGLE LABELED CALLOUT (label an object, person, action on screen): use add_callout "
+                "instead — it sets correct positioning and gives you an arrow option.\n"
+                "  type='text' is only for genuine one-off text not covered by the above. If you do use it, "
+                "you MUST set sub_pos_x (0.5 = center) and font_size via set_clip_prop or the text will "
+                "render off-canvas.\n\n"
+                "BACKGROUND CLIPS — type='background', text = a preset id (REQUIRED — the call fails "
+                "without a valid one). Preset ids: solid, blob, lava, aurora, plasma, oilslick, inkdrop, "
+                "gradsweep, sunset, neonflood, colorpulse, spotlight, prism, gridpulse, stripes, rings, "
+                "tunnel, vwgrid, checker, hex, halftone, filmgrain, tvstatic, crt, vhstracking, glitchblk, "
+                "matrix, starfield, rain, snow, confetti, bubbles, fire, waveform, ripple, breathing, "
+                "clocksweep, noisedrift, lightning.\n"
+                "  For a FLAT COLOR: text='solid', then set_clip_prop bg_c1=[r,g,b,a] (defaults to white). "
+                "Animated presets take up to three colors (bg_c1..bg_c3) plus bg_speed/bg_intensity — "
+                "sensible defaults are applied from the preset. Place backgrounds on a high-index track "
+                "so they sit behind your content.\n\n"
+                "FRAME SNAPPING — start/end always snap to the project's frame grid (1/fps seconds). The "
+                "engine rounds start to the nearest frame and rounds end UP. If you place clips back-to-back "
+                "by passing next.start = prev.end (your intended values), the snapped previous-end may push "
+                "one frame past your intended next.start, causing an overlap error. RECOVERY: read the error "
+                "message — it includes the colliding clip's snapped end (e.g. \"[90.100s – 90.767s]\"). Use "
+                "that snapped end as the next clip's start. Better: call get_clips after each add and use the "
+                "returned 'end' field as the next clip's start.\n\n"
                 "FILE PATH CONVENTIONS:\n"
                 "  Cropped media:       {parent}/{stem}_crop.mp4  (video)  or  {parent}/{stem}_crop.png  (image)\n"
                 "  Extracted segments:  {parent}/{stem}/{stem}_{start_int}_{end_int}.webm\n"
@@ -513,6 +755,7 @@ async def list_tools() -> list[Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
+                    "quiet": {"type": "boolean", "description": "Return a small ack instead of the full project state (big token saver — use unless you need to re-read state)"},
                     "track":      {"type": "integer"},
                     "track_name": {"type": "string", "description": "Track name (alternative to track index)"},
                     "type": {"type": "string"},
@@ -526,7 +769,7 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="add_track",
             description=(
-                "Add a track at position (0=top/foreground, higher=background). Returns track index. Requires batch.\n\n"
+                "Add a track at position (0=top/foreground, higher=background). Returns track index.\n\n"
                 "LAYERING RULE: track 0 = top (foreground). Highest index = bottom (background).\n"
                 "  Text, FX, overlays → low-index tracks (0, 1, 2…)\n"
                 "  Video, background  → high-index tracks"
@@ -534,6 +777,7 @@ async def list_tools() -> list[Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
+                    "quiet": {"type": "boolean", "description": "Return a small ack instead of the full project state (big token saver — use unless you need to re-read state)"},
                     "name": {"type": "string", "description": "Track name"},
                     "position": {"type": "integer", "description": "Insert position (0 = top)", "default": 0},
                 },
@@ -541,10 +785,11 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="delete_clip",
-            description="Delete a clip. Requires batch.",
+            description="Delete a clip.",
             inputSchema={
                 "type": "object",
                 "properties": {
+                    "quiet": {"type": "boolean", "description": "Return a small ack instead of the full project state (big token saver — use unless you need to re-read state)"},
                     "track":      {"type": "integer"},
                     "track_name": {"type": "string", "description": "Track name (alternative to track index)"},
                     "clip": {"type": "integer"},
@@ -554,10 +799,16 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="move_clip",
-            description="Move a clip to a new start time (preserves duration). Requires batch.",
+            description=(
+                "Move a clip to a new start time (preserves duration). "
+                "Moving an FX brick onto another FX brick's time range on the same "
+                "track is rejected — FX bricks never overlap (use add_multifx_brick "
+                "to combine effects)."
+            ),
             inputSchema={
                 "type": "object",
                 "properties": {
+                    "quiet": {"type": "boolean", "description": "Return a small ack instead of the full project state (big token saver — use unless you need to re-read state)"},
                     "track":      {"type": "integer"},
                     "track_name": {"type": "string", "description": "Track name (alternative to track index)"},
                     "clip": {"type": "integer"},
@@ -568,10 +819,15 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="trim_clip",
-            description="Trim a clip's start and/or end time. Requires batch.",
+            description=(
+                "Trim a clip's start and/or end time. Trimming an FX brick so it "
+                "would lap another FX brick on the same track is rejected — FX "
+                "bricks never overlap."
+            ),
             inputSchema={
                 "type": "object",
                 "properties": {
+                    "quiet": {"type": "boolean", "description": "Return a small ack instead of the full project state (big token saver — use unless you need to re-read state)"},
                     "track":      {"type": "integer"},
                     "track_name": {"type": "string", "description": "Track name (alternative to track index)"},
                     "clip": {"type": "integer"},
@@ -583,46 +839,108 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="split_clip",
-            description="Split a clip at a time point. Returns left_clip and right_clip indices. Requires batch.",
+            description=(
+                "Split a clip at one or more time points. Pass times=[...] to make "
+                "every cut in one call — never loop split_clip for a multi-cut edit. "
+                "Returns left_clip/right_clip for a single cut, plus clips (all "
+                "resulting indices, leftmost first) for multiple cuts."
+            ),
             inputSchema={
                 "type": "object",
                 "properties": {
+                    "quiet": {"type": "boolean", "description": "Return a small ack instead of the full project state (big token saver — use unless you need to re-read state)"},
                     "track":      {"type": "integer"},
                     "track_name": {"type": "string", "description": "Track name (alternative to track index)"},
                     "clip": {"type": "integer"},
-                    "time": {"type": "number"},
+                    "time": {"type": "number", "description": "Single cut point (seconds)"},
+                    "times": {"type": "array", "items": {"type": "number"},
+                              "description": "Multiple cut points (seconds); all must fall inside the clip"},
                 },
-                "required": ["clip", "time"],
+                "required": ["clip"],
             },
         ),
         Tool(
             name="set_clip_prop",
             description=(
-                "Set one property on a clip. Requires batch.\n\n"
+                "Set one property on a clip.\n\n"
                 "LAYOUT:    pos_x, pos_y (0–1 canvas fraction), scale_x, scale_y, rotation\n"
-                "PLAYBACK:  volume (0–2), speed (0.25–4), opacity (0–1), muted (bool),\n"
+                "CROP:      crop_l, crop_t, crop_r, crop_b (0–0.95 fraction trimmed per side,\n"
+                "           display orientation). Non-destructive render-time UV window —\n"
+                "           prefer this over crop_media when the media is already on the\n"
+                "           timeline; the fit box follows the cropped aspect.\n"
+                "PLAYBACK:  volume (0–2), speed (0.25–100; retimes like the UI — the clip's\n"
+                "           timeline width rescales to keep the same source span, and FX\n"
+                "           bricks riding the clip rescale with it. Downstream clips do NOT\n"
+                "           ripple: a shrunk clip leaves a gap — close it with move_clip.\n"
+                "           Pass retime=false to keep start/end and change which source\n"
+                "           range plays instead), opacity (0–1), muted (bool),\n"
                 "           fade_in, fade_out, in_point (source offset seconds)\n"
                 "TEXT:      text, font_size (0=auto), sub_pos (0=bottom 1=center 2=top 3=custom),\n"
                 "           sub_pos_x/y (0–1), sub_anchor_h (0=left 1=center 2=right),\n"
                 "           sub_wrap_w (0–1), sub_color ([r,g,b,a] 0–1)\n"
                 "ANIMATION: clip_style (none|fade|glitch|typewriter|bounce|scale|slide|stack|block),\n"
                 "           blend_mode (normal|add|multiply|screen|overlay)\n"
+                "RECORD:    selected_take (int index into the record brick's takes; -1 = none)\n"
                 "COLOR GRADE (video clips only):\n"
                 "           grade_brightness (-1–1), grade_contrast (0–3),\n"
                 "           grade_saturation (0–3), grade_hue (-180–180)\n"
+                "BACKGROUND (background clips only):\n"
+                "           bg_c1, bg_c2, bg_c3 ([r,g,b,a] 0–1 — 'solid' uses bg_c1 only;\n"
+                "           animated presets use up to all three), bg_speed, bg_intensity (0–1)\n"
                 "AUDIO SYNC: To sync audio to a video at a specific source moment, use a negative\n"
                 "           clip start: start = -source_timestamp, end = video_duration - source_timestamp"
             ),
             inputSchema={
                 "type": "object",
                 "properties": {
+                    "quiet": {"type": "boolean", "description": "Return a small ack instead of the full project state (big token saver — use unless you need to re-read state)"},
                     "track":      {"type": "integer"},
                     "track_name": {"type": "string", "description": "Track name (alternative to track index)"},
                     "clip": {"type": "integer"},
                     "prop": {"type": "string"},
                     "value": {},
+                    "retime": {"type": "boolean", "description": "speed only: false keeps the clip's start/end instead of rescaling its timeline width (default true)"},
                 },
                 "required": ["clip", "prop", "value"],
+            },
+        ),
+        Tool(
+            name="set_clip_keyframes",
+            description=(
+                "Replace the keyframe track for one animatable property on a clip — this is how "
+                "you animate position, scale, rotation, opacity, volume, or pan over time. "
+                "Keyframable props: pos_x, pos_y, scale_x, scale_y, rotation, opacity, volume, pan.\n\n"
+                "keys: full list of {t, v, interp?} replacing any existing keys for that prop. "
+                "t is SECONDS RELATIVE TO CLIP START; interp is the easing toward the NEXT key: "
+                "linear | ease_in | ease_out | ease_both (default) | hold. "
+                "Pass keys=[] to clear the track (the static property value takes over again). "
+                "While keys exist the static field for that prop is ignored.\n\n"
+                "Keys render in both preview and export, survive split/trim (remapped), and show "
+                "as diamonds on the clip in the timeline. Existing keyframes appear under "
+                "'keyframes' on each clip in get_project(verbose=true)."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "quiet": {"type": "boolean", "description": "Return a small ack instead of the full project state (big token saver — use unless you need to re-read state)"},
+                    "track":      {"type": "integer"},
+                    "track_name": {"type": "string", "description": "Track name (alternative to track index)"},
+                    "clip": {"type": "integer"},
+                    "prop": {"type": "string", "description": "pos_x | pos_y | scale_x | scale_y | rotation | opacity | volume | pan"},
+                    "keys": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "t":      {"type": "number", "description": "Seconds relative to clip start"},
+                                "v":      {"type": "number"},
+                                "interp": {"type": "string", "description": "linear|ease_in|ease_out|ease_both|hold (easing toward next key)"},
+                            },
+                            "required": ["t", "v"],
+                        },
+                    },
+                },
+                "required": ["clip", "prop", "keys"],
             },
         ),
         Tool(
@@ -630,12 +948,13 @@ async def list_tools() -> list[Tool]:
             description=(
                 "Add multiple clips to a single track in one round-trip. Equivalent to calling "
                 "add_clip N times but dramatically faster for beat-sync edits or any bulk layout. "
-                "Returns an array of assigned clip IDs in order. Requires batch.\n\n"
+                "Returns an array of assigned clip IDs in order.\n\n"
                 "Each entry in 'clips': {type, start, end, text (file path for video/audio)}"
             ),
             inputSchema={
                 "type": "object",
                 "properties": {
+                    "quiet": {"type": "boolean", "description": "Return a small ack instead of the full project state (big token saver — use unless you need to re-read state)"},
                     "track": {"type": "integer"},
                     "clips": {
                         "type": "array",
@@ -656,10 +975,15 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="set_clip_props",
-            description="Set properties on multiple clips in one call. ops: [{track, clip, prop, value}]. Requires batch.",
+            description=(
+                "Set properties on multiple clips in one call. ops: [{track, clip, prop, value}]. "
+                "Setting speed retimes like the UI (clip width rescales; see set_clip_prop) — "
+                "per-op retime=false opts out."
+            ),
             inputSchema={
                 "type": "object",
                 "properties": {
+                    "quiet": {"type": "boolean", "description": "Return a small ack instead of the full project state (big token saver — use unless you need to re-read state)"},
                     "ops": {
                         "type": "array",
                         "items": {
@@ -669,6 +993,7 @@ async def list_tools() -> list[Tool]:
                                 "clip": {"type": "integer"},
                                 "prop": {"type": "string"},
                                 "value": {},
+                                "retime": {"type": "boolean", "description": "speed only: false keeps start/end instead of rescaling timeline width (default true)"},
                             },
                             "required": ["track", "clip", "prop", "value"],
                         },
@@ -681,15 +1006,15 @@ async def list_tools() -> list[Tool]:
             name="set_text_style",
             description=(
                 "Set visual text styling on a clip. All fields are optional — only provided "
-                "fields are updated. Color arrays are [r, g, b, a] with values 0–1. Requires batch.\n"
+                "fields are updated. Color arrays are [r, g, b, a] with values 0–1.\n"
                 "Fields: shadow_enabled (bool), shadow_ox, shadow_oy, shadow_col,\n"
                 "  stroke_enabled, stroke_w, stroke_col,\n"
                 "  glow_enabled, glow_r, glow_col,\n"
                 "  bg_enabled, bg_col, bg_pad_x, bg_pad_y, bg_corner\n\n"
-                "WARNING — do NOT call this on lyrics/subtitle clips generated by generate_typography. "
+                "WARNING — do NOT call this on lyrics/subtitle clips generated by trigger_pipeline. "
                 "Those clips inherit style from the global preset; overriding a single clip detaches it "
                 "from the global system and produces inconsistent results. "
-                "If the user wants a different text style, re-run generate_typography with the preset "
+                "If the user wants a different text style, call generate_typography with the preset "
                 "that best matches their request — the preset IS the style. "
                 "Only use set_text_style on individual text clips (type='text') when the user explicitly "
                 "asks for a per-clip override."
@@ -697,6 +1022,7 @@ async def list_tools() -> list[Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
+                    "quiet": {"type": "boolean", "description": "Return a small ack instead of the full project state (big token saver — use unless you need to re-read state)"},
                     "track": {"type": "integer"},
                     "clip": {"type": "integer"},
                     "shadow_enabled": {"type": "boolean"},
@@ -719,37 +1045,21 @@ async def list_tools() -> list[Tool]:
             },
         ),
         Tool(
-            name="apply_effect",
-            description=(
-                "Apply a shader effect to a clip. Set amount (0–1). "
-                "Provide params dict with effect-specific parameter values.\n\n"
-                "Available effects:\n" + _EFFECT_CATALOG + "\n\n"
-                "Requires batch."
-            ),
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "track": {"type": "integer"},
-                    "clip": {"type": "integer"},
-                    "fx_id": {"type": "string", "description": "Effect id from the list above"},
-                    "amount": {"type": "number", "description": "0–1 blend amount"},
-                    "params": {"type": "object", "description": "Effect-specific params by name"},
-                },
-                "required": ["track", "clip", "fx_id"],
-            },
-        ),
-        Tool(
             name="generate_typography",
             description=(
-                "Generate subtitle/lyric clips from the loaded transcript using a typography preset. "
-                "Must call trigger_pipeline first to produce the transcript. Requires batch.\n\n"
-                "BEFORE calling this: ensure the audio/video source file is already on the timeline as a clip. "
-                "If it isn't, add it now (add_track + add_clip) — the user must see an audio brick alongside "
-                "the lyric clips or the timeline looks broken.\n\n"
+                "Lay lyric/subtitle bricks on the timeline using a typography preset. Call this AFTER "
+                "trigger_pipeline finishes (stage='done' via get_pipeline_status) — that's how lyrics "
+                "get onto the timeline. Also call again to swap to a different visual style: idempotent, "
+                "clears the existing lyric clips for the current audio source and re-lays them with the "
+                "new preset.\n\n"
                 "PRESET SYSTEM: each preset bundles grouping, position, animation, color, and optional FX clips. "
                 "The preset IS the style — do NOT call set_text_style on the generated clips afterward to tweak "
                 "them; that breaks the global styling. Match the user's style request to the closest preset here "
                 "and use that preset. Karaoke is a preset — use preset='karaoke', do NOT set karaoke=true manually.\n\n"
+                "INTERPRET, DON'T HAND-ROLL: if the user describes a style (e.g. 'bold white caps with drop shadow', "
+                "'tiktok one-word', 'spotify bottom bar'), map it to the closest preset below and call this tool. "
+                "Do NOT build text clips manually via add_clip(type='text') just because the user's wording doesn't "
+                "match a preset name verbatim — the presets are deliberately broad and the closest fit is correct.\n\n"
                 "PRESET GUIDE — pick based on user's style request:\n"
                 "  flash      — ONE WORD · white · all-caps · hard cuts · no effects  ← TikTok lyric video default\n"
                 "  strobe     — same as flash but inverts color every word · ultra aggressive\n"
@@ -801,23 +1111,36 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="trigger_pipeline",
             description=(
-                "Transcribe the project audio for subtitle/typography/karaoke generation. "
-                "Blocks until complete — returns final pipeline status. No polling needed. No batch needed.\n\n"
+                "Kick off the ML pipeline (Demucs + transcription) on the project audio. NON-BLOCKING: "
+                "returns immediately with stage='running'. Poll get_pipeline_status every 2–3s until "
+                "stage='done', then call generate_typography(preset='...') to lay the lyric/subtitle "
+                "bricks on the timeline. No batch needed.\n\n"
+                "FULL WORKFLOW:\n"
+                "  1. add_track('Audio') + add_clip(type='audio', text=<path>) — audio MUST be on the\n"
+                "     timeline before this tool will accept the call.\n"
+                "  2. trigger_pipeline(mode='both')  → returns stage='running'\n"
+                "  3. loop: get_pipeline_status() every 2–3s until stage='done' (or 'error').\n"
+                "  4. generate_typography(preset='flash')  ← lays the lyric bricks in the chosen style.\n"
+                "  5. (optional) generate_typography(preset='...') again to swap the visual style.\n\n"
+                "PROBE FIRST: call get_transcript() — if status='ready' the transcript is already cached on disk. "
+                "If lyric bricks are already on the timeline you can skip this entirely. "
+                "Only call trigger_pipeline when no transcript exists for this audio.\n\n"
                 "PIPELINE MODES:\n"
-                "  both            — (default) Demucs stem separation → vocals.wav → transcription.\n"
-                "                    Transcribes the isolated vocal stem, not the raw mix. Much cleaner for music.\n"
-                "  transcribe_only — Skip separation, transcribe source audio directly. Faster, use for speech/podcasts.\n"
-                "  separate_only   — Run Demucs only, no transcription.\n\n"
-                "BEFORE calling this: add the audio file to the timeline first — add_track('Audio'), "
-                "then add_clip(type='audio', text=path, start=0, end=duration) on that track. "
-                "Do this BEFORE trigger_pipeline, not after. The pipeline adds lyric clips and the user "
-                "must already see the audio brick underneath them — floating lyrics with no audio is very confusing.\n\n"
-                "After this completes:\n"
-                "  Call generate_typography(preset=...) to lay out lyric clips on top.\n\n"
-                "DO NOT use this to search for a moment — use find_and_add_clip instead (windowed search, much faster).\n\n"
+                "  both            — (default) Demucs stem separation → vocals.wav → transcription. "
+                "Transcribes the isolated vocal stem, not the raw mix. Best for music.\n"
+                "  transcribe_only — Skip separation, transcribe source audio directly. Faster; use for speech/podcasts.\n"
+                "  separate_only   — Run Demucs only, no transcription. No bricks to lay afterward.\n\n"
+                "PRESET QUICK-PICKS for step 4 (full list in generate_typography):\n"
+                "  flash    — one word, white, all caps, hard cuts (TikTok default)\n"
+                "  apple    — one word, white, large, smooth fade\n"
+                "  spotify  — phrases, white, bottom center, clean fade\n"
+                "  karaoke  — line with current word highlighted, bottom\n"
+                "  headline — one word, massive, scale animation\n\n"
+                "DO NOT use this to search for a specific moment — use find_and_add_clip instead "
+                "(windowed search, much faster).\n\n"
                 "NEVER run this on a full-length song/track when the user only wants a section. "
-                "Instead: (1) find_and_add_clip(path=full_file, query='end phrase') — windowed "
-                "search, returns exact end timestamp AND auto-extracts the segment to result.dst; "
+                "Instead: (1) find_and_add_clip(path=full_file, query='end phrase') — returns exact end "
+                "timestamp AND auto-extracts the segment to result.dst; "
                 "(2) extract_clip_segment(src=full_file, start=0, end=result.end) → short clip; "
                 "(3) add_track + add_clip(audio, short clip); "
                 "(4) trigger_pipeline on the short clip only. "
@@ -860,31 +1183,35 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="save_project",
             description=(
-                "Save the project to disk. If path is omitted, saves to the last-used path. "
-                "Returns the path written. No batch needed."
+                "Save the project to disk as a .pms file. Always use the .pms extension — the UI "
+                "file picker filters by *.pms, so any other extension (.pmsproj, .json, etc.) "
+                "produces a file the user can't reopen from the app. "
+                "If path is omitted, saves to the last-used path. Returns the path written. No batch needed."
             ),
             inputSchema={
                 "type": "object",
-                "properties": {"path": {"type": "string"}},
+                "properties": {"path": {"type": "string", "description": "Absolute path ending in .pms"}},
             },
         ),
         Tool(
             name="load_project",
-            description="Load a .pms project file, replacing the current project. Requires batch.",
+            description="Load a .pms project file, replacing the current project.",
             inputSchema={
                 "type": "object",
-                "properties": {"path": {"type": "string"}},
+                "properties": {"path": {"type": "string", "description": "Absolute path to a .pms file"}},
                 "required": ["path"],
             },
         ),
         Tool(
             name="add_multifx_brick",
             description=(
-                "Add an ordered chain of FX sub-effects as one brick. Prefer over multiple overlapping add_effect_brick calls.\n\n"
+                "Add an ordered chain of FX sub-effects as one brick. This is THE way to layer "
+                "effects over the same time range: FX bricks cannot overlap each other on a track "
+                "(such calls are rejected), so stacked effects must be one MultiFX chain.\n\n"
                 "Same-track as a video clip = glass mode (affects that clip only). "
                 "Separate FX track = global (affects all layers below).\n\n"
                 "effects[]: {fx_type, rel_start (0), rel_end (0=brick end), params, body_fx_type (if fx_type='body_fx')}\n"
-                "body_fx constraint: must be glass mode (same track as video clip). Requires batch."
+                "body_fx constraint: must be glass mode (same track as video clip)."
             ),
             inputSchema={
                 "type": "object",
@@ -918,7 +1245,7 @@ async def list_tools() -> list[Tool]:
                 "Reset the project to a blank state (clears all tracks, clips, audio, beats). "
                 "Call get_project first — if tracks=[], audio_path='', and duration=0 the project is "
                 "already blank; skip this call and go straight to set_format. Only call new_project "
-                "when the project has existing content you need to discard. Requires batch.\n\n"
+                "when the project has existing content you need to discard.\n\n"
                 "PROBE BEFORE ASKING: When the user provides media files, use tools to answer factual "
                 "questions yourself before asking the user. See get_project description for the full rule."
             ),
@@ -926,10 +1253,11 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="rename_track",
-            description="Rename a track. Requires batch.",
+            description="Rename a track.",
             inputSchema={
                 "type": "object",
                 "properties": {
+                    "quiet": {"type": "boolean", "description": "Return a small ack instead of the full project state (big token saver — use unless you need to re-read state)"},
                     "track":      {"type": "integer"},
                     "track_name": {"type": "string", "description": "Track name to look up (alternative to track index)"},
                     "name": {"type": "string", "description": "New name to assign"},
@@ -942,6 +1270,9 @@ async def list_tools() -> list[Tool]:
             description=(
                 "Add a standalone FX brick to a track. Affects everything below on the timeline "
                 "(or only the sibling video clip if on the same track — glass mode).\n\n"
+                "FX bricks cannot overlap other FX bricks on a track — the call fails. To layer "
+                "several effects over the same time range use one add_multifx_brick chain; "
+                "overlapping a video/text clip (glass mode) is fine.\n\n"
                 "fx_type — use the exact snake_case name. All params are floats. "
                 "'body_fx' is NOT valid here — use add_body_fx_brick instead.\n\n"
                 "BASIC: grade (brightness,contrast,saturation,hue) | blur (blur) | vignette (vignette) | "
@@ -1005,8 +1336,7 @@ async def list_tools() -> list[Tool]:
                 "pencil_sketch (amount,line_str,paper_tone,hatching) | "
                 "long_exposure (amount,threshold,trail,glow) | "
                 "thermal_map (amount,cold_hue,hot_hue,contrast,scanlines) | "
-                "digital_noise (amount,intensity,color_sep,luma_bias)\n\n"
-                "Requires batch."
+                "digital_noise (amount,intensity,color_sep,luma_bias)"
             ),
             inputSchema={
                 "type": "object",
@@ -1065,49 +1395,60 @@ async def list_tools() -> list[Tool]:
             },
         ),
         Tool(
-            name="get_vision_model_status",
-            description=(
-                "Check whether the local Moondream2 vision model is installed. "
-                "Returns {status: 'ready'|'downloading'|'idle'|'error', progress?, message?}. "
-                "Poll every 3s after download_vision_model until status='ready'."
-            ),
-            inputSchema={"type": "object", "properties": {}},
-        ),
-        Tool(
-            name="download_vision_model",
-            description="Start Moondream2 download (~1.1 GB, one-time). Returns immediately. Poll get_vision_model_status until status='ready'.",
-            inputSchema={"type": "object", "properties": {}},
-        ),
-        Tool(
             name="describe_video",
             description=(
-                "DO NOT CALL THIS TOOL. The built-in vision model is broken and returns empty descriptions.\n\n"
-                "Instead, use YOUR OWN vision capability:\n"
-                "  1. Run: ffmpeg -y -ss 3 -i <path> -vframes 1 -vf scale=480:-1 /tmp/still_<name>.jpg -loglevel quiet\n"
-                "  2. Read the JPEG with your Read tool — you will see the image.\n"
-                "  3. Describe what you see and use that for mood/content matching.\n\n"
-                "Repeat for each video. This is faster and more accurate than any local model."
+                "Start local scene analysis: extract keyframes at scene changes and caption each "
+                "with the on-device Moondream2 model. Returns {status:'started'}, or "
+                "{status:'cached'} when a fresh sidecar already exists (then get_video_description "
+                "returns immediately). Poll get_video_description every ~10s — captioning costs "
+                "about 10 s per scene on CPU, so long videos take minutes. Results are cached in "
+                "<video>.pms_scene.json; pass force=true to recompute. Vision models ship "
+                "with the release install.\n\n"
+                "Use this to map a WHOLE video (summaries, find_video_moment scoring) — or when you "
+                "have no vision capability of your own.\n\n"
+                "TEXT-MODE CONTACT SHEET: pass times=[...] (max 48) to caption exactly those "
+                "timestamps instead of auto-detected scenes — e.g. to verify segment boundaries "
+                "from detect_screen_activity without vision. Custom-times runs skip the sidecar "
+                "cache. Vision-capable agents should prefer make_contact_sheet (one image, "
+                "no ~10s-per-frame captioning cost).\n\n"
+                "IF you have Bash + Read tools and native vision, sampling stills yourself is "
+                "faster for spot checks:\n"
+                "  ffmpeg -y -ss <t> -i <path> -vframes 1 -vf scale=480:-1 /tmp/still.jpg, then Read it.\n"
+                "One still is never enough to judge a video — the first frame may be a black intro "
+                "or a transition. Sample ~5 spread across the duration (10%/30%/50%/70%/90%), then "
+                "binary-search a window when hunting a specific moment."
             ),
             inputSchema={
                 "type": "object",
-                "properties": {"path": {"type": "string", "description": "Absolute path to the video file"}},
+                "properties": {
+                    "path": {"type": "string", "description": "Absolute path to the video file"},
+                    "force": {"type": "boolean", "description": "Recompute even if a cached sidecar exists"},
+                    "times": {"type": "array", "items": {"type": "number"},
+                              "description": "Caption exactly these source times in seconds (max 48) instead of auto-detected scenes"},
+                },
                 "required": ["path"],
             },
         ),
         Tool(
             name="get_video_description",
             description=(
-                "DO NOT USE — the built-in vision model is broken. "
-                "Use ffmpeg + your own Read tool to view frames instead (see describe_video for instructions)."
+                "Poll scene analysis started by describe_video. "
+                "Returns {status: 'idle'|'running'|'done'|'error', frames?, capped?}. "
+                "When done, frames is [{timestamp, description}] — pass to find_video_moment "
+                "to score against a query, or scan it yourself for the moment you need."
             ),
             inputSchema={"type": "object", "properties": {}},
         ),
         Tool(
             name="find_video_moment",
             description=(
-                "Score analysed video frames against a query. Returns top 3 matches by confidence: {timestamp, description, confidence}.\n"
-                "Requires: get_video_description status='done' (call describe_video first, then poll).\n"
-                "Requires: get_vision_model_status='ready'."
+                "Find the best-matching moment in a video by visual content. Scores the scene "
+                "captions from describe_video against the query — run describe_video first "
+                "(this tool tells you if the sidecar is missing). Returns ranked "
+                "{timestamp, description, score} candidates.\n\n"
+                "Agents with Bash + Read and native vision can alternatively sample stills "
+                "around candidate timestamps to verify: ffmpeg -y -ss <t> -i <path> -vframes 1 "
+                "/tmp/still_<t>.jpg, then Read it."
             ),
             inputSchema={
                 "type": "object",
@@ -1129,14 +1470,29 @@ async def list_tools() -> list[Tool]:
                 "This means you can locate an exact timestamp in a song or podcast without running "
                 "the full pipeline. Useful for finding where a lyric or phrase occurs so you can "
                 "trim the project to that point before generating typography.\n\n"
-                "FOR LYRIC VIDEOS — use this BEFORE trigger_pipeline when the user wants only a "
-                "section of a song: call find_and_add_clip(path=full_file, query='end phrase') to get "
-                "the exact end timestamp and extracted segment, then add_track + add_clip + trigger_pipeline "
-                "on the result.dst file.\n\n"
+                "FOR LYRIC VIDEOS / SCOPED SECTIONS — use this BEFORE trigger_pipeline when the user wants "
+                "only a section of a song. The canonical flow is:\n"
+                "  1. find_and_add_clip(path=full_file, query='start phrase')  → start timestamp\n"
+                "  2. find_and_add_clip(path=full_file, query='end phrase')    → end timestamp\n"
+                "  3. extract_clip_segment(src=full_file, dst='/tmp/scoped.flac', start=startA, end=endB + tail_sec)\n"
+                "  4. add_track + add_clip(audio, /tmp/scoped.flac) + trigger_pipeline\n"
+                "  5. poll get_pipeline_status until stage='done', then generate_typography(preset='flash')\n"
+                "DO NOT skip step (2): the auto-extracted dst only covers a small window around the matched "
+                "phrase, not from start to end of section. You need both timestamps to extract the full span.\n\n"
+                "CHUNK-STRADDLING PHRASES are handled internally: when a partial match lands at the trailing "
+                "edge of a search chunk, the scanner extends into the next chunk before reporting found, so "
+                "result.end reflects the real phrase end (not the chunk boundary). Same goes for queries whose "
+                "match lives past an existing cached transcript — the cache is extended automatically.\n\n"
                 "Blocks until the match is found — no polling needed. Returns status=found.\n\n"
                 "Always returns extracted=true with a ready-to-use dst file. NEVER call extract_clip_segment "
-                "manually after this — the tool handles extraction internally with exact word-boundary timestamps.\n\n"
-                "result includes in_point = offset into dst where your content starts\n"
+                "manually after this — the tool handles extraction internally.\n\n"
+                "result includes in_point = offset into dst where your content starts.\n\n"
+                "MATCH QUALITY: result includes score (0-1, fraction of query words found) and "
+                "partial_match (true when score<1.0 OR the located span is wider than ~1.5s/word). "
+                "When partial_match=true, treat start/end as APPROXIMATE — the located span may include "
+                "leading/trailing context rather than just the query phrase. Do not derive exact word "
+                "timestamps from a partial match; re-run with a corrected query or use trigger_pipeline + "
+                "get_transcript on the matched segment for word-level alignment.\n\n"
                 "add_clip: track=<target>, type=video, text=result.dst, start=0, end=result.clip_duration, in_point=result.in_point"
             ),
             inputSchema={
@@ -1154,14 +1510,88 @@ async def list_tools() -> list[Tool]:
             name="get_transcript",
             description=(
                 "Return the word-level transcript produced by the transcription pipeline. "
-                "Returns {status: 'idle'|'ready'|'error', words?: [{word, start, end}]}. "
+                "Returns {status: 'idle'|'ready'|'error', words?: [{word, start, end}], path?}. "
                 "Word timestamps are source-file-relative seconds.\n\n"
+                "By default reads the project's current transcript. Pass `path` to inspect "
+                "the cached transcript of any previously-transcribed file (e.g. the full song "
+                "before you sectioned it) without changing project state.\n\n"
                 "STATUS IDLE — what to do next depends on your task:\n"
                 "  Finding a specific moment/phrase → use find_and_add_clip (windowed, stops early, MUCH faster).\n"
                 "    DO NOT run trigger_pipeline just to search.\n"
-                "  Generating full subtitles/karaoke for a clip already on the timeline → use trigger_pipeline."
+                "  Generating full subtitles/karaoke for a clip already on the timeline → use trigger_pipeline.\n"
+                "  Re-using a previously-transcribed file's words for a new section audio → use shift_transcript."
             ),
-            inputSchema={"type": "object", "properties": {}},
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Optional: read the cached transcript for this file path instead of the project's current one. Read-only — does not change project state."},
+                },
+            },
+        ),
+        Tool(
+            name="set_transcript",
+            description=(
+                "Install a custom word-level transcript for the project's current audio. "
+                "Writes the canonical cache JSON next to the audio file and reloads the "
+                "in-memory word cache so generate_typography uses your words immediately.\n\n"
+                "USE THIS WHEN:\n"
+                "  - WhisperX on the current audio produced wrong / sparse word timings and "
+                "you want to override with hand-edited words.\n"
+                "  - You computed words from another source (different transcriber, manual "
+                "alignment) and want the managed Lyrics path to use them.\n\n"
+                "DON'T USE THIS FOR: shifting/clipping a transcript across audio files — call "
+                "shift_transcript, which handles the offset and source-file selection for you.\n\n"
+                "After this call, generate_typography(preset='flash'|...) will lay lyric clips at "
+                "the timings you provided. words: [{word: str, start: float, end: float}, ...]"
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "words": {
+                        "type": "array",
+                        "description": "Word list to install as the project transcript",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "word":  {"type": "string"},
+                                "start": {"type": "number", "description": "Seconds, audio-relative"},
+                                "end":   {"type": "number", "description": "Seconds, audio-relative"},
+                            },
+                            "required": ["word", "start", "end"],
+                        },
+                    },
+                },
+                "required": ["words"],
+            },
+        ),
+        Tool(
+            name="shift_transcript",
+            description=(
+                "Repurpose another file's cached transcript as the project's transcript, "
+                "with a time shift and optional clipping. Closes the gap when a long source "
+                "(e.g. full song) has a clean WhisperX transcript but you're working on an "
+                "extracted section where re-transcribing produces worse results.\n\n"
+                "FLOW: extract section /tmp/section.flac from full.flac starting at 88.71s → "
+                "add the section as the project audio → "
+                "shift_transcript(source_path='/path/to/full.flac', offset=-88.71, start=88.71, end=127) → "
+                "generate_typography(preset='flash'). Done.\n\n"
+                "source_path: optional — the file whose cached transcript to read. Defaults to "
+                "the project's current transcript (useful for shifting in place).\n"
+                "start, end: optional — keep only words overlapping this range in SOURCE-file "
+                "time (pre-shift). Use to clip to the section you extracted.\n"
+                "offset: required — seconds added to every word's start/end. Pass the negative "
+                "of the section's start timestamp to convert source-time to section-time."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "offset":      {"type": "number", "description": "Seconds added to every word timestamp (pass -section_start to convert source time → section time)"},
+                    "start":       {"type": "number", "description": "Lower bound in source-file seconds (pre-shift) for clipping"},
+                    "end":         {"type": "number", "description": "Upper bound in source-file seconds (pre-shift) for clipping"},
+                    "source_path": {"type": "string", "description": "Optional source file whose transcript to read. Defaults to project's current transcript."},
+                },
+                "required": ["offset"],
+            },
         ),
         Tool(
             name="read_transcript_context",
@@ -1430,15 +1860,21 @@ async def list_tools() -> list[Tool]:
                 "After adding the brick, call process_body_fx_masks to compute the body masks from "
                 "the video clip(s) on tracks below. Processing is async; poll get_project or "
                 "get_pipeline_status to monitor progress.\n\n"
-                "fx_type options (40 effects, case-sensitive names from the BodyFX library):\n"
-                "  Retro: RetroTV, VHSGlitch, Scanlines, Halftone, CRTDistort\n"
-                "  Depth: DepthBlur, DepthFog, TiltShift, CinematicDOF\n"
-                "  Glitch: GlitchDisplace, ChromaShift, SignalNoise, DataBurst\n"
-                "  Color: NeonOutline, ThermalCamera, XRayBody, InfraredGlow\n"
-                "  Light: AuraGlow, HoloShimmer, LightTrails, RimLight\n"
-                "  Abstract: LiquidMorph, ParticleDissolve, PixelSort, FractalEdge\n"
-                "  Party: DiscoBall, Confetti, RainbowAura, GlitterBurst\n"
-                "(If unsure, use 'NeonOutline' or 'DepthBlur'.)\n\n"
+                "fx_type options — pass the exact display name (space-separated Title Case, as listed):\n"
+                "  Mask:         Remove Background\n"
+                "  Retro / 80s:  Neon Outline | VHS Body | Scanlines | Chromatic Body | Retrowave | "
+                "TV Static Bg | Arcade | Film Grain Body\n"
+                "  Depth/Focus:  Depth Blur | Tilt-Shift Bg | Spotlight | Fog Bg | Bokeh Bg\n"
+                "  Glitch:       Glitch Body | Glitch Bg | Split Reality | Data Corruption | "
+                "Signal Loss Bg | Chromafall\n"
+                "  Color:        Color Isolation | Invert Bg | Duotone Body | Duotone Bg | Thermal Body | X-Ray\n"
+                "  Light/Glow:   Electric Aura | Rim Light | God Rays | Halo | Bloom Body | Bioluminescent\n"
+                "  Abstract:     Hologram | Matrix Rain Bg | Body Mosaic | Wireframe Bg | Vaporwave\n"
+                "  Party:        Strobe Bg | Disco Body | UV Paint | Fire Aura\n"
+                "Names are case-sensitive AND space-separated — these are different effects from the "
+                "snake_case shader names used by add_effect_brick (e.g. BodyFX 'Scanlines' uses body masks; "
+                "add_effect_brick fx_type='scanlines' is a fullscreen shader). If unsure, use 'Neon Outline' "
+                "or 'Depth Blur'.\n\n"
                 "Returns {track, clip} of the created brick."
             ),
             inputSchema={
@@ -1464,7 +1900,12 @@ async def list_tools() -> list[Tool]:
                 "on tracks below the brick and writes body-segmentation masks for the brick's time "
                 "range. Async — returns immediately; poll get_project for body_fx_mask_status "
                 "('Processing' → 'Ready'). Only needed once per brick; re-run if you extend the "
-                "brick's right edge past the already-processed range."
+                "brick's right edge past the already-processed range.\n\n"
+                "REQUIRES PROXY: the video clip's MJPEG proxy must be on disk before calling this. "
+                "Newly-imported clips show instantly via direct decode but proxy generation runs "
+                "in the background — this call fails with 'video proxy not ready yet' until the "
+                "proxy finishes. Poll get_project for proxy_status on the source video clip and "
+                "retry when it reports 'ready'."
             ),
             inputSchema={
                 "type": "object",
@@ -1480,7 +1921,11 @@ async def list_tools() -> list[Tool]:
             description=(
                 "Remove the background from a video clip using U2Net body segmentation. "
                 "Adds a 'Remove Background' body_fx brick on the same track as the video clip "
-                "(mask processing starts automatically). Blocks until masks are ready. No batch needed."
+                "(mask processing starts automatically). Blocks until masks are ready. No batch needed.\n\n"
+                "REQUIRES PROXY: fails with 'video proxy not ready yet' when the clip's MJPEG "
+                "proxy hasn't finished transcoding. Newly-imported clips preview instantly via "
+                "direct libav decode but bg_remove specifically reads from the proxy. Poll "
+                "get_project for the source clip's proxy_status and retry when it reports 'ready'."
             ),
             inputSchema={
                 "type": "object",
@@ -1517,13 +1962,109 @@ async def list_tools() -> list[Tool]:
             description=(
                 "Renders the canvas frame to PNG and returns the image inline so you can see it. "
                 "Pass an optional time (seconds) to snap at that timestamp without seeking first. "
+                "source='render' (default) re-renders the frame through the export pipeline — what an "
+                "exported video will contain. source='canvas' captures the live preview rect from the "
+                "app's framebuffer — the exact pixels the user is looking at (interactive scene "
+                "compositor + text overlays). If the two disagree, the preview compositor and export "
+                "renderer have diverged — capture both to diagnose which side is wrong. "
+                "source='ui' captures the ENTIRE app window — timeline, panels, canvas, popups — "
+                "use it to see the app state itself (e.g. verifying timeline markers, panel "
+                "layouts, or what the user is describing) rather than the composition. "
                 "Read-only — no batch needed."
             ),
             inputSchema={
                 "type": "object",
                 "properties": {
                     "time": {"type": "number", "description": "Timeline position to snap (default: current playhead)"},
+                    "source": {
+                        "type": "string",
+                        "enum": ["render", "canvas", "ui"],
+                        "description": "render = export pipeline (default); canvas = live preview ground truth; ui = whole app window",
+                    },
                 },
+            },
+        ),
+        Tool(
+            name="detect_screen_activity",
+            description=(
+                "Scan a screen recording for visual activity, for planning retimes/cuts of "
+                "technical footage. Runs server-side over the existing .pms_proxy.mjpeg + .idx "
+                "seek table (sequential pass, never touches the original file) — the proxy must "
+                "be ready (it generates automatically after add_clip; check proxy status if "
+                "unsure). Computes per-frame mean absolute pixel diff (0-255 grayscale) inside "
+                "one or more normalized screen regions and returns merged segments per region: "
+                "[{t0, t1, state: 'active'|'idle', mean_diff}].\n\n"
+                "PURELY MECHANICAL: the numbers say where pixels changed, nothing more. YOU "
+                "interpret what active/idle means for this recording (e.g. 'terminal spinner = "
+                "agent working', 'prompt box changing = user typing') — pick regions that make "
+                "that interpretation unambiguous.\n\n"
+                "regions: {name: [x0, y0, x1, y1]} normalized 0-1 (default {'frame': full}). "
+                "Watching a small region (a spinner, a prompt box) is far more selective than "
+                "whole-frame diff. threshold: mean-diff above this = active (default 1.5; raise "
+                "for noisy video). min_segment: shorter state runs are absorbed into the "
+                "previous segment (default 1.0 s) so blinking cursors don't fragment output. "
+                "sample_fps: scan rate (default 3 — a 40-min recording scans in a few seconds). "
+                "NOTE: diffs are between consecutive SAMPLES, so a higher sample_fps means "
+                "smaller per-sample diffs against the same threshold — if you raise sample_fps, "
+                "lower threshold proportionally (or keep both defaults).\n\n"
+                "ASYNC — returns immediately with {started}; poll get_activity_status every "
+                "2-3 s until state='done'. Progress also shows in the app UI. Typical flow: "
+                "detect → interpret segments → begin_batch + split_clip + set_clip_prop "
+                "(speed up to 100x) to retime the idle stretches."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Absolute path of the source video (proxy must exist)"},
+                    "regions": {
+                        "type": "object",
+                        "description": "Named normalized rects {name: [x0,y0,x1,y1]}. Default: {'frame': [0,0,1,1]}",
+                        "additionalProperties": {
+                            "type": "array", "items": {"type": "number"},
+                            "minItems": 4, "maxItems": 4,
+                        },
+                    },
+                    "threshold":   {"type": "number", "description": "Mean abs diff (0-255) above which a frame counts as active (default 1.5)"},
+                    "min_segment": {"type": "number", "description": "Minimum segment duration in seconds (default 1.0)"},
+                    "sample_fps":  {"type": "number", "description": "Frames per second to sample (default 3)"},
+                },
+                "required": ["path"],
+            },
+        ),
+        Tool(
+            name="get_activity_status",
+            description=(
+                "Poll a detect_screen_activity job: {state: 'running'|'done'|'error', progress "
+                "0-1, result?} — result carries the per-region segment lists when done. Pass "
+                "the same path; omit it to get the most recently started job. Read-only."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Source path passed to detect_screen_activity (optional)"},
+                },
+            },
+        ),
+        Tool(
+            name="make_contact_sheet",
+            description=(
+                "One tiled thumbnail grid with burned-in timestamps for a list of timeline "
+                "times on a source file, returned inline — visually verify ambiguous segment "
+                "boundaries (e.g. from detect_screen_activity) in ONE image call instead of N "
+                "stills. Decodes from the proxy seek table when available (fast), falls back "
+                "to ffmpeg on the original. Up to 48 times per call. Read-only.\n\n"
+                "Requires vision: the result is an image. Text-only agents should use "
+                "describe_video(times=[...]) instead — same idea, local captions as text."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "path":  {"type": "string", "description": "Absolute path of the source video"},
+                    "times": {"type": "array", "items": {"type": "number"},
+                              "description": "Source times in seconds, one tile per entry (max 48)"},
+                    "cols":  {"type": "integer", "description": "Grid columns (default 4)"},
+                },
+                "required": ["path", "times"],
             },
         ),
         Tool(
@@ -1753,17 +2294,6 @@ async def _find_audio_cue(arguments: dict) -> dict:
     }
 
 
-# ── vision model download ─────────────────────────────────────────────────────
-
-async def _download_vision_model() -> dict:
-    """Start the download and return immediately. Claude polls get_vision_model_status."""
-    st = _call("get_vision_model_status", {})
-    if st.get("status") == "ready":
-        return {"status": "ready", "message": "Vision model already installed."}
-    _call("download_vision_model", {})
-    return {"status": "started", "message": "Download started. Poll get_vision_model_status every 3s until status='ready'."}
-
-
 # ── find_video_moment ─────────────────────────────────────────────────────────
 
 def _tfidf_score(query: str, text: str) -> float:
@@ -1787,18 +2317,12 @@ async def _find_video_moment(arguments: dict) -> list[dict]:
     if not query:
         raise ValueError("query is required")
 
-    st = _call("get_vision_model_status", {})
-    if st.get("status") != "ready":
-        raise ValueError(
-            "Vision model not installed. Call download_vision_model, "
-            "then poll get_vision_model_status every 3s until status='ready'."
-        )
-
     res = _call("get_video_description", {})
     if res.get("status") != "done":
         raise ValueError(
-            "Scene analysis not ready. Call describe_video(path) first, "
-            "then poll get_video_description every 3s until status='done', then call find_video_moment."
+            "Scene analysis not ready. Call describe_video(path) first, then poll "
+            "get_video_description every ~10s until status='done' (captioning costs ~10s "
+            "per scene), then call find_video_moment."
         )
 
     frames = res.get("frames", [])
@@ -2338,6 +2862,29 @@ async def _add_clip(arguments: dict) -> dict:
 
 # ── find_and_add_clip ─────────────────────────────────────────────────────────
 
+def _words_cache_paths(audio_path: str) -> tuple[Path, Path]:
+    """Return (canonical, search) words.json paths for a given audio file.
+
+    Canonical (_words.json) is owned by the full pipeline (do_transcribe):
+    DTW + forced alignment + segment splits. Authoritative when present.
+    Search (_words_search.json) is the windowed find_and_add_clip output:
+    best-effort, used as fallback when canonical hasn't been produced yet.
+    """
+    p = Path(audio_path)
+    return (
+        p.parent / p.stem / f"{p.stem}_words.json",
+        p.parent / p.stem / f"{p.stem}_words_search.json",
+    )
+
+
+def _best_words_cache(audio_path: str) -> Path | None:
+    """Pick the best available words.json for an audio file (canonical > search)."""
+    canon, search = _words_cache_paths(audio_path)
+    if canon.exists():  return canon
+    if search.exists(): return search
+    return None
+
+
 def _search_transcript_in_words(words: list, query: str) -> tuple[float, float, str, float, bool]:
     """Search a words list for a query. Returns (start, end, excerpt, score, truncated).
     end is the end of the last matched query word, not the end of the search window.
@@ -2355,17 +2902,27 @@ def _search_transcript_in_words(words: list, query: str) -> tuple[float, float, 
         score = len(query_words_set & set(text.split())) / len(query_words_set) if query_words_set else 0.0
         if score > best_score:
             best_score = score
-            # Narrow to the tightest subspan that covers all query words
-            s_idx, e_idx = 0, len(window) - 1
+            # Narrow to the tightest subspan that achieves the window's score.
+            # Previously this required score >= 1.0, which left s_idx,e_idx at the
+            # full window edges on partial matches — callers then mistook the
+            # window span (often ~20 words / ~15-20s wide) for the located phrase
+            # and cut/extracted at the wrong timestamp. Now we pick the highest
+            # subspan-score and break ties by tighter span.
+            s_idx, e_idx     = 0, len(window) - 1
+            best_span_score  = -1.0
             for s in range(len(window)):
                 for e in range(s, len(window)):
-                    span_text = " ".join(w["word"] for w in window[s:e + 1]).lower()
-                    if len(query_words_set & set(span_text.split())) / len(query_words_set) >= 1.0:
-                        s_idx, e_idx = s, e
+                    span_text  = " ".join(w["word"] for w in window[s:e + 1]).lower()
+                    span_score = (
+                        len(query_words_set & set(span_text.split())) / len(query_words_set)
+                        if query_words_set else 0.0
+                    )
+                    tighter = (e - s) < (e_idx - s_idx)
+                    if span_score > best_span_score or (span_score == best_span_score and tighter):
+                        best_span_score, s_idx, e_idx = span_score, s, e
+                    if span_score >= 1.0:
+                        # full match — can't do better; stop scanning end positions
                         break
-                else:
-                    continue
-                break
             best_start = float(window[s_idx]["start"])
             best_end   = float(window[e_idx]["end"])
             best_text  = " ".join(w["word"] for w in window[s_idx:e_idx + 1])
@@ -2396,8 +2953,13 @@ async def _find_and_add_clip(arguments: dict) -> dict:
 
     p = Path(path)
 
-    # Check disk cache first
-    cached_words_path = p.parent / p.stem / f"{p.stem}_words.json"
+    # Check disk cache first.
+    # PROVENANCE: prefer the canonical full-pipeline cache (_words.json) over
+    # the windowed-search cache (_words_search.json).  The full pipeline runs
+    # DTW + forced alignment and is authoritative.  Search cache is best-effort
+    # — used only when the canonical cache hasn't been produced yet.
+    canonical_words_path, search_words_path = _words_cache_paths(path)
+    cached_words_path = _best_words_cache(path) or search_words_path
     words = None
     if cached_words_path.exists():
         with open(cached_words_path) as f:
@@ -2411,14 +2973,39 @@ async def _find_and_add_clip(arguments: dict) -> dict:
 
     if words:
         start, end, excerpt, score, truncated = _search_transcript_in_words(words, query)
-        if score < 0.3:
+
+        # Cached words may only cover an earlier scan window — e.g. a previous
+        # find_and_add_clip transcribed words 0–60s of a 200s file, and now the
+        # caller asks for a phrase that's actually at 150s. Detect "cache doesn't
+        # cover the file" and trigger a windowed re-scan, regardless of where the
+        # weak match landed inside the cache.
+        try:
+            file_dur = float(_call("get_media_info", {"path": path}).get("duration", 0.0))
+        except Exception:
+            file_dur = 0.0
+        cache_covers_file = bool(words) and (
+            file_dur <= 0.0 or float(words[-1]["end"]) >= file_dur - 5.0
+        )
+        cache_incomplete_match = (not cache_covers_file) and score < 0.85
+
+        if score < 0.3 and cache_covers_file:
             raise ValueError(f"could not find '{query}' in transcript (best score: {score:.2f})")
 
+        # Sanity guard: if the returned span is implausibly wide for the query length,
+        # the actual phrase location is ambiguous. Cap at ~1.5s per query word with a
+        # 6s floor. Wider than that almost always means a partial/noisy match — the
+        # caller should treat start/end as approximate and not extract at exact bounds.
+        n_qwords      = max(len(query.split()), 1)
+        max_plausible = max(6.0, 1.5 * n_qwords)
+        partial_match = score < 1.0 or (end - start) > max_plausible
+
         # Partial match at a chunk boundary — the cached word list was cut off before capturing
-        # the trailing query word(s). Re-run the windowed search with a larger buffer so the
-        # scanner reads one more chunk and returns the true end timestamp.
-        if truncated:
-            print(f"[find_and_add_clip] partial match ({score:.2f}) near cache tail — re-scanning for trailing words", flush=True)
+        # the trailing query word(s) — OR the cache covers only an earlier slice of the file and
+        # the query lives in the un-transcribed region. Re-run the windowed search so the scanner
+        # extends the cache and returns true word-boundary timestamps.
+        if truncated or cache_incomplete_match:
+            reason = "near cache tail" if truncated else "cache doesn't cover full file"
+            print(f"[find_and_add_clip] partial match ({score:.2f}) — re-scanning ({reason})", flush=True)
             _call("search_transcript", {
                 "path":        path,
                 "query_words": query.lower().split(),
@@ -2432,19 +3019,30 @@ async def _find_and_add_clip(arguments: dict) -> dict:
                 msg = st.get("message", "")
                 if msg and msg != last_msg:
                     print(f"[find_and_add_clip lookahead] {msg}", flush=True)
-                    last_msg = msg
+                last_msg = await _send_search_progress(st, last_msg)
                 if not st.get("running", False):
                     break
             if st.get("found"):
                 start   = float(st.get("start", start))
                 end     = float(st.get("end",   end))
                 excerpt = st.get("excerpt", excerpt)
-                # Reload the cache if the search extended it
-                if cached_words_path.exists():
-                    with open(cached_words_path) as f:
+                # Reload the cache if the search extended it, then re-score
+                # against the refreshed words so partial_match reflects the
+                # extended search result, not the stale pre-rescan score.
+                # The re-scan always writes to _words_search.json (the
+                # canonical _words.json is owned by the full pipeline), so
+                # read from the search path here regardless of which cache
+                # we originally loaded.
+                reload_path = search_words_path
+                if reload_path.exists():
+                    with open(reload_path) as f:
                         refreshed = json.load(f)
                     if refreshed and words and float(refreshed[-1]["end"]) > float(words[-1]["end"]):
                         words = refreshed
+                        rs, re_, rex, rscore, _ = _search_transcript_in_words(words, query)
+                        if rscore >= score:
+                            start, end, excerpt, score = rs, re_, rex, rscore
+                            partial_match = score < 1.0 or (end - start) > max_plausible
 
         # Check if any previously extracted segment covers the needed range
         seg_start = max(0.0, start - padding)
@@ -2477,6 +3075,8 @@ async def _find_and_add_clip(arguments: dict) -> dict:
                 "dst":           existing_dst,
                 "clip_duration": round(duration, 3),
                 "in_point":      round(seg_start - file_seg_start, 3),
+                "score":         round(score, 2),
+                "partial_match": partial_match,
             }
 
         # Auto-extract the segment so the caller never needs to call extract_clip_segment manually
@@ -2514,6 +3114,8 @@ async def _find_and_add_clip(arguments: dict) -> dict:
             "dst":           dst,
             "clip_duration": round(duration, 3),
             "in_point":      round(start - seg_start, 3),
+            "score":         round(score, 2),
+            "partial_match": partial_match,
         }
 
     # No transcript — start transcription search and block until done
@@ -2529,11 +3131,24 @@ async def _find_and_add_clip(arguments: dict) -> dict:
         msg = status.get("message", "")
         if msg and msg != last_msg:
             print(f"[find_and_add_clip] {msg}", flush=True)
-            last_msg = msg
+        last_msg = await _send_search_progress(status, last_msg)
         if not status.get("running", False):
             break
 
     if not status.get("found", False):
+        # Surface top-N fuzzy candidates instead of a blank failure.  The C++
+        # search returns up to 3 disjoint windows with coverage >= 0.5 so the
+        # agent / human can disambiguate ("did you mean phrase X at 0:42?")
+        # without re-running another search.
+        cands = status.get("candidates", []) or []
+        if cands:
+            tip = ", ".join(
+                f"{round(c.get('start',0.0),2)}s '{(c.get('excerpt','') or '').strip()[:60]}' (score={c.get('score',0):.2f})"
+                for c in cands[:3]
+            )
+            raise ValueError(
+                f"could not find '{query}' exactly. Closest fuzzy hits: {tip}"
+            )
         raise ValueError(f"could not find '{query}' in transcript: {status.get('error', 'not found')}")
 
     start   = float(status["start"])
@@ -2610,8 +3225,8 @@ def _search_transcript(arguments: dict) -> dict:
     if not path:
         raise ValueError("No path provided and no audio_path on project")
     p = Path(_resolve_path(path))
-    words_path = p.parent / p.stem / f"{p.stem}_words.json"
-    if not words_path.exists():
+    words_path = _best_words_cache(str(p))
+    if words_path is None:
         raise ValueError(f"No transcript for {p.name} — run trigger_pipeline first")
     with open(words_path) as f:
         all_words = json.load(f)
@@ -2636,8 +3251,8 @@ def _cut_at_phrase(arguments: dict) -> dict:
         raise ValueError("Transcript not ready — run trigger_pipeline first")
 
     p = Path(_resolve_path(audio_path))
-    words_path = p.parent / p.stem / f"{p.stem}_words.json"
-    if not words_path.exists():
+    words_path = _best_words_cache(str(p))
+    if words_path is None:
         raise ValueError(f"No transcript for {p.name}")
     with open(words_path) as f:
         all_words = json.load(f)
@@ -2680,127 +3295,8 @@ def _cut_at_phrase(arguments: dict) -> dict:
         return {"trimmed_start": round(timeline_t, 3), "excerpt": match["excerpt"], **result}
 
 
-_AGENT_GUIDE = """
-# Pop Maker Studio — Agent Guide
-
-## Architecture
-A native C++ video editor controlled through an MCP server over a Unix socket IPC layer.
-The app runs locally; agents connect via this MCP server.
-
-## Asking the user questions
-When you have clarifying questions before starting a task (style preferences, pacing choices,
-layout decisions, etc.), always use the AskUserQuestion tool — the interactive panel UI — instead
-of asking in plain text. Group all questions into a single AskUserQuestion call.
-
-## The two non-negotiable rules
-
-**1. ALL mutations require a batch.**
-Wrap every write operation in begin_batch("label") … end_batch().
-Read-only calls (get_project, get_clips, get_all_clips, take_snapshot, trigger_pipeline,
-crop_media, analyze_audio, seek, play, pause, get_pipeline_status, verify_clips) need no batch.
-Single-edit batches are fine — they still need begin/end_batch. Never nest batches.
-
-**2. Long-running ops block until complete — no manual polling needed.**
-These tools handle polling internally and return only when done:
-  trigger_pipeline    — returns final stage=done result; then call generate_typography
-  analyze_audio(path) — returns status=done with beats/rms; then call find_audio_cue
-  find_and_add_clip   — returns status=found; then extract_clip_segment → add_clip
-  remove_background   — returns status=ready
-
-Video scene understanding (built-in vision model is broken — do this instead):
-  ffmpeg -y -ss 3 -i <path> -vframes 1 -vf scale=480:-1 /tmp/still_<name>.jpg -loglevel quiet
-  Then Read /tmp/still_<name>.jpg — you can see the image and describe it yourself.
-
-## Track layering
-Track 0 = top (foreground). Highest index = bottom (background).
-  Text, FX, overlays → low-index tracks (0, 1, 2…)
-  Video, background  → high-index tracks
-
-## Canvas formats
-set_format presets: vertical (9:16 TikTok/Reels), horizontal (16:9 YouTube), square (1:1 Instagram)
-
-## File path conventions
-  Cropped media:       {parent}/{stem}_crop.mp4  (video) or  {parent}/{stem}_crop.png  (image)
-  Extracted segments:  {parent}/{stem}/{stem}_{start_int}_{end_int}.webm
-  Transcripts:         {parent}/{stem}/{stem}_words.json
-  find_and_add_clip only adds the short extracted segment — never the full source file
-  Always call crop_media before add_clip when source aspect ratio differs from the canvas
-
-## crop_media — face-aware cropping
-crop_media runs face detection by default (face_detect=true). It finds the largest face,
-adds padding (pad_top=0.4, pad_bottom=0.3 × face height), and crops automatically.
-Returns an inline thumbnail — verify it before calling add_clip.
-If the thumbnail looks wrong, re-call with adjusted pad_top/pad_bottom or face_detect=false + x_pct/y_pct.
-Handles HEIC/JPG/PNG images and MOV/MP4 video including rotation metadata.
-
-## Clip props reference
-
-Layout:    pos_x, pos_y (0–1 canvas fraction), scale_x, scale_y, rotation
-Playback:  volume (0–2), speed (0.25–4), opacity (0–1), muted (bool),
-           fade_in, fade_out, in_point (source offset seconds)
-Text:      text, font_size (0=auto), sub_pos (0=bottom 1=center 2=top 3=custom),
-           sub_pos_x/y (0–1), sub_anchor_h (0=left 1=center 2=right),
-           sub_wrap_w (0–1), sub_color ([r,g,b,a] 0–1)
-Animation: clip_style (none|fade|glitch|typewriter|bounce|scale|slide|stack|block),
-           blend_mode (normal|add|multiply|screen|overlay)
-Color grade (video clips only):
-           grade_brightness (-1–1), grade_contrast (0–3),
-           grade_saturation (0–3), grade_hue (-180–180)
-Audio sync: start = -source_timestamp, end = video_duration - source_timestamp
-
-## Lyric video / karaoke workflow
-1. add_track("Audio") + add_clip(type='audio', ...) — audio brick on timeline FIRST, before pipeline runs
-2. trigger_pipeline(mode="both")  ← separates vocals with Demucs, then transcribes audio
-   mode="transcribe_only" to skip separation (use for speech/podcasts, not music)
-3. generate_typography(preset="...") ← lays out timed lyric clips on top of the audio brick
-
-Karaoke is a TYPOGRAPHY PRESET — use preset="karaoke".
-Do NOT set karaoke=true on individual clips manually.
-
-Available presets:
-  Hype:       flash, strobe, rave, cyberpunk, drill
-  Aesthetic:  tumblr, indie2012, sadgirl, cottagecore, film
-  Editorial:  headline, manifesto, zine, newspaper
-  Clean:      minimal, spotify, apple, kinetic, karaoke
-  Retro:      vhs, neon, lofi
-
-## Searching vs. transcribing — decision rule (read this first)
-
-**"Find where they say X" / "trim to the line X" / "locate the moment X" → find_and_add_clip**
-  Windowed search (5-min chunks), stops as soon as the phrase is found. Works on video AND audio.
-  DO NOT call trigger_pipeline first. DO NOT call get_transcript and then trigger_pipeline because it says idle.
-  find_and_add_clip builds its own windowed transcript internally — no separate pipeline step needed.
-
-**"Generate subtitles / karaoke / typography for the full clip" → trigger_pipeline**
-  Full Demucs + transcription pass over the whole file. Only appropriate when you need a complete transcript
-  of everything already on the timeline. Slow on long files.
-
-Never add a full source video to the timeline just to transcribe it.
-
-## Cutting a file to a specific phrase (intro-to-line pattern)
-When the user wants audio/video from the START of a file up to a specific phrase (e.g. "from the
-beginning until he says X"):
-  1. find_and_add_clip(query="X", path=full_file) — windowed search, fast, auto-extracts segment,
-     returns result.end (exact word boundary), result.dst (ready file), result.clip_duration
-  2. extract_clip_segment(src=full_file, dst=..., start=0, end=result.end) — cut from 0 to exact phrase end
-  3. Use the extracted file as the project audio clip
-NEVER use ffmpeg or shell commands to cut the audio manually — extract_clip_segment is the right tool,
-is instant, and handles every codec including FLAC.
-NEVER add arbitrary padding seconds after result.end — use result.end directly.
-
-## Verifying clip placement
-After placing video clips from transcript timestamps, call verify_clips with the midpoint of each clip.
-This catches wrong timestamps (wrong speaker, wrong line) without stopping to ask.
-""".strip()
-
-
 @server.call_tool()
 async def call_tool(name: str, arguments: dict) -> list[TextContent]:
-    if name == "get_guide":
-        return [TextContent(type="text", text=(
-            "get_guide is deprecated — all workflow rules are in each tool's description. "
-            "Use get_project to check the current timeline state and proceed from there."
-        ))]
     if name == "trigger_pipeline":
         proj = _call("get_project", {})
         if not proj.get("audio_path") and not arguments.get("path"):
@@ -2811,6 +3307,19 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 "  2. begin_batch('Add audio clip') → add_clip(type='audio', text=<path>, start=0, end=<duration>) → end_batch()\n"
                 "Then call trigger_pipeline."
             )
+        target_path = arguments.get("path") or proj.get("audio_path")
+        if target_path:
+            p = Path(target_path)
+            cached_words = p.parent / p.stem / f"{p.stem}_words.json"
+            if cached_words.exists():
+                raise ValueError(
+                    f"Transcript already cached for {p.name} at {cached_words}.\n"
+                    "Call get_transcript() to read it — re-transcribing is wasted work.\n"
+                    "If the cached transcript is wrong, you have two cleaner options than re-transcribing:\n"
+                    "  - shift_transcript(source_path=..., offset=..., start=..., end=...) to repurpose another file's transcript\n"
+                    "  - set_transcript(words=[...]) to install a hand-edited word list\n"
+                    f"Or to force a fresh re-transcription, delete {cached_words} first."
+                )
         duration = float(proj.get("duration") or 0)
         if duration > 300 and not arguments.get("path"):
             raise ValueError(
@@ -2822,6 +3331,29 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 "  4. Then call trigger_pipeline on the short clip\n"
                 "Only call trigger_pipeline directly if you genuinely need a full transcript of everything."
             )
+        if not arguments.get("path") and proj.get("audio_path") and 30 < duration <= 300:
+            src_info = _call("get_media_info", {"path": proj["audio_path"]})
+            src_duration = float(src_info.get("duration") or 0)
+            if src_duration > 0 and duration / src_duration >= 0.9:
+                raise ValueError(
+                    f"trigger_pipeline called with {duration:.0f}s on the timeline "
+                    f"({duration / src_duration:.0%} of the source file, which is {src_duration:.0f}s). "
+                    "The audio clip covers nearly the full source, which means find_and_add_clip "
+                    "was probably skipped.\n\n"
+                    "If you only need a section of this file, use this pattern first:\n"
+                    "  1. find_and_add_clip(path=<audio_path>, query='<end phrase>') — locates the exact timestamp\n"
+                    "  2. extract_clip_segment(src=<audio_path>, dst=..., start=<start>, end=<found_end>)\n"
+                    "  3. Replace the timeline audio clip with the trimmed segment\n"
+                    "  4. Then call trigger_pipeline\n\n"
+                    "If you genuinely need the full file transcribed, pass path=<audio_path> "
+                    "to trigger_pipeline directly to bypass this check."
+                )
+        # Kick off the pipeline and return immediately. The engine runs separation
+        # + transcription in a background thread; the caller polls get_pipeline_status
+        # until stage='done', then (for modes 'both' / 'transcribe_only') calls
+        # generate_typography(preset=...) to lay the lyric bricks.
+        result = _call("trigger_pipeline", arguments)
+        return [TextContent(type="text", text=json.dumps(result, indent=2))]
     if name == "remove_silence":
         result = await _remove_silence(arguments)
         return [TextContent(type="text", text=json.dumps(result, indent=2))]
@@ -2870,9 +3402,6 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     if name == "find_video_moment":
         result = await _find_video_moment(arguments)
         return [TextContent(type="text", text=json.dumps(result, indent=2))]
-    if name == "download_vision_model":
-        result = await _download_vision_model()
-        return [TextContent(type="text", text=json.dumps(result, indent=2))]
     if name == "search_transcript":
         result = _search_transcript(arguments)
         return [TextContent(type="text", text=json.dumps(result, indent=2))]
@@ -2886,8 +3415,8 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         after  = float(arguments.get("after",  60))
         gap_threshold = float(arguments.get("gap_threshold", 0.8))
         p = Path(path)
-        words_path = p.parent / p.stem / f"{p.stem}_words.json"
-        if not words_path.exists():
+        words_path = _best_words_cache(str(p))
+        if words_path is None:
             raise ValueError(f"no transcript cached for {p.name} — run find_and_add_clip or trigger_pipeline first")
         with open(words_path) as f:
             all_words = json.load(f)
@@ -2935,13 +3464,12 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             if not st.get("running", False) or st.get("message", "") != last_msg:
                 return [TextContent(type="text", text=json.dumps(st, indent=2))]
         return [TextContent(type="text", text=json.dumps(st, indent=2))]
-    if name == "get_vision_model_status":
-        result = _call("get_vision_model_status", {})
-        return [TextContent(type="text", text=json.dumps(result, indent=2))]
     if name == "take_snapshot":
         ipc_args = {}
         if "time" in arguments:
             ipc_args["time"] = arguments["time"]
+        if "source" in arguments:
+            ipc_args["source"] = arguments["source"]
         _call("take_snapshot", ipc_args)
         for _ in range(50):
             await asyncio.sleep(0.2)
@@ -2955,7 +3483,12 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 try:
                     from PIL import Image as _PILImage
                     img = _PILImage.open(io.BytesIO(raw))
-                    img.thumbnail((540, 960))
+                    # UI grabs need to stay readable (timeline labels, panel
+                    # text); composition frames can shrink to canvas size.
+                    if arguments.get("source") == "ui":
+                        img.thumbnail((1568, 1568))
+                    else:
+                        img.thumbnail((540, 960))
                     buf = io.BytesIO()
                     img.save(buf, format="PNG")
                     raw = buf.getvalue()
@@ -2966,6 +3499,133 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                     ImageContent(type="image", data=base64.b64encode(raw).decode(), mimeType="image/png"),
                 ]
         raise RuntimeError("take_snapshot timed out")
+    if name == "detect_screen_activity":
+        src = _resolve_path(arguments["path"])
+        mjpeg_path, idx_path = _proxy_files(src)
+        if not (os.path.exists(mjpeg_path) and os.path.exists(idx_path)):
+            raise ValueError(
+                f"No proxy for {src} — the scan reads .pms_proxy.mjpeg/.idx. Proxies "
+                "generate automatically once the file is on the timeline (add_clip); "
+                "wait for generation to finish and retry.")
+        regions = arguments.get("regions") or {"frame": [0.0, 0.0, 1.0, 1.0]}
+        for rname, rect in regions.items():
+            if (not isinstance(rect, (list, tuple)) or len(rect) != 4
+                    or not all(isinstance(v, (int, float)) for v in rect)
+                    or not (0 <= rect[0] < rect[2] <= 1 and 0 <= rect[1] < rect[3] <= 1)):
+                raise ValueError(f"region '{rname}' must be [x0,y0,x1,y1] normalized 0-1 with x0<x1, y0<y1")
+        threshold   = float(arguments.get("threshold", 1.5))
+        min_segment = float(arguments.get("min_segment", 1.0))
+        sample_fps  = float(arguments.get("sample_fps", 3.0))
+        with _activity_lock:
+            existing = _activity_jobs.get(src)
+            if existing and existing.get("state") == "running":
+                return [TextContent(type="text", text=json.dumps(
+                    {"state": "running", "progress": existing.get("progress", 0.0),
+                     "note": "scan already running for this path — poll get_activity_status"},
+                    indent=2))]
+            job = {"state": "running", "progress": 0.0, "path": src, "started": _now()}
+            _activity_jobs[src] = job
+        threading.Thread(target=_activity_scan_worker,
+                         args=(src, regions, threshold, sample_fps, min_segment, job),
+                         daemon=True).start()
+        n_frames = 0
+        try:
+            n_frames = len(_read_proxy_index(idx_path))
+        except Exception:
+            pass
+        return [TextContent(type="text", text=json.dumps(
+            {"started": True, "path": src, "frames_total": n_frames,
+             "regions": list(regions.keys()),
+             "note": "poll get_activity_status every 2-3 s until state='done'"},
+            indent=2))]
+    if name == "get_activity_status":
+        with _activity_lock:
+            if "path" in arguments and arguments["path"]:
+                job = _activity_jobs.get(_resolve_path(arguments["path"]))
+            else:
+                job = max(_activity_jobs.values(), key=lambda j: j.get("started", 0.0),
+                          default=None)
+        if job is None:
+            raise ValueError("no activity scan has been started — call detect_screen_activity first")
+        out = {"state": job.get("state"), "progress": round(job.get("progress", 0.0), 4),
+               "path": job.get("path")}
+        if job.get("state") == "done":
+            out["result"] = job.get("result")
+        if job.get("state") == "error":
+            out["error"] = job.get("error")
+        return [TextContent(type="text", text=json.dumps(out, indent=2))]
+    if name == "make_contact_sheet":
+        from PIL import Image as _Img, ImageDraw as _Draw, ImageFont as _Font
+        src   = _resolve_path(arguments["path"])
+        times = list(arguments.get("times") or [])[:48]
+        if not times:
+            raise ValueError("times must be a non-empty list of seconds")
+        cols  = max(1, min(int(arguments.get("cols", 4)), len(times)))
+        mjpeg_path, idx_path = _proxy_files(src)
+        use_proxy = os.path.exists(mjpeg_path) and os.path.exists(idx_path)
+        thumbs: list[tuple[float, Any]] = []
+        if use_proxy:
+            offsets   = _read_proxy_index(idx_path)
+            file_size = os.path.getsize(mjpeg_path)
+            fps       = _proxy_fps(src, len(offsets))
+            with open(mjpeg_path, "rb") as mj:
+                for t in times:
+                    i = max(0, min(len(offsets) - 1, round(t * fps)))
+                    start = offsets[i]
+                    end   = offsets[i + 1] if i + 1 < len(offsets) else file_size
+                    mj.seek(start)
+                    img = _Img.open(io.BytesIO(mj.read(end - start)))
+                    img.draft("RGB", (340, 200))
+                    img = img.convert("RGB")
+                    img.thumbnail((320, 320))
+                    thumbs.append((t, img))
+        else:
+            import tempfile
+            for t in times:
+                with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tf:
+                    tmp = tf.name
+                subprocess.run(
+                    ["ffmpeg", "-y", "-loglevel", "error", "-ss", str(t),
+                     "-i", "file:" + src, "-frames:v", "1",
+                     "-vf", "scale=320:-2", tmp], capture_output=True)
+                img = _Img.open(tmp).convert("RGB") if os.path.getsize(tmp) else                       _Img.new("RGB", (320, 180), (20, 20, 20))
+                thumbs.append((t, img))
+                os.unlink(tmp)
+        try:
+            font = _Font.truetype("/usr/share/fonts/TTF/DejaVuSans-Bold.ttf", 14)
+        except Exception:
+            try:
+                font = _Font.truetype("DejaVuSans-Bold.ttf", 14)
+            except Exception:
+                font = _Font.load_default()
+        tw = max(im.size[0] for _, im in thumbs)
+        th = max(im.size[1] for _, im in thumbs)
+        gap  = 4
+        rows = (len(thumbs) + cols - 1) // cols
+        sheet = _Img.new("RGB", (cols * (tw + gap) + gap, rows * (th + gap) + gap),
+                         (12, 12, 14))
+        draw = _Draw.Draw(sheet)
+        for k, (t, im) in enumerate(thumbs):
+            x = gap + (k % cols) * (tw + gap)
+            y = gap + (k // cols) * (th + gap)
+            sheet.paste(im, (x, y))
+            mm, ss = divmod(t, 60.0)
+            label = f"{int(mm)}:{ss:06.3f}"
+            tb = draw.textbbox((0, 0), label, font=font)
+            draw.rectangle([x + 2, y + th - (tb[3] - tb[1]) - 8,
+                            x + (tb[2] - tb[0]) + 10, y + th - 2], fill=(0, 0, 0))
+            draw.text((x + 6, y + th - (tb[3] - tb[1]) - 6), label,
+                      fill=(255, 255, 255), font=font)
+        buf = io.BytesIO()
+        sheet.save(buf, format="PNG")
+        meta = {"path": src, "tiles": len(thumbs), "cols": cols,
+                "decoded_from": "proxy" if use_proxy else "original (ffmpeg)"}
+        return [
+            TextContent(type="text", text=json.dumps(meta, indent=2)),
+            ImageContent(type="image",
+                         data=base64.b64encode(buf.getvalue()).decode(),
+                         mimeType="image/png"),
+        ]
     if name == "verify_clips":
         async def _snap_at(t: float) -> str:
             _call("seek", {"time": t})
@@ -3200,25 +3860,36 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         }, indent=2)
         return [TextContent(type="text", text=result_text)] + thumb_parts
     if name == "get_transcript":
-        raw = _call("get_transcript", {})
+        forward = {}
+        if "path" in arguments:
+            forward["path"] = arguments["path"]
+        raw = _call("get_transcript", forward)
         slim = {"status": raw.get("status", "idle")}
         if "words" in raw:
             slim["words"] = raw["words"]
+        if "path" in raw:
+            slim["path"] = raw["path"]
         if "error" in raw:
             slim["error"] = raw["error"]
         # If IPC says idle, the words_json_path may not be synced to state yet
         # even though the pipeline already wrote the file. Fall back to deriving
-        # the path from audio_path and reading directly from disk.
+        # the path from the explicit `path` arg, or the project audio_path.
         if slim["status"] == "idle":
             try:
-                proj = _call("get_project", {})
-                audio = proj.get("audio_path", "")
-                if audio:
-                    ap = Path(audio)
-                    words_path = ap.parent / ap.stem / (ap.stem + "_words.json")
-                    if words_path.exists():
+                fallback_audio = arguments.get("path")
+                if not fallback_audio:
+                    proj = _call("get_project", {})
+                    fallback_audio = proj.get("audio_path", "")
+                if fallback_audio:
+                    words_path = _best_words_cache(str(fallback_audio))
+                    if words_path is not None:
                         with open(words_path) as f:
-                            slim = {"status": "ready", "words": json.load(f)}
+                            slim = {
+                                "status":     "ready",
+                                "words":      json.load(f),
+                                "path":       str(words_path),
+                                "provenance": "search" if words_path.name.endswith("_words_search.json") else "canonical",
+                            }
             except Exception:
                 pass
         return [TextContent(type="text", text=json.dumps(slim, indent=2))]
@@ -3239,6 +3910,27 @@ async def main():
         await server.run(read_stream, write_stream, server.create_initialization_options())
 
 
+def dump_tools():
+    """--dump-tools: print the tool list as JSON and exit. No socket, no MCP
+    loop — consumed by tools/gen_agent_tools.py to generate the C++ header
+    for the in-app agent harness (see AGENT_HARNESS.md)."""
+    import asyncio as _asyncio
+    tools = _asyncio.run(list_tools())
+    out = [
+        {
+            "name": t.name,
+            "description": t.description or "",
+            "inputSchema": t.inputSchema,
+        }
+        for t in tools
+    ]
+    print(json.dumps(out, indent=1))
+
+
 if __name__ == "__main__":
+    import sys as _sys
+    if "--dump-tools" in _sys.argv:
+        dump_tools()
+        raise SystemExit(0)
     import asyncio
     asyncio.run(main())

@@ -4,7 +4,9 @@
 #include <GLFW/glfw3.h>
 #include <cstdio>
 #include <cstdlib>
+#include <csignal>
 #include <unistd.h>
+#include <deque>
 #include <string>
 #include <filesystem>
 
@@ -17,15 +19,49 @@
 #include "globals.h"
 #include "stb_image_write.h"
 #include "portrait_preview.h"
+#include "ui/canvas.h"
+#include "ui/panel_media.h"  // bin_add for drain_bin_pending()
 namespace fs = std::filesystem;
 
 // Definitions of globals declared in globals.h
 std::string g_dropped_file;
 std::string g_managed_dir;
 
+// Drop queues. Single-file drops follow the legacy g_dropped_file path so the
+// existing readers (screen_studio, screen_upload, panel_terminal) handle
+// hover-track placement as before. Multi-file drops bypass that entirely and
+// go straight to the bin, because "place all 5 files at the playhead on one
+// track" is essentially never what the user wants — it just stacks them.
+static std::deque<std::string> g_dropped_queue;   // single-file: one path per frame
+static std::deque<std::string> g_bin_pending;     // multi-file: drained into AppState.bin
+
 static void glfw_drop_callback(GLFWwindow*, int count, const char** paths) {
-    if (count > 0)
-        g_dropped_file = paths[0];
+    if (count <= 0 || !paths) return;
+    if (count == 1) {
+        if (paths[0] && paths[0][0])
+            g_dropped_queue.emplace_back(paths[0]);
+        return;
+    }
+    for (int i = 0; i < count; ++i) {
+        if (paths[i] && paths[i][0])
+            g_bin_pending.emplace_back(paths[i]);
+    }
+}
+
+static void drain_dropped_queue() {
+    if (!g_dropped_file.empty() || g_dropped_queue.empty()) return;
+    g_dropped_file = std::move(g_dropped_queue.front());
+    g_dropped_queue.pop_front();
+}
+
+// Drain the multi-file pending list into the project bin. Needs AppState
+// access, so this lives in main.cpp where state is in scope and is called
+// from the main loop right after drain_dropped_queue.
+static void drain_bin_pending(AppState& state) {
+    while (!g_bin_pending.empty()) {
+        bin_add(state, g_bin_pending.front());
+        g_bin_pending.pop_front();
+    }
 }
 
 static void glfw_error_callback(int err, const char* desc) {
@@ -173,10 +209,20 @@ int main(int argc, char** argv) {
 
     glfwSetDropCallback(window, glfw_drop_callback);
 
+    // If ffmpeg dies mid-export (vaapi hiccup, encoder error, user kill, ...)
+    // our next write() to its stdin pipe would send SIGPIPE and the default
+    // handler silently terminates this process — losing the in-flight render
+    // and leaving the user with a truncated mp4. Ignore SIGPIPE so write()
+    // returns EPIPE and the render loop can log + clean up properly.
+    signal(SIGPIPE, SIG_IGN);
+
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
-    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+    // NavEnableKeyboard intentionally off: it reroutes arrow keys to whichever
+    // widget the nav cursor drifts onto (typically a slider), which then eats
+    // the arrows we want for playhead seeking.
+    io.ConfigFlags &= ~ImGuiConfigFlags_NavEnableKeyboard;
 
     ImGui_ImplGlfw_InitForOpenGL(window, true);
     ImGui_ImplOpenGL3_Init("#version 330");
@@ -185,8 +231,22 @@ int main(int argc, char** argv) {
     app_init(state);
     state.models_ready = models_detect();
 
+    // Vsync is on during normal interactive use (smooth UI, low CPU). While an
+    // export is running we let the main loop free-run so render_tick_gl isn't
+    // capped at the display refresh — otherwise the export's wall-clock speed
+    // is gated by the monitor (e.g. 60 Hz), and changing the libx264 preset
+    // has no observable effect because ffmpeg is starved on stdin.
+    bool vsync_on = true;
     while (!glfwWindowShouldClose(window)) {
         glfwPollEvents();
+        drain_dropped_queue();   // single-file drops: feed one path per frame
+        drain_bin_pending(state); // multi-file drops: dump all into the bin
+
+        bool want_vsync = !state.render.running;
+        if (want_vsync != vsync_on) {
+            glfwSwapInterval(want_vsync ? 1 : 0);
+            vsync_on = want_vsync;
+        }
 
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplGlfw_NewFrame();
@@ -201,6 +261,10 @@ int main(int argc, char** argv) {
         glClearColor(0.f, 0.f, 0.f, 1.f);
         glClear(GL_COLOR_BUFFER_BIT);
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+
+        // "source: canvas" snapshot — grab the preview rect from the back
+        // buffer now that the full frame is drawn (no-op unless armed).
+        canvas_capture_after_render(state);
 
         glfwSwapBuffers(window);
     }

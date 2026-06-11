@@ -696,18 +696,26 @@ void panel_background(AppState& state, float w, bool clip_only) {
         ImGui::PopStyleColor();
         ImGui::Dummy({0.f, 4.f});
         if (ImGui::Button("+ Add Background Track", {w, 0.f})) {
+            // A background brick is just a generated-texture layer — place it
+            // like any other content clip (empty track if free, else a new
+            // track at the top, at the playhead) instead of push_back to the
+            // bottom, which made every new background a full-composition
+            // backdrop behind everything.
             float dur = 7.f;
-            Track t;
-            t.name = "Background";
             Clip c;
             c.clip_type = ClipType::Background;
-            c.start = 0.f; c.end = dur;
+            c.start = state.playhead; c.end = c.start + dur;
             c.text  = "blob";  // default preset
-            t.clips.push_back(c);
-            state.tracks.push_back(t);
-            state.selected_track = (int)state.tracks.size() - 1;
-            state.selected_clip  = 0;
-            bgclip = &state.tracks[state.selected_track].clips[0];
+            int target = find_empty_track(state);
+            if (target < 0) {
+                Track t; t.name = "Background";
+                state.tracks.insert(state.tracks.begin(), std::move(t));
+                target = 0;
+            }
+            state.tracks[target].clips.push_back(std::move(c));
+            state.selected_track = target;
+            state.selected_clip  = (int)state.tracks[target].clips.size() - 1;
+            bgclip = &state.tracks[target].clips[state.selected_clip];
             history_push(state, "Add background");
         }
         ImGui::Dummy({0.f, 8.f});
@@ -720,15 +728,18 @@ void panel_background(AppState& state, float w, bool clip_only) {
         ImGui::PopStyleColor();
         ImGui::Dummy({0.f, 4.f});
 
-        ImGui::SetNextItemWidth(w);
-        ImGui::SliderFloat("##bg_speed", &bgclip->bg_speed, 0.1f, 4.f, "Speed %.1fx");
-        if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "BG speed");
-        ImGui::SetNextItemWidth(w);
-        {
-            float pct = bgclip->bg_intensity * 100.f;
-            if (ImGui::SliderFloat("##bg_int", &pct, 0.f, 100.f, "Intensity %.0f%%"))
-                bgclip->bg_intensity = pct / 100.f;
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "BG intensity");
+        // Solid fill has no animation — speed/intensity would be dead sliders.
+        if (bgclip->text != "solid") {
+            ImGui::SetNextItemWidth(w);
+            ImGui::SliderFloat("##bg_speed", &bgclip->bg_speed, 0.1f, 4.f, "Speed %.1fx");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "BG speed");
+            ImGui::SetNextItemWidth(w);
+            {
+                float pct = bgclip->bg_intensity * 100.f;
+                if (ImGui::SliderFloat("##bg_int", &pct, 0.f, 100.f, "Intensity %.0f%%"))
+                    bgclip->bg_intensity = pct / 100.f;
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "BG intensity");
+            }
         }
         ImGui::Dummy({0.f, 4.f});
 
@@ -808,18 +819,24 @@ void panel_background(AppState& state, float w, bool clip_only) {
         ImGui::InvisibleButton(pr.id, {cell_w, cell_h});
         if (ImGui::IsItemClicked()) {
             if (!bgclip) {
-                // No bg clip selected — create one
+                // No bg clip selected — create one, placed like any content
+                // clip (empty track or new track on top, at the playhead).
                 float dur = 7.f;
-                Track t; t.name = "Background";
-                Clip c; c.clip_type = ClipType::Background; c.start = 0.f; c.end = dur;
+                Clip c; c.clip_type = ClipType::Background;
+                c.start = state.playhead; c.end = c.start + dur;
                 c.text = pr.id;
                 memcpy(c.bg_c1, pr.dc1, sizeof(float)*4);
                 memcpy(c.bg_c2, pr.dc2, sizeof(float)*4);
                 memcpy(c.bg_c3, pr.dc3, sizeof(float)*4);
-                t.clips.push_back(c);
-                state.tracks.push_back(t);
-                state.selected_track = (int)state.tracks.size()-1;
-                state.selected_clip  = 0;
+                int target = find_empty_track(state);
+                if (target < 0) {
+                    Track t; t.name = "Background";
+                    state.tracks.insert(state.tracks.begin(), std::move(t));
+                    target = 0;
+                }
+                state.tracks[target].clips.push_back(std::move(c));
+                state.selected_track = target;
+                state.selected_clip  = (int)state.tracks[target].clips.size()-1;
             } else {
                 bgclip->text = pr.id;
                 memcpy(bgclip->bg_c1, pr.dc1, sizeof(float)*4);
@@ -1185,6 +1202,27 @@ void panel_audio_fx_clip(AppState& state, float w) {
             }
             ImGui::Dummy({0.f, 6.f});
 
+            // ── Transpose into the target's register ─────────────────────────
+            {
+                bool auto_on = afx.voice_pitch_auto;
+                if (ImGui::Checkbox("Auto octave##vc_auto", &auto_on)) {
+                    afx.voice_pitch_auto = auto_on;
+                    history_push(state, "Voice auto octave");
+                }
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Probes the voice at -12/0/+12 semitones and\n"
+                                      "keeps the octave it tracks best. The slider\n"
+                                      "adds a manual offset on top.");
+                ImGui::SameLine(0.f, 10.f);
+                ImGui::SetNextItemWidth(w - ImGui::GetCursorPosX() - 12.f);
+                int semis = afx.voice_pitch_semitones;
+                if (ImGui::SliderInt("##vc_semi", &semis, -24, 24, "%+d st"))
+                    afx.voice_pitch_semitones = semis;
+                if (ImGui::IsItemDeactivatedAfterEdit())
+                    history_push(state, "Voice transpose");
+            }
+            ImGui::Dummy({0.f, 6.f});
+
             // ── Find overlapping audio clips on this track ────────────────────
             // We need them to show conversion state and to trigger vc_start.
             int ti = state.selected_track;
@@ -1192,7 +1230,11 @@ void panel_audio_fx_clip(AppState& state, float w) {
             std::vector<AudioRef> audio_refs;
             for (int ci = 0; ci < (int)track.clips.size(); ++ci) {
                 const Clip& ac = track.clips[ci];
-                if (ac.clip_type != ClipType::Audio || ac.text.empty()) continue;
+                bool is_audio = ac.clip_type == ClipType::Audio && !ac.text.empty();
+                bool is_take  = ac.clip_type == ClipType::Record &&
+                                ac.rec_take_sel >= 0 &&
+                                ac.rec_take_sel < (int)ac.rec_takes.size();
+                if (!is_audio && !is_take) continue;
                 if (ac.end <= clip.start || ac.start >= clip.end) continue;
                 audio_refs.push_back({ci});
             }
@@ -1229,16 +1271,12 @@ void panel_audio_fx_clip(AppState& state, float w) {
                     ImGui::TextWrapped("Running RVC. This may take a minute.");
                     ImGui::PopStyleColor();
                 } else if (agg == VcStatus::Ready) {
+                    // Re-convert lives on the current-voice card below.
                     dl->AddRectFilled(bp, {bp.x+bar_w, bp.y+6.f}, IM_COL32(30, 200, 80, 255), 3.f);
                     ImGui::Dummy({0.f, 10.f});
                     ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(40,220,100,255));
                     ImGui::TextUnformatted("Voice converted");
                     ImGui::PopStyleColor();
-                    ImGui::Dummy({0.f, 4.f});
-                    if (ui_btn("Re-convert##vcr", false, true)) {
-                        for (auto& ar : audio_refs)
-                            vc_start(state, ti, ar.ci, afx.voice_model_path);
-                    }
                 } else if (agg == VcStatus::Error) {
                     ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(220,80,80,255));
                     ImGui::TextWrapped("Error: %s", agg_err.c_str());
@@ -1246,13 +1284,15 @@ void panel_audio_fx_clip(AppState& state, float w) {
                     ImGui::Dummy({0.f, 4.f});
                     if (ui_btn("Retry##vcretry", false, true)) {
                         for (auto& ar : audio_refs)
-                            vc_start(state, ti, ar.ci, afx.voice_model_path);
+                            vc_start(state, ti, ar.ci, afx.voice_model_path,
+                                     afx.voice_pitch_semitones, afx.voice_pitch_auto);
                     }
                 } else {
                     // Idle — show Convert button
                     if (ui_btn("Convert##vc_go", false, false)) {
                         for (auto& ar : audio_refs)
-                            vc_start(state, ti, ar.ci, afx.voice_model_path);
+                            vc_start(state, ti, ar.ci, afx.voice_model_path,
+                                     afx.voice_pitch_semitones, afx.voice_pitch_auto);
                     }
                 }
             } else if (afx.voice_model_path.empty()) {
@@ -1297,16 +1337,20 @@ void panel_audio_fx_clip(AppState& state, float w) {
 
             // Card: Download + Use (sets model path; user then hits Convert above)
             auto draw_vc_card = [&](int id, const char* lbl,
-                                    const char* repo, const char* file) {
+                                    const char* repo, const char* file,
+                                    const char* index_file = "") {
                 std::string key = dl_key(repo, file);
                 HFDownload& hfdl = s_dl[key];
                 hf_download_poll(hfdl);
-                // Download completed → set model path
+                // Download completed → select the voice and convert on demand
                 if (hfdl.status.load(std::memory_order_acquire) == HFDownload::Status::Done) {
                     afx.voice_model_path = hfdl.out_path;
                     afx.voice_convert_on = true;
                     history_push(state, std::string("Voice: ") + lbl);
                     hfdl.status.store(HFDownload::Status::Idle, std::memory_order_release);
+                    for (auto& ar : audio_refs)
+                        vc_start(state, ti, ar.ci, afx.voice_model_path,
+                                     afx.voice_pitch_semitones, afx.voice_pitch_auto);
                 }
                 bool installed = hf_rvc_installed(repo, file);
                 ImGui::PushID(id);
@@ -1335,16 +1379,24 @@ void panel_audio_fx_clip(AppState& state, float w) {
                     cdl->AddText({cp.x+8.f, cp.y+28.f},
                                  active ? IM_COL32(30,220,150,255) : IM_COL32(60,140,100,180),
                                  active ? "Selected" : "Installed");
-                    ImGui::SetCursorScreenPos({cp.x+cw-44.f, cp.y+8.f});
-                    if (ImGui::SmallButton("Use##vu")) {
-                        afx.voice_model_path = hf_rvc_model_path(repo, file);
-                        afx.voice_convert_on = true;
-                        history_push(state, std::string("Voice: ") + lbl);
+                    ImGui::SetCursorScreenPos({cp.x+cw-(active?78.f:44.f), cp.y+8.f});
+                    // Use switches voice AND converts on demand; on the active
+                    // card the same button re-runs the conversion.
+                    if (ImGui::SmallButton(active ? "Re-convert##vu" : "Use##vu")) {
+                        if (!active) {
+                            afx.voice_model_path = hf_rvc_model_path(repo, file);
+                            afx.voice_convert_on = true;
+                            history_push(state, std::string("Voice: ") + lbl);
+                        }
+                        for (auto& ar : audio_refs)
+                            vc_start(state, ti, ar.ci, afx.voice_model_path,
+                                     afx.voice_pitch_semitones, afx.voice_pitch_auto);
                     }
                 } else {
                     ImGui::SetCursorScreenPos({cp.x+cw-70.f, cp.y+ch/2.f-8.f});
                     if (ImGui::SmallButton("Download##vd"))
-                        hf_download_model(repo, file, hf_rvc_model_path(repo, file), hfdl);
+                        hf_download_model(repo, file, hf_rvc_model_path(repo, file),
+                                          hfdl, index_file);
                     if (dst == HFDownload::Status::Error) {
                         cdl->AddText({cp.x+8.f, cp.y+28.f}, IM_COL32(220,80,80,200), "Failed");
                         if (ImGui::IsItemHovered() && !hfdl.error_msg.empty())
@@ -1357,11 +1409,61 @@ void panel_audio_fx_clip(AppState& state, float w) {
                 ImGui::PopID();
             };
 
+            // ── Current voice pinned on top (its button is Re-convert) ────────
+            auto is_active_model = [&](const char* repo, const char* file) {
+                return !afx.voice_model_path.empty() &&
+                       afx.voice_model_path == hf_rvc_model_path(repo, file);
+            };
+            if (!afx.voice_model_path.empty()) {
+                ImGui::Dummy({0.f, 2.f});
+                const PinnedVoice* pv = nullptr;
+                for (auto& p : k_pinned)
+                    if (is_active_model(p.repo, p.file)) { pv = &p; break; }
+                const HFModel* rm = nullptr;
+                if (!pv && ss == HFSearch::Status::Done)
+                    for (auto& m : s_vc_search.results)
+                        if (is_active_model(m.repo.c_str(), m.model_file.c_str()))
+                            { rm = &m; break; }
+                if (pv) {
+                    draw_vc_card(59999, pv->label, pv->repo, pv->file);
+                } else if (rm) {
+                    std::string disp = rm->repo;
+                    auto sl = disp.rfind('/');
+                    if (sl != std::string::npos) disp = disp.substr(sl+1);
+                    for (char& c : disp) if (c=='_'||c=='-') c=' ';
+                    draw_vc_card(59999, disp.c_str(), rm->repo.c_str(),
+                                 rm->model_file.c_str(), rm->index_file.c_str());
+                } else {
+                    // Browse-picked or no longer listed: minimal selected card
+                    std::string disp = fs::path(afx.voice_model_path)
+                                           .stem().string();
+                    for (char& c : disp) if (c=='_'||c=='-') c=' ';
+                    ImVec2 cp = ImGui::GetCursorScreenPos();
+                    float cw = w - 8.f, ch = 44.f;
+                    ImDrawList* cdl = ImGui::GetWindowDrawList();
+                    cdl->AddRectFilled(cp, {cp.x+cw, cp.y+ch}, IM_COL32(14,24,20,255), 4.f);
+                    cdl->AddRect(cp, {cp.x+cw, cp.y+ch}, IM_COL32(30,200,150,180), 4.f, 0, 1.f);
+                    ImGui::PushFont(g_font_bold);
+                    cdl->AddText(ImGui::GetFont(), 11.f, {cp.x+8.f, cp.y+8.f},
+                                 IM_COL32(255,255,255,220), disp.c_str());
+                    ImGui::PopFont();
+                    cdl->AddText({cp.x+8.f, cp.y+28.f}, IM_COL32(30,220,150,255), "Selected");
+                    ImGui::SetCursorScreenPos({cp.x+cw-78.f, cp.y+8.f});
+                    if (ImGui::SmallButton("Re-convert##vcur"))
+                        for (auto& ar : audio_refs)
+                            vc_start(state, ti, ar.ci, afx.voice_model_path,
+                                     afx.voice_pitch_semitones, afx.voice_pitch_auto);
+                    ImGui::SetCursorScreenPos(cp);
+                    ImGui::Dummy({0.f, ch + 3.f});
+                }
+            }
+
             if (!s_vc_query[0]) {
                 ImGui::Dummy({0.f, 2.f});
-                for (int i = 0; i < 4; ++i)
-                    draw_vc_card(60000+i, k_pinned[i].label,
-                                 k_pinned[i].repo, k_pinned[i].file);
+                for (auto& p : k_pinned) {
+                    if (is_active_model(p.repo, p.file)) continue;  // already on top
+                    draw_vc_card(60000 + (int)(&p - k_pinned), p.label, p.repo, p.file);
+                }
             } else if (ss == HFSearch::Status::Running || s_vc_debounce > 0.f) {
                 ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
                 ImGui::TextUnformatted("Searching…");
@@ -1378,12 +1480,15 @@ void panel_audio_fx_clip(AppState& state, float w) {
                 }
                 for (int i = 0; i < (int)s_vc_search.results.size(); ++i) {
                     const HFModel& m = s_vc_search.results[i];
+                    if (is_active_model(m.repo.c_str(), m.model_file.c_str()))
+                        continue;  // already on top
                     std::string disp = m.repo;
                     auto sl = disp.rfind('/');
                     if (sl != std::string::npos) disp = disp.substr(sl+1);
                     for (char& c : disp) if (c=='_'||c=='-') c=' ';
                     draw_vc_card(61000+i, disp.c_str(),
-                                 m.repo.c_str(), m.model_file.c_str());
+                                 m.repo.c_str(), m.model_file.c_str(),
+                                 m.index_file.c_str());
                 }
             }
             break;
@@ -1867,6 +1972,9 @@ void panel_multifx(AppState& state, float w) {
         // Duration mini-bar
         ImGui::SameLine(0.f, 6.f);
         {
+            // One handle is active at a time, so a single "gesture changed
+            // something" flag is enough to push undo once per drag.
+            static bool s_bar_edited = false;
             float rel_end_eff = (se.rel_end <= 0.f) ? brick_dur : se.rel_end;
             float x0  = ImGui::GetCursorScreenPos().x;
             float y0  = ImGui::GetCursorScreenPos().y + 8.f;
@@ -1881,27 +1989,38 @@ void panel_multifx(AppState& state, float w) {
             ImU32 bar_col = sel ? IM_COL32(210,130,30,220) : IM_COL32(150,90,20,180);
             dl->AddRectFilled({rx0, y0}, {rx1, y0 + bh}, bar_col, 2.f);
 
+            // Drag handles map to the absolute mouse position on the bar —
+            // never accumulate per-frame deltas here: rel_end == 0 is the
+            // "full duration" sentinel, and delta-from-sentinel re-snaps to
+            // full every frame, gluing the right handle in place for any
+            // drag slower than the snap zone (the old bug).
+            float mouse_t = (ImGui::GetIO().MousePos.x - x0) / bar_w * brick_dur;
+
             // Draggable left handle
             ImGui::SetCursorScreenPos({rx0 - 3.f, y0});
             ImGui::InvisibleButton("##hleft", {8.f, bh});
             if (ImGui::IsItemActive() && ImGui::IsMouseDragging(0)) {
-                float dx = ImGui::GetIO().MouseDelta.x / bar_w * brick_dur;
-                se.rel_start = fmaxf(0.f, fminf(se.rel_start + dx, rel_end_eff - 0.1f));
+                float ns = fmaxf(0.f, fminf(mouse_t, rel_end_eff - 0.1f));
+                if (ns != se.rel_start) { se.rel_start = ns; s_bar_edited = true; }
+            }
+            if (ImGui::IsItemDeactivated() && s_bar_edited) {
                 history_push(state, "Multi-FX: adjust timing");
+                s_bar_edited = false;
             }
             if (ImGui::IsItemHovered()) ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
 
-            // Draggable right handle (only if rel_end != 0, i.e. not "full")
+            // Draggable right handle; the last 3% snaps to "full" (rel_end=0)
             ImGui::SetCursorScreenPos({rx1 - 3.f, y0});
             ImGui::InvisibleButton("##hright", {8.f, bh});
             if (ImGui::IsItemActive() && ImGui::IsMouseDragging(0)) {
-                float dx = ImGui::GetIO().MouseDelta.x / bar_w * brick_dur;
-                float new_end = rel_end_eff + dx;
-                // Snap to full-duration when near the end
-                if (new_end >= brick_dur * 0.97f) new_end = 0.f;
-                else new_end = fmaxf(se.rel_start + 0.1f, fminf(new_end, brick_dur));
-                se.rel_end = new_end;
+                float ne = (mouse_t >= brick_dur * 0.97f)
+                    ? 0.f
+                    : fmaxf(se.rel_start + 0.1f, fminf(mouse_t, brick_dur));
+                if (ne != se.rel_end) { se.rel_end = ne; s_bar_edited = true; }
+            }
+            if (ImGui::IsItemDeactivated() && s_bar_edited) {
                 history_push(state, "Multi-FX: adjust timing");
+                s_bar_edited = false;
             }
             if (ImGui::IsItemHovered()) ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
 

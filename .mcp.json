@@ -2,7 +2,7 @@
   "mcpServers": {
     "pop-maker-studio": {
       "command": "python3",
-      "args": ["mcp_server/server.py"]
+      "args": ["/home/alexis/dev/pop-maker-studio/mcp_server/server.py"]
     },
     "vr-docs": {
       "command": "/home/alexis/dev/vertrectdirectory/.venv/bin/python3",

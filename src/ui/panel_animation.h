@@ -6,5 +6,9 @@
 
 void panel_typography(AppState& state, float w);
 
+// Text brick library — create text clips from the UI (click = playhead,
+// drag = timeline). Style cards/preview shared via text_styles.h.
+void panel_text_library(AppState& state, float w);
+
 // generate_typography — also called from pipeline completion and import_file
 void generate_typography(AppState& state);

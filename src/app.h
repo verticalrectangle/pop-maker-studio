@@ -2,8 +2,10 @@
 #include "presets.h"
 #include "audio_fx.h"
 #include "body_fx.h"
+#include "keyframe.h"
 #include <string>
 #include <vector>
+#include <deque>
 #include <chrono>
 #include <map>
 #include <unordered_map>
@@ -11,25 +13,14 @@
 #include <array>
 #include <algorithm>
 #include <cmath>
+#include <functional>
 
-// ── Keyframing ────────────────────────────────────────────────────────────────
+struct AppState;
 
-enum class InterpType { Linear, EaseIn, EaseOut, EaseBoth, Hold };
-
-struct Keyframe {
-    float      time   = 0.f;   // seconds relative to clip.start
-    float      value  = 0.f;
-    InterpType interp = InterpType::EaseBoth;
-};
-
-struct PropTrack {
-    std::vector<Keyframe> keys;  // always sorted by time
-
-    bool  empty()                                                     const { return keys.empty(); }
-    float eval(float t)                                               const;
-    void  set(float t, float v, InterpType it = InterpType::EaseBoth);
-    void  remove_at(float t, float tol = 0.05f);
-    int   find_nearest(float t, float tol = 0.1f)                    const;
+enum class PipelineMode {
+    Both,            // Demucs + transcription
+    TranscribeOnly,  // transcription on original file (no Demucs)
+    SeparateOnly,    // Demucs only, no subtitles
 };
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -83,7 +74,7 @@ enum class OutputFormat { Vertical, Horizontal, Square };
 // ── Track / clip data model ───────────────────────────────────────────────────
 
 // Each clip carries its own type so any track can hold mixed content.
-enum class ClipType { Text, Lyrics, Subtitle, Video, Audio, Effect, Background, BodyFX, MultiFX };
+enum class ClipType { Text, Lyrics, Subtitle, Video, Audio, Effect, Background, BodyFX, MultiFX, Record };
 
 struct WordEntry {
     std::string text;
@@ -168,6 +159,22 @@ struct Clip {
     float scale_x  = 1.f;
     float scale_y  = 1.f;
     float rotation = 0.f;    // degrees, clockwise
+
+    // Non-destructive crop (video/image clips): fractions of the source frame
+    // trimmed from each side, in DISPLAY orientation (after rotation tags).
+    // Pure render-time UV window — source media is never touched. All four 0
+    // = no crop. crop_l + crop_r and crop_t + crop_b are kept <= 0.95 so a
+    // sliver always remains visible.
+    float crop_l = 0.f, crop_t = 0.f, crop_r = 0.f, crop_b = 0.f;
+    bool  has_crop() const { return crop_l > 0.f || crop_t > 0.f ||
+                                    crop_r > 0.f || crop_b > 0.f; }
+    // Aspect of the visible (cropped) region — use this everywhere the
+    // canvas-fit box is computed so preview, export, and click-picking agree.
+    float cropped_aspect(int src_w, int src_h) const {
+        float cw = (float)src_w * (1.f - crop_l - crop_r);
+        float ch = (float)src_h * (1.f - crop_t - crop_b);
+        return (cw > 0.f && ch > 0.f) ? cw / ch : 1.f;
+    }
 
     // per-clip animation style (None = inherit project default)
     AnimStyle   clip_style = AnimStyle::None;
@@ -296,7 +303,24 @@ struct Clip {
     float              rel_end   = 0.f;
     std::vector<Clip>  fx_chain;          // ordered sub-effects for MultiFX bricks
     int                fx_chain_selected = -1;
+
+    // Record brick (ClipType::Record) — loop-recorded takes (WAV paths in the
+    // managed takes dir). The selected take plays in preview/export like an
+    // audio clip with in_point 0 / speed 1; the rest wait in the panel tray.
+    std::vector<std::string> rec_takes;
+    int                      rec_take_sel = -1;
 };
+
+// Split `cl` at absolute timeline time `cut` and return the right half.
+// Handles in_point (speed-scaled) and remaps keyframe tracks so both halves
+// keep the animation they showed before the split. Caller inserts the
+// returned clip after `cl` on the track.
+Clip clip_split_at(Clip& cl, float cut);
+
+// Shift every keyframe time by dt seconds. Use when clip.start moves but the
+// content shouldn't (left-edge trim): pass -(new_start - old_start) so keys
+// stay put on the timeline.
+void clip_keys_shift(Clip& cl, float dt);
 
 struct Track {
     std::string       name;
@@ -464,6 +488,12 @@ struct AppState {
     int   selected_track = -1;
     int   selected_clip  = -1;
 
+    // Canvas crop-edit mode (UI-only, not serialized). Targets one clip; the
+    // canvas shows its full frame ghosted with draggable crop-window handles.
+    // -1/-1 = mode off. Entered from the Clip panel / context menu.
+    int   crop_edit_track = -1;
+    int   crop_edit_clip  = -1;
+
     // playback
     float playhead = 0.f;
     bool  playing  = false;
@@ -479,6 +509,7 @@ struct AppState {
     float tl_v_scroll     = 0.f;   // vertical scroll offset in the track area (pixels)
     float tl_clip_area_w      = 0.f;   // visible pixel width (written each frame by draw_timeline)
     float tl_zoom_to_fit_end  = 0.f;   // when >0, draw_timeline zooms out to fit this time + padding then clears it
+    float tl_zoom_min         = 1.f;   // fit-to-width floor, recomputed each frame by draw_timeline
 
     // project settings
     int          fps         = 30;              // 24 / 30 / 60
@@ -498,6 +529,14 @@ struct AppState {
     // Proxy slot table: proxy_paths[slot] = source file path (empty = free).
     // Keyed by file path so two clips sharing a source share one proxy.
     std::string proxy_paths[MAX_VIDEO_TRACKS];
+
+    // Bin — project-scoped media library. Files added here are "available to
+    // the project" but not necessarily on the timeline. Drag from bin → track
+    // to place. Multi-file drops land here without auto-placement so the
+    // timeline doesn't get a stack of overlapping tracks. Persisted in the
+    // project file; backfilled from existing clip paths on load when missing
+    // for backward compat with pre-bin projects.
+    std::vector<std::string> bin;
 
     // keyframe selection
     int         kf_sel_track = -1;
@@ -521,8 +560,9 @@ struct AppState {
     std::string    out_srt;
 
     // UI layout — user-dragged splitter positions (0 = auto)
-    float panel_w   = 0.f;   // right panel width
-    float tl_h_frac = 0.f;   // timeline height as fraction of body height (0 = auto)
+    float panel_w    = 0.f;   // right panel width
+    float tl_h_frac  = 0.f;   // timeline height as fraction of avail_h (0 = auto)
+    float term_h_frac = 0.f;  // terminal height as fraction of avail_h (0 = auto)
 
     // audio extraction (ffmpeg demux, no ML)
     bool        extract_running      = false;
@@ -574,6 +614,12 @@ struct AppState {
 
     // IPC-requested snapshot (ipc_server sets request; GL thread fulfills and sets done)
     bool        snapshot_request    = false;
+    // source == "canvas": capture the live preview rect from the window
+    // framebuffer after ImGui renders — the exact pixels the user sees
+    // (scene compositor + text overlays) — instead of re-rendering through
+    // the export path. Ground truth for diagnosing preview/export divergence.
+    bool        snapshot_source_canvas = false;
+    bool        snapshot_source_ui     = false;  // capture whole window, not just canvas
     bool        snapshot_done       = false;
     std::string snapshot_done_path;
     std::string snapshot_done_err;
@@ -591,9 +637,15 @@ struct AppState {
     // subtitle grouping (legacy, kept for project compat)
     SubtitleMode subtitle_mode = SubtitleMode::Word;
     int          subtitle_n    = 3;
-    bool         pipeline_produces_subtitles  = false;
-    bool         pipeline_is_separate_only   = false;  // SeparateOnly run: skip subtitle apply, add vocals track
-    bool         typo_generate_when_done     = false;  // "Make lyric video" sets this; fires generate_typography after pipeline
+
+    // Pipeline completion state. kick_pipeline() records the mode it was launched
+    // with so the async completion handler knows what kind of work just finished
+    // (transcript vs separation). pipeline_on_done is an optional callback the
+    // caller sets *before* kicking the pipeline — UI buttons use it to chain
+    // apply_subtitle_mode or generate_typography after completion. MCP
+    // trigger_pipeline leaves it null so the timeline is never mutated.
+    PipelineMode                       last_pipeline_mode = PipelineMode::Both;
+    std::function<void(AppState&)>     pipeline_on_done;
 
     // typography
     std::string  typo_preset_id  = "flash";     // active preset id
@@ -612,8 +664,16 @@ struct AppState {
     bool        agent_active = false;
     std::string agent_msg;   // batch label shown in loading panel
 
+    // Rolling log of recent MCP tool calls (newest first, max 6)
+    struct AgentOp {
+        std::string method;   // raw method name
+        std::string detail;   // file basename, query snippet, etc.
+    };
+    std::deque<AgentOp> agent_log;
+
     // Terminal panel
     bool  terminal_open   = false;
+    bool  agent_panel_open = false;  // in-app agent chat strip (AGENT_HARNESS.md)
 
     // user-created effect presets (persisted to ~/.config/pop-maker-studio/presets.json)
     std::vector<EffectPreset> user_presets;

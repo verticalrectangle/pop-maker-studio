@@ -13,7 +13,9 @@
 #include "history.h"
 #include "filepicker.h"
 #include "waveform.h"
+#include "../recorder.h"
 #include "bg_presets.h"
+#include "text_styles.h"
 #include "theme.h"
 #include "body_fx.h"
 #include "bg_remove.h"
@@ -37,15 +39,91 @@ extern ImFont* g_font_black;
 // g_tl — timeline drag/select state (declared extern in studio_types.h)
 TlState g_tl;
 
+// How long a drag must dwell on a merge target before it welds — shared by
+// keyframe super diamonds and FX brick merging so the gesture feels the same.
+static const double kWeldHoldSec = 3.0;
+
+// In-progress keyframe-diamond retime drag. Grabbing a super diamond drags
+// every key at that timestamp (one entry per member prop); member indices are
+// kept current as keys bubble through their sorted tracks.
+static struct {
+    bool active = false;
+    int  ti = -1, ci = -1;
+    struct Mem { std::string prop; int idx; };
+    std::vector<Mem> mems;
+    bool moved = false;          // only push undo history if it actually moved
+    // Hold-to-weld: parking the drag beside another diamond arms a 3 s timer;
+    // only when it completes do the keys snap together into a super diamond.
+    float  weld_target = -1.f;   // group time we're parked beside (-1 = none)
+    double weld_start  = 0.0;    // ImGui::GetTime() when the timer was armed
+} s_kf_drag;
+
+// Brief expanding-ring flash when a weld completes.
+static struct {
+    bool   active = false;
+    double t0     = 0.0;
+    int    ti = -1, ci = -1;
+    float  time   = 0.f;         // clip-relative time of the new super diamond
+} s_kf_flash;
+
+// Super-diamond right-click context (unpair menu).
+static struct { int ti = -1, ci = -1; float time = 0.f; } s_kf_ctx;
+
+// Hold-to-weld for FX brick merging — the keyframe-diamond gesture applied to
+// bricks: overlapping a merge target arms the dwell timer; the merge only
+// fires when it completes (or instantly on an Alt drop). An early release
+// just leaves the bricks overlapping, which is legal for FX (both render).
+static struct {
+    int    target_ti = -1;   // current merge candidate (mirrors drag_merge_*)
+    int    target_ci = -1;
+    double t0        = 0.0;  // when the timer was armed
+} s_fx_weld;
+
+// Expanding-ring flash over a freshly merged FX brick.
+static struct {
+    bool   active = false;
+    double t0     = 0.0;
+    int    ti = -1, ci = -1;
+} s_fx_flash;
+
+// The weld timer ring, filling clockwise at the merge target's center —
+// same visual language as the keyframe-diamond weld ring.
+static void draw_fx_weld_ring(ImDrawList* dl, float x0, float x1,
+                              float y0, float y1, ImU32 col) {
+    float prog = (float)((ImGui::GetTime() - s_fx_weld.t0) / kWeldHoldSec);
+    if (prog <= 0.f || prog >= 1.f) return;
+    ImVec2 c{(x0 + x1) * 0.5f, (y0 + y1) * 0.5f};
+    float pr = 10.f * (1.f + 0.1f * sinf((float)ImGui::GetTime() * 9.f));
+    dl->PathArcTo(c, pr, -IM_PI * 0.5f, -IM_PI * 0.5f + prog * 2.f * IM_PI, 24);
+    dl->PathStroke(col, 0, 2.f);
+}
+
+static void draw_fx_merge_flash(ImDrawList* dl, int ti, int ci,
+                                float x0, float x1, float y0, float y1) {
+    if (!s_fx_flash.active || s_fx_flash.ti != ti || s_fx_flash.ci != ci) return;
+    float el = (float)(ImGui::GetTime() - s_fx_flash.t0);
+    if (el > 0.45f) { s_fx_flash.active = false; return; }
+    float k  = el / 0.45f;
+    float ex = 14.f * k;
+    dl->AddRect({x0 - ex, y0 - ex}, {x1 + ex, y1 + ex},
+                IM_COL32(255, 200, 90, (int)(220.f * (1.f - k))), 3.f, 0, 2.5f);
+}
+
 // Drop state — declared extern in timeline.h
 int   s_tl_hover_track   = -1;
 float s_drop_flash_t     = 0.f;
 int   s_drop_flash_track = -1;
 
+static bool is_fx_clip(const Clip& c) {
+    return c.clip_type == ClipType::Effect ||
+           c.clip_type == ClipType::MultiFX ||
+           c.clip_type == ClipType::BodyFX;
+}
 static bool clips_conflict(const Clip& a, const Clip& b) {
-    if (a.clip_type == ClipType::Effect  || b.clip_type == ClipType::Effect  ||
-        a.clip_type == ClipType::MultiFX || b.clip_type == ClipType::MultiFX ||
-        a.clip_type == ClipType::BodyFX  || b.clip_type == ClipType::BodyFX) return false;
+    // FX bricks never conflict with content clips (glass bricks ride over
+    // video on the same track), but FX-on-FX overlap is illegal: bricks
+    // weld into a MultiFX chain or bounce back — they never stack.
+    if (is_fx_clip(a) != is_fx_clip(b)) return false;
     return a.start < b.end && a.end > b.start;
 }
 static void merge_fx_clips(Clip& target, Clip dragged) {
@@ -80,11 +158,49 @@ static void merge_fx_clips(Clip& target, Clip dragged) {
 
 void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h) {
     ImDrawList* dl      = ImGui::GetWindowDrawList();
-    float clip_area_w        = total_w - TL_LABEL_W;
+    // Any open popup (clip/track context menus, transition picker, modals)
+    // silences the timeline's raw hit-testing below: ImGui popups don't
+    // intercept IsMouseClicked, so clicks on menu items — and the click that
+    // dismisses a popup — were also landing on whatever sat underneath
+    // (toggling track icons, deselecting, starting drags, opening another
+    // menu). Drag continuation (IsMouseDown/Dragging/Released) stays live so
+    // an in-flight drag still finishes if a popup opens mid-gesture.
+    const bool tl_any_popup = ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId |
+                                                     ImGuiPopupFlags_AnyPopupLevel);
+    float clip_area_w        = total_w - TL_LABEL_W - TL_VSCROLLBAR_W;
     state.tl_clip_area_w     = clip_area_w;
     float dur                = fmaxf(state.duration, 1.f);
     float& zoom         = state.tl_zoom;
     float& scroll       = state.tl_scroll;
+
+    // Minimum zoom that fits the entire timeline in the visible clip area,
+    // minus a small right margin so clip edges (and their trim handles) never
+    // sit flush against the vertical scrollbar at full zoom-out.
+    float fit_margin = fminf(fmaxf(clip_area_w * 0.05f, 24.f), 64.f);
+    float zoom_min = fmaxf(1.f, (clip_area_w - fit_margin) / dur);
+    state.tl_zoom_min = zoom_min;
+    // Lift zoom when the floor rises (window resized, duration shrank) — but
+    // never mid-gesture: trimming the last clip changes the duration every
+    // frame, and chasing the moving floor live rescales the whole timeline
+    // under the drag. Freeze while a clip drag is in flight, glide after.
+    if (g_tl.drag_track < 0 && zoom < zoom_min) {
+        float a = fminf(1.f, ImGui::GetIO().DeltaTime * 12.f);
+        zoom += (zoom_min - zoom) * a;
+        if (zoom_min - zoom < 0.01f) zoom = zoom_min;
+    }
+    // Glide scroll back into legal bounds once hands are off — trims may
+    // overscroll past the content end freely while dragging. The bound keeps
+    // the fit margin of empty timeline after the last clip (a trim-follow
+    // release usually lands exactly on it, so nothing visibly moves). At the
+    // zoom floor this converges to 0 (fully zoomed out shows frame 0).
+    if (g_tl.drag_track < 0) {
+        float smax = fmaxf(0.f, dur * zoom - clip_area_w + fit_margin);
+        if (scroll > smax) {
+            float a = fminf(1.f, ImGui::GetIO().DeltaTime * 12.f);
+            scroll += (smax - scroll) * a;
+            if (scroll - smax < 0.5f) scroll = smax;
+        }
+    }
 
     // Deferred zoom-to-fit: set by add_clip_to_track / import whenever a new clip is added.
     // Always compute the target zoom for the clip; only apply it if it means zooming OUT
@@ -92,7 +208,13 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
     // see the full clip, nothing changes; if not, the timeline adjusts to show it with spacing.
     if (state.tl_zoom_to_fit_end > 0.f && clip_area_w > 0.f) {
         float target   = state.tl_zoom_to_fit_end * 1.15f;
-        float new_zoom = fmaxf(20.f, fminf(clip_area_w / target, 4000.f));
+        // Floor against the duration AFTER the add lands, not this frame's
+        // zoom_min: the request fires the same frame as the click, before the
+        // duration sync sees the new clip, and the stale (shorter-project)
+        // floor used to swallow the whole zoom-out.
+        float fit_dur   = fmaxf(dur, state.tl_zoom_to_fit_end);
+        float floor_fit = fmaxf(1.f, (clip_area_w - fit_margin) / fit_dur);
+        float new_zoom  = fmaxf(floor_fit, fminf(clip_area_w / target, 4000.f));
         if (new_zoom < zoom) {
             float left_t = scroll / zoom;
             zoom   = new_zoom;
@@ -119,7 +241,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
             scroll = clip_px1 - clip_area_w + margin;
         // Vertical: ensure track row is visible
         float track_top = state.selected_track * TL_TRACK_H;
-        float vis_h     = total_h - TL_RULER_H;
+        float vis_h     = total_h - TL_RULER_H - TL_SCROLLBAR_H;
         if (track_top < state.tl_v_scroll)
             state.tl_v_scroll = track_top;
         else if (track_top + TL_TRACK_H > state.tl_v_scroll + vis_h)
@@ -137,18 +259,18 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
     if (in_tl) {
         float wheel = ImGui::GetIO().MouseWheel;
         if (fabsf(wheel) > 0.f) {
-            bool in_track_body = mouse.y >= origin.y + TL_RULER_H && mouse.y < origin.y + total_h;
+            bool in_track_body = mouse.y >= origin.y + TL_RULER_H && mouse.y < origin.y + total_h - TL_SCROLLBAR_H;
             if (ImGui::GetIO().KeyCtrl) {
                 // Ctrl+scroll = zoom (anchor under cursor)
                 float old_zoom = zoom;
-                zoom = fmaxf(20.f, fminf(zoom * (1.f + wheel * 0.1f), 4000.f));
+                zoom = fmaxf(zoom_min, fminf(zoom * (1.f + wheel * 0.1f), 4000.f));
                 float mouse_t = (mouse.x - origin.x - TL_LABEL_W + scroll) / old_zoom;
                 scroll = fmaxf(0.f, mouse_t * zoom - (mouse.x - origin.x - TL_LABEL_W));
-                scroll = fminf(scroll, fmaxf(0.f, dur * zoom - clip_area_w + 60.f));
+                scroll = fminf(scroll, fmaxf(0.f, dur * zoom - clip_area_w + fit_margin));
             } else if (!in_track_body) {
                 // Plain scroll in ruler/header = horizontal pan only
                 scroll = fmaxf(0.f, scroll - wheel * 60.f);
-                scroll = fminf(scroll, fmaxf(0.f, tl_content_w - clip_area_w + 60.f));
+                scroll = fminf(scroll, fmaxf(0.f, tl_content_w - clip_area_w + fit_margin));
             }
             // Plain scroll in track body is handled by the vertical scroll block below
         }
@@ -229,73 +351,97 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
         float th = ImGui::CalcTextSize(lbl).y;
         dl->AddText({btn_min.x + ((btn_max.x-btn_min.x)-tw)*0.5f,
                      btn_min.y + ((btn_max.y-btn_min.y)-th)*0.5f}, txt_col, lbl);
-        if (hov && ImGui::IsMouseClicked(0))
+        if (hov && (!tl_any_popup && ImGui::IsMouseClicked(0)))
             s_snap_enabled = !s_snap_enabled;
     }
 
-    // Adaptive tick ladder {major_interval_secs, subdivisions}.
-    // Selected so that major ticks are always ≥ 80 px apart.
-    struct TickLevel { float secs; int subdivs; };
+    // Tick ladder derived from the project frame grid: every tick at every
+    // zoom sits on a frame boundary, and majors are always labeled as time —
+    // never raw frame counts. Seconds stay the unit; zoomed in, each second
+    // subdivides by a divisor of fps so minors land exactly on frames.
     const float f1 = 1.f / fps;
-    const TickLevel levels[] = {
-        {f1,      1},   // 1 frame
-        {2*f1,    2},   // 2 frames,  minor every 1f
-        {5*f1,    5},   // 5 frames,  minor every 1f
-        {10*f1,   2},   // 10 frames, minor every 5f
-        {0.5f,    5},   // 0.5 s,     minor every 0.1 s
-        {1.f,     4},   // 1 s,       minor every 0.25 s
-        {2.f,     4},   // 2 s,       minor every 0.5 s
-        {5.f,     5},   // 5 s,       minor every 1 s
-        {10.f,    2},   // 10 s,      minor every 5 s
-        {30.f,    3},   // 30 s,      minor every 10 s
-        {60.f,    4},   // 1 min,     minor every 15 s
-        {300.f,   5},   // 5 min,     minor every 1 min
-        {600.f,   2},   // 10 min,    minor every 5 min
-    };
-    const int NUM_LEVELS = (int)(sizeof(levels)/sizeof(levels[0]));
     const float MIN_MAJOR_PX = 80.f;
+    const float MIN_MINOR_PX = 7.f;
+    const int   ifps = (int)fmaxf(1.f, roundf(fps));
 
-    TickLevel chosen = levels[NUM_LEVELS-1];
-    for (int li = 0; li < NUM_LEVELS; ++li) {
-        if (levels[li].secs * zoom >= MIN_MAJOR_PX) { chosen = levels[li]; break; }
+    float major_secs;        // labeled tick interval (always whole-second based)
+    int   minors_per_major;  // minor ticks inside one major
+    bool  frame_grid = false;
+    int   frame_step = ifps; // frames between minors when frame_grid
+    if (zoom >= MIN_MAJOR_PX) {
+        // 1 s majors fit — subdivide the second on the frame grid with the
+        // smallest fps divisor that keeps minors ≥ MIN_MINOR_PX apart.
+        major_secs = 1.f;
+        for (int s = 1; s <= ifps; ++s) {
+            if (ifps % s) continue;
+            if ((float)s * zoom / (float)ifps >= MIN_MINOR_PX) { frame_step = s; break; }
+        }
+        frame_grid       = frame_step < ifps;
+        minors_per_major = ifps / frame_step;
+    } else {
+        // Whole-second ladder — minors are whole seconds (or skipped), so the
+        // grid stays frame-exact at any fps.
+        struct TickLevel { float secs; int subdivs; };
+        static const TickLevel levels[] = {
+            {2.f,    2},   // 2 s,    minor every 1 s
+            {5.f,    5},   // 5 s,    minor every 1 s
+            {10.f,   2},   // 10 s,   minor every 5 s
+            {30.f,   3},   // 30 s,   minor every 10 s
+            {60.f,   4},   // 1 min,  minor every 15 s
+            {300.f,  5},   // 5 min,  minor every 1 min
+            {600.f,  2},   // 10 min, minor every 5 min
+            {1800.f, 3},   // 30 min, minor every 10 min
+        };
+        const int NUM_LEVELS = (int)(sizeof(levels)/sizeof(levels[0]));
+        major_secs       = levels[NUM_LEVELS-1].secs;
+        minors_per_major = levels[NUM_LEVELS-1].subdivs;
+        for (int li = 0; li < NUM_LEVELS; ++li) {
+            if (levels[li].secs * zoom >= MIN_MAJOR_PX) {
+                major_secs       = levels[li].secs;
+                minors_per_major = levels[li].subdivs;
+                break;
+            }
+        }
     }
 
-    float minor_secs = chosen.secs / (float)chosen.subdivs;
-    float first_tick = floorf((scroll / zoom) / minor_secs) * minor_secs;
-
-    for (float t = first_tick; t <= dur + chosen.secs; t += minor_secs) {
+    // Index-based walk (no float accumulation drift on long timelines).
+    const double minor_d   = (double)major_secs / (double)minors_per_major;
+    const float  minor_px  = (float)(minor_d * zoom);
+    const bool   label_frames = frame_grid && minor_px >= 48.f;
+    long i0 = (long)floor((double)(scroll / zoom) / minor_d);
+    if (i0 < 0) i0 = 0;
+    for (long i = i0; (double)i * minor_d <= (double)dur + major_secs; ++i) {
+        float t  = (float)((double)i * minor_d);
         float px = origin.x + TL_LABEL_W + t * zoom - scroll;
-        if (px < origin.x + TL_LABEL_W - 1.f || px > origin.x + total_w) continue;
+        if (px < origin.x + TL_LABEL_W - 1.f) continue;
+        if (px > origin.x + total_w) break;
 
-        int   tick_idx = (int)roundf(t / minor_secs);
-        bool  is_major = (tick_idx % chosen.subdivs == 0);
+        int  sub      = (int)(i % minors_per_major);
+        bool is_major = (sub == 0);
 
         if (is_major) {
             dl->AddLine({px, ruler_y + 4.f}, {px, ruler_y + TL_RULER_H},
                         to_u32(Col::muted));
             char tbuf[16];
-            if (chosen.secs >= 1.f)
-                snprintf(tbuf, sizeof(tbuf), "%s", fmt_time_short(t).c_str());
-            else
-                snprintf(tbuf, sizeof(tbuf), "%d", (int)roundf(t * fps));
+            snprintf(tbuf, sizeof(tbuf), "%s", fmt_time_short(t).c_str());
             float tw = ImGui::CalcTextSize(tbuf).x;
             float lx = px - tw * 0.5f;
             if (lx >= origin.x + TL_LABEL_W + 2.f && lx + tw <= origin.x + total_w - 2.f)
                 dl->AddText({lx, ruler_y + 3.f}, to_u32(Col::muted), tbuf);
         } else {
-            dl->AddLine({px, ruler_y + 10.f}, {px, ruler_y + TL_RULER_H},
-                        to_u32(Col::dim));
-        }
-    }
-
-    // Beat tick marks (small orange triangles at the bottom of the ruler)
-    if (!state.beats.empty()) {
-        ImU32 beat_col = IM_COL32(255, 160, 50, 180);
-        float ty = ruler_y + TL_RULER_H - 5.f;
-        for (float bt : state.beats) {
-            float px = origin.x + TL_LABEL_W + bt * zoom - scroll;
-            if (px < origin.x + TL_LABEL_W || px > origin.x + total_w) continue;
-            dl->AddTriangleFilled({px-3.f, ty}, {px+3.f, ty}, {px, ty+5.f}, beat_col);
+            // Frame ticks: emphasize every 5th frame so groups read at a
+            // glance; label frames as +offsets under their second when wide.
+            bool emph = frame_grid && frame_step == 1 && (sub % 5 == 0);
+            dl->AddLine({px, ruler_y + (emph ? 7.f : 10.f)}, {px, ruler_y + TL_RULER_H},
+                        to_u32(emph ? Col::muted : Col::dim));
+            if (label_frames) {
+                char fbuf[12];
+                snprintf(fbuf, sizeof(fbuf), "+%d", sub * frame_step);
+                float tw = ImGui::CalcTextSize(fbuf).x;
+                float lx = px - tw * 0.5f;
+                if (lx >= origin.x + TL_LABEL_W + 2.f && lx + tw <= origin.x + total_w - 2.f)
+                    dl->AddText({lx, ruler_y + 3.f}, to_u32(Col::dim), fbuf);
+            }
         }
     }
 
@@ -314,7 +460,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
     // Tracks
     // Vertical scroll: mouse wheel in the track body area
     float track_area_top = origin.y + TL_RULER_H;
-    float track_area_bot = origin.y + total_h;
+    float track_area_bot = origin.y + total_h - TL_SCROLLBAR_H;
     float tracks_total_h = ((int)state.tracks.size() + 1) * TL_TRACK_H;  // +1 for add-track row
     float max_v_scroll   = fmaxf(0.f, tracks_total_h - (track_area_bot - track_area_top));
     if (ImGui::IsMouseHoveringRect({origin.x, track_area_top}, {origin.x+total_w, track_area_bot})) {
@@ -322,6 +468,64 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
         if (wheel != 0.f && !ImGui::GetIO().KeyCtrl)
             state.tl_v_scroll -= wheel * TL_TRACK_H;
     }
+
+    // ── Edge auto-scroll while dragging ───────────────────────────────────────
+    // Dragging a clip (body or trim edge), a transition glass, or a marquee box
+    // past the visible clip area scrolls the timeline toward the mouse so the
+    // gesture can continue beyond the current view. Speed scales with how far
+    // the mouse overshoots the edge. Drag math recomputes positions from
+    // mouse + scroll every frame, so the dragged clip rides along; the marquee
+    // anchor is screen-space and gets shifted so its corner stays pinned to
+    // the same timeline position.
+    if ((g_tl.drag_track >= 0 || g_tl.box_selecting || g_tl.glass_drag != 0) &&
+        ImGui::IsMouseDown(0)) {
+        ImVec2 mp = ImGui::GetIO().MousePos;
+        float  dt = ImGui::GetIO().DeltaTime;
+        auto edge_step = [&](float overshoot) {
+            return fminf(overshoot, 160.f) * 8.f * dt;  // px this frame, capped
+        };
+        // Horizontal
+        {
+            float x_lo = origin.x + TL_LABEL_W;
+            float x_hi = x_lo + clip_area_w;
+            // Edge trims scroll early (at the margin line, not the border)
+            // and — crucially — with NO content-derived ceiling: during a
+            // trim the user's push is the only scroll driver. The dragged
+            // edge rides margin-short of the border, so any ceiling tied to
+            // the (edge-defined) content end cancels against the setback and
+            // deadlocks the gesture. Post-release housekeeping glides the
+            // view back into legal bounds.
+            bool  trim  = (g_tl.drag_left || g_tl.drag_right) && g_tl.drag_track >= 0;
+            float inset = trim ? fit_margin : 0.f;
+            float max_scroll = fmaxf(0.f, tl_content_w - clip_area_w + fit_margin);
+            float ds = 0.f;
+            if      (mp.x < x_lo + inset) ds = -edge_step(x_lo + inset - mp.x);
+            else if (mp.x > x_hi - inset) ds =  edge_step(mp.x - (x_hi - inset));
+            if (ds != 0.f) {
+                float ns = scroll + ds;
+                if (!trim) ns = fminf(ns, max_scroll);
+                ns = fmaxf(0.f, ns);
+                if (g_tl.box_selecting) g_tl.box_start.x -= ns - scroll;
+                scroll = ns;
+            }
+            // NOTE: edge trims deliberately never change zoom. A mid-gesture
+            // scale change — even cursor-anchored and floor-latched — swaps
+            // the user's frame of reference while they're measuring by eye.
+            // Auto-scroll at constant zoom is the entire follow behavior.
+        }
+        // Vertical (clip drags move across tracks; marquee spans them)
+        if (g_tl.drag_track >= 0 || g_tl.box_selecting) {
+            float dv = 0.f;
+            if      (mp.y < track_area_top) dv = -edge_step(track_area_top - mp.y);
+            else if (mp.y > track_area_bot) dv =  edge_step(mp.y - track_area_bot);
+            if (dv != 0.f) {
+                float nv = fmaxf(0.f, fminf(max_v_scroll, state.tl_v_scroll + dv));
+                if (g_tl.box_selecting) g_tl.box_start.y -= nv - state.tl_v_scroll;
+                state.tl_v_scroll = nv;
+            }
+        }
+    }
+
     state.tl_v_scroll = fmaxf(0.f, fminf(max_v_scroll, state.tl_v_scroll));
 
     float track_y = track_area_top - state.tl_v_scroll;
@@ -365,8 +569,13 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
     auto& s_glass_drag_ref_start= g_tl.glass_drag_ref_start;
     bool s_trans_hit_this_frame = false;
 
-    // Clip all track drawing to the scrollable area (below ruler, above add-track row)
-    dl->PushClipRect({origin.x, track_area_top}, {origin.x+total_w, track_area_bot}, true);
+    // Clip all track drawing to the scrollable area (below ruler, above add-track row).
+    // Use ImGui::PushClipRect (not dl->) so the window's ClipRect is updated too:
+    // ImGui::PopClipRect inside clip labels restores the window ClipRect from the
+    // draw-list stack top, and a dl-only push would leave the window ClipRect stuck
+    // at the track area for the rest of the frame — which then makes the scrollbar's
+    // IsMouseHoveringRect always return false because its rect is below track_area_bot.
+    ImGui::PushClipRect({origin.x, track_area_top}, {origin.x+total_w-TL_VSCROLLBAR_W, track_area_bot}, true);
 
     for (int ti = 0; ti < (int)state.tracks.size(); ++ti) {
         Track& track = state.tracks[ti];
@@ -379,10 +588,14 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
             to_u32(row_hov ? Col::bg_soft_hov : Col::bg_soft));
         dl->AddLine({origin.x, row_br.y}, {origin.x+total_w, row_br.y}, to_u32(Col::line));
 
-        // FX preset drag-drop target on the clip area of this row
+        // FX preset drag-drop target on the clip area of this row.
+        // Clamp to track_area_bot so the button doesn't overlap (and swallow
+        // clicks on) the horizontal scrollbar below.
         {
             ImVec2 drop_tl = {origin.x + TL_LABEL_W, track_y};
-            ImVec2 drop_br = {origin.x + total_w,     track_y + TL_TRACK_H};
+            ImVec2 drop_br = {origin.x + total_w,
+                              fminf(track_y + TL_TRACK_H, track_area_bot)};
+            if (drop_br.y > drop_tl.y) {
             ImGui::SetCursorScreenPos(drop_tl);
             ImGui::InvisibleButton(("##fxdrop" + std::to_string(ti)).c_str(),
                                    {drop_br.x - drop_tl.x, drop_br.y - drop_tl.y});
@@ -432,6 +645,16 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                         s_drop_flash_t     = 0.6f;
                         history_push(state, std::string("Drop Background: ") + pr->label);
                     }
+                }
+                if (const ImGuiPayload* pay = ImGui::AcceptDragDropPayload("TEXT_STYLE")) {
+                    AnimStyle st = (AnimStyle)*(const int*)pay->Data;
+                    float drop_t = fmaxf(0.f, (ImGui::GetMousePos().x - (origin.x + TL_LABEL_W) + scroll) / zoom);
+                    state.tracks[ti].clips.push_back(make_text_brick(st, drop_t));
+                    state.selected_track = ti;
+                    state.selected_clip  = (int)state.tracks[ti].clips.size() - 1;
+                    s_drop_flash_track = ti;
+                    s_drop_flash_t     = 0.6f;
+                    history_push(state, std::string("Drop text brick: ") + text_style_name(st));
                 }
                 if (const ImGuiPayload* pay = ImGui::AcceptDragDropPayload("FX_CREATIVE")) {
                     FXType ft = (FXType)*(const int*)pay->Data;
@@ -494,6 +717,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                 dl->AddRect(drop_tl, drop_br, IM_COL32(180,130,255,180), 2.f);
                 ImGui::EndDragDropTarget();
             }
+            }
         }
 
         // Drop flash — briefly illuminate the row that just received a drop.
@@ -551,9 +775,26 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                 dl->AddRectFilled({origin.x, track_y+2.f},
                                   {origin.x+3.f, track_y+TL_TRACK_H-2.f},
                                   to_u32(Col::clip_lyrics));
+            // Truncate with ellipsis if the name would overflow into the
+            // icon buttons (lock at TL_LABEL_W-45, then mute, eye).
+            float max_w = TL_LABEL_W - 8.f - 54.f;
+            std::string label = track.name;
+            if (ImGui::CalcTextSize(label.c_str()).x > max_w) {
+                const char* ell = "\xE2\x80\xA6";  // U+2026
+                float ell_w = ImGui::CalcTextSize(ell).x;
+                while (!label.empty() &&
+                       ImGui::CalcTextSize(label.c_str()).x + ell_w > max_w) {
+                    // pop one UTF-8 code point off the end
+                    size_t n = label.size();
+                    while (n > 0 && (label[n-1] & 0xC0) == 0x80) --n;
+                    if (n > 0) --n;
+                    label.resize(n);
+                }
+                label += ell;
+            }
             dl->AddText({origin.x+8.f, track_y+(TL_TRACK_H-13.f)*0.5f},
-                to_u32(track_sel ? Col::fg : Col::muted), track.name.c_str());
-            if (ImGui::IsMouseClicked(0) && in_label) {
+                to_u32(track_sel ? Col::fg : Col::muted), label.c_str());
+            if ((!tl_any_popup && ImGui::IsMouseClicked(0)) && in_label) {
                 state.selected_track  = ti;
                 state.selected_clip   = -1;
                 state.clip_selection.clear();
@@ -561,7 +802,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                 s_track_drag_start_y  = mouse.y;
                 s_track_dragging      = false;
             }
-            if (ImGui::IsMouseDoubleClicked(0) && in_label && !s_track_dragging) {
+            if ((!tl_any_popup && ImGui::IsMouseDoubleClicked(0)) && in_label && !s_track_dragging) {
                 s_track_drag_src = -1;
                 s_rename_track = ti;
                 strncpy(s_rename_buf, track.name.c_str(), sizeof(s_rename_buf)-1);
@@ -583,7 +824,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                 dl->AddLine({eye_c.x-5.f, eye_c.y-4.f}, {eye_c.x+5.f, eye_c.y+4.f},
                             to_u32(Col::dim), 1.5f);
             }
-            if (hov && ImGui::IsMouseClicked(0)) {
+            if (hov && (!tl_any_popup && ImGui::IsMouseClicked(0))) {
                 track.visible = !track.visible;
                 history_push(state, "Toggle track visibility");
             }
@@ -601,7 +842,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
             else               // open shackle — right side lifted
                 dl->AddBezierQuadratic({lock_c.x-3.f, lock_c.y-1.f},
                     {lock_c.x-3.f, lock_c.y-5.f}, {lock_c.x+3.f, lock_c.y-5.f}, lc, 1.2f);
-            if (hov && ImGui::IsMouseClicked(0)) {
+            if (hov && (!tl_any_popup && ImGui::IsMouseClicked(0))) {
                 track.locked = !track.locked;
                 history_push(state, track.locked ? "Lock track" : "Unlock track");
             }
@@ -622,7 +863,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                 dl->AddLine({mut_c.x+6.f, mut_c.y-3.f}, {mut_c.x+2.f, mut_c.y+3.f},
                             IM_COL32(255,80,80,230), 1.5f);
             }
-            if (hov && ImGui::IsMouseClicked(0)) {
+            if (hov && (!tl_any_popup && ImGui::IsMouseClicked(0))) {
                 track.muted = !track.muted;
                 history_push(state, "Toggle track mute");
             }
@@ -632,7 +873,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                     {origin.x+TL_LABEL_W, track_y+TL_TRACK_H}, to_u32(Col::line));
 
         // Right-click track label
-        if (ImGui::IsMouseClicked(1) &&
+        if ((!tl_any_popup && ImGui::IsMouseClicked(1)) &&
             mouse.x >= origin.x && mouse.x < origin.x+TL_LABEL_W &&
             mouse.y >= track_y  && mouse.y < track_y+TL_TRACK_H) {
             ctx_track = ti; ctx_clip = -1;
@@ -646,11 +887,22 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
         bool clip_ctx_opened_this_frame = false;
 
         auto clip_interact = [&](int ci, Clip& clip, float vis_x0, float vis_x1, float cy0, float cy1, bool sel) {
+            // Clamp the Y range used for mouse hit-testing to the track area.
+            // Without this, clips on tracks partially clipped at the bottom
+            // extend cy1 past track_area_bot and steal scrollbar clicks.
+            cy1 = std::min(cy1, track_area_bot);
             const float ew = 6.f, ew_hit = 12.f;
-            // Edge handles
+            // Edge handles — only where the TRUE edge is on screen. vis_x0/x1
+            // are clamped to the viewport, so a zoomed-in view mid-clip would
+            // otherwise draw a phantom handle at the boundary where no
+            // trimmable edge exists.
             if (sel) {
-                dl->AddRectFilled({vis_x0,cy0},{vis_x0+ew,cy1},to_u32(Col::muted),1.f);
-                dl->AddRectFilled({vis_x1-ew,cy0},{vis_x1,cy1},to_u32(Col::muted),1.f);
+                float tx0 = origin.x + TL_LABEL_W + clip.start * zoom - scroll;
+                float tx1 = origin.x + TL_LABEL_W + clip.end   * zoom - scroll;
+                if (fabsf(tx0 - vis_x0) < 0.5f)
+                    dl->AddRectFilled({vis_x0,cy0},{vis_x0+ew,cy1},to_u32(Col::muted),1.f);
+                if (fabsf(tx1 - vis_x1) < 0.5f)
+                    dl->AddRectFilled({vis_x1-ew,cy0},{vis_x1,cy1},to_u32(Col::muted),1.f);
             }
             // Resize cursor
             {
@@ -663,41 +915,260 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                     (mouse.x <= orig_cx0h+ew_hit || mouse.x >= orig_cx1h-ew_hit))
                     ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
             }
-            // Keyframe diamond markers
+            // Keyframe diamond markers. Simultaneous keys across props merge
+            // into one "super diamond" (stacked like the MultiFX brick icon):
+            // clicking selects / cycles through members, dragging retimes the
+            // whole group as one pose.
+            bool kf_claimed = false;  // diamond consumed this click; skip clip select/drag
             if (!clip.ktracks.empty()) {
-                float kf_mid_y = (cy0 + cy1) * 0.5f;
-                float d = 4.f;
+                // Dedicated lane at the bottom of the clip body: a dark strip
+                // the diamonds sit on, so they stay legible over any thumbnail
+                // (4px grey floating mid-clip was invisible on busy video).
+                float lane_b = cy1 - 2.f, lane_t = fmaxf(cy0 + 2.f, cy1 - 13.f);
+                dl->AddRectFilled({vis_x0, lane_t}, {vis_x1, lane_b},
+                                  IM_COL32(8, 8, 12, 170), 3.f);
+                float kf_mid_y = (lane_t + lane_b) * 0.5f;
+
+                // Group by actual timestamp (the PropTrack::set tolerance),
+                // NOT by screen overlap — a super diamond means "genuinely
+                // simultaneous", so zooming out never welds unrelated keys.
+                struct Mem { const std::string* prop; int idx; float value; };
+                struct Grp { float time; std::vector<Mem> mems; };
+                std::vector<Grp> groups;
                 for (auto& [pname, pt] : clip.ktracks) {
-                    for (auto& kf : pt.keys) {
-                        float kx = origin.x + TL_LABEL_W + (clip.start + kf.time) * zoom - scroll;
-                        if (kx < vis_x0 || kx > vis_x1) continue;
-                        bool kf_sel = (state.kf_sel_track == ti &&
-                                       state.kf_sel_clip  == ci &&
-                                       state.kf_sel_prop  == pname &&
-                                       &kf == &pt.keys[state.kf_sel_idx > 0 &&
-                                           state.kf_sel_idx < (int)pt.keys.size()
-                                           ? state.kf_sel_idx : 0]);
-                        ImU32 kc = kf_sel ? IM_COL32(255,200,60,255) : IM_COL32(220,220,220,200);
-                        dl->AddQuadFilled(
-                            {kx, kf_mid_y-d}, {kx+d, kf_mid_y},
-                            {kx, kf_mid_y+d}, {kx-d, kf_mid_y}, kc);
-                        if (ImGui::IsMouseClicked(0) &&
-                            fabsf(mouse.x - kx) < d+2.f &&
-                            fabsf(mouse.y - kf_mid_y) < d+2.f) {
-                            state.kf_sel_track = ti;
-                            state.kf_sel_clip  = ci;
-                            state.kf_sel_prop  = pname;
-                            int idx = (int)(&kf - pt.keys.data());
-                            state.kf_sel_idx   = idx;
+                    for (int ki = 0; ki < (int)pt.keys.size(); ++ki) {
+                        float kt = pt.keys[ki].time;
+                        Grp* g = nullptr;
+                        for (auto& gg : groups)
+                            if (fabsf(gg.time - kt) < 0.02f) { g = &gg; break; }
+                        if (!g) { groups.push_back({kt, {}}); g = &groups.back(); }
+                        g->mems.push_back({&pname, ki, pt.keys[ki].value});
+                    }
+                }
+                for (auto& g : groups)
+                    std::sort(g.mems.begin(), g.mems.end(),
+                              [](const Mem& a, const Mem& b){ return *a.prop < *b.prop; });
+
+                for (auto& g : groups) {
+                    bool  super = g.mems.size() > 1;
+                    float d  = super ? 6.f : 5.f;
+                    float kx = origin.x + TL_LABEL_W + (clip.start + g.time) * zoom - scroll;
+                    if (kx < vis_x0 - d || kx > vis_x1 + d) continue;
+                    auto is_mem = [&](const std::string& prop, int idx) {
+                        for (auto& m : g.mems)
+                            if (*m.prop == prop && m.idx == idx) return true;
+                        return false;
+                    };
+                    bool dragging_this = s_kf_drag.active &&
+                        s_kf_drag.ti == ti && s_kf_drag.ci == ci &&
+                        !s_kf_drag.mems.empty() &&
+                        is_mem(s_kf_drag.mems[0].prop, s_kf_drag.mems[0].idx);
+                    bool kf_sel = state.kf_sel_track == ti &&
+                                  state.kf_sel_clip  == ci &&
+                                  is_mem(state.kf_sel_prop, state.kf_sel_idx);
+                    bool hovered = !s_kf_drag.active && !tl_any_popup &&
+                                   fabsf(mouse.x - kx) < d + 3.f &&
+                                   fabsf(mouse.y - kf_mid_y) < d + 3.f;
+                    // Singles stay white; super diamonds are blue so a merged
+                    // pose reads at a glance. Selection gold wins over both.
+                    ImU32 kc = (kf_sel || dragging_this) ? IM_COL32(255,200,60,255)
+                             : hovered ? (super ? IM_COL32(170,220,255,255)
+                                               : IM_COL32(255,235,160,230))
+                                       : (super ? IM_COL32(110,190,255,255)
+                                               : IM_COL32(235,235,235,255));
+                    auto diamond = [&](float cx, float cy, float r, ImU32 fill) {
+                        dl->AddQuadFilled({cx, cy-r}, {cx+r, cy},
+                                          {cx, cy+r}, {cx-r, cy}, fill);
+                        dl->AddQuad({cx, cy-r}, {cx+r, cy},
+                                    {cx, cy+r}, {cx-r, cy},
+                                    IM_COL32(0, 0, 0, 200), 1.f);
+                    };
+                    // Super diamonds get a dimmer echo peeking out behind —
+                    // same stacked-layers language as the MultiFX brick.
+                    if (super) diamond(kx + 3.f, kf_mid_y, d - 1.f,
+                                       IM_COL32(55, 110, 185, 255));
+                    diamond(kx, kf_mid_y, d, kc);
+
+                    if (hovered) {
+                        char tip[256]; int off = 0;
+                        off += snprintf(tip + off, sizeof(tip) - off,
+                                        "%.2fs", g.time);
+                        for (auto& m : g.mems) {
+                            if (off >= (int)sizeof(tip) - 32) break;
+                            off += snprintf(tip + off, sizeof(tip) - off,
+                                            "\n%s = %.3f", m.prop->c_str(), m.value);
+                        }
+                        snprintf(tip + off, sizeof(tip) - off,
+                                 super ? "\nclick cycles \xc2\xb7 drag moves all %d \xc2\xb7 right-click unpairs"
+                                       : "\nclick to select \xc2\xb7 drag to move",
+                                 (int)g.mems.size());
+                        ImGui::SetTooltip("%s", tip);
+                        if (super && ImGui::IsMouseClicked(1)) {
+                            s_kf_ctx.ti = ti; s_kf_ctx.ci = ci;
+                            s_kf_ctx.time = g.time;
                             state.selected_track = ti;
                             state.selected_clip  = ci;
+                            clip_ctx_opened_this_frame = true;  // not the clip menu
+                            ImGui::OpenPopup("##kf_ctx");
                         }
+                        if (ImGui::IsMouseClicked(0)) {
+                            // Select: cycle through members if one is already
+                            // selected (same gesture as Alt+click layer cycle
+                            // on the canvas), else start at the first.
+                            int cur = -1;
+                            if (state.kf_sel_track == ti && state.kf_sel_clip == ci)
+                                for (int mi = 0; mi < (int)g.mems.size(); ++mi)
+                                    if (*g.mems[mi].prop == state.kf_sel_prop &&
+                                        g.mems[mi].idx   == state.kf_sel_idx) { cur = mi; break; }
+                            const Mem& pick = g.mems[(cur + 1) % (int)g.mems.size()];
+                            state.kf_sel_track = ti;
+                            state.kf_sel_clip  = ci;
+                            state.kf_sel_prop  = *pick.prop;
+                            state.kf_sel_idx   = pick.idx;
+                            state.selected_track = ti;
+                            state.selected_clip  = ci;
+                            s_kf_drag.active = true;
+                            s_kf_drag.ti = ti; s_kf_drag.ci = ci;
+                            s_kf_drag.mems.clear();
+                            for (auto& m : g.mems)
+                                s_kf_drag.mems.push_back({*m.prop, m.idx});
+                            s_kf_drag.moved = false;
+                            kf_claimed = true;
+                            s_clip_hit = true;  // it's still a clip hit — don't deselect
+                        }
+                    }
+                }
+                // Retime drag in progress — move every member of the grabbed
+                // group to the same new time so the pose stays simultaneous.
+                if (s_kf_drag.active && s_kf_drag.ti == ti && s_kf_drag.ci == ci) {
+                    bool valid = !s_kf_drag.mems.empty();
+                    for (auto& m : s_kf_drag.mems) {
+                        auto it_kt = clip.ktracks.find(m.prop);
+                        if (it_kt == clip.ktracks.end() ||
+                            m.idx >= (int)it_kt->second.keys.size()) { valid = false; break; }
+                    }
+                    if (!valid) {
+                        s_kf_drag.active = false;
+                    } else if (ImGui::IsMouseDown(0)) {
+                        float t_new = (mouse.x - origin.x - TL_LABEL_W + scroll) / zoom
+                                      - clip.start;
+                        // Hold-to-weld: hovering the drag over another diamond
+                        // arms a 3 s ring timer instead of merging on contact.
+                        // Until it completes the drag parks just beside the
+                        // target, so releasing early leaves them neighbors;
+                        // when the ring closes, the keys snap to the exact
+                        // same time and become one (blue) super diamond.
+                        const double now = ImGui::GetTime();
+                        float weld_zone = fmaxf(0.02f, 8.f / zoom);
+                        float park_off  = fmaxf(0.03f, 4.f / zoom);
+                        const Grp* tgt = nullptr;
+                        bool tgt_weldable = false;
+                        for (auto& g : groups) {
+                            bool is_dragged = false;
+                            for (auto& m : g.mems)
+                                if (*m.prop == s_kf_drag.mems[0].prop &&
+                                    m.idx   == s_kf_drag.mems[0].idx) { is_dragged = true; break; }
+                            if (is_dragged) continue;
+                            if (fabsf(t_new - g.time) >= weld_zone) continue;
+                            if (tgt && fabsf(t_new - g.time) >= fabsf(t_new - tgt->time))
+                                continue;
+                            // A super diamond holds at most one key per prop —
+                            // groups sharing a prop with the drag park beside
+                            // each other but never weld (no timer either).
+                            bool shares_prop = false;
+                            for (auto& m : g.mems) {
+                                for (auto& dm : s_kf_drag.mems)
+                                    if (*m.prop == dm.prop) { shares_prop = true; break; }
+                                if (shares_prop) break;
+                            }
+                            tgt = &g;
+                            tgt_weldable = !shares_prop;
+                        }
+                        if (tgt && !tgt_weldable) {
+                            // Repel only: keep distinct keys of the same prop
+                            // from stacking into a degenerate group.
+                            t_new = tgt->time +
+                                    (t_new >= tgt->time ? park_off : -park_off);
+                            s_kf_drag.weld_target = -1.f;
+                        } else if (tgt) {
+                            if (fabsf(s_kf_drag.weld_target - tgt->time) > 0.0005f) {
+                                s_kf_drag.weld_target = tgt->time;   // new candidate
+                                s_kf_drag.weld_start  = now;         // arm the timer
+                            }
+                            float prog = (float)((now - s_kf_drag.weld_start) / kWeldHoldSec);
+                            if (prog >= 1.f) {
+                                t_new = tgt->time;                   // weld!
+                                s_kf_flash.active = true;
+                                s_kf_flash.t0 = now;
+                                s_kf_flash.ti = ti; s_kf_flash.ci = ci;
+                                s_kf_flash.time = tgt->time;
+                                s_kf_drag.weld_target = -1.f;
+                                // Absorb the target's members so the merged
+                                // group keeps dragging as one from here on.
+                                for (auto& m : tgt->mems)
+                                    s_kf_drag.mems.push_back({*m.prop, m.idx});
+                            } else {
+                                t_new = tgt->time +
+                                        (t_new >= tgt->time ? park_off : -park_off);
+                                // The timer ring, filling clockwise around the
+                                // target with a gentle pulse.
+                                float tx = origin.x + TL_LABEL_W +
+                                           (clip.start + tgt->time) * zoom - scroll;
+                                float pr = 9.f * (1.f + 0.1f * sinf((float)now * 9.f));
+                                dl->PathArcTo({tx, kf_mid_y}, pr, -IM_PI * 0.5f,
+                                              -IM_PI * 0.5f + prog * 2.f * IM_PI, 24);
+                                dl->PathStroke(IM_COL32(110,190,255,230), 0, 2.f);
+                            }
+                        } else {
+                            s_kf_drag.weld_target = -1.f;
+                        }
+                        t_new = fmaxf(0.f, fminf(t_new, clip.end - clip.start));
+                        for (auto& m : s_kf_drag.mems) {
+                            auto& keys = clip.ktracks[m.prop].keys;
+                            bool was_sel = state.kf_sel_prop == m.prop &&
+                                           state.kf_sel_idx  == m.idx;
+                            if (fabsf(t_new - keys[m.idx].time) > 1e-4f)
+                                s_kf_drag.moved = true;
+                            keys[m.idx].time = t_new;
+                            // Bubble past neighbors so the track stays sorted.
+                            while (m.idx > 0 &&
+                                   keys[m.idx].time < keys[m.idx-1].time) {
+                                std::swap(keys[m.idx], keys[m.idx-1]);
+                                --m.idx;
+                            }
+                            while (m.idx + 1 < (int)keys.size() &&
+                                   keys[m.idx].time > keys[m.idx+1].time) {
+                                std::swap(keys[m.idx], keys[m.idx+1]);
+                                ++m.idx;
+                            }
+                            if (was_sel) state.kf_sel_idx = m.idx;
+                        }
+                    } else {
+                        if (s_kf_drag.moved)
+                            history_push(state, s_kf_drag.mems.size() > 1
+                                                ? "Move keyframe group" : "Move keyframe");
+                        s_kf_drag.active = false;
+                    }
+                }
+                // Weld-complete flash: a quick expanding ring fading out over
+                // the freshly merged super diamond.
+                if (s_kf_flash.active && s_kf_flash.ti == ti && s_kf_flash.ci == ci) {
+                    float el = (float)(ImGui::GetTime() - s_kf_flash.t0);
+                    if (el > 0.45f) {
+                        s_kf_flash.active = false;
+                    } else {
+                        float fx = origin.x + TL_LABEL_W +
+                                   (clip.start + s_kf_flash.time) * zoom - scroll;
+                        float fr = 7.f + el * 34.f;
+                        int   fa = (int)(220.f * (1.f - el / 0.45f));
+                        dl->AddCircle({fx, kf_mid_y}, fr,
+                                      IM_COL32(140, 200, 255, fa), 20, 2.f);
                     }
                 }
             }
             // Left click — select / drag
             bool any_popup = ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
-            if (!s_trans_hit_this_frame && !any_popup && ImGui::IsMouseClicked(0)) {
+            if (!kf_claimed && !s_trans_hit_this_frame && !any_popup && (!tl_any_popup && ImGui::IsMouseClicked(0))) {
                 if (mouse.y>=cy0 && mouse.y<=cy1 && mouse.x>=vis_x0 && mouse.x<=vis_x1) {
                     s_clip_hit = true;
                     auto key = std::make_pair(ti, ci);
@@ -773,7 +1244,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                 }
             }
             // Right-click context
-            if (!clip_ctx_opened_this_frame && ImGui::IsMouseClicked(1) &&
+            if (!clip_ctx_opened_this_frame && (!tl_any_popup && ImGui::IsMouseClicked(1)) &&
                 mouse.y>=cy0 && mouse.y<=cy1 && mouse.x>=vis_x0 && mouse.x<=vis_x1) {
                 ctx_track = ti; ctx_clip = ci;
                 state.selected_track = ti; state.selected_clip = ci;
@@ -872,6 +1343,81 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                     dl->AddText({vis_x0+4.f, cy0+(cy1-cy0-13.f)*0.5f}, ltcol, lbl);
                 }
                 ImGui::PopClipRect();
+            } else if (clip.clip_type == ClipType::Record) {
+                // Record brick: neutral slate at rest with a red dot as the
+                // type marker; the whole brick goes red only while recording.
+                bool rec_live = recorder_is_target(ti, ci);
+                bool has_take = clip.rec_take_sel >= 0 &&
+                                clip.rec_take_sel < (int)clip.rec_takes.size();
+                ImU32 fill = rec_live ? IM_COL32(140, 22, 26, 255)
+                           : sel      ? IM_COL32(135, 135, 175, 255)
+                           : has_take ? IM_COL32( 42,  42,  56, 255)
+                                      : IM_COL32( 33,  33,  45, 255);
+                dl->AddRectFilled({vis_x0,cy0},{vis_x1,cy1}, fill, 2.f);
+                ImU32 border;
+                if (rec_live) {
+                    float t  = (float)ImGui::GetTime();
+                    int   a  = (int)(170.f + 85.f * sinf(t * 6.f));
+                    border = IM_COL32(255, 70, 70, a);
+                } else {
+                    border = sel ? IM_COL32(205, 205, 240, 255)
+                                 : IM_COL32( 80,  80, 105, 200);
+                }
+                dl->AddRect({vis_x0,cy0},{vis_x1,cy1}, border, 2.f, 0, rec_live ? 2.f : 1.f);
+
+                ImGui::PushClipRect({vis_x0,cy0},{vis_x1,cy1},true);
+                float mid  = (cy0 + cy1) * 0.5f;
+                float half = (cy1 - cy0) * 0.44f;
+                if (rec_live) {
+                    // Live waveform of the pass in progress, growing left→right.
+                    int n = (int)fminf(fmaxf(cx1 - cx0, 16.f), 4096.f);
+                    static std::vector<float> peaks;
+                    peaks.resize((size_t)n);
+                    if (recorder_live_peaks(n, peaks.data())) {
+                        ImU32 wcol = IM_COL32(255, 130, 130, 230);
+                        for (float px2 = vis_x0; px2 < vis_x1; px2 += 1.f) {
+                            int b = (int)((px2 - cx0) / (cx1 - cx0) * (float)n);
+                            if (b < 0 || b >= n) continue;
+                            float amp = fminf(peaks[(size_t)b], 1.f) * half;
+                            if (amp < 1.f) continue;  // not reached yet — stay flat
+                            dl->AddLine({px2, mid-amp}, {px2, mid+amp}, wcol);
+                        }
+                    }
+                } else if (has_take) {
+                    // Takes are recorded on the loop grid: in_point 0, speed 1.
+                    const WaveformData* wd = waveform_get(clip.rec_takes[clip.rec_take_sel]);
+                    if (wd && !wd->samples.empty()) {
+                        ImU32 wcol = sel ? IM_COL32(25, 25, 45, 190)
+                                         : IM_COL32(190, 190, 220, 130);
+                        for (float px2 = vis_x0; px2 < vis_x1; px2 += 1.f) {
+                            float t_src = (px2 - cx0) / zoom;
+                            int   fi    = (int)(t_src * WAVEFORM_FPS);
+                            if (fi < 0 || fi >= (int)wd->samples.size()) continue;
+                            float amp = wd->samples[fi] * half;
+                            if (amp < 1.f) amp = 1.f;
+                            dl->AddLine({px2, mid-amp}, {px2, mid+amp}, wcol);
+                        }
+                    }
+                }
+                // Red dot, top-left — the record-brick type marker. Brighter
+                // (and the brick itself red) while recording.
+                dl->AddCircleFilled({vis_x0 + 8.f, cy0 + 8.f}, 3.f,
+                    rec_live ? IM_COL32(255, 90, 90, 255) : IM_COL32(225, 55, 55, 255));
+                // Label badge, right of the dot.
+                char lbl[48];
+                if (rec_live)
+                    snprintf(lbl, sizeof(lbl), "Take %d", recorder_take_count() + 1);
+                else if (has_take)
+                    snprintf(lbl, sizeof(lbl), "Take %d", clip.rec_take_sel + 1);
+                else if (!clip.rec_takes.empty())
+                    snprintf(lbl, sizeof(lbl), "No take selected");
+                else
+                    snprintf(lbl, sizeof(lbl), "Empty audio record brick");
+                ImU32 lcol = rec_live ? IM_COL32(255, 220, 220, 255)
+                           : sel      ? IM_COL32( 25,  25,  45, 255)
+                                      : IM_COL32(195, 195, 220, 220);
+                dl->AddText({vis_x0 + 15.f, cy0 + 3.f}, lcol, lbl);
+                ImGui::PopClipRect();
             } else {
                 ImVec4 clip_fill = (clip.clip_type==ClipType::Lyrics)   ? Col::clip_lyrics
                                  : (clip.clip_type==ClipType::Subtitle) ? Col::clip_subtitle
@@ -962,10 +1508,12 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                 }
                 ImGui::PopClipRect();
                 clip_interact(ci, clip, vis_x0, vis_x1, cy0, cy1, sel);
-                if (g_tl.drag_merge_ci == ci && drag_track == ti) {
+                if (g_tl.drag_merge_ti == ti && g_tl.drag_merge_ci == ci) {
                     float pulse = 0.5f + 0.5f * sinf((float)ImGui::GetTime() * 6.f);
                     ImU32 mc = IM_COL32(80, 255, 220, (int)(120 + 80 * pulse));
                     dl->AddRect({vis_x0, cy0}, {vis_x1, cy1}, mc, 2.f, 0, 2.5f);
+                    draw_fx_weld_ring(dl, vis_x0, vis_x1, cy0, cy1,
+                                      IM_COL32(80, 255, 220, 230));
                 }
                 continue;
             }
@@ -1034,15 +1582,20 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
             ImGui::PopClipRect();
 
             clip_interact(ci, clip, vis_x0, vis_x1, cy0, cy1, sel);
-            if (g_tl.drag_merge_ci == ci && drag_track == ti) {
+            if (g_tl.drag_merge_ti == ti && g_tl.drag_merge_ci == ci) {
                 float pulse = 0.5f + 0.5f * sinf((float)ImGui::GetTime() * 6.f);
                 ImU32 mc = IM_COL32(255, 180, 60, (int)(130 + 80 * pulse));
                 dl->AddRect({vis_x0, cy0}, {vis_x1, cy1}, mc, 2.f, 0, 2.5f);
+                draw_fx_weld_ring(dl, vis_x0, vis_x1, cy0, cy1,
+                                  IM_COL32(255, 180, 60, 230));
             }
+            // Weld-complete flash (the merged brick is always MultiFX, so it
+            // renders through this path, never the BodyFX one).
+            draw_fx_merge_flash(dl, ti, ci, vis_x0, vis_x1, cy0, cy1);
         }
 
         // Left-click empty track body (no clip hit) — deselect
-        if (!s_clip_hit && ImGui::IsMouseClicked(0) &&
+        if (!s_clip_hit && (!tl_any_popup && ImGui::IsMouseClicked(0)) &&
             mouse.y >= track_y && mouse.y < track_y+TL_TRACK_H &&
             mouse.x > origin.x+TL_LABEL_W && mouse.x < origin.x+total_w) {
             state.clip_selection.clear();
@@ -1051,7 +1604,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
         }
 
         // Right-click empty timeline area (this track row, no clip hit)
-        if (!clip_ctx_opened_this_frame && ImGui::IsMouseClicked(1) &&
+        if (!clip_ctx_opened_this_frame && (!tl_any_popup && ImGui::IsMouseClicked(1)) &&
             mouse.y >= track_y && mouse.y < track_y+TL_TRACK_H &&
             mouse.x >= origin.x+TL_LABEL_W && mouse.x <= origin.x+total_w) {
             open_tl_ctx = true;
@@ -1084,7 +1637,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                 dl->AddConvexPolyFilled(pts, 4, IM_COL32(18,18,18,220));
                 dl->AddPolyline(pts, 4, hov ? IM_COL32(255,255,255,230) : IM_COL32(210,210,210,200),
                                 ImDrawFlags_Closed, 1.5f);
-                if (hov && ImGui::IsMouseClicked(0)) {
+                if (hov && (!tl_any_popup && ImGui::IsMouseClicked(0))) {
                     s_trans_track    = ti; s_trans_left_ci = ci;
                     s_trans_popup_pos = {cut_x - 80.f, cy0 - 8.f};
                     s_trans_hit_this_frame = true;
@@ -1145,7 +1698,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                 }
 
                 // Mouse down — start drag or open picker
-                if (ImGui::IsMouseClicked(0) && in_glass) {
+                if ((!tl_any_popup && ImGui::IsMouseClicked(0)) && in_glass) {
                     s_trans_track    = ti; s_trans_left_ci = ci;
                     s_trans_hit_this_frame = true;
                     s_glass_drag_ref_x    = mouse.x;
@@ -1160,7 +1713,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                 }
 
                 // Right-click removes transition
-                if (ImGui::IsMouseClicked(1) && in_glass) {
+                if ((!tl_any_popup && ImGui::IsMouseClicked(1)) && in_glass) {
                     a.transition_type = TransitionType::None;
                     a.transition_pre  = 0.f; a.transition_post = 0.f;
                     s_glass_drag = 0;
@@ -1233,14 +1786,14 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
         float lh = ImGui::GetTextLineHeight();
         dl->AddText({origin.x + 8.f, track_y + (TL_TRACK_H - lh) * 0.5f},
                     to_u32(add_label_hov ? Col::fg : Col::muted), "+ Add Track");
-        if (add_label_hov && ImGui::IsMouseClicked(0)) {
+        if (add_label_hov && (!tl_any_popup && ImGui::IsMouseClicked(0))) {
             Track t;
             char name[32]; snprintf(name, sizeof(name), "Track %d", (int)state.tracks.size() + 1);
             t.name = name; state.tracks.insert(state.tracks.begin(), std::move(t));
         }
     }
 
-    dl->PopClipRect();  // end scrollable track area clip
+    ImGui::PopClipRect();  // end scrollable track area clip (restores window ClipRect)
 
     // ── Track reorder drag ────────────────────────────────────────────────────
     if (s_track_drag_src >= 0) {
@@ -1297,14 +1850,14 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
     // ── Box select ───────────────────────────────────────────────────────────
     {
         bool in_body = mouse.x > origin.x+TL_LABEL_W && mouse.x < origin.x+total_w &&
-                       mouse.y > origin.y+TL_RULER_H  && mouse.y < origin.y+total_h;
+                       mouse.y > origin.y+TL_RULER_H  && mouse.y < origin.y+total_h - TL_SCROLLBAR_H;
         bool ldown  = ImGui::IsMouseDown(0);
-        bool lclick = ImGui::IsMouseClicked(0);
+        bool lclick = (!tl_any_popup && ImGui::IsMouseClicked(0));
 
         // Deselect on click in the label column (any track row or below all tracks)
         bool in_label_empty = lclick && !ImGui::IsAnyItemActive() &&
                               mouse.x >= origin.x && mouse.x < origin.x+TL_LABEL_W &&
-                              mouse.y > origin.y+TL_RULER_H && mouse.y < origin.y+total_h &&
+                              mouse.y > origin.y+TL_RULER_H && mouse.y < origin.y+total_h - TL_SCROLLBAR_H &&
                               s_rename_track < 0;  // don't deselect while renaming
 
         // Start box select when clicking empty body space (no clip was hit)
@@ -1367,8 +1920,9 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
             }
         }
 
-        // Escape clears selection
-        if (ImGui::IsKeyPressed(ImGuiKey_Escape) && s_rename_track < 0) {
+        // Escape clears selection (unless crop-edit mode owns Esc this frame)
+        if (ImGui::IsKeyPressed(ImGuiKey_Escape) && s_rename_track < 0 &&
+            state.crop_edit_track < 0) {
             state.clip_selection.clear();
             state.selected_track = -1;
             state.selected_clip  = -1;
@@ -1438,13 +1992,133 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                 IM_COL32(0, 0, 0, 110));
             // Track rows
             dl->AddRectFilled({dim_x, origin.y + TL_RULER_H},
-                {origin.x + total_w, origin.y + total_h},
+                {origin.x + total_w, track_area_bot},
                 IM_COL32(0, 0, 0, 85));
             // Subtle end-of-project line
             if (end_x >= origin.x + TL_LABEL_W)
                 dl->AddLine({end_x, origin.y},
-                    {end_x, origin.y + total_h},
+                    {end_x, track_area_bot},
                     IM_COL32(255, 255, 255, 50));
+        }
+    }
+
+    // ── Horizontal scrollbar ─────────────────────────────────────────────────────
+    {
+        float sb_x0 = origin.x + TL_LABEL_W;
+        float sb_x1 = origin.x + total_w - TL_VSCROLLBAR_W;
+        float sb_w  = sb_x1 - sb_x0;
+        float sb_y0 = origin.y + total_h - TL_SCROLLBAR_H;
+        float sb_y1 = origin.y + total_h;
+
+        // Bottom strip background spans the full width including the bottom-right
+        // dead-corner where the H and V scrollbars meet.
+        dl->AddRectFilled({origin.x, sb_y0}, {origin.x + total_w, sb_y1},
+                          IM_COL32(18, 18, 18, 255));
+        dl->AddLine({origin.x, sb_y0}, {origin.x + total_w, sb_y0},
+                    to_u32(Col::line));
+
+        if (tl_content_w > clip_area_w + 1.f || scroll > 0.f) {
+            // Scroll range includes the fit margin: fully scrolled right, the
+            // last clip end sits margin-short of the border, same as the
+            // zoomed-out fit and the trim-follow lead.
+            float max_scroll   = fmaxf(1.f, tl_content_w - clip_area_w + fit_margin);
+            float thumb_w      = fmaxf(20.f, sb_w * clip_area_w / (tl_content_w + fit_margin));
+            float thumb_travel = fmaxf(1.f, sb_w - thumb_w);
+            float thumb_x0     = sb_x0 + scroll / max_scroll * thumb_travel;
+            float thumb_x1     = thumb_x0 + thumb_w;
+
+            bool hov_thumb = ImGui::IsMouseHoveringRect({thumb_x0, sb_y0}, {thumb_x1, sb_y1});
+
+            static bool  s_sb_drag       = false;
+            static float s_sb_drag_ox    = 0.f;
+            static float s_sb_drag_osc   = 0.f;
+
+            if (hov_thumb && (!tl_any_popup && ImGui::IsMouseClicked(0))) {
+                s_sb_drag     = true;
+                s_sb_drag_ox  = mouse.x;
+                s_sb_drag_osc = scroll;
+            }
+            if (s_sb_drag) {
+                if (ImGui::IsMouseDown(0)) {
+                    float dx = mouse.x - s_sb_drag_ox;
+                    scroll = fmaxf(0.f, fminf(s_sb_drag_osc + dx * max_scroll / thumb_travel, max_scroll));
+                } else {
+                    s_sb_drag = false;
+                }
+            }
+
+            // Click in trough → jump
+            if (!s_sb_drag && !hov_thumb && (!tl_any_popup && ImGui::IsMouseClicked(0)) &&
+                ImGui::IsMouseHoveringRect({sb_x0, sb_y0}, {sb_x1, sb_y1})) {
+                float t = (mouse.x - sb_x0 - thumb_w * 0.5f) / thumb_travel;
+                scroll = fmaxf(0.f, fminf(t * max_scroll, max_scroll));
+            }
+
+            ImU32 thumb_col = s_sb_drag  ? IM_COL32(170, 170, 170, 255)
+                            : hov_thumb  ? IM_COL32(130, 130, 130, 255)
+                                         : IM_COL32(80,  80,  80,  255);
+            dl->AddRectFilled({thumb_x0 + 1.f, sb_y0 + 2.f},
+                              {thumb_x1 - 1.f, sb_y1 - 2.f},
+                              thumb_col, 2.f);
+        }
+    }
+
+    // ── Vertical scrollbar ──────────────────────────────────────────────────────
+    // Mirrors the horizontal scrollbar but for tl_v_scroll.  Spans only the track
+    // area (below the ruler, above the horizontal scrollbar) so the bottom-right
+    // corner where they would meet is left as a dead-corner.
+    {
+        float vb_x0 = origin.x + total_w - TL_VSCROLLBAR_W;
+        float vb_x1 = origin.x + total_w;
+        float vb_y0 = track_area_top;
+        float vb_y1 = track_area_bot;
+        float vb_h  = vb_y1 - vb_y0;
+
+        dl->AddRectFilled({vb_x0, vb_y0}, {vb_x1, vb_y1}, IM_COL32(18, 18, 18, 255));
+        dl->AddLine({vb_x0, vb_y0}, {vb_x0, vb_y1}, to_u32(Col::line));
+
+        float v_visible = track_area_bot - track_area_top;
+        if (tracks_total_h > v_visible + 1.f || state.tl_v_scroll > 0.f) {
+            float v_max_scroll   = fmaxf(1.f, tracks_total_h - v_visible);
+            float v_thumb_h      = fmaxf(20.f, vb_h * v_visible / tracks_total_h);
+            float v_thumb_travel = fmaxf(1.f, vb_h - v_thumb_h);
+            float v_thumb_y0     = vb_y0 + state.tl_v_scroll / v_max_scroll * v_thumb_travel;
+            float v_thumb_y1     = v_thumb_y0 + v_thumb_h;
+
+            bool hov_vthumb = ImGui::IsMouseHoveringRect({vb_x0, v_thumb_y0}, {vb_x1, v_thumb_y1});
+
+            static bool  s_vsb_drag     = false;
+            static float s_vsb_drag_oy  = 0.f;
+            static float s_vsb_drag_osc = 0.f;
+
+            if (hov_vthumb && (!tl_any_popup && ImGui::IsMouseClicked(0))) {
+                s_vsb_drag     = true;
+                s_vsb_drag_oy  = mouse.y;
+                s_vsb_drag_osc = state.tl_v_scroll;
+            }
+            if (s_vsb_drag) {
+                if (ImGui::IsMouseDown(0)) {
+                    float dy = mouse.y - s_vsb_drag_oy;
+                    state.tl_v_scroll = fmaxf(0.f,
+                        fminf(s_vsb_drag_osc + dy * v_max_scroll / v_thumb_travel, v_max_scroll));
+                } else {
+                    s_vsb_drag = false;
+                }
+            }
+
+            // Click in trough → jump (center thumb on click point)
+            if (!s_vsb_drag && !hov_vthumb && (!tl_any_popup && ImGui::IsMouseClicked(0)) &&
+                ImGui::IsMouseHoveringRect({vb_x0, vb_y0}, {vb_x1, vb_y1})) {
+                float t = (mouse.y - vb_y0 - v_thumb_h * 0.5f) / v_thumb_travel;
+                state.tl_v_scroll = fmaxf(0.f, fminf(t * v_max_scroll, v_max_scroll));
+            }
+
+            ImU32 vthumb_col = s_vsb_drag  ? IM_COL32(170, 170, 170, 255)
+                             : hov_vthumb  ? IM_COL32(130, 130, 130, 255)
+                                           : IM_COL32(80,  80,  80,  255);
+            dl->AddRectFilled({vb_x0 + 2.f, v_thumb_y0 + 1.f},
+                              {vb_x1 - 2.f, v_thumb_y1 - 1.f},
+                              vthumb_col, 2.f);
         }
     }
 
@@ -1493,18 +2167,38 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
         auto src_dur_it = s_source_durations.find(dc.text);
         float src_dur = (src_dur_it != s_source_durations.end()) ? src_dur_it->second : 0.f;
 
+        // The dragged edge is locked inside the visible clip area minus the
+        // fit margin: the margin line is a wall, and auto-scroll feeding
+        // timeline under it is the only way the edge advances — so there is
+        // always that much empty timeline visible ahead of the edge. The left
+        // wall lifts when scrolled home so a left trim can still reach 0:00.
+        const float vis_t_lo = (scroll > 0.5f) ? (scroll + fit_margin) / zoom : 0.f;
+        const float vis_t_hi = (scroll + clip_area_w - fit_margin) / zoom;
+
         if (drag_left && !left_locked) {
             float t = edge_snap(snap(new_t), cands);
-            float src_floor = (src_dur > 0.f)
+            t = fmaxf(vis_t_lo, fminf(t, vis_t_hi));
+            bool still_img_l = dc.clip_type == ClipType::Video && is_image_path(dc.text);
+            float src_floor = (src_dur > 0.f && !still_img_l)
                 ? dc.start - dc.in_point / fmaxf(0.01f, dc.speed) : 0.f;
             float new_start = fmaxf(src_floor, fmaxf(0.f, fminf(t, dc.end - f1)));
-            dc.in_point = fmaxf(0.f, dc.in_point + (new_start - dc.start));
+            float d = new_start - dc.start;
+            // in_point is in source seconds — scale the timeline delta by speed
+            // (matches src_floor above, which divides by speed).
+            dc.in_point = fmaxf(0.f, dc.in_point + d * fmaxf(0.01f, dc.speed));
+            // Keys are relative to clip.start; shift them back so the
+            // animation stays put on the timeline while the edge moves.
+            clip_keys_shift(dc, -d);
             dc.start = new_start;
             sync_proxy_key();
         } else if (drag_right && !right_locked) {
             float et = (mouse.x - origin.x - TL_LABEL_W + scroll) / zoom;
             float t = edge_snap(snap(et), cands);
-            float max_end = (src_dur > 0.f)
+            t = fmaxf(vis_t_lo, fminf(t, vis_t_hi));
+            // Stills hold a single frame indefinitely, so the source-duration
+            // cap doesn't apply — let the user stretch the brick freely.
+            bool still_img = dc.clip_type == ClipType::Video && is_image_path(dc.text);
+            float max_end = (src_dur > 0.f && !still_img)
                 ? dc.start + (src_dur - dc.in_point) / fmaxf(0.01f, dc.speed)
                 : t;
             dc.end = fmaxf(dc.start + f1, fminf(t, max_end));
@@ -1581,35 +2275,148 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                 int hot = (int)((mouse.y - track_origin_y) / TL_TRACK_H);
                 drag_hot_track = (hot >= 0 && hot <= n_tracks) ? hot : -1;
             }
-            // Merge-target detection: FX-on-FX overlap on the same track.
+            // Merge-target detection: dragged FX brick over another FX brick.
+            // The target track follows the mouse row (drag_hot_track), so
+            // dropping a brick from one track onto a brick on another welds
+            // the same way as a same-track drop.
+            g_tl.drag_merge_ti = -1;
             g_tl.drag_merge_ci = -1;
-            if (!drag_left && !drag_right) {
+            if (!drag_left && !drag_right && drag_hot_gap < 0) {
                 const Clip& dc_ref = state.tracks[drag_track].clips[drag_clip];
-                bool dc_is_fx = (dc_ref.clip_type == ClipType::Effect ||
-                                 dc_ref.clip_type == ClipType::MultiFX ||
-                                 dc_ref.clip_type == ClipType::BodyFX);
-                if (dc_is_fx) {
-                    for (int ci2 = 0; ci2 < (int)state.tracks[drag_track].clips.size(); ++ci2) {
-                        if (ci2 == drag_clip) continue;
-                        const Clip& oc = state.tracks[drag_track].clips[ci2];
-                        if (oc.clip_type != ClipType::Effect &&
-                            oc.clip_type != ClipType::MultiFX &&
-                            oc.clip_type != ClipType::BodyFX) continue;
+                int tt = (drag_hot_track >= 0 &&
+                          drag_hot_track < (int)state.tracks.size())
+                             ? drag_hot_track : drag_track;
+                if (is_fx_clip(dc_ref)) {
+                    for (int ci2 = 0; ci2 < (int)state.tracks[tt].clips.size(); ++ci2) {
+                        if (tt == drag_track && ci2 == drag_clip) continue;
+                        const Clip& oc = state.tracks[tt].clips[ci2];
+                        if (!is_fx_clip(oc)) continue;
                         if (dc_ref.start < oc.end && dc_ref.end > oc.start) {
+                            g_tl.drag_merge_ti = tt;
                             g_tl.drag_merge_ci = ci2;
                             break;
                         }
                     }
                 }
+                // Hold-to-weld: overlapping a target only arms the dwell
+                // timer (ring drawn at the target brick); the merge fires when
+                // it completes. Multi-drags never merge.
+                if (g_tl.drag_multi.size() > 1) {
+                    g_tl.drag_merge_ti = -1;
+                    g_tl.drag_merge_ci = -1;
+                }
+                if (g_tl.drag_merge_ti != s_fx_weld.target_ti ||
+                    g_tl.drag_merge_ci != s_fx_weld.target_ci) {
+                    s_fx_weld.target_ti = g_tl.drag_merge_ti;   // new candidate
+                    s_fx_weld.target_ci = g_tl.drag_merge_ci;
+                    s_fx_weld.t0        = ImGui::GetTime();     // arm the timer
+                }
+                if (g_tl.drag_merge_ci >= 0 &&
+                    ImGui::GetTime() - s_fx_weld.t0 >= kWeldHoldSec) {
+                    int tgt_ti = g_tl.drag_merge_ti;
+                    int tgt_ci = g_tl.drag_merge_ci;
+                    Clip dragged_copy = state.tracks[drag_track].clips[drag_clip];
+                    merge_fx_clips(state.tracks[tgt_ti].clips[tgt_ci], dragged_copy);
+                    state.tracks[drag_track].clips.erase(
+                        state.tracks[drag_track].clips.begin() + drag_clip);
+                    int sel_ci = (tgt_ti == drag_track && tgt_ci > drag_clip)
+                                     ? tgt_ci - 1 : tgt_ci;
+                    state.selected_track = tgt_ti;
+                    state.selected_clip  = sel_ci;
+                    state.clip_selection.clear();
+                    state.clip_selection.insert({tgt_ti, sel_ci});
+                    s_fx_flash.active = true;
+                    s_fx_flash.t0     = ImGui::GetTime();
+                    s_fx_flash.ti     = tgt_ti;
+                    s_fx_flash.ci     = sel_ci;
+                    history_push(state, "Merge FX bricks");
+                    // End the drag — the merged brick stays selected, so
+                    // re-grabbing it is one click. (Diamonds keep dragging
+                    // their merged group; bricks stop, deliberately.)
+                    drag_track = -1; drag_clip = -1;
+                    drag_hot_track = -1; drag_hot_gap = -1;
+                    g_tl.drag_merge_ti  = -1;
+                    g_tl.drag_merge_ci  = -1;
+                    s_fx_weld.target_ti = -1;
+                    s_fx_weld.target_ci = -1;
+                    s_drag_moved = false;
+                    s_body_snap_held_start = -1.f; s_body_snap_held_cand = -1.f;
+                    g_tl.drag_multi.clear();
+                }
             }
         }
     } else {
         s_snap_indicator = -1.f;
+        g_tl.drag_merge_ti = -1;
         g_tl.drag_merge_ci = -1;
+        s_fx_weld.target_ti = -1;
+        s_fx_weld.target_ci = -1;
     }
+
+    // Trim feedback: bright bar + inward arrow on the edge being dragged, and
+    // a floating chip with the edge timecode (M:SS:FF) and resulting duration.
+    if (drag_track >= 0 && drag_clip >= 0 && (drag_left || drag_right) &&
+        s_drag_moved && drag_track < (int)state.tracks.size() &&
+        drag_clip < (int)state.tracks[drag_track].clips.size()) {
+        const Clip& dc = state.tracks[drag_track].clips[drag_clip];
+        float edge_t = drag_left ? dc.start : dc.end;
+        float ex = origin.x + TL_LABEL_W + edge_t * zoom - scroll;
+        float ty = track_area_top - state.tl_v_scroll + drag_track * TL_TRACK_H;
+        float ecy0 = ty + 1.f, ecy1 = ty + TL_TRACK_H - 1.f;
+        if (ex >= origin.x + TL_LABEL_W && ex <= origin.x + total_w) {
+            dl->AddLine({ex, ecy0}, {ex, ecy1}, IM_COL32(255, 255, 255, 235), 2.5f);
+            float adir = drag_left ? 1.f : -1.f;   // arrow points into the clip
+            float amy  = (ecy0 + ecy1) * 0.5f;
+            dl->AddTriangleFilled({ex + adir * 3.f, amy - 5.f},
+                                  {ex + adir * 3.f, amy + 5.f},
+                                  {ex + adir * 9.f, amy}, IM_COL32(255, 255, 255, 235));
+        }
+        int total_f = (int)roundf(edge_t * fps);
+        int ifr     = (int)fmaxf(1.f, roundf(fps));
+        int ff      = total_f % ifr, ssec = total_f / ifr;
+        char chip[48];
+        snprintf(chip, sizeof(chip), "%d:%02d:%02d  \xc2\xb7  %.2fs",
+                 ssec / 60, ssec % 60, ff, dc.end - dc.start);
+        ImVec2 csz = ImGui::CalcTextSize(chip);
+        ImVec2 cp  = {mouse.x + 14.f, mouse.y - csz.y - 14.f};
+        if (cp.x + csz.x + 12.f > origin.x + total_w) cp.x = mouse.x - csz.x - 26.f;
+        dl->AddRectFilled({cp.x - 6.f, cp.y - 4.f},
+                          {cp.x + csz.x + 6.f, cp.y + csz.y + 4.f},
+                          IM_COL32(20, 20, 30, 235), 4.f);
+        dl->AddRect({cp.x - 6.f, cp.y - 4.f},
+                    {cp.x + csz.x + 6.f, cp.y + csz.y + 4.f},
+                    IM_COL32(120, 120, 160, 200), 4.f);
+        dl->AddText(cp, IM_COL32(230, 230, 245, 255), chip);
+    }
+
     if (ImGui::IsMouseReleased(0)) {
         if (drag_track >= 0 && drag_clip >= 0) {
             {
+            // Alt+drop on a merge target (any track) = instant weld, skipping
+            // the hold-to-weld dwell. Checked before the gap/cross-track
+            // branches so a cross-track Alt drop merges instead of moving.
+            if (!drag_left && !drag_right && g_tl.drag_merge_ci >= 0 &&
+                ImGui::GetIO().KeyAlt) {
+                int tgt_ti = g_tl.drag_merge_ti;
+                int tgt_ci = g_tl.drag_merge_ci;
+                Clip dragged_copy = state.tracks[drag_track].clips[drag_clip];
+                merge_fx_clips(state.tracks[tgt_ti].clips[tgt_ci], dragged_copy);
+                // Erase the dragged clip; adjust index if target sat after it
+                state.tracks[drag_track].clips.erase(
+                    state.tracks[drag_track].clips.begin() + drag_clip);
+                int sel_ci = (tgt_ti == drag_track && tgt_ci > drag_clip)
+                                 ? tgt_ci - 1 : tgt_ci;
+                state.selected_track = tgt_ti;
+                state.selected_clip  = sel_ci;
+                state.clip_selection.clear();
+                state.clip_selection.insert({tgt_ti, sel_ci});
+                s_fx_flash.active = true;
+                s_fx_flash.t0     = ImGui::GetTime();
+                s_fx_flash.ti     = tgt_ti;
+                s_fx_flash.ci     = sel_ci;
+                history_push(state, "Merge FX bricks");
+                goto drag_done;
+            }
             if (!drag_left && !drag_right && drag_hot_gap >= 0) {
                 // Drop into gap between tracks — insert new track there
                 Clip moved = state.tracks[drag_track].clips[drag_clip];
@@ -1669,41 +2476,24 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                     }
                 }
             } else {
-                // Merge: FX brick dropped on top of another FX brick (same track)
-                if (!drag_left && !drag_right && g_tl.drag_merge_ci >= 0) {
-                    int tgt_ci = g_tl.drag_merge_ci;
-                    Clip dragged_copy = state.tracks[drag_track].clips[drag_clip];
-                    merge_fx_clips(state.tracks[drag_track].clips[tgt_ci], dragged_copy);
-                    // Erase the dragged clip; adjust index if target is after it
-                    state.tracks[drag_track].clips.erase(
-                        state.tracks[drag_track].clips.begin() + drag_clip);
-                    int sel_ci = (tgt_ci > drag_clip) ? tgt_ci - 1 : tgt_ci;
-                    state.selected_track = drag_track;
-                    state.selected_clip  = sel_ci;
-                    state.clip_selection.clear();
-                    state.clip_selection.insert({drag_track, sel_ci});
-                    g_tl.drag_merge_ci = -1;
-                    history_push(state, "Merge FX bricks");
-                    goto drag_done;
-                }
                 // Body drag on same track — validate with conflict predicate, restore on conflict
                 bool overlaps = false;
+                // Check the focus clip and all multi-drag clips for conflicts
+                auto check_clip_conflicts = [&](int chk_ti, int chk_ci) -> bool {
+                    if (chk_ti >= (int)state.tracks.size()) return false;
+                    const Clip& mc = state.tracks[chk_ti].clips[chk_ci];
+                    for (int ci2 = 0; ci2 < (int)state.tracks[chk_ti].clips.size(); ++ci2) {
+                        if (ci2 == chk_ci) continue;
+                        // Skip other multi-drag clips (they moved together, no relative conflict)
+                        bool in_multi = false;
+                        for (auto& orig : g_tl.drag_multi)
+                            if (orig.ti == chk_ti && orig.ci == ci2) { in_multi = true; break; }
+                        if (in_multi) continue;
+                        if (clips_conflict(mc, state.tracks[chk_ti].clips[ci2])) return true;
+                    }
+                    return false;
+                };
                 if (!drag_left && !drag_right) {
-                    // Check the focus clip and all multi-drag clips for conflicts
-                    auto check_clip_conflicts = [&](int chk_ti, int chk_ci) -> bool {
-                        if (chk_ti >= (int)state.tracks.size()) return false;
-                        const Clip& mc = state.tracks[chk_ti].clips[chk_ci];
-                        for (int ci2 = 0; ci2 < (int)state.tracks[chk_ti].clips.size(); ++ci2) {
-                            if (ci2 == chk_ci) continue;
-                            // Skip other multi-drag clips (they moved together, no relative conflict)
-                            bool in_multi = false;
-                            for (auto& orig : g_tl.drag_multi)
-                                if (orig.ti == chk_ti && orig.ci == ci2) { in_multi = true; break; }
-                            if (in_multi) continue;
-                            if (clips_conflict(mc, state.tracks[chk_ti].clips[ci2])) return true;
-                        }
-                        return false;
-                    };
                     if (check_clip_conflicts(drag_track, drag_clip)) overlaps = true;
                     if (!overlaps) {
                         for (auto& orig : g_tl.drag_multi) {
@@ -1711,10 +2501,23 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                             if (check_clip_conflicts(orig.ti, orig.ci)) { overlaps = true; break; }
                         }
                     }
+                } else if (is_fx_clip(state.tracks[drag_track].clips[drag_clip]) &&
+                           check_clip_conflicts(drag_track, drag_clip)) {
+                    // Trimming an FX brick's edge over a neighboring FX brick
+                    // would stack them — bounce the trim back too.
+                    overlaps = true;
                 }
                 if (overlaps) {
                     // Restore focus clip
                     Clip& moved_clip = state.tracks[drag_track].clips[drag_clip];
+                    if (drag_left) {
+                        // Left trims also moved in_point and shifted keys;
+                        // undo both along with the edge.
+                        float d = drag_origin_start - moved_clip.start;
+                        moved_clip.in_point = fmaxf(0.f, moved_clip.in_point +
+                                                    d * fmaxf(0.01f, moved_clip.speed));
+                        clip_keys_shift(moved_clip, -d);
+                    }
                     if (moved_clip.clip_type == ClipType::Video && !moved_clip.text.empty()
                         && moved_clip.start != drag_origin_start) {
                         std::string old_key = clip_slot_key(moved_clip.text, moved_clip.start);
@@ -1743,7 +2546,8 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
         drag_done:
         drag_track=-1; drag_clip=-1; drag_left=false; drag_right=false;
         drag_hot_track=-1; drag_hot_gap=-1;
-        g_tl.drag_merge_ci = -1;
+        g_tl.drag_merge_ti = -1; g_tl.drag_merge_ci = -1;
+        s_fx_weld.target_ti = -1; s_fx_weld.target_ci = -1;
         s_drag_moved = false;
         s_body_snap_held_start = -1.f; s_body_snap_held_cand = -1.f;
         g_tl.drag_multi.clear();
@@ -1763,7 +2567,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
     if (!any_popup_global && drag_track < 0) {
         bool in_ruler = mouse.y >= origin.y && mouse.y <= origin.y + TL_RULER_H &&
                         mouse.x >= origin.x + TL_LABEL_W && mouse.x <= origin.x + total_w;
-        if (in_ruler && ImGui::IsMouseClicked(0)) s_ruler_drag = true;
+        if (in_ruler && (!tl_any_popup && ImGui::IsMouseClicked(0))) s_ruler_drag = true;
         if (s_ruler_drag && ImGui::IsMouseDown(0)) {
             float raw = (mouse.x - origin.x - TL_LABEL_W + scroll) / zoom;
             std::vector<float> edge_cands;
@@ -1830,21 +2634,32 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
     // a preset card past the last track creates a new track on drop.
     {
         ImVec2 dz_tl = {origin.x + TL_LABEL_W, track_y};
-        ImVec2 dz_br = {origin.x + total_w, track_y + TL_TRACK_H};
-        if (dz_br.y > origin.y + TL_RULER_H && dz_br.y <= origin.y + total_h) {
+        ImVec2 dz_br = {origin.x + total_w, fminf(track_y + TL_TRACK_H, track_area_bot)};
+        if (dz_br.y > origin.y + TL_RULER_H && dz_br.y > dz_tl.y) {
             ImGui::SetCursorScreenPos(dz_tl);
             ImGui::InvisibleButton("##picker_new_track",
                                    {dz_br.x - dz_tl.x, dz_br.y - dz_tl.y});
             if (ImGui::BeginDragDropTarget()) {
-                auto make_new_track = [&](Clip&& cl, const char* act) {
-                    Track nt;
-                    nt.name = clip_type_name(cl.clip_type);
-                    nt.clips.push_back(std::move(cl));
-                    state.tracks.push_back(std::move(nt));
-                    state.selected_track = (int)state.tracks.size() - 1;
-                    state.selected_clip  = 0;
-                    s_drop_flash_track   = state.selected_track;
+                // reuse_empty: media/audio land on an existing empty track when
+                // one is free. Background/FX bricks always get a real new track
+                // — their vertical position decides what they affect.
+                auto make_new_track = [&](Clip&& cl, const char* act, bool reuse_empty) {
+                    int target = reuse_empty ? find_empty_track(state) : -1;
+                    float clip_end = cl.end;
+                    if (target < 0) {
+                        Track nt;
+                        nt.name = clip_type_name(cl.clip_type);
+                        state.tracks.push_back(std::move(nt));
+                        target = (int)state.tracks.size() - 1;
+                    }
+                    state.tracks[target].clips.push_back(std::move(cl));
+                    state.selected_track = target;
+                    state.selected_clip  = (int)state.tracks[target].clips.size() - 1;
+                    s_drop_flash_track   = target;
                     s_drop_flash_t       = 0.6f;
+                    // New clip longer than the current view → zoom out to fit
+                    // it once placed (consumer only ever zooms out, next frame).
+                    state.tl_zoom_to_fit_end = fmaxf(state.tl_zoom_to_fit_end, clip_end);
                     history_push(state, act);
                 };
                 float drop_t = fmaxf(0.f, (ImGui::GetMousePos().x - (origin.x + TL_LABEL_W) + scroll) / zoom);
@@ -1858,14 +2673,21 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                         cl.start = drop_t; cl.end = drop_t + proj_dur;
                         cl.bg_speed = pr->default_speed; cl.bg_intensity = 0.85f;
                         memcpy(cl.bg_c1, pr->dc1, 16); memcpy(cl.bg_c2, pr->dc2, 16); memcpy(cl.bg_c3, pr->dc3, 16);
-                        make_new_track(std::move(cl), (std::string("Drop Background: ") + pr->label).c_str());
+                        // Backgrounds are content (a generated texture layer),
+                        // not position-sensitive like FX bricks — reuse-empty.
+                        make_new_track(std::move(cl), (std::string("Drop Background: ") + pr->label).c_str(), true);
                     }
+                }
+                if (const ImGuiPayload* pay = ImGui::AcceptDragDropPayload("TEXT_STYLE")) {
+                    AnimStyle st = (AnimStyle)*(const int*)pay->Data;
+                    make_new_track(make_text_brick(st, drop_t),
+                                   (std::string("Drop text brick: ") + text_style_name(st)).c_str(), true);
                 }
                 if (const ImGuiPayload* pay = ImGui::AcceptDragDropPayload("FX_CREATIVE")) {
                     FXType ft = (FXType)*(const int*)pay->Data;
                     Clip cl; cl.clip_type = ClipType::Effect; cl.fx_type = ft;
                     cl.start = drop_t; cl.end = drop_t + 5.f;
-                    make_new_track(std::move(cl), (std::string("Drop FX: ") + fx_type_name(ft)).c_str());
+                    make_new_track(std::move(cl), (std::string("Drop FX: ") + fx_type_name(ft)).c_str(), false);
                 }
                 auto new_track_media = [&](const char* ptype) {
                     if (const ImGuiPayload* pay = ImGui::AcceptDragDropPayload(ptype)) {
@@ -1878,7 +2700,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                         s_source_durations[path] = dur;
                         std::string act = (img ? "Drop image: " : "Drop video: ") +
                                           fs::path(path).filename().string();
-                        make_new_track(std::move(cl), act.c_str());
+                        make_new_track(std::move(cl), act.c_str(), true);
                         proxy_start(path);
                         int slot = slot_for_video(state, clip_slot_key(path, drop_t), path);
                         if (slot >= 0) video_open_still(slot, proxy_still_path(path));
@@ -1896,7 +2718,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                     cl.source_id = path; cl.start = drop_t; cl.end = drop_t + dur;
                     s_source_durations[path] = dur;
                     std::string act = "Drop audio: " + fs::path(path).filename().string();
-                    make_new_track(std::move(cl), act.c_str());
+                    make_new_track(std::move(cl), act.c_str(), true);
                     audio_source_ensure(path);
                     recent_media_push(path, MediaKind::Audio);
                 }
@@ -1914,6 +2736,73 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
 
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {8.f, 6.f});
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,   {8.f, 4.f});
+
+    // Super-diamond unpair menu — pulls members back out of a welded group by
+    // nudging their keys one frame apart (just past the grouping tolerance).
+    if (ImGui::BeginPopup("##kf_ctx")) {
+        bool ctx_ok = s_kf_ctx.ti >= 0 && s_kf_ctx.ti < (int)state.tracks.size() &&
+                      s_kf_ctx.ci >= 0 &&
+                      s_kf_ctx.ci < (int)state.tracks[s_kf_ctx.ti].clips.size();
+        if (!ctx_ok) {
+            ImGui::CloseCurrentPopup();
+        } else {
+            Clip& kclip = state.tracks[s_kf_ctx.ti].clips[s_kf_ctx.ci];
+            std::vector<std::string> mems;
+            for (auto& [p, pt] : kclip.ktracks)
+                if (pt.find_nearest(s_kf_ctx.time, 0.02f) >= 0) mems.push_back(p);
+            std::sort(mems.begin(), mems.end());
+
+            // First free timestamp stepping away from the group, frame-sized
+            // steps so unpaired keys land on the grid and never re-group.
+            auto free_spot = [&]() {
+                float dur  = kclip.end - kclip.start;
+                float step = fmaxf(1.f / (float)state.fps, 0.04f);
+                auto occupied = [&](float t) {
+                    for (auto& [p2, pt2] : kclip.ktracks)
+                        if (pt2.find_nearest(t, 0.025f) >= 0) return true;
+                    return false;
+                };
+                float nt = s_kf_ctx.time + step; int guard = 0;
+                while (nt <= dur && occupied(nt) && guard++ < 64) nt += step;
+                if (nt > dur) {
+                    nt = s_kf_ctx.time - step; guard = 0;
+                    while (nt >= 0.f && occupied(nt) && guard++ < 64) nt -= step;
+                    if (nt < 0.f) nt = s_kf_ctx.time;  // nowhere to go
+                }
+                return nt;
+            };
+            auto unpair_one = [&](const std::string& prop) {
+                auto it = kclip.ktracks.find(prop);
+                if (it == kclip.ktracks.end()) return;
+                int ki = it->second.find_nearest(s_kf_ctx.time, 0.02f);
+                if (ki < 0) return;
+                it->second.keys[ki].time = free_spot();
+                std::sort(it->second.keys.begin(), it->second.keys.end(),
+                          [](const Keyframe& a, const Keyframe& b){ return a.time < b.time; });
+            };
+
+            if (mems.size() < 2) {
+                ImGui::CloseCurrentPopup();  // weld dissolved meanwhile
+            } else {
+                if (ImGui::MenuItem("Unpair all")) {
+                    // Keep the first member in place, spread the rest out.
+                    for (size_t i = 1; i < mems.size(); ++i) unpair_one(mems[i]);
+                    state.kf_sel_idx = -1;  // selection index likely stale now
+                    history_push(state, "Unpair keyframes");
+                }
+                ImGui::Separator();
+                for (auto& p : mems) {
+                    char lbl[64]; snprintf(lbl, sizeof(lbl), "Unpair %s", p.c_str());
+                    if (ImGui::MenuItem(lbl)) {
+                        unpair_one(p);
+                        state.kf_sel_idx = -1;
+                        history_push(state, "Unpair keyframe");
+                    }
+                }
+            }
+        }
+        ImGui::EndPopup();
+    }
 
     if (ImGui::BeginPopup("##clip_ctx")) {
         open_clip_ctx = false;
@@ -1943,8 +2832,8 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
 
             if (disabled) ImGui::BeginDisabled();
             if (ImGui::MenuItem("Make lyric video")) {
+                state.pipeline_on_done = generate_typography;
                 kick_pipeline(state, cc->text, PipelineMode::Both);
-                state.typo_generate_when_done = true;
             }
             if (ImGui::MenuItem("Transcribe  (subtitles only)")) {
                 kick_pipeline(state, cc->text, PipelineMode::TranscribeOnly);
@@ -2017,9 +2906,8 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
             if (valid) {
                 float cut = state.playhead;
                 if (cut > cc->start+0.02f && cut < cc->end-0.02f) {
-                    Clip right = *cc; cc->end = cut; right.start = cut;
-                    right.in_point += (cut - cc->start) * cc->speed;
-                    ct->clips.insert(ct->clips.begin()+ci+1, right);
+                    Clip right = clip_split_at(*cc, cut);
+                    ct->clips.insert(ct->clips.begin()+ci+1, std::move(right));
                     history_push(state, "Split clip");
                 }
             }
@@ -2030,6 +2918,13 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                 ct->clips.insert(ct->clips.begin()+ci+1, dup);
                 history_push(state, "Duplicate clip");
             }
+        }
+        if (valid && cc->clip_type == ClipType::Video &&
+            ImGui::MenuItem(cc->has_crop() ? "Crop clip *" : "Crop clip")) {
+            state.selected_track  = ctx_track;
+            state.selected_clip   = ci;
+            state.crop_edit_track = ctx_track;
+            state.crop_edit_clip  = ci;
         }
         if (trk_locked) ImGui::EndDisabled();
         ImGui::Separator();
@@ -2153,6 +3048,8 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
             t.name=n; state.tracks.insert(state.tracks.begin(), std::move(t));
             history_push(state, "Add Track");
         }
+        if (ImGui::MenuItem("Add Record Brick"))
+            add_record_brick(state);
         ImGui::EndPopup();
     }
 

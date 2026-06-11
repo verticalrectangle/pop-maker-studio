@@ -1,6 +1,7 @@
 #include "studio_types.h"
 #include "studio_shared.h"
 #include "panel_media.h"
+#include "timeline.h"
 #include "app.h"
 #include "audio.h"
 #include "video.h"
@@ -179,7 +180,60 @@ bool is_image_path(const std::string& p) {
     std::string ext = fp.extension().string();
     for (auto& c : ext) c = (char)tolower((unsigned char)c);
     return ext==".jpg"||ext==".jpeg"||ext==".png"||ext==".bmp"||ext==".webp"||ext==".tiff"
-        || ext==".heic"||ext==".heif";
+        || ext==".heic"||ext==".heif"||ext==".gif";
+}
+
+// ── Bin helpers ──────────────────────────────────────────────────────────────
+
+MediaKind kind_for_path(const std::string& path) {
+    if (is_image_path(path)) return MediaKind::Image;
+    fs::path fp(path);
+    std::string ext = fp.extension().string();
+    for (auto& c : ext) c = (char)tolower((unsigned char)c);
+    // Anything with a video container extension counts as Video; everything
+    // else audio-shaped counts as Audio. Matches what add_clip_to_track does
+    // when classifying drops, so the bin's kind tag agrees with how the clip
+    // would actually be placed.
+    if (ext==".mp4"||ext==".mov"||ext==".mkv"||ext==".avi"||ext==".webm") return MediaKind::Video;
+    return MediaKind::Audio;
+}
+
+bool bin_contains(const AppState& state, const std::string& path) {
+    for (auto& p : state.bin) if (p == path) return true;
+    return false;
+}
+
+void bin_add(AppState& state, const std::string& path) {
+    if (path.empty() || bin_contains(state, path)) return;
+    state.bin.push_back(path);
+    // Mirror into the cross-project Recent list so it shows up next time too.
+    recent_media_push(path, kind_for_path(path));
+}
+
+void bin_remove(AppState& state, const std::string& path) {
+    state.bin.erase(std::remove(state.bin.begin(), state.bin.end(), path),
+                    state.bin.end());
+}
+
+int bin_used_count(const AppState& state, const std::string& path) {
+    int n = 0;
+    for (auto& tr : state.tracks)
+        for (auto& cl : tr.clips)
+            if ((cl.clip_type == ClipType::Video || cl.clip_type == ClipType::Audio)
+                && cl.text == path)
+                ++n;
+    return n;
+}
+
+void bin_backfill_from_timeline(AppState& state) {
+    if (!state.bin.empty()) return;
+    for (auto& tr : state.tracks) {
+        for (auto& cl : tr.clips) {
+            if ((cl.clip_type == ClipType::Video || cl.clip_type == ClipType::Audio)
+                && !cl.text.empty())
+                bin_add(state, cl.text);
+        }
+    }
 }
 
 
@@ -204,19 +258,25 @@ void panel_media_browser(AppState& state, float w, bool is_video) {
         if (ImGui::SmallButton("Browse…")) {
             std::string picked = is_video
                 ? filepicker_open("Open video", "Video", "*.mp4 *.mov *.mkv *.avi *.webm *.gif")
-                : filepicker_open("Open image", "Image", "*.jpg *.jpeg *.png *.bmp *.webp *.heic *.heif");
+                : filepicker_open("Open image", "Image", "*.jpg *.jpeg *.png *.bmp *.webp *.heic *.heif *.gif");
             if (!picked.empty()) {
                 recent_media_push(picked, is_video ? MediaKind::Video : MediaKind::Image);
-                // Insert new track + clip at playhead
+                // Clip at playhead — reuse an empty track if one exists,
+                // otherwise insert a new track at the top.
                 float dur = is_video ? video_probe_duration(picked) : 0.f;
                 if (dur <= 0.f) dur = is_video ? 4.f : 5.f;
-                Track nt; nt.name = fs::path(picked).stem().string();
                 Clip cl; cl.clip_type = ClipType::Video; cl.text = picked;
                 cl.source_id = picked; cl.start = state.playhead; cl.end = cl.start + dur;
                 s_source_durations[picked] = dur;
-                nt.clips.push_back(cl);
-                state.tracks.insert(state.tracks.begin(), std::move(nt));
-                state.selected_track = 0; state.selected_clip = 0;
+                int target = find_empty_track(state);
+                if (target < 0) {
+                    Track nt; nt.name = fs::path(picked).stem().string();
+                    state.tracks.insert(state.tracks.begin(), std::move(nt));
+                    target = 0;
+                }
+                state.tracks[target].clips.push_back(cl);
+                state.selected_track = target;
+                state.selected_clip  = (int)state.tracks[target].clips.size() - 1;
                 proxy_start(picked);
                 int slot = slot_for_video(state, clip_slot_key(picked, cl.start), picked);
                 if (slot >= 0) video_open_still(slot, proxy_still_path(picked));
@@ -275,9 +335,14 @@ void panel_media_browser(AppState& state, float w, bool is_video) {
         ImU32 bg = hov ? IM_COL32(34,34,52,255) : IM_COL32(18,18,28,255);
         dl->AddRectFilled(cp, {cp.x+COL_W, cp.y+CARD_H}, bg, 6.f);
 
-        // Thumbnail — letterboxed to preserve aspect ratio
+        // Thumbnail — letterboxed to preserve aspect ratio.
+        // HEIC/HEIF aren't supported by stb_image; route through the proxy
+        // JPEG still (generated by proxy_ensure_still via ffmpeg/libheif).
         int tw = 0, th = 0;
-        uintptr_t tex = is_image_path(path)
+        std::string ext = fs::path(path).extension().string();
+        for (auto& c : ext) c = (char)tolower((unsigned char)c);
+        bool needs_proxy_thumb = (ext == ".heic" || ext == ".heif");
+        uintptr_t tex = (is_image_path(path) && !needs_proxy_thumb)
             ? video_load_thumb(path, &tw, &th)
             : video_load_thumb(proxy_still_path(path), &tw, &th);
 
@@ -320,17 +385,22 @@ void panel_media_browser(AppState& state, float w, bool is_video) {
                     hov ? IM_COL32(255,255,255,160) : IM_COL32(48,48,68,180),
                     6.f, 0, hov ? 1.5f : 1.f);
 
-        // Click → add new track + clip
+        // Click → add clip on an empty track (new track at top only if none)
         if (ImGui::IsItemClicked()) {
             float dur = is_video ? video_probe_duration(path) : 0.f;
             if (dur <= 0.f) dur = is_video ? 4.f : 5.f;
-            Track nt; nt.name = fp.stem().string();
             Clip cl; cl.clip_type = ClipType::Video; cl.text = path;
             cl.source_id = path; cl.start = state.playhead; cl.end = cl.start + dur;
             s_source_durations[path] = dur;
-            nt.clips.push_back(cl);
-            state.tracks.insert(state.tracks.begin(), std::move(nt));
-            state.selected_track = 0; state.selected_clip = 0;
+            int target = find_empty_track(state);
+            if (target < 0) {
+                Track nt; nt.name = fp.stem().string();
+                state.tracks.insert(state.tracks.begin(), std::move(nt));
+                target = 0;
+            }
+            state.tracks[target].clips.push_back(cl);
+            state.selected_track = target;
+            state.selected_clip  = (int)state.tracks[target].clips.size() - 1;
             proxy_start(path);
             int slot = slot_for_video(state, clip_slot_key(path, cl.start), path);
             if (slot >= 0) video_open_still(slot, proxy_still_path(path));
@@ -359,6 +429,205 @@ void panel_media_browser(AppState& state, float w, bool is_video) {
     ImGui::Dummy({0.f, 0.f});
 }
 
+// ── Right panel: Bin tab ──────────────────────────────────────────────────────
+//
+// Project-scoped media library. The "Library" tabs above (Videos / Images /
+// Audio) show cross-project recents — files used across sessions. The Bin
+// shows files in *this project*: things the user has added, including from
+// multi-file drops. Click to place at playhead, drag to drop on a specific
+// track, hover × to remove from the project.
+void panel_bin(AppState& state, float w) {
+    ImGui::Dummy({0.f, 8.f});
+
+    ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(220, 200, 120, 255));
+    ImGui::TextUnformatted("Bin");
+    ImGui::PopStyleColor();
+    ImGui::SameLine();
+    ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+    char count_buf[32]; snprintf(count_buf, sizeof(count_buf), "  %d", (int)state.bin.size());
+    ImGui::TextUnformatted(count_buf);
+    ImGui::PopStyleColor();
+
+    ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+    ImGui::TextWrapped("Project media. Click to place, drag to a track.");
+    ImGui::PopStyleColor();
+    ImGui::Dummy({0.f, 8.f});
+
+    if (state.bin.empty()) {
+        ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+        ImGui::TextWrapped("Empty. Drop files onto the canvas to add them here.");
+        ImGui::PopStyleColor();
+        return;
+    }
+
+    const float ROW_H  = 52.f;
+    const float THUMB_W = 64.f;
+    const float GAP    = 4.f;
+    const float CARD_W = w - 8.f;
+
+    std::string pending_remove;
+
+    for (int i = 0; i < (int)state.bin.size(); ++i) {
+        const std::string& path = state.bin[i];
+        fs::path fp(path);
+        bool exists = fs::exists(path);
+        MediaKind kind = kind_for_path(path);
+        int used = bin_used_count(state, path);
+
+        ImGui::PushID(i);
+        ImGui::SetCursorPosX(4.f);
+        ImVec2 cp = ImGui::GetCursorScreenPos();
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+
+        ImGui::InvisibleButton("##bin_row", {CARD_W, ROW_H});
+        bool hov = ImGui::IsItemHovered();
+        bool clk = ImGui::IsItemClicked();
+
+        ImU32 bg = hov ? IM_COL32(28, 28, 38, 255) : IM_COL32(16, 16, 22, 255);
+        dl->AddRectFilled(cp, {cp.x + CARD_W, cp.y + ROW_H}, bg, 5.f);
+
+        // Thumbnail — reuses proxy still / direct image load
+        int tw = 0, th = 0;
+        uintptr_t tex = 0;
+        if (kind == MediaKind::Image) {
+            std::string ext = fp.extension().string();
+            for (auto& c : ext) c = (char)tolower((unsigned char)c);
+            bool needs_proxy_thumb = (ext == ".heic" || ext == ".heif");
+            tex = needs_proxy_thumb
+                ? video_load_thumb(proxy_still_path(path), &tw, &th)
+                : video_load_thumb(path, &tw, &th);
+        } else if (kind == MediaKind::Video) {
+            tex = video_load_thumb(proxy_still_path(path), &tw, &th);
+        }
+
+        float thumb_h = ROW_H - 8.f;
+        ImVec2 t0 = {cp.x + 4.f, cp.y + 4.f};
+        ImVec2 t1 = {t0.x + THUMB_W, t0.y + thumb_h};
+        if (tex && kind != MediaKind::Audio) {
+            float aspect = (tw > 0 && th > 0) ? (float)tw / (float)th : 16.f / 9.f;
+            float dw = THUMB_W, dh = THUMB_W / aspect;
+            if (dh > thumb_h) { dh = thumb_h; dw = thumb_h * aspect; }
+            float ox = (THUMB_W - dw) * 0.5f;
+            float oy = (thumb_h - dh) * 0.5f;
+            dl->PushClipRect(t0, t1, true);
+            dl->AddImageRounded((ImTextureID)(uintptr_t)tex,
+                                {t0.x + ox, t0.y + oy},
+                                {t0.x + ox + dw, t0.y + oy + dh},
+                                {0, 0}, {1, 1},
+                                IM_COL32(255, 255, 255, exists ? 220 : 100), 4.f);
+            dl->PopClipRect();
+        } else {
+            // Audio or no-thumb-yet: plain block with kind glyph
+            ImU32 fill = (kind == MediaKind::Audio) ? IM_COL32(20, 38, 26, 255)
+                                                    : IM_COL32(22, 22, 30, 255);
+            dl->AddRectFilled(t0, t1, fill, 4.f);
+            const char* glyph = (kind == MediaKind::Audio) ? "AUD"
+                              : (kind == MediaKind::Image) ? "IMG" : "VID";
+            ImVec2 gsz = ImGui::CalcTextSize(glyph);
+            ImU32 gcol = (kind == MediaKind::Audio) ? IM_COL32(80, 200, 130, 200)
+                                                    : IM_COL32(140, 140, 170, 200);
+            dl->AddText({t0.x + (THUMB_W - gsz.x) * 0.5f, t0.y + (thumb_h - gsz.y) * 0.5f},
+                        gcol, glyph);
+        }
+
+        // Filename
+        std::string name = fp.filename().string();
+        if ((int)name.size() > 28) name = name.substr(0, 25) + "…";
+        ImVec2 nx = {t1.x + 10.f, cp.y + 8.f};
+        ImGui::PushFont(g_font_bold);
+        dl->AddText(ImGui::GetFont(), 12.f, nx,
+                    exists ? (hov ? IM_COL32(255, 255, 255, 235)
+                                  : IM_COL32(200, 205, 220, 210))
+                           : IM_COL32(140, 100, 100, 200),
+                    name.c_str());
+        ImGui::PopFont();
+
+        // Sub-line: duration + "used N×"
+        auto dit = s_source_durations.find(path);
+        float dur = (dit != s_source_durations.end()) ? dit->second : 0.f;
+        char sub[64];
+        if (dur > 0.f && used > 0)
+            snprintf(sub, sizeof(sub), "%s   used %d\xc3\x97",
+                     fmt_time_short(dur).c_str(), used);
+        else if (dur > 0.f)
+            snprintf(sub, sizeof(sub), "%s", fmt_time_short(dur).c_str());
+        else if (used > 0)
+            snprintf(sub, sizeof(sub), "used %d\xc3\x97", used);
+        else
+            snprintf(sub, sizeof(sub), "%s", exists ? "" : "missing");
+        dl->AddText({nx.x, cp.y + 28.f},
+                    exists ? IM_COL32(140, 145, 160, 200)
+                           : IM_COL32(200, 100, 100, 220),
+                    sub);
+
+        // Border
+        dl->AddRect(cp, {cp.x + CARD_W, cp.y + ROW_H},
+                    hov ? IM_COL32(255, 255, 255, 140) : IM_COL32(40, 40, 56, 180),
+                    5.f, 0, hov ? 1.4f : 1.f);
+
+        // Hover × — top-right small button. Use InvisibleButton over the X
+        // area so the row's click handler doesn't also fire on the X.
+        if (hov) {
+            float xsz = 16.f;
+            ImVec2 xp = {cp.x + CARD_W - xsz - 4.f, cp.y + 4.f};
+            ImGui::SetCursorScreenPos(xp);
+            ImGui::InvisibleButton("##bin_x", {xsz, xsz});
+            bool x_hov = ImGui::IsItemHovered();
+            bool x_clk = ImGui::IsItemClicked();
+            dl->AddRectFilled(xp, {xp.x + xsz, xp.y + xsz},
+                              x_hov ? IM_COL32(180, 60, 60, 220)
+                                    : IM_COL32(60, 60, 80, 180), 4.f);
+            // Draw an X
+            float pad = 4.f;
+            ImU32 xcol = IM_COL32(240, 240, 240, 230);
+            dl->AddLine({xp.x + pad, xp.y + pad}, {xp.x + xsz - pad, xp.y + xsz - pad}, xcol, 1.4f);
+            dl->AddLine({xp.x + xsz - pad, xp.y + pad}, {xp.x + pad, xp.y + xsz - pad}, xcol, 1.4f);
+            if (x_clk) {
+                pending_remove = path;
+                clk = false;  // suppress row click in the same frame
+            }
+        }
+
+        // Row click → place at playhead. Lands on the hovered track if the
+        // user is hovering one, otherwise on a fresh track at the top.
+        if (clk && exists) {
+            ClipType ct = (kind == MediaKind::Audio) ? ClipType::Audio : ClipType::Video;
+            int target;
+            if (s_tl_hover_track >= 0 && s_tl_hover_track < (int)state.tracks.size()) {
+                target = s_tl_hover_track;
+            } else if ((target = find_empty_track(state)) < 0) {
+                Track nt; nt.name = fp.stem().string();
+                state.tracks.insert(state.tracks.begin(), std::move(nt));
+                target = 0;
+            }
+            add_clip_to_track(state, target, path, ct);
+            s_panel_view = PanelView::Clip;
+        }
+
+        // Drag-drop source — payload kind matches existing MEDIA_VID/IMG/AUD
+        // so timeline drop sites accept it without changes.
+        if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
+            const char* ptype = (kind == MediaKind::Audio) ? "MEDIA_AUD"
+                              : (kind == MediaKind::Image) ? "MEDIA_IMG" : "MEDIA_VID";
+            ImGui::SetDragDropPayload(ptype, path.c_str(), path.size() + 1);
+            if (tex && kind != MediaKind::Audio)
+                ImGui::Image((ImTextureID)(uintptr_t)tex, {96.f, 54.f});
+            ImGui::TextUnformatted(name.c_str());
+            ImGui::TextDisabled("Drop onto timeline track");
+            ImGui::EndDragDropSource();
+        }
+
+        ImGui::Dummy({0.f, GAP});
+        ImGui::PopID();
+    }
+
+    if (!pending_remove.empty()) {
+        bin_remove(state, pending_remove);
+        history_push(state, "Remove from bin: " +
+                     fs::path(pending_remove).filename().string());
+    }
+}
+
 void panel_audio_browser(AppState& state, float w) {
     ImGui::Dummy({0.f, 8.f});
 
@@ -381,13 +650,18 @@ void panel_audio_browser(AppState& state, float w) {
                 AudioMeta meta{};
                 float dur = audio_probe(picked, meta) ? meta.duration_secs : 4.f;
                 if (dur <= 0.f) dur = 4.f;
-                Track nt; nt.name = fs::path(picked).stem().string();
                 Clip cl; cl.clip_type = ClipType::Audio; cl.text = picked;
                 cl.source_id = picked; cl.start = state.playhead; cl.end = cl.start + dur;
                 s_source_durations[picked] = dur;
-                nt.clips.push_back(cl);
-                state.tracks.insert(state.tracks.begin(), std::move(nt));
-                state.selected_track = 0; state.selected_clip = 0;
+                int target = find_empty_track(state);
+                if (target < 0) {
+                    Track nt; nt.name = fs::path(picked).stem().string();
+                    state.tracks.insert(state.tracks.begin(), std::move(nt));
+                    target = 0;
+                }
+                state.tracks[target].clips.push_back(cl);
+                state.selected_track = target;
+                state.selected_clip  = (int)state.tracks[target].clips.size() - 1;
                 audio_source_ensure(picked);
                 s_panel_view = PanelView::Clip;
                 history_push(state, "Import audio: " + fs::path(picked).filename().string());
@@ -490,13 +764,18 @@ void panel_audio_browser(AppState& state, float w) {
             AudioMeta meta{};
             float dur = audio_probe(path, meta) ? meta.duration_secs : 4.f;
             if (dur <= 0.f) dur = 4.f;
-            Track nt; nt.name = fp.stem().string();
             Clip cl; cl.clip_type = ClipType::Audio; cl.text = path;
             cl.source_id = path; cl.start = state.playhead; cl.end = cl.start + dur;
             s_source_durations[path] = dur;
-            nt.clips.push_back(cl);
-            state.tracks.insert(state.tracks.begin(), std::move(nt));
-            state.selected_track = 0; state.selected_clip = 0;
+            int target = find_empty_track(state);
+            if (target < 0) {
+                Track nt; nt.name = fp.stem().string();
+                state.tracks.insert(state.tracks.begin(), std::move(nt));
+                target = 0;
+            }
+            state.tracks[target].clips.push_back(cl);
+            state.selected_track = target;
+            state.selected_clip  = (int)state.tracks[target].clips.size() - 1;
             audio_source_ensure(path);
             recent_media_push(path, MediaKind::Audio);
             s_panel_view = PanelView::Clip;

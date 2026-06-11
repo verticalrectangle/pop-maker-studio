@@ -32,6 +32,10 @@ uint64_t audio_fx_hash(const AudioFX& fx) {
         return acc;
     };
     uint64_t acc = 14695981039346656037ULL;
+    // DSP version salt — bump when processing math changes so persistent
+    // caches (export FX bakes in /tmp) can't serve stale renders.
+    const uint32_t kDspVersion = 2;  // v2: 0 ms autotune = hard snap, not off
+    acc = h(acc, &kDspVersion, sizeof(kDspVersion));
     acc = h(acc, &fx.autotune_on,    sizeof(fx.autotune_on));
     acc = h(acc, &fx.autotune_key,   sizeof(fx.autotune_key));
     acc = h(acc, &fx.autotune_scale, sizeof(fx.autotune_scale));
@@ -50,6 +54,18 @@ uint64_t audio_fx_hash(const AudioFX& fx) {
     acc = h(acc, &fx.reverb_mix,  sizeof(fx.reverb_mix));
     acc = h(acc, &fx.voice_convert_on, sizeof(fx.voice_convert_on));
     for (char c : fx.voice_model_path) acc = h(acc, &c, 1);
+    return acc;
+}
+
+uint64_t audio_fx_segments_hash(const std::vector<AudioFXSegment>& segs) {
+    uint64_t acc = 1469598103934665603ULL ^ (uint64_t)segs.size();
+    for (const auto& s : segs) {
+        acc ^= audio_fx_hash(s.fx) + 0x9E3779B97F4A7C15ULL + (acc << 6) + (acc >> 2);
+        // Window quantized to ms so float noise can't fork cache entries.
+        uint64_t w = ((uint64_t)(uint32_t)(int64_t)(s.t0 * 1000.f) << 32) |
+                      (uint64_t)(uint32_t)(int64_t)(s.t1 * 1000.f);
+        acc = (acc ^ w) * 1099511628211ULL;
+    }
     return acc;
 }
 
@@ -364,7 +380,11 @@ struct ATState {
                 if (++low_conf > 8) held_ratio = 1.f;
             }
         }
-        float chase_k = (speed_ms <= 0.f) ? 1.f
+        // chase_k weights the OLD ratio: 0 = jump straight to the target
+        // (hard snap), →1 = glide. 0 ms used to map to 1.f, which froze
+        // cur_ratio at 1.0 forever — autotune audibly disabled at the
+        // hardest setting.
+        float chase_k = (speed_ms <= 0.f) ? 0.f
             : std::exp(-1.f / (speed_ms * 0.001f * sr));
         cur_ratio = cur_ratio * chase_k + held_ratio * (1.f - chase_k);
         return cur_ratio;
@@ -462,6 +482,54 @@ std::vector<float> process_audio_fx(const std::vector<float>& raw,
 
 static std::string piper_cache_dir() {
     return app_models_dir() + "/piper";
+}
+
+std::vector<float> process_audio_fx_segments(const std::vector<float>& raw,
+                                             const std::vector<AudioFXSegment>& segs,
+                                             float sample_rate,
+                                             const std::atomic<uint64_t>* cancel_gen,
+                                             uint64_t my_gen)
+{
+    if (raw.empty()) return raw;
+    std::vector<float> out = raw;
+    const long n_frames = (long)(raw.size() / 2);
+
+    for (const auto& seg : segs) {
+        if (!seg.fx.any_active()) continue;
+        long f0 = (long)(seg.t0 * sample_rate);
+        long f1 = (long)(seg.t1 * sample_rate);
+        f0 = std::max(0L, std::min(f0, n_frames));
+        f1 = std::max(f0, std::min(f1, n_frames));
+        if (f1 - f0 < 64) continue;
+
+        // Pre-roll warms detectors/delay lines so the window start isn't a
+        // cold transient; it's processed but discarded. Slice from `out`, not
+        // `raw`, so stacked segments over the same range CHAIN (autotune →
+        // reverb) instead of the last one replacing the others.
+        long pre = std::min<long>(f0, (long)sample_rate);
+        std::vector<float> slice(out.begin() + (size_t)(f0 - pre) * 2,
+                                 out.begin() + (size_t)f1 * 2);
+        std::vector<float> proc = process_audio_fx(slice, seg.fx, sample_rate,
+                                                   cancel_gen, my_gen);
+        if (proc.empty()) return {};                  // cancelled
+        if (proc.size() != slice.size()) continue;    // processor bailed
+
+        // Crossfade wet over dry at both edges (~12 ms) so the brick's
+        // boundaries never click.
+        const long FADE = std::min<long>(512, (f1 - f0) / 4);
+        for (long f = f0; f < f1; ++f) {
+            float w = 1.f;
+            if (FADE > 0) {
+                if (f - f0 < FADE)      w = (float)(f - f0) / (float)FADE;
+                else if (f1 - f < FADE) w = (float)(f1 - f) / (float)FADE;
+            }
+            size_t oi = (size_t)f * 2;
+            size_t si = (size_t)(f - (f0 - pre)) * 2;
+            out[oi]   = out[oi]   * (1.f - w) + proc[si]   * w;
+            out[oi+1] = out[oi+1] * (1.f - w) + proc[si+1] * w;
+        }
+    }
+    return out;
 }
 
 void tts_generate(const std::string& text, const std::string& voice,

@@ -1,6 +1,7 @@
 // hf_api.cpp — HuggingFace search + download, curl binary only, no libraries
 
 #include "hf_api.h"
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -81,9 +82,10 @@ static std::vector<HFModel> parse_models(const std::string& json) {
         m.repo      = jstr(mid, "modelId");
         m.downloads = (int)jint(op, "downloads");
 
-        // Scan siblings: prefer first .pth, fall back to first .zip
+        // Scan siblings: prefer .pth, then .zip, then .onnx (native RVC
+        // signature support). Also grab the first faiss .index sibling.
         const char* rp = op;
-        std::string zip_fallback;
+        std::string pth, zip, onnx;
         while (true) {
             const char* rf = strstr(rp, "\"rfilename\":\"");
             if (!rf) break;
@@ -91,16 +93,16 @@ static std::vector<HFModel> parse_models(const std::string& json) {
             const char* rfend = strchr(rf, '"');
             if (!rfend) break;
             std::string fname(rf, rfend - rf);
-            if (ends_with(fname, ".pth")) {
-                m.model_file = std::move(fname);
-                break;
-            }
-            if (zip_fallback.empty() && ends_with(fname, ".zip"))
-                zip_fallback = fname;
+            if (pth.empty()  && ends_with(fname, ".pth"))   pth  = fname;
+            else if (zip.empty()  && ends_with(fname, ".zip"))   zip  = fname;
+            else if (onnx.empty() && ends_with(fname, ".onnx"))  onnx = fname;
+            else if (m.index_file.empty() && ends_with(fname, ".index"))
+                m.index_file = fname;
             rp = rfend + 1;
         }
-        if (m.model_file.empty())
-            m.model_file = std::move(zip_fallback);
+        m.model_file = !pth.empty() ? std::move(pth)
+                     : !zip.empty() ? std::move(zip)
+                                    : std::move(onnx);
 
         if (!m.repo.empty() && !m.model_file.empty())
             out.push_back(std::move(m));
@@ -119,37 +121,58 @@ void hf_search(const std::string& query, HFSearch& s) {
     uint32_t my_gen = s.gen.load(std::memory_order_relaxed);
 
     std::thread([query, my_gen, &s]() {
-        // Append "rvc" so we always get RVC models; "filter=rvc" is a broken tag.
-        std::string url = "https://huggingface.co/api/models?search="
-                        + url_encode(query + " rvc")
-                        + "&limit=20&full=true&sort=downloads&direction=-1";
+        // Two passes: the raw query (recall — many voice repos never mention
+        // "rvc") and the query + " rvc" (precision — keeps random torch repos
+        // out of the top). Merged, deduped by repo, ranked by downloads; the
+        // sibling filter in parse_models() already drops repos without a
+        // .pth/.zip/.onnx model file.
+        auto fetch = [](const std::string& q) -> std::string {
+            std::string url = "https://huggingface.co/api/models?search="
+                            + url_encode(q)
+                            + "&limit=20&full=true&sort=downloads&direction=-1";
+            std::string cmd = "curl -sS --max-time 15 \"" + url + "\" 2>&1";
+            FILE* p = popen(cmd.c_str(), "r");
+            if (!p) return {};
+            std::string json;
+            char buf[8192];
+            while (fgets(buf, sizeof(buf), p))
+                json += buf;
+            pclose(p);
+            return json;
+        };
 
-        std::string cmd = "curl -sS --max-time 15 \"" + url + "\" 2>&1";
-        FILE* p = popen(cmd.c_str(), "r");
-        if (!p) {
-            if (s.gen.load(std::memory_order_relaxed) == my_gen) {
-                s.error = "curl binary not found";
-                s.status.store(HFSearch::Status::Error, std::memory_order_release);
-            }
-            return;
-        }
-
-        std::string json;
-        char buf[8192];
-        while (fgets(buf, sizeof(buf), p))
-            json += buf;
-        pclose(p);
-
+        std::string j_rvc = fetch(query + " rvc");
+        if (s.gen.load(std::memory_order_relaxed) != my_gen) return;
+        std::string j_raw = fetch(query);
         if (s.gen.load(std::memory_order_relaxed) != my_gen) return;
 
-        if (json.empty() || json.front() != '[') {
-            if (json.size() > 120) json.resize(120);
-            s.error = "Unexpected response: " + json;
+        bool ok_rvc = !j_rvc.empty() && j_rvc.front() == '[';
+        bool ok_raw = !j_raw.empty() && j_raw.front() == '[';
+        if (!ok_rvc && !ok_raw) {
+            std::string j = !j_rvc.empty() ? j_rvc : j_raw;
+            if (j.size() > 120) j.resize(120);
+            s.error = j.empty() ? "curl binary not found"
+                                : "Unexpected response: " + j;
             s.status.store(HFSearch::Status::Error, std::memory_order_release);
             return;
         }
 
-        s.results = parse_models(json);
+        std::vector<HFModel> merged;
+        if (ok_rvc) merged = parse_models(j_rvc);
+        if (ok_raw)
+            for (auto& m : parse_models(j_raw)) {
+                bool dup = false;
+                for (auto& e : merged)
+                    if (e.repo == m.repo) { dup = true; break; }
+                if (!dup) merged.push_back(std::move(m));
+            }
+        std::stable_sort(merged.begin(), merged.end(),
+            [](const HFModel& a, const HFModel& b) {
+                return a.downloads > b.downloads;
+            });
+        if (merged.size() > 20) merged.resize(20);
+
+        s.results = std::move(merged);
         s.status.store(HFSearch::Status::Done, std::memory_order_release);
     }).detach();
 }
@@ -199,11 +222,12 @@ void hf_download_poll(HFDownload& dl) {
 }
 
 void hf_download_model(const std::string& repo, const std::string& model_file,
-                       const std::string& out_path, HFDownload& dl) {
+                       const std::string& out_path, HFDownload& dl,
+                       const std::string& index_file) {
     dl.status.store(HFDownload::Status::Running, std::memory_order_release);
     dl.bytes_done.store(0, std::memory_order_relaxed);
     dl.bytes_total = 0;
-    dl.out_path    = out_path;   // final .pth path
+    dl.out_path    = out_path;   // final model path
     dl.tmp_path    = out_path + ".dl";
     dl.error_msg.clear();
 
@@ -212,7 +236,7 @@ void hf_download_model(const std::string& repo, const std::string& model_file,
 
     bool is_zip = ends_with(model_file, ".zip");
 
-    std::thread([repo, model_file, out_path, is_zip, &dl]() {
+    std::thread([repo, model_file, out_path, is_zip, index_file, &dl]() {
         std::string url = "https://huggingface.co/" + repo
                         + "/resolve/main/" + model_file;
 
@@ -268,7 +292,7 @@ void hf_download_model(const std::string& repo, const std::string& model_file,
             fs::create_directories(extract_dir, ec2);
 
             std::string unzip_cmd = "unzip -j -o \""
-                                  + zip_path + "\" \"*.pth\" -d \""
+                                  + zip_path + "\" \"*.pth\" \"*.index\" -d \""
                                   + extract_dir + "\" 2>/dev/null";
             rc = system(unzip_cmd.c_str());
 
@@ -292,6 +316,14 @@ void hf_download_model(const std::string& repo, const std::string& model_file,
             }
 
             fs::rename(found_pth, out_path, ec2);
+            // Keep a bundled faiss .index as <model_stem>.index (retrieval)
+            for (auto& entry : fs::directory_iterator(extract_dir, ec2)) {
+                if (entry.path().extension() == ".index") {
+                    std::string stem = out_path.substr(0, out_path.rfind('.'));
+                    fs::rename(entry.path(), stem + ".index", ec2);
+                    break;
+                }
+            }
             fs::remove(zip_path);
             fs::remove_all(extract_dir);
 
@@ -299,6 +331,24 @@ void hf_download_model(const std::string& repo, const std::string& model_file,
                 dl.error_msg = "Could not move extracted file: " + ec2.message();
                 dl.status.store(HFDownload::Status::Error, std::memory_order_release);
                 return;
+            }
+        }
+
+        // Faiss .index sibling (feature retrieval) — best-effort, non-fatal.
+        // Saved as <model_stem>.index next to the model so retrieval can find
+        // it by convention once implemented.
+        if (!index_file.empty()) {
+            std::string stem = out_path.substr(0, out_path.rfind('.'));
+            std::string idx_path = stem + ".index";
+            if (!fs::exists(idx_path)) {
+                std::string idx_url = "https://huggingface.co/" + repo
+                                    + "/resolve/main/" + index_file;
+                std::string idx_cmd = "curl -L --max-time 600 --fail -o \""
+                                    + idx_path + ".dl\" \"" + idx_url + "\" 2>/dev/null";
+                if (system(idx_cmd.c_str()) == 0)
+                    fs::rename(idx_path + ".dl", idx_path, ec2);
+                else
+                    fs::remove(idx_path + ".dl", ec2);
             }
         }
 

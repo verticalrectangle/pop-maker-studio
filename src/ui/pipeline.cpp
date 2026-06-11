@@ -9,7 +9,6 @@
 #include "history.h"
 #include "filepicker.h"
 #include "transcribe.h"
-#include "vision_download.h"
 #include "beat_detect.h"
 #include "waveform.h"
 #include "theme.h"
@@ -103,11 +102,14 @@ std::vector<Clip> group_words(
 
     switch (mode) {
     case SubtitleMode::Word: {
-        // Extend each word to the next word's start so inter-word gaps don't
-        // leave blank frames between clips.
+        // Extend each word to the next word's start to fill intra-sentence gaps,
+        // but stop at the word's natural CTC end when a sentence-level pause follows.
+        constexpr float kSentenceGap = 0.4f;
         std::vector<Clip> out = words;
-        for (size_t i = 0; i + 1 < out.size(); ++i)
-            out[i].end = out[i + 1].start;
+        for (size_t i = 0; i + 1 < out.size(); ++i) {
+            if (out[i + 1].start - out[i].end < kSentenceGap)
+                out[i].end = out[i + 1].start;
+        }
         return out;
     }
 
@@ -687,11 +689,16 @@ void import_file(AppState& state, const std::string& path) {
         audio_init();              // ensure device is alive (no-op if already running)
         audio_source_ensure(path); // decode video audio into per-clip buffer
 
-        state.tracks.insert(state.tracks.begin(), Track{});
-        Track& vt = state.tracks.front();
-        char vname[32];
-        snprintf(vname, sizeof(vname), "Track %d", (int)state.tracks.size());
-        vt.name = vname;
+        // Reuse an empty track when one exists; new track at top otherwise.
+        int vti = find_empty_track(state);
+        if (vti < 0) {
+            state.tracks.insert(state.tracks.begin(), Track{});
+            vti = 0;
+            char vname[32];
+            snprintf(vname, sizeof(vname), "Track %d", (int)state.tracks.size());
+            state.tracks[vti].name = vname;
+        }
+        Track& vt = state.tracks[vti];
         Clip vc; vc.clip_type = ClipType::Video;
         vc.source_id = path;
         vc.start=0.f; vc.end=state.duration; vc.text=path;
@@ -744,11 +751,15 @@ void import_file(AppState& state, const std::string& path) {
             if (!t.clips.empty() && t.clips[0].clip_type == ClipType::Audio &&
                 t.clips[0].source_id == path) { at=&t; break; }
         if (!at) {
-            state.tracks.insert(state.tracks.begin(), Track{});
-            at = &state.tracks.front();
-            char aname[32];
-            snprintf(aname, sizeof(aname), "Track %d", (int)state.tracks.size());
-            at->name = aname;
+            int ati = find_empty_track(state);  // reuse before creating
+            if (ati < 0) {
+                state.tracks.insert(state.tracks.begin(), Track{});
+                ati = 0;
+                char aname[32];
+                snprintf(aname, sizeof(aname), "Track %d", (int)state.tracks.size());
+                state.tracks[ati].name = aname;
+            }
+            at = &state.tracks[ati];
         }
         at->clips.clear();
         Clip ac; ac.clip_type = ClipType::Audio;
@@ -797,8 +808,7 @@ void kick_pipeline(AppState& state, const std::string& path, PipelineMode mode) 
     state.vocals_path        = vocals_out;
     state.out_wav            = vocals_out;
 
-    state.pipeline_produces_subtitles = (mode == PipelineMode::TranscribeOnly);
-    state.pipeline_is_separate_only   = (mode == PipelineMode::SeparateOnly);
+    state.last_pipeline_mode = mode;
 
     // Get MJPEG proxy FPS so forced alignment can snap timestamps to frame boundaries
     double proxy_fps = 0.0;
@@ -879,8 +889,17 @@ void draw_pipeline_strip(AppState& state, float w) {
     ImGui::Dummy({w, h});
 }
 
-void draw_vision_download_strip(float w) {
-    if (!vision_download_running()) return;
+// ── Find-and-add-clip search strip ────────────────────────────────────────────
+//
+// Agent-driven windowed transcript searches (find_and_add_clip /
+// search_transcript) used to run invisibly — the human only saw a clip
+// appear (or not) at the end.  This mirrors draw_pipeline_strip so a search
+// in progress shows up in the same status bar with its current chunk range,
+// progress, and a cancel button.  See feedback_agent_tools_visible_ui.
+void draw_search_strip(float w) {
+    if (!transcribe_search_running()) return;
+
+    SearchStatus s = transcribe_search_status();
 
     ImDrawList* dl = ImGui::GetWindowDrawList();
     ImVec2 p = ImGui::GetCursorScreenPos();
@@ -889,33 +908,34 @@ void draw_vision_download_strip(float w) {
     dl->AddRectFilled(p, {p.x + w, p.y + h}, to_u32(Col::bg_soft));
     dl->AddLine({p.x, p.y + h}, {p.x + w, p.y + h}, to_u32(Col::line));
 
-    float prog = vision_download_progress();
-    dl->AddRectFilled(p, {p.x + w * prog, p.y + h}, IM_COL32(255,255,255,18));
+    dl->AddRectFilled(p, {p.x + w * s.progress, p.y + h},
+        IM_COL32(255,255,255,18));
 
     float pulse = 0.5f + 0.5f * sinf((float)ImGui::GetTime() * 4.f);
     dl->AddCircleFilled({p.x + 14.f, p.y + h * 0.5f}, 4.f,
         ImGui::ColorConvertFloat4ToU32({1.f, 1.f, 1.f, pulse}));
 
-    std::string msg = vision_download_message();
-    if (msg.empty()) msg = "Downloading vision model…";
+    std::string msg = s.message.empty() ? "Searching transcript…" : s.message;
     char buf[256];
-    snprintf(buf, sizeof(buf), "Vision Model  •  %s  %d%%",
-             msg.c_str(), (int)(prog * 100.f));
+    snprintf(buf, sizeof(buf), "Search  •  %s  %d%%",
+        msg.c_str(), (int)(s.progress * 100.f));
     dl->AddText({p.x + 26.f, p.y + 3.f}, to_u32(Col::muted), buf);
 
-    std::string err = vision_download_error();
-    if (!err.empty()) {
-        std::string e = err.size() > 80 ? err.substr(0, 77) + "..." : err;
+    if (s.total_sec > 0.f) {
+        char range[64];
+        snprintf(range, sizeof(range), "%.0fs / %.0fs scanned",
+            s.current_sec, s.total_sec);
         dl->AddText(ImGui::GetFont(), 10.f, {p.x + 26.f, p.y + 15.f},
-                    to_u32(Col::dim), e.c_str());
+            to_u32(Col::dim), range);
     }
 
     const char* cancel_lbl = "Cancel";
     float cx = p.x + w - ImGui::CalcTextSize(cancel_lbl).x - 16.f;
     ImVec2 mp = ImGui::GetIO().MousePos;
     bool hov = mp.x >= cx && mp.y >= p.y && mp.y < p.y + h;
-    dl->AddText({cx, p.y + 3.f}, to_u32(hov ? Col::fg : Col::muted), cancel_lbl);
-    if (hov && ImGui::IsMouseClicked(0)) vision_download_cancel();
+    dl->AddText({cx, p.y + 3.f},
+        to_u32(hov ? Col::fg : Col::muted), cancel_lbl);
+    if (hov && ImGui::IsMouseClicked(0)) transcribe_cancel();
 
     ImGui::Dummy({w, h});
 }

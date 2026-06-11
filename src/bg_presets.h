@@ -16,6 +16,7 @@ struct BgPreset {
 
 static const BgPreset g_bg_presets[] = {
     // id              label              category      spd  nc  c1                   c2                   c3
+    {"solid",       "Solid Color",     "Solid",      1.f, 1, {1.0f,1.0f,1.0f,1},{0,0,0,0},{0,0,0,0}},
     {"blob",        "Blob Field",      "Organic",    1.f, 3, {0.4f,0.0f,0.8f,1},{0.0f,0.8f,1.0f,1},{1.0f,0.1f,0.5f,1}},
     {"lava",        "Lava Lamp",       "Organic",    0.4f,2, {0.9f,0.2f,0.0f,1},{0.1f,0.0f,0.0f,1},{0,0,0,0}},
     {"aurora",      "Aurora",          "Organic",    0.5f,3, {0.0f,0.8f,0.5f,1},{0.0f,0.3f,0.9f,1},{0.5f,0.0f,0.8f,1}},
@@ -94,8 +95,15 @@ inline void draw_bg_preset(const char* id,
         return (float)(x & 0xFFFFFF) / 16777216.f;
     };
 
+    // ── Solid ─────────────────────────────────────────────────────────────────
+    if (!strcmp(id,"solid")) {
+        // Flat fill of c1 — alpha straight from the picker (not scaled by
+        // intensity) so a translucent wash over lower tracks works too.
+        // speed/intensity intentionally unused: nothing animates.
+        dl->AddRectFilled({x0,y0},{x1,y1}, rgba(c1[0],c1[1],c1[2],c1[3]));
+    }
     // ── Organic ───────────────────────────────────────────────────────────────
-    if (!strcmp(id,"blob")) {
+    else if (!strcmp(id,"blob")) {
         dl->AddRectFilled({x0,y0},{x1,y1}, from4(c1,0.9f));
         for (int i = 0; i < 5; ++i) {
             float bx = x0 + w*(0.2f+0.6f*hf(i*7))   + sinf(t*0.37f+i*1.3f)*w*0.25f;

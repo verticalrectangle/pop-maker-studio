@@ -1,5 +1,6 @@
 #include "studio_types.h"
 #include "studio_shared.h"
+#include "panel_media.h"
 #include "app.h"
 #include "audio.h"
 #include "video.h"
@@ -39,9 +40,105 @@ std::string fmt_time_short(float s) {
     return buf;
 }
 
+int find_empty_track(const AppState& state) {
+    for (int ti = 0; ti < (int)state.tracks.size(); ++ti) {
+        const Track& t = state.tracks[ti];
+        if (t.clips.empty() && t.visible && !t.locked && !t.managed) return ti;
+    }
+    return -1;
+}
+
+// ── Multi-selection ops ───────────────────────────────────────────────────────
+bool delete_selected_clips(AppState& state) {
+    if (state.clip_selection.size() <= 1) {
+        if (state.selected_track < 0 || state.selected_clip < 0) return false;
+        if (state.selected_track >= (int)state.tracks.size()) return false;
+        Track& tr = state.tracks[state.selected_track];
+        if (state.selected_clip >= (int)tr.clips.size()) return false;
+        tr.clips.erase(tr.clips.begin() + state.selected_clip);
+        state.selected_clip = -1;
+        state.clip_selection.clear();
+        return true;
+    }
+    // Group by track; delete descending so erase() doesn't shift indices
+    // out from under us within a track.
+    std::vector<std::vector<int>> by_track(state.tracks.size());
+    for (auto& [ti, ci] : state.clip_selection)
+        if (ti >= 0 && ti < (int)state.tracks.size()) by_track[ti].push_back(ci);
+    for (int ti = 0; ti < (int)by_track.size(); ++ti) {
+        auto& cis = by_track[ti];
+        std::sort(cis.begin(), cis.end(), std::greater<int>());
+        for (int ci : cis)
+            if (ci >= 0 && ci < (int)state.tracks[ti].clips.size())
+                state.tracks[ti].clips.erase(state.tracks[ti].clips.begin() + ci);
+    }
+    state.clip_selection.clear();
+    state.selected_clip = -1;
+    return true;
+}
+
+bool duplicate_selected_clips(AppState& state) {
+    auto valid = [&](int ti, int ci) {
+        return ti >= 0 && ti < (int)state.tracks.size() &&
+               ci >= 0 && ci < (int)state.tracks[ti].clips.size();
+    };
+    if (state.clip_selection.size() <= 1) {
+        if (!valid(state.selected_track, state.selected_clip)) return false;
+        Track& tr = state.tracks[state.selected_track];
+        Clip dup = tr.clips[state.selected_clip];
+        float len = dup.end - dup.start;
+        dup.start = dup.end;
+        dup.end   = dup.start + len;
+        tr.clips.insert(tr.clips.begin() + state.selected_clip + 1, dup);
+        state.selected_clip = state.selected_clip + 1;
+        state.clip_selection.clear();
+        state.clip_selection.insert({state.selected_track, state.selected_clip});
+        return true;
+    }
+    float gmin =  1e30f, gmax = -1e30f;
+    for (auto& [ti, ci] : state.clip_selection) {
+        if (!valid(ti, ci)) continue;
+        const Clip& c = state.tracks[ti].clips[ci];
+        gmin = fminf(gmin, c.start);
+        gmax = fmaxf(gmax, c.end);
+    }
+    if (!(gmax > gmin)) return false;
+    float shift = gmax - gmin;
+    // Snapshot per-track originals first; append copies after so we don't
+    // duplicate clips we just inserted.
+    std::vector<std::vector<Clip>> dups(state.tracks.size());
+    for (auto& [ti, ci] : state.clip_selection) {
+        if (!valid(ti, ci)) continue;
+        Clip d = state.tracks[ti].clips[ci];
+        d.start += shift;
+        d.end   += shift;
+        dups[ti].push_back(std::move(d));
+    }
+    state.clip_selection.clear();
+    int new_primary_ti = -1, new_primary_ci = -1;
+    for (int ti = 0; ti < (int)dups.size(); ++ti) {
+        for (auto& d : dups[ti]) {
+            state.tracks[ti].clips.push_back(std::move(d));
+            int nci = (int)state.tracks[ti].clips.size() - 1;
+            state.clip_selection.insert({ti, nci});
+            if (new_primary_ti < 0) { new_primary_ti = ti; new_primary_ci = nci; }
+        }
+    }
+    if (new_primary_ti >= 0) {
+        state.selected_track = new_primary_ti;
+        state.selected_clip  = new_primary_ci;
+    }
+    return true;
+}
+
 // ── Playback helpers ──────────────────────────────────────────────────────────
 void seek_to(AppState& state, float t) {
-    t = roundf(t * 30.f) / 30.f;
+    // Quantize to the video's actual frame grid (falls back to 30 fps). A
+    // hard-coded 30 fps grid eats sub-frame steps for >30 fps content, which
+    // made back-arrow stick at high zoom on 60 fps footage.
+    float qfps = tl_fps(state);
+    if (!(qfps > 0.f)) qfps = 30.f;
+    t = roundf(t * qfps) / qfps;
     state.playhead = t;
     audio_seek(t);
     if (state.playing) {
@@ -112,14 +209,28 @@ void reopen_video_slots(AppState& state) {
             std::string key = clip_slot_key(cl.text, cl.start);
             int slot = slot_for_video(state, key, cl.text);
             if (slot < 0) continue;
-            video_open_still(slot, proxy_still_path(cl.text));
+            // Images go straight to Still — never native. libav happily opens
+            // a PNG as a one-frame video, but then any decode past t=0 fails
+            // and the clip renders blank (this is how MCP-added images
+            // vanished from the preview: add_clip → proxy_scan → native PNG).
+            if (is_image_path(cl.text)) {
+                if (video_source(slot) != PreviewSource::Still)
+                    video_open_still(slot, proxy_still_path(cl.text));
+                continue;
+            }
             if (proxy_is_ready(cl.text)) {
                 ProxyInfo pi;
                 if (proxy_load(cl.text, pi)) {
                     video_open_proxy(slot, pi);
                     if (slot == 0) state.proxy_ready = true;
+                    continue;
                 }
             }
+            // No proxy yet — try native (libav direct decode) for instant
+            // preview. Falls back to the still placeholder if libav can't open
+            // the file (unusual codec, corrupt container).
+            if (!video_open_native(slot, cl.text))
+                video_open_still(slot, proxy_still_path(cl.text));
         }
     }
 }
@@ -136,12 +247,19 @@ bool is_audio_file(const std::string& path) {
     std::string ext = fs::path(path).extension().string();
     for (auto& c : ext) c = (char)tolower((unsigned char)c);
     return ext==".wav"||ext==".mp3"||ext==".m4a"||
-           ext==".flac"||ext==".mp4"||ext==".mov"||ext==".aac";
+           ext==".flac"||ext==".mp4"||ext==".mov"||ext==".aac"||
+           ext==".mkv"||ext==".webm";
 }
 
 void add_clip_to_track(AppState& state, int ti, const std::string& path, ClipType ct) {
     if (ti < 0 || ti >= (int)state.tracks.size()) return;
     Track& tr = state.tracks[ti];
+
+    // Every video/audio that lands on the timeline is also in the project, so
+    // mirror it into the bin. No-op for duplicates, so Browse-then-drag flows
+    // don't double-list.
+    if ((ct == ClipType::Video || ct == ClipType::Audio) && !path.empty())
+        bin_add(state, path);
 
     Clip cl;
     cl.clip_type = ct;
@@ -157,10 +275,11 @@ void add_clip_to_track(AppState& state, int ti, const std::string& path, ClipTyp
         int slot = slot_for_video(state, clip_slot_key(path, cl.start), path);
         proxy_start(path);
         if (slot >= 0) {
-            video_open_still(slot, proxy_still_path(path));
             if (proxy_is_ready(path)) {
                 ProxyInfo pi;
                 if (proxy_load(path, pi)) video_open_proxy(slot, pi);
+            } else if (!video_open_native(slot, path)) {
+                video_open_still(slot, proxy_still_path(path));
             }
         }
         state.video_loaded = true;
@@ -199,7 +318,8 @@ void add_clip_to_track(AppState& state, int ti, const std::string& path, ClipTyp
 bool pv_is_lib(PanelView v) {
     return v == PanelView::LibBG    || v == PanelView::LibFX  || v == PanelView::LibAdj ||
            v == PanelView::LibBFX   || v == PanelView::LibAFX || v == PanelView::LibVID ||
-           v == PanelView::LibIMG   || v == PanelView::LibAUD;
+           v == PanelView::LibIMG   || v == PanelView::LibAUD || v == PanelView::LibBin ||
+           v == PanelView::LibText;
 }
 
 bool pv_is_override(PanelView v) {
@@ -214,49 +334,82 @@ bool fx_type_is_audio_fx(FXType ft) {
            ft == FXType::AudioReverb     || ft == FXType::AudioVoiceConvert;
 }
 
-AudioFX collect_audio_fx_for_clip(const AppState& state, int track_idx, const Clip& audio_clip) {
-    if (track_idx < 0 || track_idx >= (int)state.tracks.size()) return {};
-    const Track& track = state.tracks[track_idx];
-    AudioFX result;
-    for (const auto& cl : track.clips) {
-        if (cl.clip_type != ClipType::Effect) continue;
-        if (!fx_type_is_audio_fx(cl.fx_type)) continue;
-        if (cl.end <= audio_clip.start || cl.start >= audio_clip.end) continue;
-        switch (cl.fx_type) {
-            case FXType::AudioAutotune:
-                result.autotune_on    = cl.audio_fx.autotune_on;
-                result.autotune_key   = cl.audio_fx.autotune_key;
-                result.autotune_scale = cl.audio_fx.autotune_scale;
-                result.autotune_speed = cl.audio_fx.autotune_speed;
-                break;
-            case FXType::AudioPitch:
-                result.pitch_on        = cl.audio_fx.pitch_on;
-                result.pitch_semitones = cl.audio_fx.pitch_semitones;
-                break;
-            case FXType::AudioFormant:
-                result.formant_on    = cl.audio_fx.formant_on;
-                result.formant_shift = cl.audio_fx.formant_shift;
-                break;
-            case FXType::AudioDelay:
-                result.delay_on       = cl.audio_fx.delay_on;
-                result.delay_time     = cl.audio_fx.delay_time;
-                result.delay_feedback = cl.audio_fx.delay_feedback;
-                result.delay_mix      = cl.audio_fx.delay_mix;
-                break;
-            case FXType::AudioReverb:
-                result.reverb_on   = cl.audio_fx.reverb_on;
-                result.reverb_room = cl.audio_fx.reverb_room;
-                result.reverb_damp = cl.audio_fx.reverb_damp;
-                result.reverb_mix  = cl.audio_fx.reverb_mix;
-                break;
-            case FXType::AudioVoiceConvert:
-                result.voice_convert_on = cl.audio_fx.voice_convert_on;
-                result.voice_model_path = cl.audio_fx.voice_model_path;
-                break;
-            default: break;
+// One brick's contribution as a standalone AudioFX. VoiceConvert is excluded
+// — it's an ML job handled via vc_out_path substitution, not offline DSP.
+static bool audio_fx_from_brick(const Clip& cl, AudioFX& out) {
+    switch (cl.fx_type) {
+        case FXType::AudioAutotune:
+            out.autotune_on    = cl.audio_fx.autotune_on;
+            out.autotune_key   = cl.audio_fx.autotune_key;
+            out.autotune_scale = cl.audio_fx.autotune_scale;
+            out.autotune_speed = cl.audio_fx.autotune_speed;
+            return out.autotune_on;
+        case FXType::AudioPitch:
+            out.pitch_on        = cl.audio_fx.pitch_on;
+            out.pitch_semitones = cl.audio_fx.pitch_semitones;
+            return out.pitch_on;
+        case FXType::AudioFormant:
+            out.formant_on    = cl.audio_fx.formant_on;
+            out.formant_shift = cl.audio_fx.formant_shift;
+            return out.formant_on;
+        case FXType::AudioDelay:
+            out.delay_on       = cl.audio_fx.delay_on;
+            out.delay_time     = cl.audio_fx.delay_time;
+            out.delay_feedback = cl.audio_fx.delay_feedback;
+            out.delay_mix      = cl.audio_fx.delay_mix;
+            return out.delay_on;
+        case FXType::AudioReverb:
+            out.reverb_on   = cl.audio_fx.reverb_on;
+            out.reverb_room = cl.audio_fx.reverb_room;
+            out.reverb_damp = cl.audio_fx.reverb_damp;
+            out.reverb_mix  = cl.audio_fx.reverb_mix;
+            return out.reverb_on;
+        default: return false;
+    }
+}
+
+std::vector<AudioFXSegment> collect_audio_fx_segments(const AppState& state,
+                                                      int track_idx,
+                                                      const Clip& ac) {
+    std::vector<AudioFXSegment> segs;
+    if (track_idx < 0 || track_idx >= (int)state.tracks.size()) return segs;
+    const float spd = fmaxf(0.01f, ac.speed);
+
+    // Map a timeline window onto the clip's SOURCE time — the FX brick only
+    // applies where it overlaps the clip, not to the whole file.
+    auto add_window = [&](float tl0, float tl1, const AudioFX& fx) {
+        tl0 = fmaxf(tl0, ac.start);
+        tl1 = fminf(tl1, ac.end);
+        if (tl1 - tl0 < 0.005f) return;
+        AudioFXSegment s;
+        s.t0 = ac.in_point + (tl0 - ac.start) * spd;
+        s.t1 = ac.in_point + (tl1 - ac.start) * spd;
+        s.fx = fx;
+        segs.push_back(s);
+    };
+
+    for (const auto& cl : state.tracks[track_idx].clips) {
+        if (&cl == &ac) continue;
+        if (cl.end <= ac.start || cl.start >= ac.end) continue;
+        if (cl.clip_type == ClipType::Effect && fx_type_is_audio_fx(cl.fx_type)) {
+            AudioFX fx;
+            if (audio_fx_from_brick(cl, fx)) add_window(cl.start, cl.end, fx);
+        } else if (cl.clip_type == ClipType::MultiFX) {
+            // MultiFX chains stack audio FX: one segment per audio entry,
+            // honoring the entry's rel_start/rel_end sub-window.
+            for (const auto& se : cl.fx_chain) {
+                if (!fx_type_is_audio_fx(se.fx_type)) continue;
+                AudioFX fx;
+                if (!audio_fx_from_brick(se, fx)) continue;
+                float s0 = cl.start + se.rel_start;
+                float s1 = (se.rel_end > 0.f) ? cl.start + se.rel_end : cl.end;
+                add_window(s0, fminf(s1, cl.end), fx);
+            }
         }
     }
-    return result;
+    std::sort(segs.begin(), segs.end(),
+              [](const AudioFXSegment& a, const AudioFXSegment& b) { return a.t0 < b.t0; });
+    return segs;
 }
 
 PanelView pv_derive(const AppState& state) {
@@ -292,6 +445,7 @@ ImVec4 clip_type_badge_color(ClipType ct) {
         case ClipType::Audio:      return {50.f/255,180.f/255,100.f/255,1.f};
         case ClipType::Background: return {180.f/255,60.f/255,160.f/255,1.f};
         case ClipType::BodyFX:     return {255.f/255,80.f/255,160.f/255,1.f};
+        case ClipType::Record:     return {220.f/255,50.f/255,50.f/255,1.f};
         default:                   return {120.f/255,80.f/255,220.f/255,1.f};
     }
 }
@@ -305,6 +459,7 @@ const char* clip_type_name(ClipType ct) {
         case ClipType::Audio:      return "AUDIO";
         case ClipType::Background: return "BG";
         case ClipType::BodyFX:     return "BODY FX";
+        case ClipType::Record:     return "REC";
         default:                   return "ADJUST";
     }
 }
@@ -386,6 +541,65 @@ bool fx_type_is_adjustment_style(FXType ft) {
             return true;
         default: return false;
     }
+}
+
+void add_record_brick(AppState& state) {
+    float qfps = tl_fps(state);
+    if (!(qfps > 0.f)) qfps = 30.f;
+    Clip cl;
+    cl.clip_type = ClipType::Record;
+    cl.start     = snap_to_frame(state.playhead, (int)qfps);
+    cl.end       = snap_end_to_frame(cl.start + 8.f, (int)qfps);
+    Track t;
+    char n[32];
+    snprintf(n, sizeof(n), "Record %d", (int)state.tracks.size() + 1);
+    t.name = n;
+    float clip_end = cl.end;
+    t.clips.push_back(std::move(cl));
+    state.tracks.insert(state.tracks.begin(), std::move(t));
+    state.selected_track = 0;
+    state.selected_clip  = 0;
+    // If the brick lands past the current view, zoom out to fit it.
+    state.tl_zoom_to_fit_end = fmaxf(state.tl_zoom_to_fit_end, clip_end);
+    history_push(state, "Add Record Brick");
+}
+
+// Rescale a media clip's own timeline width AND any FX bricks (Effect / BodyFX
+// / MultiFX / Background) that overlap it, anchored at the clip's start. Speed
+// ratio = new_speed / old_speed; widths divide by it so the clip plays the
+// same source content in less/more wall-clock time and brick boundaries stay
+// locked to the same source-content moments. MultiFX sub-effects'
+// rel_start/rel_end scale with their parent so internal timing stays coherent.
+void rescale_glass_bricks(AppState& state, int media_ti, int media_ci, float speed_ratio) {
+    if (speed_ratio <= 0.f || !std::isfinite(speed_ratio)) return;
+    if (fabsf(speed_ratio - 1.f) < 1e-5f) return;
+    if (media_ti < 0 || media_ti >= (int)state.tracks.size()) return;
+    Track& mtr = state.tracks[media_ti];
+    if (media_ci < 0 || media_ci >= (int)mtr.clips.size()) return;
+    const Clip media = mtr.clips[media_ci];  // snapshot — old start/end used for overlap test
+    float anchor = media.start;
+    for (int ti = 0; ti < (int)state.tracks.size(); ++ti) {
+        Track& tr = state.tracks[ti];
+        for (auto& cl : tr.clips) {
+            if (ti == media_ti && &cl == &mtr.clips[media_ci]) continue;
+            if (cl.clip_type != ClipType::Effect &&
+                cl.clip_type != ClipType::BodyFX &&
+                cl.clip_type != ClipType::MultiFX &&
+                cl.clip_type != ClipType::Background) continue;
+            if (cl.start >= media.end || cl.end <= media.start) continue;
+            cl.start = anchor + (cl.start - anchor) / speed_ratio;
+            cl.end   = anchor + (cl.end   - anchor) / speed_ratio;
+            for (auto& se : cl.fx_chain) {
+                se.rel_start /= speed_ratio;
+                if (se.rel_end > 0.f) se.rel_end /= speed_ratio;
+            }
+        }
+    }
+    // Resize the media clip itself so its timeline width matches the new
+    // playback duration (source_dur / speed). Anchored at the start so nothing
+    // upstream shifts.
+    Clip& m = mtr.clips[media_ci];
+    m.end = anchor + (m.end - anchor) / speed_ratio;
 }
 
 FxBrickColors fx_brick_colors(FXType ft, bool sel) {

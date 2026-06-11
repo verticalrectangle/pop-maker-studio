@@ -9,14 +9,17 @@
 // ── Panel view ────────────────────────────────────────────────────────────────
 enum class PanelView {
     Clip, Typography, Project, History,                  // tab-bar views
-    LibBG, LibFX, LibAdj, LibAFX, LibVID, LibIMG, LibAUD, LibBFX, // library browsers
+    LibBG, LibText, LibFX, LibAdj, LibAFX, LibVID, LibIMG, LibAUD, LibBFX, // library browsers
+    LibBin,                                              // project bin (this-project media)
     OverrideFX, OverrideAdj, OverrideBG, OverrideAudioFX, OverrideMultiFX, // clip-type overrides
 };
 
 // ── Timeline layout constants ─────────────────────────────────────────────────
-static constexpr float TL_LABEL_W = 120.f;
-static constexpr float TL_TRACK_H = 42.f;
-static constexpr float TL_RULER_H = 24.f;
+static constexpr float TL_LABEL_W     = 120.f;
+static constexpr float TL_TRACK_H     = 42.f;
+static constexpr float TL_RULER_H     = 24.f;
+static constexpr float TL_SCROLLBAR_H = 14.f;
+static constexpr float TL_VSCROLLBAR_W = 10.f;
 
 // ── Timeline drag/select state ────────────────────────────────────────────────
 struct TlState {
@@ -40,7 +43,9 @@ struct TlState {
     float glass_drag_ref_pre=0.f, glass_drag_ref_post=0.f;
     float glass_drag_ref_start=0.f;
     bool ruler_drag=false;
-    int drag_merge_ci=-1;  // FX brick index to merge into on drop (-1 = none)
+    // FX brick (track, clip) to weld into — follows the mouse row, so
+    // cross-track welds work. -1 = no candidate.
+    int drag_merge_ti=-1, drag_merge_ci=-1;
 };
 
 // Defined in timeline.cpp

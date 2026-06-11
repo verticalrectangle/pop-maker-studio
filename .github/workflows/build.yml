@@ -28,6 +28,7 @@ jobs:
             libaubio-dev \
             libfftw3-dev \
             libvterm-dev \
+            libturbojpeg0-dev \
             xxd
 
       - name: Install whisper.cpp
@@ -73,6 +74,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: pop-maker-studio-linux
-          path: |
-            build/pop-maker-studio
-            build/ml_pipeline.py
+          path: build/pop-maker-studio

@@ -18,6 +18,7 @@ pkg_check_modules(SWSCALE   REQUIRED libswscale)
 pkg_check_modules(FREETYPE  REQUIRED freetype2)
 pkg_check_modules(AUBIO     REQUIRED aubio)
 pkg_check_modules(VTERM     REQUIRED vterm)
+pkg_check_modules(TURBOJPEG REQUIRED libturbojpeg)
 
 # ── ImGui ─────────────────────────────────────────────────────────────────────
 set(IMGUI_DIR ${CMAKE_SOURCE_DIR}/vendor/imgui)
@@ -34,13 +35,14 @@ set(IMGUI_SOURCES
 # ── Sources ───────────────────────────────────────────────────────────────────
 set(SOURCES
     src/paths.cpp
+    src/rmvpe_onnx.cpp
     src/runtime_fx.cpp
     src/ipc_server.cpp
     src/main.cpp
     src/app.cpp
     src/audio.cpp
+    src/recorder.cpp
     src/transcribe.cpp
-    src/stems.cpp
     src/render.cpp
     src/history.cpp
     src/filepicker.cpp
@@ -52,13 +54,13 @@ set(SOURCES
     src/bg_remove.cpp
     src/scene_detect.cpp
     src/vision_caption.cpp
-    src/vision_download.cpp
     src/body_fx.cpp
     src/noise_reduce.cpp
     src/audio_fx.cpp
     src/hf_api.cpp
     src/vc_job.cpp
     src/vc_onnx.cpp
+    src/faiss_ivf.cpp
     src/pth_reader.cpp
     src/rvc_onnx.cpp
     src/hubert_onnx.cpp
@@ -78,6 +80,8 @@ set(SOURCES
     src/ui/panel_media.cpp
     src/ui/export_ui.cpp
     src/ui/panel_terminal.cpp
+    src/ui/panel_agent.cpp
+    src/agent_harness.cpp
     src/ui/theme.cpp
     src/project.cpp
     src/fx_shader.cpp
@@ -103,6 +107,7 @@ target_include_directories(pop-maker-studio PRIVATE
     ${FREETYPE_INCLUDE_DIRS}
     ${AUBIO_INCLUDE_DIRS}
     ${VTERM_INCLUDE_DIRS}
+    ${TURBOJPEG_INCLUDE_DIRS}
 )
 
 target_link_libraries(pop-maker-studio PRIVATE
@@ -116,6 +121,7 @@ target_link_libraries(pop-maker-studio PRIVATE
     ${FREETYPE_LIBRARIES}
     ${AUBIO_LIBRARIES}
     ${VTERM_LIBRARIES}
+    ${TURBOJPEG_LIBRARIES}
     onnxruntime
     $<IF:$<TARGET_EXISTS:whisper::whisper>,whisper::whisper,whisper>
     fftw3f

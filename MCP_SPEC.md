@@ -1,10 +1,13 @@
 # Pop Maker Studio — MCP & Runtime FX Spec
 
-This document defines the full design for:
+Reference for the wire protocol, runtime FX registry, and IPC architecture that link Claude to the running app. **Per-tool reference lives in `mcp_server/server.py`** — every tool's description, parameter schema, and behaviour notes are there. This doc covers the protocol, the serialisation contract, and the moving pieces around the tool layer; do not duplicate per-tool documentation here.
+
 1. **Runtime FX registry** — hot-reload custom effects from disk, no rebuild
-2. **MCP server** — Claude-exclusive tool surface for effect generation and timeline editing
-3. **IPC protocol** — how the MCP server talks to the running app
-4. **AppState serialization** — what Claude reads about the project
+2. **IPC protocol** — how the MCP server talks to the running app
+3. **MCP tool surface** — categories, conventions, polling pattern
+4. **AppState serialization** — what `get_project` returns
+5. **MCP server implementation** — Python bridge, lock-file discovery
+6. **App-side IPC implementation** — main-thread dispatch, auto-batching
 
 ---
 
@@ -136,227 +139,103 @@ or on error:
 
 The app processes IPC messages on the **main thread** between frames (polled from `app_frame`), so all edits are applied atomically with respect to rendering. No locking needed beyond the socket read.
 
-**Batch semantics:** `begin_batch` pushes one `history_push` entry before the first edit. All subsequent edits in the batch are applied without additional history pushes. `end_batch` closes the batch. If the connection drops mid-batch, the batch is silently closed (partial edits remain in history).
+**Batch semantics:** `begin_batch` pushes one `history_push` entry before the first edit. All subsequent edits in the batch are applied without additional history pushes. `end_batch` closes the batch. If the connection drops mid-batch, the in-flight changes are saved as `"<label> (incomplete)"` so nothing is lost.
+
+**Auto-batching:** mutation calls received outside an explicit batch are wrapped in an implicit one-call batch (labelled with the method name) and committed when the call returns. So `add_clip` on its own is one undo step automatically; `begin_batch` is only needed to coalesce *multiple* mutations into one undo step.
 
 ---
 
 ## 3. MCP Tool Surface
 
-The MCP server exposes two categories of tools to Claude.
+The server registers ~70 tools spanning the full editing surface. **The canonical reference is `mcp_server/server.py`** — each tool's description, parameter schema, and behaviour notes are inline there. This section covers categories and cross-cutting conventions; do not duplicate per-tool tables here, they rot the moment a tool changes.
 
-### 3a. Effect tools
+### Categories
 
-#### `register_effect`
-Writes (or overwrites) `{effects_dir}/{id}.json`. The app picks it up within 500 ms.
+| Category | Examples |
+|----------|----------|
+| **Project state** | `get_project`, `get_clips`, `get_all_clips`, `take_snapshot` |
+| **Bin** | `add_to_bin`, `remove_from_bin` (bin contents surface via `get_project.bin`) |
+| **Timeline edits** | `add_clip`, `add_clip_sequence`, `delete_clip`, `move_clip`, `trim_clip`, `split_clip`, `set_clip_prop`, `set_clip_props`, `set_text_style` |
+| **Tracks** | `add_track`, `rename_track`, `delete_clips_after`, `trim_all_to` |
+| **Effects / bricks** | `add_effect_brick`, `add_body_fx_brick`, `add_multifx_brick`, `add_callout`, `generate_typography` |
+| **Markers** | `add_chapter_marker`, `remove_chapter_marker`, `generate_chapters` |
+| **ML pipeline** | `trigger_pipeline`, `get_pipeline_status`, `get_transcript`, `read_transcript_context`, `search_transcript`, `analyze_audio`, `get_audio_analysis`, `find_audio_cue` |
+| **Search / discovery** | `find_and_add_clip`, `find_video_moment`, `cut_at_phrase`, `cut_filler_words`, `remove_silence` |
+| **Background removal** | `remove_background`, `process_body_fx_masks`, `get_bg_remove_status` |
+| **Media probing** | `get_media_info`, `get_stills`, `describe_video`, `get_video_description` |
+| **Multicam** | `apply_multicam_cuts` |
+| **Media operations** | `crop_media`, `extract_clip_segment` |
+| **Vision model** | `download_vision_model`, `get_vision_model_status` |
+| **Playback** | `play`, `pause`, `seek` |
+| **Export / project** | `trigger_export`, `cancel_export`, `get_export_status`, `take_snapshot`, `save_project`, `load_project`, `new_project`, `set_format` |
+| **Runtime FX** | `validate_glsl` (register / list / delete handled by editing the JSON files directly — see Section 1) |
+| **Batching** | `begin_batch`, `end_batch` (mostly optional — see auto-batching in Section 2) |
+| **Cancellation** | `cancel_search`, `cancel_export` |
 
-Params:
-- `id` string — snake_case identifier, unique
-- `name` string — display name
-- `category` string — "color" | "distort" | "blur" | "composite" | "creative" | other
-- `description` string
-- `params` array — `[{name, label, min, max, default, curve?}]`
-- `glsl` string — shader body as described above
+### Conventions
 
-Returns: `{ok: true}` or `{ok: false, error: "..."}` after asking the app to validate-compile via IPC `validate_glsl` before writing.
+**Async-first.** Long-running mutations return immediately with a stage hint. `trigger_pipeline`, `analyze_audio`, `remove_background`, `find_and_add_clip`, `process_body_fx_masks` all return `{stage: "running"}` (or equivalent) and the caller polls a status endpoint (`get_pipeline_status`, `get_audio_analysis`, `get_bg_remove_status`, etc.) until `stage` is `done` or `error`. This keeps the MCP socket free during ML work.
 
-#### `list_effects`
-Returns all runtime effects currently in the registry (including compile status).
+**Auto-batching.** See Section 2 — single mutations are wrapped in an implicit batch labelled with the method name. `begin_batch`/`end_batch` is only needed when coalescing a sequence as one undo step.
 
-#### `delete_effect`
-Removes `{id}.json` from the effects directory.
+**Bin vs timeline.** `add_to_bin` makes a media file available to the project without placing it. `add_clip` actually places. `add_clip` on a video/audio path automatically mirrors the file into the bin, so for direct placements just call `add_clip` and skip the bin step.
 
-#### `validate_glsl`
-Sends `validate_glsl` IPC call to the app, which attempts to compile the shader and returns success or the GL compile error. Use this before `register_effect` to give Claude immediate feedback on GLSL errors.
+**Proxy-required tools.** `remove_background` and `process_body_fx_masks` fail synchronously if the source clip's MJPEG proxy isn't on disk yet (they read masks keyed by proxy frame index). Poll the source clip's `proxy_status` via `get_project` and retry when ready.
 
----
-
-### 3b. Editing tools
-
-#### `get_project`
-Returns full project state. See Section 4 for schema.
-
-#### `get_beats`
-Returns `{bpm: 128.0, beats: [0.0, 0.47, 0.94, ...]}`. Empty if no beat analysis has run.
-
-#### `begin_batch`
-Pushes one undo history entry. All edits until `end_batch` are grouped under one undo step.
-
-Params: `{label: "Sync clips to beat"}` — label shown in undo history.
-
-Must be called before any editing tools. The app rejects edit calls that arrive outside a batch (returns error). This prevents Claude from making untracked edits.
-
-#### `end_batch`
-Closes the current batch. No params.
-
-#### `move_clip`
-Move a clip's start position (preserves duration).
-
-Params: `{track: int, clip: int, start: float}`
-
-#### `trim_clip`
-Set clip start and/or end. Adjusts `in_point` correctly if start moves forward.
-
-Params: `{track: int, clip: int, start?: float, end?: float}`
-
-#### `split_clip`
-Split a clip at `time`. Left half retains original, right half gets `in_point` advanced.
-
-Params: `{track: int, clip: int, time: float}`
-
-Returns: `{left_clip: int, right_clip: int}`
-
-#### `delete_clip`
-Delete a clip.
-
-Params: `{track: int, clip: int}`
-
-#### `add_clip`
-Add a new clip to a track.
-
-Params:
-```json
-{
-  "track": 0,
-  "type": "audio" | "video" | "text" | "effect" | "lyrics",
-  "start": 10.0,
-  "end": 14.0,
-  "text": "/path/to/file.mp4"   // file path for audio/video, display text for text/lyrics
-}
-```
-
-Returns: `{clip: int}` — index of the new clip.
-
-#### `set_clip_prop`
-Set a named property on a clip. Supported props:
-
-| prop | type | notes |
-|---|---|---|
-| `volume` | float 0–2 | audio gain |
-| `speed` | float 0.25–4 | playback speed |
-| `opacity` | float 0–1 | video opacity |
-| `muted` | bool | |
-| `in_point` | float | seconds into source |
-| `fade_in` | float | seconds |
-| `fade_out` | float | seconds |
-| `pos_x` | float 0–1 | horizontal position |
-| `pos_y` | float 0–1 | vertical position |
-| `scale_x` | float | |
-| `scale_y` | float | |
-| `rotation` | float | degrees |
-| `text` | string | display text for text/lyrics clips |
-
-Params: `{track: int, clip: int, prop: string, value: any}`
-
-#### `add_track`
-Add a new empty track.
-
-Params: `{name: string, position?: int}` — position 0 = top. Default = top.
-
-Returns: `{track: int}`
-
-#### `delete_track`
-Delete an entire track and all its clips.
-
-Params: `{track: int}`
-
-#### `seek`
-Move the playhead.
-
-Params: `{time: float}`
-
-#### `play` / `pause`
-Control playback. No params.
-
-#### `trigger_pipeline`
-Kick the ML pipeline on the current audio file.
-
-Params: `{mode: "both" | "transcribe_only" | "separate_only"}`
-
-#### `validate_glsl`
-Ask the app to test-compile a GLSL shader body.
-
-Params: `{glsl: string, params: [{name, min, max, default}]}`
-
-Returns: `{ok: true}` or `{ok: false, error: "line 3: undeclared identifier 'colour'"}`.
+**Generic dispatch.** Tools that don't have explicit Python handlers (most of them) forward through the catch-all dispatcher at the bottom of `server.py` — the method name is sent verbatim over IPC. So the surface in `server.py` is also a near-1:1 reflection of the IPC methods in `ipc_server.cpp`.
 
 ---
 
 ## 4. AppState Serialization
 
-`get_project` returns:
+`get_project` returns a **slim** view by default (track summaries only, no per-clip detail). Pass `{verbose: true}` for the full nested schema. Slim:
 
 ```json
 {
   "duration": 210.5,
   "fps": 30,
   "bpm": 128.0,
-  "beats": [0.0, 0.47, 0.94],
   "audio_path": "/home/alexis/music/track.wav",
+  "project_path": "/home/alexis/projects/song.pms",
+  "transcript_ready": true,
   "playhead": 4.5,
   "tracks": [
-    {
-      "index": 0,
-      "name": "Lyrics",
-      "muted": false,
-      "locked": false,
-      "clips": [
-        {
-          "index": 0,
-          "type": "lyrics",
-          "start": 0.47,
-          "end": 0.94,
-          "text": "Hello",
-          "in_point": 0.0,
-          "duration": 0.47,
-          "volume": 1.0,
-          "speed": 1.0,
-          "opacity": 1.0,
-          "muted": false
-        }
-      ]
-    }
+    {"index": 0, "name": "Lyrics", "muted": false, "locked": false, "clip_count": 24}
+  ],
+  "markers": [
+    {"index": 0, "time": 32.4, "label": "Chorus 1", "color": "#FF66CC"}
+  ],
+  "bin": [
+    "/home/alexis/music/track.wav",
+    "/home/alexis/footage/clip1.mov",
+    "/home/alexis/footage/clip2.mp4"
   ]
 }
 ```
 
-Only fields useful for editing decisions are included. No internal GL state, no pixel data, no render status. Beat timestamps are truncated to 3 decimal places.
+Verbose adds `beats[]`, full nested `clips[]` per track (with `text`, `in_point`, `duration`, `volume`, `speed`, `opacity`, `muted`, transform, fade, FX, body_fx state, etc.), and the same `markers` + `bin` arrays.
+
+Use `get_clips(track)` or `get_all_clips()` for per-clip detail without paying for the full state dump. Beat timestamps are truncated to 3 decimal places.
 
 ---
 
 ## 5. MCP Server implementation
 
-The MCP server is a **TypeScript/Node.js** process that:
-- Implements the MCP protocol (Claude Desktop standard)
-- On each tool call, either writes to the effects directory or sends an IPC message to the app and awaits the response
-- Finds the running app instance via `/tmp/pop-maker-studio.lock`
-- Errors gracefully if no app instance is running
+The MCP server is a **Python** process using the official `mcp` SDK. Single-file implementation at `mcp_server/server.py`. It:
 
-**Location:** `mcp/` directory at repo root.
+- Reads `/tmp/pop-maker-studio.lock` to discover the running app's socket path (errors gracefully if no app instance is running, and starts PMS lazily if the binary is on `PATH`).
+- Registers ~70 tools at startup. A handful have explicit Python handlers (the ones doing client-side orchestration like `find_and_add_clip`'s windowed search loop, or `remove_background` which adds a body_fx brick before calling the IPC `start_bg_remove`); the rest forward through a generic dispatcher that sends the method name verbatim over the socket.
+- Marshals tool results as `TextContent` (JSON `dumps`'d). MCP progress notifications are forwarded from the C++ search status via `_send_search_progress` so the client sees Demucs / Whisper / window progress live.
+
+**Location:** `mcp_server/` directory at repo root.
 
 ```
-mcp/
-  src/
-    index.ts        — MCP server entry point, tool registration
-    ipc.ts          — Unix socket client, request/response handling
-    effects.ts      — Effect file writing and validation
-    tools/
-      effect_tools.ts
-      editing_tools.ts
-  package.json
-  tsconfig.json
+mcp_server/
+  server.py         — single-file server: tool registration, dispatch, helpers
+  requirements.txt  — mcp>=1.0
 ```
 
-**Claude Desktop config** (user adds to `claude_desktop_config.json`):
-```json
-{
-  "mcpServers": {
-    "pop-maker-studio": {
-      "command": "node",
-      "args": ["/path/to/pop-maker-studio/mcp/dist/index.js"]
-    }
-  }
-}
-```
+**Setup snippets** for Claude Desktop and Claude Code live in the main `README.md` under "MCP server / Setup".
 
 ---
 
@@ -380,36 +259,3 @@ All IPC handlers run on the main thread inside `ipc_server_poll`. History push f
 
 ---
 
-## 7. Brick system (post-MCP)
-
-The brick composer lets users build effects without writing GLSL. It is implemented on top of the runtime FX registry — the output of a brick composition is a generated `{id}.json` file written to the effects directory. The effect then loads like any other runtime effect.
-
-**Primitive operations available in the brick composer:**
-
-| Brick | GLSL it generates |
-|---|---|
-| Hue shift | `hue_rotate(color, amount)` |
-| Brightness / contrast | standard formula |
-| Pixelate | grid snap |
-| Blur (box) | tap sum |
-| Chromatic aberration | per-channel UV offset |
-| Noise overlay | procedural noise |
-| Edge detect | Sobel |
-| Color grade | lift/gamma/gain |
-| Mix | blend two upstream outputs |
-| Feedback | reads previous frame (requires ghost buffer) |
-
-Each brick has param sliders. The composer chains bricks left-to-right; the GLSL generator concatenates their bodies with the output of each feeding into the next as `color`.
-
-The brick graph is stored in the `{id}.json` alongside the generated GLSL, in a `"bricks"` field. Re-opening a custom effect in the composer re-hydrates the brick graph. The GLSL is regenerated on any brick change and validated before saving.
-
----
-
-## 8. Implementation order
-
-1. **Runtime FX registry** (`src/runtime_fx.h/.cpp`, watch loop, FX picker integration, clip storage, render path)
-2. **App IPC server** (`src/ipc_server.h/.cpp`, socket, lock file, all editing handlers, batch/undo)
-3. **MCP server** (`mcp/`, TypeScript, all tools wired to IPC)
-4. **Brick composer** (UI in `src/ui/panel_fx.cpp` or new `src/ui/brick_composer.cpp`, GLSL codegen)
-
-Items 1–3 ship together as one PR. Item 4 follows.

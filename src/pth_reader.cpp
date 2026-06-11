@@ -581,6 +581,13 @@ PthModel pth_open(const std::string& path) {
     // Fall back to 'model' key if no 'weight' found (fairseq/HuBERT format)
     if (!weight_val && model_val) weight_val = model_val;
 
+    // Bare state_dict (torchaudio-style): the root dict itself maps
+    // tensor names to tensors with no 'weight'/'model' wrapper.
+    if (!weight_val && root.kind == Val::Dict) {
+        for (auto& p : root.pairs)
+            if (p.second.kind == Val::Tensor) { weight_val = &root; break; }
+    }
+
     // Parse weight dict into TensorMeta
     if (weight_val && weight_val->kind == Val::Dict) {
         for (auto& p : weight_val->pairs) {

@@ -13,21 +13,26 @@ This is Dear ImGui's immediate-mode model taken seriously. The consequences are 
 The main loop:
 
 ```
-app_frame(state)
-  ├── update playhead (audio position or wall clock fallback)
-  ├── ipc_server_poll(state)          — process MCP/IPC commands from socket
-  ├── render_tick_gl(state)           — advance export by one frame if running
-  └── ui_studio(state)
-        ├── draw_timeline()
-        ├── draw_preview()            — proxy decode → fx_apply → scene composite
-        └── draw_panel_*()
+main loop
+  ├── glfwPollEvents()                — OS drops land in g_dropped_queue / g_bin_pending
+  ├── drain_dropped_queue()           — single-file drops: one path per frame → g_dropped_file
+  ├── drain_bin_pending(state)        — multi-file drops: all paths → state.bin
+  └── app_frame(state)
+        ├── update playhead (audio position or wall clock fallback)
+        ├── ipc_server_poll(state)    — process MCP/IPC commands from socket
+        ├── render_tick_gl(state)     — advance export by one frame if running
+        └── ui_studio(state)
+              ├── draw_timeline()
+              ├── draw_preview()      — three-tier decode → fx_apply → scene composite
+              ├── panel_bin / panel_media / panel_clip / panel_fx / panel_terminal …
+              └── transport overlay (hover-fade) + agent activity card (activity-fade)
 ```
 
 ---
 
 ## Clip data model
 
-Every piece of content on the timeline is a `Clip`. Clips are typed (`ClipType::Video`, `Audio`, `Text`, `Lyrics`, `Subtitle`, `Effect`, `Background`, `BodyFX`) but live in the same struct. Tracks are named containers.
+Every piece of content on the timeline is a `Clip`. Clips are typed (`ClipType::Video`, `Audio`, `Text`, `Lyrics`, `Subtitle`, `Effect`, `Background`, `BodyFX`, `MultiFX`, `Record`) but live in the same struct. Tracks are named containers.
 
 **Source time vs timeline time** is the single most important distinction in the codebase:
 
@@ -58,15 +63,19 @@ The callback mixes three sources: video-embedded audio decoded to a flat PCM buf
 
 ---
 
-## Video proxy system
+## Video preview pipeline
 
-Decoding H.264/HEVC in real time on the main thread is too slow for interactive scrubbing. Each video clip gets a proxy: a folder of MJPEG frames at a lower resolution with a prebuilt seek table (fseek + stb_image). Scrubbing is essentially a direct fseek to a JPEG.
+Three tiers, picked per-slot at open time, transparently upgraded as media becomes available. The slot table is `state.proxy_paths[MAX_VIDEO_TRACKS]` (32 slots) keyed by source file path, NOT by track index — two clips on different tracks sharing the same source file share one slot.
 
-Each track gets its own decoder slot (0–7), indexed by `track_id`. The slot is opened with whatever clip is currently active on that track. Two clips on different tracks get independent slots with no seek contention; two clips on the same track share a slot (but never simultaneously).
+**Tier 1 — Native libav decode** (`PreviewSource::Native`). When a clip is added, `video_open_native` opens the source via `avformat` + `avcodec` and the first frame shows immediately. `try_attach_hw` walks `AV_HWDEVICE_TYPE_VAAPI → CUDA → VDPAU → VIDEOTOOLBOX` and attaches the first usable HW context; silent SW fallback runs at `thread_count = 2`. `prepare_native_frame_cpu` skips `av_seek_frame + avcodec_flush_buffers` when the next requested frame is within ~8 frames forward of `last_decoded_pts` — sequential play / forward scrub then decodes one frame instead of the whole GOP-since-keyframe.
 
-The proxy poll loop runs every frame and manages the slot state machine: slot assigned and proxy ready → open proxy; slot assigned and proxy still generating → open a JPEG still as placeholder. `gc_video_slots` frees slots whose clips were deleted.
+**Tier 2 — MJPEG proxy** (`PreviewSource::Proxy`). In parallel with the native open, `proxy_start` queues an ffmpeg transcode (quarter-res MJPEG + binary frame-offset table). Scrubbing on the proxy is `fseek + libjpeg-turbo decode + GPU upload` — measurably cheaper than HW-decoding the original, so `screen_studio`'s per-slot scan loop swaps `Native → Proxy` the instant transcode finishes. The proxy worker pool runs `min(4, cores/2)` workers with `-hwaccel auto`, `-threads K` (so workers × threads ≈ hardware_concurrency), and `scale=...:flags=fast_bilinear`. The proxy `-r` cap is 30 fps; `ProxyInfo::fps` is probed from the **original** source so the CTC aligner snaps word timestamps to real source frame boundaries.
 
-**One invariant**: `fps` in the `ProxyInfo` struct must be probed from the original source file, not the proxy. The proxy is always 12 fps; the source FPS determines the frame count table. This value is also passed to the CTC forced aligner so word timestamps snap to actual source frame boundaries.
+**Tier 3 — Single-frame still** (`PreviewSource::Still`). Fallback when libav can't open the file. `proxy_ensure_still` runs ffmpeg once, caches the JPEG.
+
+Every slot keeps an 8-frame `DecodedFrame ring` (RGB pixels, optional RGBA composite for chroma-key / bg_remove / glitch corruption-bleed). The canvas pre-walk (`canvas.cpp`) dispatches a parallel JPEG/decoder batch via the thread pool for the active clip per track plus a 3-frame boundary warm into neighbour clips when the playhead is within 1 s of a cut. `video_get_texture` is a ring lookup; misses fall through to sync decode on the main thread.
+
+`gc_video_slots` frees slots whose clips were deleted. `proxy_is_ready` is cached at session scope — terminal "ready" hits never re-stat; in-progress paths are throttled to one stat per 250 ms so the timeline draw loop can't flood syscalls at 60 fps × N visible clips.
 
 ---
 
@@ -76,7 +85,7 @@ All visual effects are GLSL fragment shaders. The pipeline distinguishes two app
 
 **Glass pass (pre-composite)**: an FX brick is glass when the track directly below it has an active Video clip at that time. Glass FX apply to the single clip's decoded texture before it's composited with the rest of the scene. The check is purely positional — no mode flag, no configuration.
 
-**Global pass (post-composite)**: an FX brick on a track with no video below it applies to the full composited 9:16 frame after all clips have been merged.
+**Global pass (post-composite)**: an FX brick on a track with no video below it applies to the full composited frame after all clips have been merged. Canvas resolution depends on `state.format`: 1080×1920 vertical (9:16), 1920×1080 horizontal (16:9), or 1080×1080 square (1:1).
 
 `collect_effects` and `collect_creative_fx` skip glass tracks. `collect_glass_effects` and `collect_glass_fx` read only the one track directly above the target video clip. A given FX brick is collected by exactly one path — never both.
 
@@ -116,7 +125,7 @@ Effects beyond the hand-wired core are defined in `effects/registry.json` and ge
 | `fx_attached_accum.h`, `fx_attached_defaults.h`, `fx_attached_ui.h` | AttachedFX system |
 | `fx_clip_set_dispatch.h` | `fx_clip_set_param(Clip&, fx_id, param, value)` — used by IPC `set_clip_fx` |
 
-The script also writes `effects/mcp_manifest.json` — a machine-readable effect catalog (id, label, description, params with ranges) consumed by the MCP server to populate the `apply_effect` tool description. All 100 effects are self-documenting to Claude.
+The script also writes `effects/mcp_manifest.json` — a machine-readable effect catalog (id, label, description, params with ranges). The MCP server doesn't expose a generic `apply_effect` tool any more (deprecated in favour of `add_effect_brick` + `set_clip_prop`), but the manifest is still consumed by IPC handlers and tooling that needs the canonical effect list without hardcoding.
 
 Every entry specifies: `id`, `label`, `params[]` (name, min, max, default, curve, fmt), a GLSL shader path, and display metadata. Power curves (`"curve": 0.5`) map slider travel to perceptual values at accumulation time.
 
@@ -140,7 +149,7 @@ whisper.cpp with `ggml-large-v3-turbo-q5_0`. DTW token timestamps (`cparams.dtw_
 
 Runs after Whisper to produce frame-accurate word timestamps. Model: wav2vec2-base-960h ONNX (Xenova quantized, ~94 MB). The vocab is loaded from `wav2vec2_vocab.json` at runtime (character → token index map; `<pad>` = CTC blank; `|` = word separator).
 
-The Viterbi CTC decoder uses standard blank-padded expanded targets (`[B, t0, B, t1, ..., tL, B]`) with a two-row DP and a full `int8_t back[T×S]` back-pointer matrix for path reconstruction. Skip-blank transitions are allowed only when the current token differs from the token two positions back.
+The stay/advance trellis (torchaudio forced-alignment algorithm) uses a plain character target (no blank padding) and a (T+1)×(L+1) log-prob DP. Each state j = "tokens consumed so far"; transitions are stay-at-j (emit blank) or advance-to-j+1 (emit tokens[j]). Backtracking from the frame with the highest cell(t, L) score yields one PathPoint per frame; consecutive same-token points are merged into CharSeg spans, which are mapped to absolute word timestamps.
 
 Processing is chunked into 30-second windows. Each chunk is mean/variance normalized before ONNX inference (wav2vec2 feature extractor convention). The model's `attention_mask` input is optional — detected via `sess.GetInputCount() >= 2`.
 
@@ -182,6 +191,30 @@ Layer order per line block:
 
 ---
 
+## Project bin
+
+`AppState.bin` is a `std::vector<std::string>` of paths "available to the project" — distinct from `state.tracks[i].clips[j].text` paths which are "placed on the timeline". Adding a file and placing a file are two operations.
+
+Routing rules in `main.cpp`:
+- Single-file OS drop → `g_dropped_queue` → existing readers (hover-track placement preserved). `add_clip_to_track` and the screen_studio drop handler call `bin_add` so the bin reflects every placement.
+- Multi-file OS drop → `g_bin_pending` → `bin_add` for each, no auto-placement. Solves the "5 files dropped = 5 stacked tracks" problem.
+- Browse buttons / media library clicks → place + `bin_add` (via `add_clip_to_track`).
+- IPC `add_to_bin` / `remove_from_bin` for agent-driven workflows.
+
+`bin_add` is a no-op for duplicates and mirrors into the cross-project `RecentMedia` list. `bin_remove` drops the bin entry only — clips already on the timeline keep working (the timeline holds its own path reference). `bin_backfill_from_timeline` runs on project load for backward compat (pre-v36 projects don't carry the bin field).
+
+UI: `panel_bin` (single-column compact rows: thumbnail / filename / duration / `used Nx`). Hover × removes. Drag uses the existing `MEDIA_VID/IMG/AUD` payload types so timeline drop sites accept it unchanged.
+
+---
+
+## Embedded terminal
+
+`src/terminal.cpp` runs a real PTY backed by `libvterm`. The terminal panel lives below the timeline in a draggable splitter (`panel_terminal`). Drops on the terminal panel inject the file path at the shell prompt instead of touching the timeline — handled by the `terminal_claims_drop` check at the top of `screen_studio`'s drop handler.
+
+Mouse selection, right-click copy/paste, double-wide character handling, and live resize (vterm + pty track panel width on every frame) are all wired through `panel_terminal.cpp`.
+
+---
+
 ## IPC and MCP server
 
 `ipc_server.cpp` listens on a PID-scoped Unix domain socket (`/tmp/pop-maker-studio-{pid}.sock`). The lock file `/tmp/pop-maker-studio.lock` holds `{pid} {socket_path}` for client discovery.
@@ -190,15 +223,15 @@ Protocol: newline-delimited JSON. Request: `{"id": "...", "method": "...", "para
 
 `ipc_server_poll(state)` is called from the main loop — same thread as the UI. All mutations land on the main thread between frames, identical to a UI interaction. No locking required.
 
-**Batch system**: mutation commands are rejected outside a `begin_batch`/`end_batch` pair. `end_batch` calls `history_push`, making MCP edits undoable from the UI. If the client disconnects with an open batch, the partial batch is pushed with an `(incomplete)` label.
+**Batch system**: mutation commands run inside a `begin_batch`/`end_batch` pair so the entire sequence becomes one `history_push` and one undo step. Mutations called outside an explicit batch are auto-wrapped in a single-call batch labelled with the method name, so clients only need `begin_batch` when grouping multiple mutations. If the client disconnects with an open batch, the partial batch is pushed with an `(incomplete)` label so nothing is lost.
 
-**Commands** (read-only — no batch required): `get_project`, `get_pipeline_status`, `get_beats`, `seek`, `play`, `pause`, `validate_glsl`, `save_project`.
+**Commands** (read-only — no batch effect): `get_project`, `get_clips`, `get_all_clips`, `get_pipeline_status`, `get_export_status`, `get_bg_remove_status`, `get_audio_analysis`, `get_transcript`, `get_media_info`, `get_stills`, `seek`, `play`, `pause`, `validate_glsl`, `save_project`, plus search/probe tools (`find_and_add_clip`, `find_audio_cue`, `search_transcript`).
 
-**Commands** (mutation — require batch): `add_clip`, `delete_clip`, `move_clip`, `trim_clip`, `split_clip`, `set_clip_prop`, `set_text_style`, `set_clip_fx`, `add_track`, `delete_track`, `trigger_pipeline`, `generate_typography`, `load_project`.
+**Commands** (mutation — auto-batched if standalone): `add_clip`, `add_clip_sequence`, `delete_clip`, `move_clip`, `trim_clip`, `split_clip`, `set_clip_prop`, `set_clip_props`, `set_text_style`, `add_track`, `rename_track`, `delete_clips_after`, `trim_all_to`, `add_effect_brick`, `add_body_fx_brick`, `add_multifx_brick`, `add_callout`, `add_chapter_marker`, `remove_chapter_marker`, `add_to_bin`, `remove_from_bin`, `trigger_pipeline`, `generate_typography`, `apply_multicam_cuts`, `cut_at_phrase`, `cut_filler_words`, `remove_silence`, `crop_media`, `extract_clip_segment`, `load_project`, `new_project`.
 
-`set_clip_fx` dispatches to the generated `fx_clip_set_param()` function in `src/generated/fx_clip_set_dispatch.h`, which covers all 100 codegen effects by id and param name.
+The **Python MCP server** (`mcp_server/server.py`) bridges Claude to the IPC layer using the `mcp` SDK. It reads the lock file, connects to the socket, and registers ~70 tools — the full editing surface plus search, audio/video analysis, and bin management. Tool descriptions live in `server.py` and are the canonical reference; the generic dispatcher forwards anything not explicitly named to the IPC layer using the same method name.
 
-The **Python MCP server** (`mcp_server/server.py`) bridges Claude to the IPC layer using the `mcp` SDK. It reads the lock file, connects to the socket, and exposes 20 MCP tools. The `apply_effect` tool description is populated at import time from `effects/mcp_manifest.json` — Claude sees all 100 effect IDs, descriptions, and param ranges without any hardcoding in the Python layer.
+**Async-first.** Long-running mutations return immediately with a stage hint. `trigger_pipeline` returns `{stage: "running"}` and the caller polls `get_pipeline_status` until `stage` is `done` or `error`. Same pattern for `analyze_audio`, `remove_background`, `find_and_add_clip`. This keeps the MCP socket / chat free during ML work.
 
 ---
 
@@ -218,12 +251,12 @@ Resolution: 1080×1920 (vertical), 1920×1080 (horizontal), 1080×1080 (square).
 
 Binary format:
 ```
-[MAGIC: u32 = 0x534D5001]  [VERSION: u32 = 28]  [fields...]
+[MAGIC: u32 = 0x534D5001]  [VERSION: u32 = 36]  [fields...]
 ```
 
-When adding a field: bump `VERSION`, write unconditionally in `write_clip`/`project_save`, wrap the read in `if (version >= N)` in `read_clip`/`project_load` with a sensible default. Never reorder existing fields. Never remove version guards.
+When adding a field: bump `VERSION`, write unconditionally in `write_clip`/`project_save`, wrap the read in `if (version >= N)` in `read_clip`/`project_load` with a sensible default. Never reorder existing fields. Never remove version guards. Recent gates: v33 lyrics word edits, v36 project bin (also backfilled from existing clip paths for pre-v36 saves).
 
-The generated effect fields are all written under a single version gate (currently v23) — when the effect set changes, `project_version` in `effects/registry.json` bumps and the codegen regenerates `fx_project_read.h` with the new gate. Old projects get default-constructed values for new fields.
+The generated effect fields are all written under a single version gate tied to `project_version` in `effects/registry.json` — when the effect set changes, that version bumps and the codegen regenerates `fx_project_read.h` with the new gate. Old projects get default-constructed values for new fields.
 
 ---
 
@@ -237,21 +270,22 @@ A stack of `AppState` snapshots. `history_push` copies the entire struct. `AppSt
 
 ```
 src/
-  main.cpp               Entry point, GL/ImGui init, main loop
-  app.h                  AppState, Clip, Track, TextStyle, all data model types
+  main.cpp               Entry point, GL/ImGui init, main loop, drop queues
+  app.h                  AppState (incl. bin), Clip, Track, TextStyle, all data model types
   app.cpp                app_frame; collect_effects/creative_fx; glass variants
-  project.cpp            Binary save/load, VERSION=28
-  audio.h / audio.cpp    miniaudio device, PCM mixing, master clock
-  video.h / video.cpp    MJPEG proxy preview, GL texture upload
-  proxy.h / proxy.cpp    Proxy generation (ffmpeg subprocess)
+  project.cpp            Binary save/load, VERSION=38
+  audio.h / audio.cpp    miniaudio device, PCM mixing, master clock, loop region, mic capture
+  recorder.h/.cpp        Loop recorder: cycle takes over a Record brick, WAV tray
+  video.h / video.cpp    Three-tier preview (Native libav, MJPEG proxy, Still), GL upload
+  proxy.h / proxy.cpp    Parallel MJPEG proxy generation (worker pool, ffmpeg + hwaccel)
   fx_shader.h/.cpp       GPU FX: GLSL shaders, fx_apply, scene compositor
   overlay_renderer.h/.cpp  ImDrawList text/subtitle rendering (preview + export)
   text_renderer.h/.cpp   Shared text layer renderer (glow/bg/shadow/stroke/karaoke)
   render.h / render.cpp  GL export pipeline, ffmpeg pipe, snapshot
   transcribe.h/.cpp      ML pipeline orchestration (separate → whisper → align)
   separate.h/.cpp        MDX-Net vocal separation, FFTW3 STFT/iSTFT
-  forced_align.h/.cpp    CTC forced alignment, Viterbi DP, wav2vec2 ONNX
-  ipc_server.h/.cpp      Unix socket IPC server, JSON command dispatch
+  forced_align.h/.cpp    CTC forced alignment, stay/advance trellis DP, wav2vec2 ONNX
+  ipc_server.h/.cpp      Unix socket IPC server, JSON command dispatch, auto-batching
   pth_reader.h/.cpp      PyTorch .pth reader (system unzip + handrolled pickle VM, no libtorch)
   rvc_onnx.h/.cpp        VITS→ONNX exporter (hand-rolled protobuf)
   vc_job.h/.cpp          Voice conversion job queue
@@ -259,27 +293,31 @@ src/
   bg_remove.h/.cpp       Background removal (u2net ONNX, grayscale MJPEG mask streaming)
   body_fx.h/.cpp         BodyFX brick (skeleton-tracked effects)
   noise_reduce.h/.cpp    Spectral noise reduction
+  terminal.h/.cpp        Embedded PTY + libvterm parser
+  runtime_fx.h/.cpp      Hot-reload custom GLSL effects from ~/.local/share/.../effects
   paths.h / paths.cpp    Binary-relative model path resolution
   history.h/.cpp         AppState snapshot stack
   presets.h/.cpp         User effect presets (JSON)
   generated/             Auto-generated from codegen_effects.py — do not edit
 
   ui/
-    screen_studio.cpp    Main editor UI
+    screen_studio.cpp    Main editor UI, library button row, drop handler, overlay fades
     screen_splash.cpp    Splash screen
     screen_setup.cpp     First-run setup
-    canvas.cpp           Canvas preview, text layout, handle hit testing
+    canvas.cpp           Canvas preview, text layout, hit testing, prefetch pre-walk
     timeline.cpp         Timeline, clip drag/resize, track management
     pipeline.cpp         ML pipeline UI, kick_pipeline()
-    panel_clip.cpp       Clip inspector (properties, text style, karaoke)
+    panel_clip.cpp       Clip inspector (properties, text style, karaoke, bg_remove)
     panel_animation.cpp  Typography presets, generate_typography()
     panel_fx.cpp         Effect inspector
-    panel_media.cpp      Media browser
+    panel_media.cpp      Media browser (Bin + Videos / Images / Audio recents)
+    panel_terminal.cpp   Terminal panel chrome, drop-injects path at prompt
     export_ui.cpp        Export dialog
+    studio_shared.cpp    add_clip_to_track, slot table helpers, panel-view enum dispatch
 
 effects/
   registry.json          Effect definitions (params, shader paths, metadata)
-  mcp_manifest.json      MCP tool catalog — generated by codegen_effects.py
+  mcp_manifest.json      Effect catalog — generated by codegen_effects.py
   shaders/               GLSL source files for generated effects
 
 tools/
@@ -287,9 +325,10 @@ tools/
   export_hubert.cpp      CLI tool: hubert_base.pt → hubert.onnx
 
 mcp_server/
-  server.py              Python MCP server (20 tools, reads lock file)
+  server.py              Python MCP server (~70 tools, reads lock file). The
+                         canonical reference for tool descriptions — don't
+                         re-document tools in side files; they rot.
   requirements.txt       mcp>=1.0
-  README.md              Setup instructions for Claude Desktop and Claude Code CLI
 ```
 
 ---
@@ -297,17 +336,20 @@ mcp_server/
 ## Things that will surprise you
 
 - **`g_read_pos` is a clock, not a cursor.** It advances unconditionally. Source position is always computed from clip data.
-- **Proxy slots are per track, not per clip or source file.** Each track_id maps to one slot (0–7). Two clips on different tracks get independent slots; clips on the same track share a slot sequentially.
+- **Preview slots are per source path, not per track.** `state.proxy_paths[MAX_VIDEO_TRACKS]` (32 slots) is keyed by `clip.text`. Two clips with the same source file share one slot, regardless of track.
+- **Bin entries and timeline clips are independent.** Removing a file from the bin does NOT remove placed clips (they hold their own path). `bin_used_count` only counts placements for the UI badge.
 - **Font size is a fraction of canvas height, never pixels.** This is why preview and 4K export look proportionally identical.
 - **`Keyframe.time` is relative to `clip.start`.** `eval_prop` takes absolute playhead time and handles the offset.
 - **`in_point` must be advanced on split.** `right.in_point += (cut - left.start) * left.speed`. All split sites do this.
 - **Glass FX is collected by exactly one path.** `collect_effects`/`collect_creative_fx` skip glass tracks. The glass functions read only the one track directly above the target video. No double-counting.
 - **Effect clips don't conflict with Video/Audio for overlap checks.** Only Effect-vs-Effect overlaps are blocked. This is what allows FX bricks on the same track as a video clip (glass system).
 - **fx_apply uses per-slot stable output textures.** Shared ping-pong buffers would be overwritten before the deferred ImDrawList flushes. Each slot (0–15) owns its output texture.
-- **bg_remove stays CPU-side.** It reads grayscale MJPEG masks (`bg_masks.mjpeg`) generated by a background thread; all other FX run through GLSL via fx_apply.
+- **bg_remove stays CPU-side and requires the MJPEG proxy.** It reads grayscale MJPEG masks (`bg_masks.mjpeg`) generated by a background thread, keyed by **proxy** frame index. IPC `start_bg_remove` / `process_body_fx_masks` fail-fast when the proxy isn't ready — agents need to wait for proxy generation before requesting masks.
 - **Datamosh ghost resets on `clip_start` change.** Moving or replacing a datamosh clip restarts the ghost from the first visible frame.
-- **Proxy FPS must be probed from the original file, not the proxy.** The proxy is always 12 fps. This value is passed to `forced_align` so CTC timestamps snap to real source frame boundaries.
+- **Proxy is `-r 30` capped to source fps; `ProxyInfo::fps` is the SOURCE fps.** The proxy file's literal frame rate is 30 (or lower if the source is slower), but `ProxyInfo::fps` carries the original source fps because that's what CTC alignment + frame-snapping needs.
+- **Native decode and proxy decode coexist per slot.** A slot opens Native first (instant) and gets upgraded to Proxy when transcode finishes. The screen_studio per-slot loop gates on `video_source(slot) == Proxy` to avoid re-upgrading.
 - **WN `n_layers` is derived from weight shapes.** `cond_layer` output channels ÷ (2 × hidden_channels) — not hardcoded.
-- **CTC alignment is chunked in 30-second windows.** The full-song Viterbi DP matrix would be ~60 MB; per-chunk it stays at ~750 KB. Whisper timestamps are the fallback if any chunk fails.
+- **CTC alignment runs per Whisper segment, not over the full audio.** The (T+1)×(L+1) trellis is tiny (T = frames in one segment, L = chars in that segment's text). Whisper timestamps are the fallback if any segment fails.
 - **IPC mutations land on the main thread.** `ipc_server_poll` runs in the main loop. There is no concurrency between MCP edits and UI interactions — they interleave frame by frame.
+- **Single mutations auto-batch.** `begin_batch`/`end_batch` is only required when grouping multiple mutations as one undo step. Standalone `add_clip` becomes one undo step automatically (labelled with the method name).
 - **`set_clip_fx` dispatches via generated code.** `fx_clip_set_dispatch.h` is a codegen output. If you add a new effect to the registry, re-run `codegen_effects.py` or `set_clip_fx` won't recognize the new effect id.

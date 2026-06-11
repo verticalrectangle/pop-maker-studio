@@ -9,7 +9,8 @@
 
 struct HFModel {
     std::string repo;        // e.g. "binant/Drake_RVC"
-    std::string model_file;  // .pth preferred; .zip if no bare .pth in repo
+    std::string model_file;  // .pth preferred; .zip, then .onnx as fallbacks
+    std::string index_file;  // optional faiss .index sibling (feature retrieval)
     int         downloads = 0;
 };
 
@@ -44,11 +45,14 @@ struct HFDownload {
     }
 };
 
-// Download repo/resolve/main/model_file → final .pth at out_path.
+// Download repo/resolve/main/model_file → final model at out_path.
 // If model_file is a .zip, extracts the .pth after download.
+// If index_file is non-empty, it is fetched alongside as <out_stem>.index
+// (best-effort: an index failure never fails the model download).
 // Call hf_download_poll() every frame while status == Running.
 void hf_download_model(const std::string& repo, const std::string& model_file,
-                       const std::string& out_path, HFDownload& dl);
+                       const std::string& out_path, HFDownload& dl,
+                       const std::string& index_file = "");
 
 void hf_download_poll(HFDownload& dl);
 

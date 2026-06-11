@@ -39,15 +39,6 @@ std::string separate_model_path() {
 }
 bool separate_model_exists() { return fs::exists(separate_model_path()); }
 
-// ── Download (no-op — model must be bundled) ──────────────────────────────────
-
-std::string separate_download(
-    std::function<void(float, const std::string&)> /*on_progress*/)
-{
-    if (separate_model_exists()) return {};
-    return "Model not found: " + separate_model_path();
-}
-
 // ── Audio I/O ─────────────────────────────────────────────────────────────────
 
 static std::vector<float> read_stereo(const std::string& p, int& n,

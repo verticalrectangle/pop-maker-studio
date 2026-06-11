@@ -195,3 +195,73 @@ std::vector<KeyFrame> extract_keyframes(const std::string& video_path,
 
     return result;
 }
+
+std::vector<KeyFrame> extract_frames_at(const std::string& video_path,
+                                        const std::vector<float>& times) {
+    AVFormatContext* fmt_ctx = nullptr;
+    if (avformat_open_input(&fmt_ctx, video_path.c_str(), nullptr, nullptr) < 0)
+        return {};
+    if (avformat_find_stream_info(fmt_ctx, nullptr) < 0) {
+        avformat_close_input(&fmt_ctx); return {};
+    }
+    int vi = av_find_best_stream(fmt_ctx, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
+    if (vi < 0) { avformat_close_input(&fmt_ctx); return {}; }
+
+    AVStream*      stream = fmt_ctx->streams[vi];
+    const AVCodec* codec  = avcodec_find_decoder(stream->codecpar->codec_id);
+    if (!codec) { avformat_close_input(&fmt_ctx); return {}; }
+
+    AVCodecContext* cc = avcodec_alloc_context3(codec);
+    avcodec_parameters_to_context(cc, stream->codecpar);
+    cc->thread_count = 2;
+    if (avcodec_open2(cc, codec, nullptr) < 0) {
+        avcodec_free_context(&cc); avformat_close_input(&fmt_ctx); return {};
+    }
+
+    std::string frames_dir = video_path + ".pms_frames";
+    fs::create_directories(frames_dir);
+
+    AVPacket* pkt = av_packet_alloc();
+    AVFrame*  frm = av_frame_alloc();
+    double    tb  = av_q2d(stream->time_base);
+
+    std::vector<KeyFrame> out;
+    for (float t : times) {
+        int64_t seek_ts = (int64_t)((double)t / tb);
+        if (av_seek_frame(fmt_ctx, vi, seek_ts, AVSEEK_FLAG_BACKWARD) < 0)
+            continue;
+        avcodec_flush_buffers(cc);
+
+        // Decode forward from the preceding keyframe until we reach t.
+        bool got = false;
+        while (!got && av_read_frame(fmt_ctx, pkt) >= 0) {
+            if (pkt->stream_index != vi) { av_packet_unref(pkt); continue; }
+            if (avcodec_send_packet(cc, pkt) == 0) {
+                while (avcodec_receive_frame(cc, frm) == 0) {
+                    double pts = (frm->best_effort_timestamp == AV_NOPTS_VALUE)
+                                     ? t
+                                     : frm->best_effort_timestamp * tb;
+                    if (pts + 1e-3 >= (double)t) {
+                        char name[48];
+                        snprintf(name, sizeof(name), "/at_%d_ms.jpg",
+                                 (int)(t * 1000.f));
+                        std::string jp = frames_dir + name;
+                        if (write_frame_jpeg(frm, (AVPixelFormat)frm->format,
+                                             cc->width, cc->height, jp))
+                            out.push_back({t, jp});
+                        got = true;
+                        break;
+                    }
+                }
+            }
+            av_packet_unref(pkt);
+        }
+        // EOF before reaching t (time past the end) → skipped.
+    }
+
+    av_frame_free(&frm);
+    av_packet_free(&pkt);
+    avcodec_free_context(&cc);
+    avformat_close_input(&fmt_ctx);
+    return out;
+}

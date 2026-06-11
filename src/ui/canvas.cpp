@@ -66,6 +66,18 @@ struct CanvasTransform {
 };
 static CanvasTransform s_ctx;
 
+// True when a real ImGui widget claims the mouse — the transport pill's
+// scrubber/buttons and other overlays float INSIDE the preview rect, so the
+// canvas's raw hit-testing must stand down or clicks on them fall through to
+// layer-select / drag-start underneath. Widgets are submitted after this code
+// runs each frame, so same-frame HoveredId is always still 0 here:
+// HoveredIdPreviousFrame catches the click frame (hover precedes click),
+// ActiveId catches a drag already in progress (it persists across frames).
+static bool ui_widget_claims_mouse() {
+    ImGuiContext& g = *GImGui;
+    return g.HoveredIdPreviousFrame != 0 || g.ActiveId != 0;
+}
+
 void compute_video_bbox(AppState& state, Clip& cl, ImVec2 p, float w, float h,
                                 float& bx0, float& by0, float& bx1, float& by1) {
     float px = cl.eval_prop("pos_x",   state.playhead) * w + p.x;
@@ -76,7 +88,8 @@ void compute_video_bbox(AppState& state, Clip& cl, ImVec2 p, float w, float h,
     std::string vkey = clip_slot_key(cl.text, cl.start);
     for (int s = 0; s < MAX_VIDEO_TRACKS; ++s) {
         if (state.proxy_paths[s] == vkey && video_info(s).width > 0) {
-            float va = (float)video_info(s).width / (float)video_info(s).height;
+            // Crop changes the displayed aspect — bbox must match the render.
+            float va = cl.cropped_aspect(video_info(s).width, video_info(s).height);
             float ca = w / h;
             if (va > ca) { fit_w = w; fit_h = w / va; }
             else         { fit_h = h; fit_w = h * va; }
@@ -88,7 +101,258 @@ void compute_video_bbox(AppState& state, Clip& cl, ImVec2 p, float w, float h,
     bx1 = px + hw; by1 = py + hh;
 }
 
+// ── Crop-edit mode ────────────────────────────────────────────────────────────
+// Targets state.crop_edit_track/clip. The scene shows the clip's full frame
+// (unrotated); this draws the dimmed surround, the crop window with drag
+// handles, and a small pill with aspect presets + Reset / Cancel / Apply.
+// Crop values are applied live to the clip; Cancel restores the entry values,
+// Apply pushes one history entry. Esc = cancel, Enter = apply.
+static struct {
+    int    target_track = -1, target_clip = -1;     // entry snapshot owner
+    float  entry_l = 0.f, entry_t = 0.f, entry_r = 0.f, entry_b = 0.f;
+    int    aspect = 0;   // 0 free, 1 = 1:1, 2 = 9:16, 3 = 16:9
+    int    drag   = 0;   // 0 none, 1 TL, 2 TR, 3 BR, 4 BL, 5 T, 6 B, 7 L, 8 R, 9 body
+    float  ref_l = 0.f, ref_t = 0.f, ref_r = 0.f, ref_b = 0.f;
+    ImVec2 ref_mouse = {};
+} s_crop;
+
+static void crop_mode_exit(AppState& state) {
+    state.crop_edit_track = state.crop_edit_clip = -1;
+    s_crop.target_track   = s_crop.target_clip   = -1;
+    s_crop.drag = 0;
+}
+
+static void draw_crop_mode(AppState& state, ImDrawList* dl, ImVec2 p, float w, float h) {
+    // Validate target — clip deleted / track hidden ends the mode.
+    if (state.crop_edit_track < 0 || state.crop_edit_track >= (int)state.tracks.size())
+        { crop_mode_exit(state); return; }
+    Track& tr = state.tracks[state.crop_edit_track];
+    if (state.crop_edit_clip < 0 || state.crop_edit_clip >= (int)tr.clips.size())
+        { crop_mode_exit(state); return; }
+    Clip& cl = tr.clips[state.crop_edit_clip];
+    if (cl.clip_type != ClipType::Video || !tr.visible)
+        { crop_mode_exit(state); return; }
+
+    // First frame on this target: snapshot for Cancel.
+    if (s_crop.target_track != state.crop_edit_track ||
+        s_crop.target_clip  != state.crop_edit_clip) {
+        s_crop.target_track = state.crop_edit_track;
+        s_crop.target_clip  = state.crop_edit_clip;
+        s_crop.entry_l = cl.crop_l; s_crop.entry_t = cl.crop_t;
+        s_crop.entry_r = cl.crop_r; s_crop.entry_b = cl.crop_b;
+        s_crop.aspect  = 0;
+        s_crop.drag    = 0;
+    }
+
+    // Source dims (for the px readout and aspect-lock math).
+    int src_w = 0, src_h = 0;
+    {
+        std::string vkey = clip_slot_key(cl.text, cl.start);
+        for (int s = 0; s < MAX_VIDEO_TRACKS; ++s)
+            if (state.proxy_paths[s] == vkey && video_info(s).width > 0)
+                { src_w = video_info(s).width; src_h = video_info(s).height; break; }
+    }
+
+    // Full-frame fit box — must mirror the editing_crop branch of the scene
+    // draw: full aspect, no rotation, pos/scale applied.
+    float px = cl.eval_prop("pos_x",   state.playhead) * w + p.x;
+    float py = cl.eval_prop("pos_y",   state.playhead) * h + p.y;
+    float sx = cl.eval_prop("scale_x", state.playhead);
+    float sy = cl.eval_prop("scale_y", state.playhead);
+    float fit_w = w, fit_h = h;
+    if (src_w > 0 && src_h > 0) {
+        float va = (float)src_w / (float)src_h, ca = w / h;
+        if (va > ca) { fit_w = w; fit_h = w / va; }
+        else         { fit_h = h; fit_w = h * va; }
+    }
+    float fw = fit_w * sx, fh = fit_h * sy;
+    float fx0 = px - fw * 0.5f, fy0 = py - fh * 0.5f;
+    float fx1 = fx0 + fw,       fy1 = fy0 + fh;
+
+    // Crop window in screen space.
+    float cx0 = fx0 + cl.crop_l * fw, cy0 = fy0 + cl.crop_t * fh;
+    float cx1 = fx1 - cl.crop_r * fw, cy1 = fy1 - cl.crop_b * fh;
+
+    ImVec2 mpos = ImGui::GetIO().MousePos;
+    bool ldown  = ImGui::IsMouseDown(0);
+    bool lclick = ImGui::IsMouseClicked(0) && !ui_widget_claims_mouse() &&
+                  !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId |
+                                          ImGuiPopupFlags_AnyPopupLevel);
+
+    // ── Dimmed surround + window border ───────────────────────────────────────
+    const ImU32 DIM = IM_COL32(0, 0, 0, 150);
+    dl->AddRectFilled({fx0, fy0}, {fx1, cy0}, DIM);                  // top band
+    dl->AddRectFilled({fx0, cy1}, {fx1, fy1}, DIM);                  // bottom band
+    dl->AddRectFilled({fx0, cy0}, {cx0, cy1}, DIM);                  // left band
+    dl->AddRectFilled({cx1, cy0}, {fx1, cy1}, DIM);                  // right band
+    dl->AddRect({fx0, fy0}, {fx1, fy1}, IM_COL32(255,255,255,50));   // full frame
+    dl->AddRect({cx0, cy0}, {cx1, cy1}, IM_COL32(255,255,255,230), 0.f, 0, 1.5f);
+    // Thirds grid
+    for (int i = 1; i <= 2; ++i) {
+        float gx = cx0 + (cx1 - cx0) * (i / 3.f);
+        float gy = cy0 + (cy1 - cy0) * (i / 3.f);
+        dl->AddLine({gx, cy0}, {gx, cy1}, IM_COL32(255,255,255,40));
+        dl->AddLine({cx0, gy}, {cx1, gy}, IM_COL32(255,255,255,40));
+    }
+    // Pixel readout under the window
+    if (src_w > 0) {
+        char dim_lbl[48];
+        snprintf(dim_lbl, sizeof(dim_lbl), "%d x %d",
+                 (int)roundf(src_w * (1.f - cl.crop_l - cl.crop_r)),
+                 (int)roundf(src_h * (1.f - cl.crop_t - cl.crop_b)));
+        dl->AddText({cx0 + 4.f, cy1 + 4.f}, IM_COL32(220,220,220,200), dim_lbl);
+    }
+
+    // ── Handles ───────────────────────────────────────────────────────────────
+    const float CR = 4.5f, HIT = 8.f;
+    float cmx = (cx0 + cx1) * 0.5f, cmy = (cy0 + cy1) * 0.5f;
+    struct H { float x, y; int id; };
+    H corners[4] = {{cx0,cy0,1},{cx1,cy0,2},{cx1,cy1,3},{cx0,cy1,4}};
+    H edges[4]   = {{cmx,cy0,5},{cmx,cy1,6},{cx0,cmy,7},{cx1,cmy,8}};
+    bool aspect_locked = s_crop.aspect != 0;
+
+    auto draw_handle = [&](float hx, float hy, int id) {
+        bool hov = fabsf(mpos.x - hx) <= HIT && fabsf(mpos.y - hy) <= HIT;
+        ImU32 c = (hov || s_crop.drag == id) ? IM_COL32(100,180,255,255)
+                                             : IM_COL32(255,255,255,230);
+        dl->AddRectFilled({hx-CR, hy-CR}, {hx+CR, hy+CR}, c, 2.f);
+        dl->AddRect      ({hx-CR, hy-CR}, {hx+CR, hy+CR}, IM_COL32(0,0,0,180), 2.f, 0, 0.8f);
+        if (hov && lclick && s_crop.drag == 0) {
+            s_crop.drag = id;
+            s_crop.ref_l = cl.crop_l; s_crop.ref_t = cl.crop_t;
+            s_crop.ref_r = cl.crop_r; s_crop.ref_b = cl.crop_b;
+            s_crop.ref_mouse = mpos;
+        }
+    };
+    for (auto& hc : corners) draw_handle(hc.x, hc.y, hc.id);
+    if (!aspect_locked)                       // edges break a locked ratio
+        for (auto& he : edges) draw_handle(he.x, he.y, he.id);
+
+    // Body drag (move the window)
+    bool in_window = mpos.x > cx0+CR*2 && mpos.x < cx1-CR*2 &&
+                     mpos.y > cy0+CR*2 && mpos.y < cy1-CR*2;
+    if (in_window && s_crop.drag == 0)
+        ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
+    if (in_window && lclick && s_crop.drag == 0) {
+        s_crop.drag = 9;
+        s_crop.ref_l = cl.crop_l; s_crop.ref_t = cl.crop_t;
+        s_crop.ref_r = cl.crop_r; s_crop.ref_b = cl.crop_b;
+        s_crop.ref_mouse = mpos;
+    }
+
+    // ── Drag update ───────────────────────────────────────────────────────────
+    const float MIN_WIN = 0.05f;  // smallest visible window per axis
+    if (s_crop.drag != 0 && ldown && fw > 0.f && fh > 0.f) {
+        float dxf = (mpos.x - s_crop.ref_mouse.x) / fw;
+        float dyf = (mpos.y - s_crop.ref_mouse.y) / fh;
+        float l = s_crop.ref_l, t = s_crop.ref_t, r = s_crop.ref_r, b = s_crop.ref_b;
+        auto clampf = [](float v, float lo, float hi) {
+            return v < lo ? lo : (v > hi ? hi : v);
+        };
+        if (s_crop.drag == 9) {                       // move window
+            float shift_x = clampf(dxf, -l, r);
+            float shift_y = clampf(dyf, -t, b);
+            cl.crop_l = l + shift_x; cl.crop_r = r - shift_x;
+            cl.crop_t = t + shift_y; cl.crop_b = b - shift_y;
+        } else if (aspect_locked && s_crop.drag <= 4 && src_w > 0) {
+            // Corner drag with ratio lock: opposite corner anchored; the new
+            // width (from x motion) drives the height via the fraction ratio
+            // k = cw/ch that yields the target pixel aspect.
+            float A = (s_crop.aspect == 1) ? 1.f : (s_crop.aspect == 2) ? 9.f/16.f : 16.f/9.f;
+            float k = A * (float)src_h / (float)src_w;
+            bool left_c = (s_crop.drag == 1 || s_crop.drag == 4);
+            bool top_c  = (s_crop.drag == 1 || s_crop.drag == 2);
+            float cw = left_c ? (1.f - r) - (l + dxf) : (1.f - l) - (r - dxf);
+            cw = clampf(cw, MIN_WIN, left_c ? 1.f - r : 1.f - l);
+            // keep the derived height inside its own bounds
+            float ch_max = top_c ? 1.f - b : 1.f - t;
+            cw = fminf(cw, ch_max * k);
+            cw = fmaxf(cw, MIN_WIN);
+            float ch = cw / k;
+            if (left_c) cl.crop_l = (1.f - r) - cw; else cl.crop_r = (1.f - l) - cw;
+            if (top_c)  cl.crop_t = (1.f - b) - ch; else cl.crop_b = (1.f - t) - ch;
+        } else {                                       // free corner / edge
+            bool eL = s_crop.drag == 1 || s_crop.drag == 4 || s_crop.drag == 7;
+            bool eR = s_crop.drag == 2 || s_crop.drag == 3 || s_crop.drag == 8;
+            bool eT = s_crop.drag == 1 || s_crop.drag == 2 || s_crop.drag == 5;
+            bool eB = s_crop.drag == 3 || s_crop.drag == 4 || s_crop.drag == 6;
+            if (eL) cl.crop_l = clampf(l + dxf, 0.f, 1.f - r - MIN_WIN);
+            if (eR) cl.crop_r = clampf(r - dxf, 0.f, 1.f - l - MIN_WIN);
+            if (eT) cl.crop_t = clampf(t + dyf, 0.f, 1.f - b - MIN_WIN);
+            if (eB) cl.crop_b = clampf(b - dyf, 0.f, 1.f - t - MIN_WIN);
+        }
+    }
+    if (!ldown) s_crop.drag = 0;
+
+    // ── Pill: aspect presets + Reset / Cancel / Apply ─────────────────────────
+    auto apply_preset = [&](int preset) {
+        s_crop.aspect = preset;
+        if (preset == 0 || src_w <= 0) return;
+        float A  = (preset == 1) ? 1.f : (preset == 2) ? 9.f/16.f : 16.f/9.f;
+        float k  = A * (float)src_h / (float)src_w;   // cw/ch fraction ratio
+        float cw = fminf(1.f, k), ch = cw / k;
+        cl.crop_l = cl.crop_r = (1.f - cw) * 0.5f;
+        cl.crop_t = cl.crop_b = (1.f - ch) * 0.5f;
+    };
+
+    struct PB { const char* lbl; int preset; };  // preset >= 0; -1 Reset, -2 Cancel, -3 Apply
+    PB btns[] = {{"Free",0},{"1:1",1},{"9:16",2},{"16:9",3},
+                 {"Reset",-1},{"Cancel",-2},{"Apply",-3}};
+    float bh = 24.f, gap = 6.f, pad = 10.f, total_w = 0.f;
+    for (auto& pb : btns) total_w += ImGui::CalcTextSize(pb.lbl).x + 16.f + gap;
+    total_w += pad * 2.f - gap;
+    float bx = p.x + (w - total_w) * 0.5f, by = p.y + 12.f;
+    dl->AddRectFilled({bx, by}, {bx + total_w, by + bh + pad},
+                      IM_COL32(18,18,22,215), 14.f);
+    dl->AddRect({bx, by}, {bx + total_w, by + bh + pad},
+                IM_COL32(255,255,255,25), 14.f);
+    float cur_x = bx + pad;
+    for (auto& pb : btns) {
+        float bw2 = ImGui::CalcTextSize(pb.lbl).x + 16.f;
+        ImGui::SetCursorScreenPos({cur_x, by + pad * 0.5f});
+        ImGui::InvisibleButton(pb.lbl, {bw2, bh});
+        bool hov = ImGui::IsItemHovered();
+        bool sel = (pb.preset >= 0 && s_crop.aspect == pb.preset);
+        ImU32 bg = sel ? IM_COL32(130,100,255,220)
+                 : hov ? IM_COL32(62,62,82,230)
+                 : pb.preset == -3 ? IM_COL32(46,46,66,230) : IM_COL32(34,34,44,200);
+        dl->AddRectFilled({cur_x, by + pad*0.5f}, {cur_x + bw2, by + pad*0.5f + bh}, bg, 12.f);
+        dl->AddText({cur_x + 8.f, by + pad*0.5f + (bh - ImGui::GetFontSize()) * 0.5f},
+                    IM_COL32(232,232,238,255), pb.lbl);
+        if (ImGui::IsItemClicked()) {
+            if      (pb.preset >= 0)  apply_preset(pb.preset);
+            else if (pb.preset == -1) { cl.crop_l=cl.crop_t=cl.crop_r=cl.crop_b=0.f; s_crop.aspect=0; }
+            else if (pb.preset == -2) {
+                cl.crop_l = s_crop.entry_l; cl.crop_t = s_crop.entry_t;
+                cl.crop_r = s_crop.entry_r; cl.crop_b = s_crop.entry_b;
+                crop_mode_exit(state);
+                return;
+            } else {                   // Apply
+                history_push(state, "Crop clip");
+                crop_mode_exit(state);
+                return;
+            }
+        }
+        cur_x += bw2 + gap;
+    }
+
+    // Keyboard: Esc = cancel, Enter = apply.
+    if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+        cl.crop_l = s_crop.entry_l; cl.crop_t = s_crop.entry_t;
+        cl.crop_r = s_crop.entry_r; cl.crop_b = s_crop.entry_b;
+        crop_mode_exit(state);
+        return;
+    }
+    if (ImGui::IsKeyPressed(ImGuiKey_Enter) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter)) {
+        history_push(state, "Crop clip");
+        crop_mode_exit(state);
+        return;
+    }
+}
+
 void draw_canvas_handles(AppState& state, ImDrawList* dl, ImVec2 p, float w, float h) {
+    // Crop-edit mode replaces the normal transform handles entirely.
+    if (state.crop_edit_track >= 0) { draw_crop_mode(state, dl, p, w, h); return; }
     if (state.selected_track < 0 || state.selected_clip < 0) return;
     if (state.selected_track >= (int)state.tracks.size()) return;
     Track& tr = state.tracks[state.selected_track];
@@ -97,10 +361,23 @@ void draw_canvas_handles(AppState& state, ImDrawList* dl, ImVec2 p, float w, flo
 
     ImVec2 mpos   = ImGui::GetIO().MousePos;
     bool   ldown  = ImGui::IsMouseDown(0);
-    bool   lclick = ImGui::IsMouseClicked(0);
+    // No drag-start while a popup is open (popups don't block IsMouseClicked),
+    // while a real widget claims the mouse (transport pill over the canvas),
+    // or during Alt+click — Alt cycles the layer selection in draw_preview,
+    // and immediately grabbing the newly selected layer would move it.
+    bool   lclick = ImGui::IsMouseClicked(0) &&
+                    !ImGui::GetIO().KeyAlt &&
+                    !ui_widget_claims_mouse() &&
+                    !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId |
+                                            ImGuiPopupFlags_AnyPopupLevel);
 
-    bool in_preview  = mpos.x >= p.x && mpos.x <= p.x+w &&
-                       mpos.y >= p.y && mpos.y <= p.y+h;
+    // Interaction region is the whole preview zone (the letterbox surround
+    // included), not just the canvas — clips dragged off-canvas must stay
+    // grabbable. Drawing past the zone is cut by the child window clip rect.
+    ImVec2 zp = ImGui::GetWindowPos();
+    ImVec2 zs = ImGui::GetWindowSize();
+    bool in_preview  = mpos.x >= zp.x && mpos.x <= zp.x+zs.x &&
+                       mpos.y >= zp.y && mpos.y <= zp.y+zs.y;
     bool drag_active = (s_ctx.handle != CanvasHandle::None);
     if (!in_preview && !drag_active) return;
 
@@ -592,11 +869,32 @@ void draw_canvas_handles(AppState& state, ImDrawList* dl, ImVec2 p, float w, flo
 
 // ── Preview ───────────────────────────────────────────────────────────────────
 
+// Canvas-source snapshot: capture the live preview rect from the window
+// framebuffer after ImGui renders this frame. frames_left counts down a few
+// frames after the request so an IPC seek's async proxy decode has time to
+// land before we grab the pixels; the rect is refreshed every frame so it
+// tracks the live layout.
+static struct {
+    int    frames_left = -1;   // -1 idle, >0 warming, 0 capture after render
+    bool   full_ui     = false; // capture the whole window, not the canvas rect
+    ImVec2 p           = {};
+    float  w = 0.f, h = 0.f;
+} g_canvas_cap;
+
 void draw_preview(AppState& state, ImVec2 p, float w, float h) {
     // IPC-triggered snapshot — fulfilled here on the GL thread
     if (state.snapshot_request) {
         state.snapshot_request = false;
-        render_snapshot_gl(state, state.playhead);
+        if (state.snapshot_source_canvas) {
+            g_canvas_cap.frames_left = 3;
+            g_canvas_cap.full_ui     = state.snapshot_source_ui;
+        } else {
+            render_snapshot_gl(state, state.playhead);
+        }
+    }
+    if (g_canvas_cap.frames_left > 0) {
+        g_canvas_cap.p = p; g_canvas_cap.w = w; g_canvas_cap.h = h;
+        --g_canvas_cap.frames_left;  // 0 → canvas_capture_after_render fires
     }
 
     ImDrawList* dl = ImGui::GetWindowDrawList();
@@ -726,13 +1024,28 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
     // Unified z-order pass: track index 0 = frontmost, so iterate high→low (background first).
     // Each track draws whichever clip type is active — video and text are interleaved correctly.
     ImVec2 mpos  = ImGui::GetIO().MousePos;
-    bool   lclick = ImGui::IsMouseClicked(0);
+    // Popups don't intercept IsMouseClicked — without this guard a click on a
+    // context-menu item overlapping the preview also ran layer selection. The
+    // widget guard does the same for the transport pill floating over the
+    // canvas: scrubbing or hitting play must not select/deselect layers.
+    bool   lclick = ImGui::IsMouseClicked(0) &&
+                    !ui_widget_claims_mouse() &&
+                    !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId |
+                                            ImGuiPopupFlags_AnyPopupLevel);
 
-    // Click-to-select using tight bboxes: video computed inline, text from previous-frame layouts.
-    bool in_preview_area = mpos.x >= p.x && mpos.x <= p.x+w &&
-                           mpos.y >= p.y && mpos.y <= p.y+h;
+    // Click-to-select using tight bboxes: video computed inline, text from
+    // previous-frame layouts. The pickable region is the whole preview zone —
+    // clips dragged off-canvas park in the letterbox surround and must stay
+    // clickable there.
+    ImVec2 zone_p = ImGui::GetWindowPos();
+    ImVec2 zone_s = ImGui::GetWindowSize();
+    bool in_preview_area = mpos.x >= zone_p.x && mpos.x <= zone_p.x+zone_s.x &&
+                           mpos.y >= zone_p.y && mpos.y <= zone_p.y+zone_s.y;
 
-    if (lclick && in_preview_area && s_ctx.handle == CanvasHandle::None) {
+    // Layer picking stands down during crop-edit mode — clicks there belong
+    // to the crop window/handles (draw_crop_mode).
+    if (lclick && in_preview_area && s_ctx.handle == CanvasHandle::None &&
+        state.crop_edit_track < 0) {
         struct HitCandidate { int ti, ci; float area; };
         std::vector<HitCandidate> hits;
         for (int ti = 0; ti < (int)state.tracks.size(); ++ti) {
@@ -772,14 +1085,30 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                 }
             }
         }
+        // Front-to-back: track 0 draws last, i.e. frontmost, so the lowest ti
+        // hit is the layer the user actually sees under the cursor. The old
+        // smallest-bbox-wins pick kept selecting clips that were completely
+        // hidden behind larger ones.
         std::sort(hits.begin(), hits.end(), [](const HitCandidate& a, const HitCandidate& b) {
-            if (a.area != b.area) return a.area < b.area;
-            return a.ti < b.ti;
+            if (a.ti != b.ti) return a.ti < b.ti;
+            return a.ci < b.ci;
         });
         if (!hits.empty()) {
-            if (state.selected_track != hits[0].ti || state.selected_clip != hits[0].ci) {
-                state.selected_track = hits[0].ti;
-                state.selected_clip  = hits[0].ci;
+            int pick = 0;
+            // Alt+click digs through the stack: from the currently selected
+            // layer, advance to the next hit beneath it (wrapping to the top),
+            // so covered layers stay reachable from the canvas.
+            if (ImGui::GetIO().KeyAlt) {
+                for (int i = 0; i < (int)hits.size(); ++i)
+                    if (hits[i].ti == state.selected_track &&
+                        hits[i].ci == state.selected_clip) {
+                        pick = (i + 1) % (int)hits.size();
+                        break;
+                    }
+            }
+            if (state.selected_track != hits[pick].ti || state.selected_clip != hits[pick].ci) {
+                state.selected_track = hits[pick].ti;
+                state.selected_clip  = hits[pick].ci;
                 state.request_scroll_to_clip = true;
             }
         } else {
@@ -796,6 +1125,118 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
 
     // ── Pass 1: BG clips (ImGui draw list) + Video clips (→ scene FBO) ────────
     scene_begin((int)w, (int)h);
+
+    // Pre-walk: identify every video clip that will be decoded this frame
+    // (active clip per track + any transition partner) and dispatch a parallel
+    // JPEG decode batch. The draw loop below then hits a cached upload path.
+    // Mirrors the active-clip selection logic farther down — keep in sync.
+    {
+        auto make_pfx = [&](const Clip* cl_ptr, int ti) {
+            PixelFX pfx;
+            CreativeFXAccum cfx2 = collect_glass_fx(state, state.playhead, ti);
+            pfx.bg_remove_on       = cl_ptr->bg_remove_on &&
+                                     cl_ptr->bg_remove_status == BgRemoveStatus::Ready;
+            pfx.bg_remove_mask_dir = cl_ptr->bg_remove_mask_dir;
+            pfx.bg_remove_softness = cl_ptr->bg_remove_softness;
+            pfx.bg_remove_box_on   = cl_ptr->bg_remove_box_on;
+            pfx.bg_remove_box_l    = cl_ptr->bg_remove_box_l;
+            pfx.bg_remove_box_r    = cl_ptr->bg_remove_box_r;
+            pfx.bg_remove_box_t    = cl_ptr->bg_remove_box_t;
+            pfx.bg_remove_box_b    = cl_ptr->bg_remove_box_b;
+            pfx.datamosh_on        = cfx2.datamosh_on;
+            pfx.datamosh_intensity = cfx2.datamosh_intensity;
+            pfx.datamosh_spread    = cfx2.datamosh_spread;
+            pfx.time               = t_anim;
+            return pfx;
+        };
+        std::vector<VideoPrefetchReq> reqs;
+        reqs.reserve(MAX_VIDEO_TRACKS * 2);
+        // Dedup by slot: each slot only needs one prefetch window per frame. The
+        // ring caches RING_FRAMES forward, so a second req for the same slot
+        // would just race for the same ring entries.
+        auto already_queued = [&](int slot) {
+            for (auto& r : reqs) if (r.track_id == slot) return true;
+            return false;
+        };
+        auto add_clip = [&](const Clip* cl, float at_time, int ti, int max_frames = 0) {
+            if (!cl || cl->clip_type != ClipType::Video) return;
+            int slot = slot_for_video(const_cast<AppState&>(state),
+                                      clip_slot_key(cl->text, cl->start), cl->text);
+            if (slot < 0 || !video_is_open(slot)) return;
+            if (already_queued(slot)) return;
+            video_set_pixel_fx(slot, make_pfx(cl, ti));
+            float src_t = cl->in_point + (at_time - cl->start) * cl->speed;
+            reqs.push_back({slot, (double)(src_t + lookahead), max_frames});
+        };
+
+        // Boundary warm distance: prefetch the next/previous clip's slot when
+        // the playhead is within this many seconds of a clip boundary, so a
+        // scrub across the cut hits a warm ring instead of a sync JPEG decode.
+        constexpr float BOUNDARY_WARM_S = 1.0f;
+
+        for (int ti = (int)state.tracks.size() - 1; ti >= 0; --ti) {
+            auto& track = state.tracks[ti];
+            if (!track.visible) continue;
+
+            const Clip* active = nullptr; int active_ci = -1;
+            for (int ci = 0; ci < (int)track.clips.size(); ++ci) {
+                auto& cl = track.clips[ci];
+                if (cl.clip_type == ClipType::Video &&
+                    state.playhead >= cl.start && state.playhead < cl.end)
+                    { active = &cl; active_ci = ci; break; }
+            }
+            if (!active) {
+                for (int ci = 1; ci < (int)track.clips.size(); ++ci) {
+                    const Clip& prev = track.clips[ci - 1];
+                    const Clip& cl   = track.clips[ci];
+                    if (prev.clip_type != ClipType::Video || cl.clip_type != ClipType::Video) continue;
+                    if (prev.transition_type == TransitionType::None || prev.transition_post <= 0.f) continue;
+                    if (state.playhead >= cl.start && state.playhead < cl.start + prev.transition_post)
+                        { active = &track.clips[ci]; active_ci = ci; break; }
+                }
+            }
+            if (!active) continue;
+            add_clip(active, state.playhead, ti);
+
+            bool in_trans_out = (active->transition_type != TransitionType::None &&
+                                 active->transition_pre > 0.f &&
+                                 state.playhead >= active->end - active->transition_pre);
+            if (in_trans_out && active_ci + 1 < (int)track.clips.size()) {
+                const Clip& nc = track.clips[active_ci + 1];
+                if (nc.clip_type == ClipType::Video) add_clip(&nc, state.playhead, ti);
+            } else if (active_ci > 0) {
+                const Clip& pc = track.clips[active_ci - 1];
+                if (pc.clip_type == ClipType::Video &&
+                    pc.transition_type != TransitionType::None &&
+                    pc.transition_post > 0.f &&
+                    state.playhead < active->start + pc.transition_post) {
+                    float at = std::fminf(state.playhead, pc.end - 1e-4f);
+                    add_clip(&pc, at, ti);
+                }
+            }
+
+            // Boundary warm: forward into the upcoming clip's first frame,
+            // backward into the previous clip's last frame. add_clip's slot
+            // dedupe makes this a no-op when active/neighbor share a source.
+            // Cap warm window so we don't drag the active clip's prefetch.
+            constexpr int BOUNDARY_WARM_FRAMES = 3;
+            float t_to_end   = active->end       - state.playhead;
+            float t_to_start = state.playhead    - active->start;
+            if (t_to_end < BOUNDARY_WARM_S && active_ci + 1 < (int)track.clips.size()) {
+                const Clip& nc = track.clips[active_ci + 1];
+                if (nc.clip_type == ClipType::Video)
+                    add_clip(&nc, nc.start, ti, BOUNDARY_WARM_FRAMES);
+            }
+            if (t_to_start < BOUNDARY_WARM_S && active_ci > 0) {
+                const Clip& pc = track.clips[active_ci - 1];
+                if (pc.clip_type == ClipType::Video) {
+                    float prev_at = std::fmaxf(pc.start, pc.end - 1e-3f);
+                    add_clip(&pc, prev_at, ti, BOUNDARY_WARM_FRAMES);
+                }
+            }
+        }
+        video_prefetch_frames(reqs.data(), (int)reqs.size());
+    }
 
     for (int ti = (int)state.tracks.size() - 1; ti >= 0; --ti) {
         auto& track = state.tracks[ti];
@@ -934,9 +1375,20 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                 float rot   = cl_ptr->eval_prop("rotation", at_time);
                 float alpha = cl_ptr->eval_prop("opacity",  at_time) * alpha_mul;
                 VideoInfo vi = video_info(slot);
+                // While THIS clip is in crop-edit mode the full frame is shown
+                // (full aspect, full UVs) so the user can drag the crop window
+                // over it; otherwise the cropped sub-rect IS the clip.
+                bool editing_crop = (state.crop_edit_track == ti &&
+                                     state.crop_edit_clip  >= 0 &&
+                                     state.crop_edit_clip  < (int)track.clips.size() &&
+                                     &track.clips[state.crop_edit_clip] == cl_ptr);
                 float fit_w = w, fit_h = h;
                 if (vi.width > 0 && vi.height > 0) {
-                    float vid_asp = (float)vi.width / (float)vi.height;
+                    // Fit box follows the CROPPED region's aspect — the crop
+                    // sub-rect fills the same role the full frame used to.
+                    float vid_asp = editing_crop
+                        ? (float)vi.width / (float)vi.height
+                        : cl_ptr->cropped_aspect(vi.width, vi.height);
                     float can_asp = w / h;
                     if (vid_asp > can_asp) { fit_w = w; fit_h = w / vid_asp; }
                     else                   { fit_h = h; fit_w = h * vid_asp; }
@@ -969,7 +1421,17 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                 }
 
                 alpha = std::fmaxf(0.f, std::fminf(1.f, alpha));
-                scene_add_layer(tex, cx, cy, hw, hh, cos_r, sin_r, alpha);
+                if (editing_crop)
+                    // Crop-edit shows the full frame, unrotated — the crop is
+                    // defined in source space, so the editing view is source
+                    // view (the overlay rect in draw_crop_mode matches this).
+                    scene_add_layer(tex, cx, cy, hw, hh, 1.f, 0.f, alpha);
+                else if (cl_ptr->has_crop())
+                    scene_add_layer(tex, cx, cy, hw, hh, cos_r, sin_r, alpha,
+                                    cl_ptr->crop_l, cl_ptr->crop_t,
+                                    1.f - cl_ptr->crop_r, 1.f - cl_ptr->crop_b);
+                else
+                    scene_add_layer(tex, cx, cy, hw, hh, cos_r, sin_r, alpha);
             };
 
             // Find the active video clip and check for transitions
@@ -1328,6 +1790,43 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
 
     dl->PopClipRect();  // end video-frame clip region
 
+    // Ghost outlines for clips parked fully outside the canvas: their pixels
+    // can't render (the scene FBO is the canvas), but a dim dashed box in the
+    // letterbox surround keeps them visible and gives picking a target.
+    for (int gti = 0; gti < (int)state.tracks.size(); ++gti) {
+        auto& gtr = state.tracks[gti];
+        if (!gtr.visible) continue;
+        for (int gci = 0; gci < (int)gtr.clips.size(); ++gci) {
+            auto& gcl = gtr.clips[gci];
+            if (state.playhead < gcl.start || state.playhead >= gcl.end) continue;
+            if (gcl.clip_type != ClipType::Video &&
+                gcl.clip_type != ClipType::Background) continue;
+            float gx0, gy0, gx1, gy1;
+            if (gcl.clip_type == ClipType::Video) {
+                compute_video_bbox(state, gcl, p, w, h, gx0, gy0, gx1, gy1);
+            } else {
+                float gpx = gcl.eval_prop("pos_x",   state.playhead) * w + p.x;
+                float gpy = gcl.eval_prop("pos_y",   state.playhead) * h + p.y;
+                float ghw = w * gcl.eval_prop("scale_x", state.playhead) * 0.5f;
+                float ghh = h * gcl.eval_prop("scale_y", state.playhead) * 0.5f;
+                gx0 = gpx - ghw; gy0 = gpy - ghh; gx1 = gpx + ghw; gy1 = gpy + ghh;
+            }
+            bool overlaps_canvas = gx1 > p.x && gx0 < p.x + w &&
+                                   gy1 > p.y && gy0 < p.y + h;
+            if (overlaps_canvas) continue;
+            bool gsel = (gti == state.selected_track && gci == state.selected_clip);
+            ImU32 gc = gsel ? IM_COL32(255, 255, 255, 150)
+                            : IM_COL32(255, 255, 255, 60);
+            dl->AddRect({gx0, gy0}, {gx1, gy1}, gc, 3.f, 0, 1.5f);
+            std::string gname = gcl.text.empty() ? "clip"
+                              : fs::path(gcl.text).filename().string();
+            ImVec2 gsz = ImGui::CalcTextSize(gname.c_str());
+            if (gsz.x < gx1 - gx0 - 8.f)
+                dl->AddText({(gx0 + gx1 - gsz.x) * 0.5f,
+                             (gy0 + gy1 - gsz.y) * 0.5f}, gc, gname.c_str());
+        }
+    }
+
     // Safe zone guide — shown when a managed Lyrics track exists.
     // Represents the region guaranteed visible on TikTok/Reels/Shorts.
     {
@@ -1445,4 +1944,95 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                         IM_COL32(220, 220, 220, (int)(alpha * 255.f)), msg);
         }
     }
+}
+
+// ── Canvas-source snapshot capture ───────────────────────────────────────────
+// Runs after ImGui_ImplOpenGL3_RenderDrawData and before buffer swap (called
+// from the main loop) so the back buffer holds the fully drawn frame. Reads
+// the preview rect — the exact pixels the user sees, scene compositor output
+// plus text overlays — and writes it as the snapshot PNG. This is the
+// "source: canvas" ground-truth path; render_snapshot_gl is the export path.
+#define GL_GLEXT_PROTOTYPES
+#include <GL/gl.h>
+#include <GL/glext.h>
+#include "stb_image_write.h"
+
+void canvas_capture_after_render(AppState& state) {
+    if (g_canvas_cap.frames_left != 0) return;
+    g_canvas_cap.frames_left = -1;
+
+    auto fail = [&](const char* why) {
+        state.snapshot_done_err = why;
+        state.snapshot_done     = true;
+    };
+
+    ImGuiIO& io = ImGui::GetIO();
+    float sx = io.DisplayFramebufferScale.x, sy = io.DisplayFramebufferScale.y;
+    int fb_h = (int)(io.DisplaySize.y * sy);
+    int rx, ry, rw, rh;
+    if (g_canvas_cap.full_ui) {
+        // "ui" source: the entire window backbuffer — full app state as the
+        // user sees it (timeline, panels, canvas, popups).
+        rx = 0; ry = 0;
+        rw = (int)(io.DisplaySize.x * sx);
+        rh = fb_h;
+    } else {
+        rx = (int)(g_canvas_cap.p.x * sx);
+        rw = (int)(g_canvas_cap.w   * sx);
+        rh = (int)(g_canvas_cap.h   * sy);
+        // GL reads from the bottom-left; the rect's top is p.y in UI coords.
+        ry = fb_h - (int)((g_canvas_cap.p.y + g_canvas_cap.h) * sy);
+    }
+    if (rw <= 0 || rh <= 0) { fail("canvas rect is empty"); return; }
+
+    std::vector<uint8_t> raw((size_t)rw * rh * 4);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glPixelStorei(GL_PACK_ALIGNMENT, 1);
+    glReadPixels(rx, ry, rw, rh, GL_RGBA, GL_UNSIGNED_BYTE, raw.data());
+
+    // Flip rows (GL bottom-up → PNG top-down) and force opaque alpha — the
+    // window backbuffer's alpha channel is whatever compositing left there,
+    // which makes the PNG look blank in viewers if kept.
+    std::vector<uint8_t> img((size_t)rw * rh * 4);
+    int rb = rw * 4;
+    for (int y = 0; y < rh; ++y) {
+        uint8_t* dst = img.data() + (size_t)y * rb;
+        memcpy(dst, raw.data() + (size_t)(rh - 1 - y) * rb, rb);
+        for (int x = 0; x < rw; ++x) dst[x*4 + 3] = 255;
+    }
+
+    // Same naming scheme as render_snapshot_gl, with a _canvas_ marker.
+    std::string base_path = state.audio_path;
+    if (base_path.empty()) {
+        for (auto& tr : state.tracks) {
+            for (auto& cl : tr.clips)
+                if (cl.clip_type == ClipType::Video && !cl.text.empty())
+                    { base_path = cl.text; break; }
+            if (!base_path.empty()) break;
+        }
+    }
+    int total_ms = (int)(state.playhead * 1000.f);
+    int ms = total_ms % 1000, ss = (total_ms / 1000) % 60, mm = total_ms / 60000;
+    char ts[32]; snprintf(ts, sizeof(ts), "%02dm%02ds%03dms", mm, ss, ms);
+    // UI grabs are agent-debugging artifacts — keep them in /tmp instead of
+    // littering the user's media folder like project snapshots do.
+    std::string out;
+    if (g_canvas_cap.full_ui) {
+        out = std::string("/tmp/pop-maker-studio_ui_") + ts + ".png";
+    } else if (base_path.empty()) {
+        out = std::string("/tmp/pop-maker-studio_canvas_") + ts + ".png";
+    } else {
+        out = fs::path(base_path).parent_path().string() + "/" +
+              fs::path(base_path).stem().string() + "_canvas_" + ts + ".png";
+    }
+
+    if (!stbi_write_png(out.c_str(), rw, rh, 4, img.data(), rb)) {
+        fail("PNG write failed");
+        return;
+    }
+    state.snapshot_msg       = "Saved " + fs::path(out).filename().string();
+    state.snapshot_msg_new   = true;
+    state.snapshot_done_path = out;
+    state.snapshot_done_err.clear();
+    state.snapshot_done      = true;
 }

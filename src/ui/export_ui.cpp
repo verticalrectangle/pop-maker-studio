@@ -197,6 +197,13 @@ void draw_export_modal(AppState& state) {
             }
             ImGui::NewLine();
 
+            // Encode speed (libx264 preset). The VAAPI HW encoder ignores
+            // -preset entirely — encoding runs at a fixed silicon rate
+            // regardless — so grey the buttons out when VAAPI is the active
+            // encoder, otherwise picking "Fast" vs "Slow" silently does nothing
+            // and "Draft" feels the same speed as "Master."
+            bool vaapi_active_for_speed = state.render_settings.use_vaapi &&
+                                           fs::exists("/dev/dri/renderD128");
             ImGui::Dummy({0.f, 8.f});
             ImGui::SetCursorPosX(ImGui::GetStyle().WindowPadding.x + 8.f);
             ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
@@ -204,12 +211,20 @@ void draw_export_modal(AppState& state) {
             ImGui::PopStyleColor();
             ImGui::Dummy({0.f, 6.f});
             ImGui::SetCursorPosX(ImGui::GetStyle().WindowPadding.x + 8.f);
+            if (vaapi_active_for_speed) ImGui::BeginDisabled();
             if (ui_btn("Fast##spm", state.render_settings.preset == "fast", true))
                 state.render_settings.preset = "fast";
             ImGui::SameLine(0.f, 4.f);
             if (ui_btn("Slow##spm", state.render_settings.preset == "slow", true))
                 state.render_settings.preset = "slow";
+            if (vaapi_active_for_speed) ImGui::EndDisabled();
             ImGui::NewLine();
+            if (vaapi_active_for_speed) {
+                ImGui::SetCursorPosX(ImGui::GetStyle().WindowPadding.x + 8.f);
+                ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+                ImGui::TextUnformatted("Hardware encoder — speed fixed by GPU silicon.");
+                ImGui::PopStyleColor();
+            }
 
             ImGui::Dummy({0.f, 8.f});
             ImGui::SetCursorPosX(ImGui::GetStyle().WindowPadding.x + 8.f);
@@ -268,7 +283,15 @@ void draw_export_modal(AppState& state) {
             ImGui::BeginDisabled(!any_active);
             if (ui_btn("Start render  ->", true, false)) {
                 state.render_done = false;
-                if (!state.audio_path.empty()) {
+                // Output precedence: a saved project exports next to its
+                // .pms (what users expect); the audio-stem subdir is the
+                // legacy lyric-video flow for projects with no file yet.
+                if (!state.project_path.empty()) {
+                    fs::path pp(state.project_path);
+                    fs::path base = pp.parent_path() / pp.stem();
+                    state.out_mp4 = base.string() + ".mp4";
+                    state.out_srt = base.string() + ".srt";
+                } else if (!state.audio_path.empty()) {
                     fs::path audio(state.audio_path);
                     fs::path outdir = audio.parent_path() / audio.stem();
                     fs::create_directories(outdir);
@@ -276,14 +299,7 @@ void draw_export_modal(AppState& state) {
                     state.out_gif = (outdir / (audio.stem().string() + ".gif")).string();
                     state.out_srt = (outdir / (audio.stem().string() + ".srt")).string();
                 } else if (state.out_mp4.empty()) {
-                    // Video-only project — derive output path from project file or home dir.
-                    fs::path base;
-                    if (!state.project_path.empty()) {
-                        fs::path pp(state.project_path);
-                        base = pp.parent_path() / pp.stem();
-                    } else {
-                        base = fs::path(std::getenv("HOME") ? std::getenv("HOME") : ".") / "Videos" / "pop_maker_export";
-                    }
+                    fs::path base = fs::path(std::getenv("HOME") ? std::getenv("HOME") : ".") / "Videos" / "pop_maker_export";
                     fs::create_directories(base.parent_path());
                     state.out_mp4 = base.string() + ".mp4";
                 }
@@ -412,16 +428,22 @@ void panel_export(AppState& state, float w) {
         }
         ImGui::NewLine();
 
-        // Encode speed
+        // Encode speed — disabled under VAAPI (HW encoder ignores -preset).
+        bool vaapi_active_for_speed2 = state.render_settings.use_vaapi &&
+                                        std::filesystem::exists("/dev/dri/renderD128");
         ImGui::Dummy({0.f, 8.f}); ui_label("Encode speed"); ImGui::Dummy({0.f, 4.f});
+        if (vaapi_active_for_speed2) ImGui::BeginDisabled();
         if (ui_btn("Fast", state.render_settings.preset == "fast", true))
             state.render_settings.preset = "fast";
         ImGui::SameLine(0.f, 4.f);
         if (ui_btn("Slow", state.render_settings.preset == "slow", true))
             state.render_settings.preset = "slow";
+        if (vaapi_active_for_speed2) ImGui::EndDisabled();
         ImGui::NewLine();
         ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
-        ImGui::TextUnformatted("Slow = better compression, same quality.");
+        ImGui::TextUnformatted(vaapi_active_for_speed2
+            ? "Hardware encoder — speed fixed by GPU silicon."
+            : "Slow = better compression, same quality.");
         ImGui::PopStyleColor();
 
         // Hardware encoder
@@ -477,7 +499,13 @@ void panel_export(AppState& state, float w) {
     } else {
         if (ui_btn("Start render  ->", true, true)) {
             state.render_done = false;
-            if (!state.audio_path.empty()) {
+            // Same output precedence as the main export panel above.
+            if (!state.project_path.empty()) {
+                fs::path pp(state.project_path);
+                fs::path base = pp.parent_path() / pp.stem();
+                state.out_mp4 = base.string() + ".mp4";
+                state.out_srt = base.string() + ".srt";
+            } else if (!state.audio_path.empty()) {
                 fs::path audio(state.audio_path);
                 fs::path outdir = audio.parent_path() / audio.stem();
                 fs::create_directories(outdir);
@@ -485,13 +513,7 @@ void panel_export(AppState& state, float w) {
                 state.out_gif = (outdir / (audio.stem().string() + ".gif")).string();
                 state.out_srt = (outdir / (audio.stem().string() + ".srt")).string();
             } else if (state.out_mp4.empty()) {
-                fs::path base;
-                if (!state.project_path.empty()) {
-                    fs::path pp(state.project_path);
-                    base = pp.parent_path() / pp.stem();
-                } else {
-                    base = fs::path(std::getenv("HOME") ? std::getenv("HOME") : ".") / "Videos" / "pop_maker_export";
-                }
+                fs::path base = fs::path(std::getenv("HOME") ? std::getenv("HOME") : ".") / "Videos" / "pop_maker_export";
                 fs::create_directories(base.parent_path());
                 state.out_mp4 = base.string() + ".mp4";
             }

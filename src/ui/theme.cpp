@@ -52,7 +52,7 @@ void theme_apply() {
     };
     g_font_mono = io.Fonts->AddFontFromMemoryTTF(
         (void*)jetbrains_mono_regular_ttf, (int)jetbrains_mono_regular_ttf_size,
-        28.f, &cfg, mono_ranges);
+        20.f, &cfg, mono_ranges);
 
     io.Fonts->Build();
 

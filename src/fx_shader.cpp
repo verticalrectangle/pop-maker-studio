@@ -259,6 +259,8 @@ uniform vec2  u_center;
 uniform vec2  u_half;
 uniform vec2  u_cossin;
 uniform float u_alpha;
+uniform vec2  u_uv0;   // source UV window (crop) — quad maps to [u_uv0, u_uv1]
+uniform vec2  u_uv1;
 void main() {
     vec2 scene_uv = gl_FragCoord.xy / u_canvas;
     vec4 scene    = texture(u_scene, scene_uv);
@@ -272,7 +274,7 @@ void main() {
     vec4 clip = vec4(0.0);
     if (clip_uv.x >= 0.0 && clip_uv.x <= 1.0 &&
         clip_uv.y >= 0.0 && clip_uv.y <= 1.0)
-        clip = texture(u_clip, clip_uv);
+        clip = texture(u_clip, mix(u_uv0, u_uv1, clip_uv));
     float src_a = clip.a * u_alpha;
     fragColor = vec4(clip.rgb * src_a + scene.rgb * (1.0 - src_a),
                      src_a + scene.a  * (1.0 - src_a));
@@ -742,7 +744,8 @@ void scene_begin(int canvas_w, int canvas_h) {
 }
 
 void scene_add_layer(uintptr_t clip_tex, float cx, float cy, float hw, float hh,
-                     float cos_r, float sin_r, float alpha)
+                     float cos_r, float sin_r, float alpha,
+                     float u0, float v0, float u1, float v1)
 {
     if (!g_scene.begun || !g_prog.composite) return;
     if (clip_tex == 0 || hw <= 0.f || hh <= 0.f) return;
@@ -751,6 +754,19 @@ void scene_add_layer(uintptr_t clip_tex, float cx, float cy, float hw, float hh,
     glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prev_fbo);
     GLint prev_vp[4];
     glGetIntegerv(GL_VIEWPORT, prev_vp);
+
+    // The composite shader blends src-over in-shader and relies on every
+    // fragment of the fullscreen triangle OVERWRITING the destination FBO.
+    // GL blending must be off: with GL_BLEND on (left enabled by
+    // bg_render_to_texture or the ImGui backend), fragments outside the
+    // clip quad output alpha 0 and KEEP the destination's stale pixels from
+    // previous frames — moving a layer smears it across the canvas and a
+    // background brick appears to cover everything forever. Scissor would
+    // similarly leave stale pixels outside its rect.
+    GLboolean prev_blend   = glIsEnabled(GL_BLEND);
+    GLboolean prev_scissor = glIsEnabled(GL_SCISSOR_TEST);
+    glDisable(GL_BLEND);
+    glDisable(GL_SCISSOR_TEST);
 
     int next = g_scene.active ^ 1;
     glBindVertexArray(g_vao);
@@ -772,11 +788,15 @@ void scene_add_layer(uintptr_t clip_tex, float cx, float cy, float hw, float hh,
     glUniform2f(glGetUniformLocation(g_prog.composite, "u_half"),   hw, hh);
     glUniform2f(glGetUniformLocation(g_prog.composite, "u_cossin"), cos_r, sin_r);
     glUniform1f(glGetUniformLocation(g_prog.composite, "u_alpha"),  alpha);
+    glUniform2f(glGetUniformLocation(g_prog.composite, "u_uv0"),    u0, v0);
+    glUniform2f(glGetUniformLocation(g_prog.composite, "u_uv1"),    u1, v1);
 
     glDrawArrays(GL_TRIANGLES, 0, 3);
     glActiveTexture(GL_TEXTURE0);
 
     g_scene.active = next;
+    if (prev_blend)   glEnable(GL_BLEND);
+    if (prev_scissor) glEnable(GL_SCISSOR_TEST);
     glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)prev_fbo);
     glViewport(prev_vp[0], prev_vp[1], prev_vp[2], prev_vp[3]);
     glBindVertexArray(0);

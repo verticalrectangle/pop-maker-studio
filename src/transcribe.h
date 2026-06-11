@@ -1,14 +1,10 @@
 #pragma once
 #include "app.h"
 #include <string>
+#include <vector>
+// PipelineMode is defined in app.h so AppState can hold last_pipeline_mode.
 
-enum class PipelineMode {
-    Both,        // Demucs + transcription
-    TranscribeOnly,  // transcription on original file (no Demucs)
-    SeparateOnly,    // Demucs only, no subtitles
-};
-
-// Kick off ml_pipeline.py as a subprocess.
+// Run the transcription pipeline (whisper.cpp in-process; C++ only).
 // Writes progress to `status` from a background thread.
 // out_words_json / out_vocals_wav are set before the thread reads them.
 // clip_in / clip_dur (seconds): when clip_dur > 0, only the source region
@@ -46,6 +42,13 @@ TranscribeSearchResult transcribe_search(
     float                           buffer_sec = 60.f
 );
 
+struct SearchCandidate {
+    float       start = 0.f;
+    float       end   = 0.f;
+    float       score = 0.f;   // 0..1 fraction of query words matched
+    std::string excerpt;
+};
+
 struct SearchStatus {
     bool        running       = false;
     float       progress      = 0.f;
@@ -58,6 +61,10 @@ struct SearchStatus {
     float       end           = 0.f;
     std::string excerpt;
     std::string error;
+    // On no-match, the top-N closest fuzzy hits in the accumulated transcript
+    // (sorted by score descending).  Lets the caller / human disambiguate or
+    // re-query rather than getting a blank failure.
+    std::vector<SearchCandidate> candidates;
 };
 
 // Kick off a background search (returns immediately). Poll transcribe_search_status().

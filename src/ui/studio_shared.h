@@ -28,7 +28,32 @@ void seek_to(AppState& state, float t);
 void toggle_play(AppState& state);
 float tl_fps(const AppState& state);
 
+// ── Record brick ──────────────────────────────────────────────────────────────
+// Insert a fresh Record brick (8 s, frame-snapped) at the playhead on a new
+// top track, select it, and push history. Used by the toolbox rail and the
+// timeline context menu.
+void add_record_brick(AppState& state);
+
+// ── Retime ────────────────────────────────────────────────────────────────────
+// Rescale a media clip's timeline width and any FX bricks overlapping it,
+// anchored at the clip's start. ratio = new_speed / old_speed. Used by the
+// clip panel's speed control and the IPC set_clip_prop(s) speed path so both
+// have the same semantics: changing speed keeps the source span, not the
+// timeline width.
+void rescale_glass_bricks(AppState& state, int media_ti, int media_ci, float speed_ratio);
+
+// ── Multi-selection ops ───────────────────────────────────────────────────────
+// Both fall back to the primary single selection when clip_selection has <=1
+// entry. Return true if anything changed (caller pushes history).
+bool delete_selected_clips(AppState& state);
+bool duplicate_selected_clips(AppState& state);
+
 // ── Clip / slot helpers ───────────────────────────────────────────────────────
+// First track that's safe to reuse for a newly added media clip: no clips,
+// visible, not locked, not managed (managed = lyric/typography tracks — those
+// keep their reserved spot even when empty). Returns -1 when none exists and
+// the caller should create a fresh track.
+int find_empty_track(const AppState& state);
 std::string clip_slot_key(const std::string& src, float start);
 std::string source_from_key(const std::string& key);
 void add_clip_to_track(AppState& state, int track_idx, const std::string& path, ClipType ct);
@@ -53,7 +78,12 @@ const char* clip_display_name(const Clip& cl);
 ImU32 clip_badge_color(const Clip& cl);
 bool fx_type_is_adjustment_style(FXType ft);
 bool fx_type_is_audio_fx(FXType ft);
-AudioFX collect_audio_fx_for_clip(const AppState& state, int track_idx, const Clip& audio_clip);
+// Windowed audio FX for one clip: a segment per overlapping audio FX brick
+// (and per audio entry inside overlapping MultiFX chains), each mapped into
+// the clip's source time. The FX applies only over the brick's range.
+std::vector<AudioFXSegment> collect_audio_fx_segments(const AppState& state,
+                                                      int track_idx,
+                                                      const Clip& audio_clip);
 
 struct FxBrickColors { ImU32 fill, border, label; };
 FxBrickColors fx_brick_colors(FXType ft, bool sel);

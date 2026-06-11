@@ -1,6 +1,7 @@
 #include "terminal.h"
 #include <cstring>
 #include <cstdlib>
+#include <algorithm>
 #include <unistd.h>
 #include <pty.h>
 #include <fcntl.h>
@@ -15,9 +16,34 @@ static int cb_movecursor(VTermPos, VTermPos, int, void*){ return 1; }
 static int cb_settermprop(VTermProp, VTermValue*, void*){ return 1; }
 static int cb_bell      (void*)                        { return 1; }
 static int cb_resize    (int, int, void*)              { return 1; }
-static int cb_sb_pushline(int, const VTermScreenCell*, void*) { return 1; }
-static int cb_sb_popline (int, VTermScreenCell*, void*)       { return 1; }
-static int cb_sb_clear   (void*)                              { return 1; }
+
+static int cb_sb_pushline(int cols, const VTermScreenCell* cells, void* user) {
+    TerminalState* t = (TerminalState*)user;
+    if (!t) return 0;
+    ScrollbackRow row;
+    row.cells.assign(cells, cells + cols);
+    if ((int)t->scrollback.size() >= TerminalState::kMaxScrollback)
+        t->scrollback.pop_front();
+    t->scrollback.push_back(std::move(row));
+    return 1;
+}
+
+static int cb_sb_popline(int cols, VTermScreenCell* cells, void* user) {
+    TerminalState* t = (TerminalState*)user;
+    if (!t || t->scrollback.empty()) return 0;
+    const auto& row = t->scrollback.back();
+    int n = std::min((int)row.cells.size(), cols);
+    std::copy(row.cells.begin(), row.cells.begin() + n, cells);
+    if (n < cols) std::memset(cells + n, 0, sizeof(VTermScreenCell) * (cols - n));
+    t->scrollback.pop_back();
+    return 1;
+}
+
+static int cb_sb_clear(void* user) {
+    TerminalState* t = (TerminalState*)user;
+    if (t) { t->scrollback.clear(); t->scroll_offset = 0; }
+    return 1;
+}
 
 static const VTermScreenCallbacks k_screen_cbs = {
     cb_damage, cb_moverect, cb_movecursor, cb_settermprop,
@@ -44,7 +70,7 @@ void terminal_init(TerminalState& t, int cols, int rows) {
     vterm_set_utf8(t.vt, 1);
     vterm_output_set_callback(t.vt, cb_output, &t);
     t.vts = vterm_obtain_screen(t.vt);
-    vterm_screen_set_callbacks(t.vts, &k_screen_cbs, nullptr);
+    vterm_screen_set_callbacks(t.vts, &k_screen_cbs, &t);
     vterm_screen_set_damage_merge(t.vts, VTERM_DAMAGE_SCROLL);
     vterm_screen_reset(t.vts, 1);
 
@@ -167,6 +193,23 @@ void terminal_destroy(TerminalState& t) {
         vterm_free(t.vt);
         t.vt  = nullptr;
         t.vts = nullptr;
+    }
+}
+
+void terminal_resize(TerminalState& t, int cols, int rows) {
+    if (!t.vt || (cols == t.cols && rows == t.rows)) return;
+    {
+        std::lock_guard<std::mutex> lk(t.mu);
+        vterm_set_size(t.vt, rows, cols);
+        vterm_screen_flush_damage(t.vts);
+        t.cols = cols;
+        t.rows = rows;
+    }
+    if (t.pty_master >= 0) {
+        struct winsize ws = {};
+        ws.ws_col = (unsigned short)cols;
+        ws.ws_row = (unsigned short)rows;
+        ioctl(t.pty_master, TIOCSWINSZ, &ws);
     }
 }
 
