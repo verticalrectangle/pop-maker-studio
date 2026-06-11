@@ -1209,7 +1209,11 @@ void panel_audio_fx_clip(AppState& state, float w) {
             std::vector<AudioRef> audio_refs;
             for (int ci = 0; ci < (int)track.clips.size(); ++ci) {
                 const Clip& ac = track.clips[ci];
-                if (ac.clip_type != ClipType::Audio || ac.text.empty()) continue;
+                bool is_audio = ac.clip_type == ClipType::Audio && !ac.text.empty();
+                bool is_take  = ac.clip_type == ClipType::Record &&
+                                ac.rec_take_sel >= 0 &&
+                                ac.rec_take_sel < (int)ac.rec_takes.size();
+                if (!is_audio && !is_take) continue;
                 if (ac.end <= clip.start || ac.start >= clip.end) continue;
                 audio_refs.push_back({ci});
             }

@@ -147,7 +147,7 @@ struct OnnxGraph {
         PbBuf a;
         a.tag_string(1, name);
         uint32_t bits; memcpy(&bits, &v, 4);
-        a.tag_i32(4, bits);
+        a.tag_i32(2, bits);   // AttributeProto.f is field 2
         a.tag_varint(20, kAttrFloat);
         return a;
     }
@@ -248,6 +248,33 @@ static std::vector<float> apply_weight_norm(const std::vector<float>& wv,
     return w;
 }
 
+// Weight norm over the LAST dim (fairseq pos_conv uses dim=2):
+// w[i,j,k] = v[i,j,k] * g[k] / ||v[:,:,k]||
+static std::vector<float> apply_weight_norm_lastdim(const std::vector<float>& wv,
+                                                     const std::vector<float>& wg,
+                                                     const std::vector<int64_t>& shape)
+{
+    int64_t K    = shape.back();
+    int64_t rows = 1;
+    for (size_t i = 0; i + 1 < shape.size(); i++) rows *= shape[i];
+
+    std::vector<double> norm2((size_t)K, 0.0);
+    for (int64_t r = 0; r < rows; r++)
+        for (int64_t k = 0; k < K; k++) {
+            float v = wv[(size_t)r * K + k];
+            norm2[(size_t)k] += (double)v * v;
+        }
+
+    std::vector<float> w(wv.size());
+    for (int64_t r = 0; r < rows; r++)
+        for (int64_t k = 0; k < K; k++) {
+            double n2   = norm2[(size_t)k];
+            float scale = (n2 > 1e-12) ? wg[(size_t)k] / (float)std::sqrt(n2) : 0.f;
+            w[(size_t)r * K + k] = wv[(size_t)r * K + k] * scale;
+        }
+    return w;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Tensor loader
 // ─────────────────────────────────────────────────────────────────────────────
@@ -255,40 +282,83 @@ static std::vector<float> apply_weight_norm(const std::vector<float>& wv,
 struct TensorLoader {
     const PthModel& m;
 
+    // The code below uses fairseq names (hubert_base.pt). The torchaudio
+    // mirror (hubert_fairseq_base_ls960.pth) stores the same tensors under
+    // different module paths; map to whichever variant the checkpoint has.
+    std::string resolve(const std::string& name) const {
+        if (m.tensors.count(name)) return name;
+        std::string n = name;
+        auto sub = [&](const std::string& a, const std::string& b) {
+            auto p = n.find(a);
+            if (p != std::string::npos) n = n.substr(0, p) + b + n.substr(p + a.size());
+        };
+        if (n.rfind("feature_extractor.conv_layers.", 0) == 0) {
+            // ".{i}.0.weight" → ".{i}.conv.weight",  ".{i}.2.*" → ".{i}.layer_norm.*"
+            size_t base = strlen("feature_extractor.conv_layers.");
+            size_t dot  = n.find('.', base);               // after layer index
+            if (dot != std::string::npos) {
+                size_t dot2 = n.find('.', dot + 1);        // after sub-module index
+                std::string sm = n.substr(dot + 1, dot2 - dot - 1);
+                if (sm == "0") n = n.substr(0, dot + 1) + "conv"       + n.substr(dot2);
+                if (sm == "2") n = n.substr(0, dot + 1) + "layer_norm" + n.substr(dot2);
+            }
+        }
+        else if (n.rfind("layer_norm.", 0) == 0)
+            n = "encoder.feature_projection." + n;
+        else if (n.rfind("post_extract_proj.", 0) == 0)
+            sub("post_extract_proj.", "encoder.feature_projection.projection.");
+        else if (n.rfind("encoder.pos_conv.0.", 0) == 0)
+            sub("encoder.pos_conv.0.", "encoder.transformer.pos_conv_embed.conv.");
+        else if (n.rfind("encoder.layer_norm.", 0) == 0)
+            sub("encoder.layer_norm.", "encoder.transformer.layer_norm.");
+        else if (n.rfind("encoder.layers.", 0) == 0) {
+            sub("encoder.layers.", "encoder.transformer.layers.");
+            sub(".self_attn_layer_norm.", ".layer_norm.");
+            sub(".self_attn.", ".attention.");
+            sub(".fc1.", ".feed_forward.intermediate_dense.");
+            sub(".fc2.", ".feed_forward.output_dense.");
+        }
+        return n;
+    }
+
     std::vector<float> load(const std::string& name) const {
-        auto v = pth_load_tensor(m, name);
-        if (v.empty()) throw std::runtime_error("missing tensor: " + name);
+        auto v = pth_load_tensor(m, resolve(name));
+        if (v.empty()) throw std::runtime_error("missing tensor: " + name +
+                                                " (tried " + resolve(name) + ")");
         return v;
     }
 
     std::vector<float> load_wn(const std::string& base) const {
-        auto it_v = m.tensors.find(base + ".weight_v");
-        auto it_g = m.tensors.find(base + ".weight_g");
+        auto it_v = m.tensors.find(resolve(base + ".weight_v"));
+        auto it_g = m.tensors.find(resolve(base + ".weight_g"));
         if (it_v != m.tensors.end() && it_g != m.tensors.end()) {
             auto wv = load(base + ".weight_v");
             auto wg = load(base + ".weight_g");
-            // weight_g shape is [C_out, 1, 1]; flatten to [C_out]
-            std::vector<float> wg_flat(wg.size());
-            for (size_t i = 0; i < wg.size(); i++) wg_flat[i] = wg[i];
-            return apply_weight_norm(wv, wg_flat, it_v->second.shape);
+            const auto& shp = it_v->second.shape;
+            // weight_g [C_out,1,1] → norm over dim 0; [1,1,K] → norm over last dim
+            if ((int64_t)wg.size() == shp[0])
+                return apply_weight_norm(wv, wg, shp);
+            if ((int64_t)wg.size() == shp.back())
+                return apply_weight_norm_lastdim(wv, wg, shp);
+            throw std::runtime_error("unsupported weight_g shape for " + base);
         }
         return load(base + ".weight");
     }
 
     std::vector<int64_t> shape(const std::string& name) const {
-        auto it = m.tensors.find(name);
+        auto it = m.tensors.find(resolve(name));
         if (it == m.tensors.end()) throw std::runtime_error("no tensor: " + name);
         return it->second.shape;
     }
 
     std::vector<int64_t> shape_wn(const std::string& base) const {
-        auto it_v = m.tensors.find(base + ".weight_v");
+        auto it_v = m.tensors.find(resolve(base + ".weight_v"));
         if (it_v != m.tensors.end()) return it_v->second.shape;
         return shape(base + ".weight");
     }
 
     bool has(const std::string& name) const {
-        return m.tensors.count(name) > 0;
+        return m.tensors.count(resolve(name)) > 0;
     }
 };
 
@@ -488,14 +558,9 @@ static std::string emit_feature_extractor(G& g, const TensorLoader& tl,
             g.add_init_f32(h + "_gnw", {c_out}, gn_w);
             g.add_init_f32(h + "_gnb", {c_out}, gn_b);
 
-            PbBuf eps_attr;
-            eps_attr.tag_string(1, "epsilon");
-            uint32_t eps_bits; float eps_val = 1e-5f; memcpy(&eps_bits, &eps_val, 4);
-            eps_attr.tag_i32(4, eps_bits);
-            eps_attr.tag_varint(20, kAttrFloat);
             cur = g.emit("InstanceNormalization",
                          {cur, h + "_gnw", h + "_gnb"},
-                         {eps_attr},
+                         {G::attr_float("epsilon", 1e-5f)},
                          h + "_gn");
         }
 
@@ -571,8 +636,6 @@ static std::string emit_pos_conv(G& g, const TensorLoader& tl,
     // Slice to [1, 768, T]: axis=2, start=0, end=T (dynamic)
     // We build the slice tensors dynamically.
     std::string zero_c = "pc_z0";   g.add_scalar_i64(zero_c, 0LL);
-    std::string one_c  = "pc_one";  g.add_scalar_i64(one_c,  1LL);
-    std::string big_c  = "pc_big";  g.add_scalar_i64(big_c,  INT64_MAX);
     std::string ax2_c  = "pc_ax2";  g.add_init_i64(ax2_c, {1}, {2LL});
 
     // starts=[0], ends=[T], axes=[2]
@@ -703,7 +766,9 @@ static std::string emit_ffn(G& g, const TensorLoader& tl,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Single transformer layer (pre-norm)
+// Single transformer layer — POST-norm (HuBERT base has layer_norm_first=False):
+//   x = self_attn_layer_norm(x + attn(x))
+//   x = final_layer_norm(x + ffn(x))
 // Input x: [1, T, 768]
 // ─────────────────────────────────────────────────────────────────────────────
 static std::string emit_transformer_layer(G& g, const TensorLoader& tl,
@@ -714,31 +779,25 @@ static std::string emit_transformer_layer(G& g, const TensorLoader& tl,
     std::string h    = "tl" + std::to_string(layer);
     std::string lpfx = "encoder.layers." + std::to_string(layer);
 
-    // Self-attn pre-norm
+    // Self-attention on raw input, then residual, then norm
+    auto attn_out = emit_self_attention(g, tl, x, T_sc, layer, h + "_sa");
+    auto res1     = op_add(g, x, attn_out, h + "_res1");
+
     auto ln1_w = tl.load(lpfx + ".self_attn_layer_norm.weight");
     auto ln1_b = tl.load(lpfx + ".self_attn_layer_norm.bias");
     g.add_init_f32(h + "_ln1w", {768}, ln1_w);
     g.add_init_f32(h + "_ln1b", {768}, ln1_b);
-    auto x_ln1 = emit_layer_norm_last(g, x, h + "_ln1w", h + "_ln1b", h + "_ln1");
+    auto x1 = emit_layer_norm_last(g, res1, h + "_ln1w", h + "_ln1b", h + "_ln1");
 
-    // Self-attention
-    auto attn_out = emit_self_attention(g, tl, x_ln1, T_sc, layer, h + "_sa");
+    // FFN, then residual, then norm
+    auto ffn_out = emit_ffn(g, tl, x1, layer, h + "_ffn");
+    auto res2    = op_add(g, x1, ffn_out, h + "_res2");
 
-    // Residual
-    auto res1 = op_add(g, x, attn_out, h + "_res1");
-
-    // FFN pre-norm
     auto ln2_w = tl.load(lpfx + ".final_layer_norm.weight");
     auto ln2_b = tl.load(lpfx + ".final_layer_norm.bias");
     g.add_init_f32(h + "_ln2w", {768}, ln2_w);
     g.add_init_f32(h + "_ln2b", {768}, ln2_b);
-    auto x_ln2 = emit_layer_norm_last(g, res1, h + "_ln2w", h + "_ln2b", h + "_ln2");
-
-    // FFN
-    auto ffn_out = emit_ffn(g, tl, x_ln2, layer, h + "_ffn");
-
-    // Residual
-    return op_add(g, res1, ffn_out, h + "_res2");
+    return emit_layer_norm_last(g, res2, h + "_ln2w", h + "_ln2b", h + "_ln2");
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -776,17 +835,19 @@ std::string hubert_to_onnx(const PthModel& m, const std::string& out_path)
         // x = x + pos_enc  [1, T, 768]
         auto x = op_add(g, feat_proj, pos_enc, "pos_add");
 
-        // ── 12 Transformer layers ─────────────────────────────────────────────
-        for (int i = 0; i < 12; i++) {
-            x = emit_transformer_layer(g, tl, x, T_sc, i);
-        }
-
-        // ── Final layer norm ──────────────────────────────────────────────────
+        // ── Encoder layer norm ────────────────────────────────────────────────
+        // Post-norm config (layer_norm_first=False): applied BEFORE the layers,
+        // and nothing after the last layer.
         auto enc_ln_w = tl.load("encoder.layer_norm.weight");
         auto enc_ln_b = tl.load("encoder.layer_norm.bias");
         g.add_init_f32("enc_lnw", {768}, enc_ln_w);
         g.add_init_f32("enc_lnb", {768}, enc_ln_b);
         x = emit_layer_norm_last(g, x, "enc_lnw", "enc_lnb", "enc_ln");
+
+        // ── 12 Transformer layers ─────────────────────────────────────────────
+        for (int i = 0; i < 12; i++) {
+            x = emit_transformer_layer(g, tl, x, T_sc, i);
+        }
 
         // ── Rename final output to "features" ─────────────────────────────────
         g.add_node("Identity", {x}, {"features"}, "features_id");

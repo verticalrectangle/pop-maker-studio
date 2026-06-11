@@ -1,8 +1,10 @@
 #include "vc_job.h"
 #include "vc_onnx.h"
+#include "rmvpe_onnx.h"
 #include "rvc_onnx.h"
 #include "pth_reader.h"
 #include <filesystem>
+#include <fstream>
 #include <functional>
 #include <thread>
 #include <atomic>
@@ -52,16 +54,29 @@ static void run_job(std::shared_ptr<VcJobData> data,
         data->status.store(2);
     };
 
-    // ── HuBERT availability check ─────────────────────────────────────────────
+    // ── Model availability checks (fail fast, before the slow export) ────────
     if (!hubert_onnx_exists()) {
         set_err("HuBERT model not found. Download hubert.onnx to:\n"
                 + hubert_onnx_path());
         return;
     }
+    if (!rmvpe_onnx_exists()) {
+        set_err("RMVPE pitch model not found. Download rmvpe.onnx to:\n"
+                + rmvpe_onnx_path());
+        return;
+    }
 
     // ── One-time voice ONNX export (C++, no Python required) ─────────────────
+    // Re-export if the sidecar lacks the current vc_version (older exports
+    // came from a graph-builder with known correctness bugs).
     std::string voice_onnx = model_path.substr(0, model_path.rfind('.')) + ".onnx";
-    if (!fs::exists(voice_onnx)) {
+    bool need_export = !fs::exists(voice_onnx);
+    if (!need_export) {
+        std::ifstream jf(model_path.substr(0, model_path.rfind('.')) + ".json");
+        std::string js((std::istreambuf_iterator<char>(jf)), {});
+        if (js.find("\"vc_version\":3") == std::string::npos) need_export = true;
+    }
+    if (need_export) {
         set_prog(0.05f, "exporting model");
         PthModel pth = pth_open(model_path);
         if (!pth.err.empty()) { set_err("Failed to read model: " + pth.err); return; }
@@ -108,9 +123,17 @@ void vc_start(AppState& state, int track_idx, int clip_idx,
     auto& track = state.tracks[track_idx];
     if (clip_idx < 0 || clip_idx >= (int)track.clips.size()) return;
     Clip& clip = track.clips[clip_idx];
-    if (clip.clip_type != ClipType::Audio || clip.text.empty()) return;
+    // Audio clips convert their source; record bricks convert the selected take.
+    std::string source;
+    if (clip.clip_type == ClipType::Audio && !clip.text.empty())
+        source = clip.text;
+    else if (clip.clip_type == ClipType::Record &&
+             clip.rec_take_sel >= 0 &&
+             clip.rec_take_sel < (int)clip.rec_takes.size())
+        source = clip.rec_takes[(size_t)clip.rec_take_sel];
+    if (source.empty()) return;
 
-    uint64_t h = std::hash<std::string>{}(clip.text + model_path + std::to_string(f0_semitones));
+    uint64_t h = std::hash<std::string>{}(source + model_path + std::to_string(f0_semitones));
     std::string out_path = "/tmp/pms_vc_" + std::to_string(h) + ".wav";
 
     clip.vc_status    = VcStatus::Processing;
@@ -126,7 +149,7 @@ void vc_start(AppState& state, int track_idx, int clip_idx,
     job.data      = data;
     job.track_idx = track_idx;
     job.clip_idx  = clip_idx;
-    job.thread    = std::thread(run_job, data, clip.text, model_path, out_path, f0_semitones);
+    job.thread    = std::thread(run_job, data, source, model_path, out_path, f0_semitones);
 
     std::lock_guard<std::mutex> lk(g_jobs_mu);
     g_jobs.push_back(std::move(job));

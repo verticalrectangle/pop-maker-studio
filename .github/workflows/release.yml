@@ -89,14 +89,20 @@ jobs:
           echo "Copying bundled u2netp model..."
           cp models/u2netp_human_seg.onnx release/models/u2netp_human_seg.onnx
 
-          echo "Downloading HuBERT checkpoint..."
+          echo "Downloading HuBERT checkpoint (RVC's hubert_base.pt = ContentVec)..."
+          # NOT vanilla HuBERT: RVC voice models are trained on ContentVec
+          # features. Vanilla hubert_base_ls960 produces fluent gibberish.
           curl -fsSL -o hubert_base.pt \
-            "https://dl.fbaipublicfiles.com/hubert/hubert_base_ls960.pt"
+            "https://huggingface.co/lj1995/VoiceConversionWebUI/resolve/main/hubert_base.pt"
 
           echo "Exporting HuBERT to ONNX..."
           ./build/export-hubert hubert_base.pt release/models/hubert.onnx
 
-          echo "Downloading wav2vec2 CTC alignment model..."
+          echo "Downloading RMVPE pitch model..."
+          curl -fsSL -o release/models/rmvpe.onnx \
+            "https://huggingface.co/lj1995/VoiceConversionWebUI/resolve/main/rmvpe.onnx"
+
+          echo "Downloading wav2vec2 acoustic model (our C++ CTC alignment consumes its log-probs)..."
           curl -fsSL -o release/models/wav2vec2_ctc.onnx \
             "https://huggingface.co/Xenova/wav2vec2-base-960h/resolve/main/onnx/model_quantized.onnx"
           curl -fsSL -o release/models/wav2vec2_vocab.json \

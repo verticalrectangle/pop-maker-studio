@@ -480,6 +480,9 @@ void ui_studio(AppState& state) {
                     d.volume   = cl.volume;   d.pan      = cl.pan;
                     d.fade_in  = cl.fade_in;  d.fade_out = cl.fade_out;
                     d.path     = cl.rec_takes[cl.rec_take_sel];
+                    // Converted voice substitutes the take, same as Audio clips
+                    if (cl.vc_status == VcStatus::Ready && !cl.vc_out_path.empty())
+                        d.path = cl.vc_out_path;
                     // Takes get audio FX bricks on the same track (autotune
                     // over takes), windowed to each brick's range.
                     {

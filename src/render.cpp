@@ -2259,6 +2259,10 @@ void render_start_gl(AppState& state) {
                         cl.rec_take_sel >= (int)cl.rec_takes.size()) continue;
                     std::string tp = cl.rec_takes[cl.rec_take_sel];
                     if (!fs::exists(tp)) continue;
+                    // Converted voice substitutes the take (preview parity)
+                    if (cl.vc_status == VcStatus::Ready && !cl.vc_out_path.empty() &&
+                        fs::exists(cl.vc_out_path))
+                        tp = cl.vc_out_path;
                     // Autotune-over-takes etc: bake the take's effective FX.
                     auto segs = export_fx_segments(state, ti, cl);
                     if (!segs.empty()) {

@@ -35,6 +35,7 @@ set(IMGUI_SOURCES
 # ── Sources ───────────────────────────────────────────────────────────────────
 set(SOURCES
     src/paths.cpp
+    src/rmvpe_onnx.cpp
     src/runtime_fx.cpp
     src/ipc_server.cpp
     src/main.cpp

@@ -160,7 +160,7 @@ struct OnnxGraph {
         PbBuf a;
         a.tag_string(1, name);
         uint32_t bits; memcpy(&bits, &v, 4);
-        a.tag_i32(4, bits);
+        a.tag_i32(2, bits);   // AttributeProto.f is field 2
         a.tag_varint(20, kAttrFloat);
         return a;
     }
@@ -596,6 +596,50 @@ static std::string emit_rel_to_abs(G& g, const std::string& x,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// _abs_to_rel: [1, H, T, T] → [1, H, T, 2T-1]  (inverse of _rel_to_abs; used
+// to weight emb_rel_v by the attention probabilities)
+// ─────────────────────────────────────────────────────────────────────────────
+static std::string emit_abs_to_rel(G& g, const std::string& x,
+                                    const std::string& T,   // scalar int64
+                                    int n_heads,
+                                    const std::string& hint)
+{
+    std::string one_c  = hint + "_1"; g.add_scalar_i64(one_c,  1LL);
+    std::string two_c  = hint + "_2"; g.add_scalar_i64(two_c,  2LL);
+    std::string zero_c = hint + "_0"; g.add_scalar_i64(zero_c, 0LL);
+    std::string H_c    = hint + "_H"; g.add_scalar_i64(H_c, (int64_t)n_heads);
+
+    auto T_m1    = op_sub(g, T, one_c, hint + "_Tm1");
+    auto two_T   = op_mul(g, two_c, T, hint + "_2T");
+    auto two_Tm1 = op_sub(g, two_T, one_c, hint + "_2Tm1");
+
+    // Step 1: pad last dim end by T-1 → [1, H, T, 2T-1]
+    auto pads1 = build_shape(g, {zero_c, zero_c, zero_c, zero_c,
+                                 zero_c, zero_c, zero_c, T_m1}, hint + "_pads1");
+    auto x1 = g.emit("Pad", {x, pads1}, {}, hint + "_s1");
+
+    // Step 2: Reshape → [1, H, T·(2T-1)]
+    auto flat_n  = op_mul(g, T, two_Tm1, hint + "_flatn");
+    auto rs2_shp = build_shape(g, {one_c, H_c, flat_n}, hint + "_rs2");
+    auto x2 = op_reshape(g, x1, rs2_shp, hint + "_s2");
+
+    // Step 3: pad last dim start by T → [1, H, 2T²]
+    auto pads3 = build_shape(g, {zero_c, zero_c, T, zero_c, zero_c, zero_c},
+                              hint + "_pads3");
+    auto x3 = g.emit("Pad", {x2, pads3}, {}, hint + "_s3");
+
+    // Step 4: Reshape → [1, H, T, 2T]
+    auto rs4_shp = build_shape(g, {one_c, H_c, T, two_T}, hint + "_rs4");
+    auto x4 = op_reshape(g, x3, rs4_shp, hint + "_s4");
+
+    // Step 5: Slice [:, :, :, 1:] → [1, H, T, 2T-1]
+    auto st5 = build_shape(g, {one_c},  hint + "_st5");
+    auto en5 = build_shape(g, {two_T},  hint + "_en5");
+    std::string ax5 = hint + "_ax5"; g.add_init_i64(ax5, {1}, {3LL});
+    return g.emit("Slice", {x4, st5, en5, ax5}, {}, hint + "_s5");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Multi-head Attention (enc_p encoder)
 // window_size=10, heads_share=true, no attention mask (all-ones x_mask)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -618,6 +662,7 @@ static std::string emit_attention(G& g, const TensorLoader& tl,
     auto W_o = tl.load(pfx + ".conv_o.weight");
     auto b_o = tl.load(pfx + ".conv_o.bias");
     auto emb_rk = tl.load(pfx + ".emb_rel_k");
+    auto emb_rv = tl.load(pfx + ".emb_rel_v");
 
     // Register initializers
     g.add_init_f32(hint + "_Wq", {hidden, hidden, 1}, W_q);
@@ -629,6 +674,7 @@ static std::string emit_attention(G& g, const TensorLoader& tl,
     g.add_init_f32(hint + "_Wo", {hidden, hidden, 1}, W_o);
     g.add_init_f32(hint + "_bo", {hidden},             b_o);
     g.add_init_f32(hint + "_erk", {1, 21, (int64_t)k_ch}, emb_rk);
+    g.add_init_f32(hint + "_erv", {1, 21, (int64_t)k_ch}, emb_rv);
 
     // Q, K, V projections
     auto q = op_conv1d(g, x, hint + "_Wq", hint + "_bq", 1, 1, 0, hint + "_Q");
@@ -674,6 +720,14 @@ static std::string emit_attention(G& g, const TensorLoader& tl,
 
     // out = weights @ vt → [1, H, T, k_ch]
     auto aout  = op_matmul(g, weights, vt, hint + "_aout");
+
+    // Relative-value contribution: out += abs_to_rel(weights) @ emb_rel_v
+    auto rel_w = emit_abs_to_rel(g, weights, T, n_heads, hint + "_a2r");
+    auto ev    = emit_rel_emb(g, hint + "_erv", T, n_heads, k_ch, hint + "_rev");
+    auto ev4   = op_unsqueeze(g, ev, 0, hint + "_ev4");        // [1, H, 2T-1, k_ch]
+    auto rel_o = op_matmul(g, rel_w, ev4, hint + "_relo");     // [1, H, T, k_ch]
+    aout = op_add(g, aout, rel_o, hint + "_aoutr");
+
     // Transpose: [1, H, k_ch, T]
     auto aoutT = op_transpose(g, aout, {0,1,3,2}, hint + "_aoutT");
 
@@ -718,6 +772,7 @@ static std::string emit_ffn(G& g, const TensorLoader& tl,
 static std::pair<std::string, std::string>
 emit_enc_p(G& g, const TensorLoader& tl,
            const std::string& phone,   // [1, T, phone_dim]
+           const std::string& f0,     // [1, T] float Hz (for coarse pitch emb)
            const std::string& x_mask, // [1, 1, T]
            const std::string& T,      // scalar int64
            const RvcConfig& cfg)
@@ -749,9 +804,50 @@ emit_enc_p(G& g, const TensorLoader& tl,
     // phone [1, T, pdim] @ W_T [pdim, hid] → [1, T, hid]
     auto emb   = op_matmul(g, phone, "ep_Wt", "ep_mm");
     auto emb_b = op_add(g, emb, "ep_b", "ep_add");
+
+    // emb_pitch: coarse mel-scale pitch (1..255) embedded and added, as in
+    // RVC's TextEncoder when f0=1. Coarse bins computed in-graph from f0 Hz:
+    //   mel = 1127·ln(1 + f0/700)
+    //   coarse = clip(round((mel - mel_min)·254/(mel_max - mel_min) + 1), 1, 255)
+    // with f0_min=50, f0_max=1100 (RVC constants). f0=0 maps below 1 → clipped to 1.
+    if (tl.has("enc_p.emb_pitch.weight")) {
+        auto pe_sh = tl.shape("enc_p.emb_pitch.weight");      // [256, hid]
+        auto pe_w  = tl.load("enc_p.emb_pitch.weight");
+        g.add_init_f32("ep_pew", pe_sh, pe_w);
+
+        const float mel_min = 1127.f * std::log(1.f + 50.f   / 700.f);
+        const float mel_max = 1127.f * std::log(1.f + 1100.f / 700.f);
+
+        std::string c700  = "cp_700";  g.add_scalar_f32(c700,  700.f);
+        std::string c1127 = "cp_1127"; g.add_scalar_f32(c1127, 1127.f);
+        std::string c1f   = "cp_1f";   g.add_scalar_f32(c1f,   1.f);
+        std::string cmin  = "cp_mmin"; g.add_scalar_f32(cmin,  mel_min);
+        std::string cscl  = "cp_mscl"; g.add_scalar_f32(cscl,  254.f / (mel_max - mel_min));
+        std::string clo   = "cp_lo";   g.add_scalar_f32(clo,   1.f);
+        std::string chi   = "cp_hi";   g.add_scalar_f32(chi,   255.f);
+
+        auto r   = op_div(g, f0, c700, "cp_r");
+        auto r1  = op_add(g, r, c1f, "cp_r1");
+        auto lg  = g.emit("Log", {r1}, {}, "cp_log");
+        auto mel = op_mul(g, lg, c1127, "cp_mel");
+        auto ms  = op_sub(g, mel, cmin, "cp_ms");
+        auto sc  = op_mul(g, ms, cscl, "cp_sc");
+        auto sc1 = op_add(g, sc, c1f, "cp_sc1");
+        auto rd  = g.emit("Round", {sc1}, {}, "cp_round");
+        auto cl  = g.emit("Clip", {rd, clo, chi}, {}, "cp_clip");
+        auto ci  = g.emit("Cast", {cl}, {G::attr_int("to", kDtInt64)}, "cp_i64");
+        // Gather rows: [256, hid] indexed by [1, T] → [1, T, hid]
+        auto pemb = op_gather(g, "ep_pew", ci, 0, "cp_emb");
+        emb_b = op_add(g, emb_b, pemb, "ep_addp");
+    }
+
+    // x = x * sqrt(hidden_channels)  (RVC scales embeddings before the encoder)
+    std::string sqh_c = "ep_sqh"; g.add_scalar_f32(sqh_c, std::sqrt((float)hid));
+    auto emb_s = op_mul(g, emb_b, sqh_c, "ep_scale");
+
+    auto xlr_btc = op_leaky_relu(g, emb_s, 0.1f, "ep_lr");
     // Transpose to [1, hid, T]
-    auto xt    = op_transpose(g, emb_b, {0, 2, 1}, "ep_tp");
-    auto xlr   = op_leaky_relu(g, xt, 0.1f, "ep_lr");
+    auto xlr   = op_transpose(g, xlr_btc, {0, 2, 1}, "ep_tp");
 
     // Transformer layers
     std::string x = xlr;
@@ -1056,11 +1152,26 @@ static std::string emit_decoder(G& g, const TensorLoader& tl,
     auto sine    = g.emit("Sin", {rad}, {}, "sg_sin");            // [1,T*400,1]
     std::string amp_c = "sg_amp"; g.add_scalar_f32(amp_c, 0.1f);
     auto sine_s  = op_mul(g, sine, amp_c, "sg_sins");
-    // voiced/unvoiced mask: uv = float(f0_up > 0)
-    std::string zero_f = "sg_zf"; g.add_scalar_f32(zero_f, 0.f);
-    auto uv_b    = g.emit("Greater", {f0_up, zero_f}, {}, "sg_uvb");
+    // voiced/unvoiced mask: uv = float(f0_up > 10)  (RVC voiced_threshold=10 Hz)
+    std::string vth_f = "sg_vth"; g.add_scalar_f32(vth_f, 10.f);
+    auto uv_b    = g.emit("Greater", {f0_up, vth_f}, {}, "sg_uvb");
     auto uv      = g.emit("Cast", {uv_b}, {G::attr_int("to", kDtFloat)}, "sg_uv");
-    auto sine_wavs = op_mul(g, sine_s, uv, "sg_wavs");            // [1,T*400,1]
+    auto sine_v  = op_mul(g, sine_s, uv, "sg_sv");                // [1,T*400,1]
+
+    // Noise excitation: noise_amp = uv·noise_std + (1-uv)·sine_amp/3
+    // (unvoiced frames are noise-excited; voiced get a small dither)
+    std::string nstd_c = "sg_nstd"; g.add_scalar_f32(nstd_c, 0.003f);
+    std::string namp_c = "sg_namp"; g.add_scalar_f32(namp_c, 0.1f / 3.f);
+    std::string onef_c = "sg_1f2";  g.add_scalar_f32(onef_c, 1.f);
+    auto uv_inv   = op_sub(g, onef_c, uv, "sg_uvi");
+    auto namp_v   = op_mul(g, uv, nstd_c, "sg_nv");
+    auto namp_u   = op_mul(g, uv_inv, namp_c, "sg_nu");
+    auto namp     = op_add(g, namp_v, namp_u, "sg_na");
+    auto noise    = g.emit("RandomNormalLike", {sine_v},
+                            {G::attr_float("mean", 0.f), G::attr_float("scale", 1.f)},
+                            "sg_rnd");
+    auto noise_s  = op_mul(g, noise, namp, "sg_ns");
+    auto sine_wavs = op_add(g, sine_v, noise_s, "sg_wavs");       // [1,T*400,1]
 
     // ── SourceModuleHnNSF ─────────────────────────────────────────────────────
     // l_linear: weight [1,1], bias [1]
@@ -1097,15 +1208,20 @@ static std::string emit_decoder(G& g, const TensorLoader& tl,
     auto cond_out = op_conv1d(g, g_cond, "dc_cw", "dc_cb", 1, 1, 0, "dc_cond");
     xd = op_add(g, xd, cond_out, "dc_xcond");
 
-    // noise_conv parameters (given in spec)
+    // noise_conv parameters: stride_f0 = prod(upsample_rates[i+1:]),
+    // kernel = 2·stride_f0 (1 for the last stage), pad = stride_f0/2 —
+    // mirrors RVC GeneratorNSF so non-40k rate configs work too.
+    int n_up = (int)cfg.upsample_rates.size();
     struct NcInfo { int ch_out; int k, stride, pad; };
-    // ch_out follows the up-stage ch_out (upinit/2, /4, /8, /16)
-    const NcInfo nc_info[4] = {
-        {upinit/2,  80, 40, 20},
-        {upinit/4,   8,  4,  2},
-        {upinit/8,   4,  2,  1},
-        {upinit/16,  1,  1,  0}
-    };
+    std::vector<NcInfo> nc_info((size_t)n_up);
+    for (int i = 0; i < n_up; i++) {
+        int s = 1;
+        for (int j = i + 1; j < n_up; j++) s *= cfg.upsample_rates[(size_t)j];
+        nc_info[(size_t)i].ch_out = upinit >> (i + 1);
+        nc_info[(size_t)i].stride = (i + 1 < n_up) ? s : 1;
+        nc_info[(size_t)i].k      = (i + 1 < n_up) ? 2 * s : 1;
+        nc_info[(size_t)i].pad    = (i + 1 < n_up) ? s / 2 : 0;
+    }
 
     int ch_cur = upinit;
     for (int i = 0; i < (int)cfg.upsample_rates.size(); i++) {
@@ -1230,9 +1346,18 @@ std::string pth_to_onnx(const PthModel& m, const std::string& out_path)
         auto g_cond  = op_unsqueeze(g, g_emb2, 2, "g_cond");           // [1, gin_ch, 1]
 
         // ── TextEncoder ───────────────────────────────────────────────────────
-        auto [m_p, logs_p] = emit_enc_p(g, tl, "phone", "x_mask", T_scalar, cfg);
-        (void)logs_p;  // not used at inference (mean-only sampling)
-        std::string z = m_p;  // z = m_p  (deterministic, noise-free)
+        auto [m_p, logs_p] = emit_enc_p(g, tl, "phone", "f0", "x_mask", T_scalar, cfg);
+
+        // z = m_p + exp(logs_p)·noise·0.66666  (RVC's sampling temperature;
+        // the noise keeps the output from sounding over-smoothed/robotic)
+        std::string ztmp_c = "z_temp"; g.add_scalar_f32(ztmp_c, 0.66666f);
+        auto z_std   = g.emit("Exp", {logs_p}, {}, "z_exp");
+        auto z_noise = g.emit("RandomNormalLike", {m_p},
+                              {OnnxGraph::attr_float("mean", 0.f),
+                               OnnxGraph::attr_float("scale", 1.f)}, "z_rnd");
+        auto z_ns    = op_mul(g, z_noise, z_std, "z_ns");
+        auto z_nt    = op_mul(g, z_ns, ztmp_c, "z_nt");
+        std::string z = op_add(g, m_p, z_nt, "z_sample");
 
         // ── Flow (reverse) ────────────────────────────────────────────────────
         z = emit_flow_reverse(g, tl, z, "x_mask", g_cond, cfg.inter_channels, "fl");
@@ -1264,7 +1389,8 @@ std::string pth_to_onnx(const PthModel& m, const std::string& out_path)
             std::ofstream jf(jp);
             if (!jf) return "Cannot write sidecar JSON: " + jp;
             jf << "{\"target_sr\":" << cfg.sr
-               << ",\"phone_dim\":" << cfg.phone_dim << "}";
+               << ",\"phone_dim\":" << cfg.phone_dim
+               << ",\"vc_version\":3}";
         }
 
         return "";  // success

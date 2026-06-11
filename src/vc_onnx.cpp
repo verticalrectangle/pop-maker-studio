@@ -1,8 +1,8 @@
 // RVC voice conversion — pure C++ ONNX Runtime inference.
-// Pipeline: ffmpeg decode → YIN F0 → HuBERT ONNX → repeat-interleave
-//           → VITS ONNX → ffmpeg encode.
-// Python is only ever used for one-time model export (vc_export.py).
+// Pipeline: ffmpeg decode → RMVPE F0 (YIN fallback) → HuBERT ONNX
+//           → repeat-interleave → VITS ONNX → ffmpeg encode.
 #include "vc_onnx.h"
+#include "rmvpe_onnx.h"
 #include "paths.h"
 #include <onnxruntime_cxx_api.h>
 #include <filesystem>
@@ -20,8 +20,6 @@ namespace fs = std::filesystem;
 
 static constexpr int kHubRate  = 16000;   // HuBERT expects 16 kHz
 static constexpr int kOutRate  = 44100;   // app standard
-static constexpr int kYINWin   = 1024;    // ~64 ms at 16 kHz
-static constexpr int kYINHop   = 160;     // ~10 ms at 16 kHz → ~100 fps
 
 // ── Paths ─────────────────────────────────────────────────────────────────────
 
@@ -57,57 +55,6 @@ static bool write_wav(const std::string& p, const std::vector<float>& d, int in_
     if (!fp) return false;
     fwrite(d.data(), sizeof(float), d.size(), fp);
     return pclose(fp) == 0;
-}
-
-// ── YIN F0 detector (from silvertune) ────────────────────────────────────────
-// Returns F0 in Hz per frame (0.0 = unvoiced).
-
-static std::vector<float> yin_f0(
-    const std::vector<float>& x, int sr, int hop = kYINHop, int win = kYINWin)
-{
-    int N        = (int)x.size();
-    int half     = win / 2;
-    int min_tau  = std::max(1, sr / 1100);
-    int max_tau  = std::min(half - 1, sr / 50);
-    int n_frames = std::max(1, (N - win) / hop + 1);
-
-    std::vector<float> f0(n_frames, 0.f), d(half);
-
-    for (int i = 0; i < n_frames; i++) {
-        int start = i * hop;
-
-        // Difference function
-        for (int tau = 0; tau < half; tau++) {
-            float sum = 0.f;
-            for (int j = 0; j < half; j++) {
-                float a = (start + j        < N) ? x[start + j]        : 0.f;
-                float b = (start + j + tau  < N) ? x[start + j + tau]  : 0.f;
-                sum += (a - b) * (a - b);
-            }
-            d[tau] = sum;
-        }
-
-        // Cumulative mean normalised difference
-        d[0] = 1.f;
-        float run = 0.f;
-        for (int tau = 1; tau < half; tau++) {
-            run += d[tau];
-            d[tau] = (run > 1e-10f) ? d[tau] * tau / run : 1.f;
-        }
-
-        // Absolute threshold + parabolic interpolation
-        for (int tau = std::max(min_tau, 2); tau < max_tau; tau++) {
-            if (d[tau] < 0.15f && d[tau] <= d[tau - 1]) {
-                float denom = d[tau-1] - 2.f*d[tau] + (tau+1 < half ? d[tau+1] : d[tau]);
-                float adj   = (std::abs(denom) > 1e-10f && tau+1 < half)
-                            ? 0.5f * (d[tau-1] - d[tau+1]) / denom : 0.f;
-                adj = std::max(-0.5f, std::min(0.5f, adj));
-                f0[i] = (float)sr / (tau + adj);
-                break;
-            }
-        }
-    }
-    return f0;
 }
 
 // Linear interpolation to resize an F0 array.
@@ -156,6 +103,30 @@ std::string vc_onnx_convert(
     prog(0.05f, "Loading audio…");
     auto wav16 = read_mono(source_wav, kHubRate);   // for HuBERT + F0
     if (wav16.empty()) return "Failed to decode audio";
+
+    // Normalise to 0.95 peak (parity with RVC preprocessing)
+    {
+        float peak = 0.f;
+        for (float v : wav16) peak = std::fmax(peak, std::fabs(v));
+        if (peak / 0.95f > 1.f) {
+            float s = 0.95f / peak;
+            for (auto& v : wav16) v *= s;
+        }
+    }
+
+    // Reflect-pad 0.5 s each side so HuBERT/F0 context exists at the clip
+    // edges; the matching span is trimmed from the synthesised output.
+    constexpr int kPad16 = kHubRate / 2;
+    {
+        int n = (int)wav16.size();
+        std::vector<float> p((size_t)n + 2 * kPad16);
+        for (int i = 0; i < kPad16; i++)
+            p[(size_t)i] = wav16[(size_t)std::min(kPad16 - i, n - 1)];
+        std::copy(wav16.begin(), wav16.end(), p.begin() + kPad16);
+        for (int i = 0; i < kPad16; i++)
+            p[(size_t)(kPad16 + n + i)] = wav16[(size_t)std::max(0, n - 2 - i)];
+        wav16 = std::move(p);
+    }
     int N16 = (int)wav16.size();
 
     // ── ONNX sessions ─────────────────────────────────────────────────────────
@@ -223,10 +194,13 @@ std::string vc_onnx_convert(
         std::copy(src, src + D_phone, d1);
     }
 
-    // ── YIN F0 ────────────────────────────────────────────────────────────────
+    // ── F0: RMVPE (neural pitch tracker) — required, no silent fallback ──────
     prog(0.55f, "Extracting pitch…");
 
-    auto f0_raw = yin_f0(wav16, kHubRate);
+    auto f0_raw = rmvpe_f0(wav16);
+    if (f0_raw.empty())
+        return "RMVPE pitch extraction failed (rmvpe.onnx missing or broken at "
+               + rmvpe_onnx_path() + ")";
     if (f0_semitones != 0) {
         float mult = std::pow(2.f, f0_semitones / 12.f);
         for (auto& v : f0_raw) if (v > 0.f) v *= mult;
@@ -260,9 +234,12 @@ std::string vc_onnx_convert(
     const float* ad  = voc_out[0].GetTensorData<float>();
     int M = (int)audio_shape[2];   // [1, 1, M]
 
-    // ── Write output ──────────────────────────────────────────────────────────
+    // ── Write output (trim the 0.5 s reflect padding) ─────────────────────────
     prog(0.92f, "Writing output…");
-    std::vector<float> audio(ad, ad + M);
+    int trim = tgt_sr / 2;
+    int lo   = std::min(trim, M);
+    int hi   = std::max(lo, M - trim);
+    std::vector<float> audio(ad + lo, ad + hi);
     if (!write_wav(output_wav, audio, tgt_sr))
         return "Failed to write output audio";
 
