@@ -1635,7 +1635,6 @@ void ui_studio(AppState& state) {
         ImGui::SetCursorPos({0.f, ImGui::GetCursorPosY()});
         draw_pipeline_strip(state, win_w);
     }
-    draw_vision_download_strip(win_w);
     // Surface agent-driven find_and_add_clip / search_transcript runs in the
     // same strip lane so the human can see what's being scanned.
     draw_search_strip(win_w);

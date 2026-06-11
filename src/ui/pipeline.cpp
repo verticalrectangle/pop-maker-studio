@@ -9,7 +9,6 @@
 #include "history.h"
 #include "filepicker.h"
 #include "transcribe.h"
-#include "vision_download.h"
 #include "beat_detect.h"
 #include "waveform.h"
 #include "theme.h"
@@ -886,47 +885,6 @@ void draw_pipeline_strip(AppState& state, float w) {
     dl->AddText({cx, p.y + 3.f},
         to_u32(hov ? Col::fg : Col::muted), cancel_lbl);
     if (hov && ImGui::IsMouseClicked(0)) transcribe_cancel();
-
-    ImGui::Dummy({w, h});
-}
-
-void draw_vision_download_strip(float w) {
-    if (!vision_download_running()) return;
-
-    ImDrawList* dl = ImGui::GetWindowDrawList();
-    ImVec2 p = ImGui::GetCursorScreenPos();
-    float  h = 32.f;
-
-    dl->AddRectFilled(p, {p.x + w, p.y + h}, to_u32(Col::bg_soft));
-    dl->AddLine({p.x, p.y + h}, {p.x + w, p.y + h}, to_u32(Col::line));
-
-    float prog = vision_download_progress();
-    dl->AddRectFilled(p, {p.x + w * prog, p.y + h}, IM_COL32(255,255,255,18));
-
-    float pulse = 0.5f + 0.5f * sinf((float)ImGui::GetTime() * 4.f);
-    dl->AddCircleFilled({p.x + 14.f, p.y + h * 0.5f}, 4.f,
-        ImGui::ColorConvertFloat4ToU32({1.f, 1.f, 1.f, pulse}));
-
-    std::string msg = vision_download_message();
-    if (msg.empty()) msg = "Downloading vision model…";
-    char buf[256];
-    snprintf(buf, sizeof(buf), "Vision Model  •  %s  %d%%",
-             msg.c_str(), (int)(prog * 100.f));
-    dl->AddText({p.x + 26.f, p.y + 3.f}, to_u32(Col::muted), buf);
-
-    std::string err = vision_download_error();
-    if (!err.empty()) {
-        std::string e = err.size() > 80 ? err.substr(0, 77) + "..." : err;
-        dl->AddText(ImGui::GetFont(), 10.f, {p.x + 26.f, p.y + 15.f},
-                    to_u32(Col::dim), e.c_str());
-    }
-
-    const char* cancel_lbl = "Cancel";
-    float cx = p.x + w - ImGui::CalcTextSize(cancel_lbl).x - 16.f;
-    ImVec2 mp = ImGui::GetIO().MousePos;
-    bool hov = mp.x >= cx && mp.y >= p.y && mp.y < p.y + h;
-    dl->AddText({cx, p.y + 3.f}, to_u32(hov ? Col::fg : Col::muted), cancel_lbl);
-    if (hov && ImGui::IsMouseClicked(0)) vision_download_cancel();
 
     ImGui::Dummy({w, h});
 }

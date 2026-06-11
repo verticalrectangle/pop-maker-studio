@@ -108,6 +108,18 @@ jobs:
           curl -fsSL -o release/models/wav2vec2_vocab.json \
             "https://huggingface.co/facebook/wav2vec2-base-960h/resolve/main/vocab.json"
 
+          echo "Downloading Moondream2 vision models (release-only — no runtime downloads)..."
+          mkdir -p release/vision-models
+          MOON="https://huggingface.co/Xenova/moondream2/resolve/main"
+          curl -fsSL -o release/vision-models/moondream-encoder.onnx \
+            "${MOON}/onnx/vision_encoder_q4.onnx"
+          curl -fsSL -o release/vision-models/embed_tokens.onnx \
+            "${MOON}/onnx/embed_tokens_q4.onnx"
+          curl -fsSL -o release/vision-models/moondream-decoder.onnx \
+            "${MOON}/onnx/decoder_model_merged_q4.onnx"
+          curl -fsSL -o release/vision-models/moondream-tokenizer.json \
+            "${MOON}/tokenizer.json"
+
           echo "Downloading Piper voices..."
           BASE_URL="https://huggingface.co/rhasspy/piper-voices/resolve/main"
           for VOICE in en_US-amy-medium en_US-ryan-medium en_US-lessac-medium en_GB-alan-medium; do
@@ -126,15 +138,27 @@ jobs:
 
       - name: Package release
         run: |
+          # Two assets to stay under GitHub's 2 GB per-file limit:
+          #   app + core models (~1.6 GB), vision models (~1.5 GB).
+          # Both extract into the same directory:
+          #   tar -xzf pop-maker-studio-linux-x86_64.tar.gz
+          #   tar -xzf pop-maker-studio-vision-models.tar.gz
           mkdir -p pop-maker-studio
           cp build/pop-maker-studio pop-maker-studio/pop-maker-studio
           cp -r release/models pop-maker-studio/models
           tar -czf pop-maker-studio-linux-x86_64.tar.gz pop-maker-studio/
 
+          rm -rf pop-maker-studio
+          mkdir -p pop-maker-studio/models
+          cp release/vision-models/* pop-maker-studio/models/
+          tar -czf pop-maker-studio-vision-models.tar.gz pop-maker-studio/
+
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2
         with:
-          files: pop-maker-studio-linux-x86_64.tar.gz
+          files: |
+            pop-maker-studio-linux-x86_64.tar.gz
+            pop-maker-studio-vision-models.tar.gz
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

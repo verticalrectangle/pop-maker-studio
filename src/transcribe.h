@@ -4,7 +4,7 @@
 #include <vector>
 // PipelineMode is defined in app.h so AppState can hold last_pipeline_mode.
 
-// Kick off ml_pipeline.py as a subprocess.
+// Run the transcription pipeline (whisper.cpp in-process; C++ only).
 // Writes progress to `status` from a background thread.
 // out_words_json / out_vocals_wav are set before the thread reads them.
 // clip_in / clip_dur (seconds): when clip_dur > 0, only the source region

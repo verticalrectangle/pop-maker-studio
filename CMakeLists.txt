@@ -43,7 +43,6 @@ set(SOURCES
     src/audio.cpp
     src/recorder.cpp
     src/transcribe.cpp
-    src/stems.cpp
     src/render.cpp
     src/history.cpp
     src/filepicker.cpp
@@ -55,7 +54,6 @@ set(SOURCES
     src/bg_remove.cpp
     src/scene_detect.cpp
     src/vision_caption.cpp
-    src/vision_download.cpp
     src/body_fx.cpp
     src/noise_reduce.cpp
     src/audio_fx.cpp

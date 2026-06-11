@@ -30,7 +30,6 @@ void poll_clip_beat_analysis(AppState& state);
 
 // ── Pipeline UI strip ─────────────────────────────────────────────────────────
 void draw_pipeline_strip(AppState& state, float w);
-void draw_vision_download_strip(float w);
 // Inline status strip for windowed find_and_add_clip / search_transcript runs.
 // Renders the current search range (e.g. "Demucs 1:30 – 2:35: separating
 // vocals…"), progress, a cancel control, and disappears when the search ends.

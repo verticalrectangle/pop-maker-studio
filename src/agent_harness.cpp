@@ -668,7 +668,6 @@ static bool poll_tool_in_progress(const std::string& name, const json& r) {
         return st == "extract" || st == "transcribe" || st == "align";
     }
     if (name == "get_activity_status")     return sval("state") == "running";
-    if (name == "get_vision_model_status") return sval("status") == "downloading";
     if (name == "get_video_description" || name == "get_audio_analysis")
         return sval("status") == "running";
     if (name == "get_bg_remove_status") {

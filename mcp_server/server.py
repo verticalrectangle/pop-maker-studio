@@ -1395,20 +1395,6 @@ async def list_tools() -> list[Tool]:
             },
         ),
         Tool(
-            name="get_vision_model_status",
-            description=(
-                "Check whether the local Moondream2 vision model is installed. "
-                "Returns {status: 'ready'|'downloading'|'idle'|'error', progress?, message?}. "
-                "Poll every 3s after download_vision_model until status='ready'."
-            ),
-            inputSchema={"type": "object", "properties": {}},
-        ),
-        Tool(
-            name="download_vision_model",
-            description="Start Moondream2 download (~1.1 GB, one-time). Returns immediately. Poll get_vision_model_status until status='ready'.",
-            inputSchema={"type": "object", "properties": {}},
-        ),
-        Tool(
             name="describe_video",
             description=(
                 "Start local scene analysis: extract keyframes at scene changes and caption each "
@@ -1416,8 +1402,8 @@ async def list_tools() -> list[Tool]:
                 "{status:'cached'} when a fresh sidecar already exists (then get_video_description "
                 "returns immediately). Poll get_video_description every ~10s — captioning costs "
                 "about 10 s per scene on CPU, so long videos take minutes. Results are cached in "
-                "<video>.pms_scene.json; pass force=true to recompute. Requires the vision model "
-                "(get_vision_model_status / download_vision_model).\n\n"
+                "<video>.pms_scene.json; pass force=true to recompute. Vision models ship "
+                "with the release install.\n\n"
                 "Use this to map a WHOLE video (summaries, find_video_moment scoring) — or when you "
                 "have no vision capability of your own.\n\n"
                 "TEXT-MODE CONTACT SHEET: pass times=[...] (max 48) to caption exactly those "
@@ -2308,17 +2294,6 @@ async def _find_audio_cue(arguments: dict) -> dict:
     }
 
 
-# ── vision model download ─────────────────────────────────────────────────────
-
-async def _download_vision_model() -> dict:
-    """Start the download and return immediately. Claude polls get_vision_model_status."""
-    st = _call("get_vision_model_status", {})
-    if st.get("status") == "ready":
-        return {"status": "ready", "message": "Vision model already installed."}
-    _call("download_vision_model", {})
-    return {"status": "started", "message": "Download started. Poll get_vision_model_status every 3s until status='ready'."}
-
-
 # ── find_video_moment ─────────────────────────────────────────────────────────
 
 def _tfidf_score(query: str, text: str) -> float:
@@ -2341,13 +2316,6 @@ async def _find_video_moment(arguments: dict) -> list[dict]:
         raise ValueError("path is required")
     if not query:
         raise ValueError("query is required")
-
-    st = _call("get_vision_model_status", {})
-    if st.get("status") != "ready":
-        raise ValueError(
-            "Vision model not installed. Call download_vision_model, "
-            "then poll get_vision_model_status every 3s until status='ready'."
-        )
 
     res = _call("get_video_description", {})
     if res.get("status") != "done":
@@ -3434,9 +3402,6 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     if name == "find_video_moment":
         result = await _find_video_moment(arguments)
         return [TextContent(type="text", text=json.dumps(result, indent=2))]
-    if name == "download_vision_model":
-        result = await _download_vision_model()
-        return [TextContent(type="text", text=json.dumps(result, indent=2))]
     if name == "search_transcript":
         result = _search_transcript(arguments)
         return [TextContent(type="text", text=json.dumps(result, indent=2))]
@@ -3499,9 +3464,6 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             if not st.get("running", False) or st.get("message", "") != last_msg:
                 return [TextContent(type="text", text=json.dumps(st, indent=2))]
         return [TextContent(type="text", text=json.dumps(st, indent=2))]
-    if name == "get_vision_model_status":
-        result = _call("get_vision_model_status", {})
-        return [TextContent(type="text", text=json.dumps(result, indent=2))]
     if name == "take_snapshot":
         ipc_args = {}
         if "time" in arguments:
