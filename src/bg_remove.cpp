@@ -522,7 +522,7 @@ void bg_remove_start(AppState& state, int track_idx, int clip_idx) {
     auto& track = state.tracks[track_idx];
     if (clip_idx < 0 || clip_idx >= (int)track.clips.size()) return;
     Clip& clip = track.clips[clip_idx];
-    if (clip.clip_type != ClipType::Video || clip.text.empty()) return;
+    if (!clip_is_videolike_type(clip.clip_type) || clip.text.empty()) return;
 
     std::string mjpeg = proxy_mjpeg_path(clip.text);
     if (!fs::exists(mjpeg)) {
