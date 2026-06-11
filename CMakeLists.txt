@@ -60,6 +60,7 @@ set(SOURCES
     src/hf_api.cpp
     src/vc_job.cpp
     src/vc_onnx.cpp
+    src/faiss_ivf.cpp
     src/pth_reader.cpp
     src/rvc_onnx.cpp
     src/hubert_onnx.cpp

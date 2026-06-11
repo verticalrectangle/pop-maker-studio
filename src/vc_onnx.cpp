@@ -3,6 +3,7 @@
 //           → repeat-interleave → VITS ONNX → ffmpeg encode.
 #include "vc_onnx.h"
 #include "rmvpe_onnx.h"
+#include "faiss_ivf.h"
 #include "paths.h"
 #include <onnxruntime_cxx_api.h>
 #include <filesystem>
@@ -268,12 +269,30 @@ std::string vc_onnx_convert(
     int  T_phone    = (int)feat_shape[1];
     int  D_phone    = (int)feat_shape[2];
     const float* fd = hub_out[0].GetTensorData<float>();
+    std::vector<float> feats(fd, fd + (size_t)T_phone * D_phone);
+
+    // ── Feature retrieval (faiss .index sibling, RVC index_rate) ─────────────
+    // Pull each frame toward its nearest training-set features — tightens
+    // timbre. Skipped when no <voice_stem>.index exists.
+    {
+        std::string ip = voice_onnx.substr(0, voice_onnx.rfind('.')) + ".index";
+        if (fs::exists(ip)) {
+            prog(0.45f, "Feature retrieval…");
+            FaissIVF ivf = faiss_ivf_load(ip);
+            if (!ivf.err.empty())
+                return "Index load failed (" + ip + "): " + ivf.err;
+            if (ivf.dim == D_phone) {
+                constexpr float kIndexRate = 0.75f;
+                faiss_ivf_blend(ivf, feats.data(), T_phone, kIndexRate);
+            }
+        }
+    }
 
     // Repeat-interleave ×2: [1, T, D] → [1, 2T, D]
     int T2 = T_phone * 2;
     std::vector<float> phone((size_t)T2 * D_phone);
     for (int t = 0; t < T_phone; t++) {
-        const float* src = fd + (size_t)t * D_phone;
+        const float* src = feats.data() + (size_t)t * D_phone;
         float* d0 = phone.data() + (size_t)(2*t)   * D_phone;
         float* d1 = phone.data() + (size_t)(2*t+1) * D_phone;
         std::copy(src, src + D_phone, d0);

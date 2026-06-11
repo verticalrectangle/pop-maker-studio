@@ -292,7 +292,7 @@ void hf_download_model(const std::string& repo, const std::string& model_file,
             fs::create_directories(extract_dir, ec2);
 
             std::string unzip_cmd = "unzip -j -o \""
-                                  + zip_path + "\" \"*.pth\" -d \""
+                                  + zip_path + "\" \"*.pth\" \"*.index\" -d \""
                                   + extract_dir + "\" 2>/dev/null";
             rc = system(unzip_cmd.c_str());
 
@@ -316,6 +316,14 @@ void hf_download_model(const std::string& repo, const std::string& model_file,
             }
 
             fs::rename(found_pth, out_path, ec2);
+            // Keep a bundled faiss .index as <model_stem>.index (retrieval)
+            for (auto& entry : fs::directory_iterator(extract_dir, ec2)) {
+                if (entry.path().extension() == ".index") {
+                    std::string stem = out_path.substr(0, out_path.rfind('.'));
+                    fs::rename(entry.path(), stem + ".index", ec2);
+                    break;
+                }
+            }
             fs::remove(zip_path);
             fs::remove_all(extract_dir);
 
