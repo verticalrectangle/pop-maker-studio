@@ -355,7 +355,38 @@ static void draw_crop_mode(AppState& state, ImDrawList* dl, ImVec2 p, float w, f
     }
 }
 
+static CanvasHandleGeom s_handle_geom;
+CanvasHandleGeom canvas_handle_geom() { return s_handle_geom; }
+
+// True when the mouse sits on one of the selection's transform handles
+// (geometry from last frame's draw_canvas_handles). Layer picking runs
+// earlier in the frame than draw_canvas_handles, so without this a click on
+// the rotate knob — which sits OUTSIDE the selected clip's bbox — counted as
+// a click on empty canvas (deselect) or on whatever clip sat underneath
+// (reselect), and the rotate drag never began. Hit extents mirror the handle
+// hit tests below (CR/EL/ES + 4px grace).
+static bool mouse_on_handle_spot(ImVec2 m) {
+    const CanvasHandleGeom& g = s_handle_geom;
+    if (!g.valid) return false;
+    const float CR = 4.5f, EL = 11.f, ES = 2.5f;
+    float mx = (g.bx0 + g.bx1) * 0.5f, my = (g.by0 + g.by1) * 0.5f;
+    // Rotate knob
+    if (fabsf(m.x - g.rot_x) <= CR+5.f && fabsf(m.y - g.rot_y) <= CR+5.f) return true;
+    // Corners
+    const float c = CR + 4.f;
+    if ((fabsf(m.x - g.bx0) <= c || fabsf(m.x - g.bx1) <= c) &&
+        (fabsf(m.y - g.by0) <= c || fabsf(m.y - g.by1) <= c)) return true;
+    // Top/bottom edge bars
+    if (fabsf(m.x - mx) <= EL+4.f &&
+        (fabsf(m.y - g.by0) <= ES+4.f || fabsf(m.y - g.by1) <= ES+4.f)) return true;
+    // Left/right edge bars
+    if (fabsf(m.y - my) <= EL+4.f &&
+        (fabsf(m.x - g.bx0) <= ES+4.f || fabsf(m.x - g.bx1) <= ES+4.f)) return true;
+    return false;
+}
+
 void draw_canvas_handles(AppState& state, ImDrawList* dl, ImVec2 p, float w, float h) {
+    s_handle_geom = CanvasHandleGeom{};
     // Crop-edit mode replaces the normal transform handles entirely.
     if (state.crop_edit_track >= 0) { draw_crop_mode(state, dl, p, w, h); return; }
     if (state.selected_track < 0 || state.selected_clip < 0) return;
@@ -403,13 +434,33 @@ void draw_canvas_handles(AppState& state, ImDrawList* dl, ImVec2 p, float w, flo
     bool in_preview  = mpos.x >= zp.x && mpos.x <= zp.x+zs.x &&
                        mpos.y >= zp.y && mpos.y <= zp.y+zs.y;
     bool drag_active = (s_ctx.handle != CanvasHandle::None);
-    if (!in_preview && !drag_active) return;
 
     // ── Handle visual constants ───────────────────────────────────────────────
     const float CR       = 4.5f;    // corner half-size
     const float EL       = 11.f;    // edge handle long-axis half
     const float ES       = 2.5f;    // edge handle short-axis half
     const float ROT_DIST = 28.f;
+
+    // Record handle geometry before the hover early-out — IPC clients driving
+    // the canvas via ui_input need knob/bbox positions even while the real
+    // cursor is parked outside the preview.
+    if (clip_is_videolike_type(cl.clip_type)) {
+        float gx0, gy0, gx1, gy1;
+        compute_video_bbox(state, cl, p, w, h, gx0, gy0, gx1, gy1);
+        s_handle_geom = {true, gx0, gy0, gx1, gy1,
+                         (gx0+gx1)*0.5f, gy0 - ROT_DIST,
+                         cl.eval_prop("pos_x", state.playhead) * w + p.x,
+                         cl.eval_prop("pos_y", state.playhead) * h + p.y};
+    } else if (cl.clip_type == ClipType::Background) {
+        float gpx = cl.eval_prop("pos_x",   state.playhead) * w + p.x;
+        float gpy = cl.eval_prop("pos_y",   state.playhead) * h + p.y;
+        float ghw = w * cl.eval_prop("scale_x", state.playhead) * 0.5f;
+        float ghh = h * cl.eval_prop("scale_y", state.playhead) * 0.5f;
+        s_handle_geom = {true, gpx-ghw, gpy-ghh, gpx+ghw, gpy+ghh,
+                         gpx, gpy-ghh - ROT_DIST, gpx, gpy};
+    }
+
+    if (!in_preview && !drag_active) return;
 
     ImU32 box_col  = IM_COL32(255, 255, 255, 180);
     ImU32 hdl_col  = IM_COL32(255, 255, 255, 230);
@@ -1207,9 +1258,11 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                            mpos.y >= zone_p.y && mpos.y <= zone_p.y+zone_s.y;
 
     // Layer picking stands down during crop-edit mode — clicks there belong
-    // to the crop window/handles (draw_crop_mode).
+    // to the crop window/handles (draw_crop_mode) — and on the selection's
+    // transform handles (the rotate knob sits outside the clip bbox; picking
+    // there deselected the clip before the rotate drag could begin).
     if (lclick && in_preview_area && s_ctx.handle == CanvasHandle::None &&
-        state.crop_edit_track < 0) {
+        state.crop_edit_track < 0 && !mouse_on_handle_spot(mpos)) {
         struct HitCandidate { int ti, ci; float area; };
         std::vector<HitCandidate> hits;
         for (int ti = 0; ti < (int)state.tracks.size(); ++ti) {

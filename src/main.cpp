@@ -11,6 +11,7 @@
 #include <filesystem>
 
 #include "app.h"
+#include "ipc_server.h"
 #include "paths.h"
 #include "video.h"
 #include "fx_shader.h"
@@ -250,6 +251,7 @@ int main(int argc, char** argv) {
 
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplGlfw_NewFrame();
+        ipc_debug_input_tick();  // synthetic mouse steps land after the backend's
         ImGui::NewFrame();
 
         app_frame(state);

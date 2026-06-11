@@ -6,6 +6,7 @@
 #include "bg_remove.h"
 #include "history.h"
 #include "runtime_fx.h"
+#include "ui/canvas.h"
 #include "ui/pipeline.h"
 #include "ui/panel_animation.h"
 #include "ui/panel_media.h"
@@ -34,6 +35,7 @@ static const char* k_gen_fx_names[] = {
 
 #include <cstdio>
 #include <cstring>
+#include <deque>
 #include <string>
 #include <vector>
 #include <algorithm>
@@ -596,6 +598,25 @@ static int track_by_name_or_index(const AppState& state, const json& params) {
         return -1;
     }
     return params.value("track", -1);
+}
+
+// ── Synthetic mouse input (ui_input) ──────────────────────────────────────────
+// Agents can't reach the canvas handles through any structured IPC method —
+// transform handles are pure mouse interactions. ui_input queues scripted
+// mouse steps; the main loop feeds exactly one per frame into ImGui (after
+// the GLFW backend's events, so an injected position wins the frame). Used
+// for agent-driven UI testing; everything runs on the main thread.
+struct InputStep { float x = 0, y = 0; bool has_pos = false; int btn = -1; };  // btn: 0 down, 1 up
+static std::deque<InputStep> g_input_steps;
+
+void ipc_debug_input_tick() {
+    if (g_input_steps.empty()) return;
+    InputStep s = g_input_steps.front();
+    g_input_steps.pop_front();
+    ImGuiIO& io = ImGui::GetIO();
+    if (s.has_pos)     io.AddMousePosEvent(s.x, s.y);
+    if (s.btn == 0)    io.AddMouseButtonEvent(0, true);
+    else if (s.btn == 1) io.AddMouseButtonEvent(0, false);
 }
 
 // ── Command dispatch ──────────────────────────────────────────────────────────
@@ -1185,6 +1206,53 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         float t = params.value("time", 0.f);
         state.playhead = t;
         return json::object();
+    }
+
+    if (method == "ui_input") {
+        // steps: [{x, y, down?, up?}] — one consumed per UI frame. A drag is
+        // move → down → N moves → up. Holding a position for a frame = a step
+        // with the same x/y.
+        if (!params.contains("steps") || !params["steps"].is_array()) {
+            err = "ui_input needs steps: [{x,y,down?,up?}]"; return {};
+        }
+        for (auto& st : params["steps"]) {
+            InputStep s;
+            if (st.contains("x") && st.contains("y")) {
+                s.x = st.value("x", 0.f); s.y = st.value("y", 0.f);
+                s.has_pos = true;
+            }
+            if (st.value("down", false))     s.btn = 0;
+            else if (st.value("up", false))  s.btn = 1;
+            g_input_steps.push_back(s);
+        }
+        json r; r["queued"] = (int)g_input_steps.size();
+        return r;
+    }
+
+    if (method == "get_canvas_geometry") {
+        // Transform-handle geometry from the last drawn frame (screen px) —
+        // pairs with ui_input so agents can hit the handles deterministically.
+        CanvasHandleGeom g = canvas_handle_geom();
+        json r;
+        r["valid"] = g.valid;
+        if (g.valid) {
+            r["bbox"]     = {g.bx0, g.by0, g.bx1, g.by1};
+            r["rotate_knob"] = {g.rot_x, g.rot_y};
+            r["center"]   = {g.cx, g.cy};
+        }
+        r["selected_track"] = state.selected_track;
+        r["selected_clip"]  = state.selected_clip;
+        if (state.selected_track >= 0 && state.selected_track < (int)state.tracks.size() &&
+            state.selected_clip >= 0 &&
+            state.selected_clip < (int)state.tracks[state.selected_track].clips.size()) {
+            Clip& sc = state.tracks[state.selected_track].clips[state.selected_clip];
+            r["rotation"] = sc.rotation;
+            r["scale_x"]  = sc.scale_x;
+            r["pos_x"]    = sc.pos_x;
+            r["pos_y"]    = sc.pos_y;
+        }
+        r["pending_input_steps"] = (int)g_input_steps.size();
+        return r;
     }
 
     if (method == "vrecord_start") {
