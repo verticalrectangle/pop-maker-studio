@@ -502,7 +502,8 @@ void draw_canvas_handles(AppState& state, ImDrawList* dl, ImVec2 p, float w, flo
 
         // Apply video drag
         if (drag_active && s_ctx.track_idx == state.selected_track &&
-            s_ctx.clip_idx == state.selected_clip && cl.clip_type == ClipType::Video) {
+            s_ctx.clip_idx == state.selected_clip &&
+            clip_is_videolike_type(cl.clip_type)) {
             float dmx = mpos.x - s_ctx.drag_sx;
             float dmy = mpos.y - s_ctx.drag_sy;
             Clip& mc = state.tracks[s_ctx.track_idx].clips[s_ctx.clip_idx];
@@ -928,25 +929,60 @@ static void draw_camera_mirror(ImDrawList* dl, ImVec2 p, float w, float h) {
 
     // Fit inside the canvas with a small inset; mirror horizontally so it
     // behaves like a mirror (recorded takes keep the true orientation).
+    // Rotation comes from the camera brick (selected, or the record target)
+    // so the mirror matches how the take will sit on the canvas — phone
+    // cameras over v4l2loopback often arrive sideways.
+    float rot_deg = 0.f;
+    {
+        extern AppState* g_state_for_mirror;   // set by draw_preview below
+        if (g_state_for_mirror) {
+            AppState& st = *g_state_for_mirror;
+            const Clip* br = nullptr;
+            if (st.selected_track >= 0 && st.selected_track < (int)st.tracks.size() &&
+                st.selected_clip >= 0 &&
+                st.selected_clip < (int)st.tracks[st.selected_track].clips.size()) {
+                const Clip& c2 = st.tracks[st.selected_track].clips[st.selected_clip];
+                if (c2.clip_type == ClipType::VideoRecord) br = &c2;
+            }
+            if (!br) {
+                for (auto& tr : st.tracks)
+                    for (auto& c2 : tr.clips)
+                        if (c2.clip_type == ClipType::VideoRecord) { br = &c2; break; }
+            }
+            if (br) rot_deg = br->rotation;
+        }
+    }
+    float rad = rot_deg * 3.14159265f / 180.f;
+    float cr = cosf(rad), sr = sinf(rad);
+
+    // Fit the ROTATED frame inside the canvas with a small inset.
     float inset = 12.f;
     float aw = w - inset * 2.f, ah = h - inset * 2.f;
-    float sc = fminf(aw / (float)s_cam_w, ah / (float)s_cam_h);
-    float dw = s_cam_w * sc, dh = s_cam_h * sc;
+    float bw = fabsf((float)s_cam_w * cr) + fabsf((float)s_cam_h * sr);
+    float bh = fabsf((float)s_cam_w * sr) + fabsf((float)s_cam_h * cr);
+    float sc = fminf(aw / bw, ah / bh);
+    float hw = s_cam_w * sc * 0.5f, hh = s_cam_h * sc * 0.5f;
     ImVec2 c  = {p.x + w * 0.5f, p.y + h * 0.5f};
-    ImVec2 q0 = {c.x - dw * 0.5f, c.y - dh * 0.5f};
-    ImVec2 q1 = {c.x + dw * 0.5f, c.y + dh * 0.5f};
+    auto rotp = [&](float x, float y) {
+        return ImVec2{c.x + x * cr - y * sr, c.y + x * sr + y * cr};
+    };
+    ImVec2 p0 = rotp(-hw, -hh), p1 = rotp(hw, -hh),
+           p2 = rotp(hw, hh),   p3 = rotp(-hw, hh);
     dl->AddRectFilled({p.x, p.y}, {p.x + w, p.y + h}, IM_COL32(0, 0, 0, 160));
-    dl->AddImage((ImTextureID)(intptr_t)s_cam_tex, q0, q1,
-                 {1, 0}, {0, 1});   // u flipped → mirror
+    // u flipped → mirror behaviour (recorded takes keep true orientation)
+    dl->AddImageQuad((ImTextureID)(intptr_t)s_cam_tex, p0, p1, p2, p3,
+                     {1, 0}, {0, 0}, {0, 1}, {1, 1});
     ImU32 frame_col = vrecorder_recording() ? IM_COL32(235, 90, 40, 255)
                                             : IM_COL32(160, 160, 180, 160);
-    dl->AddRect(q0, q1, frame_col, 4.f, 0,
-                vrecorder_recording() ? 3.f : 1.5f);
+    dl->AddQuad(p0, p1, p2, p3, frame_col, vrecorder_recording() ? 3.f : 1.5f);
     const char* tag2 = vrecorder_recording() ? "\xe2\x97\x8f REC"
                      : vrecorder_warming()   ? "starting\xe2\x80\xa6"
                                              : "camera";
-    dl->AddText({q0.x + 10.f, q0.y + 8.f}, frame_col, tag2);
+    dl->AddText({fminf(fminf(p0.x,p1.x),fminf(p2.x,p3.x)) + 10.f,
+                 fminf(fminf(p0.y,p1.y),fminf(p2.y,p3.y)) + 8.f}, frame_col, tag2);
 }
+
+AppState* g_state_for_mirror = nullptr;
 
 void draw_preview(AppState& state, ImVec2 p, float w, float h) {
     // IPC-triggered snapshot — fulfilled here on the GL thread
@@ -2012,6 +2048,7 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
         }
     }
 
+    g_state_for_mirror = &state;
     draw_camera_mirror(dl, p, w, h);
 }
 
