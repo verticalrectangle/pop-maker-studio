@@ -927,6 +927,8 @@ static void draw_camera_mirror(ImDrawList* dl, ImVec2 p, float w, float h) {
     }
     if (!s_cam_tex || s_cam_w <= 0) return;
 
+    uintptr_t draw_tex = s_cam_tex;
+
     // Fit inside the canvas with a small inset; mirror horizontally so it
     // behaves like a mirror (recorded takes keep the true orientation).
     // Rotation comes from the camera brick (selected, or the record target)
@@ -950,6 +952,23 @@ static void draw_camera_mirror(ImDrawList* dl, ImVec2 p, float w, float h) {
                         if (c2.clip_type == ClipType::VideoRecord) { br = &c2; break; }
             }
             if (br) rot_deg = br->rotation;
+
+            // Run the brick's glass FX chain (beauty MultiFX etc.) on the
+            // live frame — the mirror shows you filtered, like the take will.
+            if (br) {
+                int bti = -1;
+                for (int ti2 = 0; ti2 < (int)st.tracks.size() && bti < 0; ++ti2)
+                    for (auto& c3 : st.tracks[(size_t)ti2].clips)
+                        if (&c3 == br) { bti = ti2; break; }
+                if (bti >= 0) {
+                    float bt = br->start + 0.001f;   // brick-local sample time
+                    EffectAccum     ea  = collect_glass_effects(st, bt, bti);
+                    CreativeFXAccum cfx = collect_glass_fx(st, bt, bti);
+                    draw_tex = fx_apply((uintptr_t)s_cam_tex, kSceneFxSlot,
+                                        s_cam_w, s_cam_h, ea, cfx,
+                                        (float)ImGui::GetTime());
+                }
+            }
         }
     }
     // The mirror flips horizontally, which inverts apparent rotation:
@@ -973,7 +992,7 @@ static void draw_camera_mirror(ImDrawList* dl, ImVec2 p, float w, float h) {
            p2 = rotp(hw, hh),   p3 = rotp(-hw, hh);
     dl->AddRectFilled({p.x, p.y}, {p.x + w, p.y + h}, IM_COL32(0, 0, 0, 160));
     // u flipped → mirror behaviour (recorded takes keep true orientation)
-    dl->AddImageQuad((ImTextureID)(intptr_t)s_cam_tex, p0, p1, p2, p3,
+    dl->AddImageQuad((ImTextureID)(intptr_t)draw_tex, p0, p1, p2, p3,
                      {1, 0}, {0, 0}, {0, 1}, {1, 1});
     ImU32 frame_col = vrecorder_recording() ? IM_COL32(235, 90, 40, 255)
                                             : IM_COL32(160, 160, 180, 160);
@@ -1002,6 +1021,21 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
         g_canvas_cap.p = p; g_canvas_cap.w = w; g_canvas_cap.h = h;
         --g_canvas_cap.frames_left;  // 0 → canvas_capture_after_render fires
     }
+
+    // Clips are half-open [start, end): a playhead parked exactly at the
+    // project end selects no clip and the canvas goes empty. Sample the
+    // preview a hair inside so the last frame stays visible at the end.
+    float saved_playhead = state.playhead;
+    bool  clamped_end = false;
+    if (!state.playing && state.duration > 0.f &&
+        state.playhead >= state.duration - 1e-4f) {
+        state.playhead = fmaxf(0.f, state.duration - 1e-3f);
+        clamped_end = true;
+    }
+    struct PlayheadRestore {
+        AppState& st; float v; bool on;
+        ~PlayheadRestore() { if (on) st.playhead = v; }
+    } ph_restore{state, saved_playhead, clamped_end};
 
     ImDrawList* dl = ImGui::GetWindowDrawList();
 
