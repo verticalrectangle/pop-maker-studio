@@ -1171,6 +1171,7 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         std::string path = params.value("path", state.project_path);
         if (path.empty()) { err = "no project path — provide 'path' param or save once from UI"; return {}; }
         if (!project_save(state, path)) { err = "project_save failed"; return {}; }
+        state.project_path = path;   // exports default next to the .pms
         json r; r["path"] = path;
         return r;
     }
@@ -2056,6 +2057,7 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         bool mr = state.models_ready;
         bool ms = state.models_skipped;
         if (!project_load(state, path)) { err = "project_load failed"; return {}; }
+        state.project_path   = path;   // exports default next to the .pms
         state.models_ready   = mr;
         state.models_skipped = ms;
         state.proxy_scan_needed = true;

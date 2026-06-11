@@ -283,7 +283,15 @@ void draw_export_modal(AppState& state) {
             ImGui::BeginDisabled(!any_active);
             if (ui_btn("Start render  ->", true, false)) {
                 state.render_done = false;
-                if (!state.audio_path.empty()) {
+                // Output precedence: a saved project exports next to its
+                // .pms (what users expect); the audio-stem subdir is the
+                // legacy lyric-video flow for projects with no file yet.
+                if (!state.project_path.empty()) {
+                    fs::path pp(state.project_path);
+                    fs::path base = pp.parent_path() / pp.stem();
+                    state.out_mp4 = base.string() + ".mp4";
+                    state.out_srt = base.string() + ".srt";
+                } else if (!state.audio_path.empty()) {
                     fs::path audio(state.audio_path);
                     fs::path outdir = audio.parent_path() / audio.stem();
                     fs::create_directories(outdir);
@@ -291,14 +299,7 @@ void draw_export_modal(AppState& state) {
                     state.out_gif = (outdir / (audio.stem().string() + ".gif")).string();
                     state.out_srt = (outdir / (audio.stem().string() + ".srt")).string();
                 } else if (state.out_mp4.empty()) {
-                    // Video-only project — derive output path from project file or home dir.
-                    fs::path base;
-                    if (!state.project_path.empty()) {
-                        fs::path pp(state.project_path);
-                        base = pp.parent_path() / pp.stem();
-                    } else {
-                        base = fs::path(std::getenv("HOME") ? std::getenv("HOME") : ".") / "Videos" / "pop_maker_export";
-                    }
+                    fs::path base = fs::path(std::getenv("HOME") ? std::getenv("HOME") : ".") / "Videos" / "pop_maker_export";
                     fs::create_directories(base.parent_path());
                     state.out_mp4 = base.string() + ".mp4";
                 }
@@ -498,7 +499,13 @@ void panel_export(AppState& state, float w) {
     } else {
         if (ui_btn("Start render  ->", true, true)) {
             state.render_done = false;
-            if (!state.audio_path.empty()) {
+            // Same output precedence as the main export panel above.
+            if (!state.project_path.empty()) {
+                fs::path pp(state.project_path);
+                fs::path base = pp.parent_path() / pp.stem();
+                state.out_mp4 = base.string() + ".mp4";
+                state.out_srt = base.string() + ".srt";
+            } else if (!state.audio_path.empty()) {
                 fs::path audio(state.audio_path);
                 fs::path outdir = audio.parent_path() / audio.stem();
                 fs::create_directories(outdir);
@@ -506,13 +513,7 @@ void panel_export(AppState& state, float w) {
                 state.out_gif = (outdir / (audio.stem().string() + ".gif")).string();
                 state.out_srt = (outdir / (audio.stem().string() + ".srt")).string();
             } else if (state.out_mp4.empty()) {
-                fs::path base;
-                if (!state.project_path.empty()) {
-                    fs::path pp(state.project_path);
-                    base = pp.parent_path() / pp.stem();
-                } else {
-                    base = fs::path(std::getenv("HOME") ? std::getenv("HOME") : ".") / "Videos" / "pop_maker_export";
-                }
+                fs::path base = fs::path(std::getenv("HOME") ? std::getenv("HOME") : ".") / "Videos" / "pop_maker_export";
                 fs::create_directories(base.parent_path());
                 state.out_mp4 = base.string() + ".mp4";
             }
