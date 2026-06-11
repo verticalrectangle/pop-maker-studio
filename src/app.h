@@ -74,7 +74,14 @@ enum class OutputFormat { Vertical, Horizontal, Square };
 // ── Track / clip data model ───────────────────────────────────────────────────
 
 // Each clip carries its own type so any track can hold mixed content.
-enum class ClipType { Text, Lyrics, Subtitle, Video, Audio, Effect, Background, BodyFX, MultiFX, Record };
+enum class ClipType { Text, Lyrics, Subtitle, Video, Audio, Effect, Background, BodyFX, MultiFX, Record, VideoRecord };
+
+// A clip that composites as video: a Video clip, or a VideoRecord brick whose
+// selected take is mirrored into `text` (path consumers stay unchanged).
+struct Clip;
+inline bool clip_is_videolike_type(ClipType t) {
+    return t == ClipType::Video || t == ClipType::VideoRecord;
+}
 
 struct WordEntry {
     std::string text;

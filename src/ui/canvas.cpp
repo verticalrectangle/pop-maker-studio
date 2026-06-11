@@ -422,7 +422,7 @@ void draw_canvas_handles(AppState& state, ImDrawList* dl, ImVec2 p, float w, flo
     };
 
     // ── Video clip ────────────────────────────────────────────────────────────
-    if (cl.clip_type == ClipType::Video) {
+    if (clip_is_videolike_type(cl.clip_type)) {
         float bx0, by0, bx1, by1;
         compute_video_bbox(state, cl, p, w, h, bx0, by0, bx1, by1);
         float vmx = (bx0+bx1)*0.5f, vmy = (by0+by1)*0.5f;
@@ -1054,7 +1054,7 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
             for (int ci = 0; ci < (int)tr2.clips.size(); ++ci) {
                 auto& cl2 = tr2.clips[ci];
                 if (state.playhead < cl2.start || state.playhead >= cl2.end) continue;
-                if (cl2.clip_type == ClipType::Video) {
+                if (clip_is_videolike_type(cl2.clip_type)) {
                     float hbx0, hby0, hbx1, hby1;
                     compute_video_bbox(state, cl2, p, w, h, hbx0, hby0, hbx1, hby1);
                     if (mpos.x >= hbx0 && mpos.x <= hbx1 &&
@@ -1159,7 +1159,7 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
             return false;
         };
         auto add_clip = [&](const Clip* cl, float at_time, int ti, int max_frames = 0) {
-            if (!cl || cl->clip_type != ClipType::Video) return;
+            if (!cl || !clip_is_videolike_type(cl->clip_type)) return;
             int slot = slot_for_video(const_cast<AppState&>(state),
                                       clip_slot_key(cl->text, cl->start), cl->text);
             if (slot < 0 || !video_is_open(slot)) return;
@@ -1181,7 +1181,7 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
             const Clip* active = nullptr; int active_ci = -1;
             for (int ci = 0; ci < (int)track.clips.size(); ++ci) {
                 auto& cl = track.clips[ci];
-                if (cl.clip_type == ClipType::Video &&
+                if (clip_is_videolike_type(cl.clip_type) &&
                     state.playhead >= cl.start && state.playhead < cl.end)
                     { active = &cl; active_ci = ci; break; }
             }

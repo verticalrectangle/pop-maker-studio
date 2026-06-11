@@ -446,6 +446,7 @@ ImVec4 clip_type_badge_color(ClipType ct) {
         case ClipType::Background: return {180.f/255,60.f/255,160.f/255,1.f};
         case ClipType::BodyFX:     return {255.f/255,80.f/255,160.f/255,1.f};
         case ClipType::Record:     return {220.f/255,50.f/255,50.f/255,1.f};
+        case ClipType::VideoRecord: return {235.f/255,90.f/255,40.f/255,1.f};
         default:                   return {120.f/255,80.f/255,220.f/255,1.f};
     }
 }
@@ -460,6 +461,7 @@ const char* clip_type_name(ClipType ct) {
         case ClipType::Background: return "BG";
         case ClipType::BodyFX:     return "BODY FX";
         case ClipType::Record:     return "REC";
+        case ClipType::VideoRecord: return "CAM";
         default:                   return "ADJUST";
     }
 }
@@ -553,6 +555,27 @@ void add_record_brick(AppState& state) {
     Track t;
     char n[32];
     snprintf(n, sizeof(n), "Record %d", (int)state.tracks.size() + 1);
+    t.name = n;
+    float clip_end = cl.end;
+    t.clips.push_back(std::move(cl));
+    state.tracks.insert(state.tracks.begin(), std::move(t));
+    state.selected_track = 0;
+    state.selected_clip  = 0;
+    // If the brick lands past the current view, zoom out to fit it.
+    state.tl_zoom_to_fit_end = fmaxf(state.tl_zoom_to_fit_end, clip_end);
+    history_push(state, "Add Record Brick");
+}
+
+void add_video_record_brick(AppState& state) {
+    float qfps = tl_fps(state);
+    if (!(qfps > 0.f)) qfps = 30.f;
+    Clip cl;
+    cl.clip_type = ClipType::VideoRecord;
+    cl.start     = snap_to_frame(state.playhead, (int)qfps);
+    cl.end       = snap_end_to_frame(cl.start + 8.f, (int)qfps);
+    Track t;
+    char n[32];
+    snprintf(n, sizeof(n), "Camera %d", (int)state.tracks.size() + 1);
     t.name = n;
     float clip_end = cl.end;
     t.clips.push_back(std::move(cl));

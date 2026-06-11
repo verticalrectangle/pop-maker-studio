@@ -14,6 +14,7 @@
 #include "filepicker.h"
 #include "waveform.h"
 #include "../recorder.h"
+#include "../video_recorder.h"
 #include "bg_presets.h"
 #include "text_styles.h"
 #include "theme.h"
@@ -1341,6 +1342,43 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                              info ? " \xe2\x80\x94 " : "", info ? info->name : "");
                     ImU32 ltcol = sel ? IM_COL32(0,30,25,255) : IM_COL32(160,240,220,255);
                     dl->AddText({vis_x0+4.f, cy0+(cy1-cy0-13.f)*0.5f}, ltcol, lbl);
+                }
+                ImGui::PopClipRect();
+            } else if (clip.clip_type == ClipType::VideoRecord) {
+                // Camera brick: slate at rest with an orange dot; pulses
+                // orange while recording. Shows the selected take number.
+                bool rec_live = vrecorder_is_target(ti, ci);
+                bool has_take = clip.rec_take_sel >= 0 &&
+                                clip.rec_take_sel < (int)clip.rec_takes.size();
+                ImU32 fill = rec_live ? IM_COL32(150, 60, 18, 255)
+                           : sel      ? IM_COL32(150, 130, 115, 255)
+                           : has_take ? IM_COL32( 50,  42,  38, 255)
+                                      : IM_COL32( 40,  34,  30, 255);
+                dl->AddRectFilled({vis_x0,cy0},{vis_x1,cy1}, fill, 2.f);
+                ImU32 border;
+                if (rec_live) {
+                    float t  = (float)ImGui::GetTime();
+                    int   a  = (int)(170.f + 85.f * sinf(t * 6.f));
+                    border = IM_COL32(255, 140, 60, a);
+                } else {
+                    border = sel ? IM_COL32(235, 215, 205, 255)
+                                 : IM_COL32(110,  90,  75, 200);
+                }
+                dl->AddRect({vis_x0,cy0},{vis_x1,cy1}, border, 2.f, 0, rec_live ? 2.f : 1.f);
+                ImGui::PushClipRect({vis_x0,cy0},{vis_x1,cy1},true);
+                {
+                    float mid = (cy0 + cy1) * 0.5f;
+                    dl->AddCircleFilled({vis_x0 + 10.f, mid}, 3.5f,
+                        rec_live ? IM_COL32(255,160,80,255) : IM_COL32(235,90,40,220));
+                    char lbl[48];
+                    if (rec_live)
+                        snprintf(lbl, sizeof(lbl), "REC \xc2\xb7 %d", vrecorder_take_count());
+                    else if (has_take)
+                        snprintf(lbl, sizeof(lbl), "CAM \xc2\xb7 take %d", clip.rec_take_sel + 1);
+                    else
+                        snprintf(lbl, sizeof(lbl), "CAM");
+                    ImU32 tc = sel ? IM_COL32(30,22,18,255) : IM_COL32(235,210,195,230);
+                    dl->AddText({vis_x0 + 20.f, mid - 7.f}, tc, lbl);
                 }
                 ImGui::PopClipRect();
             } else if (clip.clip_type == ClipType::Record) {
@@ -3050,6 +3088,8 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
         }
         if (ImGui::MenuItem("Add Record Brick"))
             add_record_brick(state);
+        if (ImGui::MenuItem("Add Camera Brick"))
+            add_video_record_brick(state);
         ImGui::EndPopup();
     }
 

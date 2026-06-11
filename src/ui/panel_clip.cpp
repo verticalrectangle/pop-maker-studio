@@ -19,6 +19,8 @@
 #include "body_fx.h"
 #include "noise_reduce.h"
 #include "../recorder.h"
+#include "../video_recorder.h"
+#include "../video.h"
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <filesystem>
@@ -2209,6 +2211,120 @@ void panel_clip(AppState& state, float w) {
                 history_push(state, "Place take on track");
                 return;
             }
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // CAMERA BRICK — cycle video recording: transport loops the brick, every
+    // pass lands a video take; the selected take plays on the brick like a
+    // video clip (mirrored into clip.text).
+    // ═══════════════════════════════════════════════════════════════════════════
+    else if (clip.clip_type == ClipType::VideoRecord) {
+        float bar_w = w - 16.f;
+        bool rec_here = vrecorder_is_target(state.selected_track, state.selected_clip);
+
+        ImGui::Dummy({0.f, 4.f});
+        ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+        ImGui::TextWrapped("Loops %s \xe2\x80\x93 %s while recording. Every pass "
+                           "over the loop lands a video take below; the newest "
+                           "take plays back on the brick.",
+                           fmt_time(clip.start).c_str(), fmt_time(clip.end).c_str());
+        ImGui::PopStyleColor();
+        ImGui::Dummy({0.f, 6.f});
+
+        if (rec_here) {
+            float t = (float)ImGui::GetTime();
+            float pulse = 0.65f + 0.35f * sinf(t * 6.f);
+            ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.85f*pulse, 0.30f, 0.08f, 1.f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.95f, 0.38f, 0.12f, 1.f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive,  ImVec4(0.75f, 0.28f, 0.08f, 1.f));
+            char stop_lbl[64];
+            snprintf(stop_lbl, sizeof(stop_lbl), "\xe2\x96\xa0 Stop  (%d take%s)",
+                     vrecorder_take_count(), vrecorder_take_count() == 1 ? "" : "s");
+            if (ImGui::Button(stop_lbl, {bar_w, 34.f}))
+                vrecorder_stop(state);
+            ImGui::PopStyleColor(3);
+            if (vrecorder_using_test_pattern()) {
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.75f, 0.3f, 1.f));
+                ImGui::TextWrapped("No camera found \xe2\x80\x94 recording a test pattern.");
+                ImGui::PopStyleColor();
+            }
+            ImGui::Dummy({0.f, 6.f});
+        } else {
+            bool busy = vrecorder_active();   // recording a different brick
+            if (busy) ImGui::BeginDisabled();
+            ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.70f, 0.28f, 0.08f, 1.f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.85f, 0.34f, 0.10f, 1.f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive,  ImVec4(0.60f, 0.24f, 0.07f, 1.f));
+            if (ImGui::Button("\xe2\x97\x8f Record video", {bar_w, 34.f})) {
+                if (!vrecorder_start(state, state.selected_track, state.selected_clip))
+                    {} // brick too short or capture failed — button stays armed
+            }
+            ImGui::PopStyleColor(3);
+            if (busy) ImGui::EndDisabled();
+            ImGui::Dummy({0.f, 6.f});
+        }
+
+        // ── Take tray ────────────────────────────────────────────────────────
+        ImGui::Dummy({0.f, 10.f}); ui_separator(); ImGui::Dummy({0.f, 6.f});
+        ui_label("Takes");
+        ImGui::Dummy({0.f, 6.f});
+        if (clip.rec_takes.empty()) {
+            ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+            ImGui::TextUnformatted("No takes yet \xe2\x80\x94 hit Record.");
+            ImGui::PopStyleColor();
+        }
+        int place_idx = -1, delete_idx = -1;
+        for (int i = 0; i < (int)clip.rec_takes.size(); ++i) {
+            ImGui::PushID(20000 + i);
+            bool sel = (clip.rec_take_sel == i);
+            char lbl[80];
+            snprintf(lbl, sizeof(lbl), "%s Take %d",
+                     sel ? "\xe2\x96\xb6" : " ", i + 1);
+            if (ImGui::Selectable(lbl, sel, 0, {bar_w - 110.f, 0.f})) {
+                clip.rec_take_sel = i;
+                clip.text = clip.rec_takes[(size_t)i];   // mirror for draw/export
+                history_push(state, "Select take");
+            }
+            ImGui::SameLine(bar_w - 100.f);
+            if (ui_btn("Place", false, true)) place_idx = i;
+            ImGui::SameLine(0.f, 4.f);
+            if (ui_btn("\xc3\x97", false, true)) delete_idx = i;
+            ImGui::PopID();
+        }
+        if (delete_idx >= 0) {
+            clip.rec_takes.erase(clip.rec_takes.begin() + delete_idx);
+            if (clip.rec_take_sel == delete_idx) clip.rec_take_sel = -1;
+            else if (clip.rec_take_sel > delete_idx) --clip.rec_take_sel;
+            if (clip.rec_take_sel < 0 && !clip.rec_takes.empty())
+                clip.rec_take_sel = (int)clip.rec_takes.size() - 1;
+            clip.text = (clip.rec_take_sel >= 0)
+                        ? clip.rec_takes[(size_t)clip.rec_take_sel] : "";
+            history_push(state, "Delete take");
+        }
+
+        // Deferred placement as a plain Video clip on a new track.
+        if (place_idx >= 0 && place_idx < (int)clip.rec_takes.size()) {
+            std::string path  = clip.rec_takes[(size_t)place_idx];
+            float       start = clip.start;
+            float dur = video_probe_duration(path);
+            if (dur <= 0.f) dur = clip.end - clip.start;
+            float qfps = tl_fps(state);
+            Clip nc;
+            nc.clip_type = ClipType::Video;
+            nc.text      = path;
+            nc.source_id = path;
+            nc.start     = start;
+            nc.end       = snap_end_to_frame(start + dur, (int)qfps);
+            Track t;
+            char n[48];
+            snprintf(n, sizeof(n), "Cam take %d", place_idx + 1);
+            t.name = n;
+            t.clips.push_back(std::move(nc));
+            state.tracks.insert(state.tracks.begin(), std::move(t));
+            state.selected_track += 1;
+            history_push(state, "Place take on track");
+            return;
         }
     }
 

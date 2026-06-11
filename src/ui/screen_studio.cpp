@@ -13,6 +13,7 @@
 #include "panel_agent.h"
 #include "../agent_harness.h"
 #include "../recorder.h"
+#include "../video_recorder.h"
 #include "export_ui.h"
 #include "theme.h"
 #include "app.h"
@@ -333,7 +334,7 @@ void ui_studio(AppState& state) {
         for (auto& tr : state.tracks) {
             bool started = false;
             for (auto& cl : tr.clips) {
-                if (cl.clip_type != ClipType::Video) continue;
+                if (!clip_is_videolike_type(cl.clip_type)) continue;
                 if (cl.text.empty() || is_image_path(cl.text)) continue;
                 if (!proxy_is_ready(cl.text)) {
                     proxy_start(cl.text);
@@ -457,6 +458,7 @@ void ui_studio(AppState& state) {
 
     // Loop recorder: drain mic, slice takes on the loop-cycle clock.
     recorder_tick(state);
+    vrecorder_tick(state);
 
     // Push clip snapshots to audio system every frame.
     // The callback reads these to position audio correctly — no separate volume hack needed.
@@ -1746,7 +1748,7 @@ void ui_studio(AppState& state) {
             bool has_video = false;
             for (auto& tr : state.tracks)
                 for (auto& cl : tr.clips)
-                    if (cl.clip_type == ClipType::Video) { has_video = true; break; }
+                    if (clip_is_videolike_type(cl.clip_type)) { has_video = true; break; }
             if (has_video) state.tutorial_step = 1;
         }
         if (state.tutorial_step == 2 && !state.beats.empty())

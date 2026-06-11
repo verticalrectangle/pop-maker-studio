@@ -397,6 +397,12 @@ static Clip read_clip(Reader& r, uint32_t version) {
             if (c.rec_take_sel < 0 && !c.rec_takes.empty())
                 c.rec_take_sel = (int)c.rec_takes.size() - 1;
         }
+        // VideoRecord bricks mirror the selected take into text (video
+        // draw/export paths consume clip.text).
+        if (c.clip_type == ClipType::VideoRecord)
+            c.text = (c.rec_take_sel >= 0 &&
+                      c.rec_take_sel < (int)c.rec_takes.size())
+                     ? c.rec_takes[(size_t)c.rec_take_sel] : "";
     }
     if (version >= 39u) {
         AudioFX& fx = c.audio_fx;

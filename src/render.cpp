@@ -1476,7 +1476,7 @@ void render_snapshot_start(AppState& state, float snap_t) {
     if (base_path.empty()) {
         for (auto& tr : state.tracks)
             for (auto& cl : tr.clips)
-                if (cl.clip_type == ClipType::Video && !cl.text.empty())
+                if (clip_is_videolike_type(cl.clip_type) && !cl.text.empty())
                     { base_path = cl.text; goto found_base; }
     }
     found_base:
@@ -1595,7 +1595,7 @@ void render_snapshot_gl(AppState& state, float snap_t, bool open_folder) {
     if (base_path.empty()) {
         for (auto& tr : state.tracks)
             for (auto& cl : tr.clips)
-                if (cl.clip_type == ClipType::Video && !cl.text.empty())
+                if (clip_is_videolike_type(cl.clip_type) && !cl.text.empty())
                     { base_path = cl.text; goto snap_found_base; }
     }
     snap_found_base:
@@ -1720,7 +1720,8 @@ void render_snapshot_gl(AppState& state, float snap_t, bool open_folder) {
         const Clip* active = nullptr; int active_ci = -1;
         for (int ci = 0; ci < (int)track.clips.size(); ++ci) {
             auto& cl = track.clips[ci];
-            if (cl.clip_type == ClipType::Video && t >= cl.start && t < cl.end)
+            if (clip_is_videolike_type(cl.clip_type) && !cl.text.empty() &&
+                t >= cl.start && t < cl.end)
                 { active = &cl; active_ci = ci; break; }
         }
         if (!active) {

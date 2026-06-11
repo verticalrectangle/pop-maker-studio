@@ -42,6 +42,7 @@ set(SOURCES
     src/app.cpp
     src/audio.cpp
     src/recorder.cpp
+    src/video_recorder.cpp
     src/transcribe.cpp
     src/render.cpp
     src/history.cpp

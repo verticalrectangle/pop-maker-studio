@@ -1,4 +1,5 @@
 #include "ipc_server.h"
+#include "video_recorder.h"
 #include "agent_harness.h"
 #include "render.h"
 #include "bg_presets.h"
@@ -173,6 +174,7 @@ static std::string clip_type_str(ClipType t) {
         case ClipType::BodyFX:     return "body_fx";
         case ClipType::MultiFX:    return "multi_fx";
         case ClipType::Record:     return "record";
+        case ClipType::VideoRecord: return "video_record";
     }
     return "unknown";
 }
@@ -302,7 +304,8 @@ static json clip_to_json_slim(int idx, const Clip& c) {
     j["in_point"] = c.in_point;
     if (!c.source_id.empty()) j["source"] = c.source_id;
     if (!c.text.empty())      j["text"]   = c.text;
-    if (c.clip_type == ClipType::Record) {
+    if (c.clip_type == ClipType::Record ||
+        c.clip_type == ClipType::VideoRecord) {
         j["takes"]         = c.rec_takes;
         j["selected_take"] = c.rec_take_sel;
     }
@@ -391,7 +394,8 @@ static json clip_to_json(int idx, const Clip& c) {
         }
         if (!kfs.empty()) j["keyframes"] = std::move(kfs);
     }
-    if (c.clip_type == ClipType::Record) {
+    if (c.clip_type == ClipType::Record ||
+        c.clip_type == ClipType::VideoRecord) {
         j["takes"]         = c.rec_takes;
         j["selected_take"] = c.rec_take_sel;
     }
@@ -510,6 +514,7 @@ static ClipType parse_clip_type(const std::string& s) {
     if (s == "background") return ClipType::Background;
     if (s == "body_fx")   return ClipType::BodyFX;
     if (s == "record")    return ClipType::Record;
+    if (s == "video_record") return ClipType::VideoRecord;
     return ClipType::Text;
 }
 
@@ -1180,6 +1185,20 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         float t = params.value("time", 0.f);
         state.playhead = t;
         return json::object();
+    }
+
+    if (method == "vrecord_start") {
+        int ti = params.value("track", -1);
+        int ci = params.value("clip", -1);
+        if (!vrecorder_start(state, ti, ci)) { err = "vrecord_start failed (not a camera brick / too short / capture failed)"; return {}; }
+        json r; r["status"] = "recording";
+        r["test_pattern"] = vrecorder_using_test_pattern();
+        return r;
+    }
+    if (method == "vrecord_stop") {
+        vrecorder_stop(state);
+        json r; r["takes"] = vrecorder_take_count();
+        return r;
     }
 
     if (method == "play") {

@@ -33,6 +33,7 @@ float tl_fps(const AppState& state);
 // top track, select it, and push history. Used by the toolbox rail and the
 // timeline context menu.
 void add_record_brick(AppState& state);
+void add_video_record_brick(AppState& state);
 
 // ── Retime ────────────────────────────────────────────────────────────────────
 // Rescale a media clip's timeline width and any FX bricks overlapping it,
