@@ -1,6 +1,7 @@
 // hf_api.cpp — HuggingFace search + download, curl binary only, no libraries
 
 #include "hf_api.h"
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -120,37 +121,58 @@ void hf_search(const std::string& query, HFSearch& s) {
     uint32_t my_gen = s.gen.load(std::memory_order_relaxed);
 
     std::thread([query, my_gen, &s]() {
-        // Append "rvc" so we always get RVC models; "filter=rvc" is a broken tag.
-        std::string url = "https://huggingface.co/api/models?search="
-                        + url_encode(query + " rvc")
-                        + "&limit=20&full=true&sort=downloads&direction=-1";
+        // Two passes: the raw query (recall — many voice repos never mention
+        // "rvc") and the query + " rvc" (precision — keeps random torch repos
+        // out of the top). Merged, deduped by repo, ranked by downloads; the
+        // sibling filter in parse_models() already drops repos without a
+        // .pth/.zip/.onnx model file.
+        auto fetch = [](const std::string& q) -> std::string {
+            std::string url = "https://huggingface.co/api/models?search="
+                            + url_encode(q)
+                            + "&limit=20&full=true&sort=downloads&direction=-1";
+            std::string cmd = "curl -sS --max-time 15 \"" + url + "\" 2>&1";
+            FILE* p = popen(cmd.c_str(), "r");
+            if (!p) return {};
+            std::string json;
+            char buf[8192];
+            while (fgets(buf, sizeof(buf), p))
+                json += buf;
+            pclose(p);
+            return json;
+        };
 
-        std::string cmd = "curl -sS --max-time 15 \"" + url + "\" 2>&1";
-        FILE* p = popen(cmd.c_str(), "r");
-        if (!p) {
-            if (s.gen.load(std::memory_order_relaxed) == my_gen) {
-                s.error = "curl binary not found";
-                s.status.store(HFSearch::Status::Error, std::memory_order_release);
-            }
-            return;
-        }
-
-        std::string json;
-        char buf[8192];
-        while (fgets(buf, sizeof(buf), p))
-            json += buf;
-        pclose(p);
-
+        std::string j_rvc = fetch(query + " rvc");
+        if (s.gen.load(std::memory_order_relaxed) != my_gen) return;
+        std::string j_raw = fetch(query);
         if (s.gen.load(std::memory_order_relaxed) != my_gen) return;
 
-        if (json.empty() || json.front() != '[') {
-            if (json.size() > 120) json.resize(120);
-            s.error = "Unexpected response: " + json;
+        bool ok_rvc = !j_rvc.empty() && j_rvc.front() == '[';
+        bool ok_raw = !j_raw.empty() && j_raw.front() == '[';
+        if (!ok_rvc && !ok_raw) {
+            std::string j = !j_rvc.empty() ? j_rvc : j_raw;
+            if (j.size() > 120) j.resize(120);
+            s.error = j.empty() ? "curl binary not found"
+                                : "Unexpected response: " + j;
             s.status.store(HFSearch::Status::Error, std::memory_order_release);
             return;
         }
 
-        s.results = parse_models(json);
+        std::vector<HFModel> merged;
+        if (ok_rvc) merged = parse_models(j_rvc);
+        if (ok_raw)
+            for (auto& m : parse_models(j_raw)) {
+                bool dup = false;
+                for (auto& e : merged)
+                    if (e.repo == m.repo) { dup = true; break; }
+                if (!dup) merged.push_back(std::move(m));
+            }
+        std::stable_sort(merged.begin(), merged.end(),
+            [](const HFModel& a, const HFModel& b) {
+                return a.downloads > b.downloads;
+            });
+        if (merged.size() > 20) merged.resize(20);
+
+        s.results = std::move(merged);
         s.status.store(HFSearch::Status::Done, std::memory_order_release);
     }).detach();
 }
