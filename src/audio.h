@@ -36,6 +36,25 @@ bool  audio_capture_active();
 void  audio_capture_drain(std::vector<float>& out);
 float audio_capture_latency();  // input period in seconds (0 if not capturing)
 
+// Capture device picker. Index -1 = system default. The list refreshes on
+// each devices() call; selection applies on the next audio_capture_start.
+std::vector<std::string> audio_capture_devices();
+void audio_capture_select(int index);
+int  audio_capture_selected();
+
+// Input monitoring: route live mic into the playback mix (capture must be
+// running). Round-trip latency = input + output period — fine for VO, audible
+// for tight singing, hence default off.
+void audio_monitor_set(bool on);
+bool audio_monitor_get();
+
+// ── Processed-audio lookups (export bake) ─────────────────────────────────────
+// Copy out the preview system's buffers so the exporter can bake audio FX
+// without re-decoding/re-processing: raw decoded PCM for `path`, or the
+// FX-processed buffer for (path, fx_hash). false = not cached/ready.
+bool audio_source_cached(const std::string& path, std::vector<float>& out);
+bool audio_fx_cached(const std::string& path, uint64_t fx_hash, std::vector<float>& out);
+
 // Decode audio file metadata without full load
 struct AudioMeta {
     float    duration_secs = 0.f;
@@ -59,8 +78,8 @@ struct AudioClipDesc {
     PropTrack   vol_keys;         // volume keyframes (times rel. tl_start); empty = use volume
     PropTrack   pan_keys;         // pan keyframes; empty = use pan
     std::string path;
-    AudioFX     fx;
-    uint64_t    fx_hash   = 0;    // audio_fx_hash(fx); 0 = no FX
+    std::vector<AudioFXSegment> fx_segs;  // windowed FX; empty = dry
+    uint64_t    fx_hash   = 0;            // audio_fx_segments_hash; 0 = no FX
 };
 
 // Kick off async PCM decode for a source file so it's ready when needed.

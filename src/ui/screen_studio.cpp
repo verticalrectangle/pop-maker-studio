@@ -480,6 +480,23 @@ void ui_studio(AppState& state) {
                     d.volume   = cl.volume;   d.pan      = cl.pan;
                     d.fade_in  = cl.fade_in;  d.fade_out = cl.fade_out;
                     d.path     = cl.rec_takes[cl.rec_take_sel];
+                    // Takes get audio FX bricks on the same track (autotune
+                    // over takes), windowed to each brick's range.
+                    {
+                        std::vector<AudioFXSegment> segs;
+                        if (cl.audio_fx.any_active()) {
+                            AudioFX own = cl.audio_fx;
+                            own.voice_convert_on = false;
+                            if (own.any_active())
+                                segs.push_back({0.f, cl.end - cl.start, own});
+                        } else {
+                            segs = collect_audio_fx_segments(state, tr_idx, cl);
+                        }
+                        if (!segs.empty()) {
+                            d.fx_segs = std::move(segs);
+                            d.fx_hash = audio_fx_segments_hash(d.fx_segs);
+                        }
+                    }
                     adescs.push_back(d);
                     audio_source_ensure(d.path);
                     continue;
@@ -503,14 +520,26 @@ void ui_studio(AppState& state) {
                     d.path = cl.text;
                 }
                 {
-                    // Merge per-clip AudioFX with any audio FX bricks on the same track.
-                    // Exclude voice_convert_on when the clip already has a converted source.
-                    AudioFX combined = collect_audio_fx_for_clip(state, (int)(&tr - state.tracks.data()), cl);
-                    if (cl.audio_fx.any_active()) combined = cl.audio_fx;
-                    if (cl.vc_status == VcStatus::Ready) combined.voice_convert_on = false;
-                    if (combined.any_active()) {
-                        d.fx      = combined;
-                        d.fx_hash = audio_fx_hash(combined);
+                    // The clip's own AudioFX chain covers its whole range;
+                    // otherwise audio FX bricks apply windowed to each
+                    // brick's overlap with the clip.
+                    std::vector<AudioFXSegment> segs;
+                    if (cl.audio_fx.any_active()) {
+                        AudioFX own = cl.audio_fx;
+                        if (cl.vc_status == VcStatus::Ready) own.voice_convert_on = false;
+                        if (own.any_active()) {
+                            float spd = fmaxf(0.01f, cl.speed);
+                            segs.push_back({cl.in_point,
+                                            cl.in_point + (cl.end - cl.start) * spd,
+                                            own});
+                        }
+                    } else {
+                        segs = collect_audio_fx_segments(
+                            state, (int)(&tr - state.tracks.data()), cl);
+                    }
+                    if (!segs.empty()) {
+                        d.fx_segs = std::move(segs);
+                        d.fx_hash = audio_fx_segments_hash(d.fx_segs);
                     }
                 }
                 if (cl.clip_type == ClipType::Video) {

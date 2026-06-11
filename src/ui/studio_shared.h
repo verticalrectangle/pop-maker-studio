@@ -78,7 +78,12 @@ const char* clip_display_name(const Clip& cl);
 ImU32 clip_badge_color(const Clip& cl);
 bool fx_type_is_adjustment_style(FXType ft);
 bool fx_type_is_audio_fx(FXType ft);
-AudioFX collect_audio_fx_for_clip(const AppState& state, int track_idx, const Clip& audio_clip);
+// Windowed audio FX for one clip: a segment per overlapping audio FX brick
+// (and per audio entry inside overlapping MultiFX chains), each mapped into
+// the clip's source time. The FX applies only over the brick's range.
+std::vector<AudioFXSegment> collect_audio_fx_segments(const AppState& state,
+                                                      int track_idx,
+                                                      const Clip& audio_clip);
 
 struct FxBrickColors { ImU32 fill, border, label; };
 FxBrickColors fx_brick_colors(FXType ft, bool sel);

@@ -46,6 +46,19 @@ struct AudioFX {
 
 uint64_t audio_fx_hash(const AudioFX& fx);
 
+// ── Windowed FX segments ──────────────────────────────────────────────────────
+// An audio FX brick applies only over its own timeline range. Each segment is
+// a window in SOURCE time (seconds into the decoded PCM) with the FX active
+// inside it; outside, the audio stays dry. Stacked effects on one range come
+// from MultiFX chains (one segment per chain entry).
+
+struct AudioFXSegment {
+    float   t0 = 0.f, t1 = 0.f;  // source-time window, seconds
+    AudioFX fx;
+};
+
+uint64_t audio_fx_segments_hash(const std::vector<AudioFXSegment>& segs);
+
 // ── Voice presets ─────────────────────────────────────────────────────────────
 
 struct VoicePresetDef {
@@ -72,6 +85,15 @@ std::vector<float> process_audio_fx(const std::vector<float>& raw,
                                     float sample_rate = 44100.f,
                                     const std::atomic<uint64_t>* cancel_gen = nullptr,
                                     uint64_t my_gen = 0);
+
+// Windowed variant: each segment processes with ~1 s of pre-roll (detectors
+// and delay lines are warm at the window start) and crossfades into the dry
+// signal at both edges. Returns {} when cancelled.
+std::vector<float> process_audio_fx_segments(const std::vector<float>& raw,
+                                             const std::vector<AudioFXSegment>& segs,
+                                             float sample_rate = 44100.f,
+                                             const std::atomic<uint64_t>* cancel_gen = nullptr,
+                                             uint64_t my_gen = 0);
 
 // ── TTS status ────────────────────────────────────────────────────────────────
 

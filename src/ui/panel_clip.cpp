@@ -2084,6 +2084,60 @@ void panel_clip(AppState& state, float w) {
             }
         }
 
+        // ── Input ────────────────────────────────────────────────────────────
+        ImGui::Dummy({0.f, 10.f}); ui_separator(); ImGui::Dummy({0.f, 6.f});
+        ui_label("Input");
+        ImGui::Dummy({0.f, 6.f});
+        {
+            // Mic picker — list refreshes when the combo opens; locked while
+            // any recording runs (the device is in use).
+            static std::vector<std::string> s_devs;
+            static bool s_devs_init = false;
+            if (!s_devs_init) { s_devs = audio_capture_devices(); s_devs_init = true; }
+            bool busy_rec = recorder_active();
+            int  mic_sel  = audio_capture_selected();
+            const char* cur = (mic_sel >= 0 && mic_sel < (int)s_devs.size())
+                              ? s_devs[mic_sel].c_str() : "System default";
+            if (busy_rec) ImGui::BeginDisabled();
+            ImGui::PushStyleColor(ImGuiCol_FrameBg, Col::bg_soft);
+            ImGui::SetNextItemWidth(bar_w);
+            if (ImGui::BeginCombo("##rec_mic", cur)) {
+                if (ImGui::IsWindowAppearing()) s_devs = audio_capture_devices();
+                if (ImGui::Selectable("System default", mic_sel < 0))
+                    audio_capture_select(-1);
+                for (int di = 0; di < (int)s_devs.size(); ++di) {
+                    ImGui::PushID(di);
+                    if (ImGui::Selectable(s_devs[di].c_str(), mic_sel == di))
+                        audio_capture_select(di);
+                    ImGui::PopID();
+                }
+                ImGui::EndCombo();
+            }
+            ImGui::PopStyleColor();
+            if (busy_rec) ImGui::EndDisabled();
+
+            ImGui::Dummy({0.f, 4.f});
+            bool mon = audio_monitor_get();
+            if (ImGui::Checkbox("Monitor input", &mon)) {
+                if (mon) {
+                    // Idle monitoring runs the capture device on its own so
+                    // you can hear the mic before arming; audio_monitor_set
+                    // keeps the output device alive while paused.
+                    if (audio_capture_start()) audio_monitor_set(true);
+                } else {
+                    audio_monitor_set(false);
+                    if (!recorder_active()) audio_capture_stop();
+                }
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::BeginTooltip();
+                ImGui::TextUnformatted("Hear the mic in the mix. Round-trip latency is one\n"
+                                       "input + one output period \xe2\x80\x94 fine for voice-over,\n"
+                                       "noticeable for tight singing.");
+                ImGui::EndTooltip();
+            }
+        }
+
         // ── Take tray ────────────────────────────────────────────────────────
         ImGui::Dummy({0.f, 10.f}); ui_separator(); ImGui::Dummy({0.f, 6.f});
         ui_label("Takes");

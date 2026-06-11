@@ -45,11 +45,115 @@
 #include <fcntl.h>
 #include <cstdarg>
 
+#include "audio.h"             // audio_source_cached / audio_fx_cached (FX bake)
+#include "ui/studio_shared.h"  // collect_audio_fx_for_clip
+
 namespace fs = std::filesystem;
 
 static std::atomic<bool>  g_cancel{false};
 static std::atomic<pid_t> g_ffmpeg_pid{0};
 static std::string        g_font_path;
+
+// ── Audio FX bake ─────────────────────────────────────────────────────────────
+// Preview applies AudioFX (autotune, reverb, delay…) by processing decoded
+// PCM in memory; ffmpeg knows nothing about that. For export parity, a clip
+// with an effective FX chain gets its source pre-rendered to a processed WAV
+// that substitutes the ffmpeg input. Full-source bake, so ss/to/itsoffset
+// math is untouched. Reuses the preview's caches when warm (the usual case —
+// hearing the FX in preview is what computed them); cold paths decode and
+// process synchronously at export start.
+
+static bool write_wav_f32(const std::string& path, const float* smp, size_t n) {
+    FILE* f = fopen(path.c_str(), "wb");
+    if (!f) return false;
+    uint32_t data_bytes = (uint32_t)(n * 4);
+    uint32_t riff_sz    = 36 + data_bytes;
+    uint16_t fmt = 3 /*IEEE float*/, ch = 2, bits = 32;
+    uint32_t rate = 44100, byte_rate = rate * ch * 4;
+    uint16_t block = ch * 4;
+    uint32_t fmt_sz = 16;
+    bool ok = true;
+    auto put = [&](const void* p, size_t sz) { ok = ok && fwrite(p, 1, sz, f) == sz; };
+    put("RIFF", 4); put(&riff_sz, 4); put("WAVE", 4);
+    put("fmt ", 4); put(&fmt_sz, 4);
+    put(&fmt, 2); put(&ch, 2); put(&rate, 4); put(&byte_rate, 4);
+    put(&block, 2); put(&bits, 2);
+    put("data", 4); put(&data_bytes, 4);
+    put(smp, n * 4);
+    fclose(f);
+    if (!ok) ::unlink(path.c_str());
+    return ok;
+}
+
+static bool decode_to_pcm(const std::string& src, std::vector<float>& out) {
+    std::string tmp = "/tmp/pms_bake_" +
+                      std::to_string(std::hash<std::string>{}(src)) + ".raw";
+    const char* args[] = {
+        "ffmpeg", "-hide_banner", "-loglevel", "error",
+        "-y", "-i", src.c_str(),
+        "-vn", "-ar", "44100", "-ac", "2", "-f", "f32le", tmp.c_str(),
+        nullptr
+    };
+    pid_t pid = fork();
+    if (pid == 0) {
+        int dn = open("/dev/null", O_WRONLY);
+        if (dn >= 0) { dup2(dn, STDOUT_FILENO); dup2(dn, STDERR_FILENO); close(dn); }
+        execvp("ffmpeg", const_cast<char**>(args));
+        _exit(127);
+    }
+    if (pid < 0) return false;
+    int st = 0; waitpid(pid, &st, 0);
+    if (!WIFEXITED(st) || WEXITSTATUS(st) != 0) return false;
+    FILE* f = fopen(tmp.c_str(), "rb");
+    if (!f) return false;
+    fseek(f, 0, SEEK_END);
+    long sz = ftell(f); rewind(f);
+    if (sz > 0) {
+        out.resize((size_t)sz / sizeof(float));
+        size_t got = fread(out.data(), sizeof(float), out.size(), f);
+        out.resize(got);
+    }
+    fclose(f);
+    ::unlink(tmp.c_str());
+    return !out.empty();
+}
+
+static std::string bake_audio_fx_wav(const std::string& src,
+                                     const std::vector<AudioFXSegment>& segs) {
+    uint64_t fxh = audio_fx_segments_hash(segs);
+    uint64_t key = fxh ^ (uint64_t)std::hash<std::string>{}(src);
+    char out_path[160];
+    snprintf(out_path, sizeof(out_path), "/tmp/pms_fxbake_%016llx.wav",
+             (unsigned long long)key);
+    if (fs::exists(out_path)) return out_path;
+
+    std::vector<float> pcm;
+    if (!audio_fx_cached(src, fxh, pcm)) {           // preview already processed?
+        if (!audio_source_cached(src, pcm) &&        // raw PCM cached?
+            !decode_to_pcm(src, pcm))                // cold: decode now
+            return "";
+        pcm = process_audio_fx_segments(pcm, segs, 44100.f);
+        if (pcm.empty()) return "";
+    }
+    if (!write_wav_f32(out_path, pcm.data(), pcm.size())) return "";
+    return out_path;
+}
+
+// Effective FX segments for an exported clip — same rules as the preview:
+// the clip's own chain covers its whole range, otherwise track bricks apply
+// windowed to their overlap. Voice conversion is an ML job handled via
+// vc_out_path substitution, never offline-baked.
+static std::vector<AudioFXSegment> export_fx_segments(const AppState& state,
+                                                      int ti, const Clip& cl) {
+    if (cl.audio_fx.any_active()) {
+        AudioFX own = cl.audio_fx;
+        own.voice_convert_on = false;
+        if (!own.any_active()) return {};
+        float spd = fmaxf(0.01f, cl.speed);
+        return {{cl.in_point, cl.in_point + (cl.end - cl.start) * spd, own}};
+    }
+    return collect_audio_fx_segments(state, ti, cl);
+}
 
 // ── Font extraction ───────────────────────────────────────────────────────────
 
@@ -2153,8 +2257,14 @@ void render_start_gl(AppState& state) {
                 if (cl.clip_type == ClipType::Record) {
                     if (cl.muted || cl.rec_take_sel < 0 ||
                         cl.rec_take_sel >= (int)cl.rec_takes.size()) continue;
-                    const std::string& tp = cl.rec_takes[cl.rec_take_sel];
+                    std::string tp = cl.rec_takes[cl.rec_take_sel];
                     if (!fs::exists(tp)) continue;
+                    // Autotune-over-takes etc: bake the take's effective FX.
+                    auto segs = export_fx_segments(state, ti, cl);
+                    if (!segs.empty()) {
+                        std::string baked = bake_audio_fx_wav(tp, segs);
+                        if (!baked.empty()) tp = baked;
+                    }
                     AudioIn ai;
                     ai.path  = tp;
                     ai.vol   = state.tracks[ti].muted ? 0.f : cl.volume;
@@ -2186,8 +2296,23 @@ void render_start_gl(AppState& state) {
                 // cl.start on the output timeline we need itsoffset = cl.start - in_point,
                 // not cl.start.  Clamped to 0 — negative itsoffset is unsupported.
                 float delay = fmaxf(0.f, cl.start - cl.in_point);
+                // Preview parity: converted voice substitutes the source, and
+                // any effective AudioFX chain is baked into a processed WAV.
+                // Full-source bake — ss/to/itsoffset math below is unchanged.
+                std::string apath = cl.text;
+                if (cl.clip_type == ClipType::Audio &&
+                    cl.vc_status == VcStatus::Ready && !cl.vc_out_path.empty() &&
+                    fs::exists(cl.vc_out_path))
+                    apath = cl.vc_out_path;
+                {
+                    auto segs = export_fx_segments(state, ti, cl);
+                    if (!segs.empty()) {
+                        std::string baked = bake_audio_fx_wav(apath, segs);
+                        if (!baked.empty()) apath = baked;
+                    }
+                }
                 AudioIn ai;
-                ai.path = cl.text; ai.vol = vol;
+                ai.path = apath; ai.vol = vol;
                 ai.ss = ss; ai.to = to; ai.delay = delay; ai.speed = speed;
                 // Pre-atempo filter time base: pts of the clip's first sample.
                 float pts0 = delay + cl.in_point;

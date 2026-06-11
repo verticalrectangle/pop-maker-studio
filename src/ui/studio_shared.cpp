@@ -334,49 +334,82 @@ bool fx_type_is_audio_fx(FXType ft) {
            ft == FXType::AudioReverb     || ft == FXType::AudioVoiceConvert;
 }
 
-AudioFX collect_audio_fx_for_clip(const AppState& state, int track_idx, const Clip& audio_clip) {
-    if (track_idx < 0 || track_idx >= (int)state.tracks.size()) return {};
-    const Track& track = state.tracks[track_idx];
-    AudioFX result;
-    for (const auto& cl : track.clips) {
-        if (cl.clip_type != ClipType::Effect) continue;
-        if (!fx_type_is_audio_fx(cl.fx_type)) continue;
-        if (cl.end <= audio_clip.start || cl.start >= audio_clip.end) continue;
-        switch (cl.fx_type) {
-            case FXType::AudioAutotune:
-                result.autotune_on    = cl.audio_fx.autotune_on;
-                result.autotune_key   = cl.audio_fx.autotune_key;
-                result.autotune_scale = cl.audio_fx.autotune_scale;
-                result.autotune_speed = cl.audio_fx.autotune_speed;
-                break;
-            case FXType::AudioPitch:
-                result.pitch_on        = cl.audio_fx.pitch_on;
-                result.pitch_semitones = cl.audio_fx.pitch_semitones;
-                break;
-            case FXType::AudioFormant:
-                result.formant_on    = cl.audio_fx.formant_on;
-                result.formant_shift = cl.audio_fx.formant_shift;
-                break;
-            case FXType::AudioDelay:
-                result.delay_on       = cl.audio_fx.delay_on;
-                result.delay_time     = cl.audio_fx.delay_time;
-                result.delay_feedback = cl.audio_fx.delay_feedback;
-                result.delay_mix      = cl.audio_fx.delay_mix;
-                break;
-            case FXType::AudioReverb:
-                result.reverb_on   = cl.audio_fx.reverb_on;
-                result.reverb_room = cl.audio_fx.reverb_room;
-                result.reverb_damp = cl.audio_fx.reverb_damp;
-                result.reverb_mix  = cl.audio_fx.reverb_mix;
-                break;
-            case FXType::AudioVoiceConvert:
-                result.voice_convert_on = cl.audio_fx.voice_convert_on;
-                result.voice_model_path = cl.audio_fx.voice_model_path;
-                break;
-            default: break;
+// One brick's contribution as a standalone AudioFX. VoiceConvert is excluded
+// — it's an ML job handled via vc_out_path substitution, not offline DSP.
+static bool audio_fx_from_brick(const Clip& cl, AudioFX& out) {
+    switch (cl.fx_type) {
+        case FXType::AudioAutotune:
+            out.autotune_on    = cl.audio_fx.autotune_on;
+            out.autotune_key   = cl.audio_fx.autotune_key;
+            out.autotune_scale = cl.audio_fx.autotune_scale;
+            out.autotune_speed = cl.audio_fx.autotune_speed;
+            return out.autotune_on;
+        case FXType::AudioPitch:
+            out.pitch_on        = cl.audio_fx.pitch_on;
+            out.pitch_semitones = cl.audio_fx.pitch_semitones;
+            return out.pitch_on;
+        case FXType::AudioFormant:
+            out.formant_on    = cl.audio_fx.formant_on;
+            out.formant_shift = cl.audio_fx.formant_shift;
+            return out.formant_on;
+        case FXType::AudioDelay:
+            out.delay_on       = cl.audio_fx.delay_on;
+            out.delay_time     = cl.audio_fx.delay_time;
+            out.delay_feedback = cl.audio_fx.delay_feedback;
+            out.delay_mix      = cl.audio_fx.delay_mix;
+            return out.delay_on;
+        case FXType::AudioReverb:
+            out.reverb_on   = cl.audio_fx.reverb_on;
+            out.reverb_room = cl.audio_fx.reverb_room;
+            out.reverb_damp = cl.audio_fx.reverb_damp;
+            out.reverb_mix  = cl.audio_fx.reverb_mix;
+            return out.reverb_on;
+        default: return false;
+    }
+}
+
+std::vector<AudioFXSegment> collect_audio_fx_segments(const AppState& state,
+                                                      int track_idx,
+                                                      const Clip& ac) {
+    std::vector<AudioFXSegment> segs;
+    if (track_idx < 0 || track_idx >= (int)state.tracks.size()) return segs;
+    const float spd = fmaxf(0.01f, ac.speed);
+
+    // Map a timeline window onto the clip's SOURCE time — the FX brick only
+    // applies where it overlaps the clip, not to the whole file.
+    auto add_window = [&](float tl0, float tl1, const AudioFX& fx) {
+        tl0 = fmaxf(tl0, ac.start);
+        tl1 = fminf(tl1, ac.end);
+        if (tl1 - tl0 < 0.005f) return;
+        AudioFXSegment s;
+        s.t0 = ac.in_point + (tl0 - ac.start) * spd;
+        s.t1 = ac.in_point + (tl1 - ac.start) * spd;
+        s.fx = fx;
+        segs.push_back(s);
+    };
+
+    for (const auto& cl : state.tracks[track_idx].clips) {
+        if (&cl == &ac) continue;
+        if (cl.end <= ac.start || cl.start >= ac.end) continue;
+        if (cl.clip_type == ClipType::Effect && fx_type_is_audio_fx(cl.fx_type)) {
+            AudioFX fx;
+            if (audio_fx_from_brick(cl, fx)) add_window(cl.start, cl.end, fx);
+        } else if (cl.clip_type == ClipType::MultiFX) {
+            // MultiFX chains stack audio FX: one segment per audio entry,
+            // honoring the entry's rel_start/rel_end sub-window.
+            for (const auto& se : cl.fx_chain) {
+                if (!fx_type_is_audio_fx(se.fx_type)) continue;
+                AudioFX fx;
+                if (!audio_fx_from_brick(se, fx)) continue;
+                float s0 = cl.start + se.rel_start;
+                float s1 = (se.rel_end > 0.f) ? cl.start + se.rel_end : cl.end;
+                add_window(s0, fminf(s1, cl.end), fx);
+            }
         }
     }
-    return result;
+    std::sort(segs.begin(), segs.end(),
+              [](const AudioFXSegment& a, const AudioFXSegment& b) { return a.t0 < b.t0; });
+    return segs;
 }
 
 PanelView pv_derive(const AppState& state) {
