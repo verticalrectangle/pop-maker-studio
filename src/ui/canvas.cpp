@@ -362,7 +362,26 @@ void draw_canvas_handles(AppState& state, ImDrawList* dl, ImVec2 p, float w, flo
     if (state.selected_track >= (int)state.tracks.size()) return;
     Track& tr = state.tracks[state.selected_track];
     if (state.selected_clip >= (int)tr.clips.size()) return;
-    Clip& cl = tr.clips[state.selected_clip];
+
+    // Glass FX bricks (Effect/MultiFX/BodyFX riding a video) carry no
+    // transform of their own — selecting one hands the canvas handles to
+    // the host clip underneath, so move/scale/rotate always works no
+    // matter which layer of the stack is selected.
+    int sel_ti = state.selected_track, sel_ci = state.selected_clip;
+    {
+        Clip& sc = tr.clips[(size_t)state.selected_clip];
+        bool is_fx = sc.clip_type == ClipType::Effect ||
+                     sc.clip_type == ClipType::MultiFX ||
+                     sc.clip_type == ClipType::BodyFX;
+        if (is_fx && fx_clip_is_glass(state, state.selected_track, sc)) {
+            for (int ci = 0; ci < (int)tr.clips.size(); ++ci) {
+                Clip& hc = tr.clips[(size_t)ci];
+                if (clip_is_videolike_type(hc.clip_type) &&
+                    hc.start < sc.end && hc.end > sc.start) { sel_ci = ci; break; }
+            }
+        }
+    }
+    Clip& cl = tr.clips[(size_t)sel_ci];
 
     ImVec2 mpos   = ImGui::GetIO().MousePos;
     bool   ldown  = ImGui::IsMouseDown(0);
@@ -419,8 +438,8 @@ void draw_canvas_handles(AppState& state, ImDrawList* dl, ImVec2 p, float w, flo
     };
     auto begin_drag = [&](CanvasHandle ht) {
         s_ctx.handle    = ht;
-        s_ctx.track_idx = state.selected_track;
-        s_ctx.clip_idx  = state.selected_clip;
+        s_ctx.track_idx = sel_ti;
+        s_ctx.clip_idx  = sel_ci;
         s_ctx.drag_sx   = mpos.x;
         s_ctx.drag_sy   = mpos.y;
         s_ctx.dirty     = false;
@@ -501,8 +520,8 @@ void draw_canvas_handles(AppState& state, ImDrawList* dl, ImVec2 p, float w, flo
         }
 
         // Apply video drag
-        if (drag_active && s_ctx.track_idx == state.selected_track &&
-            s_ctx.clip_idx == state.selected_clip &&
+        if (drag_active && s_ctx.track_idx == sel_ti &&
+            s_ctx.clip_idx == sel_ci &&
             clip_is_videolike_type(cl.clip_type)) {
             float dmx = mpos.x - s_ctx.drag_sx;
             float dmy = mpos.y - s_ctx.drag_sy;
@@ -645,8 +664,8 @@ void draw_canvas_handles(AppState& state, ImDrawList* dl, ImVec2 p, float w, flo
         }
 
         // Apply BG drag (same logic as video)
-        if (drag_active && s_ctx.track_idx == state.selected_track &&
-            s_ctx.clip_idx == state.selected_clip && cl.clip_type == ClipType::Background) {
+        if (drag_active && s_ctx.track_idx == sel_ti &&
+            s_ctx.clip_idx == sel_ci && cl.clip_type == ClipType::Background) {
             float dmx = mpos.x - s_ctx.drag_sx;
             float dmy = mpos.y - s_ctx.drag_sy;
             Clip& mc = state.tracks[s_ctx.track_idx].clips[s_ctx.clip_idx];
