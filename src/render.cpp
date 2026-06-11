@@ -2272,14 +2272,14 @@ void render_start_gl(AppState& state) {
                     AudioIn ai;
                     ai.path  = tp;
                     ai.vol   = state.tracks[ti].muted ? 0.f : cl.volume;
-                    ai.ss    = 0.f;
+                    ai.ss    = fmaxf(0.f, -cl.start);   // overhang past t=0
                     ai.to    = cl.end - cl.start;
                     ai.delay = fmaxf(0.f, cl.start);
                     ai.pan   = state.tracks[ti].muted ? 0.f : cl.pan;
-                    if (cl.fade_in > 0.f)  { ai.fade_in = cl.fade_in;  ai.fade_in_st = ai.delay; }
+                    if (cl.fade_in > 0.f)  { ai.fade_in = cl.fade_in;  ai.fade_in_st = 0.f; }
                     if (cl.fade_out > 0.f) {
                         ai.fade_out    = cl.fade_out;
-                        ai.fade_out_st = ai.delay + fmaxf(0.f, (cl.end - cl.start) - cl.fade_out);
+                        ai.fade_out_st = fmaxf(0.f, (cl.end - cl.start) - cl.fade_out);
                     }
                     audio_ins.push_back(std::move(ai));
                     covered_paths.insert(tp);
@@ -2292,14 +2292,24 @@ void render_start_gl(AppState& state) {
                 if (cl.clip_type == ClipType::Video && !path_has_audio(cl.text)) continue;
                 float speed = fmaxf(0.01f, cl.speed);
                 float vol   = state.tracks[ti].muted ? 0.f : cl.volume;
-                float ss    = cl.in_point;
-                float dur   = (cl.end - cl.start) * speed;
+                // Clips dragged left past t=0 (start < 0): only the part from
+                // timeline 0 is audible. Fold the overhang into in_point so
+                // the ss/to/itsoffset math below needs no negative offsets —
+                // preview parity (the live mixer handles negative start).
+                float cstart  = cl.start;
+                float inpoint = cl.in_point;
+                if (cstart < 0.f) {
+                    inpoint += -cstart * speed;
+                    cstart   = 0.f;
+                }
+                float ss    = inpoint;
+                float dur   = (cl.end - cstart) * speed;
                 float to    = ss + dur;
                 // Modern FFmpeg keeps absolute timestamps after -ss (input option),
                 // so the stream's pts starts at ~in_point, not 0.  To place audio at
                 // cl.start on the output timeline we need itsoffset = cl.start - in_point,
                 // not cl.start.  Clamped to 0 — negative itsoffset is unsupported.
-                float delay = fmaxf(0.f, cl.start - cl.in_point);
+                float delay = fmaxf(0.f, cstart - inpoint);
                 // Preview parity: converted voice substitutes the source, and
                 // any effective AudioFX chain is baked into a processed WAV.
                 // Full-source bake — ss/to/itsoffset math below is unchanged.
@@ -2318,8 +2328,11 @@ void render_start_gl(AppState& state) {
                 AudioIn ai;
                 ai.path = apath; ai.vol = vol;
                 ai.ss = ss; ai.to = to; ai.delay = delay; ai.speed = speed;
-                // Pre-atempo filter time base: pts of the clip's first sample.
-                float pts0 = delay + cl.in_point;
+                // Pre-atempo filter time base. Streams are normalised with
+                // asetpts=PTS-STARTPTS in the filter graph (amix ignores input
+                // start timestamps — measured, not folklore), so the clip's
+                // first sample is always pts 0; placement happens via adelay.
+                float pts0 = 0.f;
                 if (!state.tracks[ti].muted) {
                     if (auto kv = cl.ktracks.find("volume");
                         kv != cl.ktracks.end() && !kv->second.empty())
@@ -2376,11 +2389,9 @@ void render_start_gl(AppState& state) {
     args.push_back("-r");       args.push_back(std::to_string(fps));
     args.push_back("-i");       args.push_back("pipe:0");
     for (auto& ai : audio_ins) {
-        // -itsoffset must come before -ss/-to/-i; a value of 0 is harmless.
-        if (ai.delay > 0.001f) {
-            char buf[64]; snprintf(buf, sizeof(buf), "%.6f", (double)ai.delay);
-            args.push_back("-itsoffset"); args.push_back(buf);
-        }
+        // No -itsoffset: amix ignores input start timestamps entirely
+        // (verified empirically), so timeline placement is done with adelay
+        // inside the filter graph instead.
         if (ai.ss > 0.001f) {
             char buf[64]; snprintf(buf, sizeof(buf), "%.6f", (double)ai.ss);
             args.push_back("-ss"); args.push_back(buf);
@@ -2424,7 +2435,8 @@ void render_start_gl(AppState& state) {
             };
             // Single stream with no edits → direct map (zero filter overhead).
             bool simple_passthrough = (audio_ins.size() == 1) &&
-                                      !stream_needs_work(audio_ins[0]);
+                                      !stream_needs_work(audio_ins[0]) &&
+                                      audio_ins[0].delay <= 0.001f;
             if (simple_passthrough) {
                 args.push_back("-map"); args.push_back("1:a");
             } else {
@@ -2437,7 +2449,7 @@ void render_start_gl(AppState& state) {
                 std::vector<std::string> mix_ins;
                 for (int i = 0; i < (int)audio_ins.size(); ++i) {
                     const auto& ai = audio_ins[i];
-                    if (!stream_needs_work(ai)) {
+                    if (!stream_needs_work(ai) && ai.delay <= 0.001f) {
                         char lbl[32]; snprintf(lbl, sizeof(lbl), "[%d:a]", i + 1);
                         mix_ins.push_back(lbl);
                         continue;
@@ -2445,6 +2457,10 @@ void render_start_gl(AppState& state) {
                     char head[16]; snprintf(head, sizeof(head), "[%d:a]", i + 1);
                     fc += head;
                     std::vector<std::string> chain;
+                    // Normalise to pts 0: input -ss leaves absolute timestamps
+                    // and itsoffset is ignored by amix, so every downstream
+                    // time (fades, keyframe exprs) is clip-relative.
+                    chain.push_back("asetpts=PTS-STARTPTS");
                     if (!ai.vol_e.empty())
                         chain.push_back("volume='" + ai.vol_e + "':eval=frame");
                     else if (fabsf(ai.vol - 1.f) > 0.001f) {
@@ -2499,10 +2515,20 @@ void render_start_gl(AppState& state) {
                                                    (double)fmaxf(0.5f, fminf(100.f, ai.speed)));
                             fc += buf;
                         }
+                        if (ai.delay > 0.001f) {
+                            char buf[64]; snprintf(buf, sizeof(buf),
+                                ",adelay=%d:all=1", (int)lroundf(ai.delay * 1000.f));
+                            fc += buf;
+                        }
                     } else {
                         if (has_speed) {
                             char buf[64]; snprintf(buf, sizeof(buf), "atempo=%.5f",
                                                    (double)fmaxf(0.5f, fminf(100.f, ai.speed)));
+                            chain.push_back(buf);
+                        }
+                        if (ai.delay > 0.001f) {
+                            char buf[64]; snprintf(buf, sizeof(buf),
+                                "adelay=%d:all=1", (int)lroundf(ai.delay * 1000.f));
                             chain.push_back(buf);
                         }
                         for (size_t k = 0; k < chain.size(); ++k) {
