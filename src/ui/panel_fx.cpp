@@ -64,19 +64,25 @@ static EffectPreset preset_from_clip(const Clip& clip, const std::string& name) 
 
 
 // ── Shared FX card catalogue ──────────────────────────────────────────────────
-struct FXCard { FXType type; const char* name; const char* tagline; ImU32 accent; };
+struct FXCard { FXType type; const char* name; const char* tagline; ImU32 accent; const char* category; };
 static const FXCard g_fx_cards[] = {
-    {FXType::ChromaKey, "Chroma Key",  "Color-range keyer  ·  green screen  ·  compositing", IM_COL32(50,220,120,255)},
-    {FXType::Glitch,    "Glitch",      "RGB split  ·  row corruption  ·  digital tear",       IM_COL32(0,210,220,255)},
-    {FXType::ZoomPunch, "Zoom Punch",  "Beat-synced scale spike  ·  shake",                   IM_COL32(255,135,40,255)},
-    {FXType::LUT,       "LUT Grade",   "Load any .cube file  ·  cinematic color grade",       IM_COL32(255,205,55,255)},
-    {FXType::LightLeak, "Light Leak",  "Film flare  ·  amplitude-driven  ·  Screen blend",    IM_COL32(255,90,160,255)},
-    {FXType::VHS,       "VHS",         "Chroma bleed  ·  grain  ·  tracking glitch",          IM_COL32(110,195,95,255)},
-    {FXType::Datamosh,  "Datamosh",    "Temporal ghost  ·  multi-key chaos  ·  total mosh",   IM_COL32(255,60,100,255)},
-    {FXType::Grade,     "Grade",       "colour  ·  contrast  ·  saturation",                  IM_COL32(100,80,200,255)},
-    {FXType::Blur,      "Blur",        "gaussian softness",                                    IM_COL32(100,80,200,255)},
-    {FXType::Vignette,  "Vignette",    "radial darkening",                                    IM_COL32(100,80,200,255)},
+    {FXType::ChromaKey, "Chroma Key",  "Color-range keyer  ·  green screen  ·  compositing", IM_COL32(50,220,120,255), "Tools"},
+    {FXType::Glitch,    "Glitch",      "RGB split  ·  row corruption  ·  digital tear",       IM_COL32(0,210,220,255),  "Glitch"},
+    {FXType::ZoomPunch, "Zoom Punch",  "Beat-synced scale spike  ·  shake",                   IM_COL32(255,135,40,255), "Motion"},
+    {FXType::LUT,       "LUT Grade",   "Load any .cube file  ·  cinematic color grade",       IM_COL32(255,205,55,255), "Color"},
+    {FXType::LightLeak, "Light Leak",  "Film flare  ·  amplitude-driven  ·  Screen blend",    IM_COL32(255,90,160,255), "Light"},
+    {FXType::VHS,       "VHS",         "Chroma bleed  ·  grain  ·  tracking glitch",          IM_COL32(110,195,95,255), "Film"},
+    {FXType::Datamosh,  "Datamosh",    "Temporal ghost  ·  multi-key chaos  ·  total mosh",   IM_COL32(255,60,100,255), "Glitch"},
+    {FXType::Grade,     "Grade",       "colour  ·  contrast  ·  saturation",                  IM_COL32(100,80,200,255), "Tools"},
+    {FXType::Blur,      "Blur",        "gaussian softness",                                    IM_COL32(100,80,200,255), "Tools"},
+    {FXType::Vignette,  "Vignette",    "radial darkening",                                    IM_COL32(100,80,200,255), "Tools"},
 #include "generated/fx_ui_picker.h"
+};
+// Toolbox display order. Cards keep registry order within a category; any
+// category not listed here lands in the trailing "Other" bucket.
+static const char* g_fx_categories[] = {
+    "Beauty", "Tools", "Glitch", "Color", "Film", "Light",
+    "Warp", "Pattern", "Art", "Motion", "Other",
 };
 static const int g_n_fx_cards = (int)(sizeof(g_fx_cards) / sizeof(g_fx_cards[0]));
 
@@ -885,8 +891,37 @@ void panel_fx_creative(AppState& state, float w) {
     float card_h  = 96.f;
     float thumb_w = card_h * (108.f / 192.f);
 
+    // Cards grouped by category (collapsible). A card belongs to the named
+    // category, or to the trailing "Other" bucket if its category string
+    // isn't in g_fx_categories.
+    const int n_cats = (int)(sizeof(g_fx_categories) / sizeof(g_fx_categories[0]));
+    auto card_in_cat = [&](const FXCard& fc, int c) -> bool {
+        if (strcmp(g_fx_categories[c], "Other") != 0)
+            return strcmp(fc.category, g_fx_categories[c]) == 0;
+        for (int k = 0; k < n_cats - 1; ++k)
+            if (strcmp(fc.category, g_fx_categories[k]) == 0) return false;
+        return true;
+    };
+    for (int c = 0; c < n_cats; ++c) {
+    int cat_count = 0;
+    for (int i = 0; i < g_n_fx_cards; ++i)
+        if (!fx_type_is_adjustment_style(g_fx_cards[i].type) &&
+            card_in_cat(g_fx_cards[i], c)) ++cat_count;
+    if (cat_count == 0) continue;
+
+    char hdr[64];
+    snprintf(hdr, sizeof(hdr), "%s  (%d)###fxcat_%d", g_fx_categories[c], cat_count, c);
+    ImGui::PushStyleColor(ImGuiCol_Header,        IM_COL32(28, 28, 42, 255));
+    ImGui::PushStyleColor(ImGuiCol_HeaderHovered, IM_COL32(38, 38, 56, 255));
+    ImGui::PushStyleColor(ImGuiCol_HeaderActive,  IM_COL32(46, 46, 66, 255));
+    bool open = ImGui::CollapsingHeader(hdr, ImGuiTreeNodeFlags_DefaultOpen);
+    ImGui::PopStyleColor(3);
+    if (!open) continue;
+    ImGui::Dummy({0.f, 4.f});
+
     for (int i = 0; i < g_n_fx_cards; ++i) {
         if (fx_type_is_adjustment_style(g_fx_cards[i].type)) continue;
+        if (!card_in_cat(g_fx_cards[i], c)) continue;
         const FXCard& fc = g_fx_cards[i];
         ImGui::PushID(i + 9000);
         ImVec2 cp = ImGui::GetCursorScreenPos();
@@ -959,6 +994,8 @@ void panel_fx_creative(AppState& state, float w) {
         ImGui::Dummy({0.f, 5.f});
         ImGui::PopID();
     }
+    ImGui::Dummy({0.f, 6.f});
+    }  // category loop
 }
 
 // ── Audio FX brick catalogue ──────────────────────────────────────────────────

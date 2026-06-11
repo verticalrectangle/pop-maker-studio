@@ -19,6 +19,7 @@
 #include "bg_remove.h"
 #include "body_fx.h"
 #include "noise_reduce.h"
+#include "generated/fx_clip_set_dispatch.h"  // fx_clip_set_param for beauty preset chips
 #include "../recorder.h"
 #include "../video_recorder.h"
 #include "../video.h"
@@ -2342,6 +2343,75 @@ void panel_clip(AppState& state, float w) {
             if (ui_btn("\xe2\x9f\xb3 90\xc2\xb0", false, true)) {
                 clip.rotation = fmodf(clip.rotation + 90.f + 180.f, 360.f) - 180.f;
                 history_push(state, "Rotate camera");
+            }
+        }
+
+        // ── Beauty presets ───────────────────────────────────────────────────
+        // One-tap looks: each chip drops (or retunes) a glass Multi-FX brick
+        // spanning this camera brick. The brick is a normal Multi-FX clip —
+        // open it to tweak or extend the chain.
+        ImGui::Dummy({0.f, 10.f}); ui_separator(); ImGui::Dummy({0.f, 6.f});
+        ui_label("Beauty");
+        ImGui::Dummy({0.f, 6.f});
+        {
+            struct BParam  { const char* param; float v; };
+            struct BFx     { const char* id; FXType type; BParam ps[4]; int np; };
+            struct BPreset { const char* name; BFx fx[2]; int nfx; };
+            static const BPreset k_beauty[] = {
+                {"No Makeup",
+                 {{"skin_smooth", FXType::SkinSmooth,
+                   {{"amount",0.50f},{"radius",2.5f},{"tone",0.50f}}, 3}}, 1},
+                {"Soft Glam",
+                 {{"skin_smooth", FXType::SkinSmooth,
+                   {{"amount",0.85f},{"radius",3.5f},{"tone",0.55f}}, 3},
+                  {"glow_up", FXType::GlowUp,
+                   {{"glow",0.45f},{"warmth",0.20f},{"brighten",0.10f}}, 3}}, 2},
+                {"Golden Hour",
+                 {{"skin_smooth", FXType::SkinSmooth, {{"amount",0.70f}}, 1},
+                  {"golden_hour", FXType::GoldenHour, {{"amount",0.90f}}, 1}}, 2},
+            };
+            ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+            ImGui::TextWrapped("One-tap looks \xe2\x80\x94 lands a Multi-FX brick on the camera.");
+            ImGui::PopStyleColor();
+            ImGui::Dummy({0.f, 4.f});
+            int hit = -1;
+            for (int bi = 0; bi < (int)(sizeof(k_beauty)/sizeof(k_beauty[0])); ++bi) {
+                if (bi > 0) ImGui::SameLine(0.f, 6.f);
+                if (ui_btn(k_beauty[bi].name, false, true)) hit = bi;
+            }
+            if (hit >= 0) {
+                const BPreset& bp = k_beauty[hit];
+                std::vector<Clip> chain;
+                for (int fi = 0; fi < bp.nfx; ++fi) {
+                    Clip se;
+                    se.clip_type = ClipType::Effect;
+                    se.fx_type   = bp.fx[fi].type;
+                    for (int pi = 0; pi < bp.fx[fi].np; ++pi)
+                        fx_clip_set_param(se, bp.fx[fi].id,
+                                          bp.fx[fi].ps[pi].param, bp.fx[fi].ps[pi].v);
+                    chain.push_back(se);
+                }
+                Track& tr = state.tracks[state.selected_track];
+                int existing = -1;
+                for (int ci = 0; ci < (int)tr.clips.size(); ++ci) {
+                    Clip& mc = tr.clips[(size_t)ci];
+                    if (mc.clip_type == ClipType::MultiFX &&
+                        mc.start < clip.end && mc.end > clip.start) { existing = ci; break; }
+                }
+                if (existing >= 0) {
+                    tr.clips[(size_t)existing].fx_chain = std::move(chain);
+                    tr.clips[(size_t)existing].fx_chain_selected = 0;
+                } else {
+                    Clip nb;
+                    nb.clip_type = ClipType::MultiFX;
+                    nb.start     = clip.start;
+                    nb.end       = clip.end;
+                    nb.fx_chain  = std::move(chain);
+                    nb.fx_chain_selected = 0;
+                    tr.clips.push_back(std::move(nb));   // invalidates `clip` —
+                }
+                history_push(state, std::string("Beauty preset: ") + bp.name);
+                return;                                  // — bail out this frame
             }
         }
 

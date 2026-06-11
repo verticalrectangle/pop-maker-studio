@@ -260,7 +260,8 @@ def main():
         color_cases.append(f'        case FXType::{e["enum"]}: return IM_COL32({col[0]},{col[1]},{col[2]},{col[3]});')
         abbrev_cases.append(f'        case FXType::{e["enum"]}: return "{e["abbrev"]}";')
         label_cases.append(f'        case FXType::{e["enum"]}: return "{e["label"]}";')
-        picker_entries.append(f'        {{FXType::{e["enum"]}, "{e["label"]}", "{e["description"]}", IM_COL32({col[0]},{col[1]},{col[2]},{col[3]})}},')
+        cat = e.get("category", "Other")
+        picker_entries.append(f'        {{FXType::{e["enum"]}, "{e["label"]}", "{e["description"]}", IM_COL32({col[0]},{col[1]},{col[2]},{col[3]}), "{cat}"}},')
 
     write(os.path.join(GEN_DIR, "fx_ui_color.h"),   "\n".join(color_cases)   + "\n")
     write(os.path.join(GEN_DIR, "fx_ui_abbrev.h"),  "\n".join(abbrev_cases)  + "\n")

@@ -606,7 +606,7 @@ static int track_by_name_or_index(const AppState& state, const json& params) {
 // mouse steps; the main loop feeds exactly one per frame into ImGui (after
 // the GLFW backend's events, so an injected position wins the frame). Used
 // for agent-driven UI testing; everything runs on the main thread.
-struct InputStep { float x = 0, y = 0; bool has_pos = false; int btn = -1; };  // btn: 0 down, 1 up
+struct InputStep { float x = 0, y = 0; bool has_pos = false; int btn = -1; float wheel = 0; };  // btn: 0 down, 1 up
 static std::deque<InputStep> g_input_steps;
 
 void ipc_debug_input_tick() {
@@ -617,6 +617,7 @@ void ipc_debug_input_tick() {
     if (s.has_pos)     io.AddMousePosEvent(s.x, s.y);
     if (s.btn == 0)    io.AddMouseButtonEvent(0, true);
     else if (s.btn == 1) io.AddMouseButtonEvent(0, false);
+    if (s.wheel != 0.f)  io.AddMouseWheelEvent(0.f, s.wheel);
 }
 
 // ── Command dispatch ──────────────────────────────────────────────────────────
@@ -1223,6 +1224,7 @@ static json dispatch(AppState& state, const std::string& method, const json& par
             }
             if (st.value("down", false))     s.btn = 0;
             else if (st.value("up", false))  s.btn = 1;
+            s.wheel = st.value("wheel", 0.f);
             g_input_steps.push_back(s);
         }
         json r; r["queued"] = (int)g_input_steps.size();
