@@ -246,7 +246,8 @@ bool fx_clip_is_glass(const AppState& state, int fx_ti, const Clip& fx_cl) {
     if (fx_ti < 0 || fx_ti >= (int)state.tracks.size()) return false;
     for (auto& cl : state.tracks[fx_ti].clips) {
         if (cl.clip_type != ClipType::Video && cl.clip_type != ClipType::Audio &&
-            cl.clip_type != ClipType::Background) continue;
+            cl.clip_type != ClipType::Background &&
+            cl.clip_type != ClipType::VideoRecord) continue;
         if (fx_cl.start < cl.end && fx_cl.end > cl.start) return true;
     }
     return false;

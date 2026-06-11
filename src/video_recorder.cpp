@@ -176,6 +176,7 @@ static bool finalize_take(AppState& state) {
     cl->rec_takes.push_back(path);
     cl->rec_take_sel = (int)cl->rec_takes.size() - 1;
     cl->text = path;   // mirrored: video draw/export paths read clip.text
+    state.proxy_scan_needed = true;   // proxy + slot for canvas preview
     ++s_take_count;
     return true;
 }

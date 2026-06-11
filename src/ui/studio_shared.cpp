@@ -192,7 +192,7 @@ void gc_video_slots(AppState& state) {
     std::set<std::string> live;
     for (auto& tr : state.tracks)
         for (auto& cl : tr.clips)
-            if (cl.clip_type == ClipType::Video && !cl.text.empty())
+            if (clip_is_videolike_type(cl.clip_type) && !cl.text.empty())
                 live.insert(clip_slot_key(cl.text, cl.start));
     for (int i = 0; i < MAX_VIDEO_TRACKS; ++i) {
         if (!state.proxy_paths[i].empty() && !live.count(state.proxy_paths[i])) {
@@ -205,7 +205,7 @@ void gc_video_slots(AppState& state) {
 void reopen_video_slots(AppState& state) {
     for (auto& tr : state.tracks) {
         for (auto& cl : tr.clips) {
-            if (cl.clip_type != ClipType::Video || cl.text.empty()) continue;
+            if (!clip_is_videolike_type(cl.clip_type) || cl.text.empty()) continue;
             std::string key = clip_slot_key(cl.text, cl.start);
             int slot = slot_for_video(state, key, cl.text);
             if (slot < 0) continue;

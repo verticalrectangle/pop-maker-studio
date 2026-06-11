@@ -2284,6 +2284,7 @@ void panel_clip(AppState& state, float w) {
             if (ImGui::Selectable(lbl, sel, 0, {bar_w - 110.f, 0.f})) {
                 clip.rec_take_sel = i;
                 clip.text = clip.rec_takes[(size_t)i];   // mirror for draw/export
+                state.proxy_scan_needed = true;
                 history_push(state, "Select take");
             }
             ImGui::SameLine(bar_w - 100.f);
@@ -2300,6 +2301,7 @@ void panel_clip(AppState& state, float w) {
                 clip.rec_take_sel = (int)clip.rec_takes.size() - 1;
             clip.text = (clip.rec_take_sel >= 0)
                         ? clip.rec_takes[(size_t)clip.rec_take_sel] : "";
+            state.proxy_scan_needed = true;
             history_push(state, "Delete take");
         }
 

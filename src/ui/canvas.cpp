@@ -1439,7 +1439,7 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
             int active_ci = -1;
             for (int ci = 0; ci < (int)track.clips.size(); ++ci) {
                 auto& cl = track.clips[ci];
-                if (cl.clip_type == ClipType::Video &&
+                if (clip_is_videolike_type(cl.clip_type) && !cl.text.empty() &&
                     state.playhead >= cl.start && state.playhead < cl.end)
                     { active = &cl; active_ci = ci; break; }
             }

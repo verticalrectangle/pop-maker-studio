@@ -2856,7 +2856,8 @@ void render_tick_gl(AppState& state) {
         int active_ci = -1;
         for (int ci = 0; ci < (int)track.clips.size(); ++ci) {
             auto& cl = track.clips[ci];
-            if (cl.clip_type == ClipType::Video && t >= cl.start && t < cl.end)
+            if (clip_is_videolike_type(cl.clip_type) && !cl.text.empty() &&
+                t >= cl.start && t < cl.end)
                 { active = &cl; active_ci = ci; break; }
         }
         // Check incoming transition clip (visible before its own start time)
