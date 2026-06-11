@@ -9,7 +9,7 @@
 // ── Binary serialization helpers ──────────────────────────────────────────────
 
 static const uint32_t MAGIC   = 0x534D5001u; // "PMS\x01"
-static const uint32_t VERSION = 38u;  // v38: record brick takes
+static const uint32_t VERSION = 39u;  // v39: per-clip AudioFX chain
 
 struct Writer {
     std::ofstream f;
@@ -200,6 +200,23 @@ static void write_clip(Writer& w, const Clip& c) {
     w.pod(ntk);
     for (auto& tp : c.rec_takes) w.str(tp);
     w.pod(c.rec_take_sel);
+    // v39: per-clip AudioFX (was never persisted — voice model, transpose,
+    // autotune, delay, reverb all reset on reload before this)
+    {
+        const AudioFX& fx = c.audio_fx;
+        w.pod((uint8_t)fx.autotune_on); w.pod(fx.autotune_key);
+        w.pod(fx.autotune_scale);       w.pod(fx.autotune_speed);
+        w.pod((uint8_t)fx.pitch_on);    w.pod(fx.pitch_semitones);
+        w.pod((uint8_t)fx.formant_on);  w.pod(fx.formant_shift);
+        w.pod((uint8_t)fx.delay_on);    w.pod(fx.delay_time);
+        w.pod(fx.delay_feedback);       w.pod(fx.delay_mix);
+        w.pod((uint8_t)fx.reverb_on);   w.pod(fx.reverb_room);
+        w.pod(fx.reverb_damp);          w.pod(fx.reverb_mix);
+        w.pod((uint8_t)fx.voice_convert_on);
+        w.str(fx.voice_model_path);
+        w.pod((uint8_t)fx.voice_pitch_auto);
+        w.pod(fx.voice_pitch_semitones);
+    }
 }
 
 static Clip read_clip(Reader& r, uint32_t version) {
@@ -379,6 +396,35 @@ static Clip read_clip(Reader& r, uint32_t version) {
                 if (c.rec_takes[i] == sel) { c.rec_take_sel = i; break; }
             if (c.rec_take_sel < 0 && !c.rec_takes.empty())
                 c.rec_take_sel = (int)c.rec_takes.size() - 1;
+        }
+    }
+    if (version >= 39u) {
+        AudioFX& fx = c.audio_fx;
+        fx.autotune_on      = (bool)r.pod<uint8_t>();
+        fx.autotune_key     = r.pod<int>();
+        fx.autotune_scale   = r.pod<int>();
+        fx.autotune_speed   = r.pod<float>();
+        fx.pitch_on         = (bool)r.pod<uint8_t>();
+        fx.pitch_semitones  = r.pod<float>();
+        fx.formant_on       = (bool)r.pod<uint8_t>();
+        fx.formant_shift    = r.pod<float>();
+        fx.delay_on         = (bool)r.pod<uint8_t>();
+        fx.delay_time       = r.pod<float>();
+        fx.delay_feedback   = r.pod<float>();
+        fx.delay_mix        = r.pod<float>();
+        fx.reverb_on        = (bool)r.pod<uint8_t>();
+        fx.reverb_room      = r.pod<float>();
+        fx.reverb_damp      = r.pod<float>();
+        fx.reverb_mix       = r.pod<float>();
+        fx.voice_convert_on = (bool)r.pod<uint8_t>();
+        fx.voice_model_path = r.str();
+        fx.voice_pitch_auto = (bool)r.pod<uint8_t>();
+        fx.voice_pitch_semitones = r.pod<int>();
+        // Model file may have been deleted from the cache since saving
+        if (!fx.voice_model_path.empty() &&
+            !std::filesystem::exists(fx.voice_model_path)) {
+            fx.voice_model_path.clear();
+            fx.voice_convert_on = false;
         }
     }
     return c;
