@@ -11,6 +11,7 @@
 #include <cmath>
 #include <cstring>
 #include <filesystem>
+#include <memory>
 #include <mutex>
 #include <vector>
 
@@ -128,13 +129,20 @@ std::vector<float> rmvpe_f0(const std::vector<float>& wav16k)
         std::memcpy(mel_in.data() + (size_t)m * T_pad,
                     logmel.data() + (size_t)m * T, (size_t)T * sizeof(float));
 
-    // ── ONNX inference ────────────────────────────────────────────────────────
+    // ── ONNX inference (session cached — the model is 360 MB) ────────────────
     try {
-        Ort::Env env(ORT_LOGGING_LEVEL_ERROR, "rmvpe");
-        Ort::SessionOptions opts;
-        opts.SetIntraOpNumThreads(4);
-        opts.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
-        Ort::Session sess(env, rmvpe_onnx_path().c_str(), opts);
+        static std::mutex sess_mu;
+        static Ort::Env env(ORT_LOGGING_LEVEL_ERROR, "rmvpe");
+        static std::unique_ptr<Ort::Session> sess_ptr;
+        std::lock_guard<std::mutex> lk(sess_mu);
+        if (!sess_ptr) {
+            Ort::SessionOptions opts;
+            opts.SetIntraOpNumThreads(4);
+            opts.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
+            sess_ptr = std::make_unique<Ort::Session>(
+                env, rmvpe_onnx_path().c_str(), opts);
+        }
+        Ort::Session& sess = *sess_ptr;
 
         Ort::MemoryInfo mem = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator,
                                                          OrtMemTypeDefault);

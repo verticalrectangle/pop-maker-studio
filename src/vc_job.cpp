@@ -41,7 +41,7 @@ static void run_job(std::shared_ptr<VcJobData> data,
                     const std::string& source_path,
                     const std::string& model_path,
                     const std::string& out_path,
-                    int f0_semitones)
+                    int f0_semitones, bool f0_auto)
 {
     auto set_prog = [&](float p, const std::string& ph) {
         data->progress.store(p);
@@ -78,7 +78,7 @@ static void run_job(std::shared_ptr<VcJobData> data,
     if (!is_native_onnx && !need_export) {
         std::ifstream jf(stem + ".json");
         std::string js((std::istreambuf_iterator<char>(jf)), {});
-        if (js.find("\"vc_version\":4") == std::string::npos) need_export = true;
+        if (js.find("\"vc_version\":5") == std::string::npos) need_export = true;
     }
     if (need_export) {
         set_prog(0.05f, "exporting model");
@@ -102,7 +102,8 @@ static void run_job(std::shared_ptr<VcJobData> data,
     }
 
     // ── Inference ─────────────────────────────────────────────────────────────
-    std::string err = vc_onnx_convert(wav_in, voice_onnx, out_path, f0_semitones,
+    std::string err = vc_onnx_convert(wav_in, voice_onnx, out_path,
+        f0_semitones, f0_auto,
         [&](float p, const std::string& msg) {
             set_prog(0.62f + p * 0.38f, "converting:" + msg);
         });
@@ -121,7 +122,7 @@ static void run_job(std::shared_ptr<VcJobData> data,
 // ── Public API ────────────────────────────────────────────────────────────────
 
 void vc_start(AppState& state, int track_idx, int clip_idx,
-              const std::string& model_path, int f0_semitones)
+              const std::string& model_path, int f0_semitones, bool f0_auto)
 {
     if (track_idx < 0 || track_idx >= (int)state.tracks.size()) return;
     auto& track = state.tracks[track_idx];
@@ -137,7 +138,8 @@ void vc_start(AppState& state, int track_idx, int clip_idx,
         source = clip.rec_takes[(size_t)clip.rec_take_sel];
     if (source.empty()) return;
 
-    uint64_t h = std::hash<std::string>{}(source + model_path + std::to_string(f0_semitones));
+    uint64_t h = std::hash<std::string>{}(source + model_path +
+                 std::to_string(f0_semitones) + (f0_auto ? "a" : "m"));
     std::string out_path = "/tmp/pms_vc_" + std::to_string(h) + ".wav";
 
     clip.vc_status    = VcStatus::Processing;
@@ -153,7 +155,8 @@ void vc_start(AppState& state, int track_idx, int clip_idx,
     job.data      = data;
     job.track_idx = track_idx;
     job.clip_idx  = clip_idx;
-    job.thread    = std::thread(run_job, data, source, model_path, out_path, f0_semitones);
+    job.thread    = std::thread(run_job, data, source, model_path, out_path,
+                                f0_semitones, f0_auto);
 
     std::lock_guard<std::mutex> lk(g_jobs_mu);
     g_jobs.push_back(std::move(job));

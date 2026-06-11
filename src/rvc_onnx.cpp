@@ -6,6 +6,7 @@
 //
 // See rvc_onnx.h for I/O spec.
 #include "rvc_onnx.h"
+#include "paths.h"
 #include <cmath>
 #include <cstring>
 #include <fstream>
@@ -1355,6 +1356,59 @@ std::string pth_to_onnx(const PthModel& m, const std::string& out_path)
             if (!ofs) return "Write error: " + out_path;
         }
 
+        // ── Trained-register mask ─────────────────────────────────────────────
+        // Embedding rows only get gradients for coarse-pitch bins seen in
+        // fine-tuning, so diffing emb_pitch against the pretrained base
+        // (models/rvc_pitch_bases.bin) reveals exactly which pitch bins the
+        // voice was trained on. The mask drives auto-octave at convert time.
+        std::string mask_hex;
+        if (cfg.phone_dim == 768 && tl.has("enc_p.emb_pitch.weight")) {
+            auto ft = tl.load("enc_p.emb_pitch.weight");      // [256, hid]
+            auto sh = tl.shape("enc_p.emb_pitch.weight");
+            std::ifstream bf(app_models_dir() + "/rvc_pitch_bases.bin",
+                             std::ios::binary);
+            char magic[7] = {};
+            if (bf && bf.read(magic, 7) && std::memcmp(magic, "PMSPB1\n", 7) == 0) {
+                while (bf) {
+                    uint32_t sr = 0, rows = 0, cols = 0;
+                    if (!bf.read((char*)&sr, 4) || !bf.read((char*)&rows, 4) ||
+                        !bf.read((char*)&cols, 4)) break;
+                    std::vector<float> base((size_t)rows * cols);
+                    if (!bf.read((char*)base.data(),
+                                 (std::streamsize)(base.size() * 4))) break;
+                    if ((int)sr != cfg.sr || (int64_t)rows != sh[0] ||
+                        (int64_t)cols != sh[1]) continue;
+                    // Per-bin diff norm, smoothed over 9 bins
+                    std::vector<float> d(rows, 0.f), sm(rows, 0.f);
+                    for (uint32_t b = 0; b < rows; b++) {
+                        double acc = 0.0;
+                        for (uint32_t c2 = 0; c2 < cols; c2++) {
+                            float v = ft[(size_t)b*cols+c2] - base[(size_t)b*cols+c2];
+                            acc += (double)v * v;
+                        }
+                        d[b] = (float)std::sqrt(acc);
+                    }
+                    float peak = 0.f;
+                    for (uint32_t b = 0; b < rows; b++) {
+                        int lo = (int)b - 4, hi = (int)b + 4, n = 0;
+                        float acc = 0.f;
+                        for (int k = lo; k <= hi; k++)
+                            if (k >= 0 && k < (int)rows) { acc += d[(size_t)k]; n++; }
+                        sm[b] = acc / (float)n;
+                        peak  = std::fmax(peak, sm[b]);
+                    }
+                    // 64 hex chars, bin 0 = LSB of first nibble group
+                    for (uint32_t b = 0; b < rows; b += 4) {
+                        int nib = 0;
+                        for (int k = 0; k < 4; k++)
+                            if (sm[b+(uint32_t)k] > 0.3f * peak) nib |= 1 << k;
+                        mask_hex += "0123456789abcdef"[nib];
+                    }
+                    break;
+                }
+            }
+        }
+
         // ── Sidecar JSON ──────────────────────────────────────────────────────
         {
             std::string jp = out_path;
@@ -1365,7 +1419,9 @@ std::string pth_to_onnx(const PthModel& m, const std::string& out_path)
             if (!jf) return "Cannot write sidecar JSON: " + jp;
             jf << "{\"target_sr\":" << cfg.sr
                << ",\"phone_dim\":" << cfg.phone_dim
-               << ",\"vc_version\":4}";
+               << ",\"vc_version\":5";
+            if (!mask_hex.empty()) jf << ",\"register_mask\":\"" << mask_hex << "\"";
+            jf << "}";
         }
 
         return "";  // success

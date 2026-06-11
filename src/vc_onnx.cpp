@@ -1,5 +1,5 @@
 // RVC voice conversion — pure C++ ONNX Runtime inference.
-// Pipeline: ffmpeg decode → RMVPE F0 (YIN fallback) → HuBERT ONNX
+// Pipeline: ffmpeg decode → RMVPE F0 → HuBERT ONNX
 //           → repeat-interleave → VITS ONNX → ffmpeg encode.
 #include "vc_onnx.h"
 #include "rmvpe_onnx.h"
@@ -11,6 +11,7 @@
 #include <vector>
 #include <string>
 #include <algorithm>
+#include <fstream>
 #include <functional>
 #include <cstdlib>
 #include <cstdio>
@@ -90,6 +91,7 @@ std::string vc_onnx_convert(
     const std::string& voice_onnx,
     const std::string& output_wav,
     int f0_semitones,
+    bool f0_auto,
     std::function<void(float, const std::string&)> on_progress)
 {
     auto prog = [&](float p, const std::string& m) {
@@ -285,11 +287,85 @@ std::string vc_onnx_convert(
     if (f0_raw.empty())
         return "RMVPE pitch extraction failed (rmvpe.onnx missing or broken at "
                + rmvpe_onnx_path() + ")";
-    if (f0_semitones != 0) {
-        float mult = std::pow(2.f, f0_semitones / 12.f);
-        for (auto& v : f0_raw) if (v > 0.f) v *= mult;
-    }
     auto f0 = interp_f0(f0_raw, T2);
+
+    // ── Auto octave: trained-register mask from the sidecar ──────────────────
+    // The exporter diffs emb_pitch against the pretrained base — embedding
+    // rows only receive gradients for pitch bins seen in fine-tuning — and
+    // stores the trained-bin mask. Pick the octave shift whose coverage of
+    // the source's voiced bins is best (ties prefer 0). No synthesis needed.
+    int auto_shift = 0;
+    if (f0_auto) {
+        bool mask[256] = {};
+        bool have_mask = false;
+        {
+            std::string jp = voice_onnx.substr(0, voice_onnx.rfind('.')) + ".json";
+            std::ifstream jf(jp);
+            std::string js((std::istreambuf_iterator<char>(jf)), {});
+            auto pos = js.find("\"register_mask\":\"");
+            if (pos != std::string::npos) {
+                pos += 17;
+                auto end2 = js.find('"', pos);
+                std::string hex = js.substr(pos, end2 - pos);
+                if (hex.size() == 64) {
+                    for (int i = 0; i < 64; i++) {
+                        char c = hex[(size_t)i];
+                        int nib = (c >= 'a') ? c - 'a' + 10 : c - '0';
+                        for (int k = 0; k < 4; k++)
+                            mask[i*4 + k] = (nib >> k) & 1;
+                    }
+                    have_mask = true;
+                }
+            }
+        }
+        if (have_mask) {
+            // Erode the band edges (~3 st): pitch hugging the rim of the
+            // trained register sounds strained even though it's "covered".
+            bool core[256] = {};
+            for (int b = 0; b < 256; b++) {
+                bool ok = true;
+                for (int k = -4; k <= 4 && ok; k++) {
+                    int j = b + k;
+                    ok = (j >= 0 && j < 256) ? mask[j] : false;
+                }
+                core[b] = ok;
+            }
+            std::memcpy(mask, core, sizeof(core));
+            const float mel_min = 1127.f * std::log(1.f + 50.f   / 700.f);
+            const float mel_max = 1127.f * std::log(1.f + 1100.f / 700.f);
+            auto coverage = [&](int shift) {
+                float mult = std::pow(2.f, shift / 12.f);
+                int voiced = 0, in_mask = 0;
+                for (int t = 0; t < T2; t++) {
+                    float v = f0[(size_t)t];
+                    if (v <= 0.f) continue;
+                    voiced++;
+                    float mel = 1127.f * std::log(1.f + v * mult / 700.f);
+                    float b   = (mel - mel_min) * 254.f / (mel_max - mel_min) + 1.f;
+                    int   bin = (int)std::lround(std::fmin(255.f, std::fmax(1.f, b)));
+                    if (mask[bin]) in_mask++;
+                }
+                return voiced ? (float)in_mask / (float)voiced : 0.f;
+            };
+            float best = -1.f;
+            for (int shift : {0, 12, -12}) {       // 0 first → wins ties
+                float c = coverage(shift);
+                if (c > best + 0.05f) { best = c; auto_shift = shift; }
+            }
+            char m[48];
+            snprintf(m, sizeof(m), "Register: %+d st (coverage %.0f%%)",
+                     auto_shift, best * 100.f);
+            prog(0.58f, m);
+        } else {
+            prog(0.58f, "Register: auto unavailable (no mask)");
+        }
+    }
+
+    int total_semis = f0_semitones + auto_shift;
+    if (total_semis != 0) {
+        float mult = std::pow(2.f, total_semis / 12.f);
+        for (auto& v : f0) if (v > 0.f) v *= mult;
+    }
 
     // ── Coarse mel pitch bins (RVC formula, caller-side) ─────────────────────
     // mel = 1127·ln(1 + f0/700); bins 1..255 spanning f0 50..1100 Hz.

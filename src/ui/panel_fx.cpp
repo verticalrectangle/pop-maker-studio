@@ -1202,6 +1202,27 @@ void panel_audio_fx_clip(AppState& state, float w) {
             }
             ImGui::Dummy({0.f, 6.f});
 
+            // ── Transpose into the target's register ─────────────────────────
+            {
+                bool auto_on = afx.voice_pitch_auto;
+                if (ImGui::Checkbox("Auto octave##vc_auto", &auto_on)) {
+                    afx.voice_pitch_auto = auto_on;
+                    history_push(state, "Voice auto octave");
+                }
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Probes the voice at -12/0/+12 semitones and\n"
+                                      "keeps the octave it tracks best. The slider\n"
+                                      "adds a manual offset on top.");
+                ImGui::SameLine(0.f, 10.f);
+                ImGui::SetNextItemWidth(w - ImGui::GetCursorPosX() - 12.f);
+                int semis = afx.voice_pitch_semitones;
+                if (ImGui::SliderInt("##vc_semi", &semis, -24, 24, "%+d st"))
+                    afx.voice_pitch_semitones = semis;
+                if (ImGui::IsItemDeactivatedAfterEdit())
+                    history_push(state, "Voice transpose");
+            }
+            ImGui::Dummy({0.f, 6.f});
+
             // ── Find overlapping audio clips on this track ────────────────────
             // We need them to show conversion state and to trigger vc_start.
             int ti = state.selected_track;
@@ -1250,16 +1271,12 @@ void panel_audio_fx_clip(AppState& state, float w) {
                     ImGui::TextWrapped("Running RVC. This may take a minute.");
                     ImGui::PopStyleColor();
                 } else if (agg == VcStatus::Ready) {
+                    // Re-convert lives on the current-voice card below.
                     dl->AddRectFilled(bp, {bp.x+bar_w, bp.y+6.f}, IM_COL32(30, 200, 80, 255), 3.f);
                     ImGui::Dummy({0.f, 10.f});
                     ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(40,220,100,255));
                     ImGui::TextUnformatted("Voice converted");
                     ImGui::PopStyleColor();
-                    ImGui::Dummy({0.f, 4.f});
-                    if (ui_btn("Re-convert##vcr", false, true)) {
-                        for (auto& ar : audio_refs)
-                            vc_start(state, ti, ar.ci, afx.voice_model_path);
-                    }
                 } else if (agg == VcStatus::Error) {
                     ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(220,80,80,255));
                     ImGui::TextWrapped("Error: %s", agg_err.c_str());
@@ -1267,13 +1284,15 @@ void panel_audio_fx_clip(AppState& state, float w) {
                     ImGui::Dummy({0.f, 4.f});
                     if (ui_btn("Retry##vcretry", false, true)) {
                         for (auto& ar : audio_refs)
-                            vc_start(state, ti, ar.ci, afx.voice_model_path);
+                            vc_start(state, ti, ar.ci, afx.voice_model_path,
+                                     afx.voice_pitch_semitones, afx.voice_pitch_auto);
                     }
                 } else {
                     // Idle — show Convert button
                     if (ui_btn("Convert##vc_go", false, false)) {
                         for (auto& ar : audio_refs)
-                            vc_start(state, ti, ar.ci, afx.voice_model_path);
+                            vc_start(state, ti, ar.ci, afx.voice_model_path,
+                                     afx.voice_pitch_semitones, afx.voice_pitch_auto);
                     }
                 }
             } else if (afx.voice_model_path.empty()) {
@@ -1330,7 +1349,8 @@ void panel_audio_fx_clip(AppState& state, float w) {
                     history_push(state, std::string("Voice: ") + lbl);
                     hfdl.status.store(HFDownload::Status::Idle, std::memory_order_release);
                     for (auto& ar : audio_refs)
-                        vc_start(state, ti, ar.ci, afx.voice_model_path);
+                        vc_start(state, ti, ar.ci, afx.voice_model_path,
+                                     afx.voice_pitch_semitones, afx.voice_pitch_auto);
                 }
                 bool installed = hf_rvc_installed(repo, file);
                 ImGui::PushID(id);
@@ -1369,7 +1389,8 @@ void panel_audio_fx_clip(AppState& state, float w) {
                             history_push(state, std::string("Voice: ") + lbl);
                         }
                         for (auto& ar : audio_refs)
-                            vc_start(state, ti, ar.ci, afx.voice_model_path);
+                            vc_start(state, ti, ar.ci, afx.voice_model_path,
+                                     afx.voice_pitch_semitones, afx.voice_pitch_auto);
                     }
                 } else {
                     ImGui::SetCursorScreenPos({cp.x+cw-70.f, cp.y+ch/2.f-8.f});
@@ -1430,7 +1451,8 @@ void panel_audio_fx_clip(AppState& state, float w) {
                     ImGui::SetCursorScreenPos({cp.x+cw-78.f, cp.y+8.f});
                     if (ImGui::SmallButton("Re-convert##vcur"))
                         for (auto& ar : audio_refs)
-                            vc_start(state, ti, ar.ci, afx.voice_model_path);
+                            vc_start(state, ti, ar.ci, afx.voice_model_path,
+                                     afx.voice_pitch_semitones, afx.voice_pitch_auto);
                     ImGui::SetCursorScreenPos(cp);
                     ImGui::Dummy({0.f, ch + 3.f});
                 }

@@ -72,69 +72,35 @@ jobs:
 
       - name: Download models
         run: |
-          mkdir -p release/models/piper
+          mkdir -p release/models/piper release/vision-models
+          BASE="https://huggingface.co/verticalrectangle/pop-maker-studio-models/resolve/main"
 
-          echo "Downloading Whisper large model (pipeline/subtitles)..."
-          curl -fsSL -o release/models/ggml-large-v3-turbo-q5_0.bin \
-            "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin"
+          echo "Downloading all models from pop-maker-studio-models..."
+          curl -fsSL -o release/models/ggml-large-v3-turbo-q5_0.bin     "${BASE}/whisper/ggml-large-v3-turbo-q5_0.bin"
+          curl -fsSL -o release/models/ggml-tiny.en.bin                 "${BASE}/whisper/ggml-tiny.en.bin"
+          curl -fsSL -o release/models/Kim_Vocal_2.onnx                 "${BASE}/separation/Kim_Vocal_2.onnx"
+          curl -fsSL -o release/models/u2netp_human_seg.onnx            "${BASE}/background/u2netp_human_seg.onnx"
+          curl -fsSL -o release/models/hubert.onnx                      "${BASE}/hubert/hubert.onnx"
+          curl -fsSL -o release/models/rmvpe.onnx                       "${BASE}/rvc/rmvpe.onnx"
+          curl -fsSL -o release/models/wav2vec2_ctc.onnx                "${BASE}/alignment/wav2vec2_ctc.onnx"
+          curl -fsSL -o release/models/wav2vec2_vocab.json              "${BASE}/alignment/wav2vec2_vocab.json"
 
-          echo "Downloading Whisper tiny.en model (fast search)..."
-          curl -fsSL -o release/models/ggml-tiny.en.bin \
-            "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin"
+          curl -fsSL -o release/vision-models/moondream-encoder.onnx    "${BASE}/vision/vision_encoder_q4.onnx"
+          curl -fsSL -o release/vision-models/embed_tokens.onnx         "${BASE}/vision/embed_tokens_q4.onnx"
+          curl -fsSL -o release/vision-models/moondream-decoder.onnx    "${BASE}/vision/decoder_model_merged_q4.onnx"
+          curl -fsSL -o release/vision-models/moondream-tokenizer.json  "${BASE}/vision/tokenizer.json"
 
-          echo "Downloading Kim_Vocal_2..."
-          curl -fsSL -o release/models/Kim_Vocal_2.onnx \
-            "https://huggingface.co/Politrees/UVR_resources/resolve/main/models/MDXNet/Kim_Vocal_2.onnx"
-
-          echo "Copying bundled u2netp model..."
-          cp models/u2netp_human_seg.onnx release/models/u2netp_human_seg.onnx
-
-          echo "Downloading HuBERT checkpoint (RVC's hubert_base.pt = ContentVec)..."
-          # NOT vanilla HuBERT: RVC voice models are trained on ContentVec
-          # features. Vanilla hubert_base_ls960 produces fluent gibberish.
-          curl -fsSL -o hubert_base.pt \
-            "https://huggingface.co/lj1995/VoiceConversionWebUI/resolve/main/hubert_base.pt"
-
-          echo "Exporting HuBERT to ONNX..."
-          ./build/export-hubert hubert_base.pt release/models/hubert.onnx
-
-          echo "Downloading RMVPE pitch model..."
-          curl -fsSL -o release/models/rmvpe.onnx \
-            "https://huggingface.co/lj1995/VoiceConversionWebUI/resolve/main/rmvpe.onnx"
-
-          echo "Downloading wav2vec2 acoustic model (our C++ CTC alignment consumes its log-probs)..."
-          curl -fsSL -o release/models/wav2vec2_ctc.onnx \
-            "https://huggingface.co/Xenova/wav2vec2-base-960h/resolve/main/onnx/model_quantized.onnx"
-          curl -fsSL -o release/models/wav2vec2_vocab.json \
-            "https://huggingface.co/facebook/wav2vec2-base-960h/resolve/main/vocab.json"
-
-          echo "Downloading Moondream2 vision models (release-only — no runtime downloads)..."
-          mkdir -p release/vision-models
-          MOON="https://huggingface.co/Xenova/moondream2/resolve/main"
-          curl -fsSL -o release/vision-models/moondream-encoder.onnx \
-            "${MOON}/onnx/vision_encoder_q4.onnx"
-          curl -fsSL -o release/vision-models/embed_tokens.onnx \
-            "${MOON}/onnx/embed_tokens_q4.onnx"
-          curl -fsSL -o release/vision-models/moondream-decoder.onnx \
-            "${MOON}/onnx/decoder_model_merged_q4.onnx"
-          curl -fsSL -o release/vision-models/moondream-tokenizer.json \
-            "${MOON}/tokenizer.json"
-
-          echo "Downloading Piper voices..."
-          BASE_URL="https://huggingface.co/rhasspy/piper-voices/resolve/main"
           for VOICE in en_US-amy-medium en_US-ryan-medium en_US-lessac-medium en_GB-alan-medium; do
-            # Parse lang2/lang/name/quality from voice id: ll_CC-name-quality
-            LANG="${VOICE%%-*}"                    # en_US or en_GB
-            LANG2="${LANG%%_*}"                    # en
-            QUALITY="${VOICE##*-}"                 # medium
-            TMP="${VOICE#${LANG}-}"                # amy-medium
-            NAME="${TMP%-${QUALITY}}"              # amy
-            HF_DIR="${LANG2}/${LANG}/${NAME}/${QUALITY}"
             for EXT in onnx onnx.json; do
               curl -fsSL -o "release/models/piper/${VOICE}.${EXT}" \
-                "${BASE_URL}/${HF_DIR}/${VOICE}.${EXT}"
+                "${BASE}/piper/${VOICE}.${EXT}"
             done
           done
+
+          echo "All models downloaded from single HF repo."
+
+          echo "Copying bundled pitch-base blob (auto-octave register detection)..."
+          cp models/rvc_pitch_bases.bin release/models/rvc_pitch_bases.bin
 
       - name: Package release
         run: |

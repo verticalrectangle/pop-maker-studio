@@ -36,7 +36,12 @@ struct AudioFX {
 
     // AI voice conversion (ML — requires model)
     bool        voice_convert_on  = false;
-    std::string voice_model_path; // path to .pth
+    std::string voice_model_path; // path to .pth or .onnx
+    // Transpose into the target's register. Auto probes the octave
+    // empirically ({-12,0,+12} test syntheses, best pitch tracking wins);
+    // the slider is a manual offset applied on top.
+    bool        voice_pitch_auto      = true;
+    int         voice_pitch_semitones = 0;   // -24 … +24
 
     bool any_active() const {
         return autotune_on || pitch_on || formant_on ||
