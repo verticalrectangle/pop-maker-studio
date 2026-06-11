@@ -964,7 +964,12 @@ static void draw_camera_mirror(ImDrawList* dl, ImVec2 p, float w, float h) {
                     float bt = br->start + 0.001f;   // brick-local sample time
                     EffectAccum     ea  = collect_glass_effects(st, bt, bti);
                     CreativeFXAccum cfx = collect_glass_fx(st, bt, bti);
-                    draw_tex = fx_apply((uintptr_t)s_cam_tex, kSceneFxSlot,
+                    // kSceneFxSlot (MAX*2-2) belongs to the scene
+                    // compositor every frame — sharing it collided FBOs and
+                    // rendered the mirror solid green. The last slot index
+                    // is unclaimed by clips and the scene pass.
+                    draw_tex = fx_apply((uintptr_t)s_cam_tex,
+                                        MAX_VIDEO_TRACKS * 2 - 1,
                                         s_cam_w, s_cam_h, ea, cfx,
                                         (float)ImGui::GetTime());
                 }
