@@ -1323,12 +1323,14 @@ void panel_audio_fx_clip(AppState& state, float w) {
                 std::string key = dl_key(repo, file);
                 HFDownload& hfdl = s_dl[key];
                 hf_download_poll(hfdl);
-                // Download completed → set model path
+                // Download completed → select the voice and convert on demand
                 if (hfdl.status.load(std::memory_order_acquire) == HFDownload::Status::Done) {
                     afx.voice_model_path = hfdl.out_path;
                     afx.voice_convert_on = true;
                     history_push(state, std::string("Voice: ") + lbl);
                     hfdl.status.store(HFDownload::Status::Idle, std::memory_order_release);
+                    for (auto& ar : audio_refs)
+                        vc_start(state, ti, ar.ci, afx.voice_model_path);
                 }
                 bool installed = hf_rvc_installed(repo, file);
                 ImGui::PushID(id);
@@ -1357,11 +1359,17 @@ void panel_audio_fx_clip(AppState& state, float w) {
                     cdl->AddText({cp.x+8.f, cp.y+28.f},
                                  active ? IM_COL32(30,220,150,255) : IM_COL32(60,140,100,180),
                                  active ? "Selected" : "Installed");
-                    ImGui::SetCursorScreenPos({cp.x+cw-44.f, cp.y+8.f});
-                    if (ImGui::SmallButton("Use##vu")) {
-                        afx.voice_model_path = hf_rvc_model_path(repo, file);
-                        afx.voice_convert_on = true;
-                        history_push(state, std::string("Voice: ") + lbl);
+                    ImGui::SetCursorScreenPos({cp.x+cw-(active?78.f:44.f), cp.y+8.f});
+                    // Use switches voice AND converts on demand; on the active
+                    // card the same button re-runs the conversion.
+                    if (ImGui::SmallButton(active ? "Re-convert##vu" : "Use##vu")) {
+                        if (!active) {
+                            afx.voice_model_path = hf_rvc_model_path(repo, file);
+                            afx.voice_convert_on = true;
+                            history_push(state, std::string("Voice: ") + lbl);
+                        }
+                        for (auto& ar : audio_refs)
+                            vc_start(state, ti, ar.ci, afx.voice_model_path);
                     }
                 } else {
                     ImGui::SetCursorScreenPos({cp.x+cw-70.f, cp.y+ch/2.f-8.f});
@@ -1380,11 +1388,60 @@ void panel_audio_fx_clip(AppState& state, float w) {
                 ImGui::PopID();
             };
 
+            // ── Current voice pinned on top (its button is Re-convert) ────────
+            auto is_active_model = [&](const char* repo, const char* file) {
+                return !afx.voice_model_path.empty() &&
+                       afx.voice_model_path == hf_rvc_model_path(repo, file);
+            };
+            if (!afx.voice_model_path.empty()) {
+                ImGui::Dummy({0.f, 2.f});
+                const PinnedVoice* pv = nullptr;
+                for (auto& p : k_pinned)
+                    if (is_active_model(p.repo, p.file)) { pv = &p; break; }
+                const HFModel* rm = nullptr;
+                if (!pv && ss == HFSearch::Status::Done)
+                    for (auto& m : s_vc_search.results)
+                        if (is_active_model(m.repo.c_str(), m.model_file.c_str()))
+                            { rm = &m; break; }
+                if (pv) {
+                    draw_vc_card(59999, pv->label, pv->repo, pv->file);
+                } else if (rm) {
+                    std::string disp = rm->repo;
+                    auto sl = disp.rfind('/');
+                    if (sl != std::string::npos) disp = disp.substr(sl+1);
+                    for (char& c : disp) if (c=='_'||c=='-') c=' ';
+                    draw_vc_card(59999, disp.c_str(), rm->repo.c_str(),
+                                 rm->model_file.c_str(), rm->index_file.c_str());
+                } else {
+                    // Browse-picked or no longer listed: minimal selected card
+                    std::string disp = fs::path(afx.voice_model_path)
+                                           .stem().string();
+                    for (char& c : disp) if (c=='_'||c=='-') c=' ';
+                    ImVec2 cp = ImGui::GetCursorScreenPos();
+                    float cw = w - 8.f, ch = 44.f;
+                    ImDrawList* cdl = ImGui::GetWindowDrawList();
+                    cdl->AddRectFilled(cp, {cp.x+cw, cp.y+ch}, IM_COL32(14,24,20,255), 4.f);
+                    cdl->AddRect(cp, {cp.x+cw, cp.y+ch}, IM_COL32(30,200,150,180), 4.f, 0, 1.f);
+                    ImGui::PushFont(g_font_bold);
+                    cdl->AddText(ImGui::GetFont(), 11.f, {cp.x+8.f, cp.y+8.f},
+                                 IM_COL32(255,255,255,220), disp.c_str());
+                    ImGui::PopFont();
+                    cdl->AddText({cp.x+8.f, cp.y+28.f}, IM_COL32(30,220,150,255), "Selected");
+                    ImGui::SetCursorScreenPos({cp.x+cw-78.f, cp.y+8.f});
+                    if (ImGui::SmallButton("Re-convert##vcur"))
+                        for (auto& ar : audio_refs)
+                            vc_start(state, ti, ar.ci, afx.voice_model_path);
+                    ImGui::SetCursorScreenPos(cp);
+                    ImGui::Dummy({0.f, ch + 3.f});
+                }
+            }
+
             if (!s_vc_query[0]) {
                 ImGui::Dummy({0.f, 2.f});
-                for (int i = 0; i < 4; ++i)
-                    draw_vc_card(60000+i, k_pinned[i].label,
-                                 k_pinned[i].repo, k_pinned[i].file);
+                for (auto& p : k_pinned) {
+                    if (is_active_model(p.repo, p.file)) continue;  // already on top
+                    draw_vc_card(60000 + (int)(&p - k_pinned), p.label, p.repo, p.file);
+                }
             } else if (ss == HFSearch::Status::Running || s_vc_debounce > 0.f) {
                 ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
                 ImGui::TextUnformatted("Searching…");
@@ -1401,6 +1458,8 @@ void panel_audio_fx_clip(AppState& state, float w) {
                 }
                 for (int i = 0; i < (int)s_vc_search.results.size(); ++i) {
                     const HFModel& m = s_vc_search.results[i];
+                    if (is_active_model(m.repo.c_str(), m.model_file.c_str()))
+                        continue;  // already on top
                     std::string disp = m.repo;
                     auto sl = disp.rfind('/');
                     if (sl != std::string::npos) disp = disp.substr(sl+1);
