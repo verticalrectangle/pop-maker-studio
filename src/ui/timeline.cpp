@@ -15,6 +15,7 @@
 #include "waveform.h"
 #include "../recorder.h"
 #include "../video_recorder.h"
+#include "../video.h"
 #include "bg_presets.h"
 #include "text_styles.h"
 #include "theme.h"
@@ -292,16 +293,41 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
 
     // ── Edge / playhead snapping ──────────────────────────────────────────────
 
+    // Selected-take duration of a record brick, cached per path (a probe per
+    // frame would hammer file IO). Returns 0 when there is no take.
+    auto take_duration = [](const Clip& cl) -> float {
+        if (cl.rec_take_sel < 0 || cl.rec_take_sel >= (int)cl.rec_takes.size())
+            return 0.f;
+        static std::unordered_map<std::string, float> cache;
+        const std::string& path = cl.rec_takes[(size_t)cl.rec_take_sel];
+        auto it = cache.find(path);
+        if (it != cache.end()) return it->second;
+        float d = (cl.clip_type == ClipType::VideoRecord)
+                  ? video_probe_duration(path)
+                  : recorder_wav_duration(path);
+        cache[path] = d;
+        return d;
+    };
+
     // Build candidate list (all clip edges + playhead), excluding one clip.
+    // Record-brick take ends are candidates too: resizing a brick (or laying
+    // a clip against it) snaps to where the selected take's content ends.
     auto build_snap_candidates = [&](int ex_ti, int ex_ci) -> std::vector<float> {
         std::vector<float> cands;
         cands.push_back(state.playhead);
         cands.push_back(0.f);
         for (int ti = 0; ti < (int)state.tracks.size(); ++ti)
             for (int ci = 0; ci < (int)state.tracks[ti].clips.size(); ++ci) {
-                if (ti == ex_ti && ci == ex_ci) continue;
-                cands.push_back(state.tracks[ti].clips[ci].start);
-                cands.push_back(state.tracks[ti].clips[ci].end);
+                const Clip& cl = state.tracks[ti].clips[ci];
+                if (!(ti == ex_ti && ci == ex_ci)) {
+                    cands.push_back(cl.start);
+                    cands.push_back(cl.end);
+                }
+                if (cl.clip_type == ClipType::Record ||
+                    cl.clip_type == ClipType::VideoRecord) {
+                    float td = take_duration(cl);
+                    if (td > 0.05f) cands.push_back(cl.start + td);
+                }
             }
         for (float bt : state.beats) cands.push_back(bt);
         return cands;
@@ -1379,6 +1405,23 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                         snprintf(lbl, sizeof(lbl), "CAM");
                     ImU32 tc = sel ? IM_COL32(30,22,18,255) : IM_COL32(235,210,195,230);
                     dl->AddText({vis_x0 + 20.f, mid - 7.f}, tc, lbl);
+
+                    // Take-end marker: where the selected take's content
+                    // stops. The region past it is dimmed — resizing the
+                    // brick edge snaps here (take ends are snap candidates).
+                    if (!rec_live && has_take) {
+                        float td = take_duration(clip);
+                        float brick_len = clip.end - clip.start;
+                        if (td > 0.05f && td < brick_len - 0.05f) {
+                            float tx = cx0 + td * zoom;
+                            if (tx > vis_x0 && tx < vis_x1) {
+                                dl->AddRectFilled({tx, cy0}, {vis_x1, cy1},
+                                                  IM_COL32(0, 0, 0, 110));
+                                dl->AddLine({tx, cy0}, {tx, cy1},
+                                            IM_COL32(235, 150, 80, 230), 2.f);
+                            }
+                        }
+                    }
                 }
                 ImGui::PopClipRect();
             } else if (clip.clip_type == ClipType::Record) {
