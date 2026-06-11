@@ -58,7 +58,6 @@ static constexpr int kDtFloat  = 1;   // TensorProto::FLOAT
 static constexpr int kDtInt64  = 7;   // TensorProto::INT64
 static constexpr int kAttrFloat  = 1; // AttributeProto type enum
 static constexpr int kAttrInt    = 2;
-static constexpr int kAttrFloats = 6;
 static constexpr int kAttrInts   = 7;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -772,7 +771,7 @@ static std::string emit_ffn(G& g, const TensorLoader& tl,
 static std::pair<std::string, std::string>
 emit_enc_p(G& g, const TensorLoader& tl,
            const std::string& phone,   // [1, T, phone_dim]
-           const std::string& f0,     // [1, T] float Hz (for coarse pitch emb)
+           const std::string& pitch,  // [1, T] int64 coarse mel bins (1..255)
            const std::string& x_mask, // [1, 1, T]
            const std::string& T,      // scalar int64
            const RvcConfig& cfg)
@@ -806,38 +805,14 @@ emit_enc_p(G& g, const TensorLoader& tl,
     auto emb_b = op_add(g, emb, "ep_b", "ep_add");
 
     // emb_pitch: coarse mel-scale pitch (1..255) embedded and added, as in
-    // RVC's TextEncoder when f0=1. Coarse bins computed in-graph from f0 Hz:
-    //   mel = 1127·ln(1 + f0/700)
-    //   coarse = clip(round((mel - mel_min)·254/(mel_max - mel_min) + 1), 1, 255)
-    // with f0_min=50, f0_max=1100 (RVC constants). f0=0 maps below 1 → clipped to 1.
+    // RVC's TextEncoder when f0=1. The caller computes the coarse bins
+    // (standard RVC ONNX signature: `pitch` is an int64 graph input).
     if (tl.has("enc_p.emb_pitch.weight")) {
         auto pe_sh = tl.shape("enc_p.emb_pitch.weight");      // [256, hid]
         auto pe_w  = tl.load("enc_p.emb_pitch.weight");
         g.add_init_f32("ep_pew", pe_sh, pe_w);
-
-        const float mel_min = 1127.f * std::log(1.f + 50.f   / 700.f);
-        const float mel_max = 1127.f * std::log(1.f + 1100.f / 700.f);
-
-        std::string c700  = "cp_700";  g.add_scalar_f32(c700,  700.f);
-        std::string c1127 = "cp_1127"; g.add_scalar_f32(c1127, 1127.f);
-        std::string c1f   = "cp_1f";   g.add_scalar_f32(c1f,   1.f);
-        std::string cmin  = "cp_mmin"; g.add_scalar_f32(cmin,  mel_min);
-        std::string cscl  = "cp_mscl"; g.add_scalar_f32(cscl,  254.f / (mel_max - mel_min));
-        std::string clo   = "cp_lo";   g.add_scalar_f32(clo,   1.f);
-        std::string chi   = "cp_hi";   g.add_scalar_f32(chi,   255.f);
-
-        auto r   = op_div(g, f0, c700, "cp_r");
-        auto r1  = op_add(g, r, c1f, "cp_r1");
-        auto lg  = g.emit("Log", {r1}, {}, "cp_log");
-        auto mel = op_mul(g, lg, c1127, "cp_mel");
-        auto ms  = op_sub(g, mel, cmin, "cp_ms");
-        auto sc  = op_mul(g, ms, cscl, "cp_sc");
-        auto sc1 = op_add(g, sc, c1f, "cp_sc1");
-        auto rd  = g.emit("Round", {sc1}, {}, "cp_round");
-        auto cl  = g.emit("Clip", {rd, clo, chi}, {}, "cp_clip");
-        auto ci  = g.emit("Cast", {cl}, {G::attr_int("to", kDtInt64)}, "cp_i64");
         // Gather rows: [256, hid] indexed by [1, T] → [1, T, hid]
-        auto pemb = op_gather(g, "ep_pew", ci, 0, "cp_emb");
+        auto pemb = op_gather(g, "ep_pew", pitch, 0, "cp_emb");
         emb_b = op_add(g, emb_b, pemb, "ep_addp");
     }
 
@@ -1302,10 +1277,15 @@ std::string pth_to_onnx(const PthModel& m, const std::string& out_path)
         TensorLoader tl{m};
         OnnxGraph g;
 
-        // ── Graph inputs ──────────────────────────────────────────────────────
-        g.add_input("phone", kDtFloat, {1, -1, cfg.phone_dim});
-        g.add_input("f0",    kDtFloat, {1, -1});
-        g.add_input("sid",   kDtInt64, {1});
+        // ── Graph inputs (standard RVC ONNX signature — interop with the
+        //    MoeSS/w-okada ecosystem; coarse pitch and noise are caller-side) ──
+        g.add_input("phone",         kDtFloat, {1, -1, cfg.phone_dim});
+        g.add_input("phone_lengths", kDtInt64, {1});   // accepted, unused (we
+                                                       // always pass full length)
+        g.add_input("pitch",         kDtInt64, {1, -1});            // coarse 1..255
+        g.add_input("pitchf",        kDtFloat, {1, -1});            // Hz for NSF
+        g.add_input("ds",            kDtInt64, {1});                // speaker id
+        g.add_input("rnd",           kDtFloat, {1, cfg.inter_channels, -1});
 
         // ── Graph output ──────────────────────────────────────────────────────
         g.add_output("audio", kDtFloat, {1, 1, -1});
@@ -1339,31 +1319,26 @@ std::string pth_to_onnx(const PthModel& m, const std::string& out_path)
             auto ew = tl.load("emb_g.weight");
             g.add_init_f32("emb_g_w", {cfg.n_speakers, cfg.gin_channels}, ew);
         }
-        // sid: [1] int64 → scalar
-        auto sid_sc  = op_squeeze(g, "sid", 0, "sid_sc");
+        // ds: [1] int64 → scalar
+        auto sid_sc  = op_squeeze(g, "ds", 0, "sid_sc");
         auto g_emb   = op_gather(g, "emb_g_w", sid_sc, 0, "g_emb");    // [gin_ch]
         auto g_emb2  = op_unsqueeze(g, g_emb,  0, "g_emb2");           // [1, gin_ch]
         auto g_cond  = op_unsqueeze(g, g_emb2, 2, "g_cond");           // [1, gin_ch, 1]
 
         // ── TextEncoder ───────────────────────────────────────────────────────
-        auto [m_p, logs_p] = emit_enc_p(g, tl, "phone", "f0", "x_mask", T_scalar, cfg);
+        auto [m_p, logs_p] = emit_enc_p(g, tl, "phone", "pitch", "x_mask", T_scalar, cfg);
 
-        // z = m_p + exp(logs_p)·noise·0.66666  (RVC's sampling temperature;
-        // the noise keeps the output from sounding over-smoothed/robotic)
-        std::string ztmp_c = "z_temp"; g.add_scalar_f32(ztmp_c, 0.66666f);
+        // z = m_p + exp(logs_p)·rnd  (official RVC ONNX semantics: the caller
+        // provides the noise, scaled by its chosen temperature — seedable)
         auto z_std   = g.emit("Exp", {logs_p}, {}, "z_exp");
-        auto z_noise = g.emit("RandomNormalLike", {m_p},
-                              {OnnxGraph::attr_float("mean", 0.f),
-                               OnnxGraph::attr_float("scale", 1.f)}, "z_rnd");
-        auto z_ns    = op_mul(g, z_noise, z_std, "z_ns");
-        auto z_nt    = op_mul(g, z_ns, ztmp_c, "z_nt");
-        std::string z = op_add(g, m_p, z_nt, "z_sample");
+        auto z_ns    = op_mul(g, "rnd", z_std, "z_ns");
+        std::string z = op_add(g, m_p, z_ns, "z_sample");
 
         // ── Flow (reverse) ────────────────────────────────────────────────────
         z = emit_flow_reverse(g, tl, z, "x_mask", g_cond, cfg.inter_channels, "fl");
 
         // ── Decoder ───────────────────────────────────────────────────────────
-        auto audio_out = emit_decoder(g, tl, z, g_cond, "f0", T_scalar, cfg);
+        auto audio_out = emit_decoder(g, tl, z, g_cond, "pitchf", T_scalar, cfg);
         // audio_out: [1, 1, M]
 
         // ── Rename final output to "audio" ────────────────────────────────────
@@ -1390,7 +1365,7 @@ std::string pth_to_onnx(const PthModel& m, const std::string& out_path)
             if (!jf) return "Cannot write sidecar JSON: " + jp;
             jf << "{\"target_sr\":" << cfg.sr
                << ",\"phone_dim\":" << cfg.phone_dim
-               << ",\"vc_version\":3}";
+               << ",\"vc_version\":4}";
         }
 
         return "";  // success

@@ -7,11 +7,11 @@
 #include <onnxruntime_cxx_api.h>
 #include <filesystem>
 #include <cmath>
+#include <random>
 #include <vector>
 #include <string>
 #include <algorithm>
 #include <functional>
-#include <fstream>
 #include <cstdlib>
 #include <cstdio>
 #include <cstring>
@@ -139,29 +139,106 @@ std::string vc_onnx_convert(
     prog(0.15f, "Loading voice model…");
     Ort::Session voc_sess(env, voice_onnx.c_str(), opts);
 
-    // Read target_sr from sidecar JSON written by vc_export.py
-    int tgt_sr = 40000;
+    Ort::MemoryInfo mem = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
+
+    // ── Probe the voice model: signature, phone dim, rnd channels ────────────
+    // Standard RVC ONNX signature is phone/phone_lengths/pitch/pitchf/ds/rnd;
+    // we accept any subset of those names so third-party exports work natively.
+    struct VocSig {
+        bool has_lengths = false, has_rnd = false;
+        int  phone_dim = 768, rnd_ch = 192;
+    } sig;
     {
-        std::string jp = voice_onnx.substr(0, voice_onnx.rfind('.')) + ".json";
-        std::ifstream jf(jp);
-        if (jf) {
-            std::string s((std::istreambuf_iterator<char>(jf)), {});
-            auto find_int = [&](const char* key) {
-                std::string search = std::string("\"") + key + "\"";
-                auto pos = s.find(search);
-                if (pos == std::string::npos) return -1;
-                pos = s.find(':', pos);
-                if (pos == std::string::npos) return -1;
-                try { return std::stoi(s.substr(pos + 1)); } catch (...) { return -1; }
-            };
-            int v = find_int("target_sr");
-            if (v > 0) tgt_sr = v;
+        Ort::AllocatorWithDefaultOptions alloc;
+        size_t n_in = voc_sess.GetInputCount();
+        for (size_t i = 0; i < n_in; i++) {
+            std::string nm = voc_sess.GetInputNameAllocated(i, alloc).get();
+            auto shape = voc_sess.GetInputTypeInfo(i)
+                             .GetTensorTypeAndShapeInfo().GetShape();
+            if (nm == "phone_lengths") sig.has_lengths = true;
+            else if (nm == "rnd") {
+                sig.has_rnd = true;
+                if (shape.size() == 3 && shape[1] > 0) sig.rnd_ch = (int)shape[1];
+            }
+            else if (nm == "phone") {
+                if (shape.size() == 3 && shape[2] > 0) sig.phone_dim = (int)shape[2];
+            }
+            else if (nm != "pitch" && nm != "pitchf" && nm != "ds")
+                return "Voice model has unsupported input '" + nm + "'";
         }
     }
 
-    Ort::MemoryInfo mem = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
+    // Run the voice model on tiny inputs; returns audio sample count (<0 = error).
+    auto run_voice = [&](const std::vector<float>& phone, int T,
+                         const std::vector<int64_t>& pitch,
+                         const std::vector<float>& pitchf,
+                         const std::vector<float>& rnd,
+                         std::vector<float>* audio_out) -> int64_t {
+        std::vector<int64_t> ph_shape  = {1, (int64_t)T, (int64_t)sig.phone_dim};
+        std::vector<int64_t> t_shape   = {1, (int64_t)T};
+        std::vector<int64_t> rnd_shape = {1, (int64_t)sig.rnd_ch, (int64_t)T};
+        std::vector<int64_t> one_shape = {1};
+        std::vector<int64_t> len_val   = {(int64_t)T};
+        std::vector<int64_t> ds_val    = {0};
 
-    // ── HuBERT features ───────────────────────────────────────────────────────
+        std::vector<const char*> names;
+        std::vector<Ort::Value>  vals;
+        names.push_back("phone");
+        vals.push_back(Ort::Value::CreateTensor<float>(
+            mem, const_cast<float*>(phone.data()), phone.size(), ph_shape.data(), 3));
+        if (sig.has_lengths) {
+            names.push_back("phone_lengths");
+            vals.push_back(Ort::Value::CreateTensor<int64_t>(
+                mem, len_val.data(), 1, one_shape.data(), 1));
+        }
+        names.push_back("pitch");
+        vals.push_back(Ort::Value::CreateTensor<int64_t>(
+            mem, const_cast<int64_t*>(pitch.data()), pitch.size(), t_shape.data(), 2));
+        names.push_back("pitchf");
+        vals.push_back(Ort::Value::CreateTensor<float>(
+            mem, const_cast<float*>(pitchf.data()), pitchf.size(), t_shape.data(), 2));
+        names.push_back("ds");
+        vals.push_back(Ort::Value::CreateTensor<int64_t>(
+            mem, ds_val.data(), 1, one_shape.data(), 1));
+        if (sig.has_rnd) {
+            names.push_back("rnd");
+            vals.push_back(Ort::Value::CreateTensor<float>(
+                mem, const_cast<float*>(rnd.data()), rnd.size(), rnd_shape.data(), 3));
+        }
+
+        const char* out_names[] = {"audio"};
+        try {
+            auto out = voc_sess.Run(Ort::RunOptions{nullptr},
+                                    names.data(), vals.data(), vals.size(),
+                                    out_names, 1);
+            auto oshape = out[0].GetTensorTypeAndShapeInfo().GetShape();
+            int64_t M = oshape.back();
+            if (audio_out) {
+                const float* ad = out[0].GetTensorData<float>();
+                audio_out->assign(ad, ad + M);
+            }
+            return M;
+        } catch (const Ort::Exception&) {
+            return -1;
+        }
+    };
+
+    // ── Probe target sample rate ──────────────────────────────────────────────
+    // RVC's frame rate is fixed at 100 fps, so sr = 100 × out_samples / frames.
+    // Works for any export — no sidecar metadata needed.
+    int tgt_sr;
+    {
+        constexpr int Tp = 8;
+        std::vector<float>   p_phone((size_t)Tp * sig.phone_dim, 0.f);
+        std::vector<int64_t> p_pitch((size_t)Tp, 1);
+        std::vector<float>   p_pitchf((size_t)Tp, 0.f);
+        std::vector<float>   p_rnd((size_t)Tp * sig.rnd_ch, 0.f);
+        int64_t M = run_voice(p_phone, Tp, p_pitch, p_pitchf, p_rnd, nullptr);
+        if (M <= 0) return "Voice model probe failed — incompatible ONNX graph";
+        tgt_sr = (int)(M * 100 / Tp);
+    }
+
+    // ── HuBERT features (768-dim, or final_proj 256-dim for v1 models) ───────
     prog(0.20f, "Extracting phone features…");
 
     std::vector<int64_t> hub_shape = {1, (int64_t)N16};
@@ -170,11 +247,18 @@ std::string vc_onnx_convert(
         mem, wav16.data(), wav16.size(), hub_shape.data(), 2));
 
     const char* hub_in_names[]  = {"audio"};
-    const char* hub_out_names[] = {"features"};
-    auto hub_out = hub_sess.Run(
-        Ort::RunOptions{nullptr},
-        hub_in_names, hub_in.data(), 1,
-        hub_out_names, 1);
+    const char* feat_name = (sig.phone_dim == 256) ? "features256" : "features";
+    const char* hub_out_names[] = {feat_name};
+    std::vector<Ort::Value> hub_out;
+    try {
+        hub_out = hub_sess.Run(
+            Ort::RunOptions{nullptr},
+            hub_in_names, hub_in.data(), 1,
+            hub_out_names, 1);
+    } catch (const Ort::Exception&) {
+        return std::string("HuBERT model lacks output '") + feat_name +
+               "' — re-export hubert.onnx from the ContentVec checkpoint";
+    }
 
     // features: [1, T, 768]
     auto feat_info  = hub_out[0].GetTensorTypeAndShapeInfo();
@@ -207,39 +291,42 @@ std::string vc_onnx_convert(
     }
     auto f0 = interp_f0(f0_raw, T2);
 
+    // ── Coarse mel pitch bins (RVC formula, caller-side) ─────────────────────
+    // mel = 1127·ln(1 + f0/700); bins 1..255 spanning f0 50..1100 Hz.
+    std::vector<int64_t> pitch_coarse((size_t)T2);
+    {
+        const float mel_min = 1127.f * std::log(1.f + 50.f   / 700.f);
+        const float mel_max = 1127.f * std::log(1.f + 1100.f / 700.f);
+        for (int t = 0; t < T2; t++) {
+            float mel = 1127.f * std::log(1.f + f0[(size_t)t] / 700.f);
+            float v   = (mel - mel_min) * 254.f / (mel_max - mel_min) + 1.f;
+            pitch_coarse[(size_t)t] =
+                (int64_t)std::lround(std::fmin(255.f, std::fmax(1.f, v)));
+        }
+    }
+
+    // ── Sampling noise (seeded → reproducible output) ─────────────────────────
+    // z = m_p + exp(logs_p)·rnd; 0.66666 is RVC's sampling temperature.
+    std::vector<float> rnd((size_t)sig.rnd_ch * T2);
+    {
+        std::mt19937 rng(0x9e3779b9u);
+        std::normal_distribution<float> gauss(0.f, 1.f);
+        for (auto& v : rnd) v = gauss(rng) * 0.66666f;
+    }
+
     // ── VITS synthesis ────────────────────────────────────────────────────────
     prog(0.65f, "Voice synthesis…");
 
-    std::vector<int64_t> ph_shape  = {1, (int64_t)T2, (int64_t)D_phone};
-    std::vector<int64_t> f0_shape  = {1, (int64_t)T2};
-    std::vector<int64_t> sid_shape = {1};
-    std::vector<int64_t> sid_val   = {0};
-
-    std::vector<Ort::Value> voc_in;
-    voc_in.push_back(Ort::Value::CreateTensor<float>(
-        mem, phone.data(), phone.size(), ph_shape.data(), 3));
-    voc_in.push_back(Ort::Value::CreateTensor<float>(
-        mem, f0.data(), f0.size(), f0_shape.data(), 2));
-    voc_in.push_back(Ort::Value::CreateTensor<int64_t>(
-        mem, sid_val.data(), 1, sid_shape.data(), 1));
-
-    const char* voc_in_names[]  = {"phone", "f0", "sid"};
-    const char* voc_out_names[] = {"audio"};
-    auto voc_out = voc_sess.Run(
-        Ort::RunOptions{nullptr},
-        voc_in_names, voc_in.data(), 3,
-        voc_out_names, 1);
-
-    auto audio_shape = voc_out[0].GetTensorTypeAndShapeInfo().GetShape();
-    const float* ad  = voc_out[0].GetTensorData<float>();
-    int M = (int)audio_shape[2];   // [1, 1, M]
+    std::vector<float> audio_full;
+    int64_t M = run_voice(phone, T2, pitch_coarse, f0, rnd, &audio_full);
+    if (M <= 0) return "Voice synthesis failed";
 
     // ── Write output (trim the 0.5 s reflect padding) ─────────────────────────
     prog(0.92f, "Writing output…");
     int trim = tgt_sr / 2;
-    int lo   = std::min(trim, M);
-    int hi   = std::max(lo, M - trim);
-    std::vector<float> audio(ad + lo, ad + hi);
+    int lo   = std::min((int64_t)trim, M);
+    int hi   = (int)std::max((int64_t)lo, M - trim);
+    std::vector<float> audio(audio_full.begin() + lo, audio_full.begin() + hi);
     if (!write_wav(output_wav, audio, tgt_sr))
         return "Failed to write output audio";
 

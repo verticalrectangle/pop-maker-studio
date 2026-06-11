@@ -852,6 +852,25 @@ std::string hubert_to_onnx(const PthModel& m, const std::string& out_path)
         // ── Rename final output to "features" ─────────────────────────────────
         g.add_node("Identity", {x}, {"features"}, "features_id");
 
+        // ── features256: final_proj(768→256) for v1 voice models ──────────────
+        // ContentVec checkpoints carry final_proj; vanilla HuBERT may not.
+        if (tl.has("final_proj.weight")) {
+            auto pw_sh = tl.shape("final_proj.weight");          // [256, 768]
+            auto pw    = tl.load("final_proj.weight");
+            auto pb    = tl.load("final_proj.bias");
+            int  out_d = (int)pw_sh[0];
+            int  in_d  = (int)pw_sh[1];
+            std::vector<float> pw_T((size_t)in_d * out_d);
+            for (int i = 0; i < out_d; i++)
+                for (int j = 0; j < in_d; j++)
+                    pw_T[(size_t)j * out_d + i] = pw[(size_t)i * in_d + j];
+            g.add_init_f32("fproj_w", {in_d, out_d}, pw_T);
+            g.add_init_f32("fproj_b", {out_d}, pb);
+            auto mm = op_matmul(g, x, "fproj_w", "fproj_mm");
+            g.add_node("Add", {mm, "fproj_b"}, {"features256"}, "features256_n");
+            g.add_output("features256", kDtFloat, {1, -1, out_d}, {"T"});
+        }
+
         // ── Serialise ─────────────────────────────────────────────────────────
         auto bytes = g.serialise("hubert_base");
 

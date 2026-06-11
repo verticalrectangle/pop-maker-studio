@@ -67,14 +67,18 @@ static void run_job(std::shared_ptr<VcJobData> data,
     }
 
     // ── One-time voice ONNX export (C++, no Python required) ─────────────────
-    // Re-export if the sidecar lacks the current vc_version (older exports
-    // came from a graph-builder with known correctness bugs).
-    std::string voice_onnx = model_path.substr(0, model_path.rfind('.')) + ".onnx";
-    bool need_export = !fs::exists(voice_onnx);
-    if (!need_export) {
-        std::ifstream jf(model_path.substr(0, model_path.rfind('.')) + ".json");
+    // A .onnx model is used as-is (standard RVC signature; third-party exports
+    // work natively). A .pth model is exported once; re-export if the sidecar
+    // lacks the current vc_version (older exports had graph bugs).
+    std::string stem = model_path.substr(0, model_path.rfind('.'));
+    std::string voice_onnx = stem + ".onnx";
+    bool is_native_onnx = model_path.size() > 5 &&
+                          model_path.compare(model_path.size() - 5, 5, ".onnx") == 0;
+    bool need_export = !is_native_onnx && !fs::exists(voice_onnx);
+    if (!is_native_onnx && !need_export) {
+        std::ifstream jf(stem + ".json");
         std::string js((std::istreambuf_iterator<char>(jf)), {});
-        if (js.find("\"vc_version\":3") == std::string::npos) need_export = true;
+        if (js.find("\"vc_version\":4") == std::string::npos) need_export = true;
     }
     if (need_export) {
         set_prog(0.05f, "exporting model");

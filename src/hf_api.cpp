@@ -81,9 +81,10 @@ static std::vector<HFModel> parse_models(const std::string& json) {
         m.repo      = jstr(mid, "modelId");
         m.downloads = (int)jint(op, "downloads");
 
-        // Scan siblings: prefer first .pth, fall back to first .zip
+        // Scan siblings: prefer .pth, then .zip, then .onnx (native RVC
+        // signature support). Also grab the first faiss .index sibling.
         const char* rp = op;
-        std::string zip_fallback;
+        std::string pth, zip, onnx;
         while (true) {
             const char* rf = strstr(rp, "\"rfilename\":\"");
             if (!rf) break;
@@ -91,16 +92,16 @@ static std::vector<HFModel> parse_models(const std::string& json) {
             const char* rfend = strchr(rf, '"');
             if (!rfend) break;
             std::string fname(rf, rfend - rf);
-            if (ends_with(fname, ".pth")) {
-                m.model_file = std::move(fname);
-                break;
-            }
-            if (zip_fallback.empty() && ends_with(fname, ".zip"))
-                zip_fallback = fname;
+            if (pth.empty()  && ends_with(fname, ".pth"))   pth  = fname;
+            else if (zip.empty()  && ends_with(fname, ".zip"))   zip  = fname;
+            else if (onnx.empty() && ends_with(fname, ".onnx"))  onnx = fname;
+            else if (m.index_file.empty() && ends_with(fname, ".index"))
+                m.index_file = fname;
             rp = rfend + 1;
         }
-        if (m.model_file.empty())
-            m.model_file = std::move(zip_fallback);
+        m.model_file = !pth.empty() ? std::move(pth)
+                     : !zip.empty() ? std::move(zip)
+                                    : std::move(onnx);
 
         if (!m.repo.empty() && !m.model_file.empty())
             out.push_back(std::move(m));
@@ -199,11 +200,12 @@ void hf_download_poll(HFDownload& dl) {
 }
 
 void hf_download_model(const std::string& repo, const std::string& model_file,
-                       const std::string& out_path, HFDownload& dl) {
+                       const std::string& out_path, HFDownload& dl,
+                       const std::string& index_file) {
     dl.status.store(HFDownload::Status::Running, std::memory_order_release);
     dl.bytes_done.store(0, std::memory_order_relaxed);
     dl.bytes_total = 0;
-    dl.out_path    = out_path;   // final .pth path
+    dl.out_path    = out_path;   // final model path
     dl.tmp_path    = out_path + ".dl";
     dl.error_msg.clear();
 
@@ -212,7 +214,7 @@ void hf_download_model(const std::string& repo, const std::string& model_file,
 
     bool is_zip = ends_with(model_file, ".zip");
 
-    std::thread([repo, model_file, out_path, is_zip, &dl]() {
+    std::thread([repo, model_file, out_path, is_zip, index_file, &dl]() {
         std::string url = "https://huggingface.co/" + repo
                         + "/resolve/main/" + model_file;
 
@@ -299,6 +301,24 @@ void hf_download_model(const std::string& repo, const std::string& model_file,
                 dl.error_msg = "Could not move extracted file: " + ec2.message();
                 dl.status.store(HFDownload::Status::Error, std::memory_order_release);
                 return;
+            }
+        }
+
+        // Faiss .index sibling (feature retrieval) — best-effort, non-fatal.
+        // Saved as <model_stem>.index next to the model so retrieval can find
+        // it by convention once implemented.
+        if (!index_file.empty()) {
+            std::string stem = out_path.substr(0, out_path.rfind('.'));
+            std::string idx_path = stem + ".index";
+            if (!fs::exists(idx_path)) {
+                std::string idx_url = "https://huggingface.co/" + repo
+                                    + "/resolve/main/" + index_file;
+                std::string idx_cmd = "curl -L --max-time 600 --fail -o \""
+                                    + idx_path + ".dl\" \"" + idx_url + "\" 2>/dev/null";
+                if (system(idx_cmd.c_str()) == 0)
+                    fs::rename(idx_path + ".dl", idx_path, ec2);
+                else
+                    fs::remove(idx_path + ".dl", ec2);
             }
         }
 

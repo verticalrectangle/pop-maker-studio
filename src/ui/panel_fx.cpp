@@ -1318,7 +1318,8 @@ void panel_audio_fx_clip(AppState& state, float w) {
 
             // Card: Download + Use (sets model path; user then hits Convert above)
             auto draw_vc_card = [&](int id, const char* lbl,
-                                    const char* repo, const char* file) {
+                                    const char* repo, const char* file,
+                                    const char* index_file = "") {
                 std::string key = dl_key(repo, file);
                 HFDownload& hfdl = s_dl[key];
                 hf_download_poll(hfdl);
@@ -1365,7 +1366,8 @@ void panel_audio_fx_clip(AppState& state, float w) {
                 } else {
                     ImGui::SetCursorScreenPos({cp.x+cw-70.f, cp.y+ch/2.f-8.f});
                     if (ImGui::SmallButton("Download##vd"))
-                        hf_download_model(repo, file, hf_rvc_model_path(repo, file), hfdl);
+                        hf_download_model(repo, file, hf_rvc_model_path(repo, file),
+                                          hfdl, index_file);
                     if (dst == HFDownload::Status::Error) {
                         cdl->AddText({cp.x+8.f, cp.y+28.f}, IM_COL32(220,80,80,200), "Failed");
                         if (ImGui::IsItemHovered() && !hfdl.error_msg.empty())
@@ -1404,7 +1406,8 @@ void panel_audio_fx_clip(AppState& state, float w) {
                     if (sl != std::string::npos) disp = disp.substr(sl+1);
                     for (char& c : disp) if (c=='_'||c=='-') c=' ';
                     draw_vc_card(61000+i, disp.c_str(),
-                                 m.repo.c_str(), m.model_file.c_str());
+                                 m.repo.c_str(), m.model_file.c_str(),
+                                 m.index_file.c_str());
                 }
             }
             break;
