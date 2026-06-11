@@ -952,7 +952,10 @@ static void draw_camera_mirror(ImDrawList* dl, ImVec2 p, float w, float h) {
             if (br) rot_deg = br->rotation;
         }
     }
-    float rad = rot_deg * 3.14159265f / 180.f;
+    // The mirror flips horizontally, which inverts apparent rotation:
+    // mirrored content rotated -θ looks like true content rotated +θ. Negate
+    // so the SAME brick rotation makes mirror and recorded take match.
+    float rad = -rot_deg * 3.14159265f / 180.f;
     float cr = cosf(rad), sr = sinf(rad);
 
     // Fit the ROTATED frame inside the canvas with a small inset.
