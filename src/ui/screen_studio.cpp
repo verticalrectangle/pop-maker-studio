@@ -1025,33 +1025,50 @@ void ui_studio(AppState& state) {
             BY += BTN_H + 6.f;
         }
 
-        // ── Record — action button, not a library view: drops a Record brick
-        // at the playhead and opens its panel ready to arm.
+        // ── Record actions — not library views: each drops its brick at the
+        // playhead and opens the panel ready to arm.
         {
             tdl->AddLine({sp.x + 6.f, BY - 5.f}, {sp.x + TB_W - 6.f, BY - 5.f},
                          IM_COL32(50, 50, 65, 180), 1.f);
             BY += 4.f;
-            const ImU32 accent = IM_COL32(220, 50, 50, 255);
-            ImVec2 bmin = { BX, BY }, bmax = { BX + BTN_W, BY + BTN_H };
-            bool hov = ImGui::IsMouseHoveringRect(bmin, bmax);
-            bool armed = recorder_active();
-            ImU32 fill = armed ? accent
-                       : hov   ? IM_COL32(58, 26, 30, 255)
-                                : IM_COL32(34, 18, 20, 255);
-            tdl->AddRectFilled(bmin, bmax, fill, 4.f);
-            if (armed || hov)
-                tdl->AddRect(bmin, bmax,
-                    armed ? accent : IM_COL32(150, 60, 65, 200), 4.f, 0, 1.2f);
-            const char* lbl = "\xe2\x97\x8f Record";
-            ImU32 tc = armed ? IM_COL32(255,255,255,255) : IM_COL32(220,140,145,220);
-            ImVec2 tsz = ImGui::CalcTextSize(lbl);
-            tdl->AddText({BX + (BTN_W - tsz.x) * 0.5f, BY + (BTN_H - tsz.y) * 0.5f}, tc, lbl);
-            ImGui::SetCursorScreenPos(bmin);
-            ImGui::InvisibleButton("##tb_record", { BTN_W, BTN_H });
-            if (ImGui::IsItemClicked() && !armed) {
-                add_record_brick(state);
-                s_panel_view = PanelView::Clip;
-                s_user_nav   = false;
+
+            struct RecBtn {
+                const char* lbl; const char* id;
+                ImU32 accent, hov_fill, idle_fill, idle_border, idle_text;
+                bool  is_video;
+            };
+            const RecBtn btns[] = {
+                { "\xe2\x97\x8f Audio Rec", "##tb_record",
+                  IM_COL32(220, 50, 50, 255), IM_COL32(58, 26, 30, 255),
+                  IM_COL32(34, 18, 20, 255),  IM_COL32(150, 60, 65, 200),
+                  IM_COL32(220, 140, 145, 220), false },
+                { "\xe2\x97\x8f Video Rec", "##tb_vrecord",
+                  IM_COL32(235, 90, 40, 255), IM_COL32(60, 34, 22, 255),
+                  IM_COL32(36, 22, 16, 255),  IM_COL32(170, 95, 55, 200),
+                  IM_COL32(235, 165, 120, 220), true },
+            };
+            for (auto& b : btns) {
+                ImVec2 bmin = { BX, BY }, bmax = { BX + BTN_W, BY + BTN_H };
+                bool hov   = ImGui::IsMouseHoveringRect(bmin, bmax);
+                bool armed = b.is_video ? vrecorder_active() : recorder_active();
+                ImU32 fill = armed ? b.accent : hov ? b.hov_fill : b.idle_fill;
+                tdl->AddRectFilled(bmin, bmax, fill, 4.f);
+                if (armed || hov)
+                    tdl->AddRect(bmin, bmax, armed ? b.accent : b.idle_border,
+                                 4.f, 0, 1.2f);
+                ImU32 tc = armed ? IM_COL32(255,255,255,255) : b.idle_text;
+                ImVec2 tsz = ImGui::CalcTextSize(b.lbl);
+                tdl->AddText({BX + (BTN_W - tsz.x) * 0.5f,
+                              BY + (BTN_H - tsz.y) * 0.5f}, tc, b.lbl);
+                ImGui::SetCursorScreenPos(bmin);
+                ImGui::InvisibleButton(b.id, { BTN_W, BTN_H });
+                if (ImGui::IsItemClicked() && !armed) {
+                    if (b.is_video) add_video_record_brick(state);
+                    else            add_record_brick(state);
+                    s_panel_view = PanelView::Clip;
+                    s_user_nav   = false;
+                }
+                BY += BTN_H + 6.f;
             }
         }
     }

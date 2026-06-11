@@ -1905,3 +1905,38 @@
                 acc.ken_burns_end_y = cl.fx_ken_burns_end_y;
             }
             break;
+        case FXType::SkinSmooth:
+            acc.skin_smooth_on = true;
+            acc.any_gen_fx = true;
+            acc.skin_smooth_amount = fmaxf(acc.skin_smooth_amount, cl.fx_skin_smooth_amount);
+            {
+                float _bi = cl.fx_skin_smooth_radius_beat;
+                float _bv = cl.fx_skin_smooth_radius;
+                acc.skin_smooth_radius = fmaxf(acc.skin_smooth_radius, (_bi > 0.001f) ? (1.0f + (6.0f - 1.0f) * _bi * _cl_beat_pulse) : _bv);
+            }
+            {
+                float _bi = cl.fx_skin_smooth_tone_beat;
+                float _bv = cl.fx_skin_smooth_tone;
+                acc.skin_smooth_tone = fmaxf(acc.skin_smooth_tone, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
+            }
+            break;
+        case FXType::GlowUp:
+            acc.glow_up_on = true;
+            acc.any_gen_fx = true;
+            acc.glow_up_amount = fmaxf(acc.glow_up_amount, cl.fx_glow_up_amount);
+            {
+                float _bi = cl.fx_glow_up_glow_beat;
+                float _bv = cl.fx_glow_up_glow;
+                acc.glow_up_glow = fmaxf(acc.glow_up_glow, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
+            }
+            {
+                float _bi = cl.fx_glow_up_warmth_beat;
+                float _bv = cl.fx_glow_up_warmth;
+                acc.glow_up_warmth = fmaxf(acc.glow_up_warmth, (_bi > 0.001f) ? (-1.0f + (1.0f - -1.0f) * _bi * _cl_beat_pulse) : _bv);
+            }
+            {
+                float _bi = cl.fx_glow_up_brighten_beat;
+                float _bv = cl.fx_glow_up_brighten;
+                acc.glow_up_brighten = fmaxf(acc.glow_up_brighten, (_bi > 0.001f) ? (0.0f + (0.5f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
+            }
+            break;

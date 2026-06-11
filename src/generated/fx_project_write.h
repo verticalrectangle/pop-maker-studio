@@ -661,3 +661,15 @@
     w.pod(c.fx_ken_burns_start_y);
     w.pod(c.fx_ken_burns_end_x);
     w.pod(c.fx_ken_burns_end_y);
+    w.pod(c.fx_skin_smooth_amount);
+    w.pod(c.fx_skin_smooth_radius);
+    w.pod(c.fx_skin_smooth_radius_beat);
+    w.pod(c.fx_skin_smooth_tone);
+    w.pod(c.fx_skin_smooth_tone_beat);
+    w.pod(c.fx_glow_up_amount);
+    w.pod(c.fx_glow_up_glow);
+    w.pod(c.fx_glow_up_glow_beat);
+    w.pod(c.fx_glow_up_warmth);
+    w.pod(c.fx_glow_up_warmth_beat);
+    w.pod(c.fx_glow_up_brighten);
+    w.pod(c.fx_glow_up_brighten_beat);

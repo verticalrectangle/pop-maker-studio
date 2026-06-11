@@ -4451,6 +4451,85 @@
         }
       ],
       "amount_default": 1.0
+    },
+    {
+      "id": "skin_smooth",
+      "enum": "SkinSmooth",
+      "label": "Skin Smooth",
+      "abbrev": "SKIN",
+      "color": [
+        255,
+        180,
+        160,
+        255
+      ],
+      "description": "Beauty smoothing  \u00b7  edge-preserving, skin-tone gated  \u00b7  pores soften, jawlines don't",
+      "shader": "shaders/skin_smooth.glsl",
+      "params": [
+        {
+          "name": "radius",
+          "label": "Smoothness",
+          "min": 1.0,
+          "max": 6.0,
+          "default": 3.0,
+          "fmt": "%.1f px",
+          "curve": 1.0
+        },
+        {
+          "name": "tone",
+          "label": "Skin Range",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 0.5,
+          "fmt": "%.2f",
+          "curve": 1.0
+        }
+      ],
+      "amount_default": 0.8
+    },
+    {
+      "id": "glow_up",
+      "enum": "GlowUp",
+      "label": "Glow Up",
+      "abbrev": "GLOW",
+      "color": [
+        255,
+        210,
+        140,
+        255
+      ],
+      "description": "Soft-focus portrait glow  \u00b7  warmth + lift  \u00b7  diffusion-filter look",
+      "shader": "shaders/glow_up.glsl",
+      "params": [
+        {
+          "name": "glow",
+          "label": "Glow",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 0.5,
+          "fmt": "%.2f",
+          "curve": 1.0
+        },
+        {
+          "name": "warmth",
+          "label": "Warmth",
+          "min": -1.0,
+          "max": 1.0,
+          "default": 0.25,
+          "fmt": "%.2f",
+          "curve": 1.0
+        },
+        {
+          "name": "brighten",
+          "label": "Brighten",
+          "min": 0.0,
+          "max": 0.5,
+          "default": 0.15,
+          "fmt": "%.2f",
+          "curve": 1.0
+        }
+      ],
+      "amount_default": 1.0
     }
   ]
 }

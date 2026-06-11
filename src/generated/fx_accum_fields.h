@@ -487,3 +487,12 @@
     float ken_burns_start_y = 0.0f;
     float ken_burns_end_x = 0.0f;
     float ken_burns_end_y = 0.0f;
+    bool  skin_smooth_on = false;
+    float skin_smooth_amount = 0.0f;
+    float skin_smooth_radius = 1.0f;
+    float skin_smooth_tone = 0.0f;
+    bool  glow_up_on = false;
+    float glow_up_amount = 0.0f;
+    float glow_up_glow = 0.0f;
+    float glow_up_warmth = -1.0f;
+    float glow_up_brighten = 0.0f;

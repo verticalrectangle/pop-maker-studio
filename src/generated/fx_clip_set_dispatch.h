@@ -969,5 +969,23 @@ static bool fx_clip_set_param(Clip& c, const std::string& fx_id,
         if (param == "end_y") { c.fx_ken_burns_end_y = value; return true; }
         return false;
     }
+    if (fx_id == "skin_smooth") {
+        if (param == "amount") { c.fx_skin_smooth_amount = value; return true; }
+        if (param == "radius") { c.fx_skin_smooth_radius = value; return true; }
+        if (param == "radius_beat") { c.fx_skin_smooth_radius_beat = value; return true; }
+        if (param == "tone") { c.fx_skin_smooth_tone = value; return true; }
+        if (param == "tone_beat") { c.fx_skin_smooth_tone_beat = value; return true; }
+        return false;
+    }
+    if (fx_id == "glow_up") {
+        if (param == "amount") { c.fx_glow_up_amount = value; return true; }
+        if (param == "glow") { c.fx_glow_up_glow = value; return true; }
+        if (param == "glow_beat") { c.fx_glow_up_glow_beat = value; return true; }
+        if (param == "warmth") { c.fx_glow_up_warmth = value; return true; }
+        if (param == "warmth_beat") { c.fx_glow_up_warmth_beat = value; return true; }
+        if (param == "brighten") { c.fx_glow_up_brighten = value; return true; }
+        if (param == "brighten_beat") { c.fx_glow_up_brighten_beat = value; return true; }
+        return false;
+    }
     return false;
 }

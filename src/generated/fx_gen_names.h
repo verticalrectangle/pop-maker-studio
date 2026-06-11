@@ -101,3 +101,5 @@
     "dna_helix",
     "double_exposure",
     "ken_burns",
+    "skin_smooth",
+    "glow_up",

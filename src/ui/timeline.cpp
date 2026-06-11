@@ -3086,9 +3086,9 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
             t.name=n; state.tracks.insert(state.tracks.begin(), std::move(t));
             history_push(state, "Add Track");
         }
-        if (ImGui::MenuItem("Add Record Brick"))
+        if (ImGui::MenuItem("Add Audio Record Brick"))
             add_record_brick(state);
-        if (ImGui::MenuItem("Add Camera Brick"))
+        if (ImGui::MenuItem("Add Video Record Brick"))
             add_video_record_brick(state);
         ImGui::EndPopup();
     }

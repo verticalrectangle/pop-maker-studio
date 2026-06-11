@@ -101,3 +101,5 @@
         case FXType::DnaHelix: return "DNA Helix Grid";
         case FXType::DoubleExposure: return "Double Exposure";
         case FXType::KenBurns: return "Ken Burns";
+        case FXType::SkinSmooth: return "Skin Smooth";
+        case FXType::GlowUp: return "Glow Up";

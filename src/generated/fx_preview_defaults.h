@@ -690,3 +690,16 @@
             cfx.ken_burns_end_x = 0.5f;
             cfx.ken_burns_end_y = 0.5f;
             break;
+        case FXType::SkinSmooth:
+            cfx.skin_smooth_on = true;
+            cfx.skin_smooth_amount = 1.0f;
+            cfx.skin_smooth_radius = 3.0f;
+            cfx.skin_smooth_tone = 0.5f;
+            break;
+        case FXType::GlowUp:
+            cfx.glow_up_on = true;
+            cfx.glow_up_amount = 1.0f;
+            cfx.glow_up_glow = 0.5f;
+            cfx.glow_up_warmth = 0.25f;
+            cfx.glow_up_brighten = 0.15f;
+            break;

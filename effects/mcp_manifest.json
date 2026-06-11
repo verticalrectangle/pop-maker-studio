@@ -2908,5 +2908,59 @@
         "fmt": "%.2f"
       }
     ]
+  },
+  {
+    "id": "skin_smooth",
+    "label": "Skin Smooth",
+    "description": "Beauty smoothing  \u00b7  edge-preserving, skin-tone gated  \u00b7  pores soften, jawlines don't",
+    "params": [
+      {
+        "name": "radius",
+        "label": "Smoothness",
+        "min": 1.0,
+        "max": 6.0,
+        "default": 3.0,
+        "fmt": "%.1f px"
+      },
+      {
+        "name": "tone",
+        "label": "Skin Range",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.5,
+        "fmt": "%.2f"
+      }
+    ]
+  },
+  {
+    "id": "glow_up",
+    "label": "Glow Up",
+    "description": "Soft-focus portrait glow  \u00b7  warmth + lift  \u00b7  diffusion-filter look",
+    "params": [
+      {
+        "name": "glow",
+        "label": "Glow",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.5,
+        "fmt": "%.2f"
+      },
+      {
+        "name": "warmth",
+        "label": "Warmth",
+        "min": -1.0,
+        "max": 1.0,
+        "default": 0.25,
+        "fmt": "%.2f"
+      },
+      {
+        "name": "brighten",
+        "label": "Brighten",
+        "min": 0.0,
+        "max": 0.5,
+        "default": 0.15,
+        "fmt": "%.2f"
+      }
+    ]
   }
 ]

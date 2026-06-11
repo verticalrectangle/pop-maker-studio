@@ -6660,3 +6660,127 @@
             ImGui::SliderFloat("##gen_ken_burns_end_y", &clip.fx_ken_burns_end_y, 0.0f, 1.0f, "%.2f");
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Ken Burns: End Y");
             break;
+
+        case FXType::SkinSmooth:
+            ui_label("Amount");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##gen_skin_smooth_amount", &clip.fx_skin_smooth_amount, 0.0f, 1.0f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Skin Smooth: Amount");
+            ImGui::Dummy({0.f, 4.f});
+            ui_label("Smoothness");
+            {
+                bool _bon = clip.fx_skin_smooth_radius_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_skin_smooth_radius", &clip.fx_skin_smooth_radius, 1.0f, 6.0f, "%.1f px");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Skin Smooth: Smoothness");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
+                ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
+                if (ImGui::SmallButton("B##bt_skin_smooth_radius")) {
+                    clip.fx_skin_smooth_radius_beat = _bon ? 0.f : 0.5f;
+                    history_push(state, "Skin Smooth: Beat Sync");
+                }
+                ImGui::PopStyleColor();
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_skin_smooth_radius", &clip.fx_skin_smooth_radius_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Skin Smooth: Beat Intensity");
+                }
+            }
+            ImGui::Dummy({0.f, 4.f});
+            ui_label("Skin Range");
+            {
+                bool _bon = clip.fx_skin_smooth_tone_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_skin_smooth_tone", &clip.fx_skin_smooth_tone, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Skin Smooth: Skin Range");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
+                ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
+                if (ImGui::SmallButton("B##bt_skin_smooth_tone")) {
+                    clip.fx_skin_smooth_tone_beat = _bon ? 0.f : 0.5f;
+                    history_push(state, "Skin Smooth: Beat Sync");
+                }
+                ImGui::PopStyleColor();
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_skin_smooth_tone", &clip.fx_skin_smooth_tone_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Skin Smooth: Beat Intensity");
+                }
+            }
+            break;
+
+        case FXType::GlowUp:
+            ui_label("Amount");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##gen_glow_up_amount", &clip.fx_glow_up_amount, 0.0f, 1.0f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Glow Up: Amount");
+            ImGui::Dummy({0.f, 4.f});
+            ui_label("Glow");
+            {
+                bool _bon = clip.fx_glow_up_glow_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_glow_up_glow", &clip.fx_glow_up_glow, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Glow Up: Glow");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
+                ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
+                if (ImGui::SmallButton("B##bt_glow_up_glow")) {
+                    clip.fx_glow_up_glow_beat = _bon ? 0.f : 0.5f;
+                    history_push(state, "Glow Up: Beat Sync");
+                }
+                ImGui::PopStyleColor();
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_glow_up_glow", &clip.fx_glow_up_glow_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Glow Up: Beat Intensity");
+                }
+            }
+            ImGui::Dummy({0.f, 4.f});
+            ui_label("Warmth");
+            {
+                bool _bon = clip.fx_glow_up_warmth_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_glow_up_warmth", &clip.fx_glow_up_warmth, -1.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Glow Up: Warmth");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
+                ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
+                if (ImGui::SmallButton("B##bt_glow_up_warmth")) {
+                    clip.fx_glow_up_warmth_beat = _bon ? 0.f : 0.5f;
+                    history_push(state, "Glow Up: Beat Sync");
+                }
+                ImGui::PopStyleColor();
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_glow_up_warmth", &clip.fx_glow_up_warmth_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Glow Up: Beat Intensity");
+                }
+            }
+            ImGui::Dummy({0.f, 4.f});
+            ui_label("Brighten");
+            {
+                bool _bon = clip.fx_glow_up_brighten_beat > 0.001f;
+                if (_bon) ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(sw - 26.f);
+                ImGui::SliderFloat("##gen_glow_up_brighten", &clip.fx_glow_up_brighten, 0.0f, 0.5f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Glow Up: Brighten");
+                if (_bon) ImGui::EndDisabled();
+                ImGui::SameLine(0.f, 4.f);
+                ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
+                if (ImGui::SmallButton("B##bt_glow_up_brighten")) {
+                    clip.fx_glow_up_brighten_beat = _bon ? 0.f : 0.5f;
+                    history_push(state, "Glow Up: Beat Sync");
+                }
+                ImGui::PopStyleColor();
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_glow_up_brighten", &clip.fx_glow_up_brighten_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Glow Up: Beat Intensity");
+                }
+            }
+            break;

@@ -785,6 +785,21 @@ static void fx_accum_from_attached(CreativeFXAccum& acc, FXType type, float amou
             if ((int)pv.size() > 4) acc.ken_burns_end_x = fmaxf(acc.ken_burns_end_x, pv[4]);
             if ((int)pv.size() > 5) acc.ken_burns_end_y = fmaxf(acc.ken_burns_end_y, pv[5]);
             break;
+        case FXType::SkinSmooth:
+            acc.skin_smooth_on = true;
+            acc.skin_smooth_amount = fmaxf(acc.skin_smooth_amount, amount);
+            if ((int)pv.size() > 0) acc.skin_smooth_radius = fmaxf(acc.skin_smooth_radius, pv[0]);
+            if ((int)pv.size() > 1) acc.skin_smooth_tone = fmaxf(acc.skin_smooth_tone, pv[1]);
+            acc.any_gen_fx = true;
+            break;
+        case FXType::GlowUp:
+            acc.glow_up_on = true;
+            acc.glow_up_amount = fmaxf(acc.glow_up_amount, amount);
+            if ((int)pv.size() > 0) acc.glow_up_glow = fmaxf(acc.glow_up_glow, pv[0]);
+            if ((int)pv.size() > 1) acc.glow_up_warmth = fmaxf(acc.glow_up_warmth, pv[1]);
+            if ((int)pv.size() > 2) acc.glow_up_brighten = fmaxf(acc.glow_up_brighten, pv[2]);
+            acc.any_gen_fx = true;
+            break;
         default: break;
     }
 }

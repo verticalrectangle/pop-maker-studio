@@ -101,3 +101,5 @@
         {FXType::DnaHelix, "DNA Helix Grid", "Animated DNA helix wire overlay", IM_COL32(80,255,200,255)},
         {FXType::DoubleExposure, "Double Exposure", "Screen-blended double exposure", IM_COL32(160,100,255,255)},
         {FXType::KenBurns, "Ken Burns", "Animated zoom & pan — push in or pull back across the clip duration", IM_COL32(80,180,255,255)},
+        {FXType::SkinSmooth, "Skin Smooth", "Beauty smoothing  ·  edge-preserving, skin-tone gated  ·  pores soften, jawlines don't", IM_COL32(255,180,160,255)},
+        {FXType::GlowUp, "Glow Up", "Soft-focus portrait glow  ·  warmth + lift  ·  diffusion-filter look", IM_COL32(255,210,140,255)},
