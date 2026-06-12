@@ -74,7 +74,7 @@ enum class OutputFormat { Vertical, Horizontal, Square };
 // ── Track / clip data model ───────────────────────────────────────────────────
 
 // Each clip carries its own type so any track can hold mixed content.
-enum class ClipType { Text, Lyrics, Subtitle, Video, Audio, Effect, Background, BodyFX, MultiFX, Record, VideoRecord };
+enum class ClipType { Text, Lyrics, Subtitle, Video, Audio, Effect, Background, BodyFX, MultiFX, Record, VideoRecord, AudioMultiFX };
 
 // A clip that composites as video: a Video clip, or a VideoRecord brick whose
 // selected take is mirrored into `text` (path consumers stay unchanged).
@@ -723,6 +723,7 @@ int              fx_glass_host_index (const AppState& state, int fx_ti, const Cl
 
 // ── FX-brick coupling ─────────────────────────────────────────────────────────
 bool             fx_brick_is_video   (const Clip& c);   // Effect(video)/MultiFX/BodyFX
+bool             fx_brick_is_audio_kind(const Clip& c); // Effect(audio)/AudioMultiFX
 // Stable host fingerprint (source_id/text; record bricks get sentinels).
 std::string      fx_host_fingerprint (const Clip& host);
 // Resolve a coupled brick's host on its track: fingerprint match, then max

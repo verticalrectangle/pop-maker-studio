@@ -97,8 +97,9 @@ static void monitor_chain_sync(AppState& state) {
 
 static bool s_user_nav = false; // user explicitly chose Animation/History tab
 // Coupled Multi-FX brick shown in the selected content's FX tab this frame.
-static int  s_host_fx_ti = -1;
-static int  s_host_fx_ci = -1;
+static int  s_host_fx_ti  = -1;
+static int  s_host_fx_ci  = -1;
+static int  s_host_afx_ci = -1;
 
 static void handle_shortcuts(AppState& state) {
     if (terminal_is_focused()) return;
@@ -1596,32 +1597,36 @@ void ui_studio(AppState& state) {
                 return (do_switch && s_panel_view == target) ? ImGuiTabItemFlags_SetSelected : 0;
             };
 
-            // The FX tab appears only while the selected content has a
-            // coupled Multi-FX brick on its track.
+            // FX tabs appear only while the selected content has coupled
+            // chain bricks on its track: "FX" = video chain, "Audio FX" =
+            // audio chain (a video clip can carry both).
             int host_fx_ti = -1, host_fx_ci = -1;
+            int host_afx_ci = -1;
             if (has_sel && state.selected_track >= 0 &&
                 state.selected_track < (int)state.tracks.size()) {
                 auto& cls = state.tracks[state.selected_track].clips;
                 if (state.selected_clip >= 0 && state.selected_clip < (int)cls.size()) {
-                    const Clip& sc = cls[(size_t)state.selected_clip];
-                    bool hostable = clip_is_videolike_type(sc.clip_type) ||
-                                    sc.clip_type == ClipType::Background;
-                    if (hostable) {
-                        for (int k = 0; k < (int)cls.size(); ++k) {
-                            const Clip& oc = cls[(size_t)k];
-                            if (oc.clip_type == ClipType::MultiFX && oc.fx_coupled &&
-                                fx_coupled_host(state, state.selected_track, oc)
-                                    == state.selected_clip) {
-                                host_fx_ti = state.selected_track;
-                                host_fx_ci = k;
-                                break;
-                            }
+                    for (int k = 0; k < (int)cls.size(); ++k) {
+                        const Clip& oc = cls[(size_t)k];
+                        if (!oc.fx_coupled) continue;
+                        if (oc.clip_type != ClipType::MultiFX &&
+                            oc.clip_type != ClipType::AudioMultiFX) continue;
+                        if (fx_coupled_host(state, state.selected_track, oc)
+                                != state.selected_clip) continue;
+                        if (oc.clip_type == ClipType::MultiFX) {
+                            host_fx_ti = state.selected_track;
+                            host_fx_ci = k;
+                        } else {
+                            host_fx_ti = state.selected_track;
+                            host_afx_ci = k;
                         }
                     }
                 }
             }
             if (s_panel_view == PanelView::HostFX && host_fx_ci < 0)
                 s_panel_view = PanelView::Clip;   // brick decoupled/deleted
+            if (s_panel_view == PanelView::HostAudioFX && host_afx_ci < 0)
+                s_panel_view = PanelView::Clip;
 
             if (ImGui::BeginTabBar("##panel_tabs")) {
                 if (show_clip_tabs) {
@@ -1631,13 +1636,16 @@ void ui_studio(AppState& state) {
                         { s_panel_view = PanelView::Typography; s_user_nav = false; ImGui::EndTabItem(); }
                     if (host_fx_ci >= 0 && ImGui::BeginTabItem("FX", nullptr, tf(PanelView::HostFX)))
                         { s_panel_view = PanelView::HostFX; s_user_nav = false; ImGui::EndTabItem(); }
+                    if (host_afx_ci >= 0 && ImGui::BeginTabItem("Audio FX", nullptr, tf(PanelView::HostAudioFX)))
+                        { s_panel_view = PanelView::HostAudioFX; s_user_nav = false; ImGui::EndTabItem(); }
                 }
                 if (ImGui::BeginTabItem("History", nullptr, tf(PanelView::History)))
                     { s_panel_view = PanelView::History; s_user_nav = true; ImGui::EndTabItem(); }
                 ImGui::EndTabBar();
             }
-            s_host_fx_ti = host_fx_ti;
-            s_host_fx_ci = host_fx_ci;
+            s_host_fx_ti  = host_fx_ti;
+            s_host_fx_ci  = host_fx_ci;
+            s_host_afx_ci = host_afx_ci;
 
             ImGui::PopStyleColor(2);
             ImGui::PopStyleVar();
@@ -1651,6 +1659,12 @@ void ui_studio(AppState& state) {
         switch (s_panel_view) {
             case PanelView::Clip:        panel_clip(state, pw);                  break;
             case PanelView::Typography:  panel_typography(state, pw);            break;
+            case PanelView::HostAudioFX:
+                panel_audio_multifx_for(state, pw, s_host_fx_ti, s_host_afx_ci);
+                break;
+            case PanelView::OverrideAudioMultiFX:
+                panel_audio_multifx(state, pw);
+                break;
             case PanelView::HostFX: {
                 // Coupled chain of the selected content + the way out.
                 panel_multifx_for(state, pw, s_host_fx_ti, s_host_fx_ci);

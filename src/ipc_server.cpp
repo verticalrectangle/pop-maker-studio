@@ -178,6 +178,7 @@ static std::string clip_type_str(ClipType t) {
         case ClipType::Background: return "background";
         case ClipType::BodyFX:     return "body_fx";
         case ClipType::MultiFX:    return "multi_fx";
+        case ClipType::AudioMultiFX: return "audio_multi_fx";
         case ClipType::Record:     return "record";
         case ClipType::VideoRecord: return "video_record";
     }
@@ -627,13 +628,20 @@ static int ipc_autocouple_fx(AppState& state, int ti, int ci) {
     auto& clips = state.tracks[ti].clips;
     if (ci < 0 || ci >= (int)clips.size()) return ci;
     Clip& c = clips[(size_t)ci];
-    if (c.fx_coupled || !fx_brick_is_video(c)) return ci;
+    if (c.fx_coupled || !(fx_brick_is_video(c) || fx_brick_is_audio_kind(c)))
+        return ci;
+    const bool audio_kind = fx_brick_is_audio_kind(c);
     int best = -1; float bov = 0.05f;
     for (int k = 0; k < (int)clips.size(); ++k) {
         if (k == ci) continue;
         const Clip& hc = clips[(size_t)k];
-        bool hostable = clip_is_videolike_type(hc.clip_type) ||
-                        hc.clip_type == ClipType::Background;
+        bool hostable = audio_kind
+            ? (hc.clip_type == ClipType::Audio ||
+               hc.clip_type == ClipType::Record ||
+               hc.clip_type == ClipType::Video ||
+               hc.clip_type == ClipType::VideoRecord)
+            : (clip_is_videolike_type(hc.clip_type) ||
+               hc.clip_type == ClipType::Background);
         if (!hostable) continue;
         float ov = fminf(c.end, hc.end) - fmaxf(c.start, hc.start);
         if (ov > bov) { bov = ov; best = k; }
@@ -1326,6 +1334,45 @@ static json dispatch(AppState& state, const std::string& method, const json& par
             bk.end   = hc.end + fminf(2.f, fmaxf(0.5f, blen));
         }
         return json::object();
+    }
+
+    if (method == "get_fx_segments") {
+        int ti = track_by_name_or_index(state, params), ci = params.value("clip", -1);
+        if (!check_clip(state, ti, ci, err)) return {};
+        auto segs = collect_audio_fx_segments(state, ti, state.tracks[ti].clips[(size_t)ci]);
+        json arr = json::array();
+        for (auto& sg : segs) {
+            json e; e["t0"] = sg.t0; e["t1"] = sg.t1;
+            e["pitch_on"] = sg.fx.pitch_on; e["semitones"] = sg.fx.pitch_semitones;
+            e["reverb_on"] = sg.fx.reverb_on; e["delay_on"] = sg.fx.delay_on;
+            e["autotune_on"] = sg.fx.autotune_on;
+            arr.push_back(e);
+        }
+        json r; r["segments"] = arr;
+        // Coupling diagnostics for every FX brick on the track
+        json bricks = json::array();
+        for (int k = 0; k < (int)state.tracks[ti].clips.size(); ++k) {
+            const Clip& bc = state.tracks[ti].clips[(size_t)k];
+            if (bc.clip_type != ClipType::AudioMultiFX &&
+                bc.clip_type != ClipType::MultiFX) continue;
+            json b;
+            b["index"]   = k;
+            b["type"]    = clip_type_str(bc.clip_type);
+            b["coupled"] = bc.fx_coupled;
+            b["host_sid"] = bc.fx_host_sid;
+            b["resolved_host"] = fx_coupled_host(state, ti, bc);
+            json ents = json::array();
+            for (auto& se : bc.fx_chain) {
+                json e; e["fx_type"] = (int)se.fx_type;
+                e["pitch_on"] = se.audio_fx.pitch_on;
+                e["rel0"] = se.rel_start; e["rel1"] = se.rel_end;
+                ents.push_back(e);
+            }
+            b["entries"] = ents;
+            bricks.push_back(b);
+        }
+        r["bricks"] = bricks;
+        return r;
     }
 
     if (method == "debug_fx_tone") {
@@ -2393,6 +2440,75 @@ static json dispatch(AppState& state, const std::string& method, const json& par
 
         if (fx_overlap_on_track(state, ti, start, end, -1, err)) return {};
         state.tracks[ti].clips.push_back(cl);
+        int nci = ipc_autocouple_fx(state, ti, (int)state.tracks[ti].clips.size() - 1);
+        json r; r["clip"] = nci;
+        r["coupled"] = state.tracks[ti].clips[(size_t)nci].fx_coupled;
+        return r;
+    }
+
+    if (method == "add_audio_multifx_brick") {
+        // Audio chain brick: effects = [{fx_type: audio_*, params, rel_start?,
+        // rel_end?}]. Auto-couples to the best-overlap audio content.
+        int ti = track_by_name_or_index(state, params);
+        if (!check_track(state, ti, err)) return {};
+        if (state.tracks[ti].locked) { err = "track is locked"; return {}; }
+        float start = snap_to_frame(params.value("start", 0.f), state.fps);
+        float end   = snap_end_to_frame(params.value("end", start + 2.f), state.fps);
+
+        Clip brick;
+        brick.clip_type = ClipType::AudioMultiFX;
+        brick.start     = start;
+        brick.end       = end;
+        if (params.contains("effects") && params["effects"].is_array()) {
+            for (auto& e : params["effects"]) {
+                std::string fxt = e.value("fx_type", "audio_autotune");
+                Clip se;
+                se.clip_type = ClipType::Effect;
+                se.fx_type   = parse_fx_type(fxt);
+                if (!fx_type_is_audio_fx(se.fx_type)) {
+                    err = "'" + fxt + "' is not an audio effect — the Audio "
+                          "Multi-FX brick takes audio effects only";
+                    return {};
+                }
+                se.rel_start = e.value("rel_start", 0.f);
+                se.rel_end   = e.value("rel_end",   0.f);
+                json ap = e.value("params", json::object());
+                AudioFX& afx = se.audio_fx;
+                switch (se.fx_type) {
+                    case FXType::AudioAutotune:
+                        afx.autotune_on    = true;
+                        afx.autotune_key   = ap.value("key",   afx.autotune_key);
+                        afx.autotune_scale = ap.value("scale", afx.autotune_scale);
+                        afx.autotune_speed = ap.value("speed_ms", afx.autotune_speed);
+                        break;
+                    case FXType::AudioPitch:
+                        afx.pitch_on        = true;
+                        afx.pitch_semitones = ap.value("semitones", afx.pitch_semitones);
+                        break;
+                    case FXType::AudioFormant:
+                        afx.formant_on    = true;
+                        afx.formant_shift = ap.value("shift", afx.formant_shift);
+                        break;
+                    case FXType::AudioDelay:
+                        afx.delay_on       = true;
+                        afx.delay_time     = ap.value("time",     afx.delay_time);
+                        afx.delay_feedback = ap.value("feedback", afx.delay_feedback);
+                        afx.delay_mix      = ap.value("mix",      afx.delay_mix);
+                        break;
+                    case FXType::AudioReverb:
+                        afx.reverb_on   = true;
+                        afx.reverb_room = ap.value("room", afx.reverb_room);
+                        afx.reverb_damp = ap.value("damp", afx.reverb_damp);
+                        afx.reverb_mix  = ap.value("mix",  afx.reverb_mix);
+                        break;
+                    default: break;
+                }
+                brick.fx_chain.push_back(se);
+            }
+        }
+        brick.fx_chain_selected = brick.fx_chain.empty() ? -1 : 0;
+        if (fx_overlap_on_track(state, ti, start, end, -1, err)) return {};
+        state.tracks[ti].clips.push_back(brick);
         int nci = ipc_autocouple_fx(state, ti, (int)state.tracks[ti].clips.size() - 1);
         json r; r["clip"] = nci;
         r["coupled"] = state.tracks[ti].clips[(size_t)nci].fx_coupled;

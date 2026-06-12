@@ -325,7 +325,8 @@ bool pv_is_lib(PanelView v) {
 bool pv_is_override(PanelView v) {
     return v == PanelView::OverrideFX    || v == PanelView::OverrideAdj ||
            v == PanelView::OverrideBG    || v == PanelView::OverrideAudioFX ||
-           v == PanelView::OverrideMultiFX;
+           v == PanelView::OverrideMultiFX ||
+           v == PanelView::OverrideAudioMultiFX;
 }
 
 bool fx_type_is_audio_fx(FXType ft) {
@@ -392,11 +393,17 @@ std::vector<AudioFXSegment> collect_audio_fx_segments(const AppState& state,
         if (&cl == &ac) continue;
         if (cl.end <= ac.start || cl.start >= ac.end) continue;
         if (cl.clip_type == ClipType::Effect && fx_type_is_audio_fx(cl.fx_type)) {
+            // Transitional single audio brick (pre-coupling) — legacy overlap.
             AudioFX fx;
             if (audio_fx_from_brick(cl, fx)) add_window(cl.start, cl.end, fx);
-        } else if (cl.clip_type == ClipType::MultiFX) {
-            // MultiFX chains stack audio FX: one segment per audio entry,
-            // honoring the entry's rel_start/rel_end sub-window.
+        } else if (cl.clip_type == ClipType::AudioMultiFX) {
+            // Audio chain brick: one segment per entry, honoring the entry's
+            // rel sub-window. Coupled bricks apply only to their host.
+            if (cl.fx_coupled) {
+                int host = fx_coupled_host(state, track_idx, cl);
+                if (host < 0 ||
+                    &state.tracks[track_idx].clips[(size_t)host] != &ac) continue;
+            }
             for (const auto& se : cl.fx_chain) {
                 if (!fx_type_is_audio_fx(se.fx_type)) continue;
                 AudioFX fx;
@@ -426,6 +433,9 @@ PanelView pv_derive(const AppState& state) {
     if (cl.clip_type == ClipType::MultiFX && !cl.fx_coupled)
         return PanelView::OverrideMultiFX;
     if (cl.clip_type == ClipType::MultiFX) return PanelView::Clip;
+    if (cl.clip_type == ClipType::AudioMultiFX && !cl.fx_coupled)
+        return PanelView::OverrideAudioMultiFX;
+    if (cl.clip_type == ClipType::AudioMultiFX) return PanelView::Clip;
     if (cl.clip_type == ClipType::Effect) {
         if (cl.fx_type == FXType::Grade    ||
             cl.fx_type == FXType::Blur     ||

@@ -2383,6 +2383,138 @@ void panel_multifx_for(AppState& state, float w, int b_ti, int b_ci) {
     if (track.locked) ImGui::EndDisabled();
 }
 
+// ── Audio Multi-FX chain panel ────────────────────────────────────────────────
+
+void panel_audio_multifx(AppState& state, float w) {
+    panel_audio_multifx_for(state, w, state.selected_track, state.selected_clip);
+}
+
+void panel_audio_multifx_for(AppState& state, float w, int b_ti, int b_ci) {
+    if (b_ti < 0 || b_ti >= (int)state.tracks.size()) return;
+    Track& track = state.tracks[b_ti];
+    if (b_ci < 0 || b_ci >= (int)track.clips.size()) return;
+    Clip& brick = track.clips[b_ci];
+    if (brick.clip_type != ClipType::AudioMultiFX) return;
+
+    ImGui::Dummy({0.f, 8.f});
+    ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(30, 220, 180, 255));
+    ImGui::TextUnformatted("Audio Multi-FX");
+    ImGui::PopStyleColor();
+    ImGui::SameLine(0.f, 8.f);
+    bool is_glass = fx_clip_is_glass(state, b_ti, brick);
+    ImGui::PushStyleColor(ImGuiCol_Text, is_glass ? IM_COL32(130,210,255,255)
+                                                  : IM_COL32(160,110,255,255));
+    ImGui::TextUnformatted(is_glass ? "GLASS" : "GLOBAL");
+    ImGui::PopStyleColor();
+    ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+    ImGui::TextWrapped("%s  \xc2\xb7  %.2fs \xe2\x80\x93 %.2fs  \xc2\xb7  %d effect%s \xc2\xb7 played live",
+        track.name.c_str(), brick.start, brick.end,
+        (int)brick.fx_chain.size(), brick.fx_chain.size() == 1 ? "" : "s");
+    ImGui::PopStyleColor();
+    ImGui::Dummy({0.f, 4.f}); ui_separator(); ImGui::Dummy({0.f, 8.f});
+
+    float sw = w - 16.f;
+    int remove_idx = -1, move_up = -1, move_dn = -1;
+    for (int i = 0; i < (int)brick.fx_chain.size(); ++i) {
+        Clip& se = brick.fx_chain[(size_t)i];
+        ImGui::PushID(31000 + i);
+        bool selrow = brick.fx_chain_selected == i;
+        if (ImGui::Selectable(fx_type_name(se.fx_type), selrow, 0, {sw - 70.f, 0.f}))
+            brick.fx_chain_selected = i;
+        ImGui::SameLine(sw - 62.f);
+        if (ui_btn("^", false, true) && i > 0) move_up = i;
+        ImGui::SameLine(0.f, 2.f);
+        if (ui_btn("v", false, true) && i + 1 < (int)brick.fx_chain.size()) move_dn = i;
+        ImGui::SameLine(0.f, 6.f);
+        if (ui_btn("\xc3\x97", false, true)) remove_idx = i;
+        ImGui::PopID();
+    }
+    if (move_up > 0) {
+        std::swap(brick.fx_chain[move_up], brick.fx_chain[move_up - 1]);
+        brick.fx_chain_selected = move_up - 1;
+        history_push(state, "Audio Multi-FX: reorder");
+    } else if (move_dn >= 0) {
+        std::swap(brick.fx_chain[move_dn], brick.fx_chain[move_dn + 1]);
+        brick.fx_chain_selected = move_dn + 1;
+        history_push(state, "Audio Multi-FX: reorder");
+    }
+    if (remove_idx >= 0) {
+        brick.fx_chain.erase(brick.fx_chain.begin() + remove_idx);
+        if (brick.fx_chain_selected >= (int)brick.fx_chain.size())
+            brick.fx_chain_selected = (int)brick.fx_chain.size() - 1;
+        history_push(state, "Audio Multi-FX: remove effect");
+    }
+
+    int si = brick.fx_chain_selected;
+    if (si < 0 || si >= (int)brick.fx_chain.size()) { ImGui::Dummy({0.f, 8.f}); return; }
+    Clip& se = brick.fx_chain[(size_t)si];
+    AudioFX& fx = se.audio_fx;
+
+    ImGui::Dummy({0.f, 8.f}); ui_separator(); ImGui::Dummy({0.f, 6.f});
+    ImGui::PushStyleColor(ImGuiCol_SliderGrab, IM_COL32(30, 220, 180, 255));
+    ImGui::PushStyleColor(ImGuiCol_FrameBg,    Col::bg_soft);
+    auto slider = [&](const char* id, const char* lbl, float* v, float lo, float hi,
+                      const char* fmt, const char* hist) {
+        ui_label(lbl);
+        ImGui::SetNextItemWidth(sw);
+        ImGui::SliderFloat(id, v, lo, hi, fmt);
+        if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, hist);
+        ImGui::Dummy({0.f, 4.f});
+    };
+    switch (se.fx_type) {
+        case FXType::AudioAutotune: {
+            static const char* keys[] = {"C","C#","D","D#","E","F","F#","G","G#","A","A#","B"};
+            static const char* scales[] = {"Major","Minor","Chromatic"};
+            ui_label("Key");
+            ImGui::SetNextItemWidth(sw * 0.5f);
+            if (ImGui::Combo("##at_key", &fx.autotune_key, keys, 12))
+                history_push(state, "Autotune: key");
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(sw * 0.45f);
+            if (ImGui::Combo("##at_scale", &fx.autotune_scale, scales, 3))
+                history_push(state, "Autotune: scale");
+            ImGui::Dummy({0.f, 4.f});
+            slider("##at_speed", "Glide (0 = hard snap)", &fx.autotune_speed,
+                   0.f, 100.f, "%.0f ms", "Autotune: speed");
+            break;
+        }
+        case FXType::AudioPitch:
+            slider("##p_semi", "Pitch", &fx.pitch_semitones, -24.f, 24.f,
+                   "%+.0f st", "Pitch: semitones");
+            break;
+        case FXType::AudioFormant:
+            slider("##f_shift", "Character", &fx.formant_shift, -1.f, 1.f,
+                   "%.2f", "Formant: shift");
+            break;
+        case FXType::AudioDelay:
+            slider("##d_time", "Time",     &fx.delay_time,     0.01f, 2.f,   "%.2f s", "Delay: time");
+            slider("##d_fb",   "Feedback", &fx.delay_feedback, 0.f,   0.95f, "%.2f",   "Delay: feedback");
+            slider("##d_mix",  "Mix",      &fx.delay_mix,      0.f,   1.f,   "%.2f",   "Delay: mix");
+            break;
+        case FXType::AudioReverb:
+            slider("##r_room", "Room", &fx.reverb_room, 0.f, 1.f, "%.2f", "Reverb: room");
+            slider("##r_damp", "Damp", &fx.reverb_damp, 0.f, 1.f, "%.2f", "Reverb: damp");
+            slider("##r_mix",  "Mix",  &fx.reverb_mix,  0.f, 1.f, "%.2f", "Reverb: mix");
+            break;
+        default: break;
+    }
+    ImGui::PopStyleColor(2);
+
+    ImGui::Dummy({0.f, 12.f}); ui_separator(); ImGui::Dummy({0.f, 8.f});
+    if (track.locked) ImGui::BeginDisabled();
+    if (ui_btn("Delete Audio Multi-FX brick", false, true)) {
+        if (track.locked) ImGui::EndDisabled();
+        track.clips.erase(track.clips.begin() + b_ci);
+        if (state.selected_track == b_ti && state.selected_clip == b_ci)
+            state.selected_clip = -1;
+        else if (state.selected_track == b_ti && state.selected_clip > b_ci)
+            --state.selected_clip;
+        history_push(state, "Delete Audio Multi-FX clip");
+        return;
+    }
+    if (track.locked) ImGui::EndDisabled();
+}
+
 // ── Body FX library / toolbox ─────────────────────────────────────────────────
 
 void panel_body_fx_library(AppState& state, float w) {

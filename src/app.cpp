@@ -248,6 +248,17 @@ bool fx_brick_is_video(const Clip& c) {
     return c.clip_type == ClipType::Effect && !fx_type_is_audio_fx(c.fx_type);
 }
 
+bool fx_brick_is_audio_kind(const Clip& c) {
+    if (c.clip_type == ClipType::AudioMultiFX) return true;
+    return c.clip_type == ClipType::Effect && fx_type_is_audio_fx(c.fx_type);
+}
+
+// Hosts an audio FX brick can couple to: anything that makes sound.
+static bool fx_audio_host_type(ClipType t) {
+    return t == ClipType::Audio || t == ClipType::Record ||
+           t == ClipType::Video || t == ClipType::VideoRecord;
+}
+
 std::string fx_host_fingerprint(const Clip& host) {
     // Record bricks swap their text per selected take — use stable sentinels.
     if (host.clip_type == ClipType::VideoRecord) return "\x01vrecord";
@@ -262,11 +273,13 @@ static bool fx_video_host_type(ClipType t) {
 int fx_coupled_host(const AppState& state, int fx_ti, const Clip& fx_cl) {
     if (!fx_cl.fx_coupled || fx_cl.fx_host_sid.empty()) return -1;
     if (fx_ti < 0 || fx_ti >= (int)state.tracks.size()) return -1;
+    const bool audio_kind = fx_brick_is_audio_kind(fx_cl);
     const auto& clips = state.tracks[fx_ti].clips;
     int best = -1; float best_ov = -1e9f;
     for (int ci = 0; ci < (int)clips.size(); ++ci) {
         const Clip& hc = clips[(size_t)ci];
-        if (!fx_video_host_type(hc.clip_type)) continue;
+        if (audio_kind ? !fx_audio_host_type(hc.clip_type)
+                       : !fx_video_host_type(hc.clip_type)) continue;
         if (fx_host_fingerprint(hc) != fx_cl.fx_host_sid) continue;
         float ov = fminf(fx_cl.end, hc.end) - fmaxf(fx_cl.start, hc.start);
         if (ov > best_ov) { best_ov = ov; best = ci; }
@@ -278,7 +291,8 @@ void fx_coupling_tick(AppState& state) {
     for (int ti = 0; ti < (int)state.tracks.size(); ++ti) {
         auto& clips = state.tracks[ti].clips;
         for (auto& cl : clips) {
-            if (!cl.fx_coupled || !fx_brick_is_video(cl)) continue;
+            if (!cl.fx_coupled ||
+                !(fx_brick_is_video(cl) || fx_brick_is_audio_kind(cl))) continue;
             int host = fx_coupled_host(state, ti, cl);
             if (host < 0) {
                 // Host deleted / moved off-track — the brick goes free.
@@ -297,7 +311,7 @@ void fx_coupling_tick(AppState& state) {
 // bricks keep the legacy same-track-overlap rule until the audio chain
 // brick lands.
 bool fx_clip_is_glass(const AppState& state, int fx_ti, const Clip& fx_cl) {
-    if (fx_brick_is_video(fx_cl))
+    if (fx_brick_is_video(fx_cl) || fx_cl.clip_type == ClipType::AudioMultiFX)
         return fx_cl.fx_coupled && fx_coupled_host(state, fx_ti, fx_cl) >= 0;
     if (fx_ti < 0 || fx_ti >= (int)state.tracks.size()) return false;
     for (auto& cl : state.tracks[fx_ti].clips) {

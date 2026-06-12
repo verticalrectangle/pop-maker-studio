@@ -10,7 +10,7 @@
 // ── Binary serialization helpers ──────────────────────────────────────────────
 
 static const uint32_t MAGIC   = 0x534D5001u; // "PMS\x01"
-static const uint32_t VERSION = 40u;  // v40: FX-brick coupling
+static const uint32_t VERSION = 41u;  // v41: AudioMultiFX chain bricks
 
 struct Writer {
     std::ofstream f;
@@ -637,20 +637,28 @@ bool project_load(AppState& state, const std::string& path) {
     // sitting on content becomes a coupled Video Multi-FX chain (stacked
     // bricks merge into one per host, stacking order preserved). Same couple
     // semantics as the timeline's 1.5 s ring, minus the wait.
-    if (r.ok && version < 40u) {
+    if (r.ok && version < 41u) {
         for (int ti = 0; ti < (int)state.tracks.size(); ++ti) {
             auto& clips = state.tracks[ti].clips;
             for (int ci = 0; ci < (int)clips.size(); ) {
                 Clip& c = clips[(size_t)ci];
                 bool fx_kind = c.clip_type == ClipType::Effect ||
                                c.clip_type == ClipType::MultiFX ||
-                               c.clip_type == ClipType::BodyFX;
-                if (fx_kind && !c.fx_coupled && fx_brick_is_video(c)) {
+                               c.clip_type == ClipType::BodyFX ||
+                               c.clip_type == ClipType::AudioMultiFX;
+                bool audio_kind = fx_brick_is_audio_kind(c);
+                if (fx_kind && !c.fx_coupled &&
+                    (audio_kind || fx_brick_is_video(c))) {
                     int best = -1; float bov = 0.05f;
                     for (int k = 0; k < (int)clips.size(); ++k) {
                         const Clip& hc = clips[(size_t)k];
-                        bool hostable = clip_is_videolike_type(hc.clip_type) ||
-                                        hc.clip_type == ClipType::Background;
+                        bool hostable = audio_kind
+                            ? (hc.clip_type == ClipType::Audio ||
+                               hc.clip_type == ClipType::Record ||
+                               hc.clip_type == ClipType::Video ||
+                               hc.clip_type == ClipType::VideoRecord)
+                            : (clip_is_videolike_type(hc.clip_type) ||
+                               hc.clip_type == ClipType::Background);
                         if (!hostable) continue;
                         float ov = fminf(c.end, hc.end) - fmaxf(c.start, hc.start);
                         if (ov > bov) { bov = ov; best = k; }

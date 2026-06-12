@@ -131,16 +131,13 @@ int   s_drop_flash_track = -1;
 static bool is_fx_clip(const Clip& c) {
     return c.clip_type == ClipType::Effect ||
            c.clip_type == ClipType::MultiFX ||
-           c.clip_type == ClipType::BodyFX;
+           c.clip_type == ClipType::BodyFX ||
+           c.clip_type == ClipType::AudioMultiFX;
 }
-// Audio FX bricks live in their own world: they never weld into the Video
-// Multi-FX chain (audio gets its own chain brick), so for welding purposes
-// an audio Effect brick is incompatible with everything video.
-static bool fx_brick_is_audio(const Clip& c) {
-    return c.clip_type == ClipType::Effect && fx_type_is_audio_fx(c.fx_type);
-}
+// Audio FX bricks weld with each other into an Audio Multi-FX chain; video
+// bricks weld into a Video Multi-FX chain. Never across the divide.
 static bool fx_bricks_weldable(const Clip& a, const Clip& b) {
-    return !fx_brick_is_audio(a) && !fx_brick_is_audio(b);
+    return fx_brick_is_audio_kind(a) == fx_brick_is_audio_kind(b);
 }
 static bool clips_conflict(const Clip& a, const Clip& b) {
     // FX bricks never conflict with content clips (glass bricks ride over
@@ -149,23 +146,28 @@ static bool clips_conflict(const Clip& a, const Clip& b) {
     if (is_fx_clip(a) != is_fx_clip(b)) return false;
     return a.start < b.end && a.end > b.start;
 }
+static bool is_chain_brick(const Clip& c) {
+    return c.clip_type == ClipType::MultiFX ||
+           c.clip_type == ClipType::AudioMultiFX;
+}
 static void merge_fx_clips(Clip& target, Clip dragged) {
-    if (target.clip_type == ClipType::MultiFX) {
-        if (dragged.clip_type == ClipType::MultiFX) {
+    if (is_chain_brick(target)) {
+        if (is_chain_brick(dragged)) {
             for (auto& se : dragged.fx_chain)
                 target.fx_chain.push_back(se);
         } else {
             target.fx_chain.push_back(dragged);
         }
     } else {
-        // target is Effect or BodyFX — promote to MultiFX
+        // target is a single brick — promote to the matching chain type
         Clip sub0 = target;
         sub0.clip_type = (target.clip_type == ClipType::BodyFX) ? ClipType::BodyFX : ClipType::Effect;
         sub0.rel_start = 0.f; sub0.rel_end = 0.f;
-        target.clip_type = ClipType::MultiFX;
+        target.clip_type = fx_brick_is_audio_kind(target) ? ClipType::AudioMultiFX
+                                                          : ClipType::MultiFX;
         target.fx_chain.clear();
         target.fx_chain.push_back(sub0);
-        if (dragged.clip_type == ClipType::MultiFX) {
+        if (is_chain_brick(dragged)) {
             for (auto& se : dragged.fx_chain)
                 target.fx_chain.push_back(se);
         } else {
@@ -202,7 +204,7 @@ int timeline_couple_fx_brick(AppState& state, int ti, int ci, int host_ci) {
     };
 
     std::vector<Clip> entries;
-    if (brick.clip_type == ClipType::MultiFX) entries = brick.fx_chain;
+    if (is_chain_brick(brick)) entries = brick.fx_chain;
     else {
         Clip se = brick;
         se.fx_chain.clear();
@@ -211,11 +213,14 @@ int timeline_couple_fx_brick(AppState& state, int ti, int ci, int host_ci) {
     }
     for (auto& se : entries) window_entry(se, brick.start, brick.end);
 
-    // Host already has a coupled chain? Merge into it.
+    const ClipType chain_type = fx_brick_is_audio_kind(clips[(size_t)ci])
+                              ? ClipType::AudioMultiFX : ClipType::MultiFX;
+
+    // Host already has a coupled chain of this kind? Merge into it.
     for (int k = 0; k < (int)clips.size(); ++k) {
         if (k == ci) continue;
         Clip& oc = clips[(size_t)k];
-        if (oc.clip_type == ClipType::MultiFX && oc.fx_coupled &&
+        if (oc.clip_type == chain_type && oc.fx_coupled &&
             fx_coupled_host(state, ti, oc) == host_ci) {
             for (auto& se : entries) oc.fx_chain.push_back(se);
             if (oc.fx_chain_selected < 0) oc.fx_chain_selected = 0;
@@ -225,7 +230,7 @@ int timeline_couple_fx_brick(AppState& state, int ti, int ci, int host_ci) {
     }
 
     Clip& b = clips[(size_t)ci];
-    b.clip_type         = ClipType::MultiFX;
+    b.clip_type         = chain_type;
     b.fx_chain          = std::move(entries);
     b.fx_chain_selected = b.fx_chain.empty() ? -1 : 0;
     b.fx_coupled        = true;
@@ -245,13 +250,20 @@ static void couple_pending_tick(AppState& state) {
         auto& cls = state.tracks[ti].clips;
         for (int ci = 0; ci < (int)cls.size(); ++ci) {
             Clip& c = cls[(size_t)ci];
-            if (!is_fx_clip(c) || c.fx_coupled || !fx_brick_is_video(c)) continue;
+            if (!is_fx_clip(c) || c.fx_coupled) continue;
+            bool audio_kind = fx_brick_is_audio_kind(c);
+            if (!audio_kind && !fx_brick_is_video(c)) continue;
             if (g_tl.drag_track == ti && g_tl.drag_clip == ci) continue;
             int best = -1; float bov = 0.05f;   // ≥50 ms overlap to arm
             for (int k = 0; k < (int)cls.size(); ++k) {
                 const Clip& hc = cls[(size_t)k];
-                bool hostable = clip_is_videolike_type(hc.clip_type) ||
-                                hc.clip_type == ClipType::Background;
+                bool hostable = audio_kind
+                    ? (hc.clip_type == ClipType::Audio ||
+                       hc.clip_type == ClipType::Record ||
+                       hc.clip_type == ClipType::Video ||
+                       hc.clip_type == ClipType::VideoRecord)
+                    : (clip_is_videolike_type(hc.clip_type) ||
+                       hc.clip_type == ClipType::Background);
                 if (!hostable) continue;
                 float ov = fminf(c.end, hc.end) - fmaxf(c.start, hc.start);
                 if (ov > bov) { bov = ov; best = k; }
@@ -1702,7 +1714,9 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
             Clip& clip = track.clips[ci];
             bool is_mfx = (clip.clip_type == ClipType::MultiFX);
             bool is_bfx = (clip.clip_type == ClipType::BodyFX);
-            if (clip.clip_type != ClipType::Effect && !is_mfx && !is_bfx) continue;
+            bool is_amfx = (clip.clip_type == ClipType::AudioMultiFX);
+            if (clip.clip_type != ClipType::Effect && !is_mfx && !is_bfx && !is_amfx)
+                continue;
             float cx0 = origin.x+TL_LABEL_W+clip.start*zoom-scroll;
             float cx1 = origin.x+TL_LABEL_W+clip.end*zoom-scroll;
             if (cx1 < origin.x+TL_LABEL_W || cx0 > origin.x+total_w) continue;
@@ -1739,7 +1753,9 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
             }
 
             bool is_glass = fx_clip_is_glass(state, ti, clip);
-            FxBrickColors fbc = is_mfx ? fx_brick_colors(FXType::Glitch, sel)
+            FxBrickColors fbc = (is_mfx || is_amfx)
+                                       ? fx_brick_colors(is_amfx ? FXType::AudioAutotune
+                                                                 : FXType::Glitch, sel)
                                        : fx_brick_colors(clip.fx_type, sel);
 
             if (is_glass) {
@@ -1776,10 +1792,11 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
             ImGui::PushClipRect({vis_x0,cy0},{vis_x1,cy1},true);
             float ly = cy0 + (cy1-cy0-13.f)*0.5f;
             ImU32 lbl_col = is_glass ? IM_COL32(200, 240, 255, 255) : fbc.label;
-            if (is_mfx) {
+            if (is_mfx || is_amfx) {
                 // Show "N FX" label with stacked-layers indicator
                 char mfx_lbl[24];
-                snprintf(mfx_lbl, sizeof(mfx_lbl), "VIDEO FX \xc2\xb7 %d", (int)clip.fx_chain.size());
+                snprintf(mfx_lbl, sizeof(mfx_lbl), "%s FX \xc2\xb7 %d",
+                         is_amfx ? "AUDIO" : "VIDEO", (int)clip.fx_chain.size());
                 dl->AddText({vis_x0+5.f, ly}, lbl_col, mfx_lbl);
                 // Stacked layers icon: three small horizontal bars at right
                 if (vis_x1 - vis_x0 > 40.f) {
