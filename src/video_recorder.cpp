@@ -43,6 +43,7 @@ static float  s_lp_start = 0.f, s_lp_end = 0.f;
 static float  s_loop_len = 0.f;
 static int    s_take_count = 0;
 static FILE*  s_cap = nullptr;            // capture child stdout (MJPEG stream)
+static pid_t  s_cap_pid = 0;              // capture child pid (own process group)
 static std::vector<uint8_t> s_raw;        // undecoded byte tail from the pipe
 static std::vector<VFrame>  s_frames;     // frames of the take in progress
 static std::vector<uint8_t> s_last_jpeg;  // most recent frame (live mirror)
@@ -286,15 +287,60 @@ static bool capture_start() {
                      dev.c_str());
         }
     }
-    s_cap = popen(cmd, "r");
-    if (!s_cap) { s_error = "could not start capture (ffmpeg missing?)"; return false; }
+    // Own fork/exec instead of popen: pclose() WAITS for the child, and
+    // ffmpeg sometimes wedges in a futex on teardown instead of dying on the
+    // closed pipe — pclose then blocks the MAIN THREAD forever (frozen app,
+    // dead IPC). With the pid in hand we can kill the process group and wait
+    // with a bound.
+    int fds[2];
+    if (pipe(fds) != 0) { s_error = "pipe() failed"; return false; }
+    pid_t pid = fork();
+    if (pid < 0) {
+        close(fds[0]); close(fds[1]);
+        s_error = "fork() failed";
+        return false;
+    }
+    if (pid == 0) {
+        setpgid(0, 0);              // own group → killable with children
+        dup2(fds[1], 1);
+        close(fds[0]); close(fds[1]);
+        execl("/bin/sh", "sh", "-c", cmd, (char*)nullptr);
+        _exit(127);
+    }
+    close(fds[1]);
+    s_cap = fdopen(fds[0], "r");
+    if (!s_cap) {
+        close(fds[0]);
+        kill(-pid, SIGKILL);
+        waitpid(pid, nullptr, 0);
+        s_error = "fdopen() failed";
+        return false;
+    }
+    s_cap_pid = pid;
     int fd = fileno(s_cap);
     fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK);
     return true;
 }
 
 static void capture_stop() {
-    if (s_cap) { pclose(s_cap); s_cap = nullptr; }
+    if (s_cap) {
+        fclose(s_cap);              // reader side gone → child gets EPIPE
+        s_cap = nullptr;
+        if (s_cap_pid > 0) {
+            kill(-s_cap_pid, SIGTERM);
+            // Bounded reap: ~1 s of WNOHANG polls, then SIGKILL. Never block
+            // the main thread on ffmpeg teardown again.
+            for (int i = 0; i < 20; ++i) {
+                if (waitpid(s_cap_pid, nullptr, WNOHANG) != 0) { s_cap_pid = 0; break; }
+                usleep(50 * 1000);
+            }
+            if (s_cap_pid > 0) {
+                kill(-s_cap_pid, SIGKILL);
+                waitpid(s_cap_pid, nullptr, 0);
+                s_cap_pid = 0;
+            }
+        }
+    }
     s_raw.clear();
     s_raw.shrink_to_fit();
 }
