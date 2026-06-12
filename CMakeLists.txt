@@ -19,6 +19,9 @@ pkg_check_modules(FREETYPE  REQUIRED freetype2)
 pkg_check_modules(AUBIO     REQUIRED aubio)
 pkg_check_modules(VTERM     REQUIRED vterm)
 pkg_check_modules(TURBOJPEG REQUIRED libturbojpeg)
+# Native low-latency audio backend (perf mode); optional — the miniaudio
+# duplex path is the fallback when PipeWire is absent.
+pkg_check_modules(PIPEWIRE libpipewire-0.3)
 
 # ── ImGui ─────────────────────────────────────────────────────────────────────
 set(IMGUI_DIR ${CMAKE_SOURCE_DIR}/vendor/imgui)
@@ -41,6 +44,7 @@ set(SOURCES
     src/main.cpp
     src/app.cpp
     src/audio.cpp
+    src/audio_pw.cpp
     src/recorder.cpp
     src/video_recorder.cpp
     src/transcribe.cpp
@@ -93,6 +97,10 @@ set(SOURCES
 
 add_executable(pop-maker-studio ${SOURCES} ${IMGUI_SOURCES})
 
+if(PIPEWIRE_FOUND)
+    target_compile_definitions(pop-maker-studio PRIVATE HAVE_PIPEWIRE)
+endif()
+
 target_include_directories(pop-maker-studio PRIVATE
     src
     ${IMGUI_DIR}
@@ -109,6 +117,7 @@ target_include_directories(pop-maker-studio PRIVATE
     ${AUBIO_INCLUDE_DIRS}
     ${VTERM_INCLUDE_DIRS}
     ${TURBOJPEG_INCLUDE_DIRS}
+    ${PIPEWIRE_INCLUDE_DIRS}
 )
 
 target_link_libraries(pop-maker-studio PRIVATE
@@ -123,6 +132,7 @@ target_link_libraries(pop-maker-studio PRIVATE
     ${AUBIO_LIBRARIES}
     ${VTERM_LIBRARIES}
     ${TURBOJPEG_LIBRARIES}
+    ${PIPEWIRE_LIBRARIES}
     onnxruntime
     $<IF:$<TARGET_EXISTS:whisper::whisper>,whisper::whisper,whisper>
     fftw3f

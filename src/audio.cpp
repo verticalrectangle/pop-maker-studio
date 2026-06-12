@@ -1,5 +1,8 @@
 #include "audio.h"
 #include "audio_fx.h"
+#ifdef HAVE_PIPEWIRE
+#include "audio_pw.h"
+#endif
 
 extern "C" {
 #include <libavformat/avformat.h>
@@ -59,8 +62,19 @@ static std::atomic<uint64_t> g_loop_cycles{0};
 // companion (single ma_device_type_duplex @ 128-frame periods).
 static ma_device         g_duplex;
 static bool              g_duplex_init = false;
-static bool              g_cap_init    = false;  // duplex device owns audio (perf mode)
+static bool              g_cap_init    = false;  // perf mode active (either backend)
+static bool              g_perf_pw     = false;  // native PipeWire backend in use
 static std::atomic<bool> g_monitor_on{false};
+
+// Monitor ring — SPSC: input block pushes the gated mic, output block drains
+// it into the mix. On the miniaudio duplex backend both happen in the SAME
+// callback (zero added latency); on the PipeWire backend the capture and
+// playback streams tick the same graph clock, so the fill stays a constant
+// one cycle (~3 ms) instead of drifting like the old two-device path.
+static constexpr uint32_t MONR_N    = 1u << 15;   // 32768 floats ≈ 370 ms stereo
+static constexpr uint32_t MONR_MASK = MONR_N - 1;
+static float                 g_monr[MONR_N];
+static std::atomic<uint32_t> g_monr_w{0}, g_monr_r{0};
 
 // Capture ring — SPSC: duplex callback writes, audio_capture_drain (UI frame)
 // reads. 2^21 floats ≈ 23.8 s stereo @ 44.1k; the writer drops samples when
@@ -265,16 +279,47 @@ static void data_callback(ma_device*, void* pOutput, const void*, ma_uint32 fram
     apply_fade_in(out, frameCount);
 }
 
-// Performance mode: one duplex callback does everything — timeline mix, live
-// input gated + summed into the output (zero buffers between in and out),
-// and the raw input pushed to the capture ring for the recorder.
-static void duplex_callback(ma_device* pDevice, void* pOutput, const void* pInput, ma_uint32 frameCount) {
-    float* out = (float*)pOutput;
+// Performance-mode input: gate the live mic, push the gated signal to the
+// monitor ring and the raw (or baked) signal to the capture ring. Runs on
+// the audio thread of whichever backend is active.
+static void perf_input_block(const float* in, uint32_t frameCount) {
+    const bool gate = g_gate_on.load(std::memory_order_relaxed);
+    const bool bake = g_gate_bake.load(std::memory_order_relaxed);
+    const bool mon  = g_monitor_on.load(std::memory_order_relaxed);
+    uint32_t cw = g_cap_w.load(std::memory_order_relaxed);
+    const uint32_t cr = g_cap_r.load(std::memory_order_acquire);
+    uint32_t mw = g_monr_w.load(std::memory_order_relaxed);
+    const uint32_t mr = g_monr_r.load(std::memory_order_acquire);
+    for (uint32_t f = 0; f < frameCount; ++f) {
+        float l = in[f*2], r2 = in[f*2+1];
+        // Gate: leaky RMS² of the mono sum drives a smoothed 0→1 gain.
+        float mono = 0.5f * (l + r2);
+        g_gate_energy = 0.999f * g_gate_energy + 0.001f * mono * mono;
+        float open  = g_gate_energy > GATE_THRESHOLD ? 1.f : 0.f;
+        float coeff = open > g_gate_gain ? (1.f - GATE_ATTACK) : (1.f - GATE_RELEASE);
+        g_gate_gain += coeff * (open - g_gate_gain);
+        float gg = gate ? g_gate_gain : 1.f;
+        if (mon && (mw - mr) < MONR_N - 2) {
+            g_monr[mw++ & MONR_MASK] = l  * gg;
+            g_monr[mw++ & MONR_MASK] = r2 * gg;
+        }
+        // Recorded stream: raw by default; gated only when bake is on.
+        float cl = bake ? l * gg : l, cr2 = bake ? r2 * gg : r2;
+        if (cw - cr < CAP_N - 2) {
+            g_cap_ring[cw++ & CAP_MASK] = cl;
+            g_cap_ring[cw++ & CAP_MASK] = cr2;
+        }
+    }
+    g_cap_w.store(cw, std::memory_order_release);
+    g_monr_w.store(mw, std::memory_order_release);
+}
+
+// Performance-mode output: timeline mix + drain the monitor ring on top.
+static void perf_output_block(float* out, uint32_t frameCount) {
     mix_master(out, frameCount);
 
     // Stall detection from callback wall-clock gaps (audio thread only).
     {
-        (void)pDevice;
         struct timespec ts;
         clock_gettime(CLOCK_MONOTONIC, &ts);
         double now = (double)ts.tv_sec + (double)ts.tv_nsec * 1e-9;
@@ -283,40 +328,28 @@ static void duplex_callback(ma_device* pDevice, void* pOutput, const void* pInpu
         g_last_cb_time = now;
     }
 
-    if (pInput) {
-        const float* in   = (const float*)pInput;
-        const bool   mon  = g_monitor_on.load(std::memory_order_relaxed);
-        const bool   gate = g_gate_on.load(std::memory_order_relaxed);
-        const bool   bake = g_gate_bake.load(std::memory_order_relaxed);
-        uint32_t w = g_cap_w.load(std::memory_order_relaxed);
-        const uint32_t r = g_cap_r.load(std::memory_order_acquire);
-        for (ma_uint32 f = 0; f < frameCount; ++f) {
-            float l = in[f*2], r2 = in[f*2+1];
-            // Gate: leaky RMS² of the mono sum drives a smoothed 0→1 gain.
-            float mono = 0.5f * (l + r2);
-            g_gate_energy = 0.999f * g_gate_energy + 0.001f * mono * mono;
-            float open  = g_gate_energy > GATE_THRESHOLD ? 1.f : 0.f;
-            float coeff = open > g_gate_gain ? (1.f - GATE_ATTACK) : (1.f - GATE_RELEASE);
-            g_gate_gain += coeff * (open - g_gate_gain);
-            float gg = gate ? g_gate_gain : 1.f;
-            if (mon) {
-                out[f*2]   += l  * gg;
-                out[f*2+1] += r2 * gg;
-            }
-            // Recorded stream: raw by default; gated only when bake is on.
-            float cl = bake ? l * gg : l, cr = bake ? r2 * gg : r2;
-            if (w - r < CAP_N - 2) {
-                g_cap_ring[w++ & CAP_MASK] = cl;
-                g_cap_ring[w++ & CAP_MASK] = cr;
-            }
-        }
-        g_cap_w.store(w, std::memory_order_release);
-        if (mon) {  // re-clamp after summing the mic on top of the mix
-            for (ma_uint32 i = 0; i < frameCount * 2; ++i)
-                out[i] = fmaxf(-1.f, fminf(1.f, out[i]));
-        }
+    if (g_monitor_on.load(std::memory_order_relaxed)) {
+        uint32_t w = g_monr_w.load(std::memory_order_acquire);
+        uint32_t r = g_monr_r.load(std::memory_order_relaxed);
+        // Backlog past ~90 ms (start hiccup, stall) → skip to ~12 ms so the
+        // monitor stays tight instead of turning into an echo.
+        if (w - r > 8192u) r = w - 1024u;
+        const uint32_t need = frameCount * 2;
+        for (uint32_t i = 0; i < need && r != w; ++i)
+            out[i] += g_monr[r++ & MONR_MASK];
+        g_monr_r.store(r, std::memory_order_release);
+        for (uint32_t i = 0; i < need; ++i)
+            out[i] = fmaxf(-1.f, fminf(1.f, out[i]));
     }
     apply_fade_in(out, frameCount);
+}
+
+// miniaudio duplex backend (fallback when PipeWire isn't available): input
+// is pushed and drained within the SAME callback, so the monitor ring adds
+// zero latency here.
+static void duplex_callback(ma_device*, void* pOutput, const void* pInput, ma_uint32 frameCount) {
+    if (pInput) perf_input_block((const float*)pInput, frameCount);
+    perf_output_block((float*)pOutput, frameCount);
 }
 
 // ── Device init/shutdown ──────────────────────────────────────────────────────
@@ -453,6 +486,9 @@ float audio_position() {
 }
 
 float audio_latency() {
+#ifdef HAVE_PIPEWIRE
+    if (g_cap_init && g_perf_pw) return audio_pw_period_s();
+#endif
     // Whichever device currently owns the output.
     const ma_device* dev = g_cap_init && g_duplex_init ? &g_duplex
                          : g_device_init               ? &g_device : nullptr;
@@ -532,6 +568,32 @@ bool audio_monitor_get() { return g_monitor_on.load(std::memory_order_relaxed); 
 bool audio_capture_start() {
     if (g_cap_init) return true;
 
+    // Fresh state for this perf-mode run (shared by both backends).
+    g_cap_r.store(g_cap_w.load(std::memory_order_relaxed), std::memory_order_relaxed);
+    g_monr_r.store(g_monr_w.load(std::memory_order_relaxed), std::memory_order_relaxed);
+    g_gate_energy  = 1e-6f;
+    g_gate_gain    = 0.f;
+    g_xruns.store(0, std::memory_order_relaxed);
+    g_last_cb_time = 0.0;
+    g_fade_pos.store(0, std::memory_order_relaxed);
+
+#ifdef HAVE_PIPEWIRE
+    // Native PipeWire stream pair first — it gets the real 128-frame quantum
+    // the pulse shim refuses (~6 ms round trip vs ~14 ms).
+    {
+        const char* target = nullptr;
+        if (g_cap_sel >= 0 && g_cap_sel < (int)g_cap_dev_ids.size())
+            target = g_cap_dev_ids[(size_t)g_cap_sel].pulse;  // pulse name == pw node name
+        if (audio_pw_start(perf_input_block, perf_output_block, target)) {
+            if (g_device_init && ma_device_is_started(&g_device))
+                ma_device_stop(&g_device);
+            g_perf_pw  = true;
+            g_cap_init = true;
+            return true;
+        }
+    }
+#endif
+
     ma_device_config cfg = ma_device_config_init(ma_device_type_duplex);
     cfg.capture.format    = ma_format_f32;
     cfg.capture.channels  = 2;   // miniaudio upmixes mono mics for us
@@ -552,14 +614,6 @@ bool audio_capture_start() {
     }
     g_duplex_init = true;
 
-    // Fresh state for this perf-mode run.
-    g_cap_r.store(g_cap_w.load(std::memory_order_relaxed), std::memory_order_relaxed);
-    g_gate_energy  = 1e-6f;
-    g_gate_gain    = 0.f;
-    g_xruns.store(0, std::memory_order_relaxed);
-    g_last_cb_time = 0.0;
-    g_fade_pos.store(0, std::memory_order_relaxed);
-
     if (ma_device_start(&g_duplex) != MA_SUCCESS) {
         ma_device_uninit(&g_duplex);
         g_duplex_init = false;
@@ -576,10 +630,18 @@ bool audio_capture_start() {
 void audio_capture_stop() {
     if (!g_cap_init) return;
     g_monitor_on.store(false, std::memory_order_relaxed);
-    ma_device_stop(&g_duplex);
-    ma_device_uninit(&g_duplex);
-    g_duplex_init = false;
-    g_cap_init    = false;
+#ifdef HAVE_PIPEWIRE
+    if (g_perf_pw) {
+        audio_pw_stop();
+        g_perf_pw = false;
+    } else
+#endif
+    {
+        ma_device_stop(&g_duplex);
+        ma_device_uninit(&g_duplex);
+        g_duplex_init = false;
+    }
+    g_cap_init = false;
     // Hand the output back to the normal device if the transport is rolling.
     if (g_transport.load(std::memory_order_relaxed)) {
         if (!g_device_init) init_device();
@@ -603,7 +665,11 @@ void audio_capture_drain(std::vector<float>& out) {
 }
 
 float audio_capture_latency() {
-    if (!g_cap_init || !g_duplex_init) return 0.f;
+    if (!g_cap_init) return 0.f;
+#ifdef HAVE_PIPEWIRE
+    if (g_perf_pw) return audio_pw_period_s();
+#endif
+    if (!g_duplex_init) return 0.f;
     ma_uint32 period = g_duplex.capture.internalPeriodSizeInFrames;
     ma_uint32 rate   = g_duplex.capture.internalSampleRate;
     if (rate == 0) return 0.f;
