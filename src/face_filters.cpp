@@ -226,8 +226,10 @@ int face_filter_doggy_quads(const FaceObs& obs, float amount,
     };
 
     float sc = 0.6f + 0.4f * amount;   // strength scales the costume
-    sprite("sprite_ear.png", -1.35f, 1.55f, 1.25f * sc,  20.f, true);
-    sprite("sprite_ear.png",  1.35f, 1.55f, 1.25f * sc, -20.f, false);
+    // Ears sit at the CROWN: high enough (2.0 ed above the eye line) to read
+    // as on top of the head — at 1.55 the downhill ear landed on the hair.
+    sprite("sprite_ear.png", -1.15f, 2.0f, 1.25f * sc,  20.f, true);
+    sprite("sprite_ear.png",  1.15f, 2.0f, 1.25f * sc, -20.f, false);
     // Tongue before nose (Snapchat layering — nose draws on top). Openness
     // from the INNER lip ring (64–71) — the outer ring includes lip thickness
     // and fired on a closed mouth.

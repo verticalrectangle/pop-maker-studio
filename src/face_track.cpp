@@ -65,7 +65,7 @@ static constexpr int DET_S = 480;   // letterbox side for SCRFD (dynamic input)
 // output (a few ms), which is what makes the live filters feel realtime.
 static bool detect_face(const uint8_t* rgb, int w, int h,
                         float& bx1, float& by1, float& bx2, float& by2,
-                        float* score_out = nullptr) {
+                        float* score_out = nullptr, float* kps_out = nullptr) {
     if (!ensure_sessions()) return false;
     // ── Detect: letterbox to DET_S, (x-127.5)/128 ────────────────────────────
     static std::vector<float> blob;
@@ -99,10 +99,12 @@ static bool detect_face(const uint8_t* rgb, int w, int h,
     // Best box across strides 8/16/32 (2 anchors per cell, distances*stride).
     float best_score = 0.35f;
     bx1 = by1 = bx2 = by2 = 0.f;
+    float kps[10] = {};
     const int strides[3] = {8, 16, 32};
     for (int s = 0; s < 3; ++s) {
         const float* sc = det_out[s].GetTensorData<float>();
         const float* bb = det_out[s + 3].GetTensorData<float>();
+        const float* kp = det_out[s + 6].GetTensorData<float>();
         size_t n = det_out[s].GetTensorTypeAndShapeInfo().GetElementCount();
         int side = DET_S / strides[s];
         for (size_t j = 0; j < n; ++j) {
@@ -115,11 +117,19 @@ static bool detect_face(const uint8_t* rgb, int w, int h,
             by1 = cy - bb[j*4+1] * strides[s];
             bx2 = cx + bb[j*4+2] * strides[s];
             by2 = cy + bb[j*4+3] * strides[s];
+            // 5-point kps (eyeL, eyeR, nose, mouthL, mouthR) — offsets from
+            // the anchor cell, same decode as bbox distances.
+            for (int k = 0; k < 5; ++k) {
+                kps[k*2]   = cx + kp[j*10 + k*2]   * strides[s];
+                kps[k*2+1] = cy + kp[j*10 + k*2+1] * strides[s];
+            }
         }
     }
     if (best_score <= 0.35f) return false;
     bx1 /= scale; by1 /= scale; bx2 /= scale; by2 /= scale;
     if (score_out) *score_out = best_score;
+    if (kps_out)
+        for (int k = 0; k < 10; ++k) kps_out[k] = kps[k] / scale;
     return true;
 }
 
@@ -194,6 +204,9 @@ static bool                    g_worker_started = false;
 static std::mutex g_latest_mtx;
 static FaceObs    g_latest;        // EMA-smoothed
 static FaceObs    g_raw_prev;
+std::atomic<int>  g_dbg_flip180{0};      // worker debug state (IPC readout)
+std::atomic<int>  g_dbg_since_detect{0};
+std::atomic<int>  g_dbg_detects{0};
 
 static void rot180(std::vector<uint8_t>& f, int w, int h) {
     const size_t n = (size_t)w * h;
@@ -233,16 +246,44 @@ static bool lm_sane(const FaceObs& o, float b1, float b2, float b3, float b4) {
            y1 - y0 >= (b4 - b2) * 0.35f;
 }
 
-static void prev_lm_box(const FaceObs& o, float& b1, float& b2,
-                        float& b3, float& b4) {
-    b1 = b3 = o.pts[0][0];
-    b2 = b4 = o.pts[0][1];
-    for (int k = 0; k < 106; ++k) {
-        b1 = std::min(b1, o.pts[k][0]);
-        b2 = std::min(b2, o.pts[k][1]);
-        b3 = std::max(b3, o.pts[k][0]);
-        b4 = std::max(b4, o.pts[k][1]);
-    }
+// Detect-box geometry carried through tracking mode. The landmark net is
+// trained on DETECTOR-shaped crops (forehead included, sitting higher and
+// larger than the landmark extent). Cropping from the previous landmark
+// bbox instead makes the net's output drift a little every frame — the
+// pose walks off the face and locks onto a stable wrong answer (kodim04:
+// the whole set climbed onto the hat at score 1.0). So tracking mode
+// re-centres the LAST DETECTOR BOX on the tracked face instead.
+struct DetBoxGeom {
+    bool  valid = false;
+    float w = 0, h = 0;    // detector box size
+    float dx = 0, dy = 0;  // box center minus landmark centroid (submitted coords)
+};
+
+static void lm_centroid(const FaceObs& o, float& cx, float& cy) {
+    cx = cy = 0.f;
+    for (int k = 0; k < 106; ++k) { cx += o.pts[k][0]; cy += o.pts[k][1]; }
+    cx /= 106.f; cy /= 106.f;
+}
+
+static void store_box_geom(const FaceObs& obs_submitted, const float box[4],
+                           DetBoxGeom& g) {
+    float cx, cy;
+    lm_centroid(obs_submitted, cx, cy);
+    g.w  = box[2] - box[0];
+    g.h  = box[3] - box[1];
+    g.dx = (box[0] + box[2]) * 0.5f - cx;
+    g.dy = (box[1] + box[3]) * 0.5f - cy;
+    g.valid = true;
+}
+
+static void crop_box_from_prev(const FaceObs& prev, const DetBoxGeom& g,
+                               float& b1, float& b2, float& b3, float& b4) {
+    float cx, cy;
+    lm_centroid(prev, cx, cy);
+    b1 = cx + g.dx - g.w * 0.5f;
+    b2 = cy + g.dy - g.h * 0.5f;
+    b3 = b1 + g.w;
+    b4 = b2 + g.h;
 }
 
 // Re-detect helper shared by the live worker and the offline take pass.
@@ -251,22 +292,41 @@ static void prev_lm_box(const FaceObs& o, float& b1, float& b2,
 // orientation that detects. Score both, landmark the better one first, fall
 // back to the other. `frame` carries the current flip state on entry;
 // flip180 is updated to the orientation that won. Landmarks are returned in
-// the WINNING orientation's coordinates (caller flips back if flip180).
+// the WINNING orientation's coordinates (caller flips back if flip180);
+// out_box gets the winning detector box, same coordinates.
 static bool detect_both_orientations(const std::vector<uint8_t>& frame,
                                      int fw, int fh, bool& flip180,
-                                     FaceObs& obs) {
+                                     FaceObs& obs, float out_box[4]) {
     std::vector<uint8_t> raw = frame;
     if (flip180) rot180(raw, fw, fh);       // undo intake flip → raw
     std::vector<uint8_t> flp = raw;
     rot180(flp, fw, fh);
     struct Cand {
         const std::vector<uint8_t>* img;
-        bool flipped; bool det; float score; float b[4];
-    } cands[2] = {{&raw, false, false, 0.f, {0,0,0,0}},
-                  {&flp, true,  false, 0.f, {0,0,0,0}}};
+        bool flipped; bool det; float score; float b[4]; float kps[10];
+    } cands[2] = {{&raw, false, false, 0.f, {0,0,0,0}, {}},
+                  {&flp, true,  false, 0.f, {0,0,0,0}, {}}};
     for (Cand& cd : cands)
         cd.det = detect_face(cd.img->data(), fw, fh,
-                             cd.b[0], cd.b[1], cd.b[2], cd.b[3], &cd.score);
+                             cd.b[0], cd.b[1], cd.b[2], cd.b[3],
+                             &cd.score, cd.kps);
+    // SCRFD's own 5-point keypoints land on the REAL features even when it
+    // detects an upside-down face (which it does, sometimes at a HIGHER box
+    // score than the upright view — kodim04 letterboxed: 0.674 flipped vs
+    // 0.636 upright). Box score can't arbitrate orientation; eyes-above-
+    // mouth from the kps can. Only when neither candidate passes the gate
+    // (kps unreliable) does score order decide alone.
+    auto kps_upright = [](const Cand& cd) {
+        float eyes  = (cd.kps[1] + cd.kps[3]) * 0.5f;   // eyeL.y, eyeR.y
+        float mouth = (cd.kps[7] + cd.kps[9]) * 0.5f;   // mouthL.y, mouthR.y
+        return eyes + (cd.b[3] - cd.b[1]) * 0.02f < mouth;
+    };
+    bool up0 = cands[0].det && kps_upright(cands[0]);
+    bool up1 = cands[1].det && kps_upright(cands[1]);
+    if (up0 || up1) {
+        cands[0].det = cands[0].det && up0;
+        cands[1].det = cands[1].det && up1;
+    }
     if (cands[1].det && (!cands[0].det || cands[1].score > cands[0].score))
         std::swap(cands[0], cands[1]);
     for (Cand& cd : cands) {
@@ -277,10 +337,19 @@ static bool detect_both_orientations(const std::vector<uint8_t>& frame,
             lm_sane(obs, cd.b[0], cd.b[1], cd.b[2], cd.b[3])) {
             obs.score = cd.score;
             flip180 = cd.flipped;
+            for (int i = 0; i < 4; ++i) out_box[i] = cd.b[i];
             return true;
         }
     }
     return false;
+}
+
+// Flip a box's coordinates 180° within a fw×fh frame (matches the landmark
+// publish flip so box and landmarks stay in the same space).
+static void flip_box(float b[4], int fw, int fh) {
+    float n1 = (float)fw - 1.f - b[2], n2 = (float)fh - 1.f - b[3];
+    float n3 = (float)fw - 1.f - b[0], n4 = (float)fh - 1.f - b[1];
+    b[0] = n1; b[1] = n2; b[2] = n3; b[3] = n4;
 }
 
 static void worker_main() {
@@ -297,19 +366,22 @@ static void worker_main() {
             g_pend_fresh = false;
         }
         if (s_flip180) rot180(frame, fw, fh);
-        // Tracking mode: while locked, skip the heavy detector and crop
-        // around the previous landmarks (the landmark net is a few ms, so
-        // the loop runs at camera rate). Re-detect on loss or every ~2 s.
+        // Tracking mode: while locked, skip the heavy detector and crop a
+        // DETECT-SHAPED box re-centred on the previous landmarks (the
+        // landmark net is a few ms, so the loop runs at camera rate).
+        // Re-detect on loss or every ~2 s.
         static int s_since_detect = 0;
+        static DetBoxGeom s_boxg;
         FaceObs obs;
         bool ok = false;
         bool have_prev = false;
         float pb1 = 0, pb2 = 0, pb3 = 0, pb4 = 0;
         {
             std::lock_guard<std::mutex> lk(g_latest_mtx);
-            if (g_latest.valid && g_latest.w == fw && g_latest.h == fh) {
+            if (g_latest.valid && g_latest.w == fw && g_latest.h == fh &&
+                s_boxg.valid) {
                 have_prev = true;
-                prev_lm_box(g_latest, pb1, pb2, pb3, pb4);
+                crop_box_from_prev(g_latest, s_boxg, pb1, pb2, pb3, pb4);
             }
         }
         if (have_prev && s_flip180) {
@@ -325,9 +397,12 @@ static void worker_main() {
                        !lm_sane(obs, pb1, pb2, pb3, pb4)))
                 ok = false;                       // wrong pose → re-detect
         }
+        bool fresh_detect = false;
+        float det_box[4] = {0, 0, 0, 0};
         if (!ok) {
             s_since_detect = 0;
-            ok = detect_both_orientations(frame, fw, fh, s_flip180, obs);
+            ok = detect_both_orientations(frame, fw, fh, s_flip180, obs, det_box);
+            fresh_detect = ok;
         }
         if (ok && s_flip180) {
             // Publish landmarks in the SUBMITTED frame's coordinates.
@@ -335,7 +410,11 @@ static void worker_main() {
                 obs.pts[k][0] = (float)fw - 1.f - obs.pts[k][0];
                 obs.pts[k][1] = (float)fh - 1.f - obs.pts[k][1];
             }
+            if (fresh_detect) flip_box(det_box, fw, fh);
         }
+        if (fresh_detect) { store_box_geom(obs, det_box, s_boxg); ++g_dbg_detects; }
+        g_dbg_flip180.store(s_flip180 ? 1 : 0);
+        g_dbg_since_detect.store(s_since_detect);
         std::lock_guard<std::mutex> lk(g_latest_mtx);
         if (!ok) {
             g_latest.score *= 0.7f;
@@ -442,6 +521,7 @@ bool face_track_build_cache(const std::string& video_path, int rot_q,
 
     bool flip180 = false;
     int since_detect = 60;          // force detect on the first frame
+    DetBoxGeom boxg;
     FaceObs smooth; smooth.valid = false;
     int n = 0;
     const float hw2f = (float)hw2, hh2f = (float)hh2;
@@ -451,9 +531,9 @@ bool face_track_build_cache(const std::string& video_path, int rot_q,
         if (flip180) rot180(frame, fw, fh);
         FaceObs obs;
         bool ok = false;
-        if (smooth.valid && ++since_detect < 60) {
+        if (smooth.valid && boxg.valid && ++since_detect < 60) {
             float b1, b2, b3, b4;
-            prev_lm_box(smooth, b1, b2, b3, b4);
+            crop_box_from_prev(smooth, boxg, b1, b2, b3, b4);
             if (flip180) {
                 float n1 = (float)fw - 1.f - b3, n2 = (float)fh - 1.f - b4;
                 float n3 = (float)fw - 1.f - b1, n4 = (float)fh - 1.f - b2;
@@ -463,16 +543,21 @@ bool face_track_build_cache(const std::string& video_path, int rot_q,
             if (ok && (!upright_ok(obs) || !lm_sane(obs, b1, b2, b3, b4)))
                 ok = false;
         }
+        bool fresh_detect = false;
+        float det_box[4] = {0, 0, 0, 0};
         if (!ok) {
             since_detect = 0;
-            ok = detect_both_orientations(frame, fw, fh, flip180, obs);
+            ok = detect_both_orientations(frame, fw, fh, flip180, obs, det_box);
+            fresh_detect = ok;
         }
         if (ok && flip180) {
             for (int k = 0; k < 106; ++k) {
                 obs.pts[k][0] = (float)fw - 1.f - obs.pts[k][0];
                 obs.pts[k][1] = (float)fh - 1.f - obs.pts[k][1];
             }
+            if (fresh_detect) flip_box(det_box, fw, fh);
         }
+        if (fresh_detect) store_box_geom(obs, det_box, boxg);
         if (!ok) {
             smooth.score *= 0.7f;
             if (smooth.score < 0.15f) smooth.valid = false;
@@ -516,7 +601,7 @@ bool face_track_build_cache(const std::string& video_path, int rot_q,
     std::string tmp = out_path + ".tmp";
     FILE* f = fopen(tmp.c_str(), "wb");
     if (!f) return false;
-    uint32_t magic = 0x46534D50, version = 1;    // 'PMSF'
+    uint32_t magic = 0x46534D50, version = 2;   // v2: detect-box tracking + kps gate    // 'PMSF'
     int32_t  rq = rot_q, rw = W, rh = H;
     float    fps = (float)info.fps;
     uint32_t count = (uint32_t)n;

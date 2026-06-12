@@ -50,7 +50,7 @@ std::shared_ptr<CacheData> load_file(const std::string& take_path, int rot_q) {
                fread(&rq, 4, 1, f) == 1 && fread(&fps, 4, 1, f) == 1 &&
                fread(&rw, 4, 1, f) == 1 && fread(&rh, 4, 1, f) == 1 &&
                fread(&count, 4, 1, f) == 1;
-    if (!hdr || magic != 0x46534D50 || version != 1 || rq != rot_q ||
+    if (!hdr || magic != 0x46534D50 || version != 2 || rq != rot_q ||
         count == 0 || count > 1000000 || fps <= 0.f) {
         fclose(f);
         return nullptr;

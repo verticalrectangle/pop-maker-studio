@@ -1482,6 +1482,12 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         json r;
         r["available"] = face_track_available();
         r["valid"]     = ok;
+        {
+            extern std::atomic<int> g_dbg_flip180, g_dbg_since_detect, g_dbg_detects;
+            r["flip180"]      = g_dbg_flip180.load();
+            r["since_detect"] = g_dbg_since_detect.load();
+            r["detects"]      = g_dbg_detects.load();
+        }
         if (ok) {
             r["score"] = obs.score;
             r["frame"] = {obs.w, obs.h};
