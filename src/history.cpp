@@ -45,6 +45,20 @@ void history_push(const AppState& state, const std::string& action) {
     g_pos = (int)g_history.size() - 1;
 }
 
+void history_amend(const AppState& state, const std::string& action) {
+    // Replace the newest entry instead of stacking — used when an automatic
+    // follow-up (the 1.5 s coupling) completes a gesture: one undo restores
+    // the state BEFORE the gesture, not the awkward halfway point.
+    if (g_history.empty() || g_pos != (int)g_history.size() - 1) {
+        history_push(state, action);
+        return;
+    }
+    TimelineSnapshot snap;
+    snap.action = action;
+    capture(snap, state);
+    g_history.back() = std::move(snap);
+}
+
 void history_undo(AppState& state) {
     if (g_pos <= 0) return;
     --g_pos;

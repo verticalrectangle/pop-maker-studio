@@ -17,6 +17,8 @@
 #include "body_fx.h"
 #include "bg_remove.h"
 #include "video_recorder.h"
+#include "face_track.h"
+#include "face_filters.h"
 #include <turbojpeg.h>
 #define GL_GLEXT_PROTOTYPES
 #include <GL/gl.h>
@@ -958,6 +960,10 @@ static struct {
 // While the camera brick monitors, warms up, or records, the latest camera
 // frame is drawn over the canvas (fit, slightly inset) so the performer can
 // frame themselves. Decode happens only when a new frame arrived.
+static FaceObs s_mirror_obs;          // latest face for the doggy overlay
+static int     s_mirror_filter = 0;
+static float   s_mirror_filter_amt = 1.f;
+
 static void draw_camera_mirror(ImDrawList* dl, ImVec2 p, float w, float h) {
     if (!vrecorder_monitor_get() && !vrecorder_active()) return;
 
@@ -1041,6 +1047,91 @@ static void draw_camera_mirror(ImDrawList* dl, ImVec2 p, float w, float h) {
                                         (float)ImGui::GetTime());
                 }
             }
+
+            // Face filter: track the live frame, warp the mirror. The
+            // detector can't see sideways faces, so the tracker gets the
+            // frame rotated upright per the brick's rotation (90° steps)
+            // and landmarks are mapped back into raw-frame coords.
+            s_mirror_filter     = br ? br->face_filter : 0;
+            s_mirror_filter_amt = br ? br->face_filter_amt : 1.f;
+            if (br && br->face_filter != 0 && face_track_available()) {
+                int rot_q = ((int)lroundf(br->rotation / 90.f) % 4 + 4) % 4;
+                static uint64_t s_track_serial = 0;
+                static int s_sub_rotq = 0;
+                if (serial != s_track_serial && !s_rgba.empty()) {
+                    // Half-res submit: 4× less conversion + inference input;
+                    // landmark precision at half-res is ample for warps.
+                    static std::vector<uint8_t> rgb;
+                    const uint8_t* src4 = s_rgba.data();
+                    int W = s_cam_w, H = s_cam_h;
+                    int hw2 = W / 2, hh2 = H / 2;
+                    if (rot_q == 0 || rot_q == 2) {
+                        rgb.resize((size_t)hw2 * hh2 * 3);
+                        for (int y = 0; y < hh2; ++y)
+                            for (int x = 0; x < hw2; ++x) {
+                                size_t si = ((size_t)(y*2) * W + x*2) * 4;
+                                size_t di = rot_q == 0
+                                    ? ((size_t)y * hw2 + x) * 3
+                                    : ((size_t)(hh2-1-y) * hw2 + (hw2-1-x)) * 3;
+                                rgb[di+0] = src4[si+0];
+                                rgb[di+1] = src4[si+1];
+                                rgb[di+2] = src4[si+2];
+                            }
+                        face_track_submit(rgb.data(), hw2, hh2);
+                    } else {
+                        // 90° CW (rot_q 1) or CCW (rot_q 3): dims swap.
+                        rgb.resize((size_t)hw2 * hh2 * 3);
+                        for (int y = 0; y < hh2; ++y)
+                            for (int x = 0; x < hw2; ++x) {
+                                size_t si = ((size_t)(y*2) * W + x*2) * 4;
+                                int ux, uy;   // position in upright (hh2×hw2) frame
+                                if (rot_q == 1) { ux = hh2 - 1 - y; uy = x; }
+                                else            { ux = y;           uy = hw2 - 1 - x; }
+                                size_t di = ((size_t)uy * hh2 + ux) * 3;
+                                rgb[di+0] = src4[si+0];
+                                rgb[di+1] = src4[si+1];
+                                rgb[di+2] = src4[si+2];
+                            }
+                        face_track_submit(rgb.data(), hh2, hw2);
+                    }
+                    s_track_serial = serial;
+                    s_sub_rotq = rot_q;
+                }
+                FaceObs obs;
+                if (face_track_latest(obs)) {
+                    // Map landmarks back into RAW full-res frame coords
+                    // (tracker ran on the half-res upright frame).
+                    {
+                        FaceObs raw = obs;
+                        raw.w = s_cam_w; raw.h = s_cam_h;
+                        float hw2f = (float)(s_cam_w / 2), hh2f = (float)(s_cam_h / 2);
+                        for (int k = 0; k < 106; ++k) {
+                            float ux = obs.pts[k][0], uy = obs.pts[k][1];
+                            float rx2, ry2;   // half-res raw coords
+                            if (s_sub_rotq == 1)      { rx2 = uy;             ry2 = hh2f - 1.f - ux; }
+                            else if (s_sub_rotq == 3) { rx2 = hw2f - 1.f - uy; ry2 = ux; }
+                            else if (s_sub_rotq == 2) { rx2 = hw2f - 1.f - ux; ry2 = hh2f - 1.f - uy; }
+                            else                      { rx2 = ux;             ry2 = uy; }
+                            raw.pts[k][0] = rx2 * 2.f;
+                            raw.pts[k][1] = ry2 * 2.f;
+                        }
+                        obs = raw;
+                    }
+                    s_mirror_obs = obs;
+                    FaceWarpBump bumps[MAX_FACE_BUMPS];
+                    int nb = face_filter_bumps(br->face_filter,
+                                               br->face_filter_amt, obs, bumps);
+                    if (nb > 0)
+                        draw_tex = face_warp_apply(draw_tex,
+                                                   MAX_VIDEO_TRACKS * 2,
+                                                   s_cam_w, s_cam_h,
+                                                   (const float*)bumps, nb);
+                } else {
+                    s_mirror_obs.valid = false;
+                }
+            } else {
+                s_mirror_obs.valid = false;
+            }
         }
     }
     // The mirror flips horizontally, which inverts apparent rotation:
@@ -1066,6 +1157,17 @@ static void draw_camera_mirror(ImDrawList* dl, ImVec2 p, float w, float h) {
     // u flipped → mirror behaviour (recorded takes keep true orientation)
     dl->AddImageQuad((ImTextureID)(intptr_t)draw_tex, p0, p1, p2, p3,
                      {1, 0}, {0, 0}, {0, 1}, {1, 1});
+    // Doggy overlay: landmark-anchored ears/nose/tongue. Frame UV → screen
+    // via the same quad mapping (note the mirror's flipped U).
+    if (s_mirror_filter == (int)FaceFilter::Doggy && s_mirror_obs.valid) {
+        auto to_screen = [&](float u, float v) -> ImVec2 {
+            float mu = 1.f - u;   // mirror flip
+            float lx = (mu - 0.5f) * 2.f * hw;
+            float ly = (v  - 0.5f) * 2.f * hh;
+            return rotp(lx, ly);
+        };
+        face_filter_draw_doggy(dl, s_mirror_obs, s_mirror_filter_amt, to_screen);
+    }
     ImU32 frame_col = vrecorder_recording() ? IM_COL32(235, 90, 40, 255)
                                             : IM_COL32(160, 160, 180, 160);
     dl->AddQuad(p0, p1, p2, p3, frame_col, vrecorder_recording() ? 3.f : 1.5f);

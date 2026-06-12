@@ -380,7 +380,7 @@ static GLuint g_solid_tex = 0;
 
 // Per-slot stable output textures — indexed by fx_apply's 'slot' argument.
 // These persist between pass chains so deferred ImDrawList commands are safe.
-static const int kMaxSlots = MAX_VIDEO_TRACKS * 2;
+static const int kMaxSlots = MAX_VIDEO_TRACKS * 2 + 1;  // +1: face-warp slot
 static struct {
     GLuint fbo = 0, tex = 0;
     int w = 0, h = 0;
@@ -557,6 +557,75 @@ void fx_shader_shutdown() {
     if (g_bg_vao)  glDeleteVertexArrays(1, &g_bg_vao);
     if (g_bg_vbo)  glDeleteBuffers(1, &g_bg_vbo);
     if (g_bg_ebo)  glDeleteBuffers(1, &g_bg_ebo);
+}
+
+// ── Face warp (filters) ───────────────────────────────────────────────────────
+// One pass, up to 12 local "bumps": radial scale (enlarge/shrink) + content
+// shift with gaussian falloff. Landmark logic stays on the CPU; this shader
+// is dumb on purpose.
+static const char* k_face_warp_fs = R"(#version 330 core
+in vec2 v_uv; out vec4 frag;
+uniform sampler2D u_tex;
+uniform int  u_n;
+uniform vec4 u_ba[12];   // cx, cy, radius, scale
+uniform vec4 u_bb[12];   // dx, dy, aspect, _
+void main() {
+    vec2 uv = v_uv;
+    for (int i = 0; i < u_n; ++i) {
+        vec2 c = u_ba[i].xy;
+        float r = max(u_ba[i].z, 1e-4);
+        vec2 d = v_uv - c;
+        d.x *= u_bb[i].z;            // aspect-correct the falloff
+        float g = exp(-dot(d, d) / (r * r * 0.45));
+        uv -= (u_bb[i].xy + (v_uv - c) * u_ba[i].w) * g;
+    }
+    frag = texture(u_tex, clamp(uv, vec2(0.001), vec2(0.999)));
+}
+)";
+static GLuint g_face_warp_prog = 0;
+
+uintptr_t face_warp_apply(uintptr_t src_tex, int slot, int w, int h,
+                          const float* bumps, int n_bumps) {
+    if (n_bumps <= 0 || slot < 0 || slot >= kMaxSlots || w <= 0 || h <= 0)
+        return src_tex;
+    if (!g_face_warp_prog) {
+        g_face_warp_prog = link_prog(k_face_warp_fs);
+        if (!g_face_warp_prog) return src_tex;
+    }
+    if (n_bumps > 12) n_bumps = 12;
+
+    GLint prev_fbo = 0;
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prev_fbo);
+    GLint prev_vp[4];
+    glGetIntegerv(GL_VIEWPORT, prev_vp);
+
+    out_ensure(slot, w, h);
+    glBindVertexArray(g_vao);
+    glBindFramebuffer(GL_FRAMEBUFFER, g_out[slot].fbo);
+    glViewport(0, 0, w, h);
+    glUseProgram(g_face_warp_prog);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, (GLuint)src_tex);
+    glUniform1i(glGetUniformLocation(g_face_warp_prog, "u_tex"), 0);
+    glUniform1i(glGetUniformLocation(g_face_warp_prog, "u_n"), n_bumps);
+    float ba[48] = {}, bb[48] = {};
+    float aspect = (float)w / (float)h;
+    for (int i = 0; i < n_bumps; ++i) {
+        ba[i*4+0] = bumps[i*6+0];           // cx
+        ba[i*4+1] = bumps[i*6+1];           // cy
+        ba[i*4+2] = bumps[i*6+2];           // radius
+        ba[i*4+3] = bumps[i*6+3];           // scale
+        bb[i*4+0] = bumps[i*6+4];           // dx
+        bb[i*4+1] = bumps[i*6+5];           // dy
+        bb[i*4+2] = aspect;
+    }
+    glUniform4fv(glGetUniformLocation(g_face_warp_prog, "u_ba"), 12, ba);
+    glUniform4fv(glGetUniformLocation(g_face_warp_prog, "u_bb"), 12, bb);
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)prev_fbo);
+    glViewport(prev_vp[0], prev_vp[1], prev_vp[2], prev_vp[3]);
+    return (uintptr_t)g_out[slot].tex;
 }
 
 uintptr_t fx_apply(uintptr_t src_tex_in, int slot, int w, int h,

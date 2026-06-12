@@ -17,6 +17,11 @@ void fx_shader_shutdown();
 //        ImDrawList that is submitted later in the same frame.
 // w, h:  pixel dimensions of src_tex.
 // t:     animation time (seconds, e.g. clip-local or absolute playhead).
+// Face-filter warp: bumps = n × {cx, cy, radius, scale, dx, dy} in frame UV.
+// Renders into the slot's FBO and returns its texture (src on no-op).
+uintptr_t face_warp_apply(uintptr_t src_tex, int slot, int w, int h,
+                          const float* bumps, int n_bumps);
+
 uintptr_t fx_apply(uintptr_t src_tex, int slot, int w, int h,
                    const EffectAccum& ea, const CreativeFXAccum& cfx, float t);
 

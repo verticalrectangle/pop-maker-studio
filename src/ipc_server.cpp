@@ -2,6 +2,7 @@
 #include "audio.h"
 #include "recorder.h"
 #include "video_recorder.h"
+#include "face_track.h"
 #include "agent_harness.h"
 #include "render.h"
 #include "bg_presets.h"
@@ -1469,6 +1470,28 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         return r;
     }
 
+    if (method == "dump_face_input") {
+        bool ok = face_track_dump_last("/tmp/face_input.ppm");
+        json r; r["ok"] = ok;
+        return r;
+    }
+
+    if (method == "get_face_track") {
+        FaceObs obs;
+        bool ok = face_track_latest(obs);
+        json r;
+        r["available"] = face_track_available();
+        r["valid"]     = ok;
+        if (ok) {
+            r["score"] = obs.score;
+            r["frame"] = {obs.w, obs.h};
+            r["nose"]  = {obs.pts[80][0], obs.pts[80][1]};
+            r["chin"]  = {obs.pts[16][0], obs.pts[16][1]};
+            r["eyeB"]  = {obs.pts[90][0], obs.pts[90][1]};
+        }
+        return r;
+    }
+
     if (method == "debug_fx_tone") {
         // DSP self-test: 2 s of 440 Hz through process_audio_fx with the
         // given params; returns Goertzel powers so divergence between the
@@ -2116,6 +2139,8 @@ static json dispatch(AppState& state, const std::string& method, const json& par
             else if (prop == "scale_x")   { cl.scale_x   = jval_float(val); }
             else if (prop == "scale_y")   { cl.scale_y   = jval_float(val); }
             else if (prop == "rotation")  { cl.rotation  = jval_float(val); }
+            else if (prop == "face_filter")     { cl.face_filter = (int)jval_float(val); }
+            else if (prop == "face_filter_amt") { cl.face_filter_amt = jval_float(val); }
             // Crop: clamp against the opposite side so a sliver stays visible
             else if (prop == "crop_l")    { cl.crop_l = fmaxf(0.f, fminf(jval_float(val), 0.95f - cl.crop_r)); }
             else if (prop == "crop_r")    { cl.crop_r = fmaxf(0.f, fminf(jval_float(val), 0.95f - cl.crop_l)); }
@@ -2252,6 +2277,8 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         else if (prop == "scale_x")  { cl.scale_x  = jval_float(val); }
         else if (prop == "scale_y")  { cl.scale_y  = jval_float(val); }
         else if (prop == "rotation") { cl.rotation = jval_float(val); }
+        else if (prop == "face_filter")     { cl.face_filter = (int)jval_float(val); }
+        else if (prop == "face_filter_amt") { cl.face_filter_amt = jval_float(val); }
         // Crop: clamp against the opposite side so a sliver stays visible
         else if (prop == "crop_l")   { cl.crop_l = fmaxf(0.f, fminf(jval_float(val), 0.95f - cl.crop_r)); }
         else if (prop == "crop_r")   { cl.crop_r = fmaxf(0.f, fminf(jval_float(val), 0.95f - cl.crop_l)); }

@@ -98,6 +98,7 @@ static struct {
     int    ti = -1, ci = -1;  // the brick
     int    host_ci = -1;      // content clip beneath it
     double t0      = 0.0;
+    int    hist_len = -1;     // history size at arm — amend only if unchanged
 } s_couple_pend;
 
 // The weld timer ring, filling clockwise at the merge target's center —
@@ -276,6 +277,7 @@ static void couple_pending_tick(AppState& state) {
         s_couple_pend.ti = pti; s_couple_pend.ci = pci;
         s_couple_pend.host_ci = phost;
         s_couple_pend.t0 = ImGui::GetTime();
+        s_couple_pend.hist_len = (int)history_entries().size();
         return;
     }
     if (pti < 0) return;
@@ -289,7 +291,15 @@ static void couple_pending_tick(AppState& state) {
     s_fx_flash.t0     = ImGui::GetTime();
     s_fx_flash.ti     = pti;
     s_fx_flash.ci     = nci;
-    history_push(state, "Couple FX brick");
+    // Collapse the drop + couple into ONE undo step: undoing a weld must
+    // bounce the brick back to where it was before the gesture, not leave
+    // an uncoupled brick stranded on the content (which would instantly
+    // re-arm the timer). Only safe when nothing else hit history since
+    // the ring armed.
+    if (s_couple_pend.hist_len == (int)history_entries().size())
+        history_amend(state, "Couple FX brick");
+    else
+        history_push(state, "Couple FX brick");
     s_couple_pend.ti = s_couple_pend.ci = s_couple_pend.host_ci = -1;
 }
 

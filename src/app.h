@@ -320,6 +320,12 @@ struct Clip {
     bool        fx_coupled = false;
     std::string fx_host_sid;
 
+    // Face filter (VideoRecord bricks): id into face_filters.h's list +
+    // intensity. Applies to the live mirror; take playback uses the same
+    // recipe via the cached landmark pass (stage 3).
+    int   face_filter     = 0;
+    float face_filter_amt = 1.f;
+
     // Record brick (ClipType::Record) — loop-recorded takes (WAV paths in the
     // managed takes dir). The selected take plays in preview/export like an
     // audio clip with in_point 0 / speed 1; the rest wait in the panel tray.

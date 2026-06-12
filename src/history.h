@@ -20,6 +20,11 @@ struct TimelineSnapshot {
 // Call this AFTER the mutation so the snapshot captures the resulting state.
 void history_push(const AppState& state, const std::string& action);
 
+// Replace the newest entry with the current state (gesture + automatic
+// follow-up collapse into one undo step). Falls back to push when the
+// cursor isn't at the top.
+void history_amend(const AppState& state, const std::string& action);
+
 // Step backward / forward through the history.
 void history_undo(AppState& state);
 void history_redo(AppState& state);

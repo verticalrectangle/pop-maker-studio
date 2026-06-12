@@ -20,6 +20,8 @@
 #include "body_fx.h"
 #include "noise_reduce.h"
 #include "generated/fx_clip_set_dispatch.h"  // fx_clip_set_param for beauty preset chips
+#include "face_track.h"
+#include "face_filters.h"
 #include "../recorder.h"
 #include "../video_recorder.h"
 #include "../video.h"
@@ -2478,6 +2480,42 @@ void panel_clip(AppState& state, float w) {
                 }
                 history_push(state, std::string("Beauty preset: ") + bp.name);
                 return;                                  // — bail out this frame
+            }
+        }
+
+        // ── Face filters ─────────────────────────────────────────────────────
+        // Landmark-driven warps on the live mirror — pick a look, see
+        // yourself in it instantly.
+        ImGui::Dummy({0.f, 10.f}); ui_separator(); ImGui::Dummy({0.f, 6.f});
+        ui_label("Face filters");
+        ImGui::Dummy({0.f, 6.f});
+        if (!face_track_available()) {
+            ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+            ImGui::TextWrapped("Face models missing (models/face).");
+            ImGui::PopStyleColor();
+        } else {
+            for (int fi = 0; fi < face_filter_count(); ++fi) {
+                if (fi % 4 != 0) ImGui::SameLine(0.f, 6.f);
+                bool on = clip.face_filter == fi;
+                if (on) ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(235, 120, 60, 255));
+                if (ui_btn(face_filter_name(fi), on, true)) {
+                    clip.face_filter = fi;
+                    history_push(state, std::string("Face filter: ") + face_filter_name(fi));
+                }
+                if (on) ImGui::PopStyleColor();
+            }
+            if (clip.face_filter != 0) {
+                ImGui::Dummy({0.f, 4.f});
+                ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+                ImGui::TextUnformatted("Strength");
+                ImGui::PopStyleColor();
+                ImGui::PushStyleColor(ImGuiCol_SliderGrab, to_u32(Col::fg));
+                ImGui::PushStyleColor(ImGuiCol_FrameBg,    Col::bg_soft);
+                ImGui::SetNextItemWidth(bar_w);
+                ImGui::SliderFloat("##face_amt", &clip.face_filter_amt, 0.f, 1.5f, "%.2f");
+                ImGui::PopStyleColor(2);
+                if (ImGui::IsItemDeactivatedAfterEdit())
+                    history_push(state, "Face filter strength");
             }
         }
 
