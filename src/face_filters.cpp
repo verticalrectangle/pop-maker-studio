@@ -203,8 +203,11 @@ int face_filter_doggy_quads(const FaceObs& obs, float amount, float t,
     // One sprite: center/size in face-basis units, tilt in degrees (positive
     // leans outward to the sprite's right). Corners land in frame UV — the
     // mirror maps them through to_screen, the compositor uses them directly.
+    // pin_top: (cx_fb, cy_fb) anchors the TOP-CENTER edge instead of the
+    // center — the sprite hangs from that point and tilt swings around it.
     auto sprite = [&](const char* name, float cx_fb, float cy_fb,
-                      float width_fb, float tilt_deg, bool flip) {
+                      float width_fb, float tilt_deg, bool flip,
+                      bool pin_top = false) {
         if (n >= max_out) return;
         int sw = 0, sh = 0;
         GLuint tex = sprite_tex(name, sw, sh);
@@ -218,6 +221,10 @@ int face_filter_doggy_quads(const FaceObs& obs, float amount, float t,
         float hh = hw * (float)sh / (float)sw;
         float cx = a.eyeMid[0] + rx * cx_fb * ed + upx * cy_fb * ed;
         float cy = a.eyeMid[1] + ry * cx_fb * ed + upy * cy_fb * ed;
+        if (pin_top) {                // top-center = anchor for any tilt
+            cx -= ayx * hh;
+            cy -= ayy * hh;
+        }
         FaceSpriteQuad& q = out[n++];
         q.tex = tex;
         const float oxs[4] = {-hw,  hw,  hw, -hw};   // tl tr br bl
@@ -255,12 +262,24 @@ int face_filter_doggy_quads(const FaceObs& obs, float amount, float t,
         ext = fmaxf(0.f, fminf(1.f, ext));
         ext = ext * ext * (3.f - 2.f * ext);          // smoothstep
         if (ext > 0.02f) {
+            // Root the tongue at the INNER LOWER LIP: the lowest inner-ring
+            // point along the face up axis (centered-on-mouth placement made
+            // it sprout from the upper teeth). Tucked 0.10 ed upward so the
+            // root hides behind the lip; growth extends downward from there
+            // and the wag swings around the root.
+            float lip_oy = 1e9f;
+            for (int k = 64; k < 72; ++k) {
+                float vx = obs.pts[k][0] - a.eyeMid[0];
+                float vy = obs.pts[k][1] - a.eyeMid[1];
+                float o = (vx * upx + vy * upy) / ed;
+                if (o < lip_oy) lip_oy = o;
+            }
             float mx = a.mouth[0] - a.eyeMid[0], my = a.mouth[1] - a.eyeMid[1];
             float ox = (mx * rx + my * ry) / ed;
-            float oy = (mx * upx + my * upy) / ed;
             float wag = sinf(t * 9.f) * 7.f * ext;    // degrees
-            sprite("sprite_tongue.png", ox, oy - 0.50f * ext,
-                   0.85f * sc * (0.45f + 0.55f * ext), wag, false);
+            sprite("sprite_tongue.png", ox, lip_oy + 0.10f,
+                   0.85f * sc * (0.45f + 0.55f * ext), wag, false,
+                   /*pin_top=*/true);
         }
     }
     {
