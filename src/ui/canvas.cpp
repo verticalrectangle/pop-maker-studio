@@ -961,6 +961,8 @@ static struct {
 // frame is drawn over the canvas (fit, slightly inset) so the performer can
 // frame themselves. Decode happens only when a new frame arrived.
 static FaceObs s_mirror_obs;          // latest face for the doggy overlay
+static MirrorDebugGeom s_mirror_dbg;
+MirrorDebugGeom mirror_debug_geom() { return s_mirror_dbg; }
 static int     s_mirror_filter = 0;
 static float   s_mirror_filter_amt = 1.f;
 
@@ -1153,6 +1155,14 @@ static void draw_camera_mirror(ImDrawList* dl, ImVec2 p, float w, float h) {
     };
     ImVec2 p0 = rotp(-hw, -hh), p1 = rotp(hw, -hh),
            p2 = rotp(hw, hh),   p3 = rotp(-hw, hh);
+    s_mirror_dbg.valid   = true;
+    s_mirror_dbg.cx      = c.x;  s_mirror_dbg.cy = c.y;
+    s_mirror_dbg.hw      = hw;   s_mirror_dbg.hh = hh;
+    s_mirror_dbg.rot_deg = rot_deg;
+    s_mirror_dbg.cam_w   = s_cam_w; s_mirror_dbg.cam_h = s_cam_h;
+    s_mirror_dbg.face_valid = s_mirror_obs.valid;
+    if (s_mirror_obs.valid)
+        memcpy(s_mirror_dbg.pts, s_mirror_obs.pts, sizeof(s_mirror_dbg.pts));
     dl->AddRectFilled({p.x, p.y}, {p.x + w, p.y + h}, IM_COL32(0, 0, 0, 160));
     // u flipped → mirror behaviour (recorded takes keep true orientation)
     dl->AddImageQuad((ImTextureID)(intptr_t)draw_tex, p0, p1, p2, p3,

@@ -1486,8 +1486,32 @@ static json dispatch(AppState& state, const std::string& method, const json& par
             r["score"] = obs.score;
             r["frame"] = {obs.w, obs.h};
             r["nose"]  = {obs.pts[80][0], obs.pts[80][1]};
-            r["chin"]  = {obs.pts[16][0], obs.pts[16][1]};
+            r["chin"]  = {obs.pts[0][0], obs.pts[0][1]};
             r["eyeB"]  = {obs.pts[90][0], obs.pts[90][1]};
+            if (params.value("full", false)) {
+                json pts = json::array();
+                for (int k = 0; k < 106; ++k)
+                    pts.push_back({obs.pts[k][0], obs.pts[k][1]});
+                r["pts"] = pts;
+            }
+        }
+        // Mirror overlay debug: quad geometry + raw-frame landmarks exactly
+        // as the doggy overlay consumes them (post rotation remap).
+        MirrorDebugGeom mg = mirror_debug_geom();
+        if (mg.valid) {
+            json m;
+            m["center"]  = {mg.cx, mg.cy};
+            m["half"]    = {mg.hw, mg.hh};
+            m["rot_deg"] = mg.rot_deg;
+            m["cam"]     = {mg.cam_w, mg.cam_h};
+            m["face_valid"] = mg.face_valid;
+            if (mg.face_valid && params.value("full", false)) {
+                json pts = json::array();
+                for (int k = 0; k < 106; ++k)
+                    pts.push_back({mg.pts[k][0], mg.pts[k][1]});
+                m["pts"] = pts;
+            }
+            r["mirror"] = m;
         }
         return r;
     }
@@ -1545,6 +1569,13 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         r["gate"]          = audio_gate_get();
         r["hear_fx"]       = audio_monitor_fx_get();
         r["chain_active"]  = audio_monitor_chain_active();
+        return r;
+    }
+
+    if (method == "set_camera_monitor") {
+        bool on = params.value("on", true);
+        vrecorder_monitor_set(on);
+        json r; r["monitor"] = vrecorder_monitor_get();
         return r;
     }
 
