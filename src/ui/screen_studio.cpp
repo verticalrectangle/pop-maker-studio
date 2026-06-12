@@ -527,6 +527,7 @@ void ui_studio(AppState& state) {
                         cl.rec_take_sel >= (int)cl.rec_takes.size() ||
                         recorder_is_target(tr_idx, ci)) continue;
                     AudioClipDesc d;
+                    d.bus      = tr.bus;
                     d.tl_start = cl.start;    d.tl_end   = cl.end;
                     d.in_point = 0.f;         d.speed    = 1.f;
                     d.volume   = cl.volume;   d.pan      = cl.pan;
@@ -558,6 +559,7 @@ void ui_studio(AppState& state) {
                 }
                 if (cl.text.empty() || cl.muted) continue;
                 AudioClipDesc d;
+                d.bus      = tr.bus;
                 d.tl_start = cl.start;    d.tl_end   = cl.end;
                 d.in_point = cl.in_point; d.speed    = cl.speed;
                 d.volume   = cl.volume;   d.pan      = cl.pan;
@@ -608,6 +610,7 @@ void ui_studio(AppState& state) {
         }
         video_audio_clips_update(vdescs);
         audio_clips_update(adescs);
+        audio_buses_update(collect_bus_descs(state));
     }
 
     if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_H))

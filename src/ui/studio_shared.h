@@ -3,6 +3,7 @@
 
 #include "studio_types.h"
 #include "app.h"
+#include "audio.h"
 #include <cmath>
 
 // ── Frame-boundary snapping ───────────────────────────────────────────────────
@@ -82,6 +83,11 @@ bool fx_type_is_audio_fx(FXType ft);
 // Windowed audio FX for one clip: a segment per overlapping audio FX brick
 // (and per audio entry inside overlapping MultiFX chains), each mapped into
 // the clip's source time. The FX applies only over the brick's range.
+// Extract the AudioFX params from a single audio FX entry (brick or chain
+// entry). Returns false when the entry is inactive/not audio.
+bool audio_fx_from_brick_pub(const Clip& cl, AudioFX& out);
+// Bus configs for the live mixer (index 0 = Master).
+std::vector<AudioBusDesc> collect_bus_descs(const AppState& state);
 std::vector<AudioFXSegment> collect_audio_fx_segments(const AppState& state,
                                                       int track_idx,
                                                       const Clip& audio_clip);

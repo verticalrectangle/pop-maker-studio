@@ -69,6 +69,9 @@ AudioFXChain* audio_fx_chain_create_seg(const std::vector<AudioFXSegment>& segs,
                                         float sample_rate);
 void          audio_fx_chain_process_seg(AudioFXChain* c, float& L, float& R,
                                          float src_t, int64_t frame_idx);
+// Approximate group latency of the chain's grain stages (frames @ chain sr) —
+// buses read ahead by this much so grain FX don't smear bus timing (PDC).
+int           audio_fx_chain_latency_frames(const AudioFXChain* c);
 
 // ── Windowed FX segments ──────────────────────────────────────────────────────
 // An audio FX brick applies only over its own timeline range. Each segment is

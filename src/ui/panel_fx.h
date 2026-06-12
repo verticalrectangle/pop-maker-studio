@@ -13,6 +13,7 @@ void panel_multifx(AppState& state, float w);
 void panel_multifx_for(AppState& state, float w, int b_ti, int b_ci);
 void panel_audio_multifx(AppState& state, float w);
 void panel_audio_multifx_for(AppState& state, float w, int b_ti, int b_ci);
+void audio_chain_entry_params_ui(AppState& state, Clip& se, float sw);
 void panel_audio_fx_clip(AppState& state, float w);
 void panel_adjustment_library(AppState& state, float w);
 void panel_adjustment(AppState& state, float w);

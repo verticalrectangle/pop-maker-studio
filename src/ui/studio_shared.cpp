@@ -337,7 +337,15 @@ bool fx_type_is_audio_fx(FXType ft) {
 
 // One brick's contribution as a standalone AudioFX. VoiceConvert is excluded
 // — it's an ML job handled via vc_out_path substitution, not offline DSP.
+bool audio_fx_from_brick_pub(const Clip& cl, AudioFX& out) {
+    extern bool audio_fx_from_brick_impl(const Clip&, AudioFX&);
+    return audio_fx_from_brick_impl(cl, out);
+}
+bool audio_fx_from_brick_impl(const Clip& cl, AudioFX& out);
 static bool audio_fx_from_brick(const Clip& cl, AudioFX& out) {
+    return audio_fx_from_brick_impl(cl, out);
+}
+bool audio_fx_from_brick_impl(const Clip& cl, AudioFX& out) {
     switch (cl.fx_type) {
         case FXType::AudioAutotune:
             out.autotune_on    = cl.audio_fx.autotune_on;
@@ -417,6 +425,25 @@ std::vector<AudioFXSegment> collect_audio_fx_segments(const AppState& state,
     std::sort(segs.begin(), segs.end(),
               [](const AudioFXSegment& a, const AudioFXSegment& b) { return a.t0 < b.t0; });
     return segs;
+}
+
+std::vector<AudioBusDesc> collect_bus_descs(const AppState& state) {
+    std::vector<AudioBusDesc> out;
+    for (const auto& b : state.buses) {
+        AudioBusDesc d;
+        d.gain = b.gain;
+        uint64_t h = 14695981039346656037ull;
+        for (const auto& se : b.fx_chain) {
+            if (!fx_type_is_audio_fx(se.fx_type)) continue;
+            AudioFX fx;
+            if (!audio_fx_from_brick(se, fx)) continue;
+            d.stages.push_back(fx);
+            h = (h ^ audio_fx_hash(fx)) * 1099511628211ull;
+        }
+        d.hash = d.stages.empty() ? 0 : h;
+        out.push_back(d);
+    }
+    return out;
 }
 
 PanelView pv_derive(const AppState& state) {

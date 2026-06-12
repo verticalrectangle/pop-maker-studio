@@ -145,14 +145,42 @@ static std::string bake_audio_fx_wav(const std::string& src,
 // vc_out_path substitution, never offline-baked.
 static std::vector<AudioFXSegment> export_fx_segments(const AppState& state,
                                                       int ti, const Clip& cl) {
+    std::vector<AudioFXSegment> segs;
     if (cl.audio_fx.any_active()) {
         AudioFX own = cl.audio_fx;
         own.voice_convert_on = false;
-        if (!own.any_active()) return {};
-        float spd = fmaxf(0.01f, cl.speed);
-        return {{cl.in_point, cl.in_point + (cl.end - cl.start) * spd, own}};
+        if (own.any_active()) {
+            float spd = fmaxf(0.01f, cl.speed);
+            segs.push_back({cl.in_point,
+                            cl.in_point + (cl.end - cl.start) * spd, own});
+        }
+    } else {
+        segs = collect_audio_fx_segments(state, ti, cl);
     }
-    return collect_audio_fx_segments(state, ti, cl);
+    // Bus chain: baked per routed clip over its full range. Identical to
+    // processing the summed bus stem for linear FX (delay/reverb/gain — the
+    // typical bus inserts); grain FX differ marginally on overlapping clips.
+    if (ti >= 0 && ti < (int)state.tracks.size()) {
+        int b = state.tracks[ti].bus;
+        if (b > 0 && b < (int)state.buses.size()) {
+            float spd = fmaxf(0.01f, cl.speed);
+            float s0 = cl.in_point, s1 = cl.in_point + (cl.end - cl.start) * spd;
+            for (const auto& se : state.buses[(size_t)b].fx_chain) {
+                AudioFX fx;
+                if (audio_fx_from_brick_pub(se, fx)) segs.push_back({s0, s1, fx});
+            }
+        }
+    }
+    // Master chain applies to everything.
+    if (!state.buses.empty() && !state.buses[0].fx_chain.empty()) {
+        float spd = fmaxf(0.01f, cl.speed);
+        float s0 = cl.in_point, s1 = cl.in_point + (cl.end - cl.start) * spd;
+        for (const auto& se : state.buses[0].fx_chain) {
+            AudioFX fx;
+            if (audio_fx_from_brick_pub(se, fx)) segs.push_back({s0, s1, fx});
+        }
+    }
+    return segs;
 }
 
 // ── Font extraction ───────────────────────────────────────────────────────────

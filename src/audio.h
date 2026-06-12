@@ -93,7 +93,18 @@ bool audio_probe(const std::string& path, AudioMeta& meta);
 
 // ── Clip-based audio ──────────────────────────────────────────────────────────
 
+// Bus config snapshot — stages flattened from the bus's chain entries.
+struct AudioBusDesc {
+    std::vector<AudioFX> stages;
+    float    gain = 1.f;
+    uint64_t hash = 0;   // change detector for the live chain registry
+};
+
+// Push the bus set (index 0 = Master) — called every frame like clips.
+void audio_buses_update(const std::vector<AudioBusDesc>& buses);
+
 struct AudioClipDesc {
+    int         bus       = 0;    // routing: which bus this clip sums into
     float       tl_start  = 0.f;  // clip start on timeline (seconds)
     float       tl_end    = 0.f;  // clip end on timeline
     float       in_point  = 0.f;  // source offset at tl_start

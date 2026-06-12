@@ -509,6 +509,16 @@ void audio_fx_chain_process(AudioFXChain* c, float& L, float& R) {
 
 void audio_fx_chain_free(AudioFXChain* c) { delete c; }
 
+int audio_fx_chain_latency_frames(const AudioFXChain* c) {
+    if (!c) return 0;
+    int lat = 0;
+    for (const auto& u : c->units) {
+        if (u.fx.autotune_on || u.fx.pitch_on) lat += (int)u.gs[0].grain_size / 2;
+        if (u.fx.formant_on)                   lat += (int)u.gs[2].grain_size / 2;
+    }
+    return lat;
+}
+
 AudioFXChain* audio_fx_chain_create_seg(const std::vector<AudioFXSegment>& segs,
                                         float sample_rate) {
     auto* c = new AudioFXChain();

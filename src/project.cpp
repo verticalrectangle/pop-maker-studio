@@ -10,7 +10,7 @@
 // ── Binary serialization helpers ──────────────────────────────────────────────
 
 static const uint32_t MAGIC   = 0x534D5001u; // "PMS\x01"
-static const uint32_t VERSION = 41u;  // v41: AudioMultiFX chain bricks
+static const uint32_t VERSION = 42u;  // v42: audio buses + track routing
 
 struct Writer {
     std::ofstream f;
@@ -449,6 +449,7 @@ static Clip read_clip(Reader& r, uint32_t version) {
 static void write_track(Writer& w, const Track& t) {
     w.str(t.name);
     w.pod((uint8_t)t.visible); w.pod((uint8_t)t.muted); w.pod((uint8_t)t.locked); w.pod(t.sub_row);
+    w.pod(t.bus);   // v42
     uint32_t nc = (uint32_t)t.clips.size();
     w.pod(nc);
     for (auto& c : t.clips) write_clip(w, c);
@@ -460,6 +461,7 @@ static Track read_track(Reader& r, uint32_t version) {
     t.visible = (bool)r.pod<uint8_t>(); t.muted = (bool)r.pod<uint8_t>();
     if (version >= 9u) t.locked = (bool)r.pod<uint8_t>();
     t.sub_row = r.pod<int>();
+    if (version >= 42u) t.bus = r.pod<int>();
     uint32_t nc = r.pod<uint32_t>();
     for (uint32_t i = 0; i < nc && r.ok; ++i)
         t.clips.push_back(read_clip(r, version));
@@ -535,6 +537,15 @@ bool project_save(const AppState& state, const std::string& path) {
     // v36: project bin
     w.pod((uint32_t)state.bin.size());
     for (auto& p : state.bin) w.str(p);
+
+    // v42: audio buses (chains reuse the clip serializer)
+    w.pod((uint32_t)state.buses.size());
+    for (auto& b : state.buses) {
+        w.str(b.name);
+        w.pod(b.gain);
+        w.pod((uint32_t)b.fx_chain.size());
+        for (auto& se : b.fx_chain) write_clip(w, se);
+    }
 
     return w.ok;
 }
@@ -629,6 +640,26 @@ bool project_load(AppState& state, const std::string& path) {
         for (uint32_t i = 0; i < nb && r.ok; ++i)
             state.bin.push_back(r.str());
     }
+    // v42: audio buses
+    if (version >= 42u) {
+        uint32_t nbus = r.pod<uint32_t>();
+        if (nbus >= 1 && nbus <= (uint32_t)MAX_BUSES) {
+            state.buses.clear();
+            for (uint32_t i = 0; i < nbus && r.ok; ++i) {
+                Bus b;
+                b.name = r.str();
+                b.gain = r.pod<float>();
+                uint32_t nch = r.pod<uint32_t>();
+                for (uint32_t k = 0; k < nch && r.ok; ++k)
+                    b.fx_chain.push_back(read_clip(r, version));
+                state.buses.push_back(std::move(b));
+            }
+        }
+    }
+    if (state.buses.empty()) state.buses.push_back(Bus{"Master", {}, -1, 1.f});
+    for (auto& t : state.tracks)
+        if (t.bus < 0 || t.bus >= (int)state.buses.size()) t.bus = 0;
+
     // Backfill for pre-v36 projects: derive the bin from existing clip paths
     // so users opening older projects still see their media in the bin.
     bin_backfill_from_timeline(state);
