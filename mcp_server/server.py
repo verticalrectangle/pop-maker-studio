@@ -881,6 +881,9 @@ async def list_tools() -> list[Tool]:
                 "ANIMATION: clip_style (none|fade|glitch|typewriter|bounce|scale|slide|stack|block),\n"
                 "           blend_mode (normal|add|multiply|screen|overlay)\n"
                 "RECORD:    selected_take (int index into the record brick's takes; -1 = none)\n"
+                "FACE:      face_filter (camera bricks: 0=None 1=Pretty 2=BigEyes 3=TinyFace\n"
+                "           4=BigMouth 5=Alien 6=Doggy — live mirror + takes/export via cached\n"
+                "           landmark pass), face_filter_amt (0–1.5 strength)\n"
                 "COLOR GRADE (video clips only):\n"
                 "           grade_brightness (-1–1), grade_contrast (0–3),\n"
                 "           grade_saturation (0–3), grade_hue (-180–180)\n"
@@ -2085,6 +2088,218 @@ async def list_tools() -> list[Tool]:
                 },
                 "required": ["times"],
             },
+        ),
+        Tool(
+            name="add_audio_multifx_brick",
+            description=(
+                "Add an Audio Multi-FX brick: an ordered chain of LIVE audio effects that "
+                "auto-couples (1.5s weld timer skipped — couples immediately) to the "
+                "best-overlapping audio content on the same track. Effects run live like a DAW "
+                "insert chain: preview, monitor, and export all stream through the same DSP.\n\n"
+                "Audio fx_types: audio_autotune (strength,speed,key,scale), audio_pitch "
+                "(semitones), audio_formant (shift), audio_reverb (mix,size,damp), audio_delay "
+                "(time,feedback,mix), audio_codec (bitrate crush). Video FX are rejected here; "
+                "audio FX are rejected from the (video) multi-FX brick."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "track":      {"type": "integer"},
+                    "track_name": {"type": "string"},
+                    "start": {"type": "number"},
+                    "end":   {"type": "number"},
+                    "effects": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "fx_type":   {"type": "string"},
+                                "rel_start": {"type": "number", "default": 0},
+                                "rel_end":   {"type": "number", "default": 0},
+                                "params":    {"type": "object"},
+                            },
+                            "required": ["fx_type"],
+                        },
+                    },
+                },
+                "required": ["start", "end"],
+            },
+        ),
+        Tool(
+            name="decouple_fx_brick",
+            description=(
+                "Decouple a welded (coupled) Multi-FX brick from its host content clip, turning "
+                "it back into a free-floating glass brick at its current position. The UI "
+                "equivalent is right-click → 'Decouple Multi FX brick' or the host clip's FX tab."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "track":      {"type": "integer"},
+                    "track_name": {"type": "string"},
+                    "clip":       {"type": "integer", "description": "Index of the coupled FX brick"},
+                },
+                "required": ["clip"],
+            },
+        ),
+        Tool(
+            name="get_buses",
+            description="List audio buses: name, gain, FX chain, and which tracks route to each.",
+            inputSchema={"type": "object", "properties": {}},
+        ),
+        Tool(
+            name="set_bus",
+            description=(
+                "Create or configure an audio bus. Omit 'bus' to append a new one (max 8). "
+                "'effects' REPLACES the bus FX chain (same audio fx_types as "
+                "add_audio_multifx_brick). Buses process live — preview/monitor/export all "
+                "stream through the same chain."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "bus":     {"type": "integer", "description": "Bus index; omit to create a new bus"},
+                    "name":    {"type": "string"},
+                    "gain":    {"type": "number"},
+                    "effects": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "fx_type": {"type": "string"},
+                                "params":  {"type": "object"},
+                            },
+                            "required": ["fx_type"],
+                        },
+                    },
+                },
+            },
+        ),
+        Tool(
+            name="set_track_bus",
+            description="Route a track's audio to a bus (0 = Main). UI equivalent: track right-click → Output bus.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "track":      {"type": "integer"},
+                    "track_name": {"type": "string"},
+                    "bus":        {"type": "integer"},
+                },
+                "required": ["bus"],
+            },
+        ),
+        Tool(
+            name="set_monitor",
+            description=(
+                "Audio monitor ('Hear yourself') controls: on/off, hear_fx (apply live FX chain "
+                "to the monitor), gate (reduce mic noise). Mirrors the Record panel toggles — "
+                "state changes are visible in the UI."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "on":      {"type": "boolean"},
+                    "hear_fx": {"type": "boolean"},
+                    "gate":    {"type": "boolean"},
+                },
+            },
+        ),
+        Tool(
+            name="set_camera_monitor",
+            description=(
+                "Toggle the live camera mirror in the preview canvas (the 'Preview camera' "
+                "checkbox on the camera brick panel). Starts/stops the capture child process."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {"on": {"type": "boolean"}},
+                "required": ["on"],
+            },
+        ),
+        Tool(
+            name="vrecord_start",
+            description=(
+                "Start recording camera takes into a VideoRecord (camera) brick. Takes are "
+                "recorded on the loop grid and appended to the brick; the newest take is "
+                "auto-selected. Stop with vrecord_stop."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "track":      {"type": "integer"},
+                    "track_name": {"type": "string"},
+                    "clip":       {"type": "integer"},
+                },
+                "required": ["clip"],
+            },
+        ),
+        Tool(
+            name="vrecord_stop",
+            description="Stop camera take recording (finalizes the in-flight take).",
+            inputSchema={"type": "object", "properties": {}},
+        ),
+        Tool(
+            name="get_face_track",
+            description=(
+                "Live face tracker state (camera mirror): lock validity, detector score, key "
+                "landmark positions, worker flip/redetect counters, and (full:true) all 106 "
+                "landmarks plus the mirror quad geometry — enough to predict overlay screen "
+                "positions numerically. Face filters themselves are clip props: set_clip_prop "
+                "face_filter (0=None 1=Pretty 2=BigEyes 3=TinyFace 4=BigMouth 5=Alien 6=Doggy) "
+                "and face_filter_amt (0-1.5) on a video_record clip."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {"full": {"type": "boolean", "description": "Include all 106 landmarks + mirror geometry"}},
+            },
+        ),
+        Tool(
+            name="get_canvas_geometry",
+            description=(
+                "Transform-handle geometry of the selected clip from the last drawn frame "
+                "(screen px): selection bbox, rotate-knob position, pivot, plus current "
+                "rotation/scale/position props. Pairs with ui_input to hit handles "
+                "deterministically instead of pixel-hunting screenshots."
+            ),
+            inputSchema={"type": "object", "properties": {}},
+        ),
+        Tool(
+            name="ui_input",
+            description=(
+                "Inject scripted mouse steps into the real UI input stream (one step per UI "
+                "frame): {x, y} moves the cursor, down/up press/release the left button, wheel "
+                "scrolls. A drag = move, down, N moves, up. Hold a position by repeating the "
+                "same x/y. Use take_snapshot source=ui + get_canvas_geometry to find targets. "
+                "This drives the actual ImGui input path — what you see is what a user gets."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "steps": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "x":     {"type": "number"},
+                                "y":     {"type": "number"},
+                                "down":  {"type": "boolean"},
+                                "up":    {"type": "boolean"},
+                                "wheel": {"type": "number"},
+                            },
+                        },
+                    },
+                },
+                "required": ["steps"],
+            },
+        ),
+        Tool(
+            name="get_audio_perf",
+            description=(
+                "Audio engine performance/latency readout: backend (pipewire native vs SDL), "
+                "block size, measured input/output latency, xrun count, performance-mode state. "
+                "Use when diagnosing monitoring latency or glitches."
+            ),
+            inputSchema={"type": "object", "properties": {}},
         ),
         Tool(
             name="undo",
