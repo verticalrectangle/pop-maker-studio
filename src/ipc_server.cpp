@@ -1,5 +1,6 @@
 #include "ipc_server.h"
 #include "audio.h"
+#include "recorder.h"
 #include "video_recorder.h"
 #include "agent_harness.h"
 #include "render.h"
@@ -1255,6 +1256,17 @@ static json dispatch(AppState& state, const std::string& method, const json& par
             r["pos_y"]    = sc.pos_y;
         }
         r["pending_input_steps"] = (int)g_input_steps.size();
+        return r;
+    }
+
+    if (method == "get_live_peaks") {
+        // Debug: the live-recording waveform exactly as the timeline sees it.
+        int n = params.value("n", 64);
+        if (n < 1 || n > 4096) n = 64;
+        std::vector<float> pk((size_t)n, 0.f);
+        bool ok = recorder_live_peaks(n, pk.data());
+        json r; r["active"] = ok;
+        if (ok) r["peaks"] = pk;
         return r;
     }
 

@@ -1459,8 +1459,8 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                         for (float px2 = vis_x0; px2 < vis_x1; px2 += 1.f) {
                             int b = (int)((px2 - cx0) / (cx1 - cx0) * (float)n);
                             if (b < 0 || b >= n) continue;
-                            float amp = fminf(peaks[(size_t)b], 1.f) * half;
-                            if (amp < 1.f) continue;  // not reached yet — stay flat
+                            if (peaks[(size_t)b] <= 0.f) continue;  // not reached yet — stay flat
+                            float amp = fmaxf(peaks[(size_t)b] * half, 1.f);
                             dl->AddLine({px2, mid-amp}, {px2, mid+amp}, wcol);
                         }
                     }
