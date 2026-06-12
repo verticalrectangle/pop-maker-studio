@@ -241,7 +241,17 @@ static bool capture_start() {
     auto devs = vrecorder_devices();
     s_test_pattern = devs.empty();
     char cmd[512];
-    if (s_test_pattern) {
+    // Deterministic test rig: PMS_FAKE_CAM=<image> loops a still through the
+    // REAL capture path — standard reference faces instead of a live human
+    // when validating face tracking/filters.
+    if (const char* fake = getenv("PMS_FAKE_CAM")) {
+        snprintf(cmd, sizeof(cmd),
+                 "ffmpeg -hide_banner -loglevel error"
+                 " -re -loop 1 -framerate 15 -i '%s'"
+                 " -vf 'scale=720:1280:force_original_aspect_ratio=decrease,"
+                 "pad=720:1280:(ow-iw)/2:(oh-ih)/2'"
+                 " -c:v mjpeg -q:v 4 -f mjpeg pipe:1 2>/dev/null", fake);
+    } else if (s_test_pattern) {
         // Camera-less dev fallback: timestamped test pattern at webcam-ish
         // specs. -re paces lavfi to real time (a camera self-paces).
         snprintf(cmd, sizeof(cmd),
