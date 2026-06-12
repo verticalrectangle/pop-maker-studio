@@ -26,11 +26,16 @@ void     audio_clear_loop();
 bool     audio_loop_active();
 uint64_t audio_loop_cycles();  // increments once per wrap — recorder slices takes on this clock
 
-// ── Mic capture (record brick) ────────────────────────────────────────────────
-// Separate miniaudio capture device: interleaved stereo f32 @ 44100, same
-// format the mixer uses, so takes feed straight back into the clip system.
-bool  audio_capture_start();
-void  audio_capture_stop();
+// ── Mic capture (record brick) — performance mode ─────────────────────────────
+// Opening the mic swaps the playback-only device for ONE duplex device with
+// small periods (~128 frames): the same callback renders the timeline mix,
+// sums the gated live input straight into the output (zero-buffer monitor
+// path, ~6 ms round trip), and feeds the raw input to the capture ring.
+// Interleaved stereo f32 @ 44100 throughout, so takes feed straight back
+// into the clip system. The master clock is shared — playback continues
+// seamlessly across the device swap.
+bool  audio_capture_start();    // enter performance mode
+void  audio_capture_stop();     // leave performance mode
 bool  audio_capture_active();
 // Move all captured samples since the last drain into `out` (appends).
 void  audio_capture_drain(std::vector<float>& out);
@@ -42,11 +47,23 @@ std::vector<std::string> audio_capture_devices();
 void audio_capture_select(int index);
 int  audio_capture_selected();
 
-// Input monitoring: route live mic into the playback mix (capture must be
-// running). Round-trip latency = input + output period — fine for VO, audible
-// for tight singing, hence default off.
+// Input monitoring: sum the live mic into the output inside the duplex
+// callback. Latency = one input + one output period of the duplex device.
+// Enters performance mode on demand.
 void audio_monitor_set(bool on);
 bool audio_monitor_get();
+
+// Monitor noise gate (silvertune companion port): smoothed gate on the
+// monitored signal. The recorded stream stays raw unless bake is on.
+void audio_gate_set(bool on);
+bool audio_gate_get();
+void audio_gate_bake_set(bool on);  // also gate the recorded takes
+bool audio_gate_bake_get();
+
+// Perf-mode health: true while the duplex device owns audio; xruns counts
+// suspicious callback gaps since capture start (any nonzero = audible risk).
+bool     audio_perf_mode();
+uint32_t audio_perf_xruns();
 
 // ── Processed-audio lookups (export bake) ─────────────────────────────────────
 // Copy out the preview system's buffers so the exporter can bake audio FX

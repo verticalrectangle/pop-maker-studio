@@ -49,13 +49,52 @@ static std::atomic<size_t>   g_loop_start{0};
 static std::atomic<size_t>   g_loop_end{0};
 static std::atomic<uint64_t> g_loop_cycles{0};
 
-// ── Input monitor ring ────────────────────────────────────────────────────────
-// SPSC: capture callback writes, playback callback reads.
-static constexpr uint32_t MON_N    = 1u << 15;   // 32768 floats ≈ 370 ms stereo
-static constexpr uint32_t MON_MASK = MON_N - 1;
-static float                 g_mon_ring[MON_N];
-static std::atomic<uint32_t> g_mon_w{0}, g_mon_r{0};
-static std::atomic<bool>     g_monitor_on{false};
+// ── Performance mode (low-latency duplex monitor/record) ─────────────────────
+// While the mic is open (monitoring or recording), the playback-only device
+// is swapped for ONE duplex device with small periods: input → gain/gate →
+// summed straight into the output buffer inside the same callback. No ring
+// between capture and playback, no second device clock — round trip is one
+// input period + one output period (~6 ms at 128 frames) instead of the old
+// two-device SPSC path (~40 ms). Pattern lifted from Alexis's silvertune
+// companion (single ma_device_type_duplex @ 128-frame periods).
+static ma_device         g_duplex;
+static bool              g_duplex_init = false;
+static bool              g_cap_init    = false;  // duplex device owns audio (perf mode)
+static std::atomic<bool> g_monitor_on{false};
+
+// Capture ring — SPSC: duplex callback writes, audio_capture_drain (UI frame)
+// reads. 2^21 floats ≈ 23.8 s stereo @ 44.1k; the writer drops samples when
+// full rather than overwrite unread audio (the recorder drains every frame,
+// so a full ring only happens in abandoned monitor-only runs).
+static constexpr uint32_t CAP_N    = 1u << 21;
+static constexpr uint32_t CAP_MASK = CAP_N - 1;
+static float                 g_cap_ring[CAP_N];
+static std::atomic<uint32_t> g_cap_w{0}, g_cap_r{0};
+
+// Noise gate (silvertune companion port): leaky RMS² on the mono sum opens /
+// closes a smoothed gain. Monitor audio is always gated when enabled; the
+// recorded stream stays raw unless bake is on.
+static std::atomic<bool> g_gate_on{true};
+static std::atomic<bool> g_gate_bake{false};
+static float             g_gate_energy = 1e-6f;   // audio thread only
+static float             g_gate_gain   = 0.f;     // smoothed 0→1 gate state
+static constexpr float GATE_THRESHOLD = 2e-5f;    // ~-47 dBFS RMS
+static constexpr float GATE_ATTACK    = 0.9995f;  // ~21 ms attack
+static constexpr float GATE_RELEASE   = 0.9999f;  // ~104 ms release
+
+// Click-free device swaps: output ramps 0→1 over FADE_LEN frames after any
+// device (re)start. Audio thread consumes; control thread arms via store(0).
+static constexpr int       FADE_LEN = 1024;       // ~23 ms
+static std::atomic<int>    g_fade_pos{FADE_LEN};
+
+// Stall counter: the pulse shim delivers callbacks in bursts, so period-scale
+// wall-clock gaps are normal and say nothing about dropped audio (verified:
+// 143 "gaps" over a recording whose takes were sample-exact). Only a gap long
+// enough to be an audible hole — graph stall, UI freeze, device hiccup — is
+// worth counting. Reset on capture start, surfaced in the record panel.
+static constexpr double      STALL_GAP_S = 0.050;
+static std::atomic<uint32_t> g_xruns{0};
+static double                g_last_cb_time = 0.0;  // audio thread only
 
 // The output device can run for monitoring alone (hear the mic while the
 // timeline is paused). The master clock advances and clips mix only while
@@ -112,12 +151,14 @@ static std::shared_ptr<const ClipSnapshot> g_snap = std::make_shared<ClipSnapsho
 
 // ── Audio callback ────────────────────────────────────────────────────────────
 
-static void data_callback(ma_device* pDevice, void* pOutput, const void*, ma_uint32 frameCount) {
+// Master mix: advance the clock, render the clip snapshot into `out`.
+// Shared by the playback-only callback and the duplex callback. No
+// allocations; the only lock is the snapshot pointer swap (bounded).
+static void mix_master(float* out, ma_uint32 frameCount) {
     if (g_loading.load()) {
-        memset(pOutput, 0, frameCount * pDevice->playback.channels * sizeof(float));
+        memset(out, 0, (size_t)frameCount * 2 * sizeof(float));
         return;
     }
-    float* out = (float*)pOutput;
     size_t pos  = g_read_pos.load(std::memory_order_relaxed);
     size_t need = (size_t)frameCount * 2;
     const bool transport = g_transport.load(std::memory_order_relaxed);
@@ -198,21 +239,84 @@ static void data_callback(ma_device* pDevice, void* pOutput, const void*, ma_uin
         for (const auto& cl : snap->clips)     mix_clip(cl, 1.f);
     }
 
-    // Input monitor: mix the live mic ring on top. If the ring backs up past
-    // ~140 ms (clock drift, hiccup), skip ahead to ~46 ms so monitoring
-    // latency stays bounded instead of slowly drifting into an echo.
-    if (g_monitor_on.load(std::memory_order_relaxed)) {
-        uint32_t w = g_mon_w.load(std::memory_order_acquire);
-        uint32_t r = g_mon_r.load(std::memory_order_relaxed);
-        if (w - r > 12288u) r = w - 4096u;
-        for (size_t i = 0; i < need && r != w; ++i)
-            out[i] += g_mon_ring[r++ & MON_MASK];
-        g_mon_r.store(r, std::memory_order_release);
-    }
-
     // Hard-clamp to prevent inter-clip summing from clipping.
     for (size_t i = 0; i < need; ++i)
         out[i] = fmaxf(-1.f, fminf(1.f, out[i]));
+}
+
+// Start-ramp: 0→1 over FADE_LEN frames after a device (re)start so the swap
+// between the playback-only and duplex devices never clicks.
+static void apply_fade_in(float* out, ma_uint32 frameCount) {
+    int fp = g_fade_pos.load(std::memory_order_relaxed);
+    if (fp >= FADE_LEN) return;
+    for (ma_uint32 f = 0; f < frameCount; ++f) {
+        float g = fp < FADE_LEN ? (float)fp / (float)FADE_LEN : 1.f;
+        out[f*2]   *= g;
+        out[f*2+1] *= g;
+        ++fp;
+    }
+    g_fade_pos.store(fp, std::memory_order_relaxed);
+}
+
+// Normal mode: playback-only device, mix only.
+static void data_callback(ma_device*, void* pOutput, const void*, ma_uint32 frameCount) {
+    float* out = (float*)pOutput;
+    mix_master(out, frameCount);
+    apply_fade_in(out, frameCount);
+}
+
+// Performance mode: one duplex callback does everything — timeline mix, live
+// input gated + summed into the output (zero buffers between in and out),
+// and the raw input pushed to the capture ring for the recorder.
+static void duplex_callback(ma_device* pDevice, void* pOutput, const void* pInput, ma_uint32 frameCount) {
+    float* out = (float*)pOutput;
+    mix_master(out, frameCount);
+
+    // Stall detection from callback wall-clock gaps (audio thread only).
+    {
+        (void)pDevice;
+        struct timespec ts;
+        clock_gettime(CLOCK_MONOTONIC, &ts);
+        double now = (double)ts.tv_sec + (double)ts.tv_nsec * 1e-9;
+        if (g_last_cb_time > 0.0 && now - g_last_cb_time > STALL_GAP_S)
+            g_xruns.fetch_add(1, std::memory_order_relaxed);
+        g_last_cb_time = now;
+    }
+
+    if (pInput) {
+        const float* in   = (const float*)pInput;
+        const bool   mon  = g_monitor_on.load(std::memory_order_relaxed);
+        const bool   gate = g_gate_on.load(std::memory_order_relaxed);
+        const bool   bake = g_gate_bake.load(std::memory_order_relaxed);
+        uint32_t w = g_cap_w.load(std::memory_order_relaxed);
+        const uint32_t r = g_cap_r.load(std::memory_order_acquire);
+        for (ma_uint32 f = 0; f < frameCount; ++f) {
+            float l = in[f*2], r2 = in[f*2+1];
+            // Gate: leaky RMS² of the mono sum drives a smoothed 0→1 gain.
+            float mono = 0.5f * (l + r2);
+            g_gate_energy = 0.999f * g_gate_energy + 0.001f * mono * mono;
+            float open  = g_gate_energy > GATE_THRESHOLD ? 1.f : 0.f;
+            float coeff = open > g_gate_gain ? (1.f - GATE_ATTACK) : (1.f - GATE_RELEASE);
+            g_gate_gain += coeff * (open - g_gate_gain);
+            float gg = gate ? g_gate_gain : 1.f;
+            if (mon) {
+                out[f*2]   += l  * gg;
+                out[f*2+1] += r2 * gg;
+            }
+            // Recorded stream: raw by default; gated only when bake is on.
+            float cl = bake ? l * gg : l, cr = bake ? r2 * gg : r2;
+            if (w - r < CAP_N - 2) {
+                g_cap_ring[w++ & CAP_MASK] = cl;
+                g_cap_ring[w++ & CAP_MASK] = cr;
+            }
+        }
+        g_cap_w.store(w, std::memory_order_release);
+        if (mon) {  // re-clamp after summing the mic on top of the mix
+            for (ma_uint32 i = 0; i < frameCount * 2; ++i)
+                out[i] = fmaxf(-1.f, fminf(1.f, out[i]));
+        }
+    }
+    apply_fade_in(out, frameCount);
 }
 
 // ── Device init/shutdown ──────────────────────────────────────────────────────
@@ -234,6 +338,7 @@ void audio_init() {
 }
 
 void audio_shutdown() {
+    g_transport.store(false, std::memory_order_relaxed);  // so capture_stop won't restart playback
     if (g_device_init) {
         ma_device_stop(&g_device);
         ma_device_uninit(&g_device);
@@ -307,16 +412,26 @@ bool audio_load(const std::string& path) {
 
 void audio_play() {
     g_transport.store(true, std::memory_order_relaxed);
-    if (g_device_init && !ma_device_is_started(&g_device)) ma_device_start(&g_device);
+    if (g_cap_init) {
+        // Perf mode: the duplex device owns the output and is already running.
+        if (g_duplex_init && !ma_device_is_started(&g_duplex)) {
+            g_fade_pos.store(0, std::memory_order_relaxed);
+            ma_device_start(&g_duplex);
+        }
+        return;
+    }
+    if (g_device_init && !ma_device_is_started(&g_device)) {
+        g_fade_pos.store(0, std::memory_order_relaxed);
+        ma_device_start(&g_device);
+    }
 }
 
 void audio_pause() {
     g_transport.store(false, std::memory_order_relaxed);
-    // Keep the device alive for monitor-only output (mic in the mix while
-    // the timeline is paused); otherwise stop it like before.
-    bool monitor_solo = g_monitor_on.load(std::memory_order_relaxed) &&
-                        audio_capture_active();
-    if (g_device_init && !monitor_solo) ma_device_stop(&g_device);
+    // Perf mode keeps the duplex device alive — the mic stays audible while
+    // the timeline is paused (mix_master idles on !transport).
+    if (g_cap_init) return;
+    if (g_device_init) ma_device_stop(&g_device);
 }
 void audio_set_volume(float v) { g_volume = (v < 0.f) ? 0.f : (v > 4.f) ? 4.f : v; }
 
@@ -338,9 +453,12 @@ float audio_position() {
 }
 
 float audio_latency() {
-    if (!g_device_init) return 0.f;
-    ma_uint32 period = g_device.playback.internalPeriodSizeInFrames;
-    ma_uint32 rate   = g_device.playback.internalSampleRate;
+    // Whichever device currently owns the output.
+    const ma_device* dev = g_cap_init && g_duplex_init ? &g_duplex
+                         : g_device_init               ? &g_device : nullptr;
+    if (!dev) return 0.f;
+    ma_uint32 period = dev->playback.internalPeriodSizeInFrames;
+    ma_uint32 rate   = dev->playback.internalSampleRate;
     if (rate == 0) return 0.f;
     return (float)period / (float)rate;
 }
@@ -361,12 +479,10 @@ void audio_clear_loop() {
 bool     audio_loop_active() { return g_loop_on.load(std::memory_order_relaxed); }
 uint64_t audio_loop_cycles() { return g_loop_cycles.load(std::memory_order_relaxed); }
 
-// ── Mic capture ───────────────────────────────────────────────────────────────
-
-static ma_device         g_cap_device;
-static bool              g_cap_init = false;
-static std::mutex        g_cap_mutex;
-static std::vector<float> g_cap_buf;  // interleaved stereo f32 @ 44100
+// ── Mic capture (performance mode) ────────────────────────────────────────────
+// audio_capture_start/stop = enter/leave performance mode: the playback-only
+// device stops and the duplex device takes over the output (and the master
+// clock with it — g_read_pos is shared, so the handoff is seamless).
 
 // Device picker: enumeration context + current selection (-1 = default).
 static ma_context g_ma_ctx;
@@ -374,27 +490,6 @@ static bool       g_ma_ctx_init = false;
 static std::vector<std::string>  g_cap_dev_names;
 static std::vector<ma_device_id> g_cap_dev_ids;
 static int        g_cap_sel = -1;
-
-static void capture_callback(ma_device*, void*, const void* pInput, ma_uint32 frameCount) {
-    if (!pInput) return;
-    const float* in = (const float*)pInput;
-    const size_t n  = (size_t)frameCount * 2;
-
-    if (g_monitor_on.load(std::memory_order_relaxed)) {
-        uint32_t w = g_mon_w.load(std::memory_order_relaxed);
-        uint32_t r = g_mon_r.load(std::memory_order_acquire);
-        for (size_t i = 0; i < n && (w - r) < MON_N; ++i)
-            g_mon_ring[w++ & MON_MASK] = in[i];
-        g_mon_w.store(w, std::memory_order_release);
-    }
-
-    std::lock_guard<std::mutex> lk(g_cap_mutex);
-    // Hard cap (~2 min): idle monitoring runs the device with nobody
-    // draining, so wrap rather than grow unbounded. The recorder drains every
-    // UI frame and discards pre-roll on start, so it never sees the wrap.
-    if (g_cap_buf.size() > 44100u * 2u * 120u) g_cap_buf.clear();
-    g_cap_buf.insert(g_cap_buf.end(), in, in + n);
-}
 
 static bool ensure_ma_ctx() {
     if (g_ma_ctx_init) return true;
@@ -426,70 +521,101 @@ void audio_capture_select(int index) {
 int audio_capture_selected() { return g_cap_sel; }
 
 void audio_monitor_set(bool on) {
-    if (on) {
-        // Start fresh — a stale ring would replay old input as a glitch.
-        g_mon_r.store(g_mon_w.load(std::memory_order_relaxed),
-                      std::memory_order_relaxed);
-    }
+    // Monitoring needs the duplex device — enter performance mode if the
+    // caller hasn't already (panel does, IPC paths may not).
+    if (on && !g_cap_init && !audio_capture_start()) return;
     g_monitor_on.store(on, std::memory_order_relaxed);
-    // Monitor-only output: run the device while the transport is paused so
-    // the mic is audible; stop it again when monitoring ends while paused.
-    if (!g_device_init) init_device();
-    if (!g_device_init) return;
-    bool transport = g_transport.load(std::memory_order_relaxed);
-    if (on && !ma_device_is_started(&g_device)) ma_device_start(&g_device);
-    else if (!on && !transport && ma_device_is_started(&g_device))
-        ma_device_stop(&g_device);
 }
 
 bool audio_monitor_get() { return g_monitor_on.load(std::memory_order_relaxed); }
 
 bool audio_capture_start() {
     if (g_cap_init) return true;
-    ma_device_config cfg = ma_device_config_init(ma_device_type_capture);
-    cfg.capture.format   = ma_format_f32;
-    cfg.capture.channels = 2;   // miniaudio upmixes mono mics for us
-    cfg.sampleRate       = 44100;
-    cfg.dataCallback     = capture_callback;
+
+    ma_device_config cfg = ma_device_config_init(ma_device_type_duplex);
+    cfg.capture.format    = ma_format_f32;
+    cfg.capture.channels  = 2;   // miniaudio upmixes mono mics for us
+    cfg.playback.format   = ma_format_f32;
+    cfg.playback.channels = 2;
+    cfg.sampleRate        = 44100;
+    cfg.dataCallback      = duplex_callback;
+    cfg.periodSizeInFrames = 128;   // ~2.9 ms — the whole point of perf mode
     if (g_cap_sel >= 0 && g_cap_sel < (int)g_cap_dev_ids.size())
         cfg.capture.pDeviceID = &g_cap_dev_ids[g_cap_sel];
     ma_context* ctx = (cfg.capture.pDeviceID && ensure_ma_ctx()) ? &g_ma_ctx : nullptr;
-    if (ma_device_init(ctx, &cfg, &g_cap_device) != MA_SUCCESS) return false;
-    {
-        std::lock_guard<std::mutex> lk(g_cap_mutex);
-        g_cap_buf.clear();
+
+    if (ma_device_init(ctx, &cfg, &g_duplex) != MA_SUCCESS) {
+        // Some routes refuse small periods — retry at the backend default
+        // before giving up (still beats the old two-device path).
+        cfg.periodSizeInFrames = 0;
+        if (ma_device_init(ctx, &cfg, &g_duplex) != MA_SUCCESS) return false;
     }
-    g_mon_r.store(g_mon_w.load(std::memory_order_relaxed), std::memory_order_relaxed);
-    if (ma_device_start(&g_cap_device) != MA_SUCCESS) {
-        ma_device_uninit(&g_cap_device);
+    g_duplex_init = true;
+
+    // Fresh state for this perf-mode run.
+    g_cap_r.store(g_cap_w.load(std::memory_order_relaxed), std::memory_order_relaxed);
+    g_gate_energy  = 1e-6f;
+    g_gate_gain    = 0.f;
+    g_xruns.store(0, std::memory_order_relaxed);
+    g_last_cb_time = 0.0;
+    g_fade_pos.store(0, std::memory_order_relaxed);
+
+    if (ma_device_start(&g_duplex) != MA_SUCCESS) {
+        ma_device_uninit(&g_duplex);
+        g_duplex_init = false;
         return false;
     }
+    // Output handoff: the duplex device owns the mix now. g_read_pos is
+    // shared, so playback continues from the same master-clock position.
+    if (g_device_init && ma_device_is_started(&g_device))
+        ma_device_stop(&g_device);
     g_cap_init = true;
     return true;
 }
 
 void audio_capture_stop() {
     if (!g_cap_init) return;
-    ma_device_stop(&g_cap_device);
-    ma_device_uninit(&g_cap_device);
-    g_cap_init = false;
+    g_monitor_on.store(false, std::memory_order_relaxed);
+    ma_device_stop(&g_duplex);
+    ma_device_uninit(&g_duplex);
+    g_duplex_init = false;
+    g_cap_init    = false;
+    // Hand the output back to the normal device if the transport is rolling.
+    if (g_transport.load(std::memory_order_relaxed)) {
+        if (!g_device_init) init_device();
+        if (g_device_init && !ma_device_is_started(&g_device)) {
+            g_fade_pos.store(0, std::memory_order_relaxed);
+            ma_device_start(&g_device);
+        }
+    }
 }
 
 bool audio_capture_active() { return g_cap_init; }
 
 void audio_capture_drain(std::vector<float>& out) {
-    std::lock_guard<std::mutex> lk(g_cap_mutex);
-    out.insert(out.end(), g_cap_buf.begin(), g_cap_buf.end());
-    g_cap_buf.clear();
+    const uint32_t w = g_cap_w.load(std::memory_order_acquire);
+    uint32_t       r = g_cap_r.load(std::memory_order_relaxed);
+    size_t n = (size_t)(w - r);
+    if (n == 0) return;
+    out.reserve(out.size() + n);
+    while (r != w) out.push_back(g_cap_ring[r++ & CAP_MASK]);
+    g_cap_r.store(r, std::memory_order_release);
 }
 
 float audio_capture_latency() {
-    if (!g_cap_init) return 0.f;
-    ma_uint32 period = g_cap_device.capture.internalPeriodSizeInFrames;
-    ma_uint32 rate   = g_cap_device.capture.internalSampleRate;
+    if (!g_cap_init || !g_duplex_init) return 0.f;
+    ma_uint32 period = g_duplex.capture.internalPeriodSizeInFrames;
+    ma_uint32 rate   = g_duplex.capture.internalSampleRate;
     if (rate == 0) return 0.f;
     return (float)period / (float)rate;
 }
+
+bool     audio_perf_mode()  { return g_cap_init; }
+uint32_t audio_perf_xruns() { return g_xruns.load(std::memory_order_relaxed); }
+void audio_gate_set(bool on)       { g_gate_on.store(on, std::memory_order_relaxed); }
+bool audio_gate_get()              { return g_gate_on.load(std::memory_order_relaxed); }
+void audio_gate_bake_set(bool on)  { g_gate_bake.store(on, std::memory_order_relaxed); }
+bool audio_gate_bake_get()         { return g_gate_bake.load(std::memory_order_relaxed); }
 
 bool audio_probe(const std::string& path, AudioMeta& meta) {
     AVFormatContext* fmt_ctx = nullptr;

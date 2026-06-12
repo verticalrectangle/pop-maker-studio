@@ -1,4 +1,5 @@
 #include "ipc_server.h"
+#include "audio.h"
 #include "video_recorder.h"
 #include "agent_harness.h"
 #include "render.h"
@@ -1254,6 +1255,18 @@ static json dispatch(AppState& state, const std::string& method, const json& par
             r["pos_y"]    = sc.pos_y;
         }
         r["pending_input_steps"] = (int)g_input_steps.size();
+        return r;
+    }
+
+    if (method == "get_audio_perf") {
+        // Low-latency duplex (performance mode) health — see audio.h.
+        json r;
+        r["perf_mode"]     = audio_perf_mode();
+        r["xruns"]         = audio_perf_xruns();
+        r["out_latency_s"] = audio_latency();
+        r["in_latency_s"]  = audio_capture_latency();
+        r["monitor"]       = audio_monitor_get();
+        r["gate"]          = audio_gate_get();
         return r;
     }
 

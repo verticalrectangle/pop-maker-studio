@@ -2124,9 +2124,8 @@ void panel_clip(AppState& state, float w) {
             bool mon = audio_monitor_get();
             if (ImGui::Checkbox("Monitor input", &mon)) {
                 if (mon) {
-                    // Idle monitoring runs the capture device on its own so
-                    // you can hear the mic before arming; audio_monitor_set
-                    // keeps the output device alive while paused.
+                    // Monitoring swaps in the low-latency duplex device so
+                    // you hear yourself near-instantly, before arming.
                     if (audio_capture_start()) audio_monitor_set(true);
                 } else {
                     audio_monitor_set(false);
@@ -2135,10 +2134,47 @@ void panel_clip(AppState& state, float w) {
             }
             if (ImGui::IsItemHovered()) {
                 ImGui::BeginTooltip();
-                ImGui::TextUnformatted("Hear the mic in the mix. Round-trip latency is one\n"
-                                       "input + one output period \xe2\x80\x94 fine for voice-over,\n"
-                                       "noticeable for tight singing.");
+                ImGui::TextUnformatted("Hear the mic in the mix, zero-buffer path \xe2\x80\x94\n"
+                                       "tight enough to sing against.");
                 ImGui::EndTooltip();
+            }
+
+            ImGui::SameLine(0.f, 12.f);
+            bool gate = audio_gate_get();
+            if (ImGui::Checkbox("Gate", &gate)) audio_gate_set(gate);
+            if (ImGui::IsItemHovered()) {
+                ImGui::BeginTooltip();
+                ImGui::TextUnformatted("Noise gate on the monitor \xe2\x80\x94 kills hiss and room\n"
+                                       "tone between phrases. Takes record raw unless\n"
+                                       "'Gate takes' is on.");
+                ImGui::EndTooltip();
+            }
+            if (gate) {
+                ImGui::SameLine(0.f, 12.f);
+                bool bake = audio_gate_bake_get();
+                if (ImGui::Checkbox("Gate takes", &bake)) audio_gate_bake_set(bake);
+                if (ImGui::IsItemHovered()) {
+                    ImGui::BeginTooltip();
+                    ImGui::TextUnformatted("Bake the gate into the recorded audio too.");
+                    ImGui::EndTooltip();
+                }
+            }
+
+            // Perf-mode health line: actual device latency + xruns. Only
+            // shown while the duplex device runs — the numbers are honest,
+            // straight from the device, not the config request.
+            if (audio_perf_mode()) {
+                float rt_ms = (audio_latency() + audio_capture_latency()) * 1000.f;
+                uint32_t xr = audio_perf_xruns();
+                ImGui::Dummy({0.f, 2.f});
+                if (xr == 0) {
+                    ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+                    ImGui::Text("monitor round trip %.1f ms", rt_ms);
+                } else {
+                    ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(242, 140, 64, 255));
+                    ImGui::Text("monitor round trip %.1f ms \xc2\xb7 %u stalls", rt_ms, xr);
+                }
+                ImGui::PopStyleColor();
             }
         }
 
