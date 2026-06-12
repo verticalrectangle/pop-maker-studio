@@ -242,31 +242,48 @@ static void worker_main() {
             float nb3 = (float)fw - 1.f - pb1, nb4 = (float)fh - 1.f - pb2;
             pb1 = nb1; pb2 = nb2; pb3 = nb3; pb4 = nb4;
         }
+        // Orientation sanity: the submitted frame is upright by contract, so
+        // a valid face must have its eyes ABOVE the chin (image y grows
+        // down). The landmark net happily returns a plausible-looking but
+        // WRONG pose for an upside-down crop — without this check a stale
+        // flip state poses every overlay as if the face looked another way.
+        auto upright_ok = [](const FaceObs& o) {
+            float eyx = 0.f, eyy = 0.f;
+            for (int k = 33; k < 43; ++k) { eyx += o.pts[k][0]; eyy += o.pts[k][1]; }
+            for (int k = 87; k < 97; ++k) { eyx += o.pts[k][0]; eyy += o.pts[k][1]; }
+            eyy /= 20.f;
+            float face_h = fabsf(o.pts[16][1] - eyy);
+            return o.pts[16][1] - eyy > face_h * 0.4f;   // chin clearly below
+        };
         if (have_prev && ++s_since_detect < 60) {
             ok = landmarks_from_box(frame.data(), fw, fh, pb1, pb2, pb3, pb4, obs);
-            // Degenerate track (face left the crop) → force re-detect.
-            if (ok) {
-                float spanx = 0, spany = 0;
-                for (int k = 0; k < 106; ++k) {
-                    spanx = std::max(spanx, obs.pts[k][0]);
-                    spany = std::max(spany, obs.pts[k][1]);
-                }
-                if (spanx <= 0.f || spany <= 0.f) ok = false;
-            }
+            if (ok && !upright_ok(obs)) ok = false;   // wrong pose → re-detect
         }
         if (!ok) {
             s_since_detect = 0;
             float b1, b2, b3, b4;
-            if (detect_face(frame.data(), fw, fh, b1, b2, b3, b4)) {
-                ok = landmarks_from_box(frame.data(), fw, fh, b1, b2, b3, b4, obs);
+            // Always try the unflipped frame first so a stale flip state
+            // can't stick; only fall back to (and latch) 180 on failure.
+            std::vector<uint8_t> base = frame;
+            if (s_flip180) { rot180(base, fw, fh); }   // undo intake flip → raw
+            if (detect_face(base.data(), fw, fh, b1, b2, b3, b4) &&
+                landmarks_from_box(base.data(), fw, fh, b1, b2, b3, b4, obs) &&
+                upright_ok(obs)) {
+                ok = true;
+                if (s_flip180) {
+                    s_flip180 = false;          // raw is upright again
+                    frame.swap(base);
+                }
             } else {
-                // Phones get flipped mid-session: retry upside down, and
-                // remember the winning orientation for subsequent frames.
-                rot180(frame, fw, fh);
-                if (detect_face(frame.data(), fw, fh, b1, b2, b3, b4) &&
-                    landmarks_from_box(frame.data(), fw, fh, b1, b2, b3, b4, obs)) {
+                rot180(base, fw, fh);           // raw flipped 180
+                if (detect_face(base.data(), fw, fh, b1, b2, b3, b4) &&
+                    landmarks_from_box(base.data(), fw, fh, b1, b2, b3, b4, obs) &&
+                    upright_ok(obs)) {
                     ok = true;
-                    s_flip180 = !s_flip180;
+                    if (!s_flip180) {
+                        s_flip180 = true;
+                        frame.swap(base);
+                    }
                 }
             }
         }
