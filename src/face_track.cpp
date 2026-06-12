@@ -62,7 +62,8 @@ static constexpr int DET_S = 480;   // letterbox side for SCRFD (dynamic input)
 // it sparsely; between detects the landmark net tracks from its own previous
 // output (a few ms), which is what makes the live filters feel realtime.
 static bool detect_face(const uint8_t* rgb, int w, int h,
-                        float& bx1, float& by1, float& bx2, float& by2) {
+                        float& bx1, float& by1, float& bx2, float& by2,
+                        float* score_out = nullptr) {
     if (!ensure_sessions()) return false;
     // ── Detect: letterbox to DET_S, (x-127.5)/128 ────────────────────────────
     static std::vector<float> blob;
@@ -116,6 +117,7 @@ static bool detect_face(const uint8_t* rgb, int w, int h,
     }
     if (best_score <= 0.35f) return false;
     bx1 /= scale; by1 /= scale; bx2 /= scale; by2 /= scale;
+    if (score_out) *score_out = best_score;
     return true;
 }
 
@@ -248,42 +250,65 @@ static void worker_main() {
         // WRONG pose for an upside-down crop — without this check a stale
         // flip state poses every overlay as if the face looked another way.
         auto upright_ok = [](const FaceObs& o) {
-            float eyx = 0.f, eyy = 0.f;
-            for (int k = 33; k < 43; ++k) { eyx += o.pts[k][0]; eyy += o.pts[k][1]; }
-            for (int k = 87; k < 97; ++k) { eyx += o.pts[k][0]; eyy += o.pts[k][1]; }
+            float eyy = 0.f;
+            for (int k = 33; k < 43; ++k) eyy += o.pts[k][1];
+            for (int k = 87; k < 97; ++k) eyy += o.pts[k][1];
             eyy /= 20.f;
-            float face_h = fabsf(o.pts[16][1] - eyy);
-            return o.pts[16][1] - eyy > face_h * 0.4f;   // chin clearly below
+            float face_h = fabsf(o.pts[0][1] - eyy);
+            return o.pts[0][1] - eyy > face_h * 0.4f;    // chin clearly below
+        };
+        // Garbage-landmark guard: the landmark net answers SOMETHING for any
+        // crop; a real face fills most of it. A collapsed cluster (tiny
+        // fraction of the box it was cropped from) is garbage — it can pass
+        // the RELATIVE upright check, and the tracking loop then crops ever
+        // smaller around it, locking the collapse in at "score 1.0".
+        auto lm_sane = [](const FaceObs& o, float b1, float b2, float b3, float b4) {
+            float x0 = o.pts[0][0], x1 = x0, y0 = o.pts[0][1], y1 = y0;
+            for (int k = 1; k < 106; ++k) {
+                x0 = std::min(x0, o.pts[k][0]); x1 = std::max(x1, o.pts[k][0]);
+                y0 = std::min(y0, o.pts[k][1]); y1 = std::max(y1, o.pts[k][1]);
+            }
+            if (x1 - x0 < 12.f || y1 - y0 < 12.f) return false;
+            return x1 - x0 >= (b3 - b1) * 0.35f &&
+                   y1 - y0 >= (b4 - b2) * 0.35f;
         };
         if (have_prev && ++s_since_detect < 60) {
             ok = landmarks_from_box(frame.data(), fw, fh, pb1, pb2, pb3, pb4, obs);
-            if (ok && !upright_ok(obs)) ok = false;   // wrong pose → re-detect
+            if (ok && (!upright_ok(obs) ||
+                       !lm_sane(obs, pb1, pb2, pb3, pb4)))
+                ok = false;                       // wrong pose → re-detect
         }
         if (!ok) {
             s_since_detect = 0;
-            float b1, b2, b3, b4;
-            // Always try the unflipped frame first so a stale flip state
-            // can't stick; only fall back to (and latch) 180 on failure.
-            std::vector<uint8_t> base = frame;
-            if (s_flip180) { rot180(base, fw, fh); }   // undo intake flip → raw
-            if (detect_face(base.data(), fw, fh, b1, b2, b3, b4) &&
-                landmarks_from_box(base.data(), fw, fh, b1, b2, b3, b4, obs) &&
-                upright_ok(obs)) {
-                ok = true;
-                if (s_flip180) {
-                    s_flip180 = false;          // raw is upright again
-                    frame.swap(base);
-                }
-            } else {
-                rot180(base, fw, fh);           // raw flipped 180
-                if (detect_face(base.data(), fw, fh, b1, b2, b3, b4) &&
-                    landmarks_from_box(base.data(), fw, fh, b1, b2, b3, b4, obs) &&
-                    upright_ok(obs)) {
+            // SCRFD fires on an UPSIDE-DOWN face too, just at a lower score
+            // (lena rig: 0.66 upside-down vs 0.76 upright) — so never short-
+            // circuit on the first orientation that detects. Score both,
+            // landmark the better one first, fall back to the other.
+            std::vector<uint8_t> raw = frame;
+            if (s_flip180) rot180(raw, fw, fh);   // undo intake flip → raw
+            std::vector<uint8_t> flp = raw;
+            rot180(flp, fw, fh);
+            struct Cand {
+                const std::vector<uint8_t>* img;
+                bool flipped; bool det; float score; float b[4];
+            } cands[2] = {{&raw, false, false, 0.f, {0,0,0,0}},
+                          {&flp, true,  false, 0.f, {0,0,0,0}}};
+            for (Cand& cd : cands)
+                cd.det = detect_face(cd.img->data(), fw, fh,
+                                     cd.b[0], cd.b[1], cd.b[2], cd.b[3],
+                                     &cd.score);
+            if (cands[1].det && (!cands[0].det || cands[1].score > cands[0].score))
+                std::swap(cands[0], cands[1]);
+            for (Cand& cd : cands) {
+                if (!cd.det) continue;
+                if (landmarks_from_box(cd.img->data(), fw, fh,
+                                       cd.b[0], cd.b[1], cd.b[2], cd.b[3], obs) &&
+                    upright_ok(obs) &&
+                    lm_sane(obs, cd.b[0], cd.b[1], cd.b[2], cd.b[3])) {
                     ok = true;
-                    if (!s_flip180) {
-                        s_flip180 = true;
-                        frame.swap(base);
-                    }
+                    obs.score = cd.score;
+                    s_flip180 = cd.flipped;
+                    break;
                 }
             }
         }

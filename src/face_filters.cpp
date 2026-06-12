@@ -56,9 +56,9 @@ static Anchors anchors_from(const FaceObs& o) {
         if (d > mw) mw = d;
     }
     a.mouthW = mw * 2.f;
-    a.chin[0] = o.pts[16][0]; a.chin[1] = o.pts[16][1];
-    a.jawL[0] = o.pts[8][0];  a.jawL[1] = o.pts[8][1];
-    a.jawR[0] = o.pts[24][0]; a.jawR[1] = o.pts[24][1];
+    a.chin[0] = o.pts[0][0];  a.chin[1] = o.pts[0][1];
+    a.jawL[0] = o.pts[13][0]; a.jawL[1] = o.pts[13][1];
+    a.jawR[0] = o.pts[29][0]; a.jawR[1] = o.pts[29][1];
     a.faceC[0] = (a.eyeMid[0] + a.chin[0]) * 0.5f;
     a.faceC[1] = (a.eyeMid[1] + a.chin[1]) * 0.5f;
     // Face basis — frame axes lie when the camera is rotated.

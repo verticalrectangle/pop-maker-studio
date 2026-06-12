@@ -4,8 +4,13 @@
 // latest submitted frame so the UI never blocks; results are EMA-smoothed
 // so warps don't jitter.
 //
-// Landmark layout (verified empirically on take frames):
-//   0–32  face contour (chin ≈ 16)
+// Landmark layout (verified empirically on the lena standard rig — the
+// contour is a ZIG-ZAG, not a sequential jaw sweep):
+//   0     chin bottom center
+//   1     left jaw top (ear)   9–16  upper-left jawline (down)
+//   2–8   lower-left jaw curving into the chin
+//   17    right jaw top        25–32 upper-right jawline (down)
+//   18–24 lower-right jaw curving into the chin
 //   33–42 eye A     43–51 brow A
 //   52–71 mouth (outer 52–63, inner 64–71)
 //   72–86 nose
