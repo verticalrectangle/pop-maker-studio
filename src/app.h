@@ -311,6 +311,15 @@ struct Clip {
     std::vector<Clip>  fx_chain;          // ordered sub-effects for MultiFX bricks
     int                fx_chain_selected = -1;
 
+    // FX-brick coupling: a coupled brick belongs to the content clip it sits
+    // on — it snaps to the host's span, follows it through edits, applies to
+    // it exclusively, and lets go only via explicit decouple. Host identity
+    // is a source fingerprint (indices shift): source_id/text for media,
+    // "\x01vrecord"/"\x01record" sentinels for record bricks. Glass == coupled
+    // for video FX bricks; uncoupled bricks are global.
+    bool        fx_coupled = false;
+    std::string fx_host_sid;
+
     // Record brick (ClipType::Record) — loop-recorded takes (WAV paths in the
     // managed takes dir). The selected take plays in preview/export like an
     // audio clip with in_point 0 / speed 1; the rest wait in the panel tray.
@@ -704,12 +713,25 @@ CreativeFXAccum  collect_glass_fx    (const AppState& state, float t, int video_
 // Used by the scene compositor to apply per-track global FX in z-order.
 EffectAccum      collect_effects_for_track     (const AppState& state, float t, int track_idx);
 CreativeFXAccum  collect_creative_fx_for_track (const AppState& state, float t, int track_idx);
-// Visual check: does this FX clip sit directly above any video/audio clip (time overlap)?
+// Glass check: video FX bricks are glass iff coupled to a resolvable host;
+// audio FX bricks keep the legacy same-track-overlap rule until the audio
+// chain brick lands.
 bool             fx_clip_is_glass    (const AppState& state, int fx_ti, const Clip& fx_cl);
-// Index of the videolike host clip a glass FX brick rides (first time-overlap
-// on the same track), or -1. Canvas handles and FX panels both redirect
-// transform edits through this.
+// Index of the host clip a coupled FX brick belongs to (-1 if none).
+// Canvas handles and FX panels redirect transform edits through this.
 int              fx_glass_host_index (const AppState& state, int fx_ti, const Clip& fx_cl);
+
+// ── FX-brick coupling ─────────────────────────────────────────────────────────
+bool             fx_brick_is_video   (const Clip& c);   // Effect(video)/MultiFX/BodyFX
+// Stable host fingerprint (source_id/text; record bricks get sentinels).
+std::string      fx_host_fingerprint (const Clip& host);
+// Resolve a coupled brick's host on its track: fingerprint match, then max
+// overlap when several clips share a source. -1 = unresolvable.
+int              fx_coupled_host     (const AppState& state, int fx_ti, const Clip& fx_cl);
+// Per-frame constraint pass: coupled bricks snap to their host's span and
+// follow it through every edit; bricks whose host vanished decouple to
+// free/global. Call once per frame from app_frame.
+void             fx_coupling_tick    (AppState& state);
 
 // Beat sync: returns exp-decay pulse [0..1] from most recent beat before t in the referenced clip.
 // src_track/src_clip = -1 → always returns 0.

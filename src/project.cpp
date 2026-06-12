@@ -1,4 +1,5 @@
 #include "project.h"
+#include "ui/timeline.h"
 #include "body_fx.h"
 #include "ui/panel_media.h"  // bin_backfill_from_timeline
 #include <algorithm>
@@ -9,7 +10,7 @@
 // ── Binary serialization helpers ──────────────────────────────────────────────
 
 static const uint32_t MAGIC   = 0x534D5001u; // "PMS\x01"
-static const uint32_t VERSION = 39u;  // v39: per-clip AudioFX chain
+static const uint32_t VERSION = 40u;  // v40: FX-brick coupling
 
 struct Writer {
     std::ofstream f;
@@ -217,6 +218,9 @@ static void write_clip(Writer& w, const Clip& c) {
         w.pod((uint8_t)fx.voice_pitch_auto);
         w.pod(fx.voice_pitch_semitones);
     }
+    // v40: FX-brick coupling
+    w.pod((uint8_t)c.fx_coupled);
+    w.str(c.fx_host_sid);
 }
 
 static Clip read_clip(Reader& r, uint32_t version) {
@@ -433,6 +437,10 @@ static Clip read_clip(Reader& r, uint32_t version) {
             fx.voice_convert_on = false;
         }
     }
+    if (version >= 40u) {
+        c.fx_coupled  = (bool)r.pod<uint8_t>();
+        c.fx_host_sid = r.str();
+    }
     return c;
 }
 
@@ -624,6 +632,39 @@ bool project_load(AppState& state, const std::string& path) {
     // Backfill for pre-v36 projects: derive the bin from existing clip paths
     // so users opening older projects still see their media in the bin.
     bin_backfill_from_timeline(state);
+
+    // Pre-v40 migration: overlap-glass was implicit — every video FX brick
+    // sitting on content becomes a coupled Video Multi-FX chain (stacked
+    // bricks merge into one per host, stacking order preserved). Same couple
+    // semantics as the timeline's 1.5 s ring, minus the wait.
+    if (r.ok && version < 40u) {
+        for (int ti = 0; ti < (int)state.tracks.size(); ++ti) {
+            auto& clips = state.tracks[ti].clips;
+            for (int ci = 0; ci < (int)clips.size(); ) {
+                Clip& c = clips[(size_t)ci];
+                bool fx_kind = c.clip_type == ClipType::Effect ||
+                               c.clip_type == ClipType::MultiFX ||
+                               c.clip_type == ClipType::BodyFX;
+                if (fx_kind && !c.fx_coupled && fx_brick_is_video(c)) {
+                    int best = -1; float bov = 0.05f;
+                    for (int k = 0; k < (int)clips.size(); ++k) {
+                        const Clip& hc = clips[(size_t)k];
+                        bool hostable = clip_is_videolike_type(hc.clip_type) ||
+                                        hc.clip_type == ClipType::Background;
+                        if (!hostable) continue;
+                        float ov = fminf(c.end, hc.end) - fmaxf(c.start, hc.start);
+                        if (ov > bov) { bov = ov; best = k; }
+                    }
+                    if (best >= 0) {
+                        int nci = timeline_couple_fx_brick(state, ti, ci, best);
+                        // Merged-away brick shrinks the list — don't advance.
+                        if (nci != ci) continue;
+                    }
+                }
+                ++ci;
+            }
+        }
+    }
 
     return r.ok;
 }

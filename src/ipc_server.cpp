@@ -9,6 +9,7 @@
 #include "history.h"
 #include "runtime_fx.h"
 #include "ui/canvas.h"
+#include "ui/timeline.h"
 #include "ui/pipeline.h"
 #include "ui/panel_animation.h"
 #include "ui/panel_media.h"
@@ -313,6 +314,7 @@ static json clip_to_json_slim(int idx, const Clip& c) {
         j["takes"]         = c.rec_takes;
         j["selected_take"] = c.rec_take_sel;
     }
+    if (c.fx_coupled) j["coupled"] = true;
     return j;
 }
 
@@ -403,6 +405,7 @@ static json clip_to_json(int idx, const Clip& c) {
         j["takes"]         = c.rec_takes;
         j["selected_take"] = c.rec_take_sel;
     }
+    if (c.fx_coupled) j["coupled"] = true;
     return j;
 }
 
@@ -600,6 +603,28 @@ static int track_by_name_or_index(const AppState& state, const json& params) {
         return -1;
     }
     return params.value("track", -1);
+}
+
+// Auto-couple a freshly added video FX brick to the best-overlap content
+// clip on its track — agents get the coupled end-state instantly (the UI's
+// 1.5 s ring is a human affordance). Returns the brick's resulting index.
+static int ipc_autocouple_fx(AppState& state, int ti, int ci) {
+    auto& clips = state.tracks[ti].clips;
+    if (ci < 0 || ci >= (int)clips.size()) return ci;
+    Clip& c = clips[(size_t)ci];
+    if (c.fx_coupled || !fx_brick_is_video(c)) return ci;
+    int best = -1; float bov = 0.05f;
+    for (int k = 0; k < (int)clips.size(); ++k) {
+        if (k == ci) continue;
+        const Clip& hc = clips[(size_t)k];
+        bool hostable = clip_is_videolike_type(hc.clip_type) ||
+                        hc.clip_type == ClipType::Background;
+        if (!hostable) continue;
+        float ov = fminf(c.end, hc.end) - fmaxf(c.start, hc.start);
+        if (ov > bov) { bov = ov; best = k; }
+    }
+    if (best < 0) return ci;
+    return timeline_couple_fx_brick(state, ti, ci, best);
 }
 
 // ── Synthetic mouse input (ui_input) ──────────────────────────────────────────
@@ -1268,6 +1293,23 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         json r; r["active"] = ok;
         if (ok) r["peaks"] = pk;
         return r;
+    }
+
+    if (method == "decouple_fx_brick") {
+        int ti = track_by_name_or_index(state, params), ci = params.value("clip", -1);
+        if (!check_clip(state, ti, ci, err)) return {};
+        Clip& bk = state.tracks[ti].clips[(size_t)ci];
+        if (!bk.fx_coupled) { err = "clip is not a coupled FX brick"; return {}; }
+        int host = fx_coupled_host(state, ti, bk);
+        float blen = bk.end - bk.start;
+        bk.fx_coupled = false;
+        bk.fx_host_sid.clear();
+        if (host >= 0) {
+            const Clip& hc = state.tracks[ti].clips[(size_t)host];
+            bk.start = hc.end;
+            bk.end   = hc.end + fminf(2.f, fmaxf(0.5f, blen));
+        }
+        return json::object();
     }
 
     if (method == "get_audio_perf") {
@@ -2252,7 +2294,9 @@ static json dispatch(AppState& state, const std::string& method, const json& par
 
         if (fx_overlap_on_track(state, ti, start, end, -1, err)) return {};
         state.tracks[ti].clips.push_back(cl);
-        json r; r["clip"] = (int)state.tracks[ti].clips.size() - 1;
+        int nci = ipc_autocouple_fx(state, ti, (int)state.tracks[ti].clips.size() - 1);
+        json r; r["clip"] = nci;
+        r["coupled"] = state.tracks[ti].clips[(size_t)nci].fx_coupled;
         return r;
     }
 
@@ -2295,6 +2339,12 @@ static json dispatch(AppState& state, const std::string& method, const json& par
                 } else {
                     se.clip_type = ClipType::Effect;
                     se.fx_type   = parse_fx_type(fxt);
+                    if (fx_type_is_audio_fx(se.fx_type)) {
+                        err = "'" + fxt + "' is an audio effect — the Video Multi-FX "
+                              "brick takes video effects only (audio gets its own "
+                              "chain brick)";
+                        return {};
+                    }
                     if (e.contains("params") && e["params"].is_object()) {
                         if (!apply_effect_params(se, e["params"], fxt, err)) return {};
                     }
@@ -2305,7 +2355,9 @@ static json dispatch(AppState& state, const std::string& method, const json& par
 
         if (fx_overlap_on_track(state, ti, start, end, -1, err)) return {};
         state.tracks[ti].clips.push_back(brick);
-        json r; r["clip"] = (int)state.tracks[ti].clips.size() - 1;
+        int nci = ipc_autocouple_fx(state, ti, (int)state.tracks[ti].clips.size() - 1);
+        json r; r["clip"] = nci;
+        r["coupled"] = state.tracks[ti].clips[(size_t)nci].fx_coupled;
         return r;
     }
 

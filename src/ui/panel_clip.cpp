@@ -2440,6 +2440,8 @@ void panel_clip(AppState& state, float w) {
                 if (existing >= 0) {
                     tr.clips[(size_t)existing].fx_chain = std::move(chain);
                     tr.clips[(size_t)existing].fx_chain_selected = 0;
+                    tr.clips[(size_t)existing].fx_coupled  = true;
+                    tr.clips[(size_t)existing].fx_host_sid = fx_host_fingerprint(clip);
                 } else {
                     Clip nb;
                     nb.clip_type = ClipType::MultiFX;
@@ -2447,6 +2449,8 @@ void panel_clip(AppState& state, float w) {
                     nb.end       = clip.end;
                     nb.fx_chain  = std::move(chain);
                     nb.fx_chain_selected = 0;
+                    nb.fx_coupled  = true;
+                    nb.fx_host_sid = fx_host_fingerprint(clip);
                     tr.clips.push_back(std::move(nb));   // invalidates `clip` —
                 }
                 history_push(state, std::string("Beauty preset: ") + bp.name);

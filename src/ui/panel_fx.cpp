@@ -1537,11 +1537,12 @@ void panel_audio_fx_clip(AppState& state, float w) {
 
 // Layout section for glass bricks: the brick has no transform of its own, so
 // this edits the HOST clip's rotation — same redirect as the canvas handles.
-void glass_host_layout(AppState& state, Clip& brick, float w) {
-    if (!fx_clip_is_glass(state, state.selected_track, brick)) return;
-    int host = fx_glass_host_index(state, state.selected_track, brick);
+void glass_host_layout(AppState& state, Clip& brick, float w, int b_ti) {
+    if (b_ti < 0) b_ti = state.selected_track;
+    if (b_ti < 0 || !fx_clip_is_glass(state, b_ti, brick)) return;
+    int host = fx_glass_host_index(state, b_ti, brick);
     if (host < 0) return;
-    Clip& hc = state.tracks[state.selected_track].clips[(size_t)host];
+    Clip& hc = state.tracks[(size_t)b_ti].clips[(size_t)host];
     ImGui::Dummy({0.f, 10.f}); ui_separator(); ImGui::Dummy({0.f, 6.f});
     ui_label("Host clip layout");
     ImGui::Dummy({0.f, 6.f});
@@ -1884,18 +1885,24 @@ static const int k_n_shader_fx = (int)(sizeof(k_shader_fx)/sizeof(k_shader_fx[0]
 // ── Multi-FX chain panel ──────────────────────────────────────────────────────
 
 void panel_multifx(AppState& state, float w) {
-    if (state.selected_track < 0 || state.selected_track >= (int)state.tracks.size()) return;
-    Track& track = state.tracks[state.selected_track];
-    if (state.selected_clip < 0 || state.selected_clip >= (int)track.clips.size()) return;
-    Clip& brick = track.clips[state.selected_clip];
+    panel_multifx_for(state, w, state.selected_track, state.selected_clip);
+}
+
+// Explicit-target variant: the host clip's FX tab inspects the coupled brick
+// while the CONTENT stays selected.
+void panel_multifx_for(AppState& state, float w, int b_ti, int b_ci) {
+    if (b_ti < 0 || b_ti >= (int)state.tracks.size()) return;
+    Track& track = state.tracks[b_ti];
+    if (b_ci < 0 || b_ci >= (int)track.clips.size()) return;
+    Clip& brick = track.clips[b_ci];
     if (brick.clip_type != ClipType::MultiFX) return;
 
     ImGui::Dummy({0.f, 8.f});
     ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(210,110,30,255));
-    ImGui::TextUnformatted("Multi-FX");
+    ImGui::TextUnformatted("Video Multi-FX");
     ImGui::PopStyleColor();
     ImGui::SameLine(0.f, 8.f);
-    bool is_glass = fx_clip_is_glass(state, state.selected_track, brick);
+    bool is_glass = fx_clip_is_glass(state, b_ti, brick);
     ImGui::PushStyleColor(ImGuiCol_Text, is_glass ? IM_COL32(130,210,255,255) : IM_COL32(160,110,255,255));
     ImGui::TextUnformatted(is_glass ? "GLASS" : "GLOBAL");
     ImGui::PopStyleColor();
@@ -2122,14 +2129,14 @@ void panel_multifx(AppState& state, float w) {
         ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
         ImGui::TextWrapped("No effects yet — use 'Add Effect' above.");
         ImGui::PopStyleColor();
-        glass_host_layout(state, brick, w);
+        glass_host_layout(state, brick, w, b_ti);
         return;
     }
 
     // ── Parameters for selected sub-effect ────────────────────────────────
     int si = brick.fx_chain_selected;
     if (si < 0 || si >= (int)brick.fx_chain.size()) {
-        glass_host_layout(state, brick, w);
+        glass_host_layout(state, brick, w, b_ti);
         ImGui::Dummy({0.f, 8.f});
         return;
     }
@@ -2359,14 +2366,17 @@ void panel_multifx(AppState& state, float w) {
         ImGui::PopStyleColor(3);
     }
 
-    glass_host_layout(state, brick, w);
+    glass_host_layout(state, brick, w, b_ti);
 
     ImGui::Dummy({0.f, 12.f}); ui_separator(); ImGui::Dummy({0.f, 8.f});
     if (track.locked) ImGui::BeginDisabled();
-    if (ui_btn("Delete Multi-FX brick", false, true)) {
+    if (ui_btn("Delete Video Multi-FX brick", false, true)) {
         if (track.locked) ImGui::EndDisabled();
-        track.clips.erase(track.clips.begin() + state.selected_clip);
-        state.selected_clip = -1;
+        track.clips.erase(track.clips.begin() + b_ci);
+        if (state.selected_track == b_ti && state.selected_clip == b_ci)
+            state.selected_clip = -1;
+        else if (state.selected_track == b_ti && state.selected_clip > b_ci)
+            --state.selected_clip;
         history_push(state, "Delete Multi-FX clip");
         return;
     }

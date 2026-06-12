@@ -241,8 +241,64 @@ static void accum_creative_clip(CreativeFXAccum& acc, const Clip& cl, float _cl_
     }
 }
 
-// An FX clip is glass if it overlaps a Video/Audio clip on the same track.
+bool fx_type_is_audio_fx(FXType ft);  // defined in ui/studio_shared.cpp
+
+bool fx_brick_is_video(const Clip& c) {
+    if (c.clip_type == ClipType::MultiFX || c.clip_type == ClipType::BodyFX) return true;
+    return c.clip_type == ClipType::Effect && !fx_type_is_audio_fx(c.fx_type);
+}
+
+std::string fx_host_fingerprint(const Clip& host) {
+    // Record bricks swap their text per selected take — use stable sentinels.
+    if (host.clip_type == ClipType::VideoRecord) return "\x01vrecord";
+    if (host.clip_type == ClipType::Record)      return "\x01record";
+    return !host.source_id.empty() ? host.source_id : host.text;
+}
+
+static bool fx_video_host_type(ClipType t) {
+    return clip_is_videolike_type(t) || t == ClipType::Background;
+}
+
+int fx_coupled_host(const AppState& state, int fx_ti, const Clip& fx_cl) {
+    if (!fx_cl.fx_coupled || fx_cl.fx_host_sid.empty()) return -1;
+    if (fx_ti < 0 || fx_ti >= (int)state.tracks.size()) return -1;
+    const auto& clips = state.tracks[fx_ti].clips;
+    int best = -1; float best_ov = -1e9f;
+    for (int ci = 0; ci < (int)clips.size(); ++ci) {
+        const Clip& hc = clips[(size_t)ci];
+        if (!fx_video_host_type(hc.clip_type)) continue;
+        if (fx_host_fingerprint(hc) != fx_cl.fx_host_sid) continue;
+        float ov = fminf(fx_cl.end, hc.end) - fmaxf(fx_cl.start, hc.start);
+        if (ov > best_ov) { best_ov = ov; best = ci; }
+    }
+    return best;
+}
+
+void fx_coupling_tick(AppState& state) {
+    for (int ti = 0; ti < (int)state.tracks.size(); ++ti) {
+        auto& clips = state.tracks[ti].clips;
+        for (auto& cl : clips) {
+            if (!cl.fx_coupled || !fx_brick_is_video(cl)) continue;
+            int host = fx_coupled_host(state, ti, cl);
+            if (host < 0) {
+                // Host deleted / moved off-track — the brick goes free.
+                cl.fx_coupled = false;
+                cl.fx_host_sid.clear();
+                continue;
+            }
+            const Clip& hc = clips[(size_t)host];
+            cl.start = hc.start;
+            cl.end   = hc.end;
+        }
+    }
+}
+
+// Glass: video FX bricks are glass iff coupled (explicit link); audio FX
+// bricks keep the legacy same-track-overlap rule until the audio chain
+// brick lands.
 bool fx_clip_is_glass(const AppState& state, int fx_ti, const Clip& fx_cl) {
+    if (fx_brick_is_video(fx_cl))
+        return fx_cl.fx_coupled && fx_coupled_host(state, fx_ti, fx_cl) >= 0;
     if (fx_ti < 0 || fx_ti >= (int)state.tracks.size()) return false;
     for (auto& cl : state.tracks[fx_ti].clips) {
         if (cl.clip_type != ClipType::Video && cl.clip_type != ClipType::Audio &&
@@ -254,14 +310,7 @@ bool fx_clip_is_glass(const AppState& state, int fx_ti, const Clip& fx_cl) {
 }
 
 int fx_glass_host_index(const AppState& state, int fx_ti, const Clip& fx_cl) {
-    if (fx_ti < 0 || fx_ti >= (int)state.tracks.size()) return -1;
-    const auto& clips = state.tracks[fx_ti].clips;
-    for (int ci = 0; ci < (int)clips.size(); ++ci) {
-        const Clip& hc = clips[(size_t)ci];
-        if (clip_is_videolike_type(hc.clip_type) &&
-            hc.start < fx_cl.end && hc.end > fx_cl.start) return ci;
-    }
-    return -1;
+    return fx_coupled_host(state, fx_ti, fx_cl);
 }
 
 // Helper: accumulate all sub-effects of a MultiFX brick that are active at time t.
@@ -451,6 +500,10 @@ void app_init(AppState& state) {
 }
 
 void app_frame(AppState& state) {
+    // Coupled FX bricks track their host every frame — drags, trims, splits
+    // and deletions all resolve here instead of in each edit path.
+    fx_coupling_tick(state);
+
     ImGuiIO& io = ImGui::GetIO();
     ImGui::SetNextWindowPos({0, 0});
     ImGui::SetNextWindowSize(io.DisplaySize);

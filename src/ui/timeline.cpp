@@ -43,7 +43,7 @@ TlState g_tl;
 
 // How long a drag must dwell on a merge target before it welds — shared by
 // keyframe super diamonds and FX brick merging so the gesture feels the same.
-static const double kWeldHoldSec = 3.0;
+static const double kWeldHoldSec = 1.5;
 
 // In-progress keyframe-diamond retime drag. Grabbing a super diamond drags
 // every key at that timestamp (one entry per member prop); member indices are
@@ -88,6 +88,18 @@ static struct {
     int    ti = -1, ci = -1;
 } s_fx_flash;
 
+// Pending content-coupling: an uncoupled video FX brick sitting on content
+// arms this timer (ring drawn on the brick); after kWeldHoldSec it couples —
+// converting to a Video Multi-FX chain or merging into the host's existing
+// one. Passive scan, so every entry path (drag drop, toolbox drop, IPC,
+// decoupled brick dragged back on) behaves identically; moving the brick
+// re-arms, dragging it pauses.
+static struct {
+    int    ti = -1, ci = -1;  // the brick
+    int    host_ci = -1;      // content clip beneath it
+    double t0      = 0.0;
+} s_couple_pend;
+
 // The weld timer ring, filling clockwise at the merge target's center —
 // same visual language as the keyframe-diamond weld ring.
 static void draw_fx_weld_ring(ImDrawList* dl, float x0, float x1,
@@ -120,6 +132,15 @@ static bool is_fx_clip(const Clip& c) {
     return c.clip_type == ClipType::Effect ||
            c.clip_type == ClipType::MultiFX ||
            c.clip_type == ClipType::BodyFX;
+}
+// Audio FX bricks live in their own world: they never weld into the Video
+// Multi-FX chain (audio gets its own chain brick), so for welding purposes
+// an audio Effect brick is incompatible with everything video.
+static bool fx_brick_is_audio(const Clip& c) {
+    return c.clip_type == ClipType::Effect && fx_type_is_audio_fx(c.fx_type);
+}
+static bool fx_bricks_weldable(const Clip& a, const Clip& b) {
+    return !fx_brick_is_audio(a) && !fx_brick_is_audio(b);
 }
 static bool clips_conflict(const Clip& a, const Clip& b) {
     // FX bricks never conflict with content clips (glass bricks ride over
@@ -154,6 +175,110 @@ static void merge_fx_clips(Clip& target, Clip dragged) {
         }
         target.fx_chain_selected = 0;
     }
+}
+
+// Couple the brick at (ti, ci) to the content clip at host_ci: chain entries
+// are re-windowed against the host span so effective timing survives the
+// snap, singles convert to a Video Multi-FX, and a host that already owns a
+// coupled chain absorbs the new entries instead of growing a second brick.
+// Returns the index of the resulting coupled brick.
+int timeline_couple_fx_brick(AppState& state, int ti, int ci, int host_ci) {
+    auto& clips = state.tracks[ti].clips;
+    const Clip host = clips[(size_t)host_ci];   // copy: erase below shifts refs
+    const float h0 = host.start, hlen = host.end - host.start;
+    Clip brick = clips[(size_t)ci];
+
+    auto window_entry = [&](Clip& se, float b0, float b1) {
+        float abs0 = (se.rel_end <= 0.f) ? b0 : b0 + se.rel_start;
+        float abs1 = (se.rel_end <= 0.f) ? b1 : b0 + se.rel_end;
+        se.rel_start = fmaxf(0.f, abs0 - h0);
+        se.rel_end   = fmaxf(se.rel_start, fminf(abs1 - h0, hlen));
+        if (se.rel_start <= 0.001f && se.rel_end >= hlen - 0.001f) {
+            se.rel_start = 0.f;   // full-host window = "always on"
+            se.rel_end   = 0.f;
+        }
+        se.fx_coupled = false;
+        se.fx_host_sid.clear();
+    };
+
+    std::vector<Clip> entries;
+    if (brick.clip_type == ClipType::MultiFX) entries = brick.fx_chain;
+    else {
+        Clip se = brick;
+        se.fx_chain.clear();
+        se.rel_start = se.rel_end = 0.f;
+        entries.push_back(se);
+    }
+    for (auto& se : entries) window_entry(se, brick.start, brick.end);
+
+    // Host already has a coupled chain? Merge into it.
+    for (int k = 0; k < (int)clips.size(); ++k) {
+        if (k == ci) continue;
+        Clip& oc = clips[(size_t)k];
+        if (oc.clip_type == ClipType::MultiFX && oc.fx_coupled &&
+            fx_coupled_host(state, ti, oc) == host_ci) {
+            for (auto& se : entries) oc.fx_chain.push_back(se);
+            if (oc.fx_chain_selected < 0) oc.fx_chain_selected = 0;
+            clips.erase(clips.begin() + ci);
+            return k > ci ? k - 1 : k;
+        }
+    }
+
+    Clip& b = clips[(size_t)ci];
+    b.clip_type         = ClipType::MultiFX;
+    b.fx_chain          = std::move(entries);
+    b.fx_chain_selected = b.fx_chain.empty() ? -1 : 0;
+    b.fx_coupled        = true;
+    b.fx_host_sid       = fx_host_fingerprint(host);
+    b.start = host.start;
+    b.end   = host.end;
+    return ci;
+}
+
+// Passive coupling scan: any uncoupled video FX brick resting on content
+// (not mid-drag) arms the 1.5 s ring; completion couples it. One pending
+// brick at a time. Runs every frame, so toolbox drops, drag drops, IPC
+// bricks and re-dropped decoupled bricks all behave identically.
+static void couple_pending_tick(AppState& state) {
+    int pti = -1, pci = -1, phost = -1;
+    for (int ti = 0; ti < (int)state.tracks.size() && pti < 0; ++ti) {
+        auto& cls = state.tracks[ti].clips;
+        for (int ci = 0; ci < (int)cls.size(); ++ci) {
+            Clip& c = cls[(size_t)ci];
+            if (!is_fx_clip(c) || c.fx_coupled || !fx_brick_is_video(c)) continue;
+            if (g_tl.drag_track == ti && g_tl.drag_clip == ci) continue;
+            int best = -1; float bov = 0.05f;   // ≥50 ms overlap to arm
+            for (int k = 0; k < (int)cls.size(); ++k) {
+                const Clip& hc = cls[(size_t)k];
+                bool hostable = clip_is_videolike_type(hc.clip_type) ||
+                                hc.clip_type == ClipType::Background;
+                if (!hostable) continue;
+                float ov = fminf(c.end, hc.end) - fmaxf(c.start, hc.start);
+                if (ov > bov) { bov = ov; best = k; }
+            }
+            if (best >= 0) { pti = ti; pci = ci; phost = best; break; }
+        }
+    }
+    if (pti != s_couple_pend.ti || pci != s_couple_pend.ci ||
+        phost != s_couple_pend.host_ci) {
+        s_couple_pend.ti = pti; s_couple_pend.ci = pci;
+        s_couple_pend.host_ci = phost;
+        s_couple_pend.t0 = ImGui::GetTime();
+        return;
+    }
+    if (pti < 0) return;
+    if (ImGui::GetTime() - s_couple_pend.t0 < kWeldHoldSec) return;
+    int nci = timeline_couple_fx_brick(state, pti, pci, phost);
+    state.selected_track = pti;
+    state.selected_clip  = nci;
+    state.clip_selection.clear();
+    state.clip_selection.insert({pti, nci});
+    s_fx_flash.active = true;
+    s_fx_flash.t0     = ImGui::GetTime();
+    s_fx_flash.ti     = pti;
+    s_fx_flash.ci     = nci;
+    history_push(state, "Couple FX brick");
+    s_couple_pend.ti = s_couple_pend.ci = s_couple_pend.host_ci = -1;
 }
 
 // ── Timeline ──────────────────────────────────────────────────────────────────
@@ -1225,13 +1350,27 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                     }
                     state.selected_track = ti;
                     state.selected_clip  = ci;
+                    // A coupled brick is an attachment of its content: left-
+                    // click selects the HOST — its chain lives in the content
+                    // panel's FX tab now. (Right-click still hits the brick
+                    // for "Decouple".)
+                    if (clip.fx_coupled && is_fx_clip(clip)) {
+                        int host = fx_coupled_host(state, ti, clip);
+                        if (host >= 0) {
+                            state.selected_clip = host;
+                            state.clip_selection.clear();
+                            state.clip_selection.insert({ti, host});
+                        }
+                    }
                     strncpy(s_edit_buf, clip.text.c_str(), sizeof(s_edit_buf)-1);
                     s_edit_buf[sizeof(s_edit_buf)-1] = '\0';
                     s_edit_focus_next = (clip.clip_type==ClipType::Text || clip.clip_type==ClipType::Lyrics ||
                                          clip.clip_type==ClipType::Subtitle);
                     float orig_cx0 = origin.x+TL_LABEL_W+clip.start*zoom-scroll;
                     float orig_cx1 = origin.x+TL_LABEL_W+clip.end*zoom-scroll;
-                    if (!track.locked) {
+                    // Coupled FX bricks are pinned to their host — click
+                    // selects, but no drag/trim. Decouple to move them.
+                    if (!track.locked && !(clip.fx_coupled && is_fx_clip(clip))) {
                         drag_origin_start = clip.start;
                         drag_origin_end   = clip.end;
                         float clip_scr_w  = orig_cx1 - orig_cx0;
@@ -1640,7 +1779,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
             if (is_mfx) {
                 // Show "N FX" label with stacked-layers indicator
                 char mfx_lbl[24];
-                snprintf(mfx_lbl, sizeof(mfx_lbl), "MULTI %d FX", (int)clip.fx_chain.size());
+                snprintf(mfx_lbl, sizeof(mfx_lbl), "VIDEO FX \xc2\xb7 %d", (int)clip.fx_chain.size());
                 dl->AddText({vis_x0+5.f, ly}, lbl_col, mfx_lbl);
                 // Stacked layers icon: three small horizontal bars at right
                 if (vis_x1 - vis_x0 > 40.f) {
@@ -1669,6 +1808,21 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                 dl->AddRect({vis_x0, cy0}, {vis_x1, cy1}, mc, 2.f, 0, 2.5f);
                 draw_fx_weld_ring(dl, vis_x0, vis_x1, cy0, cy1,
                                   IM_COL32(255, 180, 60, 230));
+            }
+            // Pending content-coupling: ring fills on the brick about to
+            // become (or merge into) the host's Video Multi-FX chain.
+            if (s_couple_pend.ti == ti && s_couple_pend.ci == ci) {
+                float pulse = 0.5f + 0.5f * sinf((float)ImGui::GetTime() * 6.f);
+                ImU32 cc = IM_COL32(120, 200, 255, (int)(110 + 80 * pulse));
+                dl->AddRect({vis_x0, cy0}, {vis_x1, cy1}, cc, 2.f, 0, 2.f);
+                float prog = (float)((ImGui::GetTime() - s_couple_pend.t0) / kWeldHoldSec);
+                if (prog > 0.f && prog < 1.f) {
+                    ImVec2 cctr{(vis_x0 + vis_x1) * 0.5f, (cy0 + cy1) * 0.5f};
+                    float pr = 10.f * (1.f + 0.1f * sinf((float)ImGui::GetTime() * 9.f));
+                    dl->PathArcTo(cctr, pr, -IM_PI * 0.5f,
+                                  -IM_PI * 0.5f + prog * 2.f * IM_PI, 24);
+                    dl->PathStroke(IM_COL32(120, 200, 255, 235), 0, 2.f);
+                }
             }
             // Weld-complete flash (the merged brick is always MultiFX, so it
             // renders through this path, never the BodyFX one).
@@ -2372,6 +2526,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                         if (tt == drag_track && ci2 == drag_clip) continue;
                         const Clip& oc = state.tracks[tt].clips[ci2];
                         if (!is_fx_clip(oc)) continue;
+                        if (!fx_bricks_weldable(dc_ref, oc)) continue;
                         if (dc_ref.start < oc.end && dc_ref.end > oc.start) {
                             g_tl.drag_merge_ti = tt;
                             g_tl.drag_merge_ci = ci2;
@@ -2968,7 +3123,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
 
         // ── Convert single Effect → Multi-FX ─────────────────────────────────
         if (cc && cc->clip_type == ClipType::Effect) {
-            if (ImGui::MenuItem("Wrap in Multi-FX")) {
+            if (ImGui::MenuItem("Wrap in Video Multi-FX")) {
                 Clip se    = *cc;
                 cc->clip_type  = ClipType::MultiFX;
                 cc->fx_chain.clear();
@@ -2976,7 +3131,26 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                 // Sub-clip inherits the parent's time span as full duration (rel_start=0, rel_end=0)
                 se.rel_start = 0.f; se.rel_end = 0.f;
                 cc->fx_chain.push_back(std::move(se));
-                history_push(state, "Wrap in Multi-FX");
+                history_push(state, "Wrap in Video Multi-FX");
+            }
+            ImGui::Separator();
+        }
+
+        // ── Decouple a coupled Multi-FX brick from its host ──────────────────
+        if (cc && cc->fx_coupled && is_fx_clip(*cc)) {
+            if (ImGui::MenuItem("Decouple Multi-FX brick")) {
+                // Park the freed brick right after its host so it doesn't sit
+                // on content and immediately re-arm the coupling timer.
+                int host = fx_coupled_host(state, ti, *cc);
+                float hlen = cc->end - cc->start;
+                cc->fx_coupled = false;
+                cc->fx_host_sid.clear();
+                if (host >= 0) {
+                    const Clip& hc = ct->clips[(size_t)host];
+                    cc->start = hc.end;
+                    cc->end   = hc.end + fminf(2.f, fmaxf(0.5f, hlen));
+                }
+                history_push(state, "Decouple Multi-FX brick");
             }
             ImGui::Separator();
         }
@@ -3138,4 +3312,8 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
 
     ImGui::PopStyleVar(2);
     (void)open_clip_ctx; (void)open_track_ctx; (void)open_tl_ctx;
+
+    // Content-coupling timer — runs after all clip interaction so coupling
+    // never invalidates indices the draw loop above is still using.
+    couple_pending_tick(state);
 }

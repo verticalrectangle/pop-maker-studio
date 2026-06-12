@@ -420,7 +420,12 @@ PanelView pv_derive(const AppState& state) {
     if (!hs) return PanelView::Project;
     const Clip& cl = state.tracks[state.selected_track].clips[state.selected_clip];
     if (cl.clip_type == ClipType::Background) return PanelView::OverrideBG;
-    if (cl.clip_type == ClipType::MultiFX) return PanelView::OverrideMultiFX;
+    // Coupled bricks have no standalone panel — their chain lives in the
+    // host content's FX tab (left-click can't even select them anymore;
+    // this guard covers stale selections).
+    if (cl.clip_type == ClipType::MultiFX && !cl.fx_coupled)
+        return PanelView::OverrideMultiFX;
+    if (cl.clip_type == ClipType::MultiFX) return PanelView::Clip;
     if (cl.clip_type == ClipType::Effect) {
         if (cl.fx_type == FXType::Grade    ||
             cl.fx_type == FXType::Blur     ||
