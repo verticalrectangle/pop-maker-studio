@@ -96,6 +96,14 @@ static constexpr float GATE_THRESHOLD = 2e-5f;    // ~-47 dBFS RMS
 static constexpr float GATE_ATTACK    = 0.9995f;  // ~21 ms attack
 static constexpr float GATE_RELEASE   = 0.9999f;  // ~104 ms release
 
+// "Hear effects": the record brick's audio FX chain applied to the MONITOR
+// only (the take records dry; playback re-applies the same chain, so what
+// you sing against is what the take becomes). UI thread builds/swaps the
+// chain; the audio thread only loads the pointer once per block. Retired
+// chains free after a grace period long enough for any in-flight block.
+static std::atomic<bool>          g_mon_fx_on{false};
+static std::atomic<AudioFXChain*> g_mon_chain{nullptr};
+
 // Click-free device swaps: output ramps 0→1 over FADE_LEN frames after any
 // device (re)start. Audio thread consumes; control thread arms via store(0).
 static constexpr int       FADE_LEN = 1024;       // ~23 ms
@@ -146,8 +154,43 @@ struct ClipInfo {
     float fade_in, fade_out;
     PropTrack vol_keys, pan_keys;   // empty = use the static volume/pan
     std::shared_ptr<const std::vector<float>> buf;  // raw PCM; null = not loaded
-    std::shared_ptr<FXBuf> fx_buf;  // non-null = processed samples available
+    AudioFXChain* chain = nullptr;  // live FX (DAW-style); owned by g_chain_reg
 };
+
+// ── Live chain registry ───────────────────────────────────────────────────────
+// One stateful chain per (half, path, tl_start): state survives the per-frame
+// snapshot republish, dies with the clip. UI thread only (under g_clip_mutex);
+// retired chains free after a grace period since the audio thread may still
+// be inside a block that loaded the old snapshot.
+struct ChainSlot {
+    AudioFXChain* chain = nullptr;
+    uint64_t      hash  = 0;
+    double        last_use = 0.0;
+};
+static std::map<std::string, ChainSlot> g_chain_reg;
+static std::vector<std::pair<AudioFXChain*, double>> g_chain_retire;
+
+static double mono_now() {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (double)ts.tv_sec + (double)ts.tv_nsec * 1e-9;
+}
+
+static void chains_gc() {  // caller holds g_clip_mutex
+    double now = mono_now();
+    for (auto it = g_chain_reg.begin(); it != g_chain_reg.end(); ) {
+        if (now - it->second.last_use > 1.0) {
+            if (it->second.chain) g_chain_retire.push_back({it->second.chain, now});
+            it = g_chain_reg.erase(it);
+        } else ++it;
+    }
+    for (auto it = g_chain_retire.begin(); it != g_chain_retire.end(); ) {
+        if (now - it->second > 0.25) {
+            audio_fx_chain_free(it->first);
+            it = g_chain_retire.erase(it);
+        } else ++it;
+    }
+}
 
 static std::mutex            g_clip_mutex;
 static std::vector<SrcBuf>   g_src_bufs;   // guarded by g_clip_mutex
@@ -229,14 +272,16 @@ static void mix_master(float* out, ma_uint32 frameCount) {
         // cleanly within their brick range regardless of clip type.
         auto mix_clip = [&](const ClipInfo& cl, float global_vol) {
             if (t < cl.tl_start || t >= cl.tl_end) return;
-            // Prefer FX-processed buffer when ready; fall back to raw samples.
             const std::vector<float>* buf_ptr = cl.buf ? cl.buf.get() : nullptr;
-            if (cl.fx_buf && cl.fx_buf->ready.load(std::memory_order_acquire))
-                buf_ptr = &cl.fx_buf->samples;
             if (!buf_ptr || buf_ptr->empty()) return;
             float src_t = cl.in_point + (t - cl.tl_start) * cl.speed;
             size_t sp = (size_t)(src_t * 44100.f) * 2;
             if (sp + 1 >= buf_ptr->size()) return;
+            float sl = (*buf_ptr)[sp], sr2 = (*buf_ptr)[sp+1];
+            // Live FX, pre-fader — same FXUnits the export bake runs.
+            if (cl.chain)
+                audio_fx_chain_process_seg(cl.chain, sl, sr2, src_t,
+                                           (int64_t)(sp / 2));
             float fade = clip_fade(cl, t);
             float vraw = cl.vol_keys.empty() ? cl.volume
                        : cl.vol_keys.eval(t - cl.tl_start);
@@ -245,8 +290,8 @@ static void mix_master(float* out, ma_uint32 frameCount) {
             float vol  = fmaxf(0.f, vraw) * global_vol * fade;
             float panL = pan <= 0.f ? 1.f : (1.f - pan);
             float panR = pan >= 0.f ? 1.f : (1.f + pan);
-            out[f*2]   += (*buf_ptr)[sp]   * vol * panL;
-            out[f*2+1] += (*buf_ptr)[sp+1] * vol * panR;
+            out[f*2]   += sl  * vol * panL;
+            out[f*2+1] += sr2 * vol * panR;
         };
 
         for (const auto& cl : snap->vid_clips) mix_clip(cl, g_volume);
@@ -283,6 +328,8 @@ static void data_callback(ma_device*, void* pOutput, const void*, ma_uint32 fram
 // monitor ring and the raw (or baked) signal to the capture ring. Runs on
 // the audio thread of whichever backend is active.
 static void perf_input_block(const float* in, uint32_t frameCount) {
+    AudioFXChain* fxc = g_mon_fx_on.load(std::memory_order_relaxed)
+                      ? g_mon_chain.load(std::memory_order_acquire) : nullptr;
     const bool gate = g_gate_on.load(std::memory_order_relaxed);
     const bool bake = g_gate_bake.load(std::memory_order_relaxed);
     const bool mon  = g_monitor_on.load(std::memory_order_relaxed);
@@ -300,8 +347,10 @@ static void perf_input_block(const float* in, uint32_t frameCount) {
         g_gate_gain += coeff * (open - g_gate_gain);
         float gg = gate ? g_gate_gain : 1.f;
         if (mon && (mw - mr) < MONR_N - 2) {
-            g_monr[mw++ & MONR_MASK] = l  * gg;
-            g_monr[mw++ & MONR_MASK] = r2 * gg;
+            float ml = l * gg, mr2 = r2 * gg;
+            if (fxc) audio_fx_chain_process(fxc, ml, mr2);
+            g_monr[mw++ & MONR_MASK] = ml;
+            g_monr[mw++ & MONR_MASK] = mr2;
         }
         // Recorded stream: raw by default; gated only when bake is on.
         float cl = bake ? l * gg : l, cr2 = bake ? r2 * gg : r2;
@@ -683,6 +732,26 @@ bool audio_gate_get()              { return g_gate_on.load(std::memory_order_rel
 void audio_gate_bake_set(bool on)  { g_gate_bake.store(on, std::memory_order_relaxed); }
 bool audio_gate_bake_get()         { return g_gate_bake.load(std::memory_order_relaxed); }
 
+void audio_monitor_fx_set(bool on) { g_mon_fx_on.store(on, std::memory_order_relaxed); }
+bool audio_monitor_fx_get()        { return g_mon_fx_on.load(std::memory_order_relaxed); }
+
+void audio_monitor_chain_set(const std::vector<AudioFX>& stages) {
+    AudioFXChain* next = stages.empty()
+                       ? nullptr : audio_fx_chain_create(stages, 44100.f);
+    AudioFXChain* old = g_mon_chain.exchange(next, std::memory_order_acq_rel);
+    if (old) {
+        // Grace period: any in-flight audio block is ≤ a few ms; 20 ms is
+        // generous. UI-thread sleep, imperceptible at chain-change cadence.
+        struct timespec ts = {0, 20 * 1000 * 1000};
+        nanosleep(&ts, nullptr);
+        audio_fx_chain_free(old);
+    }
+}
+
+bool audio_monitor_chain_active() {
+    return g_mon_chain.load(std::memory_order_relaxed) != nullptr;
+}
+
 bool audio_probe(const std::string& path, AudioMeta& meta) {
     AVFormatContext* fmt_ctx = nullptr;
     if (avformat_open_input(&fmt_ctx, path.c_str(), nullptr, nullptr) < 0) return false;
@@ -760,8 +829,11 @@ void audio_source_ensure(const std::string& path) {
 }
 
 // Build ClipInfos for one snapshot half. Caller holds g_clip_mutex (for
-// g_src_bufs); FX cache uses its own lock.
-static void clips_fill(std::vector<ClipInfo>& out, const std::vector<AudioClipDesc>& descs) {
+// g_src_bufs and the chain registry). `half` namespaces the chain key so a
+// video's embedded audio never shares DSP state with an audio clip that
+// happens to have the same path+start.
+static void clips_fill(std::vector<ClipInfo>& out, const std::vector<AudioClipDesc>& descs,
+                       char half) {
     out.clear();
     for (const auto& d : descs) {
         ClipInfo ci;
@@ -774,39 +846,27 @@ static void clips_fill(std::vector<ClipInfo>& out, const std::vector<AudioClipDe
             if (b.path == d.path && b.ready) { ci.buf = b.samples; break; }
         }
 
-        // FX processing — windowed segments, so a brick's effect lands only
-        // on its own range of the source.
+        // Live FX (DAW-style): one stateful chain per clip, rebuilt when the
+        // effective segment set changes. Voice convert stays on its offline
+        // path (vc_out_path source substitution).
         if (d.fx_hash != 0 && !d.fx_segs.empty() && ci.buf) {
-            auto key = std::make_pair(d.path, d.fx_hash);
-            std::shared_ptr<FXBuf> fb;
-            {
-                std::lock_guard<std::mutex> lk2(g_fx_mutex);
-                auto it = g_fx_cache.find(key);
-                if (it != g_fx_cache.end()) {
-                    fb = it->second;
-                } else {
-                    fb = std::make_shared<FXBuf>();
-                    g_fx_cache[key] = fb;
-                    // Kick off async processing. Capture the source as a
-                    // shared_ptr — it used to copy the whole PCM buffer.
-                    uint64_t my_gen = fb->gen.fetch_add(1) + 1;
-                    std::shared_ptr<const std::vector<float>> src = ci.buf;
-                    std::vector<AudioFXSegment> segs = d.fx_segs;
-                    std::thread([fb, src, segs, my_gen]() {
-                        auto result = process_audio_fx_segments(*src, segs, 44100.f,
-                                                                &fb->gen, my_gen);
-                        if (!result.empty()) {
-                            fb->samples = std::move(result);
-                            fb->ready.store(true, std::memory_order_release);
-                        }
-                    }).detach();
-                }
+            char keybuf[32];
+            snprintf(keybuf, sizeof(keybuf), "%c%lld:", half,
+                     (long long)llroundf(d.tl_start * 1000.f));
+            std::string key = std::string(keybuf) + d.path;
+            ChainSlot& slot = g_chain_reg[key];
+            if (slot.hash != d.fx_hash || !slot.chain) {
+                if (slot.chain) g_chain_retire.push_back({slot.chain, mono_now()});
+                slot.chain = audio_fx_chain_create_seg(d.fx_segs, 44100.f);
+                slot.hash  = d.fx_hash;
             }
-            ci.fx_buf = fb;
+            slot.last_use = mono_now();
+            ci.chain = slot.chain;
         }
 
         out.push_back(ci);
     }
+    chains_gc();
 }
 
 // Publish one half of the snapshot, carrying the other half over.
@@ -827,7 +887,7 @@ void audio_clips_update(const std::vector<AudioClipDesc>& descs) {
     std::vector<ClipInfo> filled;
     {
         std::lock_guard<std::mutex> lk(g_clip_mutex);
-        clips_fill(filled, descs);
+        clips_fill(filled, descs, 'A');
     }
     snapshot_publish(std::move(filled), false);
 }
@@ -836,7 +896,7 @@ void video_audio_clips_update(const std::vector<AudioClipDesc>& descs) {
     std::vector<ClipInfo> filled;
     {
         std::lock_guard<std::mutex> lk(g_clip_mutex);
-        clips_fill(filled, descs);
+        clips_fill(filled, descs, 'V');
     }
     snapshot_publish(std::move(filled), true);
 }
@@ -865,6 +925,11 @@ void audio_clips_clear() {
     {
         std::lock_guard<std::mutex> lk(g_clip_mutex);
         g_src_bufs.clear();
+        // Snapshot is replaced below, so the audio thread can't be handed a
+        // dying chain after this point; the grace list covers in-flight blocks.
+        for (auto& [k, slot] : g_chain_reg)
+            if (slot.chain) g_chain_retire.push_back({slot.chain, mono_now()});
+        g_chain_reg.clear();
     }
     {
         std::lock_guard<std::mutex> lk(g_snap_mutex);

@@ -254,6 +254,10 @@ struct StereoDelay {
         wp = 0;
     }
 
+    void clear() {
+        std::fill(bufl.begin(), bufl.end(), 0.f);
+        std::fill(bufr.begin(), bufr.end(), 0.f);
+    }
     void process(float inL, float inR, float& outL, float& outR,
                  float time, float feedback, float mix) {
         size_t n = bufl.size();
@@ -286,6 +290,7 @@ struct CombFilter {
         wp = 0; fback = feedback;
         damp1 = damp; damp2 = 1.f - damp; store = 0.f;
     }
+    void clear() { std::fill(buf.begin(), buf.end(), 0.f); store = 0.f; }
     float process(float in) {
         float out = buf[wp];
         store = out * damp2 + store * damp1;
@@ -301,6 +306,7 @@ struct AllpassFilter {
     float  fback   = 0.f;
 
     void init(size_t n) { buf.assign(n, 0.f); wp = 0; fback = 0.5f; }
+    void clear() { std::fill(buf.begin(), buf.end(), 0.f); }
     float process(float in) {
         float out = buf[wp];
         float v   = in + out * fback;
@@ -334,6 +340,10 @@ struct Reverb {
         }
     }
 
+    void clear() {
+        for (int i = 0; i < N_COMB; ++i)    { comb_l[i].clear(); comb_r[i].clear(); }
+        for (int i = 0; i < N_ALLPASS; ++i) { allpass_l[i].clear(); allpass_r[i].clear(); }
+    }
     void process(float inL, float inR, float& outL, float& outR) {
         float mixed = (inL + inR) * 0.5f;
         outL = 0.f; outR = 0.f;
@@ -391,6 +401,164 @@ struct ATState {
     }
 };
 
+// ── Streaming unit / chain ────────────────────────────────────────────────────
+// One AudioFX stage's complete DSP state as a per-sample processor. The
+// offline bake below runs THIS — live monitoring, preview and export share
+// one implementation by construction.
+
+struct FXUnit {
+    AudioFX      fx;
+    GrainShifter gs[4];   // [0]=L pitch, [1]=R pitch, [2]=L formant, [3]=R formant
+    ATState      at;
+    StereoDelay  delay;
+    Reverb       reverb;
+    double pitch_ratio = 1.0, formant_ratio = 1.0;
+    // Live windowing (source seconds). win1 <= 0 → always active.
+    float  win0 = 0.f, win1 = 0.f;
+    bool   in_window = false;
+    float  sr = 44100.f;
+
+    void init(const AudioFX& f, float sample_rate) {
+        fx = f;
+        sr = sample_rate;
+        for (auto& g : gs) g.reset();
+        auto st_ratio = [](float st) -> double {
+            return std::pow(2.0, (double)st / 12.0);
+        };
+        pitch_ratio   = fx.pitch_on   ? st_ratio(fx.pitch_semitones)   : 1.0;
+        formant_ratio = fx.formant_on ? st_ratio(fx.formant_shift * 12.f) : 1.0;
+        // Grain size vs ratio: 256-sample grains are tight (≈3 ms — what live
+        // autotune wants) but collapse spectrally past ~1.5 semitones — the
+        // wrap rate (ratio-1)·sr/grain modulates faster than the grain can
+        // carry. Large shifts get 1024-sample grains: correct pitch, mild
+        // flutter, ~12 ms extra latency only when a big shift is active.
+        auto grain_for = [](double r) -> uint32_t {
+            return std::fabs(std::log2(r)) > 0.125 ? 1024u : 256u;
+        };
+        gs[0].grain_size = gs[1].grain_size = grain_for(pitch_ratio);
+        gs[2].grain_size = gs[3].grain_size = grain_for(formant_ratio);
+        if (fx.autotune_on) at.init(sample_rate);
+        if (fx.delay_on)    delay.init(sample_rate);
+        if (fx.reverb_on)   reverb.init(fx.reverb_room, fx.reverb_damp);
+    }
+
+    // RT-safe state wipe (no allocations) — used on transport jumps and
+    // window re-entry so stale tails never blurt out.
+    void reset_state() {
+        for (auto& g : gs) g.reset();
+        if (fx.autotune_on) at.init(sr);
+        if (fx.delay_on)    delay.clear();
+        if (fx.reverb_on)   reverb.clear();
+    }
+
+    void process(float& L, float& R) {
+        // ── Autotune ────────────────────────────────────────────────────────
+        if (fx.autotune_on) {
+            float mono    = (L + R) * 0.5f;
+            float at_rat  = at.push(mono, fx.autotune_speed,
+                                    fx.autotune_key, fx.autotune_scale);
+            double ratio  = (double)at_rat * pitch_ratio;
+            L = gs[0].process(L, ratio);
+            R = gs[1].process(R, ratio);
+        } else if (fx.pitch_on) {
+            L = gs[0].process(L, pitch_ratio);
+            R = gs[1].process(R, pitch_ratio);
+        }
+        // ── Formant shift (second grain pass) ───────────────────────────────
+        if (fx.formant_on) {
+            L = gs[2].process(L, formant_ratio);
+            R = gs[3].process(R, formant_ratio);
+        }
+        // ── Delay ───────────────────────────────────────────────────────────
+        if (fx.delay_on) {
+            float dL, dR;
+            delay.process(L, R, dL, dR, fx.delay_time, fx.delay_feedback, fx.delay_mix);
+            L = dL; R = dR;
+        }
+        // ── Reverb ──────────────────────────────────────────────────────────
+        if (fx.reverb_on) {
+            float rL, rR;
+            reverb.process(L, R, rL, rR);
+            L = L * (1.f - fx.reverb_mix) + rL * fx.reverb_mix;
+            R = R * (1.f - fx.reverb_mix) + rR * fx.reverb_mix;
+        }
+    }
+};
+
+struct AudioFXChain {
+    std::vector<FXUnit> units;
+    int64_t last_frame = INT64_MIN;   // audio thread only — jump detection
+};
+
+AudioFXChain* audio_fx_chain_create(const std::vector<AudioFX>& stages, float sample_rate) {
+    auto* c = new AudioFXChain();
+    for (const auto& fx : stages) {
+        if (!fx.any_active()) continue;
+        c->units.emplace_back();
+        c->units.back().init(fx, sample_rate);
+    }
+    if (c->units.empty()) { delete c; return nullptr; }
+    return c;
+}
+
+void audio_fx_chain_process(AudioFXChain* c, float& L, float& R) {
+    for (auto& u : c->units) u.process(L, R);
+    L = fmaxf(-1.f, fminf(1.f, L));
+    R = fmaxf(-1.f, fminf(1.f, R));
+}
+
+void audio_fx_chain_free(AudioFXChain* c) { delete c; }
+
+AudioFXChain* audio_fx_chain_create_seg(const std::vector<AudioFXSegment>& segs,
+                                        float sample_rate) {
+    auto* c = new AudioFXChain();
+    for (const auto& sg : segs) {
+        AudioFX fx = sg.fx;
+        fx.voice_convert_on = false;   // ML — offline path only
+        if (!fx.any_active()) continue;
+        c->units.emplace_back();
+        c->units.back().init(fx, sample_rate);
+        c->units.back().win0 = sg.t0;
+        c->units.back().win1 = sg.t1;
+    }
+    if (c->units.empty()) { delete c; return nullptr; }
+    return c;
+}
+
+void audio_fx_chain_process_seg(AudioFXChain* c, float& L, float& R,
+                                float src_t, int64_t frame_idx) {
+    // Transport jump (seek / loop wrap) — wipe state, tails don't teleport.
+    if (frame_idx != c->last_frame + 1)
+        for (auto& u : c->units) { u.reset_state(); u.in_window = false; }
+    c->last_frame = frame_idx;
+
+    constexpr float FADE_S = 0.012f;   // window-edge crossfade (~12 ms)
+    for (auto& u : c->units) {
+        const bool windowed = u.win1 > 0.f;
+        if (windowed && (src_t < u.win0 || src_t >= u.win1)) {
+            u.in_window = false;
+            continue;
+        }
+        if (windowed && !u.in_window) {  // cold entry — no stale tail
+            u.reset_state();
+            u.in_window = true;
+        }
+        if (!windowed) {
+            u.process(L, R);
+            continue;
+        }
+        float wl = L, wr = R;
+        u.process(wl, wr);
+        float w = 1.f;
+        if (src_t - u.win0 < FADE_S)      w = (src_t - u.win0) / FADE_S;
+        else if (u.win1 - src_t < FADE_S) w = (u.win1 - src_t) / FADE_S;
+        L = L * (1.f - w) + wl * w;
+        R = R * (1.f - w) + wr * w;
+    }
+    L = fmaxf(-1.f, fminf(1.f, L));
+    R = fmaxf(-1.f, fminf(1.f, R));
+}
+
 // ── Main offline processor ────────────────────────────────────────────────────
 
 std::vector<float> process_audio_fx(const std::vector<float>& raw,
@@ -404,29 +572,8 @@ std::vector<float> process_audio_fx(const std::vector<float>& raw,
     const int n_frames = (int)(raw.size() / 2);
     std::vector<float> out(raw.size());
 
-    // Semitone-to-ratio helper
-    auto st_ratio = [](float st) -> double {
-        return std::pow(2.0, (double)st / 12.0);
-    };
-
-    // Grain shifters: [0]=L pitch, [1]=R pitch, [2]=L formant, [3]=R formant
-    GrainShifter gs[4];
-    for (auto& g : gs) g.reset();
-
-    // Combined pitch ratio for grain shifters
-    double pitch_ratio   = 1.0;
-    double formant_ratio = 1.0;
-    if (fx.pitch_on)   pitch_ratio   = st_ratio(fx.pitch_semitones);
-    if (fx.formant_on) formant_ratio = st_ratio(fx.formant_shift * 12.f);
-
-    ATState at;
-    if (fx.autotune_on) at.init(sample_rate);
-
-    StereoDelay delay;
-    if (fx.delay_on) delay.init(sample_rate);
-
-    Reverb reverb;
-    if (fx.reverb_on) reverb.init(fx.reverb_room, fx.reverb_damp);
+    FXUnit unit;
+    unit.init(fx, sample_rate);
 
     for (int f = 0; f < n_frames; ++f) {
         // Cancellation check every 4096 frames
@@ -435,42 +582,7 @@ std::vector<float> process_audio_fx(const std::vector<float>& raw,
 
         float L = raw[f * 2];
         float R = raw[f * 2 + 1];
-
-        // ── Autotune ────────────────────────────────────────────────────────
-        if (fx.autotune_on) {
-            float mono    = (L + R) * 0.5f;
-            float at_rat  = at.push(mono, fx.autotune_speed,
-                                    fx.autotune_key, fx.autotune_scale);
-            double ratio  = (double)at_rat * pitch_ratio;
-            L = gs[0].process(L, ratio);
-            R = gs[1].process(R, ratio);
-        } else if (fx.pitch_on) {
-            // ── Pitch shift only ─────────────────────────────────────────────
-            L = gs[0].process(L, pitch_ratio);
-            R = gs[1].process(R, pitch_ratio);
-        }
-
-        // ── Formant shift (second grain pass) ───────────────────────────────
-        if (fx.formant_on) {
-            L = gs[2].process(L, formant_ratio);
-            R = gs[3].process(R, formant_ratio);
-        }
-
-        // ── Delay ────────────────────────────────────────────────────────────
-        if (fx.delay_on) {
-            float dL, dR;
-            delay.process(L, R, dL, dR, fx.delay_time, fx.delay_feedback, fx.delay_mix);
-            L = dL; R = dR;
-        }
-
-        // ── Reverb ────────────────────────────────────────────────────────────
-        if (fx.reverb_on) {
-            float rL, rR;
-            reverb.process(L, R, rL, rR);
-            L = L * (1.f - fx.reverb_mix) + rL * fx.reverb_mix;
-            R = R * (1.f - fx.reverb_mix) + rR * fx.reverb_mix;
-        }
-
+        unit.process(L, R);
         out[f * 2]     = fmaxf(-1.f, fminf(1.f, L));
         out[f * 2 + 1] = fmaxf(-1.f, fminf(1.f, R));
     }

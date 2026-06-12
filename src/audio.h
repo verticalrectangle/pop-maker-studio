@@ -60,6 +60,16 @@ bool audio_gate_get();
 void audio_gate_bake_set(bool on);  // also gate the recorded takes
 bool audio_gate_bake_get();
 
+// "Hear effects": run the record brick's audio FX chain on the MONITOR
+// signal only — takes record dry, playback re-applies the same chain, so
+// what you sing against is what the take becomes. The chain is built on the
+// UI thread (audio_monitor_chain_set; empty clears) and processed per
+// sample in the duplex input path.
+void audio_monitor_fx_set(bool on);
+bool audio_monitor_fx_get();
+void audio_monitor_chain_set(const std::vector<AudioFX>& stages);
+bool audio_monitor_chain_active();
+
 // Perf-mode health: true while the duplex device owns audio; xruns counts
 // suspicious callback gaps since capture start (any nonzero = audible risk).
 bool     audio_perf_mode();

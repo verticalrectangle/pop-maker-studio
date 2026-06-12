@@ -50,6 +50,51 @@ extern ImFont* g_font_black;
 
 // s_panel_view — declared extern in studio_shared.h for helpers that switch it
 PanelView s_panel_view = PanelView::Project;
+// "Hear effects" sync: keep the live monitor chain matched to the record
+// brick's audio FX (the recording target, else the selected Record brick,
+// else the first one). Rebuilds only when the effective chain changes.
+static void monitor_chain_sync(AppState& state) {
+    static uint64_t s_last_chain_hash = 0;
+    if (!audio_capture_active() || !audio_monitor_fx_get()) {
+        if (s_last_chain_hash) { audio_monitor_chain_set({}); s_last_chain_hash = 0; }
+        return;
+    }
+    int bti = -1, bci = -1;
+    for (int ti = 0; ti < (int)state.tracks.size() && bti < 0; ++ti)
+        for (int ci = 0; ci < (int)state.tracks[ti].clips.size(); ++ci)
+            if (state.tracks[ti].clips[ci].clip_type == ClipType::Record &&
+                recorder_is_target(ti, ci)) { bti = ti; bci = ci; break; }
+    if (bti < 0 && state.selected_track >= 0 &&
+        state.selected_track < (int)state.tracks.size() &&
+        state.selected_clip >= 0 &&
+        state.selected_clip < (int)state.tracks[state.selected_track].clips.size() &&
+        state.tracks[state.selected_track].clips[state.selected_clip].clip_type
+            == ClipType::Record) {
+        bti = state.selected_track; bci = state.selected_clip;
+    }
+    if (bti < 0)
+        for (int ti = 0; ti < (int)state.tracks.size() && bti < 0; ++ti)
+            for (int ci = 0; ci < (int)state.tracks[ti].clips.size(); ++ci)
+                if (state.tracks[ti].clips[ci].clip_type == ClipType::Record)
+                    { bti = ti; bci = ci; break; }
+
+    std::vector<AudioFX> stages;
+    uint64_t h = 1469598103934665603ull;
+    if (bti >= 0) {
+        auto segs = collect_audio_fx_segments(state, bti,
+                                              state.tracks[bti].clips[bci]);
+        for (auto& sg : segs) {
+            if (sg.fx.voice_convert_on && !sg.fx.any_active()) continue;
+            stages.push_back(sg.fx);
+            h = (h ^ audio_fx_hash(sg.fx)) * 1099511628211ull;
+        }
+    }
+    if (h != s_last_chain_hash) {
+        audio_monitor_chain_set(stages);
+        s_last_chain_hash = h;
+    }
+}
+
 static bool s_user_nav = false; // user explicitly chose Animation/History tab
 // Coupled Multi-FX brick shown in the selected content's FX tab this frame.
 static int  s_host_fx_ti = -1;
@@ -462,6 +507,7 @@ void ui_studio(AppState& state) {
     // Loop recorder: drain mic, slice takes on the loop-cycle clock.
     recorder_tick(state);
     vrecorder_tick(state);
+    monitor_chain_sync(state);
 
     // Push clip snapshots to audio system every frame.
     // The callback reads these to position audio correctly — no separate volume hack needed.

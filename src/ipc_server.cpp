@@ -208,6 +208,11 @@ static FXType parse_fx_type(const std::string& s) {
     if (s == "datamosh")   return FXType::Datamosh;
     if (s == "chroma_key") return FXType::ChromaKey;
     if (s == "ken_burns")  return FXType::KenBurns;
+    if (s == "audio_autotune") return FXType::AudioAutotune;
+    if (s == "audio_pitch")    return FXType::AudioPitch;
+    if (s == "audio_formant")  return FXType::AudioFormant;
+    if (s == "audio_delay")    return FXType::AudioDelay;
+    if (s == "audio_reverb")   return FXType::AudioReverb;
     for (int i = 0; i < k_gen_fx_count; ++i)
         if (s == k_gen_fx_names[i]) return k_gen_fx_types[i];
     return FXType::Grade;
@@ -315,6 +320,16 @@ static json clip_to_json_slim(int idx, const Clip& c) {
         j["selected_take"] = c.rec_take_sel;
     }
     if (c.fx_coupled) j["coupled"] = true;
+    if (c.clip_type == ClipType::Effect && fx_type_is_audio_fx(c.fx_type)) {
+        json a;
+        a["autotune_on"] = c.audio_fx.autotune_on;
+        a["pitch_on"]    = c.audio_fx.pitch_on;
+        a["pitch_semitones"] = c.audio_fx.pitch_semitones;
+        a["formant_on"]  = c.audio_fx.formant_on;
+        a["delay_on"]    = c.audio_fx.delay_on;
+        a["reverb_on"]   = c.audio_fx.reverb_on;
+        j["audio_fx"]    = a;
+    }
     return j;
 }
 
@@ -1233,6 +1248,7 @@ static json dispatch(AppState& state, const std::string& method, const json& par
     if (method == "seek") {
         float t = params.value("time", 0.f);
         state.playhead = t;
+        audio_seek(t);   // keep the audio master clock with the playhead
         return json::object();
     }
 
@@ -1312,6 +1328,48 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         return json::object();
     }
 
+    if (method == "debug_fx_tone") {
+        // DSP self-test: 2 s of 440 Hz through process_audio_fx with the
+        // given params; returns Goertzel powers so divergence between the
+        // collection layer and the DSP layer is attributable in one call.
+        AudioFX fx;
+        fx.pitch_on        = true;
+        fx.pitch_semitones = params.value("semitones", 12.f);
+        const int sr = 44100, n = sr * 2;
+        std::vector<float> raw((size_t)n * 2);
+        for (int i = 0; i < n; ++i) {
+            float v = 0.5f * sinf(2.f * 3.14159265f * 440.f * (float)i / sr);
+            raw[(size_t)i*2] = raw[(size_t)i*2+1] = v;
+        }
+        std::vector<float> proc = process_audio_fx(raw, fx, (float)sr);
+        auto goertzel = [&](const std::vector<float>& b, float freq) {
+            double k = 2.0 * 3.14159265358979 * freq / sr, s0, s1 = 0, s2 = 0;
+            for (size_t i = b.size()/2; i + 1 < b.size(); i += 2) {
+                s0 = b[i] + 2.0*cos(k)*s1 - s2; s2 = s1; s1 = s0;
+            }
+            return s1*s1 + s2*s2 - 2.0*cos(k)*s1*s2;
+        };
+        json r;
+        r["in_440"]   = goertzel(raw, 440.f);
+        r["out_440"]  = goertzel(proc, 440.f);
+        r["out_880"]  = goertzel(proc, 880.f);
+        return r;
+    }
+
+    if (method == "set_monitor") {
+        // Live mic monitoring controls — parity with the record panel's
+        // "Hear yourself" / "Hear effects" / gate toggles.
+        bool on = params.value("on", true);
+        if (on && !audio_capture_start()) { err = "mic open failed"; return {}; }
+        audio_monitor_set(on);
+        if (params.contains("hear_fx"))
+            audio_monitor_fx_set(params.value("hear_fx", false));
+        if (params.contains("gate"))
+            audio_gate_set(params.value("gate", true));
+        if (!on && !recorder_active()) audio_capture_stop();
+        return json::object();
+    }
+
     if (method == "get_audio_perf") {
         // Low-latency duplex (performance mode) health — see audio.h.
         json r;
@@ -1321,6 +1379,8 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         r["in_latency_s"]  = audio_capture_latency();
         r["monitor"]       = audio_monitor_get();
         r["gate"]          = audio_gate_get();
+        r["hear_fx"]       = audio_monitor_fx_get();
+        r["chain_active"]  = audio_monitor_chain_active();
         return r;
     }
 
@@ -1339,16 +1399,22 @@ static json dispatch(AppState& state, const std::string& method, const json& par
     }
 
     if (method == "play") {
+        // Mirror toggle_play: without audio_play() the audio engine never
+        // started for agent-driven playback (playhead ran on the wall-clock
+        // fallback, output stream stayed corked).
         if (!state.playing) {
             state.playing = true;
             state.play_start_wall = std::chrono::steady_clock::now();
             state.play_start_pos  = state.playhead;
+            audio_seek(state.playhead);
+            audio_play();
         }
         return json::object();
     }
 
     if (method == "pause") {
         state.playing = false;
+        audio_pause();
         return json::object();
     }
 
@@ -2288,7 +2354,40 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         cl.start     = start;
         cl.end       = end;
 
-        if (params.contains("params") && params["params"].is_object()) {
+        // Audio FX bricks: enable the effect and take its params directly.
+        if (fx_type_is_audio_fx(cl.fx_type)) {
+            json ap = params.value("params", json::object());
+            AudioFX& afx = cl.audio_fx;
+            switch (cl.fx_type) {
+                case FXType::AudioAutotune:
+                    afx.autotune_on    = true;
+                    afx.autotune_key   = ap.value("key",   afx.autotune_key);
+                    afx.autotune_scale = ap.value("scale", afx.autotune_scale);
+                    afx.autotune_speed = ap.value("speed_ms", afx.autotune_speed);
+                    break;
+                case FXType::AudioPitch:
+                    afx.pitch_on        = true;
+                    afx.pitch_semitones = ap.value("semitones", afx.pitch_semitones);
+                    break;
+                case FXType::AudioFormant:
+                    afx.formant_on    = true;
+                    afx.formant_shift = ap.value("shift", afx.formant_shift);
+                    break;
+                case FXType::AudioDelay:
+                    afx.delay_on       = true;
+                    afx.delay_time     = ap.value("time",     afx.delay_time);
+                    afx.delay_feedback = ap.value("feedback", afx.delay_feedback);
+                    afx.delay_mix      = ap.value("mix",      afx.delay_mix);
+                    break;
+                case FXType::AudioReverb:
+                    afx.reverb_on   = true;
+                    afx.reverb_room = ap.value("room", afx.reverb_room);
+                    afx.reverb_damp = ap.value("damp", afx.reverb_damp);
+                    afx.reverb_mix  = ap.value("mix",  afx.reverb_mix);
+                    break;
+                default: break;
+            }
+        } else if (params.contains("params") && params["params"].is_object()) {
             if (!apply_effect_params(cl, params["params"], fx_s, err)) return {};
         }
 

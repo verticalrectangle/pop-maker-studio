@@ -51,6 +51,25 @@ struct AudioFX {
 
 uint64_t audio_fx_hash(const AudioFX& fx);
 
+// ── Streaming chain ───────────────────────────────────────────────────────────
+// Ordered AudioFX stages as a live per-sample processor — the SAME DSP the
+// offline bake runs, so live monitoring, preview and export can't diverge.
+// create on a control thread; process is RT-safe (no locks, no allocs).
+// Voice conversion is offline-only and ignored by the chain.
+struct AudioFXChain;
+AudioFXChain* audio_fx_chain_create(const std::vector<AudioFX>& stages, float sample_rate);
+void          audio_fx_chain_process(AudioFXChain* c, float& L, float& R);
+void          audio_fx_chain_free(AudioFXChain* c);
+
+// Windowed variant for live clip playback (DAW-style): units only process
+// inside their window in SOURCE seconds, with ~12 ms edge fades; a
+// non-consecutive frame_idx (seek, loop wrap) wipes state RT-safely.
+struct AudioFXSegment;
+AudioFXChain* audio_fx_chain_create_seg(const std::vector<AudioFXSegment>& segs,
+                                        float sample_rate);
+void          audio_fx_chain_process_seg(AudioFXChain* c, float& L, float& R,
+                                         float src_t, int64_t frame_idx);
+
 // ── Windowed FX segments ──────────────────────────────────────────────────────
 // An audio FX brick applies only over its own timeline range. Each segment is
 // a window in SOURCE time (seconds into the decoded PCM) with the FX active

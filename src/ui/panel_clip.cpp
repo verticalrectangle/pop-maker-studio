@@ -2163,6 +2163,29 @@ void panel_clip(AppState& state, float w) {
                 ImGui::Unindent(22.f);
             }
 
+            // "Hear effects": the brick's audio FX chain (autotune, reverb…)
+            // applied to what YOU hear while singing. Takes stay dry.
+            {
+                auto segs = collect_audio_fx_segments(state, state.selected_track, clip);
+                bool has_fx = !segs.empty();
+                if (!has_fx) ImGui::BeginDisabled();
+                bool hfx = audio_monitor_fx_get();
+                if (ImGui::Checkbox("Hear effects", &hfx)) audio_monitor_fx_set(hfx);
+                if (!has_fx) ImGui::EndDisabled();
+                if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+                    ImGui::BeginTooltip();
+                    if (has_fx)
+                        ImGui::TextUnformatted("Sing through this brick's audio effects\n"
+                                               "(autotune, reverb\xe2\x80\xa6) live in your headphones.\n"
+                                               "Recordings stay dry \xe2\x80\x94 playback applies the\n"
+                                               "same effects.");
+                    else
+                        ImGui::TextUnformatted("Drop an audio effect on this brick first \xe2\x80\x94\n"
+                                               "autotune, reverb, delay\xe2\x80\xa6");
+                    ImGui::EndTooltip();
+                }
+            }
+
             // Perf-mode health line: actual device latency + stalls. Only
             // shown while the duplex device runs — the numbers are honest,
             // straight from the device, not the config request.
