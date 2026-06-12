@@ -1177,7 +1177,8 @@ static void draw_camera_mirror(ImDrawList* dl, ImVec2 p, float w, float h) {
             float ly = (v  - 0.5f) * 2.f * hh;
             return rotp(lx, ly);
         };
-        face_filter_draw_doggy(dl, s_mirror_obs, s_mirror_filter_amt, to_screen);
+        face_filter_draw_doggy(dl, s_mirror_obs, s_mirror_filter_amt,
+                               (float)ImGui::GetTime(), to_screen);
     }
     ImU32 frame_col = vrecorder_recording() ? IM_COL32(235, 90, 40, 255)
                                             : IM_COL32(160, 160, 180, 160);

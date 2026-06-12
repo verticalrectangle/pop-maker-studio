@@ -28,7 +28,7 @@ int face_filter_bumps(int filter_id, float amount, const FaceObs& obs,
 
 // Doggy overlay sprites (ears, nose, tongue) as frame-UV quads — feed them to
 // face_sprites_apply (playback/export) or map through to_screen (mirror).
-int face_filter_doggy_quads(const FaceObs& obs, float amount,
+int face_filter_doggy_quads(const FaceObs& obs, float amount, float t,
                             FaceSpriteQuad* out, int max_out);
 
 // Playback/export: apply the clip's face filter to its decoded frame using
@@ -41,4 +41,5 @@ uintptr_t face_filter_apply_take(const Clip& cl, double src_t,
 // Doggy overlay: ears, nose, tongue drawn from landmarks. `to_screen` maps
 // frame UV → screen px (the mirror's quad mapping, mirrored/rotated).
 void face_filter_draw_doggy(ImDrawList* dl, const FaceObs& obs, float amount,
+                            float t,
                             const std::function<ImVec2(float, float)>& to_screen);

@@ -51,12 +51,6 @@ static Anchors anchors_from(const FaceObs& o) {
         if (o.pts[k][0] > a.noseR[0]) { a.noseR[0] = o.pts[k][0]; a.noseR[1] = o.pts[k][1]; }
     }
     mean_of(o, 52, 72, a.mouth);
-    float mw = 0.f;
-    for (int k = 52; k < 72; ++k) {
-        float d = fabsf(o.pts[k][0] - a.mouth[0]);
-        if (d > mw) mw = d;
-    }
-    a.mouthW = mw * 2.f;
     a.chin[0] = o.pts[0][0];  a.chin[1] = o.pts[0][1];
     a.jawL[0] = o.pts[13][0]; a.jawL[1] = o.pts[13][1];
     a.jawR[0] = o.pts[29][0]; a.jawR[1] = o.pts[29][1];
@@ -69,6 +63,17 @@ static Anchors anchors_from(const FaceObs& o) {
     float rx = a.eyeB[0] - a.eyeA[0], ry = a.eyeB[1] - a.eyeA[1];
     float rl = sqrtf(rx*rx + ry*ry); if (rl < 1.f) rl = 1.f;
     a.right[0] = rx / rl; a.right[1] = ry / rl;
+    // Mouth width along the FACE right axis — frame-x width measured the
+    // mouth's *height* on rotated cameras (sideways face in raw coords),
+    // which made the tongue's openness ratio explode on a closed mouth.
+    float mw = 0.f;
+    for (int k = 52; k < 72; ++k) {
+        float vx = o.pts[k][0] - a.mouth[0];
+        float vy = o.pts[k][1] - a.mouth[1];
+        float d = fabsf(vx * a.right[0] + vy * a.right[1]);
+        if (d > mw) mw = d;
+    }
+    a.mouthW = mw * 2.f;
     return a;
 }
 
@@ -185,7 +190,7 @@ static GLuint sprite_tex(const char* name, int& w, int& h) {
     return sl.tex;
 }
 
-int face_filter_doggy_quads(const FaceObs& obs, float amount,
+int face_filter_doggy_quads(const FaceObs& obs, float amount, float t,
                             FaceSpriteQuad* out, int max_out) {
     if (!obs.valid || obs.w <= 0 || obs.h <= 0 || max_out <= 0) return 0;
     Anchors a = anchors_from(obs);
@@ -243,11 +248,19 @@ int face_filter_doggy_quads(const FaceObs& obs, float amount,
             open_span = fmaxf(open_span, fabsf(vx * upx + vy * upy));
         }
         float openness = 2.f * open_span / (a.mouthW > 1.f ? a.mouthW : 1.f);
-        if (openness > 0.22f) {
+        // Slide-out animation, driven by openness itself (deterministic —
+        // mirror, playback, and export all agree): the tongue extends as the
+        // mouth opens, with a small wag while it's out.
+        float ext = (openness - 0.20f) / 0.18f;
+        ext = fmaxf(0.f, fminf(1.f, ext));
+        ext = ext * ext * (3.f - 2.f * ext);          // smoothstep
+        if (ext > 0.02f) {
             float mx = a.mouth[0] - a.eyeMid[0], my = a.mouth[1] - a.eyeMid[1];
             float ox = (mx * rx + my * ry) / ed;
             float oy = (mx * upx + my * upy) / ed;
-            sprite("sprite_tongue.png", ox, oy - 0.50f, 0.85f * sc, 0.f, false);
+            float wag = sinf(t * 9.f) * 7.f * ext;    // degrees
+            sprite("sprite_tongue.png", ox, oy - 0.50f * ext,
+                   0.85f * sc * (0.45f + 0.55f * ext), wag, false);
         }
     }
     {
@@ -259,9 +272,10 @@ int face_filter_doggy_quads(const FaceObs& obs, float amount,
 }
 
 void face_filter_draw_doggy(ImDrawList* dl, const FaceObs& obs, float amount,
+                            float t,
                             const std::function<ImVec2(float, float)>& to_screen) {
     FaceSpriteQuad quads[4];
-    int n = face_filter_doggy_quads(obs, amount, quads, 4);
+    int n = face_filter_doggy_quads(obs, amount, t, quads, 4);
     for (int i = 0; i < n; ++i) {
         const FaceSpriteQuad& q = quads[i];
         dl->AddImageQuad((ImTextureID)(intptr_t)q.tex,
@@ -291,7 +305,8 @@ uintptr_t face_filter_apply_take(const Clip& cl, double src_t,
         tex = face_warp_apply(tex, slot, w, h, (const float*)bumps, nb);
     if (cl.face_filter == (int)FaceFilter::Doggy) {
         FaceSpriteQuad quads[4];
-        int nq = face_filter_doggy_quads(obs, cl.face_filter_amt, quads, 4);
+        int nq = face_filter_doggy_quads(obs, cl.face_filter_amt, (float)src_t,
+                                         quads, 4);
         if (nq > 0)
             tex = face_sprites_apply(tex, slot, w, h, quads, nq);
     }
