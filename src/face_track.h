@@ -15,7 +15,10 @@
 //   52–71 mouth (outer 52–63, inner 64–71)
 //   72–86 nose
 //   87–96 eye B     97–105 brow B
+#include <atomic>
 #include <cstdint>
+#include <functional>
+#include <string>
 
 struct FaceObs {
     bool   valid = false;
@@ -36,3 +39,13 @@ bool face_track_run_sync(const uint8_t* rgb, int w, int h, FaceObs& out);
 
 void face_track_shutdown();
 bool face_track_dump_last(const char* path);  // debug: PPM of last submitted frame
+
+// Offline take pass: decode `video_path` (rotated upright per rot_q, matching
+// the live mirror's submit), run the tracker over every frame, and write a
+// .face cache file: per-frame score + 106 landmarks in RAW full-res frame
+// coords. Blocking — run on a background thread (see face_cache.h). Returns
+// false on decode/track failure or when `cancel` flips.
+bool face_track_build_cache(const std::string& video_path, int rot_q,
+                            const std::string& out_path,
+                            const std::function<void(float)>& progress,
+                            const std::atomic<bool>* cancel);

@@ -46,6 +46,7 @@ set(SOURCES
     src/audio.cpp
     src/audio_pw.cpp
     src/face_track.cpp
+    src/face_cache.cpp
     src/face_filters.cpp
     src/recorder.cpp
     src/video_recorder.cpp

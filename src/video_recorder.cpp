@@ -1,5 +1,6 @@
 #include "video_recorder.h"
 #include "audio.h"
+#include "face_cache.h"
 #include "history.h"
 #include "globals.h"
 
@@ -232,6 +233,12 @@ static bool finalize_take(AppState& state) {
     cl->text = path;   // mirrored: video draw/export paths read clip.text
     state.proxy_scan_needed = true;   // proxy + slot for canvas preview
     ++s_take_count;
+    // Face filter active on the brick → start the take's landmark pass now,
+    // so playback is already filtered by the time the user hits play.
+    if (cl->face_filter != 0) {
+        int rq = ((int)lroundf(cl->rotation / 90.f) % 4 + 4) % 4;
+        face_cache_request(path, rq);
+    }
     return true;
 }
 

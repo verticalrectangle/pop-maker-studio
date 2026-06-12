@@ -13,6 +13,7 @@
 #include "history.h"
 #include "filepicker.h"
 #include "waveform.h"
+#include "face_cache.h"
 #include "../recorder.h"
 #include "../video_recorder.h"
 #include "../video.h"
@@ -1566,6 +1567,21 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                         snprintf(lbl, sizeof(lbl), "CAM");
                     ImU32 tc = sel ? IM_COL32(30,22,18,255) : IM_COL32(235,210,195,230);
                     dl->AddText({vis_x0 + 20.f, mid - 7.f}, tc, lbl);
+
+                    // Face-filter landmark pass running on the selected take:
+                    // show progress so the unfiltered playback in the
+                    // meantime doesn't read as a broken filter.
+                    if (!rec_live && has_take && clip.face_filter != 0) {
+                        float fp = 0.f;
+                        if (face_cache_status(clip.text, &fp) ==
+                            FaceCacheStatus::Building) {
+                            char fb[40];
+                            snprintf(fb, sizeof(fb), "face \xc2\xb7 %d%%",
+                                     (int)(fp * 100.f));
+                            dl->AddText({vis_x0 + 20.f, mid + 8.f},
+                                        IM_COL32(255, 190, 120, 230), fb);
+                        }
+                    }
 
                     // Take-end marker: where the selected take's content
                     // stops. The region past it is dimmed — resizing the

@@ -22,6 +22,7 @@
 #include "generated/fx_clip_set_dispatch.h"  // fx_clip_set_param for beauty preset chips
 #include "face_track.h"
 #include "face_filters.h"
+#include "face_cache.h"
 #include "../recorder.h"
 #include "../video_recorder.h"
 #include "../video.h"
@@ -2501,6 +2502,13 @@ void panel_clip(AppState& state, float w) {
                 if (ui_btn(face_filter_name(fi), on, true)) {
                     clip.face_filter = fi;
                     history_push(state, std::string("Face filter: ") + face_filter_name(fi));
+                    // Filter picked after recording: start the landmark pass
+                    // for the selected take now (the cache is landmark-only,
+                    // so switching filters reuses it).
+                    if (fi != 0 && !clip.text.empty()) {
+                        int rq = ((int)lroundf(clip.rotation / 90.f) % 4 + 4) % 4;
+                        face_cache_request(clip.text, rq);
+                    }
                 }
                 if (on) ImGui::PopStyleColor();
             }
@@ -2516,6 +2524,21 @@ void panel_clip(AppState& state, float w) {
                 ImGui::PopStyleColor(2);
                 if (ImGui::IsItemDeactivatedAfterEdit())
                     history_push(state, "Face filter strength");
+                // Landmark pass status for the selected take.
+                if (!clip.text.empty()) {
+                    float fp = 0.f;
+                    FaceCacheStatus fst = face_cache_status(clip.text, &fp);
+                    if (fst == FaceCacheStatus::Building) {
+                        ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+                        ImGui::Text("Tracking face in take\xe2\x80\xa6 %d%%",
+                                    (int)(fp * 100.f));
+                        ImGui::PopStyleColor();
+                    } else if (fst == FaceCacheStatus::Failed) {
+                        ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+                        ImGui::TextWrapped("No face found in this take.");
+                        ImGui::PopStyleColor();
+                    }
+                }
             }
         }
 

@@ -380,7 +380,20 @@ static GLuint g_solid_tex = 0;
 
 // Per-slot stable output textures — indexed by fx_apply's 'slot' argument.
 // These persist between pass chains so deferred ImDrawList commands are safe.
-static const int kMaxSlots = MAX_VIDEO_TRACKS * 2 + 1;  // +1: face-warp slot
+// Slot map: [0 .. MAX*2-1] per-clip fx (== video decode slot) + scene/mirror
+// specials at the top of that range; [MAX*2] mirror face-warp; [MAX*2+1 ..
+// MAX*4] face-warp/sprite outputs for clips (one per video slot — the warp
+// output must outlive the clip's fx_apply output until scene composite);
+// [MAX*4+1] (kMaxSlots-1) fx-picker preview thumbnails. The preview slot
+// previously shared MAX*2 with the mirror face-warp — now exclusive.
+static const int kMaxSlots = MAX_VIDEO_TRACKS * 4 + 2;
+static const int kFaceClipSlotBase = MAX_VIDEO_TRACKS * 2 + 1;
+
+int fx_face_clip_slot(int video_slot) {
+    if (video_slot < 0) video_slot = 0;
+    return kFaceClipSlotBase + (video_slot % (MAX_VIDEO_TRACKS * 2));
+}
+
 static struct {
     GLuint fbo = 0, tex = 0;
     int w = 0, h = 0;
@@ -623,6 +636,70 @@ uintptr_t face_warp_apply(uintptr_t src_tex, int slot, int w, int h,
     glUniform4fv(glGetUniformLocation(g_face_warp_prog, "u_bb"), 12, bb);
     glDrawArrays(GL_TRIANGLES, 0, 3);
 
+    glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)prev_fbo);
+    glViewport(prev_vp[0], prev_vp[1], prev_vp[2], prev_vp[3]);
+    return (uintptr_t)g_out[slot].tex;
+}
+
+// ── Face sprites (doggy ears/nose/tongue at playback/export) ─────────────────
+// Attribute-less quad: corners come in as uniforms, gl_VertexID picks them.
+// Position UV convention matches the fx pipeline: (0,0) = image top-left =
+// texture row 0 = NDC (-1,-1).
+static const char* k_sprite_vs = R"(#version 330 core
+uniform vec2 u_p[4];     // tl, tr, br, bl in target UV
+uniform vec2 u_uv[4];
+out vec2 v_uv;
+void main() {
+    int idx[6] = int[6](0, 1, 2, 0, 2, 3);
+    int i = idx[gl_VertexID];
+    gl_Position = vec4(u_p[i] * 2.0 - 1.0, 0.0, 1.0);
+    v_uv = u_uv[i];
+}
+)";
+static const char* k_sprite_fs = R"(#version 330 core
+in vec2 v_uv; out vec4 frag;
+uniform sampler2D u_tex;
+void main() { frag = texture(u_tex, v_uv); }
+)";
+static GLuint g_sprite_prog = 0;
+
+uintptr_t face_sprites_apply(uintptr_t src_tex, int slot, int w, int h,
+                             const FaceSpriteQuad* quads, int n) {
+    if (n <= 0 || slot < 0 || slot >= kMaxSlots || w <= 0 || h <= 0)
+        return src_tex;
+    if (!g_sprite_prog) {
+        g_sprite_prog = link_prog2(k_sprite_vs, k_sprite_fs);
+        if (!g_sprite_prog) return src_tex;
+    }
+    GLint prev_fbo = 0;
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prev_fbo);
+    GLint prev_vp[4];
+    glGetIntegerv(GL_VIEWPORT, prev_vp);
+
+    out_ensure(slot, w, h);
+    glBindVertexArray(g_vao);
+    // face_warp_apply output already lives in this slot — draw in place.
+    if ((GLuint)src_tex != g_out[slot].tex)
+        draw_pass(g_out[slot].fbo, (GLuint)src_tex, w, h, g_prog.blit);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, g_out[slot].fbo);
+    glViewport(0, 0, w, h);
+    glUseProgram(g_sprite_prog);
+    glEnable(GL_BLEND);
+    glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA,
+                        GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+    glActiveTexture(GL_TEXTURE0);
+    glUniform1i(glGetUniformLocation(g_sprite_prog, "u_tex"), 0);
+    for (int i = 0; i < n; ++i) {
+        const FaceSpriteQuad& q = quads[i];
+        if (!q.tex) continue;
+        float uv[8] = {q.u0, 0.f, q.u1, 0.f, q.u1, 1.f, q.u0, 1.f};
+        glUniform2fv(glGetUniformLocation(g_sprite_prog, "u_p"),  4, &q.p[0][0]);
+        glUniform2fv(glGetUniformLocation(g_sprite_prog, "u_uv"), 4, uv);
+        glBindTexture(GL_TEXTURE_2D, (GLuint)q.tex);
+        glDrawArrays(GL_TRIANGLES, 0, 6);
+    }
+    glDisable(GL_BLEND);
     glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)prev_fbo);
     glViewport(prev_vp[0], prev_vp[1], prev_vp[2], prev_vp[3]);
     return (uintptr_t)g_out[slot].tex;

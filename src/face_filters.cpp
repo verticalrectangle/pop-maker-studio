@@ -1,4 +1,5 @@
 #include "face_filters.h"
+#include "face_cache.h"
 #include "paths.h"
 #include <GL/gl.h>
 #include <GL/glext.h>
@@ -8,7 +9,7 @@
 #include <map>
 
 // Landmark groups (see face_track.h): eyes 33–42 / 87–96, brows 43–51 /
-// 97–105, mouth 52–71, nose 72–86, contour 0–32 (chin ≈ 16).
+// 97–105, mouth 52–71, nose 72–86, contour 0–32 (zig-zag; chin = 0).
 
 static const char* k_names[] = {
     "None", "Pretty", "Big Eyes", "Tiny Face", "Big Mouth", "Alien", "Doggy",
@@ -184,20 +185,22 @@ static GLuint sprite_tex(const char* name, int& w, int& h) {
     return sl.tex;
 }
 
-void face_filter_draw_doggy(ImDrawList* dl, const FaceObs& obs, float amount,
-                            const std::function<ImVec2(float, float)>& to_screen) {
-    if (!obs.valid) return;
+int face_filter_doggy_quads(const FaceObs& obs, float amount,
+                            FaceSpriteQuad* out, int max_out) {
+    if (!obs.valid || obs.w <= 0 || obs.h <= 0 || max_out <= 0) return 0;
     Anchors a = anchors_from(obs);
     const float iw = 1.f / obs.w, ih = 1.f / obs.h;
     const float ed = a.eyeDist;
     float upx = a.up[0], upy = a.up[1];
     float rx = a.right[0], ry = a.right[1];
+    int n = 0;
 
-    // Draw a sprite: center/size in face-basis units, tilt in degrees
-    // (positive leans outward to the sprite's right). Corners go through
-    // to_screen, so mirror flip + camera rotation come for free.
+    // One sprite: center/size in face-basis units, tilt in degrees (positive
+    // leans outward to the sprite's right). Corners land in frame UV — the
+    // mirror maps them through to_screen, the compositor uses them directly.
     auto sprite = [&](const char* name, float cx_fb, float cy_fb,
                       float width_fb, float tilt_deg, bool flip) {
+        if (n >= max_out) return;
         int sw = 0, sh = 0;
         GLuint tex = sprite_tex(name, sw, sh);
         if (!tex || sw <= 0) return;
@@ -210,23 +213,24 @@ void face_filter_draw_doggy(ImDrawList* dl, const FaceObs& obs, float amount,
         float hh = hw * (float)sh / (float)sw;
         float cx = a.eyeMid[0] + rx * cx_fb * ed + upx * cy_fb * ed;
         float cy = a.eyeMid[1] + ry * cx_fb * ed + upy * cy_fb * ed;
-        auto S = [&](float ox, float oy) {
-            return to_screen((cx + axx * ox + ayx * oy) * iw,
-                             (cy + axy * ox + ayy * oy) * ih);
-        };
-        ImVec2 tl = S(-hw,  hh), tr = S(hw,  hh);
-        ImVec2 br = S( hw, -hh), bl = S(-hw, -hh);
-        float u0 = flip ? 1.f : 0.f, u1 = flip ? 0.f : 1.f;
-        dl->AddImageQuad((ImTextureID)(intptr_t)tex, tl, tr, br, bl,
-                         {u0, 0}, {u1, 0}, {u1, 1}, {u0, 1});
+        FaceSpriteQuad& q = out[n++];
+        q.tex = tex;
+        const float oxs[4] = {-hw,  hw,  hw, -hw};   // tl tr br bl
+        const float oys[4] = { hh,  hh, -hh, -hh};   // +hh along local up = art top
+        for (int i = 0; i < 4; ++i) {
+            q.p[i][0] = (cx + axx * oxs[i] + ayx * oys[i]) * iw;
+            q.p[i][1] = (cy + axy * oxs[i] + ayy * oys[i]) * ih;
+        }
+        q.u0 = flip ? 1.f : 0.f;
+        q.u1 = flip ? 0.f : 1.f;
     };
 
     float sc = 0.6f + 0.4f * amount;   // strength scales the costume
     sprite("sprite_ear.png", -1.35f, 1.55f, 1.25f * sc,  20.f, true);
     sprite("sprite_ear.png",  1.35f, 1.55f, 1.25f * sc, -20.f, false);
-    // Tongue first, nose on top (Snapchat layering). Openness from the INNER
-    // lip ring (64–71) — the outer ring includes lip thickness and fired on
-    // a closed mouth.
+    // Tongue before nose (Snapchat layering — nose draws on top). Openness
+    // from the INNER lip ring (64–71) — the outer ring includes lip thickness
+    // and fired on a closed mouth.
     {
         float inner_c[2];
         mean_of(obs, 64, 72, inner_c);
@@ -249,4 +253,45 @@ void face_filter_draw_doggy(ImDrawList* dl, const FaceObs& obs, float amount,
         float ox = (nx * rx + ny * ry) / ed, oy = (nx * upx + ny * upy) / ed;
         sprite("sprite_nose.png", ox, oy, 0.95f * sc, 0.f, false);
     }
+    return n;
+}
+
+void face_filter_draw_doggy(ImDrawList* dl, const FaceObs& obs, float amount,
+                            const std::function<ImVec2(float, float)>& to_screen) {
+    FaceSpriteQuad quads[4];
+    int n = face_filter_doggy_quads(obs, amount, quads, 4);
+    for (int i = 0; i < n; ++i) {
+        const FaceSpriteQuad& q = quads[i];
+        dl->AddImageQuad((ImTextureID)(intptr_t)q.tex,
+                         to_screen(q.p[0][0], q.p[0][1]),
+                         to_screen(q.p[1][0], q.p[1][1]),
+                         to_screen(q.p[2][0], q.p[2][1]),
+                         to_screen(q.p[3][0], q.p[3][1]),
+                         {q.u0, 0}, {q.u1, 0}, {q.u1, 1}, {q.u0, 1});
+    }
+}
+
+// ── Playback/export: face filter on a take's decoded frame ───────────────────
+
+uintptr_t face_filter_apply_take(const Clip& cl, double src_t,
+                                 uintptr_t tex, int video_slot, int w, int h) {
+    if (cl.face_filter == 0 || cl.text.empty() || w <= 0 || h <= 0 ||
+        !face_track_available())
+        return tex;
+    int rot_q = ((int)lroundf(cl.rotation / 90.f) % 4 + 4) % 4;
+    face_cache_request(cl.text, rot_q);          // no-op once built
+    FaceObs obs;
+    if (!face_cache_obs(cl.text, rot_q, src_t, obs)) return tex;
+    int slot = fx_face_clip_slot(video_slot);
+    FaceWarpBump bumps[MAX_FACE_BUMPS];
+    int nb = face_filter_bumps(cl.face_filter, cl.face_filter_amt, obs, bumps);
+    if (nb > 0)
+        tex = face_warp_apply(tex, slot, w, h, (const float*)bumps, nb);
+    if (cl.face_filter == (int)FaceFilter::Doggy) {
+        FaceSpriteQuad quads[4];
+        int nq = face_filter_doggy_quads(obs, cl.face_filter_amt, quads, 4);
+        if (nq > 0)
+            tex = face_sprites_apply(tex, slot, w, h, quads, nq);
+    }
+    return tex;
 }

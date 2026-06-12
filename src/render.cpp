@@ -7,6 +7,8 @@
 #include "fx_shader.h"
 #include "runtime_fx.h"
 #include "body_fx.h"
+#include "face_filters.h"
+#include "face_cache.h"
 
 #define GL_GLEXT_PROTOTYPES
 #include <GL/gl.h>
@@ -1605,6 +1607,8 @@ static struct GlExport {
     // — shaves the per-frame glMapBuffer wait when GPU runs faster than CPU.
     GLuint  pbo[3]        = {};
     bool    use_vaapi     = false;  // h264_vaapi encoder active
+    // Face-filter landmark caches still building — frames wait on these.
+    std::vector<std::pair<std::string, int>> face_waits;   // (take path, rot_q)
 } g_gl_ex;
 
 static void gl_cleanup_export();
@@ -2108,6 +2112,12 @@ static bool gl_render_vid_clip(ImDrawList& dl, const Clip* cl, float at_time,
         cur_tex = runtime_fx_apply(cl->runtime_fx_id, cur_tex, vid_w, vid_h,
                                    cl->runtime_fx_params, cl->runtime_fx_amount, at_time);
 
+    // Face filter on the take — same cached-landmark helper as preview.
+    // Export prep blocks until the cache is built (see export start).
+    if (cl->face_filter != 0)
+        cur_tex = face_filter_apply_take(*cl, (double)src_t, cur_tex,
+                                         fx_slot, vid_w, vid_h);
+
     // BodyFX is now a solid brick on its own track — applied post-composite (see below).
 
     // Global FX are applied once to the full composited frame after all clips are
@@ -2199,6 +2209,19 @@ void render_start_gl(AppState& state) {
     int fps          = state.fps;
     int total_frames = (int)(state.duration * fps + 0.5f);
     if (total_frames <= 0 || state.out_mp4.empty()) return;
+
+    // Face filters: kick landmark-cache builds NOW so they run while the rest
+    // of the export sets up; render_tick_gl waits on the stragglers before
+    // the first frame (filters silently missing from an export would read as
+    // "export is broken").
+    std::vector<std::pair<std::string, int>> face_waits;
+    for (auto& tr : state.tracks)
+        for (auto& cl : tr.clips)
+            if (cl.face_filter != 0 && !cl.text.empty()) {
+                int rq = ((int)lroundf(cl.rotation / 90.f) % 4 + 4) % 4;
+                face_cache_request(cl.text, rq);
+                face_waits.push_back({cl.text, rq});
+            }
 
     // ── Create FBO ────────────────────────────────────────────────────────────
     GLuint fbo = 0, col_tex = 0;
@@ -2677,6 +2700,7 @@ void render_start_gl(AppState& state) {
     g_gl_ex.pbo[1]        = pbos[1];
     g_gl_ex.pbo[2]        = pbos[2];
     g_gl_ex.use_vaapi     = use_vaapi;
+    g_gl_ex.face_waits    = std::move(face_waits);
     video_close_export_all();  // reset all decoder slots for the new render session
     g_ffmpeg_pid.store(pid);
 
@@ -2756,6 +2780,33 @@ void render_tick_gl(AppState& state) {
         state.render.stage   = "Cancelled";
         if (g_render_log) { fclose(g_render_log); g_render_log = nullptr; }
         return;
+    }
+
+    // Face-filter caches still building: hold the first frame until they're
+    // ready (a filter silently missing from an export reads as "broken").
+    // Failed builds are dropped — those clips export unfiltered.
+    if (!g_gl_ex.face_waits.empty() && g_gl_ex.current_frame == 0) {
+        float worst = 1.f;
+        auto& fw = g_gl_ex.face_waits;
+        for (auto it = fw.begin(); it != fw.end();) {
+            float p = 0.f;
+            FaceCacheStatus st = face_cache_status(it->first, &p);
+            if (st == FaceCacheStatus::Ready || st == FaceCacheStatus::Failed ||
+                st == FaceCacheStatus::None) {
+                it = fw.erase(it);
+            } else {
+                worst = std::min(worst, p);
+                ++it;
+            }
+        }
+        if (!fw.empty()) {
+            char buf[64];
+            snprintf(buf, sizeof(buf), "Tracking faces… %d%%",
+                     (int)(worst * 100.f));
+            state.render.stage = buf;
+            return;
+        }
+        state.render.stage = "Encoding…";
     }
 
     auto tick_t0 = perf_clock::now();

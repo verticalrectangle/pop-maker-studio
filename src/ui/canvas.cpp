@@ -19,6 +19,7 @@
 #include "video_recorder.h"
 #include "face_track.h"
 #include "face_filters.h"
+#include "face_cache.h"
 #include <turbojpeg.h>
 #define GL_GLEXT_PROTOTYPES
 #include <GL/gl.h>
@@ -1692,6 +1693,16 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                     tex = runtime_fx_apply(cl_ptr->runtime_fx_id, tex, rw, rh,
                                           cl_ptr->runtime_fx_params,
                                           cl_ptr->runtime_fx_amount, t_anim);
+                }
+
+                // Face filter on the take (Pretty/Doggy…): cached landmark
+                // pass per take, same helper as export — no divergence.
+                if (cl_ptr && cl_ptr->face_filter != 0 && slot >= 0) {
+                    VideoInfo vi_f = video_info(slot);
+                    int fwd = (vi_f.width  > 0) ? vi_f.width  : (int)w;
+                    int fhd = (vi_f.height > 0) ? vi_f.height : (int)h;
+                    tex = face_filter_apply_take(*cl_ptr, (double)src_t,
+                                                 tex, slot, fwd, fhd);
                 }
 
                 float px    = cl_ptr->eval_prop("pos_x",    at_time);
