@@ -253,12 +253,18 @@ static bool capture_start() {
     // REAL capture path — standard reference faces instead of a live human
     // when validating face tracking/filters.
     if (const char* fake = getenv("PMS_FAKE_CAM")) {
+        // Stills loop at 15 fps; video files (motion test clips) loop whole.
+        const char* ext = strrchr(fake, '.');
+        bool is_video = ext && (!strcasecmp(ext, ".mp4") || !strcasecmp(ext, ".avi") ||
+                                !strcasecmp(ext, ".mkv") || !strcasecmp(ext, ".mov") ||
+                                !strcasecmp(ext, ".webm"));
         snprintf(cmd, sizeof(cmd),
                  "ffmpeg -hide_banner -loglevel error"
-                 " -re -loop 1 -framerate 15 -i '%s'"
+                 " -re %s -i '%s'"
                  " -vf 'scale=720:1280:force_original_aspect_ratio=decrease,"
                  "pad=720:1280:(ow-iw)/2:(oh-ih)/2'"
-                 " -c:v mjpeg -q:v 4 -f mjpeg pipe:1 2>/dev/null", fake);
+                 " -an -c:v mjpeg -q:v 4 -f mjpeg pipe:1 2>/dev/null",
+                 is_video ? "-stream_loop -1" : "-loop 1 -framerate 15", fake);
     } else if (s_test_pattern) {
         // Camera-less dev fallback: timestamped test pattern at webcam-ish
         // specs. -re paces lavfi to real time (a camera self-paces).

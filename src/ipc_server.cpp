@@ -1814,8 +1814,10 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         int ti = params.value("track", -1), ci = params.value("clip", -1);
         if (!check_clip(state, ti, ci, err)) return {};
         const Clip& cl_pre = state.tracks[ti].clips[ci];
-        if (cl_pre.clip_type != ClipType::Video || cl_pre.text.empty()) {
-            err = "clip is not a video clip"; return {};
+        // Camera bricks count: a selected take mirrors its path into `text`,
+        // so the mask pipeline reads it like any video clip.
+        if (!clip_is_videolike_type(cl_pre.clip_type) || cl_pre.text.empty()) {
+            err = "clip is not a video clip (or camera brick with a take)"; return {};
         }
         // Refuse fast when the MJPEG proxy isn't on disk yet — the bg_remove
         // mask pipeline reads frames from the proxy, so without it we'd

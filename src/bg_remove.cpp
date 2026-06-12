@@ -16,6 +16,8 @@
 #include "stb_image.h"
 #include "stb_image_write.h"
 #include <unistd.h>
+#include <sys/resource.h>
+#include <sys/syscall.h>
 #include <fcntl.h>
 #include <sys/wait.h>
 
@@ -262,6 +264,9 @@ static void run_job(std::shared_ptr<JobData> data,
                     float /*duration*/,
                     int start_frame,
                     int num_frames) {
+    // Background QoS for the whole job (covers the batch path too — worker
+    // threads inherit): the live app outranks mask generation.
+    setpriority(PRIO_PROCESS, (id_t)syscall(SYS_gettid), 10);
     // Probe fps
     float fps = probe_fps(input_path);
     if (fps <= 0.f || fps > 1000.f) fps = 30.f;
@@ -291,8 +296,11 @@ static void run_job(std::shared_ptr<JobData> data,
 
     Ort::Env env(ORT_LOGGING_LEVEL_ERROR, "rembg");
     Ort::SessionOptions opts;
-    opts.SetIntraOpNumThreads((int)std::thread::hardware_concurrency());
-    opts.SetInterOpNumThreads((int)std::thread::hardware_concurrency());
+    // Half the cores: full-width inference starved the live app while
+    // masks generated (the 'remove background made everything laggy' report).
+    const int n_inf_threads = std::max(1, (int)std::thread::hardware_concurrency() / 2);
+    opts.SetIntraOpNumThreads(n_inf_threads);
+    opts.SetInterOpNumThreads(1);
     opts.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
 
     std::unique_ptr<Ort::Session> session;
@@ -443,8 +451,10 @@ static void run_job(std::shared_ptr<JobData> data,
         }
     } else {
         // Fixed batch=1 model — run N parallel sessions, each processing a different frame.
-        // One session per logical core; each session is single-threaded to avoid oversubscription.
-        const int N = std::max(1, (int)std::thread::hardware_concurrency());
+        // Each session is single-threaded to avoid oversubscription. HALF the
+        // cores, niced: one-per-core saturated the machine and the app itself
+        // (UI, decode, audio) visibly stuttered while masks generated.
+        const int N = std::max(1, (int)std::thread::hardware_concurrency() / 2);
         Ort::SessionOptions wopts;
         wopts.SetIntraOpNumThreads(1);
         wopts.SetInterOpNumThreads(1);
@@ -463,6 +473,8 @@ static void run_job(std::shared_ptr<JobData> data,
         std::atomic<bool> aborted{false};
 
         auto worker = [&](Ort::Session* sess) {
+            // Background QoS: the live app outranks mask generation.
+            setpriority(PRIO_PROCESS, (id_t)syscall(SYS_gettid), 10);
             auto wm = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
             std::vector<float> inp(3 * U2NET_SIZE * U2NET_SIZE);
             while (true) {

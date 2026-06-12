@@ -1650,7 +1650,9 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                     !cl_ptr->bg_remove_mask_dir.empty()) {
                     std::string mask_dir = cl_ptr->bg_remove_mask_dir;
                     float mask_fps = bg_remove_read_fps(mask_dir);
-                    float src_t = cl_ptr->in_point + (at_time - cl_ptr->start) / cl_ptr->speed;
+                    // Same source-time mapping as the frame fetch (×speed —
+                    // this used to divide, desyncing masks on retimed clips).
+                    float src_t = cl_ptr->in_point + (at_time - cl_ptr->start) * cl_ptr->speed;
                     int frame_i = (int)(src_t * mask_fps);
                     VideoInfo vi_g = video_info(slot);
                     int bw = (vi_g.width  > 0) ? vi_g.width  : (int)w;

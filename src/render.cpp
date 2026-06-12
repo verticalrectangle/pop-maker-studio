@@ -2073,7 +2073,9 @@ static bool gl_render_vid_clip(ImDrawList& dl, const Clip* cl, float at_time,
     if (cl->bg_remove_status == BgRemoveStatus::Ready && !cl->bg_remove_mask_dir.empty()) {
         std::string mask_dir = cl->bg_remove_mask_dir;
         float mask_fps = bg_remove_read_fps(mask_dir);
-        float bfx_src_t = cl->in_point + (at_time - cl->start) / cl->speed;
+        // Same source-time mapping as the frame fetch (×speed — this used to
+        // divide, desyncing body-FX masks on any retimed clip).
+        float bfx_src_t = cl->in_point + (at_time - cl->start) * cl->speed;
         int frame_i = (int)(bfx_src_t * mask_fps);
 
         // Standalone glass BodyFX bricks on this track
