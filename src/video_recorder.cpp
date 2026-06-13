@@ -11,6 +11,7 @@
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -81,8 +82,14 @@ int  vrecorder_device_selected()      { return s_device_sel; }
 // Does the device deliver MJPEG natively? (Stream-copy when it does; phone
 // bridges like v4l2loopback often only do planar YUV — re-encode those.)
 static bool device_has_mjpeg(const std::string& path) {
+    // Cache per device path: the format enumeration opens the V4L2 node, which
+    // on some bridges blocks ~100 ms — re-running it on every capture_start
+    // slowed the warm-up after the camera is released between takes.
+    static std::map<std::string, bool> s_mjpeg_cache;
+    auto it = s_mjpeg_cache.find(path);
+    if (it != s_mjpeg_cache.end()) return it->second;
     int fd = open(path.c_str(), O_RDWR | O_NONBLOCK);
-    if (fd < 0) return false;
+    if (fd < 0) return false;            // don't cache a transient open failure
     bool found = false;
     for (uint32_t i = 0; i < 64; ++i) {
         v4l2_fmtdesc f{};
@@ -92,6 +99,7 @@ static bool device_has_mjpeg(const std::string& path) {
         if (f.pixelformat == V4L2_PIX_FMT_MJPEG) { found = true; break; }
     }
     close(fd);
+    s_mjpeg_cache[path] = found;
     return found;
 }
 
@@ -276,21 +284,26 @@ static bool capture_start() {
         int idx = (s_device_sel >= 0 && s_device_sel < (int)devs.size())
                   ? s_device_sel : 0;
         const std::string& dev = devs[(size_t)idx].path;
+        // Low-latency intake: skip ffmpeg's stream analysis so first frame
+        // arrives ~immediately — the camera is released between takes, so a
+        // short cold start matters. nobuffer/low_delay + a tiny probe window.
+        const char* lat = "-fflags nobuffer -flags low_delay "
+                          "-probesize 32 -analyzeduration 0";
         if (device_has_mjpeg(dev)) {
             // Native MJPEG → stream copy, no transcode.
             snprintf(cmd, sizeof(cmd),
-                     "ffmpeg -hide_banner -loglevel error"
+                     "ffmpeg -hide_banner -loglevel error %s"
                      " -f v4l2 -input_format mjpeg -framerate 30"
                      " -video_size 1280x720 -i %s"
-                     " -c:v copy -f mjpeg pipe:1 2>/dev/null", dev.c_str());
+                     " -c:v copy -f mjpeg pipe:1 2>/dev/null", lat, dev.c_str());
         } else {
             // YUV-only device (e.g. phone bridges over v4l2loopback):
             // let V4L2 negotiate format/size and encode to MJPEG ourselves.
             snprintf(cmd, sizeof(cmd),
-                     "ffmpeg -hide_banner -loglevel error"
+                     "ffmpeg -hide_banner -loglevel error %s"
                      " -f v4l2 -i %s"
                      " -c:v mjpeg -q:v 4 -f mjpeg pipe:1 2>/dev/null",
-                     dev.c_str());
+                     lat, dev.c_str());
         }
     }
     // Own fork/exec instead of popen: pclose() WAITS for the child, and
@@ -510,16 +523,20 @@ void vrecorder_stop(AppState& state, bool keep_partial) {
         audio_clear_loop();
         state.playing = false;
         audio_pause();
+        // Park the playhead at the take's start so the freshly recorded take
+        // is shown from its first frame (instead of wherever the loop ended).
+        state.playhead = s_lp_start;
     }
 
     s_ti = s_ci = -1;
-    if (s_monitor_want) {
-        s_state = VRecState::Monitor;   // keep the mirror running
-    } else {
-        capture_stop();
-        s_last_jpeg.clear();
-        s_state = VRecState::Idle;
-    }
+    // A finished recording always drops the live preview and releases the
+    // camera — you want to see the TAKE you just shot, not the live feed
+    // painted over it, and an idle camera proc should close. Re-arming Record
+    // re-opens the device and shows live again (vrecorder_start → Warming).
+    s_monitor_want = false;
+    capture_stop();
+    s_last_jpeg.clear();
+    s_state = VRecState::Idle;
 }
 
 void vrecorder_tick(AppState& state) {
