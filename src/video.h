@@ -149,6 +149,16 @@ void video_set_pixel_fx(int track_id, const PixelFX& fx);
 // Animated types (Glitch, VHS) regenerate each frame; others cached after first call.
 uintptr_t video_fx_preview_texture(FXType ft, float t);
 
+// Large hover-popover preview: render effect `ft` onto `src_tex` (0 = built-in
+// portrait) at w×h and return a stable GL texture. Runs on the user's footage.
+uintptr_t video_fx_preview_big(FXType ft, float t, uintptr_t src_tex, int w, int h);
+uintptr_t video_adj_preview_big(uintptr_t src_tex, int w, int h,
+                                float brightness, float contrast,
+                                float saturation, float hue,
+                                float blur, float vignette);
+// The default preview source (built-in portrait) as a GL texture.
+uintptr_t video_default_preview_tex();
+
 // Adjustment preset preview — 80×45 GL texture showing the grade applied to source.
 // Keyed by unique_id; regenerated whenever called (caller caches by id if desired).
 uintptr_t video_adj_preview_texture(int unique_id,
