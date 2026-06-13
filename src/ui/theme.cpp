@@ -201,6 +201,37 @@ bool ui_card_add_btn(ImVec2 card_tl, float card_w, int uid) {
     return clicked;
 }
 
+// ── Shared progress UI ───────────────────────────────────────────────────────
+void ui_progress_bar(ImDrawList* dl, float x, float y, float bw, float progress,
+                     ImU32 accent, float bh) {
+    if (bw <= 0.f) return;
+    ImU32 track = (accent & 0x00FFFFFFu) | ((ImU32)40 << IM_COL32_A_SHIFT);
+    dl->AddRectFilled({x, y}, {x + bw, y + bh}, track, bh * 0.5f);
+    if (progress < 0.f) {
+        float seg = bw * 0.35f;
+        float tt  = fmodf((float)ImGui::GetTime() * 0.8f, 1.f);
+        float x0  = x + (bw - seg) * tt;
+        dl->AddRectFilled({x0, y}, {x0 + seg, y + bh}, accent, bh * 0.5f);
+    } else {
+        float pct = progress < 0.02f ? 0.02f : (progress > 1.f ? 1.f : progress);
+        dl->AddRectFilled({x, y}, {x + bw * pct, y + bh}, accent, bh * 0.5f);
+    }
+}
+
+void ui_canvas_progress_banner(ImDrawList* dl, ImVec2 p, float w, float h,
+                               const char* title, float progress, ImU32 accent) {
+    if (!title) title = "Working…";
+    ImVec2 ts = ImGui::CalcTextSize(title);
+    const float pad = 10.f;
+    float bw = ts.x + pad * 2.f, bh = ts.y + pad + 10.f;
+    ImVec2 bp = {p.x + (w - bw) * 0.5f, p.y + h - bh - 16.f};
+    dl->AddRectFilled(bp, {bp.x + bw, bp.y + bh}, IM_COL32(10, 10, 16, 225), 6.f);
+    dl->AddRect(bp, {bp.x + bw, bp.y + bh},
+                (accent & 0x00FFFFFFu) | ((ImU32)190 << IM_COL32_A_SHIFT), 6.f, 0, 1.5f);
+    dl->AddText({bp.x + pad, bp.y + pad * 0.55f}, IM_COL32(255, 210, 140, 255), title);
+    ui_progress_bar(dl, bp.x + pad, bp.y + bh - 8.f, bw - pad * 2.f, progress, accent, 3.f);
+}
+
 // ── Shared library-card hover-dwell clock + image popover ────────────────────
 static int    s_card_hover_id = -1;
 static double s_card_hover_t0 = 0.0;

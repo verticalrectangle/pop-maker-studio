@@ -1719,20 +1719,17 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                 ImU32 ftcol = sel ? IM_COL32(20, 8, 40, 255) : IM_COL32(200, 200, 220, 255);
                 dl->AddText({vis_x0+4.f, cy0+(cy1-cy0-13.f)*0.5f}, ftcol, fname);
                 ImGui::PopClipRect();
-                // Proxy progress bar — shown while transcoding, absent once ready
+                // Proxy progress bar — shown while transcoding, absent once ready.
+                // Shared bar style (blue accent flags it as a background transcode,
+                // distinct from the orange AI jobs); Queued shows an idle sweep.
                 if (!clip.text.empty()) {
                     auto pst = proxy_job_status(clip.text);
                     const float bar_h = 3.f;
-                    if (pst.state == ProxyJobStatus::State::Generating) {
-                        float filled = (vis_x1 - vis_x0) * pst.progress;
-                        dl->AddRectFilled({vis_x0, cy1-bar_h}, {vis_x0+filled, cy1},
-                                          IM_COL32(100, 210, 255, 255));
-                        dl->AddRectFilled({vis_x0+filled, cy1-bar_h}, {vis_x1, cy1},
-                                          IM_COL32(30, 40, 60, 200));
-                    } else if (pst.state == ProxyJobStatus::State::Queued) {
-                        dl->AddRectFilled({vis_x0, cy1-bar_h}, {vis_x1, cy1},
-                                          IM_COL32(60, 70, 100, 160));
-                    }
+                    const ImU32 pacc = IM_COL32(100, 210, 255, 255);
+                    if (pst.state == ProxyJobStatus::State::Generating)
+                        ui_progress_bar(dl, vis_x0, cy1-bar_h, vis_x1-vis_x0, pst.progress, pacc, bar_h);
+                    else if (pst.state == ProxyJobStatus::State::Queued)
+                        ui_progress_bar(dl, vis_x0, cy1-bar_h, vis_x1-vis_x0, -1.f, pacc, bar_h);
                 }
             } else if (clip.clip_type == ClipType::Background) {
                 // Background brick: deep purple gradient with shimmer lines
