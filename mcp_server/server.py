@@ -2254,12 +2254,29 @@ async def list_tools() -> list[Tool]:
             },
         ),
         Tool(
+            name="select_clip",
+            description=(
+                "Set the canvas selection — the clip whose transform handles (move/resize/"
+                "rotate box) show on the preview. Pairs with get_canvas_geometry + ui_input. "
+                "Omit 'clip' (or pass -1) to clear the selection."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "track":      {"type": "integer"},
+                    "track_name": {"type": "string"},
+                    "clip":       {"type": "integer"},
+                },
+            },
+        ),
+        Tool(
             name="get_canvas_geometry",
             description=(
                 "Transform-handle geometry of the selected clip from the last drawn frame "
-                "(screen px): selection bbox, rotate-knob position, pivot, plus current "
-                "rotation/scale/position props. Pairs with ui_input to hit handles "
-                "deterministically instead of pixel-hunting screenshots."
+                "(screen px): selection bbox (un-rotated/local), rotate-knob position, pivot, "
+                "rotation, plus current scale/position props. The box + handles rotate with "
+                "the clip — reconstruct rotated corners as center + R(rotation)·(±hw,±hh). "
+                "Pairs with ui_input to hit handles deterministically."
             ),
             inputSchema={"type": "object", "properties": {}},
         ),
