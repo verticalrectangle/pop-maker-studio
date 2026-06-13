@@ -789,10 +789,11 @@ void draw_canvas_handles(AppState& state, ImDrawList* dl, ImVec2 p, float w, flo
                 case CanvasHandle::Body:
                     mc.sub_pos      = 3;
                     mc.sub_anchor_h = 1;
-                    mc.sub_pos_x    = fmaxf(SAFE_SIDE, fminf(1.f-SAFE_SIDE,
-                                        s_ctx.start_pos_x + dmx/w));
-                    mc.sub_pos_y    = fmaxf(SAFE_TOP,  fminf(1.f-SAFE_BOT,
-                                        s_ctx.start_pos_y + dmy/h));
+                    // Text moves as freely as any other canvas object — past the
+                    // safe margins and off-canvas if you want — not penned into
+                    // the safe zone. Same generous [-1, 2] range as image/video.
+                    mc.sub_pos_x    = fmaxf(-1.f, fminf(2.f, s_ctx.start_pos_x + dmx/w));
+                    mc.sub_pos_y    = fmaxf(-1.f, fminf(2.f, s_ctx.start_pos_y + dmy/h));
                     break;
                 case CanvasHandle::CornerTL: case CanvasHandle::CornerTR:
                     if (orig_bbox_h > 0.f) {
@@ -820,8 +821,7 @@ void draw_canvas_handles(AppState& state, ImDrawList* dl, ImVec2 p, float w, flo
                 }
                 case CanvasHandle::EdgeT: case CanvasHandle::EdgeB:
                     mc.sub_pos   = 3;
-                    mc.sub_pos_y = fmaxf(SAFE_TOP, fminf(1.f-SAFE_BOT,
-                                    s_ctx.start_pos_y + dmy/h));
+                    mc.sub_pos_y = fmaxf(-1.f, fminf(2.f, s_ctx.start_pos_y + dmy/h));
                     break;
                 default: break;
             }
@@ -1907,20 +1907,12 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
 
             float block_h = txt_lines.size() * line_h;
 
-            // Post-wrap font scale: ensure no rendered line overflows the canvas given the anchor.
-            // Checks actual line widths (including trailing spaces/punctuation from transcription).
+            // Post-wrap font scale: keep a single over-long token (an unbroken URL,
+            // say) from spilling past the wrap column. NO safe-margin penalty — the
+            // text holds its size as you drag it anywhere on the canvas; it's free
+            // to overflow the edges like any other object.
             {
-                float max_fit_w;
-                if (show->sub_anchor_h == 0)
-                    max_fit_w = (1.f - show->sub_pos_x - SAFE_SIDE) * w;
-                else if (show->sub_anchor_h == 2)
-                    max_fit_w = (show->sub_pos_x - SAFE_SIDE) * w;
-                else
-                    max_fit_w = 2.f * fminf(show->sub_pos_x - SAFE_SIDE,
-                                            1.f - show->sub_pos_x - SAFE_SIDE) * w;
-                max_fit_w = fminf(max_fit_w, max_line_w);              // also cap at wrap column
-                max_fit_w = fmaxf(max_fit_w, 40.f);                    // safety floor
-
+                float max_fit_w = fmaxf(40.f, max_line_w);
                 float max_rendered_w = 0.f;
                 for (auto& ln : txt_lines)
                     max_rendered_w = fmaxf(max_rendered_w,
@@ -2137,6 +2129,45 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
             dl->AddLine({sx1, sy0}, {sx1 - tk, sy0}, tc);  dl->AddLine({sx1, sy0}, {sx1, sy0 + tk}, tc);
             dl->AddLine({sx0, sy1}, {sx0 + tk, sy1}, tc);  dl->AddLine({sx0, sy1}, {sx0, sy1 - tk}, tc);
             dl->AddLine({sx1, sy1}, {sx1 - tk, sy1}, tc);  dl->AddLine({sx1, sy1}, {sx1, sy1 - tk}, tc);
+        }
+    }
+
+    // Background-removal progress banner — so the human sees the AI working
+    // (and that it IS working) even when the Clip panel isn't open.
+    {
+        const Clip* bgp = nullptr;
+        for (auto& tr : state.tracks) {
+            for (auto& c : tr.clips)
+                if (clip_is_videolike_type(c.clip_type) &&
+                    c.bg_remove_status == BgRemoveStatus::Processing &&
+                    state.playhead >= c.start && state.playhead < c.end) { bgp = &c; break; }
+            if (bgp) break;
+        }
+        if (bgp) {
+            float prog = bgp->bg_remove_progress;
+            char msg[64];
+            if (prog < 0.f) snprintf(msg, sizeof(msg), "Downloading AI model…");
+            else snprintf(msg, sizeof(msg), "Removing background…  %d%%",
+                          (int)(fmaxf(0.f, fminf(1.f, prog)) * 100.f));
+            ImVec2 ts = ImGui::CalcTextSize(msg);
+            float pad = 10.f, bw = ts.x + pad * 2.f, bh = ts.y + pad + 10.f;
+            ImVec2 bp = {p.x + (w - bw) * 0.5f, p.y + h - bh - 16.f};
+            dl->AddRectFilled(bp, {bp.x + bw, bp.y + bh}, IM_COL32(10, 10, 16, 225), 6.f);
+            dl->AddRect(bp, {bp.x + bw, bp.y + bh}, IM_COL32(255, 165, 0, 190), 6.f, 0, 1.5f);
+            dl->AddText({bp.x + pad, bp.y + pad * 0.55f}, IM_COL32(255, 210, 140, 255), msg);
+            float bar_y = bp.y + bh - 8.f, bar_w = bw - pad * 2.f;
+            dl->AddRectFilled({bp.x + pad, bar_y}, {bp.x + pad + bar_w, bar_y + 3.f},
+                              IM_COL32(255, 165, 0, 50), 2.f);
+            if (prog < 0.f) {
+                float tt = fmodf((float)ImGui::GetTime() * 0.8f, 1.f);
+                float x0 = bp.x + pad + (bar_w - bar_w * 0.35f) * tt;
+                dl->AddRectFilled({x0, bar_y}, {x0 + bar_w * 0.35f, bar_y + 3.f},
+                                  IM_COL32(255, 165, 0, 255), 2.f);
+            } else {
+                float pct = fmaxf(0.02f, fminf(1.f, prog));
+                dl->AddRectFilled({bp.x + pad, bar_y}, {bp.x + pad + bar_w * pct, bar_y + 3.f},
+                                  IM_COL32(255, 165, 0, 255), 2.f);
+            }
         }
     }
 

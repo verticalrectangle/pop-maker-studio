@@ -50,12 +50,49 @@ int find_empty_track(const AppState& state) {
 
 // ── Multi-selection ops ───────────────────────────────────────────────────────
 bool delete_selected_clips(AppState& state) {
+    auto is_fx = [](const Clip& c) {
+        return c.clip_type == ClipType::Effect  || c.clip_type == ClipType::MultiFX ||
+               c.clip_type == ClipType::BodyFX  || c.clip_type == ClipType::AudioMultiFX;
+    };
+    // A content clip's welded FX bricks must die with it — otherwise deleting the
+    // content (selecting a glass brick selects its host) leaves the FX orphaned.
+    auto add_coupled = [&](int ti, int ci, std::vector<int>& out) {
+        auto& cls = state.tracks[(size_t)ti].clips;
+        for (int k = 0; k < (int)cls.size(); ++k)
+            if (k != ci && cls[(size_t)k].fx_coupled && is_fx(cls[(size_t)k]) &&
+                fx_coupled_host(state, ti, cls[(size_t)k]) == ci)
+                out.push_back(k);
+    };
+    // Deleting a "Remove Background" body-FX brick turns the cutout back off on
+    // its host clip — otherwise the decode-time bg_remove_on flag lingers and the
+    // background stays removed even though the effect is gone.
+    auto clear_bg_for_deleted = [&](int ti, const std::vector<int>& dels) {
+        auto& cls = state.tracks[(size_t)ti].clips;
+        for (int k : dels) {
+            if (k < 0 || k >= (int)cls.size()) continue;
+            const Clip& d = cls[(size_t)k];
+            if (d.clip_type != ClipType::BodyFX ||
+                d.body_fx_type != BodyFXType::RemoveBackground) continue;
+            for (auto& h : cls)
+                if (clip_is_videolike_type(h.clip_type) && !h.source_id.empty() &&
+                    h.source_id == d.source_id) {
+                    h.bg_remove_on     = false;
+                    h.bg_remove_status = BgRemoveStatus::Idle;
+                }
+        }
+    };
+
     if (state.clip_selection.size() <= 1) {
         if (state.selected_track < 0 || state.selected_clip < 0) return false;
         if (state.selected_track >= (int)state.tracks.size()) return false;
         Track& tr = state.tracks[state.selected_track];
         if (state.selected_clip >= (int)tr.clips.size()) return false;
-        tr.clips.erase(tr.clips.begin() + state.selected_clip);
+        std::vector<int> dels{state.selected_clip};
+        add_coupled(state.selected_track, state.selected_clip, dels);
+        std::sort(dels.begin(), dels.end(), std::greater<int>());
+        clear_bg_for_deleted(state.selected_track, dels);
+        for (int k : dels)
+            if (k >= 0 && k < (int)tr.clips.size()) tr.clips.erase(tr.clips.begin() + k);
         state.selected_clip = -1;
         state.clip_selection.clear();
         return true;
@@ -64,10 +101,15 @@ bool delete_selected_clips(AppState& state) {
     // out from under us within a track.
     std::vector<std::vector<int>> by_track(state.tracks.size());
     for (auto& [ti, ci] : state.clip_selection)
-        if (ti >= 0 && ti < (int)state.tracks.size()) by_track[ti].push_back(ci);
+        if (ti >= 0 && ti < (int)state.tracks.size()) {
+            by_track[ti].push_back(ci);
+            add_coupled(ti, ci, by_track[ti]);
+        }
     for (int ti = 0; ti < (int)by_track.size(); ++ti) {
         auto& cis = by_track[ti];
         std::sort(cis.begin(), cis.end(), std::greater<int>());
+        cis.erase(std::unique(cis.begin(), cis.end()), cis.end());
+        clear_bg_for_deleted(ti, cis);
         for (int ci : cis)
             if (ci >= 0 && ci < (int)state.tracks[ti].clips.size())
                 state.tracks[ti].clips.erase(state.tracks[ti].clips.begin() + ci);

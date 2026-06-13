@@ -1667,6 +1667,13 @@ void panel_clip(AppState& state, float w) {
                 ImGui::Dummy({0.f, 4.f});
                 if (ui_btn("Re-run", false, true))
                     bg_remove_start(state, state.selected_track, state.selected_clip);
+                ImGui::SameLine();
+                if (ui_btn("Turn off", false, true)) {
+                    clip.bg_remove_on     = false;
+                    clip.bg_remove_status = BgRemoveStatus::Idle;
+                    clip.bg_remove_mask_dir.clear();
+                    history_push(state, "Turn off background removal");
+                }
 
             } else if (status == BgRemoveStatus::Error) {
                 ImVec2 bp = ImGui::GetCursorScreenPos();
