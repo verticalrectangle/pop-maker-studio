@@ -1784,6 +1784,44 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                             s_kf_drag.weld_target = -1.f;
                         }
                         t_new = fmaxf(0.f, fminf(t_new, clip.end - clip.start));
+                        // Keyframes snap to the frame grid like the playhead. If
+                        // the snapped frame already holds a key of one of the
+                        // dragged props (distinct keys of a prop can't share a
+                        // frame), step out to the nearest free frame so they
+                        // separate instead of stacking. Welds (different props at
+                        // one frame = a pose) have no same-prop clash, so they
+                        // still land together.
+                        {
+                            float kfps = tl_fps(state); if (!(kfps > 0.f)) kfps = 30.f;
+                            float fstep = 1.f / kfps;
+                            float clip_len = clip.end - clip.start;
+                            auto occupied = [&](float t) -> bool {
+                                for (auto& mm : s_kf_drag.mems) {
+                                    auto it2 = clip.ktracks.find(mm.prop);
+                                    if (it2 == clip.ktracks.end()) continue;
+                                    auto& ks = it2->second.keys;
+                                    for (int k = 0; k < (int)ks.size(); ++k) {
+                                        if (k == mm.idx) continue;             // the dragged key itself
+                                        if (fabsf(ks[k].time - t) < fstep * 0.5f) return true;
+                                    }
+                                }
+                                return false;
+                            };
+                            float base = snap_to_frame(state, clip.start + t_new) - clip.start;
+                            base = fmaxf(0.f, fminf(base, clip_len));
+                            t_new = base;
+                            if (occupied(t_new)) {
+                                for (int step = 1; ; ++step) {
+                                    float hi = base + step * fstep;
+                                    float lo = base - step * fstep;
+                                    bool hi_ok = hi <= clip_len + 1e-4f;
+                                    bool lo_ok = lo >= -1e-4f;
+                                    if (hi_ok && !occupied(hi)) { t_new = hi; break; }
+                                    if (lo_ok && !occupied(lo)) { t_new = lo; break; }
+                                    if (!hi_ok && !lo_ok) break;               // no free frame
+                                }
+                            }
+                        }
                         for (auto& m : s_kf_drag.mems) {
                             auto& keys = clip.ktracks[m.prop].keys;
                             bool was_sel = state.kf_sel_prop == m.prop &&
