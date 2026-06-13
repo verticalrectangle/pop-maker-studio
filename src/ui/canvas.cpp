@@ -73,6 +73,7 @@ struct CanvasTransform {
     bool         dirty = false;
 };
 static CanvasTransform s_ctx;
+static bool s_rot_snapped = false;   // rotate drag is currently angle-snapped
 
 // True when a real ImGui widget claims the mouse — the transport pill's
 // scrubber/buttons and other overlays float INSIDE the preview rect, so the
@@ -539,11 +540,13 @@ void draw_canvas_handles(AppState& state, ImDrawList* dl, ImVec2 p, float w, flo
         // Box outline
         dl->AddQuad(TL, TR, BR, BL, box_col, 1.5f);
 
-        // Rotate knob
-        dl->AddLine(etop, knob, IM_COL32(255,255,255,80));
+        // Rotate knob — turns the snap colour while angle-snapped (45° steps).
+        bool rot_act  = (s_ctx.handle == CanvasHandle::Rotate);
+        bool rot_snap = rot_act && s_rot_snapped;
+        ImU32 knob_col = rot_snap ? snap_col : (rot_act ? hdl_hov : hdl_col);
+        dl->AddLine(etop, knob, rot_snap ? snap_col : IM_COL32(255,255,255,80));
         dl->AddCircleFilled(knob, CR+1.5f, IM_COL32(0,0,0,120));
-        bool rot_act = (s_ctx.handle == CanvasHandle::Rotate);
-        dl->AddCircle(knob, CR+1.5f, rot_act ? hdl_hov : hdl_col);
+        dl->AddCircle(knob, CR+1.5f, knob_col);
         float rdist = sqrtf((mpos.x-knob.x)*(mpos.x-knob.x) + (mpos.y-knob.y)*(mpos.y-knob.y));
         if (rdist <= CR+5.f && lclick && s_ctx.handle == CanvasHandle::None) {
             begin_drag(CanvasHandle::Rotate);
@@ -593,7 +596,14 @@ void draw_canvas_handles(AppState& state, ImDrawList* dl, ImVec2 p, float w, flo
                 case CanvasHandle::Rotate: {
                     float a0 = atan2f(s_ctx.drag_sy - cy, s_ctx.drag_sx - cx);
                     float a1 = atan2f(mpos.y - cy,        mpos.x - cx);
-                    mc.rotation = fmodf(s_ctx.start_rot + (a1-a0)*180.f/3.14159265f, 360.f);
+                    float raw = fmodf(s_ctx.start_rot + (a1-a0)*180.f/3.14159265f, 360.f);
+                    if (raw < 0.f) raw += 360.f;
+                    // Snap to the nearest 45° (covers 45/90/135/180/…) when
+                    // within ~6°, unless Shift is held for free rotation.
+                    float snapped = roundf(raw / 45.f) * 45.f;
+                    bool snap = !ImGui::GetIO().KeyShift && fabsf(raw - snapped) < 6.f;
+                    mc.rotation = fmodf(snap ? snapped : raw, 360.f);
+                    s_rot_snapped = snap;
                     break;
                 }
                 case CanvasHandle::CornerTL: case CanvasHandle::CornerTR:
