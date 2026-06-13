@@ -384,6 +384,22 @@ static std::vector<Clip> extract_host_group(AppState& state, int ti, int ci) {
     return grp;
 }
 
+// Clip indices on track ti of every FX brick welded to the content clip host_ci.
+static std::vector<int> coupled_fx_of(AppState& state, int ti, int host_ci) {
+    std::vector<int> out;
+    auto& cls = state.tracks[(size_t)ti].clips;
+    for (int k = 0; k < (int)cls.size(); ++k)
+        if (cls[(size_t)k].fx_coupled && is_fx_clip(cls[(size_t)k]) &&
+            fx_coupled_host(state, ti, cls[(size_t)k]) == host_ci)
+            out.push_back(k);
+    return out;
+}
+
+// Deferred FX-brick removal requested from the clip context menu — applied after
+// the popup closes so we never erase clips while cc/ci are still live in the menu.
+static int              s_ctx_fx_del_ti = -1;
+static std::vector<int> s_ctx_fx_del_cis;
+
 static void couple_pending_tick(AppState& state) {
     int pti = -1, pci = -1, phost = -1;
     for (int ti = 0; ti < (int)state.tracks.size() && pti < 0; ++ti) {
@@ -3537,7 +3553,32 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
             ImGui::Separator();
         }
 
-        // ── Decouple a coupled Multi-FX brick from its host ──────────────────
+        // ── Manage the FX welded to a CONTENT clip (right-clicked the host) ──
+        if (cc && !is_fx_clip(*cc)) {
+            std::vector<int> fxk = coupled_fx_of(state, ti, ci);
+            if (!fxk.empty()) {
+                bool many = fxk.size() > 1;
+                if (ImGui::MenuItem(many ? "Decouple FX bricks" : "Decouple FX brick")) {
+                    // Park each freed brick just past the host so it doesn't sit
+                    // on content and immediately re-arm the coupling timer.
+                    float park = cc->end;
+                    for (int k : fxk) {
+                        Clip& bk = ct->clips[(size_t)k];
+                        float blen = bk.end - bk.start;
+                        bk.fx_coupled = false; bk.fx_host_sid.clear();
+                        bk.start = park; bk.end = park + fminf(2.f, fmaxf(0.5f, blen));
+                        park = bk.end;
+                    }
+                    history_push(state, "Decouple FX");
+                }
+                if (ImGui::MenuItem(many ? "Remove FX bricks" : "Remove FX brick")) {
+                    s_ctx_fx_del_ti = ti; s_ctx_fx_del_cis = fxk;   // deferred erase
+                }
+                ImGui::Separator();
+            }
+        }
+
+        // ── Decouple / remove a coupled Multi-FX brick (right-clicked the brick) ──
         if (cc && cc->fx_coupled && is_fx_clip(*cc)) {
             if (ImGui::MenuItem("Decouple Multi-FX brick")) {
                 // Park the freed brick right after its host so it doesn't sit
@@ -3552,6 +3593,9 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                     cc->end   = hc.end + fminf(2.f, fmaxf(0.5f, hlen));
                 }
                 history_push(state, "Decouple Multi-FX brick");
+            }
+            if (ImGui::MenuItem("Remove effect")) {
+                s_ctx_fx_del_ti = ti; s_ctx_fx_del_cis = {ci};      // deferred erase
             }
             ImGui::Separator();
         }
@@ -3610,6 +3654,20 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
         if (trk_locked) ImGui::EndDisabled();
         ImGui::EndPopup();
     }
+
+    // Apply a deferred "Remove FX / Remove effect" requested above — erasing in
+    // the popup body would dangle cc/ci for the menu items that follow.
+    if (s_ctx_fx_del_ti >= 0 && s_ctx_fx_del_ti < (int)state.tracks.size() &&
+        !s_ctx_fx_del_cis.empty()) {
+        auto& cls = state.tracks[(size_t)s_ctx_fx_del_ti].clips;
+        std::sort(s_ctx_fx_del_cis.rbegin(), s_ctx_fx_del_cis.rend());   // erase high→low
+        for (int k : s_ctx_fx_del_cis)
+            if (k >= 0 && k < (int)cls.size()) cls.erase(cls.begin() + k);
+        state.selected_clip = -1;
+        history_push(state, s_ctx_fx_del_cis.size() > 1 ? "Remove FX" : "Remove effect");
+    }
+    s_ctx_fx_del_ti = -1;
+    s_ctx_fx_del_cis.clear();
 
     if (ImGui::BeginPopup("##track_ctx")) {
         open_track_ctx = false;

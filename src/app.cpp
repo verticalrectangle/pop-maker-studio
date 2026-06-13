@@ -301,8 +301,37 @@ void fx_coupling_tick(AppState& state) {
                 continue;
             }
             const Clip& hc = clips[(size_t)host];
-            cl.start = hc.start;
-            cl.end   = hc.end;
+            float old0 = cl.start, old1 = cl.end, oldlen = old1 - old0;
+            float new0 = hc.start, new1 = hc.end, newlen = new1 - new0;
+
+            // A length change means the host was TRIMMED: each windowed sub-effect
+            // in the chain should hold its absolute timeline position instead of
+            // rubber-banding with the brick. (A pure position change is a move —
+            // the whole brick shifts, so the effects ride along untouched.)
+            //   • always-on (0/0) spans the brick → follows the resize.
+            //   • "until end" (rel_end<=0) keeps tracking the new end; only its
+            //     start pins to absolute time.
+            //   • windowed (rel_end>0) pins both edges, clamped to the new bounds.
+            if (newlen > 1e-4f && fabsf(newlen - oldlen) > 1e-4f) {
+                for (auto& se : cl.fx_chain) {
+                    bool to_end     = (se.rel_end   <= 0.f);
+                    bool from_start = (se.rel_start <= 0.001f);
+                    if (from_start && to_end) continue;          // always-on
+                    float abs0 = old0 + se.rel_start;
+                    float rs   = fmaxf(0.f, fminf(abs0 - new0, newlen));
+                    if (to_end) {
+                        se.rel_start = rs;                       // rel_end stays 0
+                    } else {
+                        float abs1 = old0 + se.rel_end;
+                        float re   = fmaxf(rs, fminf(abs1 - new0, newlen));
+                        if (rs <= 0.001f && re >= newlen - 0.001f) { rs = 0.f; re = 0.f; }
+                        se.rel_start = rs;
+                        se.rel_end   = re;
+                    }
+                }
+            }
+            cl.start = new0;
+            cl.end   = new1;
         }
     }
 }
