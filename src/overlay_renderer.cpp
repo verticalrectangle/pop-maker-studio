@@ -222,6 +222,7 @@ void draw_text_overlays(ImDrawList* dl, const AppState& state, float t,
             trc.ty         = ty_anim;
             trc.line_h     = line_h;
             trc.t          = t;
+            trc.rotation   = active->eval_prop("rotation", t);
             trc.clip_words = has_karaoke ? &clip_words : nullptr;
             render_text_block(trc, txt_lines);
         }

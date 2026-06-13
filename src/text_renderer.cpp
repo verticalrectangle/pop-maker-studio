@@ -47,6 +47,12 @@ void render_text_block(const TextRenderCtx& ctx, const std::vector<std::string>&
 
     float block_h = lines.size() * ctx.line_h;
 
+    // Record the vertex range so a non-zero clip rotation can spin the whole
+    // composed block (glow + shadow + fill + outline) around its centre after
+    // it's drawn — ImGui's AddText can't rotate, but rotating the emitted
+    // glyph quads gives the same result for a uniform block rotation.
+    int vtx_rot0 = (fabsf(ctx.rotation) > 0.01f) ? dl->VtxBuffer.Size : -1;
+
     // ── 1. Glow ───────────────────────────────────────────────────────────────
     if (ts.glow_enabled) {
         for (int pass = 0; pass < 3; ++pass) {
@@ -158,6 +164,22 @@ void render_text_block(const TextRenderCtx& ctx, const std::vector<std::string>&
                 tcol = IM_COL32(255, 255, 255, (int)(255.f * alpha));
             }
             dl->AddText(font, fsz, {lx, ly}, tcol, lines[li].c_str());
+        }
+    }
+
+    // Spin the whole emitted block around its centre by the clip rotation.
+    if (vtx_rot0 >= 0 && vtx_rot0 < dl->VtxBuffer.Size) {
+        float cx = ctx.anchor_h == 0 ? ctx.block_cx + block_max_w * 0.5f
+                 : ctx.anchor_h == 2 ? ctx.block_cx - block_max_w * 0.5f
+                                     : ctx.block_cx;
+        float cy = ctx.ty + block_h * 0.5f;
+        float rad = ctx.rotation * 3.14159265f / 180.f;
+        float cs = cosf(rad), sn = sinf(rad);
+        for (int i = vtx_rot0; i < dl->VtxBuffer.Size; ++i) {
+            ImVec2& p = dl->VtxBuffer[i].pos;
+            float dx = p.x - cx, dy = p.y - cy;
+            p.x = cx + dx * cs - dy * sn;
+            p.y = cy + dx * sn + dy * cs;
         }
     }
 }

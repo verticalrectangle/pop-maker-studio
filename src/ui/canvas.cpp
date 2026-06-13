@@ -44,9 +44,10 @@ double s_scrub_until = 0.0;
 // TextLayout: tight rendered bbox computed each frame during text draw.
 // Persists so draw_canvas_handles can use accurate extents for handles.
 struct TextLayout {
-    float x0 = 0.f, y0 = 0.f, x1 = 0.f, y1 = 0.f;  // tight bbox, canvas pixels
+    float x0 = 0.f, y0 = 0.f, x1 = 0.f, y1 = 0.f;  // tight bbox (un-rotated, canvas px)
     float block_ax = 0.f;   // anchor X (canvas pixels)
     float fsz      = 0.f;   // final rendered font size
+    float rot      = 0.f;   // clip rotation in degrees
     bool  valid    = false;
 };
 static std::unordered_map<uint64_t, TextLayout> s_text_layouts;
@@ -457,8 +458,6 @@ void draw_canvas_handles(AppState& state, ImDrawList* dl, ImVec2 p, float w, flo
 
     // ── Handle visual constants ───────────────────────────────────────────────
     const float CR       = 4.5f;    // corner half-size
-    const float EL       = 11.f;    // edge handle long-axis half
-    const float ES       = 2.5f;    // edge handle short-axis half
     const float ROT_DIST = 28.f;
 
     // Record handle geometry before the hover early-out — IPC clients driving
@@ -483,6 +482,20 @@ void draw_canvas_handles(AppState& state, ImDrawList* dl, ImVec2 p, float w, flo
         float ky = gcy + (-(ghh + ROT_DIST)) * cosf(grad);
         s_handle_geom = {true, gcx-ghw, gcy-ghh, gcx+ghw, gcy+ghh,
                          kx, ky, gcx, gcy, gdeg};
+    } else if (cl.clip_type == ClipType::Text || cl.clip_type == ClipType::Subtitle ||
+               cl.clip_type == ClipType::Lyrics) {
+        // Text geometry comes from last frame's rendered TextLayout.
+        uint64_t tlk = ((uint64_t)sel_ti << 32) | (uint32_t)sel_ci;
+        auto it = s_text_layouts.find(tlk);
+        if (it != s_text_layouts.end() && it->second.valid) {
+            const TextLayout& tl = it->second;
+            float gcx = (tl.x0+tl.x1)*0.5f, gcy = (tl.y0+tl.y1)*0.5f;
+            float ghh = (tl.y1-tl.y0)*0.5f, grad = tl.rot * 3.14159265f / 180.f;
+            float kx = gcx - (-(ghh + ROT_DIST)) * sinf(grad);
+            float ky = gcy + (-(ghh + ROT_DIST)) * cosf(grad);
+            s_handle_geom = {true, tl.x0, tl.y0, tl.x1, tl.y1,
+                             kx, ky, gcx, gcy, tl.rot};
+        }
     }
 
     if (!in_preview && !drag_active) return;
@@ -499,17 +512,6 @@ void draw_canvas_handles(AppState& state, ImDrawList* dl, ImVec2 p, float w, flo
         ImU32 c = (hov || s_ctx.handle == ht) ? hdl_hov : hdl_col;
         dl->AddRectFilled({cx-CR, cy-CR}, {cx+CR, cy+CR}, c, 2.f);
         dl->AddRect      ({cx-CR, cy-CR}, {cx+CR, cy+CR}, hdl_bdr, 2.f, 0, 0.8f);
-        return hov && lclick && s_ctx.handle == CanvasHandle::None;
-    };
-    // vertical=true → tall bar (left/right edges); false → wide bar (top/bottom)
-    auto draw_edge_h = [&](float ex, float ey, bool vertical, CanvasHandle ht) -> bool {
-        float ex0 = vertical ? ex-ES : ex-EL, ey0 = vertical ? ey-EL : ey-ES;
-        float ex1 = vertical ? ex+ES : ex+EL, ey1 = vertical ? ey+EL : ey+ES;
-        bool hov = mpos.x >= ex0-4.f && mpos.x <= ex1+4.f &&
-                   mpos.y >= ey0-4.f && mpos.y <= ey1+4.f;
-        ImU32 c = (hov || s_ctx.handle == ht) ? hdl_hov : hdl_col;
-        dl->AddRectFilled({ex0, ey0}, {ex1, ey1}, c, 2.5f);
-        dl->AddRect      ({ex0, ey0}, {ex1, ey1}, hdl_bdr, 2.5f, 0, 0.6f);
         return hov && lclick && s_ctx.handle == CanvasHandle::None;
     };
     auto begin_drag = [&](CanvasHandle ht) {
@@ -682,62 +684,74 @@ void draw_canvas_handles(AppState& state, ImDrawList* dl, ImVec2 p, float w, flo
         float bx0 = tl.x0, by0 = tl.y0, bx1 = tl.x1, by1 = tl.y1;
         float tmx = (bx0+bx1)*0.5f, tmy = (by0+by1)*0.5f;
 
-        // Solid box
-        dl->AddRect({bx0, by0}, {bx1, by1}, box_col, 0.f, 0, 1.5f);
+        // Rotation-aware: box + handles rotate with the clip; hit-testing and
+        // size/wrap drags work in the block's LOCAL frame (same as video/bg).
+        float trad = tl.rot * 3.14159265f / 180.f;
+        float tax = cosf(trad), tay = sinf(trad);          // local +x in screen
+        float lhw = (bx1-bx0)*0.5f, lhh = (by1-by0)*0.5f;
+        auto TL_ = [&](float lx, float ly) {
+            return ImVec2{tmx + lx*tax - ly*tay, tmy + lx*tay + ly*tax};
+        };
+        ImVec2 qTL = TL_(-lhw,-lhh), qTR = TL_(lhw,-lhh), qBR = TL_(lhw,lhh), qBL = TL_(-lhw,lhh);
+        ImVec2 eTm = TL_(0,-lhh), eBm = TL_(0,lhh), eLm = TL_(-lhw,0), eRm = TL_(lhw,0);
+        ImVec2 tknob = TL_(0, -lhh - ROT_DIST);
+
+        // Box outline
+        dl->AddQuad(qTL, qTR, qBR, qBL, box_col, 1.5f);
+
+        // Rotate knob (with 45° snapping, same cue as the other clips)
+        bool trot_act  = (s_ctx.handle == CanvasHandle::Rotate);
+        bool trot_snap = trot_act && s_rot_snapped;
+        ImU32 tkc = trot_snap ? snap_col : (trot_act ? hdl_hov : hdl_col);
+        dl->AddLine(eTm, tknob, trot_snap ? snap_col : IM_COL32(255,255,255,80));
+        dl->AddCircleFilled(tknob, CR+1.5f, IM_COL32(0,0,0,120));
+        dl->AddCircle(tknob, CR+1.5f, tkc);
+        if (sqrtf((mpos.x-tknob.x)*(mpos.x-tknob.x)+(mpos.y-tknob.y)*(mpos.y-tknob.y)) <= CR+5.f &&
+            lclick && s_ctx.handle == CanvasHandle::None) {
+            begin_drag(CanvasHandle::Rotate);
+            s_ctx.start_rot = cl.rotation;
+        }
 
         // Corners → scale font size
-        if (draw_corner_h(bx0, by0, CanvasHandle::CornerTL)) {
-            begin_drag(CanvasHandle::CornerTL);
-            s_ctx.start_font_size = cl.font_size > 0.f ? cl.font_size : 0.09f;
-            s_ctx.start_bbox_y0 = by0; s_ctx.start_bbox_y1 = by1;
-        }
-        if (draw_corner_h(bx1, by0, CanvasHandle::CornerTR)) {
-            begin_drag(CanvasHandle::CornerTR);
-            s_ctx.start_font_size = cl.font_size > 0.f ? cl.font_size : 0.09f;
-            s_ctx.start_bbox_y0 = by0; s_ctx.start_bbox_y1 = by1;
-        }
-        if (draw_corner_h(bx1, by1, CanvasHandle::CornerBR)) {
-            begin_drag(CanvasHandle::CornerBR);
-            s_ctx.start_font_size = cl.font_size > 0.f ? cl.font_size : 0.09f;
-            s_ctx.start_bbox_y0 = by0; s_ctx.start_bbox_y1 = by1;
-        }
-        if (draw_corner_h(bx0, by1, CanvasHandle::CornerBL)) {
-            begin_drag(CanvasHandle::CornerBL);
-            s_ctx.start_font_size = cl.font_size > 0.f ? cl.font_size : 0.09f;
-            s_ctx.start_bbox_y0 = by0; s_ctx.start_bbox_y1 = by1;
-        }
+        auto txt_corner = [&](ImVec2 pos, CanvasHandle ht) {
+            if (draw_corner_h(pos.x, pos.y, ht)) {
+                begin_drag(ht);
+                s_ctx.start_font_size = cl.font_size > 0.f ? cl.font_size : 0.09f;
+                s_ctx.start_bbox_y0 = by0; s_ctx.start_bbox_y1 = by1;
+            }
+        };
+        txt_corner(qTL, CanvasHandle::CornerTL); txt_corner(qTR, CanvasHandle::CornerTR);
+        txt_corner(qBR, CanvasHandle::CornerBR); txt_corner(qBL, CanvasHandle::CornerBL);
 
-        // Left/Right edges → wrap width
-        if (draw_edge_h(bx0, tmy, true, CanvasHandle::EdgeL)) {
-            begin_drag(CanvasHandle::EdgeL);
-            s_ctx.start_wrap_w = cl.sub_wrap_w; s_ctx.start_anchor = cl.sub_anchor_h;
-            s_ctx.start_bbox_x0 = bx0; s_ctx.start_bbox_x1 = bx1;
-        }
-        if (draw_edge_h(bx1, tmy, true, CanvasHandle::EdgeR)) {
-            begin_drag(CanvasHandle::EdgeR);
-            s_ctx.start_wrap_w = cl.sub_wrap_w; s_ctx.start_anchor = cl.sub_anchor_h;
-            s_ctx.start_bbox_x0 = bx0; s_ctx.start_bbox_x1 = bx1;
-        }
+        // Left/Right edges → wrap width (square handles at rotated mids)
+        auto txt_wrap = [&](ImVec2 pos, CanvasHandle ht) {
+            if (draw_corner_h(pos.x, pos.y, ht)) {
+                begin_drag(ht);
+                s_ctx.start_wrap_w = cl.sub_wrap_w; s_ctx.start_anchor = cl.sub_anchor_h;
+                s_ctx.start_bbox_x0 = bx0; s_ctx.start_bbox_x1 = bx1;
+            }
+        };
+        txt_wrap(eLm, CanvasHandle::EdgeL); txt_wrap(eRm, CanvasHandle::EdgeR);
 
         // Top/Bottom edges → vertical nudge
-        if (draw_edge_h(tmx, by0, false, CanvasHandle::EdgeT)) {
-            begin_drag(CanvasHandle::EdgeT);
-            s_ctx.start_pos_y = ((by0+by1)*0.5f - p.y) / h;
-        }
-        if (draw_edge_h(tmx, by1, false, CanvasHandle::EdgeB)) {
-            begin_drag(CanvasHandle::EdgeB);
-            s_ctx.start_pos_y = ((by0+by1)*0.5f - p.y) / h;
-        }
+        auto txt_vnudge = [&](ImVec2 pos, CanvasHandle ht) {
+            if (draw_corner_h(pos.x, pos.y, ht)) {
+                begin_drag(ht);
+                s_ctx.start_pos_y = (tmy - p.y) / h;
+            }
+        };
+        txt_vnudge(eTm, CanvasHandle::EdgeT); txt_vnudge(eBm, CanvasHandle::EdgeB);
 
-        // Interior → move
-        bool in_txt = mpos.x > bx0+CR*2 && mpos.x < bx1-CR*2 &&
-                      mpos.y > by0+CR*2 && mpos.y < by1-CR*2;
+        // Interior → move (point-in-rotated-rect)
+        float mlx = (mpos.x-tmx)*tax + (mpos.y-tmy)*tay;
+        float mly = -(mpos.x-tmx)*tay + (mpos.y-tmy)*tax;
+        bool in_txt = fabsf(mlx) < lhw - CR*2 && fabsf(mly) < lhh - CR*2;
         if (in_txt) {
             ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
             if (lclick && s_ctx.handle == CanvasHandle::None) {
                 begin_drag(CanvasHandle::Body);
-                s_ctx.start_pos_x  = ((bx0+bx1)*0.5f - p.x) / w;
-                s_ctx.start_pos_y  = ((by0+by1)*0.5f - p.y) / h;
+                s_ctx.start_pos_x  = (tmx - p.x) / w;
+                s_ctx.start_pos_y  = (tmy - p.y) / h;
                 s_ctx.start_wrap_w = cl.sub_wrap_w;
                 s_ctx.start_anchor = cl.sub_anchor_h;
                 s_ctx.start_bbox_x0 = bx0; s_ctx.start_bbox_x1 = bx1;
@@ -752,10 +766,26 @@ void draw_canvas_handles(AppState& state, ImDrawList* dl, ImVec2 p, float w, flo
              cl.clip_type == ClipType::Lyrics)) {
             float dmx = mpos.x - s_ctx.drag_sx;
             float dmy = mpos.y - s_ctx.drag_sy;
+            // Local-frame projection of the drag delta (font size + wrap edit
+            // along the block's own axes when it's rotated).
+            float dly =  dmx*tay - dmy*tax;   // local +y is down → sign matches dmy at rot 0
+            dly = -dly;
+            float dlx =  dmx*tax + dmy*tay;
             Clip& mc = state.tracks[s_ctx.track_idx].clips[s_ctx.clip_idx];
             float orig_bbox_h = s_ctx.start_bbox_y1 - s_ctx.start_bbox_y0;
 
             switch (s_ctx.handle) {
+                case CanvasHandle::Rotate: {
+                    float a0 = atan2f(s_ctx.drag_sy - tmy, s_ctx.drag_sx - tmx);
+                    float a1 = atan2f(mpos.y - tmy,        mpos.x - tmx);
+                    float raw = fmodf(s_ctx.start_rot + (a1-a0)*180.f/3.14159265f, 360.f);
+                    if (raw < 0.f) raw += 360.f;
+                    float snapped = roundf(raw / 45.f) * 45.f;
+                    bool snap = !ImGui::GetIO().KeyShift && fabsf(raw - snapped) < 6.f;
+                    mc.rotation = fmodf(snap ? snapped : raw, 360.f);
+                    s_rot_snapped = snap;
+                    break;
+                }
                 case CanvasHandle::Body:
                     mc.sub_pos      = 3;
                     mc.sub_anchor_h = 1;
@@ -766,35 +796,25 @@ void draw_canvas_handles(AppState& state, ImDrawList* dl, ImVec2 p, float w, flo
                     break;
                 case CanvasHandle::CornerTL: case CanvasHandle::CornerTR:
                     if (orig_bbox_h > 0.f) {
-                        float scale = (orig_bbox_h - dmy) / orig_bbox_h;
+                        float scale = (orig_bbox_h - dly) / orig_bbox_h;
                         mc.font_size = fmaxf(0.02f, fminf(0.5f, s_ctx.start_font_size * scale));
                     }
                     break;
                 case CanvasHandle::CornerBL: case CanvasHandle::CornerBR:
                     if (orig_bbox_h > 0.f) {
-                        float scale = (orig_bbox_h + dmy) / orig_bbox_h;
+                        float scale = (orig_bbox_h + dly) / orig_bbox_h;
                         mc.font_size = fmaxf(0.02f, fminf(0.5f, s_ctx.start_font_size * scale));
                     }
                     break;
-                case CanvasHandle::EdgeL: {
-                    float new_x0 = s_ctx.start_bbox_x0 + dmx;
-                    float new_w  = s_ctx.start_bbox_x1 - new_x0;
+                case CanvasHandle::EdgeL: case CanvasHandle::EdgeR: {
+                    // Wrap width along the block's local-x; grow symmetrically
+                    // about the centre so it stays anchored under rotation.
+                    float start_w_px = s_ctx.start_bbox_x1 - s_ctx.start_bbox_x0;
+                    float new_w = start_w_px +
+                                  (s_ctx.handle == CanvasHandle::EdgeR ? dlx : -dlx);
                     if (new_w > 20.f) {
                         mc.sub_wrap_w   = fmaxf(0.08f, fminf(0.98f, new_w/w));
                         mc.sub_anchor_h = 1;
-                        mc.sub_pos_x    = fmaxf(0.f, fminf(1.f,
-                            (new_x0 + new_w*0.5f - p.x) / w));
-                    }
-                    break;
-                }
-                case CanvasHandle::EdgeR: {
-                    float new_x1 = s_ctx.start_bbox_x1 + dmx;
-                    float new_w  = new_x1 - s_ctx.start_bbox_x0;
-                    if (new_w > 20.f) {
-                        mc.sub_wrap_w   = fmaxf(0.08f, fminf(0.98f, new_w/w));
-                        mc.sub_anchor_h = 1;
-                        mc.sub_pos_x    = fmaxf(0.f, fminf(1.f,
-                            (s_ctx.start_bbox_x0 + new_w*0.5f - p.x) / w));
                     }
                     break;
                 }
@@ -2025,6 +2045,7 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                 trc.ty          = ty_anim;
                 trc.line_h      = line_h;
                 trc.t           = state.playhead;
+                trc.rotation    = render_clip.eval_prop("rotation", state.playhead);
                 trc.clip_words  = has_karaoke ? &clip_words : nullptr;
                 render_text_block(trc, txt_lines);
             }
@@ -2046,6 +2067,7 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                 tl.y1       = ty_anim + block_h + 4.f;
                 tl.block_ax = block_ax;
                 tl.fsz      = fsz;
+                tl.rot      = show->eval_prop("rotation", state.playhead);
                 tl.valid    = true;
             }
             ++text_rendered;
