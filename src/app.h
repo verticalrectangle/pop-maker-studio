@@ -344,6 +344,13 @@ Clip clip_split_at(Clip& cl, float cut);
 // stay put on the timeline.
 void clip_keys_shift(Clip& cl, float dt);
 
+// Registry of keyframable float fields on Clip (defined in app.cpp). Single
+// source of truth for eval_prop's fallback, the render's per-frame evaluation,
+// and the keyframe slider UI.
+struct ClipKfField { const char* name; float Clip::* f; };
+extern const ClipKfField kClipKfFields[];
+extern const int kClipKfFieldCount;
+
 struct Track {
     std::string       name;
     std::vector<Clip> clips;

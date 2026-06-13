@@ -2258,13 +2258,11 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         int ti = track_by_name_or_index(state, params), ci = params.value("clip", -1);
         std::string prop = params.value("prop", "");
         if (!check_clip(state, ti, ci, err)) return {};
-        static const std::set<std::string> kf_props = {
-            "pos_x", "pos_y", "scale_x", "scale_y",
-            "rotation", "opacity", "volume", "pan"
-        };
-        if (!kf_props.count(prop)) {
-            err = "prop '" + prop + "' is not keyframable (allowed: pos_x pos_y "
-                  "scale_x scale_y rotation opacity volume pan)";
+        bool ok_prop = (prop == "opacity");          // opacity is special-cased in eval_prop
+        for (int i = 0; !ok_prop && i < kClipKfFieldCount; ++i)
+            if (prop == kClipKfFields[i].name) ok_prop = true;
+        if (!ok_prop) {
+            err = "prop '" + prop + "' is not keyframable";
             return {};
         }
         if (!params.contains("keys") || !params["keys"].is_array()) {

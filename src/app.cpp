@@ -74,16 +74,50 @@ int PropTrack::find_nearest(float t, float tol) const {
 
 // ── Clip::eval_prop ───────────────────────────────────────────────────────────
 
+// Registry of keyframable float fields on Clip — the single source of truth for
+// eval_prop's static fallback and the keyframe UI/render routing. Every entry is
+// animatable: with keys it interpolates, without keys eval_prop returns the
+// static field (so non-animated clips render exactly as before). `opacity` is
+// handled separately because of its fade-envelope interaction.
+const ClipKfField kClipKfFields[] = {
+    // Transform / audio level
+    {"pos_x", &Clip::pos_x},   {"pos_y", &Clip::pos_y},
+    {"scale_x", &Clip::scale_x}, {"scale_y", &Clip::scale_y},
+    {"rotation", &Clip::rotation}, {"volume", &Clip::volume}, {"pan", &Clip::pan},
+    {"sub_pos_x", &Clip::sub_pos_x}, {"sub_pos_y", &Clip::sub_pos_y},
+    {"sub_wrap_w", &Clip::sub_wrap_w},
+    // Look / colour grade
+    {"fx_brightness", &Clip::fx_brightness}, {"fx_contrast", &Clip::fx_contrast},
+    {"fx_saturation", &Clip::fx_saturation}, {"fx_hue", &Clip::fx_hue},
+    {"fx_blur", &Clip::fx_blur}, {"fx_vignette", &Clip::fx_vignette},
+    {"fx_opacity_mul", &Clip::fx_opacity_mul}, {"fx_scale_mul", &Clip::fx_scale_mul},
+    // Creative FX values
+    {"fx_glitch_chroma", &Clip::fx_glitch_chroma},
+    {"fx_glitch_jitter", &Clip::fx_glitch_jitter},
+    {"fx_glitch_corruption", &Clip::fx_glitch_corruption},
+    {"fx_glitch_corruption_bleed", &Clip::fx_glitch_corruption_bleed},
+    {"fx_zoom_strength", &Clip::fx_zoom_strength}, {"fx_zoom_decay", &Clip::fx_zoom_decay},
+    {"fx_zoom_shake", &Clip::fx_zoom_shake},
+    {"fx_leak_intensity", &Clip::fx_leak_intensity}, {"fx_leak_speed", &Clip::fx_leak_speed},
+    {"fx_vhs_noise", &Clip::fx_vhs_noise}, {"fx_vhs_bleed", &Clip::fx_vhs_bleed},
+    {"fx_vhs_tracking", &Clip::fx_vhs_tracking},
+    {"fx_datamosh_intensity", &Clip::fx_datamosh_intensity},
+    {"fx_chroma_key_threshold", &Clip::fx_chroma_key_threshold},
+    {"fx_chroma_key_softness", &Clip::fx_chroma_key_softness},
+    // Body / runtime FX amount, fades, transitions
+    {"body_fx_amount", &Clip::body_fx_amount},
+    {"runtime_fx_amount", &Clip::runtime_fx_amount},
+    {"face_filter_amt", &Clip::face_filter_amt},
+    {"fade_in", &Clip::fade_in}, {"fade_out", &Clip::fade_out},
+    {"transition_pre", &Clip::transition_pre}, {"transition_post", &Clip::transition_post},
+};
+const int kClipKfFieldCount = (int)(sizeof(kClipKfFields) / sizeof(kClipKfFields[0]));
+
 float Clip::eval_prop(const std::string& name, float playhead) const {
     float t = playhead - start;
     auto it = ktracks.find(name);
     if (it != ktracks.end() && !it->second.empty())
         return it->second.eval(t);
-    if (name == "pos_x")     return pos_x;
-    if (name == "pos_y")     return pos_y;
-    if (name == "scale_x")   return scale_x;
-    if (name == "scale_y")   return scale_y;
-    if (name == "rotation")  return rotation;
     if (name == "opacity") {
         float base = opacity;
         float dur  = end - start;
@@ -93,9 +127,8 @@ float Clip::eval_prop(const std::string& name, float playhead) const {
             base *= ((dur - t) / fade_out);
         return fmaxf(0.f, fminf(1.f, base));
     }
-    if (name == "volume")    return volume;
-    if (name == "pan")       return pan;
-    if (name == "sub_pos_y") return sub_pos_y;
+    for (int i = 0; i < kClipKfFieldCount; ++i)
+        if (name == kClipKfFields[i].name) return this->*(kClipKfFields[i].f);
     return 0.f;
 }
 
@@ -168,25 +201,28 @@ std::vector<std::pair<int,int>> AppState::subtitle_clip_indices() const {
     return out;
 }
 
-static void accum_effect_clip(EffectAccum& acc, const Clip& cl) {
+// _t is the current playhead (absolute) so animated colour-grade params are
+// evaluated per-frame; eval_prop returns the static field when a param has no
+// keys, so non-animated clips are unchanged.
+static void accum_effect_clip(EffectAccum& acc, const Clip& cl, float _t = 0.f) {
     if (cl.fx_color_on) {
-        acc.brightness += cl.fx_brightness;
-        acc.contrast   *= cl.fx_contrast;
-        acc.saturation *= cl.fx_saturation;
-        acc.hue        += cl.fx_hue;
+        acc.brightness += cl.eval_prop("fx_brightness", _t);
+        acc.contrast   *= cl.eval_prop("fx_contrast",   _t);
+        acc.saturation *= cl.eval_prop("fx_saturation", _t);
+        acc.hue        += cl.eval_prop("fx_hue",        _t);
         acc.any_color   = true;
     }
     if (cl.fx_blur_on) {
-        acc.blur     += cl.fx_blur;
+        acc.blur     += cl.eval_prop("fx_blur", _t);
         acc.any_blur  = true;
     }
     if (cl.fx_vignette_on) {
-        acc.vignette     = fminf(1.f, acc.vignette + cl.fx_vignette);
+        acc.vignette     = fminf(1.f, acc.vignette + cl.eval_prop("fx_vignette", _t));
         acc.any_vignette = true;
     }
     if (cl.fx_text_on) {
-        acc.opacity_mul *= cl.fx_opacity_mul;
-        acc.scale_mul   *= cl.fx_scale_mul;
+        acc.opacity_mul *= cl.eval_prop("fx_opacity_mul", _t);
+        acc.scale_mul   *= cl.eval_prop("fx_scale_mul",   _t);
         acc.any_text     = true;
     }
 }
@@ -369,7 +405,7 @@ static void accum_multifx_effects(EffectAccum& ea, CreativeFXAccum& ca,
         if (se.clip_type == ClipType::BodyFX) continue;  // handled by glass BodyFX pass
         float se_end = (se.rel_end <= 0.f) ? parent_dur : se.rel_end;
         if (rel < se.rel_start || rel >= se_end) continue;
-        accum_effect_clip(ea, se);
+        accum_effect_clip(ea, se, t);
         accum_creative_clip(ca, se, beat_pulse, t);
     }
 }
@@ -389,7 +425,7 @@ EffectAccum collect_effects(const AppState& state, float t, int below_track_idx)
             if (cl.clip_type != ClipType::Effect) continue;
             if (t < cl.start || t >= cl.end) continue;
             if (fx_clip_is_glass(state, ti, cl)) continue;
-            accum_effect_clip(acc, cl);
+            accum_effect_clip(acc, cl, t);
         }
     }
     return acc;
@@ -410,7 +446,7 @@ EffectAccum collect_glass_effects(const AppState& state, float t, int video_trac
         if (cl.clip_type != ClipType::Effect) continue;
         if (t < cl.start || t >= cl.end) continue;
         if (!fx_clip_is_glass(state, video_track_idx, cl)) continue;
-        accum_effect_clip(acc, cl);
+        accum_effect_clip(acc, cl, t);
     }
     // Per-clip grade from the video clip itself
     for (auto& cl : state.tracks[video_track_idx].clips) {
@@ -488,7 +524,7 @@ EffectAccum collect_effects_for_track(const AppState& state, float t, int track_
         if (cl.clip_type != ClipType::Effect) continue;
         if (t < cl.start || t >= cl.end) continue;
         if (fx_clip_is_glass(state, track_idx, cl)) continue;
-        accum_effect_clip(acc, cl);
+        accum_effect_clip(acc, cl, t);
     }
     return acc;
 }
