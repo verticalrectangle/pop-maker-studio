@@ -967,8 +967,17 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
         if (rmi >= 0 && rmi < (int)state.markers.size()) {
             Marker& m = state.markers[rmi];
             float px = origin.x + TL_LABEL_W + m.time * zoom - scroll;
-            ImGui::SetCursorScreenPos({px + 2.f, band_y0});
-            ImGui::SetNextItemWidth(120.f);
+            // Keep the field inside the clip area: clamp width near the right
+            // edge and never let it start left of the timeline.
+            float bw = 110.f;
+            float bx = px + 2.f;
+            if (bx + bw > clip_r - 4.f) bx = clip_r - 4.f - bw;
+            if (bx < clip_l + 2.f) bx = clip_l + 2.f;
+            // Compact frame so the box fits the marker band height (band is
+            // TL_RULER_H - LOOP_STRIP_H tall) instead of poking out of it.
+            ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {4.f, 2.f});
+            ImGui::SetCursorScreenPos({bx, band_y0 + 1.f});
+            ImGui::SetNextItemWidth(bw);
             ImGui::PushStyleColor(ImGuiCol_FrameBg, Col::bg_soft);
             ImGui::PushStyleColor(ImGuiCol_Border,  Col::fg);
             if (g_tl.marker_rename_focus) { ImGui::SetKeyboardFocusHere(); g_tl.marker_rename_focus = false; }
@@ -982,6 +991,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
             }
             if (ImGui::IsKeyPressed(ImGuiKey_Escape)) g_tl.marker_rename = -1;
             ImGui::PopStyleColor(2);
+            ImGui::PopStyleVar();
         }
 
         // Right-click context menu.
