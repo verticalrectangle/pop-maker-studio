@@ -823,15 +823,16 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                 s_loop_drag = 3; g_tl.loop_drag_ref_x = mouse.x;
                 g_tl.loop_drag_ref_in = lo0; g_tl.loop_drag_ref_out = hi0;
             } else {
-                float t = x_to_t(mouse.x);
+                float t = snap_to_frame(state, x_to_t(mouse.x));
                 s_loop_drag = 4; g_tl.loop_drag_anchor = t;
                 state.loop_in = t; state.loop_out = t;
             }
         }
-        // Drag.
+        // Drag. Edge-snap to clips/markers, then quantize to the frame grid so a
+        // loop boundary never falls mid-frame (which makes the loop wrap stutter).
         if (s_loop_drag != 0 && ImGui::IsMouseDown(0)) {
             if (fabsf(mouse.x - g_tl.loop_drag_down_x) > 2.f) g_tl.loop_drag_moved = true;
-            float t = edge_snap(x_to_t(mouse.x), loop_cands());
+            float t = snap_to_frame(state, edge_snap(x_to_t(mouse.x), loop_cands()));
             if (s_loop_drag == 1) {
                 state.loop_in  = fminf(t, g_tl.loop_drag_anchor - 1e-3f);
                 state.loop_out = g_tl.loop_drag_anchor;
@@ -841,7 +842,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
             } else if (s_loop_drag == 3) {
                 float span = g_tl.loop_drag_ref_out - g_tl.loop_drag_ref_in;
                 float ni   = g_tl.loop_drag_ref_in + (mouse.x - g_tl.loop_drag_ref_x) / zoom;
-                ni = edge_snap(ni, loop_cands());
+                ni = snap_to_frame(state, edge_snap(ni, loop_cands()));
                 ni = fmaxf(0.f, fminf(ni, dur - span));
                 state.loop_in = ni; state.loop_out = ni + span;
             } else if (s_loop_drag == 4) {
@@ -942,7 +943,8 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
             ImGui::IsMouseDown(0)) {
             if (fabsf(mouse.x - g_tl.marker_down_x) > 3.f) g_tl.marker_drag_moved = true;
             if (g_tl.marker_drag_moved)
-                state.markers[g_tl.marker_drag].time = edge_snap(x_to_t(mouse.x), mk_cands());
+                state.markers[g_tl.marker_drag].time =
+                    snap_to_frame(state, edge_snap(x_to_t(mouse.x), mk_cands()));
         }
         if (g_tl.marker_drag >= 0 && ImGui::IsMouseReleased(0)) {
             int di = g_tl.marker_drag;
@@ -1184,7 +1186,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                     else if (idx - bn < (int)state.user_presets.size())
                         preset = &state.user_presets[idx - bn];
                     if (preset) {
-                        float drop_t = fmaxf(0.f, (ImGui::GetMousePos().x - (origin.x + TL_LABEL_W) + scroll) / zoom);
+                        float drop_t = snap_to_frame(state, fmaxf(0.f, (ImGui::GetMousePos().x - (origin.x + TL_LABEL_W) + scroll) / zoom));
                         Clip cl;
                         cl.clip_type = ClipType::Effect;
                         cl.start     = drop_t;
@@ -1203,7 +1205,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                     const char* preset_id = (const char*)pay->Data;
                     const BgPreset* pr = bg_preset_by_id(preset_id);
                     if (pr) {
-                        float drop_t = fmaxf(0.f, (ImGui::GetMousePos().x - (origin.x + TL_LABEL_W) + scroll) / zoom);
+                        float drop_t = snap_to_frame(state, fmaxf(0.f, (ImGui::GetMousePos().x - (origin.x + TL_LABEL_W) + scroll) / zoom));
                         float proj_dur = 7.f;
                         Clip cl;
                         cl.clip_type    = ClipType::Background;
@@ -1225,7 +1227,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                 }
                 if (const ImGuiPayload* pay = ImGui::AcceptDragDropPayload("TEXT_STYLE")) {
                     AnimStyle st = (AnimStyle)*(const int*)pay->Data;
-                    float drop_t = fmaxf(0.f, (ImGui::GetMousePos().x - (origin.x + TL_LABEL_W) + scroll) / zoom);
+                    float drop_t = snap_to_frame(state, fmaxf(0.f, (ImGui::GetMousePos().x - (origin.x + TL_LABEL_W) + scroll) / zoom));
                     state.tracks[ti].clips.push_back(make_text_brick(st, drop_t));
                     state.selected_track = ti;
                     state.selected_clip  = (int)state.tracks[ti].clips.size() - 1;
@@ -1235,7 +1237,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                 }
                 if (const ImGuiPayload* pay = ImGui::AcceptDragDropPayload("FX_CREATIVE")) {
                     FXType ft = (FXType)*(const int*)pay->Data;
-                    float drop_t = fmaxf(0.f, (ImGui::GetMousePos().x - (origin.x + TL_LABEL_W) + scroll) / zoom);
+                    float drop_t = snap_to_frame(state, fmaxf(0.f, (ImGui::GetMousePos().x - (origin.x + TL_LABEL_W) + scroll) / zoom));
                     Clip cl;
                     cl.clip_type = ClipType::Effect;
                     cl.fx_type   = ft;
@@ -1252,7 +1254,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                 // to the audio (or video) host under the drop via couple_fx_now.
                 if (const ImGuiPayload* pay = ImGui::AcceptDragDropPayload("FX_AUDIO")) {
                     FXType ft = (FXType)*(const int*)pay->Data;
-                    float drop_t = fmaxf(0.f, (ImGui::GetMousePos().x - (origin.x + TL_LABEL_W) + scroll) / zoom);
+                    float drop_t = snap_to_frame(state, fmaxf(0.f, (ImGui::GetMousePos().x - (origin.x + TL_LABEL_W) + scroll) / zoom));
                     Clip cl;
                     cl.clip_type = ClipType::Effect;
                     cl.fx_type   = ft;
@@ -1275,7 +1277,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                 if (const ImGuiPayload* pay = ImGui::AcceptDragDropPayload("FX_RUNTIME")) {
                     int idx = *(const int*)pay->Data;
                     const auto& defs = runtime_fx_list();
-                    float drop_t = fmaxf(0.f, (ImGui::GetMousePos().x - (origin.x + TL_LABEL_W) + scroll) / zoom);
+                    float drop_t = snap_to_frame(state, fmaxf(0.f, (ImGui::GetMousePos().x - (origin.x + TL_LABEL_W) + scroll) / zoom));
                     int target = -1;
                     for (int k = 0; k < (int)state.tracks[ti].clips.size(); ++k) {
                         const Clip& c = state.tracks[ti].clips[(size_t)k];
@@ -1300,7 +1302,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                 // drop, with AI mask generation kicked off if not ready.
                 if (const ImGuiPayload* pay = ImGui::AcceptDragDropPayload("FX_BODY")) {
                     BodyFXType bt = (BodyFXType)*(const int*)pay->Data;
-                    float drop_t = fmaxf(0.f, (ImGui::GetMousePos().x - (origin.x + TL_LABEL_W) + scroll) / zoom);
+                    float drop_t = snap_to_frame(state, fmaxf(0.f, (ImGui::GetMousePos().x - (origin.x + TL_LABEL_W) + scroll) / zoom));
                     int target = -1;
                     for (int k = 0; k < (int)state.tracks[ti].clips.size(); ++k) {
                         const Clip& c = state.tracks[ti].clips[(size_t)k];
@@ -1334,7 +1336,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                     if (const ImGuiPayload* pay = ImGui::AcceptDragDropPayload(ptype)) {
                         std::string path((const char*)pay->Data, pay->DataSize - 1);
                         bool img = is_image_path(path);
-                        float drop_t = fmaxf(0.f, (ImGui::GetMousePos().x - (origin.x + TL_LABEL_W) + scroll) / zoom);
+                        float drop_t = snap_to_frame(state, fmaxf(0.f, (ImGui::GetMousePos().x - (origin.x + TL_LABEL_W) + scroll) / zoom));
                         float dur = img ? 5.f : video_probe_duration(path);
                         if (dur <= 0.f) dur = 4.f;
                         Clip cl; cl.clip_type = ClipType::Video; cl.text = path;
@@ -1357,7 +1359,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                 accept_media_drop("MEDIA_IMG");
                 if (const ImGuiPayload* pay = ImGui::AcceptDragDropPayload("MEDIA_AUD")) {
                     std::string path((const char*)pay->Data, pay->DataSize - 1);
-                    float drop_t = fmaxf(0.f, (ImGui::GetMousePos().x - (origin.x + TL_LABEL_W) + scroll) / zoom);
+                    float drop_t = snap_to_frame(state, fmaxf(0.f, (ImGui::GetMousePos().x - (origin.x + TL_LABEL_W) + scroll) / zoom));
                     AudioMeta meta{}; float dur = audio_probe(path, meta) ? meta.duration_secs : 4.f;
                     if (dur <= 0.f) dur = 4.f;
                     Clip cl; cl.clip_type = ClipType::Audio; cl.text = path;
@@ -2546,18 +2548,19 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
 
             if (ImGui::IsMouseDragging(0)) {
                 if (s_glass_drag == 1) {
-                    // Left handle → adjust pre (drag left = more pre)
+                    // Left handle → adjust pre (drag left = more pre). Frame-snap
+                    // the duration so the crossfade spans whole frames.
                     float new_pre = fmaxf(0.01f, fminf(s_glass_drag_ref_pre - dx,
                                                        a.end - a.start - 0.05f));
-                    a.transition_pre = new_pre;
+                    a.transition_pre = snap_to_frame(state, new_pre);
                 } else if (s_glass_drag == 2) {
                     // Right handle → adjust post
                     float new_post = fmaxf(0.01f, fminf(s_glass_drag_ref_post + dx,
                                                         b_ptr ? (b_ptr->end - b_ptr->start - 0.05f) : 10.f));
-                    a.transition_post = new_post;
+                    a.transition_post = snap_to_frame(state, new_post);
                 } else {
-                    // Body drag → move linked pair
-                    float new_start = fmaxf(0.f, s_glass_drag_ref_start + dx);
+                    // Body drag → move linked pair (frame-snapped)
+                    float new_start = snap_to_frame(state, fmaxf(0.f, s_glass_drag_ref_start + dx));
                     float dur_a = a.end - a.start;
                     a.start = new_start; a.end = new_start + dur_a;
                     if (b_ptr) {
@@ -2601,19 +2604,23 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                         cands.push_back(bclip.start + o.rel_start);
                         cands.push_back(bclip.start + (o.rel_end > 0.f ? o.rel_end : dur));
                     }
+                    // Edge-snap to clip/sibling edges, then quantize the absolute
+                    // time to the frame grid so the FX window starts/ends on a
+                    // frame (brick.start is frame-aligned, so rel becomes a frame
+                    // multiple) — same rule as the playhead, markers and loop.
                     if (g_tl.fx_lane_drag == 1) {            // left edge → rel_start
-                        float abs_s = edge_snap(bclip.start + g_tl.fx_lane_ref_s + dt, cands);
+                        float abs_s = snap_to_frame(state, edge_snap(bclip.start + g_tl.fx_lane_ref_s + dt, cands));
                         se.rel_start = fmaxf(0.f, fminf(abs_s - bclip.start,
                                                         g_tl.fx_lane_ref_e - MINLEN));
                         se.rel_end   = g_tl.fx_lane_ref_e;
                     } else if (g_tl.fx_lane_drag == 2) {    // right edge → rel_end
-                        float abs_e = edge_snap(bclip.start + g_tl.fx_lane_ref_e + dt, cands);
+                        float abs_e = snap_to_frame(state, edge_snap(bclip.start + g_tl.fx_lane_ref_e + dt, cands));
                         se.rel_start = g_tl.fx_lane_ref_s;
                         se.rel_end   = fminf(dur, fmaxf(abs_e - bclip.start,
                                                         g_tl.fx_lane_ref_s + MINLEN));
                     } else {                                 // body → shift window
                         float len = g_tl.fx_lane_ref_e - g_tl.fx_lane_ref_s;
-                        float abs_s = edge_snap(bclip.start + g_tl.fx_lane_ref_s + dt, cands);
+                        float abs_s = snap_to_frame(state, edge_snap(bclip.start + g_tl.fx_lane_ref_s + dt, cands));
                         float rel_s = fmaxf(0.f, fminf(abs_s - bclip.start, dur - len));
                         se.rel_start = rel_s;
                         se.rel_end   = rel_s + len;
@@ -3554,7 +3561,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                     state.tl_zoom_to_fit_end = fmaxf(state.tl_zoom_to_fit_end, clip_end);
                     history_push(state, act);
                 };
-                float drop_t = fmaxf(0.f, (ImGui::GetMousePos().x - (origin.x + TL_LABEL_W) + scroll) / zoom);
+                float drop_t = snap_to_frame(state, fmaxf(0.f, (ImGui::GetMousePos().x - (origin.x + TL_LABEL_W) + scroll) / zoom));
 
                 if (const ImGuiPayload* pay = ImGui::AcceptDragDropPayload("BG_PRESET")) {
                     const char* pid = (const char*)pay->Data;

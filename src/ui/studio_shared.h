@@ -34,6 +34,11 @@ float tl_fps(const AppState& state);
 // seeking and scrubbing. 0 when there's no content.
 float last_playable_time(const AppState& state);
 
+// Quantize a time to the timeline frame grid (round to the nearest frame). The
+// playhead, markers and loop-region edges all live on frame boundaries so they
+// never land mid-frame (which makes loops wrap and markers cut between frames).
+float snap_to_frame(const AppState& state, float t);
+
 // ── Loop region ────────────────────────────────────────────────────────────────
 // Effective loop bounds. Fills lo/hi with the region to cycle: the loop brace
 // [loop_in,loop_out] when one is set, otherwise the whole timeline [0,duration].

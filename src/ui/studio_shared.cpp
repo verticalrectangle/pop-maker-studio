@@ -174,13 +174,17 @@ bool duplicate_selected_clips(AppState& state) {
 }
 
 // ── Playback helpers ──────────────────────────────────────────────────────────
+float snap_to_frame(const AppState& state, float t) {
+    float fps = tl_fps(state);
+    if (!(fps > 0.f)) fps = 30.f;
+    return roundf(t * fps) / fps;
+}
+
 void seek_to(AppState& state, float t) {
-    // Quantize to the video's actual frame grid (falls back to 30 fps). A
-    // hard-coded 30 fps grid eats sub-frame steps for >30 fps content, which
-    // made back-arrow stick at high zoom on 60 fps footage.
-    float qfps = tl_fps(state);
-    if (!(qfps > 0.f)) qfps = 30.f;
-    t = roundf(t * qfps) / qfps;
+    // Quantize to the timeline frame grid (falls back to 30 fps). A hard-coded
+    // 30 fps grid eats sub-frame steps for >30 fps content, which made the
+    // back-arrow stick at high zoom on 60 fps footage.
+    t = snap_to_frame(state, t);
     // Never past the last playable frame (a playhead at `duration` shows nothing).
     t = fmaxf(0.f, fminf(t, last_playable_time(state)));
     state.playhead = t;
@@ -236,6 +240,10 @@ bool loop_region(const AppState& state, float& lo, float& hi) {
     bool custom = state.loop_in >= 0.f && state.loop_out > state.loop_in;
     lo = custom ? fmaxf(0.f, state.loop_in) : 0.f;
     hi = custom ? state.loop_out : state.duration;
+    // The brace edges are the loop's wrap points — force them onto the frame
+    // grid so a loop can never cycle mid-frame (set paths already snap; this is
+    // the belt-and-braces guard for older saved regions).
+    if (custom) { lo = snap_to_frame(state, lo); hi = snap_to_frame(state, hi); }
     if (hi > state.duration) hi = state.duration;   // never cycle past content
     if (hi <= lo) { lo = 0.f; hi = state.duration; return false; }  // degenerate → whole
     return custom;
@@ -243,7 +251,7 @@ bool loop_region(const AppState& state, float& lo, float& hi) {
 
 int marker_add(AppState& state, float time, const char* label) {
     Marker m;
-    m.time = fmaxf(0.f, time);
+    m.time = snap_to_frame(state, fmaxf(0.f, time));
     if (label && *label) {
         m.label = label;
     } else {

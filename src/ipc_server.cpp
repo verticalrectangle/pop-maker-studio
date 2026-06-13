@@ -2416,7 +2416,8 @@ static json dispatch(AppState& state, const std::string& method, const json& par
     }
 
     if (method == "add_marker") {
-        float mtime  = params.value("time", 0.f);
+        // Markers live on the frame grid like the playhead — never mid-frame.
+        float mtime  = snap_to_frame(state, fmaxf(0.f, params.value("time", 0.f)));
         std::string mlabel = params.value("label", "");
         uint32_t mcolor = 0xFF4A90E2u;
         if (params.contains("color") && params["color"].is_string()) {
@@ -2441,8 +2442,9 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         // Omit start/end (or pass end<=start) to loop the whole timeline.
         state.loop_play = params.value("enabled", true);
         if (params.contains("start") && params.contains("end")) {
-            float s = params.value("start", 0.f);
-            float e = params.value("end", 0.f);
+            // Snap the brace to the frame grid so the loop never wraps mid-frame.
+            float s = snap_to_frame(state, params.value("start", 0.f));
+            float e = snap_to_frame(state, params.value("end", 0.f));
             if (e > s) { state.loop_in = s; state.loop_out = e; }
             else       { state.loop_in = -1.f; state.loop_out = -1.f; }
         } else {
