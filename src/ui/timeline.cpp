@@ -279,6 +279,65 @@ static int couple_fx_now(AppState& state, int ti, int ci) {
     return nci;
 }
 
+// The FX chain rendered on a coupled glass brick, morphing with zoom:
+//   narrow brick → a frosted deck of cards (depth = effect count);
+//   wide brick   → per-FX timing lanes (lane length = that effect's span).
+// The SAME panes interpolate between the two by a `spread` factor, so the
+// transition is continuous as you zoom. Each pane is tinted by its FX type.
+static void draw_fx_stack(ImDrawList* dl, const Clip& clip, float cx0,
+                          float vis_x0, float vis_x1, float cy0, float cy1,
+                          float zoom, bool sel) {
+    int N = (int)clip.fx_chain.size();
+    if (N <= 0) {
+        dl->AddText({vis_x0 + 5.f, cy0 + (cy1-cy0-13.f)*0.5f},
+                    IM_COL32(200,240,255,255), "FX");
+        return;
+    }
+    const float brick_w = vis_x1 - vis_x0, brick_h = cy1 - cy0;
+    // 0 = deck (narrow), 1 = full timing lanes (wide). Continuous.
+    float spread = (brick_w - 70.f) / 180.f;
+    spread = fmaxf(0.f, fminf(1.f, spread));
+    const int   shown  = N < 5 ? N : 5;          // cap visible panes
+    const float lane_h = (brick_h - 4.f) / (float)shown;
+    const float dur    = clip.end - clip.start;
+    for (int i = 0; i < shown; ++i) {
+        const Clip& se = clip.fx_chain[(size_t)i];
+        FxBrickColors c = fx_brick_colors(se.fx_type, sel);
+        ImU32 tint = IM_COL32((int)((c.fill>>IM_COL32_R_SHIFT)&0xFF),
+                              (int)((c.fill>>IM_COL32_G_SHIFT)&0xFF),
+                              (int)((c.fill>>IM_COL32_B_SHIFT)&0xFF),
+                              sel ? 235 : 200);
+        // Deck pane: stacked cards fanning right.
+        float d_x0 = vis_x0 + 5.f + i*3.f, d_x1 = d_x0 + 17.f;
+        float d_y0 = cy0 + 2.f,            d_y1 = cy1 - 2.f;
+        // Lane pane: the effect's active span at its vertical slot.
+        float rel_s = se.rel_start;
+        float rel_e = (se.rel_end > 0.f) ? se.rel_end : dur;
+        float l_x0 = fmaxf(vis_x0, cx0 + rel_s*zoom);
+        float l_x1 = fminf(vis_x1, cx0 + rel_e*zoom);
+        if (l_x1 < l_x0 + 3.f) l_x1 = l_x0 + 3.f;
+        float l_y0 = cy0 + 2.f + i*lane_h, l_y1 = l_y0 + lane_h - 1.f;
+        // Morph each corner.
+        float x0 = d_x0 + (l_x0-d_x0)*spread, x1 = d_x1 + (l_x1-d_x1)*spread;
+        float y0 = d_y0 + (l_y0-d_y0)*spread, y1 = d_y1 + (l_y1-d_y1)*spread;
+        dl->AddRectFilled({x0,y0}, {x1,y1}, tint, 2.f);
+        dl->AddRect({x0,y0}, {x1,y1}, IM_COL32(255,255,255, sel?170:90), 2.f, 0, 1.f);
+        // Effect name once the lane has room.
+        if (spread > 0.45f && (x1-x0) > 34.f)
+            dl->AddText({x0+3.f, (y0+y1)*0.5f - 6.5f},
+                        IM_COL32(255,255,255,235), fx_type_name(se.fx_type));
+    }
+    // Count badge in deck mode (and an overflow tail when capped).
+    if (spread < 0.5f) {
+        char b[12]; snprintf(b, sizeof(b), "\xc3\x97%d", N);
+        dl->AddText({vis_x0 + 5.f + shown*3.f + 21.f, cy0 + brick_h*0.5f - 6.5f},
+                    IM_COL32(220,240,255,255), b);
+    } else if (N > shown) {
+        char b[12]; snprintf(b, sizeof(b), "+%d", N - shown);
+        dl->AddText({vis_x1 - 22.f, cy1 - 14.f}, IM_COL32(220,240,255,220), b);
+    }
+}
+
 static void couple_pending_tick(AppState& state) {
     int pti = -1, pci = -1, phost = -1;
     for (int ti = 0; ti < (int)state.tracks.size() && pti < 0; ++ti) {
@@ -1853,17 +1912,11 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
             float ly = cy0 + (cy1-cy0-13.f)*0.5f;
             ImU32 lbl_col = is_glass ? IM_COL32(200, 240, 255, 255) : fbc.label;
             if (is_mfx || is_amfx) {
-                // Show "N FX" label with stacked-layers indicator
-                char mfx_lbl[24];
-                snprintf(mfx_lbl, sizeof(mfx_lbl), "%s FX \xc2\xb7 %d",
-                         is_amfx ? "AUDIO" : "VIDEO", (int)clip.fx_chain.size());
-                dl->AddText({vis_x0+5.f, ly}, lbl_col, mfx_lbl);
-                // Stacked layers icon: three small horizontal bars at right
-                if (vis_x1 - vis_x0 > 40.f) {
-                    float ix = vis_x1 - 14.f, iy = cy0 + (cy1-cy0)*0.35f;
-                    for (int k = 0; k < 3; ++k)
-                        dl->AddRectFilled({ix, iy+k*4.f}, {ix+10.f, iy+k*4.f+2.f}, lbl_col);
-                }
+                // The FX chain as a stack that morphs with zoom: a frosted
+                // deck of cards when the brick is narrow (depth = count),
+                // unfolding into per-FX timing lanes as it widens (lane
+                // length = that effect's active span). See draw_fx_stack.
+                draw_fx_stack(dl, clip, cx0, vis_x0, vis_x1, cy0, cy1, zoom, sel);
             } else {
                 dl->AddText({vis_x0+5.f, ly}, lbl_col, fx_type_name(clip.fx_type));
                 // Scope arrow
