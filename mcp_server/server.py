@@ -1808,6 +1808,24 @@ async def list_tools() -> list[Tool]:
             },
         ),
         Tool(
+            name="set_loop_region",
+            description=(
+                "Arm the transport loop and optionally set the loop brace region. "
+                "Playback then cycles seamlessly over [start, end] (or the whole timeline "
+                "if start/end are omitted) instead of stopping at the end. The brace is "
+                "shown in the timeline ruler and the green Loop button lights up. "
+                "Pass enabled=false to disarm looping. Returns {loop_play, loop_in, loop_out}."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "start":   {"type": "number",  "description": "Loop region start in seconds (omit for whole timeline)"},
+                    "end":     {"type": "number",  "description": "Loop region end in seconds (must be > start)"},
+                    "enabled": {"type": "boolean", "description": "Arm (true, default) or disarm (false) the loop"},
+                },
+            },
+        ),
+        Tool(
             name="generate_chapters",
             description=(
                 "Auto-generate chapter markers from the transcript by finding natural pause points. "
@@ -3600,6 +3618,9 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         return [TextContent(type="text", text=json.dumps(result, indent=2))]
     if name == "remove_chapter_marker":
         result = await _remove_chapter_marker(arguments)
+        return [TextContent(type="text", text=json.dumps(result, indent=2))]
+    if name == "set_loop_region":
+        result = _call("set_loop_region", arguments)
         return [TextContent(type="text", text=json.dumps(result, indent=2))]
     if name == "generate_chapters":
         result = await _generate_chapters(arguments)

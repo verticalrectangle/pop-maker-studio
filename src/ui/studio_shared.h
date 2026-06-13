@@ -34,6 +34,21 @@ float tl_fps(const AppState& state);
 // seeking and scrubbing. 0 when there's no content.
 float last_playable_time(const AppState& state);
 
+// ── Loop region ────────────────────────────────────────────────────────────────
+// Effective loop bounds. Fills lo/hi with the region to cycle: the loop brace
+// [loop_in,loop_out] when one is set, otherwise the whole timeline [0,duration].
+// Returns true when a custom brace region is set (vs the whole-timeline default).
+// Single source of truth for playback (app.cpp), prefetch (canvas.cpp) and the
+// brace drawing (timeline.cpp).
+bool loop_region(const AppState& state, float& lo, float& hi);
+
+// ── Markers / locators ──────────────────────────────────────────────────────────
+// Drop a marker at `time` (auto-labels "Marker N" when label is empty), keeping
+// state.markers sorted by time. Returns the index of the new marker.
+int  marker_add(AppState& state, float time, const char* label = nullptr);
+// Seek to the nearest marker before (dir<0) or after (dir>0) the playhead.
+void marker_jump(AppState& state, int dir);
+
 // ── Record brick ──────────────────────────────────────────────────────────────
 // Insert a fresh Record brick (8 s, frame-snapped) at the playhead on a new
 // top track, select it, and push history. Used by the toolbox rail and the

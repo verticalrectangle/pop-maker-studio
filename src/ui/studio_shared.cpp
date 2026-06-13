@@ -207,8 +207,19 @@ void toggle_play(AppState& state) {
 }
 
 float tl_fps(const AppState& state) {
-    return (state.proxy_ready && video_info(0).fps > 0.0)
-           ? (float)video_info(0).fps : (float)state.fps;
+    // The timeline frame grid. Default to the project (timeline/export) fps —
+    // that's the rate the playhead, frame-stepping and last_playable_time should
+    // snap to. The MJPEG preview proxy is fps-capped (and some are coarse — a
+    // 10 fps proxy would otherwise drag the playhead onto a 0.1 s grid and park
+    // it short of the clip's true end), so only let the proxy's rate RAISE the
+    // grid when it's genuinely finer, never lower it.
+    float tf = (float)state.fps;
+    if (!(tf > 0.f)) tf = 30.f;
+    if (state.proxy_ready) {
+        double vf = video_info(0).fps;
+        if (vf > (double)tf) tf = (float)vf;
+    }
+    return tf;
 }
 
 float last_playable_time(const AppState& state) {
@@ -219,6 +230,47 @@ float last_playable_time(const AppState& state) {
     // minus one → last index, /fps → its start. Always strictly inside [0,duration).
     float lf = (ceilf(state.duration * fps) - 1.f) / fps;
     return fmaxf(0.f, lf);
+}
+
+bool loop_region(const AppState& state, float& lo, float& hi) {
+    bool custom = state.loop_in >= 0.f && state.loop_out > state.loop_in;
+    lo = custom ? fmaxf(0.f, state.loop_in) : 0.f;
+    hi = custom ? state.loop_out : state.duration;
+    if (hi > state.duration) hi = state.duration;   // never cycle past content
+    if (hi <= lo) { lo = 0.f; hi = state.duration; return false; }  // degenerate → whole
+    return custom;
+}
+
+int marker_add(AppState& state, float time, const char* label) {
+    Marker m;
+    m.time = fmaxf(0.f, time);
+    if (label && *label) {
+        m.label = label;
+    } else {
+        char buf[24];
+        snprintf(buf, sizeof(buf), "Marker %d", (int)state.markers.size() + 1);
+        m.label = buf;
+    }
+    // Keep markers sorted by time so prev/next jumps and the ruler walk are linear.
+    auto it = std::lower_bound(state.markers.begin(), state.markers.end(), m.time,
+                               [](const Marker& a, float t){ return a.time < t; });
+    int idx = (int)(it - state.markers.begin());
+    state.markers.insert(it, std::move(m));
+    history_push(state, "Add marker");
+    return idx;
+}
+
+void marker_jump(AppState& state, int dir) {
+    if (state.markers.empty()) return;
+    const float eps = 1e-3f;
+    float here = state.playhead;
+    float best = -1.f;
+    if (dir < 0) {
+        for (auto& m : state.markers) if (m.time < here - eps) best = m.time;  // sorted → last match
+    } else {
+        for (auto& m : state.markers) if (m.time > here + eps) { best = m.time; break; }
+    }
+    if (best >= 0.f) seek_to(state, best);
 }
 
 // ── Clip / slot helpers ───────────────────────────────────────────────────────
@@ -263,11 +315,12 @@ void reopen_video_slots(AppState& state) {
             std::string key = clip_slot_key(cl.text, cl.start);
             int slot = slot_for_video(state, key, cl.text);
             if (slot < 0) continue;
-            // Images go straight to Still — never native. libav happily opens
-            // a PNG as a one-frame video, but then any decode past t=0 fails
-            // and the clip renders blank (this is how MCP-added images
+            // Still images go straight to Still — never native. libav happily
+            // opens a PNG as a one-frame video, but then any decode past t=0
+            // fails and the clip renders blank (this is how MCP-added images
             // vanished from the preview: add_clip → proxy_scan → native PNG).
-            if (is_image_path(cl.text)) {
+            // Animated images (.gif) fall through to the proxy path below.
+            if (is_image_path(cl.text) && !is_animated_image(cl.text)) {
                 if (video_source(slot) != PreviewSource::Still)
                     video_open_still(slot, proxy_still_path(cl.text));
                 continue;

@@ -17,7 +17,7 @@ enum class PanelView {
 // ── Timeline layout constants ─────────────────────────────────────────────────
 static constexpr float TL_LABEL_W     = 120.f;
 static constexpr float TL_TRACK_H     = 42.f;
-static constexpr float TL_RULER_H     = 24.f;
+static constexpr float TL_RULER_H     = 34.f;  // loop-brace lane (top) + ticks/markers
 static constexpr float TL_SCROLLBAR_H = 14.f;
 static constexpr float TL_VSCROLLBAR_W = 10.f;
 
@@ -52,6 +52,20 @@ struct TlState {
     // FX brick (track, clip) to weld into — follows the mouse row, so
     // cross-track welds work. -1 = no candidate.
     int drag_merge_ti=-1, drag_merge_ci=-1;
+    // Loop brace (ruler) drag: 0 none, 1 left edge, 2 right edge, 3 move body,
+    // 4 create (drag out a new region).
+    int   loop_drag=0;
+    float loop_drag_anchor=0.f;                 // fixed edge while create/resize
+    float loop_drag_ref_x=0.f, loop_drag_ref_in=0.f, loop_drag_ref_out=0.f;  // body move
+    float loop_drag_down_x=0.f; bool loop_drag_moved=false;
+    // Marker (locator) drag/rename in the ruler.
+    int   marker_drag=-1;            // index of marker being dragged, -1 none
+    bool  marker_drag_moved=false;   float marker_down_x=0.f;
+    int   marker_rename=-1;          // index being renamed inline, -1 none
+    bool  marker_rename_focus=false;
+    char  marker_rename_buf[64]={};
+    int   ctx_marker=-1;             // marker index for the right-click menu
+    bool  open_marker_ctx=false;
 };
 
 // Defined in timeline.cpp

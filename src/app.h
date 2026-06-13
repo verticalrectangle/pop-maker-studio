@@ -483,6 +483,9 @@ struct Marker {
     float       time  = 0.f;
     std::string label;
     uint32_t    color = 0xFF4A90E2u;  // ABGR, default cornflower blue
+    // A marker is always a navigation locator (jump/loop anchor). `chapter`
+    // additionally flags it as an exported chapter point (YouTube etc.).
+    bool        chapter = false;
 };
 
 // ── Central app state ─────────────────────────────────────────────────────────
@@ -538,6 +541,14 @@ struct AppState {
     // wall-clock playback sync
     std::chrono::steady_clock::time_point play_start_wall;
     float play_start_pos = 0.f;
+
+    // Loop transport: when on, playback cycles seamlessly instead of stopping
+    // at the end (the audio clock wraps sample-accurately). loop_in/loop_out
+    // define the loop brace region; loop_in < 0 (or out <= in) means "no region
+    // set" → loop the whole timeline.
+    bool  loop_play = false;
+    float loop_in   = -1.f;
+    float loop_out  = -1.f;
 
     // timeline view
     float tl_scroll       = 0.f;

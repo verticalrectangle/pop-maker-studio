@@ -2436,6 +2436,25 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         return r;
     }
 
+    if (method == "set_loop_region") {
+        // Arm/disarm the transport loop and optionally set the brace region.
+        // Omit start/end (or pass end<=start) to loop the whole timeline.
+        state.loop_play = params.value("enabled", true);
+        if (params.contains("start") && params.contains("end")) {
+            float s = params.value("start", 0.f);
+            float e = params.value("end", 0.f);
+            if (e > s) { state.loop_in = s; state.loop_out = e; }
+            else       { state.loop_in = -1.f; state.loop_out = -1.f; }
+        } else {
+            state.loop_in = -1.f; state.loop_out = -1.f;
+        }
+        json r;
+        r["loop_play"] = state.loop_play;
+        r["loop_in"]   = state.loop_in;
+        r["loop_out"]  = state.loop_out;
+        return r;
+    }
+
     if (method == "remove_marker") {
         int mi = params.value("index", -1);
         if (mi < 0 || mi >= (int)state.markers.size()) { err = "invalid marker index"; return {}; }

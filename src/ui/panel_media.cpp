@@ -183,6 +183,17 @@ bool is_image_path(const std::string& p) {
         || ext==".heic"||ext==".heif"||ext==".gif";
 }
 
+// An animated image is image-kind (silent, no audio track — see the audio_path
+// guard in add_clip) but plays back like a video: it gets a full MJPEG proxy
+// (proxy.cpp's is_image_ext deliberately excludes .gif for exactly this) and
+// must NOT be pinned to a single Still in the preview, or it freezes on frame 0.
+bool is_animated_image(const std::string& p) {
+    fs::path fp(p);
+    std::string ext = fp.extension().string();
+    for (auto& c : ext) c = (char)tolower((unsigned char)c);
+    return ext==".gif";
+}
+
 // ── Bin helpers ──────────────────────────────────────────────────────────────
 
 MediaKind kind_for_path(const std::string& path) {

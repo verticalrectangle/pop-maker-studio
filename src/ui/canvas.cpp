@@ -1443,6 +1443,30 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                 }
             }
         }
+
+        // Loop warm: when transport-looping and approaching the region end,
+        // prefetch the clips that become active right after the wrap (at the
+        // loop region start) so the loop seam hits a warm ring, not a sync
+        // decode — clean cycle, no frame hitch. Slot dedupe makes this free when
+        // the same source spans the wrap.
+        if (state.loop_play && state.playing && state.duration > 0.f) {
+            float wlo = 0.f, whi = state.duration;
+            loop_region(state, wlo, whi);
+            if (whi > wlo && state.playhead > whi - BOUNDARY_WARM_S) {
+                constexpr int LOOP_WARM_FRAMES = 3;
+                for (int ti = 0; ti < (int)state.tracks.size(); ++ti) {
+                    auto& track = state.tracks[ti];
+                    if (!track.visible) continue;
+                    for (auto& cl : track.clips) {
+                        if (!clip_is_videolike_type(cl.clip_type)) continue;
+                        if (cl.start <= wlo + 1e-4f && cl.end > wlo + 1e-4f) {
+                            add_clip(&cl, wlo, ti, LOOP_WARM_FRAMES);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
         video_prefetch_frames(reqs.data(), (int)reqs.size());
     }
 

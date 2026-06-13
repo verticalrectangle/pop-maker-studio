@@ -10,7 +10,7 @@
 // ── Binary serialization helpers ──────────────────────────────────────────────
 
 static const uint32_t MAGIC   = 0x534D5001u; // "PMS\x01"
-static const uint32_t VERSION = 43u;  // v43: face filters on camera bricks
+static const uint32_t VERSION = 44u;  // v44: loop brace region + marker chapter flag
 
 struct Writer {
     std::ofstream f;
@@ -532,6 +532,7 @@ bool project_save(const AppState& state, const std::string& path) {
         w.pod(m.time);
         w.str(m.label);
         w.pod(m.color);
+        w.pod((uint8_t)m.chapter);   // v44
     }
 
     // v33: lyrics word edits
@@ -553,6 +554,11 @@ bool project_save(const AppState& state, const std::string& path) {
         w.pod((uint32_t)b.fx_chain.size());
         for (auto& se : b.fx_chain) write_clip(w, se);
     }
+
+    // v44: loop brace region (armed state + in/out)
+    w.pod((uint8_t)state.loop_play);
+    w.pod(state.loop_in);
+    w.pod(state.loop_out);
 
     return w.ok;
 }
@@ -626,6 +632,8 @@ bool project_load(AppState& state, const std::string& path) {
             m.time  = r.pod<float>();
             m.label = r.str();
             m.color = r.pod<uint32_t>();
+            // Pre-v44 markers were all "chapter markers"; preserve that intent.
+            m.chapter = (version >= 44u) ? (bool)r.pod<uint8_t>() : true;
             state.markers.push_back(std::move(m));
         }
     }
@@ -666,6 +674,13 @@ bool project_load(AppState& state, const std::string& path) {
     if (state.buses.empty()) state.buses.push_back(Bus{"Master", {}, -1, 1.f});
     for (auto& t : state.tracks)
         if (t.bus < 0 || t.bus >= (int)state.buses.size()) t.bus = 0;
+
+    // v44: loop brace region
+    if (version >= 44u) {
+        state.loop_play = (bool)r.pod<uint8_t>();
+        state.loop_in   = r.pod<float>();
+        state.loop_out  = r.pod<float>();
+    }
 
     // Backfill for pre-v36 projects: derive the bin from existing clip paths
     // so users opening older projects still see their media in the bin.

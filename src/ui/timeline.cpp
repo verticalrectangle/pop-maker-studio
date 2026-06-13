@@ -663,6 +663,10 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
 
     // ── Ruler ─────────────────────────────────────────────────────────────────
     float ruler_y = origin.y;
+    // Top band of the ruler reserved for the loop brace (grab/resize/move). The
+    // seek-on-click zone and tick labels start below it so they don't fight for
+    // the mouse / pixels.
+    const float LOOP_STRIP_H = 12.f;
     dl->AddRectFilled({origin.x, ruler_y},
         {origin.x+total_w, ruler_y+TL_RULER_H}, to_u32(Col::bg_soft));
     dl->AddLine({origin.x, ruler_y+TL_RULER_H},
@@ -755,20 +759,22 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
         int  sub      = (int)(i % minors_per_major);
         bool is_major = (sub == 0);
 
+        // Ticks + labels live below the loop-brace lane.
+        float tk = ruler_y + LOOP_STRIP_H;
         if (is_major) {
-            dl->AddLine({px, ruler_y + 4.f}, {px, ruler_y + TL_RULER_H},
+            dl->AddLine({px, tk + 1.f}, {px, ruler_y + TL_RULER_H},
                         to_u32(Col::muted));
             char tbuf[16];
             snprintf(tbuf, sizeof(tbuf), "%s", fmt_time_short(t).c_str());
             float tw = ImGui::CalcTextSize(tbuf).x;
             float lx = px - tw * 0.5f;
             if (lx >= origin.x + TL_LABEL_W + 2.f && lx + tw <= origin.x + total_w - 2.f)
-                dl->AddText({lx, ruler_y + 3.f}, to_u32(Col::muted), tbuf);
+                dl->AddText({lx, tk}, to_u32(Col::muted), tbuf);
         } else {
             // Frame ticks: emphasize every 5th frame so groups read at a
             // glance; label frames as +offsets under their second when wide.
             bool emph = frame_grid && frame_step == 1 && (sub % 5 == 0);
-            dl->AddLine({px, ruler_y + (emph ? 7.f : 10.f)}, {px, ruler_y + TL_RULER_H},
+            dl->AddLine({px, tk + (emph ? 3.f : 6.f)}, {px, ruler_y + TL_RULER_H},
                         to_u32(emph ? Col::muted : Col::dim));
             if (label_frames) {
                 char fbuf[12];
@@ -776,21 +782,245 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                 float tw = ImGui::CalcTextSize(fbuf).x;
                 float lx = px - tw * 0.5f;
                 if (lx >= origin.x + TL_LABEL_W + 2.f && lx + tw <= origin.x + total_w - 2.f)
-                    dl->AddText({lx, ruler_y + 3.f}, to_u32(Col::dim), fbuf);
+                    dl->AddText({lx, tk}, to_u32(Col::dim), fbuf);
             }
         }
     }
 
-    // Chapter marker lines — colored vertical lines + labels in the ruler
-    for (auto& m : state.markers) {
-        float px = origin.x + TL_LABEL_W + m.time * zoom - scroll;
-        if (px < origin.x + TL_LABEL_W || px > origin.x + total_w) continue;
-        ImU32 mc = (m.color & 0x00FFFFFFu) | 0xCC000000u;  // use stored RGB, force alpha=0xCC
-        dl->AddLine({px, ruler_y}, {px, origin.y + total_h}, mc, 1.5f);
-        if (!m.label.empty()) {
-            ImVec2 tp = {px + 3.f, ruler_y + 2.f};
-            dl->AddText(tp, mc, m.label.c_str());
+    // ── Loop brace (region) ─────────────────────────────────────────────────
+    {
+        auto& s_loop_drag = g_tl.loop_drag;
+        float clip_l = origin.x + TL_LABEL_W, clip_r = origin.x + total_w;
+        auto t_to_x = [&](float t){ return origin.x + TL_LABEL_W + t * zoom - scroll; };
+        auto x_to_t = [&](float x){ return fmaxf(0.f, fminf((x - clip_l + scroll) / zoom, dur)); };
+
+        // Snap candidates: clip edges + markers + 0/end (skip the playhead — the
+        // brace shouldn't stick to it while you set a region).
+        auto loop_cands = [&]() {
+            std::vector<float> c;
+            for (auto& tr : state.tracks)
+                for (auto& cl : tr.clips) { c.push_back(cl.start); c.push_back(cl.end); }
+            for (auto& mk : state.markers) c.push_back(mk.time);
+            c.push_back(0.f); c.push_back(dur);
+            return c;
+        };
+
+        float lo0, hi0; bool have_region = loop_region(state, lo0, hi0);
+        float xin = t_to_x(lo0), xout = t_to_x(hi0);
+        const float EDGE_PX = 6.f;
+
+        bool in_strip = mouse.y >= ruler_y && mouse.y < ruler_y + LOOP_STRIP_H &&
+                        mouse.x >= clip_l && mouse.x <= clip_r;
+
+        // Grab.
+        if (!tl_any_popup && s_loop_drag == 0 && in_strip && ImGui::IsMouseClicked(0)) {
+            g_tl.loop_drag_down_x = mouse.x; g_tl.loop_drag_moved = false;
+            if (have_region && fabsf(mouse.x - xin) <= EDGE_PX) {
+                s_loop_drag = 1; g_tl.loop_drag_anchor = hi0;
+            } else if (have_region && fabsf(mouse.x - xout) <= EDGE_PX) {
+                s_loop_drag = 2; g_tl.loop_drag_anchor = lo0;
+            } else if (have_region && mouse.x > xin && mouse.x < xout) {
+                s_loop_drag = 3; g_tl.loop_drag_ref_x = mouse.x;
+                g_tl.loop_drag_ref_in = lo0; g_tl.loop_drag_ref_out = hi0;
+            } else {
+                float t = x_to_t(mouse.x);
+                s_loop_drag = 4; g_tl.loop_drag_anchor = t;
+                state.loop_in = t; state.loop_out = t;
+            }
         }
+        // Drag.
+        if (s_loop_drag != 0 && ImGui::IsMouseDown(0)) {
+            if (fabsf(mouse.x - g_tl.loop_drag_down_x) > 2.f) g_tl.loop_drag_moved = true;
+            float t = edge_snap(x_to_t(mouse.x), loop_cands());
+            if (s_loop_drag == 1) {
+                state.loop_in  = fminf(t, g_tl.loop_drag_anchor - 1e-3f);
+                state.loop_out = g_tl.loop_drag_anchor;
+            } else if (s_loop_drag == 2) {
+                state.loop_in  = g_tl.loop_drag_anchor;
+                state.loop_out = fmaxf(t, g_tl.loop_drag_anchor + 1e-3f);
+            } else if (s_loop_drag == 3) {
+                float span = g_tl.loop_drag_ref_out - g_tl.loop_drag_ref_in;
+                float ni   = g_tl.loop_drag_ref_in + (mouse.x - g_tl.loop_drag_ref_x) / zoom;
+                ni = edge_snap(ni, loop_cands());
+                ni = fmaxf(0.f, fminf(ni, dur - span));
+                state.loop_in = ni; state.loop_out = ni + span;
+            } else if (s_loop_drag == 4) {
+                state.loop_in  = fminf(g_tl.loop_drag_anchor, t);
+                state.loop_out = fmaxf(g_tl.loop_drag_anchor, t);
+            }
+        }
+        // Release.
+        if (s_loop_drag != 0 && ImGui::IsMouseReleased(0)) {
+            bool tiny = (state.loop_out - state.loop_in) < 3.f / zoom;
+            if (s_loop_drag == 4 && (tiny || !g_tl.loop_drag_moved)) {
+                state.loop_in = -1.f; state.loop_out = -1.f;   // stray click → no region
+            } else {
+                if (tiny) { state.loop_in = -1.f; state.loop_out = -1.f; }
+                else      state.loop_play = true;              // a real region arms the loop
+                history_push(state, "Set loop region");
+            }
+            s_loop_drag = 0; s_snap_indicator = -1.f;
+        }
+
+        // Persistent loop-lane background so the grab strip is discoverable as a
+        // distinct bar even when no region is set (lighter when hovered).
+        dl->AddRectFilled({clip_l, ruler_y}, {clip_r, ruler_y + LOOP_STRIP_H},
+                          IM_COL32(255, 255, 255, in_strip ? 16 : 9));
+        dl->AddLine({clip_l, ruler_y + LOOP_STRIP_H}, {clip_r, ruler_y + LOOP_STRIP_H},
+                    IM_COL32(255, 255, 255, 16));
+
+        // Draw region tint + brace (recompute from current state).
+        float lo, hi; bool region = loop_region(state, lo, hi);
+        if (region || s_loop_drag != 0) {
+            float bx0 = fmaxf(t_to_x(lo), clip_l), bx1 = fminf(t_to_x(hi), clip_r);
+            ImU32 tint = state.loop_play ? IM_COL32(90,210,150,28) : IM_COL32(150,150,170,16);
+            if (bx1 > bx0) dl->AddRectFilled({bx0, ruler_y + LOOP_STRIP_H}, {bx1, origin.y + total_h}, tint);
+            ImU32 bc = state.loop_play ? IM_COL32(90,220,150,255) : IM_COL32(180,180,200,220);
+            if (bx1 > bx0) dl->AddRectFilled({bx0, ruler_y + 1.f}, {bx1, ruler_y + LOOP_STRIP_H - 1.f}, bc);
+            float exin = t_to_x(lo), exout = t_to_x(hi);
+            if (exin  >= clip_l && exin  <= clip_r) dl->AddRectFilled({exin, ruler_y},     {exin+2.f, ruler_y + TL_RULER_H}, bc);
+            if (exout >= clip_l && exout <= clip_r) dl->AddRectFilled({exout-2.f, ruler_y}, {exout,   ruler_y + TL_RULER_H}, bc);
+        }
+        if (in_strip || s_loop_drag != 0) ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+    }
+
+    // ── Markers (locators) — interactive flags in the ruler band ─────────────
+    {
+        float band_y0 = ruler_y + LOOP_STRIP_H;
+        float band_y1 = ruler_y + TL_RULER_H;
+        float clip_l  = origin.x + TL_LABEL_W, clip_r = origin.x + total_w;
+        auto  x_to_t  = [&](float x){ return fmaxf(0.f, fminf((x - clip_l + scroll) / zoom, dur)); };
+        auto  mk_cands = [&]() {
+            std::vector<float> c;
+            for (auto& tr : state.tracks)
+                for (auto& cl : tr.clips) { c.push_back(cl.start); c.push_back(cl.end); }
+            c.push_back(0.f); c.push_back(dur);
+            return c;
+        };
+
+        int hover_idx = -1;
+        for (int mi = 0; mi < (int)state.markers.size(); ++mi) {
+            Marker& m = state.markers[mi];
+            float px = origin.x + TL_LABEL_W + m.time * zoom - scroll;
+            if (px < clip_l - 60.f || px > clip_r + 4.f) continue;
+            bool  being = (g_tl.marker_drag == mi);
+            ImU32 rgb   = m.color & 0x00FFFFFFu;
+
+            // Guide line down the tracks (faint unless grabbed).
+            if (px >= clip_l && px <= clip_r)
+                dl->AddLine({px, band_y1}, {px, origin.y + total_h},
+                            rgb | (being ? 0xFF000000u : 0x55000000u), being ? 1.5f : 1.f);
+
+            // Flag tab + downward notch at the exact time.
+            const char* lbl = m.label.empty() ? "\xe2\x80\xa2" : m.label.c_str();
+            float tw  = ImGui::CalcTextSize(lbl).x;
+            float tabw = tw + 8.f;
+            ImVec2 a = {px, band_y0}, b = {px + tabw, band_y1 - 1.f};
+            bool over = mouse.x >= px - 4.f && mouse.x <= b.x &&
+                        mouse.y >= band_y0 && mouse.y <= band_y1;
+            if (over) hover_idx = mi;
+            ImU32 fill = rgb | (over || being ? 0xFF000000u : 0xDD000000u);
+            dl->AddRectFilled(a, b, fill, 2.f, ImDrawFlags_RoundCornersRight);
+            dl->AddTriangleFilled({px, band_y1}, {px + 5.f, band_y1 - 5.f},
+                                  {px + 5.f, band_y1}, fill);
+            if (g_tl.marker_rename != mi)
+                dl->AddText({px + 4.f, band_y0 + 1.f}, IM_COL32(18,18,22,255), lbl);
+        }
+
+        // Interaction (uses the topmost hovered flag).
+        if (!tl_any_popup && hover_idx >= 0 && g_tl.marker_drag < 0 &&
+            ImGui::IsMouseDoubleClicked(0)) {
+            g_tl.marker_rename = hover_idx; g_tl.marker_rename_focus = true;
+            snprintf(g_tl.marker_rename_buf, sizeof(g_tl.marker_rename_buf),
+                     "%s", state.markers[hover_idx].label.c_str());
+        } else if (!tl_any_popup && hover_idx >= 0 && g_tl.marker_drag < 0 &&
+                   g_tl.marker_rename < 0 && ImGui::IsMouseClicked(0)) {
+            g_tl.marker_drag = hover_idx; g_tl.marker_drag_moved = false;
+            g_tl.marker_down_x = mouse.x;
+        }
+        if (g_tl.marker_drag >= 0 && g_tl.marker_drag < (int)state.markers.size() &&
+            ImGui::IsMouseDown(0)) {
+            if (fabsf(mouse.x - g_tl.marker_down_x) > 3.f) g_tl.marker_drag_moved = true;
+            if (g_tl.marker_drag_moved)
+                state.markers[g_tl.marker_drag].time = edge_snap(x_to_t(mouse.x), mk_cands());
+        }
+        if (g_tl.marker_drag >= 0 && ImGui::IsMouseReleased(0)) {
+            int di = g_tl.marker_drag;
+            if (di < (int)state.markers.size()) {
+                if (!g_tl.marker_drag_moved) {
+                    seek_to(state, state.markers[di].time);     // plain click = jump
+                } else {
+                    std::sort(state.markers.begin(), state.markers.end(),
+                              [](const Marker& x, const Marker& y){ return x.time < y.time; });
+                    history_push(state, "Move marker");
+                }
+            }
+            g_tl.marker_drag = -1; s_snap_indicator = -1.f;
+        }
+        if (!tl_any_popup && hover_idx >= 0 && ImGui::IsMouseClicked(1)) {
+            g_tl.ctx_marker = hover_idx; g_tl.open_marker_ctx = true;
+            ImGui::OpenPopup("##marker_ctx");
+        }
+
+        // Inline rename field.
+        int rmi = g_tl.marker_rename;
+        if (rmi >= 0 && rmi < (int)state.markers.size()) {
+            Marker& m = state.markers[rmi];
+            float px = origin.x + TL_LABEL_W + m.time * zoom - scroll;
+            ImGui::SetCursorScreenPos({px + 2.f, band_y0});
+            ImGui::SetNextItemWidth(120.f);
+            ImGui::PushStyleColor(ImGuiCol_FrameBg, Col::bg_soft);
+            ImGui::PushStyleColor(ImGuiCol_Border,  Col::fg);
+            if (g_tl.marker_rename_focus) { ImGui::SetKeyboardFocusHere(); g_tl.marker_rename_focus = false; }
+            bool done = ImGui::InputText("##mk_rename", g_tl.marker_rename_buf,
+                                         sizeof(g_tl.marker_rename_buf),
+                                         ImGuiInputTextFlags_EnterReturnsTrue);
+            if (done || (ImGui::IsItemDeactivated() && !ImGui::IsKeyPressed(ImGuiKey_Escape))) {
+                m.label = g_tl.marker_rename_buf;
+                history_push(state, "Rename marker");
+                g_tl.marker_rename = -1;
+            }
+            if (ImGui::IsKeyPressed(ImGuiKey_Escape)) g_tl.marker_rename = -1;
+            ImGui::PopStyleColor(2);
+        }
+
+        // Right-click context menu.
+        if (ImGui::BeginPopup("##marker_ctx")) {
+            g_tl.open_marker_ctx = false;
+            int mi = g_tl.ctx_marker;
+            if (mi >= 0 && mi < (int)state.markers.size()) {
+                Marker& m = state.markers[mi];
+                if (ImGui::MenuItem("Rename")) {
+                    g_tl.marker_rename = mi; g_tl.marker_rename_focus = true;
+                    snprintf(g_tl.marker_rename_buf, sizeof(g_tl.marker_rename_buf), "%s", m.label.c_str());
+                }
+                if (ImGui::MenuItem("Loop to next marker")) {
+                    float nt = -1.f;
+                    for (auto& mm : state.markers) if (mm.time > m.time + 1e-3f) { nt = mm.time; break; }
+                    if (nt < 0.f) nt = dur;
+                    state.loop_in = m.time; state.loop_out = nt; state.loop_play = true;
+                    history_push(state, "Loop to next marker");
+                }
+                if (ImGui::MenuItem("Set loop start here")) {
+                    state.loop_in = m.time;
+                    if (state.loop_out <= m.time) state.loop_out = dur;
+                    state.loop_play = true;
+                    history_push(state, "Set loop start");
+                }
+                bool chap = m.chapter;
+                if (ImGui::MenuItem("Chapter point", nullptr, &chap)) {
+                    m.chapter = chap; history_push(state, "Toggle chapter");
+                }
+                ImGui::Separator();
+                if (ImGui::MenuItem("Delete")) {
+                    state.markers.erase(state.markers.begin() + mi);
+                    history_push(state, "Delete marker");
+                }
+            }
+            ImGui::EndPopup();
+        }
+
+        if (hover_idx >= 0 && g_tl.marker_drag < 0) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
     }
 
     // Tracks
@@ -3197,8 +3427,15 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
         g_tl.drag_multi.clear();
     }
 
-    // Playhead
-    float ph_x = origin.x+TL_LABEL_W+state.playhead*zoom-scroll;
+    // Playhead. The transport parks on the last *whole* frame (a playhead at
+    // the exclusive `duration` shows nothing), which leaves the marker one
+    // sub-frame short of the final clip's right edge. When we're sitting on
+    // that last frame, draw the marker at the true timeline end so it meets the
+    // clip border — the preview still holds the last real frame.
+    float ph_draw = state.playhead;
+    if (state.duration > 0.f && state.playhead >= last_playable_time(state) - 1e-4f)
+        ph_draw = state.duration;
+    float ph_x = origin.x+TL_LABEL_W+ph_draw*zoom-scroll;
     if (ph_x >= origin.x+TL_LABEL_W && ph_x <= origin.x+total_w) {
         dl->AddLine({ph_x, origin.y}, {ph_x, origin.y+total_h}, to_u32(Col::fg));
         dl->AddTriangleFilled({ph_x-5.f,origin.y},{ph_x+5.f,origin.y},{ph_x,origin.y+10.f},to_u32(Col::fg));
@@ -3208,8 +3445,9 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
     auto& s_ruler_drag = g_tl.ruler_drag;
     bool any_popup_global = ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
     if (ImGui::IsMouseReleased(0)) s_ruler_drag = false;
-    if (!any_popup_global && drag_track < 0) {
-        bool in_ruler = mouse.y >= origin.y && mouse.y <= origin.y + TL_RULER_H &&
+    if (!any_popup_global && drag_track < 0 && g_tl.loop_drag == 0 && g_tl.marker_drag < 0) {
+        // Seek zone starts below the loop-brace strip so the two don't collide.
+        bool in_ruler = mouse.y >= origin.y + LOOP_STRIP_H && mouse.y <= origin.y + TL_RULER_H &&
                         mouse.x >= origin.x + TL_LABEL_W && mouse.x <= origin.x + total_w;
         if (in_ruler && (!tl_any_popup && ImGui::IsMouseClicked(0))) s_ruler_drag = true;
         if (s_ruler_drag && ImGui::IsMouseDown(0)) {

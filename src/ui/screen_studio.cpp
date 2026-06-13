@@ -178,6 +178,11 @@ static void handle_shortcuts(AppState& state) {
     if (ImGui::IsKeyPressed(ImGuiKey_Home)) { seek_to(state, 0.f);  return; }
     if (ImGui::IsKeyPressed(ImGuiKey_End))  { seek_to(state, dur);  return; }
 
+    // Markers / locators: M drops one at the playhead, [ / ] jump between them.
+    if (ImGui::IsKeyPressed(ImGuiKey_M))            { marker_add(state, state.playhead); return; }
+    if (ImGui::IsKeyPressed(ImGuiKey_LeftBracket))  { marker_jump(state, -1); return; }
+    if (ImGui::IsKeyPressed(ImGuiKey_RightBracket)) { marker_jump(state, +1); return; }
+
     // ── Clip operations (need a selected clip) ────────────────────────────────
     if (state.selected_track<0 || state.selected_clip<0) return;
     if (state.selected_track>=(int)state.tracks.size()) return;
@@ -320,10 +325,12 @@ void ui_studio(AppState& state) {
         if (video_source(slot) == PreviewSource::Proxy) continue;  // terminal state
 
         std::string src = source_from_key(key);
-        if (is_image_path(src)) {
-            // Images never get an MJPEG proxy — keep them out of the generic
-            // native/proxy logic below (per-frame libav opens). Still is their
-            // terminal state; repair both Closed slots (the add-time open
+        if (is_image_path(src) && !is_animated_image(src)) {
+            // Still images never get an MJPEG proxy — keep them out of the
+            // generic native/proxy logic below (per-frame libav opens).
+            // Animated images (.gif) fall through to the proxy path so they
+            // play instead of freezing on frame 0.
+            // Still is their terminal state; repair both Closed slots (the add-time open
             // races the background still generator for brand-new files) and
             // slots stuck in Native (libav opens a PNG as a one-frame video,
             // then every decode past t=0 fails and the clip renders blank).
@@ -384,7 +391,9 @@ void ui_studio(AppState& state) {
             bool started = false;
             for (auto& cl : tr.clips) {
                 if (!clip_is_videolike_type(cl.clip_type)) continue;
-                if (cl.text.empty() || is_image_path(cl.text)) continue;
+                // Still images get no proxy; animated images (.gif) do.
+                if (cl.text.empty() ||
+                    (is_image_path(cl.text) && !is_animated_image(cl.text))) continue;
                 if (!proxy_is_ready(cl.text)) {
                     proxy_start(cl.text);
                     started = true;
@@ -1250,7 +1259,11 @@ void ui_studio(AppState& state) {
                 if (scrub_held) seek_to(state, mouse_t);
             }
 
-            float played_frac = fmaxf(0.f, fminf(1.f, state.playhead / dur));
+            // Snap the knob to the very end when parked on the last whole frame
+            // (matches the timeline marker — the transport can't sit past it).
+            float played_frac = (state.playhead >= last_playable_time(state) - 1e-4f)
+                                ? 1.f
+                                : fmaxf(0.f, fminf(1.f, state.playhead / dur));
             float play_sx = scrub_x0 + played_frac * scrub_w;
             float bh2 = s_scrub_h_anim * 0.5f;
 
@@ -1307,7 +1320,8 @@ void ui_studio(AppState& state) {
             const float SB  = 26.f;
             const float PB  = 38.f;
             const float GAP = 8.f;
-            float btns_total = SB * 4.f + PB + GAP * 4.f;
+            // 5 small buttons (|< < > >| loop) + 1 large play button.
+            float btns_total = SB * 5.f + PB + GAP * 5.f;
             float btn_row_y  = pill_y0 + PILL_PAD_Y + SCRUB_H + 10.f;
             float bx = pill_x0 + (PILL_W - btns_total) * 0.5f;
             float btn_cy = btn_row_y + BTN_ROW_H * 0.5f;
@@ -1412,6 +1426,44 @@ void ui_studio(AppState& state) {
                 dl->AddTriangleFilled({cx2-r*0.9f, btn_cy-r}, {cx2-r*0.9f, btn_cy+r}, {cx2+r*0.9f, btn_cy}, ic);
                 dl->AddRectFilled({cx2+r*1.1f, btn_cy-r}, {cx2+r*1.6f, btn_cy+r}, ic, 1.f);
                 if (c) seek_to(state, dur);
+            }
+
+            // Loop toggle — tints green when engaged; playback cycles the whole
+            // timeline seamlessly instead of stopping at the end.
+            {
+                float sz = SB;
+                float cy2 = btn_row_y + (BTN_ROW_H - sz) * 0.5f;
+                ImGui::SetCursorScreenPos({bx, cy2});
+                ImGui::InvisibleButton("##t_loop", {sz, sz});
+                bool h = ImGui::IsItemHovered();
+                bool a = ImGui::IsItemActive();
+                bool c = ImGui::IsItemClicked();
+                if (a) any_active_this_frame = true;
+                float cx2 = bx + sz*0.5f, cy3 = cy2 + sz*0.5f;
+                bool on = state.loop_play;
+                dl->AddCircleFilled({cx2, cy3}, sz*0.5f,
+                    on ? fa(IM_COL32(90,210,150, a?75:h?58:42))
+                       : fa(IM_COL32(255,255,255, a?45:h?28:12)));
+                dl->AddCircle({cx2, cy3}, sz*0.5f - 0.5f,
+                    on ? fa(IM_COL32(120,240,180,150))
+                       : fa(IM_COL32(255,255,255, a?80:h?50:22)), 0, 1.f);
+                ImU32 ic = on ? fa(IM_COL32(150,250,200,255))
+                              : fa(IM_COL32(255,255,255, a?255:h?230:180));
+                // Circular-arrow glyph (~300° arc + tangent arrowhead).
+                float r = sz * 0.27f;
+                float a0 = 0.7f, a1 = 0.7f + 5.2f;
+                dl->PathArcTo({cx2, cy3}, r, a0, a1, 22);
+                dl->PathStroke(ic, 0, 1.8f);
+                float ex = cx2 + cosf(a1)*r, ey = cy3 + sinf(a1)*r;
+                float tgx = -sinf(a1), tgy = cosf(a1);   // tangent (travel dir)
+                float rdx =  cosf(a1), rdy = sinf(a1);   // radial
+                float ah = sz * 0.20f;
+                dl->AddTriangleFilled(
+                    {ex + tgx*ah,            ey + tgy*ah},
+                    {ex + rdx*ah*0.7f,       ey + rdy*ah*0.7f},
+                    {ex - rdx*ah*0.7f,       ey - rdy*ah*0.7f}, ic);
+                if (c) state.loop_play = !state.loop_play;
+                bx += sz + GAP;
             }
 
             // ── Timecode — centered row below buttons ─────────────────────────
@@ -1798,6 +1850,38 @@ void ui_studio(AppState& state) {
         ImGui::PushFont(g_font_bold);
         tl_dl->AddText({hdr_tl.x+8.f, hdr_tl.y+4.f}, to_u32(Col::muted), "TIMELINE");
         ImGui::PopFont();
+
+        // Loop + marker controls — always visible here (the transport pill's
+        // loop button auto-hides, so the timeline is their discoverable home).
+        {
+            ImGui::SetCursorScreenPos({hdr_tl.x + 86.f, hdr_tl.y + 2.f});
+            ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {6.f, 2.f});
+            // Loop toggle — green when armed.
+            bool on = state.loop_play;
+            ImVec4 loop_btn  = on ? ImVec4(0.16f,0.59f,0.35f,1.f) : Col::bg_soft;
+            ImVec4 loop_btnh = on ? ImVec4(0.20f,0.69f,0.41f,1.f) : Col::bg_soft_hov;
+            ImGui::PushStyleColor(ImGuiCol_Button,        loop_btn);
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, loop_btnh);
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive,  loop_btnh);
+            if (ImGui::SmallButton("Loop##tlloop")) state.loop_play = !state.loop_play;
+            ImGui::PopStyleColor(3);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Loop playback over the brace region (whole timeline if none set)");
+            ImGui::SameLine(0.f, 8.f);
+            ImGui::PushStyleColor(ImGuiCol_Button,        Col::bg_soft);
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, Col::bg_soft_hov);
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive,  Col::bg_soft_hov);
+            if (ImGui::SmallButton("+Mark##tlmark")) marker_add(state, state.playhead);
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Drop a marker at the playhead (M)");
+            ImGui::SameLine(0.f, 6.f);
+            if (ImGui::SmallButton("<##tlmprev")) marker_jump(state, -1);
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Jump to previous marker ([)");
+            ImGui::SameLine(0.f, 2.f);
+            if (ImGui::SmallButton(">##tlmnext")) marker_jump(state, +1);
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Jump to next marker (])");
+            ImGui::PopStyleColor(3);
+            ImGui::PopStyleVar();
+        }
 
         // Zoom controls in header. The readout is the position within the
         // usable zoom range: 0% = fully zoomed out (whole project fits),

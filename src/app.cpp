@@ -8,6 +8,8 @@
 #include "fx_shader.h"
 #include "presets.h"
 #include "runtime_fx.h"
+#include "recorder.h"
+#include "video_recorder.h"
 #include "ipc_server.h"
 #include "agent_harness.h"
 #include "globals.h"
@@ -564,6 +566,24 @@ void app_frame(AppState& state) {
     );
     ImGui::PopStyleVar();  // WindowPadding
 
+    // Transport loop: cycle the loop brace region (or the whole timeline when no
+    // region is set) seamlessly while playing. The record bricks own the audio
+    // loop region when active, so defer to them.
+    float loop_lo = 0.f, loop_hi = state.duration;
+    loop_region(state, loop_lo, loop_hi);
+    bool transport_loop = state.loop_play && loop_hi > loop_lo &&
+                          !recorder_active() && !vrecorder_active();
+    if (transport_loop && state.playing) {
+        // Drive the audio engine's sample-accurate wrap so the master clock
+        // (and the playhead derived from it) loops with no seam. Re-set each
+        // frame so a region/duration change mid-loop is picked up immediately.
+        audio_set_loop(loop_lo, loop_hi);
+    } else if (audio_loop_active() && !recorder_active() && !vrecorder_active()) {
+        // Loop turned off / playback stopped → drop our transport loop region
+        // (never a recorder's — those clear it themselves on stop).
+        audio_clear_loop();
+    }
+
     // Update playhead BEFORE rendering so the video frame shown this cycle
     // matches the audio position this cycle, not last cycle's.
     if (state.playing) {
@@ -577,18 +597,33 @@ void app_frame(AppState& state) {
             if (elapsed < 0.0) elapsed = 0.0;
             pos = state.play_start_pos + (float)elapsed;
         }
-        state.playhead = pos;
-        // No end-of-project auto-stop while a loop region cycles (record
-        // brick): the brick may extend past current content, and the wrap
-        // keeps the playhead inside the loop anyway.
-        if (!audio_loop_active() &&
-            state.duration > 0.f && state.playhead >= state.duration) {
-            // Park on the last real frame, not the exclusive end (which shows
-            // nothing) — so playing to the end leaves the last frame on screen.
-            state.playhead = last_playable_time(state);
-            state.playing  = false;
-            audio_pause();
-            audio_seek(0.f);
+        if (transport_loop) {
+            // The audio clock already wraps when sound is playing; this also
+            // covers the silent (wall-clock) path, where pos grows unbounded.
+            // Wrap at the region end → region start (playback before the region
+            // plays in, then cycles — matches Ableton). Re-anchor the wall-clock
+            // origin on wrap so drift can't accumulate.
+            if (pos >= loop_hi) {
+                pos = loop_lo + fmodf(pos - loop_lo, loop_hi - loop_lo);
+                state.play_start_pos  = pos;
+                state.play_start_wall = std::chrono::steady_clock::now();
+                audio_seek(pos);
+            }
+            state.playhead = pos;
+        } else {
+            state.playhead = pos;
+            // No end-of-project auto-stop while a loop region cycles (record
+            // brick): the brick may extend past current content, and the wrap
+            // keeps the playhead inside the loop anyway.
+            if (!audio_loop_active() &&
+                state.duration > 0.f && state.playhead >= state.duration) {
+                // Park on the last real frame, not the exclusive end (which shows
+                // nothing) — so playing to the end leaves the last frame on screen.
+                state.playhead = last_playable_time(state);
+                state.playing  = false;
+                audio_pause();
+                audio_seek(0.f);
+            }
         }
     }
     // Single source of truth when paused: the playhead can never sit past the
