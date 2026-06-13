@@ -1617,17 +1617,27 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                 }
 
                 alpha = fmaxf(0.f, fminf(1.f, alpha));
+                // Camera-record takes render MIRRORED — same as the live
+                // preview you recorded in (front-facing-cam convention).
+                // Without this the take flips horizontally the instant
+                // recording stops, which reads as the image jumping. Mirror =
+                // swap the horizontal UV window.
+                bool mirror = (cl_ptr->clip_type == ClipType::VideoRecord);
                 if (editing_crop)
                     // Crop-edit shows the full frame, unrotated — the crop is
                     // defined in source space, so the editing view is source
                     // view (the overlay rect in draw_crop_mode matches this).
                     scene_add_layer(tex, cx, cy, hw, hh, 1.f, 0.f, alpha);
-                else if (cl_ptr->has_crop())
+                else if (cl_ptr->has_crop()) {
+                    float u0 = cl_ptr->crop_l, u1 = 1.f - cl_ptr->crop_r;
+                    if (mirror) { float t = u0; u0 = u1; u1 = t; }
                     scene_add_layer(tex, cx, cy, hw, hh, cos_r, sin_r, alpha,
-                                    cl_ptr->crop_l, cl_ptr->crop_t,
-                                    1.f - cl_ptr->crop_r, 1.f - cl_ptr->crop_b);
-                else
-                    scene_add_layer(tex, cx, cy, hw, hh, cos_r, sin_r, alpha);
+                                    u0, cl_ptr->crop_t, u1, 1.f - cl_ptr->crop_b);
+                } else {
+                    float u0 = mirror ? 1.f : 0.f, u1 = mirror ? 0.f : 1.f;
+                    scene_add_layer(tex, cx, cy, hw, hh, cos_r, sin_r, alpha,
+                                    u0, 0.f, u1, 1.f);
+                }
             };
 
             // Find the active video clip and check for transitions

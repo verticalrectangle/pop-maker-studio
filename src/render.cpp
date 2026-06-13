@@ -2016,6 +2016,11 @@ static bool gl_render_vid_clip(ImDrawList& dl, const Clip* cl, float at_time,
         // Non-destructive crop: sample only the clip's UV window.
         ImVec2 uv0{cl->crop_l,       cl->crop_t};
         ImVec2 uv1{1.f - cl->crop_r, 1.f - cl->crop_b};
+        // Camera-record takes export MIRRORED — matches the live preview and
+        // playback (front-facing-cam convention). Swap the horizontal window.
+        if (cl->clip_type == ClipType::VideoRecord) {
+            float t = uv0.x; uv0.x = uv1.x; uv1.x = t;
+        }
         if (use_scene) {
             scene_add_layer(cur_tex, cx, cy, hw, hh, cos_r, sin_r,
                             fmaxf(0.f, fminf(1.f, alpha)),
@@ -2179,6 +2184,9 @@ static bool gl_render_vid_clip(ImDrawList& dl, const Clip* cl, float at_time,
     // Non-destructive crop: sample only the clip's UV window.
     float cu0 = cl->crop_l,       cv0 = cl->crop_t;
     float cu1 = 1.f - cl->crop_r, cv1 = 1.f - cl->crop_b;
+    // Camera-record takes export MIRRORED — matches the live preview and
+    // playback (front-facing-cam convention). Swap the horizontal window.
+    if (cl->clip_type == ClipType::VideoRecord) { float t = cu0; cu0 = cu1; cu1 = t; }
     if (use_scene) {
         scene_add_layer(draw_tex, cx, cy, hw, hh, cos_r, sin_r,
                         fmaxf(0.f, fminf(1.f, alpha)),
