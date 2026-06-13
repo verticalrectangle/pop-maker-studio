@@ -336,6 +336,13 @@ static void draw_fx_stack(ImDrawList* dl, const Clip& clip, float cx0,
     fx_stack_layout(clip, vis_x0, vis_x1, shown, spread);
     for (int i = 0; i < shown; ++i) {
         const Clip& se = clip.fx_chain[(size_t)i];
+        // A Body FX sub-effect names itself by its body_fx_type — its plain
+        // fx_type is 0 (Grade), which is why every Body FX used to read "Grade".
+        const char* se_name = fx_type_name(se.fx_type);
+        if (se.clip_type == ClipType::BodyFX) {
+            const BodyFXInfo* bi = body_fx_find_info(se.body_fx_type);
+            if (bi) se_name = bi->name;
+        }
         FxBrickColors c = fx_brick_colors(se.fx_type, sel);
         ImU32 tint = IM_COL32((int)((c.fill>>IM_COL32_R_SHIFT)&0xFF),
                               (int)((c.fill>>IM_COL32_G_SHIFT)&0xFF),
@@ -348,7 +355,7 @@ static void draw_fx_stack(ImDrawList* dl, const Clip& clip, float cx0,
         // Effect name once the lane has room.
         if (spread > 0.45f && (r.x1-r.x0) > 34.f)
             dl->AddText({r.x0+3.f, (r.y0+r.y1)*0.5f - 6.5f},
-                        IM_COL32(255,255,255,235), fx_type_name(se.fx_type));
+                        IM_COL32(255,255,255,235), se_name);
     }
     // Count badge in deck mode (and an overflow tail when capped).
     if (spread < 0.5f) {
@@ -2097,11 +2104,11 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                         break;
                     }
                     // Clicked the unfolded brick but missed every lane (e.g. the
-                    // empty region of a retimed lane). On a GLASS brick, select the
-                    // host and SWALLOW the click so the content clip beneath —
-                    // whose body drag Pass 1 already armed — doesn't slide out from
-                    // under it. (Standalone bricks have no content to protect and
-                    // stay freely repositionable, so this only fires for glass.)
+                    // empty region of a retimed lane). Select the host so its FX
+                    // panel opens — but LEAVE the content's body drag (armed by
+                    // Pass 1 beneath the glass) intact: a drag from here moves the
+                    // whole welded group (the coupled bricks follow their host),
+                    // a click just selects. We only swallow Pass 2's own handling.
                     if (is_glass && !lane_grabbed && !tl_any_popup && ImGui::IsMouseClicked(0)) {
                         int hostsel = ci;
                         if (clip.fx_coupled && is_fx_clip(clip)) {
@@ -2112,7 +2119,6 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                         state.selected_clip  = hostsel;
                         state.clip_selection.clear();
                         state.clip_selection.insert({ti, hostsel});
-                        drag_track = -1; drag_clip = -1; drag_left = false; drag_right = false;
                         s_clip_hit   = true;
                         lane_grabbed = true;
                     }
