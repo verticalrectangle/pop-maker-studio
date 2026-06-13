@@ -25,6 +25,26 @@
 namespace fs = std::filesystem;
 extern ImFont* g_font_bold;
 
+// ── FX card thumbnail animation ───────────────────────────────────────────────
+// The preview thumbnails are rendered at a time t. Rather than animate every
+// card every frame (busy, and expensive — each call re-renders the effect),
+// only the hovered card plays, from the start, while the rest sit on a frozen
+// representative frame. The list then "comes alive" as the cursor passes down
+// it. Only one card is hovered at a time, so a single id/start pair suffices.
+static int    s_fx_anim_hover_id = -1;
+static double s_fx_anim_hover_t0 = 0.0;
+static float fx_card_preview_t(int card_id, bool hovered) {
+    if (hovered) {
+        if (s_fx_anim_hover_id != card_id) {
+            s_fx_anim_hover_id = card_id;
+            s_fx_anim_hover_t0 = ImGui::GetTime();
+        }
+        return (float)(ImGui::GetTime() - s_fx_anim_hover_t0);
+    }
+    if (s_fx_anim_hover_id == card_id) s_fx_anim_hover_id = -1;
+    return 0.6f;   // frozen representative frame
+}
+
 // ── FX preset helpers ─────────────────────────────────────────────────────────
 
 void preset_apply(Clip& clip, const EffectPreset& p) {
@@ -249,7 +269,7 @@ void panel_adjustment_library(AppState& state, float w) {
                               hov ? IM_COL32(28,22,48,255) : IM_COL32(18,14,32,255), 5.f);
             dl->AddRectFilled(cp, {cp.x+3.f, cp.y+cg_card_h}, IM_COL32(100,80,200,200), 2.f);
 
-            uintptr_t prev_tex = video_fx_preview_texture(fc.type, (float)ImGui::GetTime());
+            uintptr_t prev_tex = video_fx_preview_texture(fc.type, fx_card_preview_t(19000 + i, hov));
             if (prev_tex)
                 dl->AddImageRounded((ImTextureID)(uintptr_t)prev_tex,
                                     cp, {cp.x+cg_thumb_w, cp.y+cg_card_h},
@@ -957,7 +977,7 @@ void panel_fx_creative(AppState& state, float w) {
         dl->AddRectFilled(cp, {cp.x+card_w, cp.y+card_h},
                           hov ? IM_COL32(28,28,40,255) : IM_COL32(18,18,28,255), 5.f);
 
-        uintptr_t prev_tex = video_fx_preview_texture(fc.type, (float)ImGui::GetTime());
+        uintptr_t prev_tex = video_fx_preview_texture(fc.type, fx_card_preview_t(9000 + i, hov));
         if (prev_tex)
             dl->AddImageRounded((ImTextureID)(uintptr_t)prev_tex,
                                 cp, {cp.x+thumb_w, cp.y+card_h},

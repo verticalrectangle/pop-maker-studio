@@ -179,6 +179,11 @@ bool ui_btn(const char* label, bool filled, bool small) {
 // button can receive clicks over it. `uid` keeps the button id unique.
 bool ui_card_add_btn(ImVec2 card_tl, float card_w, int uid) {
     const float sz = 20.f, pad = 5.f;
+    // The "+" is an overlay anchored to the card's top-right. Save and restore
+    // the layout cursor around it — otherwise SetCursorScreenPos clobbers the
+    // advance the card's InvisibleButton already made, and the next card stacks
+    // on top of this one (cards end up overlapping by their lower half).
+    ImVec2 save = ImGui::GetCursorScreenPos();
     ImGui::SetCursorScreenPos({card_tl.x + card_w - sz - pad, card_tl.y + pad});
     ImGui::PushID(uid);
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {0.f, 0.f});
@@ -192,5 +197,6 @@ bool ui_card_add_btn(ImVec2 card_tl, float card_w, int uid) {
     ImGui::PopStyleColor(4);
     ImGui::PopStyleVar();
     ImGui::PopID();
+    ImGui::SetCursorScreenPos(save);
     return clicked;
 }
