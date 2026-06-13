@@ -2220,6 +2220,80 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                          fminf(s_cam_box.c[2].y, s_cam_box.c[3].y)) + 8.f;
         dl->AddText({lx, ly}, col, tag);
     }
+
+    // ── Empty camera brick: "Turn on camera preview" call-to-action ───────────
+    // A selected camera brick with no take and preview off leaves the canvas
+    // blank — show its frame outline (where the shot will land) with a one-
+    // click pill to start the live preview. The pill is a real ImGui button,
+    // so the layer-pick/handle hit-testing stands down for it automatically.
+    if (!s_cam_box.active && !vrecorder_monitor_get() && !vrecorder_active() &&
+        state.selected_track >= 0 && state.selected_track < (int)state.tracks.size() &&
+        state.selected_clip  >= 0) {
+        auto& sclips = state.tracks[state.selected_track].clips;
+        if (state.selected_clip < (int)sclips.size()) {
+            Clip& br = sclips[(size_t)state.selected_clip];
+            bool no_take = br.rec_take_sel < 0 || br.rec_takes.empty();
+            if (br.clip_type == ClipType::VideoRecord && no_take) {
+                float bx0, by0, bx1, by1;
+                compute_video_bbox(state, br, p, w, h, bx0, by0, bx1, by1);
+                float bcx = (bx0+bx1)*0.5f, bcy = (by0+by1)*0.5f;
+                float lhw = (bx1-bx0)*0.5f, lhh = (by1-by0)*0.5f;
+                float rad = br.eval_prop("rotation", state.playhead) * 3.14159265f / 180.f;
+                float ax = cosf(rad), ay = sinf(rad);
+                auto L = [&](float lx, float ly) {
+                    return ImVec2{bcx + lx*ax - ly*ay, bcy + lx*ay + ly*ax};
+                };
+                ImVec2 q[4] = {L(-lhw,-lhh), L(lhw,-lhh), L(lhw,lhh), L(-lhw,lhh)};
+                // Dashed frame outline (placeholder look).
+                auto dashed = [&](ImVec2 a, ImVec2 b) {
+                    float len = sqrtf((b.x-a.x)*(b.x-a.x) + (b.y-a.y)*(b.y-a.y));
+                    if (len < 1.f) return;
+                    float dx = (b.x-a.x)/len, dy = (b.y-a.y)/len;
+                    for (float s = 0.f; s < len; s += 14.f) {
+                        float e = fminf(s + 8.f, len);
+                        dl->AddLine({a.x+dx*s, a.y+dy*s}, {a.x+dx*e, a.y+dy*e},
+                                    IM_COL32(150, 160, 190, 130), 1.5f);
+                    }
+                };
+                dashed(q[0], q[1]); dashed(q[1], q[2]);
+                dashed(q[2], q[3]); dashed(q[3], q[0]);
+
+                // Centered pill: camera glyph + label.
+                const char* label = "Turn on camera preview";
+                float fs = ImGui::GetFontSize();
+                float tw = ImGui::CalcTextSize(label).x;
+                float icon_w = fs * 1.2f, padx = 14.f, gap = 9.f;
+                float pill_w = padx*2 + icon_w + gap + tw;
+                float pill_h = fs + 16.f;
+                ImVec2 pc = {bcx, bcy};
+                ImVec2 p0 = {pc.x - pill_w*0.5f, pc.y - pill_h*0.5f};
+                bool hov = ImGui::GetIO().MousePos.x >= p0.x &&
+                           ImGui::GetIO().MousePos.x <= p0.x + pill_w &&
+                           ImGui::GetIO().MousePos.y >= p0.y &&
+                           ImGui::GetIO().MousePos.y <= p0.y + pill_h;
+                dl->AddRectFilled(p0, {p0.x+pill_w, p0.y+pill_h},
+                                  hov ? IM_COL32(60, 70, 96, 245)
+                                      : IM_COL32(30, 34, 46, 230), pill_h*0.5f);
+                dl->AddRect(p0, {p0.x+pill_w, p0.y+pill_h},
+                            IM_COL32(120, 150, 230, hov ? 220 : 140), pill_h*0.5f, 0, 1.5f);
+                // Mini camera icon: body + lens.
+                float ix = p0.x + padx, iy = pc.y;
+                float bw = icon_w, bh = icon_w * 0.72f;
+                dl->AddRectFilled({ix, iy - bh*0.5f}, {ix + bw, iy + bh*0.5f},
+                                  IM_COL32(225, 232, 245, 255), 2.5f);
+                dl->AddRectFilled({ix + bw*0.18f, iy - bh*0.5f - bh*0.22f},
+                                  {ix + bw*0.5f, iy - bh*0.5f + 1.f},
+                                  IM_COL32(225, 232, 245, 255), 1.5f);  // viewfinder bump
+                dl->AddCircleFilled({ix + bw*0.5f, iy}, bh*0.27f, IM_COL32(40, 44, 58, 255));
+                dl->AddText({ix + icon_w + gap, pc.y - fs*0.5f},
+                            IM_COL32(232, 238, 248, 255), label);
+                // Hit area (claims the mouse so handles/layer-pick stand down).
+                ImGui::SetCursorScreenPos(p0);
+                ImGui::InvisibleButton("##cam_preview_cta", {pill_w, pill_h});
+                if (ImGui::IsItemClicked()) vrecorder_monitor_set(true);
+            }
+        }
+    }
 }
 
 // ── Canvas-source snapshot capture ───────────────────────────────────────────
