@@ -1332,7 +1332,14 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
     }
 
     float lookahead = state.playing ? ImGui::GetIO().DeltaTime : 0.f;
-    float t_anim    = state.playing ? (float)ImGui::GetTime() : state.playhead;
+    // FX animation time MUST be the timeline position, not wall-clock. Export and
+    // scrub feed the (small, bounded) playhead into time-driven shaders; play used
+    // to feed ImGui::GetTime() (seconds since app start — large and unbounded).
+    // GPU sin/fract/hash lose precision at large arguments, so after the app had
+    // been running a while those effects flattened out during playback only — they
+    // were fine paused, scrubbing, and on export. Using the playhead makes preview
+    // match export (WYSIWYG) and keeps the argument bounded.
+    float t_anim    = state.playhead;
 
     // Collect global creative FX (for full-frame effects — LightLeak, grade, etc.)
     CreativeFXAccum global_cfx = collect_creative_fx(state, state.playhead, (int)state.tracks.size());

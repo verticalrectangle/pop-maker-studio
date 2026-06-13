@@ -2155,7 +2155,7 @@ int video_export_width(int slot) {
 void video_preview_dims(int slot, int* w, int* h) {
     if (w) *w = 0;
     if (h) *h = 0;
-    if (slot < 0 || slot >= MAX_VIDEO_TRACKS * 2) return;
+    if (slot < 0 || slot >= MAX_VIDEO_TRACKS) return;
     PreviewState& pv = g_pv[slot];
     int tw = pv.tex_w, th = pv.tex_h;
     if (tw <= 0 || th <= 0) { tw = pv.info.width; th = pv.info.height; }
