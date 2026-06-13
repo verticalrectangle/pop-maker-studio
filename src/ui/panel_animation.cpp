@@ -635,7 +635,8 @@ const char* text_style_name(AnimStyle st) {
 }
 
 void draw_text_style_preview(AnimStyle style, ImDrawList* dl, ImVec2 ppos,
-                             float prev_w, float prev_h, const char* sample) {
+                             float prev_w, float prev_h, const char* sample,
+                             float font_size) {
     dl->AddRectFilled(ppos, {ppos.x + prev_w, ppos.y + prev_h},
         to_u32(Col::accent_dark), 2.f);
 
@@ -688,10 +689,18 @@ void draw_text_style_preview(AnimStyle style, ImDrawList* dl, ImVec2 ppos,
     }
 
     if (!sample) sample = text_style_name(style);
-    ImVec2 tsz = ImGui::CalcTextSize(sample);
-    dl->AddText(
-        {ppos.x + (prev_w - tsz.x) * 0.5f, ppos.y + (prev_h - tsz.y) * 0.5f},
-        txt_col, sample);
+    if (font_size > 0.f) {
+        ImFont* f = g_font_black ? g_font_black : ImGui::GetFont();
+        ImVec2 tsz = f->CalcTextSizeA(font_size, FLT_MAX, -1.f, sample);
+        dl->AddText(f, font_size,
+            {ppos.x + (prev_w - tsz.x) * 0.5f, ppos.y + (prev_h - tsz.y) * 0.5f},
+            txt_col, sample);
+    } else {
+        ImVec2 tsz = ImGui::CalcTextSize(sample);
+        dl->AddText(
+            {ppos.x + (prev_w - tsz.x) * 0.5f, ppos.y + (prev_h - tsz.y) * 0.5f},
+            txt_col, sample);
+    }
 }
 
 // Build the clip a card creates/drops. Centered on the canvas so it's never
@@ -706,6 +715,38 @@ Clip make_text_brick(AnimStyle style, float start) {
     c.start      = start;
     c.end        = start + 4.f;
     return c;
+}
+
+// Big hover popover for a text-style card: a large animated sample of the style,
+// opened to the left of the panel after a short dwell (shares theme's clock).
+static void text_style_popover(ImVec2 card_tl, AnimStyle style,
+                               const char* name, const char* desc) {
+    const float pw = 240.f, ph = 150.f, pad = 9.f, txt_h = 42.f;
+    ImGuiViewport* vp = ImGui::GetMainViewport();
+    float x1 = card_tl.x - 14.f, x0 = x1 - pw;
+    float minx = vp->Pos.x + 8.f;
+    if (x0 < minx) { x0 = minx; x1 = x0 + pw; }
+    float box_h = ph + txt_h + pad;
+    float y0 = card_tl.y - 6.f;
+    float maxy = vp->Pos.y + vp->Size.y - 8.f;
+    if (y0 + box_h + pad > maxy) y0 = maxy - box_h - pad;
+    if (y0 < vp->Pos.y + 8.f) y0 = vp->Pos.y + 8.f;
+
+    ImDrawList* dl = ImGui::GetForegroundDrawList();
+    dl->AddRectFilled({x0 - pad, y0 - pad}, {x0 + pw + pad, y0 + box_h + pad},
+                      IM_COL32(14, 14, 20, 252), 9.f);
+    dl->AddRect({x0 - pad, y0 - pad}, {x0 + pw + pad, y0 + box_h + pad},
+                IM_COL32(90, 90, 120, 255), 9.f, 0, 1.5f);
+    dl->PushClipRect({x0, y0}, {x0 + pw, y0 + ph}, true);
+    draw_text_style_preview(style, dl, {x0, y0}, pw, ph, "Stay", 40.f);
+    dl->PopClipRect();
+    dl->AddRect({x0, y0}, {x0 + pw, y0 + ph}, IM_COL32(255, 255, 255, 40), 6.f);
+    ImGui::PushFont(g_font_bold);
+    dl->AddText(ImGui::GetFont(), 15.f, {x0, y0 + ph + 7.f},
+                IM_COL32(255, 255, 255, 245), name);
+    ImGui::PopFont();
+    if (desc)
+        dl->AddText({x0, y0 + ph + 26.f}, IM_COL32(160, 160, 175, 220), desc);
 }
 
 void panel_text_library(AppState& state, float w) {
@@ -748,11 +789,15 @@ void panel_text_library(AppState& state, float w) {
         ImGui::SetCursorScreenPos(cp);
         ImGui::SetNextItemAllowOverlap();
         ImGui::InvisibleButton(sc.name, {cell_w, cell_h});
-        if (ImGui::IsItemHovered()) {
+        bool sc_hov = ImGui::IsItemHovered();
+        ui_card_hover_secs(30000 + (int)sc.style, sc_hov);
+        bool sc_pop = ui_card_hover_ready(30000 + (int)sc.style, 0.30f);
+        if (sc_hov) {
             dl->AddRect(cp, {cp.x + cell_w, cp.y + cell_h},
                         IM_COL32(80, 140, 220, 200), 4.f, 0, 1.5f);
-            ImGui::SetTooltip("%s", sc.desc);
+            if (!sc_pop) ImGui::SetTooltip("%s", sc.desc);
         }
+        if (sc_pop) text_style_popover(cp, sc.style, sc.name, sc.desc);
         if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
             int style_int = (int)sc.style;
             ImGui::SetDragDropPayload("TEXT_STYLE", &style_int, sizeof(int));

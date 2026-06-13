@@ -31,35 +31,17 @@ extern ImFont* g_font_bold;
 // card every frame (busy, and expensive — each call re-renders the effect),
 // only the hovered card plays, from the start, while the rest sit on a frozen
 // representative frame. The list then "comes alive" as the cursor passes down
-// it. Only one card is hovered at a time, so a single id/start pair suffices.
-static int    s_fx_anim_hover_id = -1;
-static double s_fx_anim_hover_t0 = 0.0;
-static float fx_card_preview_t(int card_id, bool hovered) {
-    if (hovered) {
-        if (s_fx_anim_hover_id != card_id) {
-            s_fx_anim_hover_id = card_id;
-            s_fx_anim_hover_t0 = ImGui::GetTime();
-        }
-        return (float)(ImGui::GetTime() - s_fx_anim_hover_t0);
-    }
-    if (s_fx_anim_hover_id == card_id) s_fx_anim_hover_id = -1;
-    return 0.6f;   // frozen representative frame
-}
-
-// ── FX card hover popover ─────────────────────────────────────────────────────
-// After a short dwell on a card, a large preview opens to the LEFT of the panel
-// (the panel hugs the right screen edge) showing the effect on the user's actual
-// footage. Render resolution; the displayed size matches the 9:16 aspect.
+// it. Backed by the shared library-card hover clock (theme.h) so every panel's
+// popovers share one dwell.
 static constexpr int   kBigPrevW = 240, kBigPrevH = 426;   // render px (9:16)
 static constexpr float kPopDwell = 0.30f;                  // seconds before it opens
 
-static bool fx_card_popover_ready(int card_id) {
-    return s_fx_anim_hover_id == card_id &&
-           (float)(ImGui::GetTime() - s_fx_anim_hover_t0) >= kPopDwell;
+static float fx_card_preview_t(int card_id, bool hovered) {
+    float e = ui_card_hover_secs(card_id, hovered);
+    return hovered ? e : 0.6f;   // play from 0 while hovered, else frozen frame
 }
-static float fx_card_hover_elapsed() {
-    return (float)(ImGui::GetTime() - s_fx_anim_hover_t0);
-}
+static bool  fx_card_popover_ready(int card_id) { return ui_card_hover_ready(card_id, kPopDwell); }
+static float fx_card_hover_elapsed(int card_id)  { return ui_card_hover_secs(card_id, true); }
 
 // Source frame the popover previews on:
 //   selected video clip → that clip's current frame (isolated)
@@ -368,7 +350,7 @@ void panel_adjustment_library(AppState& state, float w) {
             if (fx_card_popover_ready(19000 + i)) {
                 bool flip = false;
                 uintptr_t src = fx_preview_source_tex(state, &flip);
-                uintptr_t big = video_fx_preview_big(fc.type, fx_card_hover_elapsed(),
+                uintptr_t big = video_fx_preview_big(fc.type, fx_card_hover_elapsed(19000 + i),
                                                      src, kBigPrevW, kBigPrevH);
                 fx_draw_big_popover(cp, big, flip, fc.name, fc.tagline);
             }
@@ -1083,7 +1065,7 @@ void panel_fx_creative(AppState& state, float w) {
         if (fx_card_popover_ready(9000 + i)) {
             bool flip = false;
             uintptr_t src = fx_preview_source_tex(state, &flip);
-            uintptr_t big = video_fx_preview_big(fc.type, fx_card_hover_elapsed(),
+            uintptr_t big = video_fx_preview_big(fc.type, fx_card_hover_elapsed(9000 + i),
                                                  src, kBigPrevW, kBigPrevH);
             fx_draw_big_popover(cp, big, flip, fc.name, fc.tagline);
         }

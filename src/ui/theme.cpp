@@ -200,3 +200,62 @@ bool ui_card_add_btn(ImVec2 card_tl, float card_w, int uid) {
     ImGui::SetCursorScreenPos(save);
     return clicked;
 }
+
+// ── Shared library-card hover-dwell clock + image popover ────────────────────
+static int    s_card_hover_id = -1;
+static double s_card_hover_t0 = 0.0;
+
+float ui_card_hover_secs(int card_id, bool hovered) {
+    if (hovered) {
+        if (s_card_hover_id != card_id) {
+            s_card_hover_id = card_id;
+            s_card_hover_t0 = ImGui::GetTime();
+        }
+        return (float)(ImGui::GetTime() - s_card_hover_t0);
+    }
+    if (s_card_hover_id == card_id) s_card_hover_id = -1;
+    return 0.f;
+}
+
+bool ui_card_hover_ready(int card_id, float dwell_secs) {
+    return s_card_hover_id == card_id &&
+           (float)(ImGui::GetTime() - s_card_hover_t0) >= dwell_secs;
+}
+
+void ui_card_image_popover(ImVec2 card_tl, ImTextureID tex,
+                           float img_w, float img_h, bool flip,
+                           const char* name, const char* subtitle) {
+    if (!tex || img_w <= 0.f || img_h <= 0.f) return;
+    const float maxw = 240.f, maxh = 300.f, pad = 9.f;
+    float txt_h = (subtitle ? 42.f : 26.f);
+    float iw = maxw, ih = iw * (img_h / img_w);
+    if (ih > maxh) { ih = maxh; iw = ih * (img_w / img_h); }
+
+    ImGuiViewport* vp = ImGui::GetMainViewport();
+    float x1 = card_tl.x - 14.f, x0 = x1 - iw;
+    float minx = vp->Pos.x + 8.f;
+    if (x0 < minx) { x0 = minx; x1 = x0 + iw; }
+    float box_h = ih + txt_h + pad;
+    float y0 = card_tl.y - 6.f;
+    float maxy = vp->Pos.y + vp->Size.y - 8.f;
+    if (y0 + box_h + pad > maxy) y0 = maxy - box_h - pad;
+    if (y0 < vp->Pos.y + 8.f) y0 = vp->Pos.y + 8.f;
+
+    ImDrawList* dl = ImGui::GetForegroundDrawList();
+    dl->AddRectFilled({x0 - pad, y0 - pad}, {x1 + pad, y0 + box_h + pad},
+                      IM_COL32(14, 14, 20, 252), 9.f);
+    dl->AddRect({x0 - pad, y0 - pad}, {x1 + pad, y0 + box_h + pad},
+                IM_COL32(90, 90, 120, 255), 9.f, 0, 1.5f);
+    ImVec2 uv0 = flip ? ImVec2(0, 1) : ImVec2(0, 0);
+    ImVec2 uv1 = flip ? ImVec2(1, 0) : ImVec2(1, 1);
+    dl->AddImageRounded(tex, {x0, y0}, {x0 + iw, y0 + ih}, uv0, uv1, IM_COL32_WHITE, 6.f);
+    dl->AddRect({x0, y0}, {x0 + iw, y0 + ih}, IM_COL32(255, 255, 255, 40), 6.f);
+    if (name) {
+        ImGui::PushFont(g_font_bold);
+        dl->AddText(ImGui::GetFont(), 15.f, {x0, y0 + ih + 7.f},
+                    IM_COL32(255, 255, 255, 245), name);
+        ImGui::PopFont();
+    }
+    if (subtitle)
+        dl->AddText({x0, y0 + ih + 26.f}, IM_COL32(160, 160, 175, 220), subtitle);
+}

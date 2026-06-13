@@ -17,9 +17,11 @@ const TextStyleCard* text_style_cards(int* count);
 const char*          text_style_name(AnimStyle st);   // "Fade", …
 
 // Dark stage + animated sample text, looping every 2 s. `sample` defaults to
-// the style's name when null.
+// the style's name when null. font_size>0 renders the sample at that pixel size
+// (g_font_black) for the big hover popover; 0 uses the current default font.
 void draw_text_style_preview(AnimStyle style, ImDrawList* dl, ImVec2 pos,
-                             float w, float h, const char* sample = nullptr);
+                             float w, float h, const char* sample = nullptr,
+                             float font_size = 0.f);
 
 // A centered 4 s text clip with the given style, starting at `start`.
 Clip make_text_brick(AnimStyle style, float start);

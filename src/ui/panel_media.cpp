@@ -386,6 +386,19 @@ void panel_media_browser(AppState& state, float w, bool is_video) {
                     hov ? IM_COL32(255,255,255,160) : IM_COL32(48,48,68,180),
                     6.f, 0, hov ? 1.5f : 1.f);
 
+        // Large hover preview of the thumbnail (after a short dwell).
+        ui_card_hover_secs(40000 + i, hov);
+        if (tex && ui_card_hover_ready(40000 + i, 0.30f)) {
+            std::string full = fp.filename().string();
+            char sub[64];
+            if (tw > 0 && th > 0)
+                snprintf(sub, sizeof(sub), "%d x %d  -  %s", tw, th, is_video ? "video" : "image");
+            else
+                snprintf(sub, sizeof(sub), "%s", is_video ? "video" : "image");
+            ui_card_image_popover(cp, (ImTextureID)(uintptr_t)tex,
+                                  (float)tw, (float)th, false, full.c_str(), sub);
+        }
+
         // Drag-drop source (whole card)
         if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
             const char* ptype = is_video ? "MEDIA_VID" : "MEDIA_IMG";
