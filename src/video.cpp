@@ -718,8 +718,12 @@ static void apply_pixel_fx_rgb(uint8_t* pixels, int w, int h,
                 rgba_out[i*4+0] = pixels[i*3+0];
                 rgba_out[i*4+1] = pixels[i*3+1];
                 rgba_out[i*4+2] = pixels[i*3+2];
+                // Matte control (bg_remove_softness, -1..1): >0 trims the edge
+                // tighter, <0 lifts the partial-mask edge pixels back in so the
+                // cutout stops eating into the subject. Gamma on the mask alpha.
                 float a = bg_mask[i] / 255.f;
-                if (bg_softness > 0.01f) a = powf(a, 1.f + bg_softness * 3.f);
+                if (bg_softness > 0.001f)       a = powf(a, 1.f + bg_softness * 3.f);
+                else if (bg_softness < -0.001f) a = powf(a, 1.f / (1.f - bg_softness * 3.f));
                 rgba_out[i*4+3] = (uint8_t)(a * 255.f + 0.5f);
             }
         } else {
@@ -2280,10 +2284,12 @@ void video_apply_bg_remove_export(VideoFrame* vf, const Clip& cl, int mask_frame
         if (mx >= mw) mx = mw - 1;
         if (my >= mh) my = mh - 1;
         uint8_t alpha = dec[(size_t)my * mw + mx];
-        // Softness: blend mask alpha with full-opacity based on cl.bg_remove_softness.
-        float soft = fmaxf(0.f, fminf(1.f, cl.bg_remove_softness));
+        // Matte (bg_remove_softness, -1..1): same gamma transform as the preview
+        // (process_jpeg_cpu) — >0 trims tighter, <0 keeps more of the subject.
+        float soft = fmaxf(-1.f, fminf(1.f, cl.bg_remove_softness));
         float fa = alpha / 255.f;
-        fa = fa < soft ? 0.f : (fa - soft) / fmaxf(1.f - soft, 0.001f);
+        if (soft > 0.001f)       fa = powf(fa, 1.f + soft * 3.f);
+        else if (soft < -0.001f) fa = powf(fa, 1.f / (1.f - soft * 3.f));
         vf->data[i * 4 + 3] = (uint8_t)(fmaxf(0.f, fminf(1.f, fa)) * 255.f);
     }
     stbi_image_free(dec);

@@ -1623,12 +1623,14 @@ void panel_clip(AppState& state, float w) {
                 ImGui::TextUnformatted("Ready");
                 ImGui::PopStyleColor();
                 ImGui::Dummy({0.f, 6.f});
-                ImGui::PushStyleColor(ImGuiCol_Text, Col::muted); ImGui::TextUnformatted("Edge softness"); ImGui::PopStyleColor();
+                ImGui::PushStyleColor(ImGuiCol_Text, Col::muted); ImGui::TextUnformatted("Matte  (− keep more · + trim tighter)"); ImGui::PopStyleColor();
                 ImGui::PushStyleColor(ImGuiCol_SliderGrab, to_u32(Col::fg));
                 ImGui::PushStyleColor(ImGuiCol_FrameBg,    Col::bg_soft);
                 ImGui::SetNextItemWidth(bar_w);
-                if (ImGui::SliderFloat("##bgrsoft", &clip.bg_remove_softness, 0.f, 1.f, "%.2f"))
-                    history_push(state, "BG Softness");
+                if (ImGui::SliderFloat("##bgrsoft", &clip.bg_remove_softness, -1.f, 1.f, "%.2f"))
+                    history_push(state, "BG Matte");
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Drag left if the cutout eats into the subject; right to trim the edge tighter.");
                 ImGui::PopStyleColor(2);
                 ImGui::Dummy({0.f, 6.f});
                 bool box_tog = clip.bg_remove_box_on;
