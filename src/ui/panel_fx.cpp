@@ -63,7 +63,10 @@ static uintptr_t fx_preview_source_tex(AppState& state, bool* flip, int* sw, int
                 uintptr_t tex = video_get_texture(slot, (double)src_t);
                 if (tex) {
                     video_preview_dims(slot, sw, sh);
-                    *flip = true;
+                    // Clip textures upload top-down (same as the portrait default),
+                    // so they draw upright with normal UVs — no V-flip. Only
+                    // scene_result (a bottom-up FBO) needs flipping.
+                    *flip = false;
                     return tex;
                 }
             }
