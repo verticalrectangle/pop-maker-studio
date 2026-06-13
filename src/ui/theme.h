@@ -35,3 +35,8 @@ void ui_separator();
 bool ui_card_begin(const char* id, ImVec2 size, bool selected = false, bool hoverable = true);
 void ui_card_end();
 bool ui_btn(const char* label, bool filled = false, bool small = false);
+
+// "+" add-at-playhead button in a card's top-right corner. Caller calls
+// ImGui::SetNextItemAllowOverlap() before the card's InvisibleButton so this
+// can sit on top of the drag-source card body. Returns true when clicked.
+bool ui_card_add_btn(ImVec2 card_tl, float card_w, int uid);

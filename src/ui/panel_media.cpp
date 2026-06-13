@@ -291,7 +291,7 @@ void panel_media_browser(AppState& state, float w, bool is_video) {
     }
 
     ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
-    ImGui::TextWrapped("Click to add at playhead. Drag onto a track.");
+    ImGui::TextWrapped("Drag onto a track, or tap + to add at the playhead.");
     ImGui::PopStyleColor();
     ImGui::Dummy({0.f, 8.f});
 
@@ -672,7 +672,7 @@ void panel_audio_browser(AppState& state, float w) {
     }
 
     ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
-    ImGui::TextWrapped("Click to add at playhead. Drag onto a track.");
+    ImGui::TextWrapped("Drag onto a track, or tap + to add at the playhead.");
     ImGui::PopStyleColor();
     ImGui::Dummy({0.f, 8.f});
 

@@ -171,3 +171,26 @@ bool ui_btn(const char* label, bool filled, bool small) {
     ImGui::PopStyleVar();
     return clicked;
 }
+
+// A small round "+" button pinned to a card's top-right corner — the explicit
+// "add at playhead" action, sitting on top of the (drag-source) card body.
+// Call right after the card's InvisibleButton + drag-source block; the caller
+// must have called ImGui::SetNextItemAllowOverlap() before the card so this
+// button can receive clicks over it. `uid` keeps the button id unique.
+bool ui_card_add_btn(ImVec2 card_tl, float card_w, int uid) {
+    const float sz = 20.f, pad = 5.f;
+    ImGui::SetCursorScreenPos({card_tl.x + card_w - sz - pad, card_tl.y + pad});
+    ImGui::PushID(uid);
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {0.f, 0.f});
+    ImGui::PushStyleColor(ImGuiCol_Button,        IM_COL32(235, 120, 60, 235));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(255, 150, 80, 255));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive,  IM_COL32(210, 100, 45, 255));
+    ImGui::PushStyleColor(ImGuiCol_Text,          IM_COL32(20, 16, 12, 255));
+    bool clicked = ImGui::Button("+##cardadd", {sz, sz});
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Add at playhead");
+    ImGui::PopStyleColor(4);
+    ImGui::PopStyleVar();
+    ImGui::PopID();
+    return clicked;
+}

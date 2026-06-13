@@ -138,10 +138,10 @@ void panel_adjustment_library(AppState& state, float w) {
         dl->AddText(ImGui::GetFont(), 13.f, {tx, cp.y+14.f}, IM_COL32(255,255,255,240), p.name.c_str());
         ImGui::PopFont();
 
-        // Invisible button over the card for click and drag-drop
+        // Whole card is the drag source; a "+" button adds at the playhead.
+        ImGui::SetNextItemAllowOverlap();
         ImGui::SetCursorScreenPos(cp);
         ImGui::InvisibleButton("##card", {card_w, card_h});
-        bool clicked = ImGui::IsItemClicked(0);
 
         // Drag-drop source — payload is index into the combined preset list
         if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
@@ -151,6 +151,7 @@ void panel_adjustment_library(AppState& state, float w) {
             ImGui::EndDragDropSource();
         }
 
+        bool clicked = ui_card_add_btn(cp, card_w, unique_id);
         ImGui::PopID();
 
         if (clicked) {
@@ -821,9 +822,28 @@ void panel_background(AppState& state, float w, bool clip_only) {
         float lx = cp.x+6.f, ly = cp.y+cell_h*0.62f;
         dl->AddText({lx,ly}, to_u32(Col::fg), pr.label);
 
+        ImGui::SetNextItemAllowOverlap();
         ImGui::SetCursorScreenPos(cp);
         ImGui::InvisibleButton(pr.id, {cell_w, cell_h});
-        if (ImGui::IsItemClicked()) {
+        bool bg_add = false;
+        if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
+            ImGui::SetDragDropPayload("BG_PRESET", pr.id, strlen(pr.id)+1);
+            // Ghost chip
+            ImDrawList* gdl = ImGui::GetWindowDrawList();
+            ImVec2 gp = ImGui::GetCursorScreenPos();
+            float gw = 140.f, gh = 36.f;
+            gdl->AddRectFilled(gp, {gp.x+gw, gp.y+gh}, IM_COL32(90,15,105,230), 6.f);
+            draw_bg_preset(pr.id, gdl, gp, gw, gh, (float)ImGui::GetTime(),
+                           pr.default_speed, 0.6f, pr.dc1, pr.dc2, pr.dc3);
+            gdl->AddRect(gp, {gp.x+gw, gp.y+gh}, IM_COL32(180,80,200,200), 6.f, 0, 1.2f);
+            ImVec2 tsz = ImGui::CalcTextSize(pr.label);
+            gdl->AddText({gp.x+(gw-tsz.x)*0.5f, gp.y+(gh-13.f)*0.5f},
+                         IM_COL32(255,255,255,240), pr.label);
+            ImGui::Dummy({gw, gh});
+            ImGui::EndDragDropSource();
+        }
+        bg_add = ui_card_add_btn(cp, cell_w, (int)(pr.id[0]) * 131 + (int)(pr.id[1]));
+        if (bg_add) {
             if (!bgclip) {
                 // No bg clip selected — create one, placed like any content
                 // clip (empty track or new track on top, at the playhead).
@@ -851,22 +871,6 @@ void panel_background(AppState& state, float w, bool clip_only) {
             }
             history_push(state, "Background preset");
         }
-        if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
-            ImGui::SetDragDropPayload("BG_PRESET", pr.id, strlen(pr.id)+1);
-            // Ghost chip
-            ImDrawList* gdl = ImGui::GetWindowDrawList();
-            ImVec2 gp = ImGui::GetCursorScreenPos();
-            float gw = 140.f, gh = 36.f;
-            gdl->AddRectFilled(gp, {gp.x+gw, gp.y+gh}, IM_COL32(90,15,105,230), 6.f);
-            draw_bg_preset(pr.id, gdl, gp, gw, gh, (float)ImGui::GetTime(),
-                           pr.default_speed, 0.6f, pr.dc1, pr.dc2, pr.dc3);
-            gdl->AddRect(gp, {gp.x+gw, gp.y+gh}, IM_COL32(180,80,200,200), 6.f, 0, 1.2f);
-            ImVec2 tsz = ImGui::CalcTextSize(pr.label);
-            gdl->AddText({gp.x+(gw-tsz.x)*0.5f, gp.y+(gh-13.f)*0.5f},
-                         IM_COL32(255,255,255,240), pr.label);
-            ImGui::Dummy({gw, gh});
-            ImGui::EndDragDropSource();
-        }
 
         if (col_idx == 0) { ImGui::SameLine(0.f, 8.f); col_idx = 1; }
         else              { col_idx = 0; }
@@ -883,7 +887,7 @@ void panel_fx_creative(AppState& state, float w) {
     ImGui::TextUnformatted("FX");
     ImGui::PopStyleColor();
     ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
-    ImGui::TextWrapped("Click to add at playhead. Drag onto a timeline track.");
+    ImGui::TextWrapped("Drag onto a clip, or tap + to add at the playhead.");
     ImGui::PopStyleColor();
     ImGui::Dummy({0.f, 8.f});
 
@@ -954,9 +958,17 @@ void panel_fx_creative(AppState& state, float w) {
             dl->AddText({cp.x+card_w-sz.x-10.f, cp.y+card_h-18.f}, IM_COL32(255,255,255,200), al);
         }
 
+        ImGui::SetNextItemAllowOverlap();
         ImGui::SetCursorScreenPos(cp);
         ImGui::InvisibleButton("##fxcard", {card_w, card_h});
-        if (ImGui::IsItemClicked()) {
+        if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
+            int ft = (int)fc.type;
+            ImGui::SetDragDropPayload("FX_CREATIVE", &ft, sizeof(int));
+            ImGui::Text("%s", fc.name);
+            ImGui::TextDisabled("Drop onto timeline track");
+            ImGui::EndDragDropSource();
+        }
+        if (ui_card_add_btn(cp, card_w, (int)fc.type + 9000)) {
             Clip cl;
             cl.clip_type = ClipType::Effect;
             cl.fx_type   = fc.type;
@@ -982,13 +994,6 @@ void panel_fx_creative(AppState& state, float w) {
             state.selected_track = 0;
             state.selected_clip  = 0;
             history_push(state, std::string("Add FX: ") + fc.name);
-        }
-        if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
-            int ft = (int)fc.type;
-            ImGui::SetDragDropPayload("FX_CREATIVE", &ft, sizeof(int));
-            ImGui::Text("%s", fc.name);
-            ImGui::TextDisabled("Drop onto timeline track");
-            ImGui::EndDragDropSource();
         }
 
         ImGui::Dummy({0.f, 5.f});

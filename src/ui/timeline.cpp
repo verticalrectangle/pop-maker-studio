@@ -246,6 +246,39 @@ int timeline_couple_fx_brick(AppState& state, int ti, int ci, int host_ci) {
 // (not mid-drag) arms the 1.5 s ring; completion couples it. One pending
 // brick at a time. Runs every frame, so toolbox drops, drag drops, IPC
 // bricks and re-dropped decoupled bricks all behave identically.
+// Immediately weld a just-dropped FX brick onto the best-overlap content on
+// its track — no 1.5s dwell. A panel drop ONTO content is a deliberate
+// placement, so there's nothing to reconsider (the dwell timer exists for
+// repositioning EXISTING bricks). Returns the resulting brick index; pushes
+// no history, so the caller's drop entry captures the welded result as one
+// undo step.
+static int couple_fx_now(AppState& state, int ti, int ci) {
+    if (ti < 0 || ti >= (int)state.tracks.size()) return ci;
+    auto& cls = state.tracks[ti].clips;
+    if (ci < 0 || ci >= (int)cls.size()) return ci;
+    Clip& c = cls[(size_t)ci];
+    if (c.fx_coupled || !is_fx_clip(c)) return ci;
+    bool audio_kind = fx_brick_is_audio_kind(c);
+    if (!audio_kind && !fx_brick_is_video(c)) return ci;
+    int best = -1; float bov = 0.05f;
+    for (int k = 0; k < (int)cls.size(); ++k) {
+        if (k == ci) continue;
+        const Clip& hc = cls[(size_t)k];
+        bool hostable = audio_kind
+            ? (hc.clip_type == ClipType::Audio || hc.clip_type == ClipType::Record ||
+               hc.clip_type == ClipType::Video || hc.clip_type == ClipType::VideoRecord)
+            : (clip_is_videolike_type(hc.clip_type) || hc.clip_type == ClipType::Background);
+        if (!hostable) continue;
+        float ov = fminf(c.end, hc.end) - fmaxf(c.start, hc.start);
+        if (ov > bov) { bov = ov; best = k; }
+    }
+    if (best < 0) return ci;
+    int nci = timeline_couple_fx_brick(state, ti, ci, best);
+    s_fx_flash.active = true; s_fx_flash.t0 = ImGui::GetTime();
+    s_fx_flash.ti = ti; s_fx_flash.ci = nci;
+    return nci;
+}
+
 static void couple_pending_tick(AppState& state) {
     int pti = -1, pci = -1, phost = -1;
     for (int ti = 0; ti < (int)state.tracks.size() && pti < 0; ++ti) {
@@ -790,8 +823,9 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                         cl.end       = drop_t + 2.f;
                         preset_apply(cl, *preset);
                         state.tracks[ti].clips.push_back(cl);
+                        int nci = couple_fx_now(state, ti, (int)state.tracks[ti].clips.size() - 1);
                         state.selected_track = ti;
-                        state.selected_clip  = (int)state.tracks[ti].clips.size() - 1;
+                        state.selected_clip  = nci;
                         s_drop_flash_track = ti;
                         s_drop_flash_t     = 0.6f;
                         history_push(state, "Drop Effect preset: " + preset->name);
@@ -840,8 +874,8 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                     cl.start     = drop_t;
                     cl.end       = drop_t + 5.f;
                     state.tracks[ti].clips.push_back(cl);
+                    state.selected_clip  = couple_fx_now(state, ti, (int)state.tracks[ti].clips.size() - 1);
                     state.selected_track = ti;
-                    state.selected_clip  = (int)state.tracks[ti].clips.size() - 1;
                     s_drop_flash_track = ti;
                     s_drop_flash_t     = 0.6f;
                     history_push(state, std::string("Drop FX: ") + fx_type_name(ft));
