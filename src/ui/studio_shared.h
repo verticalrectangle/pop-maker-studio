@@ -54,6 +54,20 @@ int  marker_add(AppState& state, float time, const char* label = nullptr);
 // Seek to the nearest marker before (dir<0) or after (dir>0) the playhead.
 void marker_jump(AppState& state, int dir);
 
+// ── Keyframable slider control ─────────────────────────────────────────────────
+// Renders a "‹ ◆ › Label  [slider]" row: the diamond toggles a keyframe at the
+// playhead (filled on a key, hollow gold when animated off-key, faint when no
+// keys), the arrows jump prev/next key, and editing the slider auto-keys the
+// value at the playhead when keys exist. Keyframes are stored on `clip` under
+// `prop` (clip == the brick for FX bricks, == the content clip for transform).
+// `w` is the available panel width; `disp` scales the field for display (100 →
+// percent); `prop2` mirrors keys onto a second track (the unified Size slider).
+// Returns true when the value changed this frame.
+bool kf_slider(AppState& state, Clip& clip, int sel_ti, int sel_ci, float w,
+               const char* prop, const char* label, float* val_ptr,
+               float vmin, float vmax, const char* fmt,
+               float disp = 1.f, const char* prop2 = nullptr);
+
 // ── Record brick ──────────────────────────────────────────────────────────────
 // Insert a fresh Record brick (8 s, frame-snapped) at the playhead on a new
 // top track, select it, and push history. Used by the toolbox rail and the

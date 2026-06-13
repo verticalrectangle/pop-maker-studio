@@ -642,20 +642,14 @@ void panel_adjustment(AppState& state, float w) {
         }
         if (clip.fx_color_on) {
             ImGui::Dummy({0.f, 4.f});
-            ImGui::SetNextItemWidth(sw); ImGui::SliderFloat("Brightness##fx",&clip.fx_brightness,-1.f,1.f,"%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Effect: brightness");
+            int kti = state.selected_track, kci = state.selected_clip;
+            kf_slider(state, clip, kti, kci, sw, "fx_brightness", "Brightness", &clip.fx_brightness, -1.f, 1.f, "%.2f");
             fx_reset_btn("br", &clip.fx_brightness, 0.f);
-
-            ImGui::SetNextItemWidth(sw); ImGui::SliderFloat("Contrast##fx",  &clip.fx_contrast, 0.5f,2.f,"%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Effect: contrast");
+            kf_slider(state, clip, kti, kci, sw, "fx_contrast", "Contrast", &clip.fx_contrast, 0.5f, 2.f, "%.2f");
             fx_reset_btn("co", &clip.fx_contrast, 1.f);
-
-            ImGui::SetNextItemWidth(sw); ImGui::SliderFloat("Saturation##fx",&clip.fx_saturation,0.f,2.f,"%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Effect: saturation");
+            kf_slider(state, clip, kti, kci, sw, "fx_saturation", "Saturation", &clip.fx_saturation, 0.f, 2.f, "%.2f");
             fx_reset_btn("sa", &clip.fx_saturation, 1.f);
-
-            ImGui::SetNextItemWidth(sw); ImGui::SliderFloat("Hue##fx",       &clip.fx_hue,-180.f,180.f,"%.0f\xc2\xb0");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Effect: hue");
+            kf_slider(state, clip, kti, kci, sw, "fx_hue", "Hue", &clip.fx_hue, -180.f, 180.f, "%.0f\xc2\xb0");
             fx_reset_btn("hu", &clip.fx_hue, 0.f);
             ImGui::Dummy({0.f, 4.f});
         }
@@ -671,8 +665,8 @@ void panel_adjustment(AppState& state, float w) {
         }
         if (clip.fx_blur_on) {
             ImGui::Dummy({0.f, 4.f});
-            ImGui::SetNextItemWidth(sw); ImGui::SliderFloat("Radius##fx", &clip.fx_blur, 0.f, 20.f, "%.1f px");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Effect: blur radius");
+            kf_slider(state, clip, state.selected_track, state.selected_clip, sw,
+                      "fx_blur", "Radius", &clip.fx_blur, 0.f, 20.f, "%.1f px");
             fx_reset_btn("bl", &clip.fx_blur, 0.f);
             ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
             ImGui::TextUnformatted("Live preview shows badge — rendered on export");
@@ -691,8 +685,8 @@ void panel_adjustment(AppState& state, float w) {
         }
         if (clip.fx_vignette_on) {
             ImGui::Dummy({0.f, 4.f});
-            ImGui::SetNextItemWidth(sw); ImGui::SliderFloat("Strength##fx", &clip.fx_vignette, 0.f, 1.f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Effect: vignette strength");
+            kf_slider(state, clip, state.selected_track, state.selected_clip, sw,
+                      "fx_vignette", "Strength", &clip.fx_vignette, 0.f, 1.f, "%.2f");
             fx_reset_btn("vi", &clip.fx_vignette, 0.f);
             ImGui::Dummy({0.f, 4.f});
         }
@@ -708,12 +702,10 @@ void panel_adjustment(AppState& state, float w) {
     }
     if (clip.fx_text_on) {
         ImGui::Dummy({0.f, 4.f});
-        ImGui::SetNextItemWidth(sw); ImGui::SliderFloat("Opacity mul##fx",&clip.fx_opacity_mul,0.f,1.f,"%.2f");
-        if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Effect: opacity mul");
+        int kti = state.selected_track, kci = state.selected_clip;
+        kf_slider(state, clip, kti, kci, sw, "fx_opacity_mul", "Opacity mul", &clip.fx_opacity_mul, 0.f, 1.f, "%.2f");
         fx_reset_btn("op", &clip.fx_opacity_mul, 1.f);
-
-        ImGui::SetNextItemWidth(sw); ImGui::SliderFloat("Scale mul##fx",  &clip.fx_scale_mul,0.5f,2.f,"%.2f");
-        if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Effect: scale mul");
+        kf_slider(state, clip, kti, kci, sw, "fx_scale_mul", "Scale mul", &clip.fx_scale_mul, 0.5f, 2.f, "%.2f");
         fx_reset_btn("sc", &clip.fx_scale_mul, 1.f);
         ImGui::Dummy({0.f, 4.f});
     }

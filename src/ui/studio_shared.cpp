@@ -7,6 +7,7 @@
 #include "proxy.h"
 #include "history.h"
 #include "fx_shader.h"
+#include "theme.h"
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <filesystem>
@@ -266,6 +267,112 @@ int marker_add(AppState& state, float time, const char* label) {
     state.markers.insert(it, std::move(m));
     history_push(state, "Add marker");
     return idx;
+}
+
+bool kf_slider(AppState& state, Clip& clip, int sel_ti, int sel_ci, float w,
+               const char* prop, const char* label, float* val_ptr,
+               float vmin, float vmax, const char* fmt,
+               float disp, const char* prop2) {
+    float t_local = state.playhead - clip.start;
+    float kf_tol  = 0.5f / fmaxf(1.f, tl_fps(state));   // half a frame: exact-frame match
+    bool changed = false;
+    auto it_pt = clip.ktracks.find(prop);
+    PropTrack* pt = (it_pt != clip.ktracks.end()) ? &it_pt->second : nullptr;
+    bool has_keys = pt && !pt->empty();
+    bool has_kf   = pt && pt->find_nearest(t_local, kf_tol) >= 0;
+
+    auto toggle_key_here = [&]() {
+        if (has_kf) {
+            pt->remove_at(t_local, kf_tol);
+            if (pt->empty()) clip.ktracks.erase(prop);
+            if (prop2) {
+                auto it2 = clip.ktracks.find(prop2);
+                if (it2 != clip.ktracks.end()) {
+                    it2->second.remove_at(t_local, kf_tol);
+                    if (it2->second.empty()) clip.ktracks.erase(it2);
+                }
+            }
+            history_push(state, std::string("Remove KF ") + prop);
+        } else {
+            clip.ktracks[prop].set(t_local, clip.eval_prop(prop, state.playhead));
+            if (prop2) clip.ktracks[prop2].set(t_local, clip.eval_prop(prop2, state.playhead));
+            state.kf_sel_track = sel_ti; state.kf_sel_clip = sel_ci;
+            state.kf_sel_prop  = prop;
+            state.kf_sel_idx   = clip.ktracks[prop].find_nearest(t_local, kf_tol);
+            history_push(state, std::string("Add KF ") + prop);
+        }
+    };
+    {
+        ImDrawList* kdl = ImGui::GetWindowDrawList();
+        float rh = ImGui::GetFrameHeight();
+        const ImU32 gold = IM_COL32(255,200,60,255), gold_dim = IM_COL32(190,160,70,220),
+                    faint = IM_COL32(120,120,130,200), off = IM_COL32(70,70,78,150);
+        ImGui::InvisibleButton((std::string("##kfprev_") + prop).c_str(), {12.f, rh});
+        {
+            ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
+            float cx = (a.x+b.x)*0.5f, cy = (a.y+b.y)*0.5f;
+            ImU32 c = !has_keys ? off : ImGui::IsItemHovered() ? gold : faint;
+            kdl->AddTriangleFilled({cx+3,cy-4},{cx+3,cy+4},{cx-3,cy}, c);
+            if (has_keys && ImGui::IsItemClicked()) {
+                float best = -1.f;
+                for (auto& k : pt->keys) if (k.time < t_local - 1e-4f) best = k.time;
+                if (best >= 0.f) seek_to(state, clip.start + best);
+            }
+        }
+        ImGui::SameLine(0.f, 1.f);
+        ImGui::InvisibleButton((std::string("##kftog_") + prop).c_str(), {16.f, rh});
+        {
+            ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
+            float cx = (a.x+b.x)*0.5f, cy = (a.y+b.y)*0.5f, r = 5.5f;
+            bool hv = ImGui::IsItemHovered();
+            ImU32 c = has_kf ? gold : has_keys ? gold_dim : (hv ? gold_dim : faint);
+            if (hv) c = gold;
+            ImVec2 top{cx,cy-r}, rt{cx+r,cy}, bot{cx,cy+r}, lf{cx-r,cy};
+            if (has_kf) kdl->AddQuadFilled(top, rt, bot, lf, c);
+            else        kdl->AddQuad(top, rt, bot, lf, c, 1.6f);
+            if (ImGui::IsItemClicked()) toggle_key_here();
+            if (hv) ImGui::SetTooltip(has_kf ? "Remove keyframe here"
+                                   : has_keys ? "Add keyframe here"
+                                              : "Animate this property");
+        }
+        ImGui::SameLine(0.f, 1.f);
+        ImGui::InvisibleButton((std::string("##kfnext_") + prop).c_str(), {12.f, rh});
+        {
+            ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
+            float cx = (a.x+b.x)*0.5f, cy = (a.y+b.y)*0.5f;
+            ImU32 c = !has_keys ? off : ImGui::IsItemHovered() ? gold : faint;
+            kdl->AddTriangleFilled({cx-3,cy-4},{cx-3,cy+4},{cx+3,cy}, c);
+            if (has_keys && ImGui::IsItemClicked()) {
+                float nxt = -1.f;
+                for (auto& k : pt->keys) if (k.time > t_local + 1e-4f) { nxt = k.time; break; }
+                if (nxt >= 0.f) seek_to(state, clip.start + nxt);
+            }
+        }
+    }
+    ImGui::SameLine(0.f, 6.f);
+    ImGui::PushStyleColor(ImGuiCol_Text, Col::muted); ImGui::TextUnformatted(label); ImGui::PopStyleColor();
+    ImGui::PushStyleColor(ImGuiCol_SliderGrab, has_keys ? IM_COL32(255,200,60,255) : to_u32(Col::fg));
+    ImGui::PushStyleColor(ImGuiCol_FrameBg, Col::bg_soft);
+    ImGui::SetNextItemWidth(w - 16.f);
+    char sid[80]; snprintf(sid, sizeof(sid), "##kfs_%s", prop);
+    float dv = (has_keys ? clip.eval_prop(prop, state.playhead) : *val_ptr) * disp;
+    if (ImGui::SliderFloat(sid, &dv, vmin, vmax, fmt)) {
+        changed = true;
+        float raw = dv / disp;
+        *val_ptr = raw;
+        if (has_keys) {
+            int ki = pt->find_nearest(t_local, kf_tol);
+            if (ki >= 0) pt->keys[ki].value = raw; else pt->set(t_local, raw);
+            if (prop2) {
+                PropTrack& p2 = clip.ktracks[prop2];
+                int k2 = p2.find_nearest(t_local, kf_tol);
+                if (k2 >= 0) p2.keys[k2].value = raw; else p2.set(t_local, raw);
+            }
+        }
+    }
+    ImGui::PopStyleColor(2);
+    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, std::string("Edit ") + prop);
+    return changed;
 }
 
 void marker_jump(AppState& state, int dir) {
