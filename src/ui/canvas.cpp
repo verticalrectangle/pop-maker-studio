@@ -86,6 +86,8 @@ static bool ui_widget_claims_mouse() {
     return g.HoveredIdPreviousFrame != 0 || g.ActiveId != 0;
 }
 
+bool camera_live_native_dims(int& cw, int& ch);   // defined below
+
 void compute_video_bbox(AppState& state, Clip& cl, ImVec2 p, float w, float h,
                                 float& bx0, float& by0, float& bx1, float& by1) {
     float px = cl.eval_prop("pos_x",   state.playhead) * w + p.x;
@@ -93,6 +95,7 @@ void compute_video_bbox(AppState& state, Clip& cl, ImVec2 p, float w, float h,
     float sx = cl.eval_prop("scale_x", state.playhead);
     float sy = cl.eval_prop("scale_y", state.playhead);
     float fit_w = w, fit_h = h;
+    bool got_aspect = false;
     std::string vkey = clip_slot_key(cl.text, cl.start);
     for (int s = 0; s < MAX_VIDEO_TRACKS; ++s) {
         if (state.proxy_paths[s] == vkey && video_info(s).width > 0) {
@@ -101,8 +104,19 @@ void compute_video_bbox(AppState& state, Clip& cl, ImVec2 p, float w, float h,
             float ca = w / h;
             if (va > ca) { fit_w = w; fit_h = w / va; }
             else         { fit_h = h; fit_w = h * va; }
+            got_aspect = true;
             break;
         }
+    }
+    // Camera brick with no take yet (or live-monitoring): the box must match
+    // the live preview, which fits the camera's native frame — so the
+    // selection handles frame what's actually on screen.
+    int cw = 0, ch = 0;
+    if (!got_aspect && cl.clip_type == ClipType::VideoRecord &&
+        camera_live_native_dims(cw, ch)) {
+        float va = (float)cw / (float)ch, ca = w / h;
+        if (va > ca) { fit_w = w; fit_h = w / va; }
+        else         { fit_h = h; fit_w = h * va; }
     }
     float hw = fit_w * sx * 0.5f, hh = fit_h * sy * 0.5f;
     bx0 = px - hw; by0 = py - hh;
@@ -957,24 +971,64 @@ static struct {
     float  w = 0.f, h = 0.f;
 } g_canvas_cap;
 
-// ── Live camera mirror ────────────────────────────────────────────────────────
+// ── Live camera preview ───────────────────────────────────────────────────────
 // While the camera brick monitors, warms up, or records, the latest camera
-// frame is drawn over the canvas (fit, slightly inset) so the performer can
-// frame themselves. Decode happens only when a new frame arrived.
-static FaceObs s_mirror_obs;          // latest face for the doggy overlay
+// frame is composited into the scene AT THE BRICK'S TRANSFORM (pos/scale/
+// rotation) — framed exactly like the take will sit, only mirror-flipped for
+// self-view. Glass FX + face filter are baked into the texture so the live
+// preview and the recorded take render through the same machinery.
+static FaceObs s_mirror_obs;          // latest tracked face (raw-frame coords)
 static MirrorDebugGeom s_mirror_dbg;
 MirrorDebugGeom mirror_debug_geom() { return s_mirror_dbg; }
 static int     s_mirror_filter = 0;
 static float   s_mirror_filter_amt = 1.f;
 
-static void draw_camera_mirror(ImDrawList* dl, ImVec2 p, float w, float h) {
-    if (!vrecorder_monitor_get() && !vrecorder_active()) return;
+// Decoded live frame — file scope so compute_video_bbox can read native dims.
+static GLuint   s_cam_tex    = 0;
+static int      s_cam_w      = 0, s_cam_h = 0;
+static uint64_t s_cam_serial = 0;
+static tjhandle s_cam_tj     = nullptr;
+static std::vector<uint8_t> s_rgba;
 
-    static GLuint   s_cam_tex    = 0;
-    static int      s_cam_w      = 0, s_cam_h = 0;
-    static uint64_t s_cam_serial = 0;
-    static tjhandle s_cam_tj     = nullptr;
-    static std::vector<uint8_t> s_rgba;
+// Native dims of the live camera frame, valid only while a frame is decoded.
+bool camera_live_native_dims(int& cw, int& ch) {
+    if (!s_cam_tex || s_cam_w <= 0) return false;
+    cw = s_cam_w; ch = s_cam_h; return true;
+}
+
+// The live preview's frame outline (rotated quad, ImGui-space corners) +
+// state, stashed during compositing so the REC border + label draw on the
+// ImGui list after the scene blit.
+static struct {
+    bool   active = false;
+    ImVec2 c[4]   = {};
+    bool   recording = false, warming = false;
+} s_cam_box;
+
+// The camera brick that drives the live preview: the selected one, else the
+// record target's, else the first VideoRecord brick. Returns its track index.
+static const Clip* camera_brick_find(AppState& st, int& out_ti) {
+    out_ti = -1;
+    if (st.selected_track >= 0 && st.selected_track < (int)st.tracks.size() &&
+        st.selected_clip >= 0 &&
+        st.selected_clip < (int)st.tracks[st.selected_track].clips.size()) {
+        const Clip& c2 = st.tracks[st.selected_track].clips[st.selected_clip];
+        if (c2.clip_type == ClipType::VideoRecord) {
+            out_ti = st.selected_track;
+            return &c2;
+        }
+    }
+    for (int ti = 0; ti < (int)st.tracks.size(); ++ti)
+        for (auto& c2 : st.tracks[(size_t)ti].clips)
+            if (c2.clip_type == ClipType::VideoRecord) { out_ti = ti; return &c2; }
+    return nullptr;
+}
+
+// Decode the latest camera frame and bake the brick's glass FX + face filter
+// into a texture. Returns 0 when no frame / no brick; fills out_brick/ti/dims.
+static uintptr_t camera_live_tex(AppState& st, const Clip*& out_brick,
+                                 int& out_ti, int& out_w, int& out_h) {
+    out_brick = nullptr; out_ti = -1; out_w = out_h = 0;
 
     uint64_t serial = vrecorder_frame_serial();
     if (serial != s_cam_serial) {
@@ -1001,48 +1055,28 @@ static void draw_camera_mirror(ImDrawList* dl, ImVec2 p, float w, float h) {
         }
         s_cam_serial = serial;
     }
-    if (!s_cam_tex || s_cam_w <= 0) return;
+    if (!s_cam_tex || s_cam_w <= 0) return 0;
+
+    int bti = -1;
+    const Clip* br = camera_brick_find(st, bti);
+    if (!br || bti < 0) return 0;
+    out_brick = br; out_ti = bti;
+    out_w = s_cam_w; out_h = s_cam_h;
 
     uintptr_t draw_tex = s_cam_tex;
 
-    // Fit inside the canvas with a small inset; mirror horizontally so it
-    // behaves like a mirror (recorded takes keep the true orientation).
-    // Rotation comes from the camera brick (selected, or the record target)
-    // so the mirror matches how the take will sit on the canvas — phone
-    // cameras over v4l2loopback often arrive sideways.
-    float rot_deg = 0.f;
     {
-        extern AppState* g_state_for_mirror;   // set by draw_preview below
-        if (g_state_for_mirror) {
-            AppState& st = *g_state_for_mirror;
-            const Clip* br = nullptr;
-            if (st.selected_track >= 0 && st.selected_track < (int)st.tracks.size() &&
-                st.selected_clip >= 0 &&
-                st.selected_clip < (int)st.tracks[st.selected_track].clips.size()) {
-                const Clip& c2 = st.tracks[st.selected_track].clips[st.selected_clip];
-                if (c2.clip_type == ClipType::VideoRecord) br = &c2;
-            }
-            if (!br) {
-                for (auto& tr : st.tracks)
-                    for (auto& c2 : tr.clips)
-                        if (c2.clip_type == ClipType::VideoRecord) { br = &c2; break; }
-            }
-            if (br) rot_deg = br->rotation;
-
+        {
             // Run the brick's glass FX chain (beauty MultiFX etc.) on the
-            // live frame — the mirror shows you filtered, like the take will.
-            if (br) {
-                int bti = -1;
-                for (int ti2 = 0; ti2 < (int)st.tracks.size() && bti < 0; ++ti2)
-                    for (auto& c3 : st.tracks[(size_t)ti2].clips)
-                        if (&c3 == br) { bti = ti2; break; }
-                if (bti >= 0) {
+            // live frame — the preview shows you filtered, like the take will.
+            {
+                {
                     float bt = br->start + 0.001f;   // brick-local sample time
                     EffectAccum     ea  = collect_glass_effects(st, bt, bti);
                     CreativeFXAccum cfx = collect_glass_fx(st, bt, bti);
                     // kSceneFxSlot (MAX*2-2) belongs to the scene
                     // compositor every frame — sharing it collided FBOs and
-                    // rendered the mirror solid green. The last slot index
+                    // rendered the preview solid green. The last slot index
                     // is unclaimed by clips and the scene pass.
                     draw_tex = fx_apply((uintptr_t)s_cam_tex,
                                         MAX_VIDEO_TRACKS * 2 - 1,
@@ -1051,13 +1085,13 @@ static void draw_camera_mirror(ImDrawList* dl, ImVec2 p, float w, float h) {
                 }
             }
 
-            // Face filter: track the live frame, warp the mirror. The
+            // Face filter: track the live frame, warp the texture. The
             // detector can't see sideways faces, so the tracker gets the
             // frame rotated upright per the brick's rotation (90° steps)
             // and landmarks are mapped back into raw-frame coords.
-            s_mirror_filter     = br ? br->face_filter : 0;
-            s_mirror_filter_amt = br ? br->face_filter_amt : 1.f;
-            if (br && br->face_filter != 0 && face_track_available()) {
+            s_mirror_filter     = br->face_filter;
+            s_mirror_filter_amt = br->face_filter_amt;
+            if (br->face_filter != 0 && face_track_available()) {
                 int rot_q = ((int)lroundf(br->rotation / 90.f) % 4 + 4) % 4;
                 static uint64_t s_track_serial = 0;
                 static int s_sub_rotq = 0;
@@ -1121,14 +1155,13 @@ static void draw_camera_mirror(ImDrawList* dl, ImVec2 p, float w, float h) {
                         obs = raw;
                     }
                     s_mirror_obs = obs;
-                    FaceWarpBump bumps[MAX_FACE_BUMPS];
-                    int nb = face_filter_bumps(br->face_filter,
-                                               br->face_filter_amt, obs, bumps);
-                    if (nb > 0)
-                        draw_tex = face_warp_apply(draw_tex,
-                                                   MAX_VIDEO_TRACKS * 2,
-                                                   s_cam_w, s_cam_h,
-                                                   (const float*)bumps, nb);
+                    // Bake the warp + doggy sprites into the texture (same
+                    // helper the take/export path uses — no overlay), so the
+                    // composited live frame already carries the filter.
+                    draw_tex = face_filter_apply_obs(
+                        br->face_filter, br->face_filter_amt, obs,
+                        (float)ImGui::GetTime(), draw_tex,
+                        MAX_VIDEO_TRACKS * 2, s_cam_w, s_cam_h);
                 } else {
                     s_mirror_obs.valid = false;
                 }
@@ -1137,57 +1170,13 @@ static void draw_camera_mirror(ImDrawList* dl, ImVec2 p, float w, float h) {
             }
         }
     }
-    // The mirror flips horizontally, which inverts apparent rotation:
-    // mirrored content rotated -θ looks like true content rotated +θ. Negate
-    // so the SAME brick rotation makes mirror and recorded take match.
-    float rad = -rot_deg * 3.14159265f / 180.f;
-    float cr = cosf(rad), sr = sinf(rad);
-
-    // Fit the ROTATED frame inside the canvas with a small inset.
-    float inset = 12.f;
-    float aw = w - inset * 2.f, ah = h - inset * 2.f;
-    float bw = fabsf((float)s_cam_w * cr) + fabsf((float)s_cam_h * sr);
-    float bh = fabsf((float)s_cam_w * sr) + fabsf((float)s_cam_h * cr);
-    float sc = fminf(aw / bw, ah / bh);
-    float hw = s_cam_w * sc * 0.5f, hh = s_cam_h * sc * 0.5f;
-    ImVec2 c  = {p.x + w * 0.5f, p.y + h * 0.5f};
-    auto rotp = [&](float x, float y) {
-        return ImVec2{c.x + x * cr - y * sr, c.y + x * sr + y * cr};
-    };
-    ImVec2 p0 = rotp(-hw, -hh), p1 = rotp(hw, -hh),
-           p2 = rotp(hw, hh),   p3 = rotp(-hw, hh);
-    s_mirror_dbg.valid   = true;
-    s_mirror_dbg.cx      = c.x;  s_mirror_dbg.cy = c.y;
-    s_mirror_dbg.hw      = hw;   s_mirror_dbg.hh = hh;
-    s_mirror_dbg.rot_deg = rot_deg;
-    s_mirror_dbg.cam_w   = s_cam_w; s_mirror_dbg.cam_h = s_cam_h;
+    s_mirror_dbg.valid      = true;
+    s_mirror_dbg.cam_w      = s_cam_w; s_mirror_dbg.cam_h = s_cam_h;
+    s_mirror_dbg.rot_deg    = br->rotation;
     s_mirror_dbg.face_valid = s_mirror_obs.valid;
     if (s_mirror_obs.valid)
         memcpy(s_mirror_dbg.pts, s_mirror_obs.pts, sizeof(s_mirror_dbg.pts));
-    dl->AddRectFilled({p.x, p.y}, {p.x + w, p.y + h}, IM_COL32(0, 0, 0, 160));
-    // u flipped → mirror behaviour (recorded takes keep true orientation)
-    dl->AddImageQuad((ImTextureID)(intptr_t)draw_tex, p0, p1, p2, p3,
-                     {1, 0}, {0, 0}, {0, 1}, {1, 1});
-    // Doggy overlay: landmark-anchored ears/nose/tongue. Frame UV → screen
-    // via the same quad mapping (note the mirror's flipped U).
-    if (s_mirror_filter == (int)FaceFilter::Doggy && s_mirror_obs.valid) {
-        auto to_screen = [&](float u, float v) -> ImVec2 {
-            float mu = 1.f - u;   // mirror flip
-            float lx = (mu - 0.5f) * 2.f * hw;
-            float ly = (v  - 0.5f) * 2.f * hh;
-            return rotp(lx, ly);
-        };
-        face_filter_draw_doggy(dl, s_mirror_obs, s_mirror_filter_amt,
-                               (float)ImGui::GetTime(), to_screen);
-    }
-    ImU32 frame_col = vrecorder_recording() ? IM_COL32(235, 90, 40, 255)
-                                            : IM_COL32(160, 160, 180, 160);
-    dl->AddQuad(p0, p1, p2, p3, frame_col, vrecorder_recording() ? 3.f : 1.5f);
-    const char* tag2 = vrecorder_recording() ? "\xe2\x97\x8f REC"
-                     : vrecorder_warming()   ? "starting\xe2\x80\xa6"
-                                             : "camera";
-    dl->AddText({fminf(fminf(p0.x,p1.x),fminf(p2.x,p3.x)) + 10.f,
-                 fminf(fminf(p0.y,p1.y),fminf(p2.y,p3.y)) + 8.f}, frame_col, tag2);
+    return draw_tex;
 }
 
 AppState* g_state_for_mirror = nullptr;
@@ -1862,6 +1851,54 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
         }
     }  // end Pass 1 track loop
 
+    // ── Live camera preview ──────────────────────────────────────────────────
+    // Composite the live frame into the scene at the camera brick's transform
+    // (pos/scale/rotation) — framed exactly like the take will sit, only
+    // mirror-flipped for self-view. Glass FX + face filter are already baked
+    // into the texture. Drawn last in Pass 1 (top of the video stack, below
+    // text), regardless of playhead range — the performer always sees it.
+    s_cam_box.active = false;
+    if (vrecorder_monitor_get() || vrecorder_active()) {
+        const Clip* br = nullptr; int bti = -1, cw = 0, ch = 0;
+        uintptr_t ltex = camera_live_tex(state, br, bti, cw, ch);
+        if (ltex && br && cw > 0 && ch > 0) {
+            float px  = br->eval_prop("pos_x",   state.playhead);
+            float py  = br->eval_prop("pos_y",   state.playhead);
+            float sx  = br->eval_prop("scale_x", state.playhead);
+            float sy  = br->eval_prop("scale_y", state.playhead);
+            float rot = br->eval_prop("rotation", state.playhead);
+            float alpha = br->eval_prop("opacity", state.playhead);
+            // Aspect-fit the native frame inside the canvas (same as a take).
+            float fit_w = w, fit_h = h;
+            float va = (float)cw / (float)ch, ca = w / h;
+            if (va > ca) { fit_w = w; fit_h = w / va; }
+            else         { fit_h = h; fit_w = h * va; }
+            float cx = px * w, cy = py * h;
+            float hw = fit_w * sx * 0.5f, hh = fit_h * sy * 0.5f;
+            float rad = rot * 3.14159265f / 180.f;
+            float cs = cosf(rad), sn = sinf(rad);
+            // Mirror flip via UVs (u0=1,u1=0). The box (handles) is the output
+            // frame; only the content inside is mirrored for self-view.
+            scene_add_layer(ltex, cx, cy, hw, hh, cs, sn,
+                            fmaxf(0.f, fminf(1.f, alpha)), 1.f, 0.f, 0.f, 1.f);
+
+            // Stash the rotated quad (ImGui space) for the REC border + label.
+            auto rp = [&](float x, float y) {
+                return ImVec2{p.x + cx + x * cs - y * sn,
+                              p.y + cy + x * sn + y * cs};
+            };
+            s_cam_box.active    = true;
+            s_cam_box.recording = vrecorder_recording();
+            s_cam_box.warming   = vrecorder_warming();
+            s_cam_box.c[0] = rp(-hw, -hh); s_cam_box.c[1] = rp(hw, -hh);
+            s_cam_box.c[2] = rp(hw,  hh);  s_cam_box.c[3] = rp(-hw, hh);
+            // Mirror-debug geometry for the test harness (new transform).
+            s_mirror_dbg.cx = p.x + cx; s_mirror_dbg.cy = p.y + cy;
+            s_mirror_dbg.hw = hw;       s_mirror_dbg.hh = hh;
+            s_mirror_dbg.rot_deg = rot;
+        }
+    }
+
     // ── Apply global FX to composited scene ──────────────────────────────────
     {
         EffectAccum global_ea = collect_effects(state, state.playhead, (int)state.tracks.size());
@@ -2286,7 +2323,26 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
     }
 
     g_state_for_mirror = &state;
-    draw_camera_mirror(dl, p, w, h);
+
+    // ── Live camera frame outline ─────────────────────────────────────────────
+    // The preview itself is composited in the scene (above); here we just
+    // outline its frame and label it. While recording the outline is the
+    // REC-orange border; otherwise a faint guide. The selection handles
+    // (draw_canvas_handles, when the brick is selected) sit on top.
+    if (s_cam_box.active) {
+        ImU32 col = s_cam_box.recording ? IM_COL32(235, 90, 40, 255)
+                                        : IM_COL32(160, 160, 180, 150);
+        dl->AddQuad(s_cam_box.c[0], s_cam_box.c[1], s_cam_box.c[2], s_cam_box.c[3],
+                    col, s_cam_box.recording ? 3.f : 1.5f);
+        const char* tag = s_cam_box.recording ? "\xe2\x97\x8f REC"
+                        : s_cam_box.warming    ? "starting\xe2\x80\xa6"
+                                               : "camera";
+        float lx = fminf(fminf(s_cam_box.c[0].x, s_cam_box.c[1].x),
+                         fminf(s_cam_box.c[2].x, s_cam_box.c[3].x)) + 10.f;
+        float ly = fminf(fminf(s_cam_box.c[0].y, s_cam_box.c[1].y),
+                         fminf(s_cam_box.c[2].y, s_cam_box.c[3].y)) + 8.f;
+        dl->AddText({lx, ly}, col, tag);
+    }
 }
 
 // ── Canvas-source snapshot capture ───────────────────────────────────────────

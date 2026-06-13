@@ -306,8 +306,30 @@ void face_filter_draw_doggy(ImDrawList* dl, const FaceObs& obs, float amount,
     }
 }
 
-// ── Playback/export: face filter on a take's decoded frame ───────────────────
+// ── Face filter baked into a texture (shared by live mirror + take/export) ───
 
+// Warp + doggy sprites for a tracked face, rendered into the slot's FBO.
+// `obs` lives in the texture's pixel space (w×h). Returns tex unchanged when
+// the filter produces nothing. `anim_t` drives the tongue wag.
+uintptr_t face_filter_apply_obs(int filter_id, float amount, const FaceObs& obs,
+                                float anim_t, uintptr_t tex,
+                                int slot, int w, int h) {
+    if (filter_id == 0 || w <= 0 || h <= 0 || !obs.valid) return tex;
+    FaceWarpBump bumps[MAX_FACE_BUMPS];
+    int nb = face_filter_bumps(filter_id, amount, obs, bumps);
+    if (nb > 0)
+        tex = face_warp_apply(tex, slot, w, h, (const float*)bumps, nb);
+    if (filter_id == (int)FaceFilter::Doggy) {
+        FaceSpriteQuad quads[4];
+        int nq = face_filter_doggy_quads(obs, amount, anim_t, quads, 4);
+        if (nq > 0)
+            tex = face_sprites_apply(tex, slot, w, h, quads, nq);
+    }
+    return tex;
+}
+
+// Playback/export: face filter on a take's decoded frame, via the cached
+// landmark pass (kicking the background build if missing).
 uintptr_t face_filter_apply_take(const Clip& cl, double src_t,
                                  uintptr_t tex, int video_slot, int w, int h) {
     if (cl.face_filter == 0 || cl.text.empty() || w <= 0 || h <= 0 ||
@@ -317,17 +339,7 @@ uintptr_t face_filter_apply_take(const Clip& cl, double src_t,
     face_cache_request(cl.text, rot_q);          // no-op once built
     FaceObs obs;
     if (!face_cache_obs(cl.text, rot_q, src_t, obs)) return tex;
-    int slot = fx_face_clip_slot(video_slot);
-    FaceWarpBump bumps[MAX_FACE_BUMPS];
-    int nb = face_filter_bumps(cl.face_filter, cl.face_filter_amt, obs, bumps);
-    if (nb > 0)
-        tex = face_warp_apply(tex, slot, w, h, (const float*)bumps, nb);
-    if (cl.face_filter == (int)FaceFilter::Doggy) {
-        FaceSpriteQuad quads[4];
-        int nq = face_filter_doggy_quads(obs, cl.face_filter_amt, (float)src_t,
-                                         quads, 4);
-        if (nq > 0)
-            tex = face_sprites_apply(tex, slot, w, h, quads, nq);
-    }
-    return tex;
+    return face_filter_apply_obs(cl.face_filter, cl.face_filter_amt, obs,
+                                 (float)src_t, tex,
+                                 fx_face_clip_slot(video_slot), w, h);
 }

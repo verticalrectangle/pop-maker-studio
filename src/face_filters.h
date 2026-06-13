@@ -31,6 +31,13 @@ int face_filter_bumps(int filter_id, float amount, const FaceObs& obs,
 int face_filter_doggy_quads(const FaceObs& obs, float amount, float t,
                             FaceSpriteQuad* out, int max_out);
 
+// Bake a face filter (warp + doggy sprites) into a texture from a tracked
+// face. `obs` lives in the texture's w×h pixel space. The live mirror passes
+// its live FaceObs; the take path passes a cached one — same pixels result.
+uintptr_t face_filter_apply_obs(int filter_id, float amount, const FaceObs& obs,
+                                float anim_t, uintptr_t tex,
+                                int slot, int w, int h);
+
 // Playback/export: apply the clip's face filter to its decoded frame using
 // the take's cached landmark pass (kicking the background build if missing).
 // Returns tex unchanged until the cache is ready. Shared by the preview and
