@@ -759,6 +759,10 @@ void panel_clip(AppState& state, float w) {
 
     // ── Keyframe slider helper (shared by transform + audio sections) ─────────
     float t_local = state.playhead - clip.start;
+    // "On this keyframe" means the playhead sits on the key's exact frame. Both
+    // are frame-snapped, so the match window is half a frame — a fixed 0.05 s
+    // window used to span ~1.5 frames (3 at 60 fps) and lit up one frame early.
+    float kf_tol  = 0.5f / fmaxf(1.f, tl_fps(state));
     int   sel_ti  = state.selected_track, sel_ci = state.selected_clip;
 
     // Keyframable slider: ◆ toggle + label row, full-width slider beneath
@@ -775,7 +779,7 @@ void panel_clip(AppState& state, float w) {
         auto  it_pt  = clip.ktracks.find(prop);
         PropTrack* pt = (it_pt != clip.ktracks.end()) ? &it_pt->second : nullptr;
         bool has_keys = pt && !pt->empty();
-        bool has_kf   = pt && pt->find_nearest(t_local, 0.05f) >= 0;
+        bool has_kf   = pt && pt->find_nearest(t_local, kf_tol) >= 0;
 
         ImGui::PushStyleColor(ImGuiCol_Button,
             has_kf ? IM_COL32(255,200,60,200)
@@ -784,12 +788,12 @@ void panel_clip(AppState& state, float w) {
         char kbid[64]; snprintf(kbid, sizeof(kbid), "\xe2\x97\x86##kf_%s", prop);
         if (ImGui::Button(kbid, {20.f, 0.f})) {
             if (has_kf) {
-                pt->remove_at(t_local, 0.05f);
+                pt->remove_at(t_local, kf_tol);
                 if (pt->empty()) clip.ktracks.erase(prop);
                 if (prop2) {
                     auto it2 = clip.ktracks.find(prop2);
                     if (it2 != clip.ktracks.end()) {
-                        it2->second.remove_at(t_local, 0.05f);
+                        it2->second.remove_at(t_local, kf_tol);
                         if (it2->second.empty()) clip.ktracks.erase(it2);
                     }
                 }
@@ -800,7 +804,7 @@ void panel_clip(AppState& state, float w) {
                     clip.ktracks[prop2].set(t_local, clip.eval_prop(prop2, state.playhead));
                 state.kf_sel_track = sel_ti; state.kf_sel_clip = sel_ci;
                 state.kf_sel_prop  = prop;
-                state.kf_sel_idx   = clip.ktracks[prop].find_nearest(t_local, 0.1f);
+                state.kf_sel_idx   = clip.ktracks[prop].find_nearest(t_local, kf_tol);
                 history_push(state, std::string("Add KF ") + prop);
             }
         }
@@ -826,11 +830,11 @@ void panel_clip(AppState& state, float w) {
                 // Auto-key: retarget the key under the playhead, or drop a new
                 // one there — otherwise the edit would go to the static field,
                 // which the renderer ignores once keys exist.
-                int ki = pt->find_nearest(t_local, 0.05f);
+                int ki = pt->find_nearest(t_local, kf_tol);
                 if (ki >= 0) pt->keys[ki].value = raw; else pt->set(t_local, raw);
                 if (prop2) {
                     PropTrack& p2 = clip.ktracks[prop2];
-                    int k2 = p2.find_nearest(t_local, 0.05f);
+                    int k2 = p2.find_nearest(t_local, kf_tol);
                     if (k2 >= 0) p2.keys[k2].value = raw; else p2.set(t_local, raw);
                 }
             }
