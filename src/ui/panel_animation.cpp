@@ -746,26 +746,12 @@ void panel_text_library(AppState& state, float w) {
         dl->AddText({cp.x + 6.f, cp.y + cell_h * 0.66f}, to_u32(Col::fg), sc.name);
 
         ImGui::SetCursorScreenPos(cp);
+        ImGui::SetNextItemAllowOverlap();
         ImGui::InvisibleButton(sc.name, {cell_w, cell_h});
         if (ImGui::IsItemHovered()) {
             dl->AddRect(cp, {cp.x + cell_w, cp.y + cell_h},
                         IM_COL32(80, 140, 220, 200), 4.f, 0, 1.5f);
             ImGui::SetTooltip("%s", sc.desc);
-        }
-        if (ImGui::IsItemClicked()) {
-            // Same placement as background cards: empty track if one exists,
-            // else a new track on top (text is foreground content).
-            Clip c = make_text_brick(sc.style, state.playhead);
-            int target = find_empty_track(state);
-            if (target < 0) {
-                Track t; t.name = "Text";
-                state.tracks.insert(state.tracks.begin(), std::move(t));
-                target = 0;
-            }
-            state.tracks[target].clips.push_back(std::move(c));
-            state.selected_track = target;
-            state.selected_clip  = (int)state.tracks[target].clips.size() - 1;
-            history_push(state, std::string("Add text brick: ") + sc.name);
         }
         if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
             int style_int = (int)sc.style;
@@ -780,6 +766,21 @@ void panel_text_library(AppState& state, float w) {
             gdl->AddText({gp.x + (gw - tsz.x) * 0.5f, gp.y + (gh - 13.f) * 0.5f},
                          IM_COL32(255, 255, 255, 240), sc.name);
             ImGui::EndDragDropSource();
+        }
+        if (ui_card_add_btn(cp, cell_w, (int)sc.style)) {
+            // Same placement as background cards: empty track if one exists,
+            // else a new track on top (text is foreground content).
+            Clip c = make_text_brick(sc.style, state.playhead);
+            int target = find_empty_track(state);
+            if (target < 0) {
+                Track t; t.name = "Text";
+                state.tracks.insert(state.tracks.begin(), std::move(t));
+                target = 0;
+            }
+            state.tracks[target].clips.push_back(std::move(c));
+            state.selected_track = target;
+            state.selected_clip  = (int)state.tracks[target].clips.size() - 1;
+            history_push(state, std::string("Add text brick: ") + sc.name);
         }
 
         if (col_idx == 0) { ImGui::SameLine(0.f, 8.f); col_idx = 1; }

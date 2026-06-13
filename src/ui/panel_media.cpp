@@ -328,6 +328,7 @@ void panel_media_browser(AppState& state, float w, bool is_video) {
         ImDrawList* dl = ImGui::GetWindowDrawList();
 
         ImGui::PushID(i);
+        ImGui::SetNextItemAllowOverlap();
         ImGui::InvisibleButton("##mc", {COL_W, CARD_H});
         bool hov = ImGui::IsItemHovered();
 
@@ -385,8 +386,18 @@ void panel_media_browser(AppState& state, float w, bool is_video) {
                     hov ? IM_COL32(255,255,255,160) : IM_COL32(48,48,68,180),
                     6.f, 0, hov ? 1.5f : 1.f);
 
-        // Click → add clip on an empty track (new track at top only if none)
-        if (ImGui::IsItemClicked()) {
+        // Drag-drop source (whole card)
+        if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
+            const char* ptype = is_video ? "MEDIA_VID" : "MEDIA_IMG";
+            ImGui::SetDragDropPayload(ptype, path.c_str(), path.size()+1);
+            if (tex) ImGui::Image((ImTextureID)(uintptr_t)tex, {96.f, 54.f});
+            ImGui::TextUnformatted(name.c_str());
+            ImGui::TextDisabled("Drop onto timeline track");
+            ImGui::EndDragDropSource();
+        }
+
+        // "+" → add clip at playhead on an empty track (new track if none)
+        if (ui_card_add_btn(cp, COL_W, i)) {
             float dur = is_video ? video_probe_duration(path) : 0.f;
             if (dur <= 0.f) dur = is_video ? 4.f : 5.f;
             Clip cl; cl.clip_type = ClipType::Video; cl.text = path;
@@ -408,16 +419,6 @@ void panel_media_browser(AppState& state, float w, bool is_video) {
             recent_media_push(path, is_video ? MediaKind::Video : MediaKind::Image);
             s_panel_view = PanelView::Clip;
             history_push(state, (is_video ? "Add video: " : "Add image: ") + fp.filename().string());
-        }
-
-        // Drag-drop source
-        if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
-            const char* ptype = is_video ? "MEDIA_VID" : "MEDIA_IMG";
-            ImGui::SetDragDropPayload(ptype, path.c_str(), path.size()+1);
-            if (tex) ImGui::Image((ImTextureID)(uintptr_t)tex, {96.f, 54.f});
-            ImGui::TextUnformatted(name.c_str());
-            ImGui::TextDisabled("Drop onto timeline track");
-            ImGui::EndDragDropSource();
         }
 
         ImGui::PopID();
@@ -702,6 +703,7 @@ void panel_audio_browser(AppState& state, float w) {
         ImDrawList* dl = ImGui::GetWindowDrawList();
 
         ImGui::SetCursorPosX(4.f);
+        ImGui::SetNextItemAllowOverlap();
         ImGui::InvisibleButton("##ac", {CARD_W, CARD_H});
         bool hov = ImGui::IsItemHovered();
 
@@ -760,7 +762,13 @@ void panel_audio_browser(AppState& state, float w) {
                     hov ? IM_COL32(80,220,130,160) : IM_COL32(38,58,44,180),
                     6.f, 0, hov ? 1.5f : 1.f);
 
-        if (ImGui::IsItemClicked()) {
+        if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
+            ImGui::SetDragDropPayload("MEDIA_AUD", path.c_str(), path.size()+1);
+            ImGui::TextUnformatted(name.c_str());
+            ImGui::TextDisabled("Drop onto timeline track");
+            ImGui::EndDragDropSource();
+        }
+        if (ui_card_add_btn(cp, CARD_W, i)) {
             AudioMeta meta{};
             float dur = audio_probe(path, meta) ? meta.duration_secs : 4.f;
             if (dur <= 0.f) dur = 4.f;
@@ -780,13 +788,6 @@ void panel_audio_browser(AppState& state, float w) {
             recent_media_push(path, MediaKind::Audio);
             s_panel_view = PanelView::Clip;
             history_push(state, "Add audio: " + fp.filename().string());
-        }
-
-        if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
-            ImGui::SetDragDropPayload("MEDIA_AUD", path.c_str(), path.size()+1);
-            ImGui::TextUnformatted(name.c_str());
-            ImGui::TextDisabled("Drop onto timeline track");
-            ImGui::EndDragDropSource();
         }
 
         ImGui::Dummy({0.f, GAP});
