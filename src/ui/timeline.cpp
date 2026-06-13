@@ -22,6 +22,7 @@
 #include "theme.h"
 #include "body_fx.h"
 #include "bg_remove.h"
+#include "runtime_fx.h"
 #include "render.h"
 #include <imgui.h>
 #include <imgui_internal.h>
@@ -983,6 +984,88 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                     s_drop_flash_track = ti;
                     s_drop_flash_t     = 0.6f;
                     history_push(state, std::string("Drop FX: ") + fx_type_name(ft));
+                }
+                // Audio FX card → Effect clip carrying the audio_fx flag, welded
+                // to the audio (or video) host under the drop via couple_fx_now.
+                if (const ImGuiPayload* pay = ImGui::AcceptDragDropPayload("FX_AUDIO")) {
+                    FXType ft = (FXType)*(const int*)pay->Data;
+                    float drop_t = fmaxf(0.f, (ImGui::GetMousePos().x - (origin.x + TL_LABEL_W) + scroll) / zoom);
+                    Clip cl;
+                    cl.clip_type = ClipType::Effect;
+                    cl.fx_type   = ft;
+                    cl.start     = drop_t;
+                    cl.end       = drop_t + 5.f;
+                    cl.audio_fx.autotune_on      = (ft == FXType::AudioAutotune);
+                    cl.audio_fx.pitch_on         = (ft == FXType::AudioPitch);
+                    cl.audio_fx.formant_on       = (ft == FXType::AudioFormant);
+                    cl.audio_fx.delay_on         = (ft == FXType::AudioDelay);
+                    cl.audio_fx.reverb_on        = (ft == FXType::AudioReverb);
+                    cl.audio_fx.voice_convert_on = (ft == FXType::AudioVoiceConvert);
+                    state.tracks[ti].clips.push_back(cl);
+                    state.selected_clip  = couple_fx_now(state, ti, (int)state.tracks[ti].clips.size() - 1);
+                    state.selected_track = ti;
+                    s_drop_flash_track = ti; s_drop_flash_t = 0.6f;
+                    history_push(state, std::string("Drop audio FX: ") + fx_type_name(ft));
+                }
+                // Custom (runtime) FX card → a per-clip property, so it applies to
+                // the clip under the drop point rather than spawning a brick.
+                if (const ImGuiPayload* pay = ImGui::AcceptDragDropPayload("FX_RUNTIME")) {
+                    int idx = *(const int*)pay->Data;
+                    const auto& defs = runtime_fx_list();
+                    float drop_t = fmaxf(0.f, (ImGui::GetMousePos().x - (origin.x + TL_LABEL_W) + scroll) / zoom);
+                    int target = -1;
+                    for (int k = 0; k < (int)state.tracks[ti].clips.size(); ++k) {
+                        const Clip& c = state.tracks[ti].clips[(size_t)k];
+                        if (clip_is_videolike_type(c.clip_type) &&
+                            drop_t >= c.start && drop_t < c.end) { target = k; break; }
+                    }
+                    if (idx >= 0 && idx < (int)defs.size() && target >= 0 &&
+                        defs[(size_t)idx].program != 0) {
+                        const RuntimeFXDef& def = defs[(size_t)idx];
+                        Clip& c = state.tracks[ti].clips[(size_t)target];
+                        c.runtime_fx_id = def.id;
+                        c.runtime_fx_params.resize(def.params.size());
+                        for (int pi = 0; pi < (int)def.params.size(); ++pi)
+                            c.runtime_fx_params[pi] = def.params[pi].default_val;
+                        c.runtime_fx_amount = 1.f;
+                        state.selected_track = ti; state.selected_clip = target;
+                        s_drop_flash_track = ti; s_drop_flash_t = 0.6f;
+                        history_push(state, "Apply custom FX: " + def.name);
+                    }
+                }
+                // Body FX card → a BodyFX glass brick over the video clip under the
+                // drop, with AI mask generation kicked off if not ready.
+                if (const ImGuiPayload* pay = ImGui::AcceptDragDropPayload("FX_BODY")) {
+                    BodyFXType bt = (BodyFXType)*(const int*)pay->Data;
+                    float drop_t = fmaxf(0.f, (ImGui::GetMousePos().x - (origin.x + TL_LABEL_W) + scroll) / zoom);
+                    int target = -1;
+                    for (int k = 0; k < (int)state.tracks[ti].clips.size(); ++k) {
+                        const Clip& c = state.tracks[ti].clips[(size_t)k];
+                        if (c.clip_type == ClipType::Video &&
+                            drop_t >= c.start && drop_t < c.end) { target = k; break; }
+                    }
+                    const BodyFXInfo* info = body_fx_find_info(bt);
+                    if (target >= 0 && info) {
+                        Clip& vid_cl = state.tracks[ti].clips[(size_t)target];
+                        Clip bfx;
+                        bfx.clip_type    = ClipType::BodyFX;
+                        bfx.start        = vid_cl.start;
+                        bfx.end          = vid_cl.end;
+                        bfx.source_id    = vid_cl.source_id;
+                        bfx.body_fx_type = bt;
+                        for (int pi = 0; pi < 4; ++pi)
+                            bfx.body_fx_params[pi] = (pi < info->n_params)
+                                ? info->params[pi].default_val : 0.5f;
+                        bfx.body_fx_amount = 1.f;
+                        state.tracks[ti].clips.push_back(bfx);
+                        if (vid_cl.bg_remove_mask_dir.empty() ||
+                            vid_cl.bg_remove_status != BgRemoveStatus::Ready)
+                            bg_remove_start(state, ti, target);
+                        state.selected_track = ti;
+                        state.selected_clip  = (int)state.tracks[ti].clips.size() - 1;
+                        s_drop_flash_track = ti; s_drop_flash_t = 0.6f;
+                        history_push(state, std::string("Drop Body FX: ") + info->name);
+                    }
                 }
                 auto accept_media_drop = [&](const char* ptype) {
                     if (const ImGuiPayload* pay = ImGui::AcceptDragDropPayload(ptype)) {
@@ -3230,6 +3313,18 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                     Clip cl; cl.clip_type = ClipType::Effect; cl.fx_type = ft;
                     cl.start = drop_t; cl.end = drop_t + 5.f;
                     make_new_track(std::move(cl), (std::string("Drop FX: ") + fx_type_name(ft)).c_str(), false);
+                }
+                if (const ImGuiPayload* pay = ImGui::AcceptDragDropPayload("FX_AUDIO")) {
+                    FXType ft = (FXType)*(const int*)pay->Data;
+                    Clip cl; cl.clip_type = ClipType::Effect; cl.fx_type = ft;
+                    cl.start = drop_t; cl.end = drop_t + 5.f;
+                    cl.audio_fx.autotune_on      = (ft == FXType::AudioAutotune);
+                    cl.audio_fx.pitch_on         = (ft == FXType::AudioPitch);
+                    cl.audio_fx.formant_on       = (ft == FXType::AudioFormant);
+                    cl.audio_fx.delay_on         = (ft == FXType::AudioDelay);
+                    cl.audio_fx.reverb_on        = (ft == FXType::AudioReverb);
+                    cl.audio_fx.voice_convert_on = (ft == FXType::AudioVoiceConvert);
+                    make_new_track(std::move(cl), (std::string("Drop audio FX: ") + fx_type_name(ft)).c_str(), false);
                 }
                 auto new_track_media = [&](const char* ptype) {
                     if (const ImGuiPayload* pay = ImGui::AcceptDragDropPayload(ptype)) {

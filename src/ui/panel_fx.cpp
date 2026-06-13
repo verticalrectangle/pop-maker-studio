@@ -274,6 +274,13 @@ void panel_adjustment_library(AppState& state, float w) {
 
             ImGui::SetCursorScreenPos(cp);
             ImGui::InvisibleButton("##cgcard", {cg_card_w, cg_card_h});
+            if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
+                int ft = (int)fc.type;
+                ImGui::SetDragDropPayload("FX_CREATIVE", &ft, sizeof(int));
+                ImGui::Text("%s", fc.name);
+                ImGui::TextDisabled("Drop onto a clip to weld it");
+                ImGui::EndDragDropSource();
+            }
             if (ImGui::IsItemClicked()) {
                 Clip cl;
                 cl.clip_type = ClipType::Effect;
@@ -305,7 +312,7 @@ void panel_adjustment_library(AppState& state, float w) {
             ImGui::TextUnformatted("Custom");
             ImGui::PopStyleColor();
             ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
-            ImGui::TextWrapped("Hot-reload effects — edit the JSON in effects/ and changes appear live.");
+            ImGui::TextWrapped("Hot-reload effects — edit the JSON in effects/ and changes appear live. Click to apply to the selected clip, or drag onto any clip.");
             ImGui::PopStyleColor();
             ImGui::Dummy({0.f, 4.f});
 
@@ -349,6 +356,13 @@ void panel_adjustment_library(AppState& state, float w) {
                 ImGui::SetCursorScreenPos(cp);
                 ImGui::InvisibleButton("##rfxcard", {card_w, card_h});
 
+                if (!failed && ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
+                    ImGui::SetDragDropPayload("FX_RUNTIME", &i, sizeof(int));
+                    ImGui::Text("%s", def.name.c_str());
+                    ImGui::TextDisabled("Drop onto a clip to apply");
+                    ImGui::EndDragDropSource();
+                }
+
                 if (failed && ImGui::IsItemHovered()) {
                     ImGui::BeginTooltip();
                     ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(255,120,120,255));
@@ -368,7 +382,7 @@ void panel_adjustment_library(AppState& state, float w) {
                         cl.runtime_fx_amount = 1.f;
                         history_push(state, "Apply custom FX: " + def.name);
                     } else {
-                        ImGui::SetTooltip("Select a clip first to apply a custom effect.");
+                        ImGui::SetTooltip("Select a clip first, or drag this card onto one.");
                     }
                 }
 
@@ -427,8 +441,16 @@ void panel_adjustment_library(AppState& state, float w) {
             ImGui::SetCursorScreenPos(cp);
             ImGui::InvisibleButton("##bfxcard", {card_w, card_h});
 
+            if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
+                int bt = (int)info.type;
+                ImGui::SetDragDropPayload("FX_BODY", &bt, sizeof(int));
+                ImGui::Text("%s", info.name);
+                ImGui::TextDisabled("Drop onto a video clip");
+                ImGui::EndDragDropSource();
+            }
+
             if (!has_vid && ImGui::IsItemHovered()) {
-                ImGui::SetTooltip("Select a video clip first.");
+                ImGui::SetTooltip("Select a video clip first, or drag onto one.");
             }
 
             if (has_vid && ImGui::IsItemClicked()) {
@@ -1028,7 +1050,7 @@ void panel_fx_audio(AppState& state, float w) {
     ImGui::TextUnformatted("Audio FX");
     ImGui::PopStyleColor();
     ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
-    ImGui::TextWrapped("Click to add to selected audio track.");
+    ImGui::TextWrapped("Click to add to the selected audio track, or drag onto an audio clip.");
     ImGui::PopStyleColor();
     ImGui::Dummy({0.f, 8.f});
 
@@ -1173,6 +1195,13 @@ void panel_fx_audio(AppState& state, float w) {
 
         ImGui::SetCursorScreenPos(cp);
         ImGui::InvisibleButton("##afxcard", {card_w, card_h});
+        if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
+            int ft = (int)fc.type;
+            ImGui::SetDragDropPayload("FX_AUDIO", &ft, sizeof(int));
+            ImGui::Text("%s", fc.name);
+            ImGui::TextDisabled("Drop onto an audio clip");
+            ImGui::EndDragDropSource();
+        }
         if (ImGui::IsItemClicked()) {
             // Find selected audio track, or first audio track, or create one
             int target_ti = -1;
@@ -2719,7 +2748,7 @@ void panel_body_fx_library(AppState& state, float w) {
     else if (vid_clip)
         ImGui::TextWrapped("Click to add a Body FX brick to the selected video clip's track.");
     else
-        ImGui::TextWrapped("Select a video clip in the timeline to add Body FX bricks.");
+        ImGui::TextWrapped("Select a video clip, or drag a card onto one, to add Body FX bricks.");
     ImGui::PopStyleColor();
     ImGui::Dummy({0.f, 8.f});
 
