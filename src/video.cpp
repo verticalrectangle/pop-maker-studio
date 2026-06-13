@@ -272,36 +272,48 @@ static void cpu_apply_corruption(uint8_t* px, int w, int h, float intensity, flo
     }
 }
 
-// Corrupt JPEG scan data in place to produce real Huffman decoder artifacts.
-// intensity 0..1 — number of corrupted bytes (1 at 0, 21 at 1.0).
-// seed — time-varying so corruption animates on playback.
-static void corrupt_jpeg_buf(uint8_t* buf, size_t sz, float intensity, uint32_t seed) {
-    // Find SOS marker (0xFF 0xDA)
-    size_t sos = sz;
-    for (size_t i = 0; i + 1 < sz; ++i) {
-        if (buf[i] == 0xFF && buf[i+1] == 0xDA) { sos = i; break; }
-    }
-    if (sos >= sz || sos + 3 >= sz) return;
+// Datamosh on a decoded RGB buffer (w*h*3, in place). Block-displacement +
+// chroma bleed — the recognizable "moshy" P-frame-bloom smear. JPEG-bitstream
+// corruption (the old approach) was unreliable: the proxy MJPEG's restart
+// markers heal mild corruption, and aggressive corruption just makes the
+// decoder return null (silent no-op). This is deterministic per frame (seed
+// from time → it animates), always visible, and shared by preview + export.
+static inline uint32_t dm_hash(uint32_t a, uint32_t b) {
+    uint32_t h = a * 0x9E3779B1u ^ b * 0x85EBCA77u;
+    h ^= h >> 15; h *= 0xC2B2AE3Du; h ^= h >> 13;
+    return h;
+}
+static void datamosh_rgb(uint8_t* rgb, int w, int h, float intensity, float time_sec) {
+    if (!rgb || intensity <= 0.f || w <= 0 || h <= 0) return;
+    if (intensity > 1.f) intensity = 1.f;
+    static thread_local std::vector<uint8_t> src;
+    src.assign(rgb, rgb + (size_t)w * h * 3);
 
-    // Skip past SOS header: marker (2) + length field (2 bytes) + header bytes
-    size_t hlen = ((size_t)buf[sos+2] << 8) | buf[sos+3];
-    size_t scan = sos + 2 + hlen;
-    if (scan >= sz) return;
-
-    size_t scan_sz = sz - scan;
-    size_t n_corrupt = (size_t)(intensity * 20.f) + 1;
-
-    uint32_t rng = seed ^ 0xDEADBEEFu;
-    for (size_t i = 0; i < n_corrupt; ++i) {
-        rng = rng * 1664525u + 1013904223u;
-        float u = (float)(rng >> 1) / (float)0x7FFFFFFFu;  // 0..1
-        // Square root bias: pulls positions toward the start of the scan
-        // so cascades run from near the top downward, distributing evenly.
-        float t = u * u;
-        size_t pos = scan + (size_t)(t * (float)scan_sz);
-        if (pos >= scan + scan_sz) pos = scan + scan_sz - 1;
-        rng = rng * 1664525u + 1013904223u;
-        buf[pos] = (uint8_t)(rng >> 24);
+    const int  B        = 16;                              // block size (px)
+    const int  max_disp = 8 + (int)(intensity * 56.f);     // max smear distance
+    const uint32_t frame = (uint32_t)(time_sec * 24.f);    // animate at ~film rate
+    auto at = [&](int x, int y, int c) -> uint8_t {
+        if (x < 0) x = 0; else if (x >= w) x = w - 1;
+        if (y < 0) y = 0; else if (y >= h) y = h - 1;
+        return src[((size_t)y * w + x) * 3 + c];
+    };
+    for (int by = 0; by < h; by += B) {
+        for (int bx = 0; bx < w; bx += B) {
+            uint32_t hb = dm_hash((uint32_t)(bx/B) | ((uint32_t)(by/B) << 16), frame);
+            // Only a fraction of blocks (scaled by intensity) smear each frame;
+            // the rest pass through clean — that patchy spread reads as mosh.
+            if ((float)(hb & 0xFFFF) / 65535.f > intensity * 0.85f + 0.05f) continue;
+            int dx = ((int)((hb >> 16) & 0xFF) - 128) * max_disp / 128;
+            int dy = ((int)((hb >> 24) & 0xFF) - 128) * max_disp / 128;
+            int hx = dx / 2, hy = dy / 2;             // chroma lags luma → bleed
+            for (int y = by; y < by + B && y < h; ++y)
+                for (int x = bx; x < bx + B && x < w; ++x) {
+                    uint8_t* d = rgb + ((size_t)y * w + x) * 3;
+                    d[0] = at(x + dx, y + dy, 0);     // R fully displaced
+                    d[1] = at(x + hx, y + hy, 1);     // G half (chroma bleed)
+                    d[2] = at(x,      y,      2);     // B stays
+                }
+        }
     }
 }
 
@@ -662,6 +674,11 @@ static void apply_pixel_fx_rgb(uint8_t* pixels, int w, int h,
     bool bg_active = (bg_mask != nullptr && bg_mask_w > 0 && bg_mask_h > 0);
     bool want_rgba = (pfx && pfx->chroma_key_on) || do_corr_bleed || bg_active;
 
+    // Datamosh first, on the raw RGB — applies on BOTH the proxy and native
+    // preview sources (this is the only shared post-decode hook).
+    if (pfx && pfx->datamosh_on && pfx->datamosh_intensity > 0.01f)
+        datamosh_rgb(pixels, w, h, pfx->datamosh_intensity, pfx->time);
+
     if (pfx) {
         bool need_grade = fabsf(pfx->brightness) > 0.005f || fabsf(pfx->contrast - 1.f) > 0.005f ||
                           fabsf(pfx->saturation - 1.f) > 0.005f || fabsf(pfx->hue_deg) > 0.1f;
@@ -987,11 +1004,8 @@ static void prepare_proxy_frame_cpu(PreviewState& pv, DecodedFrame& f, int frame
         }
     }
 
-    // Datamosh: corrupt JPEG bytes (per-frame buffer, no shared state).
-    if (pfx.datamosh_on && pfx.datamosh_intensity > 0.01f) {
-        uint32_t seed = (uint32_t)(pfx.time * 60.f);
-        corrupt_jpeg_buf(f.jpeg_buf.data(), got, pfx.datamosh_intensity, seed);
-    }
+    // Datamosh is applied to the DECODED RGB inside process_jpeg_cpu (the
+    // proxy bitstream has restart markers that heal byte corruption).
 
     // ── Phase 2 (unlocked): JPEG decode + CPU FX ────────────────────────────
     const uint8_t* bg_ptr = (pfx.bg_remove_on && !bg_mask_snapshot.empty())
@@ -2264,55 +2278,21 @@ void video_apply_bg_remove_export(VideoFrame* vf, const Clip& cl, int mask_frame
 void video_apply_datamosh(VideoFrame* vf, float intensity, float time_sec) {
     if (!vf || !vf->data || intensity <= 0.f) return;
     int W = vf->width, H = vf->height;
-
-    // stbi_write_jpg produces no restart markers, so a single corruption near the
-    // start of the scan cascades through the entire image → solid black.
-    // Work at proxy scale (~540px wide) so JPEG scan size matches what the proxy
-    // corruption was tuned for; nearest-neighbour upscale preserves block artifacts.
-    const int TARGET_W = 540;
-    int sw = (W > TARGET_W) ? TARGET_W : W;
-    int sh = (sw == W) ? H : (int)((float)H * sw / W + 0.5f);
-    if (sh < 1) sh = 1;
-
-    // Downscale RGBA → small RGB via nearest-neighbour
-    std::vector<uint8_t> small((size_t)sw * sh * 3);
-    for (int y = 0; y < sh; ++y) {
-        int sy = (int)((float)y / sh * H);
-        for (int x = 0; x < sw; ++x) {
-            int sx = (int)((float)x / sw * W);
-            const uint8_t* s = vf->data + (sy * W + sx) * 4;
-            uint8_t* d = small.data() + (y * sw + x) * 3;
-            d[0]=s[0]; d[1]=s[1]; d[2]=s[2];
-        }
+    // Mosh the RGB through the shared block-displacement core (identical look
+    // to the preview), then write it back into the RGBA frame keeping alpha.
+    static thread_local std::vector<uint8_t> rgb;
+    rgb.resize((size_t)W * H * 3);
+    for (int i = 0; i < W * H; ++i) {
+        rgb[(size_t)i*3+0] = vf->data[(size_t)i*4+0];
+        rgb[(size_t)i*3+1] = vf->data[(size_t)i*4+1];
+        rgb[(size_t)i*3+2] = vf->data[(size_t)i*4+2];
     }
-
-    std::vector<uint8_t> jpeg;
-    auto cb = [](void* ctx, void* data, int sz) {
-        auto* v = (std::vector<uint8_t>*)ctx;
-        v->insert(v->end(), (uint8_t*)data, (uint8_t*)data + sz);
-    };
-    stbi_write_jpg_to_func(cb, &jpeg, sw, sh, 3, small.data(), 85);
-    if (jpeg.empty()) return;
-
-    corrupt_jpeg_buf(jpeg.data(), jpeg.size(), intensity, (uint32_t)(time_sec * 60.f));
-
-    int dw, dh, dch;
-    uint8_t* dec = stbi_load_from_memory(jpeg.data(), (int)jpeg.size(), &dw, &dh, &dch, 3);
-    if (!dec) return;
-
-    // Upscale corrupted small image back into original RGBA buffer (nearest-neighbour)
-    for (int y = 0; y < H; ++y) {
-        int sy = (int)((float)y / H * dh);
-        if (sy >= dh) sy = dh - 1;
-        for (int x = 0; x < W; ++x) {
-            int sx = (int)((float)x / W * dw);
-            if (sx >= dw) sx = dw - 1;
-            const uint8_t* s = dec + (sy * dw + sx) * 3;
-            uint8_t* d = vf->data + (y * W + x) * 4;
-            d[0]=s[0]; d[1]=s[1]; d[2]=s[2];
-        }
+    datamosh_rgb(rgb.data(), W, H, intensity, time_sec);
+    for (int i = 0; i < W * H; ++i) {
+        vf->data[(size_t)i*4+0] = rgb[(size_t)i*3+0];
+        vf->data[(size_t)i*4+1] = rgb[(size_t)i*3+1];
+        vf->data[(size_t)i*4+2] = rgb[(size_t)i*3+2];
     }
-    stbi_image_free(dec);
 }
 
 // ── FX preview thumbnails ─────────────────────────────────────────────────────
@@ -2520,30 +2500,8 @@ uintptr_t video_fx_preview_texture(FXType ft, float t) {
             break;
         }
         case FXType::Datamosh: {
-            // Encode → corrupt → decode to show real JPEG scan-data corruption
-            static std::vector<uint8_t> s_jpeg_preview;
-            s_jpeg_preview.clear();
-            auto jpeg_cb = [](void* ctx, void* data, int sz) {
-                auto* v = (std::vector<uint8_t>*)ctx;
-                v->insert(v->end(), (uint8_t*)data, (uint8_t*)data + sz);
-            };
-            stbi_write_jpg_to_func(jpeg_cb, &s_jpeg_preview, FXP_W, FXP_H, 3,
-                                   s_fxp_src.data(), 85);
-            if (!s_jpeg_preview.empty()) {
-                corrupt_jpeg_buf(s_jpeg_preview.data(), s_jpeg_preview.size(),
-                                 0.75f, (uint32_t)(t * 60.f));
-                int w2, h2, ch2;
-                uint8_t* dec = stbi_load_from_memory(
-                    s_jpeg_preview.data(), (int)s_jpeg_preview.size(), &w2, &h2, &ch2, 3);
-                if (dec) {
-                    px.assign(dec, dec + FXP_W * FXP_H * 3);
-                    stbi_image_free(dec);
-                } else {
-                    px = s_fxp_src;
-                }
-            } else {
-                px = s_fxp_src;
-            }
+            px = s_fxp_src;
+            datamosh_rgb(px.data(), FXP_W, FXP_H, 0.7f, t);
             pv.animated = true;
             break;
         }

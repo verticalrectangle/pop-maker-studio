@@ -2500,7 +2500,10 @@ void render_start_gl(AppState& state) {
                                       !stream_needs_work(audio_ins[0]) &&
                                       audio_ins[0].delay <= 0.001f;
             if (simple_passthrough) {
-                args.push_back("-map"); args.push_back("1:a");
+                // Trailing '?' → optional stream: if the source turns out to
+                // have no audio (probe false positives on some AVIs), ffmpeg
+                // skips it instead of aborting the whole export.
+                args.push_back("-map"); args.push_back("1:a?");
             } else {
                 // Per-stream chain: volume → afade → pan → atempo, then amix.
                 // Volume/fade/pan run BEFORE atempo so their `t` is the
