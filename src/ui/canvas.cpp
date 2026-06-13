@@ -1094,21 +1094,8 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
         --g_canvas_cap.frames_left;  // 0 → canvas_capture_after_render fires
     }
 
-    // Clips are half-open [start, end): a playhead parked exactly at the
-    // project end selects no clip and the canvas goes empty. Sample the
-    // preview a hair inside so the last frame stays visible at the end.
-    float saved_playhead = state.playhead;
-    bool  clamped_end = false;
-    if (!state.playing && state.duration > 0.f &&
-        state.playhead >= state.duration - 1e-4f) {
-        state.playhead = fmaxf(0.f, state.duration - 1e-3f);
-        clamped_end = true;
-    }
-    struct PlayheadRestore {
-        AppState& st; float v; bool on;
-        ~PlayheadRestore() { if (on) st.playhead = v; }
-    } ph_restore{state, saved_playhead, clamped_end};
-
+    // The playhead is clamped to the last playable frame upstream (app.cpp), so
+    // it never parks at the exclusive project end — no render-time nudge needed.
     ImDrawList* dl = ImGui::GetWindowDrawList();
 
     // Stage background: fine transparency checker so chroma-keyed holes look intentional.
@@ -2149,25 +2136,22 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
             if (prog < 0.f) snprintf(msg, sizeof(msg), "Downloading AI model…");
             else snprintf(msg, sizeof(msg), "Removing background…  %d%%",
                           (int)(fmaxf(0.f, fminf(1.f, prog)) * 100.f));
-            ImVec2 ts = ImGui::CalcTextSize(msg);
-            float pad = 10.f, bw = ts.x + pad * 2.f, bh = ts.y + pad + 10.f;
-            ImVec2 bp = {p.x + (w - bw) * 0.5f, p.y + h - bh - 16.f};
-            dl->AddRectFilled(bp, {bp.x + bw, bp.y + bh}, IM_COL32(10, 10, 16, 225), 6.f);
-            dl->AddRect(bp, {bp.x + bw, bp.y + bh}, IM_COL32(255, 165, 0, 190), 6.f, 0, 1.5f);
-            dl->AddText({bp.x + pad, bp.y + pad * 0.55f}, IM_COL32(255, 210, 140, 255), msg);
-            float bar_y = bp.y + bh - 8.f, bar_w = bw - pad * 2.f;
-            dl->AddRectFilled({bp.x + pad, bar_y}, {bp.x + pad + bar_w, bar_y + 3.f},
-                              IM_COL32(255, 165, 0, 50), 2.f);
-            if (prog < 0.f) {
-                float tt = fmodf((float)ImGui::GetTime() * 0.8f, 1.f);
-                float x0 = bp.x + pad + (bar_w - bar_w * 0.35f) * tt;
-                dl->AddRectFilled({x0, bar_y}, {x0 + bar_w * 0.35f, bar_y + 3.f},
-                                  IM_COL32(255, 165, 0, 255), 2.f);
-            } else {
-                float pct = fmaxf(0.02f, fminf(1.f, prog));
-                dl->AddRectFilled({bp.x + pad, bar_y}, {bp.x + pad + bar_w * pct, bar_y + 3.f},
-                                  IM_COL32(255, 165, 0, 255), 2.f);
-            }
+            ui_canvas_progress_banner(dl, p, w, h, msg, prog);
+        }
+
+        // Voice conversion on an audio clip — same banner so it reads consistently.
+        const Clip* vcp = nullptr;
+        for (auto& tr : state.tracks) {
+            for (auto& c : tr.clips)
+                if (c.vc_status == VcStatus::Processing &&
+                    state.playhead >= c.start && state.playhead < c.end) { vcp = &c; break; }
+            if (vcp) break;
+        }
+        if (vcp && !bgp) {
+            char msg[48];
+            snprintf(msg, sizeof(msg), "Converting voice…  %d%%",
+                     (int)(fmaxf(0.f, fminf(1.f, vcp->vc_progress)) * 100.f));
+            ui_canvas_progress_banner(dl, p, w, h, msg, vcp->vc_progress);
         }
     }
 

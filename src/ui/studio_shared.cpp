@@ -181,6 +181,8 @@ void seek_to(AppState& state, float t) {
     float qfps = tl_fps(state);
     if (!(qfps > 0.f)) qfps = 30.f;
     t = roundf(t * qfps) / qfps;
+    // Never past the last playable frame (a playhead at `duration` shows nothing).
+    t = fmaxf(0.f, fminf(t, last_playable_time(state)));
     state.playhead = t;
     audio_seek(t);
     if (state.playing) {
@@ -207,6 +209,16 @@ void toggle_play(AppState& state) {
 float tl_fps(const AppState& state) {
     return (state.proxy_ready && video_info(0).fps > 0.0)
            ? (float)video_info(0).fps : (float)state.fps;
+}
+
+float last_playable_time(const AppState& state) {
+    if (state.duration <= 0.f) return 0.f;
+    float fps = tl_fps(state);
+    if (!(fps > 0.f)) fps = 30.f;
+    // Start time of the last whole frame: ceil(duration*fps) is the frame count,
+    // minus one → last index, /fps → its start. Always strictly inside [0,duration).
+    float lf = (ceilf(state.duration * fps) - 1.f) / fps;
+    return fmaxf(0.f, lf);
 }
 
 // ── Clip / slot helpers ───────────────────────────────────────────────────────

@@ -28,6 +28,11 @@ std::string fmt_time_short(float s);
 void seek_to(AppState& state, float t);
 void toggle_play(AppState& state);
 float tl_fps(const AppState& state);
+// Latest position the playhead can occupy and still show a frame: the start of
+// the last whole frame. Clips are half-open [start,end), so a playhead at exactly
+// `duration` selects nothing — this is the real end-of-timeline for playback,
+// seeking and scrubbing. 0 when there's no content.
+float last_playable_time(const AppState& state);
 
 // ── Record brick ──────────────────────────────────────────────────────────────
 // Insert a fresh Record brick (8 s, frame-snapped) at the playhead on a new

@@ -14,6 +14,7 @@
 #include "ui/theme.h"
 #include "ui/screens.h"
 #include "ui/panel_terminal.h"
+#include "ui/studio_shared.h"   // last_playable_time
 #include <imgui.h>
 #include <algorithm>
 #include <chrono>
@@ -582,12 +583,19 @@ void app_frame(AppState& state) {
         // keeps the playhead inside the loop anyway.
         if (!audio_loop_active() &&
             state.duration > 0.f && state.playhead >= state.duration) {
-            state.playhead = state.duration;
+            // Park on the last real frame, not the exclusive end (which shows
+            // nothing) — so playing to the end leaves the last frame on screen.
+            state.playhead = last_playable_time(state);
             state.playing  = false;
             audio_pause();
             audio_seek(0.f);
         }
     }
+    // Single source of truth when paused: the playhead can never sit past the
+    // last frame (replaces the old render-time nudge in canvas.cpp). Left alone
+    // while a record-brick loop cycles past current content.
+    if (!state.playing && !audio_loop_active() && state.duration > 0.f)
+        state.playhead = fmaxf(0.f, fminf(state.playhead, last_playable_time(state)));
 
     // IPC-requested export: pick up on GL thread before ticking the render.
     if (state.export_request && !state.render.running) {
