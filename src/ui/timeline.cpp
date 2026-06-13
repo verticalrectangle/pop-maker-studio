@@ -338,6 +338,29 @@ static void draw_fx_stack(ImDrawList* dl, const Clip& clip, float cx0,
     }
 }
 
+// Remove a content clip at (ti, ci) PLUS every glass brick coupled to it from
+// track ti, returned as a group with the host first. A coupled brick must live
+// on its host's track (fx_coupled_host only searches that track), so a
+// cross-track move has to carry the welded bricks along — otherwise the
+// content slides out from under its glass and the bricks orphan.
+static std::vector<Clip> extract_host_group(AppState& state, int ti, int ci) {
+    auto& cls = state.tracks[(size_t)ti].clips;
+    std::vector<int> idx{ci};
+    for (int k = 0; k < (int)cls.size(); ++k) {
+        if (k == ci) continue;
+        if (cls[(size_t)k].fx_coupled && is_fx_clip(cls[(size_t)k]) &&
+            fx_coupled_host(state, ti, cls[(size_t)k]) == ci)
+            idx.push_back(k);
+    }
+    std::sort(idx.begin(), idx.end());
+    std::vector<Clip> grp;
+    grp.push_back(cls[(size_t)ci]);                 // host first
+    for (int k : idx) if (k != ci) grp.push_back(cls[(size_t)k]);
+    std::sort(idx.rbegin(), idx.rend());            // erase high→low
+    for (int k : idx) cls.erase(cls.begin() + k);
+    return grp;
+}
+
 static void couple_pending_tick(AppState& state) {
     int pti = -1, pci = -1, phost = -1;
     for (int ti = 0; ti < (int)state.tracks.size() && pti < 0; ++ti) {
@@ -2784,15 +2807,14 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                 goto drag_done;
             }
             if (!drag_left && !drag_right && drag_hot_gap >= 0) {
-                // Drop into gap between tracks — insert new track there
-                Clip moved = state.tracks[drag_track].clips[drag_clip];
-                state.tracks[drag_track].clips.erase(
-                    state.tracks[drag_track].clips.begin() + drag_clip);
+                // Drop into gap between tracks — insert new track there. The
+                // host's coupled glass bricks travel with it.
+                std::vector<Clip> grp = extract_host_group(state, drag_track, drag_clip);
                 Track nt;
                 char name[32];
                 snprintf(name, sizeof(name), "Track %d", (int)state.tracks.size() + 1);
                 nt.name = name;
-                nt.clips.push_back(moved);
+                for (auto& c : grp) nt.clips.push_back(c);
                 state.tracks.insert(state.tracks.begin() + drag_hot_gap, std::move(nt));
                 state.selected_track = drag_hot_gap;
                 state.selected_clip  = 0;
@@ -2801,16 +2823,15 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                 history_push(state, "Move clip to new track");
             } else if (!drag_left && !drag_right && s_drag_moved &&
                 drag_hot_track >= 0 && drag_hot_track != drag_track) {
-                Clip moved = state.tracks[drag_track].clips[drag_clip];
-                state.tracks[drag_track].clips.erase(
-                    state.tracks[drag_track].clips.begin() + drag_clip);
+                std::vector<Clip> grp = extract_host_group(state, drag_track, drag_clip);
+                Clip& moved = grp[0];
                 if (drag_hot_track == (int)state.tracks.size()) {
                     // Drop below all tracks — create new track
                     Track nt;
                     char name[32];
                     snprintf(name, sizeof(name), "Track %d", (int)state.tracks.size() + 1);
                     nt.name = name;
-                    nt.clips.push_back(moved);
+                    for (auto& c : grp) nt.clips.push_back(c);
                     state.tracks.push_back(nt);
                     state.selected_track = (int)state.tracks.size() - 1;
                     state.selected_clip  = 0;
@@ -2818,24 +2839,28 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                     state.clip_selection.insert({state.selected_track, state.selected_clip});
                     history_push(state, "Move clip to new track");
                 } else {
-                    // Abort drop if any clip on the target track conflicts with the moved clip.
+                    // Abort drop if the host conflicts with a clip on the target.
                     bool overlaps = false;
                     for (const Clip& oc : state.tracks[drag_hot_track].clips)
                         if (clips_conflict(moved, oc)) { overlaps = true; break; }
                     if (overlaps) {
-                        // Put clip back on its original track at its original position
+                        // Put the whole group back on its original track.
                         moved.start = drag_origin_start;
                         moved.end   = drag_origin_end;
-                        state.tracks[drag_track].clips.insert(
-                            state.tracks[drag_track].clips.begin() + drag_clip, moved);
+                        int at = drag_clip < (int)state.tracks[drag_track].clips.size()
+                                 ? drag_clip : (int)state.tracks[drag_track].clips.size();
+                        for (int gi = (int)grp.size()-1; gi >= 0; --gi)
+                            state.tracks[drag_track].clips.insert(
+                                state.tracks[drag_track].clips.begin() + at, grp[(size_t)gi]);
                         state.selected_track = drag_track;
-                        state.selected_clip  = drag_clip;
+                        state.selected_clip  = at;
                         state.clip_selection.clear();
                         state.clip_selection.insert({state.selected_track, state.selected_clip});
                     } else {
-                        state.tracks[drag_hot_track].clips.push_back(moved);
+                        int base = (int)state.tracks[drag_hot_track].clips.size();
+                        for (auto& c : grp) state.tracks[drag_hot_track].clips.push_back(c);
                         state.selected_track = drag_hot_track;
-                        state.selected_clip  = (int)state.tracks[drag_hot_track].clips.size() - 1;
+                        state.selected_clip  = base;   // the host
                         state.clip_selection.clear();
                         state.clip_selection.insert({state.selected_track, state.selected_clip});
                         history_push(state, "Move clip to track");
