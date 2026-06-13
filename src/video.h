@@ -220,6 +220,10 @@ void        video_free_frame(VideoFrame* f);  // av_free(data) + delete
 int video_export_width (int slot = 0);
 int video_export_height(int slot = 0);
 
+// Preview-frame dimensions for a playback slot (0,0 if not decoded). Aspect
+// matches the clip's source; used to size the hover-preview popover.
+void video_preview_dims(int slot, int* w, int* h);
+
 // Apply AI bg-remove alpha mask to a decoded export frame in-place.
 // Reads the per-frame grayscale JPEG from cl.bg_remove_mask_dir / bg_masks.mjpeg.
 // The mask is bilinearly scaled to match vf dimensions if they differ.

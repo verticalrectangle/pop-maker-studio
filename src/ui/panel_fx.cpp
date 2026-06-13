@@ -33,7 +33,6 @@ extern ImFont* g_font_bold;
 // representative frame. The list then "comes alive" as the cursor passes down
 // it. Backed by the shared library-card hover clock (theme.h) so every panel's
 // popovers share one dwell.
-static constexpr int   kBigPrevW = 240, kBigPrevH = 426;   // render px (9:16)
 static constexpr float kPopDwell = 0.30f;                  // seconds before it opens
 
 static float fx_card_preview_t(int card_id, bool hovered) {
@@ -43,13 +42,15 @@ static float fx_card_preview_t(int card_id, bool hovered) {
 static bool  fx_card_popover_ready(int card_id) { return ui_card_hover_ready(card_id, kPopDwell); }
 static float fx_card_hover_elapsed(int card_id)  { return ui_card_hover_secs(card_id, true); }
 
-// Source frame the popover previews on:
-//   selected video clip → that clip's current frame (isolated)
-//   else if timeline has clips → the whole composited frame
-//   else → 0 (built-in portrait default)
+// Source frame the popover previews on, with its native pixel dimensions so the
+// preview keeps the source's aspect (no vertical stretch on 16:9 over a 9:16
+// canvas) and resolution:
+//   selected video clip → that clip's current frame + its preview dims
+//   else if timeline has clips → the whole composited frame + the canvas dims
+//   else → 0 (built-in portrait default; *sw/*sh stay 0)
 // *flip = true when the texture is GL bottom-up (draw with flipped V).
-static uintptr_t fx_preview_source_tex(AppState& state, bool* flip) {
-    *flip = false;
+static uintptr_t fx_preview_source_tex(AppState& state, bool* flip, int* sw, int* sh) {
+    *flip = false; *sw = 0; *sh = 0;
     int st = state.selected_track, sc = state.selected_clip;
     if (st >= 0 && st < (int)state.tracks.size() &&
         sc >= 0 && sc < (int)state.tracks[st].clips.size()) {
@@ -60,51 +61,39 @@ static uintptr_t fx_preview_source_tex(AppState& state, bool* flip) {
             float src_t = c.in_point + (state.playhead - c.start) * c.speed;
             if (slot >= 0 && video_is_open(slot)) {
                 uintptr_t tex = video_get_texture(slot, (double)src_t);
-                if (tex) { *flip = true; return tex; }
+                if (tex) {
+                    video_preview_dims(slot, sw, sh);
+                    *flip = true;
+                    return tex;
+                }
             }
         }
     }
     for (auto& tr : state.tracks)
         if (!tr.clips.empty()) {
             uintptr_t scn = scene_result();
-            if (scn) { *flip = true; return scn; }
+            if (scn) {
+                // Composited frame fills the canvas — preview at the canvas aspect.
+                *sw = 1080; *sh = 1920;
+                if (state.format == OutputFormat::Horizontal) { *sw = 1920; *sh = 1080; }
+                else if (state.format == OutputFormat::Square) { *sw = 1080; *sh = 1080; }
+                *flip = true;
+                return scn;
+            }
             break;
         }
     return 0;
 }
 
-static void fx_draw_big_popover(ImVec2 card_tl, uintptr_t tex, bool flip,
-                                const char* name, const char* tagline) {
-    if (!tex) return;
-    const float pw = 220.f, ph = pw * 16.f / 9.f;
-    const float pad = 9.f, txt_h = 42.f;
-    ImGuiViewport* vp = ImGui::GetMainViewport();
-    float x1 = card_tl.x - 14.f;          // open to the left of the card
-    float x0 = x1 - pw;
-    float minx = vp->Pos.x + 8.f;
-    if (x0 < minx) { x0 = minx; x1 = x0 + pw; }
-    float y0 = card_tl.y - 6.f;
-    float box_h = ph + txt_h + pad;
-    float maxy = vp->Pos.y + vp->Size.y - 8.f;
-    if (y0 + box_h + pad > maxy) y0 = maxy - box_h - pad;
-    if (y0 < vp->Pos.y + 8.f) y0 = vp->Pos.y + 8.f;
-
-    ImDrawList* dl = ImGui::GetForegroundDrawList();
-    dl->AddRectFilled({x0 - pad, y0 - pad}, {x1 + pad, y0 + box_h + pad},
-                      IM_COL32(14, 14, 20, 252), 9.f);
-    dl->AddRect({x0 - pad, y0 - pad}, {x1 + pad, y0 + box_h + pad},
-                IM_COL32(90, 90, 120, 255), 9.f, 0, 1.5f);
-    ImVec2 uv0 = flip ? ImVec2(0, 1) : ImVec2(0, 0);
-    ImVec2 uv1 = flip ? ImVec2(1, 0) : ImVec2(1, 1);
-    dl->AddImageRounded(tex, {x0, y0}, {x1, y0 + ph}, uv0, uv1, IM_COL32_WHITE, 6.f);
-    dl->AddRect({x0, y0}, {x1, y0 + ph}, IM_COL32(255, 255, 255, 40), 6.f);
-    if (name) {
-        ImGui::PushFont(g_font_bold);
-        dl->AddText(ImGui::GetFont(), 15.f, {x0, y0 + ph + 7.f}, IM_COL32(255, 255, 255, 245), name);
-        ImGui::PopFont();
-    }
-    if (tagline)
-        dl->AddText({x0, y0 + ph + 26.f}, IM_COL32(160, 160, 175, 220), tagline);
+// Render dimensions for the preview: the source aspect, longest side capped so
+// the offscreen render stays cheap. 0×0 source → the 9:16 portrait default.
+static void fx_render_dims(int sw, int sh, int* rw, int* rh) {
+    if (sw <= 0 || sh <= 0) { sw = 270; sh = 480; }
+    const int MAXL = 480;
+    if (sw >= sh) { *rw = MAXL; *rh = (int)lroundf(MAXL * (float)sh / (float)sw); }
+    else          { *rh = MAXL; *rw = (int)lroundf(MAXL * (float)sw / (float)sh); }
+    if (*rw < 8) *rw = 8;
+    if (*rh < 8) *rh = 8;
 }
 
 // ── FX preset helpers ─────────────────────────────────────────────────────────
@@ -218,16 +207,18 @@ void panel_adjustment_library(AppState& state, float w) {
         // clock otherwise) and open the big grade popover after the dwell.
         fx_card_preview_t(unique_id, hov);
         if (fx_card_popover_ready(unique_id)) {
-            bool flip = false;
-            uintptr_t src = fx_preview_source_tex(state, &flip);
-            uintptr_t big = video_adj_preview_big(src, kBigPrevW, kBigPrevH,
+            bool flip = false; int sw = 0, sh = 0;
+            uintptr_t src = fx_preview_source_tex(state, &flip, &sw, &sh);
+            int rw, rh; fx_render_dims(sw, sh, &rw, &rh);
+            uintptr_t big = video_adj_preview_big(src, rw, rh,
                 p.fx_color_on ? p.fx_brightness : 0.f,
                 p.fx_color_on ? p.fx_contrast   : 1.f,
                 p.fx_color_on ? p.fx_saturation : 1.f,
                 p.fx_color_on ? p.fx_hue        : 0.f,
                 p.fx_blur_on     ? p.fx_blur     : 0.f,
                 p.fx_vignette_on ? p.fx_vignette : 0.f);
-            fx_draw_big_popover(cp, big, flip, p.name.c_str(), nullptr);
+            ui_card_image_popover(cp, (ImTextureID)(uintptr_t)big, (float)rw, (float)rh,
+                                  flip, p.name.c_str(), nullptr);
         }
 
         // Name to the right of thumbnail
@@ -348,11 +339,13 @@ void panel_adjustment_library(AppState& state, float w) {
             dl->AddRectFilled(cp, {cp.x+3.f, cp.y+cg_card_h}, IM_COL32(100,80,200,200), 2.f);
 
             if (fx_card_popover_ready(19000 + i)) {
-                bool flip = false;
-                uintptr_t src = fx_preview_source_tex(state, &flip);
+                bool flip = false; int sw = 0, sh = 0;
+                uintptr_t src = fx_preview_source_tex(state, &flip, &sw, &sh);
+                int rw, rh; fx_render_dims(sw, sh, &rw, &rh);
                 uintptr_t big = video_fx_preview_big(fc.type, fx_card_hover_elapsed(19000 + i),
-                                                     src, kBigPrevW, kBigPrevH);
-                fx_draw_big_popover(cp, big, flip, fc.name, fc.tagline);
+                                                     src, rw, rh);
+                ui_card_image_popover(cp, (ImTextureID)(uintptr_t)big, (float)rw, (float)rh,
+                                      flip, fc.name, fc.tagline);
             }
             uintptr_t prev_tex = video_fx_preview_texture(fc.type, fx_card_preview_t(19000 + i, hov));
             if (prev_tex)
@@ -1063,11 +1056,13 @@ void panel_fx_creative(AppState& state, float w) {
                           hov ? IM_COL32(28,28,40,255) : IM_COL32(18,18,28,255), 5.f);
 
         if (fx_card_popover_ready(9000 + i)) {
-            bool flip = false;
-            uintptr_t src = fx_preview_source_tex(state, &flip);
+            bool flip = false; int sw = 0, sh = 0;
+            uintptr_t src = fx_preview_source_tex(state, &flip, &sw, &sh);
+            int rw, rh; fx_render_dims(sw, sh, &rw, &rh);
             uintptr_t big = video_fx_preview_big(fc.type, fx_card_hover_elapsed(9000 + i),
-                                                 src, kBigPrevW, kBigPrevH);
-            fx_draw_big_popover(cp, big, flip, fc.name, fc.tagline);
+                                                 src, rw, rh);
+            ui_card_image_popover(cp, (ImTextureID)(uintptr_t)big, (float)rw, (float)rh,
+                                  flip, fc.name, fc.tagline);
         }
         uintptr_t prev_tex = video_fx_preview_texture(fc.type, fx_card_preview_t(9000 + i, hov));
         if (prev_tex)

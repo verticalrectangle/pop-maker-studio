@@ -226,7 +226,7 @@ void ui_card_image_popover(ImVec2 card_tl, ImTextureID tex,
                            float img_w, float img_h, bool flip,
                            const char* name, const char* subtitle) {
     if (!tex || img_w <= 0.f || img_h <= 0.f) return;
-    const float maxw = 240.f, maxh = 300.f, pad = 9.f;
+    const float maxw = 240.f, maxh = 390.f, pad = 9.f;
     float txt_h = (subtitle ? 42.f : 26.f);
     float iw = maxw, ih = iw * (img_h / img_w);
     if (ih > maxh) { ih = maxh; iw = ih * (img_w / img_h); }

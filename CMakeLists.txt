@@ -195,6 +195,7 @@ add_custom_command(
             ${CMAKE_SOURCE_DIR}/assets/imgs/portrait.jpg
             ${CMAKE_BINARY_DIR}/portrait_preview.h
     DEPENDS ${CMAKE_SOURCE_DIR}/assets/imgs/portrait.jpg
+            ${CMAKE_SOURCE_DIR}/scripts/embed_portrait.sh
     COMMENT "Embedding portrait preview image"
 )
 add_custom_target(embed_portrait DEPENDS ${CMAKE_BINARY_DIR}/portrait_preview.h)

@@ -2148,6 +2148,20 @@ int video_export_width(int slot) {
     if (slot < 0 || slot >= MAX_VIDEO_TRACKS * 2) return 0;
     return g_ex[slot].info.width;
 }
+
+// Preview-frame dimensions for a playback slot (0,0 if not decoded yet). The
+// aspect matches the clip's source. Uses the live GL texture size (set on every
+// path — proxy and native), falling back to the probed source info.
+void video_preview_dims(int slot, int* w, int* h) {
+    if (w) *w = 0;
+    if (h) *h = 0;
+    if (slot < 0 || slot >= MAX_VIDEO_TRACKS * 2) return;
+    PreviewState& pv = g_pv[slot];
+    int tw = pv.tex_w, th = pv.tex_h;
+    if (tw <= 0 || th <= 0) { tw = pv.info.width; th = pv.info.height; }
+    if (w) *w = tw;
+    if (h) *h = th;
+}
 int video_export_height(int slot) {
     if (slot < 0 || slot >= MAX_VIDEO_TRACKS * 2) return 0;
     return g_ex[slot].info.height;
