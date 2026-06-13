@@ -284,6 +284,43 @@ static int couple_fx_now(AppState& state, int ti, int ci) {
 //   wide brick   → per-FX timing lanes (lane length = that effect's span).
 // The SAME panes interpolate between the two by a `spread` factor, so the
 // transition is continuous as you zoom. Each pane is tinted by its FX type.
+// Spread (0=deck/narrow, 1=full timing lanes/wide) and visible-pane count for
+// the FX stack. Shared by the renderer and the lane hit-test so the editable
+// rects always match what's drawn.
+static void fx_stack_layout(const Clip& clip, float vis_x0, float vis_x1,
+                            int& shown, float& spread) {
+    int N = (int)clip.fx_chain.size();
+    shown = N < 5 ? N : 5;
+    float brick_w = vis_x1 - vis_x0;
+    spread = (brick_w - 70.f) / 180.f;
+    spread = fmaxf(0.f, fminf(1.f, spread));
+}
+
+// Morphed (deck↔lane) screen rect for sub-effect slot i, plus the rel-space
+// span it represents. fx_lane_drag editing and the draw path both consume this.
+struct FxLaneRect { float x0, y0, x1, y1; float rel_s, rel_e; };
+static FxLaneRect fx_lane_rect(const Clip& clip, int i, int shown, float spread,
+                               float cx0, float vis_x0, float vis_x1,
+                               float cy0, float cy1, float zoom) {
+    const float brick_h = cy1 - cy0;
+    const float lane_h  = (brick_h - 4.f) / (float)shown;
+    const float dur     = clip.end - clip.start;
+    const Clip& se = clip.fx_chain[(size_t)i];
+    float rel_s = se.rel_start;
+    float rel_e = (se.rel_end > 0.f) ? se.rel_end : dur;
+    float d_x0 = vis_x0 + 5.f + i*3.f, d_x1 = d_x0 + 17.f;
+    float d_y0 = cy0 + 2.f,            d_y1 = cy1 - 2.f;
+    float l_x0 = fmaxf(vis_x0, cx0 + rel_s*zoom);
+    float l_x1 = fminf(vis_x1, cx0 + rel_e*zoom);
+    if (l_x1 < l_x0 + 3.f) l_x1 = l_x0 + 3.f;
+    float l_y0 = cy0 + 2.f + i*lane_h, l_y1 = l_y0 + lane_h - 1.f;
+    FxLaneRect r;
+    r.x0 = d_x0 + (l_x0-d_x0)*spread; r.x1 = d_x1 + (l_x1-d_x1)*spread;
+    r.y0 = d_y0 + (l_y0-d_y0)*spread; r.y1 = d_y1 + (l_y1-d_y1)*spread;
+    r.rel_s = rel_s; r.rel_e = rel_e;
+    return r;
+}
+
 static void draw_fx_stack(ImDrawList* dl, const Clip& clip, float cx0,
                           float vis_x0, float vis_x1, float cy0, float cy1,
                           float zoom, bool sel) {
@@ -293,13 +330,9 @@ static void draw_fx_stack(ImDrawList* dl, const Clip& clip, float cx0,
                     IM_COL32(200,240,255,255), "FX");
         return;
     }
-    const float brick_w = vis_x1 - vis_x0, brick_h = cy1 - cy0;
-    // 0 = deck (narrow), 1 = full timing lanes (wide). Continuous.
-    float spread = (brick_w - 70.f) / 180.f;
-    spread = fmaxf(0.f, fminf(1.f, spread));
-    const int   shown  = N < 5 ? N : 5;          // cap visible panes
-    const float lane_h = (brick_h - 4.f) / (float)shown;
-    const float dur    = clip.end - clip.start;
+    const float brick_h = cy1 - cy0;
+    int shown; float spread;
+    fx_stack_layout(clip, vis_x0, vis_x1, shown, spread);
     for (int i = 0; i < shown; ++i) {
         const Clip& se = clip.fx_chain[(size_t)i];
         FxBrickColors c = fx_brick_colors(se.fx_type, sel);
@@ -307,24 +340,13 @@ static void draw_fx_stack(ImDrawList* dl, const Clip& clip, float cx0,
                               (int)((c.fill>>IM_COL32_G_SHIFT)&0xFF),
                               (int)((c.fill>>IM_COL32_B_SHIFT)&0xFF),
                               sel ? 235 : 200);
-        // Deck pane: stacked cards fanning right.
-        float d_x0 = vis_x0 + 5.f + i*3.f, d_x1 = d_x0 + 17.f;
-        float d_y0 = cy0 + 2.f,            d_y1 = cy1 - 2.f;
-        // Lane pane: the effect's active span at its vertical slot.
-        float rel_s = se.rel_start;
-        float rel_e = (se.rel_end > 0.f) ? se.rel_end : dur;
-        float l_x0 = fmaxf(vis_x0, cx0 + rel_s*zoom);
-        float l_x1 = fminf(vis_x1, cx0 + rel_e*zoom);
-        if (l_x1 < l_x0 + 3.f) l_x1 = l_x0 + 3.f;
-        float l_y0 = cy0 + 2.f + i*lane_h, l_y1 = l_y0 + lane_h - 1.f;
-        // Morph each corner.
-        float x0 = d_x0 + (l_x0-d_x0)*spread, x1 = d_x1 + (l_x1-d_x1)*spread;
-        float y0 = d_y0 + (l_y0-d_y0)*spread, y1 = d_y1 + (l_y1-d_y1)*spread;
-        dl->AddRectFilled({x0,y0}, {x1,y1}, tint, 2.f);
-        dl->AddRect({x0,y0}, {x1,y1}, IM_COL32(255,255,255, sel?170:90), 2.f, 0, 1.f);
+        FxLaneRect r = fx_lane_rect(clip, i, shown, spread, cx0,
+                                    vis_x0, vis_x1, cy0, cy1, zoom);
+        dl->AddRectFilled({r.x0,r.y0}, {r.x1,r.y1}, tint, 2.f);
+        dl->AddRect({r.x0,r.y0}, {r.x1,r.y1}, IM_COL32(255,255,255, sel?170:90), 2.f, 0, 1.f);
         // Effect name once the lane has room.
-        if (spread > 0.45f && (x1-x0) > 34.f)
-            dl->AddText({x0+3.f, (y0+y1)*0.5f - 6.5f},
+        if (spread > 0.45f && (r.x1-r.x0) > 34.f)
+            dl->AddText({r.x0+3.f, (r.y0+r.y1)*0.5f - 6.5f},
                         IM_COL32(255,255,255,235), fx_type_name(se.fx_type));
     }
     // Count badge in deck mode (and an overflow tail when capped).
@@ -1934,12 +1956,71 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
             ImGui::PushClipRect({vis_x0,cy0},{vis_x1,cy1},true);
             float ly = cy0 + (cy1-cy0-13.f)*0.5f;
             ImU32 lbl_col = is_glass ? IM_COL32(200, 240, 255, 255) : fbc.label;
+            bool lane_grabbed = false;
             if (is_mfx || is_amfx) {
                 // The FX chain as a stack that morphs with zoom: a frosted
                 // deck of cards when the brick is narrow (depth = count),
                 // unfolding into per-FX timing lanes as it widens (lane
                 // length = that effect's active span). See draw_fx_stack.
                 draw_fx_stack(dl, clip, cx0, vis_x0, vis_x1, cy0, cy1, zoom, sel);
+                // Pass 2: once the lanes are unfolded, each one is a draggable
+                // timing handle — left/right edge retimes that effect's span,
+                // body shifts the whole window. (Deck mode stays click-to-select.)
+                int shown; float spread;
+                fx_stack_layout(clip, vis_x0, vis_x1, shown, spread);
+                bool lane_mode = spread >= 0.6f && g_tl.fx_lane_drag == 0 &&
+                                 !track.locked;
+                if (lane_mode && mouse.x >= vis_x0 && mouse.x <= vis_x1 &&
+                    mouse.y >= cy0 && mouse.y <= cy1) {
+                    const float etol = 5.f;
+                    for (int i = 0; i < shown; ++i) {
+                        FxLaneRect r = fx_lane_rect(clip, i, shown, spread, cx0,
+                                                    vis_x0, vis_x1, cy0, cy1, zoom);
+                        if (mouse.y < r.y0 - 1.f || mouse.y > r.y1 + 1.f) continue;
+                        bool can_l = (r.x1 - r.x0) > 2.f*etol;
+                        bool hov_l = can_l && fabsf(mouse.x - r.x0) <= etol;
+                        bool hov_r = can_l && fabsf(mouse.x - r.x1) <= etol && !hov_l;
+                        bool hov_b = mouse.x >= r.x0 && mouse.x <= r.x1 && !hov_l && !hov_r;
+                        if (!hov_l && !hov_r && !hov_b) continue;
+                        // Hover affordance: brighten the lane + its grabbed edge.
+                        dl->AddRect({r.x0,r.y0},{r.x1,r.y1}, IM_COL32(255,255,255,235), 2.f, 0, 1.5f);
+                        if (hov_l) dl->AddLine({r.x0,r.y0},{r.x0,r.y1}, IM_COL32(255,255,255,255), 2.f);
+                        if (hov_r) dl->AddLine({r.x1,r.y0},{r.x1,r.y1}, IM_COL32(255,255,255,255), 2.f);
+                        ImGui::SetMouseCursor((hov_l||hov_r) ? ImGuiMouseCursor_ResizeEW
+                                                             : ImGuiMouseCursor_Hand);
+                        if (!tl_any_popup && ImGui::IsMouseClicked(0)) {
+                            g_tl.fx_lane_drag = hov_l ? 1 : hov_r ? 2 : 3;
+                            g_tl.fx_lane_ti = ti; g_tl.fx_lane_ci = ci; g_tl.fx_lane_idx = i;
+                            g_tl.fx_lane_ref_x = mouse.x;
+                            g_tl.fx_lane_ref_s = r.rel_s; g_tl.fx_lane_ref_e = r.rel_e;
+                            g_tl.fx_lane_moved = false;
+                            drag_track = -1; drag_clip = -1; drag_left = false; drag_right = false;
+                            s_clip_hit = true;   // keep the empty-track deselect from firing
+                            lane_grabbed = true;
+                        }
+                        break;
+                    }
+                    // Clicked the unfolded brick but missed every lane (e.g. the
+                    // empty region of a retimed lane). On a GLASS brick, select the
+                    // host and SWALLOW the click so the content clip beneath —
+                    // whose body drag Pass 1 already armed — doesn't slide out from
+                    // under it. (Standalone bricks have no content to protect and
+                    // stay freely repositionable, so this only fires for glass.)
+                    if (is_glass && !lane_grabbed && !tl_any_popup && ImGui::IsMouseClicked(0)) {
+                        int hostsel = ci;
+                        if (clip.fx_coupled && is_fx_clip(clip)) {
+                            int host = fx_coupled_host(state, ti, clip);
+                            if (host >= 0) hostsel = host;
+                        }
+                        state.selected_track = ti;
+                        state.selected_clip  = hostsel;
+                        state.clip_selection.clear();
+                        state.clip_selection.insert({ti, hostsel});
+                        drag_track = -1; drag_clip = -1; drag_left = false; drag_right = false;
+                        s_clip_hit   = true;
+                        lane_grabbed = true;
+                    }
+                }
             } else {
                 dl->AddText({vis_x0+5.f, ly}, lbl_col, fx_type_name(clip.fx_type));
                 // Scope arrow
@@ -1954,7 +2035,8 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
             }
             ImGui::PopClipRect();
 
-            clip_interact(ci, clip, vis_x0, vis_x1, cy0, cy1, sel);
+            if (!lane_grabbed)
+                clip_interact(ci, clip, vis_x0, vis_x1, cy0, cy1, sel);
             if (g_tl.drag_merge_ti == ti && g_tl.drag_merge_ci == ci) {
                 float pulse = 0.5f + 0.5f * sinf((float)ImGui::GetTime() * 6.f);
                 ImU32 mc = IM_COL32(255, 180, 60, (int)(130 + 80 * pulse));
@@ -2152,6 +2234,75 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                     history_push(state, "Adjust transition");
                 }
                 s_glass_drag = 0;
+            }
+        }
+
+        // FX timing-lane drag update (glass-brick Pass 2) — runs once/frame for
+        // the brick whose lane was grabbed. Edits rel_start/rel_end in the
+        // sub-effect; snaps the moving edge to timeline edges, beats, the
+        // playhead and sibling-FX boundaries.
+        if (g_tl.fx_lane_drag != 0 && g_tl.fx_lane_ti == ti &&
+            g_tl.fx_lane_ci >= 0 && g_tl.fx_lane_ci < (int)track.clips.size()) {
+            Clip& bclip = track.clips[g_tl.fx_lane_ci];
+            int idx = g_tl.fx_lane_idx;
+            if (idx >= 0 && idx < (int)bclip.fx_chain.size()) {
+                Clip& se = bclip.fx_chain[(size_t)idx];
+                float dur = bclip.end - bclip.start;
+                const float MINLEN = 0.05f;
+                if (ImGui::IsMouseDragging(0)) {
+                    g_tl.fx_lane_moved = true;
+                    float dt = (mouse.x - g_tl.fx_lane_ref_x) / zoom;
+                    auto cands = build_snap_candidates(g_tl.fx_lane_ti, g_tl.fx_lane_ci);
+                    for (int k = 0; k < (int)bclip.fx_chain.size(); ++k) {
+                        if (k == idx) continue;
+                        const Clip& o = bclip.fx_chain[(size_t)k];
+                        cands.push_back(bclip.start + o.rel_start);
+                        cands.push_back(bclip.start + (o.rel_end > 0.f ? o.rel_end : dur));
+                    }
+                    if (g_tl.fx_lane_drag == 1) {            // left edge → rel_start
+                        float abs_s = edge_snap(bclip.start + g_tl.fx_lane_ref_s + dt, cands);
+                        se.rel_start = fmaxf(0.f, fminf(abs_s - bclip.start,
+                                                        g_tl.fx_lane_ref_e - MINLEN));
+                        se.rel_end   = g_tl.fx_lane_ref_e;
+                    } else if (g_tl.fx_lane_drag == 2) {    // right edge → rel_end
+                        float abs_e = edge_snap(bclip.start + g_tl.fx_lane_ref_e + dt, cands);
+                        se.rel_start = g_tl.fx_lane_ref_s;
+                        se.rel_end   = fminf(dur, fmaxf(abs_e - bclip.start,
+                                                        g_tl.fx_lane_ref_s + MINLEN));
+                    } else {                                 // body → shift window
+                        float len = g_tl.fx_lane_ref_e - g_tl.fx_lane_ref_s;
+                        float abs_s = edge_snap(bclip.start + g_tl.fx_lane_ref_s + dt, cands);
+                        float rel_s = fmaxf(0.f, fminf(abs_s - bclip.start, dur - len));
+                        se.rel_start = rel_s;
+                        se.rel_end   = rel_s + len;
+                    }
+                }
+                if (ImGui::IsMouseReleased(0)) {
+                    if (g_tl.fx_lane_moved) {
+                        // Full-host window collapses back to the "always on" encoding.
+                        if (se.rel_start <= 0.001f && se.rel_end >= dur - 0.001f) {
+                            se.rel_start = 0.f; se.rel_end = 0.f;
+                        }
+                        history_push(state, "Retime FX");
+                    } else {
+                        // Plain click (no drag) selects the host so its FX panel opens.
+                        int hostsel = g_tl.fx_lane_ci;
+                        if (bclip.fx_coupled && is_fx_clip(bclip)) {
+                            int host = fx_coupled_host(state, ti, bclip);
+                            if (host >= 0) hostsel = host;
+                        }
+                        state.selected_track = ti;
+                        state.selected_clip  = hostsel;
+                        state.clip_selection.clear();
+                        state.clip_selection.insert({ti, hostsel});
+                    }
+                    g_tl.fx_lane_drag = 0;
+                    g_tl.fx_lane_ti = g_tl.fx_lane_ci = g_tl.fx_lane_idx = -1;
+                    g_tl.snap_indicator = -1.f;
+                }
+            } else {
+                g_tl.fx_lane_drag = 0;
+                g_tl.fx_lane_ti = g_tl.fx_lane_ci = g_tl.fx_lane_idx = -1;
             }
         }
 
