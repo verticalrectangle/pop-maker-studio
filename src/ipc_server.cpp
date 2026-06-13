@@ -1283,6 +1283,16 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         return r;
     }
 
+    if (method == "select_clip") {
+        // Set the canvas selection (the clip whose transform handles show).
+        int ti = track_by_name_or_index(state, params), ci = params.value("clip", -1);
+        if (ci < 0) { state.selected_track = state.selected_clip = -1; return json::object(); }
+        if (!check_clip(state, ti, ci, err)) return {};
+        state.selected_track = ti;
+        state.selected_clip  = ci;
+        return json::object();
+    }
+
     if (method == "get_canvas_geometry") {
         // Transform-handle geometry from the last drawn frame (screen px) —
         // pairs with ui_input so agents can hit the handles deterministically.

@@ -22,9 +22,10 @@ void compute_video_bbox(AppState& state, Clip& cl, ImVec2 p, float w, float h,
 // handles were drawn (nothing selected, crop mode, text clip).
 struct CanvasHandleGeom {
     bool  valid = false;
-    float bx0 = 0, by0 = 0, bx1 = 0, by1 = 0;  // selection bbox
-    float rot_x = 0, rot_y = 0;                // rotate knob center
+    float bx0 = 0, by0 = 0, bx1 = 0, by1 = 0;  // selection bbox (un-rotated, local)
+    float rot_x = 0, rot_y = 0;                // rotate knob center (rotated)
     float cx = 0, cy = 0;                      // rotation pivot (clip center)
+    float rot_deg = 0;                         // clip rotation (handles rotate with it)
 };
 CanvasHandleGeom canvas_handle_geom();
 
