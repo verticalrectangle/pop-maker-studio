@@ -1746,10 +1746,9 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                             tgt_weldable = !shares_prop;
                         }
                         if (tgt && !tgt_weldable) {
-                            // Repel only: keep distinct keys of the same prop
-                            // from stacking into a degenerate group.
-                            t_new = tgt->time +
-                                    (t_new >= tgt->time ? park_off : -park_off);
+                            // Same-prop neighbour: can't form a pose, but don't
+                            // dodge it either — let the key snap straight onto its
+                            // frame so dropping it there welds (merges) on release.
                             s_kf_drag.weld_target = -1.f;
                         } else if (tgt) {
                             if (fabsf(s_kf_drag.weld_target - tgt->time) > 0.0005f) {
@@ -1783,45 +1782,11 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                         } else {
                             s_kf_drag.weld_target = -1.f;
                         }
+                        // Snap to the frame grid like the playhead. Same-prop
+                        // collisions are resolved by welding (merge) on release,
+                        // not by dodging to another frame.
+                        t_new = snap_to_frame(state, clip.start + t_new) - clip.start;
                         t_new = fmaxf(0.f, fminf(t_new, clip.end - clip.start));
-                        // Keyframes snap to the frame grid like the playhead. If
-                        // the snapped frame already holds a key of one of the
-                        // dragged props (distinct keys of a prop can't share a
-                        // frame), step out to the nearest free frame so they
-                        // separate instead of stacking. Welds (different props at
-                        // one frame = a pose) have no same-prop clash, so they
-                        // still land together.
-                        {
-                            float kfps = tl_fps(state); if (!(kfps > 0.f)) kfps = 30.f;
-                            float fstep = 1.f / kfps;
-                            float clip_len = clip.end - clip.start;
-                            auto occupied = [&](float t) -> bool {
-                                for (auto& mm : s_kf_drag.mems) {
-                                    auto it2 = clip.ktracks.find(mm.prop);
-                                    if (it2 == clip.ktracks.end()) continue;
-                                    auto& ks = it2->second.keys;
-                                    for (int k = 0; k < (int)ks.size(); ++k) {
-                                        if (k == mm.idx) continue;             // the dragged key itself
-                                        if (fabsf(ks[k].time - t) < fstep * 0.5f) return true;
-                                    }
-                                }
-                                return false;
-                            };
-                            float base = snap_to_frame(state, clip.start + t_new) - clip.start;
-                            base = fmaxf(0.f, fminf(base, clip_len));
-                            t_new = base;
-                            if (occupied(t_new)) {
-                                for (int step = 1; ; ++step) {
-                                    float hi = base + step * fstep;
-                                    float lo = base - step * fstep;
-                                    bool hi_ok = hi <= clip_len + 1e-4f;
-                                    bool lo_ok = lo >= -1e-4f;
-                                    if (hi_ok && !occupied(hi)) { t_new = hi; break; }
-                                    if (lo_ok && !occupied(lo)) { t_new = lo; break; }
-                                    if (!hi_ok && !lo_ok) break;               // no free frame
-                                }
-                            }
-                        }
                         for (auto& m : s_kf_drag.mems) {
                             auto& keys = clip.ktracks[m.prop].keys;
                             bool was_sel = state.kf_sel_prop == m.prop &&
@@ -1843,9 +1808,33 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                             if (was_sel) state.kf_sel_idx = m.idx;
                         }
                     } else {
-                        if (s_kf_drag.moved)
-                            history_push(state, s_kf_drag.mems.size() > 1
-                                                ? "Move keyframe group" : "Move keyframe");
+                        if (s_kf_drag.moved) {
+                            // Weld: a dropped key that shares its frame with
+                            // another key of the same prop merges into it — the
+                            // dragged key wins, the one it landed on is removed.
+                            float kfps = tl_fps(state); if (!(kfps > 0.f)) kfps = 30.f;
+                            float half = 0.5f / kfps;
+                            bool welded = false;
+                            for (auto& m : s_kf_drag.mems) {
+                                auto itk = clip.ktracks.find(m.prop);
+                                if (itk == clip.ktracks.end()) continue;
+                                auto& ks = itk->second.keys;
+                                if (m.idx < 0 || m.idx >= (int)ks.size()) continue;
+                                float dt = ks[m.idx].time;
+                                for (int k = (int)ks.size() - 1; k >= 0; --k) {
+                                    if (k == m.idx) continue;
+                                    if (fabsf(ks[k].time - dt) < half) {
+                                        ks.erase(ks.begin() + k);
+                                        if (k < m.idx) --m.idx;   // dragged key shifted left
+                                        welded = true;
+                                    }
+                                }
+                            }
+                            history_push(state, welded
+                                ? "Weld keyframe"
+                                : (s_kf_drag.mems.size() > 1 ? "Move keyframe group"
+                                                             : "Move keyframe"));
+                        }
                         s_kf_drag.active = false;
                     }
                 }
