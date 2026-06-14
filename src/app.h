@@ -511,6 +511,7 @@ struct Marker {
 struct AppState {
     // splash
     float splash_timer = 1.6f;  // counts down from launch; studio shows when <= 0
+    bool  in_studio    = false; // false = show the home/launcher; true = the editor
 
     // files
     std::string project_path;   // path of the .pms file last saved/loaded (empty = unsaved)

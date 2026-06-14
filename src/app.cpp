@@ -716,6 +716,8 @@ void app_frame(AppState& state) {
         ui_splash(state);
     } else if (!state.models_ready && !state.models_skipped) {
         ui_setup(state);
+    } else if (!state.in_studio) {
+        ui_home(state);
     } else {
         ui_studio(state);
     }

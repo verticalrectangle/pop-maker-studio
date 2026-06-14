@@ -12,6 +12,7 @@
 #include "ui/canvas.h"
 #include "ui/timeline.h"
 #include "ui/pipeline.h"
+#include "ui/screens.h"   // recent_projects_push
 #include "ui/panel_animation.h"
 #include "ui/panel_media.h"
 #include "ui/studio_shared.h"
@@ -1250,6 +1251,7 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         if (path.empty()) { err = "no project path — provide 'path' param or save once from UI"; return {}; }
         if (!project_save(state, path)) { err = "project_save failed"; return {}; }
         state.project_path = path;   // exports default next to the .pms
+        recent_projects_push(path);  // surface on the home/launcher page
         json r; r["path"] = path;
         return r;
     }

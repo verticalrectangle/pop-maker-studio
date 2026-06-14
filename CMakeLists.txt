@@ -77,6 +77,7 @@ set(SOURCES
     src/forced_align.cpp
     src/ui/screen_splash.cpp
     src/ui/screen_setup.cpp
+    src/ui/screen_home.cpp
     src/terminal.cpp
     src/ui/screen_studio.cpp
     src/ui/studio_shared.cpp

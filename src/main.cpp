@@ -232,6 +232,14 @@ int main(int argc, char** argv) {
     app_init(state);
     state.models_ready = models_detect();
 
+    // --new: skip the home/launcher and drop straight into a blank project.
+    for (int i = 1; i < argc; ++i) {
+        if (std::string(argv[i]) == "--new") {
+            state.in_studio = true;
+            break;
+        }
+    }
+
     // Vsync is on during normal interactive use (smooth UI, low CPU). While an
     // export is running we let the main loop free-run so render_tick_gl isn't
     // capped at the display refresh — otherwise the export's wall-clock speed
