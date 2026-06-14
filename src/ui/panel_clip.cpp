@@ -437,7 +437,8 @@ static void section_position(AppState& state, Clip& clip, float w) {
 
 #include "palette_presets.h"
 
-void palette_widget(const char* id, float** slots, int n_slots, bool has_alpha) {
+void palette_widget(const char* id, float** slots, int n_slots, bool has_alpha,
+                    int* ext_focus) {
     struct WidgetState {
         char search[48] = {};
         int  tag        = 0;   // index into g_palette_tags; 0 = All
@@ -445,7 +446,10 @@ void palette_widget(const char* id, float** slots, int n_slots, bool has_alpha) 
     };
     static std::unordered_map<std::string, WidgetState> s_ws;
     WidgetState& ws = s_ws[id];
-    if (ws.focus >= n_slots) ws.focus = 0;
+    // The caller can own the focus (and show its own slot chooser); otherwise
+    // we keep it internally and draw the "Apply to" chips below.
+    int* focusp = ext_focus ? ext_focus : &ws.focus;
+    if (*focusp >= n_slots || *focusp < 0) *focusp = 0;
 
     ImGui::PushID(id);
     ImGui::Dummy({0.f, 6.f});
@@ -493,7 +497,7 @@ void palette_widget(const char* id, float** slots, int n_slots, bool has_alpha) 
     // area still applies the whole palette across every slot. One slot needs no
     // chooser. Each chip shows the slot's current colour; the focused one is
     // ringed gold.
-    if (n_slots > 1) {
+    if (n_slots > 1 && !ext_focus) {
         ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
         ImGui::TextUnformatted("Apply to");
         ImGui::PopStyleColor();
@@ -504,11 +508,11 @@ void palette_widget(const char* id, float** slots, int n_slots, bool has_alpha) 
             ImGui::PushID(s);
             ImVec2 cp = ImGui::GetCursorScreenPos();
             ImGui::InvisibleButton("##slotfocus", {chip, chip});
-            if (ImGui::IsItemClicked()) ws.focus = s;
+            if (ImGui::IsItemClicked()) *focusp = s;
             ImU32 col = IM_COL32((int)(slots[s][0]*255), (int)(slots[s][1]*255),
                                  (int)(slots[s][2]*255), 255);
             fdl->AddRectFilled(cp, {cp.x+chip, cp.y+chip}, col, 3.f);
-            bool foc = (ws.focus == s);
+            bool foc = (*focusp == s);
             fdl->AddRect(cp, {cp.x+chip, cp.y+chip},
                          foc ? IM_COL32(255,200,60,255) : IM_COL32(70,70,90,200),
                          3.f, 0, foc ? 2.f : 1.f);
@@ -632,10 +636,10 @@ void palette_widget(const char* id, float** slots, int n_slots, bool has_alpha) 
         if (ImGui::IsItemClicked()) {
             (void)has_alpha;  // alpha always preserved — we never touch [3]
             if (hov_sw >= 0) {
-                slots[ws.focus][0] = pe.c[hov_sw][0] / 255.f;
-                slots[ws.focus][1] = pe.c[hov_sw][1] / 255.f;
-                slots[ws.focus][2] = pe.c[hov_sw][2] / 255.f;
-                if (n_slots > 1) ws.focus = (ws.focus + 1) % n_slots;
+                slots[*focusp][0] = pe.c[hov_sw][0] / 255.f;
+                slots[*focusp][1] = pe.c[hov_sw][1] / 255.f;
+                slots[*focusp][2] = pe.c[hov_sw][2] / 255.f;
+                if (n_slots > 1) *focusp = (*focusp + 1) % n_slots;
             } else {
                 for (int si = 0; si < n_slots; ++si) {
                     int ci = si < pe.n ? si : pe.n - 1;
@@ -648,7 +652,7 @@ void palette_widget(const char* id, float** slots, int n_slots, bool has_alpha) 
 
         if (hov) {
             if (hov_sw >= 0 && n_slots > 1)
-                ImGui::SetTooltip("%s  \xc2\xb7  swatch \xe2\x86\x92 slot %d", pe.name, ws.focus + 1);
+                ImGui::SetTooltip("%s  \xc2\xb7  swatch \xe2\x86\x92 slot %d", pe.name, *focusp + 1);
             else if (hov_sw >= 0)
                 ImGui::SetTooltip("%s  \xc2\xb7  use this colour", pe.name);
             else

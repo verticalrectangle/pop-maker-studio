@@ -868,28 +868,66 @@ void panel_background(AppState& state, float w, bool clip_only) {
         const BgPreset* active_pr = bgclip->text.empty() ? nullptr
                                     : bg_preset_by_id(bgclip->text.c_str());
         if (active_pr && active_pr->n_colors >= 1) {
+            const int nc = active_pr->n_colors;
+            float* cslots[3] = { bgclip->bg_c1, bgclip->bg_c2, bgclip->bg_c3 };
+            // Which colour is selected — clicking a palette swatch lands here, and
+            // the picker circle edits it. Shared with palette_widget via &focus.
+            static int s_bg_focus = 0;
+            if (s_bg_focus >= nc) s_bg_focus = 0;
+
             ImGui::TextUnformatted("Colors");
-            ImGui::SameLine();
-            if (ImGui::ColorEdit4("##bgc1", bgclip->bg_c1,
-                ImGuiColorEditFlags_NoLabel|ImGuiColorEditFlags_NoInputs|ImGuiColorEditFlags_NoBorder))
-                history_push(state, "BG color");
-            if (active_pr->n_colors >= 2) {
-                ImGui::SameLine();
-                if (ImGui::ColorEdit4("##bgc2", bgclip->bg_c2,
-                    ImGuiColorEditFlags_NoLabel|ImGuiColorEditFlags_NoInputs|ImGuiColorEditFlags_NoBorder))
-                    history_push(state, "BG color");
+            ImGui::SameLine(0.f, 8.f);
+            ImDrawList* cdl = ImGui::GetWindowDrawList();
+            const float sq = ImGui::GetFrameHeight();
+
+            // Selectable swatches — a click selects the slot (boxed when chosen),
+            // it does NOT open a picker.
+            for (int s = 0; s < nc; ++s) {
+                ImGui::PushID(s);
+                ImVec2 sp = ImGui::GetCursorScreenPos();
+                ImGui::InvisibleButton("##bgcsel", {sq, sq});
+                if (ImGui::IsItemClicked()) s_bg_focus = s;
+                ImU32 col = IM_COL32((int)(cslots[s][0]*255),(int)(cslots[s][1]*255),
+                                     (int)(cslots[s][2]*255),255);
+                cdl->AddRectFilled(sp, {sp.x+sq, sp.y+sq}, col, 3.f);
+                bool sel = (s_bg_focus == s);
+                cdl->AddRect(sp, {sp.x+sq, sp.y+sq},
+                             sel ? IM_COL32(255,255,255,255) : IM_COL32(70,70,90,200),
+                             3.f, 0, sel ? 2.f : 1.f);
+                ImGui::PopID();
+                ImGui::SameLine(0.f, 4.f);
             }
-            if (active_pr->n_colors >= 3) {
-                ImGui::SameLine();
-                if (ImGui::ColorEdit4("##bgc3", bgclip->bg_c3,
-                    ImGuiColorEditFlags_NoLabel|ImGuiColorEditFlags_NoInputs|ImGuiColorEditFlags_NoBorder))
-                    history_push(state, "BG color");
-            }
-            // Palette fills all active gradient slots simultaneously
+
+            // Colourful picker circle (to the right) — shows the selected colour
+            // and opens a colour picker for it.
+            ImGui::SameLine(0.f, 8.f);
             {
-                int ns = active_pr->n_colors;
+                ImVec2 pp = ImGui::GetCursorScreenPos();
+                float r = sq * 0.5f;
+                ImGui::InvisibleButton("##bgpick", {sq, sq});
+                bool hov = ImGui::IsItemHovered();
+                if (ImGui::IsItemClicked()) ImGui::OpenPopup("##bgpickpop");
+                ImU32 col = IM_COL32((int)(cslots[s_bg_focus][0]*255),
+                                     (int)(cslots[s_bg_focus][1]*255),
+                                     (int)(cslots[s_bg_focus][2]*255),255);
+                cdl->AddCircleFilled({pp.x+r, pp.y+r}, r-1.f, col);
+                cdl->AddCircle({pp.x+r, pp.y+r}, r-1.f,
+                               hov ? IM_COL32(255,255,255,255) : IM_COL32(200,200,210,210), 0, 1.5f);
+                if (hov) ImGui::SetTooltip("Edit colour");
+                if (ImGui::BeginPopup("##bgpickpop")) {
+                    if (ImGui::ColorPicker4("##bgpicker", cslots[s_bg_focus],
+                            ImGuiColorEditFlags_NoSidePreview | ImGuiColorEditFlags_NoAlpha))
+                        history_push(state, "BG color");
+                    ImGui::EndPopup();
+                }
+            }
+            ImGui::NewLine();
+            ImGui::Dummy({0.f, 4.f});
+
+            // Palette shares the selected slot (no separate "Apply to" chips).
+            {
                 float* bg_slots[3] = { bgclip->bg_c1, bgclip->bg_c2, bgclip->bg_c3 };
-                palette_widget("##pal_bg", bg_slots, ns, true);
+                palette_widget("##pal_bg", bg_slots, nc, true, &s_bg_focus);
             }
             ImGui::Dummy({0.f, 4.f});
         }

@@ -147,7 +147,11 @@ FxBrickColors fx_brick_colors(FXType ft, bool sel);
 extern std::unordered_map<std::string, float> s_source_durations;
 
 // ── Palette widget (defined in panel_clip.cpp, shared across panels) ──────────
-void palette_widget(const char* id, float** slots, int n_slots, bool has_alpha = false);
+// ext_focus (optional): the caller owns the "which slot a single swatch targets"
+// state and shows the slot chooser itself — the widget then skips its built-in
+// "Apply to" chips and reads/advances *ext_focus instead.
+void palette_widget(const char* id, float** slots, int n_slots, bool has_alpha = false,
+                    int* ext_focus = nullptr);
 void palette_widget(const char* id, float* rgb);
 
 // Wrapping row of category filter pills: "All" + each category in `cats`.
