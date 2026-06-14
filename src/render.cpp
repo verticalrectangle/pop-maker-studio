@@ -1838,6 +1838,25 @@ void render_snapshot_gl(AppState& state, float snap_t, bool open_folder) {
     dd.AddDrawList(&dl);
     ImGui_ImplOpenGL3_RenderDrawData(&dd);
 
+    // ── Global FX pass ────────────────────────────────────────────────────────
+    // Mirror render_tick_gl's Phase 3 so source='render' shows what the export
+    // contains. Without this the snapshot drops every global (uncoupled) brick —
+    // grades, vignettes, scene glitches — and reads as a false WYSIWYG failure.
+    {
+        EffectAccum     global_ea  = collect_effects    (state, t, (int)state.tracks.size());
+        CreativeFXAccum global_cfx = collect_creative_fx(state, t, (int)state.tracks.size());
+        if (global_ea.any_color || global_ea.any_blur || global_ea.any_vignette ||
+            global_ea.any_text  || global_cfx.any_cfx || global_cfx.any_gen_fx) {
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);  // detach so col_tex is readable
+            uintptr_t out = fx_apply((uintptr_t)col_tex, kSceneFxSlot, out_w, out_h,
+                                     global_ea, global_cfx, t);
+            glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+            glViewport(0, 0, out_w, out_h);
+            if (out != (uintptr_t)col_tex)
+                fx_blit(out, fbo, out_w, out_h);
+        }
+    }
+
     // ── Read back + vertical flip ─────────────────────────────────────────────
     std::vector<uint8_t> raw((size_t)out_w * out_h * 4);
     glReadPixels(0, 0, out_w, out_h, GL_RGBA, GL_UNSIGNED_BYTE, raw.data());
