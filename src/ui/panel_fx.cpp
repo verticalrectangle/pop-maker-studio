@@ -2424,81 +2424,52 @@ void panel_multifx_for(AppState& state, float w, int b_ti, int b_ci) {
         ImGui::PushStyleColor(ImGuiCol_SliderGrabActive, ac);
         ImGui::PushStyleColor(ImGuiCol_FrameBg,          Col::bg_soft);
 
+        // Every keyframable sub-effect param routes through the shared kf_slider
+        // (diamond toggle + prev/next nav + autokey). `clip` is the chain
+        // sub-effect; its start/end are synced to the brick in fx_coupling_tick
+        // so keys set here share the brick-relative time-base the renderer reads.
+        auto kfs = [&](const char* prop, const char* lbl, float* v,
+                       float mn, float mx, const char* fmt) {
+            kf_slider(state, clip, b_ti, b_ci, sw, prop, lbl, v, mn, mx, fmt);
+        };
+
         switch (clip.fx_type) {
             case FXType::Glitch:
-                ui_label("Chroma Shift");
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##mgchroma", &clip.fx_glitch_chroma, 0.f, 30.f, "%.1f px");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Multi-FX Glitch: chroma");
+                kfs("fx_glitch_chroma", "Chroma Shift", &clip.fx_glitch_chroma, 0.f, 30.f, "%.1f px");
                 ImGui::Dummy({0.f, 4.f});
-                ui_label("Row Jitter");
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##mgjitter", &clip.fx_glitch_jitter, 0.f, 1.f, "%.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Multi-FX Glitch: jitter");
+                kfs("fx_glitch_jitter", "Row Jitter", &clip.fx_glitch_jitter, 0.f, 1.f, "%.2f");
                 ImGui::Dummy({0.f, 4.f});
-                ui_label("Block Corruption");
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##mgcorrupt", &clip.fx_glitch_corruption, 0.f, 1.f, "%.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Multi-FX Glitch: corruption");
+                kfs("fx_glitch_corruption", "Block Corruption", &clip.fx_glitch_corruption, 0.f, 1.f, "%.2f");
                 ImGui::Dummy({0.f, 4.f});
-                ui_label("Layer Bleed");
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##mgbleed", &clip.fx_glitch_corruption_bleed, 0.f, 1.f, "%.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Multi-FX Glitch: bleed");
+                kfs("fx_glitch_corruption_bleed", "Layer Bleed", &clip.fx_glitch_corruption_bleed, 0.f, 1.f, "%.2f");
                 break;
 
             case FXType::ZoomPunch:
-                ui_label("Punch Strength");
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##mzstr", &clip.fx_zoom_strength, 0.f, 0.5f, "%.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Multi-FX Zoom: strength");
+                kfs("fx_zoom_strength", "Punch Strength", &clip.fx_zoom_strength, 0.f, 0.5f, "%.2f");
                 ImGui::Dummy({0.f, 4.f});
-                ui_label("Decay");
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##mzdec", &clip.fx_zoom_decay, 0.05f, 0.5f, "%.2fs");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Multi-FX Zoom: decay");
+                kfs("fx_zoom_decay", "Decay", &clip.fx_zoom_decay, 0.05f, 0.5f, "%.2fs");
                 ImGui::Dummy({0.f, 4.f});
-                ui_label("Shake");
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##mzshk", &clip.fx_zoom_shake, 0.f, 1.f, "%.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Multi-FX Zoom: shake");
+                kfs("fx_zoom_shake", "Shake", &clip.fx_zoom_shake, 0.f, 1.f, "%.2f");
                 break;
 
             case FXType::LightLeak:
-                ui_label("Intensity");
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##mllint", &clip.fx_leak_intensity, 0.f, 1.f, "%.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Multi-FX Leak: intensity");
+                kfs("fx_leak_intensity", "Intensity", &clip.fx_leak_intensity, 0.f, 1.f, "%.2f");
                 ImGui::Dummy({0.f, 4.f});
-                ui_label("Speed");
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##mllspd", &clip.fx_leak_speed, 0.f, 4.f, "%.1f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Multi-FX Leak: speed");
+                kfs("fx_leak_speed", "Speed", &clip.fx_leak_speed, 0.f, 4.f, "%.1f");
                 break;
 
             case FXType::VHS:
-                ui_label("Noise");
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##mvhsnoise", &clip.fx_vhs_noise, 0.f, 1.f, "%.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Multi-FX VHS: noise");
+                kfs("fx_vhs_noise", "Noise", &clip.fx_vhs_noise, 0.f, 1.f, "%.2f");
                 ImGui::Dummy({0.f, 4.f});
-                ui_label("Chroma Bleed");
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##mvhsbleed", &clip.fx_vhs_bleed, 0.f, 20.f, "%.1f px");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Multi-FX VHS: bleed");
+                kfs("fx_vhs_bleed", "Chroma Bleed", &clip.fx_vhs_bleed, 0.f, 20.f, "%.1f px");
                 ImGui::Dummy({0.f, 4.f});
-                ui_label("Tracking");
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##mvhstrk", &clip.fx_vhs_tracking, 0.f, 1.f, "%.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Multi-FX VHS: tracking");
+                kfs("fx_vhs_tracking", "Tracking", &clip.fx_vhs_tracking, 0.f, 1.f, "%.2f");
                 break;
 
             case FXType::Datamosh:
-                ui_label("Intensity");
-                ImGui::SetNextItemWidth(sw);
-                ImGui::SliderFloat("##mdmint", &clip.fx_datamosh_intensity, 0.f, 1.f, "%.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Multi-FX Datamosh: intensity");
+                kfs("fx_datamosh_intensity", "Intensity", &clip.fx_datamosh_intensity, 0.f, 1.f, "%.2f");
                 ImGui::Dummy({0.f, 4.f});
+                // Spread isn't keyframable (no registry entry) — raw slider.
                 ui_label("Spread");
                 ImGui::SetNextItemWidth(sw);
                 ImGui::SliderFloat("##mdmspread", &clip.fx_datamosh_spread, 0.f, 1.f, "%.2f");
@@ -2517,15 +2488,9 @@ void panel_multifx_for(AppState& state, float w, int b_ti, int b_ci) {
                 ImGui::SetNextItemWidth(sw2);
                 ImGui::SliderFloat("##mckb", &clip.fx_chroma_key_b, 0.f, 1.f, "%.2f");
                 ImGui::Dummy({0.f, 4.f});
-                ui_label("Threshold");
-                ImGui::SetNextItemWidth(sw2);
-                ImGui::SliderFloat("##mckthr", &clip.fx_chroma_key_threshold, 0.f, 1.f, "%.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Multi-FX ChromaKey");
+                kfs("fx_chroma_key_threshold", "Threshold", &clip.fx_chroma_key_threshold, 0.f, 1.f, "%.2f");
                 ImGui::Dummy({0.f, 4.f});
-                ui_label("Softness");
-                ImGui::SetNextItemWidth(sw2);
-                ImGui::SliderFloat("##mcksoft", &clip.fx_chroma_key_softness, 0.f, 0.5f, "%.2f");
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Multi-FX ChromaKey: softness");
+                kfs("fx_chroma_key_softness", "Softness", &clip.fx_chroma_key_softness, 0.f, 0.5f, "%.2f");
                 break;
             }
 
@@ -2533,35 +2498,25 @@ void panel_multifx_for(AppState& state, float w, int b_ti, int b_ci) {
                 if (ImGui::Checkbox("Color Grade##mfx", &clip.fx_color_on))
                     history_push(state, "Multi-FX Grade");
                 if (clip.fx_color_on) {
-                    ImGui::SetNextItemWidth(sw); ImGui::SliderFloat("Brightness##mfx", &clip.fx_brightness, -1.f, 1.f, "%.2f");
-                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Multi-FX Grade: brightness");
-                    ImGui::SetNextItemWidth(sw); ImGui::SliderFloat("Contrast##mfx",   &clip.fx_contrast, 0.5f, 2.f, "%.2f");
-                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Multi-FX Grade: contrast");
-                    ImGui::SetNextItemWidth(sw); ImGui::SliderFloat("Saturation##mfx", &clip.fx_saturation, 0.f, 2.f, "%.2f");
-                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Multi-FX Grade: saturation");
-                    ImGui::SetNextItemWidth(sw); ImGui::SliderFloat("Hue##mfx",        &clip.fx_hue, -180.f, 180.f, "%.0f\xc2\xb0");
-                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Multi-FX Grade: hue");
+                    kfs("fx_brightness", "Brightness", &clip.fx_brightness, -1.f, 1.f, "%.2f");
+                    kfs("fx_contrast",   "Contrast",   &clip.fx_contrast, 0.5f, 2.f, "%.2f");
+                    kfs("fx_saturation", "Saturation", &clip.fx_saturation, 0.f, 2.f, "%.2f");
+                    kfs("fx_hue",        "Hue",        &clip.fx_hue, -180.f, 180.f, "%.0f\xc2\xb0");
                 }
                 break;
 
             case FXType::Blur:
                 if (ImGui::Checkbox("Blur##mfx", &clip.fx_blur_on))
                     history_push(state, "Multi-FX Blur");
-                if (clip.fx_blur_on) {
-                    ImGui::SetNextItemWidth(sw);
-                    ImGui::SliderFloat("Radius##mfx", &clip.fx_blur, 0.f, 20.f, "%.1f px");
-                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Multi-FX Blur: radius");
-                }
+                if (clip.fx_blur_on)
+                    kfs("fx_blur", "Radius", &clip.fx_blur, 0.f, 20.f, "%.1f px");
                 break;
 
             case FXType::Vignette:
                 if (ImGui::Checkbox("Vignette##mfx", &clip.fx_vignette_on))
                     history_push(state, "Multi-FX Vignette");
-                if (clip.fx_vignette_on) {
-                    ImGui::SetNextItemWidth(sw);
-                    ImGui::SliderFloat("Strength##mfx", &clip.fx_vignette, 0.f, 1.f, "%.2f");
-                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Multi-FX Vignette: strength");
-                }
+                if (clip.fx_vignette_on)
+                    kfs("fx_vignette", "Strength", &clip.fx_vignette, 0.f, 1.f, "%.2f");
                 break;
 
             // Shader FX — generated inspector covers these

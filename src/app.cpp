@@ -376,6 +376,19 @@ void fx_coupling_tick(AppState& state) {
             cl.end   = new1;
         }
     }
+
+    // Keyframe time-base sync: a chain sub-effect is itself a Clip, and its
+    // keyframes are stored relative to its own .start (eval_prop computes
+    // t_local = playhead - clip.start). The kf_slider UI keys at the same
+    // brick-relative time, so a sub-effect's start/end MUST track its parent
+    // brick — then keys set in the panel and read during render share one time
+    // base, and they ride along whenever the brick moves or welds. (Sub-effect
+    // *windowing* still uses rel_start/rel_end; start/end is only the kf clock.)
+    for (auto& tr : state.tracks)
+        for (auto& cl : tr.clips)
+            if (cl.clip_type == ClipType::MultiFX ||
+                cl.clip_type == ClipType::AudioMultiFX)
+                for (auto& se : cl.fx_chain) { se.start = cl.start; se.end = cl.end; }
 }
 
 // Glass: video FX bricks are glass iff coupled (explicit link); audio FX
