@@ -183,6 +183,8 @@ static std::string clip_type_str(ClipType t) {
         case ClipType::AudioMultiFX: return "audio_multi_fx";
         case ClipType::Record:     return "record";
         case ClipType::VideoRecord: return "video_record";
+        case ClipType::Bus:        return "bus";
+        default: break;
     }
     return "unknown";
 }

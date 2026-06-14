@@ -970,6 +970,27 @@ void add_video_record_brick(AppState& state) {
     history_push(state, "Add Record Brick");
 }
 
+void add_bus_brick(AppState& state) {
+    float qfps = tl_fps(state);
+    if (!(qfps > 0.f)) qfps = 30.f;
+    Clip cl;
+    cl.clip_type = ClipType::Bus;
+    cl.start     = 0.f;
+    cl.end       = snap_end_to_frame(fmaxf(8.f, state.duration), (int)qfps);
+    cl.volume    = 1.f;                       // gain (1.0 = unity)
+    Track t;
+    char n[32];
+    snprintf(n, sizeof(n), "Bus %d", (int)state.tracks.size() + 1);
+    t.name = n;
+    float clip_end = cl.end;
+    t.clips.push_back(std::move(cl));
+    state.tracks.insert(state.tracks.begin(), std::move(t));  // top → groups every track below
+    state.selected_track = 0;
+    state.selected_clip  = 0;
+    state.tl_zoom_to_fit_end = fmaxf(state.tl_zoom_to_fit_end, clip_end);
+    history_push(state, "Add Bus Brick");
+}
+
 // Rescale a media clip's own timeline width AND any FX bricks (Effect / BodyFX
 // / MultiFX / Background) that overlap it, anchored at the clip's start. Speed
 // ratio = new_speed / old_speed; widths divide by it so the clip plays the

@@ -2689,6 +2689,97 @@ void panel_clip(AppState& state, float w) {
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
+    // BUS BRICK — submixes the tracks below it (gain + audio FX chain)
+    // ═══════════════════════════════════════════════════════════════════════════
+    else if (clip.clip_type == ClipType::Bus) {
+        float bar_w = w - 16.f;
+        ImGui::Dummy({0.f, 4.f});
+        ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(120, 215, 185, 255));
+        ImGui::TextUnformatted("Audio Bus");
+        ImGui::PopStyleColor();
+        ImGui::Dummy({0.f, 4.f});
+
+        // What it groups: every track below, down to the next bus brick.
+        int my_ti = state.selected_track;
+        int grouped = 0, withaud = 0;
+        for (int ti = my_ti + 1; ti < (int)state.tracks.size(); ++ti) {
+            bool is_bus = false, aud = false;
+            for (auto& c : state.tracks[(size_t)ti].clips) {
+                if (c.clip_type == ClipType::Bus) is_bus = true;
+                if (c.clip_type == ClipType::Audio || c.clip_type == ClipType::Video) aud = true;
+            }
+            if (is_bus) break;
+            grouped++; if (aud) withaud++;
+        }
+        ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+        ImGui::Text("Submixes %d track%s below it (%d with audio),\nwithin this brick's span on the timeline.",
+                    grouped, grouped == 1 ? "" : "s", withaud);
+        ImGui::PopStyleColor();
+
+        ImGui::Dummy({0.f, 10.f}); ui_separator(); ImGui::Dummy({0.f, 8.f});
+
+        // ── Gain ──────────────────────────────────────────────────────────────
+        ui_label("Gain");
+        ImGui::PushStyleColor(ImGuiCol_SliderGrab, IM_COL32(30, 200, 160, 255));
+        ImGui::PushStyleColor(ImGuiCol_FrameBg,    Col::bg_soft);
+        ImGui::SetNextItemWidth(bar_w);
+        ImGui::SliderFloat("##bus_gain", &clip.volume, 0.f, 2.f, "%.2f");
+        ImGui::PopStyleColor(2);
+        if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Bus gain");
+
+        // ── Audio FX chain (clip.fx_chain) ────────────────────────────────────
+        ImGui::Dummy({0.f, 10.f}); ui_separator(); ImGui::Dummy({0.f, 8.f});
+        ui_label("Effects");
+        ImGui::Dummy({0.f, 4.f});
+        int remove_idx = -1;
+        for (int i = 0; i < (int)clip.fx_chain.size(); ++i) {
+            Clip& se = clip.fx_chain[(size_t)i];
+            ImGui::PushID(43000 + i);
+            bool selrow = clip.fx_chain_selected == i;
+            if (ImGui::Selectable(fx_type_name(se.fx_type), selrow, 0, {bar_w - 24.f, 0.f}))
+                clip.fx_chain_selected = i;
+            ImGui::SameLine(bar_w - 16.f);
+            if (ui_btn("\xc3\x97", false, true)) remove_idx = i;
+            ImGui::PopID();
+        }
+        if (remove_idx >= 0) {
+            clip.fx_chain.erase(clip.fx_chain.begin() + remove_idx);
+            if (clip.fx_chain_selected >= (int)clip.fx_chain.size())
+                clip.fx_chain_selected = (int)clip.fx_chain.size() - 1;
+            history_push(state, "Bus: remove effect");
+        }
+        static const struct { const char* lbl; FXType t; } k_addable[] = {
+            {"+AT", FXType::AudioAutotune}, {"+Pitch", FXType::AudioPitch},
+            {"+Form", FXType::AudioFormant}, {"+Delay", FXType::AudioDelay},
+            {"+Verb", FXType::AudioReverb},
+        };
+        for (int i = 0; i < 5; ++i) {
+            if (i) ImGui::SameLine(0.f, 4.f);
+            if (ui_btn(k_addable[i].lbl, false, true)) {
+                Clip se;
+                se.clip_type = ClipType::Effect;
+                se.fx_type   = k_addable[i].t;
+                switch (k_addable[i].t) {
+                    case FXType::AudioAutotune: se.audio_fx.autotune_on = true; break;
+                    case FXType::AudioPitch:    se.audio_fx.pitch_on    = true; break;
+                    case FXType::AudioFormant:  se.audio_fx.formant_on  = true; break;
+                    case FXType::AudioDelay:    se.audio_fx.delay_on    = true; break;
+                    case FXType::AudioReverb:   se.audio_fx.reverb_on   = true; break;
+                    default: break;
+                }
+                clip.fx_chain.push_back(se);
+                clip.fx_chain_selected = (int)clip.fx_chain.size() - 1;
+                history_push(state, "Bus: add effect");
+            }
+        }
+        int si = clip.fx_chain_selected;
+        if (si >= 0 && si < (int)clip.fx_chain.size()) {
+            ImGui::Dummy({0.f, 6.f});
+            audio_chain_entry_params_ui(state, clip.fx_chain[(size_t)si], bar_w);
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
     // BODY FX CLIP (always glass — lives on same track as a video clip)
     // ═══════════════════════════════════════════════════════════════════════════
     else if (clip.clip_type == ClipType::BodyFX) {
