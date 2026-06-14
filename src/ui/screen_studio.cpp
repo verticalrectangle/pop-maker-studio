@@ -213,6 +213,114 @@ static void handle_shortcuts(AppState& state) {
         return;
     }
 }
+// ── API provider presets + brand glyphs (Settings > Agent) ────────────────────
+// Each provider is an OpenAI-compatible endpoint. Glyphs are simplified brand
+// marks drawn with ImDrawList — no asset files, crisp at any size.
+namespace {
+constexpr float PI_F = 3.14159265358979f;
+
+void glyph_anthropic(ImDrawList* dl, ImVec2 c, float r, ImU32 col) {
+    // 6-arm burst (three crossing strokes) — Anthropic's asterisk-like mark.
+    const float th = r * 0.30f;
+    const float deg[3] = { 90.f, 30.f, 150.f };
+    for (float dgr : deg) {
+        float a = dgr * PI_F / 180.f;
+        ImVec2 d = { cosf(a), -sinf(a) };
+        dl->AddLine({c.x - d.x*r, c.y - d.y*r}, {c.x + d.x*r, c.y + d.y*r}, col, th);
+        dl->AddCircleFilled({c.x + d.x*r, c.y + d.y*r}, th*0.5f, col);
+        dl->AddCircleFilled({c.x - d.x*r, c.y - d.y*r}, th*0.5f, col);
+    }
+}
+void glyph_openai(ImDrawList* dl, ImVec2 c, float r, ImU32 col) {
+    // Hexagonal knot → hexagon ring with vertex nodes and an inner ring.
+    const float th = r * 0.16f;
+    dl->AddNgon(c, r, col, 6, th);
+    for (int i = 0; i < 6; ++i) {
+        float a = (i / 6.f) * 2 * PI_F - PI_F/2;
+        dl->AddCircleFilled({c.x + cosf(a)*r, c.y + sinf(a)*r}, th*0.9f, col);
+    }
+    dl->AddNgon(c, r*0.42f, col, 6, th*0.85f);
+}
+void glyph_deepseek(ImDrawList* dl, ImVec2 c, float r, ImU32 col, ImU32 bg) {
+    // Minimal blue whale: round body + tail fluke + spout + eye.
+    ImVec2 bc = { c.x - r*0.12f, c.y + r*0.08f };
+    float  br = r * 0.70f;
+    dl->AddCircleFilled(bc, br, col);
+    dl->AddTriangleFilled({c.x + r*0.40f, c.y + r*0.02f},
+                          {c.x + r*0.98f, c.y - r*0.52f},
+                          {c.x + r*0.98f, c.y + r*0.34f}, col);
+    dl->AddLine({bc.x - br*0.15f, bc.y - br*0.95f},
+                {bc.x - br*0.15f, bc.y - br*1.35f}, col, r*0.12f);
+    dl->AddCircleFilled({bc.x - br*0.28f, bc.y - br*0.12f}, br*0.16f, bg);
+}
+void glyph_gemini(ImDrawList* dl, ImVec2 c, float r, ImU32 col) {
+    // Four-point spark (concave star) drawn as a center-fan of triangles.
+    ImVec2 p[8];
+    float inner = r * 0.34f;
+    for (int i = 0; i < 8; ++i) {
+        float a = (i / 8.f) * 2 * PI_F - PI_F/2;
+        float rad = (i % 2 == 0) ? r : inner;
+        p[i] = { c.x + cosf(a)*rad, c.y + sinf(a)*rad };
+    }
+    for (int i = 0; i < 8; ++i)
+        dl->AddTriangleFilled(c, p[i], p[(i+1)%8], col);
+}
+void glyph_custom(ImDrawList* dl, ImVec2 c, float r, ImU32 col, ImU32 bg) {
+    // Three sliders — a clean "settings / custom endpoint" mark.
+    const float th = r * 0.13f;
+    for (int i = 0; i < 3; ++i) {
+        float y  = c.y - r*0.55f + i * (r*0.55f);
+        dl->AddLine({c.x - r*0.85f, y}, {c.x + r*0.85f, y}, col, th);
+        float kx = c.x + (i % 2 == 0 ? -r*0.38f : r*0.38f);
+        dl->AddCircleFilled({kx, y}, th*1.7f, col);
+        dl->AddCircleFilled({kx, y}, th*0.95f, bg);
+    }
+}
+
+struct ApiProvider {
+    const char* name;       // short label on the card
+    const char* full;       // full company name (tooltip / dropdown)
+    const char* base_url;   // OpenAI-compatible endpoint
+    const char* models[4];  // suggested model ids (nullptr-terminated)
+    ImU32       color;      // brand accent
+    int         kind;       // 0 anthropic,1 openai,2 deepseek,3 gemini,4 custom
+};
+const ApiProvider kProviders[] = {
+    { "Claude",   "Anthropic", "https://api.anthropic.com/v1/",
+      { "claude-sonnet-4-5", "claude-opus-4-1", "claude-3-5-haiku-latest", nullptr },
+      IM_COL32(217, 119, 87, 255), 0 },
+    { "OpenAI",   "OpenAI", "https://api.openai.com/v1",
+      { "gpt-4o", "gpt-4o-mini", "o3-mini", nullptr },
+      IM_COL32(16, 163, 127, 255), 1 },
+    { "DeepSeek", "DeepSeek", "https://api.deepseek.com",
+      { "deepseek-chat", "deepseek-reasoner", nullptr, nullptr },
+      IM_COL32(77, 107, 254, 255), 2 },
+    { "Gemini",   "Google", "https://generativelanguage.googleapis.com/v1beta/openai/",
+      { "gemini-2.0-flash", "gemini-1.5-pro", "gemini-1.5-flash", nullptr },
+      IM_COL32(66, 133, 244, 255), 3 },
+    { "Custom",   "Custom endpoint", "",
+      { nullptr, nullptr, nullptr, nullptr },
+      IM_COL32(150, 150, 165, 255), 4 },
+};
+constexpr int kProviderCount = (int)(sizeof(kProviders)/sizeof(kProviders[0]));
+
+void draw_provider_glyph(ImDrawList* dl, int kind, ImVec2 c, float r, ImU32 col, ImU32 bg) {
+    switch (kind) {
+        case 0: glyph_anthropic(dl, c, r, col); break;
+        case 1: glyph_openai(dl, c, r, col); break;
+        case 2: glyph_deepseek(dl, c, r, col, bg); break;
+        case 3: glyph_gemini(dl, c, r, col); break;
+        default: glyph_custom(dl, c, r, col, bg); break;
+    }
+}
+// Which preset matches the current base URL? -1 → Custom (last entry).
+int provider_for_url(const std::string& url) {
+    for (int i = 0; i < kProviderCount; ++i)
+        if (kProviders[i].base_url[0] && url == kProviders[i].base_url) return i;
+    return kProviderCount - 1;  // Custom
+}
+} // namespace
+
 void ui_studio(AppState& state) {
     ImGuiIO& io   = ImGui::GetIO();
     float    win_w = io.DisplaySize.x;
@@ -878,7 +986,7 @@ void ui_studio(AppState& state) {
         ImGui::OpenPopup("##settings_modal");
         ImVec2 center = ImGui::GetMainViewport()->GetCenter();
         ImGui::SetNextWindowPos(center, ImGuiCond_Always, {0.5f, 0.5f});
-        ImGui::SetNextWindowSize({480.f, 0.f});
+        ImGui::SetNextWindowSize({500.f, 0.f});
         ImGui::PushStyleColor(ImGuiCol_PopupBg, to_u32(Col::bg));
         ImGui::PushStyleColor(ImGuiCol_Border,  to_u32(Col::line));
 
@@ -905,12 +1013,108 @@ void ui_studio(AppState& state) {
                 static char s_url_buf[256] = {};
                 static char s_model_buf[128] = {};
                 static bool s_synced = false;
+                static int  s_prov_sel = -1;  // -1 → derive from base URL
                 if (!s_synced) {
                     strncpy(s_url_buf,   acfg.base_url.c_str(), sizeof(s_url_buf)-1);
                     strncpy(s_model_buf, acfg.model.c_str(),    sizeof(s_model_buf)-1);
                     s_synced = true;
                 }
+                ImU32 bgc = to_u32(Col::bg);
 
+                // ── Provider card grid ────────────────────────────────────────
+                ImGui::SetCursorPosX(lx);
+                ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+                ImGui::TextUnformatted("Provider"); ImGui::PopStyleColor();
+                ImGui::Dummy({0.f, 4.f});
+
+                int sel = (s_prov_sel >= 0) ? s_prov_sel : provider_for_url(acfg.base_url);
+                ImVec2 grid0 = ImGui::GetCursorPos();
+                grid0.x = lx;
+                const float cw = 144.f, ch = 60.f, gp = 10.f;
+                const int   pr = 3;
+                ImDrawList* dl = ImGui::GetWindowDrawList();
+                for (int i = 0; i < kProviderCount; ++i) {
+                    const ApiProvider& pv = kProviders[i];
+                    int rr = i / pr, cc = i % pr;
+                    ImGui::SetCursorPos({grid0.x + cc*(cw+gp), grid0.y + rr*(ch+gp)});
+                    ImGui::PushID(i);
+                    ImGui::InvisibleButton("##prov", {cw, ch});
+                    bool hov = ImGui::IsItemHovered();
+                    bool clk = ImGui::IsItemClicked();
+                    if (hov) ImGui::SetTooltip("%s", pv.full);
+                    ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
+                    bool on = (i == sel);
+                    dl->AddRectFilled(a, b, hov ? IM_COL32(40,40,52,255)
+                                                : IM_COL32(28,28,37,255), 9.f);
+                    if (on) dl->AddRectFilled(a, b, (pv.color & 0x00FFFFFFu) | (38u<<24), 9.f);
+                    dl->AddRect(a, b, on ? pv.color : IM_COL32(62,62,80,255),
+                                9.f, 0, on ? 2.f : 1.f);
+                    draw_provider_glyph(dl, pv.kind, {a.x + cw*0.5f, a.y + 21.f},
+                                        12.f, pv.color, bgc);
+                    ImVec2 ts = ImGui::CalcTextSize(pv.name);
+                    dl->AddText({a.x + (cw-ts.x)*0.5f, b.y - 19.f},
+                                on ? IM_COL32(240,240,250,255) : to_u32(Col::muted), pv.name);
+                    ImGui::PopID();
+                    if (clk && i != sel) {
+                        s_prov_sel = i;
+                        if (pv.base_url[0]) {
+                            acfg.base_url = pv.base_url;
+                            strncpy(s_url_buf, pv.base_url, sizeof(s_url_buf)-1);
+                            s_url_buf[sizeof(s_url_buf)-1] = 0;
+                        }
+                        if (pv.models[0]) {
+                            acfg.model = pv.models[0];
+                            strncpy(s_model_buf, pv.models[0], sizeof(s_model_buf)-1);
+                            s_model_buf[sizeof(s_model_buf)-1] = 0;
+                        }
+                        agent_set_config(acfg);
+                        sel = i;
+                    }
+                }
+                int rows = (kProviderCount + pr - 1) / pr;
+                ImGui::SetCursorPos({grid0.x, grid0.y + rows*(ch+gp) + 2.f});
+
+                // ── Custom endpoint: editable Base URL ────────────────────────
+                if (kProviders[sel].kind == 4) {
+                    ImGui::SetCursorPosX(lx);
+                    ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+                    ImGui::TextUnformatted("Base URL"); ImGui::PopStyleColor();
+                    ImGui::SameLine(0.f, 8.f);
+                    ImGui::SetNextItemWidth(228.f);
+                    if (ImGui::InputText("##agent_url", s_url_buf, sizeof(s_url_buf))) {
+                        acfg.base_url = s_url_buf; agent_set_config(acfg);
+                        s_prov_sel = -1;  // re-derive (a pasted known URL re-highlights)
+                    }
+                }
+
+                // ── Model: editable field + suggestions dropdown ──────────────
+                ImGui::SetCursorPosX(lx);
+                ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+                ImGui::TextUnformatted("Model   "); ImGui::PopStyleColor();
+                ImGui::SameLine(0.f, 8.f);
+                ImGui::SetNextItemWidth(200.f);
+                if (ImGui::InputText("##agent_model", s_model_buf, sizeof(s_model_buf))) {
+                    acfg.model = s_model_buf; agent_set_config(acfg);
+                }
+                ImGui::SameLine(0.f, 4.f);
+                if (ImGui::Button("\xe2\x96\xbc##model_sug")) ImGui::OpenPopup("##model_sug");
+                if (ImGui::BeginPopup("##model_sug")) {
+                    const ApiProvider& pv = kProviders[sel];
+                    bool any = false;
+                    for (int m = 0; m < 4 && pv.models[m]; ++m) {
+                        any = true;
+                        if (ImGui::MenuItem(pv.models[m])) {
+                            strncpy(s_model_buf, pv.models[m], sizeof(s_model_buf)-1);
+                            s_model_buf[sizeof(s_model_buf)-1] = 0;
+                            acfg.model = pv.models[m]; agent_set_config(acfg);
+                        }
+                    }
+                    if (!any) ImGui::TextDisabled("no suggestions — type a model id");
+                    ImGui::EndPopup();
+                }
+
+                // ── API key (per provider, stored in the system keyring) ──────
+                ImGui::Dummy({0.f, 6.f});
                 ImGui::SetCursorPosX(lx);
                 if (!agent_key_available()) {
                     ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
@@ -939,23 +1143,7 @@ void ui_studio(AppState& state) {
                     }
                 }
 
-                ImGui::Dummy({0.f, 6.f});
-                ImGui::SetCursorPosX(lx);
-                ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
-                ImGui::TextUnformatted("Base URL"); ImGui::PopStyleColor();
-                ImGui::SameLine(0.f, 8.f);
-                ImGui::SetNextItemWidth(230.f);
-                if (ImGui::InputText("##agent_url", s_url_buf, sizeof(s_url_buf))) {
-                    acfg.base_url = s_url_buf; agent_set_config(acfg);
-                }
-                ImGui::SetCursorPosX(lx);
-                ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
-                ImGui::TextUnformatted("Model   "); ImGui::PopStyleColor();
-                ImGui::SameLine(0.f, 8.f);
-                ImGui::SetNextItemWidth(230.f);
-                if (ImGui::InputText("##agent_model", s_model_buf, sizeof(s_model_buf))) {
-                    acfg.model = s_model_buf; agent_set_config(acfg);
-                }
+                ImGui::Dummy({0.f, 2.f});
                 ImGui::SetCursorPosX(lx);
                 bool vis = acfg.vision;
                 if (ImGui::Checkbox("Send snapshot images to the model (vision)", &vis)) {
