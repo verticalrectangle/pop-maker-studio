@@ -193,6 +193,11 @@ int main(int argc, char** argv) {
     if (const char* home = getenv("HOME"))
         g_managed_dir = (fs::path(home) / ".local" / "share" / "pop-maker-studio").string();
 
+    // Keep the regeneratable media cache from growing without bound. Pruning at
+    // startup means nothing is in use yet, so we never yank a proxy/conform out
+    // from under an open project.
+    cache_prune();
+
     glfwSetErrorCallback(glfw_error_callback);
     if (!glfwInit()) return 1;
 

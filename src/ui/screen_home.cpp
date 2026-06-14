@@ -8,6 +8,7 @@
 #include "project.h"
 #include "transcribe.h"
 #include "history.h"
+#include "paths.h"
 
 #include <imgui.h>
 #include "json.hpp"
@@ -239,6 +240,31 @@ void ui_home(AppState& state) {
     ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
     ImGui::TextUnformatted("Pick up where you left off, or start something new.");
     ImGui::PopStyleColor();
+
+    // Cache footer (bottom-left): size readout + one-click clear. The size is a
+    // recursive walk, so we cache it and only refresh on first show / after clear.
+    {
+        static long long  cached_sz = -1;
+        if (cached_sz < 0) cached_sz = (long long)cache_size_bytes();
+        auto human = [](long long b) {
+            char s[32];
+            if (b >= 1024ll*1024*1024) snprintf(s, sizeof(s), "%.1f GB", b/(1024.0*1024*1024));
+            else if (b >= 1024*1024)   snprintf(s, sizeof(s), "%.0f MB", b/(1024.0*1024));
+            else if (b >= 1024)        snprintf(s, sizeof(s), "%.0f KB", b/1024.0);
+            else                       snprintf(s, sizeof(s), "%lld B", b);
+            return std::string(s);
+        };
+        ImGui::SetCursorPos({pad, H - 44.f});
+        ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+        ImGui::Text("Media cache: %s", human(cached_sz).c_str());
+        ImGui::PopStyleColor();
+        ImGui::SameLine(0.f, 14.f);
+        ImGui::SetCursorPosY(H - 48.f);
+        if (cached_sz > 0 && ui_btn("Clear cache", false, true)) {
+            cache_clear();
+            cached_sz = (long long)cache_size_bytes();
+        }
+    }
 
     // Actions
     ImGui::SetCursorPos({pad, 92.f});
