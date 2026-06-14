@@ -441,9 +441,11 @@ void palette_widget(const char* id, float** slots, int n_slots, bool has_alpha) 
     struct WidgetState {
         char search[48] = {};
         int  tag        = 0;   // index into g_palette_tags; 0 = All
+        int  focus      = 0;   // which slot a single-swatch click targets
     };
     static std::unordered_map<std::string, WidgetState> s_ws;
     WidgetState& ws = s_ws[id];
+    if (ws.focus >= n_slots) ws.focus = 0;
 
     ImGui::PushID(id);
     ImGui::Dummy({0.f, 6.f});
@@ -485,6 +487,36 @@ void palette_widget(const char* id, float** slots, int n_slots, bool has_alpha) 
     }
     ImGui::PopStyleVar(2);
     ImGui::Dummy({0.f, 5.f});
+
+    // ── Per-slot focus (multi-slot targets only) ─────────────────────────────
+    // A single-swatch click lands in the focused slot; clicking a card's name
+    // area still applies the whole palette across every slot. One slot needs no
+    // chooser. Each chip shows the slot's current colour; the focused one is
+    // ringed gold.
+    if (n_slots > 1) {
+        ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+        ImGui::TextUnformatted("Apply to");
+        ImGui::PopStyleColor();
+        ImGui::SameLine(0.f, 8.f);
+        ImDrawList* fdl = ImGui::GetWindowDrawList();
+        const float chip = 18.f;
+        for (int s = 0; s < n_slots; ++s) {
+            ImGui::PushID(s);
+            ImVec2 cp = ImGui::GetCursorScreenPos();
+            ImGui::InvisibleButton("##slotfocus", {chip, chip});
+            if (ImGui::IsItemClicked()) ws.focus = s;
+            ImU32 col = IM_COL32((int)(slots[s][0]*255), (int)(slots[s][1]*255),
+                                 (int)(slots[s][2]*255), 255);
+            fdl->AddRectFilled(cp, {cp.x+chip, cp.y+chip}, col, 3.f);
+            bool foc = (ws.focus == s);
+            fdl->AddRect(cp, {cp.x+chip, cp.y+chip},
+                         foc ? IM_COL32(255,200,60,255) : IM_COL32(70,70,90,200),
+                         3.f, 0, foc ? 2.f : 1.f);
+            ImGui::PopID();
+            if (s < n_slots - 1) ImGui::SameLine(0.f, 4.f);
+        }
+        ImGui::Dummy({0.f, 5.f});
+    }
 
     // ── Scrollable palette grid ──────────────────────────────────────────────
     const float CARD_H   = 30.f;
@@ -560,6 +592,18 @@ void palette_widget(const char* id, float** slots, int n_slots, bool has_alpha) 
         // Color strip
         const auto& pe = g_palettes[pi];
         float sw = COL_W / pe.n;
+
+        // Which swatch is the cursor over? (the top STRIP_H band is the swatches;
+        // the name row below it is the whole-palette apply target).
+        int hov_sw = -1;
+        if (hov) {
+            ImVec2 m = ImGui::GetMousePos();
+            if (m.y <= cp.y + 2.f + STRIP_H) {
+                hov_sw = (int)((m.x - cp.x) / sw);
+                hov_sw = hov_sw < 0 ? 0 : (hov_sw >= pe.n ? pe.n - 1 : hov_sw);
+            }
+        }
+
         for (int ci = 0; ci < pe.n; ++ci) {
             ImVec2 s0 = {cp.x + ci*sw, cp.y + 2.f};
             ImVec2 s1 = {cp.x + (ci+1)*sw, cp.y + 2.f + STRIP_H};
@@ -568,6 +612,8 @@ void palette_widget(const char* id, float** slots, int n_slots, bool has_alpha) 
             if (ci == pe.n - 1) rf = ImDrawFlags_RoundCornersTopRight | ImDrawFlags_RoundCornersBottomRight;
             if (pe.n == 1)      rf = ImDrawFlags_RoundCornersAll;
             dl->AddRectFilled(s0, s1, IM_COL32(pe.c[ci][0], pe.c[ci][1], pe.c[ci][2], 255), 4.f, rf);
+            if (ci == hov_sw)  // highlight the swatch under the cursor
+                dl->AddRect(s0, s1, IM_COL32(255,255,255,235), 4.f, rf, 2.f);
         }
 
         // Name
@@ -580,18 +626,34 @@ void palette_widget(const char* id, float** slots, int n_slots, bool has_alpha) 
         dl->AddRect(cp, {cp.x+COL_W, cp.y+CARD_H},
             hov ? IM_COL32(140,120,255,200) : IM_COL32(45,42,65,180), 5.f, 0, 1.f);
 
-        // Click → apply to all slots
+        // Click: a single swatch → the focused slot (then auto-advance so you can
+        // fill a multi-colour target swatch-by-swatch); the name row → the whole
+        // palette across every slot.
         if (ImGui::IsItemClicked()) {
-            for (int si = 0; si < n_slots; ++si) {
-                int ci = si < pe.n ? si : pe.n - 1;
-                slots[si][0] = pe.c[ci][0] / 255.f;
-                slots[si][1] = pe.c[ci][1] / 255.f;
-                slots[si][2] = pe.c[ci][2] / 255.f;
-                (void)has_alpha; // alpha always preserved — we never touch [3]
+            (void)has_alpha;  // alpha always preserved — we never touch [3]
+            if (hov_sw >= 0) {
+                slots[ws.focus][0] = pe.c[hov_sw][0] / 255.f;
+                slots[ws.focus][1] = pe.c[hov_sw][1] / 255.f;
+                slots[ws.focus][2] = pe.c[hov_sw][2] / 255.f;
+                if (n_slots > 1) ws.focus = (ws.focus + 1) % n_slots;
+            } else {
+                for (int si = 0; si < n_slots; ++si) {
+                    int ci = si < pe.n ? si : pe.n - 1;
+                    slots[si][0] = pe.c[ci][0] / 255.f;
+                    slots[si][1] = pe.c[ci][1] / 255.f;
+                    slots[si][2] = pe.c[ci][2] / 255.f;
+                }
             }
         }
 
-        if (hov) ImGui::SetTooltip("%s  ·  %s", pe.name, pe.tag);
+        if (hov) {
+            if (hov_sw >= 0 && n_slots > 1)
+                ImGui::SetTooltip("%s  \xc2\xb7  swatch \xe2\x86\x92 slot %d", pe.name, ws.focus + 1);
+            else if (hov_sw >= 0)
+                ImGui::SetTooltip("%s  \xc2\xb7  use this colour", pe.name);
+            else
+                ImGui::SetTooltip("%s  \xc2\xb7  apply whole palette", pe.name);
+        }
         ImGui::PopID();
     }
 
