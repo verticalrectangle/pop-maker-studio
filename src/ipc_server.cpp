@@ -540,6 +540,7 @@ static ClipType parse_clip_type(const std::string& s) {
     if (s == "body_fx")   return ClipType::BodyFX;
     if (s == "record")    return ClipType::Record;
     if (s == "video_record") return ClipType::VideoRecord;
+    if (s == "bus")       return ClipType::Bus;
     return ClipType::Text;
 }
 
@@ -1355,99 +1356,9 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         return json::object();
     }
 
-    if (method == "set_track_bus") {
-        int ti = track_by_name_or_index(state, params);
-        if (!check_track(state, ti, err)) return {};
-        int b = params.value("bus", 0);
-        if (b < 0 || b >= (int)state.buses.size()) { err = "bus index out of range"; return {}; }
-        state.tracks[ti].bus = b;
-        return json::object();
-    }
-
-    if (method == "set_bus") {
-        // Create or configure a bus: {bus?: index (absent = append new),
-        // name?, gain?, effects?: [{fx_type, params}] (replaces the chain)}.
-        int b = params.value("bus", -1);
-        if (b < 0) {
-            if ((int)state.buses.size() >= MAX_BUSES) { err = "bus limit reached"; return {}; }
-            Bus nb;
-            char n[24];
-            snprintf(n, sizeof(n), "Bus %d", (int)state.buses.size());
-            nb.name = n;
-            state.buses.push_back(std::move(nb));
-            b = (int)state.buses.size() - 1;
-        }
-        if (b >= (int)state.buses.size()) { err = "bus index out of range"; return {}; }
-        Bus& bus = state.buses[(size_t)b];
-        if (params.contains("name")) bus.name = params.value("name", bus.name);
-        if (params.contains("gain")) bus.gain = params.value("gain", bus.gain);
-        if (params.contains("effects") && params["effects"].is_array()) {
-            bus.fx_chain.clear();
-            for (auto& e : params["effects"]) {
-                std::string fxt = e.value("fx_type", "audio_reverb");
-                Clip se;
-                se.clip_type = ClipType::Effect;
-                se.fx_type   = parse_fx_type(fxt);
-                if (!fx_type_is_audio_fx(se.fx_type)) {
-                    err = "'" + fxt + "' is not an audio effect"; return {};
-                }
-                json ap = e.value("params", json::object());
-                AudioFX& afx = se.audio_fx;
-                switch (se.fx_type) {
-                    case FXType::AudioAutotune:
-                        afx.autotune_on    = true;
-                        afx.autotune_key   = ap.value("key",   afx.autotune_key);
-                        afx.autotune_scale = ap.value("scale", afx.autotune_scale);
-                        afx.autotune_speed = ap.value("speed_ms", afx.autotune_speed);
-                        break;
-                    case FXType::AudioPitch:
-                        afx.pitch_on        = true;
-                        afx.pitch_semitones = ap.value("semitones", afx.pitch_semitones);
-                        break;
-                    case FXType::AudioFormant:
-                        afx.formant_on    = true;
-                        afx.formant_shift = ap.value("shift", afx.formant_shift);
-                        break;
-                    case FXType::AudioDelay:
-                        afx.delay_on       = true;
-                        afx.delay_time     = ap.value("time",     afx.delay_time);
-                        afx.delay_feedback = ap.value("feedback", afx.delay_feedback);
-                        afx.delay_mix      = ap.value("mix",      afx.delay_mix);
-                        break;
-                    case FXType::AudioReverb:
-                        afx.reverb_on   = true;
-                        afx.reverb_room = ap.value("room", afx.reverb_room);
-                        afx.reverb_damp = ap.value("damp", afx.reverb_damp);
-                        afx.reverb_mix  = ap.value("mix",  afx.reverb_mix);
-                        break;
-                    default: break;
-                }
-                bus.fx_chain.push_back(se);
-            }
-            bus.fx_chain_selected = bus.fx_chain.empty() ? -1 : 0;
-        }
-        json r; r["bus"] = b;
-        return r;
-    }
-
-    if (method == "get_buses") {
-        json arr = json::array();
-        for (int b = 0; b < (int)state.buses.size(); ++b) {
-            const Bus& bus = state.buses[(size_t)b];
-            json e;
-            e["index"] = b;
-            e["name"]  = bus.name;
-            e["gain"]  = bus.gain;
-            e["effects"] = (int)bus.fx_chain.size();
-            json routed = json::array();
-            for (int ti = 0; ti < (int)state.tracks.size(); ++ti)
-                if (state.tracks[ti].bus == b) routed.push_back(ti);
-            e["tracks"] = routed;
-            arr.push_back(e);
-        }
-        json r; r["buses"] = arr;
-        return r;
-    }
+    // (Old global bus IPC — set_track_bus / set_bus / get_buses — removed with
+    // the global bus system. Bus bricks are plain clips: add_clip(type="bus"),
+    // set_clip_prop(volume=gain), placed on a track to group the tracks below.)
 
     if (method == "get_fx_segments") {
         int ti = track_by_name_or_index(state, params), ci = params.value("clip", -1);

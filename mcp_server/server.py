@@ -72,8 +72,8 @@ _CATEGORIES: dict[str, list[str]] = {
         "validate_glsl",
     ],
     "audio": [
-        "analyze_audio", "get_audio_analysis", "get_audio_perf", "get_buses", "set_bus",
-        "set_track_bus", "set_audio_path", "remove_silence", "cut_filler_words", "find_audio_cue",
+        "analyze_audio", "get_audio_analysis", "get_audio_perf",
+        "set_audio_path", "remove_silence", "cut_filler_words", "find_audio_cue",
     ],
     "transcript": [
         "trigger_pipeline", "get_pipeline_status", "get_transcript", "search_transcript",
@@ -2234,52 +2234,6 @@ async def list_tools() -> list[Tool]:
                     "clip":       {"type": "integer", "description": "Index of the coupled FX brick"},
                 },
                 "required": ["clip"],
-            },
-        ),
-        Tool(
-            name="get_buses",
-            description="List audio buses: name, gain, FX chain, and which tracks route to each.",
-            inputSchema={"type": "object", "properties": {}},
-        ),
-        Tool(
-            name="set_bus",
-            description=(
-                "Create or configure an audio bus. Omit 'bus' to append a new one (max 8). "
-                "'effects' REPLACES the bus FX chain (same audio fx_types as "
-                "add_audio_multifx_brick). Buses process live — preview/monitor/export all "
-                "stream through the same chain."
-            ),
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "bus":     {"type": "integer", "description": "Bus index; omit to create a new bus"},
-                    "name":    {"type": "string"},
-                    "gain":    {"type": "number"},
-                    "effects": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "fx_type": {"type": "string"},
-                                "params":  {"type": "object"},
-                            },
-                            "required": ["fx_type"],
-                        },
-                    },
-                },
-            },
-        ),
-        Tool(
-            name="set_track_bus",
-            description="Route a track's audio to a bus (0 = Main). UI equivalent: track right-click → Output bus.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "track":      {"type": "integer"},
-                    "track_name": {"type": "string"},
-                    "bus":        {"type": "integer"},
-                },
-                "required": ["bus"],
             },
         ),
         Tool(

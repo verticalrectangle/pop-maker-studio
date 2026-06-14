@@ -12,7 +12,7 @@
 // ── Binary serialization helpers ──────────────────────────────────────────────
 
 static const uint32_t MAGIC   = 0x534D5001u; // "PMS\x01"
-static const uint32_t VERSION = 46u;  // v46: per-clip frame-rate conform (src_fps + flags)
+static const uint32_t VERSION = 47u;  // v47: bus bricks replace global buses (drop track.bus + AppState::buses)
 
 struct Writer {
     std::ofstream f;
@@ -470,7 +470,6 @@ static Clip read_clip(Reader& r, uint32_t version) {
 static void write_track(Writer& w, const Track& t) {
     w.str(t.name);
     w.pod((uint8_t)t.visible); w.pod((uint8_t)t.muted); w.pod((uint8_t)t.locked); w.pod(t.sub_row);
-    w.pod(t.bus);   // v42
     uint32_t nc = (uint32_t)t.clips.size();
     w.pod(nc);
     for (auto& c : t.clips) write_clip(w, c);
@@ -482,7 +481,7 @@ static Track read_track(Reader& r, uint32_t version) {
     t.visible = (bool)r.pod<uint8_t>(); t.muted = (bool)r.pod<uint8_t>();
     if (version >= 9u) t.locked = (bool)r.pod<uint8_t>();
     t.sub_row = r.pod<int>();
-    if (version >= 42u) t.bus = r.pod<int>();
+    if (version >= 42u && version < 47u) (void)r.pod<int>();  // old track.bus — discard
     uint32_t nc = r.pod<uint32_t>();
     for (uint32_t i = 0; i < nc && r.ok; ++i)
         t.clips.push_back(read_clip(r, version));
@@ -560,14 +559,8 @@ bool project_save(const AppState& state, const std::string& path) {
     w.pod((uint32_t)state.bin.size());
     for (auto& p : state.bin) w.str(p);
 
-    // v42: audio buses (chains reuse the clip serializer)
-    w.pod((uint32_t)state.buses.size());
-    for (auto& b : state.buses) {
-        w.str(b.name);
-        w.pod(b.gain);
-        w.pod((uint32_t)b.fx_chain.size());
-        for (auto& se : b.fx_chain) write_clip(w, se);
-    }
+    // v47: global buses removed (bus bricks are plain clips). Nothing written
+    // here anymore; the loader skips the old block for versions 42..46.
 
     // v44: loop brace region (armed state + in/out)
     w.pod((uint8_t)state.loop_play);
@@ -670,24 +663,18 @@ bool project_load(AppState& state, const std::string& path) {
             state.bin.push_back(r.str());
     }
     // v42: audio buses
-    if (version >= 42u) {
+    // v42..46: old global buses block — read and discard to keep byte alignment
+    // (bus bricks are now plain clips, already loaded as part of the tracks).
+    if (version >= 42u && version < 47u) {
         uint32_t nbus = r.pod<uint32_t>();
-        if (nbus >= 1 && nbus <= (uint32_t)MAX_BUSES) {
-            state.buses.clear();
-            for (uint32_t i = 0; i < nbus && r.ok; ++i) {
-                Bus b;
-                b.name = r.str();
-                b.gain = r.pod<float>();
-                uint32_t nch = r.pod<uint32_t>();
-                for (uint32_t k = 0; k < nch && r.ok; ++k)
-                    b.fx_chain.push_back(read_clip(r, version));
-                state.buses.push_back(std::move(b));
-            }
+        for (uint32_t i = 0; i < nbus && r.ok; ++i) {
+            (void)r.str();           // name
+            (void)r.pod<float>();    // gain
+            uint32_t nch = r.pod<uint32_t>();
+            for (uint32_t k = 0; k < nch && r.ok; ++k)
+                (void)read_clip(r, version);   // discard fx-chain entries
         }
     }
-    if (state.buses.empty()) state.buses.push_back(Bus{"Master", {}, -1, 1.f});
-    for (auto& t : state.tracks)
-        if (t.bus < 0 || t.bus >= (int)state.buses.size()) t.bus = 0;
 
     // v44: loop brace region
     if (version >= 44u) {

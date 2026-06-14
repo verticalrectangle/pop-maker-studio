@@ -761,21 +761,28 @@ std::vector<AudioFXSegment> collect_audio_fx_segments(const AppState& state,
     return segs;
 }
 
-std::vector<AudioBusDesc> collect_bus_descs(const AppState& state) {
-    std::vector<AudioBusDesc> out;
-    for (const auto& b : state.buses) {
-        AudioBusDesc d;
-        d.gain = b.gain;
-        uint64_t h = 14695981039346656037ull;
-        for (const auto& se : b.fx_chain) {
-            if (!fx_type_is_audio_fx(se.fx_type)) continue;
-            AudioFX fx;
-            if (!audio_fx_from_brick(se, fx)) continue;
-            d.stages.push_back(fx);
-            h = (h ^ audio_fx_hash(fx)) * 1099511628211ull;
+std::vector<AudioBusBrick> collect_bus_bricks(const AppState& state) {
+    std::vector<AudioBusBrick> out;
+    for (int ti = 0; ti < (int)state.tracks.size(); ++ti) {
+        const Track& tr = state.tracks[(size_t)ti];
+        for (const auto& cl : tr.clips) {
+            if (cl.clip_type != ClipType::Bus) continue;
+            AudioBusBrick d;
+            d.track = ti;
+            d.start = cl.start;
+            d.end   = cl.end;
+            d.gain  = cl.volume;          // the brick's gain
+            uint64_t h = 14695981039346656037ull;
+            for (const auto& se : cl.fx_chain) {   // audio FX entries
+                if (!fx_type_is_audio_fx(se.fx_type)) continue;
+                AudioFX fx;
+                if (!audio_fx_from_brick(se, fx)) continue;
+                d.stages.push_back(fx);
+                h = (h ^ audio_fx_hash(fx)) * 1099511628211ull;
+            }
+            d.hash = d.stages.empty() ? 0 : h;
+            out.push_back(d);
         }
-        d.hash = d.stages.empty() ? 0 : h;
-        out.push_back(d);
     }
     return out;
 }

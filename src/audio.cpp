@@ -148,7 +148,7 @@ static std::map<std::pair<std::string,uint64_t>, std::shared_ptr<FXBuf>> g_fx_ca
 // ─────────────────────────────────────────────────────────────────────────────
 
 struct ClipInfo {
-    int   bus = 0;
+    int   track = 0;
     float tl_start, tl_end;
     float in_point, speed;
     float volume, pan;
@@ -200,26 +200,26 @@ static std::vector<SrcBuf>   g_src_bufs;   // guarded by g_clip_mutex
 // thread (a missed block is an audible silence splice — "static"), so the UI
 // builds a fresh immutable snapshot each frame and publishes it with a
 // pointer swap; the callback's lock hold is one shared_ptr copy.
-static constexpr int AB_MAX = 8;   // mirrors MAX_BUSES (asserted in update)
+static constexpr int AB_MAX = 8;   // max simultaneously-active bus bricks + direct
+// One active bus brick in a published snapshot.
+struct SnapBrick {
+    int           track = 0;        // groups tracks > this
+    float         start = 0.f, end = 0.f;
+    AudioFXChain* chain = nullptr;  // owned by g_chain_reg
+    float         gain  = 1.f;
+    float         lat_s = 0.f;      // PDC read-ahead (seconds)
+};
 struct ClipSnapshot {
-    std::vector<ClipInfo> clips;      // Audio-track clips
-    std::vector<ClipInfo> vid_clips;  // Video-embedded audio
-    AudioFXChain* bus_chain[AB_MAX] = {};
-    float         bus_gain[AB_MAX]  = {1.f, 1.f, 1.f, 1.f, 1.f, 1.f, 1.f, 1.f};
-    float         bus_lat_s[AB_MAX] = {};  // PDC read-ahead per bus (seconds)
-    int           n_buses = 1;
+    std::vector<ClipInfo>  clips;      // Audio-track clips
+    std::vector<ClipInfo>  vid_clips;  // Video-embedded audio
+    std::vector<SnapBrick> bricks;     // bus bricks, ascending track
 };
 static std::mutex                          g_snap_mutex;
 static std::shared_ptr<const ClipSnapshot> g_snap = std::make_shared<ClipSnapshot>();
 
-// Current bus config — written by audio_buses_update (UI thread, under
-// g_clip_mutex), copied into every published snapshot.
-static struct {
-    AudioFXChain* chain[AB_MAX] = {};
-    float         gain[AB_MAX]  = {1.f, 1.f, 1.f, 1.f, 1.f, 1.f, 1.f, 1.f};
-    float         lat_s[AB_MAX] = {};
-    int           n = 1;
-} g_buses;
+// Current bus-brick config — written by audio_bus_bricks_update (UI thread,
+// under g_clip_mutex), copied into every published snapshot.
+static std::vector<SnapBrick> g_bus_bricks;
 
 // ── Audio callback ────────────────────────────────────────────────────────────
 
@@ -285,11 +285,27 @@ static void mix_master(float* out, ma_uint32 frameCount) {
         // ── All clips (Video + Audio) read from per-source PCM buffers ──────────
         // Video and Audio clips use the same source-buffer system so they layer
         // cleanly within their brick range regardless of clip type.
+        // Owning bus brick for a clip at time t: the brick on the highest track
+        // ABOVE the clip (brick.track < clip.track) whose span [start,end)
+        // contains t. -1 = ungrouped (sums straight to output). Brick i → slot
+        // i+1; slot 0 is the direct/ungrouped bus.
+        auto owner_brick = [&](int cl_track) -> int {
+            int best = -1, best_track = -1;
+            for (int i = 0; i < (int)snap->bricks.size(); ++i) {
+                const SnapBrick& b = snap->bricks[i];
+                if (b.track < cl_track && t >= b.start && t < b.end && b.track > best_track) {
+                    best_track = b.track; best = i;
+                }
+            }
+            return best;
+        };
+
         auto mix_clip = [&](const ClipInfo& cl, float global_vol,
                             float (*acc)[2]) {
-            // PDC: clips on a bus with grain FX read ahead by the chain's
-            // latency so the post-chain audio lands back on the grid.
-            float tb = t + snap->bus_lat_s[cl.bus];
+            int ob = owner_brick(cl.track);
+            // PDC: clips routed through a brick with grain FX read ahead by its
+            // chain latency so the post-chain audio lands back on the grid.
+            float tb = t + (ob >= 0 ? snap->bricks[ob].lat_s : 0.f);
             if (tb < cl.tl_start || tb >= cl.tl_end) return;
             const std::vector<float>* buf_ptr = cl.buf ? cl.buf.get() : nullptr;
             if (!buf_ptr || buf_ptr->empty()) return;
@@ -309,32 +325,30 @@ static void mix_master(float* out, ma_uint32 frameCount) {
             float vol  = fmaxf(0.f, vraw) * global_vol * fade;
             float panL = pan <= 0.f ? 1.f : (1.f - pan);
             float panR = pan >= 0.f ? 1.f : (1.f + pan);
-            int b = cl.bus;
-            acc[b][0] += sl  * vol * panL;
-            acc[b][1] += sr2 * vol * panR;
+            int slot = (ob >= 0 && ob + 1 < AB_MAX) ? ob + 1 : 0;
+            acc[slot][0] += sl  * vol * panL;
+            acc[slot][1] += sr2 * vol * panR;
         };
 
         float bus_acc[AB_MAX][2] = {};
         for (const auto& cl : snap->vid_clips) mix_clip(cl, g_volume, bus_acc);
         for (const auto& cl : snap->clips)     mix_clip(cl, 1.f, bus_acc);
 
-        // Buses → master: each bus runs its live chain, then sums into the
-        // master bus, whose own chain runs last. Jump detection rides the
-        // master-clock frame index, so seeks and loop wraps wipe tails.
+        // Bus bricks → output: each brick runs its live chain on its submix,
+        // then sums into the output with its gain. Ungrouped audio (slot 0)
+        // passes straight through. Jump detection rides the master-clock frame
+        // index, so seeks and loop wraps wipe tails.
         int64_t fidx = (int64_t)(fpos / 2);
         float mL = bus_acc[0][0], mR = bus_acc[0][1];
-        int nb = snap->n_buses < AB_MAX ? snap->n_buses : AB_MAX;
-        for (int b = 1; b < nb; ++b) {
-            float L = bus_acc[b][0], R = bus_acc[b][1];
-            if (snap->bus_chain[b])
-                audio_fx_chain_process_seg(snap->bus_chain[b], L, R, t, fidx);
-            mL += L * snap->bus_gain[b];
-            mR += R * snap->bus_gain[b];
+        for (int i = 0; i < (int)snap->bricks.size() && i + 1 < AB_MAX; ++i) {
+            float L = bus_acc[i+1][0], R = bus_acc[i+1][1];
+            if (snap->bricks[i].chain)
+                audio_fx_chain_process_seg(snap->bricks[i].chain, L, R, t, fidx);
+            mL += L * snap->bricks[i].gain;
+            mR += R * snap->bricks[i].gain;
         }
-        if (snap->bus_chain[0])
-            audio_fx_chain_process_seg(snap->bus_chain[0], mL, mR, t, fidx);
-        out[f*2]   += mL * snap->bus_gain[0];
-        out[f*2+1] += mR * snap->bus_gain[0];
+        out[f*2]   += mL;
+        out[f*2+1] += mR;
     }
 
     // Hard-clamp to prevent inter-clip summing from clipping.
@@ -876,7 +890,7 @@ static void clips_fill(std::vector<ClipInfo>& out, const std::vector<AudioClipDe
     out.clear();
     for (const auto& d : descs) {
         ClipInfo ci;
-        ci.bus = (d.bus >= 0 && d.bus < AB_MAX) ? d.bus : 0;
+        ci.track = d.track;
         ci.tl_start = d.tl_start; ci.tl_end  = d.tl_end;
         ci.in_point = d.in_point; ci.speed    = d.speed;
         ci.volume   = d.volume;   ci.pan      = d.pan;
@@ -912,12 +926,7 @@ static void clips_fill(std::vector<ClipInfo>& out, const std::vector<AudioClipDe
 // Publish one half of the snapshot, carrying the other half over.
 static void snapshot_publish(std::vector<ClipInfo>&& filled, bool video_half) {
     auto ns = std::make_shared<ClipSnapshot>();
-    for (int b = 0; b < AB_MAX; ++b) {
-        ns->bus_chain[b] = g_buses.chain[b];
-        ns->bus_gain[b]  = g_buses.gain[b];
-        ns->bus_lat_s[b] = g_buses.lat_s[b];
-    }
-    ns->n_buses = g_buses.n;
+    ns->bricks = g_bus_bricks;
     std::lock_guard<std::mutex> lk(g_snap_mutex);
     if (video_half) {
         ns->vid_clips = std::move(filled);
@@ -929,29 +938,33 @@ static void snapshot_publish(std::vector<ClipInfo>&& filled, bool video_half) {
     g_snap = std::move(ns);
 }
 
-void audio_buses_update(const std::vector<AudioBusDesc>& buses) {
+void audio_bus_bricks_update(const std::vector<AudioBusBrick>& bricks) {
     std::lock_guard<std::mutex> lk(g_clip_mutex);
-    int n = (int)buses.size();
-    if (n < 1) n = 1;
-    if (n > AB_MAX) n = AB_MAX;
-    for (int b = 0; b < AB_MAX; ++b) {
-        const AudioBusDesc* d = (b < (int)buses.size()) ? &buses[(size_t)b] : nullptr;
-        char key[8];
-        snprintf(key, sizeof(key), "B%d", b);
+    std::vector<SnapBrick> out;
+    out.reserve(bricks.size());
+    for (int i = 0; i < (int)bricks.size() && i + 1 < AB_MAX; ++i) {
+        const AudioBusBrick& d = bricks[(size_t)i];
+        // Chain keyed by the brick's track+span so its DSP state survives the
+        // per-frame republish (registry GC retires it when the brick is gone).
+        char key[32];
+        snprintf(key, sizeof(key), "BUS%d:%d", d.track,
+                 (int)llroundf(d.start * 1000.f));
         ChainSlot& slot = g_chain_reg[key];
-        uint64_t want = (d && !d->stages.empty()) ? (d->hash | 1ull) : 0ull;
+        uint64_t want = !d.stages.empty() ? (d.hash | 1ull) : 0ull;
         if (slot.hash != want) {
             if (slot.chain) g_chain_retire.push_back({slot.chain, mono_now()});
-            slot.chain = want ? audio_fx_chain_create(d->stages, 44100.f) : nullptr;
+            slot.chain = want ? audio_fx_chain_create(d.stages, 44100.f) : nullptr;
             slot.hash  = want;
         }
         slot.last_use = mono_now();
-        g_buses.chain[b] = slot.chain;
-        g_buses.gain[b]  = d ? d->gain : 1.f;
-        g_buses.lat_s[b] = slot.chain
+        SnapBrick sb;
+        sb.track = d.track; sb.start = d.start; sb.end = d.end;
+        sb.gain  = d.gain;  sb.chain = slot.chain;
+        sb.lat_s = slot.chain
             ? (float)audio_fx_chain_latency_frames(slot.chain) / 44100.f : 0.f;
+        out.push_back(sb);
     }
-    g_buses.n = n;
+    g_bus_bricks = std::move(out);
 }
 
 void audio_clips_update(const std::vector<AudioClipDesc>& descs) {

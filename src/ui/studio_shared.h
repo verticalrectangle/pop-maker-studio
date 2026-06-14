@@ -143,8 +143,8 @@ bool fx_type_is_audio_fx(FXType ft);
 // Extract the AudioFX params from a single audio FX entry (brick or chain
 // entry). Returns false when the entry is inactive/not audio.
 bool audio_fx_from_brick_pub(const Clip& cl, AudioFX& out);
-// Bus configs for the live mixer (index 0 = Master).
-std::vector<AudioBusDesc> collect_bus_descs(const AppState& state);
+// Bus-brick configs for the live mixer (one per ClipType::Bus clip).
+std::vector<AudioBusBrick> collect_bus_bricks(const AppState& state);
 std::vector<AudioFXSegment> collect_audio_fx_segments(const AppState& state,
                                                       int track_idx,
                                                       const Clip& audio_clip);

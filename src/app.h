@@ -74,7 +74,7 @@ enum class OutputFormat { Vertical, Horizontal, Square };
 // ── Track / clip data model ───────────────────────────────────────────────────
 
 // Each clip carries its own type so any track can hold mixed content.
-enum class ClipType { Text, Lyrics, Subtitle, Video, Audio, Effect, Background, BodyFX, MultiFX, Record, VideoRecord, AudioMultiFX };
+enum class ClipType { Text, Lyrics, Subtitle, Video, Audio, Effect, Background, BodyFX, MultiFX, Record, VideoRecord, AudioMultiFX, Bus };
 
 // A clip that composites as video: a Video clip, or a VideoRecord brick whose
 // selected take is mirrored into `text` (path consumers stay unchanged).
@@ -370,20 +370,14 @@ struct Track {
     bool              locked  = false;  // when true, blocks all clip edits on this track
     bool              managed = false;  // owned by typography system — preset rewrites clips in-place
     int               sub_row = 0;
-    int               bus     = 0;      // audio routing: index into AppState::buses (0 = Master)
 };
 
-// ── Audio bus ─────────────────────────────────────────────────────────────────
-// DAW-style: every track routes to a bus; each bus runs a live FX chain (same
-// Clip-entry shape as the Audio Multi-FX brick) and a gain, then sums into
-// Master (bus 0 — always present, its chain is the master chain).
-struct Bus {
-    std::string       name = "Bus";
-    std::vector<Clip> fx_chain;            // audio FX entries (Effect clips)
-    int               fx_chain_selected = -1;
-    float             gain = 1.f;
-};
-static const int MAX_BUSES = 8;
+// ── Audio bus brick ────────────────────────────────────────────────────────────
+// A Bus is a Clip (ClipType::Bus) placed on a track: it submixes the audio of
+// every track BELOW it (down to the next bus brick), gated by its own time span,
+// then applies its FX chain (clip.fx_chain — same Effect-Clip shape as the Audio
+// Multi-FX brick) and gain (clip.volume) before summing to the output. Replaces
+// the old global per-track bus routing.
 
 // ── Creative FX accumulator ───────────────────────────────────────────────────
 
@@ -542,7 +536,6 @@ struct AppState {
 
     // timeline
     std::vector<Track> tracks;
-    std::vector<Bus>   buses{Bus{"Master", {}, -1, 1.f}};  // [0] = Master, always
     int   selected_track = -1;
     int   selected_clip  = -1;
 

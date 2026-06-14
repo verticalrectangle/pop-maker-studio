@@ -141,6 +141,42 @@ static std::string bake_audio_fx_wav(const std::string& src,
     return out_path;
 }
 
+// Does a media file have an audio stream? Cached probe (file-scope mirror of the
+// local lambda used in the per-stream builder).
+static bool render_path_has_audio(const std::string& p) {
+    static std::map<std::string, bool> cache;
+    auto it = cache.find(p);
+    if (it != cache.end()) return it->second;
+    bool ok = video_probe_file(p).has_audio;
+    cache[p] = ok;
+    return ok;
+}
+
+// The bus brick a clip on track `ti` over [t0,t1] routes through: the brick on
+// the highest track ABOVE it (lower index) whose span overlaps the clip. Mirrors
+// the live mixer's owner_brick (nearest above, span-gated). null = ungrouped.
+static const Clip* bus_brick_for(const AppState& state, int ti, float t0, float t1) {
+    const Clip* best = nullptr; int best_track = -1;
+    for (int bt = 0; bt < ti && bt < (int)state.tracks.size(); ++bt) {
+        for (const auto& c : state.tracks[(size_t)bt].clips) {
+            if (c.clip_type != ClipType::Bus) continue;
+            if (c.start < t1 && c.end > t0 && bt > best_track) {   // spans overlap
+                best = &c; best_track = bt;
+            }
+        }
+    }
+    return best;
+}
+
+// Cumulative bus-brick gain for a clip on track `ti` (the owning brick's gain;
+// 1.0 when ungrouped). Applied at the per-stream volume stage. The brick's span
+// is honored at the FX stage; for gain we apply the brick's gain to the clip
+// (exact when the clip sits within the span — the intended grouping case).
+static float bus_brick_gain(const AppState& state, int ti, const Clip& cl) {
+    const Clip* bb = bus_brick_for(state, ti, cl.start, cl.end);
+    return bb ? bb->volume : 1.f;
+}
+
 // Effective FX segments for an exported clip — same rules as the preview:
 // the clip's own chain covers its whole range, otherwise track bricks apply
 // windowed to their overlap. Voice conversion is an ML job handled via
@@ -159,25 +195,19 @@ static std::vector<AudioFXSegment> export_fx_segments(const AppState& state,
     } else {
         segs = collect_audio_fx_segments(state, ti, cl);
     }
-    // Bus chain: baked per routed clip over its full range. Identical to
-    // processing the summed bus stem for linear FX (delay/reverb/gain — the
-    // typical bus inserts); grain FX differ marginally on overlapping clips.
-    if (ti >= 0 && ti < (int)state.tracks.size()) {
-        int b = state.tracks[ti].bus;
-        if (b > 0 && b < (int)state.buses.size()) {
-            float spd = fmaxf(0.01f, cl.speed);
-            float s0 = cl.in_point, s1 = cl.in_point + (cl.end - cl.start) * spd;
-            for (const auto& se : state.buses[(size_t)b].fx_chain) {
-                AudioFX fx;
-                if (audio_fx_from_brick_pub(se, fx)) segs.push_back({s0, s1, fx});
-            }
-        }
-    }
-    // Master chain applies to everything.
-    if (!state.buses.empty() && !state.buses[0].fx_chain.empty()) {
+    // Bus brick: the clip routes through the nearest bus brick above it (lower
+    // track index) whose span overlaps the clip. Its FX chain bakes over the
+    // overlap window (clip↔span, mapped to source time). Linear inserts
+    // (EQ/comp/reverb/gain) match the summed-stem result; grain FX differ
+    // marginally on overlapping clips. The brick's gain is applied separately at
+    // the per-stream volume stage (bus_brick_gain).
+    if (const Clip* bb = bus_brick_for(state, ti, cl.start, cl.end)) {
         float spd = fmaxf(0.01f, cl.speed);
-        float s0 = cl.in_point, s1 = cl.in_point + (cl.end - cl.start) * spd;
-        for (const auto& se : state.buses[0].fx_chain) {
+        float ov0 = fmaxf(cl.start, bb->start);
+        float ov1 = fminf(cl.end,   bb->end);
+        float s0  = cl.in_point + (ov0 - cl.start) * spd;
+        float s1  = cl.in_point + (ov1 - cl.start) * spd;
+        for (const auto& se : bb->fx_chain) {
             AudioFX fx;
             if (audio_fx_from_brick_pub(se, fx)) segs.push_back({s0, s1, fx});
         }
@@ -1182,6 +1212,18 @@ static std::vector<std::string> build_args(AppState& state) {
                 rl.track_idx = ti; rl.clip_idx = ci;
                 rl.in_idx    = arr_idx;  // resolved to real ffmpeg idx below
                 layers.push_back(rl);
+                // The video's own audio must respect the bus brick gain too. It
+                // usually arrives via state.audio_path (added above at vol 1.0);
+                // replace that entry's volume with the bus-gained value (mirrors
+                // the Audio-clip dedup below), else add it as its own stream.
+                if (render_path_has_audio(cl.text)) {
+                    float vvol = (state.tracks[ti].muted ? 0.f : cl.volume)
+                                 * bus_brick_gain(state, ti, cl);
+                    bool found = false;
+                    for (auto& ai : audio_ins)
+                        if (ai.path == cl.text) { ai.vol = vvol; found = true; break; }
+                    if (!found) audio_ins.push_back({cl.text, cl.start, cl.end, vvol});
+                }
             } else if (cl.clip_type == ClipType::Text   ||
                        cl.clip_type == ClipType::Lyrics ||
                        cl.clip_type == ClipType::Subtitle) {
@@ -1190,7 +1232,8 @@ static std::vector<std::string> build_args(AppState& state) {
                 layers.push_back(rl);
             } else if (cl.clip_type == ClipType::Audio) {
                 if (cl.text.empty() || !fs::exists(cl.text)) continue;
-                float vol = state.tracks[ti].muted ? 0.f : cl.volume;
+                float vol = (state.tracks[ti].muted ? 0.f : cl.volume)
+                            * bus_brick_gain(state, ti, cl);
                 // Replace primary audio entry if same path, else add new stream
                 bool found = false;
                 for (auto& ai : audio_ins) {
@@ -2373,7 +2416,8 @@ void render_start_gl(AppState& state) {
                     }
                     AudioIn ai;
                     ai.path  = tp;
-                    ai.vol   = state.tracks[ti].muted ? 0.f : cl.volume;
+                    ai.vol   = (state.tracks[ti].muted ? 0.f : cl.volume)
+                               * bus_brick_gain(state, ti, cl);
                     ai.ss    = fmaxf(0.f, -cl.start);   // overhang past t=0
                     ai.to    = cl.end - cl.start;
                     ai.delay = fmaxf(0.f, cl.start);
@@ -2403,7 +2447,8 @@ void render_start_gl(AppState& state) {
                 if (!fs::exists(cl.text)) continue;
                 if (cl.clip_type == ClipType::Video && !path_has_audio(cl.text)) continue;
                 float speed = fmaxf(0.01f, cl.speed);
-                float vol   = state.tracks[ti].muted ? 0.f : cl.volume;
+                float vol   = (state.tracks[ti].muted ? 0.f : cl.volume)
+                              * bus_brick_gain(state, ti, cl);
                 // Clips dragged left past t=0 (start < 0): only the part from
                 // timeline 0 is audible. Fold the overhang into in_point so
                 // the ss/to/itsoffset math below needs no negative offsets —

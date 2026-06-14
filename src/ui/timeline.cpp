@@ -3944,29 +3944,8 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
         Track* ct = valid ? &state.tracks[ti] : nullptr;
 
         if (ct) {
-            // ── Audio bus routing ────────────────────────────────────────────
-            if (ImGui::BeginMenu("Route to bus")) {
-                for (int b = 0; b < (int)state.buses.size(); ++b) {
-                    bool cur = ct->bus == b;
-                    if (ImGui::MenuItem(state.buses[b].name.c_str(), nullptr, cur)) {
-                        ct->bus = b;
-                        history_push(state, "Route track to " + state.buses[b].name);
-                    }
-                }
-                ImGui::Separator();
-                if ((int)state.buses.size() < MAX_BUSES &&
-                    ImGui::MenuItem("New bus")) {
-                    Bus nb;
-                    char n[24];
-                    snprintf(n, sizeof(n), "Bus %d", (int)state.buses.size());
-                    nb.name = n;
-                    state.buses.push_back(std::move(nb));
-                    ct->bus = (int)state.buses.size() - 1;
-                    history_push(state, "New bus");
-                }
-                ImGui::EndMenu();
-            }
-            ImGui::Separator();
+            // (Audio bus routing removed — grouping is now a Bus brick placed on
+            // a track, submixing the tracks below it.)
 
             // Rename — inline edit
             static char rename_buf[64] = {};
