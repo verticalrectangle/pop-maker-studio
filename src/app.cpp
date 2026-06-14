@@ -719,6 +719,7 @@ void app_frame(AppState& state) {
     } else if (!state.in_studio) {
         ui_home(state);
     } else {
+        autosave_tick(state, io.DeltaTime);   // periodic crash-recovery write
         ui_studio(state);
     }
 
@@ -727,6 +728,7 @@ void app_frame(AppState& state) {
 
 void app_shutdown(AppState& state) {
     g_shutdown.store(true);
+    recovery_clear();       // clean exit → no crash-recovery file to offer next launch
     agent_shutdown();
     ipc_server_stop();
     vrecorder_shutdown();   // kill the camera-capture child so it isn't orphaned

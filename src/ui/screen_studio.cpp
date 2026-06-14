@@ -153,12 +153,12 @@ static void handle_shortcuts(AppState& state) {
     if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_S)) {
         if (state.project_path.empty())
             state.project_path = filepicker_save("Save project", "PMS Project", "*.pms", project_save_default(state).c_str());
-        if (!state.project_path.empty()) { project_save(state, state.project_path); recent_projects_push(state.project_path); }
+        if (!state.project_path.empty()) { project_save(state, state.project_path); recent_projects_push(state.project_path); recovery_clear(); }
         return;
     }
     if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_S)) {
         std::string p = filepicker_save("Save project as", "PMS Project", "*.pms", project_save_default(state).c_str());
-        if (!p.empty()) { state.project_path = p; project_save(state, p); recent_projects_push(p); }
+        if (!p.empty()) { state.project_path = p; project_save(state, p); recent_projects_push(p); recovery_clear(); }
         return;
     }
     if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_N)) {
@@ -679,11 +679,11 @@ void ui_studio(AppState& state) {
             if (ImGui::MenuItem("Save Project", "Ctrl+S")) {
                 if (state.project_path.empty())
                     state.project_path = filepicker_save("Save project", "PMS Project", "*.pms", project_save_default(state).c_str());
-                if (!state.project_path.empty()) { project_save(state, state.project_path); recent_projects_push(state.project_path); }
+                if (!state.project_path.empty()) { project_save(state, state.project_path); recent_projects_push(state.project_path); recovery_clear(); }
             }
             if (ImGui::MenuItem("Save Project As…", "Ctrl+Shift+S")) {
                 std::string p = filepicker_save("Save project as", "PMS Project", "*.pms", project_save_default(state).c_str());
-                if (!p.empty()) { state.project_path = p; project_save(state, p); recent_projects_push(p); }
+                if (!p.empty()) { state.project_path = p; project_save(state, p); recent_projects_push(p); recovery_clear(); }
             }
             ImGui::Separator();
             if (ImGui::MenuItem("Import Audio / Video…", "Ctrl+O")) {

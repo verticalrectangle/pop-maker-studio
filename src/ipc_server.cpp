@@ -1252,6 +1252,7 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         if (!project_save(state, path)) { err = "project_save failed"; return {}; }
         state.project_path = path;   // exports default next to the .pms
         recent_projects_push(path);  // surface on the home/launcher page
+        recovery_clear();            // saved → no stale crash-recovery slot
         json r; r["path"] = path;
         return r;
     }

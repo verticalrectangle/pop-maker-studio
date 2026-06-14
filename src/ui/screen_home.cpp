@@ -64,6 +64,83 @@ void recent_projects_push(const std::string& path) {
     } catch (...) {}
 }
 
+// ── Autosave / crash recovery ───────────────────────────────────────────────────
+// We continuously write the live project to a fixed recovery slot while editing.
+// On a clean shutdown the slot is deleted; if the app crashes it survives, and the
+// launcher offers to restore it on the next start.
+extern std::string g_managed_dir;  // ~/.local/share/pop-maker-studio
+static std::string mtime_str(const std::string& path);  // defined below
+
+static std::string recovery_dir() {
+    std::string base = !g_managed_dir.empty()
+        ? g_managed_dir
+        : (getenv("HOME") ? std::string(getenv("HOME")) + "/.local/share/pop-maker-studio"
+                          : std::string("/tmp/pop-maker-studio"));
+    return base + "/recovery";
+}
+static std::string recovery_pms()  { return recovery_dir() + "/autosave.pms"; }
+static std::string recovery_meta() { return recovery_dir() + "/autosave.json"; }
+
+static bool project_has_content(const AppState& s) {
+    for (auto& tr : s.tracks)
+        if (!tr.clips.empty()) return true;
+    return false;
+}
+
+void recovery_clear() {
+    std::error_code ec;
+    fs::remove(recovery_pms(), ec);
+    fs::remove(recovery_meta(), ec);
+}
+
+void autosave_tick(AppState& state, float dt) {
+    static float    accum    = 0.f;
+    static int      last_pos = -999999;  // history cursor at the last successful write
+    const float     INTERVAL = 20.f;     // seconds between recovery writes
+
+    accum += dt;
+    if (accum < INTERVAL) return;
+    accum = 0.f;
+
+    if (!project_has_content(state)) return;
+    int pos = history_pos();
+    if (pos == last_pos) return;         // nothing changed since the last write
+
+    try {
+        fs::create_directories(recovery_dir());
+        std::string tmp = recovery_pms() + ".tmp";
+        if (project_save(state, tmp)) {
+            std::error_code ec;
+            fs::rename(tmp, recovery_pms(), ec);   // atomic swap
+            if (ec) { fs::remove(tmp, ec); return; }
+            nlohmann::json m;
+            m["orig_path"] = state.project_path;
+            m["name"]      = state.project_path.empty()
+                                 ? std::string("Untitled project")
+                                 : fs::path(state.project_path).stem().string();
+            std::ofstream(recovery_meta()) << m.dump(2);
+            last_pos = pos;
+        }
+    } catch (...) {}
+}
+
+bool recovery_available(std::string* name, std::string* when) {
+    if (!fs::exists(recovery_pms())) return false;
+    if (name) {
+        *name = "Recovered project";
+        try {
+            std::ifstream f(recovery_meta());
+            if (f) {
+                auto j = nlohmann::json::parse(f, nullptr, false);
+                if (!j.is_discarded() && j.contains("name"))
+                    *name = j["name"].get<std::string>();
+            }
+        } catch (...) {}
+    }
+    if (when) *when = mtime_str(recovery_pms());
+    return true;
+}
+
 // ── Project actions ───────────────────────────────────────────────────────────
 void enter_new_project(AppState& state) {
     // Reset to a blank project but keep the environment flags (models/skip), or
@@ -100,6 +177,39 @@ static void open_project_path(AppState& state, const std::string& path) {
                 audio_source_ensure(cl.text);
     recent_projects_push(path);
     history_push(state, "Open project");
+}
+
+// Restore the crash-recovery slot into the live editor. Unlike open_project_path
+// we point project_path at the *original* location (from the meta sidecar), so the
+// next Save lands where the user expected — not on the recovery file itself.
+static void restore_recovery(AppState& state) {
+    AppState loaded;
+    if (!project_load(loaded, recovery_pms())) return;
+    std::string orig;
+    try {
+        std::ifstream f(recovery_meta());
+        if (f) {
+            auto j = nlohmann::json::parse(f, nullptr, false);
+            if (!j.is_discarded() && j.contains("orig_path"))
+                orig = j["orig_path"].get<std::string>();
+        }
+    } catch (...) {}
+    bool mr = state.models_ready, ms = state.models_skipped;
+    transcribe_cancel(); history_clear();
+    audio_shutdown(); audio_clips_clear(); video_close();
+    state = std::move(loaded);
+    state.models_ready = mr; state.models_skipped = ms;
+    state.project_path = orig;   // may be empty → Save will prompt for a location
+    state.splash_timer = 0.f;
+    state.in_studio    = true;
+    audio_init();
+    if (!state.audio_path.empty()) audio_load(state.audio_path.c_str());
+    reopen_video_slots(state);
+    for (auto& tr : state.tracks)
+        for (auto& cl : tr.clips)
+            if (cl.clip_type == ClipType::Audio && !cl.text.empty())
+                audio_source_ensure(cl.text);
+    history_push(state, "Recovered project");
 }
 
 // ── Rendering ─────────────────────────────────────────────────────────────────
@@ -139,15 +249,49 @@ void ui_home(AppState& state) {
         open_project_path(state, picked);
     }
 
+    // Crash-recovery banner — only when an autosave slot survived a previous run.
+    float yoff = 0.f;
+    {
+        std::string rname, rwhen;
+        if (recovery_available(&rname, &rwhen)) {
+            const float bx = pad, by = 140.f, bw = W - pad * 2.f, bh = 56.f;
+            ImDrawList* d = ImGui::GetWindowDrawList();
+            ImGui::SetCursorPos({bx, by});
+            ImGui::PushID("recover");
+            ImGui::InvisibleButton("##rec", {bw, bh});
+            bool hov = ImGui::IsItemHovered();
+            bool clk = ImGui::IsItemClicked();
+            ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
+            d->AddRectFilled(a, b, hov ? IM_COL32(64, 52, 30, 255) : IM_COL32(48, 40, 24, 255), 8.f);
+            d->AddRect(a, b, IM_COL32(210, 160, 60, 200), 8.f, 0, 1.5f);
+            ImGui::PushFont(g_font_bold);
+            d->AddText(ImGui::GetFont(), 15.f, {a.x + 16.f, a.y + 9.f},
+                       IM_COL32(245, 220, 160, 255), "\xe2\x9a\xa0  Unsaved work recovered");
+            ImGui::PopFont();
+            std::string sub = rname + "   \xc2\xb7   " + rwhen + "    \xe2\x80\x94  click to restore";
+            d->AddText({a.x + 16.f, a.y + 31.f}, IM_COL32(210, 195, 165, 220), sub.c_str());
+            // a small dismiss "x" on the right
+            ImVec2 xc = {b.x - 22.f, a.y + bh * 0.5f};
+            bool xhov = ImGui::IsMouseHoveringRect({xc.x - 12, xc.y - 12}, {xc.x + 12, xc.y + 12});
+            d->AddText({xc.x - 5.f, xc.y - 8.f}, xhov ? IM_COL32(255,255,255,255) : IM_COL32(200,190,170,200), "\xc3\x97");
+            ImGui::PopID();
+            if (clk) {
+                if (xhov) recovery_clear();
+                else { restore_recovery(state); return; }
+            }
+            yoff = bh + 24.f;
+        }
+    }
+
     // Recent grid
-    ImGui::SetCursorPos({pad, 148.f});
+    ImGui::SetCursorPos({pad, 148.f + yoff});
     ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
     ImGui::TextUnformatted("RECENT");
     ImGui::PopStyleColor();
 
     std::vector<std::string> recents = recent_projects_list();
     if (recents.empty()) {
-        ImGui::SetCursorPos({pad, 180.f});
+        ImGui::SetCursorPos({pad, 180.f + yoff});
         ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
         ImGui::TextWrapped("No recent projects yet. Create one, then Save it (Ctrl+S) — "
                            "it'll show up here next time.");
@@ -155,7 +299,7 @@ void ui_home(AppState& state) {
         return;
     }
 
-    const float grid_top = 176.f;
+    const float grid_top = 176.f + yoff;
     const float card_w = 224.f, card_h = 150.f, gap = 16.f;
     int cols = std::max(1, (int)((W - pad * 2 + gap) / (card_w + gap)));
     ImDrawList* dl = ImGui::GetWindowDrawList();
