@@ -587,67 +587,72 @@ void draw_canvas_handles(AppState& state, ImDrawList* dl, ImVec2 p, float w, flo
         // Apply drag
         if (drag_active && s_ctx.track_idx == sel_ti && s_ctx.clip_idx == sel_ci) {
             float dmx = mpos.x - s_ctx.drag_sx, dmy = mpos.y - s_ctx.drag_sy;
-            float dlx = dmx*axx + dmy*axy;   // delta in local +x
-            float dly = dmx*ayx + dmy*ayy;   // delta in local +y (down)
-            float orig_w = s_ctx.start_bbox_x1, orig_h = s_ctx.start_bbox_y1;
-            switch (s_ctx.handle) {
-                case CanvasHandle::Body:
-                    mc.pos_x = fmaxf(-1.f, fminf(2.f, s_ctx.start_pos_x + dmx/w));
-                    mc.pos_y = fmaxf(-1.f, fminf(2.f, s_ctx.start_pos_y + dmy/h));
-                    break;
-                case CanvasHandle::Rotate: {
-                    float a0 = atan2f(s_ctx.drag_sy - cy, s_ctx.drag_sx - cx);
-                    float a1 = atan2f(mpos.y - cy,        mpos.x - cx);
-                    float raw = fmodf(s_ctx.start_rot + (a1-a0)*180.f/3.14159265f, 360.f);
-                    if (raw < 0.f) raw += 360.f;
-                    // Snap to the nearest 45° (covers 45/90/135/180/…) when
-                    // within ~6°, unless Shift is held for free rotation.
-                    float snapped = roundf(raw / 45.f) * 45.f;
-                    bool snap = !ImGui::GetIO().KeyShift && fabsf(raw - snapped) < 6.f;
-                    mc.rotation = fmodf(snap ? snapped : raw, 360.f);
-                    s_rot_snapped = snap;
-                    break;
+            // Ignore zero-movement clicks (selection only) — a click must not
+            // nudge position, push history, or center-snap a near-centred clip.
+            bool real_drag = s_ctx.dirty || fabsf(dmx) > 3.f || fabsf(dmy) > 3.f;
+            if (real_drag) {
+                float dlx = dmx*axx + dmy*axy;   // delta in local +x
+                float dly = dmx*ayx + dmy*ayy;   // delta in local +y (down)
+                float orig_w = s_ctx.start_bbox_x1, orig_h = s_ctx.start_bbox_y1;
+                switch (s_ctx.handle) {
+                    case CanvasHandle::Body:
+                        mc.pos_x = fmaxf(-1.f, fminf(2.f, s_ctx.start_pos_x + dmx/w));
+                        mc.pos_y = fmaxf(-1.f, fminf(2.f, s_ctx.start_pos_y + dmy/h));
+                        break;
+                    case CanvasHandle::Rotate: {
+                        float a0 = atan2f(s_ctx.drag_sy - cy, s_ctx.drag_sx - cx);
+                        float a1 = atan2f(mpos.y - cy,        mpos.x - cx);
+                        float raw = fmodf(s_ctx.start_rot + (a1-a0)*180.f/3.14159265f, 360.f);
+                        if (raw < 0.f) raw += 360.f;
+                        // Snap to the nearest 45° (covers 45/90/135/180/…) when
+                        // within ~6°, unless Shift is held for free rotation.
+                        float snapped = roundf(raw / 45.f) * 45.f;
+                        bool snap = !ImGui::GetIO().KeyShift && fabsf(raw - snapped) < 6.f;
+                        mc.rotation = fmodf(snap ? snapped : raw, 360.f);
+                        s_rot_snapped = snap;
+                        break;
+                    }
+                    case CanvasHandle::CornerTL: case CanvasHandle::CornerTR:
+                        if (orig_h > 0.f) {
+                            float s = (orig_h - dly) / orig_h;
+                            mc.scale_x = fmaxf(0.05f, s_ctx.start_scale_x * s);
+                            mc.scale_y = fmaxf(0.05f, s_ctx.start_scale_y * s);
+                        }
+                        break;
+                    case CanvasHandle::CornerBL: case CanvasHandle::CornerBR:
+                        if (orig_h > 0.f) {
+                            float s = (orig_h + dly) / orig_h;
+                            mc.scale_x = fmaxf(0.05f, s_ctx.start_scale_x * s);
+                            mc.scale_y = fmaxf(0.05f, s_ctx.start_scale_y * s);
+                        }
+                        break;
+                    case CanvasHandle::EdgeT:
+                        if (orig_h > 0.f) mc.scale_y = fmaxf(0.05f, s_ctx.start_scale_y * (orig_h-dly)/orig_h);
+                        break;
+                    case CanvasHandle::EdgeB:
+                        if (orig_h > 0.f) mc.scale_y = fmaxf(0.05f, s_ctx.start_scale_y * (orig_h+dly)/orig_h);
+                        break;
+                    case CanvasHandle::EdgeL:
+                        if (orig_w > 0.f) mc.scale_x = fmaxf(0.05f, s_ctx.start_scale_x * (orig_w-dlx)/orig_w);
+                        break;
+                    case CanvasHandle::EdgeR:
+                        if (orig_w > 0.f) mc.scale_x = fmaxf(0.05f, s_ctx.start_scale_x * (orig_w+dlx)/orig_w);
+                        break;
+                    default: break;
                 }
-                case CanvasHandle::CornerTL: case CanvasHandle::CornerTR:
-                    if (orig_h > 0.f) {
-                        float s = (orig_h - dly) / orig_h;
-                        mc.scale_x = fmaxf(0.05f, s_ctx.start_scale_x * s);
-                        mc.scale_y = fmaxf(0.05f, s_ctx.start_scale_y * s);
-                    }
-                    break;
-                case CanvasHandle::CornerBL: case CanvasHandle::CornerBR:
-                    if (orig_h > 0.f) {
-                        float s = (orig_h + dly) / orig_h;
-                        mc.scale_x = fmaxf(0.05f, s_ctx.start_scale_x * s);
-                        mc.scale_y = fmaxf(0.05f, s_ctx.start_scale_y * s);
-                    }
-                    break;
-                case CanvasHandle::EdgeT:
-                    if (orig_h > 0.f) mc.scale_y = fmaxf(0.05f, s_ctx.start_scale_y * (orig_h-dly)/orig_h);
-                    break;
-                case CanvasHandle::EdgeB:
-                    if (orig_h > 0.f) mc.scale_y = fmaxf(0.05f, s_ctx.start_scale_y * (orig_h+dly)/orig_h);
-                    break;
-                case CanvasHandle::EdgeL:
-                    if (orig_w > 0.f) mc.scale_x = fmaxf(0.05f, s_ctx.start_scale_x * (orig_w-dlx)/orig_w);
-                    break;
-                case CanvasHandle::EdgeR:
-                    if (orig_w > 0.f) mc.scale_x = fmaxf(0.05f, s_ctx.start_scale_x * (orig_w+dlx)/orig_w);
-                    break;
-                default: break;
-            }
-            s_ctx.dirty = true;
+                s_ctx.dirty = true;
 
-            // Center snap for move (canvas center)
-            if (s_ctx.handle == CanvasHandle::Body) {
-                float scx = mc.pos_x * w + p.x, scy = mc.pos_y * h + p.y;
-                if (fabsf(scx - (p.x+w*0.5f)) < 6.f) {
-                    mc.pos_x = 0.5f;
-                    dl->AddLine({p.x+w*0.5f, p.y}, {p.x+w*0.5f, p.y+h}, snap_col);
-                }
-                if (fabsf(scy - (p.y+h*0.5f)) < 6.f) {
-                    mc.pos_y = 0.5f;
-                    dl->AddLine({p.x, p.y+h*0.5f}, {p.x+w, p.y+h*0.5f}, snap_col);
+                // Center snap for move (canvas center)
+                if (s_ctx.handle == CanvasHandle::Body) {
+                    float scx = mc.pos_x * w + p.x, scy = mc.pos_y * h + p.y;
+                    if (fabsf(scx - (p.x+w*0.5f)) < 6.f) {
+                        mc.pos_x = 0.5f;
+                        dl->AddLine({p.x+w*0.5f, p.y}, {p.x+w*0.5f, p.y+h}, snap_col);
+                    }
+                    if (fabsf(scy - (p.y+h*0.5f)) < 6.f) {
+                        mc.pos_y = 0.5f;
+                        dl->AddLine({p.x, p.y+h*0.5f}, {p.x+w, p.y+h*0.5f}, snap_col);
+                    }
                 }
             }
         }
@@ -766,73 +771,79 @@ void draw_canvas_handles(AppState& state, ImDrawList* dl, ImVec2 p, float w, flo
              cl.clip_type == ClipType::Lyrics)) {
             float dmx = mpos.x - s_ctx.drag_sx;
             float dmy = mpos.y - s_ctx.drag_sy;
-            // Local-frame projection of the drag delta (font size + wrap edit
-            // along the block's own axes when it's rotated).
-            float dly =  dmx*tay - dmy*tax;   // local +y is down → sign matches dmy at rot 0
-            dly = -dly;
-            float dlx =  dmx*tax + dmy*tay;
-            Clip& mc = state.tracks[s_ctx.track_idx].clips[s_ctx.clip_idx];
-            float orig_bbox_h = s_ctx.start_bbox_y1 - s_ctx.start_bbox_y0;
+            // A click that only selects must NOT be treated as a drag: until the
+            // pointer actually moves, skip every mutation. Otherwise clicking
+            // text on the canvas flipped it to custom position (sub_pos=3) +
+            // anchor, clobbering the Clip panel's Bottom/Center/Top + anchor.
+            bool real_drag = s_ctx.dirty || fabsf(dmx) > 3.f || fabsf(dmy) > 3.f;
+            if (real_drag) {
+                // Local-frame projection of the drag delta (font size + wrap
+                // edit along the block's own axes when it's rotated).
+                float dly = -(dmx*tay - dmy*tax);   // local +y down → matches dmy at rot 0
+                float dlx =   dmx*tax + dmy*tay;
+                Clip& mc = state.tracks[s_ctx.track_idx].clips[s_ctx.clip_idx];
+                float orig_bbox_h = s_ctx.start_bbox_y1 - s_ctx.start_bbox_y0;
 
-            switch (s_ctx.handle) {
-                case CanvasHandle::Rotate: {
-                    float a0 = atan2f(s_ctx.drag_sy - tmy, s_ctx.drag_sx - tmx);
-                    float a1 = atan2f(mpos.y - tmy,        mpos.x - tmx);
-                    float raw = fmodf(s_ctx.start_rot + (a1-a0)*180.f/3.14159265f, 360.f);
-                    if (raw < 0.f) raw += 360.f;
-                    float snapped = roundf(raw / 45.f) * 45.f;
-                    bool snap = !ImGui::GetIO().KeyShift && fabsf(raw - snapped) < 6.f;
-                    mc.rotation = fmodf(snap ? snapped : raw, 360.f);
-                    s_rot_snapped = snap;
-                    break;
-                }
-                case CanvasHandle::Body:
-                    mc.sub_pos      = 3;
-                    mc.sub_anchor_h = 1;
-                    // Text moves as freely as any other canvas object — past the
-                    // safe margins and off-canvas if you want — not penned into
-                    // the safe zone. Same generous [-1, 2] range as image/video.
-                    mc.sub_pos_x    = fmaxf(-1.f, fminf(2.f, s_ctx.start_pos_x + dmx/w));
-                    mc.sub_pos_y    = fmaxf(-1.f, fminf(2.f, s_ctx.start_pos_y + dmy/h));
-                    break;
-                case CanvasHandle::CornerTL: case CanvasHandle::CornerTR:
-                    if (orig_bbox_h > 0.f) {
-                        float scale = (orig_bbox_h - dly) / orig_bbox_h;
-                        mc.font_size = fmaxf(0.02f, fminf(0.5f, s_ctx.start_font_size * scale));
+                switch (s_ctx.handle) {
+                    case CanvasHandle::Rotate: {
+                        float a0 = atan2f(s_ctx.drag_sy - tmy, s_ctx.drag_sx - tmx);
+                        float a1 = atan2f(mpos.y - tmy,        mpos.x - tmx);
+                        float raw = fmodf(s_ctx.start_rot + (a1-a0)*180.f/3.14159265f, 360.f);
+                        if (raw < 0.f) raw += 360.f;
+                        float snapped = roundf(raw / 45.f) * 45.f;
+                        bool snap = !ImGui::GetIO().KeyShift && fabsf(raw - snapped) < 6.f;
+                        mc.rotation = fmodf(snap ? snapped : raw, 360.f);
+                        s_rot_snapped = snap;
+                        break;
                     }
-                    break;
-                case CanvasHandle::CornerBL: case CanvasHandle::CornerBR:
-                    if (orig_bbox_h > 0.f) {
-                        float scale = (orig_bbox_h + dly) / orig_bbox_h;
-                        mc.font_size = fmaxf(0.02f, fminf(0.5f, s_ctx.start_font_size * scale));
-                    }
-                    break;
-                case CanvasHandle::EdgeL: case CanvasHandle::EdgeR: {
-                    // Wrap width along the block's local-x; grow symmetrically
-                    // about the centre so it stays anchored under rotation.
-                    float start_w_px = s_ctx.start_bbox_x1 - s_ctx.start_bbox_x0;
-                    float new_w = start_w_px +
-                                  (s_ctx.handle == CanvasHandle::EdgeR ? dlx : -dlx);
-                    if (new_w > 20.f) {
-                        mc.sub_wrap_w   = fmaxf(0.08f, fminf(0.98f, new_w/w));
+                    case CanvasHandle::Body:
+                        mc.sub_pos      = 3;
                         mc.sub_anchor_h = 1;
+                        // Text moves as freely as any other canvas object — past
+                        // the safe margins and off-canvas if you want — not penned
+                        // into the safe zone. Same [-1, 2] range as image/video.
+                        mc.sub_pos_x    = fmaxf(-1.f, fminf(2.f, s_ctx.start_pos_x + dmx/w));
+                        mc.sub_pos_y    = fmaxf(-1.f, fminf(2.f, s_ctx.start_pos_y + dmy/h));
+                        break;
+                    case CanvasHandle::CornerTL: case CanvasHandle::CornerTR:
+                        if (orig_bbox_h > 0.f) {
+                            float scale = (orig_bbox_h - dly) / orig_bbox_h;
+                            mc.font_size = fmaxf(0.02f, fminf(0.5f, s_ctx.start_font_size * scale));
+                        }
+                        break;
+                    case CanvasHandle::CornerBL: case CanvasHandle::CornerBR:
+                        if (orig_bbox_h > 0.f) {
+                            float scale = (orig_bbox_h + dly) / orig_bbox_h;
+                            mc.font_size = fmaxf(0.02f, fminf(0.5f, s_ctx.start_font_size * scale));
+                        }
+                        break;
+                    case CanvasHandle::EdgeL: case CanvasHandle::EdgeR: {
+                        // Wrap width along the block's local-x; grow symmetrically
+                        // about the centre so it stays anchored under rotation.
+                        float start_w_px = s_ctx.start_bbox_x1 - s_ctx.start_bbox_x0;
+                        float new_w = start_w_px +
+                                      (s_ctx.handle == CanvasHandle::EdgeR ? dlx : -dlx);
+                        if (new_w > 20.f) {
+                            mc.sub_wrap_w   = fmaxf(0.08f, fminf(0.98f, new_w/w));
+                            mc.sub_anchor_h = 1;
+                        }
+                        break;
                     }
-                    break;
+                    case CanvasHandle::EdgeT: case CanvasHandle::EdgeB:
+                        mc.sub_pos   = 3;
+                        mc.sub_pos_y = fmaxf(-1.f, fminf(2.f, s_ctx.start_pos_y + dmy/h));
+                        break;
+                    default: break;
                 }
-                case CanvasHandle::EdgeT: case CanvasHandle::EdgeB:
-                    mc.sub_pos   = 3;
-                    mc.sub_pos_y = fmaxf(-1.f, fminf(2.f, s_ctx.start_pos_y + dmy/h));
-                    break;
-                default: break;
-            }
-            s_ctx.dirty = true;
+                s_ctx.dirty = true;
 
-            // Center snap for text body move
-            if (s_ctx.handle == CanvasHandle::Body) {
-                float cx3 = mc.sub_pos_x * w + p.x;
-                if (fabsf(cx3 - (p.x+w*0.5f)) < 8.f) {
-                    mc.sub_pos_x = 0.5f;
-                    dl->AddLine({p.x+w*0.5f, p.y}, {p.x+w*0.5f, p.y+h}, snap_col);
+                // Center snap for text body move
+                if (s_ctx.handle == CanvasHandle::Body) {
+                    float cx3 = mc.sub_pos_x * w + p.x;
+                    if (fabsf(cx3 - (p.x+w*0.5f)) < 8.f) {
+                        mc.sub_pos_x = 0.5f;
+                        dl->AddLine({p.x+w*0.5f, p.y}, {p.x+w*0.5f, p.y+h}, snap_col);
+                    }
                 }
             }
         }
