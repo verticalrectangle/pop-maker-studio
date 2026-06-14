@@ -386,12 +386,21 @@ static GLuint g_solid_tex = 0;
 // output must outlive the clip's fx_apply output until scene composite);
 // [MAX*4+1] (kMaxSlots-1) fx-picker preview thumbnails. The preview slot
 // previously shared MAX*2 with the mirror face-warp — now exclusive.
-static const int kMaxSlots = MAX_VIDEO_TRACKS * 4 + 2;
+// + a dedicated bank for the face-filter picker previews (one per filter id) so
+// the whole grid of warps can be shown at once without clobbering each other.
+static const int kFacePreviewSlots    = 8;
+static const int kFacePreviewSlotBase = MAX_VIDEO_TRACKS * 4 + 2;
+static const int kMaxSlots = MAX_VIDEO_TRACKS * 4 + 2 + kFacePreviewSlots;
 static const int kFaceClipSlotBase = MAX_VIDEO_TRACKS * 2 + 1;
 
 int fx_face_clip_slot(int video_slot) {
     if (video_slot < 0) video_slot = 0;
     return kFaceClipSlotBase + (video_slot % (MAX_VIDEO_TRACKS * 2));
+}
+
+int fx_face_preview_slot(int filter_id) {
+    if (filter_id < 0) filter_id = 0;
+    return kFacePreviewSlotBase + (filter_id % kFacePreviewSlots);
 }
 
 static struct {

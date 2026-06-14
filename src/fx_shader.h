@@ -27,6 +27,10 @@ uintptr_t face_warp_apply(uintptr_t src_tex, int slot, int w, int h,
 // without clobbering the clip's own fx_apply output.
 int fx_face_clip_slot(int video_slot);
 
+// Dedicated output slots for the face-filter PICKER preview thumbnails — one
+// per filter id, persistent so the whole grid can show all warps at once.
+int fx_face_preview_slot(int filter_id);
+
 // Doggy sprites at playback/export: alpha-blend textured quads over src_tex
 // inside the slot's FBO. Corner positions in target-frame UV ((0,0) = image
 // top-left), order tl/tr/br/bl; u0/u1 flip the sprite art horizontally.

@@ -38,6 +38,13 @@ uintptr_t face_filter_apply_obs(int filter_id, float amount, const FaceObs& obs,
                                 float anim_t, uintptr_t tex,
                                 int slot, int w, int h);
 
+// Picker preview: render `filter_id` onto the embedded base face photo and
+// return its texture for the camera brick's Filters tab. Landmarks on the base
+// face are detected once (lazily, synchronously). Returns the unmodified base
+// face for None (id 0) or when no face / no models are available.
+uintptr_t face_filter_preview_texture(int filter_id, float amount);
+void      face_filter_preview_dims(int* w, int* h);
+
 // Playback/export: apply the clip's face filter to its decoded frame using
 // the take's cached landmark pass (kicking the background build if missing).
 // Returns tex unchanged until the cache is ready. Shared by the preview and

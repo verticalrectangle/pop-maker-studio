@@ -2379,8 +2379,25 @@ void panel_clip(AppState& state, float w) {
             ImGui::Dummy({0.f, 4.f});
         }
 
-        // ── Camera ───────────────────────────────────────────────────────────
-        ImGui::Dummy({0.f, 10.f}); ui_separator(); ImGui::Dummy({0.f, 6.f});
+        // ── Tabs: Camera setup / Filters / Takes ──────────────────────────────
+        // Lightweight button-row selector (not ImGui::BeginTabBar) so the early
+        // returns in the Beauty/Takes sections can't unbalance an open tab item.
+        static int s_rec_tab = 0;  // 0 = Camera, 1 = Filters, 2 = Takes
+        ImGui::Dummy({0.f, 10.f}); ui_separator(); ImGui::Dummy({0.f, 8.f});
+        {
+            const char* rt_names[3] = { "Camera", "Filters", "Takes" };
+            for (int rt = 0; rt < 3; ++rt) {
+                if (rt) ImGui::SameLine(0.f, 6.f);
+                bool on = (s_rec_tab == rt);
+                if (on) ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(235, 120, 60, 255));
+                if (ui_btn(rt_names[rt], on, true)) s_rec_tab = rt;
+                if (on) ImGui::PopStyleColor();
+            }
+        }
+        ImGui::Dummy({0.f, 8.f});
+
+        // ── Camera tab: device + layout + beauty ──────────────────────────────
+        if (s_rec_tab == 0) {
         ui_label("Camera");
         ImGui::Dummy({0.f, 6.f});
         {
@@ -2523,67 +2540,90 @@ void panel_clip(AppState& state, float w) {
                 return;                                  // — bail out this frame
             }
         }
+        }   // ── end Camera tab ──
 
-        // ── Face filters ─────────────────────────────────────────────────────
-        // Landmark-driven warps on the live mirror — pick a look, see
-        // yourself in it instantly.
-        ImGui::Dummy({0.f, 10.f}); ui_separator(); ImGui::Dummy({0.f, 6.f});
+        // ── Filters tab: face-warp picker with live previews ──────────────────
+        else if (s_rec_tab == 1) {
         ui_label("Face filters");
         ImGui::Dummy({0.f, 6.f});
         if (!face_track_available()) {
             ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
-            ImGui::TextWrapped("Face models missing (models/face).");
+            ImGui::TextWrapped("Face models missing (models/face) \xe2\x80\x94 filters still "
+                               "record, but the previews can't render the warp.");
             ImGui::PopStyleColor();
-        } else {
+            ImGui::Dummy({0.f, 6.f});
+        }
+        // Preview grid — each card shows the filter applied to a base face.
+        {
+            int pw = 0, ph = 0; face_filter_preview_dims(&pw, &ph);
+            float aspect = (ph > 0) ? (float)pw / (float)ph : 0.75f;
+            const int   cols = 3;
+            const float gap  = 8.f;
+            float cardw = (bar_w - gap * (cols - 1)) / (float)cols;
+            float imgh  = cardw / aspect;
+            float cardh = imgh + 20.f;
+            ImDrawList* dl = ImGui::GetWindowDrawList();
             for (int fi = 0; fi < face_filter_count(); ++fi) {
-                if (fi % 4 != 0) ImGui::SameLine(0.f, 6.f);
-                bool on = clip.face_filter == fi;
-                if (on) ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(235, 120, 60, 255));
-                if (ui_btn(face_filter_name(fi), on, true)) {
+                if (fi % cols) ImGui::SameLine(0.f, gap);
+                ImGui::PushID(30000 + fi);
+                ImGui::InvisibleButton("##ff", {cardw, cardh});
+                bool hov = ImGui::IsItemHovered();
+                bool on  = (clip.face_filter == fi);
+                if (ImGui::IsItemClicked()) {
                     clip.face_filter = fi;
                     history_push(state, std::string("Face filter: ") + face_filter_name(fi));
-                    // Filter picked after recording: start the landmark pass
-                    // for the selected take now (the cache is landmark-only,
-                    // so switching filters reuses it).
                     if (fi != 0 && !clip.text.empty()) {
                         int rq = ((int)lroundf(clip.rotation / 90.f) % 4 + 4) % 4;
                         face_cache_request(clip.text, rq);
                     }
                 }
-                if (on) ImGui::PopStyleColor();
+                ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
+                uintptr_t tex = face_filter_preview_texture(fi, 1.f);
+                if (tex)
+                    dl->AddImageRounded((ImTextureID)tex, a, {b.x, a.y + imgh},
+                                        {0, 0}, {1, 1}, IM_COL32_WHITE, 7.f);
+                else
+                    dl->AddRectFilled(a, {b.x, a.y + imgh}, IM_COL32(30, 30, 40, 255), 7.f);
+                dl->AddText({a.x + 4.f, a.y + imgh + 3.f},
+                            on ? IM_COL32(245, 180, 120, 255) : to_u32(Col::muted),
+                            face_filter_name(fi));
+                dl->AddRect(a, b, on ? IM_COL32(235, 120, 60, 255)
+                                     : (hov ? IM_COL32(120, 120, 150, 220)
+                                            : IM_COL32(55, 55, 72, 200)),
+                            7.f, 0, on ? 2.f : 1.f);
+                ImGui::PopID();
             }
-            if (clip.face_filter != 0) {
-                ImGui::Dummy({0.f, 4.f});
-                ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
-                ImGui::TextUnformatted("Strength");
-                ImGui::PopStyleColor();
-                ImGui::PushStyleColor(ImGuiCol_SliderGrab, to_u32(Col::fg));
-                ImGui::PushStyleColor(ImGuiCol_FrameBg,    Col::bg_soft);
-                ImGui::SetNextItemWidth(bar_w);
-                ImGui::SliderFloat("##face_amt", &clip.face_filter_amt, 0.f, 1.5f, "%.2f");
-                ImGui::PopStyleColor(2);
-                if (ImGui::IsItemDeactivatedAfterEdit())
-                    history_push(state, "Face filter strength");
-                // Landmark pass status for the selected take.
-                if (!clip.text.empty()) {
-                    float fp = 0.f;
-                    FaceCacheStatus fst = face_cache_status(clip.text, &fp);
-                    if (fst == FaceCacheStatus::Building) {
-                        ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
-                        ImGui::Text("Tracking face in take\xe2\x80\xa6 %d%%",
-                                    (int)(fp * 100.f));
-                        ImGui::PopStyleColor();
-                    } else if (fst == FaceCacheStatus::Failed) {
-                        ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
-                        ImGui::TextWrapped("No face found in this take.");
-                        ImGui::PopStyleColor();
-                    }
+        }
+        if (clip.face_filter != 0) {
+            ImGui::Dummy({0.f, 8.f});
+            ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+            ImGui::TextUnformatted("Strength");
+            ImGui::PopStyleColor();
+            ImGui::PushStyleColor(ImGuiCol_SliderGrab, to_u32(Col::fg));
+            ImGui::PushStyleColor(ImGuiCol_FrameBg,    Col::bg_soft);
+            ImGui::SetNextItemWidth(bar_w);
+            ImGui::SliderFloat("##face_amt", &clip.face_filter_amt, 0.f, 1.5f, "%.2f");
+            ImGui::PopStyleColor(2);
+            if (ImGui::IsItemDeactivatedAfterEdit())
+                history_push(state, "Face filter strength");
+            if (!clip.text.empty()) {
+                float fp = 0.f;
+                FaceCacheStatus fst = face_cache_status(clip.text, &fp);
+                if (fst == FaceCacheStatus::Building) {
+                    ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+                    ImGui::Text("Tracking face in take\xe2\x80\xa6 %d%%", (int)(fp * 100.f));
+                    ImGui::PopStyleColor();
+                } else if (fst == FaceCacheStatus::Failed) {
+                    ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+                    ImGui::TextWrapped("No face found in this take.");
+                    ImGui::PopStyleColor();
                 }
             }
         }
+        }   // ── end Filters tab ──
 
-        // ── Take tray ────────────────────────────────────────────────────────
-        ImGui::Dummy({0.f, 10.f}); ui_separator(); ImGui::Dummy({0.f, 6.f});
+        // ── Takes tab ─────────────────────────────────────────────────────────
+        else if (s_rec_tab == 2) {
         ui_label("Takes");
         ImGui::Dummy({0.f, 6.f});
         if (clip.rec_takes.empty()) {
@@ -2645,6 +2685,7 @@ void panel_clip(AppState& state, float w) {
             history_push(state, "Place take on track");
             return;
         }
+        }   // ── end Takes tab ──
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
