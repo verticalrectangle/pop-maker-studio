@@ -1,5 +1,6 @@
 #include "conform.h"
 #include "video.h"
+#include "paths.h"
 
 #include <atomic>
 #include <chrono>
@@ -48,16 +49,16 @@ static std::deque<Job>                  g_queue;
 static std::unordered_set<std::string>  g_queued;     // out paths pending
 static std::string                      g_active_out;  // out path in flight ("" = none)
 static pid_t                            g_active_pid = -1;
-static std::atomic<bool>                g_shutdown{false};
+static std::atomic<bool>                g_cf_shutdown{false};
 static bool                             g_worker_started = false;
 static std::unordered_set<std::string>  g_ready_cache;  // out paths known complete
 
 // ── Path helpers ──────────────────────────────────────────────────────────────
 std::string conform_path(const std::string& src, int project_fps, bool smooth, bool loop) {
     char suffix[48];
-    snprintf(suffix, sizeof(suffix), ".pms_conform_%d_s%d_l%d.mp4",
+    snprintf(suffix, sizeof(suffix), ".conform_%d_s%d_l%d.mp4",
              project_fps, smooth ? 1 : 0, loop ? 1 : 0);
-    return src + suffix;
+    return cache_path(src, suffix);
 }
 
 // ── Native-fps probe ──────────────────────────────────────────────────────────
@@ -117,7 +118,7 @@ static void run_job(const Job& j) {
         pid_t r = waitpid(pp, &wst, WNOHANG);
         if (r == pp) break;
         if (r < 0)  { wst = -1; break; }
-        if (g_shutdown.load()) { kill(pp, SIGTERM); waitpid(pp, nullptr, 0); wst = -1; break; }
+        if (g_cf_shutdown.load()) { kill(pp, SIGTERM); waitpid(pp, nullptr, 0); wst = -1; break; }
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
     { std::lock_guard<std::mutex> lk(g_mu); g_active_pid = -1; }
@@ -138,8 +139,8 @@ static void worker_loop() {
         Job j;
         {
             std::unique_lock<std::mutex> lk(g_mu);
-            g_cv.wait(lk, [] { return g_shutdown.load() || !g_queue.empty(); });
-            if (g_shutdown.load()) return;
+            g_cv.wait(lk, [] { return g_cf_shutdown.load() || !g_queue.empty(); });
+            if (g_cf_shutdown.load()) return;
             j = g_queue.front(); g_queue.pop_front();
             g_queued.erase(j.out);
             g_active_out = j.out;
@@ -186,7 +187,7 @@ ConformStatus conform_status(const std::string& src, int fps, bool smooth, bool 
 }
 
 void conform_cancel() {
-    g_shutdown.store(true);
+    g_cf_shutdown.store(true);
     g_cv.notify_all();
     std::lock_guard<std::mutex> lk(g_mu);
     if (g_active_pid > 0) { kill(g_active_pid, SIGTERM); }

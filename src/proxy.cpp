@@ -49,8 +49,8 @@ static void mark_ready_cached(const std::string& path) {
 
 // ── Path helpers ──────────────────────────────────────────────────────────────
 
-std::string proxy_mjpeg_path(const std::string& vp) { return vp + ".pms_proxy.mjpeg"; }
-std::string proxy_idx_path  (const std::string& vp) { return vp + ".pms_proxy.idx";   }
+std::string proxy_mjpeg_path(const std::string& vp) { return cache_path(vp, ".proxy.mjpeg"); }
+std::string proxy_idx_path  (const std::string& vp) { return cache_path(vp, ".proxy.idx");   }
 std::string proxy_still_path(const std::string& vp) {
     // PNGs are loaded directly so transparency is preserved — a JPEG proxy
     // would flatten the alpha channel and the image would render as opaque.
@@ -58,7 +58,7 @@ std::string proxy_still_path(const std::string& vp) {
     std::string ext = p.extension().string();
     for (auto& c : ext) c = (char)tolower((unsigned char)c);
     if (ext == ".png") return vp;
-    return vp + ".pms_still.jpg";
+    return cache_path(vp, ".still.jpg");
 }
 
 // ── Queue + worker pool state ─────────────────────────────────────────────────

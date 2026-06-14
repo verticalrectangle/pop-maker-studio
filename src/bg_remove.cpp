@@ -74,13 +74,11 @@ static std::mutex                   g_jobs_mu;
 // ── Path helpers ──────────────────────────────────────────────────────────────
 
 std::string bg_remove_proxy_dir(const std::string& video_path) {
-    fs::path p(video_path);
-    return (p.parent_path() / (p.stem().string() + "_bg_masks")).string();
+    return cache_path(video_path, "_bg_masks");
 }
 
 std::string bg_remove_hires_dir(const std::string& video_path) {
-    fs::path p(video_path);
-    return (p.parent_path() / (p.stem().string() + "_bg_hires")).string();
+    return cache_path(video_path, "_bg_hires");
 }
 
 float bg_remove_read_fps(const std::string& mask_dir) {
