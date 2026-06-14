@@ -1479,19 +1479,8 @@ void panel_clip(AppState& state, float w) {
         // ── AI Tools ─────────────────────────────────────────────────────────
         bool busy     = transcribe_running();
         bool has_path = !clip.text.empty();
-        bool ml_avail = state.models_ready;
 
-        // Shared install gate — shown once above all AI tools if needed
-        if (!ml_avail) {
-            ImGui::Dummy({0.f, 10.f}); ui_separator(); ImGui::Dummy({0.f, 6.f});
-            ui_label("AI Tools");
-            ImGui::Dummy({0.f, 6.f});
-            ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
-            ImGui::TextWrapped("AI models not set up yet.");
-            ImGui::PopStyleColor();
-            ImGui::Dummy({0.f, 4.f});
-            if (ui_btn("Set Up AI Features", false, true)) state.show_model_dl_modal = true;
-        } else {
+        {
             // Shared progress bar helper — renders under whichever tool is running
             auto ai_progress = [&]() {
                 ImVec2 bp = ImGui::GetCursorScreenPos();
@@ -1933,18 +1922,8 @@ void panel_clip(AppState& state, float w) {
         // ── AI Tools ─────────────────────────────────────────────────────────
         bool busy     = transcribe_running();
         bool has_path = !clip.text.empty();
-        bool ml_avail = state.models_ready;
 
-        if (!ml_avail) {
-            ImGui::Dummy({0.f, 10.f}); ui_separator(); ImGui::Dummy({0.f, 6.f});
-            ui_label("AI Tools");
-            ImGui::Dummy({0.f, 6.f});
-            ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
-            ImGui::TextWrapped("AI models not set up yet.");
-            ImGui::PopStyleColor();
-            ImGui::Dummy({0.f, 4.f});
-            if (ui_btn("Set Up AI Features", false, true)) state.show_model_dl_modal = true;
-        } else {
+        {
             auto ai_progress = [&]() {
                 ImVec2 bp = ImGui::GetCursorScreenPos();
                 ImDrawList* bdl = ImGui::GetWindowDrawList();

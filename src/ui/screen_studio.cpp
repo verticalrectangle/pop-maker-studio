@@ -808,12 +808,6 @@ void ui_studio(AppState& state) {
                 state.show_tutorial = true;
                 state.tutorial_step = 0;
             }
-            ImGui::Separator();
-            bool already = state.models_ready;
-            if (already) ImGui::BeginDisabled();
-            if (ImGui::MenuItem("Set Up AI Features…"))
-                state.show_model_dl_modal = true;
-            if (already) ImGui::EndDisabled();
             ImGui::EndMenu();
         }
 
@@ -901,29 +895,7 @@ void ui_studio(AppState& state) {
             ui_separator();
             ImGui::Dummy({0.f, 10.f});
 
-
-            // ── Lyric extraction models ───────────────────────────────────────
-            ui_label("Lyric extraction models");
-            ImGui::Dummy({0.f, 4.f});
-            ImGui::SetCursorPosX(ImGui::GetStyle().WindowPadding.x + 8.f);
-            if (state.models_ready) {
-                ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(100, 220, 130, 255));
-                ImGui::TextUnformatted("Installed");
-                ImGui::PopStyleColor();
-            } else {
-                ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
-                ImGui::TextUnformatted("Not installed");
-                ImGui::PopStyleColor();
-                ImGui::SameLine(0.f, 12.f);
-                if (ui_btn("Download…", false, true)) {
-                    state.show_settings_modal = false;
-                    state.show_model_dl_modal = true;
-                    ImGui::CloseCurrentPopup();
-                }
-            }
-
             // ── Agent (in-app AI) ─────────────────────────────────────────────
-            ImGui::Dummy({0.f, 16.f});
             ui_label("Agent");
             ImGui::Dummy({0.f, 4.f});
             {

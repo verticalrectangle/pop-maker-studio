@@ -3783,12 +3783,6 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
             }
             if (disabled) ImGui::EndDisabled();
 
-            if (!models_ready && !busy) {
-                if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-                    ImGui::SetTooltip("Set up AI first");
-                if (ImGui::MenuItem("Set Up AI Features…"))
-                    state.show_model_dl_modal = true;
-            }
             ImGui::Separator();
         }
 
