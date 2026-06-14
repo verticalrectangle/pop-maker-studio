@@ -945,6 +945,25 @@ static bool write_filter_script(
                     y_off = buf;
                     break;
                 }
+                case AnimStyle::Scale: {
+                    // drawtext fontsize isn't a per-frame expression, so the
+                    // scale-pop can't be reproduced in this legacy filter-graph
+                    // path (the GL overlay export does the real thing). Fall back
+                    // to the Fade alpha ramp so the entrance isn't a hard cut.
+                    char buf[256];
+                    snprintf(buf, sizeof(buf),
+                        "if(lt(%s,%.3f)"
+                        ",clip(%s/%.3f\\,0\\,1)"
+                        ",if(gt(%s,%.3f)"
+                        ",clip((%.3f-%s)/%.3f\\,0\\,1)"
+                        ",1))",
+                        lt.c_str(), (double)fade_in,
+                        lt.c_str(), (double)fade_in,
+                        lt.c_str(), (double)(clip_dur - fade_out),
+                        (double)clip_dur, lt.c_str(), (double)fade_out);
+                    alpha_mod = buf;
+                    break;
+                }
                 case AnimStyle::Block: {
                     // Box drawn via drawtext box=1 option (text_w/text_h not available in drawbox)
                     break;

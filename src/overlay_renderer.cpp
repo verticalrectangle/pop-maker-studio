@@ -144,6 +144,7 @@ void draw_text_overlays(ImDrawList* dl, const AppState& state, float t,
         float anim_dx    = 0.f;
         float anim_dy    = 0.f;
         float anim_alpha = 1.f;
+        float anim_scale = 1.f;
 
         AnimStyle eff_style = (active->clip_style != AnimStyle::None)
                               ? active->clip_style : state.style;
@@ -183,6 +184,18 @@ void draw_text_overlays(ImDrawList* dl, const AppState& state, float t,
                 if (local_t < fade_in)
                     anim_dy = (1.f - local_t / fade_in) * 80.f;
                 break;
+            case AnimStyle::Scale:
+                // Scale-pop intro (mirrors canvas.cpp for WYSIWYG): grow small→
+                // full (ease-out cubic) + fade in; fade out at the tail.
+                if (local_t < fade_in) {
+                    float pp = local_t / fade_in;
+                    float e  = 1.f - powf(1.f - pp, 3.f);
+                    anim_scale = 0.55f + 0.45f * e;
+                    anim_alpha = pp;
+                } else if (local_t > clip_dur - fade_out) {
+                    anim_alpha = (clip_dur - local_t) / fade_out;
+                }
+                break;
             default: break;
         }
 
@@ -191,6 +204,11 @@ void draw_text_overlays(ImDrawList* dl, const AppState& state, float t,
             fsz        *= text_fx.scale_mul;
             line_h      = fsz * 1.25f;
             block_h     = txt_lines.size() * line_h;
+        }
+        if (anim_scale != 1.f) {                 // AnimStyle::Scale pop
+            fsz    *= anim_scale;
+            line_h  = fsz * 1.25f;
+            block_h = txt_lines.size() * line_h;
         }
 
         float block_cx = p.x + active->eval_prop("sub_pos_x", t) * w;
