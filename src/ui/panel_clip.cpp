@@ -381,12 +381,19 @@ static void section_position(AppState& state, Clip& clip, float w) {
     ImGui::PushStyleColor(ImGuiCol_SliderGrab, Col::fg);
     ImGui::PushStyleColor(ImGuiCol_FrameBg,    Col::bg_soft);
 
-    // Vertical preset buttons + custom Y slider
-    struct PosBtn { int v; const char* label; };
-    PosBtn pbtns[] = {{0,"Bottom"},{1,"Center"},{2,"Top"}};
+    // Vertical preset buttons + custom Y slider. Clicking a preset also syncs
+    // the Y slider to the slot it represents, so the control always reflects the
+    // text's position (Center maps exactly to 0.5; Bottom/Top use the slot's
+    // nominal centre within the SAFE_TOP/SAFE_BOT margins). A preset is a static
+    // choice, so any sub_pos_y keyframes are cleared.
+    struct PosBtn { int v; const char* label; float y; };
+    PosBtn pbtns[] = {{0,"Bottom",0.85f},{1,"Center",0.5f},{2,"Top",0.12f}};
     for (auto& pb : pbtns) {
         if (ui_btn(pb.label, clip.sub_pos == pb.v, true)) {
-            clip.sub_pos = pb.v; history_push(state, "Position");
+            clip.sub_pos   = pb.v;
+            clip.sub_pos_y = pb.y;
+            clip.ktracks.erase("sub_pos_y");
+            history_push(state, "Position");
         }
         ImGui::SameLine(0.f, 4.f);
     }
@@ -522,8 +529,13 @@ void palette_widget(const char* id, float** slots, int n_slots, bool has_alpha) 
     float scroll_h = fminf((float)n_rows * (CARD_H + GAP) + GAP, 210.f);
 
     ImGui::PushStyleColor(ImGuiCol_ChildBg, IM_COL32(14, 14, 22, 255));
-    ImGui::BeginChild("##palscroll", {avail, scroll_h}, ImGuiChildFlags_None,
-                      ImGuiWindowFlags_NoScrollbar);
+    // Contained scroll box: the palette grid scrolls INSIDE this fixed-height
+    // child instead of pushing the rest of the panel down. Draw to the child's
+    // own draw list (re-captured here) so cards clip to the box — the outer `dl`
+    // is the parent window's and would bleed the cards past the child.
+    ImGui::BeginChild("##palscroll", {avail, scroll_h}, ImGuiChildFlags_Borders,
+                      ImGuiWindowFlags_None);
+    dl = ImGui::GetWindowDrawList();
 
     float base_y = ImGui::GetCursorPosY();
 
