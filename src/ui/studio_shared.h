@@ -108,6 +108,17 @@ void add_clip_to_track(AppState& state, int track_idx, const std::string& path, 
 int  slot_for_video(AppState& state, const std::string& key, const std::string& src);
 void gc_video_slots(AppState& state);
 void reopen_video_slots(AppState& state);
+
+// ── Frame-rate conform ────────────────────────────────────────────────────────
+// True if this clip's native fps differs enough from the project to warrant a
+// conform (src_fps must already be probed; stills/src_fps<=0 are never conformed).
+bool clip_needs_conform(const Clip& cl, int project_fps);
+// The file the proxy/export should actually decode for this clip: the conformed
+// copy when it's ready, otherwise the original (clip.text).
+std::string clip_video_src(const AppState& state, const Clip& cl);
+// Per-frame: probe native fps lazily, kick conforms, and reopen video slots when
+// a conform becomes ready so the preview/export swap to it. Call from app_frame.
+void conform_tick(AppState& state);
 float project_end(const AppState& state);
 bool  is_audio_file(const std::string& path);
 

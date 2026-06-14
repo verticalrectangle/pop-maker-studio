@@ -17,6 +17,7 @@
 #include "ui/screens.h"
 #include "ui/panel_terminal.h"
 #include "ui/studio_shared.h"   // last_playable_time
+#include "conform.h"            // conform_cancel
 #include <imgui.h>
 #include <algorithm>
 #include <chrono>
@@ -604,6 +605,11 @@ void app_frame(AppState& state) {
     // and deletions all resolve here instead of in each edit path.
     fx_coupling_tick(state);
 
+    // Frame-rate conform: probe native fps, transcode mismatched clips to the
+    // project rate in the background, and swap the preview/export to the
+    // conformed copy when it lands.
+    conform_tick(state);
+
     ImGuiIO& io = ImGui::GetIO();
     ImGui::SetNextWindowPos({0, 0});
     ImGui::SetNextWindowSize(io.DisplaySize);
@@ -722,6 +728,7 @@ void app_shutdown(AppState& state) {
     agent_shutdown();
     ipc_server_stop();
     vrecorder_shutdown();   // kill the camera-capture child so it isn't orphaned
+    conform_cancel();       // stop background conform transcodes (no orphan ffmpeg)
     runtime_fx_shutdown();
     audio_shutdown();
     video_close();

@@ -131,6 +131,16 @@ struct Clip {
     float in_point  = 0.f;    // seconds into source file to begin playback
     float out_point = -1.f;   // seconds into source file to end (-1 = until end of source)
 
+    // Frame-rate conform (see conform.h). src_fps is the source's native rate
+    // (0 = not yet probed, -1 = still/no-conform). When it differs from the
+    // project fps the source is transcoded to a project-fps copy and the
+    // proxy/export decode that instead — so preview == export and judder is
+    // smoothed. The toggles control blend-vs-cadence and seamless looping.
+    float src_fps        = 0.f;
+    bool  conform_smooth = true;   // blend frames (vs dup/drop to keep cadence)
+    bool  clip_loop      = false;  // conform cyclically so a perfect loop stays seamless
+    bool  conform_ready_cache = false;  // transient: last-seen conform readiness (slot-reopen edge)
+
     // stereo pan: -1=full left, 0=center, +1=full right (Video embedded audio + Audio clips)
     float pan = 0.f;
 

@@ -5,6 +5,7 @@
 #include "audio.h"
 #include "video.h"
 #include "proxy.h"
+#include "conform.h"
 #include "history.h"
 #include "fx_shader.h"
 #include "theme.h"
@@ -460,7 +461,7 @@ void gc_video_slots(AppState& state) {
     for (auto& tr : state.tracks)
         for (auto& cl : tr.clips)
             if (clip_is_videolike_type(cl.clip_type) && !cl.text.empty())
-                live.insert(clip_slot_key(cl.text, cl.start));
+                live.insert(clip_slot_key(clip_video_src(state, cl), cl.start));
     for (int i = 0; i < MAX_VIDEO_TRACKS; ++i) {
         if (!state.proxy_paths[i].empty() && !live.count(state.proxy_paths[i])) {
             video_close(i);
@@ -473,22 +474,27 @@ void reopen_video_slots(AppState& state) {
     for (auto& tr : state.tracks) {
         for (auto& cl : tr.clips) {
             if (!clip_is_videolike_type(cl.clip_type) || cl.text.empty()) continue;
-            std::string key = clip_slot_key(cl.text, cl.start);
-            int slot = slot_for_video(state, key, cl.text);
+            // Decode the conformed copy when ready, else the original. (Stills
+            // are never conformed, so `src` keeps the .png/.gif extension and the
+            // image branch below still fires for them; a conformed clip's `src`
+            // is a .mp4 and falls through to the proxy/native video path.)
+            std::string src = clip_video_src(state, cl);
+            std::string key = clip_slot_key(src, cl.start);
+            int slot = slot_for_video(state, key, src);
             if (slot < 0) continue;
             // Still images go straight to Still — never native. libav happily
             // opens a PNG as a one-frame video, but then any decode past t=0
             // fails and the clip renders blank (this is how MCP-added images
             // vanished from the preview: add_clip → proxy_scan → native PNG).
             // Animated images (.gif) fall through to the proxy path below.
-            if (is_image_path(cl.text) && !is_animated_image(cl.text)) {
+            if (is_image_path(src) && !is_animated_image(src)) {
                 if (video_source(slot) != PreviewSource::Still)
-                    video_open_still(slot, proxy_still_path(cl.text));
+                    video_open_still(slot, proxy_still_path(src));
                 continue;
             }
-            if (proxy_is_ready(cl.text)) {
+            if (proxy_is_ready(src)) {
                 ProxyInfo pi;
-                if (proxy_load(cl.text, pi)) {
+                if (proxy_load(src, pi)) {
                     video_open_proxy(slot, pi);
                     if (slot == 0) state.proxy_ready = true;
                     continue;
@@ -497,10 +503,47 @@ void reopen_video_slots(AppState& state) {
             // No proxy yet — try native (libav direct decode) for instant
             // preview. Falls back to the still placeholder if libav can't open
             // the file (unusual codec, corrupt container).
-            if (!video_open_native(slot, cl.text))
-                video_open_still(slot, proxy_still_path(cl.text));
+            if (!video_open_native(slot, src))
+                video_open_still(slot, proxy_still_path(src));
         }
     }
+}
+
+// ── Frame-rate conform ────────────────────────────────────────────────────────
+bool clip_needs_conform(const Clip& cl, int project_fps) {
+    if (project_fps <= 0 || cl.src_fps <= 0.f) return false;  // 0=unprobed, -1=still
+    return std::fabs(cl.src_fps - (float)project_fps) > (float)project_fps * 0.01f;
+}
+
+std::string clip_video_src(const AppState& state, const Clip& cl) {
+    if (clip_needs_conform(cl, state.fps) &&
+        conform_is_ready(cl.text, state.fps, cl.conform_smooth, cl.clip_loop))
+        return conform_path(cl.text, state.fps, cl.conform_smooth, cl.clip_loop);
+    return cl.text;
+}
+
+void conform_tick(AppState& state) {
+    bool reopen = false, probed_one = false;
+    for (auto& tr : state.tracks) {
+        for (auto& cl : tr.clips) {
+            if (cl.clip_type != ClipType::Video || cl.text.empty()) continue;
+            // Lazy native-fps probe — at most one ffprobe per frame so a load of
+            // many clips doesn't hitch.
+            if (cl.src_fps == 0.f && !probed_one) {
+                MediaFileInfo mi = video_probe_file(cl.text);
+                cl.src_fps = (mi.fps > 0.0) ? (float)mi.fps : -1.f;
+                probed_one = true;
+            }
+            if (!clip_needs_conform(cl, state.fps)) continue;
+            conform_start(cl.text, state.fps, cl.conform_smooth, cl.clip_loop);
+            bool ready = conform_is_ready(cl.text, state.fps, cl.conform_smooth, cl.clip_loop);
+            if (ready) proxy_start(conform_path(cl.text, state.fps, cl.conform_smooth, cl.clip_loop));
+            // Edge-trigger a slot reopen so the preview swaps to the conform the
+            // moment it lands (and back to the original if it ever goes away).
+            if (ready != cl.conform_ready_cache) { cl.conform_ready_cache = ready; reopen = true; }
+        }
+    }
+    if (reopen) { gc_video_slots(state); reopen_video_slots(state); }
 }
 
 float project_end(const AppState& state) {

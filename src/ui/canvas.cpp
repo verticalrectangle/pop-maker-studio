@@ -98,7 +98,7 @@ void compute_video_bbox(AppState& state, Clip& cl, ImVec2 p, float w, float h,
     float sy = cl.eval_prop("scale_y", state.playhead);
     float fit_w = w, fit_h = h;
     bool got_aspect = false;
-    std::string vkey = clip_slot_key(cl.text, cl.start);
+    std::string vkey = clip_slot_key(clip_video_src(state, cl), cl.start);
     for (int s = 0; s < MAX_VIDEO_TRACKS; ++s) {
         if (state.proxy_paths[s] == vkey && video_info(s).width > 0) {
             // Crop changes the displayed aspect — bbox must match the render.
@@ -171,7 +171,7 @@ static void draw_crop_mode(AppState& state, ImDrawList* dl, ImVec2 p, float w, f
     // Source dims (for the px readout and aspect-lock math).
     int src_w = 0, src_h = 0;
     {
-        std::string vkey = clip_slot_key(cl.text, cl.start);
+        std::string vkey = clip_slot_key(clip_video_src(state, cl), cl.start);
         for (int s = 0; s < MAX_VIDEO_TRACKS; ++s)
             if (state.proxy_paths[s] == vkey && video_info(s).width > 0)
                 { src_w = video_info(s).width; src_h = video_info(s).height; break; }
@@ -1379,8 +1379,9 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
         };
         auto add_clip = [&](const Clip* cl, float at_time, int ti, int max_frames = 0) {
             if (!cl || !clip_is_videolike_type(cl->clip_type)) return;
+            std::string vsrc = clip_video_src(state, *cl);   // conformed copy if ready
             int slot = slot_for_video(const_cast<AppState&>(state),
-                                      clip_slot_key(cl->text, cl->start), cl->text);
+                                      clip_slot_key(vsrc, cl->start), vsrc);
             if (slot < 0 || !video_is_open(slot)) return;
             if (already_queued(slot)) return;
             video_set_pixel_fx(slot, make_pfx(cl, ti));
@@ -1518,8 +1519,9 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
             // via scene_apply_fx, not here.
             auto draw_vid_clip = [&](const Clip* cl_ptr, float at_time, float alpha_mul) {
                 if (!cl_ptr) return;
+                std::string vsrc = clip_video_src(state, *cl_ptr);  // conformed copy if ready
                 int slot = slot_for_video(const_cast<AppState&>(state),
-                               clip_slot_key(cl_ptr->text, cl_ptr->start), cl_ptr->text);
+                               clip_slot_key(vsrc, cl_ptr->start), vsrc);
                 float src_t = cl_ptr->in_point + (at_time - cl_ptr->start) * cl_ptr->speed;
 
                 // Glass-only cfx for CPU-side datamosh and ZoomPunch — global FX

@@ -10,7 +10,7 @@
 // ── Binary serialization helpers ──────────────────────────────────────────────
 
 static const uint32_t MAGIC   = 0x534D5001u; // "PMS\x01"
-static const uint32_t VERSION = 45u;  // v45: per-clip non-destructive all-caps flag
+static const uint32_t VERSION = 46u;  // v46: per-clip frame-rate conform (src_fps + flags)
 
 struct Writer {
     std::ofstream f;
@@ -226,6 +226,10 @@ static void write_clip(Writer& w, const Clip& c) {
     w.pod(c.face_filter_amt);
     // v45: non-destructive letter case (render-time; the typed case is preserved)
     w.pod(c.text_case);
+    // v46: frame-rate conform (src_fps = native rate; flags drive blend / loop)
+    w.pod(c.src_fps);
+    w.pod((uint8_t)c.conform_smooth);
+    w.pod((uint8_t)c.clip_loop);
 }
 
 static Clip read_clip(Reader& r, uint32_t version) {
@@ -451,6 +455,11 @@ static Clip read_clip(Reader& r, uint32_t version) {
         c.face_filter_amt = r.pod<float>();
     }
     if (version >= 45u) c.text_case = r.pod<int>();
+    if (version >= 46u) {
+        c.src_fps        = r.pod<float>();
+        c.conform_smooth = (bool)r.pod<uint8_t>();
+        c.clip_loop      = (bool)r.pod<uint8_t>();
+    }
     return c;
 }
 

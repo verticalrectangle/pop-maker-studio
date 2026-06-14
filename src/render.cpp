@@ -1156,8 +1156,9 @@ static std::vector<std::string> build_args(AppState& state) {
             if (cl.clip_type == ClipType::Effect || cl.clip_type == ClipType::MultiFX) {
                 continue;  // applied per-layer via collect_effects, not as a render layer
             } else if (cl.clip_type == ClipType::Video) {
-                if (cl.text.empty() || !fs::exists(cl.text)) continue;
-                int arr_idx = get_vid_input(cl.text, cl.start, cl.end);
+                std::string vsrc = clip_video_src(state, cl);  // conformed copy if ready
+                if (vsrc.empty() || !fs::exists(vsrc)) continue;
+                int arr_idx = get_vid_input(vsrc, cl.start, cl.end);
                 RLayer rl; rl.kind = RLayer::Vid;
                 rl.track_idx = ti; rl.clip_idx = ci;
                 rl.in_idx    = arr_idx;  // resolved to real ffmpeg idx below
@@ -1345,8 +1346,9 @@ static std::vector<std::string> build_snapshot_args(AppState& state,
             const Clip& cl = state.tracks[ti].clips[ci];
             if (cl.clip_type == ClipType::Effect || cl.clip_type == ClipType::MultiFX) continue;
             if (cl.clip_type == ClipType::Video) {
-                if (cl.text.empty() || !fs::exists(cl.text)) continue;
-                int arr_idx = get_vid_input(cl.text);
+                std::string vsrc = clip_video_src(state, cl);  // conformed copy if ready
+                if (vsrc.empty() || !fs::exists(vsrc)) continue;
+                int arr_idx = get_vid_input(vsrc);
                 RLayer rl; rl.kind = RLayer::Vid;
                 rl.track_idx = ti; rl.clip_idx = ci;
                 rl.in_idx    = arr_idx;
