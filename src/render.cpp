@@ -2357,6 +2357,16 @@ void render_start_gl(AppState& state) {
                     ai.to    = cl.end - cl.start;
                     ai.delay = fmaxf(0.f, cl.start);
                     ai.pan   = state.tracks[ti].muted ? 0.f : cl.pan;
+                    // Keyframed volume/pan (take plays at 1x, pts base 0) — mirror
+                    // the general clip path so a record take exports as it previews.
+                    if (!state.tracks[ti].muted) {
+                        if (auto kv = cl.ktracks.find("volume");
+                            kv != cl.ktracks.end() && !kv->second.empty())
+                            ai.vol_e = prop_expr(cl, "volume", 1.f, cl.volume, -1.f, 1.f, 0.f);
+                        if (auto kp = cl.ktracks.find("pan");
+                            kp != cl.ktracks.end() && !kp->second.empty())
+                            ai.pan_e = prop_expr(cl, "pan", 1.f, cl.pan, -1.f, 1.f, 0.f);
+                    }
                     if (cl.fade_in > 0.f)  { ai.fade_in = cl.fade_in;  ai.fade_in_st = 0.f; }
                     if (cl.fade_out > 0.f) {
                         ai.fade_out    = cl.fade_out;

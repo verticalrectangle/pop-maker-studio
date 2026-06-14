@@ -541,6 +541,12 @@ void ui_studio(AppState& state) {
                     d.in_point = 0.f;         d.speed    = 1.f;
                     d.volume   = cl.volume;   d.pan      = cl.pan;
                     d.fade_in  = cl.fade_in;  d.fade_out = cl.fade_out;
+                    // Keyframed volume/pan animate in the live mix too (same as
+                    // audio/video clips below — audio.cpp reads vol_keys/pan_keys).
+                    if (auto it = cl.ktracks.find("volume"); it != cl.ktracks.end())
+                        d.vol_keys = it->second;
+                    if (auto it = cl.ktracks.find("pan"); it != cl.ktracks.end())
+                        d.pan_keys = it->second;
                     d.path     = cl.rec_takes[cl.rec_take_sel];
                     // Converted voice substitutes the take, same as Audio clips
                     if (cl.vc_status == VcStatus::Ready && !cl.vc_out_path.empty())
