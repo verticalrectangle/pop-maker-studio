@@ -65,11 +65,14 @@ void draw_text_overlays(ImDrawList* dl, const AppState& state, float t,
         // Default fraction chosen so the text looks the same proportion in the
         // preview canvas and the full-res FBO — do NOT use a fixed pixel size.
         static constexpr float kDefaultFontFrac = 0.055f;
-        float fsz = active->font_size > 0.f ? active->font_size * h
-                                            : h * kDefaultFontFrac;
+        // Keyframable text transform: read font size / wrap / position via
+        // eval_prop(t) so an animated value matches the preview (eval_prop
+        // returns the static field when un-keyed).
+        float fs_kf = active->eval_prop("font_size", t);
+        float fsz = fs_kf > 0.f ? fs_kf * h : h * kDefaultFontFrac;
         float line_h = fsz * 1.25f;
 
-        float max_line_w = fmaxf(40.f, active->sub_wrap_w * w);
+        float max_line_w = fmaxf(40.f, active->eval_prop("sub_wrap_w", t) * w);
         std::vector<std::string> txt_lines;
         {
             const char* src = active->text.c_str();
@@ -121,7 +124,7 @@ void draw_text_overlays(ImDrawList* dl, const AppState& state, float t,
         else if (active->sub_pos == 2)
             slot_y = p.y + sz_top + text_rendered * slot_h;
         else if (active->sub_pos == 3)
-            slot_y = p.y + active->sub_pos_y * h - block_h * 0.5f;
+            slot_y = p.y + active->eval_prop("sub_pos_y", t) * h - block_h * 0.5f;
         else
             slot_y = p.y + h - sz_bot - block_h - text_rendered * slot_h;
         // Clamp to safe zone so text never lands under platform UI chrome.
@@ -186,7 +189,7 @@ void draw_text_overlays(ImDrawList* dl, const AppState& state, float t,
             block_h     = txt_lines.size() * line_h;
         }
 
-        float block_cx = p.x + active->sub_pos_x * w;
+        float block_cx = p.x + active->eval_prop("sub_pos_x", t) * w;
         float ty_anim  = slot_y + anim_dy;
 
         std::vector<const WordEntry*> clip_words;

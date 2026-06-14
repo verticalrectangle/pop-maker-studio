@@ -85,7 +85,7 @@ const ClipKfField kClipKfFields[] = {
     {"scale_x", &Clip::scale_x}, {"scale_y", &Clip::scale_y},
     {"rotation", &Clip::rotation}, {"volume", &Clip::volume}, {"pan", &Clip::pan},
     {"sub_pos_x", &Clip::sub_pos_x}, {"sub_pos_y", &Clip::sub_pos_y},
-    {"sub_wrap_w", &Clip::sub_wrap_w},
+    {"sub_wrap_w", &Clip::sub_wrap_w}, {"font_size", &Clip::font_size},
     // Look / colour grade
     {"fx_brightness", &Clip::fx_brightness}, {"fx_contrast", &Clip::fx_contrast},
     {"fx_saturation", &Clip::fx_saturation}, {"fx_hue", &Clip::fx_hue},

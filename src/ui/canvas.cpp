@@ -1886,12 +1886,15 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
             // Hover preview: temporarily render with the hovered preset's style.
             ImGui::PushFont(g_font_black);
             ImFont* txt_font = ImGui::GetFont();
-            float fsz    = show->font_size > 0.f ? show->font_size * h
-                                                  : h * 0.055f;
+            // Keyframable text transform — eval_prop(playhead) so an animated
+            // font/wrap/position previews exactly as it exports (overlay_renderer
+            // reads the same props via eval_prop). Static when un-keyed.
+            float fs_kf  = show->eval_prop("font_size", state.playhead);
+            float fsz    = fs_kf > 0.f ? fs_kf * h : h * 0.055f;
             float line_h = fsz * 1.25f;
 
             // Word-wrap: break text into lines that fit sub_wrap_w * canvas width
-            float max_line_w = fmaxf(40.f, show->sub_wrap_w * w);
+            float max_line_w = fmaxf(40.f, show->eval_prop("sub_wrap_w", state.playhead) * w);
             std::vector<std::string> txt_lines;
             {
                 const char* src = show->text.c_str();
@@ -1946,7 +1949,7 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
             else if (show->sub_pos == 2)
                 slot_y = p.y + sz_top + text_rendered * slot_h;
             else if (show->sub_pos == 3)
-                slot_y = p.y + show->sub_pos_y * h - block_h * 0.5f;
+                slot_y = p.y + show->eval_prop("sub_pos_y", state.playhead) * h - block_h * 0.5f;
             else
                 slot_y = p.y + h - sz_bot - block_h - text_rendered * slot_h;
 
@@ -2015,7 +2018,7 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                 block_h     = txt_lines.size() * line_h;
             }
 
-            float block_ax = p.x + show->sub_pos_x * w;   // anchor point X (meaning depends on sub_anchor_h)
+            float block_ax = p.x + show->eval_prop("sub_pos_x", state.playhead) * w;   // anchor point X (meaning depends on sub_anchor_h)
             float ty_anim  = slot_y + anim_dy;
             // Collect karaoke words for this clip
             std::vector<const WordEntry*> clip_words;

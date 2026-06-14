@@ -392,39 +392,32 @@ static void section_position(AppState& state, Clip& clip, float w) {
     }
     ImGui::NewLine();
     ImGui::Dummy({0.f, 4.f});
-    ImGui::PushStyleColor(ImGuiCol_Text, Col::muted); ImGui::TextUnformatted("Y"); ImGui::PopStyleColor();
-    ImGui::SetNextItemWidth(bar_w);
-    if (ImGui::SliderFloat("##sub_y", &clip.sub_pos_y, 0.f, 1.f, "%.2f")) {
+    // Subtitle transform is keyframable — diamond control on each (the props are
+    // in kClipKfFields and the preview + export text renderers read them via
+    // eval_prop). Editing Y also flips to custom-position mode.
+    int sti = state.selected_track, sci = state.selected_clip;
+    if (::kf_slider(state, clip, sti, sci, bar_w, "sub_pos_y", "Y",
+                    &clip.sub_pos_y, 0.f, 1.f, "%.2f"))
         clip.sub_pos = 3;
-    }
-    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Position Y");
 
     ImGui::Dummy({0.f, 4.f});
-    ImGui::PushStyleColor(ImGuiCol_Text, Col::muted); ImGui::TextUnformatted("X"); ImGui::PopStyleColor();
-    ImGui::SetNextItemWidth(bar_w);
-    if (ImGui::SliderFloat("##sub_x", &clip.sub_pos_x, 0.f, 1.f, "%.2f"))
-        if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Position X");
-    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Position X");
+    ::kf_slider(state, clip, sti, sci, bar_w, "sub_pos_x", "X",
+                &clip.sub_pos_x, 0.f, 1.f, "%.2f");
 
     ImGui::Dummy({0.f, 4.f});
-    ImGui::PushStyleColor(ImGuiCol_Text, Col::muted); ImGui::TextUnformatted("Wrap width"); ImGui::PopStyleColor();
-    ImGui::SetNextItemWidth(bar_w);
-    if (ImGui::SliderFloat("##sub_wrap", &clip.sub_wrap_w, 0.1f, 1.f, "%.2f"))
-        if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Wrap width");
-    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Wrap width");
+    ::kf_slider(state, clip, sti, sci, bar_w, "sub_wrap_w", "Wrap width",
+                &clip.sub_wrap_w, 0.1f, 1.f, "%.2f");
 
     ImGui::Dummy({0.f, 4.f});
-    ImGui::PushStyleColor(ImGuiCol_Text, Col::muted); ImGui::TextUnformatted("Font size"); ImGui::PopStyleColor();
-    ImGui::SetNextItemWidth(bar_w - 52.f);
-    // stored as fraction of canvas height; expose as 1–50 percent
-    float fs_pct = clip.font_size > 0.f ? clip.font_size * 100.f : 0.f;
-    if (ImGui::SliderFloat("##font_sz", &fs_pct, 1.f, 50.f, "%.1f%%")) {
-        clip.font_size = fs_pct / 100.f;
-    }
-    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Font size");
+    // Font size is stored as a fraction of canvas height; expose as 1–50 percent
+    // (disp=100). The Reset button clears it back to auto (0).
+    ::kf_slider(state, clip, sti, sci, bar_w - 52.f, "font_size", "Font size",
+                &clip.font_size, 1.f, 50.f, "%.1f%%", 100.f);
     ImGui::SameLine(0.f, 4.f);
     if (ui_btn("Reset##fs", clip.font_size == 0.f, true)) {
-        clip.font_size = 0.f; history_push(state, "Font size");
+        clip.font_size = 0.f;
+        clip.ktracks.erase("font_size");
+        history_push(state, "Font size");
     }
 
     ImGui::PopStyleColor(2);
