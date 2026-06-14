@@ -56,6 +56,7 @@ set(SOURCES
     src/filepicker.cpp
     src/video.cpp
     src/proxy.cpp
+    src/conform.cpp
     src/waveform.cpp
     src/beat_detect.cpp
     src/blender_export.cpp
