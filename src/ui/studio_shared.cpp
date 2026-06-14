@@ -391,6 +391,36 @@ int decouple_fx_to_new_track(AppState& state, int ti, int ci) {
     return new_ti;
 }
 
+bool category_pills(const char* id, const std::vector<const char*>& cats, std::string& sel) {
+    // Drop a stale filter (category no longer present) back to All.
+    if (!sel.empty()) {
+        bool ok = false;
+        for (auto* c : cats) if (sel == c) { ok = true; break; }
+        if (!ok) sel.clear();
+    }
+    bool changed = false;
+    ImGui::PushID(id);
+    std::vector<const char*> pills{"All"};
+    for (auto* c : cats) pills.push_back(c);
+    // Screen-space right edge so the wrap test matches GetItemRectMax.
+    float x2 = ImGui::GetWindowPos().x + ImGui::GetWindowContentRegionMax().x;
+    for (size_t i = 0; i < pills.size(); ++i) {
+        bool s = (i == 0) ? sel.empty() : (sel == pills[i]);
+        if (ui_btn(pills[i], s, true)) {
+            sel = (i == 0) ? std::string() : std::string(pills[i]);
+            changed = true;
+        }
+        if (i + 1 < pills.size()) {
+            float lx = ImGui::GetItemRectMax().x;
+            float nw = ImGui::CalcTextSize(pills[i + 1]).x +
+                       ImGui::GetStyle().FramePadding.x * 2.f + 8.f;
+            if (lx + ImGui::GetStyle().ItemSpacing.x + nw < x2) ImGui::SameLine();
+        }
+    }
+    ImGui::PopID();
+    return changed;
+}
+
 void marker_jump(AppState& state, int dir) {
     if (state.markers.empty()) return;
     const float eps = 1e-3f;

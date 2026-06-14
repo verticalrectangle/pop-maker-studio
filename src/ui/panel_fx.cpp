@@ -898,6 +898,20 @@ void panel_background(AppState& state, float w, bool clip_only) {
     if (clip_only) return;
 
     // ── Preset grid ───────────────────────────────────────────────────────────
+    // Category filter pills (in place) — pick a category instead of scrolling.
+    static std::string s_bg_cat;
+    {
+        std::vector<const char*> cats;
+        for (int pi = 0; pi < g_n_bg_presets; ++pi) {
+            const char* cc = g_bg_presets[pi].category;
+            bool seen = false;
+            for (auto* x : cats) if (strcmp(x, cc) == 0) { seen = true; break; }
+            if (!seen) cats.push_back(cc);
+        }
+        category_pills("bgcat", cats, s_bg_cat);
+        ImGui::Dummy({0.f, 6.f});
+    }
+
     const char* cur_cat = nullptr;
     float cell_w = (w - 8.f) * 0.5f;
     float cell_h = 80.f;
@@ -907,15 +921,19 @@ void panel_background(AppState& state, float w, bool clip_only) {
 
     for (int pi = 0; pi < g_n_bg_presets; ++pi) {
         const BgPreset& pr = g_bg_presets[pi];
+        if (!s_bg_cat.empty() && strcmp(pr.category, s_bg_cat.c_str()) != 0) continue;
 
+        // Inline category label only in "All" mode; the pill names it otherwise.
         if (!cur_cat || strcmp(cur_cat, pr.category) != 0) {
             if (col_idx == 1) { ImGui::NewLine(); col_idx = 0; }
-            if (cur_cat) ImGui::Dummy({0.f, 6.f});
             cur_cat = pr.category;
-            ImGui::PushStyleColor(ImGuiCol_Text, to_u32(Col::muted));
-            ImGui::TextUnformatted(cur_cat);
-            ImGui::PopStyleColor();
-            ImGui::Dummy({0.f, 2.f});
+            if (s_bg_cat.empty()) {
+                ImGui::Dummy({0.f, 6.f});
+                ImGui::PushStyleColor(ImGuiCol_Text, to_u32(Col::muted));
+                ImGui::TextUnformatted(cur_cat);
+                ImGui::PopStyleColor();
+                ImGui::Dummy({0.f, 2.f});
+            }
         }
 
         ImVec2 cp = ImGui::GetCursorScreenPos();
@@ -1021,21 +1039,42 @@ void panel_fx_creative(AppState& state, float w) {
             if (strcmp(fc.category, g_fx_categories[k]) == 0) return false;
         return true;
     };
+
+    // Category filter pills (in place) — pick a category instead of scrolling
+    // the whole catalogue. Only categories that actually have cards are listed.
+    static std::string s_fx_cat;
+    {
+        std::vector<const char*> cats;
+        for (int c = 0; c < n_cats; ++c) {
+            for (int i = 0; i < g_n_fx_cards; ++i)
+                if (!fx_type_is_adjustment_style(g_fx_cards[i].type) &&
+                    card_in_cat(g_fx_cards[i], c)) { cats.push_back(g_fx_categories[c]); break; }
+        }
+        category_pills("fxcat", cats, s_fx_cat);
+        ImGui::Dummy({0.f, 6.f});
+    }
+
     for (int c = 0; c < n_cats; ++c) {
+    if (!s_fx_cat.empty() && strcmp(g_fx_categories[c], s_fx_cat.c_str()) != 0) continue;
     int cat_count = 0;
     for (int i = 0; i < g_n_fx_cards; ++i)
         if (!fx_type_is_adjustment_style(g_fx_cards[i].type) &&
             card_in_cat(g_fx_cards[i], c)) ++cat_count;
     if (cat_count == 0) continue;
 
-    char hdr[64];
-    snprintf(hdr, sizeof(hdr), "%s  (%d)###fxcat_%d", g_fx_categories[c], cat_count, c);
-    ImGui::PushStyleColor(ImGuiCol_Header,        IM_COL32(28, 28, 42, 255));
-    ImGui::PushStyleColor(ImGuiCol_HeaderHovered, IM_COL32(38, 38, 56, 255));
-    ImGui::PushStyleColor(ImGuiCol_HeaderActive,  IM_COL32(46, 46, 66, 255));
-    bool open = ImGui::CollapsingHeader(hdr, ImGuiTreeNodeFlags_DefaultOpen);
-    ImGui::PopStyleColor(3);
-    if (!open) continue;
+    // With a pill active there's only one category, so the pill is the header —
+    // drop the collapsible header and just show its cards. In "All" mode each
+    // category keeps its own collapsible group.
+    if (s_fx_cat.empty()) {
+        char hdr[64];
+        snprintf(hdr, sizeof(hdr), "%s  (%d)###fxcat_%d", g_fx_categories[c], cat_count, c);
+        ImGui::PushStyleColor(ImGuiCol_Header,        IM_COL32(28, 28, 42, 255));
+        ImGui::PushStyleColor(ImGuiCol_HeaderHovered, IM_COL32(38, 38, 56, 255));
+        ImGui::PushStyleColor(ImGuiCol_HeaderActive,  IM_COL32(46, 46, 66, 255));
+        bool open = ImGui::CollapsingHeader(hdr, ImGuiTreeNodeFlags_DefaultOpen);
+        ImGui::PopStyleColor(3);
+        if (!open) continue;
+    }
     ImGui::Dummy({0.f, 4.f});
 
     for (int i = 0; i < g_n_fx_cards; ++i) {

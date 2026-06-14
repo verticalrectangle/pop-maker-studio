@@ -434,40 +434,18 @@ void panel_typography(AppState& state, float w) {
     ImGui::PopStyleColor();
     ImGui::Dummy({0.f, 4.f});
 
-    // Category filter pills: "All" then each category, wrapping to fit. Cuts the
-    // scroll when there are many presets — only the chosen category shows below.
+    // Category filter pills (in place) — pick a category instead of scrolling
+    // the whole catalogue. Shared with the FX / background libraries.
     static std::string s_typo_cat;   // empty = All
     {
-        std::vector<const char*> pills{"All"};
+        std::vector<const char*> cats;
         for (int i = 0; i < g_n_typo_presets; ++i) {
             const char* c = g_typo_presets[i].category;
             bool seen = false;
-            for (size_t k = 1; k < pills.size(); ++k)
-                if (strcmp(pills[k], c) == 0) { seen = true; break; }
-            if (!seen) pills.push_back(c);
+            for (auto* x : cats) if (strcmp(x, c) == 0) { seen = true; break; }
+            if (!seen) cats.push_back(c);
         }
-        // A filtered-to category that no longer exists falls back to All.
-        if (!s_typo_cat.empty()) {
-            bool ok = false;
-            for (size_t k = 1; k < pills.size(); ++k)
-                if (s_typo_cat == pills[k]) { ok = true; break; }
-            if (!ok) s_typo_cat.clear();
-        }
-        // Screen-space right edge so the wrap test matches GetItemRectMax (also
-        // screen-space). Comparing against a window-local x always stacked them.
-        float x2 = ImGui::GetWindowPos().x + ImGui::GetWindowContentRegionMax().x;
-        for (size_t i = 0; i < pills.size(); ++i) {
-            bool sel = (i == 0) ? s_typo_cat.empty() : (s_typo_cat == pills[i]);
-            if (ui_btn(pills[i], sel, true))
-                s_typo_cat = (i == 0) ? std::string() : std::string(pills[i]);
-            if (i + 1 < pills.size()) {
-                float last_x2 = ImGui::GetItemRectMax().x;
-                float next_w  = ImGui::CalcTextSize(pills[i+1]).x +
-                                ImGui::GetStyle().FramePadding.x * 2.f + 8.f;
-                if (last_x2 + ImGui::GetStyle().ItemSpacing.x + next_w < x2)
-                    ImGui::SameLine();
-            }
-        }
+        category_pills("typocat", cats, s_typo_cat);
         ImGui::Dummy({0.f, 8.f});
     }
 

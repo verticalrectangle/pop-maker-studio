@@ -150,6 +150,12 @@ extern std::unordered_map<std::string, float> s_source_durations;
 void palette_widget(const char* id, float** slots, int n_slots, bool has_alpha = false);
 void palette_widget(const char* id, float* rgb);
 
+// Wrapping row of category filter pills: "All" + each category in `cats`.
+// `sel` is the active filter ("" = All) and is updated on click. Returns true
+// if the selection changed this frame. Shared by the typography / FX / background
+// libraries so they all filter in place the same way.
+bool category_pills(const char* id, const std::vector<const char*>& cats, std::string& sel);
+
 // ── group_words helper (defined in pipeline.cpp, used by panel_animation) ─────
 std::vector<Clip> group_words(const std::vector<Clip>& words, SubtitleMode mode,
                                int custom_n = 5, float pause_gap = 0.8f, int max_words = 8);
