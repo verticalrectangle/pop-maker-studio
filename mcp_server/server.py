@@ -45,6 +45,90 @@ from mcp.server.stdio import stdio_server
 from mcp import types
 from mcp.types import Tool, TextContent, ImageContent
 
+# ── Tool taxonomy (single source of truth: #5 categories, #6 audience, #7 names) ─
+# These tables drive dump_tools() metadata, consumed by tools/gen_agent_tools.py
+# (groups + filters the in-app harness) and tools/check_tool_coverage.py (so a
+# renamed-but-covered IPC method isn't flagged as a gap). See AGENT_HARNESS.md.
+
+# Domain groups — give the agent a navigable map instead of a flat 90-tool wall.
+_CATEGORIES: dict[str, list[str]] = {
+    "read": [
+        "get_project", "get_clips", "get_all_clips", "get_media_info", "get_stills",
+        "get_video_description", "describe_video", "get_canvas_geometry",
+        "get_face_track", "verify_clips", "make_contact_sheet",
+    ],
+    "timeline": [
+        "add_clip", "add_clip_sequence", "add_track", "delete_clip", "delete_clips_after",
+        "delete_track", "move_clip", "split_clip", "trim_clip", "trim_all_to", "select_clip",
+        "set_clip_prop", "set_clip_props", "set_clip_keyframes", "rename_track", "add_to_bin",
+        "remove_from_bin", "set_format", "set_loop_region", "add_callout", "add_chapter_marker",
+        "remove_chapter_marker", "get_chapter_markers", "generate_chapters", "crop_media",
+        "extract_clip_segment", "find_and_add_clip", "find_video_moment", "apply_multicam_cuts",
+    ],
+    "text": ["generate_typography", "set_text_style", "set_transcript", "shift_transcript"],
+    "fx": [
+        "add_effect_brick", "add_multifx_brick", "add_audio_multifx_brick", "add_body_fx_brick",
+        "decouple_fx_brick", "set_clip_fx", "process_body_fx_masks", "remove_background",
+        "validate_glsl",
+    ],
+    "audio": [
+        "analyze_audio", "get_audio_analysis", "get_audio_perf", "get_buses", "set_bus",
+        "set_track_bus", "set_audio_path", "remove_silence", "cut_filler_words", "find_audio_cue",
+    ],
+    "transcript": [
+        "trigger_pipeline", "get_pipeline_status", "get_transcript", "search_transcript",
+        "read_transcript_context", "cut_at_phrase", "get_search_status", "cancel_search",
+    ],
+    "capture": [
+        "take_snapshot", "ui_input", "vrecord_start", "vrecord_stop", "set_monitor",
+        "set_camera_monitor", "detect_screen_activity", "get_activity_status",
+    ],
+    "playback": ["play", "pause", "seek"],
+    "export": ["trigger_export", "get_export_status", "cancel_export"],
+    "project": ["new_project", "load_project", "save_project", "collect_project"],
+    "system": ["begin_batch", "end_batch", "undo", "redo"],
+}
+TOOL_CATEGORY: dict[str, str] = {
+    name: cat for cat, names in _CATEGORIES.items() for name in names
+}
+
+# Operator tools drive the live UI / hardware — handy to an external driver
+# (Claude Code) but withheld from the autonomous in-app harness, which should not
+# be moving its own mouse or toggling monitors.
+OPERATOR_TOOLS: set[str] = {
+    "ui_input", "get_canvas_geometry", "set_monitor", "set_camera_monitor",
+    "vrecord_start", "vrecord_stop",
+}
+
+# MCP tool → the IPC method it wraps, where the names diverge (#7). The MCP names
+# are the agent-facing vocabulary (friendly verbs); the IPC names are lower level.
+# tools/check_tool_coverage.py imports this so the wrapped methods count as covered.
+MCP_IPC_ALIASES: dict[str, str] = {
+    "add_chapter_marker":    "add_marker",
+    "remove_chapter_marker": "remove_marker",
+    "get_chapter_markers":   "get_markers",
+    "remove_background":     "start_bg_remove",
+    "process_body_fx_masks": "start_body_fx_process",
+}
+
+# IPC methods deliberately NOT exposed to any agent: the agent's own loop, debug
+# hooks, and status pollers that blocking MCP tools already wait on internally.
+INTERNAL_IPC: set[str] = {
+    "agent_send", "agent_status", "agent_chat_state",   # the agent's own control loop
+    "debug_fx_tone", "dump_face_input",                 # debug-only
+    "get_snapshot_status", "get_bg_remove_status",      # pollers folded into blocking tools
+    "get_beats", "get_fx_segments", "get_live_peaks",   # internal/UI-only readouts
+}
+
+
+def tool_meta(name: str) -> dict:
+    """Category + audience for a tool name (defaults: misc / agent)."""
+    return {
+        "category": TOOL_CATEGORY.get(name, "misc"),
+        "audience": "operator" if name in OPERATOR_TOOLS else "agent",
+    }
+
+
 # ── IPC connection ─────────────────────────────────────────────────────────────
 
 SOCK_PATH = "/tmp/pop-maker-studio.sock"
@@ -431,15 +515,7 @@ async def list_tools() -> list[Tool]:
                 "project_path, transcript_ready, playhead, tracks: [{index, name, muted, locked, clip_count}], markers}. "
                 "Use verbose=true for full clip details (all styling, FX props). "
                 "Prefer get_clips(track_name=...) when you only need clip positions on one track. "
-                "Read-only — no batch needed.\n\n"
-                "PROBE BEFORE ASKING: When the user provides media files, use tools to gather facts "
-                "before asking them anything. Call get_media_info on each file to learn resolution, "
-                "duration, and codec. To understand video content: if you have Bash + Read tools "
-                "and native vision, capture a still ("
-                "ffmpeg -y -ss 0.5 -i <path> -vframes 1 -vf scale=480:-1 /tmp/still_<name>.jpg -loglevel quiet"
-                ") and Read it; otherwise use describe_video → get_video_description for local "
-                "scene captions. For lyrics/transcript, run trigger_pipeline on the audio first. "
-                "Only ask the user about subjective choices (style, pacing, colors) that tools cannot determine."
+                "Read-only — no batch needed."
             ),
             inputSchema={
                 "type": "object",
@@ -2383,6 +2459,84 @@ async def list_tools() -> list[Tool]:
                 "required": ["time"],
             },
         ),
+        Tool(
+            name="delete_track",
+            description=(
+                "Delete a whole track (and all its clips) by index or name. "
+                "One undo step. No batch needed. To remove individual clips use "
+                "delete_clip / delete_clips_after instead."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "track":      {"type": "integer"},
+                    "track_name": {"type": "string", "description": "Track name (alternative to track index)"},
+                },
+            },
+        ),
+        Tool(
+            name="set_clip_fx",
+            description=(
+                "Set parameters on an FX brick attached to a clip. Use after adding an "
+                "effect (add_effect_brick / add_multifx_brick) to tune it. "
+                "amount is the master 0–1 strength; params is an object of "
+                "named shader params (numbers only), e.g. {\"speed\": 1.5, \"scale\": 0.3}. "
+                "Read the clip's current fx via get_project(verbose=true). No batch needed."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "track":  {"type": "integer"},
+                    "clip":   {"type": "integer"},
+                    "fx_id":  {"type": "string", "description": "Effect id on the clip (from get_project verbose)"},
+                    "amount": {"type": "number", "description": "Master strength 0–1"},
+                    "params": {"type": "object", "description": "Named shader params → numeric values"},
+                },
+                "required": ["track", "clip", "fx_id"],
+            },
+        ),
+        Tool(
+            name="get_chapter_markers",
+            description=(
+                "Return all timeline markers (a.k.a. chapter/section markers): "
+                "[{index, time, label, color}], sorted by time. Read-only — no batch needed. "
+                "Pairs with add_chapter_marker / remove_chapter_marker."
+            ),
+            inputSchema={"type": "object", "properties": {}},
+        ),
+        Tool(
+            name="set_audio_path",
+            description=(
+                "Set the project's master audio source (the file used for transcription "
+                "and lyric alignment). Normally set automatically when you add the first "
+                "audio clip — only call this to point the pipeline at a different file. "
+                "No batch needed."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Absolute path to the audio/video file"},
+                },
+                "required": ["path"],
+            },
+        ),
+        Tool(
+            name="collect_project",
+            description=(
+                "Save the project as a self-contained folder: copy every referenced "
+                "media original (clip sources, LUTs, master audio, bin) into a media/ "
+                "folder beside the .pms and rewrite the references to the copies. Use for "
+                "a portable backup or handoff. path is the destination .pms (a folder is "
+                "created around it). No batch needed."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Destination .pms path (folder created around it)"},
+                },
+                "required": ["path"],
+            },
+        ),
     ]
 
 
@@ -3619,6 +3773,9 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     if name == "remove_chapter_marker":
         result = await _remove_chapter_marker(arguments)
         return [TextContent(type="text", text=json.dumps(result, indent=2))]
+    if name == "get_chapter_markers":
+        result = _call("get_markers", arguments)
+        return [TextContent(type="text", text=json.dumps(result, indent=2))]
     if name == "set_loop_region":
         result = _call("set_loop_region", arguments)
         return [TextContent(type="text", text=json.dumps(result, indent=2))]
@@ -4174,6 +4331,7 @@ def dump_tools():
             "name": t.name,
             "description": t.description or "",
             "inputSchema": t.inputSchema,
+            **tool_meta(t.name),
         }
         for t in tools
     ]

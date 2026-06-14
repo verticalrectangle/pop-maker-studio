@@ -203,6 +203,21 @@ add_custom_command(
 add_custom_target(embed_portrait DEPENDS ${CMAKE_BINARY_DIR}/portrait_preview.h)
 add_dependencies(pop-maker-studio embed_portrait)
 
+# Guard: the in-app agent harness compiles src/generated/agent_tools.h, generated
+# from mcp_server/server.py by tools/gen_agent_tools.py. If server.py changed
+# without regenerating, fail the build so the harness can't silently ship a stale
+# toolset. Regenerate with:  python3 tools/gen_agent_tools.py
+# (Degrades to a no-op when the python mcp deps aren't installed — see --check.)
+find_program(PYTHON3_EXECUTABLE NAMES python3 python)
+if(PYTHON3_EXECUTABLE)
+    add_custom_target(check_agent_tools ALL
+        COMMAND ${PYTHON3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/gen_agent_tools.py --check
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        COMMENT "Checking agent_tools.h is in sync with mcp_server/server.py"
+    )
+    add_dependencies(pop-maker-studio check_agent_tools)
+endif()
+
 install(TARGETS pop-maker-studio DESTINATION bin)
 
 # Copy bundled models to build dir so the binary can find them next to itself
