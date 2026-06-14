@@ -171,6 +171,17 @@ void panel_adjustment_library(AppState& state, float w) {
     ImGui::PopStyleColor();
     ImGui::Dummy({0.f, 8.f});
 
+    // Category filter pills (in place) — pick a group instead of scrolling.
+    static std::string s_adj_cat;
+    {
+        std::vector<const char*> cats = {"Color", "Blur", "Vignette", "Combo"};
+        if (!state.user_presets.empty()) cats.push_back("Mine");
+        cats.push_back("Tone");
+        category_pills("adjcat", cats, s_adj_cat);
+        ImGui::Dummy({0.f, 6.f});
+    }
+    auto adj_vis = [&](const char* key) { return s_adj_cat.empty() || s_adj_cat == key; };
+
     float card_w  = w - 8.f;  // single column like FX cards
     float card_h  = 80.f;
     float thumb_w = card_h * (108.f / 192.f);
@@ -269,12 +280,15 @@ void panel_adjustment_library(AppState& state, float w) {
     int builtin_count = (int)g_builtin_presets.size();
 
     auto draw_section = [&](const char* label, PresetCategory cat) {
-        ui_separator();
-        ImGui::Dummy({0.f, 4.f});
-        ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
-        ImGui::TextUnformatted(label);
-        ImGui::PopStyleColor();
-        ImGui::Dummy({0.f, 4.f});
+        if (!adj_vis(label)) return;          // a pill is the header when filtered
+        if (s_adj_cat.empty()) {
+            ui_separator();
+            ImGui::Dummy({0.f, 4.f});
+            ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+            ImGui::TextUnformatted(label);
+            ImGui::PopStyleColor();
+            ImGui::Dummy({0.f, 4.f});
+        }
 
         for (int i = 0; i < (int)g_builtin_presets.size(); ++i) {
             if (g_builtin_presets[i].category != cat) continue;
@@ -290,13 +304,15 @@ void panel_adjustment_library(AppState& state, float w) {
     draw_section("Combo",    PresetCategory::Combo);
 
     // User presets section
-    if (!state.user_presets.empty()) {
-        ui_separator();
-        ImGui::Dummy({0.f, 4.f});
-        ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
-        ImGui::TextUnformatted("My Presets");
-        ImGui::PopStyleColor();
-        ImGui::Dummy({0.f, 4.f});
+    if (!state.user_presets.empty() && adj_vis("Mine")) {
+        if (s_adj_cat.empty()) {
+            ui_separator();
+            ImGui::Dummy({0.f, 4.f});
+            ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+            ImGui::TextUnformatted("My Presets");
+            ImGui::PopStyleColor();
+            ImGui::Dummy({0.f, 4.f});
+        }
 
         for (int i = 0; i < (int)state.user_presets.size(); ++i) {
             draw_preset_card(state.user_presets[i], builtin_count + i);
@@ -314,16 +330,18 @@ void panel_adjustment_library(AppState& state, float w) {
     }
 
     // ── Color Grade & Tone ─────────────────────────────────────────────────────
-    {
-        ui_separator();
-        ImGui::Dummy({0.f, 4.f});
-        ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
-        ImGui::TextUnformatted("Color Grade & Tone");
-        ImGui::PopStyleColor();
-        ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
-        ImGui::TextWrapped("Static color grades. Click to add as a color grade brick.");
-        ImGui::PopStyleColor();
-        ImGui::Dummy({0.f, 4.f});
+    if (adj_vis("Tone")) {
+        if (s_adj_cat.empty()) {
+            ui_separator();
+            ImGui::Dummy({0.f, 4.f});
+            ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+            ImGui::TextUnformatted("Color Grade & Tone");
+            ImGui::PopStyleColor();
+            ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+            ImGui::TextWrapped("Static color grades. Click to add as a color grade brick.");
+            ImGui::PopStyleColor();
+            ImGui::Dummy({0.f, 4.f});
+        }
 
         float cg_card_w  = w - 8.f;
         float cg_card_h  = 80.f;
