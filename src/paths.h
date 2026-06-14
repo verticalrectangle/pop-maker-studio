@@ -9,6 +9,8 @@ std::string wav2vec2_ctc_path(); // <binary_dir>/models/wav2vec2_ctc.onnx
 // in one cache dir instead of being scattered next to every source file.
 // XDG_CACHE_HOME/pop-maker-studio/media (created on first use).
 std::string media_cache_dir();
+// User-facing project location: ~/Videos/Pop Maker Studio Projects (created).
+std::string projects_dir();
 // A cache file path for `source` + `suffix`, keyed by a hash of the source path
 // (stable, collision-resistant; the source's stem is kept as a readable prefix).
 // e.g. cache_path("/x/clip.mp4", ".proxy.mjpeg") -> <cache>/clip.<hash>.proxy.mjpeg

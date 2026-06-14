@@ -10,7 +10,9 @@ std::string filepicker_open(const char* title,
                              const char* filter_patterns);
 
 // Save-as file picker. Returns the chosen path (with extension appended if needed)
-// or empty string if cancelled.
+// or empty string if cancelled. default_path (optional) seeds the dialog's
+// starting directory + suggested filename (e.g. "<dir>/Untitled.pms").
 std::string filepicker_save(const char* title,
                              const char* filter_name,
-                             const char* filter_patterns);
+                             const char* filter_patterns,
+                             const char* default_path = nullptr);

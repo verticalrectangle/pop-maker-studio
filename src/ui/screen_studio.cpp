@@ -25,6 +25,13 @@
 #include "noise_reduce.h"
 #include "transcribe.h"
 #include "filepicker.h"
+#include "paths.h"
+
+// Default location offered by the Save dialog: the existing project path, or a
+// fresh name under ~/Videos/Pop Maker Studio Projects.
+static std::string project_save_default(const AppState& s) {
+    return s.project_path.empty() ? (projects_dir() + "/Untitled.pms") : s.project_path;
+}
 #include "globals.h"
 #include "render.h"
 #include "history.h"
@@ -145,12 +152,12 @@ static void handle_shortcuts(AppState& state) {
     // ── Save / Open ───────────────────────────────────────────────────────────
     if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_S)) {
         if (state.project_path.empty())
-            state.project_path = filepicker_save("Save project", "PMS Project", "*.pms");
+            state.project_path = filepicker_save("Save project", "PMS Project", "*.pms", project_save_default(state).c_str());
         if (!state.project_path.empty()) project_save(state, state.project_path);
         return;
     }
     if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_S)) {
-        std::string p = filepicker_save("Save project as", "PMS Project", "*.pms");
+        std::string p = filepicker_save("Save project as", "PMS Project", "*.pms", project_save_default(state).c_str());
         if (!p.empty()) { state.project_path = p; project_save(state, p); }
         return;
     }
@@ -674,11 +681,11 @@ void ui_studio(AppState& state) {
             }
             if (ImGui::MenuItem("Save Project", "Ctrl+S")) {
                 if (state.project_path.empty())
-                    state.project_path = filepicker_save("Save project", "PMS Project", "*.pms");
+                    state.project_path = filepicker_save("Save project", "PMS Project", "*.pms", project_save_default(state).c_str());
                 if (!state.project_path.empty()) project_save(state, state.project_path);
             }
             if (ImGui::MenuItem("Save Project As…", "Ctrl+Shift+S")) {
-                std::string p = filepicker_save("Save project as", "PMS Project", "*.pms");
+                std::string p = filepicker_save("Save project as", "PMS Project", "*.pms", project_save_default(state).c_str());
                 if (!p.empty()) { state.project_path = p; project_save(state, p); }
             }
             ImGui::Separator();

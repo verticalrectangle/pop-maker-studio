@@ -18,6 +18,14 @@ std::string media_cache_dir() {
     return dir;
 }
 
+std::string projects_dir() {
+    const char* home = getenv("HOME");
+    std::string dir = (home ? std::string(home) : std::string("."))
+                    + "/Videos/Pop Maker Studio Projects";
+    std::error_code ec; fs::create_directories(dir, ec);
+    return dir;
+}
+
 std::string cache_path(const std::string& source, const std::string& suffix) {
     // FNV-1a hash of the source path → stable, filename-safe, collision-resistant.
     uint64_t h = 1469598103934665603ull;
