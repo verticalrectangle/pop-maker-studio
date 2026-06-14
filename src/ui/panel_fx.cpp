@@ -1836,45 +1836,30 @@ void panel_fx_clip(AppState& state, float w) {
     ImGui::PushStyleColor(ImGuiCol_SliderGrabActive, ac);
     ImGui::PushStyleColor(ImGuiCol_FrameBg,          Col::bg_soft);
     float sw = w - 16.f;
+    // Keyframable creative-FX slider wrapper — the diamond control on the brick's
+    // own param (registered floats animate per-frame in preview + export).
+    int kti = state.selected_track, kci = state.selected_clip;
+    auto kfs = [&](const char* prop, const char* lbl, float* v, float mn, float mx, const char* fmt) {
+        kf_slider(state, clip, kti, kci, sw, prop, lbl, v, mn, mx, fmt);
+    };
 
     switch (clip.fx_type) {
         case FXType::Glitch:
-            ui_label("Chroma Shift");
-            ImGui::SetNextItemWidth(sw);
-            ImGui::SliderFloat("##gchroma", &clip.fx_glitch_chroma, 0.f, 30.f, "%.1f px");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Glitch: chroma shift");
+            kfs("fx_glitch_chroma", "Chroma Shift", &clip.fx_glitch_chroma, 0.f, 30.f, "%.1f px");
             ImGui::Dummy({0.f, 4.f});
-            ui_label("Row Jitter");
-            ImGui::SetNextItemWidth(sw);
-            ImGui::SliderFloat("##gjitter", &clip.fx_glitch_jitter, 0.f, 1.f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Glitch: row jitter");
+            kfs("fx_glitch_jitter", "Row Jitter", &clip.fx_glitch_jitter, 0.f, 1.f, "%.2f");
             ImGui::Dummy({0.f, 4.f});
-            ui_label("Block Corruption");
-            ImGui::SetNextItemWidth(sw);
-            ImGui::SliderFloat("##gcorrupt", &clip.fx_glitch_corruption, 0.f, 1.f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Glitch: block corruption");
+            kfs("fx_glitch_corruption", "Block Corruption", &clip.fx_glitch_corruption, 0.f, 1.f, "%.2f");
             ImGui::Dummy({0.f, 4.f});
-            ui_label("Layer Bleed");
-            ImGui::SetNextItemWidth(sw);
-            ImGui::SliderFloat("##gbleed", &clip.fx_glitch_corruption_bleed, 0.f, 1.f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Glitch: layer bleed");
+            kfs("fx_glitch_corruption_bleed", "Layer Bleed", &clip.fx_glitch_corruption_bleed, 0.f, 1.f, "%.2f");
             break;
 
         case FXType::ZoomPunch:
-            ui_label("Punch Strength");
-            ImGui::SetNextItemWidth(sw);
-            ImGui::SliderFloat("##zstr", &clip.fx_zoom_strength, 0.f, 0.5f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "ZoomPunch: strength");
+            kfs("fx_zoom_strength", "Punch Strength", &clip.fx_zoom_strength, 0.f, 0.5f, "%.2f");
             ImGui::Dummy({0.f, 4.f});
-            ui_label("Decay");
-            ImGui::SetNextItemWidth(sw);
-            ImGui::SliderFloat("##zdec", &clip.fx_zoom_decay, 0.05f, 0.5f, "%.2fs");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "ZoomPunch: decay");
+            kfs("fx_zoom_decay", "Decay", &clip.fx_zoom_decay, 0.05f, 0.5f, "%.2fs");
             ImGui::Dummy({0.f, 4.f});
-            ui_label("Shake");
-            ImGui::SetNextItemWidth(sw);
-            ImGui::SliderFloat("##zshk", &clip.fx_zoom_shake, 0.f, 1.f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "ZoomPunch: shake");
+            kfs("fx_zoom_shake", "Shake", &clip.fx_zoom_shake, 0.f, 1.f, "%.2f");
             if (state.beats.empty()) {
                 ImGui::Dummy({0.f, 6.f});
                 ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
@@ -1900,15 +1885,9 @@ void panel_fx_clip(AppState& state, float w) {
             break;
 
         case FXType::LightLeak:
-            ui_label("Intensity");
-            ImGui::SetNextItemWidth(sw);
-            ImGui::SliderFloat("##lint", &clip.fx_leak_intensity, 0.f, 1.f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "LightLeak: intensity");
+            kfs("fx_leak_intensity", "Intensity", &clip.fx_leak_intensity, 0.f, 1.f, "%.2f");
             ImGui::Dummy({0.f, 4.f});
-            ui_label("Speed");
-            ImGui::SetNextItemWidth(sw);
-            ImGui::SliderFloat("##lspd", &clip.fx_leak_speed, 0.f, 4.f, "%.2f\xc3\x97");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "LightLeak: speed");
+            kfs("fx_leak_speed", "Speed", &clip.fx_leak_speed, 0.f, 4.f, "%.2f\xc3\x97");
             if (state.amplitude_envelope.empty()) {
                 ImGui::Dummy({0.f, 6.f});
                 ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
@@ -1918,28 +1897,16 @@ void panel_fx_clip(AppState& state, float w) {
             break;
 
         case FXType::VHS:
-            ui_label("Noise");
-            ImGui::SetNextItemWidth(sw);
-            ImGui::SliderFloat("##vnoi", &clip.fx_vhs_noise, 0.f, 1.f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "VHS: noise");
+            kfs("fx_vhs_noise", "Noise", &clip.fx_vhs_noise, 0.f, 1.f, "%.2f");
             ImGui::Dummy({0.f, 4.f});
-            ui_label("Chroma Bleed");
-            ImGui::SetNextItemWidth(sw);
-            ImGui::SliderFloat("##vble", &clip.fx_vhs_bleed, 0.f, 20.f, "%.1f px");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "VHS: chroma bleed");
+            kfs("fx_vhs_bleed", "Chroma Bleed", &clip.fx_vhs_bleed, 0.f, 20.f, "%.1f px");
             ImGui::Dummy({0.f, 4.f});
-            ui_label("Tracking Glitch");
-            ImGui::SetNextItemWidth(sw);
-            ImGui::SliderFloat("##vtrk", &clip.fx_vhs_tracking, 0.f, 1.f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "VHS: tracking");
+            kfs("fx_vhs_tracking", "Tracking Glitch", &clip.fx_vhs_tracking, 0.f, 1.f, "%.2f");
             break;
 
         case FXType::Datamosh: {
             float sw2 = w - 16.f;
-            ui_label("Intensity");
-            ImGui::SetNextItemWidth(sw2);
-            ImGui::SliderFloat("##dmint", &clip.fx_datamosh_intensity, 0.f, 1.f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Datamosh: intensity");
+            kfs("fx_datamosh_intensity", "Intensity", &clip.fx_datamosh_intensity, 0.f, 1.f, "%.2f");
             ImGui::Dummy({0.f, 4.f});
             ui_label("Spread");
             ImGui::SetNextItemWidth(sw2);
