@@ -30,7 +30,10 @@ static constexpr const char* TYPO_FX_TAG = "__typo_fx__";
 
 static void apply_typo_style(Clip& c, const TypographyPreset& pr, const AppState& state) {
     float fs   = (state.typo_font_size  > 0.001f) ? state.typo_font_size  : pr.font_size;
-    bool  caps = state.typo_all_caps_override ? state.typo_all_caps : pr.all_caps;
+    // Letter case: a user override wins; else the preset's text_case (or, for
+    // older presets that predate it, derived from all_caps). 0=as-typed 1=UPPER 2=lower.
+    int   tcase = state.typo_case_override ? state.typo_case
+                : (pr.text_case >= 0 ? pr.text_case : (pr.all_caps ? 1 : 0));
     bool  has_color_override = (state.typo_color[3] > 0.001f);
 
     c.font_size         = fs;
@@ -46,8 +49,17 @@ static void apply_typo_style(Clip& c, const TypographyPreset& pr, const AppState
         memcpy(c.sub_color, pr.color, sizeof(c.sub_color));
     c.karaoke           = pr.karaoke;
     c.clip_style        = pr.style;
-    if (caps) {
-        for (auto& ch : c.text) ch = (char)toupper((unsigned char)ch);
+    // Letter case: lyrics regenerate from the transcript each time (and karaoke
+    // word widths depend on the stored text), so they fold case in-place. A
+    // one-off Text/Subtitle brick stores a render-time flag instead — that's
+    // non-destructive, so switching case back to "as-typed" restores the typed
+    // text.
+    if (c.clip_type == ClipType::Lyrics) {
+        c.text_case = 0;
+        if      (tcase == 1) for (auto& ch : c.text) ch = (char)toupper((unsigned char)ch);
+        else if (tcase == 2) for (auto& ch : c.text) ch = (char)tolower((unsigned char)ch);
+    } else {
+        c.text_case = tcase;
     }
 
     c.ts = TextStyle{};
@@ -422,6 +434,43 @@ void panel_typography(AppState& state, float w) {
     ImGui::PopStyleColor();
     ImGui::Dummy({0.f, 4.f});
 
+    // Category filter pills: "All" then each category, wrapping to fit. Cuts the
+    // scroll when there are many presets — only the chosen category shows below.
+    static std::string s_typo_cat;   // empty = All
+    {
+        std::vector<const char*> pills{"All"};
+        for (int i = 0; i < g_n_typo_presets; ++i) {
+            const char* c = g_typo_presets[i].category;
+            bool seen = false;
+            for (size_t k = 1; k < pills.size(); ++k)
+                if (strcmp(pills[k], c) == 0) { seen = true; break; }
+            if (!seen) pills.push_back(c);
+        }
+        // A filtered-to category that no longer exists falls back to All.
+        if (!s_typo_cat.empty()) {
+            bool ok = false;
+            for (size_t k = 1; k < pills.size(); ++k)
+                if (s_typo_cat == pills[k]) { ok = true; break; }
+            if (!ok) s_typo_cat.clear();
+        }
+        // Screen-space right edge so the wrap test matches GetItemRectMax (also
+        // screen-space). Comparing against a window-local x always stacked them.
+        float x2 = ImGui::GetWindowPos().x + ImGui::GetWindowContentRegionMax().x;
+        for (size_t i = 0; i < pills.size(); ++i) {
+            bool sel = (i == 0) ? s_typo_cat.empty() : (s_typo_cat == pills[i]);
+            if (ui_btn(pills[i], sel, true))
+                s_typo_cat = (i == 0) ? std::string() : std::string(pills[i]);
+            if (i + 1 < pills.size()) {
+                float last_x2 = ImGui::GetItemRectMax().x;
+                float next_w  = ImGui::CalcTextSize(pills[i+1]).x +
+                                ImGui::GetStyle().FramePadding.x * 2.f + 8.f;
+                if (last_x2 + ImGui::GetStyle().ItemSpacing.x + next_w < x2)
+                    ImGui::SameLine();
+            }
+        }
+        ImGui::Dummy({0.f, 8.f});
+    }
+
     const float gap    = 4.f;
     const float cell_w = (full_w - gap) * 0.5f;
     const float cell_h = 92.f;
@@ -431,21 +480,25 @@ void panel_typography(AppState& state, float w) {
 
     for (int i = 0; i < g_n_typo_presets; ++i) {
         const TypographyPreset& pr = g_typo_presets[i];
+        if (!s_typo_cat.empty() && s_typo_cat != pr.category) continue;
         bool selected = (state.typo_preset_id == pr.id);
 
-        // Category label — full width, resets column
+        // Category label — full width, resets column. Only in "All" mode; when a
+        // pill is active the pill already names the category, so it's dropped.
         if (!cur_cat || strcmp(cur_cat, pr.category) != 0) {
             if (col_idx == 1) { ImGui::NewLine(); col_idx = 0; }
-            if (cur_cat) ImGui::Dummy({0.f, 4.f});
-            ImU32 dot_col = typo_category_dot(pr.category);
-            ImDrawList* dl_cat = ImGui::GetWindowDrawList();
-            ImVec2 lp = ImGui::GetCursorScreenPos();
-            dl_cat->AddCircleFilled({lp.x + 4.f, lp.y + 7.f}, 4.f, dot_col);
-            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 14.f);
-            ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
-            ImGui::TextUnformatted(pr.category);
-            ImGui::PopStyleColor();
-            ImGui::Dummy({0.f, 2.f});
+            if (s_typo_cat.empty()) {
+                if (cur_cat) ImGui::Dummy({0.f, 4.f});
+                ImU32 dot_col = typo_category_dot(pr.category);
+                ImDrawList* dl_cat = ImGui::GetWindowDrawList();
+                ImVec2 lp = ImGui::GetCursorScreenPos();
+                dl_cat->AddCircleFilled({lp.x + 4.f, lp.y + 7.f}, 4.f, dot_col);
+                ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 14.f);
+                ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+                ImGui::TextUnformatted(pr.category);
+                ImGui::PopStyleColor();
+                ImGui::Dummy({0.f, 2.f});
+            }
             cur_cat = pr.category;
             col_idx = 0;
         }
@@ -498,9 +551,11 @@ void panel_typography(AppState& state, float w) {
             dl->AddRect({px0, py0}, {px1, py1}, IM_COL32(40, 36, 58, 180), 3.f);
             dl->PushClipRect({px0, py0}, {px1, py1}, true);
 
-            // Sample string with preset's caps setting
-            char sample[8] = "stay";
-            if (pr.all_caps) { sample[0]='S'; sample[1]='T'; sample[2]='A'; sample[3]='Y'; }
+            // Sample string in the preset's own letter case (Stay / STAY / stay).
+            int pc = (pr.text_case >= 0) ? pr.text_case : (pr.all_caps ? 1 : 0);
+            char sample[8] = "Stay";
+            if      (pc == 1) memcpy(sample, "STAY", 5);
+            else if (pc == 2) memcpy(sample, "stay", 5);
 
             ImFont* pfont = g_font_black;
             float pfsz = fmaxf(8.f, fminf(20.f, pr.font_size * ph * 4.5f));
@@ -553,7 +608,7 @@ void panel_typography(AppState& state, float w) {
             state.typo_preset_id = pr.id;
             state.typo_font_size = 0.f;
             memset(state.typo_color, 0, sizeof(state.typo_color));
-            state.typo_all_caps_override = false;
+            state.typo_case_override = false;   // take the preset's own letter case
             // A standalone Text/Subtitle brick just takes the preset's look
             // (font, colour, position, animation) on that one clip. Lyrics
             // regenerate the managed transcript track (regroup + lyrics FX).
@@ -620,18 +675,37 @@ void panel_typography(AppState& state, float w) {
     if (adv_open) {
         ImGui::Dummy({0.f, 6.f});
 
-        bool caps = state.typo_all_caps_override ? state.typo_all_caps : (pr ? pr->all_caps : false);
-        if (ImGui::Checkbox("ALL CAPS##tycaps", &caps)) {
-            state.typo_all_caps_override = true;
-            state.typo_all_caps = caps;
-            typo_restyle_live(state);
+        // Letter case — a 3-way control (As typed / UPPER / lower). For a
+        // standalone Text/Subtitle brick it sets that clip's own render-time
+        // flag directly; for lyrics it tracks the global preset override.
+        bool standalone = typo_selected_is_standalone(state);
+        int cur_case = standalone
+            ? state.tracks[state.selected_track].clips[state.selected_clip].text_case
+            : (state.typo_case_override ? state.typo_case
+               : (pr ? (pr->text_case >= 0 ? pr->text_case : (pr->all_caps ? 1 : 0)) : 0));
+        ui_label("Letter case");
+        struct CaseBtn { int v; const char* label; };
+        CaseBtn cbtns[] = {{0,"As typed"},{1,"AA"},{2,"aa"}};
+        for (auto& cb : cbtns) {
+            if (ui_btn(cb.label, cur_case == cb.v, true)) {
+                if (standalone) {
+                    state.tracks[state.selected_track].clips[state.selected_clip].text_case = cb.v;
+                    history_push(state, "Letter case");
+                } else {
+                    state.typo_case_override = true;
+                    state.typo_case = cb.v;
+                    typo_restyle_live(state);
+                }
+            }
+            ImGui::SameLine(0.f, 4.f);
         }
+        ImGui::NewLine();
 
         ImGui::Dummy({0.f, 8.f});
         if (ui_btn("Reset font & color to preset", false, true)) {
-            state.typo_font_size         = 0.f;
-            state.typo_color[3]          = 0.f;
-            state.typo_all_caps_override = false;
+            state.typo_font_size     = 0.f;
+            state.typo_color[3]      = 0.f;
+            state.typo_case_override = false;
             typo_restyle_live(state);
         }
 

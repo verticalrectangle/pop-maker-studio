@@ -28,7 +28,7 @@ struct TypographyPreset {
     int   sub_anchor_h = 1;      // 0=left 1=center 2=right
     float sub_wrap_w   = 0.85f;
     float color[4]     = {1.f, 1.f, 1.f, 1.f};
-    bool  all_caps     = false;
+    bool  all_caps     = false;  // legacy upper-case flag; -1 text_case derives from it
     bool  karaoke      = false;
     AnimStyle style    = AnimStyle::None;
 
@@ -39,6 +39,10 @@ struct TypographyPreset {
     // FX clips to auto-generate (max 3)
     TypoFXDesc fx[3]   = {};
     int        n_fx    = 0;
+
+    // Letter case: -1 = derive from all_caps (back-compat); 0=as-typed 1=UPPER
+    // 2=lower. Lowercase-aesthetic presets set 2 so the text actually lower-cases.
+    int        text_case = -1;
 };
 
 // ── Preset catalogue ──────────────────────────────────────────────────────────
@@ -117,7 +121,7 @@ static const TypographyPreset g_typo_presets[] = {
         {1.f, 1.f, 1.f, 1.f},
         false, false, AnimStyle::Fade,
         0.40f, 6,
-        {}, 0
+        {}, 0, 2     // lowercase
     },
 
     {   "indie2012",
@@ -129,7 +133,7 @@ static const TypographyPreset g_typo_presets[] = {
         {0.85f, 0.82f, 0.78f, 1.f},
         false, false, AnimStyle::Fade,
         0.50f, 5,
-        {}, 0
+        {}, 0, 2     // lowercase
     },
 
     {   "sadgirl",
@@ -141,7 +145,7 @@ static const TypographyPreset g_typo_presets[] = {
         {0.95f, 0.75f, 0.88f, 1.f},
         false, false, AnimStyle::Fade,
         0.20f, 1,
-        {}, 0
+        {}, 0, 2     // lowercase
     },
 
     {   "cottagecore",
@@ -153,7 +157,7 @@ static const TypographyPreset g_typo_presets[] = {
         {0.96f, 0.91f, 0.78f, 1.f},
         false, false, AnimStyle::Fade,
         0.60f, 6,
-        { {FXType::FilmGrain, 0.f} }, 1
+        { {FXType::FilmGrain, 0.f} }, 1, 2     // lowercase
     },
 
     {   "film",
@@ -291,7 +295,7 @@ static const TypographyPreset g_typo_presets[] = {
         {1.f, 1.f, 1.f, 1.f},
         false, false, AnimStyle::None,
         0.60f, 7,
-        { {FXType::VHS, 0.f} }, 1
+        { {FXType::VHS, 0.f} }, 1, 2     // lowercase
     },
 
     {   "neon",
@@ -315,7 +319,7 @@ static const TypographyPreset g_typo_presets[] = {
         {0.93f, 0.87f, 0.72f, 1.f},
         false, false, AnimStyle::Fade,
         0.45f, 5,
-        { {FXType::FilmGrain, 0.f} }, 1
+        { {FXType::FilmGrain, 0.f} }, 1, 2     // lowercase
     },
 };
 

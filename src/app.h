@@ -147,6 +147,7 @@ struct Clip {
     int   sub_anchor_h = 1;    // horizontal anchor: 0=left 1=center 2=right
     float sub_color[4] = {1.f, 1.f, 1.f, 1.f};  // RGBA base / unspoken color
     bool  sub_color_override = false;
+    int   text_case = 0;       // 0=as-typed 1=UPPERCASE 2=lowercase (render-time; non-destructive)
     float karaoke_highlight_color[4] = {1.f, 0.85f, 0.1f, 1.f};  // active word color
 
     TextStyle ts;
@@ -706,8 +707,8 @@ struct AppState {
     // tune overrides (-1 / 0 = use preset default)
     float        typo_font_size  = 0.f;       // 0 = use preset
     float        typo_color[4]   = {0.f,0.f,0.f,0.f}; // all-zero = use preset
-    bool         typo_all_caps_override = false;
-    bool         typo_all_caps   = false;
+    bool         typo_case_override = false;     // user overrode the preset's letter case
+    int          typo_case       = 0;            // 0=as-typed 1=UPPERCASE 2=lowercase
     SubtitleMode typo_grouping   = SubtitleMode::Word; // mirrors preset until overridden
     int          typo_custom_n   = 3;
 

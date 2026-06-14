@@ -10,7 +10,7 @@
 // ── Binary serialization helpers ──────────────────────────────────────────────
 
 static const uint32_t MAGIC   = 0x534D5001u; // "PMS\x01"
-static const uint32_t VERSION = 44u;  // v44: loop brace region + marker chapter flag
+static const uint32_t VERSION = 45u;  // v45: per-clip non-destructive all-caps flag
 
 struct Writer {
     std::ofstream f;
@@ -224,6 +224,8 @@ static void write_clip(Writer& w, const Clip& c) {
     // v43: face filter
     w.pod(c.face_filter);
     w.pod(c.face_filter_amt);
+    // v45: non-destructive letter case (render-time; the typed case is preserved)
+    w.pod(c.text_case);
 }
 
 static Clip read_clip(Reader& r, uint32_t version) {
@@ -448,6 +450,7 @@ static Clip read_clip(Reader& r, uint32_t version) {
         c.face_filter     = r.pod<int>();
         c.face_filter_amt = r.pod<float>();
     }
+    if (version >= 45u) c.text_case = r.pod<int>();
     return c;
 }
 

@@ -1907,8 +1907,12 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
             // Word-wrap: break text into lines that fit sub_wrap_w * canvas width
             float max_line_w = fmaxf(40.f, show->eval_prop("sub_wrap_w", state.playhead) * w);
             std::vector<std::string> txt_lines;
+            // Render-time letter case (non-destructive) — matches overlay/export.
+            std::string disp_text = show->text;
+            if      (show->text_case == 1) for (auto& ch : disp_text) ch = (char)toupper((unsigned char)ch);
+            else if (show->text_case == 2) for (auto& ch : disp_text) ch = (char)tolower((unsigned char)ch);
             {
-                const char* src = show->text.c_str();
+                const char* src = disp_text.c_str();
                 const char* wp  = src;
                 std::string cur;
                 while (true) {

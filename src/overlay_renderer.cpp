@@ -74,8 +74,12 @@ void draw_text_overlays(ImDrawList* dl, const AppState& state, float t,
 
         float max_line_w = fmaxf(40.f, active->eval_prop("sub_wrap_w", t) * w);
         std::vector<std::string> txt_lines;
+        // Render-time letter case (non-destructive): the typed text keeps its case.
+        std::string disp_text = active->text;
+        if      (active->text_case == 1) for (auto& ch : disp_text) ch = (char)toupper((unsigned char)ch);
+        else if (active->text_case == 2) for (auto& ch : disp_text) ch = (char)tolower((unsigned char)ch);
         {
-            const char* src = active->text.c_str();
+            const char* src = disp_text.c_str();
             const char* wp  = src;
             std::string cur;
             while (true) {
