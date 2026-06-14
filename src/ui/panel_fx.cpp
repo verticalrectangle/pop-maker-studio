@@ -383,7 +383,8 @@ void panel_adjustment_library(AppState& state, float w) {
             ImGui::PushFont(g_font_bold);
             dl->AddText(ImGui::GetFont(), 13.f, {tx, cp.y+10.f}, IM_COL32(255,255,255,240), fc.name);
             ImGui::PopFont();
-            dl->AddText({tx, cp.y+27.f}, IM_COL32(160,160,170,200), fc.tagline);
+            dl->AddText(ImGui::GetFont(), ImGui::GetFontSize(), {tx, cp.y+27.f},
+                        IM_COL32(160,160,170,200), fc.tagline, nullptr, cp.x + cg_card_w - tx - 10.f);
 
             if (hov) {
                 const char* al = "+ Add";
@@ -1169,7 +1170,8 @@ void panel_fx_creative(AppState& state, float w) {
         ImGui::PushFont(g_font_bold);
         dl->AddText(ImGui::GetFont(), 13.f, {tx, cp.y+14.f}, IM_COL32(255,255,255,240), fc.name);
         ImGui::PopFont();
-        dl->AddText({tx, cp.y+33.f}, IM_COL32(160,160,170,200), fc.tagline);
+        dl->AddText(ImGui::GetFont(), ImGui::GetFontSize(), {tx, cp.y+33.f},
+                    IM_COL32(160,160,170,200), fc.tagline, nullptr, cp.x + card_w - tx - 10.f);
 
         if (hov) {
             const char* al = "+ Add";
@@ -1382,7 +1384,8 @@ void panel_fx_audio(AppState& state, float w) {
         ImGui::PushFont(g_font_bold);
         dl->AddText(ImGui::GetFont(), 13.f, {tx, cp.y+12.f}, IM_COL32(255,255,255,240), fc.name);
         ImGui::PopFont();
-        dl->AddText({tx, cp.y+30.f}, IM_COL32(130,200,180,200), fc.tagline);
+        dl->AddText(ImGui::GetFont(), ImGui::GetFontSize(), {tx, cp.y+30.f},
+                    IM_COL32(130,200,180,200), fc.tagline, nullptr, cp.x + card_w - tx - 10.f);
 
         if (hov) {
             const char* al = "+ Add";
@@ -2926,7 +2929,8 @@ void panel_body_fx_library(AppState& state, float w) {
         dl->AddText(ImGui::GetFont(), 13.f, {cp.x + 10.f, cp.y + 8.f}, nc, info.name);
         ImGui::PopFont();
         ImU32 tc = can_act ? to_u32(Col::dim) : IM_COL32(60, 75, 70, 140);
-        dl->AddText({cp.x + 10.f, cp.y + 24.f}, tc, info.tagline);
+        dl->AddText(ImGui::GetFont(), ImGui::GetFontSize(), {cp.x + 10.f, cp.y + 24.f},
+                    tc, info.tagline, nullptr, card_w - 20.f);
 
         ImGui::SetCursorScreenPos(cp);
         ImGui::InvisibleButton("##bfx_card", {card_w, card_h});

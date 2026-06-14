@@ -324,7 +324,7 @@ void panel_media_browser(AppState& state, float w, bool is_video) {
     const float GAP    = 6.f;
     const float COL_W  = floorf((w - GAP * 3.f) * 0.5f);
     const float THUMB_H = floorf(COL_W * 9.f / 16.f);
-    const float CARD_H  = THUMB_H + 30.f;
+    const float CARD_H  = THUMB_H + 46.f;   // room for a wrapped (up to 2-line) title
     float base_y = ImGui::GetCursorPosY();
 
     for (int i = 0; i < (int)valid.size(); ++i) {
@@ -386,11 +386,9 @@ void panel_media_browser(AppState& state, float w, bool is_video) {
         // Filename
         fs::path fp(path);
         std::string name = fp.filename().string();
-        if ((int)name.size() > 20) name = name.substr(0,17) + "…";
-        ImVec2 tsz = ImGui::CalcTextSize(name.c_str());
-        dl->AddText({cp.x+(COL_W-tsz.x)*0.5f, cp.y+THUMB_H+8.f},
+        dl->AddText(ImGui::GetFont(), ImGui::GetFontSize(), {cp.x+5.f, cp.y+THUMB_H+6.f},
                     hov ? IM_COL32(255,255,255,230) : IM_COL32(190,190,205,200),
-                    name.c_str());
+                    name.c_str(), nullptr, COL_W - 10.f);
 
         // Border
         dl->AddRect(cp, {cp.x+COL_W, cp.y+CARD_H},
@@ -713,7 +711,7 @@ void panel_audio_browser(AppState& state, float w) {
         return;
     }
 
-    const float CARD_H  = 62.f;
+    const float CARD_H  = 68.f;  // room for a wrapped (up to 2-line) title
     const float CARD_W  = w - 8.f;
     const float BAR_W   = 36.f;  // waveform bars area
     const float GAP     = 5.f;
@@ -753,23 +751,25 @@ void panel_audio_browser(AppState& state, float w) {
             }
         }
 
-        // Filename
+        // Filename (wraps; no truncation)
         std::string name = fp.filename().string();
-        if ((int)name.size() > 28) name = name.substr(0,25) + "…";
         float tx = cp.x + BAR_W + 14.f;
+        float nmax_w = cp.x + CARD_W - tx - 12.f;
         ImGui::PushFont(g_font_bold);
-        dl->AddText(ImGui::GetFont(), 12.f, {tx, cp.y + 12.f},
+        dl->AddText(g_font_bold, 12.f, {tx, cp.y + 10.f},
                     hov ? IM_COL32(255,255,255,230) : IM_COL32(200,215,205,210),
-                    name.c_str());
+                    name.c_str(), nullptr, nmax_w);
+        float nh = g_font_bold->CalcTextSizeA(12.f, FLT_MAX, nmax_w, name.c_str()).y;
         ImGui::PopFont();
+        float infoy = cp.y + 10.f + nh + 3.f;
 
-        // Extension badge
+        // Extension + duration on one line below the (wrapped) title.
         std::string ext = fp.extension().string();
         for (auto& c : ext) c = (char)toupper((unsigned char)c);
         if (!ext.empty() && ext[0]=='.') ext = ext.substr(1);
-        dl->AddText({tx, cp.y + 30.f}, IM_COL32(80,160,100,180), ext.c_str());
+        dl->AddText({tx, infoy}, IM_COL32(80,160,100,180), ext.c_str());
+        float extw = ext.empty() ? 0.f : ImGui::CalcTextSize(ext.c_str()).x;
 
-        // Duration (probe from cache if available)
         auto dit = s_source_durations.find(path);
         if (dit == s_source_durations.end()) {
             AudioMeta meta{};
@@ -779,7 +779,7 @@ void panel_audio_browser(AppState& state, float w) {
         }
         if (dit != s_source_durations.end() && dit->second > 0.f) {
             std::string ds = fmt_time_short(dit->second);
-            dl->AddText({tx, cp.y + 44.f}, IM_COL32(100,130,110,180), ds.c_str());
+            dl->AddText({tx + extw + 10.f, infoy}, IM_COL32(100,130,110,180), ds.c_str());
         }
 
         dl->AddRect(cp, {cp.x+CARD_W, cp.y+CARD_H},
