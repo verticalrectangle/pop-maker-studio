@@ -532,6 +532,8 @@ void conform_tick(AppState& state) {
             if (cl.src_fps == 0.f && !probed_one) {
                 MediaFileInfo mi = video_probe_file(cl.text);
                 cl.src_fps = (mi.fps > 0.0) ? (float)mi.fps : -1.f;
+                // Animated GIFs are loops by nature — default to seamless conform.
+                if (mi.fps > 0.0 && is_animated_image(cl.text)) cl.clip_loop = true;
                 probed_one = true;
             }
             if (!clip_needs_conform(cl, state.fps)) continue;

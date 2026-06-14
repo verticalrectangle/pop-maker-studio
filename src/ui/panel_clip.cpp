@@ -1,5 +1,6 @@
 #include "studio_types.h"
 #include "studio_shared.h"
+#include "conform.h"
 #include "panel_clip.h"
 #include "panel_fx.h"
 #include "pipeline.h"
@@ -1421,6 +1422,46 @@ void panel_clip(AppState& state, float w) {
                 ImGui::SameLine(0.f, 4.f);
             }
             ImGui::NewLine();
+        }
+
+        // ── Frame rate (conform) ─────────────────────────────────────────────
+        // Only when the clip's native rate differs from the project — it's
+        // transcoded to the project fps so preview == export and judder smooths.
+        if (clip_needs_conform(clip, state.fps)) {
+            ImGui::Dummy({0.f, 10.f}); ui_separator(); ImGui::Dummy({0.f, 6.f});
+            ui_label("Frame Rate");
+            ImGui::Dummy({0.f, 4.f});
+            ConformStatus cs = conform_status(clip.text, state.fps, clip.conform_smooth, clip.clip_loop);
+            const char* st = cs.state == ConformState::Ready   ? "conformed"
+                           : cs.state == ConformState::Working ? "conforming\xe2\x80\xa6"
+                           : cs.state == ConformState::Queued  ? "queued\xe2\x80\xa6"
+                                                               : "pending";
+            char line[96];
+            snprintf(line, sizeof(line), "%.0f \xe2\x86\x92 %d fps  \xc2\xb7  %s",
+                     clip.src_fps, state.fps, st);
+            ImGui::PushStyleColor(ImGuiCol_Text, cs.state == ConformState::Ready
+                                  ? IM_COL32(120,210,140,235) : IM_COL32(235,200,90,235));
+            ImGui::TextUnformatted(line);
+            ImGui::PopStyleColor();
+            ImGui::Dummy({0.f, 6.f});
+            // Toggling a flag selects a different conformed file — conform_tick
+            // re-conforms + swaps automatically; reset the readiness edge so the
+            // preview reopens once the new variant lands.
+            bool sm = clip.conform_smooth;
+            if (ImGui::Checkbox("Smooth motion (blend frames)##cf_sm", &sm)) {
+                clip.conform_smooth = sm; clip.conform_ready_cache = false;
+                history_push(state, "Conform: smooth");
+            }
+            bool lp = clip.clip_loop;
+            if (ImGui::Checkbox("Seamless loop##cf_lp", &lp)) {
+                clip.clip_loop = lp; clip.conform_ready_cache = false;
+                history_push(state, "Conform: loop");
+            }
+            ImGui::Dummy({0.f, 2.f});
+            ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+            ImGui::TextWrapped("Transcoded to the project rate so preview and export match. "
+                               "Smooth blends frames; off keeps the original cadence.");
+            ImGui::PopStyleColor();
         }
 
         // ── Sound ────────────────────────────────────────────────────────────
