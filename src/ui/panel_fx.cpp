@@ -1842,6 +1842,11 @@ void panel_fx_clip(AppState& state, float w) {
     auto kfs = [&](const char* prop, const char* lbl, float* v, float mn, float mx, const char* fmt) {
         kf_slider(state, clip, kti, kci, sw, prop, lbl, v, mn, mx, fmt);
     };
+    // Same control with an explicit width — the generated FX inspector needs a
+    // narrower slider so its beat-sync "B" button fits on the row.
+    auto kfx = [&](const char* prop, const char* lbl, float* v, float mn, float mx, const char* fmt, float ww) {
+        kf_slider(state, clip, kti, kci, ww, prop, lbl, v, mn, mx, fmt);
+    };
 
     switch (clip.fx_type) {
         case FXType::Glitch:
@@ -2431,6 +2436,12 @@ void panel_multifx_for(AppState& state, float w, int b_ti, int b_ci) {
         auto kfs = [&](const char* prop, const char* lbl, float* v,
                        float mn, float mx, const char* fmt) {
             kf_slider(state, clip, b_ti, b_ci, sw, prop, lbl, v, mn, mx, fmt);
+        };
+        // Explicit-width variant for the generated FX inspector (room for the
+        // beat-sync "B" button).
+        auto kfx = [&](const char* prop, const char* lbl, float* v,
+                       float mn, float mx, const char* fmt, float ww) {
+            kf_slider(state, clip, b_ti, b_ci, ww, prop, lbl, v, mn, mx, fmt);
         };
 
         switch (clip.fx_type) {

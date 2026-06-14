@@ -110,6 +110,8 @@ const ClipKfField kClipKfFields[] = {
     {"face_filter_amt", &Clip::face_filter_amt},
     {"fade_in", &Clip::fade_in}, {"fade_out", &Clip::fade_out},
     {"transition_pre", &Clip::transition_pre}, {"transition_post", &Clip::transition_post},
+    // Generated shader-FX packs: amount + every param (one row each).
+#include "generated/fx_kf_fields.h"
 };
 const int kClipKfFieldCount = (int)(sizeof(kClipKfFields) / sizeof(kClipKfFields[0]));
 

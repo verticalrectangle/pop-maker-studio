@@ -2,1890 +2,1890 @@
         case FXType::Pixelate:
             acc.pixelate_on = true;
             acc.any_gen_fx = true;
-            acc.pixelate_amount = fmaxf(acc.pixelate_amount, cl.fx_pixelate_amount);
+            acc.pixelate_amount = fmaxf(acc.pixelate_amount, cl.eval_prop("fx_pixelate_amount", _cl_t));
             {
                 float _bi = cl.fx_pixelate_size_beat;
-                float _bv = cl.fx_pixelate_size;
+                float _bv = cl.eval_prop("fx_pixelate_size", _cl_t);
                 acc.pixelate_size = fmaxf(acc.pixelate_size, (_bi > 0.001f) ? (1.0f + (64.0f - 1.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
         case FXType::FilmGrain:
             acc.film_grain_on = true;
             acc.any_gen_fx = true;
-            acc.film_grain_amount = fmaxf(acc.film_grain_amount, cl.fx_film_grain_amount);
+            acc.film_grain_amount = fmaxf(acc.film_grain_amount, cl.eval_prop("fx_film_grain_amount", _cl_t));
             {
                 float _bi = cl.fx_film_grain_intensity_beat;
-                float _bv = cl.fx_film_grain_intensity;
+                float _bv = cl.eval_prop("fx_film_grain_intensity", _cl_t);
                 acc.film_grain_intensity = fmaxf(acc.film_grain_intensity, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_film_grain_size_beat;
-                float _bv = cl.fx_film_grain_size;
+                float _bv = cl.eval_prop("fx_film_grain_size", _cl_t);
                 acc.film_grain_size = fmaxf(acc.film_grain_size, (_bi > 0.001f) ? (0.5f + (4.0f - 0.5f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
         case FXType::Scanlines:
             acc.scanlines_on = true;
             acc.any_gen_fx = true;
-            acc.scanlines_amount = fmaxf(acc.scanlines_amount, cl.fx_scanlines_amount);
+            acc.scanlines_amount = fmaxf(acc.scanlines_amount, cl.eval_prop("fx_scanlines_amount", _cl_t));
             {
                 float _bi = cl.fx_scanlines_density_beat;
-                float _bv = cl.fx_scanlines_density;
+                float _bv = cl.eval_prop("fx_scanlines_density", _cl_t);
                 acc.scanlines_density = fmaxf(acc.scanlines_density, (_bi > 0.001f) ? (1.0f + (6.0f - 1.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
         case FXType::ChromaticAberration:
             acc.chromatic_aberration_on = true;
             acc.any_gen_fx = true;
-            acc.chromatic_aberration_amount = fmaxf(acc.chromatic_aberration_amount, cl.fx_chromatic_aberration_amount);
+            acc.chromatic_aberration_amount = fmaxf(acc.chromatic_aberration_amount, cl.eval_prop("fx_chromatic_aberration_amount", _cl_t));
             break;
         case FXType::Duotone:
             acc.duotone_on = true;
             acc.any_gen_fx = true;
-            acc.duotone_amount = fmaxf(acc.duotone_amount, cl.fx_duotone_amount);
+            acc.duotone_amount = fmaxf(acc.duotone_amount, cl.eval_prop("fx_duotone_amount", _cl_t));
             {
                 float _bi = cl.fx_duotone_shadow_r_beat;
-                float _bv = cl.fx_duotone_shadow_r;
+                float _bv = cl.eval_prop("fx_duotone_shadow_r", _cl_t);
                 acc.duotone_shadow_r = fmaxf(acc.duotone_shadow_r, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_duotone_shadow_g_beat;
-                float _bv = cl.fx_duotone_shadow_g;
+                float _bv = cl.eval_prop("fx_duotone_shadow_g", _cl_t);
                 acc.duotone_shadow_g = fmaxf(acc.duotone_shadow_g, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_duotone_shadow_b_beat;
-                float _bv = cl.fx_duotone_shadow_b;
+                float _bv = cl.eval_prop("fx_duotone_shadow_b", _cl_t);
                 acc.duotone_shadow_b = fmaxf(acc.duotone_shadow_b, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_duotone_highlight_r_beat;
-                float _bv = cl.fx_duotone_highlight_r;
+                float _bv = cl.eval_prop("fx_duotone_highlight_r", _cl_t);
                 acc.duotone_highlight_r = fmaxf(acc.duotone_highlight_r, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_duotone_highlight_g_beat;
-                float _bv = cl.fx_duotone_highlight_g;
+                float _bv = cl.eval_prop("fx_duotone_highlight_g", _cl_t);
                 acc.duotone_highlight_g = fmaxf(acc.duotone_highlight_g, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_duotone_highlight_b_beat;
-                float _bv = cl.fx_duotone_highlight_b;
+                float _bv = cl.eval_prop("fx_duotone_highlight_b", _cl_t);
                 acc.duotone_highlight_b = fmaxf(acc.duotone_highlight_b, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
         case FXType::NeonGlow:
             acc.neon_glow_on = true;
             acc.any_gen_fx = true;
-            acc.neon_glow_amount = fmaxf(acc.neon_glow_amount, cl.fx_neon_glow_amount);
+            acc.neon_glow_amount = fmaxf(acc.neon_glow_amount, cl.eval_prop("fx_neon_glow_amount", _cl_t));
             {
                 float _bi = cl.fx_neon_glow_width_beat;
-                float _bv = cl.fx_neon_glow_width;
+                float _bv = cl.eval_prop("fx_neon_glow_width", _cl_t);
                 acc.neon_glow_width = fmaxf(acc.neon_glow_width, (_bi > 0.001f) ? (1.0f + (8.0f - 1.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
         case FXType::Thermal:
             acc.thermal_on = true;
             acc.any_gen_fx = true;
-            acc.thermal_amount = fmaxf(acc.thermal_amount, cl.fx_thermal_amount);
+            acc.thermal_amount = fmaxf(acc.thermal_amount, cl.eval_prop("fx_thermal_amount", _cl_t));
             break;
         case FXType::NightVision:
             acc.night_vision_on = true;
             acc.any_gen_fx = true;
-            acc.night_vision_amount = fmaxf(acc.night_vision_amount, cl.fx_night_vision_amount);
+            acc.night_vision_amount = fmaxf(acc.night_vision_amount, cl.eval_prop("fx_night_vision_amount", _cl_t));
             {
                 float _bi = cl.fx_night_vision_noise_beat;
-                float _bv = cl.fx_night_vision_noise;
+                float _bv = cl.eval_prop("fx_night_vision_noise", _cl_t);
                 acc.night_vision_noise = fmaxf(acc.night_vision_noise, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_night_vision_gain_beat;
-                float _bv = cl.fx_night_vision_gain;
+                float _bv = cl.eval_prop("fx_night_vision_gain", _cl_t);
                 acc.night_vision_gain = fmaxf(acc.night_vision_gain, (_bi > 0.001f) ? (0.5f + (3.0f - 0.5f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
         case FXType::OldFilm:
             acc.old_film_on = true;
             acc.any_gen_fx = true;
-            acc.old_film_amount = fmaxf(acc.old_film_amount, cl.fx_old_film_amount);
+            acc.old_film_amount = fmaxf(acc.old_film_amount, cl.eval_prop("fx_old_film_amount", _cl_t));
             {
                 float _bi = cl.fx_old_film_sepia_beat;
-                float _bv = cl.fx_old_film_sepia;
+                float _bv = cl.eval_prop("fx_old_film_sepia", _cl_t);
                 acc.old_film_sepia = fmaxf(acc.old_film_sepia, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_old_film_scratch_beat;
-                float _bv = cl.fx_old_film_scratch;
+                float _bv = cl.eval_prop("fx_old_film_scratch", _cl_t);
                 acc.old_film_scratch = fmaxf(acc.old_film_scratch, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_old_film_flicker_beat;
-                float _bv = cl.fx_old_film_flicker;
+                float _bv = cl.eval_prop("fx_old_film_flicker", _cl_t);
                 acc.old_film_flicker = fmaxf(acc.old_film_flicker, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
         case FXType::Holographic:
             acc.holographic_on = true;
             acc.any_gen_fx = true;
-            acc.holographic_amount = fmaxf(acc.holographic_amount, cl.fx_holographic_amount);
+            acc.holographic_amount = fmaxf(acc.holographic_amount, cl.eval_prop("fx_holographic_amount", _cl_t));
             {
                 float _bi = cl.fx_holographic_speed_beat;
-                float _bv = cl.fx_holographic_speed;
+                float _bv = cl.eval_prop("fx_holographic_speed", _cl_t);
                 acc.holographic_speed = fmaxf(acc.holographic_speed, (_bi > 0.001f) ? (0.0f + (4.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
         case FXType::RGBSplit:
             acc.rgb_split_on = true;
             acc.any_gen_fx = true;
-            acc.rgb_split_amount = fmaxf(acc.rgb_split_amount, cl.fx_rgb_split_amount);
+            acc.rgb_split_amount = fmaxf(acc.rgb_split_amount, cl.eval_prop("fx_rgb_split_amount", _cl_t));
             {
                 float _bi = cl.fx_rgb_split_intensity_beat;
-                float _bv = cl.fx_rgb_split_intensity;
+                float _bv = cl.eval_prop("fx_rgb_split_intensity", _cl_t);
                 acc.rgb_split_intensity = fmaxf(acc.rgb_split_intensity, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_rgb_split_speed_beat;
-                float _bv = cl.fx_rgb_split_speed;
+                float _bv = cl.eval_prop("fx_rgb_split_speed", _cl_t);
                 acc.rgb_split_speed = fmaxf(acc.rgb_split_speed, (_bi > 0.001f) ? (0.0f + (4.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
         case FXType::Posterize:
             acc.posterize_on = true;
             acc.any_gen_fx = true;
-            acc.posterize_amount = fmaxf(acc.posterize_amount, cl.fx_posterize_amount);
+            acc.posterize_amount = fmaxf(acc.posterize_amount, cl.eval_prop("fx_posterize_amount", _cl_t));
             {
                 float _bi = cl.fx_posterize_levels_beat;
-                float _bv = cl.fx_posterize_levels;
+                float _bv = cl.eval_prop("fx_posterize_levels", _cl_t);
                 acc.posterize_levels = fmaxf(acc.posterize_levels, (_bi > 0.001f) ? (2.0f + (16.0f - 2.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
         case FXType::Halftone:
             acc.halftone_on = true;
             acc.any_gen_fx = true;
-            acc.halftone_amount = fmaxf(acc.halftone_amount, cl.fx_halftone_amount);
+            acc.halftone_amount = fmaxf(acc.halftone_amount, cl.eval_prop("fx_halftone_amount", _cl_t));
             {
                 float _bi = cl.fx_halftone_size_beat;
-                float _bv = cl.fx_halftone_size;
+                float _bv = cl.eval_prop("fx_halftone_size", _cl_t);
                 acc.halftone_size = fmaxf(acc.halftone_size, (_bi > 0.001f) ? (2.0f + (20.0f - 2.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
         case FXType::Fisheye:
             acc.fisheye_on = true;
             acc.any_gen_fx = true;
-            acc.fisheye_amount = fmaxf(acc.fisheye_amount, cl.fx_fisheye_amount);
+            acc.fisheye_amount = fmaxf(acc.fisheye_amount, cl.eval_prop("fx_fisheye_amount", _cl_t));
             break;
         case FXType::BleachBypass:
             acc.bleach_bypass_on = true;
             acc.any_gen_fx = true;
-            acc.bleach_bypass_amount = fmaxf(acc.bleach_bypass_amount, cl.fx_bleach_bypass_amount);
+            acc.bleach_bypass_amount = fmaxf(acc.bleach_bypass_amount, cl.eval_prop("fx_bleach_bypass_amount", _cl_t));
             break;
         case FXType::ColorBurn:
             acc.color_burn_on = true;
             acc.any_gen_fx = true;
-            acc.color_burn_amount = fmaxf(acc.color_burn_amount, cl.fx_color_burn_amount);
+            acc.color_burn_amount = fmaxf(acc.color_burn_amount, cl.eval_prop("fx_color_burn_amount", _cl_t));
             {
                 float _bi = cl.fx_color_burn_hue_beat;
-                float _bv = cl.fx_color_burn_hue;
+                float _bv = cl.eval_prop("fx_color_burn_hue", _cl_t);
                 acc.color_burn_hue = fmaxf(acc.color_burn_hue, (_bi > 0.001f) ? (0.0f + (360.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
         case FXType::CRT:
             acc.crt_on = true;
             acc.any_gen_fx = true;
-            acc.crt_amount = fmaxf(acc.crt_amount, cl.fx_crt_amount);
+            acc.crt_amount = fmaxf(acc.crt_amount, cl.eval_prop("fx_crt_amount", _cl_t));
             {
                 float _bi = cl.fx_crt_curvature_beat;
-                float _bv = cl.fx_crt_curvature;
+                float _bv = cl.eval_prop("fx_crt_curvature", _cl_t);
                 acc.crt_curvature = fmaxf(acc.crt_curvature, (_bi > 0.001f) ? (0.05f + (1.0f - 0.05f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_crt_glow_beat;
-                float _bv = cl.fx_crt_glow;
+                float _bv = cl.eval_prop("fx_crt_glow", _cl_t);
                 acc.crt_glow = fmaxf(acc.crt_glow, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
         case FXType::Sketch:
             acc.sketch_on = true;
             acc.any_gen_fx = true;
-            acc.sketch_amount = fmaxf(acc.sketch_amount, cl.fx_sketch_amount);
+            acc.sketch_amount = fmaxf(acc.sketch_amount, cl.eval_prop("fx_sketch_amount", _cl_t));
             {
                 float _bi = cl.fx_sketch_invert_beat;
-                float _bv = cl.fx_sketch_invert;
+                float _bv = cl.eval_prop("fx_sketch_invert", _cl_t);
                 acc.sketch_invert = fmaxf(acc.sketch_invert, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
         case FXType::GlitchBlock:
             acc.glitch_block_on = true;
             acc.any_gen_fx = true;
-            acc.glitch_block_amount = fmaxf(acc.glitch_block_amount, cl.fx_glitch_block_amount);
+            acc.glitch_block_amount = fmaxf(acc.glitch_block_amount, cl.eval_prop("fx_glitch_block_amount", _cl_t));
             {
                 float _bi = cl.fx_glitch_block_intensity_beat;
-                float _bv = cl.fx_glitch_block_intensity;
+                float _bv = cl.eval_prop("fx_glitch_block_intensity", _cl_t);
                 acc.glitch_block_intensity = fmaxf(acc.glitch_block_intensity, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_glitch_block_speed_beat;
-                float _bv = cl.fx_glitch_block_speed;
+                float _bv = cl.eval_prop("fx_glitch_block_speed", _cl_t);
                 acc.glitch_block_speed = fmaxf(acc.glitch_block_speed, (_bi > 0.001f) ? (0.0f + (4.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
         case FXType::Lomo:
             acc.lomo_on = true;
             acc.any_gen_fx = true;
-            acc.lomo_amount = fmaxf(acc.lomo_amount, cl.fx_lomo_amount);
+            acc.lomo_amount = fmaxf(acc.lomo_amount, cl.eval_prop("fx_lomo_amount", _cl_t));
             {
                 float _bi = cl.fx_lomo_vignette_beat;
-                float _bv = cl.fx_lomo_vignette;
+                float _bv = cl.eval_prop("fx_lomo_vignette", _cl_t);
                 acc.lomo_vignette = fmaxf(acc.lomo_vignette, (_bi > 0.001f) ? (0.1f + (1.0f - 0.1f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_lomo_saturation_beat;
-                float _bv = cl.fx_lomo_saturation;
+                float _bv = cl.eval_prop("fx_lomo_saturation", _cl_t);
                 acc.lomo_saturation = fmaxf(acc.lomo_saturation, (_bi > 0.001f) ? (0.8f + (2.0f - 0.8f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_lomo_fade_beat;
-                float _bv = cl.fx_lomo_fade;
+                float _bv = cl.eval_prop("fx_lomo_fade", _cl_t);
                 acc.lomo_fade = fmaxf(acc.lomo_fade, (_bi > 0.001f) ? (0.0f + (0.5f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
         case FXType::Twirl:
             acc.twirl_on = true;
             acc.any_gen_fx = true;
-            acc.twirl_amount = fmaxf(acc.twirl_amount, cl.fx_twirl_amount);
+            acc.twirl_amount = fmaxf(acc.twirl_amount, cl.eval_prop("fx_twirl_amount", _cl_t));
             {
                 float _bi = cl.fx_twirl_radius_beat;
-                float _bv = cl.fx_twirl_radius;
+                float _bv = cl.eval_prop("fx_twirl_radius", _cl_t);
                 acc.twirl_radius = fmaxf(acc.twirl_radius, (_bi > 0.001f) ? (0.1f + (1.0f - 0.1f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
         case FXType::Ripple:
             acc.ripple_on = true;
             acc.any_gen_fx = true;
-            acc.ripple_amount = fmaxf(acc.ripple_amount, cl.fx_ripple_amount);
+            acc.ripple_amount = fmaxf(acc.ripple_amount, cl.eval_prop("fx_ripple_amount", _cl_t));
             {
                 float _bi = cl.fx_ripple_frequency_beat;
-                float _bv = cl.fx_ripple_frequency;
+                float _bv = cl.eval_prop("fx_ripple_frequency", _cl_t);
                 acc.ripple_frequency = fmaxf(acc.ripple_frequency, (_bi > 0.001f) ? (2.0f + (40.0f - 2.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_ripple_amplitude_beat;
-                float _bv = cl.fx_ripple_amplitude;
+                float _bv = cl.eval_prop("fx_ripple_amplitude", _cl_t);
                 acc.ripple_amplitude = fmaxf(acc.ripple_amplitude, (_bi > 0.001f) ? (0.005f + (0.1f - 0.005f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_ripple_speed_beat;
-                float _bv = cl.fx_ripple_speed;
+                float _bv = cl.eval_prop("fx_ripple_speed", _cl_t);
                 acc.ripple_speed = fmaxf(acc.ripple_speed, (_bi > 0.001f) ? (0.0f + (6.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
         case FXType::WaveWarp:
             acc.wave_warp_on = true;
             acc.any_gen_fx = true;
-            acc.wave_warp_amount = fmaxf(acc.wave_warp_amount, cl.fx_wave_warp_amount);
+            acc.wave_warp_amount = fmaxf(acc.wave_warp_amount, cl.eval_prop("fx_wave_warp_amount", _cl_t));
             {
                 float _bi = cl.fx_wave_warp_freq_x_beat;
-                float _bv = cl.fx_wave_warp_freq_x;
+                float _bv = cl.eval_prop("fx_wave_warp_freq_x", _cl_t);
                 acc.wave_warp_freq_x = fmaxf(acc.wave_warp_freq_x, (_bi > 0.001f) ? (1.0f + (30.0f - 1.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_wave_warp_freq_y_beat;
-                float _bv = cl.fx_wave_warp_freq_y;
+                float _bv = cl.eval_prop("fx_wave_warp_freq_y", _cl_t);
                 acc.wave_warp_freq_y = fmaxf(acc.wave_warp_freq_y, (_bi > 0.001f) ? (1.0f + (30.0f - 1.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_wave_warp_amplitude_beat;
-                float _bv = cl.fx_wave_warp_amplitude;
+                float _bv = cl.eval_prop("fx_wave_warp_amplitude", _cl_t);
                 acc.wave_warp_amplitude = fmaxf(acc.wave_warp_amplitude, (_bi > 0.001f) ? (0.008f + (0.12f - 0.008f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_wave_warp_speed_beat;
-                float _bv = cl.fx_wave_warp_speed;
+                float _bv = cl.eval_prop("fx_wave_warp_speed", _cl_t);
                 acc.wave_warp_speed = fmaxf(acc.wave_warp_speed, (_bi > 0.001f) ? (0.0f + (5.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
         case FXType::Breathe:
             acc.breathe_on = true;
             acc.any_gen_fx = true;
-            acc.breathe_amount = fmaxf(acc.breathe_amount, cl.fx_breathe_amount);
+            acc.breathe_amount = fmaxf(acc.breathe_amount, cl.eval_prop("fx_breathe_amount", _cl_t));
             {
                 float _bi = cl.fx_breathe_breathe_rate_beat;
-                float _bv = cl.fx_breathe_breathe_rate;
+                float _bv = cl.eval_prop("fx_breathe_breathe_rate", _cl_t);
                 acc.breathe_breathe_rate = fmaxf(acc.breathe_breathe_rate, (_bi > 0.001f) ? (0.1f + (3.0f - 0.1f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_breathe_warp_strength_beat;
-                float _bv = cl.fx_breathe_warp_strength;
+                float _bv = cl.eval_prop("fx_breathe_warp_strength", _cl_t);
                 acc.breathe_warp_strength = fmaxf(acc.breathe_warp_strength, (_bi > 0.001f) ? (0.0f + (0.15f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_breathe_color_speed_beat;
-                float _bv = cl.fx_breathe_color_speed;
+                float _bv = cl.eval_prop("fx_breathe_color_speed", _cl_t);
                 acc.breathe_color_speed = fmaxf(acc.breathe_color_speed, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_breathe_chroma_split_beat;
-                float _bv = cl.fx_breathe_chroma_split;
+                float _bv = cl.eval_prop("fx_breathe_chroma_split", _cl_t);
                 acc.breathe_chroma_split = fmaxf(acc.breathe_chroma_split, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_breathe_complexity_beat;
-                float _bv = cl.fx_breathe_complexity;
+                float _bv = cl.eval_prop("fx_breathe_complexity", _cl_t);
                 acc.breathe_complexity = fmaxf(acc.breathe_complexity, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
         case FXType::Kaleidoscope:
             acc.kaleidoscope_on = true;
             acc.any_gen_fx = true;
-            acc.kaleidoscope_amount = fmaxf(acc.kaleidoscope_amount, cl.fx_kaleidoscope_amount);
+            acc.kaleidoscope_amount = fmaxf(acc.kaleidoscope_amount, cl.eval_prop("fx_kaleidoscope_amount", _cl_t));
             {
                 float _bi = cl.fx_kaleidoscope_segments_beat;
-                float _bv = cl.fx_kaleidoscope_segments;
+                float _bv = cl.eval_prop("fx_kaleidoscope_segments", _cl_t);
                 acc.kaleidoscope_segments = fmaxf(acc.kaleidoscope_segments, (_bi > 0.001f) ? (2.0f + (16.0f - 2.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_kaleidoscope_rotation_beat;
-                float _bv = cl.fx_kaleidoscope_rotation;
+                float _bv = cl.eval_prop("fx_kaleidoscope_rotation", _cl_t);
                 acc.kaleidoscope_rotation = fmaxf(acc.kaleidoscope_rotation, (_bi > 0.001f) ? (0.0f + (6.28f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_kaleidoscope_zoom_beat;
-                float _bv = cl.fx_kaleidoscope_zoom;
+                float _bv = cl.eval_prop("fx_kaleidoscope_zoom", _cl_t);
                 acc.kaleidoscope_zoom = fmaxf(acc.kaleidoscope_zoom, (_bi > 0.001f) ? (0.5f + (3.0f - 0.5f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
         case FXType::ZoomBlurRad:
             acc.zoom_blur_rad_on = true;
             acc.any_gen_fx = true;
-            acc.zoom_blur_rad_amount = fmaxf(acc.zoom_blur_rad_amount, cl.fx_zoom_blur_rad_amount);
+            acc.zoom_blur_rad_amount = fmaxf(acc.zoom_blur_rad_amount, cl.eval_prop("fx_zoom_blur_rad_amount", _cl_t));
             {
                 float _bi = cl.fx_zoom_blur_rad_intensity_beat;
-                float _bv = cl.fx_zoom_blur_rad_intensity;
+                float _bv = cl.eval_prop("fx_zoom_blur_rad_intensity", _cl_t);
                 acc.zoom_blur_rad_intensity = fmaxf(acc.zoom_blur_rad_intensity, (_bi > 0.001f) ? (0.0f + (0.35f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_zoom_blur_rad_cx_beat;
-                float _bv = cl.fx_zoom_blur_rad_cx;
+                float _bv = cl.eval_prop("fx_zoom_blur_rad_cx", _cl_t);
                 acc.zoom_blur_rad_cx = fmaxf(acc.zoom_blur_rad_cx, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_zoom_blur_rad_cy_beat;
-                float _bv = cl.fx_zoom_blur_rad_cy;
+                float _bv = cl.eval_prop("fx_zoom_blur_rad_cy", _cl_t);
                 acc.zoom_blur_rad_cy = fmaxf(acc.zoom_blur_rad_cy, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
         case FXType::SpinBlur:
             acc.spin_blur_on = true;
             acc.any_gen_fx = true;
-            acc.spin_blur_amount = fmaxf(acc.spin_blur_amount, cl.fx_spin_blur_amount);
+            acc.spin_blur_amount = fmaxf(acc.spin_blur_amount, cl.eval_prop("fx_spin_blur_amount", _cl_t));
             {
                 float _bi = cl.fx_spin_blur_angle_beat;
-                float _bv = cl.fx_spin_blur_angle;
+                float _bv = cl.eval_prop("fx_spin_blur_angle", _cl_t);
                 acc.spin_blur_angle = fmaxf(acc.spin_blur_angle, (_bi > 0.001f) ? (0.01f + (0.3f - 0.01f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
         case FXType::HeatHaze:
             acc.heat_haze_on = true;
             acc.any_gen_fx = true;
-            acc.heat_haze_amount = fmaxf(acc.heat_haze_amount, cl.fx_heat_haze_amount);
+            acc.heat_haze_amount = fmaxf(acc.heat_haze_amount, cl.eval_prop("fx_heat_haze_amount", _cl_t));
             {
                 float _bi = cl.fx_heat_haze_intensity_beat;
-                float _bv = cl.fx_heat_haze_intensity;
+                float _bv = cl.eval_prop("fx_heat_haze_intensity", _cl_t);
                 acc.heat_haze_intensity = fmaxf(acc.heat_haze_intensity, (_bi > 0.001f) ? (0.0f + (2.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_heat_haze_speed_beat;
-                float _bv = cl.fx_heat_haze_speed;
+                float _bv = cl.eval_prop("fx_heat_haze_speed", _cl_t);
                 acc.heat_haze_speed = fmaxf(acc.heat_haze_speed, (_bi > 0.001f) ? (0.0f + (4.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
         case FXType::BarrelWarp:
             acc.barrel_warp_on = true;
             acc.any_gen_fx = true;
-            acc.barrel_warp_amount = fmaxf(acc.barrel_warp_amount, cl.fx_barrel_warp_amount);
+            acc.barrel_warp_amount = fmaxf(acc.barrel_warp_amount, cl.eval_prop("fx_barrel_warp_amount", _cl_t));
             {
                 float _bi = cl.fx_barrel_warp_k1_beat;
-                float _bv = cl.fx_barrel_warp_k1;
+                float _bv = cl.eval_prop("fx_barrel_warp_k1", _cl_t);
                 acc.barrel_warp_k1 = fmaxf(acc.barrel_warp_k1, (_bi > 0.001f) ? (0.05f + (1.0f - 0.05f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_barrel_warp_k2_beat;
-                float _bv = cl.fx_barrel_warp_k2;
+                float _bv = cl.eval_prop("fx_barrel_warp_k2", _cl_t);
                 acc.barrel_warp_k2 = fmaxf(acc.barrel_warp_k2, (_bi > 0.001f) ? (0.0f + (0.5f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_barrel_warp_scale_beat;
-                float _bv = cl.fx_barrel_warp_scale;
+                float _bv = cl.eval_prop("fx_barrel_warp_scale", _cl_t);
                 acc.barrel_warp_scale = fmaxf(acc.barrel_warp_scale, (_bi > 0.001f) ? (0.5f + (1.0f - 0.5f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
         case FXType::AnamorphicStreak:
             acc.anamorphic_streak_on = true;
             acc.any_gen_fx = true;
-            acc.anamorphic_streak_amount = fmaxf(acc.anamorphic_streak_amount, cl.fx_anamorphic_streak_amount);
+            acc.anamorphic_streak_amount = fmaxf(acc.anamorphic_streak_amount, cl.eval_prop("fx_anamorphic_streak_amount", _cl_t));
             {
                 float _bi = cl.fx_anamorphic_streak_threshold_beat;
-                float _bv = cl.fx_anamorphic_streak_threshold;
+                float _bv = cl.eval_prop("fx_anamorphic_streak_threshold", _cl_t);
                 acc.anamorphic_streak_threshold = fmaxf(acc.anamorphic_streak_threshold, (_bi > 0.001f) ? (0.3f + (1.0f - 0.3f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_anamorphic_streak_length_beat;
-                float _bv = cl.fx_anamorphic_streak_length;
+                float _bv = cl.eval_prop("fx_anamorphic_streak_length", _cl_t);
                 acc.anamorphic_streak_length = fmaxf(acc.anamorphic_streak_length, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_anamorphic_streak_intensity_beat;
-                float _bv = cl.fx_anamorphic_streak_intensity;
+                float _bv = cl.eval_prop("fx_anamorphic_streak_intensity", _cl_t);
                 acc.anamorphic_streak_intensity = fmaxf(acc.anamorphic_streak_intensity, (_bi > 0.001f) ? (0.0f + (3.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
         case FXType::StarburstSpike:
             acc.starburst_spike_on = true;
             acc.any_gen_fx = true;
-            acc.starburst_spike_amount = fmaxf(acc.starburst_spike_amount, cl.fx_starburst_spike_amount);
+            acc.starburst_spike_amount = fmaxf(acc.starburst_spike_amount, cl.eval_prop("fx_starburst_spike_amount", _cl_t));
             {
                 float _bi = cl.fx_starburst_spike_threshold_beat;
-                float _bv = cl.fx_starburst_spike_threshold;
+                float _bv = cl.eval_prop("fx_starburst_spike_threshold", _cl_t);
                 acc.starburst_spike_threshold = fmaxf(acc.starburst_spike_threshold, (_bi > 0.001f) ? (0.3f + (1.0f - 0.3f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_starburst_spike_length_beat;
-                float _bv = cl.fx_starburst_spike_length;
+                float _bv = cl.eval_prop("fx_starburst_spike_length", _cl_t);
                 acc.starburst_spike_length = fmaxf(acc.starburst_spike_length, (_bi > 0.001f) ? (0.05f + (0.6f - 0.05f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_starburst_spike_rays_beat;
-                float _bv = cl.fx_starburst_spike_rays;
+                float _bv = cl.eval_prop("fx_starburst_spike_rays", _cl_t);
                 acc.starburst_spike_rays = fmaxf(acc.starburst_spike_rays, (_bi > 0.001f) ? (4.0f + (12.0f - 4.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
         case FXType::GodRays:
             acc.god_rays_on = true;
             acc.any_gen_fx = true;
-            acc.god_rays_amount = fmaxf(acc.god_rays_amount, cl.fx_god_rays_amount);
+            acc.god_rays_amount = fmaxf(acc.god_rays_amount, cl.eval_prop("fx_god_rays_amount", _cl_t));
             {
                 float _bi = cl.fx_god_rays_intensity_beat;
-                float _bv = cl.fx_god_rays_intensity;
+                float _bv = cl.eval_prop("fx_god_rays_intensity", _cl_t);
                 acc.god_rays_intensity = fmaxf(acc.god_rays_intensity, (_bi > 0.001f) ? (0.0f + (2.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_god_rays_decay_beat;
-                float _bv = cl.fx_god_rays_decay;
+                float _bv = cl.eval_prop("fx_god_rays_decay", _cl_t);
                 acc.god_rays_decay = fmaxf(acc.god_rays_decay, (_bi > 0.001f) ? (0.7f + (1.0f - 0.7f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_god_rays_cx_beat;
-                float _bv = cl.fx_god_rays_cx;
+                float _bv = cl.eval_prop("fx_god_rays_cx", _cl_t);
                 acc.god_rays_cx = fmaxf(acc.god_rays_cx, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_god_rays_cy_beat;
-                float _bv = cl.fx_god_rays_cy;
+                float _bv = cl.eval_prop("fx_god_rays_cy", _cl_t);
                 acc.god_rays_cy = fmaxf(acc.god_rays_cy, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
         case FXType::AuroraBorealis:
             acc.aurora_borealis_on = true;
             acc.any_gen_fx = true;
-            acc.aurora_borealis_amount = fmaxf(acc.aurora_borealis_amount, cl.fx_aurora_borealis_amount);
+            acc.aurora_borealis_amount = fmaxf(acc.aurora_borealis_amount, cl.eval_prop("fx_aurora_borealis_amount", _cl_t));
             {
                 float _bi = cl.fx_aurora_borealis_intensity_beat;
-                float _bv = cl.fx_aurora_borealis_intensity;
+                float _bv = cl.eval_prop("fx_aurora_borealis_intensity", _cl_t);
                 acc.aurora_borealis_intensity = fmaxf(acc.aurora_borealis_intensity, (_bi > 0.001f) ? (0.0f + (2.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_aurora_borealis_speed_beat;
-                float _bv = cl.fx_aurora_borealis_speed;
+                float _bv = cl.eval_prop("fx_aurora_borealis_speed", _cl_t);
                 acc.aurora_borealis_speed = fmaxf(acc.aurora_borealis_speed, (_bi > 0.001f) ? (0.0f + (2.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_aurora_borealis_color_shift_beat;
-                float _bv = cl.fx_aurora_borealis_color_shift;
+                float _bv = cl.eval_prop("fx_aurora_borealis_color_shift", _cl_t);
                 acc.aurora_borealis_color_shift = fmaxf(acc.aurora_borealis_color_shift, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
         case FXType::BokehDream:
             acc.bokeh_dream_on = true;
             acc.any_gen_fx = true;
-            acc.bokeh_dream_amount = fmaxf(acc.bokeh_dream_amount, cl.fx_bokeh_dream_amount);
+            acc.bokeh_dream_amount = fmaxf(acc.bokeh_dream_amount, cl.eval_prop("fx_bokeh_dream_amount", _cl_t));
             {
                 float _bi = cl.fx_bokeh_dream_radius_beat;
-                float _bv = cl.fx_bokeh_dream_radius;
+                float _bv = cl.eval_prop("fx_bokeh_dream_radius", _cl_t);
                 acc.bokeh_dream_radius = fmaxf(acc.bokeh_dream_radius, (_bi > 0.001f) ? (0.0f + (0.08f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_bokeh_dream_threshold_beat;
-                float _bv = cl.fx_bokeh_dream_threshold;
+                float _bv = cl.eval_prop("fx_bokeh_dream_threshold", _cl_t);
                 acc.bokeh_dream_threshold = fmaxf(acc.bokeh_dream_threshold, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_bokeh_dream_intensity_beat;
-                float _bv = cl.fx_bokeh_dream_intensity;
+                float _bv = cl.eval_prop("fx_bokeh_dream_intensity", _cl_t);
                 acc.bokeh_dream_intensity = fmaxf(acc.bokeh_dream_intensity, (_bi > 0.001f) ? (0.0f + (4.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
         case FXType::PrismDisperse:
             acc.prism_disperse_on = true;
             acc.any_gen_fx = true;
-            acc.prism_disperse_amount = fmaxf(acc.prism_disperse_amount, cl.fx_prism_disperse_amount);
+            acc.prism_disperse_amount = fmaxf(acc.prism_disperse_amount, cl.eval_prop("fx_prism_disperse_amount", _cl_t));
             {
                 float _bi = cl.fx_prism_disperse_spread_beat;
-                float _bv = cl.fx_prism_disperse_spread;
+                float _bv = cl.eval_prop("fx_prism_disperse_spread", _cl_t);
                 acc.prism_disperse_spread = fmaxf(acc.prism_disperse_spread, (_bi > 0.001f) ? (0.0f + (0.2f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_prism_disperse_intensity_beat;
-                float _bv = cl.fx_prism_disperse_intensity;
+                float _bv = cl.eval_prop("fx_prism_disperse_intensity", _cl_t);
                 acc.prism_disperse_intensity = fmaxf(acc.prism_disperse_intensity, (_bi > 0.001f) ? (0.0f + (2.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
         case FXType::FilmBurn:
             acc.film_burn_on = true;
             acc.any_gen_fx = true;
-            acc.film_burn_amount = fmaxf(acc.film_burn_amount, cl.fx_film_burn_amount);
+            acc.film_burn_amount = fmaxf(acc.film_burn_amount, cl.eval_prop("fx_film_burn_amount", _cl_t));
             {
                 float _bi = cl.fx_film_burn_intensity_beat;
-                float _bv = cl.fx_film_burn_intensity;
+                float _bv = cl.eval_prop("fx_film_burn_intensity", _cl_t);
                 acc.film_burn_intensity = fmaxf(acc.film_burn_intensity, (_bi > 0.001f) ? (0.0f + (2.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_film_burn_speed_beat;
-                float _bv = cl.fx_film_burn_speed;
+                float _bv = cl.eval_prop("fx_film_burn_speed", _cl_t);
                 acc.film_burn_speed = fmaxf(acc.film_burn_speed, (_bi > 0.001f) ? (0.0f + (3.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_film_burn_edge_beat;
-                float _bv = cl.fx_film_burn_edge;
+                float _bv = cl.eval_prop("fx_film_burn_edge", _cl_t);
                 acc.film_burn_edge = fmaxf(acc.film_burn_edge, (_bi > 0.001f) ? (0.0f + (0.6f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
         case FXType::OilPaint:
             acc.oil_paint_on = true;
             acc.any_gen_fx = true;
-            acc.oil_paint_amount = fmaxf(acc.oil_paint_amount, cl.fx_oil_paint_amount);
+            acc.oil_paint_amount = fmaxf(acc.oil_paint_amount, cl.eval_prop("fx_oil_paint_amount", _cl_t));
             {
                 float _bi = cl.fx_oil_paint_radius_beat;
-                float _bv = cl.fx_oil_paint_radius;
+                float _bv = cl.eval_prop("fx_oil_paint_radius", _cl_t);
                 acc.oil_paint_radius = fmaxf(acc.oil_paint_radius, (_bi > 0.001f) ? (2.0f + (8.0f - 2.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_oil_paint_sharpness_beat;
-                float _bv = cl.fx_oil_paint_sharpness;
+                float _bv = cl.eval_prop("fx_oil_paint_sharpness", _cl_t);
                 acc.oil_paint_sharpness = fmaxf(acc.oil_paint_sharpness, (_bi > 0.001f) ? (0.0f + (15.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
         case FXType::StainedGlass:
             acc.stained_glass_on = true;
             acc.any_gen_fx = true;
-            acc.stained_glass_amount = fmaxf(acc.stained_glass_amount, cl.fx_stained_glass_amount);
+            acc.stained_glass_amount = fmaxf(acc.stained_glass_amount, cl.eval_prop("fx_stained_glass_amount", _cl_t));
             {
                 float _bi = cl.fx_stained_glass_cell_size_beat;
-                float _bv = cl.fx_stained_glass_cell_size;
+                float _bv = cl.eval_prop("fx_stained_glass_cell_size", _cl_t);
                 acc.stained_glass_cell_size = fmaxf(acc.stained_glass_cell_size, (_bi > 0.001f) ? (4.0f + (48.0f - 4.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_stained_glass_border_beat;
-                float _bv = cl.fx_stained_glass_border;
+                float _bv = cl.eval_prop("fx_stained_glass_border", _cl_t);
                 acc.stained_glass_border = fmaxf(acc.stained_glass_border, (_bi > 0.001f) ? (0.0f + (0.3f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_stained_glass_saturation_beat;
-                float _bv = cl.fx_stained_glass_saturation;
+                float _bv = cl.eval_prop("fx_stained_glass_saturation", _cl_t);
                 acc.stained_glass_saturation = fmaxf(acc.stained_glass_saturation, (_bi > 0.001f) ? (0.5f + (3.0f - 0.5f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
         case FXType::NeonEdgeGlow:
             acc.neon_edge_glow_on = true;
             acc.any_gen_fx = true;
-            acc.neon_edge_glow_amount = fmaxf(acc.neon_edge_glow_amount, cl.fx_neon_edge_glow_amount);
+            acc.neon_edge_glow_amount = fmaxf(acc.neon_edge_glow_amount, cl.eval_prop("fx_neon_edge_glow_amount", _cl_t));
             {
                 float _bi = cl.fx_neon_edge_glow_threshold_beat;
-                float _bv = cl.fx_neon_edge_glow_threshold;
+                float _bv = cl.eval_prop("fx_neon_edge_glow_threshold", _cl_t);
                 acc.neon_edge_glow_threshold = fmaxf(acc.neon_edge_glow_threshold, (_bi > 0.001f) ? (0.0f + (0.5f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_neon_edge_glow_glow_beat;
-                float _bv = cl.fx_neon_edge_glow_glow;
+                float _bv = cl.eval_prop("fx_neon_edge_glow_glow", _cl_t);
                 acc.neon_edge_glow_glow = fmaxf(acc.neon_edge_glow_glow, (_bi > 0.001f) ? (0.2f + (2.0f - 0.2f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_neon_edge_glow_hue_beat;
-                float _bv = cl.fx_neon_edge_glow_hue;
+                float _bv = cl.eval_prop("fx_neon_edge_glow_hue", _cl_t);
                 acc.neon_edge_glow_hue = fmaxf(acc.neon_edge_glow_hue, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
         case FXType::CyberpunkGrade:
             acc.cyberpunk_grade_on = true;
             acc.any_gen_fx = true;
-            acc.cyberpunk_grade_amount = fmaxf(acc.cyberpunk_grade_amount, cl.fx_cyberpunk_grade_amount);
+            acc.cyberpunk_grade_amount = fmaxf(acc.cyberpunk_grade_amount, cl.eval_prop("fx_cyberpunk_grade_amount", _cl_t));
             {
                 float _bi = cl.fx_cyberpunk_grade_shadow_teal_beat;
-                float _bv = cl.fx_cyberpunk_grade_shadow_teal;
+                float _bv = cl.eval_prop("fx_cyberpunk_grade_shadow_teal", _cl_t);
                 acc.cyberpunk_grade_shadow_teal = fmaxf(acc.cyberpunk_grade_shadow_teal, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_cyberpunk_grade_hi_orange_beat;
-                float _bv = cl.fx_cyberpunk_grade_hi_orange;
+                float _bv = cl.eval_prop("fx_cyberpunk_grade_hi_orange", _cl_t);
                 acc.cyberpunk_grade_hi_orange = fmaxf(acc.cyberpunk_grade_hi_orange, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_cyberpunk_grade_contrast_beat;
-                float _bv = cl.fx_cyberpunk_grade_contrast;
+                float _bv = cl.eval_prop("fx_cyberpunk_grade_contrast", _cl_t);
                 acc.cyberpunk_grade_contrast = fmaxf(acc.cyberpunk_grade_contrast, (_bi > 0.001f) ? (1.0f + (2.5f - 1.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
         case FXType::MatrixRain:
             acc.matrix_rain_on = true;
             acc.any_gen_fx = true;
-            acc.matrix_rain_amount = fmaxf(acc.matrix_rain_amount, cl.fx_matrix_rain_amount);
+            acc.matrix_rain_amount = fmaxf(acc.matrix_rain_amount, cl.eval_prop("fx_matrix_rain_amount", _cl_t));
             {
                 float _bi = cl.fx_matrix_rain_density_beat;
-                float _bv = cl.fx_matrix_rain_density;
+                float _bv = cl.eval_prop("fx_matrix_rain_density", _cl_t);
                 acc.matrix_rain_density = fmaxf(acc.matrix_rain_density, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_matrix_rain_speed_beat;
-                float _bv = cl.fx_matrix_rain_speed;
+                float _bv = cl.eval_prop("fx_matrix_rain_speed", _cl_t);
                 acc.matrix_rain_speed = fmaxf(acc.matrix_rain_speed, (_bi > 0.001f) ? (0.5f + (6.0f - 0.5f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_matrix_rain_green_mix_beat;
-                float _bv = cl.fx_matrix_rain_green_mix;
+                float _bv = cl.eval_prop("fx_matrix_rain_green_mix", _cl_t);
                 acc.matrix_rain_green_mix = fmaxf(acc.matrix_rain_green_mix, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
         case FXType::PixelSort:
             acc.pixel_sort_on = true;
             acc.any_gen_fx = true;
-            acc.pixel_sort_amount = fmaxf(acc.pixel_sort_amount, cl.fx_pixel_sort_amount);
+            acc.pixel_sort_amount = fmaxf(acc.pixel_sort_amount, cl.eval_prop("fx_pixel_sort_amount", _cl_t));
             {
                 float _bi = cl.fx_pixel_sort_threshold_beat;
-                float _bv = cl.fx_pixel_sort_threshold;
+                float _bv = cl.eval_prop("fx_pixel_sort_threshold", _cl_t);
                 acc.pixel_sort_threshold = fmaxf(acc.pixel_sort_threshold, (_bi > 0.001f) ? (0.0f + (0.9f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_pixel_sort_intensity_beat;
-                float _bv = cl.fx_pixel_sort_intensity;
+                float _bv = cl.eval_prop("fx_pixel_sort_intensity", _cl_t);
                 acc.pixel_sort_intensity = fmaxf(acc.pixel_sort_intensity, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_pixel_sort_direction_beat;
-                float _bv = cl.fx_pixel_sort_direction;
+                float _bv = cl.eval_prop("fx_pixel_sort_direction", _cl_t);
                 acc.pixel_sort_direction = fmaxf(acc.pixel_sort_direction, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
         case FXType::Solarize:
             acc.solarize_on = true;
             acc.any_gen_fx = true;
-            acc.solarize_amount = fmaxf(acc.solarize_amount, cl.fx_solarize_amount);
+            acc.solarize_amount = fmaxf(acc.solarize_amount, cl.eval_prop("fx_solarize_amount", _cl_t));
             {
                 float _bi = cl.fx_solarize_threshold_beat;
-                float _bv = cl.fx_solarize_threshold;
+                float _bv = cl.eval_prop("fx_solarize_threshold", _cl_t);
                 acc.solarize_threshold = fmaxf(acc.solarize_threshold, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
         case FXType::DoubleGhost:
             acc.double_ghost_on = true;
             acc.any_gen_fx = true;
-            acc.double_ghost_amount = fmaxf(acc.double_ghost_amount, cl.fx_double_ghost_amount);
+            acc.double_ghost_amount = fmaxf(acc.double_ghost_amount, cl.eval_prop("fx_double_ghost_amount", _cl_t));
             {
                 float _bi = cl.fx_double_ghost_offset_beat;
-                float _bv = cl.fx_double_ghost_offset;
+                float _bv = cl.eval_prop("fx_double_ghost_offset", _cl_t);
                 acc.double_ghost_offset = fmaxf(acc.double_ghost_offset, (_bi > 0.001f) ? (0.0f + (0.15f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_double_ghost_opacity_beat;
-                float _bv = cl.fx_double_ghost_opacity;
+                float _bv = cl.eval_prop("fx_double_ghost_opacity", _cl_t);
                 acc.double_ghost_opacity = fmaxf(acc.double_ghost_opacity, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_double_ghost_angle_beat;
-                float _bv = cl.fx_double_ghost_angle;
+                float _bv = cl.eval_prop("fx_double_ghost_angle", _cl_t);
                 acc.double_ghost_angle = fmaxf(acc.double_ghost_angle, (_bi > 0.001f) ? (0.0f + (90.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
         case FXType::Watercolor:
             acc.watercolor_on = true;
             acc.any_gen_fx = true;
-            acc.watercolor_amount = fmaxf(acc.watercolor_amount, cl.fx_watercolor_amount);
+            acc.watercolor_amount = fmaxf(acc.watercolor_amount, cl.eval_prop("fx_watercolor_amount", _cl_t));
             {
                 float _bi = cl.fx_watercolor_bleeding_beat;
-                float _bv = cl.fx_watercolor_bleeding;
+                float _bv = cl.eval_prop("fx_watercolor_bleeding", _cl_t);
                 acc.watercolor_bleeding = fmaxf(acc.watercolor_bleeding, (_bi > 0.001f) ? (0.003f + (0.05f - 0.003f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_watercolor_paper_beat;
-                float _bv = cl.fx_watercolor_paper;
+                float _bv = cl.eval_prop("fx_watercolor_paper", _cl_t);
                 acc.watercolor_paper = fmaxf(acc.watercolor_paper, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_watercolor_saturation_beat;
-                float _bv = cl.fx_watercolor_saturation;
+                float _bv = cl.eval_prop("fx_watercolor_saturation", _cl_t);
                 acc.watercolor_saturation = fmaxf(acc.watercolor_saturation, (_bi > 0.001f) ? (0.8f + (2.5f - 0.8f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
         case FXType::ComicDots:
             acc.comic_dots_on = true;
             acc.any_gen_fx = true;
-            acc.comic_dots_amount = fmaxf(acc.comic_dots_amount, cl.fx_comic_dots_amount);
+            acc.comic_dots_amount = fmaxf(acc.comic_dots_amount, cl.eval_prop("fx_comic_dots_amount", _cl_t));
             {
                 float _bi = cl.fx_comic_dots_dot_size_beat;
-                float _bv = cl.fx_comic_dots_dot_size;
+                float _bv = cl.eval_prop("fx_comic_dots_dot_size", _cl_t);
                 acc.comic_dots_dot_size = fmaxf(acc.comic_dots_dot_size, (_bi > 0.001f) ? (1.0f + (10.0f - 1.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_comic_dots_ink_threshold_beat;
-                float _bv = cl.fx_comic_dots_ink_threshold;
+                float _bv = cl.eval_prop("fx_comic_dots_ink_threshold", _cl_t);
                 acc.comic_dots_ink_threshold = fmaxf(acc.comic_dots_ink_threshold, (_bi > 0.001f) ? (0.0f + (0.4f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_comic_dots_color_levels_beat;
-                float _bv = cl.fx_comic_dots_color_levels;
+                float _bv = cl.eval_prop("fx_comic_dots_color_levels", _cl_t);
                 acc.comic_dots_color_levels = fmaxf(acc.comic_dots_color_levels, (_bi > 0.001f) ? (2.0f + (8.0f - 2.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
         case FXType::Crosshatch:
             acc.crosshatch_on = true;
             acc.any_gen_fx = true;
-            acc.crosshatch_amount = fmaxf(acc.crosshatch_amount, cl.fx_crosshatch_amount);
+            acc.crosshatch_amount = fmaxf(acc.crosshatch_amount, cl.eval_prop("fx_crosshatch_amount", _cl_t));
             {
                 float _bi = cl.fx_crosshatch_density_beat;
-                float _bv = cl.fx_crosshatch_density;
+                float _bv = cl.eval_prop("fx_crosshatch_density", _cl_t);
                 acc.crosshatch_density = fmaxf(acc.crosshatch_density, (_bi > 0.001f) ? (2.0f + (20.0f - 2.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_crosshatch_thickness_beat;
-                float _bv = cl.fx_crosshatch_thickness;
+                float _bv = cl.eval_prop("fx_crosshatch_thickness", _cl_t);
                 acc.crosshatch_thickness = fmaxf(acc.crosshatch_thickness, (_bi > 0.001f) ? (0.15f + (0.8f - 0.15f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_crosshatch_angle_beat;
-                float _bv = cl.fx_crosshatch_angle;
+                float _bv = cl.eval_prop("fx_crosshatch_angle", _cl_t);
                 acc.crosshatch_angle = fmaxf(acc.crosshatch_angle, (_bi > 0.001f) ? (0.0f + (90.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
         case FXType::Daguerreotype:
             acc.daguerreotype_on = true;
             acc.any_gen_fx = true;
-            acc.daguerreotype_amount = fmaxf(acc.daguerreotype_amount, cl.fx_daguerreotype_amount);
+            acc.daguerreotype_amount = fmaxf(acc.daguerreotype_amount, cl.eval_prop("fx_daguerreotype_amount", _cl_t));
             {
                 float _bi = cl.fx_daguerreotype_tone_beat;
-                float _bv = cl.fx_daguerreotype_tone;
+                float _bv = cl.eval_prop("fx_daguerreotype_tone", _cl_t);
                 acc.daguerreotype_tone = fmaxf(acc.daguerreotype_tone, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_daguerreotype_vignette_beat;
-                float _bv = cl.fx_daguerreotype_vignette;
+                float _bv = cl.eval_prop("fx_daguerreotype_vignette", _cl_t);
                 acc.daguerreotype_vignette = fmaxf(acc.daguerreotype_vignette, (_bi > 0.001f) ? (0.1f + (2.0f - 0.1f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_daguerreotype_scratch_beat;
-                float _bv = cl.fx_daguerreotype_scratch;
+                float _bv = cl.eval_prop("fx_daguerreotype_scratch", _cl_t);
                 acc.daguerreotype_scratch = fmaxf(acc.daguerreotype_scratch, (_bi > 0.001f) ? (0.02f + (1.0f - 0.02f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
         case FXType::Super8Film:
             acc.super8_film_on = true;
             acc.any_gen_fx = true;
-            acc.super8_film_amount = fmaxf(acc.super8_film_amount, cl.fx_super8_film_amount);
+            acc.super8_film_amount = fmaxf(acc.super8_film_amount, cl.eval_prop("fx_super8_film_amount", _cl_t));
             {
                 float _bi = cl.fx_super8_film_grain_beat;
-                float _bv = cl.fx_super8_film_grain;
+                float _bv = cl.eval_prop("fx_super8_film_grain", _cl_t);
                 acc.super8_film_grain = fmaxf(acc.super8_film_grain, (_bi > 0.001f) ? (0.05f + (1.5f - 0.05f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_super8_film_gate_beat;
-                float _bv = cl.fx_super8_film_gate;
+                float _bv = cl.eval_prop("fx_super8_film_gate", _cl_t);
                 acc.super8_film_gate = fmaxf(acc.super8_film_gate, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_super8_film_fade_beat;
-                float _bv = cl.fx_super8_film_fade;
+                float _bv = cl.eval_prop("fx_super8_film_fade", _cl_t);
                 acc.super8_film_fade = fmaxf(acc.super8_film_fade, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
         case FXType::VHSDrop:
             acc.vhs_dropout_on = true;
             acc.any_gen_fx = true;
-            acc.vhs_dropout_amount = fmaxf(acc.vhs_dropout_amount, cl.fx_vhs_dropout_amount);
+            acc.vhs_dropout_amount = fmaxf(acc.vhs_dropout_amount, cl.eval_prop("fx_vhs_dropout_amount", _cl_t));
             {
                 float _bi = cl.fx_vhs_dropout_density_beat;
-                float _bv = cl.fx_vhs_dropout_density;
+                float _bv = cl.eval_prop("fx_vhs_dropout_density", _cl_t);
                 acc.vhs_dropout_density = fmaxf(acc.vhs_dropout_density, (_bi > 0.001f) ? (0.0f + (0.4f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_vhs_dropout_speed_beat;
-                float _bv = cl.fx_vhs_dropout_speed;
+                float _bv = cl.eval_prop("fx_vhs_dropout_speed", _cl_t);
                 acc.vhs_dropout_speed = fmaxf(acc.vhs_dropout_speed, (_bi > 0.001f) ? (0.0f + (8.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
         case FXType::XRay:
             acc.x_ray_on = true;
             acc.any_gen_fx = true;
-            acc.x_ray_amount = fmaxf(acc.x_ray_amount, cl.fx_x_ray_amount);
+            acc.x_ray_amount = fmaxf(acc.x_ray_amount, cl.eval_prop("fx_x_ray_amount", _cl_t));
             {
                 float _bi = cl.fx_x_ray_contrast_beat;
-                float _bv = cl.fx_x_ray_contrast;
+                float _bv = cl.eval_prop("fx_x_ray_contrast", _cl_t);
                 acc.x_ray_contrast = fmaxf(acc.x_ray_contrast, (_bi > 0.001f) ? (0.5f + (4.0f - 0.5f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_x_ray_blue_tint_beat;
-                float _bv = cl.fx_x_ray_blue_tint;
+                float _bv = cl.eval_prop("fx_x_ray_blue_tint", _cl_t);
                 acc.x_ray_blue_tint = fmaxf(acc.x_ray_blue_tint, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
         case FXType::BitCrush:
             acc.bit_crush_on = true;
             acc.any_gen_fx = true;
-            acc.bit_crush_amount = fmaxf(acc.bit_crush_amount, cl.fx_bit_crush_amount);
+            acc.bit_crush_amount = fmaxf(acc.bit_crush_amount, cl.eval_prop("fx_bit_crush_amount", _cl_t));
             {
                 float _bi = cl.fx_bit_crush_levels_beat;
-                float _bv = cl.fx_bit_crush_levels;
+                float _bv = cl.eval_prop("fx_bit_crush_levels", _cl_t);
                 acc.bit_crush_levels = fmaxf(acc.bit_crush_levels, (_bi > 0.001f) ? (2.0f + (16.0f - 2.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_bit_crush_dither_beat;
-                float _bv = cl.fx_bit_crush_dither;
+                float _bv = cl.eval_prop("fx_bit_crush_dither", _cl_t);
                 acc.bit_crush_dither = fmaxf(acc.bit_crush_dither, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
         case FXType::TVStatic:
             acc.tv_static_on = true;
             acc.any_gen_fx = true;
-            acc.tv_static_amount = fmaxf(acc.tv_static_amount, cl.fx_tv_static_amount);
+            acc.tv_static_amount = fmaxf(acc.tv_static_amount, cl.eval_prop("fx_tv_static_amount", _cl_t));
             {
                 float _bi = cl.fx_tv_static_intensity_beat;
-                float _bv = cl.fx_tv_static_intensity;
+                float _bv = cl.eval_prop("fx_tv_static_intensity", _cl_t);
                 acc.tv_static_intensity = fmaxf(acc.tv_static_intensity, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_tv_static_color_mix_beat;
-                float _bv = cl.fx_tv_static_color_mix;
+                float _bv = cl.eval_prop("fx_tv_static_color_mix", _cl_t);
                 acc.tv_static_color_mix = fmaxf(acc.tv_static_color_mix, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
         case FXType::DitherBayer:
             acc.dither_bayer_on = true;
             acc.any_gen_fx = true;
-            acc.dither_bayer_amount = fmaxf(acc.dither_bayer_amount, cl.fx_dither_bayer_amount);
+            acc.dither_bayer_amount = fmaxf(acc.dither_bayer_amount, cl.eval_prop("fx_dither_bayer_amount", _cl_t));
             {
                 float _bi = cl.fx_dither_bayer_levels_beat;
-                float _bv = cl.fx_dither_bayer_levels;
+                float _bv = cl.eval_prop("fx_dither_bayer_levels", _cl_t);
                 acc.dither_bayer_levels = fmaxf(acc.dither_bayer_levels, (_bi > 0.001f) ? (1.0f + (8.0f - 1.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_dither_bayer_scale_beat;
-                float _bv = cl.fx_dither_bayer_scale;
+                float _bv = cl.eval_prop("fx_dither_bayer_scale", _cl_t);
                 acc.dither_bayer_scale = fmaxf(acc.dither_bayer_scale, (_bi > 0.001f) ? (1.0f + (6.0f - 1.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_dither_bayer_color_beat;
-                float _bv = cl.fx_dither_bayer_color;
+                float _bv = cl.eval_prop("fx_dither_bayer_color", _cl_t);
                 acc.dither_bayer_color = fmaxf(acc.dither_bayer_color, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
         case FXType::MiamiVice:
             acc.miami_vice_on = true;
             acc.any_gen_fx = true;
-            acc.miami_vice_amount = fmaxf(acc.miami_vice_amount, cl.fx_miami_vice_amount);
+            acc.miami_vice_amount = fmaxf(acc.miami_vice_amount, cl.eval_prop("fx_miami_vice_amount", _cl_t));
             {
                 float _bi = cl.fx_miami_vice_saturation_beat;
-                float _bv = cl.fx_miami_vice_saturation;
+                float _bv = cl.eval_prop("fx_miami_vice_saturation", _cl_t);
                 acc.miami_vice_saturation = fmaxf(acc.miami_vice_saturation, (_bi > 0.001f) ? (0.5f + (3.0f - 0.5f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
         case FXType::HorrorGrade:
             acc.horror_grade_on = true;
             acc.any_gen_fx = true;
-            acc.horror_grade_amount = fmaxf(acc.horror_grade_amount, cl.fx_horror_grade_amount);
+            acc.horror_grade_amount = fmaxf(acc.horror_grade_amount, cl.eval_prop("fx_horror_grade_amount", _cl_t));
             {
                 float _bi = cl.fx_horror_grade_desat_beat;
-                float _bv = cl.fx_horror_grade_desat;
+                float _bv = cl.eval_prop("fx_horror_grade_desat", _cl_t);
                 acc.horror_grade_desat = fmaxf(acc.horror_grade_desat, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_horror_grade_red_beat;
-                float _bv = cl.fx_horror_grade_red;
+                float _bv = cl.eval_prop("fx_horror_grade_red", _cl_t);
                 acc.horror_grade_red = fmaxf(acc.horror_grade_red, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_horror_grade_crush_beat;
-                float _bv = cl.fx_horror_grade_crush;
+                float _bv = cl.eval_prop("fx_horror_grade_crush", _cl_t);
                 acc.horror_grade_crush = fmaxf(acc.horror_grade_crush, (_bi > 0.001f) ? (0.0f + (0.4f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
         case FXType::SplitToning:
             acc.split_toning_on = true;
             acc.any_gen_fx = true;
-            acc.split_toning_amount = fmaxf(acc.split_toning_amount, cl.fx_split_toning_amount);
+            acc.split_toning_amount = fmaxf(acc.split_toning_amount, cl.eval_prop("fx_split_toning_amount", _cl_t));
             {
                 float _bi = cl.fx_split_toning_shadow_hue_beat;
-                float _bv = cl.fx_split_toning_shadow_hue;
+                float _bv = cl.eval_prop("fx_split_toning_shadow_hue", _cl_t);
                 acc.split_toning_shadow_hue = fmaxf(acc.split_toning_shadow_hue, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_split_toning_hi_hue_beat;
-                float _bv = cl.fx_split_toning_hi_hue;
+                float _bv = cl.eval_prop("fx_split_toning_hi_hue", _cl_t);
                 acc.split_toning_hi_hue = fmaxf(acc.split_toning_hi_hue, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
         case FXType::DesertGold:
             acc.desert_gold_on = true;
             acc.any_gen_fx = true;
-            acc.desert_gold_amount = fmaxf(acc.desert_gold_amount, cl.fx_desert_gold_amount);
+            acc.desert_gold_amount = fmaxf(acc.desert_gold_amount, cl.eval_prop("fx_desert_gold_amount", _cl_t));
             {
                 float _bi = cl.fx_desert_gold_warmth_beat;
-                float _bv = cl.fx_desert_gold_warmth;
+                float _bv = cl.eval_prop("fx_desert_gold_warmth", _cl_t);
                 acc.desert_gold_warmth = fmaxf(acc.desert_gold_warmth, (_bi > 0.001f) ? (0.1f + (1.0f - 0.1f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_desert_gold_fade_beat;
-                float _bv = cl.fx_desert_gold_fade;
+                float _bv = cl.eval_prop("fx_desert_gold_fade", _cl_t);
                 acc.desert_gold_fade = fmaxf(acc.desert_gold_fade, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_desert_gold_haze_beat;
-                float _bv = cl.fx_desert_gold_haze;
+                float _bv = cl.eval_prop("fx_desert_gold_haze", _cl_t);
                 acc.desert_gold_haze = fmaxf(acc.desert_gold_haze, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
         case FXType::EmbossRelief:
             acc.emboss_relief_on = true;
             acc.any_gen_fx = true;
-            acc.emboss_relief_amount = fmaxf(acc.emboss_relief_amount, cl.fx_emboss_relief_amount);
+            acc.emboss_relief_amount = fmaxf(acc.emboss_relief_amount, cl.eval_prop("fx_emboss_relief_amount", _cl_t));
             {
                 float _bi = cl.fx_emboss_relief_angle_beat;
-                float _bv = cl.fx_emboss_relief_angle;
+                float _bv = cl.eval_prop("fx_emboss_relief_angle", _cl_t);
                 acc.emboss_relief_angle = fmaxf(acc.emboss_relief_angle, (_bi > 0.001f) ? (0.0f + (360.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_emboss_relief_colorize_beat;
-                float _bv = cl.fx_emboss_relief_colorize;
+                float _bv = cl.eval_prop("fx_emboss_relief_colorize", _cl_t);
                 acc.emboss_relief_colorize = fmaxf(acc.emboss_relief_colorize, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
         case FXType::Pointillist:
             acc.pointillist_on = true;
             acc.any_gen_fx = true;
-            acc.pointillist_amount = fmaxf(acc.pointillist_amount, cl.fx_pointillist_amount);
+            acc.pointillist_amount = fmaxf(acc.pointillist_amount, cl.eval_prop("fx_pointillist_amount", _cl_t));
             {
                 float _bi = cl.fx_pointillist_dot_size_beat;
-                float _bv = cl.fx_pointillist_dot_size;
+                float _bv = cl.eval_prop("fx_pointillist_dot_size", _cl_t);
                 acc.pointillist_dot_size = fmaxf(acc.pointillist_dot_size, (_bi > 0.001f) ? (2.0f + (14.0f - 2.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_pointillist_scatter_beat;
-                float _bv = cl.fx_pointillist_scatter;
+                float _bv = cl.eval_prop("fx_pointillist_scatter", _cl_t);
                 acc.pointillist_scatter = fmaxf(acc.pointillist_scatter, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
         case FXType::InterlaceGlitch:
             acc.interlace_glitch_on = true;
             acc.any_gen_fx = true;
-            acc.interlace_glitch_amount = fmaxf(acc.interlace_glitch_amount, cl.fx_interlace_glitch_amount);
+            acc.interlace_glitch_amount = fmaxf(acc.interlace_glitch_amount, cl.eval_prop("fx_interlace_glitch_amount", _cl_t));
             {
                 float _bi = cl.fx_interlace_glitch_intensity_beat;
-                float _bv = cl.fx_interlace_glitch_intensity;
+                float _bv = cl.eval_prop("fx_interlace_glitch_intensity", _cl_t);
                 acc.interlace_glitch_intensity = fmaxf(acc.interlace_glitch_intensity, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_interlace_glitch_speed_beat;
-                float _bv = cl.fx_interlace_glitch_speed;
+                float _bv = cl.eval_prop("fx_interlace_glitch_speed", _cl_t);
                 acc.interlace_glitch_speed = fmaxf(acc.interlace_glitch_speed, (_bi > 0.001f) ? (0.0f + (6.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
         case FXType::FrostedGlass:
             acc.frosted_glass_on = true;
             acc.any_gen_fx = true;
-            acc.frosted_glass_amount = fmaxf(acc.frosted_glass_amount, cl.fx_frosted_glass_amount);
+            acc.frosted_glass_amount = fmaxf(acc.frosted_glass_amount, cl.eval_prop("fx_frosted_glass_amount", _cl_t));
             {
                 float _bi = cl.fx_frosted_glass_blur_beat;
-                float _bv = cl.fx_frosted_glass_blur;
+                float _bv = cl.eval_prop("fx_frosted_glass_blur", _cl_t);
                 acc.frosted_glass_blur = fmaxf(acc.frosted_glass_blur, (_bi > 0.001f) ? (0.003f + (0.05f - 0.003f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_frosted_glass_noise_beat;
-                float _bv = cl.fx_frosted_glass_noise;
+                float _bv = cl.eval_prop("fx_frosted_glass_noise", _cl_t);
                 acc.frosted_glass_noise = fmaxf(acc.frosted_glass_noise, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_frosted_glass_tint_beat;
-                float _bv = cl.fx_frosted_glass_tint;
+                float _bv = cl.eval_prop("fx_frosted_glass_tint", _cl_t);
                 acc.frosted_glass_tint = fmaxf(acc.frosted_glass_tint, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
         case FXType::MirrorFold:
             acc.mirror_fold_on = true;
             acc.any_gen_fx = true;
-            acc.mirror_fold_amount = fmaxf(acc.mirror_fold_amount, cl.fx_mirror_fold_amount);
+            acc.mirror_fold_amount = fmaxf(acc.mirror_fold_amount, cl.eval_prop("fx_mirror_fold_amount", _cl_t));
             {
                 float _bi = cl.fx_mirror_fold_axis_beat;
-                float _bv = cl.fx_mirror_fold_axis;
+                float _bv = cl.eval_prop("fx_mirror_fold_axis", _cl_t);
                 acc.mirror_fold_axis = fmaxf(acc.mirror_fold_axis, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_mirror_fold_vertical_beat;
-                float _bv = cl.fx_mirror_fold_vertical;
+                float _bv = cl.eval_prop("fx_mirror_fold_vertical", _cl_t);
                 acc.mirror_fold_vertical = fmaxf(acc.mirror_fold_vertical, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
         case FXType::EchoTrails:
             acc.echo_trails_on = true;
             acc.any_gen_fx = true;
-            acc.echo_trails_amount = fmaxf(acc.echo_trails_amount, cl.fx_echo_trails_amount);
+            acc.echo_trails_amount = fmaxf(acc.echo_trails_amount, cl.eval_prop("fx_echo_trails_amount", _cl_t));
             {
                 float _bi = cl.fx_echo_trails_offset_beat;
-                float _bv = cl.fx_echo_trails_offset;
+                float _bv = cl.eval_prop("fx_echo_trails_offset", _cl_t);
                 acc.echo_trails_offset = fmaxf(acc.echo_trails_offset, (_bi > 0.001f) ? (0.005f + (0.1f - 0.005f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_echo_trails_fade_beat;
-                float _bv = cl.fx_echo_trails_fade;
+                float _bv = cl.eval_prop("fx_echo_trails_fade", _cl_t);
                 acc.echo_trails_fade = fmaxf(acc.echo_trails_fade, (_bi > 0.001f) ? (0.1f + (0.9f - 0.1f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_echo_trails_angle_beat;
-                float _bv = cl.fx_echo_trails_angle;
+                float _bv = cl.eval_prop("fx_echo_trails_angle", _cl_t);
                 acc.echo_trails_angle = fmaxf(acc.echo_trails_angle, (_bi > 0.001f) ? (0.0f + (360.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
         case FXType::GradientMap:
             acc.gradient_map_on = true;
             acc.any_gen_fx = true;
-            acc.gradient_map_amount = fmaxf(acc.gradient_map_amount, cl.fx_gradient_map_amount);
+            acc.gradient_map_amount = fmaxf(acc.gradient_map_amount, cl.eval_prop("fx_gradient_map_amount", _cl_t));
             {
                 float _bi = cl.fx_gradient_map_hue1_beat;
-                float _bv = cl.fx_gradient_map_hue1;
+                float _bv = cl.eval_prop("fx_gradient_map_hue1", _cl_t);
                 acc.gradient_map_hue1 = fmaxf(acc.gradient_map_hue1, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_gradient_map_hue2_beat;
-                float _bv = cl.fx_gradient_map_hue2;
+                float _bv = cl.eval_prop("fx_gradient_map_hue2", _cl_t);
                 acc.gradient_map_hue2 = fmaxf(acc.gradient_map_hue2, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
         case FXType::CrossProcess:
             acc.cross_process_on = true;
             acc.any_gen_fx = true;
-            acc.cross_process_amount = fmaxf(acc.cross_process_amount, cl.fx_cross_process_amount);
+            acc.cross_process_amount = fmaxf(acc.cross_process_amount, cl.eval_prop("fx_cross_process_amount", _cl_t));
             {
                 float _bi = cl.fx_cross_process_contrast_beat;
-                float _bv = cl.fx_cross_process_contrast;
+                float _bv = cl.eval_prop("fx_cross_process_contrast", _cl_t);
                 acc.cross_process_contrast = fmaxf(acc.cross_process_contrast, (_bi > 0.001f) ? (1.0f + (2.5f - 1.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
         case FXType::PlasmaField:
             acc.plasma_field_on = true;
             acc.any_gen_fx = true;
-            acc.plasma_field_amount = fmaxf(acc.plasma_field_amount, cl.fx_plasma_field_amount);
+            acc.plasma_field_amount = fmaxf(acc.plasma_field_amount, cl.eval_prop("fx_plasma_field_amount", _cl_t));
             {
                 float _bi = cl.fx_plasma_field_scale_beat;
-                float _bv = cl.fx_plasma_field_scale;
+                float _bv = cl.eval_prop("fx_plasma_field_scale", _cl_t);
                 acc.plasma_field_scale = fmaxf(acc.plasma_field_scale, (_bi > 0.001f) ? (1.0f + (12.0f - 1.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_plasma_field_speed_beat;
-                float _bv = cl.fx_plasma_field_speed;
+                float _bv = cl.eval_prop("fx_plasma_field_speed", _cl_t);
                 acc.plasma_field_speed = fmaxf(acc.plasma_field_speed, (_bi > 0.001f) ? (0.0f + (5.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_plasma_field_intensity_beat;
-                float _bv = cl.fx_plasma_field_intensity;
+                float _bv = cl.eval_prop("fx_plasma_field_intensity", _cl_t);
                 acc.plasma_field_intensity = fmaxf(acc.plasma_field_intensity, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
         case FXType::FireEdge:
             acc.fire_edge_on = true;
             acc.any_gen_fx = true;
-            acc.fire_edge_amount = fmaxf(acc.fire_edge_amount, cl.fx_fire_edge_amount);
+            acc.fire_edge_amount = fmaxf(acc.fire_edge_amount, cl.eval_prop("fx_fire_edge_amount", _cl_t));
             {
                 float _bi = cl.fx_fire_edge_intensity_beat;
-                float _bv = cl.fx_fire_edge_intensity;
+                float _bv = cl.eval_prop("fx_fire_edge_intensity", _cl_t);
                 acc.fire_edge_intensity = fmaxf(acc.fire_edge_intensity, (_bi > 0.001f) ? (0.0f + (2.5f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_fire_edge_speed_beat;
-                float _bv = cl.fx_fire_edge_speed;
+                float _bv = cl.eval_prop("fx_fire_edge_speed", _cl_t);
                 acc.fire_edge_speed = fmaxf(acc.fire_edge_speed, (_bi > 0.001f) ? (0.0f + (5.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_fire_edge_height_beat;
-                float _bv = cl.fx_fire_edge_height;
+                float _bv = cl.eval_prop("fx_fire_edge_height", _cl_t);
                 acc.fire_edge_height = fmaxf(acc.fire_edge_height, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
         case FXType::LaserGrid:
             acc.laser_grid_on = true;
             acc.any_gen_fx = true;
-            acc.laser_grid_amount = fmaxf(acc.laser_grid_amount, cl.fx_laser_grid_amount);
+            acc.laser_grid_amount = fmaxf(acc.laser_grid_amount, cl.eval_prop("fx_laser_grid_amount", _cl_t));
             {
                 float _bi = cl.fx_laser_grid_grid_size_beat;
-                float _bv = cl.fx_laser_grid_grid_size;
+                float _bv = cl.eval_prop("fx_laser_grid_grid_size", _cl_t);
                 acc.laser_grid_grid_size = fmaxf(acc.laser_grid_grid_size, (_bi > 0.001f) ? (4.0f + (40.0f - 4.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_laser_grid_hue_beat;
-                float _bv = cl.fx_laser_grid_hue;
+                float _bv = cl.eval_prop("fx_laser_grid_hue", _cl_t);
                 acc.laser_grid_hue = fmaxf(acc.laser_grid_hue, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_laser_grid_intensity_beat;
-                float _bv = cl.fx_laser_grid_intensity;
+                float _bv = cl.eval_prop("fx_laser_grid_intensity", _cl_t);
                 acc.laser_grid_intensity = fmaxf(acc.laser_grid_intensity, (_bi > 0.001f) ? (0.0f + (2.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
         case FXType::Technicolor:
             acc.technicolor_on = true;
             acc.any_gen_fx = true;
-            acc.technicolor_amount = fmaxf(acc.technicolor_amount, cl.fx_technicolor_amount);
+            acc.technicolor_amount = fmaxf(acc.technicolor_amount, cl.eval_prop("fx_technicolor_amount", _cl_t));
             {
                 float _bi = cl.fx_technicolor_saturation_beat;
-                float _bv = cl.fx_technicolor_saturation;
+                float _bv = cl.eval_prop("fx_technicolor_saturation", _cl_t);
                 acc.technicolor_saturation = fmaxf(acc.technicolor_saturation, (_bi > 0.001f) ? (1.0f + (4.0f - 1.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_technicolor_contrast_beat;
-                float _bv = cl.fx_technicolor_contrast;
+                float _bv = cl.eval_prop("fx_technicolor_contrast", _cl_t);
                 acc.technicolor_contrast = fmaxf(acc.technicolor_contrast, (_bi > 0.001f) ? (1.0f + (2.5f - 1.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_technicolor_warmth_beat;
-                float _bv = cl.fx_technicolor_warmth;
+                float _bv = cl.eval_prop("fx_technicolor_warmth", _cl_t);
                 acc.technicolor_warmth = fmaxf(acc.technicolor_warmth, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
         case FXType::IceCrystal:
             acc.ice_crystal_on = true;
             acc.any_gen_fx = true;
-            acc.ice_crystal_amount = fmaxf(acc.ice_crystal_amount, cl.fx_ice_crystal_amount);
+            acc.ice_crystal_amount = fmaxf(acc.ice_crystal_amount, cl.eval_prop("fx_ice_crystal_amount", _cl_t));
             {
                 float _bi = cl.fx_ice_crystal_scale_beat;
-                float _bv = cl.fx_ice_crystal_scale;
+                float _bv = cl.eval_prop("fx_ice_crystal_scale", _cl_t);
                 acc.ice_crystal_scale = fmaxf(acc.ice_crystal_scale, (_bi > 0.001f) ? (2.0f + (20.0f - 2.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_ice_crystal_refract_beat;
-                float _bv = cl.fx_ice_crystal_refract;
+                float _bv = cl.eval_prop("fx_ice_crystal_refract", _cl_t);
                 acc.ice_crystal_refract = fmaxf(acc.ice_crystal_refract, (_bi > 0.001f) ? (0.01f + (0.15f - 0.01f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_ice_crystal_tint_beat;
-                float _bv = cl.fx_ice_crystal_tint;
+                float _bv = cl.eval_prop("fx_ice_crystal_tint", _cl_t);
                 acc.ice_crystal_tint = fmaxf(acc.ice_crystal_tint, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
         case FXType::Kodachrome:
             acc.kodachrome_on = true;
             acc.any_gen_fx = true;
-            acc.kodachrome_amount = fmaxf(acc.kodachrome_amount, cl.fx_kodachrome_amount);
+            acc.kodachrome_amount = fmaxf(acc.kodachrome_amount, cl.eval_prop("fx_kodachrome_amount", _cl_t));
             {
                 float _bi = cl.fx_kodachrome_saturation_beat;
-                float _bv = cl.fx_kodachrome_saturation;
+                float _bv = cl.eval_prop("fx_kodachrome_saturation", _cl_t);
                 acc.kodachrome_saturation = fmaxf(acc.kodachrome_saturation, (_bi > 0.001f) ? (0.8f + (3.0f - 0.8f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_kodachrome_reds_beat;
-                float _bv = cl.fx_kodachrome_reds;
+                float _bv = cl.eval_prop("fx_kodachrome_reds", _cl_t);
                 acc.kodachrome_reds = fmaxf(acc.kodachrome_reds, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_kodachrome_shadows_beat;
-                float _bv = cl.fx_kodachrome_shadows;
+                float _bv = cl.eval_prop("fx_kodachrome_shadows", _cl_t);
                 acc.kodachrome_shadows = fmaxf(acc.kodachrome_shadows, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
         case FXType::VortexDistort:
             acc.vortex_distort_on = true;
             acc.any_gen_fx = true;
-            acc.vortex_distort_amount = fmaxf(acc.vortex_distort_amount, cl.fx_vortex_distort_amount);
+            acc.vortex_distort_amount = fmaxf(acc.vortex_distort_amount, cl.eval_prop("fx_vortex_distort_amount", _cl_t));
             {
                 float _bi = cl.fx_vortex_distort_scale_beat;
-                float _bv = cl.fx_vortex_distort_scale;
+                float _bv = cl.eval_prop("fx_vortex_distort_scale", _cl_t);
                 acc.vortex_distort_scale = fmaxf(acc.vortex_distort_scale, (_bi > 0.001f) ? (1.0f + (8.0f - 1.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_vortex_distort_speed_beat;
-                float _bv = cl.fx_vortex_distort_speed;
+                float _bv = cl.eval_prop("fx_vortex_distort_speed", _cl_t);
                 acc.vortex_distort_speed = fmaxf(acc.vortex_distort_speed, (_bi > 0.001f) ? (0.0f + (3.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
         case FXType::SepiaRich:
             acc.sepia_rich_on = true;
             acc.any_gen_fx = true;
-            acc.sepia_rich_amount = fmaxf(acc.sepia_rich_amount, cl.fx_sepia_rich_amount);
+            acc.sepia_rich_amount = fmaxf(acc.sepia_rich_amount, cl.eval_prop("fx_sepia_rich_amount", _cl_t));
             {
                 float _bi = cl.fx_sepia_rich_vignette_beat;
-                float _bv = cl.fx_sepia_rich_vignette;
+                float _bv = cl.eval_prop("fx_sepia_rich_vignette", _cl_t);
                 acc.sepia_rich_vignette = fmaxf(acc.sepia_rich_vignette, (_bi > 0.001f) ? (0.0f + (2.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_sepia_rich_contrast_beat;
-                float _bv = cl.fx_sepia_rich_contrast;
+                float _bv = cl.eval_prop("fx_sepia_rich_contrast", _cl_t);
                 acc.sepia_rich_contrast = fmaxf(acc.sepia_rich_contrast, (_bi > 0.001f) ? (0.5f + (2.0f - 0.5f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
         case FXType::DigitalNoise:
             acc.digital_noise_on = true;
             acc.any_gen_fx = true;
-            acc.digital_noise_amount = fmaxf(acc.digital_noise_amount, cl.fx_digital_noise_amount);
+            acc.digital_noise_amount = fmaxf(acc.digital_noise_amount, cl.eval_prop("fx_digital_noise_amount", _cl_t));
             {
                 float _bi = cl.fx_digital_noise_intensity_beat;
-                float _bv = cl.fx_digital_noise_intensity;
+                float _bv = cl.eval_prop("fx_digital_noise_intensity", _cl_t);
                 acc.digital_noise_intensity = fmaxf(acc.digital_noise_intensity, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_digital_noise_color_sep_beat;
-                float _bv = cl.fx_digital_noise_color_sep;
+                float _bv = cl.eval_prop("fx_digital_noise_color_sep", _cl_t);
                 acc.digital_noise_color_sep = fmaxf(acc.digital_noise_color_sep, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_digital_noise_luma_bias_beat;
-                float _bv = cl.fx_digital_noise_luma_bias;
+                float _bv = cl.eval_prop("fx_digital_noise_luma_bias", _cl_t);
                 acc.digital_noise_luma_bias = fmaxf(acc.digital_noise_luma_bias, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
         case FXType::ColorDodge:
             acc.color_dodge_on = true;
             acc.any_gen_fx = true;
-            acc.color_dodge_amount = fmaxf(acc.color_dodge_amount, cl.fx_color_dodge_amount);
+            acc.color_dodge_amount = fmaxf(acc.color_dodge_amount, cl.eval_prop("fx_color_dodge_amount", _cl_t));
             {
                 float _bi = cl.fx_color_dodge_intensity_beat;
-                float _bv = cl.fx_color_dodge_intensity;
+                float _bv = cl.eval_prop("fx_color_dodge_intensity", _cl_t);
                 acc.color_dodge_intensity = fmaxf(acc.color_dodge_intensity, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_color_dodge_hue_beat;
-                float _bv = cl.fx_color_dodge_hue;
+                float _bv = cl.eval_prop("fx_color_dodge_hue", _cl_t);
                 acc.color_dodge_hue = fmaxf(acc.color_dodge_hue, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_color_dodge_glow_beat;
-                float _bv = cl.fx_color_dodge_glow;
+                float _bv = cl.eval_prop("fx_color_dodge_glow", _cl_t);
                 acc.color_dodge_glow = fmaxf(acc.color_dodge_glow, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
         case FXType::WarholPop:
             acc.warhol_pop_on = true;
             acc.any_gen_fx = true;
-            acc.warhol_pop_amount = fmaxf(acc.warhol_pop_amount, cl.fx_warhol_pop_amount);
+            acc.warhol_pop_amount = fmaxf(acc.warhol_pop_amount, cl.eval_prop("fx_warhol_pop_amount", _cl_t));
             {
                 float _bi = cl.fx_warhol_pop_levels_beat;
-                float _bv = cl.fx_warhol_pop_levels;
+                float _bv = cl.eval_prop("fx_warhol_pop_levels", _cl_t);
                 acc.warhol_pop_levels = fmaxf(acc.warhol_pop_levels, (_bi > 0.001f) ? (2.0f + (8.0f - 2.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_warhol_pop_hue_shift_beat;
-                float _bv = cl.fx_warhol_pop_hue_shift;
+                float _bv = cl.eval_prop("fx_warhol_pop_hue_shift", _cl_t);
                 acc.warhol_pop_hue_shift = fmaxf(acc.warhol_pop_hue_shift, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_warhol_pop_saturation_beat;
-                float _bv = cl.fx_warhol_pop_saturation;
+                float _bv = cl.eval_prop("fx_warhol_pop_saturation", _cl_t);
                 acc.warhol_pop_saturation = fmaxf(acc.warhol_pop_saturation, (_bi > 0.001f) ? (1.0f + (4.0f - 1.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
         case FXType::InfraredFilm:
             acc.infrared_film_on = true;
             acc.any_gen_fx = true;
-            acc.infrared_film_amount = fmaxf(acc.infrared_film_amount, cl.fx_infrared_film_amount);
+            acc.infrared_film_amount = fmaxf(acc.infrared_film_amount, cl.eval_prop("fx_infrared_film_amount", _cl_t));
             {
                 float _bi = cl.fx_infrared_film_channel_mix_beat;
-                float _bv = cl.fx_infrared_film_channel_mix;
+                float _bv = cl.eval_prop("fx_infrared_film_channel_mix", _cl_t);
                 acc.infrared_film_channel_mix = fmaxf(acc.infrared_film_channel_mix, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_infrared_film_glow_beat;
-                float _bv = cl.fx_infrared_film_glow;
+                float _bv = cl.eval_prop("fx_infrared_film_glow", _cl_t);
                 acc.infrared_film_glow = fmaxf(acc.infrared_film_glow, (_bi > 0.001f) ? (0.05f + (1.0f - 0.05f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_infrared_film_contrast_beat;
-                float _bv = cl.fx_infrared_film_contrast;
+                float _bv = cl.eval_prop("fx_infrared_film_contrast", _cl_t);
                 acc.infrared_film_contrast = fmaxf(acc.infrared_film_contrast, (_bi > 0.001f) ? (0.5f + (3.0f - 0.5f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
         case FXType::ScanlineColor:
             acc.scanline_color_on = true;
             acc.any_gen_fx = true;
-            acc.scanline_color_amount = fmaxf(acc.scanline_color_amount, cl.fx_scanline_color_amount);
+            acc.scanline_color_amount = fmaxf(acc.scanline_color_amount, cl.eval_prop("fx_scanline_color_amount", _cl_t));
             {
                 float _bi = cl.fx_scanline_color_line_width_beat;
-                float _bv = cl.fx_scanline_color_line_width;
+                float _bv = cl.eval_prop("fx_scanline_color_line_width", _cl_t);
                 acc.scanline_color_line_width = fmaxf(acc.scanline_color_line_width, (_bi > 0.001f) ? (1.0f + (6.0f - 1.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_scanline_color_intensity_beat;
-                float _bv = cl.fx_scanline_color_intensity;
+                float _bv = cl.eval_prop("fx_scanline_color_intensity", _cl_t);
                 acc.scanline_color_intensity = fmaxf(acc.scanline_color_intensity, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_scanline_color_rgb_sep_beat;
-                float _bv = cl.fx_scanline_color_rgb_sep;
+                float _bv = cl.eval_prop("fx_scanline_color_rgb_sep", _cl_t);
                 acc.scanline_color_rgb_sep = fmaxf(acc.scanline_color_rgb_sep, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
         case FXType::DataCorrupt:
             acc.data_corrupt_on = true;
             acc.any_gen_fx = true;
-            acc.data_corrupt_amount = fmaxf(acc.data_corrupt_amount, cl.fx_data_corrupt_amount);
+            acc.data_corrupt_amount = fmaxf(acc.data_corrupt_amount, cl.eval_prop("fx_data_corrupt_amount", _cl_t));
             {
                 float _bi = cl.fx_data_corrupt_density_beat;
-                float _bv = cl.fx_data_corrupt_density;
+                float _bv = cl.eval_prop("fx_data_corrupt_density", _cl_t);
                 acc.data_corrupt_density = fmaxf(acc.data_corrupt_density, (_bi > 0.001f) ? (0.0f + (0.5f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_data_corrupt_block_size_beat;
-                float _bv = cl.fx_data_corrupt_block_size;
+                float _bv = cl.eval_prop("fx_data_corrupt_block_size", _cl_t);
                 acc.data_corrupt_block_size = fmaxf(acc.data_corrupt_block_size, (_bi > 0.001f) ? (2.0f + (24.0f - 2.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_data_corrupt_intensity_beat;
-                float _bv = cl.fx_data_corrupt_intensity;
+                float _bv = cl.eval_prop("fx_data_corrupt_intensity", _cl_t);
                 acc.data_corrupt_intensity = fmaxf(acc.data_corrupt_intensity, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
         case FXType::LongExposure:
             acc.long_exposure_on = true;
             acc.any_gen_fx = true;
-            acc.long_exposure_amount = fmaxf(acc.long_exposure_amount, cl.fx_long_exposure_amount);
+            acc.long_exposure_amount = fmaxf(acc.long_exposure_amount, cl.eval_prop("fx_long_exposure_amount", _cl_t));
             {
                 float _bi = cl.fx_long_exposure_threshold_beat;
-                float _bv = cl.fx_long_exposure_threshold;
+                float _bv = cl.eval_prop("fx_long_exposure_threshold", _cl_t);
                 acc.long_exposure_threshold = fmaxf(acc.long_exposure_threshold, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_long_exposure_trail_beat;
-                float _bv = cl.fx_long_exposure_trail;
+                float _bv = cl.eval_prop("fx_long_exposure_trail", _cl_t);
                 acc.long_exposure_trail = fmaxf(acc.long_exposure_trail, (_bi > 0.001f) ? (0.01f + (0.2f - 0.01f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_long_exposure_glow_beat;
-                float _bv = cl.fx_long_exposure_glow;
+                float _bv = cl.eval_prop("fx_long_exposure_glow", _cl_t);
                 acc.long_exposure_glow = fmaxf(acc.long_exposure_glow, (_bi > 0.001f) ? (0.1f + (2.0f - 0.1f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
         case FXType::PixelMosaic:
             acc.pixel_mosaic_on = true;
             acc.any_gen_fx = true;
-            acc.pixel_mosaic_amount = fmaxf(acc.pixel_mosaic_amount, cl.fx_pixel_mosaic_amount);
+            acc.pixel_mosaic_amount = fmaxf(acc.pixel_mosaic_amount, cl.eval_prop("fx_pixel_mosaic_amount", _cl_t));
             {
                 float _bi = cl.fx_pixel_mosaic_block_size_beat;
-                float _bv = cl.fx_pixel_mosaic_block_size;
+                float _bv = cl.eval_prop("fx_pixel_mosaic_block_size", _cl_t);
                 acc.pixel_mosaic_block_size = fmaxf(acc.pixel_mosaic_block_size, (_bi > 0.001f) ? (2.0f + (64.0f - 2.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_pixel_mosaic_color_steps_beat;
-                float _bv = cl.fx_pixel_mosaic_color_steps;
+                float _bv = cl.eval_prop("fx_pixel_mosaic_color_steps", _cl_t);
                 acc.pixel_mosaic_color_steps = fmaxf(acc.pixel_mosaic_color_steps, (_bi > 0.001f) ? (2.0f + (16.0f - 2.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
         case FXType::ThermalMap:
             acc.thermal_map_on = true;
             acc.any_gen_fx = true;
-            acc.thermal_map_amount = fmaxf(acc.thermal_map_amount, cl.fx_thermal_map_amount);
+            acc.thermal_map_amount = fmaxf(acc.thermal_map_amount, cl.eval_prop("fx_thermal_map_amount", _cl_t));
             {
                 float _bi = cl.fx_thermal_map_cold_hue_beat;
-                float _bv = cl.fx_thermal_map_cold_hue;
+                float _bv = cl.eval_prop("fx_thermal_map_cold_hue", _cl_t);
                 acc.thermal_map_cold_hue = fmaxf(acc.thermal_map_cold_hue, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_thermal_map_hot_hue_beat;
-                float _bv = cl.fx_thermal_map_hot_hue;
+                float _bv = cl.eval_prop("fx_thermal_map_hot_hue", _cl_t);
                 acc.thermal_map_hot_hue = fmaxf(acc.thermal_map_hot_hue, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_thermal_map_contrast_beat;
-                float _bv = cl.fx_thermal_map_contrast;
+                float _bv = cl.eval_prop("fx_thermal_map_contrast", _cl_t);
                 acc.thermal_map_contrast = fmaxf(acc.thermal_map_contrast, (_bi > 0.001f) ? (0.8f + (3.0f - 0.8f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_thermal_map_scanlines_beat;
-                float _bv = cl.fx_thermal_map_scanlines;
+                float _bv = cl.eval_prop("fx_thermal_map_scanlines", _cl_t);
                 acc.thermal_map_scanlines = fmaxf(acc.thermal_map_scanlines, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
         case FXType::TiltShift:
             acc.tilt_shift_on = true;
             acc.any_gen_fx = true;
-            acc.tilt_shift_amount = fmaxf(acc.tilt_shift_amount, cl.fx_tilt_shift_amount);
+            acc.tilt_shift_amount = fmaxf(acc.tilt_shift_amount, cl.eval_prop("fx_tilt_shift_amount", _cl_t));
             {
                 float _bi = cl.fx_tilt_shift_focus_y_beat;
-                float _bv = cl.fx_tilt_shift_focus_y;
+                float _bv = cl.eval_prop("fx_tilt_shift_focus_y", _cl_t);
                 acc.tilt_shift_focus_y = fmaxf(acc.tilt_shift_focus_y, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_tilt_shift_focus_band_beat;
-                float _bv = cl.fx_tilt_shift_focus_band;
+                float _bv = cl.eval_prop("fx_tilt_shift_focus_band", _cl_t);
                 acc.tilt_shift_focus_band = fmaxf(acc.tilt_shift_focus_band, (_bi > 0.001f) ? (0.02f + (0.5f - 0.02f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_tilt_shift_blur_radius_beat;
-                float _bv = cl.fx_tilt_shift_blur_radius;
+                float _bv = cl.eval_prop("fx_tilt_shift_blur_radius", _cl_t);
                 acc.tilt_shift_blur_radius = fmaxf(acc.tilt_shift_blur_radius, (_bi > 0.001f) ? (2.0f + (30.0f - 2.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_tilt_shift_saturation_beat;
-                float _bv = cl.fx_tilt_shift_saturation;
+                float _bv = cl.eval_prop("fx_tilt_shift_saturation", _cl_t);
                 acc.tilt_shift_saturation = fmaxf(acc.tilt_shift_saturation, (_bi > 0.001f) ? (1.0f + (3.0f - 1.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
         case FXType::RaindropRefract:
             acc.raindrop_refract_on = true;
             acc.any_gen_fx = true;
-            acc.raindrop_refract_amount = fmaxf(acc.raindrop_refract_amount, cl.fx_raindrop_refract_amount);
+            acc.raindrop_refract_amount = fmaxf(acc.raindrop_refract_amount, cl.eval_prop("fx_raindrop_refract_amount", _cl_t));
             {
                 float _bi = cl.fx_raindrop_refract_density_beat;
-                float _bv = cl.fx_raindrop_refract_density;
+                float _bv = cl.eval_prop("fx_raindrop_refract_density", _cl_t);
                 acc.raindrop_refract_density = fmaxf(acc.raindrop_refract_density, (_bi > 0.001f) ? (1.0f + (20.0f - 1.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_raindrop_refract_size_beat;
-                float _bv = cl.fx_raindrop_refract_size;
+                float _bv = cl.eval_prop("fx_raindrop_refract_size", _cl_t);
                 acc.raindrop_refract_size = fmaxf(acc.raindrop_refract_size, (_bi > 0.001f) ? (0.1f + (1.0f - 0.1f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_raindrop_refract_refract_str_beat;
-                float _bv = cl.fx_raindrop_refract_refract_str;
+                float _bv = cl.eval_prop("fx_raindrop_refract_refract_str", _cl_t);
                 acc.raindrop_refract_refract_str = fmaxf(acc.raindrop_refract_refract_str, (_bi > 0.001f) ? (0.1f + (2.0f - 0.1f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_raindrop_refract_u_time_beat;
-                float _bv = cl.fx_raindrop_refract_u_time;
+                float _bv = cl.eval_prop("fx_raindrop_refract_u_time", _cl_t);
                 acc.raindrop_refract_u_time = fmaxf(acc.raindrop_refract_u_time, (_bi > 0.001f) ? (0.0f + (1000.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
         case FXType::Risograph:
             acc.risograph_on = true;
             acc.any_gen_fx = true;
-            acc.risograph_amount = fmaxf(acc.risograph_amount, cl.fx_risograph_amount);
+            acc.risograph_amount = fmaxf(acc.risograph_amount, cl.eval_prop("fx_risograph_amount", _cl_t));
             {
                 float _bi = cl.fx_risograph_hue1_beat;
-                float _bv = cl.fx_risograph_hue1;
+                float _bv = cl.eval_prop("fx_risograph_hue1", _cl_t);
                 acc.risograph_hue1 = fmaxf(acc.risograph_hue1, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_risograph_hue2_beat;
-                float _bv = cl.fx_risograph_hue2;
+                float _bv = cl.eval_prop("fx_risograph_hue2", _cl_t);
                 acc.risograph_hue2 = fmaxf(acc.risograph_hue2, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_risograph_dot_size_beat;
-                float _bv = cl.fx_risograph_dot_size;
+                float _bv = cl.eval_prop("fx_risograph_dot_size", _cl_t);
                 acc.risograph_dot_size = fmaxf(acc.risograph_dot_size, (_bi > 0.001f) ? (1.0f + (8.0f - 1.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_risograph_misreg_beat;
-                float _bv = cl.fx_risograph_misreg;
+                float _bv = cl.eval_prop("fx_risograph_misreg", _cl_t);
                 acc.risograph_misreg = fmaxf(acc.risograph_misreg, (_bi > 0.001f) ? (0.0f + (0.02f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_risograph_paper_beat;
-                float _bv = cl.fx_risograph_paper;
+                float _bv = cl.eval_prop("fx_risograph_paper", _cl_t);
                 acc.risograph_paper = fmaxf(acc.risograph_paper, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
         case FXType::VintageNegative:
             acc.vintage_negative_on = true;
             acc.any_gen_fx = true;
-            acc.vintage_negative_amount = fmaxf(acc.vintage_negative_amount, cl.fx_vintage_negative_amount);
+            acc.vintage_negative_amount = fmaxf(acc.vintage_negative_amount, cl.eval_prop("fx_vintage_negative_amount", _cl_t));
             {
                 float _bi = cl.fx_vintage_negative_orange_mask_beat;
-                float _bv = cl.fx_vintage_negative_orange_mask;
+                float _bv = cl.eval_prop("fx_vintage_negative_orange_mask", _cl_t);
                 acc.vintage_negative_orange_mask = fmaxf(acc.vintage_negative_orange_mask, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_vintage_negative_contrast_beat;
-                float _bv = cl.fx_vintage_negative_contrast;
+                float _bv = cl.eval_prop("fx_vintage_negative_contrast", _cl_t);
                 acc.vintage_negative_contrast = fmaxf(acc.vintage_negative_contrast, (_bi > 0.001f) ? (0.5f + (2.5f - 0.5f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_vintage_negative_grain_beat;
-                float _bv = cl.fx_vintage_negative_grain;
+                float _bv = cl.eval_prop("fx_vintage_negative_grain", _cl_t);
                 acc.vintage_negative_grain = fmaxf(acc.vintage_negative_grain, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_vintage_negative_u_time_beat;
-                float _bv = cl.fx_vintage_negative_u_time;
+                float _bv = cl.eval_prop("fx_vintage_negative_u_time", _cl_t);
                 acc.vintage_negative_u_time = fmaxf(acc.vintage_negative_u_time, (_bi > 0.001f) ? (0.0f + (1000.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
         case FXType::PencilSketch:
             acc.pencil_sketch_on = true;
             acc.any_gen_fx = true;
-            acc.pencil_sketch_amount = fmaxf(acc.pencil_sketch_amount, cl.fx_pencil_sketch_amount);
+            acc.pencil_sketch_amount = fmaxf(acc.pencil_sketch_amount, cl.eval_prop("fx_pencil_sketch_amount", _cl_t));
             {
                 float _bi = cl.fx_pencil_sketch_line_str_beat;
-                float _bv = cl.fx_pencil_sketch_line_str;
+                float _bv = cl.eval_prop("fx_pencil_sketch_line_str", _cl_t);
                 acc.pencil_sketch_line_str = fmaxf(acc.pencil_sketch_line_str, (_bi > 0.001f) ? (0.5f + (5.0f - 0.5f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_pencil_sketch_paper_tone_beat;
-                float _bv = cl.fx_pencil_sketch_paper_tone;
+                float _bv = cl.eval_prop("fx_pencil_sketch_paper_tone", _cl_t);
                 acc.pencil_sketch_paper_tone = fmaxf(acc.pencil_sketch_paper_tone, (_bi > 0.001f) ? (0.7f + (1.0f - 0.7f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_pencil_sketch_hatching_beat;
-                float _bv = cl.fx_pencil_sketch_hatching;
+                float _bv = cl.eval_prop("fx_pencil_sketch_hatching", _cl_t);
                 acc.pencil_sketch_hatching = fmaxf(acc.pencil_sketch_hatching, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
         case FXType::CrtBarrel:
             acc.crt_barrel_on = true;
             acc.any_gen_fx = true;
-            acc.crt_barrel_amount = fmaxf(acc.crt_barrel_amount, cl.fx_crt_barrel_amount);
+            acc.crt_barrel_amount = fmaxf(acc.crt_barrel_amount, cl.eval_prop("fx_crt_barrel_amount", _cl_t));
             {
                 float _bi = cl.fx_crt_barrel_distort_beat;
-                float _bv = cl.fx_crt_barrel_distort;
+                float _bv = cl.eval_prop("fx_crt_barrel_distort", _cl_t);
                 acc.crt_barrel_distort = fmaxf(acc.crt_barrel_distort, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_crt_barrel_corner_dark_beat;
-                float _bv = cl.fx_crt_barrel_corner_dark;
+                float _bv = cl.eval_prop("fx_crt_barrel_corner_dark", _cl_t);
                 acc.crt_barrel_corner_dark = fmaxf(acc.crt_barrel_corner_dark, (_bi > 0.001f) ? (0.0f + (3.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_crt_barrel_rgb_shift_beat;
-                float _bv = cl.fx_crt_barrel_rgb_shift;
+                float _bv = cl.eval_prop("fx_crt_barrel_rgb_shift", _cl_t);
                 acc.crt_barrel_rgb_shift = fmaxf(acc.crt_barrel_rgb_shift, (_bi > 0.001f) ? (0.0f + (0.02f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_crt_barrel_scanline_beat;
-                float _bv = cl.fx_crt_barrel_scanline;
+                float _bv = cl.eval_prop("fx_crt_barrel_scanline", _cl_t);
                 acc.crt_barrel_scanline = fmaxf(acc.crt_barrel_scanline, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
         case FXType::RgbSplitWave:
             acc.rgb_split_wave_on = true;
             acc.any_gen_fx = true;
-            acc.rgb_split_wave_amount = fmaxf(acc.rgb_split_wave_amount, cl.fx_rgb_split_wave_amount);
+            acc.rgb_split_wave_amount = fmaxf(acc.rgb_split_wave_amount, cl.eval_prop("fx_rgb_split_wave_amount", _cl_t));
             {
                 float _bi = cl.fx_rgb_split_wave_amplitude_beat;
-                float _bv = cl.fx_rgb_split_wave_amplitude;
+                float _bv = cl.eval_prop("fx_rgb_split_wave_amplitude", _cl_t);
                 acc.rgb_split_wave_amplitude = fmaxf(acc.rgb_split_wave_amplitude, (_bi > 0.001f) ? (0.003f + (0.05f - 0.003f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_rgb_split_wave_frequency_beat;
-                float _bv = cl.fx_rgb_split_wave_frequency;
+                float _bv = cl.eval_prop("fx_rgb_split_wave_frequency", _cl_t);
                 acc.rgb_split_wave_frequency = fmaxf(acc.rgb_split_wave_frequency, (_bi > 0.001f) ? (1.0f + (20.0f - 1.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_rgb_split_wave_speed_beat;
-                float _bv = cl.fx_rgb_split_wave_speed;
+                float _bv = cl.eval_prop("fx_rgb_split_wave_speed", _cl_t);
                 acc.rgb_split_wave_speed = fmaxf(acc.rgb_split_wave_speed, (_bi > 0.001f) ? (0.0f + (10.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_rgb_split_wave_u_time_beat;
-                float _bv = cl.fx_rgb_split_wave_u_time;
+                float _bv = cl.eval_prop("fx_rgb_split_wave_u_time", _cl_t);
                 acc.rgb_split_wave_u_time = fmaxf(acc.rgb_split_wave_u_time, (_bi > 0.001f) ? (0.0f + (1000.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
         case FXType::GoldenHour:
             acc.golden_hour_on = true;
             acc.any_gen_fx = true;
-            acc.golden_hour_amount = fmaxf(acc.golden_hour_amount, cl.fx_golden_hour_amount);
+            acc.golden_hour_amount = fmaxf(acc.golden_hour_amount, cl.eval_prop("fx_golden_hour_amount", _cl_t));
             {
                 float _bi = cl.fx_golden_hour_warmth_beat;
-                float _bv = cl.fx_golden_hour_warmth;
+                float _bv = cl.eval_prop("fx_golden_hour_warmth", _cl_t);
                 acc.golden_hour_warmth = fmaxf(acc.golden_hour_warmth, (_bi > 0.001f) ? (0.1f + (1.0f - 0.1f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_golden_hour_glow_str_beat;
-                float _bv = cl.fx_golden_hour_glow_str;
+                float _bv = cl.eval_prop("fx_golden_hour_glow_str", _cl_t);
                 acc.golden_hour_glow_str = fmaxf(acc.golden_hour_glow_str, (_bi > 0.001f) ? (0.1f + (1.0f - 0.1f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_golden_hour_shadow_lift_beat;
-                float _bv = cl.fx_golden_hour_shadow_lift;
+                float _bv = cl.eval_prop("fx_golden_hour_shadow_lift", _cl_t);
                 acc.golden_hour_shadow_lift = fmaxf(acc.golden_hour_shadow_lift, (_bi > 0.001f) ? (0.0f + (0.3f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_golden_hour_vignette_beat;
-                float _bv = cl.fx_golden_hour_vignette;
+                float _bv = cl.eval_prop("fx_golden_hour_vignette", _cl_t);
                 acc.golden_hour_vignette = fmaxf(acc.golden_hour_vignette, (_bi > 0.001f) ? (0.1f + (2.0f - 0.1f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
         case FXType::NeonSign:
             acc.neon_sign_on = true;
             acc.any_gen_fx = true;
-            acc.neon_sign_amount = fmaxf(acc.neon_sign_amount, cl.fx_neon_sign_amount);
+            acc.neon_sign_amount = fmaxf(acc.neon_sign_amount, cl.eval_prop("fx_neon_sign_amount", _cl_t));
             {
                 float _bi = cl.fx_neon_sign_edge_str_beat;
-                float _bv = cl.fx_neon_sign_edge_str;
+                float _bv = cl.eval_prop("fx_neon_sign_edge_str", _cl_t);
                 acc.neon_sign_edge_str = fmaxf(acc.neon_sign_edge_str, (_bi > 0.001f) ? (1.0f + (10.0f - 1.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_neon_sign_glow_radius_beat;
-                float _bv = cl.fx_neon_sign_glow_radius;
+                float _bv = cl.eval_prop("fx_neon_sign_glow_radius", _cl_t);
                 acc.neon_sign_glow_radius = fmaxf(acc.neon_sign_glow_radius, (_bi > 0.001f) ? (2.0f + (20.0f - 2.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_neon_sign_hue_shift_beat;
-                float _bv = cl.fx_neon_sign_hue_shift;
+                float _bv = cl.eval_prop("fx_neon_sign_hue_shift", _cl_t);
                 acc.neon_sign_hue_shift = fmaxf(acc.neon_sign_hue_shift, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_neon_sign_bg_darken_beat;
-                float _bv = cl.fx_neon_sign_bg_darken;
+                float _bv = cl.eval_prop("fx_neon_sign_bg_darken", _cl_t);
                 acc.neon_sign_bg_darken = fmaxf(acc.neon_sign_bg_darken, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
         case FXType::MirrorTunnel:
             acc.mirror_tunnel_on = true;
             acc.any_gen_fx = true;
-            acc.mirror_tunnel_amount = fmaxf(acc.mirror_tunnel_amount, cl.fx_mirror_tunnel_amount);
+            acc.mirror_tunnel_amount = fmaxf(acc.mirror_tunnel_amount, cl.eval_prop("fx_mirror_tunnel_amount", _cl_t));
             {
                 float _bi = cl.fx_mirror_tunnel_depth_beat;
-                float _bv = cl.fx_mirror_tunnel_depth;
+                float _bv = cl.eval_prop("fx_mirror_tunnel_depth", _cl_t);
                 acc.mirror_tunnel_depth = fmaxf(acc.mirror_tunnel_depth, (_bi > 0.001f) ? (2.0f + (12.0f - 2.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_mirror_tunnel_rotation_beat;
-                float _bv = cl.fx_mirror_tunnel_rotation;
+                float _bv = cl.eval_prop("fx_mirror_tunnel_rotation", _cl_t);
                 acc.mirror_tunnel_rotation = fmaxf(acc.mirror_tunnel_rotation, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_mirror_tunnel_zoom_beat;
-                float _bv = cl.fx_mirror_tunnel_zoom;
+                float _bv = cl.eval_prop("fx_mirror_tunnel_zoom", _cl_t);
                 acc.mirror_tunnel_zoom = fmaxf(acc.mirror_tunnel_zoom, (_bi > 0.001f) ? (0.3f + (0.95f - 0.3f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_mirror_tunnel_u_time_beat;
-                float _bv = cl.fx_mirror_tunnel_u_time;
+                float _bv = cl.eval_prop("fx_mirror_tunnel_u_time", _cl_t);
                 acc.mirror_tunnel_u_time = fmaxf(acc.mirror_tunnel_u_time, (_bi > 0.001f) ? (0.0f + (1000.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
         case FXType::LiquidChrome:
             acc.liquid_chrome_on = true;
             acc.any_gen_fx = true;
-            acc.liquid_chrome_amount = fmaxf(acc.liquid_chrome_amount, cl.fx_liquid_chrome_amount);
+            acc.liquid_chrome_amount = fmaxf(acc.liquid_chrome_amount, cl.eval_prop("fx_liquid_chrome_amount", _cl_t));
             {
                 float _bi = cl.fx_liquid_chrome_flow_beat;
-                float _bv = cl.fx_liquid_chrome_flow;
+                float _bv = cl.eval_prop("fx_liquid_chrome_flow", _cl_t);
                 acc.liquid_chrome_flow = fmaxf(acc.liquid_chrome_flow, (_bi > 0.001f) ? (0.1f + (1.0f - 0.1f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_liquid_chrome_metallic_beat;
-                float _bv = cl.fx_liquid_chrome_metallic;
+                float _bv = cl.eval_prop("fx_liquid_chrome_metallic", _cl_t);
                 acc.liquid_chrome_metallic = fmaxf(acc.liquid_chrome_metallic, (_bi > 0.001f) ? (0.1f + (1.0f - 0.1f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_liquid_chrome_tint_r_beat;
-                float _bv = cl.fx_liquid_chrome_tint_r;
+                float _bv = cl.eval_prop("fx_liquid_chrome_tint_r", _cl_t);
                 acc.liquid_chrome_tint_r = fmaxf(acc.liquid_chrome_tint_r, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_liquid_chrome_tint_g_beat;
-                float _bv = cl.fx_liquid_chrome_tint_g;
+                float _bv = cl.eval_prop("fx_liquid_chrome_tint_g", _cl_t);
                 acc.liquid_chrome_tint_g = fmaxf(acc.liquid_chrome_tint_g, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_liquid_chrome_tint_b_beat;
-                float _bv = cl.fx_liquid_chrome_tint_b;
+                float _bv = cl.eval_prop("fx_liquid_chrome_tint_b", _cl_t);
                 acc.liquid_chrome_tint_b = fmaxf(acc.liquid_chrome_tint_b, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_liquid_chrome_u_time_beat;
-                float _bv = cl.fx_liquid_chrome_u_time;
+                float _bv = cl.eval_prop("fx_liquid_chrome_u_time", _cl_t);
                 acc.liquid_chrome_u_time = fmaxf(acc.liquid_chrome_u_time, (_bi > 0.001f) ? (0.0f + (1000.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
         case FXType::ZoneSystemBw:
             acc.zone_system_bw_on = true;
             acc.any_gen_fx = true;
-            acc.zone_system_bw_amount = fmaxf(acc.zone_system_bw_amount, cl.fx_zone_system_bw_amount);
+            acc.zone_system_bw_amount = fmaxf(acc.zone_system_bw_amount, cl.eval_prop("fx_zone_system_bw_amount", _cl_t));
             {
                 float _bi = cl.fx_zone_system_bw_zones_beat;
-                float _bv = cl.fx_zone_system_bw_zones;
+                float _bv = cl.eval_prop("fx_zone_system_bw_zones", _cl_t);
                 acc.zone_system_bw_zones = fmaxf(acc.zone_system_bw_zones, (_bi > 0.001f) ? (3.0f + (10.0f - 3.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_zone_system_bw_contrast_beat;
-                float _bv = cl.fx_zone_system_bw_contrast;
+                float _bv = cl.eval_prop("fx_zone_system_bw_contrast", _cl_t);
                 acc.zone_system_bw_contrast = fmaxf(acc.zone_system_bw_contrast, (_bi > 0.001f) ? (0.8f + (3.0f - 0.8f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_zone_system_bw_grain_beat;
-                float _bv = cl.fx_zone_system_bw_grain;
+                float _bv = cl.eval_prop("fx_zone_system_bw_grain", _cl_t);
                 acc.zone_system_bw_grain = fmaxf(acc.zone_system_bw_grain, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_zone_system_bw_paper_white_beat;
-                float _bv = cl.fx_zone_system_bw_paper_white;
+                float _bv = cl.eval_prop("fx_zone_system_bw_paper_white", _cl_t);
                 acc.zone_system_bw_paper_white = fmaxf(acc.zone_system_bw_paper_white, (_bi > 0.001f) ? (0.85f + (1.0f - 0.85f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_zone_system_bw_u_time_beat;
-                float _bv = cl.fx_zone_system_bw_u_time;
+                float _bv = cl.eval_prop("fx_zone_system_bw_u_time", _cl_t);
                 acc.zone_system_bw_u_time = fmaxf(acc.zone_system_bw_u_time, (_bi > 0.001f) ? (0.0f + (1000.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
         case FXType::GlitterDust:
             acc.glitter_dust_on = true;
             acc.any_gen_fx = true;
-            acc.glitter_dust_amount = fmaxf(acc.glitter_dust_amount, cl.fx_glitter_dust_amount);
+            acc.glitter_dust_amount = fmaxf(acc.glitter_dust_amount, cl.eval_prop("fx_glitter_dust_amount", _cl_t));
             {
                 float _bi = cl.fx_glitter_dust_density_beat;
-                float _bv = cl.fx_glitter_dust_density;
+                float _bv = cl.eval_prop("fx_glitter_dust_density", _cl_t);
                 acc.glitter_dust_density = fmaxf(acc.glitter_dust_density, (_bi > 0.001f) ? (100.0f + (2000.0f - 100.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_glitter_dust_size_beat;
-                float _bv = cl.fx_glitter_dust_size;
+                float _bv = cl.eval_prop("fx_glitter_dust_size", _cl_t);
                 acc.glitter_dust_size = fmaxf(acc.glitter_dust_size, (_bi > 0.001f) ? (0.2f + (2.0f - 0.2f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_glitter_dust_sparkle_beat;
-                float _bv = cl.fx_glitter_dust_sparkle;
+                float _bv = cl.eval_prop("fx_glitter_dust_sparkle", _cl_t);
                 acc.glitter_dust_sparkle = fmaxf(acc.glitter_dust_sparkle, (_bi > 0.001f) ? (0.2f + (2.0f - 0.2f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_glitter_dust_color_var_beat;
-                float _bv = cl.fx_glitter_dust_color_var;
+                float _bv = cl.eval_prop("fx_glitter_dust_color_var", _cl_t);
                 acc.glitter_dust_color_var = fmaxf(acc.glitter_dust_color_var, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_glitter_dust_u_time_beat;
-                float _bv = cl.fx_glitter_dust_u_time;
+                float _bv = cl.eval_prop("fx_glitter_dust_u_time", _cl_t);
                 acc.glitter_dust_u_time = fmaxf(acc.glitter_dust_u_time, (_bi > 0.001f) ? (0.0f + (1000.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
         case FXType::ContourMap:
             acc.contour_map_on = true;
             acc.any_gen_fx = true;
-            acc.contour_map_amount = fmaxf(acc.contour_map_amount, cl.fx_contour_map_amount);
+            acc.contour_map_amount = fmaxf(acc.contour_map_amount, cl.eval_prop("fx_contour_map_amount", _cl_t));
             {
                 float _bi = cl.fx_contour_map_levels_beat;
-                float _bv = cl.fx_contour_map_levels;
+                float _bv = cl.eval_prop("fx_contour_map_levels", _cl_t);
                 acc.contour_map_levels = fmaxf(acc.contour_map_levels, (_bi > 0.001f) ? (3.0f + (20.0f - 3.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_contour_map_line_width_beat;
-                float _bv = cl.fx_contour_map_line_width;
+                float _bv = cl.eval_prop("fx_contour_map_line_width", _cl_t);
                 acc.contour_map_line_width = fmaxf(acc.contour_map_line_width, (_bi > 0.001f) ? (0.01f + (0.15f - 0.01f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_contour_map_line_hue_beat;
-                float _bv = cl.fx_contour_map_line_hue;
+                float _bv = cl.eval_prop("fx_contour_map_line_hue", _cl_t);
                 acc.contour_map_line_hue = fmaxf(acc.contour_map_line_hue, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_contour_map_fill_sat_beat;
-                float _bv = cl.fx_contour_map_fill_sat;
+                float _bv = cl.eval_prop("fx_contour_map_fill_sat", _cl_t);
                 acc.contour_map_fill_sat = fmaxf(acc.contour_map_fill_sat, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
         case FXType::FilmHalation:
             acc.film_halation_on = true;
             acc.any_gen_fx = true;
-            acc.film_halation_amount = fmaxf(acc.film_halation_amount, cl.fx_film_halation_amount);
+            acc.film_halation_amount = fmaxf(acc.film_halation_amount, cl.eval_prop("fx_film_halation_amount", _cl_t));
             {
                 float _bi = cl.fx_film_halation_threshold_beat;
-                float _bv = cl.fx_film_halation_threshold;
+                float _bv = cl.eval_prop("fx_film_halation_threshold", _cl_t);
                 acc.film_halation_threshold = fmaxf(acc.film_halation_threshold, (_bi > 0.001f) ? (0.3f + (0.9f - 0.3f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_film_halation_radius_beat;
-                float _bv = cl.fx_film_halation_radius;
+                float _bv = cl.eval_prop("fx_film_halation_radius", _cl_t);
                 acc.film_halation_radius = fmaxf(acc.film_halation_radius, (_bi > 0.001f) ? (2.0f + (20.0f - 2.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_film_halation_red_shift_beat;
-                float _bv = cl.fx_film_halation_red_shift;
+                float _bv = cl.eval_prop("fx_film_halation_red_shift", _cl_t);
                 acc.film_halation_red_shift = fmaxf(acc.film_halation_red_shift, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
         case FXType::AsciiArt:
             acc.ascii_art_on = true;
             acc.any_gen_fx = true;
-            acc.ascii_art_amount = fmaxf(acc.ascii_art_amount, cl.fx_ascii_art_amount);
+            acc.ascii_art_amount = fmaxf(acc.ascii_art_amount, cl.eval_prop("fx_ascii_art_amount", _cl_t));
             {
                 float _bi = cl.fx_ascii_art_char_size_beat;
-                float _bv = cl.fx_ascii_art_char_size;
+                float _bv = cl.eval_prop("fx_ascii_art_char_size", _cl_t);
                 acc.ascii_art_char_size = fmaxf(acc.ascii_art_char_size, (_bi > 0.001f) ? (4.0f + (24.0f - 4.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_ascii_art_fg_r_beat;
-                float _bv = cl.fx_ascii_art_fg_r;
+                float _bv = cl.eval_prop("fx_ascii_art_fg_r", _cl_t);
                 acc.ascii_art_fg_r = fmaxf(acc.ascii_art_fg_r, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_ascii_art_fg_g_beat;
-                float _bv = cl.fx_ascii_art_fg_g;
+                float _bv = cl.eval_prop("fx_ascii_art_fg_g", _cl_t);
                 acc.ascii_art_fg_g = fmaxf(acc.ascii_art_fg_g, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_ascii_art_fg_b_beat;
-                float _bv = cl.fx_ascii_art_fg_b;
+                float _bv = cl.eval_prop("fx_ascii_art_fg_b", _cl_t);
                 acc.ascii_art_fg_b = fmaxf(acc.ascii_art_fg_b, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_ascii_art_bg_dark_beat;
-                float _bv = cl.fx_ascii_art_bg_dark;
+                float _bv = cl.eval_prop("fx_ascii_art_bg_dark", _cl_t);
                 acc.ascii_art_bg_dark = fmaxf(acc.ascii_art_bg_dark, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
         case FXType::DnaHelix:
             acc.dna_helix_on = true;
             acc.any_gen_fx = true;
-            acc.dna_helix_amount = fmaxf(acc.dna_helix_amount, cl.fx_dna_helix_amount);
+            acc.dna_helix_amount = fmaxf(acc.dna_helix_amount, cl.eval_prop("fx_dna_helix_amount", _cl_t));
             {
                 float _bi = cl.fx_dna_helix_grid_scale_beat;
-                float _bv = cl.fx_dna_helix_grid_scale;
+                float _bv = cl.eval_prop("fx_dna_helix_grid_scale", _cl_t);
                 acc.dna_helix_grid_scale = fmaxf(acc.dna_helix_grid_scale, (_bi > 0.001f) ? (5.0f + (30.0f - 5.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_dna_helix_wave_amp_beat;
-                float _bv = cl.fx_dna_helix_wave_amp;
+                float _bv = cl.eval_prop("fx_dna_helix_wave_amp", _cl_t);
                 acc.dna_helix_wave_amp = fmaxf(acc.dna_helix_wave_amp, (_bi > 0.001f) ? (0.15f + (1.0f - 0.15f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_dna_helix_line_width_beat;
-                float _bv = cl.fx_dna_helix_line_width;
+                float _bv = cl.eval_prop("fx_dna_helix_line_width", _cl_t);
                 acc.dna_helix_line_width = fmaxf(acc.dna_helix_line_width, (_bi > 0.001f) ? (0.02f + (0.15f - 0.02f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_dna_helix_hue_beat;
-                float _bv = cl.fx_dna_helix_hue;
+                float _bv = cl.eval_prop("fx_dna_helix_hue", _cl_t);
                 acc.dna_helix_hue = fmaxf(acc.dna_helix_hue, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_dna_helix_bg_darken_beat;
-                float _bv = cl.fx_dna_helix_bg_darken;
+                float _bv = cl.eval_prop("fx_dna_helix_bg_darken", _cl_t);
                 acc.dna_helix_bg_darken = fmaxf(acc.dna_helix_bg_darken, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_dna_helix_u_time_beat;
-                float _bv = cl.fx_dna_helix_u_time;
+                float _bv = cl.eval_prop("fx_dna_helix_u_time", _cl_t);
                 acc.dna_helix_u_time = fmaxf(acc.dna_helix_u_time, (_bi > 0.001f) ? (0.0f + (1000.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
         case FXType::DoubleExposure:
             acc.double_exposure_on = true;
             acc.any_gen_fx = true;
-            acc.double_exposure_amount = fmaxf(acc.double_exposure_amount, cl.fx_double_exposure_amount);
+            acc.double_exposure_amount = fmaxf(acc.double_exposure_amount, cl.eval_prop("fx_double_exposure_amount", _cl_t));
             {
                 float _bi = cl.fx_double_exposure_offset_x_beat;
-                float _bv = cl.fx_double_exposure_offset_x;
+                float _bv = cl.eval_prop("fx_double_exposure_offset_x", _cl_t);
                 acc.double_exposure_offset_x = fmaxf(acc.double_exposure_offset_x, (_bi > 0.001f) ? (-0.3f + (0.3f - -0.3f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_double_exposure_offset_y_beat;
-                float _bv = cl.fx_double_exposure_offset_y;
+                float _bv = cl.eval_prop("fx_double_exposure_offset_y", _cl_t);
                 acc.double_exposure_offset_y = fmaxf(acc.double_exposure_offset_y, (_bi > 0.001f) ? (-0.3f + (0.3f - -0.3f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_double_exposure_scale2_beat;
-                float _bv = cl.fx_double_exposure_scale2;
+                float _bv = cl.eval_prop("fx_double_exposure_scale2", _cl_t);
                 acc.double_exposure_scale2 = fmaxf(acc.double_exposure_scale2, (_bi > 0.001f) ? (0.5f + (2.0f - 0.5f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_double_exposure_desaturate2_beat;
-                float _bv = cl.fx_double_exposure_desaturate2;
+                float _bv = cl.eval_prop("fx_double_exposure_desaturate2", _cl_t);
                 acc.double_exposure_desaturate2 = fmaxf(acc.double_exposure_desaturate2, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_double_exposure_opacity_beat;
-                float _bv = cl.fx_double_exposure_opacity;
+                float _bv = cl.eval_prop("fx_double_exposure_opacity", _cl_t);
                 acc.double_exposure_opacity = fmaxf(acc.double_exposure_opacity, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
@@ -1896,47 +1896,47 @@
                 float _p = (_dur > 0.001f) ? (_cl_t - cl.start) / _dur : 0.f;
                 _p = (_p < 0.f) ? 0.f : (_p > 1.f ? 1.f : _p);
                 acc.ken_burns_progress = _p;
-                acc.ken_burns_amount   = fmaxf(acc.ken_burns_amount, cl.fx_ken_burns_amount);
-                acc.ken_burns_start_scale = cl.fx_ken_burns_start_scale;
-                acc.ken_burns_end_scale = cl.fx_ken_burns_end_scale;
-                acc.ken_burns_start_x = cl.fx_ken_burns_start_x;
-                acc.ken_burns_start_y = cl.fx_ken_burns_start_y;
-                acc.ken_burns_end_x = cl.fx_ken_burns_end_x;
-                acc.ken_burns_end_y = cl.fx_ken_burns_end_y;
+                acc.ken_burns_amount   = fmaxf(acc.ken_burns_amount, cl.eval_prop("fx_ken_burns_amount", _cl_t));
+                acc.ken_burns_start_scale = cl.eval_prop("fx_ken_burns_start_scale", _cl_t);
+                acc.ken_burns_end_scale = cl.eval_prop("fx_ken_burns_end_scale", _cl_t);
+                acc.ken_burns_start_x = cl.eval_prop("fx_ken_burns_start_x", _cl_t);
+                acc.ken_burns_start_y = cl.eval_prop("fx_ken_burns_start_y", _cl_t);
+                acc.ken_burns_end_x = cl.eval_prop("fx_ken_burns_end_x", _cl_t);
+                acc.ken_burns_end_y = cl.eval_prop("fx_ken_burns_end_y", _cl_t);
             }
             break;
         case FXType::SkinSmooth:
             acc.skin_smooth_on = true;
             acc.any_gen_fx = true;
-            acc.skin_smooth_amount = fmaxf(acc.skin_smooth_amount, cl.fx_skin_smooth_amount);
+            acc.skin_smooth_amount = fmaxf(acc.skin_smooth_amount, cl.eval_prop("fx_skin_smooth_amount", _cl_t));
             {
                 float _bi = cl.fx_skin_smooth_radius_beat;
-                float _bv = cl.fx_skin_smooth_radius;
+                float _bv = cl.eval_prop("fx_skin_smooth_radius", _cl_t);
                 acc.skin_smooth_radius = fmaxf(acc.skin_smooth_radius, (_bi > 0.001f) ? (1.0f + (6.0f - 1.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_skin_smooth_tone_beat;
-                float _bv = cl.fx_skin_smooth_tone;
+                float _bv = cl.eval_prop("fx_skin_smooth_tone", _cl_t);
                 acc.skin_smooth_tone = fmaxf(acc.skin_smooth_tone, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
         case FXType::GlowUp:
             acc.glow_up_on = true;
             acc.any_gen_fx = true;
-            acc.glow_up_amount = fmaxf(acc.glow_up_amount, cl.fx_glow_up_amount);
+            acc.glow_up_amount = fmaxf(acc.glow_up_amount, cl.eval_prop("fx_glow_up_amount", _cl_t));
             {
                 float _bi = cl.fx_glow_up_glow_beat;
-                float _bv = cl.fx_glow_up_glow;
+                float _bv = cl.eval_prop("fx_glow_up_glow", _cl_t);
                 acc.glow_up_glow = fmaxf(acc.glow_up_glow, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_glow_up_warmth_beat;
-                float _bv = cl.fx_glow_up_warmth;
+                float _bv = cl.eval_prop("fx_glow_up_warmth", _cl_t);
                 acc.glow_up_warmth = fmaxf(acc.glow_up_warmth, (_bi > 0.001f) ? (-1.0f + (1.0f - -1.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             {
                 float _bi = cl.fx_glow_up_brighten_beat;
-                float _bv = cl.fx_glow_up_brighten;
+                float _bv = cl.eval_prop("fx_glow_up_brighten", _cl_t);
                 acc.glow_up_brighten = fmaxf(acc.glow_up_brighten, (_bi > 0.001f) ? (0.0f + (0.5f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
