@@ -522,6 +522,26 @@ std::string clip_video_src(const AppState& state, const Clip& cl) {
     return cl.text;
 }
 
+// One-time migration: remove the exact old-format sidecars that earlier
+// versions wrote next to a source file (now centralized in the media cache).
+// Only the unambiguous PMS-generated patterns are touched.
+static void migrate_clean_sidecars(const std::string& path) {
+    std::error_code ec;
+    for (const char* sfx : {".pms_proxy.mjpeg", ".pms_proxy.idx",
+                            ".pms_proxy.mjpeg.prog", ".pms_still.jpg"})
+        fs::remove(path + sfx, ec);
+    fs::path p(path), dir = p.parent_path();
+    std::string fname = p.filename().string(), stem = p.stem().string();
+    if (fs::exists(dir, ec)) {
+        for (auto& e : fs::directory_iterator(dir, ec)) {
+            std::string n = e.path().filename().string();
+            if (n.rfind(fname + ".pms_conform_", 0) == 0) fs::remove(e.path(), ec);
+        }
+    }
+    fs::remove_all(dir / (stem + "_bg_masks"), ec);
+    fs::remove_all(dir / (stem + "_bg_hires"), ec);
+}
+
 void conform_tick(AppState& state) {
     bool reopen = false, probed_one = false;
     for (auto& tr : state.tracks) {
@@ -534,6 +554,7 @@ void conform_tick(AppState& state) {
                 cl.src_fps = (mi.fps > 0.0) ? (float)mi.fps : -1.f;
                 // Animated GIFs are loops by nature — default to seamless conform.
                 if (mi.fps > 0.0 && is_animated_image(cl.text)) cl.clip_loop = true;
+                migrate_clean_sidecars(cl.text);   // sweep old scattered files
                 probed_one = true;
             }
             if (!clip_needs_conform(cl, state.fps)) continue;
