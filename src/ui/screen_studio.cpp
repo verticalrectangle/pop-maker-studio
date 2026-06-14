@@ -685,6 +685,24 @@ void ui_studio(AppState& state) {
                 std::string p = filepicker_save("Save project as", "PMS Project", "*.pms", project_save_default(state).c_str());
                 if (!p.empty()) { state.project_path = p; project_save(state, p); recent_projects_push(p); recovery_clear(); }
             }
+            if (ImGui::MenuItem("Collect (self-contained copy)…")) {
+                // Default to a fresh folder under the projects dir, named after the
+                // project, with the .pms inside it — Collect drops a media/ beside it.
+                std::string nm = state.project_path.empty()
+                    ? std::string("Untitled")
+                    : std::filesystem::path(state.project_path).stem().string();
+                std::string def = projects_dir() + "/" + nm + "/" + nm + ".pms";
+                std::string p = filepicker_save("Collect project into folder", "PMS Project", "*.pms", def.c_str());
+                if (!p.empty()) {
+                    std::string err; int copied = 0;
+                    if (collect_project(state, p, err, &copied)) {
+                        recent_projects_push(p);
+                        recovery_clear();
+                        std::string cmd = "xdg-open \"" + std::filesystem::path(p).parent_path().string() + "\" >/dev/null 2>&1 &";
+                        system(cmd.c_str());
+                    }
+                }
+            }
             ImGui::Separator();
             if (ImGui::MenuItem("Import Audio / Video…", "Ctrl+O")) {
                 std::string picked = filepicker_open(

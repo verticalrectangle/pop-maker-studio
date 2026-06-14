@@ -6,6 +6,8 @@
 #include <fstream>
 #include <cstdint>
 #include <filesystem>
+#include <map>
+#include <set>
 
 // ── Binary serialization helpers ──────────────────────────────────────────────
 
@@ -740,4 +742,71 @@ bool project_load(AppState& state, const std::string& path) {
     }
 
     return r.ok;
+}
+
+// ── Collect: produce a self-contained project folder ──────────────────────────
+bool collect_project(AppState& state, const std::string& pms_path,
+                     std::string& err, int* copied) {
+    namespace fs = std::filesystem;
+    std::error_code ec;
+
+    fs::path dest_pms(pms_path);
+    fs::path dest_dir = dest_pms.parent_path();
+    fs::path media_dir = dest_dir / "media";
+    fs::create_directories(media_dir, ec);
+    if (ec) { err = "could not create " + media_dir.string(); return false; }
+    std::string media_canon = fs::weakly_canonical(media_dir, ec).string();
+
+    std::map<std::string, std::string> remap;   // original abs path -> collected copy
+    std::set<std::string>              used;     // destination filenames in use
+    int n_copied = 0;
+
+    // Copy one referenced file into media/ and rewrite the reference in place.
+    // A reference that isn't an existing regular file (literal text, a preset
+    // token, an empty string) is left untouched.
+    auto collect_one = [&](std::string& ref) {
+        if (ref.empty()) return;
+        fs::path src(ref);
+        std::error_code e;
+        if (!fs::exists(src, e) || !fs::is_regular_file(src, e)) return;
+        std::string srcabs = fs::weakly_canonical(src, e).string();
+        if (srcabs.empty()) srcabs = src.string();
+
+        // Already inside this project's media folder → nothing to do.
+        if (!media_canon.empty() && srcabs.rfind(media_canon, 0) == 0) return;
+
+        auto it = remap.find(srcabs);
+        if (it != remap.end()) { ref = it->second; return; }
+
+        // Unique destination name (dedup basename collisions across sources).
+        std::string base = src.filename().string();
+        std::string name = base;
+        for (int k = 1; used.count(name); ++k) {
+            std::string stem = fs::path(base).stem().string();
+            std::string ext  = fs::path(base).extension().string();
+            name = stem + "_" + std::to_string(k) + ext;
+        }
+        fs::path dst = media_dir / name;
+        fs::copy_file(src, dst, fs::copy_options::overwrite_existing, e);
+        if (e) return;   // copy failed: leave the reference pointing at the original
+        used.insert(name);
+        std::string dstabs = dst.string();
+        remap[srcabs] = dstabs;
+        ref = dstabs;
+        ++n_copied;
+    };
+
+    for (auto& tr : state.tracks)
+        for (auto& cl : tr.clips) {
+            collect_one(cl.text);
+            collect_one(cl.source_id);
+            collect_one(cl.fx_lut_path);
+        }
+    collect_one(state.audio_path);
+    for (auto& b : state.bin) collect_one(b);
+
+    state.project_path = pms_path;
+    if (!project_save(state, pms_path)) { err = "could not save " + pms_path; return false; }
+    if (copied) *copied = n_copied;
+    return true;
 }

@@ -1257,6 +1257,17 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         return r;
     }
 
+    if (method == "collect_project") {
+        std::string path = params.value("path", state.project_path);
+        if (path.empty()) { err = "no project path — provide 'path' param"; return {}; }
+        std::string e; int copied = 0;
+        if (!collect_project(state, path, e, &copied)) { err = e; return {}; }
+        recent_projects_push(path);
+        recovery_clear();
+        json r; r["path"] = path; r["copied"] = copied;
+        return r;
+    }
+
     if (method == "seek") {
         float t = params.value("time", 0.f);
         state.playhead = t;
