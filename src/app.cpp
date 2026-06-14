@@ -706,6 +706,7 @@ void app_shutdown(AppState& state) {
     g_shutdown.store(true);
     agent_shutdown();
     ipc_server_stop();
+    vrecorder_shutdown();   // kill the camera-capture child so it isn't orphaned
     runtime_fx_shutdown();
     audio_shutdown();
     video_close();

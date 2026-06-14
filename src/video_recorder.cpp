@@ -364,6 +364,12 @@ static void capture_stop() {
     s_raw.shrink_to_fit();
 }
 
+// App-shutdown hook: force-kill the capture child so closing PMS (even with a
+// CAM track / camera preview live) never orphans its ffmpeg. Idempotent.
+void vrecorder_shutdown() {
+    capture_stop();
+}
+
 // Drain the pipe and split the MJPEG byte stream into frames on JPEG
 // SOI (FFD8) / EOI (FFD9) markers. Each completed frame is stamped with the
 // current loop-stream time.

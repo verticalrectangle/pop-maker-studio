@@ -19,6 +19,7 @@
 bool vrecorder_start(AppState& state, int ti, int ci);  // async: warms up, then records
 void vrecorder_stop(AppState& state, bool keep_partial = true);
 void vrecorder_tick(AppState& state);            // call once per UI frame
+void vrecorder_shutdown();                        // kill capture child on app exit (no orphan ffmpeg)
 bool vrecorder_active();                         // warming or recording
 bool vrecorder_recording();                      // takes are being sliced
 bool vrecorder_warming();                        // camera starting, transport not yet running
