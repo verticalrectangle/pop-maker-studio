@@ -1333,17 +1333,11 @@ static json dispatch(AppState& state, const std::string& method, const json& par
     if (method == "decouple_fx_brick") {
         int ti = track_by_name_or_index(state, params), ci = params.value("clip", -1);
         if (!check_clip(state, ti, ci, err)) return {};
-        Clip& bk = state.tracks[ti].clips[(size_t)ci];
-        if (!bk.fx_coupled) { err = "clip is not a coupled FX brick"; return {}; }
-        int host = fx_coupled_host(state, ti, bk);
-        float blen = bk.end - bk.start;
-        bk.fx_coupled = false;
-        bk.fx_host_sid.clear();
-        if (host >= 0) {
-            const Clip& hc = state.tracks[ti].clips[(size_t)host];
-            bk.start = hc.end;
-            bk.end   = hc.end + fminf(2.f, fmaxf(0.5f, blen));
+        if (!state.tracks[ti].clips[(size_t)ci].fx_coupled) {
+            err = "clip is not a coupled FX brick"; return {};
         }
+        // Lift onto a fresh track just below the content — clean movable brick.
+        decouple_fx_to_new_track(state, ti, ci);
         return json::object();
     }
 

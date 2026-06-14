@@ -1193,9 +1193,10 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                         cl.end       = drop_t + 2.f;
                         preset_apply(cl, *preset);
                         state.tracks[ti].clips.push_back(cl);
-                        int nci = couple_fx_now(state, ti, (int)state.tracks[ti].clips.size() - 1);
+                        // Drop = global brick (applies to everything below); welding
+                        // is the deliberate drag-onto-content-and-hold gesture.
                         state.selected_track = ti;
-                        state.selected_clip  = nci;
+                        state.selected_clip  = (int)state.tracks[ti].clips.size() - 1;
                         s_drop_flash_track = ti;
                         s_drop_flash_t     = 0.6f;
                         history_push(state, "Drop Effect preset: " + preset->name);
@@ -1244,7 +1245,8 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                     cl.start     = drop_t;
                     cl.end       = drop_t + 5.f;
                     state.tracks[ti].clips.push_back(cl);
-                    state.selected_clip  = couple_fx_now(state, ti, (int)state.tracks[ti].clips.size() - 1);
+                    // Drop = global brick; weld via drag-onto-content + hold 1.5s.
+                    state.selected_clip  = (int)state.tracks[ti].clips.size() - 1;
                     state.selected_track = ti;
                     s_drop_flash_track = ti;
                     s_drop_flash_t     = 0.6f;
@@ -3844,16 +3846,11 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
             if (!fxk.empty()) {
                 bool many = fxk.size() > 1;
                 if (ImGui::MenuItem(many ? "Decouple FX bricks" : "Decouple FX brick")) {
-                    // Park each freed brick just past the host so it doesn't sit
-                    // on content and immediately re-arm the coupling timer.
-                    float park = cc->end;
-                    for (int k : fxk) {
-                        Clip& bk = ct->clips[(size_t)k];
-                        float blen = bk.end - bk.start;
-                        bk.fx_coupled = false; bk.fx_host_sid.clear();
-                        bk.start = park; bk.end = park + fminf(2.f, fmaxf(0.5f, blen));
-                        park = bk.end;
-                    }
+                    // Lift each freed brick onto its own fresh track just below
+                    // the content — a clean, movable global brick. Process high
+                    // index first so the earlier indices stay valid.
+                    std::sort(fxk.begin(), fxk.end(), std::greater<int>());
+                    for (int k : fxk) decouple_fx_to_new_track(state, ti, k);
                     history_push(state, "Decouple FX");
                 }
                 if (ImGui::MenuItem(many ? "Remove FX bricks" : "Remove FX brick")) {
@@ -3866,17 +3863,9 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
         // ── Decouple / remove a coupled Multi-FX brick (right-clicked the brick) ──
         if (cc && cc->fx_coupled && is_fx_clip(*cc)) {
             if (ImGui::MenuItem("Decouple Multi-FX brick")) {
-                // Park the freed brick right after its host so it doesn't sit
-                // on content and immediately re-arm the coupling timer.
-                int host = fx_coupled_host(state, ti, *cc);
-                float hlen = cc->end - cc->start;
-                cc->fx_coupled = false;
-                cc->fx_host_sid.clear();
-                if (host >= 0) {
-                    const Clip& hc = ct->clips[(size_t)host];
-                    cc->start = hc.end;
-                    cc->end   = hc.end + fminf(2.f, fmaxf(0.5f, hlen));
-                }
+                // Lift the freed brick onto a fresh track just below the content
+                // so it becomes a clean, movable global brick (keeps its span).
+                decouple_fx_to_new_track(state, ti, ci);
                 history_push(state, "Decouple Multi-FX brick");
             }
             if (ImGui::MenuItem("Remove effect")) {

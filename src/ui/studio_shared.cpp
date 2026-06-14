@@ -375,6 +375,22 @@ bool kf_slider(AppState& state, Clip& clip, int sel_ti, int sel_ci, float w,
     return changed;
 }
 
+int decouple_fx_to_new_track(AppState& state, int ti, int ci) {
+    if (ti < 0 || ti >= (int)state.tracks.size()) return -1;
+    auto& clips = state.tracks[ti].clips;
+    if (ci < 0 || ci >= (int)clips.size()) return -1;
+    Clip brick = std::move(clips[(size_t)ci]);
+    brick.fx_coupled = false;
+    brick.fx_host_sid.clear();
+    clips.erase(clips.begin() + ci);
+    Track nt;
+    nt.name = "FX";
+    nt.clips.push_back(std::move(brick));
+    int new_ti = ti + 1;
+    state.tracks.insert(state.tracks.begin() + new_ti, std::move(nt));
+    return new_ti;
+}
+
 void marker_jump(AppState& state, int dir) {
     if (state.markers.empty()) return;
     const float eps = 1e-3f;

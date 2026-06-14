@@ -54,6 +54,13 @@ int  marker_add(AppState& state, float time, const char* label = nullptr);
 // Seek to the nearest marker before (dir<0) or after (dir>0) the playhead.
 void marker_jump(AppState& state, int dir);
 
+// Decouple a welded FX brick (track ti, clip ci): free it and lift it onto a
+// fresh track inserted just BELOW the content track, keeping its span. This
+// makes it a normal, movable, global brick instead of leaving it on the content
+// track where it re-arms the weld timer / reads as stuck. Returns the new track
+// index, or -1 on bad input.
+int decouple_fx_to_new_track(AppState& state, int ti, int ci);
+
 // ── Keyframable slider control ─────────────────────────────────────────────────
 // Renders a "‹ ◆ › Label  [slider]" row: the diamond toggles a keyframe at the
 // playhead (filled on a key, hollow gold when animated off-key, faint when no
