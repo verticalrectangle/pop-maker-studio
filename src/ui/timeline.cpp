@@ -470,7 +470,12 @@ static void couple_pending_tick(AppState& state) {
 
 // ── Timeline ──────────────────────────────────────────────────────────────────
 
+static TLGeom s_tl_geom;
+const TLGeom& tl_geom() { return s_tl_geom; }
+
 void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h) {
+    s_tl_geom.clips.clear();
+    s_tl_geom.lanes.clear();
     ImDrawList* dl      = ImGui::GetWindowDrawList();
     // Any open popup (clip/track context menus, transition picker, modals)
     // silences the timeline's raw hit-testing below: ImGui popups don't
@@ -2293,6 +2298,16 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                 dl->AddLine({ix+4.f,iy-3.f},{ix+1.f,iy+2.f}, ic, 1.2f);
             }
 
+            // Capture geometry for IPC-driven testing.
+            {
+                TLGeomClip g; g.track = ti; g.clip = ci;
+                g.x0 = vis_x0; g.y0 = cy0; g.x1 = vis_x1; g.y1 = cy1;
+                g.has_fx = !is_fx_clip(clip) && host_fx_count(ti, ci) > 0;
+                g.expanded = clip.fx_expanded;
+                g.disc_cx = vis_x0 + 5.f + 4.5f; g.disc_cy = cy1 - 9.f - 1.f + 4.5f;
+                s_tl_geom.clips.push_back(g);
+            }
+
             // FX disclosure triangle — only on a content clip that owns coupled
             // FX. Toggles the per-FX timing lanes drawn beneath the clip (the
             // track grows). Click is swallowed so it doesn't also drag the clip.
@@ -2757,16 +2772,15 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                         }
                         history_push(state, "Retime FX");
                     } else {
-                        // Plain click (no drag) selects the host so its FX panel opens.
-                        int hostsel = g_tl.fx_lane_ci;
-                        if (bclip.fx_coupled && is_fx_clip(bclip)) {
-                            int host = fx_coupled_host(state, ti, bclip);
-                            if (host >= 0) hostsel = host;
-                        }
+                        // Plain click selects the FX entry itself, so its
+                        // keyframable sliders open in the panel (lane-view editing).
                         state.selected_track = ti;
-                        state.selected_clip  = hostsel;
+                        state.selected_clip  = g_tl.fx_lane_ci;
                         state.clip_selection.clear();
-                        state.clip_selection.insert({ti, hostsel});
+                        state.clip_selection.insert({ti, g_tl.fx_lane_ci});
+                        if (g_tl.fx_lane_idx >= 0 &&
+                            g_tl.fx_lane_idx < (int)bclip.fx_chain.size())
+                            bclip.fx_chain_selected = g_tl.fx_lane_idx;
                     }
                     g_tl.fx_lane_drag = 0;
                     g_tl.fx_lane_ti = g_tl.fx_lane_ci = g_tl.fx_lane_idx = -1;
@@ -2789,22 +2803,60 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
             if (fxk.empty()) continue;
             float lane_top = track_y + TL_TRACK_H + 3.f;
             int row = 0;
-            auto draw_lane = [&](const Clip& brick, FXType ft, float rs, float re) {
+            // k = brick clip index, ei = entry index in the brick's chain (-1 for
+            // a single brick). The edges resize the effect's rel window; clicking
+            // selects the effect so its keyframable sliders open in the panel.
+            auto draw_lane = [&](int k, int ei, FXType ft, float rs, float re) {
+                Clip& brick = track.clips[(size_t)k];
                 float ax0 = origin.x + TL_LABEL_W + (brick.start + rs) * zoom - scroll;
                 float ax1 = origin.x + TL_LABEL_W + (brick.start + re) * zoom - scroll;
                 float vx0 = fmaxf(ax0, origin.x + TL_LABEL_W);
                 float vx1 = fminf(ax1, origin.x + total_w);
                 if (vx1 < vx0 + 3.f) vx1 = vx0 + 3.f;
                 float ly0 = lane_top + row * FX_LANE_H, ly1 = ly0 + FX_LANE_H - 2.f;
+                bool selr = state.selected_track == ti && state.selected_clip == k &&
+                            brick.fx_chain_selected == ei;
                 if (ly1 <= track_area_bot && ly0 >= track_area_top) {
-                    FxBrickColors c = fx_brick_colors(ft, false);
+                    FxBrickColors c = fx_brick_colors(ft, selr);
                     dl->AddRectFilled({vx0, ly0}, {vx1, ly1},
-                                      (c.fill & 0x00FFFFFFu) | 0xC8000000u, 2.f);
-                    dl->AddRect({vx0, ly0}, {vx1, ly1}, c.border, 2.f, 0, 1.f);
+                                      (c.fill & 0x00FFFFFFu) | (selr ? 0xF0000000u : 0xC8000000u), 2.f);
+                    dl->AddRect({vx0, ly0}, {vx1, ly1}, c.border, 2.f, 0, selr ? 1.8f : 1.f);
                     ImGui::PushClipRect({vx0, ly0}, {vx1, ly1}, true);
                     dl->AddText({vx0 + 4.f, ly0 + 1.f}, IM_COL32(235, 240, 250, 255),
                                 fx_type_name(ft));
                     ImGui::PopClipRect();
+                    TLGeomLane gl; gl.track = ti; gl.clip = ci; gl.idx = row;
+                    gl.x0 = vx0; gl.y0 = ly0; gl.x1 = vx1; gl.y1 = ly1;
+                    gl.audio = fx_brick_is_audio_kind(brick);
+                    s_tl_geom.lanes.push_back(gl);
+
+                    // Resize / select interaction (chain entries only).
+                    if (ei >= 0 && !track.locked && g_tl.fx_lane_drag == 0 &&
+                        !tl_any_popup &&
+                        mouse.x >= vx0 - 4.f && mouse.x <= vx1 + 4.f &&
+                        mouse.y >= ly0 && mouse.y <= ly1) {
+                        const float etol = 4.f;
+                        bool can_l = (vx1 - vx0) > 2.f * etol;
+                        bool hov_l = can_l && fabsf(mouse.x - vx0) <= etol;
+                        bool hov_r = can_l && fabsf(mouse.x - vx1) <= etol && !hov_l;
+                        ImGui::SetMouseCursor((hov_l || hov_r) ? ImGuiMouseCursor_ResizeEW
+                                                               : ImGuiMouseCursor_Hand);
+                        if (hov_l) dl->AddLine({vx0,ly0},{vx0,ly1}, IM_COL32(255,255,255,255), 2.f);
+                        if (hov_r) dl->AddLine({vx1,ly0},{vx1,ly1}, IM_COL32(255,255,255,255), 2.f);
+                        if (ImGui::IsMouseClicked(0)) {
+                            g_tl.fx_lane_drag = hov_l ? 1 : hov_r ? 2 : 3;
+                            g_tl.fx_lane_ti = ti; g_tl.fx_lane_ci = k; g_tl.fx_lane_idx = ei;
+                            g_tl.fx_lane_ref_x = mouse.x;
+                            g_tl.fx_lane_ref_s = rs; g_tl.fx_lane_ref_e = re;
+                            g_tl.fx_lane_moved = false;
+                            // Select this effect so the keyframe panel targets it.
+                            state.selected_track = ti; state.selected_clip = k;
+                            state.clip_selection.clear();
+                            state.clip_selection.insert({ti, k});
+                            brick.fx_chain_selected = ei;
+                            s_clip_hit = true;
+                        }
+                    }
                 }
                 row++;
             };
@@ -2815,11 +2867,13 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                     float bdur = brick.end - brick.start;
                     if (brick.clip_type == ClipType::MultiFX ||
                         brick.clip_type == ClipType::AudioMultiFX) {
-                        for (auto& se : brick.fx_chain)
-                            draw_lane(brick, se.fx_type, se.rel_start,
+                        for (int ei = 0; ei < (int)brick.fx_chain.size(); ++ei) {
+                            auto& se = brick.fx_chain[(size_t)ei];
+                            draw_lane(k, ei, se.fx_type, se.rel_start,
                                       se.rel_end > 0.f ? se.rel_end : bdur);
+                        }
                     } else {
-                        draw_lane(brick, brick.fx_type, 0.f, bdur);
+                        draw_lane(k, -1, brick.fx_type, 0.f, bdur);
                     }
                 }
             }

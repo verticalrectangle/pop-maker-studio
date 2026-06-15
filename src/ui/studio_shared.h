@@ -5,6 +5,16 @@
 #include "app.h"
 #include "audio.h"
 #include <cmath>
+#include <vector>
+
+// ── Timeline geometry capture (for IPC-driven testing of clicks/drags) ────────
+// draw_timeline() fills this each frame with screen-px rects of clips, their FX
+// disclosure triangles, and the expanded FX lanes, so a test harness can drive
+// ui_input at exact targets the way get_canvas_geometry does for the canvas.
+struct TLGeomClip { int track, clip; float x0, y0, x1, y1; bool has_fx, expanded; float disc_cx, disc_cy; };
+struct TLGeomLane { int track, clip, idx; float x0, y0, x1, y1; bool audio; };
+struct TLGeom { std::vector<TLGeomClip> clips; std::vector<TLGeomLane> lanes; };
+const TLGeom& tl_geom();
 
 // ── Frame-boundary snapping ───────────────────────────────────────────────────
 inline float snap_to_frame(float t, int fps) {

@@ -1312,6 +1312,28 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         return json::object();
     }
 
+    if (method == "get_timeline_geometry") {
+        // Screen-px rects of clips, their FX disclosure triangles, and expanded
+        // FX lanes from the last drawn frame — pairs with ui_input.
+        const TLGeom& g = tl_geom();
+        json r, ca = json::array(), la = json::array();
+        for (auto& c : g.clips) {
+            json j; j["track"]=c.track; j["clip"]=c.clip;
+            j["x0"]=c.x0; j["y0"]=c.y0; j["x1"]=c.x1; j["y1"]=c.y1;
+            j["has_fx"]=c.has_fx; j["expanded"]=c.expanded;
+            j["disc_x"]=c.disc_cx; j["disc_y"]=c.disc_cy;
+            ca.push_back(j);
+        }
+        for (auto& l : g.lanes) {
+            json j; j["track"]=l.track; j["clip"]=l.clip; j["lane"]=l.idx;
+            j["x0"]=l.x0; j["y0"]=l.y0; j["x1"]=l.x1; j["y1"]=l.y1;
+            j["audio"]=l.audio;
+            la.push_back(j);
+        }
+        r["clips"]=ca; r["lanes"]=la;
+        return r;
+    }
+
     if (method == "get_canvas_geometry") {
         // Transform-handle geometry from the last drawn frame (screen px) —
         // pairs with ui_input so agents can hit the handles deterministically.
