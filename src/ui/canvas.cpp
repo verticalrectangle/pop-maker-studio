@@ -1900,8 +1900,10 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
             for (int ci = 0; ci < (int)track.clips.size(); ++ci) {
                 const Clip& cb = track.clips[(size_t)ci];
                 if (cb.clip_type != ClipType::VideoRecord) continue;
-                bool active = state.playhead >= cb.start && state.playhead < cb.end;
-                if (!active && &cb != cam_br) continue;   // off-span: only the framed one
+                // Span-gated like any clip: a camera brick only previews while the
+                // playhead is over it, so multiple bricks sequence on the timeline
+                // (a brick that starts later must not show before its in-point).
+                if (state.playhead < cb.start || state.playhead >= cb.end) continue;
                 float px  = cb.eval_prop("pos_x",    state.playhead);
                 float py  = cb.eval_prop("pos_y",    state.playhead);
                 float sx  = cb.eval_prop("scale_x",  state.playhead);
@@ -1918,8 +1920,9 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                 float cs = cosf(rad), sn = sinf(rad);
                 scene_add_layer(cam_ltex, cx, cy, hw, hh, cs, sn,
                                 fmaxf(0.f, fminf(1.f, alpha)), 1.f, 0.f, 0.f, 1.f);
-                // The REC border + framing box follow the primary brick.
-                if (&cb == cam_br) {
+                // REC border + framing box: the brick being recorded wins; else
+                // the first active brick this frame carries it.
+                if (vrecorder_is_target(ti, ci) || !s_cam_box.active) {
                     auto rp = [&](float x, float y) {
                         return ImVec2{p.x + cx + x * cs - y * sn,
                                       p.y + cy + x * sn + y * cs};
