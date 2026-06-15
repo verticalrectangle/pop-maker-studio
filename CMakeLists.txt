@@ -50,6 +50,7 @@ set(SOURCES
     src/face_filters.cpp
     src/recorder.cpp
     src/video_recorder.cpp
+    src/av_sync.cpp
     src/transcribe.cpp
     src/render.cpp
     src/history.cpp
