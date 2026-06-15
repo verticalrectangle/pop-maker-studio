@@ -1871,38 +1871,54 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
 
         // ── Text / subtitle clip ───────────────────────────────────────────────
         {
-            // Active text is now composited into the scene at its track z-order
-            // in Pass 1 (so video can occlude it). This pass only previews a
-            // SELECTED-but-inactive text clip on top, so you can still see/edit a
-            // clip when the playhead isn't over it. active_ci stays -1 → the
-            // preview is static (no intro animation).
-            const Clip* active = nullptr;
-            int active_ci = -1;
-            const Clip* show = nullptr;
-            int show_ci = -1;
+            // Active text is composited into the scene at its track z-order in
+            // Pass 1 (so video can occlude it). This pass rebuilds the
+            // canvas-space TextLayout that click-to-select, the edit box and the
+            // drag handles read from s_text_layouts — for BOTH:
+            //   • the clip active at the playhead, so it stays clickable and
+            //     draggable even though Pass 1 already drew it (no glyphs here);
+            //   • the selected text clip when the playhead is not over it, drawn
+            //     as a dim static preview so you can still see and edit it.
+            // active_ci stays -1 in the layout below → resting position, no
+            // intro animation, so the box lands where the text comes to rest.
+            bool has_text_clips = false;
+            int  active_text_ci = -1;
+            for (int ci = 0; ci < (int)track.clips.size(); ++ci) {
+                auto ct = track.clips[ci].clip_type;
+                if (ct != ClipType::Text && ct != ClipType::Lyrics && ct != ClipType::Subtitle)
+                    continue;
+                has_text_clips = true;   // counts toward the stacking offset
+                if (active_text_ci < 0 &&
+                    state.playhead >= track.clips[ci].start &&
+                    state.playhead <  track.clips[ci].end)
+                    active_text_ci = ci;
+            }
+            int sel_text_ci = -1;
             if (state.selected_track == ti && state.selected_clip >= 0 &&
                 state.selected_clip < (int)track.clips.size()) {
-                auto& sc = track.clips[state.selected_clip];
-                auto ct  = sc.clip_type;
-                bool is_text   = (ct == ClipType::Text || ct == ClipType::Lyrics || ct == ClipType::Subtitle);
-                bool is_active = (state.playhead >= sc.start && state.playhead < sc.end);
-                if (is_text && !is_active) { show = &sc; show_ci = state.selected_clip; }
+                auto ct = track.clips[state.selected_clip].clip_type;
+                if (ct == ClipType::Text || ct == ClipType::Lyrics || ct == ClipType::Subtitle)
+                    sel_text_ci = state.selected_clip;
             }
-            (void)active;
-            if (!show) {
-                // Only count this track toward the stacking offset if it's actually a text track
-                // (has at least one Text/Lyrics/Subtitle clip). Pure video/audio/FX tracks must
-                // not shift the vertical slot, or large-font presets like Cyberpunk get pushed
-                // off-screen when multiple non-text tracks precede the Lyrics track.
-                bool has_text_clips = false;
-                for (auto& c : track.clips) {
-                    auto ct = c.clip_type;
-                    if (ct == ClipType::Text || ct == ClipType::Lyrics || ct == ClipType::Subtitle)
-                        { has_text_clips = true; break; }
-                }
+            if (active_text_ci < 0 && sel_text_ci < 0) {
                 if (has_text_clips) ++text_rendered;
                 continue;
             }
+            const int stack_idx = text_rendered;   // this track's stacking slot
+
+            // 1–2 jobs: the active clip (hit box only) and/or the selected clip
+            // (dim preview + box). When the selection IS the active clip, one job.
+            struct TextJob { int ci; bool draw_glyphs; };
+            TextJob jobs[2]; int njobs = 0;
+            if (active_text_ci >= 0) jobs[njobs++] = { active_text_ci, false };
+            if (sel_text_ci >= 0 && sel_text_ci != active_text_ci)
+                jobs[njobs++] = { sel_text_ci, true };
+
+            for (int j = 0; j < njobs; ++j) {
+                const int   show_ci     = jobs[j].ci;
+                const bool  draw_glyphs = jobs[j].draw_glyphs;
+                const Clip* show        = &track.clips[show_ci];
+                int active_ci = -1;
 
             // Hover preview: temporarily render with the hovered preset's style.
             ImGui::PushFont(g_font_black);
@@ -1972,11 +1988,11 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
             if (show->sub_pos == 1)
                 slot_y = p.y + h * 0.5f - block_h * 0.5f;
             else if (show->sub_pos == 2)
-                slot_y = p.y + sz_top + text_rendered * slot_h;
+                slot_y = p.y + sz_top + stack_idx * slot_h;
             else if (show->sub_pos == 3)
                 slot_y = p.y + show->eval_prop("sub_pos_y", state.playhead) * h - block_h * 0.5f;
             else
-                slot_y = p.y + h - sz_bot - block_h - text_rendered * slot_h;
+                slot_y = p.y + h - sz_bot - block_h - stack_idx * slot_h;
 
             // Preset positions are penned into the safe zone so they never land
             // under platform UI chrome. Custom (dragged) text — sub_pos == 3 —
@@ -2081,8 +2097,9 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
             for (auto& ln : txt_lines)
                 block_max_w = fmaxf(block_max_w, txt_font->CalcTextSizeA(fsz, FLT_MAX, -1.f, ln.c_str()).x);
 
-            {
-                // When the clip is not active, dim inactive subtitle text
+            if (draw_glyphs) {
+                // Active text is already in the scene (Pass 1); only the selected
+                // off-time preview draws here, dimmed so it reads as inactive.
                 Clip render_clip = *show;
                 if (!show->sub_color_override && active_ci < 0) {
                     render_clip.sub_color_override = true;
@@ -2130,7 +2147,8 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                 tl.rot      = show->eval_prop("rotation", state.playhead);
                 tl.valid    = true;
             }
-            ++text_rendered;
+            }   // for j — text layout jobs (active hit box + selected preview)
+            if (has_text_clips) ++text_rendered;
         }
     }
 
