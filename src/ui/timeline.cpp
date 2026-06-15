@@ -115,15 +115,57 @@ static void draw_fx_weld_ring(ImDrawList* dl, float x0, float x1,
     dl->PathStroke(col, 0, 2.f);
 }
 
+// Cute "snap-together" celebration when an FX brick couples: a warm glow bloom
+// behind the brick, a couple of expanding rings for the pop, and a little burst
+// of twinkling sparkles radiating from the center. Brief and bouncy.
 static void draw_fx_merge_flash(ImDrawList* dl, int ti, int ci,
                                 float x0, float x1, float y0, float y1) {
     if (!s_fx_flash.active || s_fx_flash.ti != ti || s_fx_flash.ci != ci) return;
+    const float DUR = 0.6f;
     float el = (float)(ImGui::GetTime() - s_fx_flash.t0);
-    if (el > 0.45f) { s_fx_flash.active = false; return; }
-    float k  = el / 0.45f;
-    float ex = 14.f * k;
-    dl->AddRect({x0 - ex, y0 - ex}, {x1 + ex, y1 + ex},
-                IM_COL32(255, 200, 90, (int)(220.f * (1.f - k))), 3.f, 0, 2.5f);
+    if (el > DUR) { s_fx_flash.active = false; return; }
+    float k    = el / DUR;                                   // 0 → 1
+    float ease = 1.f - (1.f - k) * (1.f - k) * (1.f - k);    // ease-out cubic
+    float fade = 1.f - k;                                    // linear fade-out
+    float bump = sinf(k * IM_PI);                            // 0 → 1 → 0 swell
+    float cx = (x0 + x1) * 0.5f, cy = (y0 + y1) * 0.5f;
+    float now = (float)ImGui::GetTime();
+
+    // Soft glow bloom — layered rounded rects that breathe out and fade.
+    for (int g = 0; g < 3; ++g) {
+        float gx = 5.f + g * 7.f + ease * 9.f;
+        int   ga = (int)(80.f * fade * bump / (g + 1));
+        dl->AddRectFilled({x0 - gx, y0 - gx}, {x1 + gx, y1 + gx},
+                          IM_COL32(150, 220, 255, ga), 9.f + g * 3.f);
+    }
+
+    // Two expanding rings (staggered) for the snap "pop".
+    for (int r = 0; r < 2; ++r) {
+        float rk = k - r * 0.12f;
+        if (rk <= 0.f) continue;
+        float re = 1.f - (1.f - rk) * (1.f - rk);
+        float ex = 5.f + re * 18.f;
+        dl->AddRect({x0 - ex, y0 - ex}, {x1 + ex, y1 + ex},
+                    IM_COL32(185, 238, 255, (int)(210.f * (1.f - rk))),
+                    4.f + ex * 0.2f, 0, 2.f);
+    }
+
+    // Twinkling sparkles radiating from the center — tiny 4-point stars that
+    // shoot out, swell mid-flight, then wink out. Confetti vibe.
+    const int N = 7;
+    float dist = 9.f + ease * 24.f;
+    for (int s = 0; s < N; ++s) {
+        float ang = (float)s / N * 2.f * IM_PI + s_fx_flash.t0 * 1.3f;
+        float sx  = cx + cosf(ang) * dist * 1.7f;
+        float sy  = cy + sinf(ang) * dist;
+        float sz  = 1.5f + 1.9f * bump;
+        int   a   = (int)(255.f * fade);
+        ImU32 col = (s % 2) ? IM_COL32(255, 240, 170, a)    // warm gold
+                            : IM_COL32(215, 246, 255, a);   // icy white
+        float tw  = 0.6f + 0.4f * sinf(now * 18.f + s);     // little twinkle
+        dl->AddLine({sx - sz * tw, sy}, {sx + sz * tw, sy}, col, 1.4f);
+        dl->AddLine({sx, sy - sz * tw}, {sx, sy + sz * tw}, col, 1.4f);
+    }
 }
 
 // Drop state — declared extern in timeline.h
@@ -3669,11 +3711,23 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                     } else {
                         int base = (int)state.tracks[drag_hot_track].clips.size();
                         for (auto& c : grp) state.tracks[drag_hot_track].clips.push_back(c);
+                        // Dropping an FX brick onto a track with hostable content
+                        // is a deliberate placement — couple it on the spot (same
+                        // as a library drop), no 1.5s dwell. couple_fx_now fires
+                        // the weld flash + glow and is a no-op for content clips.
+                        int sel = base;
+                        const char* act = "Move clip to track";
+                        if (is_fx_clip(grp[0])) {
+                            sel = couple_fx_now(state, drag_hot_track, base);
+                            if (sel != base || state.tracks[drag_hot_track]
+                                    .clips[(size_t)sel].fx_coupled)
+                                act = "Couple FX brick";
+                        }
                         state.selected_track = drag_hot_track;
-                        state.selected_clip  = base;   // the host
+                        state.selected_clip  = sel;
                         state.clip_selection.clear();
                         state.clip_selection.insert({state.selected_track, state.selected_clip});
-                        history_push(state, "Move clip to track");
+                        history_push(state, act);
                     }
                 }
             } else {
