@@ -125,10 +125,14 @@ out vec4 frag;
 uniform sampler2D u_tex;
 uniform float u_chroma;    // chroma offset as fraction of width
 uniform float u_jitter;    // row-jitter intensity 0..1
+uniform float u_corrupt;       // block/pixel corruption intensity 0..1
+uniform float u_corrupt_bleed; // 0 = noisy datamosh blocks, 1 = transparent holes
 uniform float u_time;
 uniform float u_tex_h;     // texture height in pixels (avoids textureSize driver bugs)
+uniform float u_tex_w;     // texture width in pixels
 
 float hash(float n) { return fract(sin(n) * 43758.5453); }
+float hash2(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
 
 void main() {
     float y_id = floor(v_uv.y * u_tex_h);
@@ -143,6 +147,25 @@ void main() {
     float b = texture(u_tex, clamp(vec2(v_uv.x + jshift - u_chroma, v_uv.y), 0.0, 1.0)).b;
     float a = texture(u_tex, clamp(vec2(v_uv.x + jshift,            v_uv.y), 0.0, 1.0)).a;
     frag = vec4(r, g, b, a);
+
+    // Block corruption — chunky datamosh "pixels": the frame is diced into
+    // blocks, and a fraction of them (scaled by u_corrupt) get shoved sideways
+    // and recolored each tick. u_corrupt_bleed fades the corrupted blocks toward
+    // transparent holes instead of noisy colour.
+    if (u_corrupt > 0.01) {
+        float bs = 16.0;                                  // block size in px
+        vec2  px  = vec2(v_uv.x * u_tex_w, v_uv.y * u_tex_h);
+        vec2  blk = floor(px / bs);
+        float tq  = floor(u_time * 7.0);                  // ~7 reshuffles/sec
+        float br  = hash2(blk + tq * 1.7);
+        if (br < u_corrupt * 0.6) {
+            float sh  = (hash2(blk.yx + tq * 3.1) - 0.5) * 0.30 * u_corrupt; // sideways shove
+            vec4  src = texture(u_tex, clamp(vec2(v_uv.x + sh, v_uv.y), 0.0, 1.0));
+            float n   = hash2(floor(px / 3.0) + tq);      // coarse per-cluster noise
+            vec4  noisy = vec4(src.rgb * (0.35 + 1.0 * n), src.a);
+            frag = mix(noisy, vec4(0.0), u_corrupt_bleed);
+        }
+    }
 }
 )glsl";
 
@@ -723,7 +746,8 @@ uintptr_t fx_apply(uintptr_t src_tex_in, int slot, int w, int h,
     bool need_vig      = ea.any_vignette && ea.vignette > 0.001f;
     bool need_blur     = ea.any_blur     && ea.blur > 0.1f;
     bool need_chroma   = cfx.chroma_key_on;
-    bool need_glitch   = cfx.glitch_on   && (cfx.glitch_chroma >= 0.1f || cfx.glitch_jitter >= 0.01f);
+    bool need_glitch   = cfx.glitch_on   && (cfx.glitch_chroma >= 0.1f || cfx.glitch_jitter >= 0.01f
+                                             || cfx.glitch_corruption >= 0.01f);
     bool need_vhs      = cfx.vhs_on      && (cfx.vhs_noise >= 0.01f || cfx.vhs_bleed >= 0.1f || cfx.vhs_tracking >= 0.01f);
     bool need_leak     = cfx.leak_on     && cfx.leak_intensity > 0.01f;
     bool need_datamosh = cfx.datamosh_on && cfx.datamosh_spread > 0.01f;
@@ -798,8 +822,11 @@ uintptr_t fx_apply(uintptr_t src_tex_in, int slot, int w, int h,
         glUseProgram(p);
         glUniform1f(glGetUniformLocation(p, "u_chroma"), cfx.glitch_chroma / (float)w);
         glUniform1f(glGetUniformLocation(p, "u_jitter"), cfx.glitch_jitter);
+        glUniform1f(glGetUniformLocation(p, "u_corrupt"),       cfx.glitch_corruption);
+        glUniform1f(glGetUniformLocation(p, "u_corrupt_bleed"), cfx.glitch_corruption_bleed);
         glUniform1f(glGetUniformLocation(p, "u_time"),   t);
         glUniform1f(glGetUniformLocation(p, "u_tex_h"),  (float)h);
+        glUniform1f(glGetUniformLocation(p, "u_tex_w"),  (float)w);
         run1(p);
     }
 
