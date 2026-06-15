@@ -94,10 +94,16 @@ static void monitor_chain_sync(AppState& state) {
     std::vector<AudioFX> stages;
     uint64_t h = 1469598103934665603ull;
     if (bti >= 0) {
-        auto segs = collect_audio_fx_segments(state, bti,
-                                              state.tracks[bti].clips[bci]);
+        const Clip& rbrick = state.tracks[bti].clips[bci];
+        auto segs = collect_audio_fx_segments(state, bti, rbrick);
+        // Each segment's [t0,t1] is brick-relative source time. Apply a stage
+        // only while the live playhead is inside its window, so coupled audio FX
+        // activate over their own spans (like a normal FX brick) instead of all
+        // being on continuously — monitoring then matches the placed take.
+        float ptime = state.playhead - rbrick.start;
         for (auto& sg : segs) {
             if (sg.fx.voice_convert_on && !sg.fx.any_active()) continue;
+            if (ptime < sg.t0 || ptime >= sg.t1) continue;
             stages.push_back(sg.fx);
             h = (h ^ audio_fx_hash(sg.fx)) * 1099511628211ull;
         }

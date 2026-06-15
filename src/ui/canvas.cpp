@@ -1074,7 +1074,14 @@ static uintptr_t camera_live_tex(AppState& st, const Clip*& out_brick,
             // live frame — the preview shows you filtered, like the take will.
             {
                 {
-                    float bt = br->start + 0.001f;   // brick-local sample time
+                    // Sample the chain at the live playhead within the brick span
+                    // (clamped), so windowed / keyframed / beat-synced sub-effects
+                    // activate over their real spans while recording — not frozen
+                    // at the brick's first instant (which hid any FX not starting
+                    // at rel 0 until the take was placed).
+                    float bt = br->start + 0.001f;
+                    if (br->end > br->start)
+                        bt = fminf(fmaxf(st.playhead, br->start), br->end - 0.001f);
                     EffectAccum     ea  = collect_glass_effects(st, bt, bti);
                     CreativeFXAccum cfx = collect_glass_fx(st, bt, bti);
                     // kSceneFxSlot (MAX*2-2) belongs to the scene
