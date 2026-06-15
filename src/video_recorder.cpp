@@ -53,6 +53,14 @@ static std::string s_error;
 static std::chrono::steady_clock::time_point s_t0;       // capture stream origin
 static std::chrono::steady_clock::time_point s_warm_t0;  // warmup start
 
+// A/V capture: one ffmpeg grabs the webcam (MJPEG → pipe) AND the mic (PCM →
+// s_audio_wav file) so the two share a single clock. At each loop boundary the
+// matching WAV window is muxed onto the video take to make a synced A/V mp4.
+static bool        s_cap_audio = false;   // current capture child is grabbing audio
+static std::string s_audio_wav;           // session-long mic WAV the child writes
+static std::chrono::steady_clock::time_point s_cap_t0;  // capture (WAV) start wall time
+static float       s_av_offset_ms = 0.f;  // manual A/V nudge from the brick
+
 // ── Devices ───────────────────────────────────────────────────────────────────
 
 std::vector<VCamDevice> vrecorder_devices() {
@@ -232,8 +240,29 @@ static bool finalize_take(AppState& state) {
     if (s_frames.size() < 2 || s_loop_len <= 0.f) { s_frames.clear(); return true; }
     std::string path = next_take_path();
     bool ok = write_take_avi(path, s_frames, s_loop_len);
+    float first_t = s_frames.front().t;   // loop time of this take's first frame
     s_frames.clear();
     if (!ok) { ::unlink(path.c_str()); return false; }
+
+    // A/V mux: this take's audio is the WAV window that lines up with its video.
+    // The WAV and the video frames come from one ffmpeg, so loop time T maps to
+    // WAV time (s_t0 - s_cap_t0) + T; +offset_ms delays the audio (start earlier).
+    if (s_cap_audio && !s_audio_wav.empty() && fs::exists(s_audio_wav)) {
+        float astart = std::chrono::duration<float>(s_t0 - s_cap_t0).count()
+                       + first_t - s_av_offset_ms * 0.001f;
+        if (astart < 0.f) astart = 0.f;
+        std::string mkv = path.substr(0, path.size() - 4) + ".mkv";  // .avi → .mkv
+        char mcmd[768];
+        snprintf(mcmd, sizeof(mcmd),
+                 "ffmpeg -hide_banner -loglevel error -y -i '%s' -ss %.3f -i '%s' "
+                 "-map 0:v -map 1:a -c:v copy -c:a aac -t %.3f -shortest '%s' "
+                 "2>/dev/null",
+                 path.c_str(), astart, s_audio_wav.c_str(), s_loop_len, mkv.c_str());
+        if (system(mcmd) == 0 && fs::exists(mkv)) {
+            ::unlink(path.c_str());   // drop the silent AVI; the mkv has A+V
+            path = mkv;
+        }
+    }
 
     Clip* cl = target_brick(state);
     if (!cl) { ::unlink(path.c_str()); return false; }
@@ -256,55 +285,71 @@ static bool finalize_take(AppState& state) {
 static bool capture_start() {
     auto devs = vrecorder_devices();
     s_test_pattern = devs.empty();
-    char cmd[512];
-    // Deterministic test rig: PMS_FAKE_CAM=<image> loops a still through the
-    // REAL capture path — standard reference faces instead of a live human
-    // when validating face tracking/filters.
+
+    // When recording with audio, add a second ffmpeg input (the mic) and a
+    // second output (a PCM WAV). Both streams come from ONE ffmpeg process, so
+    // they share a clock — the per-take mux below just slices the matching WAV
+    // window. The PMS_FAKE_CAM test rig never grabs audio.
+    bool want_audio = s_cap_audio && !getenv("PMS_FAKE_CAM");
+    std::string ain, aout;
+    if (want_audio) {
+        s_audio_wav = takes_dir() + "/sessaudio_" +
+                      std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(
+                          std::chrono::system_clock::now().time_since_epoch()).count()) + ".wav";
+        ain  = " -f pulse -i default";
+        aout = " -map 1:a -c:a pcm_s16le -ar 44100 -ac 1 -y '" + s_audio_wav + "'";
+    } else {
+        s_audio_wav.clear();
+    }
+    // Video output map prefix only needed when there's a second (audio) stream.
+    std::string vmap = want_audio ? " -map 0:v" : "";
+
+    std::string cmd;
+    char buf[512];
     if (const char* fake = getenv("PMS_FAKE_CAM")) {
         // Stills loop at 15 fps; video files (motion test clips) loop whole.
         const char* ext = strrchr(fake, '.');
         bool is_video = ext && (!strcasecmp(ext, ".mp4") || !strcasecmp(ext, ".avi") ||
                                 !strcasecmp(ext, ".mkv") || !strcasecmp(ext, ".mov") ||
                                 !strcasecmp(ext, ".webm"));
-        snprintf(cmd, sizeof(cmd),
+        snprintf(buf, sizeof(buf),
                  "ffmpeg -hide_banner -loglevel error"
                  " -re %s -i '%s'"
                  " -vf 'scale=720:1280:force_original_aspect_ratio=decrease,"
                  "pad=720:1280:(ow-iw)/2:(oh-ih)/2'"
                  " -an -c:v mjpeg -q:v 4 -f mjpeg pipe:1 2>/dev/null",
                  is_video ? "-stream_loop -1" : "-loop 1 -framerate 15", fake);
+        cmd = buf;
     } else if (s_test_pattern) {
         // Camera-less dev fallback: timestamped test pattern at webcam-ish
         // specs. -re paces lavfi to real time (a camera self-paces).
-        snprintf(cmd, sizeof(cmd),
+        snprintf(buf, sizeof(buf),
                  "ffmpeg -hide_banner -loglevel error"
-                 " -re -f lavfi -i testsrc2=size=1280x720:rate=30"
-                 " -c:v mjpeg -q:v 4 -f mjpeg pipe:1 2>/dev/null");
+                 " -re -f lavfi -i testsrc2=size=1280x720:rate=30%s"
+                 "%s -c:v mjpeg -q:v 4 -f mjpeg pipe:1%s 2>/dev/null",
+                 ain.c_str(), vmap.c_str(), aout.c_str());
+        cmd = buf;
     } else {
         int idx = (s_device_sel >= 0 && s_device_sel < (int)devs.size())
                   ? s_device_sel : 0;
         const std::string& dev = devs[(size_t)idx].path;
-        // Low-latency intake: skip ffmpeg's stream analysis so first frame
-        // arrives ~immediately — the camera is released between takes, so a
-        // short cold start matters. nobuffer/low_delay + a tiny probe window.
         const char* lat = "-fflags nobuffer -flags low_delay "
                           "-probesize 32 -analyzeduration 0";
         if (device_has_mjpeg(dev)) {
-            // Native MJPEG → stream copy, no transcode.
-            snprintf(cmd, sizeof(cmd),
+            snprintf(buf, sizeof(buf),
                      "ffmpeg -hide_banner -loglevel error %s"
                      " -f v4l2 -input_format mjpeg -framerate 30"
-                     " -video_size 1280x720 -i %s"
-                     " -c:v copy -f mjpeg pipe:1 2>/dev/null", lat, dev.c_str());
+                     " -video_size 1280x720 -i %s%s"
+                     "%s -c:v copy -f mjpeg pipe:1%s 2>/dev/null",
+                     lat, dev.c_str(), ain.c_str(), vmap.c_str(), aout.c_str());
         } else {
-            // YUV-only device (e.g. phone bridges over v4l2loopback):
-            // let V4L2 negotiate format/size and encode to MJPEG ourselves.
-            snprintf(cmd, sizeof(cmd),
+            snprintf(buf, sizeof(buf),
                      "ffmpeg -hide_banner -loglevel error %s"
-                     " -f v4l2 -i %s"
-                     " -c:v mjpeg -q:v 4 -f mjpeg pipe:1 2>/dev/null",
-                     lat, dev.c_str());
+                     " -f v4l2 -i %s%s"
+                     "%s -c:v mjpeg -q:v 4 -f mjpeg pipe:1%s 2>/dev/null",
+                     lat, dev.c_str(), ain.c_str(), vmap.c_str(), aout.c_str());
         }
+        cmd = buf;
     }
     // Own fork/exec instead of popen: pclose() WAITS for the child, and
     // ffmpeg sometimes wedges in a futex on teardown instead of dying on the
@@ -323,7 +368,7 @@ static bool capture_start() {
         setpgid(0, 0);              // own group → killable with children
         dup2(fds[1], 1);
         close(fds[0]); close(fds[1]);
-        execl("/bin/sh", "sh", "-c", cmd, (char*)nullptr);
+        execl("/bin/sh", "sh", "-c", cmd.c_str(), (char*)nullptr);
         _exit(127);
     }
     close(fds[1]);
@@ -336,6 +381,7 @@ static bool capture_start() {
         return false;
     }
     s_cap_pid = pid;
+    s_cap_t0  = std::chrono::steady_clock::now();   // WAV/video stream origin
     int fd = fileno(s_cap);
     fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK);
     return true;
@@ -497,6 +543,14 @@ bool vrecorder_start(AppState& state, int ti, int ci) {
     s_lp_end   = cl->end;
     s_loop_len = s_lp_end - s_lp_start;
 
+    // A/V: record the mic alongside video when the brick asks for it. If a
+    // monitor child is already up in the wrong audio mode, restart it so this
+    // take is captured with (or without) sound as configured.
+    bool want_audio = cl->rec_audio && !cl->rec_photo;
+    s_av_offset_ms  = cl->rec_av_offset_ms;
+    if (s_cap && s_cap_audio != want_audio) capture_stop();
+    s_cap_audio = want_audio;
+
     // Reuse the monitor's capture child when it's already running.
     if (!s_cap && !capture_start()) {
         s_ti = s_ci = -1;
@@ -578,6 +632,9 @@ void vrecorder_stop(AppState& state, bool keep_partial) {
     // re-opens the device and shows live again (vrecorder_start → Warming).
     s_monitor_want = false;
     capture_stop();
+    // The session mic WAV has been sliced into every take's mkv — drop it.
+    if (!s_audio_wav.empty()) { ::unlink(s_audio_wav.c_str()); s_audio_wav.clear(); }
+    s_cap_audio = false;
     s_last_jpeg.clear();
     s_state = VRecState::Idle;
 }

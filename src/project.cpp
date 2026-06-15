@@ -12,7 +12,7 @@
 // ── Binary serialization helpers ──────────────────────────────────────────────
 
 static const uint32_t MAGIC   = 0x534D5001u; // "PMS\x01"
-static const uint32_t VERSION = 48u;  // v48: Capture IMG brick (rec_photo flag on camera bricks)
+static const uint32_t VERSION = 49u;  // v49: A/V camera capture (rec_audio + rec_av_offset_ms)
 
 struct Writer {
     std::ofstream f;
@@ -234,6 +234,9 @@ static void write_clip(Writer& w, const Clip& c) {
     w.pod((uint8_t)c.clip_loop);
     // v48: Capture IMG brick (photo-mode camera brick — takes are stills)
     w.pod((uint8_t)c.rec_photo);
+    // v49: A/V camera capture (record mic + manual sync offset)
+    w.pod((uint8_t)c.rec_audio);
+    w.pod(c.rec_av_offset_ms);
 }
 
 static Clip read_clip(Reader& r, uint32_t version) {
@@ -465,6 +468,10 @@ static Clip read_clip(Reader& r, uint32_t version) {
         c.clip_loop      = (bool)r.pod<uint8_t>();
     }
     if (version >= 48u) c.rec_photo = (bool)r.pod<uint8_t>();
+    if (version >= 49u) {
+        c.rec_audio        = (bool)r.pod<uint8_t>();
+        c.rec_av_offset_ms = r.pod<float>();
+    }
     return c;
 }
 

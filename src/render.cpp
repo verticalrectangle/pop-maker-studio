@@ -2513,10 +2513,12 @@ void render_start_gl(AppState& state) {
                     continue;
                 }
                 if (cl.text.empty()) continue;
+                // Audio clips and any video-like clip whose source carries audio
+                // (imported video, or a camera A/V take recorded with the mic).
                 if (cl.clip_type != ClipType::Audio &&
-                    cl.clip_type != ClipType::Video) continue;
+                    !clip_is_videolike_type(cl.clip_type)) continue;
                 if (!fs::exists(cl.text)) continue;
-                if (cl.clip_type == ClipType::Video && !path_has_audio(cl.text)) continue;
+                if (clip_is_videolike_type(cl.clip_type) && !path_has_audio(cl.text)) continue;
                 float speed = fmaxf(0.01f, cl.speed);
                 float vol   = (state.tracks[ti].muted ? 0.f : cl.volume)
                               * bus_brick_gain(state, ti, cl);

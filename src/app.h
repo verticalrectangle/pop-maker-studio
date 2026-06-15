@@ -348,6 +348,12 @@ struct Clip {
     // instead of a loop-recorded video. The selected still mirrors into `text`
     // and renders through the normal image-still path. Same camera panel.
     bool rec_photo = false;
+
+    // Video Record brick: capture the mic alongside the webcam so each take is a
+    // synced A/V mp4 (one ffmpeg captures both → single clock). rec_av_offset_ms
+    // nudges audio vs video to dial out fixed device latency (+ = delay audio).
+    bool  rec_audio       = true;
+    float rec_av_offset_ms = 0.f;
 };
 
 // Split `cl` at absolute timeline time `cut` and return the right half.
