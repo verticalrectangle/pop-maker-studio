@@ -2470,6 +2470,9 @@ void panel_clip(AppState& state, float w) {
             }
 
             // Audio capture — record the mic with the webcam (video takes only).
+            // Mirrors the Audio Record brick's mic settings 1:1 (device picker,
+            // hear-yourself, noise gate, hear-effects) so both bricks behave the
+            // same — plus the video-specific A/V offset.
             if (!clip.rec_photo) {
                 ImGui::Dummy({0.f, 6.f});
                 ImGui::Checkbox("Record mic", &clip.rec_audio);
@@ -2480,6 +2483,34 @@ void panel_clip(AppState& state, float w) {
                     ImGui::EndTooltip();
                 }
                 if (clip.rec_audio) {
+                    // ── Mic device picker (same list/selection as Audio Record) ──
+                    static std::vector<std::string> s_mic_devs;
+                    static bool s_mic_devs_init = false;
+                    if (!s_mic_devs_init) { s_mic_devs = audio_capture_devices(); s_mic_devs_init = true; }
+                    bool busy = recorder_active();
+                    int  mic_sel = audio_capture_selected();
+                    const char* mcur = (mic_sel >= 0 && mic_sel < (int)s_mic_devs.size())
+                                       ? s_mic_devs[mic_sel].c_str() : "System default";
+                    ImGui::Dummy({0.f, 4.f});
+                    if (busy) ImGui::BeginDisabled();
+                    ImGui::PushStyleColor(ImGuiCol_FrameBg, Col::bg_soft);
+                    ImGui::SetNextItemWidth(bar_w);
+                    if (ImGui::BeginCombo("##vrec_mic", mcur)) {
+                        if (ImGui::IsWindowAppearing()) s_mic_devs = audio_capture_devices();
+                        if (ImGui::Selectable("System default", mic_sel < 0))
+                            audio_capture_select(-1);
+                        for (int di = 0; di < (int)s_mic_devs.size(); ++di) {
+                            ImGui::PushID(di);
+                            if (ImGui::Selectable(s_mic_devs[di].c_str(), mic_sel == di))
+                                audio_capture_select(di);
+                            ImGui::PopID();
+                        }
+                        ImGui::EndCombo();
+                    }
+                    ImGui::PopStyleColor();
+                    if (busy) ImGui::EndDisabled();
+
+                    ImGui::Dummy({0.f, 4.f});
                     ImGui::SetNextItemWidth(bar_w - 70.f);
                     ImGui::SliderFloat("A/V offset", &clip.rec_av_offset_ms,
                                        -200.f, 200.f, "%.0f ms");
@@ -2493,11 +2524,9 @@ void panel_clip(AppState& state, float w) {
 
                     // Clean input monitoring — same as the Audio Record brick:
                     // hear yourself + a live mic meter while you frame the shot.
-                    // The engine capture is its own low-latency mic stream,
-                    // independent of the ffmpeg one that records the take.
                     ImGui::Dummy({0.f, 6.f});
                     bool amon = audio_monitor_get();
-                    if (ImGui::Checkbox("Monitor mic", &amon)) {
+                    if (ImGui::Checkbox("Hear yourself", &amon)) {
                         if (amon) { if (audio_capture_start()) audio_monitor_set(true); }
                         else {
                             audio_monitor_set(false);
@@ -2511,6 +2540,44 @@ void panel_clip(AppState& state, float w) {
                                                "recorded take.");
                         ImGui::EndTooltip();
                     }
+
+                    // Noise gate — same controls as Audio Record.
+                    ImGui::SameLine(0.f, 12.f);
+                    bool gate = audio_gate_get();
+                    if (ImGui::Checkbox("Reduce mic noise", &gate)) audio_gate_set(gate);
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::BeginTooltip();
+                        ImGui::TextUnformatted("Mutes the mic between phrases so hiss and room\n"
+                                               "noise don't pile up.");
+                        ImGui::EndTooltip();
+                    }
+                    if (gate) {
+                        ImGui::Dummy({0.f, 2.f});
+                        ImGui::Indent(22.f);
+                        bool bake = audio_gate_bake_get();
+                        if (ImGui::Checkbox("Apply to recordings", &bake)) audio_gate_bake_set(bake);
+                        ImGui::Unindent(22.f);
+                    }
+
+                    // Hear effects — sing/talk through the brick's coupled audio FX.
+                    {
+                        auto segs = collect_audio_fx_segments(state, state.selected_track, clip);
+                        bool has_fx = !segs.empty();
+                        if (!has_fx) ImGui::BeginDisabled();
+                        bool hfx = audio_monitor_fx_get();
+                        if (ImGui::Checkbox("Hear effects", &hfx)) audio_monitor_fx_set(hfx);
+                        if (!has_fx) ImGui::EndDisabled();
+                        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+                            ImGui::BeginTooltip();
+                            ImGui::TextUnformatted(has_fx
+                                ? "Monitor through this brick's audio effects live.\n"
+                                  "Recordings stay dry \xe2\x80\x94 playback applies them."
+                                : "Drop an audio effect on this brick first \xe2\x80\x94\n"
+                                  "autotune, reverb, delay\xe2\x80\xa6");
+                            ImGui::EndTooltip();
+                        }
+                    }
+
                     if (audio_capture_active()) {
                         ImGui::Dummy({0.f, 4.f});
                         static float s_cam_mic_lvl = 0.f;
