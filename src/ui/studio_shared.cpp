@@ -274,7 +274,10 @@ bool kf_slider(AppState& state, Clip& clip, int sel_ti, int sel_ci, float w,
                const char* prop, const char* label, float* val_ptr,
                float vmin, float vmax, const char* fmt,
                float disp, const char* prop2) {
-    float t_local = state.playhead - clip.start;
+    // Keyframes must land ON a frame — snap the playhead to the frame grid before
+    // taking the clip-local time, so you can't drop one between two frames (the
+    // FX-brick sliders read straight off the playhead, which can sit sub-frame).
+    float t_local = snap_to_frame(state.playhead, (int)tl_fps(state)) - clip.start;
     float kf_tol  = 0.5f / fmaxf(1.f, tl_fps(state));   // half a frame: exact-frame match
     bool changed = false;
     auto it_pt = clip.ktracks.find(prop);
