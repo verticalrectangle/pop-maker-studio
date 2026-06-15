@@ -408,7 +408,7 @@ static void do_transcribe(
 
     // DTW-based word timestamps live in context params (experimental).
     whisper_context_params cparams     = whisper_context_default_params();
-    cparams.use_gpu                    = true;
+    cparams.use_gpu                    = !getenv("PMS_WHISPER_CPU");  // escape hatch for broken Vulkan
     cparams.dtw_token_timestamps       = true;
     cparams.dtw_aheads_preset          = WHISPER_AHEADS_LARGE_V3_TURBO;
 
@@ -590,7 +590,7 @@ static whisper_context* load_whisper_ctx() {
     fs::path mp = whisper_search_model_path();
     if (!fs::exists(mp)) return nullptr;
     whisper_context_params cparams = whisper_context_default_params();
-    cparams.use_gpu              = true;
+    cparams.use_gpu              = !getenv("PMS_WHISPER_CPU");  // escape hatch for broken Vulkan
     cparams.dtw_token_timestamps = true;
     cparams.dtw_aheads_preset    = WHISPER_AHEADS_LARGE_V3_TURBO;
     return whisper_init_from_file_with_params(mp.string().c_str(), cparams);
