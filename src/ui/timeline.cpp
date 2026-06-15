@@ -2687,6 +2687,71 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
         track_y += TL_TRACK_H;
     }
 
+    // ── "Affects-below" influence wash ────────────────────────────────────────
+    // Bus bricks and standalone (uncoupled) FX/MultiFX bricks process the
+    // composite of the tracks beneath them. Paint a faint, span-gated tint over
+    // that zone so the downward influence is legible at a glance — brighter when
+    // the brick is selected or hovered. A bus's scope stops at the next bus
+    // brick below it (mirrors the audio submix bound); an FX brick's runs to the
+    // bottom. The tint is drawn over the lanes below, never over the brick row.
+    {
+        const float clip_l = origin.x + TL_LABEL_W;
+        const float clip_r = origin.x + total_w;
+        const int   ntr    = (int)state.tracks.size();
+        auto track_top_y = [&](int ti){
+            return track_area_top - state.tl_v_scroll + ti * TL_TRACK_H;
+        };
+        auto affects_below = [](const Clip& c) -> bool {
+            if (c.clip_type == ClipType::Bus) return true;
+            return (c.clip_type == ClipType::Effect ||
+                    c.clip_type == ClipType::MultiFX) && !c.fx_coupled;
+        };
+        // Exclusive lower track bound of a brick's influence.
+        auto scope_end_track = [&](int ti, const Clip& b) -> int {
+            if (b.clip_type == ClipType::Bus) {
+                for (int tj = ti + 1; tj < ntr; ++tj)
+                    for (auto& c : state.tracks[tj].clips)
+                        if (c.clip_type == ClipType::Bus &&
+                            c.start < b.end && c.end > b.start)
+                            return tj;   // wash stops above the next bus
+            }
+            return ntr;                  // FX bricks reach the bottom
+        };
+        auto brick_rgb = [](const Clip& c) -> ImU32 {
+            if (c.clip_type == ClipType::Bus) return IM_COL32(90, 200, 165, 255);
+            return fx_brick_colors(c.fx_type, false).border;
+        };
+
+        for (int ti = 0; ti < ntr; ++ti) {
+            for (int ci = 0; ci < (int)state.tracks[ti].clips.size(); ++ci) {
+                const Clip& b = state.tracks[ti].clips[ci];
+                if (!affects_below(b)) continue;
+                int te = scope_end_track(ti, b);     // exclusive lower bound
+                if (te <= ti + 1) continue;          // nothing below in scope
+
+                float zx0 = fmaxf(clip_l, clip_l + b.start * zoom - scroll);
+                float zx1 = fminf(clip_r, clip_l + b.end   * zoom - scroll);
+                if (zx1 <= zx0) continue;
+                float zy0 = fmaxf(track_area_top, track_top_y(ti + 1));
+                float zy1 = fminf(track_area_bot, track_top_y(te));
+                if (zy1 <= zy0) continue;
+
+                bool sel = state.selected_track == ti && state.selected_clip == ci;
+                float by0 = track_top_y(ti);
+                bool hov = mouse.x >= zx0 && mouse.x <= zx1 &&
+                           mouse.y >= by0 && mouse.y <= by0 + TL_TRACK_H;
+                bool hot = sel || hov;
+
+                ImU32 rgb  = brick_rgb(b) & 0x00FFFFFFu;
+                dl->AddRectFilled({zx0, zy0}, {zx1, zy1},
+                                  rgb | ((hot ? 34u : 16u) << 24));
+                // Accent edge at the top of the zone — influence emanates down.
+                dl->AddRectFilled({zx0, zy0}, {zx1, zy0 + (hot ? 2.f : 1.f)},
+                                  rgb | ((hot ? 200u : 90u) << 24));
+            }
+        }
+    }
+
     // "+ Add Track" — scrolls with the track list as the last row
     {
         ImVec2 row_tl = {origin.x,           track_y};
