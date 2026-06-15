@@ -12,7 +12,7 @@
 extern ImFont* g_font_black;
 
 void draw_text_overlays(ImDrawList* dl, const AppState& state, float t,
-                        ImVec2 p, float w, float h)
+                        ImVec2 p, float w, float h, int only_track)
 {
     if (state.tracks.empty()) return;
 
@@ -59,6 +59,9 @@ void draw_text_overlays(ImDrawList* dl, const AppState& state, float t,
             if (has_text) ++text_rendered;
             continue;
         }
+        // Per-track render: skip drawing other tracks but still count them so the
+        // target track's vertical stacking offset is unchanged.
+        if (only_track >= 0 && ti != only_track) { ++text_rendered; continue; }
 
         ImFont* txt_font = g_font_black;
         // font_size is stored as a fraction of canvas height (0 = use default).

@@ -1787,6 +1787,11 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                 }
             }
         }
+
+        // Composite this track's text overlay at its z-order (interleaved with
+        // video), so text is occluded by video on more-foreground tracks instead
+        // of always drawing on top.
+        scene_add_text_layer(state, state.playhead, ti, (int)w, (int)h);
     }  // end Pass 1 track loop
 
     // ── Live camera preview ──────────────────────────────────────────────────
@@ -1861,26 +1866,24 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
 
         // ── Text / subtitle clip ───────────────────────────────────────────────
         {
+            // Active text is now composited into the scene at its track z-order
+            // in Pass 1 (so video can occlude it). This pass only previews a
+            // SELECTED-but-inactive text clip on top, so you can still see/edit a
+            // clip when the playhead isn't over it. active_ci stays -1 → the
+            // preview is static (no intro animation).
             const Clip* active = nullptr;
             int active_ci = -1;
-            for (int ci = 0; ci < (int)track.clips.size(); ++ci) {
-                auto ct = track.clips[ci].clip_type;
-                if (ct != ClipType::Text && ct != ClipType::Lyrics && ct != ClipType::Subtitle)
-                    continue;
-                if (state.playhead >= track.clips[ci].start &&
-                    state.playhead <  track.clips[ci].end)
-                    { active = &track.clips[ci]; active_ci = ci; break; }
-            }
-            const Clip* show = active;
-            int show_ci = active_ci;
-            if (!show && state.selected_track == ti && state.selected_clip >= 0 &&
+            const Clip* show = nullptr;
+            int show_ci = -1;
+            if (state.selected_track == ti && state.selected_clip >= 0 &&
                 state.selected_clip < (int)track.clips.size()) {
-                auto ct = track.clips[state.selected_clip].clip_type;
-                if (ct == ClipType::Text || ct == ClipType::Lyrics || ct == ClipType::Subtitle) {
-                    show    = &track.clips[state.selected_clip];
-                    show_ci = state.selected_clip;
-                }
+                auto& sc = track.clips[state.selected_clip];
+                auto ct  = sc.clip_type;
+                bool is_text   = (ct == ClipType::Text || ct == ClipType::Lyrics || ct == ClipType::Subtitle);
+                bool is_active = (state.playhead >= sc.start && state.playhead < sc.end);
+                if (is_text && !is_active) { show = &sc; show_ci = state.selected_clip; }
             }
+            (void)active;
             if (!show) {
                 // Only count this track toward the stacking offset if it's actually a text track
                 // (has at least one Text/Lyrics/Subtitle clip). Pure video/audio/FX tracks must

@@ -1681,6 +1681,55 @@ static bool gl_render_vid_clip(ImDrawList& dl, const Clip* cl, float at_time,
                                 float W, float H, const AppState& state, int ti,
                                 bool use_scene = false);
 
+// Render one track's active text overlay to a texture and composite it into the
+// current scene at that track's z (shared by preview canvas + GL export).
+void scene_add_text_layer(const AppState& state, float t, int ti, int w, int h) {
+    static GLuint fbo = 0, tex = 0; static int fw = 0, fh = 0;
+    if (!fbo) glGenFramebuffers(1, &fbo);
+    if (!tex) glGenTextures(1, &tex);
+    if (fw != w || fh != h) {
+        glBindTexture(GL_TEXTURE_2D, tex);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tex, 0);
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        fw = w; fh = h;
+    }
+    // Build just this track's text into a scratch draw list.
+    ImDrawList tdl(ImGui::GetDrawListSharedData());
+    tdl._ResetForNewFrame();
+    tdl.PushClipRect({0.f, 0.f}, {(float)w, (float)h});
+    tdl.PushTexture(ImGui::GetIO().Fonts->TexRef);
+    draw_text_overlays(&tdl, state, t, {0.f, 0.f}, (float)w, (float)h, ti);
+    tdl.PopTexture(); tdl.PopClipRect();
+    if (tdl.VtxBuffer.Size == 0) return;   // no active text on this track
+
+    GLint prev_fbo = 0; glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prev_fbo);
+    GLint vp[4];        glGetIntegerv(GL_VIEWPORT, vp);
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+    glViewport(0, 0, w, h);
+    glClearColor(0.f, 0.f, 0.f, 0.f);
+    glClear(GL_COLOR_BUFFER_BIT);
+    ImDrawData dd;
+    dd.DisplayPos       = {0.f, 0.f};
+    dd.DisplaySize      = {(float)w, (float)h};
+    dd.FramebufferScale = {1.f, 1.f};
+    dd.Textures         = &ImGui::GetIO().Fonts->TexList;
+    dd.AddDrawList(&tdl);
+    ImGui_ImplOpenGL3_RenderDrawData(&dd);
+    glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)prev_fbo);
+    glViewport(vp[0], vp[1], vp[2], vp[3]);
+
+    // Composite full-frame at this track's z. The scene samples bottom-up vs
+    // ImGui's top-down render, so flip V (v0=1, v1=0) to keep the text upright.
+    scene_add_layer((uintptr_t)tex, w * 0.5f, h * 0.5f, w * 0.5f, h * 0.5f,
+                    1.f, 0.f, 1.f, 0.f, 1.f, 1.f, 0.f);
+}
+
 // ── GL snapshot — identical to preview ───────────────────────────────────────
 
 void render_snapshot_gl(AppState& state, float snap_t, bool open_folder) {
@@ -1830,7 +1879,10 @@ void render_snapshot_gl(AppState& state, float snap_t, bool open_folder) {
                     { active = &track.clips[ci]; active_ci = ci; break; }
             }
         }
-        if (!active) continue;
+        if (!active) {  // text-only track (no active video) — still draw its text
+            draw_text_overlays(&dl, state, t, {0.f, 0.f}, W, H, ti);
+            continue;
+        }
 
         bool in_trans_out = (active->transition_type != TransitionType::None &&
                              active->transition_pre > 0.f &&
@@ -1885,10 +1937,12 @@ void render_snapshot_gl(AppState& state, float snap_t, bool open_folder) {
         } else {
             gl_render_vid_clip(dl, active, t, 1.f, vid_texs[slot_pri], slot_pri, W, H, state, ti);
         }
+        // This track's text, drawn right after its video so it layers at the
+        // track's z-order (foreground tracks composite on top of it next).
+        draw_text_overlays(&dl, state, t, {0.f, 0.f}, W, H, ti);
     }
     video_close_export_all();
 
-    draw_text_overlays(&dl, state, t, {0.f, 0.f}, W, H);
     dl.PopTexture();
     dl.PopClipRect();
 
@@ -3058,7 +3112,10 @@ void render_tick_gl(AppState& state) {
                     { active = &track.clips[ci]; active_ci = ci; break; }
             }
         }
-        if (!active) continue;
+        if (!active) {  // text-only track (no active video) — still draw its text
+            draw_text_overlays(&dl, state, t, {0.f, 0.f}, W, H, ti);
+            continue;
+        }
 
         rlog("  vid_clip track=%d clip=%d path=%s\n", ti, active_ci, active->text.c_str());
 
@@ -3122,6 +3179,8 @@ void render_tick_gl(AppState& state) {
         } else {
             gl_render_vid_clip(dl, active, t, 1.f, tex_pri, slot_pri, W, H, state, ti);
         }
+        // This track's text at its z-order (foreground tracks composite over it).
+        draw_text_overlays(&dl, state, t, {0.f, 0.f}, W, H, ti);
     }
 
     g_perf.compose_us += us_since(compose_t0);
@@ -3172,36 +3231,9 @@ void render_tick_gl(AppState& state) {
     g_perf.fx_us += us_since(fx_t0);
     rlog("  fx_done\n");
 
-    // ── Phase 4: Text overlays (ImDrawList on top of the composited frame) ────
-    // Export FBO must be bound — it is, either from Phase 2 (no global FX) or
-    // re-bound explicitly in Phase 3 / Phase 3b.
-    auto text_t0 = perf_clock::now();
-    glBindFramebuffer(GL_FRAMEBUFFER, g_gl_ex.fbo);
-    glViewport(0, 0, g_gl_ex.out_w, g_gl_ex.out_h);
-    {
-        ImDrawList text_dl(ImGui::GetDrawListSharedData());
-        text_dl._ResetForNewFrame();
-        text_dl.PushClipRect({0.f, 0.f}, {W, H});
-        text_dl.PushTexture(ImGui::GetIO().Fonts->TexRef);
-
-        draw_text_overlays(&text_dl, state, t, {0.f, 0.f}, W, H);
-
-        rlog("  text_overlays_done  vtx=%d idx=%d cmd=%d\n",
-             text_dl.VtxBuffer.Size, text_dl.IdxBuffer.Size, text_dl.CmdBuffer.Size);
-
-        text_dl.PopTexture();
-        text_dl.PopClipRect();
-
-        ImDrawData tdd;
-        tdd.DisplayPos       = {0.f, 0.f};
-        tdd.DisplaySize      = {W, H};
-        tdd.FramebufferScale = {1.f, 1.f};
-        tdd.Textures         = &ImGui::GetIO().Fonts->TexList;
-        tdd.AddDrawList(&text_dl);
-        ImGui_ImplOpenGL3_RenderDrawData(&tdd);
-        rlog("  imgui_render_done\n");
-    }
-    g_perf.text_us += us_since(text_t0);
+    // (Text overlays are now drawn per-track inside Phase 1's video loop so they
+    // composite at each track's z-order instead of always on top. The old
+    // always-on-top Phase 4 pass is gone.)
 
     // ── Kick async GPU→PBO DMA (non-blocking — returns immediately) ───────────
     // The GPU will fill pbo[current_frame % 3] while the CPU processes the next

@@ -19,5 +19,11 @@ bool render_export_srt(const AppState& state, const std::string& out_path);
 void render_start_gl(AppState& state);
 void render_tick_gl(AppState& state);
 
+// Render one track's active text overlay to a texture and composite it into the
+// current scene (scene_add_layer) at that track's z-order, so text layers with
+// video instead of always drawing on top. Call between scene_begin/scene_result
+// inside the descending track loop; no-op when the track has no active text.
+void scene_add_text_layer(const AppState& state, float t, int ti, int w, int h);
+
 // Extract raw audio from a video file into a WAV, add as Audio track when done.
 void extract_audio_start(AppState& state, const std::string& video_path);
