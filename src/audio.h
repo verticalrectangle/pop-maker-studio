@@ -37,6 +37,7 @@ uint64_t audio_loop_cycles();  // increments once per wrap — recorder slices t
 bool  audio_capture_start();    // enter performance mode
 void  audio_capture_stop();     // leave performance mode
 bool  audio_capture_active();
+float audio_input_peak();       // live mic peak 0–1 (0 when not capturing)
 // Move all captured samples since the last drain into `out` (appends).
 void  audio_capture_drain(std::vector<float>& out);
 float audio_capture_latency();  // input period in seconds (0 if not capturing)

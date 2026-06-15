@@ -2490,6 +2490,41 @@ void panel_clip(AppState& state, float w) {
                                                "if the lips drift on playback.");
                         ImGui::EndTooltip();
                     }
+
+                    // Clean input monitoring — same as the Audio Record brick:
+                    // hear yourself + a live mic meter while you frame the shot.
+                    // The engine capture is its own low-latency mic stream,
+                    // independent of the ffmpeg one that records the take.
+                    ImGui::Dummy({0.f, 6.f});
+                    bool amon = audio_monitor_get();
+                    if (ImGui::Checkbox("Monitor mic", &amon)) {
+                        if (amon) { if (audio_capture_start()) audio_monitor_set(true); }
+                        else {
+                            audio_monitor_set(false);
+                            if (!recorder_active()) audio_capture_stop();
+                        }
+                    }
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::BeginTooltip();
+                        ImGui::TextUnformatted("Hear your mic in your headphones and watch the\n"
+                                               "level while you set up \xe2\x80\x94 doesn't affect the\n"
+                                               "recorded take.");
+                        ImGui::EndTooltip();
+                    }
+                    if (audio_capture_active()) {
+                        ImGui::Dummy({0.f, 4.f});
+                        static float s_cam_mic_lvl = 0.f;
+                        s_cam_mic_lvl = fmaxf(audio_input_peak(), s_cam_mic_lvl * 0.85f);
+                        float lvl = fminf(1.f, s_cam_mic_lvl);
+                        ImDrawList* pdl = ImGui::GetWindowDrawList();
+                        ImVec2 mp = ImGui::GetCursorScreenPos();
+                        pdl->AddRectFilled(mp, {mp.x + bar_w, mp.y + 6.f}, IM_COL32(35,35,50,255), 3.f);
+                        ImU32 lc = lvl > 0.9f ? IM_COL32(230,60,60,255)
+                                 : lvl > 0.7f ? IM_COL32(230,180,60,255)
+                                              : IM_COL32(70,200,110,255);
+                        pdl->AddRectFilled(mp, {mp.x + bar_w*lvl, mp.y + 6.f}, lc, 3.f);
+                        ImGui::Dummy({0.f, 10.f});
+                    }
                 }
             }
         }

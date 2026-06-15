@@ -84,6 +84,9 @@ static constexpr uint32_t CAP_N    = 1u << 21;
 static constexpr uint32_t CAP_MASK = CAP_N - 1;
 static float                 g_cap_ring[CAP_N];
 static std::atomic<uint32_t> g_cap_w{0}, g_cap_r{0};
+// Live input peak (0–1) of the most recent capture buffer — for a mic meter
+// while monitoring, independent of whether anything is recording.
+static std::atomic<float>    g_in_peak{0.f};
 
 // Noise gate (silvertune companion port): leaky RMS² on the mono sum opens /
 // closes a smoothed gain. Monitor audio is always gated when enabled; the
@@ -390,8 +393,10 @@ static void perf_input_block(const float* in, uint32_t frameCount) {
     const uint32_t cr = g_cap_r.load(std::memory_order_acquire);
     uint32_t mw = g_monr_w.load(std::memory_order_relaxed);
     const uint32_t mr = g_monr_r.load(std::memory_order_acquire);
+    float in_pk = 0.f;
     for (uint32_t f = 0; f < frameCount; ++f) {
         float l = in[f*2], r2 = in[f*2+1];
+        in_pk = fmaxf(in_pk, fmaxf(fabsf(l), fabsf(r2)));
         // Gate: leaky RMS² of the mono sum drives a smoothed 0→1 gain.
         float mono = 0.5f * (l + r2);
         g_gate_energy = 0.999f * g_gate_energy + 0.001f * mono * mono;
@@ -413,6 +418,7 @@ static void perf_input_block(const float* in, uint32_t frameCount) {
         }
     }
     g_cap_w.store(cw, std::memory_order_release);
+    g_in_peak.store(in_pk, std::memory_order_relaxed);
     g_monr_w.store(mw, std::memory_order_release);
 }
 
@@ -755,6 +761,9 @@ void audio_capture_stop() {
 }
 
 bool audio_capture_active() { return g_cap_init; }
+float audio_input_peak() {
+    return g_cap_init ? g_in_peak.load(std::memory_order_relaxed) : 0.f;
+}
 
 void audio_capture_drain(std::vector<float>& out) {
     const uint32_t w = g_cap_w.load(std::memory_order_acquire);
