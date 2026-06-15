@@ -1797,6 +1797,72 @@ void glass_host_layout(AppState& state, Clip& brick, float w, int b_ti) {
     }
 }
 
+// Beat Sync Source picker — lets `target` (an FX clip or MultiFX brick) choose
+// which analyzed audio source drives its per-param "B" beat-sync buttons.
+// Writes target.beat_src_track/beat_src_clip/beat_decay (already serialized and
+// read by beat_pulse_at). Shared by the single-Effect panel and the MultiFX
+// panel so a standalone brick can pick a source too (previously the picker only
+// existed on single Effect bricks, so a MultiFX brick's "B" buttons did nothing).
+void beat_sync_source_ui(AppState& state, Clip& target, float w) {
+    ImGui::Dummy({0.f, 12.f}); ui_separator(); ImGui::Dummy({0.f, 8.f});
+    ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(255, 210, 60, 255));
+    ImGui::TextUnformatted("Beat Sync Source");
+    ImGui::PopStyleColor();
+    ImGui::Dummy({0.f, 4.f});
+
+    // Build list of audio-bearing clips (audio, video, and the record bricks).
+    struct BeatSrcEntry { int ti, ci; std::string label; };
+    std::vector<BeatSrcEntry> beat_srcs;
+    beat_srcs.push_back({-1, -1, "None"});
+    for (int ti2 = 0; ti2 < (int)state.tracks.size(); ++ti2) {
+        const auto& tr2 = state.tracks[ti2];
+        for (int ci2 = 0; ci2 < (int)tr2.clips.size(); ++ci2) {
+            const Clip& c2 = tr2.clips[ci2];
+            if (c2.clip_type != ClipType::Audio && c2.clip_type != ClipType::Video &&
+                c2.clip_type != ClipType::Record && c2.clip_type != ClipType::VideoRecord) continue;
+            std::string nm = c2.source_id.empty()
+                ? std::string(clip_type_name(c2.clip_type))
+                : fs::path(c2.source_id).filename().string();
+            char lbl[160];
+            if (!c2.beats.empty())
+                snprintf(lbl, sizeof(lbl), "%s  ·  %d beats @ %.1f BPM",
+                    nm.c_str(), (int)c2.beats.size(), c2.beat_bpm);
+            else if (c2.beats_analyzing)
+                snprintf(lbl, sizeof(lbl), "%s  ·  analysing…", nm.c_str());
+            else
+                snprintf(lbl, sizeof(lbl), "%s  ·  no beats yet", nm.c_str());
+            beat_srcs.push_back({ti2, ci2, lbl});
+        }
+    }
+
+    int sel_idx = 0;
+    for (int i = 1; i < (int)beat_srcs.size(); ++i)
+        if (beat_srcs[i].ti == target.beat_src_track && beat_srcs[i].ci == target.beat_src_clip)
+            { sel_idx = i; break; }
+
+    ImGui::SetNextItemWidth(w - 16.f);
+    if (ImGui::BeginCombo("##bsrc", beat_srcs[sel_idx].label.c_str())) {
+        for (int i = 0; i < (int)beat_srcs.size(); ++i) {
+            bool selected = (i == sel_idx);
+            if (ImGui::Selectable(beat_srcs[i].label.c_str(), selected)) {
+                target.beat_src_track = beat_srcs[i].ti;
+                target.beat_src_clip  = beat_srcs[i].ci;
+                history_push(state, "FX: set beat sync source");
+            }
+            if (selected) ImGui::SetItemDefaultFocus();
+        }
+        ImGui::EndCombo();
+    }
+
+    if (target.beat_src_track >= 0) {
+        ImGui::Dummy({0.f, 4.f});
+        ui_label("Beat Decay");
+        ImGui::SetNextItemWidth(w - 16.f);
+        ImGui::SliderFloat("##bdecay", &target.beat_decay, 0.02f, 1.0f, "%.2fs");
+        if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "FX: beat decay");
+    }
+}
+
 void panel_fx_clip(AppState& state, float w) {
     if (state.selected_track < 0 || state.selected_track >= (int)state.tracks.size()) return;
     Track& track = state.tracks[state.selected_track];
@@ -1948,64 +2014,7 @@ void panel_fx_clip(AppState& state, float w) {
 
     ImGui::PopStyleColor(3);
 
-    // ── Beat Sync Source ────────────────────────────────────────────────────
-    ImGui::Dummy({0.f, 12.f}); ui_separator(); ImGui::Dummy({0.f, 8.f});
-    ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(255, 210, 60, 255));
-    ImGui::TextUnformatted("Beat Sync Source");
-    ImGui::PopStyleColor();
-    ImGui::Dummy({0.f, 4.f});
-
-    // Build list of analyzed Audio/Video clips
-    struct BeatSrcEntry { int ti, ci; std::string label; };
-    std::vector<BeatSrcEntry> beat_srcs;
-    beat_srcs.push_back({-1, -1, "None"});
-    for (int ti2 = 0; ti2 < (int)state.tracks.size(); ++ti2) {
-        const auto& tr2 = state.tracks[ti2];
-        for (int ci2 = 0; ci2 < (int)tr2.clips.size(); ++ci2) {
-            const Clip& c2 = tr2.clips[ci2];
-            if (c2.clip_type != ClipType::Audio && c2.clip_type != ClipType::Video) continue;
-            char lbl[128];
-            if (!c2.beats.empty())
-                snprintf(lbl, sizeof(lbl), "%s  ·  %d beats @ %.1f BPM",
-                    fs::path(c2.source_id).filename().string().c_str(), (int)c2.beats.size(), c2.beat_bpm);
-            else if (c2.beats_analyzing)
-                snprintf(lbl, sizeof(lbl), "%s  ·  analysing…",
-                    fs::path(c2.source_id).filename().string().c_str());
-            else
-                snprintf(lbl, sizeof(lbl), "%s  ·  no beats yet",
-                    fs::path(c2.source_id).filename().string().c_str());
-            beat_srcs.push_back({ti2, ci2, lbl});
-        }
-    }
-
-    // Find current selection index
-    int sel_idx = 0;
-    for (int i = 1; i < (int)beat_srcs.size(); ++i)
-        if (beat_srcs[i].ti == clip.beat_src_track && beat_srcs[i].ci == clip.beat_src_clip)
-            { sel_idx = i; break; }
-
-    const char* preview = beat_srcs[sel_idx].label.c_str();
-    ImGui::SetNextItemWidth(w - 16.f);
-    if (ImGui::BeginCombo("##bsrc", preview)) {
-        for (int i = 0; i < (int)beat_srcs.size(); ++i) {
-            bool selected = (i == sel_idx);
-            if (ImGui::Selectable(beat_srcs[i].label.c_str(), selected)) {
-                clip.beat_src_track = beat_srcs[i].ti;
-                clip.beat_src_clip  = beat_srcs[i].ci;
-                history_push(state, "FX: set beat sync source");
-            }
-            if (selected) ImGui::SetItemDefaultFocus();
-        }
-        ImGui::EndCombo();
-    }
-
-    if (clip.beat_src_track >= 0) {
-        ImGui::Dummy({0.f, 4.f});
-        ui_label("Beat Decay");
-        ImGui::SetNextItemWidth(w - 16.f);
-        ImGui::SliderFloat("##bdecay", &clip.beat_decay, 0.02f, 1.0f, "%.2fs");
-        if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "FX: beat decay");
-    }
+    beat_sync_source_ui(state, clip, w);
 
     glass_host_layout(state, clip, w);
 
@@ -2547,6 +2556,11 @@ void panel_multifx_for(AppState& state, float w, int b_ti, int b_ci) {
 
         ImGui::PopStyleColor(3);
     }
+
+    // Beat sync source for the whole brick — the pulse is computed per-brick
+    // (app.cpp accum_multifx_effects), so the "B" buttons above need a source
+    // chosen here to actually do anything.
+    beat_sync_source_ui(state, brick, w);
 
     glass_host_layout(state, brick, w, b_ti);
 
