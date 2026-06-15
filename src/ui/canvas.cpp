@@ -1891,38 +1891,49 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
             }
         }
 
-        // Live camera preview composites at the camera brick's track z-order
-        // (mirror-flipped for self-view; glass FX + face filter already baked in).
-        // Tracks composited above it (lower ti, drawn later) occlude it.
-        if (ti == cam_ti && cam_ltex && cam_br && cam_cw > 0 && cam_ch > 0) {
-            float px  = cam_br->eval_prop("pos_x",    state.playhead);
-            float py  = cam_br->eval_prop("pos_y",    state.playhead);
-            float sx  = cam_br->eval_prop("scale_x",  state.playhead);
-            float sy  = cam_br->eval_prop("scale_y",  state.playhead);
-            float rot = cam_br->eval_prop("rotation", state.playhead);
-            float alpha = cam_br->eval_prop("opacity", state.playhead);
-            float fit_w = w, fit_h = h;
-            float va = (float)cam_cw / (float)cam_ch, ca = w / h;
-            if (va > ca) { fit_w = w; fit_h = w / va; }
-            else         { fit_h = h; fit_w = h * va; }
-            float cx = px * w, cy = py * h;
-            float hw = fit_w * sx * 0.5f, hh = fit_h * sy * 0.5f;
-            float rad = rot * 3.14159265f / 180.f;
-            float cs = cosf(rad), sn = sinf(rad);
-            scene_add_layer(cam_ltex, cx, cy, hw, hh, cs, sn,
-                            fmaxf(0.f, fminf(1.f, alpha)), 1.f, 0.f, 0.f, 1.f);
-            auto rp = [&](float x, float y) {
-                return ImVec2{p.x + cx + x * cs - y * sn,
-                              p.y + cy + x * sn + y * cs};
-            };
-            s_cam_box.active    = true;
-            s_cam_box.recording = vrecorder_recording();
-            s_cam_box.warming   = vrecorder_warming();
-            s_cam_box.c[0] = rp(-hw, -hh); s_cam_box.c[1] = rp(hw, -hh);
-            s_cam_box.c[2] = rp(hw,  hh);  s_cam_box.c[3] = rp(-hw, hh);
-            s_mirror_dbg.cx = p.x + cx; s_mirror_dbg.cy = p.y + cy;
-            s_mirror_dbg.hw = hw;       s_mirror_dbg.hh = hh;
-            s_mirror_dbg.rot_deg = rot;
+        // Live camera preview(s): composite the feed at EVERY camera brick on
+        // this track that's active now (or the one being framed) — so two or more
+        // camera bricks all show at once, each at its own transform/track z-order.
+        // (Mirror-flipped for self-view; glass FX + face filter baked into cam_ltex
+        // for the primary brick and shared across the rest.)
+        if (cam_ltex && cam_cw > 0 && cam_ch > 0) {
+            for (int ci = 0; ci < (int)track.clips.size(); ++ci) {
+                const Clip& cb = track.clips[(size_t)ci];
+                if (cb.clip_type != ClipType::VideoRecord) continue;
+                bool active = state.playhead >= cb.start && state.playhead < cb.end;
+                if (!active && &cb != cam_br) continue;   // off-span: only the framed one
+                float px  = cb.eval_prop("pos_x",    state.playhead);
+                float py  = cb.eval_prop("pos_y",    state.playhead);
+                float sx  = cb.eval_prop("scale_x",  state.playhead);
+                float sy  = cb.eval_prop("scale_y",  state.playhead);
+                float rot = cb.eval_prop("rotation", state.playhead);
+                float alpha = cb.eval_prop("opacity", state.playhead);
+                float fit_w = w, fit_h = h;
+                float va = (float)cam_cw / (float)cam_ch, ca = w / h;
+                if (va > ca) { fit_w = w; fit_h = w / va; }
+                else         { fit_h = h; fit_w = h * va; }
+                float cx = px * w, cy = py * h;
+                float hw = fit_w * sx * 0.5f, hh = fit_h * sy * 0.5f;
+                float rad = rot * 3.14159265f / 180.f;
+                float cs = cosf(rad), sn = sinf(rad);
+                scene_add_layer(cam_ltex, cx, cy, hw, hh, cs, sn,
+                                fmaxf(0.f, fminf(1.f, alpha)), 1.f, 0.f, 0.f, 1.f);
+                // The REC border + framing box follow the primary brick.
+                if (&cb == cam_br) {
+                    auto rp = [&](float x, float y) {
+                        return ImVec2{p.x + cx + x * cs - y * sn,
+                                      p.y + cy + x * sn + y * cs};
+                    };
+                    s_cam_box.active    = true;
+                    s_cam_box.recording = vrecorder_recording();
+                    s_cam_box.warming   = vrecorder_warming();
+                    s_cam_box.c[0] = rp(-hw, -hh); s_cam_box.c[1] = rp(hw, -hh);
+                    s_cam_box.c[2] = rp(hw,  hh);  s_cam_box.c[3] = rp(-hw, hh);
+                    s_mirror_dbg.cx = p.x + cx; s_mirror_dbg.cy = p.y + cy;
+                    s_mirror_dbg.hw = hw;       s_mirror_dbg.hh = hh;
+                    s_mirror_dbg.rot_deg = rot;
+                }
+            }
         }
 
         // Composite this track's text overlay at its z-order (interleaved with
