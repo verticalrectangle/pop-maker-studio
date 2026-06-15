@@ -2468,6 +2468,30 @@ void panel_clip(AppState& state, float w) {
                                        "recording \xe2\x80\x94 frame yourself, check the light.");
                 ImGui::EndTooltip();
             }
+
+            // Audio capture — record the mic with the webcam (video takes only).
+            if (!clip.rec_photo) {
+                ImGui::Dummy({0.f, 6.f});
+                ImGui::Checkbox("Record mic", &clip.rec_audio);
+                if (ImGui::IsItemHovered()) {
+                    ImGui::BeginTooltip();
+                    ImGui::TextUnformatted("Capture the microphone with the webcam so each\n"
+                                           "take is a synced audio + video clip.");
+                    ImGui::EndTooltip();
+                }
+                if (clip.rec_audio) {
+                    ImGui::SetNextItemWidth(bar_w - 70.f);
+                    ImGui::SliderFloat("A/V offset", &clip.rec_av_offset_ms,
+                                       -200.f, 200.f, "%.0f ms");
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::BeginTooltip();
+                        ImGui::TextUnformatted("Nudge audio against video to dial out fixed\n"
+                                               "camera latency. + delays the audio. Only needed\n"
+                                               "if the lips drift on playback.");
+                        ImGui::EndTooltip();
+                    }
+                }
+            }
         }
 
         // ── Layout ───────────────────────────────────────────────────────────

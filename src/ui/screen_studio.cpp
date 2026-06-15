@@ -725,7 +725,9 @@ void ui_studio(AppState& state) {
                         d.fx_hash = audio_fx_segments_hash(d.fx_segs);
                     }
                 }
-                if (cl.clip_type == ClipType::Video) {
+                if (clip_is_videolike_type(cl.clip_type) && !is_image_path(cl.text)) {
+                    // Video clips and camera A/V takes (.mkv with mic audio) play
+                    // their audio in the live mix; photo (.jpg) takes are silent.
                     vdescs.push_back(d);
                     audio_source_ensure(cl.text);
                 } else if (cl.clip_type == ClipType::Audio) {
