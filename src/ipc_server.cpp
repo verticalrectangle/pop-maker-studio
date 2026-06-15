@@ -323,6 +323,7 @@ static json clip_to_json_slim(int idx, const Clip& c) {
         c.clip_type == ClipType::VideoRecord) {
         j["takes"]         = c.rec_takes;
         j["selected_take"] = c.rec_take_sel;
+        if (c.clip_type == ClipType::VideoRecord) j["photo_mode"] = c.rec_photo;
     }
     if (c.fx_coupled) j["coupled"] = true;
     if (c.clip_type == ClipType::Effect && fx_type_is_audio_fx(c.fx_type)) {
@@ -424,6 +425,7 @@ static json clip_to_json(int idx, const Clip& c) {
         c.clip_type == ClipType::VideoRecord) {
         j["takes"]         = c.rec_takes;
         j["selected_take"] = c.rec_take_sel;
+        if (c.clip_type == ClipType::VideoRecord) j["photo_mode"] = c.rec_photo;
     }
     if (c.fx_coupled) j["coupled"] = true;
     return j;
@@ -1527,6 +1529,20 @@ static json dispatch(AppState& state, const std::string& method, const json& par
     if (method == "vrecord_stop") {
         vrecorder_stop(state);
         json r; r["takes"] = vrecorder_take_count();
+        return r;
+    }
+    if (method == "capture_photo") {
+        int ti = params.value("track", -1);
+        int ci = params.value("clip", -1);
+        bool ok = vrecorder_capture_photo(state, ti, ci);
+        json r;
+        r["captured"]     = ok;
+        r["warming"]      = !ok && vrecorder_error().empty() == false;
+        r["test_pattern"] = vrecorder_using_test_pattern();
+        if (ok && ti >= 0 && ti < (int)state.tracks.size() &&
+            ci >= 0 && ci < (int)state.tracks[ti].clips.size())
+            r["take"] = state.tracks[ti].clips[ci].text;
+        if (!ok && !vrecorder_error().empty()) r["message"] = vrecorder_error();
         return r;
     }
 

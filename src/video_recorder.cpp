@@ -444,6 +444,43 @@ void vrecorder_monitor_set(bool on) {
 }
 bool vrecorder_monitor_get() { return s_monitor_want; }
 
+bool vrecorder_capture_photo(AppState& state, int ti, int ci) {
+    if (ti < 0 || ti >= (int)state.tracks.size()) return false;
+    auto& clips = state.tracks[ti].clips;
+    if (ci < 0 || ci >= (int)clips.size()) return false;
+    Clip& cl = clips[(size_t)ci];
+
+    // No live frame yet → make sure the camera is previewing and bail; the next
+    // click captures once a frame has arrived (mirrors a camera app: aim, snap).
+    if (s_last_jpeg.empty()) {
+        vrecorder_monitor_set(true);
+        s_error = "warming camera \xe2\x80\x94 click capture again once the preview is live";
+        return false;
+    }
+
+    auto now = std::chrono::system_clock::now().time_since_epoch();
+    long ms  = std::chrono::duration_cast<std::chrono::milliseconds>(now).count();
+    char buf[176];
+    snprintf(buf, sizeof(buf), "%s/photo_%ld_%02d.jpg",
+             takes_dir().c_str(), ms, (int)cl.rec_takes.size() + 1);
+    std::string path = buf;
+
+    FILE* f = fopen(path.c_str(), "wb");
+    if (!f) { s_error = "could not write photo file"; return false; }
+    fwrite(s_last_jpeg.data(), 1, s_last_jpeg.size(), f);
+    fclose(f);
+
+    cl.rec_takes.push_back(path);
+    cl.rec_take_sel = (int)cl.rec_takes.size() - 1;
+    cl.text         = path;     // selected still → renders via the image path
+    cl.source_id    = path;
+    cl.src_fps      = -1.f;     // mark as a still (never frame-rate conform)
+    state.proxy_scan_needed = true;
+    s_error.clear();
+    history_push(state, "Capture photo");
+    return true;
+}
+
 bool vrecorder_start(AppState& state, int ti, int ci) {
     if (vrecorder_active()) return false;
     s_error.clear();

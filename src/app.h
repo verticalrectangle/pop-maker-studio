@@ -342,6 +342,12 @@ struct Clip {
     // audio clip with in_point 0 / speed 1; the rest wait in the panel tray.
     std::vector<std::string> rec_takes;
     int                      rec_take_sel = -1;
+
+    // Capture IMG brick: a VideoRecord brick in photo mode — each take is a
+    // single still JPEG (rec_takes hold .jpg paths) grabbed from the webcam
+    // instead of a loop-recorded video. The selected still mirrors into `text`
+    // and renders through the normal image-still path. Same camera panel.
+    bool rec_photo = false;
 };
 
 // Split `cl` at absolute timeline time `cut` and return the right half.

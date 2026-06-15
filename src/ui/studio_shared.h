@@ -81,6 +81,7 @@ bool kf_slider(AppState& state, Clip& clip, int sel_ti, int sel_ci, float w,
 // timeline context menu.
 void add_record_brick(AppState& state);
 void add_video_record_brick(AppState& state);
+void add_photo_capture_brick(AppState& state);
 void add_bus_brick(AppState& state);
 
 // ── Retime ────────────────────────────────────────────────────────────────────

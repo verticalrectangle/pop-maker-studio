@@ -1326,6 +1326,28 @@ void ui_studio(AppState& state) {
                 }
                 BY += BTN_H + 6.f;
             }
+            // Capture IMG brick — a camera brick in photo mode: snaps a single
+            // still from the webcam (same camera panel as Video Rec). Sits right
+            // below the Video Rec pill.
+            {
+                ImVec2 bmin = { BX, BY }, bmax = { BX + BTN_W, BY + BTN_H };
+                bool hov = ImGui::IsMouseHoveringRect(bmin, bmax);
+                tdl->AddRectFilled(bmin, bmax,
+                                   hov ? IM_COL32(22, 40, 60, 255) : IM_COL32(14, 26, 38, 255), 4.f);
+                if (hov) tdl->AddRect(bmin, bmax, IM_COL32(70, 150, 235, 200), 4.f, 0, 1.2f);
+                const char* lbl = "\xe2\x97\x8f Capture IMG";
+                ImVec2 tsz = ImGui::CalcTextSize(lbl);
+                tdl->AddText({BX + (BTN_W - tsz.x) * 0.5f, BY + (BTN_H - tsz.y) * 0.5f},
+                             IM_COL32(140, 195, 245, 220), lbl);
+                ImGui::SetCursorScreenPos(bmin);
+                ImGui::InvisibleButton("##tb_capimg", { BTN_W, BTN_H });
+                if (ImGui::IsItemClicked()) {
+                    add_photo_capture_brick(state);
+                    s_panel_view = PanelView::Clip;
+                    s_user_nav   = false;
+                }
+                BY += BTN_H + 6.f;
+            }
             // Audio Bus brick — drops on a new top track and submixes the
             // tracks below it (gain + FX on the grouped audio).
             {

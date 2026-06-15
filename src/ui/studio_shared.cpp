@@ -970,6 +970,27 @@ void add_video_record_brick(AppState& state) {
     history_push(state, "Add Record Brick");
 }
 
+void add_photo_capture_brick(AppState& state) {
+    float qfps = tl_fps(state);
+    if (!(qfps > 0.f)) qfps = 30.f;
+    Clip cl;
+    cl.clip_type = ClipType::VideoRecord;   // camera brick, in photo mode
+    cl.rec_photo = true;
+    cl.start     = snap_to_frame(state.playhead, (int)qfps);
+    cl.end       = snap_end_to_frame(cl.start + 4.f, (int)qfps);
+    Track t;
+    char n[32];
+    snprintf(n, sizeof(n), "Photo %d", (int)state.tracks.size() + 1);
+    t.name = n;
+    float clip_end = cl.end;
+    t.clips.push_back(std::move(cl));
+    state.tracks.insert(state.tracks.begin(), std::move(t));
+    state.selected_track = 0;
+    state.selected_clip  = 0;
+    state.tl_zoom_to_fit_end = fmaxf(state.tl_zoom_to_fit_end, clip_end);
+    history_push(state, "Add Capture IMG Brick");
+}
+
 void add_bus_brick(AppState& state) {
     float qfps = tl_fps(state);
     if (!(qfps > 0.f)) qfps = 30.f;

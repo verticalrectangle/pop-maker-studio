@@ -33,6 +33,12 @@ std::string vrecorder_error();                   // last failure, cleared on nex
 void vrecorder_monitor_set(bool on);
 bool vrecorder_monitor_get();
 
+// Capture IMG: grab the current live frame as a single still and add it to the
+// brick at (ti,ci) as a .jpg take. Returns true if a photo was written; returns
+// false (and starts the monitor) when no live frame is available yet — the next
+// call captures once the preview has warmed up.
+bool vrecorder_capture_photo(AppState& state, int ti, int ci);
+
 // Capture devices (V4L2 video-capture nodes + their card names).
 struct VCamDevice { std::string path, name; };
 std::vector<VCamDevice> vrecorder_devices();

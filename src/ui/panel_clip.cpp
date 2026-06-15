@@ -2332,14 +2332,37 @@ void panel_clip(AppState& state, float w) {
 
         ImGui::Dummy({0.f, 4.f});
         ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
-        ImGui::TextWrapped("Loops %s \xe2\x80\x93 %s while recording. Every pass "
-                           "over the loop lands a video take below; the newest "
-                           "take plays back on the brick.",
-                           fmt_time(clip.start).c_str(), fmt_time(clip.end).c_str());
+        if (clip.rec_photo)
+            ImGui::TextWrapped("Snap a still from the webcam. Turn on the camera "
+                               "preview below, frame the shot, then Capture \xe2\x80\x94 "
+                               "each photo lands as a take and the selected one "
+                               "shows on the brick.");
+        else
+            ImGui::TextWrapped("Loops %s \xe2\x80\x93 %s while recording. Every pass "
+                               "over the loop lands a video take below; the newest "
+                               "take plays back on the brick.",
+                               fmt_time(clip.start).c_str(), fmt_time(clip.end).c_str());
         ImGui::PopStyleColor();
         ImGui::Dummy({0.f, 6.f});
 
-        if (rec_here) {
+        if (clip.rec_photo) {
+            // Photo mode: one button snaps the current live frame as a still.
+            ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.18f, 0.42f, 0.72f, 1.f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.24f, 0.52f, 0.85f, 1.f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive,  ImVec4(0.16f, 0.36f, 0.64f, 1.f));
+            const char* cap_lbl = vrecorder_monitor_get()
+                ? "\xe2\x97\x8f Capture Photo"
+                : "\xe2\x97\x8f Capture Photo  (turns on camera)";
+            if (ImGui::Button(cap_lbl, {bar_w, 34.f}))
+                vrecorder_capture_photo(state, state.selected_track, state.selected_clip);
+            ImGui::PopStyleColor(3);
+            if (vrecorder_using_test_pattern()) {
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.75f, 0.3f, 1.f));
+                ImGui::TextWrapped("No camera found \xe2\x80\x94 capturing the test pattern.");
+                ImGui::PopStyleColor();
+            }
+            ImGui::Dummy({0.f, 6.f});
+        } else if (rec_here) {
             float t = (float)ImGui::GetTime();
             float pulse = 0.65f + 0.35f * sinf(t * 6.f);
             ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.85f*pulse, 0.30f, 0.08f, 1.f));
