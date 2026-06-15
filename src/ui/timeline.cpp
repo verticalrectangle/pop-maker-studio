@@ -2073,13 +2073,15 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                     float mid = (cy0 + cy1) * 0.5f;
                     dl->AddCircleFilled({vis_x0 + 10.f, mid}, 3.5f,
                         rec_live ? IM_COL32(255,160,80,255) : IM_COL32(235,90,40,220));
+                    // Photo-mode camera brick badges as IMG; video as CAM.
+                    const char* cam_tag = clip.rec_photo ? "IMG" : "CAM";
                     char lbl[48];
                     if (rec_live)
                         snprintf(lbl, sizeof(lbl), "REC \xc2\xb7 %d", vrecorder_take_count());
                     else if (has_take)
-                        snprintf(lbl, sizeof(lbl), "CAM \xc2\xb7 take %d", clip.rec_take_sel + 1);
+                        snprintf(lbl, sizeof(lbl), "%s \xc2\xb7 take %d", cam_tag, clip.rec_take_sel + 1);
                     else
-                        snprintf(lbl, sizeof(lbl), "CAM");
+                        snprintf(lbl, sizeof(lbl), "%s", cam_tag);
                     ImU32 tc = sel ? IM_COL32(30,22,18,255) : IM_COL32(235,210,195,230);
                     dl->AddText({vis_x0 + 20.f, mid - 7.f}, tc, lbl);
 

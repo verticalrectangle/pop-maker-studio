@@ -909,6 +909,9 @@ ImU32 clip_badge_color(const Clip& c) {
 const char* clip_display_name(const Clip& c) {
     if (c.clip_type == ClipType::Effect)  return fx_type_name(c.fx_type);
     if (c.clip_type == ClipType::MultiFX) return "MULTI";
+    // Capture IMG brick is a camera brick in photo mode — badge it as IMG so it
+    // reads distinctly from the Video Record "CAM" brick.
+    if (c.clip_type == ClipType::VideoRecord && c.rec_photo) return "IMG";
     return clip_type_name(c.clip_type);
 }
 
