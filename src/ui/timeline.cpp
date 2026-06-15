@@ -2350,22 +2350,24 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                 s_tl_geom.clips.push_back(g);
             }
 
-            // FX disclosure triangle — only on a content clip that owns coupled
-            // FX. Toggles the per-FX timing lanes drawn beneath the clip (the
-            // track grows). Click is swallowed so it doesn't also drag the clip.
+            // FX disclosure — a plain white chevron at the clip's bottom-left
+            // that toggles the per-FX timing lanes beneath the clip (the track
+            // grows). Right chevron = "click to open", down chevron = "open".
+            // Click is swallowed so it doesn't also drag the clip.
             if (!is_fx_clip(clip) && host_fx_count(ti, ci) > 0) {
-                const float ts = 9.f;
-                ImVec2 tp = { vis_x0 + 5.f, cy1 - ts - 1.f };
-                bool thov = mouse.x >= tp.x - 3.f && mouse.x <= tp.x + ts + 3.f &&
-                            mouse.y >= tp.y - 3.f && mouse.y <= tp.y + ts + 3.f;
-                ImU32 tcol = thov ? IM_COL32(190, 235, 255, 255)
-                                  : IM_COL32(150, 205, 240, 220);
-                if (clip.fx_expanded)
-                    dl->AddTriangleFilled({tp.x, tp.y}, {tp.x + ts, tp.y},
-                                          {tp.x + ts*0.5f, tp.y + ts}, tcol);
-                else
-                    dl->AddTriangleFilled({tp.x, tp.y}, {tp.x, tp.y + ts},
-                                          {tp.x + ts, tp.y + ts*0.5f}, tcol);
+                float cx = vis_x0 + 9.f, cy = cy1 - 6.f;
+                bool thov = mouse.x >= cx - 7.f && mouse.x <= cx + 7.f &&
+                            mouse.y >= cy - 7.f && mouse.y <= cy + 7.f;
+                ImU32 tcol = thov ? IM_COL32(255, 255, 255, 255)
+                                  : IM_COL32(235, 240, 248, 230);
+                if (clip.fx_expanded) {
+                    dl->AddLine({cx - 4.f, cy - 2.f}, {cx, cy + 3.f}, tcol, 2.f);
+                    dl->AddLine({cx, cy + 3.f}, {cx + 4.f, cy - 2.f}, tcol, 2.f);
+                } else {
+                    dl->AddLine({cx - 2.f, cy - 4.f}, {cx + 3.f, cy}, tcol, 2.f);
+                    dl->AddLine({cx + 3.f, cy}, {cx - 2.f, cy + 4.f}, tcol, 2.f);
+                }
+                if (thov) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
                 if (thov && !tl_any_popup && !track.locked &&
                     ImGui::IsMouseClicked(0)) {
                     clip.fx_expanded = !clip.fx_expanded;
@@ -2852,6 +2854,37 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
             if (fxk.empty()) continue;
             float lane_top = track_y + TL_TRACK_H + 3.f;
             int row = 0;
+
+            // Collapse handle — a plain white chevron in the label gutter, lined
+            // up with the lane stack, so there's an obvious spot to fold the lanes
+            // back from where the lanes actually are. (The clip-body disclosure
+            // chevron opens them but ends up under the glass brick once expanded,
+            // so the collapse control lives with the lanes instead.) Down-chevron
+            // = "click to fold"; no filled block, just the glyph.
+            {
+                int   n_lanes = host_fx_count(ti, ci);
+                float stack_h = (float)n_lanes * FX_LANE_H;
+                float cxm = origin.x + TL_LABEL_W - 11.f;
+                float gy0 = lane_top, gy1 = lane_top + stack_h - 3.f;
+                float cym = (gy0 + gy1) * 0.5f;
+                if (gy1 > gy0 + 5.f && gy1 <= track_area_bot && gy0 >= track_area_top) {
+                    bool ghov = !tl_any_popup &&
+                                mouse.x >= cxm - 8.f && mouse.x <= cxm + 8.f &&
+                                mouse.y >= gy0 && mouse.y <= gy1;
+                    float w = 5.f, h = 3.f;
+                    ImU32 chc = ghov ? IM_COL32(255, 255, 255, 255)
+                                     : IM_COL32(220, 226, 235, 220);
+                    // down chevron (collapse)
+                    dl->AddLine({cxm - w, cym - h}, {cxm, cym + h}, chc, 2.f);
+                    dl->AddLine({cxm, cym + h}, {cxm + w, cym - h}, chc, 2.f);
+                    if (ghov) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+                    if (ghov && !track.locked && ImGui::IsMouseClicked(0)) {
+                        host.fx_expanded = false;
+                        s_clip_hit = true;
+                        continue;   // host folded — skip drawing its lanes this frame
+                    }
+                }
+            }
             // k = brick clip index, ei = entry index in the brick's chain (-1 for
             // a single brick). The edges resize the effect's rel window; clicking
             // selects the effect so its keyframable sliders open in the panel.
