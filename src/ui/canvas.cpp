@@ -1339,9 +1339,6 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
     // match export (WYSIWYG) and keeps the argument bounded.
     float t_anim    = state.playhead;
 
-    // Collect global creative FX (for full-frame effects — LightLeak, grade, etc.)
-    CreativeFXAccum global_cfx = collect_creative_fx(state, state.playhead, (int)state.tracks.size());
-
     // ── Pass 1: BG clips (ImGui draw list) + Video clips (→ scene FBO) ────────
     scene_begin((int)w, (int)h);
 
@@ -1792,6 +1789,17 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
         // video), so text is occluded by video on more-foreground tracks instead
         // of always drawing on top.
         scene_add_text_layer(state, state.playhead, ti, (int)w, (int)h);
+
+        // Standalone (uncoupled) FX/MultiFX bricks on this track act as a video
+        // group-bus: they process the composite of the tracks BELOW them (already
+        // accumulated, since we composite bottom-to-top), gated by their span.
+        {
+            EffectAccum     ea  = collect_effects_for_track(state, state.playhead, ti);
+            CreativeFXAccum cfx = collect_creative_fx_for_track(state, state.playhead, ti);
+            if (ea.any_color || ea.any_blur || ea.any_vignette || ea.any_text ||
+                cfx.any_cfx || cfx.any_gen_fx)
+                scene_apply_fx((int)w, (int)h, ea, cfx, t_anim);
+        }
     }  // end Pass 1 track loop
 
     // ── Live camera preview ──────────────────────────────────────────────────
@@ -1842,11 +1850,8 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
         }
     }
 
-    // ── Apply global FX to composited scene ──────────────────────────────────
-    {
-        EffectAccum global_ea = collect_effects(state, state.playhead, (int)state.tracks.size());
-        scene_apply_fx((int)w, (int)h, global_ea, global_cfx, t_anim);
-    }
+    // (Scene FX are now applied per-track inside Pass 1 — each standalone FX
+    // brick processes the tracks below it, not the whole frame.)
 
     if (uintptr_t scene_tex = scene_result()) {
         // ── Draw scene FBO to ImGui draw list ─────────────────────────────────

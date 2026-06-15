@@ -1819,6 +1819,32 @@ void render_snapshot_gl(AppState& state, float snap_t, bool open_folder) {
     dl.PushClipRect({0.f, 0.f}, {W, H});
     dl.PushTexture(ImGui::GetIO().Fonts->TexRef);
 
+    // Per-track scene FX: standalone FX bricks process the tracks below them.
+    // Flush the accumulated draw list into the FBO, then run the brick's FX on
+    // it in place, then keep building (tracks above composite over the result).
+    auto flush_dl = [&]() {
+        dl.PopTexture(); dl.PopClipRect();
+        ImDrawData fdd; fdd.DisplayPos = {0,0}; fdd.DisplaySize = {W,H};
+        fdd.FramebufferScale = {1,1}; fdd.Textures = &ImGui::GetIO().Fonts->TexList;
+        fdd.AddDrawList(&dl);
+        ImGui_ImplOpenGL3_RenderDrawData(&fdd);
+        dl._ResetForNewFrame();
+        dl.PushClipRect({0.f, 0.f}, {W, H});
+        dl.PushTexture(ImGui::GetIO().Fonts->TexRef);
+    };
+    auto apply_track_fx = [&](int ti) {
+        EffectAccum     ea  = collect_effects_for_track(state, t, ti);
+        CreativeFXAccum cfx = collect_creative_fx_for_track(state, t, ti);
+        if (!(ea.any_color || ea.any_blur || ea.any_vignette || ea.any_text ||
+              cfx.any_cfx || cfx.any_gen_fx)) return;
+        flush_dl();                                   // below-tracks → FBO
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);         // detach so col_tex is readable
+        uintptr_t out = fx_apply((uintptr_t)col_tex, kSceneFxSlot, out_w, out_h, ea, cfx, t);
+        glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+        glViewport(0, 0, out_w, out_h);
+        if (out != (uintptr_t)col_tex) fx_blit(out, fbo, out_w, out_h);
+    };
+
     // Reuse the same video-clip rendering path as render_tick_gl.
     // Per-slot decoders self-track their open file, so no path-cache bookkeeping needed.
     for (int ti = (int)state.tracks.size() - 1; ti >= 0; --ti) {
@@ -1879,8 +1905,9 @@ void render_snapshot_gl(AppState& state, float snap_t, bool open_folder) {
                     { active = &track.clips[ci]; active_ci = ci; break; }
             }
         }
-        if (!active) {  // text-only track (no active video) — still draw its text
+        if (!active) {  // text-only / FX-only track — still draw text + run its FX
             draw_text_overlays(&dl, state, t, {0.f, 0.f}, W, H, ti);
+            apply_track_fx(ti);
             continue;
         }
 
@@ -1940,6 +1967,7 @@ void render_snapshot_gl(AppState& state, float snap_t, bool open_folder) {
         // This track's text, drawn right after its video so it layers at the
         // track's z-order (foreground tracks composite on top of it next).
         draw_text_overlays(&dl, state, t, {0.f, 0.f}, W, H, ti);
+        apply_track_fx(ti);   // standalone FX bricks process the tracks below
     }
     video_close_export_all();
 
@@ -1956,24 +1984,8 @@ void render_snapshot_gl(AppState& state, float snap_t, bool open_folder) {
     dd.AddDrawList(&dl);
     ImGui_ImplOpenGL3_RenderDrawData(&dd);
 
-    // ── Global FX pass ────────────────────────────────────────────────────────
-    // Mirror render_tick_gl's Phase 3 so source='render' shows what the export
-    // contains. Without this the snapshot drops every global (uncoupled) brick —
-    // grades, vignettes, scene glitches — and reads as a false WYSIWYG failure.
-    {
-        EffectAccum     global_ea  = collect_effects    (state, t, (int)state.tracks.size());
-        CreativeFXAccum global_cfx = collect_creative_fx(state, t, (int)state.tracks.size());
-        if (global_ea.any_color || global_ea.any_blur || global_ea.any_vignette ||
-            global_ea.any_text  || global_cfx.any_cfx || global_cfx.any_gen_fx) {
-            glBindFramebuffer(GL_FRAMEBUFFER, 0);  // detach so col_tex is readable
-            uintptr_t out = fx_apply((uintptr_t)col_tex, kSceneFxSlot, out_w, out_h,
-                                     global_ea, global_cfx, t);
-            glBindFramebuffer(GL_FRAMEBUFFER, fbo);
-            glViewport(0, 0, out_w, out_h);
-            if (out != (uintptr_t)col_tex)
-                fx_blit(out, fbo, out_w, out_h);
-        }
-    }
+    // (Scene FX are applied per-track during the loop above — each standalone FX
+    // brick processes the tracks below it — so there's no whole-frame FX pass.)
 
     // ── Read back + vertical flip ─────────────────────────────────────────────
     std::vector<uint8_t> raw((size_t)out_w * out_h * 4);
@@ -3045,6 +3057,39 @@ void render_tick_gl(AppState& state) {
     dl.PushClipRect({0.f, 0.f}, {W, H});
     dl.PushTexture(ImGui::GetIO().Fonts->TexRef);
 
+    // Bind + clear the export FBO up front so standalone FX bricks can flush the
+    // tracks-below into it and run their FX mid-loop (group-bus scoping).
+    glBindFramebuffer(GL_FRAMEBUFFER, g_gl_ex.fbo);
+    glViewport(0, 0, g_gl_ex.out_w, g_gl_ex.out_h);
+    glClearColor(0.f, 0.f, 0.f, 1.f);
+    glClear(GL_COLOR_BUFFER_BIT);
+    auto flush_dl = [&]() {
+        dl.PopTexture(); dl.PopClipRect();
+        ImDrawData fdd; fdd.DisplayPos = {0,0}; fdd.DisplaySize = {W,H};
+        fdd.FramebufferScale = {1,1}; fdd.Textures = &ImGui::GetIO().Fonts->TexList;
+        fdd.AddDrawList(&dl);
+        glBindFramebuffer(GL_FRAMEBUFFER, g_gl_ex.fbo);  // per-clip FX may have rebound
+        glViewport(0, 0, g_gl_ex.out_w, g_gl_ex.out_h);
+        ImGui_ImplOpenGL3_RenderDrawData(&fdd);
+        dl._ResetForNewFrame();
+        dl.PushClipRect({0.f, 0.f}, {W, H});
+        dl.PushTexture(ImGui::GetIO().Fonts->TexRef);
+    };
+    auto apply_track_fx = [&](int ti) {
+        EffectAccum     ea  = collect_effects_for_track(state, t, ti);
+        CreativeFXAccum cfx = collect_creative_fx_for_track(state, t, ti);
+        if (!(ea.any_color || ea.any_blur || ea.any_vignette || ea.any_text ||
+              cfx.any_cfx || cfx.any_gen_fx)) return;
+        flush_dl();                                   // below-tracks → FBO
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);         // detach so color_tex is readable
+        uintptr_t out = fx_apply((uintptr_t)g_gl_ex.color_tex, kSceneFxSlot,
+                                 g_gl_ex.out_w, g_gl_ex.out_h, ea, cfx, t);
+        glBindFramebuffer(GL_FRAMEBUFFER, g_gl_ex.fbo);
+        glViewport(0, 0, g_gl_ex.out_w, g_gl_ex.out_h);
+        if (out != (uintptr_t)g_gl_ex.color_tex)
+            fx_blit(out, g_gl_ex.fbo, g_gl_ex.out_w, g_gl_ex.out_h);
+    };
+
     for (int ti = (int)state.tracks.size() - 1; ti >= 0; --ti) {
         const auto& track = state.tracks[ti];
         if (!track.visible) continue;
@@ -3112,8 +3157,9 @@ void render_tick_gl(AppState& state) {
                     { active = &track.clips[ci]; active_ci = ci; break; }
             }
         }
-        if (!active) {  // text-only track (no active video) — still draw its text
+        if (!active) {  // text-only / FX-only track — still draw text + run its FX
             draw_text_overlays(&dl, state, t, {0.f, 0.f}, W, H, ti);
+            apply_track_fx(ti);   // standalone FX bricks process the tracks below
             continue;
         }
 
@@ -3181,18 +3227,20 @@ void render_tick_gl(AppState& state) {
         }
         // This track's text at its z-order (foreground tracks composite over it).
         draw_text_overlays(&dl, state, t, {0.f, 0.f}, W, H, ti);
+        apply_track_fx(ti);   // standalone FX bricks process the tracks below
     }
 
     g_perf.compose_us += us_since(compose_t0);
     rlog("  vid_clips_done\n");
 
-    // ── Phase 2: Render video clips to export FBO ─────────────────────────────
-    // Bind and clear the export FBO, then render the ImDrawList into it.
+    // ── Phase 2: Render remaining video clips to export FBO ───────────────────
+    // The FBO was bound + cleared up front (before the loop); standalone FX
+    // bricks flushed the tracks below them into it mid-loop. Here we render any
+    // dl content accumulated after the last flush — it blends over the FBO at
+    // the correct z-order. No clear: that would erase the per-track FX results.
     auto render_t0 = perf_clock::now();
-    glBindFramebuffer(GL_FRAMEBUFFER, g_gl_ex.fbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, g_gl_ex.fbo);  // per-track FX may have rebound
     glViewport(0, 0, g_gl_ex.out_w, g_gl_ex.out_h);
-    glClearColor(0.f, 0.f, 0.f, 1.f);
-    glClear(GL_COLOR_BUFFER_BIT);
     {
         dl.PopTexture();
         dl.PopClipRect();
@@ -3207,29 +3255,8 @@ void render_tick_gl(AppState& state) {
     g_perf.render_us += us_since(render_t0);
     rlog("  vid_render_done\n");
 
-    // ── Phase 3: Global FX ────────────────────────────────────────────────────
-    // MUST run after RenderDrawData so per-clip fx slot textures are no longer
-    // referenced by a live draw list.  Unbind the export FBO before calling
-    // fx_apply so g_gl_ex.color_tex (the FBO's colour attachment) can be safely
-    // sampled without an undefined read-while-attached feedback loop.
-    auto fx_t0 = perf_clock::now();
-    {
-        EffectAccum     global_ea  = collect_effects    (state, t, (int)state.tracks.size());
-        CreativeFXAccum global_cfx = collect_creative_fx(state, t, (int)state.tracks.size());
-        if (global_ea.any_color || global_ea.any_blur || global_ea.any_vignette ||
-            global_ea.any_text  || global_cfx.any_cfx || global_cfx.any_gen_fx) {
-            glBindFramebuffer(GL_FRAMEBUFFER, 0);  // detach so color_tex is readable
-            uintptr_t out = fx_apply((uintptr_t)g_gl_ex.color_tex, kSceneFxSlot,
-                                     g_gl_ex.out_w, g_gl_ex.out_h,
-                                     global_ea, global_cfx, t);
-            glBindFramebuffer(GL_FRAMEBUFFER, g_gl_ex.fbo);
-            glViewport(0, 0, g_gl_ex.out_w, g_gl_ex.out_h);
-            if (out != (uintptr_t)g_gl_ex.color_tex)
-                fx_blit(out, g_gl_ex.fbo, g_gl_ex.out_w, g_gl_ex.out_h);
-        }
-    }
-    g_perf.fx_us += us_since(fx_t0);
-    rlog("  fx_done\n");
+    // (Scene FX are applied per-track during the loop above — each standalone FX
+    // brick processes the tracks below it — so there's no whole-frame FX pass.)
 
     // (Text overlays are now drawn per-track inside Phase 1's video loop so they
     // composite at each track's z-order instead of always on top. The old
