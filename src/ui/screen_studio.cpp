@@ -57,6 +57,12 @@ extern ImFont* g_font_black;
 
 // s_panel_view — declared extern in studio_shared.h for helpers that switch it
 PanelView s_panel_view = PanelView::Project;
+
+// One-shot panel-view request (see request_panel_view in studio_shared.h). The
+// panel router checks this before deriving a view from the selection so a lane
+// click can land directly on the FX tab. -1 sentinel = no request pending.
+static int s_panel_request = -1;
+void request_panel_view(PanelView v) { s_panel_request = (int)v; }
 // "Hear effects" sync: keep the live monitor chain matched to the record
 // brick's audio FX (the recording target, else the selected Record brick,
 // else the first one). Rebuilds only when the effective chain changes.
@@ -1858,7 +1864,20 @@ void ui_studio(AppState& state) {
         {
             static int s_last_sel_track = -1, s_last_sel_clip = -1;
             int st = state.selected_track, sc = state.selected_clip;
-            if (st != s_last_sel_track || sc != s_last_sel_clip) {
+            if (s_panel_request >= 0) {
+                // A timeline lane click already moved the selection to the host
+                // clip and asked for a specific view. Honour it and absorb the
+                // selection change so the derive branch below doesn't clobber it.
+                // The request is NOT cleared here — it's re-applied once more
+                // AFTER the tab bar (see post-tab-bar force) because ImGui only
+                // resolves the target tab's SetSelected after the earlier Clip /
+                // Typography tab bodies have already re-asserted their own view.
+                PanelView prev = s_panel_view;
+                s_panel_view = (PanelView)s_panel_request;
+                s_user_nav = false;
+                if (s_panel_view != prev) s_switch_tab = true;
+                s_last_sel_track = st; s_last_sel_clip = sc;
+            } else if (st != s_last_sel_track || sc != s_last_sel_clip) {
                 PanelView prev = s_panel_view;
                 if (st >= 0 && sc >= 0) {
                     PanelView derived = pv_derive(state);
@@ -1887,8 +1906,14 @@ void ui_studio(AppState& state) {
             // change tabs — never every frame, to avoid fighting user clicks.
             bool do_switch = s_switch_tab;
             s_switch_tab = false;
+            // Snapshot the view we want active BEFORE rendering any tab item.
+            // Each tab body sets s_panel_view live when its tab is open, so a tab
+            // rendered earlier in the list (Clip) would clobber s_panel_view before
+            // a later tab's (FX) tf() is evaluated — and SetSelected would never
+            // reach the target. Comparing against this stable copy fixes that.
+            PanelView want_view = s_panel_view;
             auto tf = [&](PanelView target) -> ImGuiTabItemFlags {
-                return (do_switch && s_panel_view == target) ? ImGuiTabItemFlags_SetSelected : 0;
+                return (do_switch && want_view == target) ? ImGuiTabItemFlags_SetSelected : 0;
             };
 
             // FX tabs appear only while the selected content has coupled
@@ -1941,9 +1966,25 @@ void ui_studio(AppState& state) {
             s_host_fx_ci  = host_fx_ci;
             s_host_afx_ci = host_afx_ci;
 
+            // Post-tab-bar force: a pending lane-click request wins over whatever
+            // the tab bodies just set s_panel_view to. SetSelected (s_switch_tab)
+            // moves the visible tab for next frame; this guarantees the CONTENT
+            // below matches the requested FX view from the very first frame.
+            if (s_panel_request >= 0) {
+                PanelView want = (PanelView)s_panel_request;
+                bool ok = (want == PanelView::HostFX      && host_fx_ci  >= 0) ||
+                          (want == PanelView::HostAudioFX && host_afx_ci >= 0) ||
+                          (want != PanelView::HostFX && want != PanelView::HostAudioFX);
+                if (ok) s_panel_view = want;
+                s_panel_request = -1;
+            }
+
             ImGui::PopStyleColor(2);
             ImGui::PopStyleVar();
         }
+        // Drop a stale request if the tab bar wasn't shown this frame (no
+        // selection / library / override view) so it can't leak to a later frame.
+        s_panel_request = -1;
 
         // ── Panel content ─────────────────────────────────────────────────────
         ImGui::BeginChild("##panel_scroll", {0.f, 0.f});

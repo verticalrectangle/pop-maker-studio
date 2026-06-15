@@ -2772,15 +2772,22 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                         }
                         history_push(state, "Retime FX");
                     } else {
-                        // Plain click selects the FX entry itself, so its
-                        // keyframable sliders open in the panel (lane-view editing).
-                        state.selected_track = ti;
-                        state.selected_clip  = g_tl.fx_lane_ci;
-                        state.clip_selection.clear();
-                        state.clip_selection.insert({ti, g_tl.fx_lane_ci});
+                        // Plain click (no drag): open this entry's keyframable
+                        // sliders. Coupled chains render through the host content
+                        // clip's FX tab, so select the HOST and request that view
+                        // with the clicked entry active — not the brick directly,
+                        // which surfaces an empty Multi-FX clip panel.
                         if (g_tl.fx_lane_idx >= 0 &&
                             g_tl.fx_lane_idx < (int)bclip.fx_chain.size())
                             bclip.fx_chain_selected = g_tl.fx_lane_idx;
+                        int host = fx_coupled_host(state, ti, bclip);
+                        int sel  = host >= 0 ? host : g_tl.fx_lane_ci;
+                        state.selected_track = ti;
+                        state.selected_clip  = sel;
+                        state.clip_selection.clear();
+                        state.clip_selection.insert({ti, sel});
+                        request_panel_view(fx_brick_is_audio_kind(bclip)
+                            ? PanelView::HostAudioFX : PanelView::HostFX);
                     }
                     g_tl.fx_lane_drag = 0;
                     g_tl.fx_lane_ti = g_tl.fx_lane_ci = g_tl.fx_lane_idx = -1;
@@ -2814,7 +2821,12 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                 float vx1 = fminf(ax1, origin.x + total_w);
                 if (vx1 < vx0 + 3.f) vx1 = vx0 + 3.f;
                 float ly0 = lane_top + row * FX_LANE_H, ly1 = ly0 + FX_LANE_H - 2.f;
-                bool selr = state.selected_track == ti && state.selected_clip == k &&
+                // The lane reads as "selected" whenever its entry is the brick's
+                // active chain entry and the panel is inspecting this lane group —
+                // which means either the host content clip (FX-tab path) or the
+                // brick itself is the current selection.
+                bool selr = state.selected_track == ti &&
+                            (state.selected_clip == ci || state.selected_clip == k) &&
                             brick.fx_chain_selected == ei;
                 if (ly1 <= track_area_bot && ly0 >= track_area_top) {
                     FxBrickColors c = fx_brick_colors(ft, selr);
@@ -2849,11 +2861,16 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                             g_tl.fx_lane_ref_x = mouse.x;
                             g_tl.fx_lane_ref_s = rs; g_tl.fx_lane_ref_e = re;
                             g_tl.fx_lane_moved = false;
-                            // Select this effect so the keyframe panel targets it.
-                            state.selected_track = ti; state.selected_clip = k;
+                            // Select the HOST content clip and open its FX tab with
+                            // this entry active, so the entry's keyframable sliders
+                            // appear (coupled chains render via the host's FX tab,
+                            // not by selecting the brick directly).
+                            state.selected_track = ti; state.selected_clip = ci;
                             state.clip_selection.clear();
-                            state.clip_selection.insert({ti, k});
+                            state.clip_selection.insert({ti, ci});
                             brick.fx_chain_selected = ei;
+                            request_panel_view(fx_brick_is_audio_kind(brick)
+                                ? PanelView::HostAudioFX : PanelView::HostFX);
                             s_clip_hit = true;
                         }
                     }

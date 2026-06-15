@@ -191,3 +191,11 @@ std::vector<Clip> group_words(const std::vector<Clip>& words, SubtitleMode mode,
 // Defined in screen_studio.cpp; some helpers (add_clip_to_track, panel_media,
 // generate_typography) need to switch the panel on selection changes.
 extern PanelView s_panel_view;
+
+// A timeline interaction (clicking an FX lane below an expanded clip) can ask the
+// props panel to open a specific view NEXT — overriding the default view that the
+// panel router would otherwise derive from the new selection. The lane click
+// selects the HOST content clip (so its FX tab can inspect the coupled brick) and
+// requests HostFX/HostAudioFX so the clicked entry's keyframable sliders open
+// straight away. Set by timeline.cpp, consumed once by the panel router.
+void request_panel_view(PanelView v);
