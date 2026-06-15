@@ -1978,8 +1978,12 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
             else
                 slot_y = p.y + h - sz_bot - block_h - text_rendered * slot_h;
 
-            // Clamp to safe zone so text never lands under platform UI chrome.
-            slot_y = fmaxf(p.y + sz_top, fminf(p.y + h - sz_bot - block_h, slot_y));
+            // Preset positions are penned into the safe zone so they never land
+            // under platform UI chrome. Custom (dragged) text — sub_pos == 3 —
+            // honours its exact position, past the margins and off-canvas, to
+            // match the canvas drag's [-1, 2] range.
+            if (show->sub_pos != 3)
+                slot_y = fmaxf(p.y + sz_top, fminf(p.y + h - sz_bot - block_h, slot_y));
 
             // Kinetic typography
             float local_t  = state.playhead - show->start;

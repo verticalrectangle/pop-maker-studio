@@ -134,8 +134,12 @@ void draw_text_overlays(ImDrawList* dl, const AppState& state, float t,
             slot_y = p.y + active->eval_prop("sub_pos_y", t) * h - block_h * 0.5f;
         else
             slot_y = p.y + h - sz_bot - block_h - text_rendered * slot_h;
-        // Clamp to safe zone so text never lands under platform UI chrome.
-        slot_y = fmaxf(p.y + sz_top, fminf(p.y + h - sz_bot - block_h, slot_y));
+        // Preset positions (Bottom/Center/Top) are penned into the safe zone so
+        // they never land under platform UI chrome. Custom (dragged) text — the
+        // canvas writes sub_pos == 3 — honours its exact position, including
+        // past the margins and off-canvas, matching the canvas drag's [-1, 2].
+        if (active->sub_pos != 3)
+            slot_y = fmaxf(p.y + sz_top, fminf(p.y + h - sz_bot - block_h, slot_y));
 
         float local_t  = t - active->start;
         float clip_dur = active->end - active->start;
