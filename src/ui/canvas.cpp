@@ -47,7 +47,7 @@ double s_scrub_until = 0.0;
 static constexpr float SOCIAL_TABS_T = 0.10f;  // top: For-You / search tabs
 static constexpr float SOCIAL_CAP_B  = 0.22f;  // bottom: caption + handle + music
 static constexpr float SOCIAL_RAIL_R = 0.12f;  // right: like / comment / share rail
-static constexpr float SOCIAL_SIDE_L = 0.04f;  // left gutter
+static constexpr float SOCIAL_SIDE_L = 0.08f;  // left gutter (caption/handle reach)
 
 // Active centre-snap target (canvas fractions). Normally the geometric centre;
 // with the social overlay on in 9:16 it shifts to the centre of the *visible*
@@ -544,6 +544,47 @@ void draw_canvas_handles(AppState& state, ImDrawList* dl, ImVec2 p, float w, flo
         s_ctx.dirty     = false;
     };
 
+    // Snap a dragged element's centre to alignment guides: the canvas borders,
+    // the canvas/social centre, and (with the social overlay on) the safe-box
+    // edges. ecx/ecy = element centre in screen px; hw/hh = its half-extents;
+    // tol = catch radius. Updates ecx/ecy in place and draws the active guides.
+    auto snap_move = [&](float& ecx, float& ecy, float hw, float hh, float tol) {
+        float tcx, tcy; canvas_center_target(state, tcx, tcy);
+        struct Guide { float line, off; };   // off = element ref point vs centre
+        Guide xc[6]; int nx = 0;
+        Guide yc[6]; int ny = 0;
+        xc[nx++] = { p.x,           -hw };    // canvas left border
+        xc[nx++] = { p.x + w,       +hw };    // canvas right border
+        xc[nx++] = { p.x + w * tcx,  0.f };   // centre (canvas / social)
+        yc[ny++] = { p.y,           -hh };    // canvas top border
+        yc[ny++] = { p.y + h,       +hh };    // canvas bottom border
+        yc[ny++] = { p.y + h * tcy,  0.f };   // centre
+        if (state.show_social_safe && state.format == OutputFormat::Vertical) {
+            xc[nx++] = { p.x + SOCIAL_SIDE_L * w,         -hw };
+            xc[nx++] = { p.x + (1.f - SOCIAL_RAIL_R) * w, +hw };
+            yc[ny++] = { p.y + SOCIAL_TABS_T * h,         -hh };
+            yc[ny++] = { p.y + (1.f - SOCIAL_CAP_B) * h,  +hh };
+        }
+        float bd = tol; int bi = -1;
+        for (int i = 0; i < nx; ++i) {
+            float d = fabsf((ecx + xc[i].off) - xc[i].line);
+            if (d < bd) { bd = d; bi = i; }
+        }
+        if (bi >= 0) {
+            ecx = xc[bi].line - xc[bi].off;
+            dl->AddLine({xc[bi].line, p.y}, {xc[bi].line, p.y + h}, snap_col);
+        }
+        bd = tol; bi = -1;
+        for (int i = 0; i < ny; ++i) {
+            float d = fabsf((ecy + yc[i].off) - yc[i].line);
+            if (d < bd) { bd = d; bi = i; }
+        }
+        if (bi >= 0) {
+            ecy = yc[bi].line - yc[bi].off;
+            dl->AddLine({p.x, yc[bi].line}, {p.x + w, yc[bi].line}, snap_col);
+        }
+    };
+
     // ── Rotation-aware transform handles (video + background share this) ──────
     // Box, corner/edge handles, and rotate knob all rotate with the clip;
     // hit-testing and scale drags work in the clip's LOCAL (un-rotated) space.
@@ -695,19 +736,12 @@ void draw_canvas_handles(AppState& state, ImDrawList* dl, ImVec2 p, float w, flo
                         dl->AddRect({p.x, p.y}, {p.x + w, p.y + h}, snap_col, 0.f, 0, 1.5f);
                 }
 
-                // Center snap for move — to the canvas centre, or the social
-                // safe-box centre (shifted up/left) when that overlay is on.
+                // Snap move to canvas borders, centre, and safe-box edges.
                 if (s_ctx.handle == CanvasHandle::Body) {
-                    float tcx, tcy; canvas_center_target(state, tcx, tcy);
-                    float scx = mc.pos_x * w + p.x, scy = mc.pos_y * h + p.y;
-                    if (fabsf(scx - (p.x+w*tcx)) < 6.f) {
-                        mc.pos_x = tcx;
-                        dl->AddLine({p.x+w*tcx, p.y}, {p.x+w*tcx, p.y+h}, snap_col);
-                    }
-                    if (fabsf(scy - (p.y+h*tcy)) < 6.f) {
-                        mc.pos_y = tcy;
-                        dl->AddLine({p.x, p.y+h*tcy}, {p.x+w, p.y+h*tcy}, snap_col);
-                    }
+                    float ecx = mc.pos_x * w + p.x, ecy = mc.pos_y * h + p.y;
+                    snap_move(ecx, ecy, lhw, lhh, 7.f);
+                    mc.pos_x = (ecx - p.x) / w;
+                    mc.pos_y = (ecy - p.y) / h;
                 }
             }
         }
@@ -898,18 +932,13 @@ void draw_canvas_handles(AppState& state, ImDrawList* dl, ImVec2 p, float w, flo
                 // by hand, and only the horizontal axis snapped. A wider radius +
                 // a vertical centre line make centring obvious while dragging.
                 if (s_ctx.handle == CanvasHandle::Body) {
-                    const float SNAP = 14.f;                       // catch radius, screen px
-                    float tcx, tcy; canvas_center_target(state, tcx, tcy);
-                    float cx3 = mc.sub_pos_x * w + p.x;            // text centre X
-                    if (fabsf(cx3 - (p.x + w*tcx)) < SNAP) {
-                        mc.sub_pos_x = tcx;
-                        dl->AddLine({p.x+w*tcx, p.y}, {p.x+w*tcx, p.y+h}, snap_col);
-                    }
-                    float cy3 = mc.sub_pos_y * h + p.y;            // text centre Y
-                    if (fabsf(cy3 - (p.y + h*tcy)) < SNAP) {
-                        mc.sub_pos_y = tcy;
-                        dl->AddLine({p.x, p.y+h*tcy}, {p.x+w, p.y+h*tcy}, snap_col);
-                    }
+                    // Text body drag is centre-anchored (sub_anchor_h forced to 1),
+                    // so sub_pos_* is the centre. Snap to borders / centre / safe box.
+                    float hw = (tl.x1 - tl.x0) * 0.5f, hh = (tl.y1 - tl.y0) * 0.5f;
+                    float ecx = mc.sub_pos_x * w + p.x, ecy = mc.sub_pos_y * h + p.y;
+                    snap_move(ecx, ecy, hw, hh, 12.f);
+                    mc.sub_pos_x = (ecx - p.x) / w;
+                    mc.sub_pos_y = (ecy - p.y) / h;
                 }
             }
         }
