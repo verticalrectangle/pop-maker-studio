@@ -40,6 +40,27 @@ extern ImFont* g_font_black;
 // s_scrub_until is declared extern in canvas.h, defined here
 double s_scrub_until = 0.0;
 
+// ── Social (TikTok/Reels/Shorts) safe-zone model ──────────────────────────────
+// One conservative envelope covering all three vertical feeds — their exact UI
+// pixels drift per release, so we approximate the chrome rather than chase one
+// app. Values are fractions of a 9:16 canvas.
+static constexpr float SOCIAL_TABS_T = 0.10f;  // top: For-You / search tabs
+static constexpr float SOCIAL_CAP_B  = 0.22f;  // bottom: caption + handle + music
+static constexpr float SOCIAL_RAIL_R = 0.12f;  // right: like / comment / share rail
+static constexpr float SOCIAL_SIDE_L = 0.04f;  // left gutter
+
+// Active centre-snap target (canvas fractions). Normally the geometric centre;
+// with the social overlay on in 9:16 it shifts to the centre of the *visible*
+// (un-chromed) box — up and slightly left — so "drag to the middle" lands where
+// viewers actually look, not under the caption or behind the action rail.
+static inline void canvas_center_target(const AppState& s, float& cx, float& cy) {
+    cx = 0.5f; cy = 0.5f;
+    if (s.show_social_safe && s.format == OutputFormat::Vertical) {
+        cx = (SOCIAL_SIDE_L + (1.f - SOCIAL_RAIL_R)) * 0.5f;  // ~0.46
+        cy = (SOCIAL_TABS_T + (1.f - SOCIAL_CAP_B))  * 0.5f;  // ~0.44
+    }
+}
+
 // ── Canvas object system ──────────────────────────────────────────────────────
 // TextLayout: tight rendered bbox computed each frame during text draw.
 // Persists so draw_canvas_handles can use accurate extents for handles.
@@ -674,16 +695,18 @@ void draw_canvas_handles(AppState& state, ImDrawList* dl, ImVec2 p, float w, flo
                         dl->AddRect({p.x, p.y}, {p.x + w, p.y + h}, snap_col, 0.f, 0, 1.5f);
                 }
 
-                // Center snap for move (canvas center)
+                // Center snap for move — to the canvas centre, or the social
+                // safe-box centre (shifted up/left) when that overlay is on.
                 if (s_ctx.handle == CanvasHandle::Body) {
+                    float tcx, tcy; canvas_center_target(state, tcx, tcy);
                     float scx = mc.pos_x * w + p.x, scy = mc.pos_y * h + p.y;
-                    if (fabsf(scx - (p.x+w*0.5f)) < 6.f) {
-                        mc.pos_x = 0.5f;
-                        dl->AddLine({p.x+w*0.5f, p.y}, {p.x+w*0.5f, p.y+h}, snap_col);
+                    if (fabsf(scx - (p.x+w*tcx)) < 6.f) {
+                        mc.pos_x = tcx;
+                        dl->AddLine({p.x+w*tcx, p.y}, {p.x+w*tcx, p.y+h}, snap_col);
                     }
-                    if (fabsf(scy - (p.y+h*0.5f)) < 6.f) {
-                        mc.pos_y = 0.5f;
-                        dl->AddLine({p.x, p.y+h*0.5f}, {p.x+w, p.y+h*0.5f}, snap_col);
+                    if (fabsf(scy - (p.y+h*tcy)) < 6.f) {
+                        mc.pos_y = tcy;
+                        dl->AddLine({p.x, p.y+h*tcy}, {p.x+w, p.y+h*tcy}, snap_col);
                     }
                 }
             }
@@ -876,15 +899,16 @@ void draw_canvas_handles(AppState& state, ImDrawList* dl, ImVec2 p, float w, flo
                 // a vertical centre line make centring obvious while dragging.
                 if (s_ctx.handle == CanvasHandle::Body) {
                     const float SNAP = 14.f;                       // catch radius, screen px
+                    float tcx, tcy; canvas_center_target(state, tcx, tcy);
                     float cx3 = mc.sub_pos_x * w + p.x;            // text centre X
-                    if (fabsf(cx3 - (p.x + w*0.5f)) < SNAP) {
-                        mc.sub_pos_x = 0.5f;
-                        dl->AddLine({p.x+w*0.5f, p.y}, {p.x+w*0.5f, p.y+h}, snap_col);
+                    if (fabsf(cx3 - (p.x + w*tcx)) < SNAP) {
+                        mc.sub_pos_x = tcx;
+                        dl->AddLine({p.x+w*tcx, p.y}, {p.x+w*tcx, p.y+h}, snap_col);
                     }
                     float cy3 = mc.sub_pos_y * h + p.y;            // text centre Y
-                    if (fabsf(cy3 - (p.y + h*0.5f)) < SNAP) {
-                        mc.sub_pos_y = 0.5f;
-                        dl->AddLine({p.x, p.y+h*0.5f}, {p.x+w, p.y+h*0.5f}, snap_col);
+                    if (fabsf(cy3 - (p.y + h*tcy)) < SNAP) {
+                        mc.sub_pos_y = tcy;
+                        dl->AddLine({p.x, p.y+h*tcy}, {p.x+w, p.y+h*tcy}, snap_col);
                     }
                 }
             }
@@ -2233,13 +2257,45 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
         }
     }
 
-    // Safe zone guide — shown when a managed Lyrics track exists.
+    // Social safe-zone overlay (9:16) — the keep-out chrome of TikTok / Reels /
+    // Shorts (top tabs, right action rail, bottom caption), so subjects clear the
+    // UI and land where viewers look. Toggled from View ▸ Social safe zones;
+    // only meaningful for vertical output. The drag centre-snap shifts to match.
+    if (state.show_social_safe && state.format == OutputFormat::Vertical) {
+        float lx = p.x + SOCIAL_SIDE_L * w;
+        float rx = p.x + (1.f - SOCIAL_RAIL_R) * w;
+        float ty = p.y + SOCIAL_TABS_T * h;
+        float by = p.y + (1.f - SOCIAL_CAP_B) * h;
+        // Faint wash over the four keep-out bands — tiled as canvas-minus-safebox
+        // so the corners aren't double-darkened.
+        ImU32 wash = IM_COL32(0, 0, 0, 64);
+        dl->AddRectFilled({p.x, p.y}, {p.x + w, ty},     wash);  // top tabs
+        dl->AddRectFilled({p.x, by},  {p.x + w, p.y + h}, wash);  // bottom caption
+        dl->AddRectFilled({p.x, ty},  {lx,      by},      wash);  // left gutter
+        dl->AddRectFilled({rx,  ty},  {p.x + w, by},      wash);  // right action rail
+        // Safe box outline + corner ticks (same readable style as the lyrics guide).
+        dl->AddRect({lx, ty}, {rx, by}, IM_COL32(255, 255, 255, 40), 0.f, 0, 1.f);
+        float tk = 8.f; ImU32 tc = IM_COL32(255, 255, 255, 70);
+        dl->AddLine({lx, ty}, {lx + tk, ty}, tc); dl->AddLine({lx, ty}, {lx, ty + tk}, tc);
+        dl->AddLine({rx, ty}, {rx - tk, ty}, tc); dl->AddLine({rx, ty}, {rx, ty + tk}, tc);
+        dl->AddLine({lx, by}, {lx + tk, by}, tc); dl->AddLine({lx, by}, {lx, by - tk}, tc);
+        dl->AddLine({rx, by}, {rx - tk, by}, tc); dl->AddLine({rx, by}, {rx, by - tk}, tc);
+        // Social centre mark — where the move-snap pulls to (shifted up/left).
+        float ccx, ccy; canvas_center_target(state, ccx, ccy);
+        float mx = p.x + ccx * w, my = p.y + ccy * h;
+        ImU32 mkc = IM_COL32(120, 200, 255, 150);
+        dl->AddLine({mx - 7.f, my}, {mx + 7.f, my}, mkc);
+        dl->AddLine({mx, my - 7.f}, {mx, my + 7.f}, mkc);
+    }
+
+    // Safe zone guide — shown when a managed Lyrics track exists (suppressed when
+    // the richer social overlay above is already on).
     // Represents the region guaranteed visible on TikTok/Reels/Shorts.
     {
         bool has_lyrics = false;
         for (auto& t : state.tracks)
             if (t.managed) { has_lyrics = true; break; }
-        if (has_lyrics) {
+        if (has_lyrics && !state.show_social_safe) {
             float sx0 = p.x + SAFE_SIDE * w,  sy0 = p.y + SAFE_TOP * h;
             float sx1 = p.x + (1.f - SAFE_SIDE) * w, sy1 = p.y + (1.f - SAFE_BOT) * h;
             dl->AddRect({sx0, sy0}, {sx1, sy1}, IM_COL32(255, 255, 255, 22), 0.f, 0, 1.f);

@@ -662,6 +662,10 @@ struct AppState {
     bool show_tutorial  = false;
     int  tutorial_step  = 0;   // 0-4 = steps 1-5; >=5 = finished
 
+    // View ▸ Social safe zones: overlay the TikTok/Reels/Shorts keep-out chrome
+    // on the 9:16 canvas and shift the drag centre-snap to the visible box.
+    bool show_social_safe = false;
+
     // scroll-to-clip request (set by preview click, consumed by draw_timeline)
     bool request_scroll_to_clip = false;
 

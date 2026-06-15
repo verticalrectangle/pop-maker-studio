@@ -907,6 +907,12 @@ void ui_studio(AppState& state) {
                 }
             }
             ImGui::Separator();
+            {
+                bool soc = state.show_social_safe;
+                if (ImGui::MenuItem("Social safe zones (9:16)", nullptr, soc))
+                    state.show_social_safe = !soc;
+            }
+            ImGui::Separator();
             if (ImGui::MenuItem("History", "Ctrl+Shift+H")) s_panel_view = PanelView::History;
             ImGui::EndMenu();
         }
