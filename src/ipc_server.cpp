@@ -2693,6 +2693,8 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         state.models_ready   = mr;
         state.models_skipped = ms;
         state.splash_timer   = 0.f;
+        state.in_studio      = true;   // an agent creating a project wants the
+                                       // editor active, not the home launcher
         // Fresh history + baseline snapshot (same reasoning as load_project).
         history_clear();
         history_push(state, "New project");
