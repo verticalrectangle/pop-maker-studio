@@ -1574,6 +1574,17 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
         video_prefetch_frames(reqs.data(), (int)reqs.size());
     }
 
+    // Live camera preview: resolve the texture and which track the camera brick
+    // sits on, so it composites at THAT track's z-order inside the loop below
+    // (tracks above it occlude it). It used to be drawn after the loop, which
+    // pinned it on top of everything — the layering only started working once a
+    // take was recorded and rendered as a normal video clip.
+    const Clip* cam_br = nullptr; int cam_ti = -1, cam_cw = 0, cam_ch = 0;
+    uintptr_t cam_ltex = 0;
+    s_cam_box.active = false;
+    if (vrecorder_monitor_get() || vrecorder_active())
+        cam_ltex = camera_live_tex(state, cam_br, cam_ti, cam_cw, cam_ch);
+
     for (int ti = (int)state.tracks.size() - 1; ti >= 0; --ti) {
         auto& track = state.tracks[ti];
         if (!track.visible) continue;
@@ -1880,6 +1891,40 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
             }
         }
 
+        // Live camera preview composites at the camera brick's track z-order
+        // (mirror-flipped for self-view; glass FX + face filter already baked in).
+        // Tracks composited above it (lower ti, drawn later) occlude it.
+        if (ti == cam_ti && cam_ltex && cam_br && cam_cw > 0 && cam_ch > 0) {
+            float px  = cam_br->eval_prop("pos_x",    state.playhead);
+            float py  = cam_br->eval_prop("pos_y",    state.playhead);
+            float sx  = cam_br->eval_prop("scale_x",  state.playhead);
+            float sy  = cam_br->eval_prop("scale_y",  state.playhead);
+            float rot = cam_br->eval_prop("rotation", state.playhead);
+            float alpha = cam_br->eval_prop("opacity", state.playhead);
+            float fit_w = w, fit_h = h;
+            float va = (float)cam_cw / (float)cam_ch, ca = w / h;
+            if (va > ca) { fit_w = w; fit_h = w / va; }
+            else         { fit_h = h; fit_w = h * va; }
+            float cx = px * w, cy = py * h;
+            float hw = fit_w * sx * 0.5f, hh = fit_h * sy * 0.5f;
+            float rad = rot * 3.14159265f / 180.f;
+            float cs = cosf(rad), sn = sinf(rad);
+            scene_add_layer(cam_ltex, cx, cy, hw, hh, cs, sn,
+                            fmaxf(0.f, fminf(1.f, alpha)), 1.f, 0.f, 0.f, 1.f);
+            auto rp = [&](float x, float y) {
+                return ImVec2{p.x + cx + x * cs - y * sn,
+                              p.y + cy + x * sn + y * cs};
+            };
+            s_cam_box.active    = true;
+            s_cam_box.recording = vrecorder_recording();
+            s_cam_box.warming   = vrecorder_warming();
+            s_cam_box.c[0] = rp(-hw, -hh); s_cam_box.c[1] = rp(hw, -hh);
+            s_cam_box.c[2] = rp(hw,  hh);  s_cam_box.c[3] = rp(-hw, hh);
+            s_mirror_dbg.cx = p.x + cx; s_mirror_dbg.cy = p.y + cy;
+            s_mirror_dbg.hw = hw;       s_mirror_dbg.hh = hh;
+            s_mirror_dbg.rot_deg = rot;
+        }
+
         // Composite this track's text overlay at its z-order (interleaved with
         // video), so text is occluded by video on more-foreground tracks instead
         // of always drawing on top.
@@ -1897,53 +1942,8 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
         }
     }  // end Pass 1 track loop
 
-    // ── Live camera preview ──────────────────────────────────────────────────
-    // Composite the live frame into the scene at the camera brick's transform
-    // (pos/scale/rotation) — framed exactly like the take will sit, only
-    // mirror-flipped for self-view. Glass FX + face filter are already baked
-    // into the texture. Drawn last in Pass 1 (top of the video stack, below
-    // text), regardless of playhead range — the performer always sees it.
-    s_cam_box.active = false;
-    if (vrecorder_monitor_get() || vrecorder_active()) {
-        const Clip* br = nullptr; int bti = -1, cw = 0, ch = 0;
-        uintptr_t ltex = camera_live_tex(state, br, bti, cw, ch);
-        if (ltex && br && cw > 0 && ch > 0) {
-            float px  = br->eval_prop("pos_x",   state.playhead);
-            float py  = br->eval_prop("pos_y",   state.playhead);
-            float sx  = br->eval_prop("scale_x", state.playhead);
-            float sy  = br->eval_prop("scale_y", state.playhead);
-            float rot = br->eval_prop("rotation", state.playhead);
-            float alpha = br->eval_prop("opacity", state.playhead);
-            // Aspect-fit the native frame inside the canvas (same as a take).
-            float fit_w = w, fit_h = h;
-            float va = (float)cw / (float)ch, ca = w / h;
-            if (va > ca) { fit_w = w; fit_h = w / va; }
-            else         { fit_h = h; fit_w = h * va; }
-            float cx = px * w, cy = py * h;
-            float hw = fit_w * sx * 0.5f, hh = fit_h * sy * 0.5f;
-            float rad = rot * 3.14159265f / 180.f;
-            float cs = cosf(rad), sn = sinf(rad);
-            // Mirror flip via UVs (u0=1,u1=0). The box (handles) is the output
-            // frame; only the content inside is mirrored for self-view.
-            scene_add_layer(ltex, cx, cy, hw, hh, cs, sn,
-                            fmaxf(0.f, fminf(1.f, alpha)), 1.f, 0.f, 0.f, 1.f);
-
-            // Stash the rotated quad (ImGui space) for the REC border + label.
-            auto rp = [&](float x, float y) {
-                return ImVec2{p.x + cx + x * cs - y * sn,
-                              p.y + cy + x * sn + y * cs};
-            };
-            s_cam_box.active    = true;
-            s_cam_box.recording = vrecorder_recording();
-            s_cam_box.warming   = vrecorder_warming();
-            s_cam_box.c[0] = rp(-hw, -hh); s_cam_box.c[1] = rp(hw, -hh);
-            s_cam_box.c[2] = rp(hw,  hh);  s_cam_box.c[3] = rp(-hw, hh);
-            // Mirror-debug geometry for the test harness (new transform).
-            s_mirror_dbg.cx = p.x + cx; s_mirror_dbg.cy = p.y + cy;
-            s_mirror_dbg.hw = hw;       s_mirror_dbg.hh = hh;
-            s_mirror_dbg.rot_deg = rot;
-        }
-    }
+    // (Live camera preview now composites at its track's z-order inside the
+    // Pass 1 loop above — it used to be drawn here, on top of every track.)
 
     // (Scene FX are now applied per-track inside Pass 1 — each standalone FX
     // brick processes the tracks below it, not the whole frame.)
