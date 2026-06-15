@@ -2301,6 +2301,28 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                                                                  : FXType::Glitch, sel)
                                        : fx_brick_colors(clip.fx_type, sel);
 
+            // A clip can carry BOTH a video glass chain and an audio glass chain
+            // (they never weld). If so, split the row so they don't draw on top
+            // of each other — video on the top half, audio on the bottom — each
+            // tinted by kind and independently clickable/draggable.
+            if (is_glass) {
+                int  host_ci    = fx_coupled_host(state, ti, clip);
+                bool this_audio = fx_brick_is_audio_kind(clip);
+                bool other_kind = false;
+                for (int oc = 0; host_ci >= 0 && oc < (int)track.clips.size(); ++oc) {
+                    if (oc == ci) continue;
+                    const Clip& o = track.clips[(size_t)oc];
+                    if (!o.fx_coupled || !is_fx_clip(o)) continue;
+                    if (fx_coupled_host(state, ti, o) != host_ci) continue;
+                    if (fx_brick_is_audio_kind(o) != this_audio) { other_kind = true; break; }
+                }
+                if (other_kind) {
+                    float mid = (cy0 + cy1) * 0.5f;
+                    if (this_audio) cy0 = mid + 1.f;   // audio chain → bottom half
+                    else            cy1 = mid - 1.f;   // video chain → top half
+                }
+            }
+
             if (is_glass) {
                 // Glass brick: semi-transparent frosted overlay over the video clip below it.
                 ImU32 fill_col = IM_COL32(
