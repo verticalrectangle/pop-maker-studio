@@ -642,6 +642,38 @@ void draw_canvas_handles(AppState& state, ImDrawList* dl, ImVec2 p, float w, flo
                 }
                 s_ctx.dirty = true;
 
+                // Fill-canvas snap for resize: media scale is proportional to the
+                // canvas, so 100% (scale 1.0 — exactly fills the frame) is a stop
+                // you should be able to land on by dragging. Without it you can't
+                // hit a clean full-frame fit and the export gets a hairline gap or
+                // overscan. Edge handles snap their single axis; corner handles
+                // snap the uniform factor (aspect preserved) when the nearer axis
+                // reaches full size. A canvas-border guide confirms the fit.
+                {
+                    const float STOL = 0.035f;   // ~3.5% of canvas — scales with it
+                    CanvasHandle hd = s_ctx.handle;
+                    bool snapped = false;
+                    if (hd == CanvasHandle::EdgeL || hd == CanvasHandle::EdgeR) {
+                        if (fabsf(mc.scale_x - 1.f) < STOL) { mc.scale_x = 1.f; snapped = true; }
+                    } else if (hd == CanvasHandle::EdgeT || hd == CanvasHandle::EdgeB) {
+                        if (fabsf(mc.scale_y - 1.f) < STOL) { mc.scale_y = 1.f; snapped = true; }
+                    } else if (hd == CanvasHandle::CornerTL || hd == CanvasHandle::CornerTR ||
+                               hd == CanvasHandle::CornerBL || hd == CanvasHandle::CornerBR) {
+                        float dx = fabsf(mc.scale_x - 1.f), dy = fabsf(mc.scale_y - 1.f);
+                        float ssx = s_ctx.start_scale_x, ssy = s_ctx.start_scale_y;
+                        if ((dx < STOL && ssx > 0.f) || (dy < STOL && ssy > 0.f)) {
+                            // Re-snap the shared scale factor so the nearer axis lands
+                            // exactly on 1.0; the other follows to keep the aspect.
+                            float f = (dx <= dy && ssx > 0.f) ? 1.f / ssx : 1.f / ssy;
+                            mc.scale_x = ssx * f;
+                            mc.scale_y = ssy * f;
+                            snapped = true;
+                        }
+                    }
+                    if (snapped)
+                        dl->AddRect({p.x, p.y}, {p.x + w, p.y + h}, snap_col, 0.f, 0, 1.5f);
+                }
+
                 // Center snap for move (canvas center)
                 if (s_ctx.handle == CanvasHandle::Body) {
                     float scx = mc.pos_x * w + p.x, scy = mc.pos_y * h + p.y;
