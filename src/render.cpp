@@ -1745,15 +1745,16 @@ void render_snapshot_gl(AppState& state, float snap_t, bool open_folder) {
     }
     snap_found_base:
     if (base_path.empty()) {
-        state.snapshot_msg     = "Snapshot failed — no media loaded";
-        state.snapshot_msg_new = true;
-        // Complete the IPC handshake too — without this, agents polling
-        // get_snapshot_status on a text-only project hang until timeout.
-        state.snapshot_done_err = "no video/audio media loaded — render "
-                                  "snapshots need at least one media clip; "
-                                  "use source='canvas' for text-only scenes";
-        state.snapshot_done     = true;
-        return;
+        // No video/audio media — a text / background / image / FX composition,
+        // i.e. someone making a still image. base_path is only used to name the
+        // output file, so derive one from the project (else HOME) and render the
+        // frame full-res anyway instead of refusing.
+        if (!state.project_path.empty()) {
+            base_path = state.project_path;
+        } else {
+            const char* home = std::getenv("HOME");
+            base_path = std::string(home ? home : ".") + "/pms_snapshot";
+        }
     }
 
     int total_ms = (int)(snap_t * 1000.f);
@@ -1811,7 +1812,11 @@ void render_snapshot_gl(AppState& state, float snap_t, bool open_folder) {
 
     glBindFramebuffer(GL_FRAMEBUFFER, fbo);
     glViewport(0, 0, out_w, out_h);
-    glClearColor(0.f, 0.f, 0.f, 1.f);
+    // Clear transparent (not black) so a still export keeps its alpha: a
+    // text/image/FX composition with empty regions saves as a transparent PNG
+    // (stickers, overlays), while a full-frame video stays fully opaque. The
+    // mp4 export path (render_tick_gl) is unchanged — it still clears black.
+    glClearColor(0.f, 0.f, 0.f, 0.f);
     glClear(GL_COLOR_BUFFER_BIT);
 
     ImDrawList dl(ImGui::GetDrawListSharedData());

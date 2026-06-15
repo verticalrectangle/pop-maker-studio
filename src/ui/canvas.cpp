@@ -2408,15 +2408,22 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
     dl->AddLine({p.x+w,p.y+h},{p.x+w-cm,p.y+h},    cc);
     dl->AddLine({p.x+w,p.y+h},{p.x+w,p.y+h-cm},    cc);
 
-    // Snapshot button — top-right corner, only when a video clip is at the playhead
+    // Snapshot button — top-right corner. Enabled for ANY visible content at the
+    // playhead (not just video), so people making stills — text / backgrounds /
+    // images / FX with no video clip — can export the frame as a full-res image.
     {
-        bool has_video_at_play = false;
-        for (auto& tr : state.tracks)
-            for (auto& cl : tr.clips)
-                if (cl.clip_type == ClipType::Video &&
-                    cl.start <= state.playhead && cl.end > state.playhead &&
-                    !cl.source_id.empty())
-                    has_video_at_play = true;
+        bool has_content_at_play = false;
+        for (auto& tr : state.tracks) {
+            if (!tr.visible) continue;
+            for (auto& cl : tr.clips) {
+                if (cl.start > state.playhead || cl.end <= state.playhead) continue;
+                ClipType t = cl.clip_type;
+                if (clip_is_videolike_type(t) || t == ClipType::Background ||
+                    t == ClipType::Text || t == ClipType::Lyrics ||
+                    t == ClipType::Subtitle) { has_content_at_play = true; break; }
+            }
+            if (has_content_at_play) break;
+        }
 
         const char* snap_lbl = state.snapshot_running ? "..." : "[o]";
         ImVec2 slsz = ImGui::GetFont()->CalcTextSizeA(ImGui::GetFontSize(), FLT_MAX, -1.f, snap_lbl);
@@ -2428,7 +2435,7 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
 
         bool snap_hov = mpos.x >= btn_tl.x && mpos.x <= btn_br.x &&
                         mpos.y >= btn_tl.y && mpos.y <= btn_br.y;
-        bool snap_ena = has_video_at_play && !state.snapshot_running;
+        bool snap_ena = has_content_at_play && !state.snapshot_running;
 
         ImU32 btn_bg  = snap_hov && snap_ena ? IM_COL32(70, 70, 70, 200) : IM_COL32(30, 30, 30, 180);
         ImU32 lbl_col = snap_ena ? to_u32(Col::fg) : to_u32(Col::dim);
