@@ -1042,7 +1042,51 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
     // Vertical scroll: mouse wheel in the track body area
     float track_area_top = origin.y + TL_RULER_H;
     float track_area_bot = origin.y + total_h - TL_SCROLLBAR_H;
-    float tracks_total_h = ((int)state.tracks.size() + 1) * TL_TRACK_H;  // +1 for add-track row
+
+    // ── Variable track heights ────────────────────────────────────────────────
+    // A content clip with fx_expanded grows its track by a lane per coupled
+    // effect, so the FX timing lanes draw beneath the clip body (the body itself
+    // stays TL_TRACK_H). Anything mapping a track index ↔ a Y must go through
+    // these helpers, never ti*TL_TRACK_H.
+    const float FX_LANE_H = 15.f;
+    auto host_fx_count = [&](int ti, int ci) -> int {
+        int n = 0;
+        for (int k : coupled_fx_of(state, ti, ci)) {
+            const Clip& b = state.tracks[(size_t)ti].clips[(size_t)k];
+            n += (b.clip_type == ClipType::MultiFX || b.clip_type == ClipType::AudioMultiFX)
+                 ? (int)b.fx_chain.size() : 1;
+        }
+        return n;
+    };
+    auto track_extra_h = [&](int ti) -> float {
+        if (ti < 0 || ti >= (int)state.tracks.size()) return 0.f;
+        float e = 0.f;
+        auto& cls = state.tracks[(size_t)ti].clips;
+        for (int ci = 0; ci < (int)cls.size(); ++ci) {
+            if (!cls[(size_t)ci].fx_expanded || is_fx_clip(cls[(size_t)ci])) continue;
+            int n = host_fx_count(ti, ci);
+            if (n > 0) e = fmaxf(e, (float)n * FX_LANE_H + 6.f);
+        }
+        return e;
+    };
+    auto track_h     = [&](int ti) -> float { return TL_TRACK_H + track_extra_h(ti); };
+    auto track_top_at = [&](int ti) -> float {
+        float y = track_area_top - state.tl_v_scroll;
+        for (int k = 0; k < ti && k < (int)state.tracks.size(); ++k) y += track_h(k);
+        return y;
+    };
+    auto y_to_track = [&](float my) -> int {
+        float y = track_area_top - state.tl_v_scroll;
+        for (int k = 0; k < (int)state.tracks.size(); ++k) {
+            float h = track_h(k);
+            if (my < y + h) return k;
+            y += h;
+        }
+        return (int)state.tracks.size();
+    };
+
+    float tracks_total_h = TL_TRACK_H;   // the trailing add-track row
+    for (int ti = 0; ti < (int)state.tracks.size(); ++ti) tracks_total_h += track_h(ti);
     float max_v_scroll   = fmaxf(0.f, tracks_total_h - (track_area_bot - track_area_top));
     if (ImGui::IsMouseHoveringRect({origin.x, track_area_top}, {origin.x+total_w, track_area_bot})) {
         float wheel = ImGui::GetIO().MouseWheel;
@@ -2249,6 +2293,29 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                 dl->AddLine({ix+4.f,iy-3.f},{ix+1.f,iy+2.f}, ic, 1.2f);
             }
 
+            // FX disclosure triangle — only on a content clip that owns coupled
+            // FX. Toggles the per-FX timing lanes drawn beneath the clip (the
+            // track grows). Click is swallowed so it doesn't also drag the clip.
+            if (!is_fx_clip(clip) && host_fx_count(ti, ci) > 0) {
+                const float ts = 9.f;
+                ImVec2 tp = { vis_x0 + 5.f, cy1 - ts - 1.f };
+                bool thov = mouse.x >= tp.x - 3.f && mouse.x <= tp.x + ts + 3.f &&
+                            mouse.y >= tp.y - 3.f && mouse.y <= tp.y + ts + 3.f;
+                ImU32 tcol = thov ? IM_COL32(190, 235, 255, 255)
+                                  : IM_COL32(150, 205, 240, 220);
+                if (clip.fx_expanded)
+                    dl->AddTriangleFilled({tp.x, tp.y}, {tp.x + ts, tp.y},
+                                          {tp.x + ts*0.5f, tp.y + ts}, tcol);
+                else
+                    dl->AddTriangleFilled({tp.x, tp.y}, {tp.x, tp.y + ts},
+                                          {tp.x + ts, tp.y + ts*0.5f}, tcol);
+                if (thov && !tl_any_popup && !track.locked &&
+                    ImGui::IsMouseClicked(0)) {
+                    clip.fx_expanded = !clip.fx_expanded;
+                    continue;   // don't fall through to clip select/drag
+                }
+            }
+
             clip_interact(ci, clip, vis_x0, vis_x1, cy0, cy1, sel);
         }
 
@@ -2346,7 +2413,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                 if (state.playhead >= clip.start && state.playhead < clip.end) {
                     float gx = origin.x + TL_LABEL_W;
                     for (int gti = ti+1; gti < (int)state.tracks.size(); ++gti) {
-                        float gty = (track_area_top - state.tl_v_scroll) + gti * TL_TRACK_H;
+                        float gty = track_top_at(gti);
                         if (gty+TL_TRACK_H < track_area_top || gty > track_area_bot) continue;
                         dl->AddRectFilled({gx,gty},{gx+2.f,gty+TL_TRACK_H},
                                           IM_COL32(160,110,255,80));
@@ -2711,7 +2778,54 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
             }
         }
 
-        track_y += TL_TRACK_H;
+        // ── Pass 3: expanded FX timing lanes beneath the clip ─────────────────
+        // One bar per coupled effect (video chains first, then audio) showing how
+        // long that effect runs on the clip. Drawn in the extra height the track
+        // grew by; the clip body above is unchanged.
+        for (int ci = 0; ci < (int)track.clips.size(); ++ci) {
+            Clip& host = track.clips[(size_t)ci];
+            if (is_fx_clip(host) || !host.fx_expanded) continue;
+            std::vector<int> fxk = coupled_fx_of(state, ti, ci);
+            if (fxk.empty()) continue;
+            float lane_top = track_y + TL_TRACK_H + 3.f;
+            int row = 0;
+            auto draw_lane = [&](const Clip& brick, FXType ft, float rs, float re) {
+                float ax0 = origin.x + TL_LABEL_W + (brick.start + rs) * zoom - scroll;
+                float ax1 = origin.x + TL_LABEL_W + (brick.start + re) * zoom - scroll;
+                float vx0 = fmaxf(ax0, origin.x + TL_LABEL_W);
+                float vx1 = fminf(ax1, origin.x + total_w);
+                if (vx1 < vx0 + 3.f) vx1 = vx0 + 3.f;
+                float ly0 = lane_top + row * FX_LANE_H, ly1 = ly0 + FX_LANE_H - 2.f;
+                if (ly1 <= track_area_bot && ly0 >= track_area_top) {
+                    FxBrickColors c = fx_brick_colors(ft, false);
+                    dl->AddRectFilled({vx0, ly0}, {vx1, ly1},
+                                      (c.fill & 0x00FFFFFFu) | 0xC8000000u, 2.f);
+                    dl->AddRect({vx0, ly0}, {vx1, ly1}, c.border, 2.f, 0, 1.f);
+                    ImGui::PushClipRect({vx0, ly0}, {vx1, ly1}, true);
+                    dl->AddText({vx0 + 4.f, ly0 + 1.f}, IM_COL32(235, 240, 250, 255),
+                                fx_type_name(ft));
+                    ImGui::PopClipRect();
+                }
+                row++;
+            };
+            for (int pass = 0; pass < 2; ++pass) {       // 0 = video, 1 = audio
+                for (int k : fxk) {
+                    Clip& brick = track.clips[(size_t)k];
+                    if ((fx_brick_is_audio_kind(brick) ? 1 : 0) != pass) continue;
+                    float bdur = brick.end - brick.start;
+                    if (brick.clip_type == ClipType::MultiFX ||
+                        brick.clip_type == ClipType::AudioMultiFX) {
+                        for (auto& se : brick.fx_chain)
+                            draw_lane(brick, se.fx_type, se.rel_start,
+                                      se.rel_end > 0.f ? se.rel_end : bdur);
+                    } else {
+                        draw_lane(brick, brick.fx_type, 0.f, bdur);
+                    }
+                }
+            }
+        }
+
+        track_y += track_h(ti);   // variable: grows when a clip's FX are expanded
     }
 
     // ── "Affects-below" influence wash ────────────────────────────────────────
@@ -2725,9 +2839,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
         const float clip_l = origin.x + TL_LABEL_W;
         const float clip_r = origin.x + total_w;
         const int   ntr    = (int)state.tracks.size();
-        auto track_top_y = [&](int ti){
-            return track_area_top - state.tl_v_scroll + ti * TL_TRACK_H;
-        };
+        auto track_top_y = [&](int ti){ return track_top_at(ti); };
         auto affects_below = [](const Clip& c) -> bool {
             if (c.clip_type == ClipType::Bus) return true;
             return (c.clip_type == ClipType::Effect ||
@@ -2811,8 +2923,13 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                 s_track_dragging = true;
             if (s_track_dragging) {
                 ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
-                float rel = mouse.y - (origin.y + TL_RULER_H);
-                int   ins = (int)roundf(rel / TL_TRACK_H);
+                // Insert gap = the boundary nearest the cursor, with variable heights.
+                int ins = 0; float y = track_area_top - state.tl_v_scroll;
+                for (int k = 0; k < (int)state.tracks.size(); ++k) {
+                    float h = track_h(k);
+                    if (mouse.y < y + h * 0.5f) break;
+                    ins = k + 1; y += h;
+                }
                 s_track_drag_insert = std::clamp(ins, 0, (int)state.tracks.size());
             }
         } else {
@@ -2839,7 +2956,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
     if (s_track_dragging && s_track_drag_src >= 0 &&
         s_track_drag_src < (int)state.tracks.size()) {
         // Insert line
-        float ins_y = origin.y + TL_RULER_H + s_track_drag_insert * TL_TRACK_H;
+        float ins_y = track_top_at(s_track_drag_insert);
         dl->AddLine({origin.x, ins_y}, {origin.x + total_w, ins_y},
                     IM_COL32(120, 200, 255, 220), 2.f);
         dl->AddCircleFilled({origin.x + 5.f, ins_y}, 4.f, IM_COL32(120, 200, 255, 220));
@@ -2898,10 +3015,10 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                 // Live update selection while dragging
                 float t0 = (bx0 - origin.x - TL_LABEL_W + scroll) / zoom;
                 float t1 = (bx1 - origin.x - TL_LABEL_W + scroll) / zoom;
-                // tl_v_scroll shifts all track rows up — must add it back to map screen-y → track index
+                // Map screen-y → track index through the variable-height helper.
                 int n_tr  = (int)state.tracks.size();
-                int   tr0 = (int)((by0 - origin.y - TL_RULER_H + state.tl_v_scroll) / TL_TRACK_H);
-                int   tr1 = (int)((by1 - origin.y - TL_RULER_H + state.tl_v_scroll) / TL_TRACK_H);
+                int   tr0 = y_to_track(by0);
+                int   tr1 = y_to_track(by1);
                 tr0 = (tr0 < 0) ? 0 : (tr0 >= n_tr ? n_tr-1 : tr0);
                 tr1 = (tr1 < 0) ? 0 : (tr1 >= n_tr ? n_tr-1 : tr1);
 
@@ -3272,8 +3389,8 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
             // Gap insertion fires only when mouse is within GAP_PX of a seam.
             const float GAP_PX = 5.f;
             drag_hot_gap = -1;
-            for (int gi = 0; gi < n_tracks; ++gi) {
-                float boundary_y = track_origin_y + gi * TL_TRACK_H;
+            for (int gi = 0; gi <= n_tracks; ++gi) {
+                float boundary_y = track_top_at(gi);
                 if (fabsf(mouse.y - boundary_y) < GAP_PX) {
                     drag_hot_gap = gi;
                     break;
@@ -3281,9 +3398,10 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
             }
             // Always assign hot track by midpoint — gap zone does not steal the target.
             {
-                int hot = (int)((mouse.y - track_origin_y) / TL_TRACK_H);
+                int hot = y_to_track(mouse.y);
                 drag_hot_track = (hot >= 0 && hot <= n_tracks) ? hot : -1;
             }
+            (void)track_origin_y;
             // Merge-target detection: dragged FX brick over another FX brick.
             // The target track follows the mouse row (drag_hot_track), so
             // dropping a brick from one track onto a brick on another welds
@@ -3371,7 +3489,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
         const Clip& dc = state.tracks[drag_track].clips[drag_clip];
         float edge_t = drag_left ? dc.start : dc.end;
         float ex = origin.x + TL_LABEL_W + edge_t * zoom - scroll;
-        float ty = track_area_top - state.tl_v_scroll + drag_track * TL_TRACK_H;
+        float ty = track_top_at(drag_track);
         float ecy0 = ty + 1.f, ecy1 = ty + TL_TRACK_H - 1.f;
         if (ex >= origin.x + TL_LABEL_W && ex <= origin.x + total_w) {
             dl->AddLine({ex, ecy0}, {ex, ecy1}, IM_COL32(255, 255, 255, 235), 2.5f);
@@ -3614,7 +3732,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
     // ── Between-track gap ghost (insert new track between two existing ones) ────
     if (drag_track >= 0 && drag_clip >= 0 && !drag_left && !drag_right &&
         drag_hot_gap >= 0 && drag_hot_gap < (int)state.tracks.size()) {
-        float gap_y = origin.y + TL_RULER_H + drag_hot_gap * TL_TRACK_H;
+        float gap_y = track_top_at(drag_hot_gap);
         dl->AddLine({origin.x, gap_y}, {origin.x + total_w, gap_y},
                     IM_COL32(120, 200, 255, 220), 2.f);
         dl->AddCircleFilled({origin.x + 5.f, gap_y}, 4.f, IM_COL32(120, 200, 255, 220));

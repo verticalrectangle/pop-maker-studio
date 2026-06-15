@@ -2140,6 +2140,7 @@ static json dispatch(AppState& state, const std::string& method, const json& par
             else if (prop == "sub_anchor_h") { cl.sub_anchor_h = jval_int(val); }
             else if (prop == "sub_wrap_w"){ cl.sub_wrap_w= jval_float(val); }
             else if (prop == "karaoke")   { cl.karaoke   = jval_bool(val); }
+            else if (prop == "fx_expanded") { cl.fx_expanded = jval_bool(val); }
             else if (prop == "clip_style"){ cl.clip_style= parse_anim_style(val.get<std::string>()); }
             else if (prop == "sub_color") {
                 if (!val.is_array() || val.size() != 4) { err = "sub_color must be [r,g,b,a]"; return {}; }
@@ -2277,6 +2278,7 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         else if (prop == "sub_anchor_h") { cl.sub_anchor_h = jval_int(val); }
         else if (prop == "sub_wrap_w") { cl.sub_wrap_w = jval_float(val); }
         else if (prop == "karaoke")    { cl.karaoke   = jval_bool(val); }
+        else if (prop == "fx_expanded") { cl.fx_expanded = jval_bool(val); }
         else if (prop == "clip_style") { cl.clip_style = parse_anim_style(val.get<std::string>()); }
         else if (prop == "sub_color") {
             if (!val.is_array() || val.size() != 4) { err = "sub_color must be [r,g,b,a]"; return {}; }

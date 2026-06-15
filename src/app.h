@@ -354,6 +354,11 @@ struct Clip {
     // nudges audio vs video to dial out fixed device latency (+ = delay audio).
     bool  rec_audio       = true;
     float rec_av_offset_ms = 0.f;
+
+    // Content clip: when true, the coupled FX chains expand into per-FX timing
+    // lanes drawn beneath the clip (the track grows), so each effect's run can
+    // be trimmed individually. Collapsed by default; view state, not exported.
+    bool  fx_expanded = false;
 };
 
 // Split `cl` at absolute timeline time `cut` and return the right half.
