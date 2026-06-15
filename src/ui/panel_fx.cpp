@@ -2252,60 +2252,74 @@ void panel_multifx_for(AppState& state, float w, int b_ti, int b_ci) {
         ImGui::SameLine(0.f, 6.f);
         {
             // One handle is active at a time, so a single "gesture changed
-            // something" flag is enough to push undo once per drag.
+            // something" flag is enough to push undo once per drag. s_bar_handle
+            // latches which edge the press grabbed (1=left, 2=right) so the drag
+            // stays on it even if the mouse races past the other edge.
             static bool s_bar_edited = false;
+            static int  s_bar_handle = 0;
             float rel_end_eff = (se.rel_end <= 0.f) ? brick_dur : se.rel_end;
-            float x0  = ImGui::GetCursorScreenPos().x;
-            float y0  = ImGui::GetCursorScreenPos().y + 8.f;
+            ImVec2 cp = ImGui::GetCursorScreenPos();
+            float x0  = cp.x;
+            float y0  = cp.y + 8.f;
             float bh  = row_h - 16.f;
             float bar_w = ImGui::GetContentRegionAvail().x - del_btn_reserve;
             if (bar_w < 10.f) bar_w = 10.f;
-            // Track background
-            dl->AddRectFilled({x0, y0}, {x0 + bar_w, y0 + bh}, IM_COL32(40,40,40,200), 2.f);
-            // Active region
+
+            // Reserve the whole bar as a single item so the layout grows cleanly
+            // — manual SetCursorScreenPos-then-InvisibleButton handle positioning
+            // tripped ImGui's "SetCursorPos extends boundaries" check every frame.
+            // Edge hit-testing is done from the mouse X instead.
+            ImGui::InvisibleButton("##durbar", {bar_w, row_h});
+            bool bar_act = ImGui::IsItemActive();
             float rx0 = x0 + (se.rel_start / brick_dur) * bar_w;
             float rx1 = x0 + (rel_end_eff  / brick_dur) * bar_w;
+            float mx  = ImGui::GetIO().MousePos.x;
+
+            // On press, latch the nearer edge — but only if the click is actually
+            // near one (within 8 px), so clicking the bar's middle does nothing.
+            if (ImGui::IsItemActivated()) {
+                float dlft = fabsf(mx - rx0), drgt = fabsf(mx - rx1);
+                if (dlft <= 8.f && dlft <= drgt)      s_bar_handle = 1;
+                else if (drgt <= 8.f)                 s_bar_handle = 2;
+                else                                  s_bar_handle = 0;
+            }
+            // Drag maps to the absolute mouse position on the bar — never
+            // accumulate per-frame deltas: rel_end == 0 is the "full duration"
+            // sentinel, and delta-from-sentinel re-snaps to full every frame,
+            // gluing the right handle in place for any slow drag (the old bug).
+            float mouse_t = (mx - x0) / bar_w * brick_dur;
+            if (bar_act && s_bar_handle && ImGui::IsMouseDragging(0)) {
+                if (s_bar_handle == 1) {
+                    float ns = fmaxf(0.f, fminf(mouse_t, rel_end_eff - 0.1f));
+                    if (ns != se.rel_start) { se.rel_start = ns; s_bar_edited = true; }
+                } else {
+                    // Right handle; the last 3% snaps to "full" (rel_end=0).
+                    float ne = (mouse_t >= brick_dur * 0.97f)
+                        ? 0.f
+                        : fmaxf(se.rel_start + 0.1f, fminf(mouse_t, brick_dur));
+                    if (ne != se.rel_end) { se.rel_end = ne; s_bar_edited = true; }
+                }
+            }
+            if (ImGui::IsItemDeactivated()) {
+                if (s_bar_edited) { history_push(state, "Multi-FX: adjust timing"); s_bar_edited = false; }
+                s_bar_handle = 0;
+            }
+            // recompute active region after a possible edit this frame
+            rel_end_eff = (se.rel_end <= 0.f) ? brick_dur : se.rel_end;
+            rx0 = x0 + (se.rel_start / brick_dur) * bar_w;
+            rx1 = x0 + (rel_end_eff  / brick_dur) * bar_w;
+
+            // Track background, active region, and edge handles (raw draw).
+            dl->AddRectFilled({x0, y0}, {x0 + bar_w, y0 + bh}, IM_COL32(40,40,40,200), 2.f);
             ImU32 bar_col = sel ? IM_COL32(210,130,30,220) : IM_COL32(150,90,20,180);
             dl->AddRectFilled({rx0, y0}, {rx1, y0 + bh}, bar_col, 2.f);
-
-            // Drag handles map to the absolute mouse position on the bar —
-            // never accumulate per-frame deltas here: rel_end == 0 is the
-            // "full duration" sentinel, and delta-from-sentinel re-snaps to
-            // full every frame, gluing the right handle in place for any
-            // drag slower than the snap zone (the old bug).
-            float mouse_t = (ImGui::GetIO().MousePos.x - x0) / bar_w * brick_dur;
-
-            // Draggable left handle
-            ImGui::SetCursorScreenPos({rx0 - 3.f, y0});
-            ImGui::InvisibleButton("##hleft", {8.f, bh});
-            if (ImGui::IsItemActive() && ImGui::IsMouseDragging(0)) {
-                float ns = fmaxf(0.f, fminf(mouse_t, rel_end_eff - 0.1f));
-                if (ns != se.rel_start) { se.rel_start = ns; s_bar_edited = true; }
+            bool near_edge = ImGui::IsItemHovered() &&
+                (fabsf(mx - rx0) <= 8.f || fabsf(mx - rx1) <= 8.f);
+            if (near_edge || s_bar_handle) {
+                ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+                dl->AddLine({rx0, y0}, {rx0, y0 + bh}, IM_COL32(255,255,255,200), 1.6f);
+                dl->AddLine({rx1, y0}, {rx1, y0 + bh}, IM_COL32(255,255,255,200), 1.6f);
             }
-            if (ImGui::IsItemDeactivated() && s_bar_edited) {
-                history_push(state, "Multi-FX: adjust timing");
-                s_bar_edited = false;
-            }
-            if (ImGui::IsItemHovered()) ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
-
-            // Draggable right handle; the last 3% snaps to "full" (rel_end=0)
-            ImGui::SetCursorScreenPos({rx1 - 3.f, y0});
-            ImGui::InvisibleButton("##hright", {8.f, bh});
-            if (ImGui::IsItemActive() && ImGui::IsMouseDragging(0)) {
-                float ne = (mouse_t >= brick_dur * 0.97f)
-                    ? 0.f
-                    : fmaxf(se.rel_start + 0.1f, fminf(mouse_t, brick_dur));
-                if (ne != se.rel_end) { se.rel_end = ne; s_bar_edited = true; }
-            }
-            if (ImGui::IsItemDeactivated() && s_bar_edited) {
-                history_push(state, "Multi-FX: adjust timing");
-                s_bar_edited = false;
-            }
-            if (ImGui::IsItemHovered()) ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
-
-            // Advance cursor past bar
-            ImGui::SetCursorScreenPos({x0 + bar_w, y0 - 8.f});
-            ImGui::Dummy({0.f, row_h});
         }
 
         // Delete button
