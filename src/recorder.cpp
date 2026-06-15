@@ -242,8 +242,13 @@ void recorder_stop(AppState& state, bool keep_partial) {
     size_t done = s_lat_off + (size_t)s_take_count * s_take_len;
     if (keep_partial && s_buf.size() > done + 44100u
         && s_take_len > 0 && s_buf.size() > s_lat_off) {
-        size_t n = std::min(s_buf.size() - done, s_take_len);
-        finalize_take(state, s_buf.data() + done, n);
+        // Pad the partial pass up to a FULL brick span with silence so a take
+        // never ends partway through the clip — audio is sample-exact, so just
+        // zero-fill the tail to the loop length.
+        size_t avail = std::min(s_buf.size() - done, s_take_len);
+        std::vector<float> padded(s_take_len, 0.f);
+        std::copy(s_buf.data() + done, s_buf.data() + done + avail, padded.begin());
+        finalize_take(state, padded.data(), s_take_len);
     }
 
     if (s_take_count > 0)

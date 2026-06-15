@@ -296,7 +296,12 @@ static bool capture_start() {
         s_audio_wav = takes_dir() + "/sessaudio_" +
                       std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(
                           std::chrono::system_clock::now().time_since_epoch()).count()) + ".wav";
-        ain  = " -f pulse -i default";
+        // Record from the same mic device the panels select (shared global),
+        // not always "default" — selecting a device must actually change what's
+        // captured. Empty source falls back to the system default.
+        std::string msrc = audio_capture_pulse_source(audio_capture_selected());
+        if (msrc.empty()) msrc = "default";
+        ain  = " -f pulse -i '" + msrc + "'";
         aout = " -map 1:a -c:a pcm_s16le -ar 44100 -ac 1 -y '" + s_audio_wav + "'";
     } else {
         s_audio_wav.clear();
@@ -598,14 +603,26 @@ void vrecorder_stop(AppState& state, bool keep_partial) {
     bool was_recording = s_state == VRecState::Recording;
     if (was_recording) capture_drain(true);
 
-    // Keep a partial last pass when it has at least half a second in it.
-    if (was_recording && keep_partial && !s_frames.empty()) {
+    // Keep a partial last pass when it has at least half a second in it — but
+    // pad it up to a FULL brick span (holding the last frame) so a take never
+    // ends partway through the clip. The AVI plays at a constant rate (rate/scale
+    // = n/dur_s), so the frame COUNT must scale with the span or the take would
+    // play back in slow motion; we duplicate the final frame to fill the tail.
+    if (was_recording && keep_partial && s_frames.size() >= 2) {
         float span = s_frames.back().t - s_frames.front().t;
         if (span > 0.5f) {
-            float keep_len = s_loop_len;
-            s_loop_len = fmaxf(span, 0.5f);
-            finalize_take(state);
-            s_loop_len = keep_len;
+            if (s_loop_len > span + 1e-3f) {
+                size_t have = s_frames.size();
+                size_t want = (size_t)llroundf((double)have * (s_loop_len / span));
+                float  dt   = span / (float)(have - 1);
+                VFrame last = s_frames.back();
+                for (size_t i = have; i < want; ++i) {
+                    VFrame pad; pad.jpeg = last.jpeg;
+                    pad.t = last.t + dt * (float)(i - have + 1);
+                    s_frames.push_back(std::move(pad));
+                }
+            }
+            finalize_take(state);   // writes at the full s_loop_len (brick span)
         }
     }
     s_frames.clear();

@@ -664,6 +664,11 @@ void audio_capture_select(int index) {
 
 int audio_capture_selected() { return g_cap_sel; }
 
+std::string audio_capture_pulse_source(int index) {
+    if (index < 0 || index >= (int)g_cap_dev_ids.size()) return std::string();
+    return std::string(g_cap_dev_ids[(size_t)index].pulse);  // pulse name == pw node name
+}
+
 void audio_monitor_set(bool on) {
     // Monitoring needs the duplex device — enter performance mode if the
     // caller hasn't already (panel does, IPC paths may not).

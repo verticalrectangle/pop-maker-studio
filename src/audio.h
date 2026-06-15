@@ -47,6 +47,10 @@ float audio_capture_latency();  // input period in seconds (0 if not capturing)
 std::vector<std::string> audio_capture_devices();
 void audio_capture_select(int index);
 int  audio_capture_selected();
+// PulseAudio/PipeWire source name for a capture-device index (from the last
+// audio_capture_devices() enumeration), for feeding ffmpeg `-f pulse -i <name>`.
+// Empty string for index < 0 (system default) or an unknown index.
+std::string audio_capture_pulse_source(int index);
 
 // Input monitoring: sum the live mic into the output inside the duplex
 // callback. Latency = one input + one output period of the duplex device.
