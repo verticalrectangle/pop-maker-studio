@@ -837,12 +837,22 @@ void draw_canvas_handles(AppState& state, ImDrawList* dl, ImVec2 p, float w, flo
                 }
                 s_ctx.dirty = true;
 
-                // Center snap for text body move
+                // Center snap for text body move — magnetic to the canvas centre
+                // on BOTH axes so dragging text "to the middle" actually catches.
+                // The old 8 px window (~3% of the canvas) was too tight to land on
+                // by hand, and only the horizontal axis snapped. A wider radius +
+                // a vertical centre line make centring obvious while dragging.
                 if (s_ctx.handle == CanvasHandle::Body) {
-                    float cx3 = mc.sub_pos_x * w + p.x;
-                    if (fabsf(cx3 - (p.x+w*0.5f)) < 8.f) {
+                    const float SNAP = 14.f;                       // catch radius, screen px
+                    float cx3 = mc.sub_pos_x * w + p.x;            // text centre X
+                    if (fabsf(cx3 - (p.x + w*0.5f)) < SNAP) {
                         mc.sub_pos_x = 0.5f;
                         dl->AddLine({p.x+w*0.5f, p.y}, {p.x+w*0.5f, p.y+h}, snap_col);
+                    }
+                    float cy3 = mc.sub_pos_y * h + p.y;            // text centre Y
+                    if (fabsf(cy3 - (p.y + h*0.5f)) < SNAP) {
+                        mc.sub_pos_y = 0.5f;
+                        dl->AddLine({p.x, p.y+h*0.5f}, {p.x+w, p.y+h*0.5f}, snap_col);
                     }
                 }
             }
