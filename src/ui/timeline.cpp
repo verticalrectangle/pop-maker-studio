@@ -292,9 +292,12 @@ static void fx_stack_layout(const Clip& clip, float vis_x0, float vis_x1,
                             int& shown, float& spread) {
     int N = (int)clip.fx_chain.size();
     shown = N < 5 ? N : 5;
-    float brick_w = vis_x1 - vis_x0;
-    spread = (brick_w - 70.f) / 180.f;
-    spread = fmaxf(0.f, fminf(1.f, spread));
+    (void)vis_x0; (void)vis_x1;
+    // FX chips are a constant-size deck — their size must NOT scale with the
+    // brick's span/width (resizing a welded brick used to stretch them via the
+    // deck→timing-lane morph). Timing editing still works: the lane-drag maps
+    // the cursor to time through `zoom`, independent of the chip rect.
+    spread = 0.f;
 }
 
 // Morphed (deck↔lane) screen rect for sub-effect slot i, plus the rel-space
