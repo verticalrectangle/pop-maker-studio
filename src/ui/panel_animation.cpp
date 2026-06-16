@@ -456,7 +456,7 @@ void panel_typography(AppState& state, float w) {
 
     const float gap    = 4.f;
     const float cell_w = (full_w - gap) * 0.5f;
-    const float cell_h = 92.f;
+    const float cell_h = 112.f;   // taller so the wrapped tagline + preview fit
 
     const char* cur_cat = nullptr;
     int col_idx = 0;
@@ -517,17 +517,20 @@ void panel_typography(AppState& state, float w) {
             selected ? IM_COL32(255,255,255,255) : IM_COL32(210,205,230,240), pr.label);
         ImGui::PopFont();
 
-        // Tagline — clip at first middle-dot
-        char tagbuf[48]; snprintf(tagbuf, sizeof(tagbuf), "%s", pr.tagline);
-        for (int k = 0; tagbuf[k]; ++k)
-            if ((unsigned char)tagbuf[k] == 0xc2 && (unsigned char)tagbuf[k+1] == 0xb7)
-                { tagbuf[k > 0 ? k-1 : 0] = '\0'; break; }
-        dl->AddText({tx, cp.y + 27.f}, IM_COL32(120, 115, 145, 200), tagbuf);
+        // Tagline — wraps within the card (up to 2 lines) instead of being cut
+        // off at the card edge. The middle-dot-separated full hint is shown.
+        {
+            float tag_w = cell_w - 16.f;
+            ImVec4 tag_clip = {tx, cp.y + 24.f, cp.x + cell_w - 6.f, cp.y + 52.f};
+            dl->AddText(ImGui::GetFont(), 11.f, {tx, cp.y + 25.f},
+                        IM_COL32(120, 115, 145, 200), pr.tagline, nullptr,
+                        tag_w, &tag_clip);
+        }
 
         // ── Inline text preview ───────────────────────────────────────────────
         {
             float px0 = cp.x + 6.f, px1 = cp.x + cell_w - 6.f;
-            float py0 = cp.y + 42.f, py1 = cp.y + cell_h - 6.f;
+            float py0 = cp.y + 56.f, py1 = cp.y + cell_h - 6.f;
             float pw  = px1 - px0, ph = py1 - py0;
 
             dl->AddRectFilled({px0, py0}, {px1, py1}, IM_COL32(10, 8, 18, 220), 3.f);
