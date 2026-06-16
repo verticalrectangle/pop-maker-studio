@@ -96,14 +96,18 @@ static void monitor_chain_sync(AppState& state) {
     if (bti >= 0) {
         const Clip& rbrick = state.tracks[bti].clips[bci];
         auto segs = collect_audio_fx_segments(state, bti, rbrick);
-        // Each segment's [t0,t1] is brick-relative source time. Apply a stage
+        // Each segment's [t0,t1] is brick-relative source time. While the
+        // transport is actually moving (playing or recording), apply a stage
         // only while the live playhead is inside its window, so coupled audio FX
-        // activate over their own spans (like a normal FX brick) instead of all
-        // being on continuously — monitoring then matches the placed take.
+        // activate over their own spans — monitoring then matches the placed
+        // take. When idle (just monitoring input to dial in the sound), the
+        // playhead is parked and span-gating would mute everything, so pass all
+        // active stages through; that's what "Hear effects" is for.
+        bool moving = state.playing || recorder_active();
         float ptime = state.playhead - rbrick.start;
         for (auto& sg : segs) {
             if (sg.fx.voice_convert_on && !sg.fx.any_active()) continue;
-            if (ptime < sg.t0 || ptime >= sg.t1) continue;
+            if (moving && (ptime < sg.t0 || ptime >= sg.t1)) continue;
             stages.push_back(sg.fx);
             h = (h ^ audio_fx_hash(sg.fx)) * 1099511628211ull;
         }
