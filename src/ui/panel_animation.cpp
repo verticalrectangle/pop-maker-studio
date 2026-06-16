@@ -7,6 +7,8 @@
 #include "audio.h"
 #include "history.h"
 #include "typography_presets.h"
+#include "text_renderer.h"
+#include "text_anim.h"
 #include "theme.h"
 #include <imgui.h>
 #include <imgui_internal.h>
@@ -556,41 +558,59 @@ void panel_typography(AppState& state, float w) {
                 tsz2 = pfont->CalcTextSizeA(pfsz, FLT_MAX, -1.f, sample.c_str());
             }
 
-            // Horizontal anchor
-            float pax = px0 + pr.sub_pos_x * pw;
-            float plx;
-            if (pr.sub_anchor_h == 0)      plx = pax;
-            else if (pr.sub_anchor_h == 2) plx = pax - tsz2.x;
-            else                            plx = pax - tsz2.x * 0.5f;
-            plx = fmaxf(px0, fminf(px1 - tsz2.x, plx));
+            // Animated preview: drive the REAL text renderer on a looping clock
+            // so the card shows the preset's actual motion (per-element cascade,
+            // typewriter, wave, gradient, glow, the real font) scaled to the box.
+            // Only the on-screen cards animate (cheap offscreen).
+            if (ImGui::IsRectVisible({px0, py0}, {px1, py1})) {
+                Clip pc;
+                pc.clip_type    = ClipType::Text;
+                pc.text         = sample;
+                pc.clip_style   = pr.style;
+                pc.sub_font     = pr.font ? pr.font : "";
+                pc.anim_unit    = pr.anim_unit;
+                pc.anim_stagger = pr.anim_stagger > 0.f ? pr.anim_stagger : 0.06f;
+                pc.ease         = pr.ease;
+                pc.tracking     = pr.tracking;
+                pc.karaoke      = false;       // no word timings to drive it in a card
+                pc.grad_mode    = pr.grad_mode;
+                memcpy(pc.grad_col2, pr.grad_col2, sizeof(pc.grad_col2));
+                memcpy(pc.sub_color, pr.color, sizeof(pc.sub_color));
+                pc.sub_color_override = true;
+                pc.ts           = pr.ts;
+                pc.sub_anchor_h = 1;
 
-            // Vertical slot
-            float ply;
-            if (pr.sub_pos == 1)      ply = py0 + ph * 0.5f - tsz2.y * 0.5f;
-            else if (pr.sub_pos == 2) ply = py0 + 2.f;
-            else if (pr.sub_pos == 3) ply = py0 + pr.sub_pos_y * ph - tsz2.y * 0.5f;
-            else                       ply = py1 - tsz2.y - 2.f;
-            ply = fmaxf(py0, fminf(py1 - tsz2.y, ply));
+                // Loop: play the intro, hold, restart. Per-card phase offset so
+                // the grid doesn't pulse in unison.
+                const float loop_dur = 2.6f;
+                float lt = fmodf((float)ImGui::GetTime() + (float)i * 0.18f, loop_dur);
+                pc.start = 0.f; pc.end = loop_dur;
 
-            ImU32 tcol = IM_COL32((int)(pr.color[0]*255), (int)(pr.color[1]*255),
-                                   (int)(pr.color[2]*255), (int)(pr.color[3]*255));
-            dl->AddText(pfont, pfsz, {plx, ply}, tcol, sample.c_str());
+                float fade_in  = fminf(0.25f, loop_dur * 0.3f);
+                float fade_out = fminf(0.25f, loop_dur * 0.2f);
+                float a_dx = 0.f, a_dy = 0.f, a_alpha = 1.f, a_scale = 1.f;
+                if (pc.anim_unit == 0 && pr.style != AnimStyle::None) {
+                    BlockAnim ba = compute_block_anim(pr.style, lt, loop_dur,
+                                                      fade_in, fade_out, pw, pc.ease);
+                    a_dx = ba.dx; a_dy = ba.dy; a_alpha = ba.alpha; a_scale = ba.scale;
+                }
+                float dfsz    = pfsz * a_scale;
+                float dline_h = dfsz * 1.25f;
 
-            // Anim style badge bottom-right inside preview
-            const char* style_tag = nullptr;
-            switch (pr.style) {
-                case AnimStyle::Fade:   style_tag = "fade";   break;
-                case AnimStyle::Slide:  style_tag = "slide";  break;
-                case AnimStyle::Scale:  style_tag = "scale";  break;
-                case AnimStyle::Block:  style_tag = "block";  break;
-                case AnimStyle::Glitch: style_tag = "glitch"; break;
-                default: break;
-            }
-            if (style_tag) {
-                ImVec2 bsz = ImGui::GetFont()->CalcTextSizeA(9.f, FLT_MAX, -1.f, style_tag);
-                dl->AddText(ImGui::GetFont(), 9.f,
-                    {px1 - bsz.x - 4.f, py1 - bsz.y - 2.f},
-                    IM_COL32(100, 90, 140, 180), style_tag);
+                float bty;
+                if (pr.sub_pos == 2)      bty = py0 + 2.f;
+                else if (pr.sub_pos == 0) bty = py1 - dline_h - 2.f;
+                else                       bty = py0 + ph * 0.5f - dline_h * 0.5f;
+
+                TextRenderCtx trc{};
+                trc.dl = dl; trc.font = pfont; trc.fsz = dfsz;
+                trc.anim_alpha = a_alpha; trc.anim_dx = a_dx; trc.anim_dy = 0.f;
+                trc.clip = &pc; trc.eff_style = pr.style; trc.anchor_h = 1;
+                trc.block_cx = px0 + pw * 0.5f; trc.ty = bty + a_dy;
+                trc.line_h = dline_h; trc.t = lt; trc.rotation = 0.f;
+                trc.canvas_w = pw; trc.clip_words = nullptr;
+                std::vector<std::string> plines{ sample };
+                render_text_block(trc, plines);
             }
 
             dl->PopClipRect();
