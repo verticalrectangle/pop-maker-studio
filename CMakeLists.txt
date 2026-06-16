@@ -52,6 +52,7 @@ set(SOURCES
     src/video_recorder.cpp
     src/av_sync.cpp
     src/av_measure.cpp
+    src/text_anim.cpp
     src/transcribe.cpp
     src/render.cpp
     src/history.cpp
@@ -189,6 +190,21 @@ add_custom_command(
 )
 add_custom_target(embed_mono DEPENDS ${CMAKE_BINARY_DIR}/mono_font.h)
 add_dependencies(pop-maker-studio embed_mono)
+
+# Embed all bundled display typefaces (typography presets) as one byte-array
+# header with a master table. Add/remove a .ttf in assets/fonts/display and
+# re-run CMake to pick it up.
+file(GLOB DISPLAY_FONT_FILES ${CMAKE_SOURCE_DIR}/assets/fonts/display/*.ttf)
+add_custom_command(
+    OUTPUT ${CMAKE_BINARY_DIR}/display_fonts.h
+    COMMAND ${CMAKE_SOURCE_DIR}/scripts/embed_fonts_dir.sh
+            ${CMAKE_SOURCE_DIR}/assets/fonts/display
+            ${CMAKE_BINARY_DIR}/display_fonts.h
+    DEPENDS ${DISPLAY_FONT_FILES}
+    COMMENT "Embedding ${CMAKE_SOURCE_DIR}/assets/fonts/display display typefaces"
+)
+add_custom_target(embed_display DEPENDS ${CMAKE_BINARY_DIR}/display_fonts.h)
+add_dependencies(pop-maker-studio embed_display)
 
 target_include_directories(pop-maker-studio PRIVATE ${CMAKE_BINARY_DIR})
 

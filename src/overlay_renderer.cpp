@@ -3,6 +3,7 @@
 #include "ui/theme.h"
 #include "ui/pipeline.h"  // SAFE_TOP, SAFE_BOT
 #include "text_renderer.h"
+#include "text_anim.h"
 
 #include <imgui.h>
 #include <cmath>
@@ -63,7 +64,7 @@ void draw_text_overlays(ImDrawList* dl, const AppState& state, float t,
         // target track's vertical stacking offset is unchanged.
         if (only_track >= 0 && ti != only_track) { ++text_rendered; continue; }
 
-        ImFont* txt_font = g_font_black;
+        ImFont* txt_font = typo_font_get(active->sub_font.c_str());
         // font_size is stored as a fraction of canvas height (0 = use default).
         // Default fraction chosen so the text looks the same proportion in the
         // preview canvas and the full-res FBO — do NOT use a fixed pixel size.
@@ -156,54 +157,12 @@ void draw_text_overlays(ImDrawList* dl, const AppState& state, float t,
         AnimStyle eff_style = (active->clip_style != AnimStyle::None)
                               ? active->clip_style : state.style;
 
-        switch (eff_style) {
-            case AnimStyle::Fade:
-                if (local_t < fade_in)       anim_alpha = local_t / fade_in;
-                else if (local_t > clip_dur - fade_out)
-                                              anim_alpha = (clip_dur - local_t) / fade_out;
-                break;
-            case AnimStyle::Glitch: {
-                float decay = fmaxf(0.f, 1.f - local_t / 0.5f);
-                anim_dx = sinf(local_t * 97.f + sinf(local_t * 53.f) * 31.f) * 12.f * decay;
-                break;
-            }
-            case AnimStyle::Typewriter:
-                if (local_t < fade_in) {
-                    anim_alpha = local_t / fade_in;
-                    anim_dy    = (fade_in - local_t) / fade_in * (-8.f);
-                }
-                break;
-            case AnimStyle::Bounce: {
-                float bd = fminf(0.6f, clip_dur);
-                if (local_t < bd) {
-                    float p2 = local_t / bd;
-                    anim_dy = sinf(p2 * 3.14159f) * (-60.f) * expf(-p2 * 4.f);
-                }
-                break;
-            }
-            case AnimStyle::Slide:
-                if (local_t < fade_in)
-                    anim_dx = (local_t / fade_in - 1.f) * w * 0.6f;
-                else if (local_t > clip_dur - fade_out)
-                    anim_dx = ((local_t - (clip_dur - fade_out)) / fade_out) * w * 0.6f;
-                break;
-            case AnimStyle::Stack:
-                if (local_t < fade_in)
-                    anim_dy = (1.f - local_t / fade_in) * 80.f;
-                break;
-            case AnimStyle::Scale:
-                // Scale-pop intro (mirrors canvas.cpp for WYSIWYG): grow small→
-                // full (ease-out cubic) + fade in; fade out at the tail.
-                if (local_t < fade_in) {
-                    float pp = local_t / fade_in;
-                    float e  = 1.f - powf(1.f - pp, 3.f);
-                    anim_scale = 0.55f + 0.45f * e;
-                    anim_alpha = pp;
-                } else if (local_t > clip_dur - fade_out) {
-                    anim_alpha = (clip_dur - local_t) / fade_out;
-                }
-                break;
-            default: break;
+        // Shared with the live canvas (text_anim.cpp) so preview == export.
+        {
+            BlockAnim ba = compute_block_anim(eff_style, local_t, clip_dur,
+                                              fade_in, fade_out, w, active->ease);
+            anim_dx = ba.dx; anim_dy = ba.dy;
+            anim_alpha = ba.alpha; anim_scale = ba.scale;
         }
 
         if (text_fx.any_text) {

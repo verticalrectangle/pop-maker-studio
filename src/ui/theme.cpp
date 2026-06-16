@@ -2,15 +2,32 @@
 #include "app.h"
 #include <imgui.h>
 #include <string>
+#include <cstring>
 #include <cctype>
+#include <vector>
 
 #include "inter_font.h"
 #include "mono_font.h"
+#include "display_fonts.h"   // generated: g_embedded_fonts[] (display typefaces)
 
 ImFont* g_font_regular = nullptr;
 ImFont* g_font_bold    = nullptr;
 ImFont* g_font_black   = nullptr;
 ImFont* g_font_mono    = nullptr;
+
+// Registered display faces, parallel to g_embedded_fonts[]. Filled in theme_apply
+// once the atlas is built; looked up by sanitized family name via typo_font_get.
+namespace {
+    struct TypoFace { const char* name; ImFont* font; };
+    std::vector<TypoFace> g_typo_faces;
+}
+
+ImFont* typo_font_get(const char* id) {
+    if (id && *id)
+        for (const auto& f : g_typo_faces)
+            if (f.font && strcmp(f.name, id) == 0) return f.font;
+    return g_font_black;   // default lyrics face / graceful fallback
+}
 
 void theme_apply() {
     ImGuiIO& io = ImGui::GetIO();
@@ -53,6 +70,17 @@ void theme_apply() {
     g_font_mono = io.Fonts->AddFontFromMemoryTTF(
         (void*)jetbrains_mono_regular_ttf, (int)jetbrains_mono_regular_ttf_size,
         20.f, &cfg, mono_ranges);
+
+    // Bundled display typefaces for typography presets. Baked at 44px (lyrics
+    // text upscales from the atlas; 44 keeps big on-canvas type crisp without
+    // bloating the atlas across ~30 faces). Registered by sanitized family name.
+    g_typo_faces.clear();
+    for (int i = 0; i < g_n_embedded_fonts; ++i) {
+        ImFont* f = io.Fonts->AddFontFromMemoryTTF(
+            (void*)g_embedded_fonts[i].data, (int)g_embedded_fonts[i].size,
+            44.f, &cfg);
+        g_typo_faces.push_back({ g_embedded_fonts[i].name, f });
+    }
 
     io.Fonts->Build();
 

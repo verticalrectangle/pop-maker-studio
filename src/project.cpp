@@ -12,7 +12,7 @@
 // ── Binary serialization helpers ──────────────────────────────────────────────
 
 static const uint32_t MAGIC   = 0x534D5001u; // "PMS\x01"
-static const uint32_t VERSION = 49u;  // v49: A/V camera capture (rec_audio + rec_av_offset_ms)
+static const uint32_t VERSION = 50u;  // v50: typography face + kinetic/styling params
 
 struct Writer {
     std::ofstream f;
@@ -237,6 +237,15 @@ static void write_clip(Writer& w, const Clip& c) {
     // v49: A/V camera capture (record mic + manual sync offset)
     w.pod((uint8_t)c.rec_audio);
     w.pod(c.rec_av_offset_ms);
+    // v50: typography face + kinetic/styling params
+    w.str(c.sub_font);
+    w.pod(c.ease);
+    w.pod(c.tracking);
+    w.pod(c.anim_unit);
+    w.pod(c.anim_stagger);
+    w.pod(c.karaoke_mode);
+    w.pod(c.grad_mode);
+    w.pod(c.grad_col2[0]); w.pod(c.grad_col2[1]); w.pod(c.grad_col2[2]); w.pod(c.grad_col2[3]);
 }
 
 static Clip read_clip(Reader& r, uint32_t version) {
@@ -471,6 +480,17 @@ static Clip read_clip(Reader& r, uint32_t version) {
     if (version >= 49u) {
         c.rec_audio        = (bool)r.pod<uint8_t>();
         c.rec_av_offset_ms = r.pod<float>();
+    }
+    if (version >= 50u) {
+        c.sub_font     = r.str();
+        c.ease         = r.pod<int>();
+        c.tracking     = r.pod<float>();
+        c.anim_unit    = r.pod<int>();
+        c.anim_stagger = r.pod<float>();
+        c.karaoke_mode = r.pod<int>();
+        c.grad_mode    = r.pod<int>();
+        c.grad_col2[0] = r.pod<float>(); c.grad_col2[1] = r.pod<float>();
+        c.grad_col2[2] = r.pod<float>(); c.grad_col2[3] = r.pod<float>();
     }
     return c;
 }

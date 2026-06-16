@@ -48,7 +48,15 @@ static void apply_typo_style(Clip& c, const TypographyPreset& pr, const AppState
     else
         memcpy(c.sub_color, pr.color, sizeof(c.sub_color));
     c.karaoke           = pr.karaoke;
+    c.karaoke_mode      = pr.karaoke_mode;
     c.clip_style        = pr.style;
+    c.sub_font          = pr.font ? pr.font : "";
+    c.ease              = pr.ease;
+    c.tracking          = pr.tracking;
+    c.anim_unit         = pr.anim_unit;
+    c.anim_stagger      = pr.anim_stagger > 0.f ? pr.anim_stagger : 0.06f;
+    c.grad_mode         = pr.grad_mode;
+    memcpy(c.grad_col2, pr.grad_col2, sizeof(c.grad_col2));
     // Letter case: lyrics regenerate from the transcript each time (and karaoke
     // word widths depend on the stored text), so they fold case in-place. A
     // one-off Text/Subtitle brick stores a render-time flag instead — that's
@@ -62,14 +70,10 @@ static void apply_typo_style(Clip& c, const TypographyPreset& pr, const AppState
         c.text_case = tcase;
     }
 
-    c.ts = TextStyle{};
-    if (strcmp(pr.id, "neon") == 0) {
-        c.ts.glow_enabled = true; c.ts.glow_r = 10.f;
-        c.ts.glow_col[0] = 1.f; c.ts.glow_col[1] = 0.2f; c.ts.glow_col[2] = 0.8f; c.ts.glow_col[3] = 0.7f;
-    } else if (strcmp(pr.id, "cyberpunk") == 0) {
-        c.ts.stroke_enabled = true; c.ts.stroke_w = 1.5f;
-        c.ts.stroke_col[0] = 0.f; c.ts.stroke_col[1] = 1.f; c.ts.stroke_col[2] = 1.f; c.ts.stroke_col[3] = 0.8f;
-    }
+    // Styling (shadow/stroke/glow/box) now travels with the preset — no more
+    // per-id special-casing. Presets that want plain text carry a default
+    // TextStyle (shadow on); styled ones set glow/stroke/bg in their struct.
+    c.ts = pr.ts;
 }
 
 void generate_typography(AppState& state) {

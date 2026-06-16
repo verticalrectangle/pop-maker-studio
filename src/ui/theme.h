@@ -5,6 +5,11 @@ void theme_apply();
 
 extern ImFont* g_font_mono;
 
+// Typography face lookup by preset font id (sanitized family name, e.g.
+// "anton", "playfairdisplay"). Returns the bundled display face, or the default
+// lyrics face (Inter Black) for "" / unknown / a font that failed to bundle.
+ImFont* typo_font_get(const char* id);
+
 // ── Design tokens (match verticalrectangle.com) ───────────────────────────────
 namespace Col {
     inline constexpr ImVec4 bg            = {0.000f, 0.000f, 0.000f, 1.000f};

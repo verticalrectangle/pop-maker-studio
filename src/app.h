@@ -160,6 +160,16 @@ struct Clip {
     int   text_case = 0;       // 0=as-typed 1=UPPERCASE 2=lowercase (render-time; non-destructive)
     float karaoke_highlight_color[4] = {1.f, 0.85f, 0.1f, 1.f};  // active word color
 
+    // ── Typography face + kinetic params ─────────────────────────────────────
+    std::string sub_font;          // typography face id ("" = default Inter Black)
+    int   ease         = 0;        // easing curve id (text_anim.h EASE_*)
+    float tracking     = 0.f;      // extra letter-spacing, fraction of font size
+    int   anim_unit    = 0;        // 0=block 1=word 2=letter (per-element motion)
+    float anim_stagger = 0.06f;    // per-element delay step (seconds)
+    int   karaoke_mode = 0;        // 0=color 1=fill-wipe 2=pop 3=bouncing-ball
+    int   grad_mode    = 0;        // 0=none 1=vertical 2=diagonal 3=hue-cycle
+    float grad_col2[4] = {1.f, 1.f, 1.f, 1.f};  // second gradient stop
+
     TextStyle ts;
 
     // callout overlay fields (text clips only)

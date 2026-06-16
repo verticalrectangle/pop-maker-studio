@@ -2,6 +2,7 @@
 #include "studio_shared.h"
 #include "canvas.h"
 #include "../text_renderer.h"
+#include "../text_anim.h"
 #include "pipeline.h"
 #include "app.h"
 #include "runtime_fx.h"
@@ -2065,8 +2066,9 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                 const Clip* show        = &track.clips[show_ci];
                 int active_ci = -1;
 
-            // Hover preview: temporarily render with the hovered preset's style.
-            ImGui::PushFont(g_font_black);
+            // Typography face: the preset's bundled font (falls back to Inter
+            // Black for "" / unknown). PushFont so layout + ImGui agree.
+            ImGui::PushFont(typo_font_get(show->sub_font.c_str()));
             ImFont* txt_font = ImGui::GetFont();
             // Keyframable text transform — eval_prop(playhead) so an animated
             // font/wrap/position previews exactly as it exports (overlay_renderer
@@ -2163,55 +2165,10 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                                   ? show->clip_style : state.style;
 
             if (active_ci >= 0) {
-                switch (eff_style) {
-                    case AnimStyle::Fade:
-                        if (local_t < fade_in)       anim_alpha = local_t / fade_in;
-                        else if (local_t > clip_dur - fade_out)
-                                                      anim_alpha = (clip_dur - local_t) / fade_out;
-                        break;
-                    case AnimStyle::Glitch: {
-                        float decay = fmaxf(0.f, 1.f - local_t / 0.5f);
-                        anim_dx = sinf(local_t * 97.f + sinf(local_t * 53.f) * 31.f) * 12.f * decay;
-                        break;
-                    }
-                    case AnimStyle::Typewriter:
-                        if (local_t < fade_in) {
-                            anim_alpha = local_t / fade_in;
-                            anim_dy    = (fade_in - local_t) / fade_in * (-8.f);
-                        }
-                        break;
-                    case AnimStyle::Bounce: {
-                        float bd = fminf(0.6f, clip_dur);
-                        if (local_t < bd) {
-                            float p2 = local_t / bd;
-                            anim_dy = sinf(p2 * 3.14159f) * (-60.f) * expf(-p2 * 4.f);
-                        }
-                        break;
-                    }
-                    case AnimStyle::Slide:
-                        if (local_t < fade_in)
-                            anim_dx = (local_t / fade_in - 1.f) * w * 0.6f;
-                        else if (local_t > clip_dur - fade_out)
-                            anim_dx = ((local_t - (clip_dur - fade_out)) / fade_out) * w * 0.6f;
-                        break;
-                    case AnimStyle::Stack:
-                        if (local_t < fade_in)
-                            anim_dy = (1.f - local_t / fade_in) * 80.f;
-                        break;
-                    case AnimStyle::Scale:
-                        // Scale-pop intro: grow small→full (ease-out cubic) + fade
-                        // in; fade out at the tail so the exit isn't a hard cut.
-                        if (local_t < fade_in) {
-                            float pp = local_t / fade_in;
-                            float e  = 1.f - powf(1.f - pp, 3.f);
-                            anim_scale = 0.55f + 0.45f * e;
-                            anim_alpha = pp;
-                        } else if (local_t > clip_dur - fade_out) {
-                            anim_alpha = (clip_dur - local_t) / fade_out;
-                        }
-                        break;
-                    default: break;
-                }
+                BlockAnim ba = compute_block_anim(eff_style, local_t, clip_dur,
+                                                  fade_in, fade_out, w, show->ease);
+                anim_dx = ba.dx; anim_dy = ba.dy;
+                anim_alpha = ba.alpha; anim_scale = ba.scale;
             }
 
             if (text_fx.any_text) {
