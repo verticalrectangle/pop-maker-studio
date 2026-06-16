@@ -261,6 +261,13 @@ int timeline_couple_fx_brick(AppState& state, int ti, int ci, int host_ci) {
     const ClipType chain_type = fx_brick_is_audio_kind(clips[(size_t)ci])
                               ? ClipType::AudioMultiFX : ClipType::MultiFX;
 
+    // Coupling an audio FX brick onto a record brick turns "Hear effects" on, so
+    // you immediately monitor through it (and can dial in its dry/wet).
+    if (chain_type == ClipType::AudioMultiFX &&
+        (host.clip_type == ClipType::Record ||
+         host.clip_type == ClipType::VideoRecord))
+        audio_monitor_fx_set(true);
+
     // Host already has a coupled chain of this kind? Merge into it.
     for (int k = 0; k < (int)clips.size(); ++k) {
         if (k == ci) continue;
