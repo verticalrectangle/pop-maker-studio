@@ -23,11 +23,6 @@
 
 namespace fs = std::filesystem;
 
-// Camera→screen→performer latency: frames are captured this long before the
-// loop position they correspond to. Webcams typically run 2–4 frames behind;
-// 100 ms is a sane default until per-device calibration exists.
-static constexpr float kCamLatency = 0.100f;
-
 struct VFrame {
     float                t = 0.f;   // loop-stream time (seconds since loop start 0)
     std::vector<uint8_t> jpeg;
@@ -503,7 +498,7 @@ static void capture_drain(bool keep_frames) {
         ++s_frame_serial;
         if (keep_frames) {
             VFrame f;
-            f.t = now_t - kCamLatency;
+            f.t = now_t;            // raw capture time; A/V offset is the only sync nudge
             f.jpeg = s_last_jpeg;
             s_frames.push_back(std::move(f));
         }
