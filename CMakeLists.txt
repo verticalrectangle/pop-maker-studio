@@ -51,6 +51,7 @@ set(SOURCES
     src/recorder.cpp
     src/video_recorder.cpp
     src/av_sync.cpp
+    src/av_measure.cpp
     src/transcribe.cpp
     src/render.cpp
     src/history.cpp

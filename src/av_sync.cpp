@@ -55,7 +55,9 @@ void load_centered(std::vector<cf>& out, const float* s, size_t ns, size_t n) {
 
 float av_estimate_offset_seconds(const float* a, size_t na,
                                  const float* b, size_t nb,
-                                 int sample_rate, float max_lag_s) {
+                                 int sample_rate, float max_lag_s,
+                                 float* out_confidence) {
+    if (out_confidence) *out_confidence = 0.f;
     if (!a || !b || na < 8 || nb < 8 || sample_rate <= 0) return 0.f;
 
     // Pad to a power of two ≥ na+nb so the circular correlation behaves like a
@@ -83,10 +85,23 @@ float av_estimate_offset_seconds(const float* a, size_t na,
                                   (long)(n / 2 - 1));
     long best = 0;
     float best_mag = -1.f;
+    double mag_sum = 0.0;
+    long   mag_cnt = 0;
     for (long tau = -max_lag; tau <= max_lag; ++tau) {
         size_t idx = (tau >= 0) ? (size_t)tau : (size_t)(tau + (long)n);
         float mag = std::abs(R[idx]);
+        mag_sum += mag; ++mag_cnt;
         if (mag > best_mag) { best_mag = mag; best = tau; }
+    }
+
+    // Peak prominence: how tall the winning peak is versus the average of the
+    // whole search window. A clean transient gives one spike far above the rest
+    // (→ near 1); a silent/featureless room gives a flat field where the "peak"
+    // is barely above the mean (→ near 0). Lets the caller flag a weak measure.
+    if (out_confidence) {
+        float mean = (mag_cnt > 0) ? (float)(mag_sum / (double)mag_cnt) : 0.f;
+        float c = (best_mag > 1e-9f) ? (best_mag - mean) / best_mag : 0.f;
+        *out_confidence = c < 0.f ? 0.f : (c > 1.f ? 1.f : c);
     }
 
     // Parabolic interpolation around the integer peak for sub-sample accuracy.

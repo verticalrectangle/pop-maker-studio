@@ -26,6 +26,7 @@
 #include "face_cache.h"
 #include "../recorder.h"
 #include "../video_recorder.h"
+#include "../av_measure.h"
 #include "../video.h"
 #include <imgui.h>
 #include <imgui_internal.h>
@@ -2561,6 +2562,89 @@ void panel_clip(AppState& state, float w) {
                                                "camera latency. + delays the audio. Only needed\n"
                                                "if the lips drift on playback.");
                         ImGui::EndTooltip();
+                    }
+
+                    // ── Measure A/V offset (GCC-PHAT) + A/B ───────────────────
+                    // Only meaningful when a SEPARATE mic is the source and the
+                    // camera has its own mic: we record both for a few seconds
+                    // (the cam mic rides the video pipeline, so it stands in for
+                    // the video's timing) and cross-correlate to find the lag.
+                    // If you're already on the camera mic there's nothing to
+                    // measure — you're aligned by construction.
+                    if (cam_mic >= 0 && mic_sel != cam_mic) {
+                        static bool  s_m_has = false;
+                        static float s_m_off = 0.f, s_m_conf = 0.f;
+                        static std::string s_m_err;
+
+                        // Pick up a finished run and apply it to this clip.
+                        AVMeasureResult mr;
+                        if (av_measure_poll(mr)) {
+                            if (mr.ok) {
+                                s_m_has = true; s_m_off = mr.offset_ms; s_m_conf = mr.confidence;
+                                s_m_err.clear();
+                                clip.rec_av_offset_ms =
+                                    mr.offset_ms < -200.f ? -200.f :
+                                    (mr.offset_ms > 200.f ? 200.f : mr.offset_ms);
+                            } else {
+                                s_m_has = false; s_m_err = mr.error;
+                            }
+                        }
+
+                        bool measuring = av_measure_active();
+                        ImGui::Dummy({0.f, 2.f});
+                        if (measuring) {
+                            ImGui::BeginDisabled();
+                            char lbl[48];
+                            snprintf(lbl, sizeof(lbl), "Listening\xe2\x80\xa6 %.1fs", av_measure_elapsed());
+                            ImGui::Button(lbl, {bar_w - 70.f, 0.f});
+                            ImGui::EndDisabled();
+                        } else if (ImGui::Button("Measure A/V offset", {bar_w - 70.f, 0.f})) {
+                            std::string clean = audio_capture_pulse_source(mic_sel);
+                            std::string camsr = audio_capture_pulse_source(cam_mic);
+                            if (clean.empty()) clean = "default";
+                            av_measure_start(clean, camsr, 3.5f);
+                            s_m_err.clear();
+                        }
+                        if (!measuring && ImGui::IsItemHovered()) {
+                            ImGui::BeginTooltip();
+                            ImGui::TextUnformatted("Make a sharp sound (a clap) for ~3 seconds.\n"
+                                                   "Records your mic and the camera's mic together\n"
+                                                   "and measures the lag between them, then sets\n"
+                                                   "the A/V offset for you.");
+                            ImGui::EndTooltip();
+                        }
+
+                        if (measuring) {
+                            ImGui::SameLine(0.f, 8.f);
+                            ImGui::TextColored(ImVec4(0.62f, 0.78f, 1.f, 1.f), "clap now");
+                        }
+
+                        if (s_m_has && !measuring) {
+                            // A/B: flip the live offset between the measured value
+                            // and 0 so you can play a take both ways and judge it.
+                            bool on_meas = fabsf(clip.rec_av_offset_ms - s_m_off) < 0.5f;
+                            ImGui::Dummy({0.f, 2.f});
+                            if (ImGui::RadioButton("Measured", on_meas))
+                                clip.rec_av_offset_ms =
+                                    s_m_off < -200.f ? -200.f : (s_m_off > 200.f ? 200.f : s_m_off);
+                            ImGui::SameLine(0.f, 10.f);
+                            if (ImGui::RadioButton("Off", fabsf(clip.rec_av_offset_ms) < 0.5f))
+                                clip.rec_av_offset_ms = 0.f;
+                            ImGui::SameLine(0.f, 10.f);
+                            ImGui::TextDisabled("(%+.0f ms)", s_m_off);
+
+                            if (s_m_conf < 0.5f) {
+                                ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(232, 184, 74, 255));
+                                ImGui::TextWrapped("Weak match \xe2\x80\x94 the room may have been too "
+                                                   "quiet. Try again with a clear clap.");
+                                ImGui::PopStyleColor();
+                            }
+                        }
+                        if (!s_m_err.empty() && !measuring) {
+                            ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(232, 120, 100, 255));
+                            ImGui::TextWrapped("%s", s_m_err.c_str());
+                            ImGui::PopStyleColor();
+                        }
                     }
 
                     // Clean input monitoring — same as the Audio Record brick:

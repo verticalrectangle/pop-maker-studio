@@ -10,6 +10,7 @@
 #include "runtime_fx.h"
 #include "recorder.h"
 #include "video_recorder.h"
+#include "av_measure.h"
 #include "ipc_server.h"
 #include "agent_harness.h"
 #include "globals.h"
@@ -732,6 +733,7 @@ void app_shutdown(AppState& state) {
     agent_shutdown();
     ipc_server_stop();
     vrecorder_shutdown();   // kill the camera-capture child so it isn't orphaned
+    av_measure_shutdown();  // join any in-flight A/V-offset measurement
     conform_cancel();       // stop background conform transcodes (no orphan ffmpeg)
     runtime_fx_shutdown();
     audio_shutdown();
