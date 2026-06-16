@@ -186,9 +186,14 @@ static bool fx_bricks_weldable(const Clip& a, const Clip& b) {
 }
 static bool clips_conflict(const Clip& a, const Clip& b) {
     // FX bricks never conflict with content clips (glass bricks ride over
-    // video on the same track), but FX-on-FX overlap is illegal: bricks
-    // weld into a MultiFX chain or bounce back — they never stack.
+    // video on the same track). Among FX bricks, only SAME-kind ones conflict:
+    // two audio (or two video) bricks must weld into a chain or bounce back,
+    // never stack. A video chain and an audio chain are different kinds that
+    // coexist as separate glass bricks on the same host — so they don't
+    // conflict, and a solo video FX brick can be dragged onto content that
+    // already carries an audio chain (and vice-versa).
     if (is_fx_clip(a) != is_fx_clip(b)) return false;
+    if (fx_brick_is_audio_kind(a) != fx_brick_is_audio_kind(b)) return false;
     return a.start < b.end && a.end > b.start;
 }
 static bool is_chain_brick(const Clip& c) {
