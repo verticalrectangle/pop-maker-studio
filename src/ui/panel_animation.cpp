@@ -49,6 +49,7 @@ static void apply_typo_style(Clip& c, const TypographyPreset& pr, const AppState
         memcpy(c.sub_color, pr.color, sizeof(c.sub_color));
     c.karaoke           = pr.karaoke;
     c.karaoke_mode      = pr.karaoke_mode;
+    memcpy(c.karaoke_highlight_color, pr.karaoke_highlight_color, sizeof(c.karaoke_highlight_color));
     c.clip_style        = pr.style;
     c.sub_font          = pr.font ? pr.font : "";
     c.ease              = pr.ease;

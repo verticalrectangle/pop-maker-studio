@@ -36,6 +36,41 @@ static int utf8_len(unsigned char c) {
     return 1;
 }
 
+// Width of `s` with letter-spacing `track` (fraction of fsz added after each
+// glyph). track == 0 is the fast path (plain measure).
+static float text_w_tracked(ImFont* f, float fsz, const char* s, float track) {
+    float w = f->CalcTextSizeA(fsz, FLT_MAX, -1.f, s).x;
+    if (track != 0.f) {
+        int n = 0;
+        for (const char* p = s; *p; ) { p += utf8_len((unsigned char)*p); ++n; }
+        if (n > 1) w += track * fsz * (n - 1);
+    }
+    return w;
+}
+
+// Draw `s` glyph-by-glyph with letter-spacing. track == 0 → one AddText.
+static void draw_text_tracked(ImDrawList* dl, ImFont* f, float fsz, float x, float y,
+                              ImU32 col, const char* s, float track) {
+    if (track == 0.f) { dl->AddText(f, fsz, {x, y}, col, s); return; }
+    float cx = x;
+    for (const char* p = s; *p; ) {
+        int n = utf8_len((unsigned char)*p);
+        char ch[5] = {0}; for (int k = 0; k < n; ++k) ch[k] = p[k];
+        float gw = f->CalcTextSizeA(fsz, FLT_MAX, -1.f, ch).x;
+        dl->AddText(f, fsz, {cx, y}, col, ch);
+        cx += gw + track * fsz;
+        p += n;
+    }
+}
+
+static inline ImU32 lerp_rgb_keepa(ImU32 c1rgb, ImU32 c2rgb, float t, unsigned a) {
+    if (t < 0.f) t = 0.f; if (t > 1.f) t = 1.f;
+    int r = (int)(((c1rgb)      & 0xFF) * (1.f - t) + ((c2rgb)      & 0xFF) * t);
+    int g = (int)(((c1rgb >> 8) & 0xFF) * (1.f - t) + ((c2rgb >> 8) & 0xFF) * t);
+    int b = (int)(((c1rgb >> 16)& 0xFF) * (1.f - t) + ((c2rgb >> 16)& 0xFF) * t);
+    return IM_COL32(r, g, b, a);
+}
+
 void render_text_block(const TextRenderCtx& ctx, const std::vector<std::string>& lines) {
     if (lines.empty()) return;
 
@@ -47,11 +82,13 @@ void render_text_block(const TextRenderCtx& ctx, const std::vector<std::string>&
     const Clip* clip      = ctx.clip;
     const TextStyle& ts   = clip->ts;
 
-    // Pre-compute per-line x positions and block width.
+    float track = clip->tracking;
+
+    // Pre-compute per-line x positions and block width (letter-spacing aware).
     std::vector<float> lwidths(lines.size());
     float block_max_w = 0.f;
     for (size_t i = 0; i < lines.size(); ++i) {
-        lwidths[i] = font->CalcTextSizeA(fsz, FLT_MAX, -1.f, lines[i].c_str()).x;
+        lwidths[i] = text_w_tracked(font, fsz, lines[i].c_str(), track);
         if (lwidths[i] > block_max_w) block_max_w = lwidths[i];
     }
 
@@ -112,9 +149,14 @@ void render_text_block(const TextRenderCtx& ctx, const std::vector<std::string>&
         for (size_t li = 0; li < lines.size(); ++li) {
             float lx = line_x(ctx.anchor_h, ctx.block_cx, lwidths[li], anim_dx);
             float ly = ctx.ty + li * ctx.line_h;
-            dl->AddText(font, fsz, {lx + ts.shadow_ox, ly + ts.shadow_oy}, scol, lines[li].c_str());
+            draw_text_tracked(dl, font, fsz, lx + ts.shadow_ox, ly + ts.shadow_oy, scol, lines[li].c_str(), track);
         }
     }
+
+    // Vertex range where the fill is emitted — a non-zero grad_mode recolours it
+    // afterwards (post-process, same trick as the rotation spin) for gradient
+    // text fill without per-glyph drawing.
+    int vtx_grad0 = (clip->grad_mode > 0) ? dl->VtxBuffer.Size : -1;
 
     // ── 4. Stroke (block only) ─────────────────────────────────────────────────
     if (ts.stroke_enabled && !per_elem) {
@@ -230,6 +272,14 @@ void render_text_block(const TextRenderCtx& ctx, const std::vector<std::string>&
         if (has_karaoke) {
             const char* lp  = lines[li].c_str();
             float       cur_x = lx;
+            // Highlight (sung) and base (unsung) colours.
+            float hl[4]; for (int k=0;k<4;++k) hl[k] = clip->karaoke_highlight_color[k];
+            float bs[4];
+            if (clip->sub_color_override) { for (int k=0;k<4;++k) bs[k]=clip->sub_color[k]; }
+            else { bs[0]=bs[1]=bs[2]=1.f; bs[3]=0.4f; }
+            auto colf = [&](const float c[4], float am) {
+                return IM_COL32((int)(c[0]*255),(int)(c[1]*255),(int)(c[2]*255),(int)(c[3]*am*255)); };
+
             while (*lp) {
                 const char* ep = lp;
                 while (*ep && *ep != ' ') ++ep;
@@ -237,31 +287,51 @@ void render_text_block(const TextRenderCtx& ctx, const std::vector<std::string>&
                 bool has_space  = (*ep == ' ');
                 std::string lword_sp = lword + (has_space ? " " : "");
 
-                bool is_active = false;
+                bool  is_active = false;
+                float wprog = 0.f;   // 0..1 progress through the active word
                 if (kw_idx < (int)ctx.clip_words->size()) {
                     const WordEntry* we = (*ctx.clip_words)[kw_idx];
                     is_active = (ctx.t >= we->start && ctx.t < we->end);
+                    bool sung = ctx.t >= we->end;
+                    if (is_active && we->end > we->start)
+                        wprog = (ctx.t - we->start) / (we->end - we->start);
+                    else if (sung) wprog = 1.f;
                     ++kw_idx;
-                }
+                    float word_w = font->CalcTextSizeA(fsz, FLT_MAX, -1.f, lword_sp.c_str()).x;
 
-                ImU32 wcol;
-                if (clip->sub_color_override) {
-                    float a = (is_active ? clip->sub_color[3] : clip->sub_color[3] * 0.45f) * alpha;
-                    wcol = IM_COL32((int)(clip->sub_color[0]*255), (int)(clip->sub_color[1]*255),
-                                    (int)(clip->sub_color[2]*255), (int)(a*255));
-                } else if (is_active) {
-                    ImU32 hcol = IM_COL32((int)(clip->karaoke_highlight_color[0]*255),
-                                          (int)(clip->karaoke_highlight_color[1]*255),
-                                          (int)(clip->karaoke_highlight_color[2]*255),
-                                          (int)(clip->karaoke_highlight_color[3]*alpha*255));
-                    wcol = hcol;
+                    if (clip->karaoke_mode == 2) {
+                        // Pop: active word scales up + lifts; base/sung swap colour.
+                        float s = is_active ? 1.f + 0.18f * sinf(wprog * 3.14159f) : 1.f;
+                        float es = fsz * s;
+                        float ws = font->CalcTextSizeA(es, FLT_MAX, -1.f, lword_sp.c_str()).x;
+                        float ox = (word_w - ws) * 0.5f;
+                        float oy = is_active ? -ctx.line_h * 0.12f * sinf(wprog * 3.14159f) : 0.f;
+                        // Active or already-sung words stay lit; upcoming stay dim.
+                        ImU32 c = (is_active || wprog >= 1.f) ? colf(hl, alpha) : colf(bs, alpha);
+                        dl->AddText(font, es, {cur_x + ox, ly + oy}, c, lword_sp.c_str());
+                    } else if (clip->karaoke_mode == 1) {
+                        // Fill-wipe: base colour underneath, highlight clipped to a
+                        // left-to-right wipe across the active word over its span.
+                        dl->AddText(font, fsz, {cur_x, ly}, colf(bs, alpha), lword_sp.c_str());
+                        float fillw = (ctx.t >= 0.f && wprog > 0.f) ? word_w * wprog : 0.f;
+                        if (wprog >= 1.f) fillw = word_w + fsz;   // fully sung
+                        if (fillw > 0.f) {
+                            dl->PushClipRect({cur_x, ly - fsz}, {cur_x + fillw, ly + fsz * 1.6f}, true);
+                            dl->AddText(font, fsz, {cur_x, ly}, colf(hl, alpha), lword_sp.c_str());
+                            dl->PopClipRect();
+                        }
+                    } else {
+                        // Mode 0: plain colour swap (active = highlight, else base).
+                        ImU32 c = is_active ? colf(hl, alpha)
+                                : (wprog >= 1.f ? colf(hl, alpha) : colf(bs, alpha));
+                        dl->AddText(font, fsz, {cur_x, ly}, c, lword_sp.c_str());
+                    }
+                    cur_x += word_w;
                 } else {
-                    wcol = IM_COL32(255, 255, 255, (int)(100 * alpha));
+                    float word_w = font->CalcTextSizeA(fsz, FLT_MAX, -1.f, lword_sp.c_str()).x;
+                    dl->AddText(font, fsz, {cur_x, ly}, colf(bs, alpha), lword_sp.c_str());
+                    cur_x += word_w;
                 }
-
-                float word_w = font->CalcTextSizeA(fsz, FLT_MAX, -1.f, lword_sp.c_str()).x;
-                dl->AddText(font, fsz, {cur_x, ly}, wcol, lword_sp.c_str());
-                cur_x += word_w;
                 lp = has_space ? ep + 1 : ep;
             }
         } else {
@@ -275,7 +345,32 @@ void render_text_block(const TextRenderCtx& ctx, const std::vector<std::string>&
             } else {
                 tcol = IM_COL32(255, 255, 255, (int)(255.f * alpha));
             }
-            dl->AddText(font, fsz, {lx, ly}, tcol, lines[li].c_str());
+            draw_text_tracked(dl, font, fsz, lx, ly, tcol, lines[li].c_str(), track);
+        }
+    }
+
+    // ── Gradient fill (post-process the fill vertices) ─────────────────────────
+    if (vtx_grad0 >= 0 && vtx_grad0 < dl->VtxBuffer.Size) {
+        ImU32 c1 = clip->sub_color_override
+            ? IM_COL32((int)(clip->sub_color[0]*255),(int)(clip->sub_color[1]*255),(int)(clip->sub_color[2]*255),255)
+            : IM_COL32(255,255,255,255);
+        ImU32 c2 = IM_COL32((int)(clip->grad_col2[0]*255),(int)(clip->grad_col2[1]*255),
+                            (int)(clip->grad_col2[2]*255),255);
+        float top = ctx.ty, bh = fmaxf(1.f, block_h);
+        float left = ctx.block_cx - block_max_w * 0.5f, span = fmaxf(1.f, block_max_w + bh);
+        for (int i = vtx_grad0; i < dl->VtxBuffer.Size; ++i) {
+            ImDrawVert& v = dl->VtxBuffer[i];
+            unsigned a = (v.col >> IM_COL32_A_SHIFT) & 0xFF;
+            if (a == 0) continue;
+            float tg;
+            if (clip->grad_mode == 2)        tg = ((v.pos.x - left) + (v.pos.y - top)) / span;
+            else if (clip->grad_mode == 3) { // hue cycle by x + time
+                float hh = (v.pos.x - left) / fmaxf(1.f, block_max_w) + ctx.t * 0.15f;
+                float r,g,b; ImGui::ColorConvertHSVtoRGB(hh - floorf(hh), 0.85f, 1.f, r,g,b);
+                v.col = IM_COL32((int)(r*255),(int)(g*255),(int)(b*255), a); continue;
+            }
+            else                              tg = (v.pos.y - top) / bh;   // vertical
+            v.col = lerp_rgb_keepa(c1, c2, tg, a);
         }
     }
 

@@ -56,6 +56,7 @@ struct TypographyPreset {
     int   karaoke_mode = 0;     // 0=color 1=fill-wipe 2=pop 3=bouncing-ball
     int   grad_mode    = 0;     // 0=none 1=vertical 2=diagonal 3=hue-cycle
     float grad_col2[4] = {1.f, 1.f, 1.f, 1.f};  // second gradient stop
+    float karaoke_highlight_color[4] = {1.f, 0.85f, 0.1f, 1.f};  // active-word colour
     TextStyle ts       = {};    // shadow/stroke/glow/box, travels with the preset
 };
 
@@ -609,6 +610,92 @@ static const TypographyPreset g_typo_presets[] = {
         .font_size=0.10f, .sub_pos=1, .sub_wrap_w=0.85f,
         .color={0.6f, 0.95f, 1.f, 1.f}, .style=AnimStyle::WaveText, .pause_gap=0.4f, .max_words=4,
         .anim_unit=2, .anim_stagger=0.f, .ts={ .shadow_enabled=false } },
+
+    // ── Karaoke evolved ──────────────────────────────────────────────────────
+
+    {   .id="karaoke_fill", .label="Fill Wipe",
+        .tagline="Highlight sweeps across each word as it's sung · classic karaoke",
+        .category="Karaoke", .font="anton",
+        .grouping=SubtitleMode::Line, .custom_n=3,
+        .font_size=0.075f, .sub_pos=0, .sub_pos_y=0.86f, .sub_wrap_w=0.9f,
+        .color={0.55f, 0.55f, 0.58f, 1.f}, .all_caps=true, .karaoke=true, .style=AnimStyle::None,
+        .pause_gap=0.5f, .max_words=8, .karaoke_mode=1 },
+
+    {   .id="karaoke_pop", .label="Pop Highlight",
+        .tagline="Active word scales up + brightens · modern karaoke",
+        .category="Karaoke", .font="montserrat",
+        .grouping=SubtitleMode::Line, .custom_n=3,
+        .font_size=0.07f, .sub_pos=0, .sub_pos_y=0.86f, .sub_wrap_w=0.9f,
+        .color={0.6f, 0.6f, 0.62f, 1.f}, .karaoke=true, .style=AnimStyle::None,
+        .pause_gap=0.5f, .max_words=8, .karaoke_mode=2 },
+
+    {   .id="neon_trace", .label="Neon Trace",
+        .tagline="Active word's tube lights up as you sing · neon sign",
+        .category="Karaoke", .font="monoton",
+        .grouping=SubtitleMode::Line, .custom_n=2,
+        .font_size=0.085f, .sub_pos=1, .sub_wrap_w=0.85f,
+        .color={0.4f, 0.2f, 0.4f, 1.f}, .all_caps=true, .karaoke=true, .style=AnimStyle::None,
+        .pause_gap=0.5f, .max_words=5, .karaoke_mode=1,
+        .karaoke_highlight_color={1.f, 0.3f, 0.85f, 1.f},
+        .ts={ .shadow_enabled=false, .glow_enabled=true, .glow_r=10.f, .glow_col={1.f,0.3f,0.85f,0.5f} } },
+
+    // ── Gradient / chromatic ─────────────────────────────────────────────────
+
+    {   .id="sunset", .label="Sunset",
+        .tagline="Warm orange-to-pink gradient fill · slow · warm pop",
+        .category="Gradient", .font="poppins",
+        .grouping=SubtitleMode::Phrase, .custom_n=3,
+        .font_size=0.11f, .sub_pos=1, .sub_wrap_w=0.85f,
+        .color={1.f, 0.75f, 0.25f, 1.f}, .style=AnimStyle::Fade, .pause_gap=0.4f, .max_words=4,
+        .ease=EASE_OUT_CUBIC, .grad_mode=1, .grad_col2={1.f, 0.25f, 0.55f, 1.f},
+        .ts={ .shadow_enabled=false } },
+
+    {   .id="holographic", .label="Holographic",
+        .tagline="Animated iridescent hue shift · Y2K foil",
+        .category="Gradient", .font="spacegrotesk",
+        .grouping=SubtitleMode::Phrase, .custom_n=3,
+        .font_size=0.11f, .sub_pos=1, .sub_wrap_w=0.85f,
+        .all_caps=true, .style=AnimStyle::Fade, .pause_gap=0.4f, .max_words=4,
+        .tracking=0.04f, .grad_mode=3, .ts={ .shadow_enabled=false } },
+
+    {   .id="duotone", .label="Duotone",
+        .tagline="Two-colour diagonal split fill · poster",
+        .category="Gradient", .font="anton",
+        .grouping=SubtitleMode::Word, .custom_n=1,
+        .font_size=0.18f, .sub_pos=1,
+        .color={1.f, 0.3f, 0.6f, 1.f}, .all_caps=true, .style=AnimStyle::Scale, .pause_gap=0.15f, .max_words=1,
+        .ease=EASE_OUT_BACK, .grad_mode=2, .grad_col2={0.3f, 0.5f, 1.f, 1.f},
+        .ts={ .shadow_enabled=false } },
+
+    {   .id="goldfoil", .label="Gold Foil",
+        .tagline="Metallic gold gradient + soft glow · luxury / awards",
+        .category="Gradient", .font="cinzel",
+        .grouping=SubtitleMode::Phrase, .custom_n=3,
+        .font_size=0.10f, .sub_pos=1, .sub_wrap_w=0.85f,
+        .color={1.f, 0.92f, 0.55f, 1.f}, .all_caps=true, .style=AnimStyle::Fade,
+        .pause_gap=0.5f, .max_words=4, .ease=EASE_OUT_CUBIC, .tracking=0.05f,
+        .grad_mode=1, .grad_col2={0.7f, 0.5f, 0.15f, 1.f},
+        .ts={ .shadow_enabled=false, .glow_enabled=true, .glow_r=8.f, .glow_col={1.f,0.8f,0.35f,0.4f} } },
+
+    {   .id="chrome80s", .label="Chrome 80s",
+        .tagline="Silver-to-blue chrome gradient · synthwave",
+        .category="Gradient", .font="bebasneue",
+        .grouping=SubtitleMode::CustomN, .custom_n=2,
+        .font_size=0.16f, .sub_pos=1, .sub_wrap_w=0.9f,
+        .color={0.95f, 0.95f, 1.f, 1.f}, .all_caps=true, .style=AnimStyle::Scale,
+        .pause_gap=0.2f, .max_words=2, .ease=EASE_OUT_BACK,
+        .grad_mode=1, .grad_col2={0.3f, 0.45f, 0.9f, 1.f},
+        .ts={ .stroke_enabled=true, .stroke_w=2.f, .stroke_col={0.1f,0.1f,0.3f,1.f} } },
+
+    {   .id="ember", .label="Ember",
+        .tagline="Fill glows orange-to-red like fire · intense",
+        .category="Gradient", .font="anton",
+        .grouping=SubtitleMode::Word, .custom_n=1,
+        .font_size=0.17f, .sub_pos=1,
+        .color={1.f, 0.85f, 0.3f, 1.f}, .all_caps=true, .style=AnimStyle::Scale,
+        .pause_gap=0.15f, .max_words=1, .ease=EASE_OUT_BACK,
+        .grad_mode=1, .grad_col2={0.85f, 0.12f, 0.05f, 1.f},
+        .ts={ .shadow_enabled=false, .glow_enabled=true, .glow_r=10.f, .glow_col={1.f,0.4f,0.1f,0.5f} } },
 };
 
 static const int g_n_typo_presets = (int)(sizeof(g_typo_presets) / sizeof(g_typo_presets[0]));
