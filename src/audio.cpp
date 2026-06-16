@@ -113,6 +113,11 @@ static std::atomic<AudioFXChain*> g_mon_chain{nullptr};
 // to map the master clock into the brick's source time.
 static std::atomic<bool>          g_mon_windowed{false};
 static std::atomic<float>         g_mon_brick_start{0.f};
+// Free-running monitor frame index for process_seg's seek detection. It only
+// ever increments, so a PARKED playhead (static master clock) isn't mistaken
+// for a per-block seek that would reset the effect every block — the window
+// gating uses src_t (the live playhead), not this counter.
+static int64_t                    g_mon_frame_ctr = 0;  // audio thread only
 
 // Click-free device swaps: output ramps 0→1 over FADE_LEN frames after any
 // device (re)start. Audio thread consumes; control thread arms via store(0).
@@ -396,13 +401,14 @@ static void perf_input_block(const float* in, uint32_t frameCount) {
     const bool gate = g_gate_on.load(std::memory_order_relaxed);
     const bool bake = g_gate_bake.load(std::memory_order_relaxed);
     const bool mon  = g_monitor_on.load(std::memory_order_relaxed);
-    // Windowed monitoring: while the transport rolls, run the FX through the
-    // same windowed processor playback/export use so the monitor follows each
-    // brick's span. Parked → run the chain straight (dial-in). perf_input_block
-    // runs before perf_output_block advances g_read_pos, so it's the block-start
-    // master frame.
-    const bool win_mon = g_mon_windowed.load(std::memory_order_relaxed) &&
-                         g_transport.load(std::memory_order_relaxed);
+    // Windowed monitoring: run the FX through the same windowed processor
+    // playback/export use, gated on the LIVE playhead — so the monitor follows
+    // each brick's span whether you're recording, playing, or just scrubbing.
+    // src_t advances per sample while rolling and stays put while parked;
+    // perf_input_block runs before perf_output_block advances g_read_pos, so
+    // mon_base is the block-start master frame (also tracks manual seeks).
+    const bool win_mon = g_mon_windowed.load(std::memory_order_relaxed);
+    const bool rolling = g_transport.load(std::memory_order_relaxed);
     const float mon_bstart = g_mon_brick_start.load(std::memory_order_relaxed);
     const int64_t mon_base = (int64_t)(g_read_pos.load(std::memory_order_relaxed) / 2);
     const float inv_sr = 1.f / 44100.f;
@@ -425,12 +431,13 @@ static void perf_input_block(const float* in, uint32_t frameCount) {
             float ml = l * gg, mr2 = r2 * gg;
             if (fxc) {
                 if (win_mon) {
-                    int64_t fr = mon_base + (int64_t)f;
-                    float src_t = (float)fr * inv_sr - mon_bstart;
-                    audio_fx_chain_process_seg(fxc, ml, mr2, src_t, fr);
+                    float src_t = (float)(mon_base + (rolling ? (int64_t)f : 0))
+                                  * inv_sr - mon_bstart;
+                    audio_fx_chain_process_seg(fxc, ml, mr2, src_t, g_mon_frame_ctr);
                 } else {
                     audio_fx_chain_process(fxc, ml, mr2);
                 }
+                ++g_mon_frame_ctr;
             }
             g_monr[mw++ & MONR_MASK] = ml;
             g_monr[mw++ & MONR_MASK] = mr2;
