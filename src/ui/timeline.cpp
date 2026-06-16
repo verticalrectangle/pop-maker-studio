@@ -2350,30 +2350,8 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                 s_tl_geom.clips.push_back(g);
             }
 
-            // FX disclosure — a plain white chevron at the clip's bottom-left
-            // that toggles the per-FX timing lanes beneath the clip (the track
-            // grows). Right chevron = "click to open", down chevron = "open".
-            // Click is swallowed so it doesn't also drag the clip.
-            if (!is_fx_clip(clip) && host_fx_count(ti, ci) > 0) {
-                float cx = vis_x0 + 9.f, cy = cy1 - 6.f;
-                bool thov = mouse.x >= cx - 7.f && mouse.x <= cx + 7.f &&
-                            mouse.y >= cy - 7.f && mouse.y <= cy + 7.f;
-                ImU32 tcol = thov ? IM_COL32(255, 255, 255, 255)
-                                  : IM_COL32(235, 240, 248, 230);
-                if (clip.fx_expanded) {
-                    dl->AddLine({cx - 4.f, cy - 2.f}, {cx, cy + 3.f}, tcol, 2.f);
-                    dl->AddLine({cx, cy + 3.f}, {cx + 4.f, cy - 2.f}, tcol, 2.f);
-                } else {
-                    dl->AddLine({cx - 2.f, cy - 4.f}, {cx + 3.f, cy}, tcol, 2.f);
-                    dl->AddLine({cx + 3.f, cy}, {cx - 2.f, cy + 4.f}, tcol, 2.f);
-                }
-                if (thov) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
-                if (thov && !tl_any_popup && !track.locked &&
-                    ImGui::IsMouseClicked(0)) {
-                    clip.fx_expanded = !clip.fx_expanded;
-                    continue;   // don't fall through to clip select/drag
-                }
-            }
+            // FX disclosure chevron is drawn later (Pass 2.5) so it lands on top
+            // of the coupled glass FX brick instead of being painted over by it.
 
             clip_interact(ci, clip, vis_x0, vis_x1, cy0, cy1, sel);
         }
@@ -2588,6 +2566,45 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
             // Weld-complete flash (the merged brick is always MultiFX, so it
             // renders through this path, never the BodyFX one).
             draw_fx_merge_flash(dl, ti, ci, vis_x0, vis_x1, cy0, cy1);
+        }
+
+        // ── Pass 2.5: FX disclosure chevron — on top of the coupled glass brick ──
+        // A plain white chevron at a content clip's bottom-left that toggles the
+        // per-FX timing lanes beneath it. Drawn after Pass 2 so the glass FX
+        // brick riding on the clip doesn't paint over it (the original Pass-1
+        // chevron was invisible — there was no button to expand the FX). Right
+        // chevron = "click to open", down chevron = "open". The click is handled
+        // here too, so it sits above the glass brick's own hit-testing.
+        for (int ci = 0; ci < (int)track.clips.size(); ++ci) {
+            Clip& clip = track.clips[(size_t)ci];
+            if (is_fx_clip(clip) || host_fx_count(ti, ci) <= 0) continue;
+            float cx0 = origin.x+TL_LABEL_W+clip.start*zoom-scroll;
+            float cx1 = origin.x+TL_LABEL_W+clip.end*zoom-scroll;
+            if (cx1 < origin.x+TL_LABEL_W || cx0 > origin.x+total_w) continue;
+            float vis_x0 = fmaxf(cx0, origin.x+TL_LABEL_W);
+            float cy1 = track_y+TL_TRACK_H-3.f;
+            if (cy1 > track_area_bot || track_y < track_area_top) continue;
+            float cx = vis_x0 + 9.f, cy = cy1 - 6.f;
+            bool thov = !tl_any_popup &&
+                        mouse.x >= cx - 7.f && mouse.x <= cx + 7.f &&
+                        mouse.y >= cy - 7.f && mouse.y <= cy + 7.f;
+            // A small dark pad behind the glyph so it reads on any glass tint.
+            dl->AddRectFilled({cx - 7.f, cy - 7.f}, {cx + 7.f, cy + 7.f},
+                              IM_COL32(0, 0, 0, thov ? 150 : 90), 3.f);
+            ImU32 tcol = thov ? IM_COL32(255, 255, 255, 255)
+                              : IM_COL32(235, 240, 248, 235);
+            if (clip.fx_expanded) {
+                dl->AddLine({cx - 4.f, cy - 2.f}, {cx, cy + 3.f}, tcol, 2.f);
+                dl->AddLine({cx, cy + 3.f}, {cx + 4.f, cy - 2.f}, tcol, 2.f);
+            } else {
+                dl->AddLine({cx - 2.f, cy - 4.f}, {cx + 3.f, cy}, tcol, 2.f);
+                dl->AddLine({cx + 3.f, cy}, {cx - 2.f, cy + 4.f}, tcol, 2.f);
+            }
+            if (thov) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+            if (thov && !track.locked && ImGui::IsMouseClicked(0)) {
+                clip.fx_expanded = !clip.fx_expanded;
+                s_clip_hit = true;   // don't let it also deselect/drag
+            }
         }
 
         // Left-click empty track body (no clip hit) — deselect
