@@ -704,36 +704,65 @@ void draw_canvas_handles(AppState& state, ImDrawList* dl, ImVec2 p, float w, flo
                 }
                 s_ctx.dirty = true;
 
-                // Fill-canvas snap for resize: media scale is proportional to the
-                // canvas, so 100% (scale 1.0 — exactly fills the frame) is a stop
-                // you should be able to land on by dragging. Without it you can't
-                // hit a clean full-frame fit and the export gets a hairline gap or
-                // overscan. Edge handles snap their single axis; corner handles
-                // snap the uniform factor (aspect preserved) when the nearer axis
-                // reaches full size. A canvas-border guide confirms the fit.
+                // Border snap for resize — rotation-correct. As you drag a handle
+                // the moved point P (the edge's midpoint, or the grabbed corner)
+                // travels along a FIXED screen-space direction d as the scale
+                // grows: P = C + t·d, where t is the half-extent (edges) or the
+                // uniform factor (corners) and C is the box centre. So to land P
+                // exactly on a canvas border we just solve for the t that puts it
+                // there. This works at any rotation — at 90/270° the dragged edge
+                // is axis-aligned and it gives a clean full-bleed fill, which the
+                // old "snap scale to 1.0" couldn't do once the clip was rotated.
                 {
-                    const float STOL = 0.035f;   // ~3.5% of canvas — scales with it
                     CanvasHandle hd = s_ctx.handle;
-                    bool snapped = false;
-                    if (hd == CanvasHandle::EdgeL || hd == CanvasHandle::EdgeR) {
-                        if (fabsf(mc.scale_x - 1.f) < STOL) { mc.scale_x = 1.f; snapped = true; }
-                    } else if (hd == CanvasHandle::EdgeT || hd == CanvasHandle::EdgeB) {
-                        if (fabsf(mc.scale_y - 1.f) < STOL) { mc.scale_y = 1.f; snapped = true; }
-                    } else if (hd == CanvasHandle::CornerTL || hd == CanvasHandle::CornerTR ||
-                               hd == CanvasHandle::CornerBL || hd == CanvasHandle::CornerBR) {
-                        float dx = fabsf(mc.scale_x - 1.f), dy = fabsf(mc.scale_y - 1.f);
-                        float ssx = s_ctx.start_scale_x, ssy = s_ctx.start_scale_y;
-                        if ((dx < STOL && ssx > 0.f) || (dy < STOL && ssy > 0.f)) {
-                            // Re-snap the shared scale factor so the nearer axis lands
-                            // exactly on 1.0; the other follows to keep the aspect.
-                            float f = (dx <= dy && ssx > 0.f) ? 1.f / ssx : 1.f / ssy;
-                            mc.scale_x = ssx * f;
-                            mc.scale_y = ssy * f;
-                            snapped = true;
+                    float fit_w = (s_ctx.start_scale_x > 1e-6f) ? orig_w / s_ctx.start_scale_x : 0.f;
+                    float fit_h = (s_ctx.start_scale_y > 1e-6f) ? orig_h / s_ctx.start_scale_y : 0.f;
+                    float dx = 0.f, dy = 0.f, t_cur = 0.f;
+                    int mode = 0;   // 1 = scale_x edge, 2 = scale_y edge, 3 = corner
+                    float sgnx = 0.f, sgny = 0.f;
+                    switch (hd) {
+                        case CanvasHandle::EdgeR: dx =  axx; dy =  axy; t_cur = fit_w*mc.scale_x*0.5f; mode = 1; break;
+                        case CanvasHandle::EdgeL: dx = -axx; dy = -axy; t_cur = fit_w*mc.scale_x*0.5f; mode = 1; break;
+                        case CanvasHandle::EdgeB: dx =  ayx; dy =  ayy; t_cur = fit_h*mc.scale_y*0.5f; mode = 2; break;
+                        case CanvasHandle::EdgeT: dx = -ayx; dy = -ayy; t_cur = fit_h*mc.scale_y*0.5f; mode = 2; break;
+                        case CanvasHandle::CornerTL: sgnx = -1.f; sgny = -1.f; mode = 3; break;
+                        case CanvasHandle::CornerTR: sgnx =  1.f; sgny = -1.f; mode = 3; break;
+                        case CanvasHandle::CornerBR: sgnx =  1.f; sgny =  1.f; mode = 3; break;
+                        case CanvasHandle::CornerBL: sgnx = -1.f; sgny =  1.f; mode = 3; break;
+                        default: break;
+                    }
+                    if (mode == 3) {
+                        // The corner rides the uniform factor f about the centre.
+                        dx = sgnx*(orig_w*0.5f)*axx + sgny*(orig_h*0.5f)*ayx;
+                        dy = sgnx*(orig_w*0.5f)*axy + sgny*(orig_h*0.5f)*ayy;
+                        t_cur = (s_ctx.start_scale_x > 1e-6f) ? mc.scale_x / s_ctx.start_scale_x : 1.f;
+                    }
+                    if (mode != 0 && fit_w > 0.f && fit_h > 0.f) {
+                        float dlen = sqrtf(dx*dx + dy*dy);
+                        const float TOLPX = fmaxf(8.f, 0.022f * w);
+                        float vlines[2] = { p.x, p.x + w };
+                        float hlines[2] = { p.y, p.y + h };
+                        float best_d = TOLPX, best_t = t_cur, snap_line = 0.f;
+                        bool  snapped = false, snap_vert = false;
+                        for (int i = 0; i < 2; ++i) if (fabsf(dx) > 1e-3f) {
+                            float tc = (vlines[i] - cx) / dx;
+                            float d  = fabsf(tc - t_cur) * dlen;
+                            if (tc > 1e-3f && d < best_d) { best_d = d; best_t = tc; snapped = true; snap_vert = true;  snap_line = vlines[i]; }
+                        }
+                        for (int i = 0; i < 2; ++i) if (fabsf(dy) > 1e-3f) {
+                            float tc = (hlines[i] - cy) / dy;
+                            float d  = fabsf(tc - t_cur) * dlen;
+                            if (tc > 1e-3f && d < best_d) { best_d = d; best_t = tc; snapped = true; snap_vert = false; snap_line = hlines[i]; }
+                        }
+                        if (snapped) {
+                            if      (mode == 1) mc.scale_x = fmaxf(0.05f, 2.f*best_t/fit_w);
+                            else if (mode == 2) mc.scale_y = fmaxf(0.05f, 2.f*best_t/fit_h);
+                            else { mc.scale_x = fmaxf(0.05f, s_ctx.start_scale_x*best_t);
+                                   mc.scale_y = fmaxf(0.05f, s_ctx.start_scale_y*best_t); }
+                            if (snap_vert) dl->AddLine({snap_line, p.y}, {snap_line, p.y + h}, snap_col, 1.5f);
+                            else           dl->AddLine({p.x, snap_line}, {p.x + w, snap_line}, snap_col, 1.5f);
                         }
                     }
-                    if (snapped)
-                        dl->AddRect({p.x, p.y}, {p.x + w, p.y + h}, snap_col, 0.f, 0, 1.5f);
                 }
 
                 // Snap move to canvas borders, centre, and safe-box edges.
