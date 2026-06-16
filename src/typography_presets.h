@@ -138,14 +138,14 @@ static const TypographyPreset g_typo_presets[] = {
         .category="Aesthetic",
         .grouping=SubtitleMode::Phrase, .custom_n=3,
         .font_size=0.08f, .sub_pos=1, .sub_wrap_w=0.80f,
-        .style=AnimStyle::Fade, .pause_gap=0.40f, .max_words=6, .text_case=2 },
+        .style=AnimStyle::None, .pause_gap=0.40f, .max_words=6, .text_case=2 },
 
     {   .id="indie2012", .label="Indie 2012",
         .tagline="Small · muted · left offset · minimal",
         .category="Aesthetic",
         .grouping=SubtitleMode::Line, .custom_n=3,
         .font_size=0.06f, .sub_pos_x=0.12f, .sub_pos=1, .sub_anchor_h=0, .sub_wrap_w=0.75f,
-        .color={0.85f, 0.82f, 0.78f, 1.f}, .style=AnimStyle::Fade,
+        .color={0.85f, 0.82f, 0.78f, 1.f}, .style=AnimStyle::None,
         .pause_gap=0.50f, .max_words=5, .text_case=2 },
 
     {   .id="sadgirl", .label="Sad Girl",
@@ -153,7 +153,7 @@ static const TypographyPreset g_typo_presets[] = {
         .category="Aesthetic", .font="cormorant",
         .grouping=SubtitleMode::Word, .custom_n=1,
         .font_size=0.16f, .sub_pos=1,
-        .color={0.95f, 0.75f, 0.88f, 1.f}, .style=AnimStyle::Fade,
+        .color={0.95f, 0.75f, 0.88f, 1.f}, .style=AnimStyle::None,
         .pause_gap=0.20f, .max_words=1, .text_case=2, .ease=EASE_OUT_CUBIC },
 
     {   .id="cottagecore", .label="Cottagecore",
@@ -161,7 +161,7 @@ static const TypographyPreset g_typo_presets[] = {
         .category="Aesthetic", .font="ebgaramond",
         .grouping=SubtitleMode::Line, .custom_n=3,
         .font_size=0.075f, .sub_pos=1, .sub_wrap_w=0.80f,
-        .color={0.96f, 0.91f, 0.78f, 1.f}, .style=AnimStyle::Fade,
+        .color={0.96f, 0.91f, 0.78f, 1.f}, .style=AnimStyle::None,
         .pause_gap=0.60f, .max_words=6,
         .fx={ {FXType::FilmGrain, 0.f} }, .n_fx=1, .text_case=2, .ease=EASE_OUT_CUBIC },
 
@@ -170,14 +170,14 @@ static const TypographyPreset g_typo_presets[] = {
         .category="Aesthetic",
         .grouping=SubtitleMode::Line, .custom_n=3,
         .font_size=0.055f, .sub_pos=0, .sub_pos_y=0.88f,
-        .style=AnimStyle::Fade, .pause_gap=0.70f, .max_words=8 },
+        .style=AnimStyle::None, .pause_gap=0.70f, .max_words=8 },
 
     {   .id="a24", .label="A24",
         .tagline="Tiny centered serif · slow fade · lots of air",
         .category="Aesthetic", .font="instrumentserif",
         .grouping=SubtitleMode::Phrase, .custom_n=3,
         .font_size=0.07f, .sub_pos=1, .sub_wrap_w=0.7f,
-        .color={0.97f, 0.95f, 0.9f, 1.f}, .style=AnimStyle::Fade,
+        .color={0.97f, 0.95f, 0.9f, 1.f}, .style=AnimStyle::None,
         .pause_gap=0.6f, .max_words=5, .ease=EASE_OUT_CUBIC,
         .ts={ .shadow_enabled=false } },
 
@@ -186,7 +186,7 @@ static const TypographyPreset g_typo_presets[] = {
         .category="Aesthetic", .font="sacramento",
         .grouping=SubtitleMode::Phrase, .custom_n=3,
         .font_size=0.10f, .sub_pos=1, .sub_wrap_w=0.7f,
-        .color={1.f, 1.f, 1.f, 0.8f}, .style=AnimStyle::Fade,
+        .color={1.f, 1.f, 1.f, 0.8f}, .style=AnimStyle::None,
         .pause_gap=0.5f, .max_words=5, .ease=EASE_OUT_CUBIC,
         .ts={ .shadow_enabled=false } },
 
@@ -211,7 +211,7 @@ static const TypographyPreset g_typo_presets[] = {
         .category="Editorial", .font="playfairdisplay",
         .grouping=SubtitleMode::Phrase, .custom_n=3,
         .font_size=0.10f, .sub_pos=1, .sub_wrap_w=0.8f,
-        .all_caps=true, .style=AnimStyle::Fade, .pause_gap=0.5f, .max_words=5,
+        .all_caps=true, .style=AnimStyle::None, .pause_gap=0.5f, .max_words=5,
         .ease=EASE_OUT_CUBIC, .tracking=0.12f, .ts={ .shadow_enabled=false } },
 
     {   .id="pullquote", .label="Pull Quote",
@@ -219,7 +219,7 @@ static const TypographyPreset g_typo_presets[] = {
         .category="Editorial", .font="fraunces",
         .grouping=SubtitleMode::Line, .custom_n=3,
         .font_size=0.085f, .sub_pos=1, .sub_wrap_w=0.8f,
-        .color={0.97f, 0.96f, 0.93f, 1.f}, .style=AnimStyle::Fade,
+        .color={0.97f, 0.96f, 0.93f, 1.f}, .style=AnimStyle::None,
         .pause_gap=0.6f, .max_words=8, .ease=EASE_OUT_CUBIC,
         .ts={ .shadow_enabled=false } },
 
@@ -237,7 +237,7 @@ static const TypographyPreset g_typo_presets[] = {
         .category="Editorial", .font="cormorant",
         .grouping=SubtitleMode::Phrase, .custom_n=3,
         .font_size=0.09f, .sub_pos=1, .sub_wrap_w=0.85f,
-        .all_caps=true, .style=AnimStyle::Fade, .pause_gap=0.6f, .max_words=4,
+        .all_caps=true, .style=AnimStyle::None, .pause_gap=0.6f, .max_words=4,
         .ease=EASE_OUT_CUBIC, .tracking=0.2f, .ts={ .shadow_enabled=false } },
 
     {   .id="letterpress", .label="Letterpress",
@@ -245,7 +245,7 @@ static const TypographyPreset g_typo_presets[] = {
         .category="Editorial", .font="cinzel",
         .grouping=SubtitleMode::Phrase, .custom_n=3,
         .font_size=0.09f, .sub_pos=1, .sub_wrap_w=0.85f,
-        .color={0.88f, 0.85f, 0.8f, 1.f}, .all_caps=true, .style=AnimStyle::Fade,
+        .color={0.88f, 0.85f, 0.8f, 1.f}, .all_caps=true, .style=AnimStyle::None,
         .pause_gap=0.6f, .max_words=5, .ease=EASE_OUT_CUBIC, .tracking=0.06f,
         .ts={ .shadow_enabled=true, .shadow_ox=-1.f, .shadow_oy=-1.f, .shadow_col={1.f,1.f,1.f,0.25f} } },
 
@@ -271,7 +271,7 @@ static const TypographyPreset g_typo_presets[] = {
         .category="Script", .font="greatvibes",
         .grouping=SubtitleMode::Phrase, .custom_n=3,
         .font_size=0.14f, .sub_pos=1, .sub_wrap_w=0.8f,
-        .style=AnimStyle::Fade, .pause_gap=0.5f, .max_words=5, .ease=EASE_OUT_CUBIC,
+        .style=AnimStyle::None, .pause_gap=0.5f, .max_words=5, .ease=EASE_OUT_CUBIC,
         .ts={ .shadow_enabled=false } },
 
     {   .id="lovenote", .label="Love Note",
@@ -287,14 +287,14 @@ static const TypographyPreset g_typo_presets[] = {
         .category="Script", .font="permanentmarker",
         .grouping=SubtitleMode::Phrase, .custom_n=3,
         .font_size=0.11f, .sub_pos=1, .sub_wrap_w=0.8f,
-        .style=AnimStyle::Fade, .pause_gap=0.4f, .max_words=5 },
+        .style=AnimStyle::None, .pause_gap=0.4f, .max_words=5 },
 
     {   .id="calligraphy", .label="Calligraphy",
         .tagline="Formal hand · large · gold · soft glow · wedding",
         .category="Script", .font="allura",
         .grouping=SubtitleMode::Phrase, .custom_n=3,
         .font_size=0.15f, .sub_pos=1, .sub_wrap_w=0.8f,
-        .color={1.f, 0.9f, 0.55f, 1.f}, .style=AnimStyle::Fade,
+        .color={1.f, 0.9f, 0.55f, 1.f}, .style=AnimStyle::None,
         .pause_gap=0.6f, .max_words=4, .ease=EASE_OUT_CUBIC,
         .ts={ .shadow_enabled=false, .glow_enabled=true, .glow_r=10.f, .glow_col={1.f,0.85f,0.4f,0.5f} } },
 
@@ -303,7 +303,7 @@ static const TypographyPreset g_typo_presets[] = {
         .category="Script", .font="homemadeapple",
         .grouping=SubtitleMode::Phrase, .custom_n=3,
         .font_size=0.085f, .sub_pos=1, .sub_wrap_w=0.75f,
-        .color={0.9f, 0.9f, 0.92f, 1.f}, .style=AnimStyle::Fade,
+        .color={0.9f, 0.9f, 0.92f, 1.f}, .style=AnimStyle::None,
         .pause_gap=0.5f, .max_words=4, .ts={ .shadow_enabled=false } },
 
     {   .id="brush", .label="Brush",
@@ -319,7 +319,7 @@ static const TypographyPreset g_typo_presets[] = {
         .category="Script", .font="dancingscript",
         .grouping=SubtitleMode::Phrase, .custom_n=3,
         .font_size=0.11f, .sub_pos=1, .sub_wrap_w=0.8f,
-        .style=AnimStyle::Fade, .pause_gap=0.45f, .max_words=5, .ease=EASE_OUT_CUBIC,
+        .style=AnimStyle::None, .pause_gap=0.45f, .max_words=5, .ease=EASE_OUT_CUBIC,
         .ts={ .shadow_enabled=false } },
 
     // ── Clean / Modern ───────────────────────────────────────────────────────
@@ -329,7 +329,7 @@ static const TypographyPreset g_typo_presets[] = {
         .category="Clean",
         .grouping=SubtitleMode::Phrase, .custom_n=3,
         .font_size=0.055f, .sub_pos=1, .sub_wrap_w=0.75f,
-        .color={0.9f, 0.9f, 0.9f, 1.f}, .style=AnimStyle::Fade,
+        .color={0.9f, 0.9f, 0.9f, 1.f}, .style=AnimStyle::None,
         .pause_gap=0.40f, .max_words=5, .ts={ .shadow_enabled=false } },
 
     {   .id="spotify", .label="Spotify",
@@ -337,14 +337,14 @@ static const TypographyPreset g_typo_presets[] = {
         .category="Clean",
         .grouping=SubtitleMode::Phrase, .custom_n=3,
         .font_size=0.07f, .sub_pos=0, .sub_pos_y=0.85f, .sub_wrap_w=0.82f,
-        .style=AnimStyle::Fade, .pause_gap=0.35f, .max_words=6 },
+        .style=AnimStyle::None, .pause_gap=0.35f, .max_words=6 },
 
     {   .id="apple", .label="Apple",
         .tagline="Single word · massive · fades · pristine white",
         .category="Clean",
         .grouping=SubtitleMode::Word, .custom_n=1,
         .font_size=0.16f, .sub_pos=1, .sub_wrap_w=0.88f,
-        .style=AnimStyle::Fade, .pause_gap=0.18f, .max_words=1, .ease=EASE_OUT_CUBIC,
+        .style=AnimStyle::None, .pause_gap=0.18f, .max_words=1, .ease=EASE_OUT_CUBIC,
         .ts={ .shadow_enabled=false } },
 
     {   .id="widecaps", .label="Wide Caps",
@@ -352,7 +352,7 @@ static const TypographyPreset g_typo_presets[] = {
         .category="Clean", .font="spacegrotesk",
         .grouping=SubtitleMode::Phrase, .custom_n=3,
         .font_size=0.07f, .sub_pos=1, .sub_wrap_w=0.85f,
-        .all_caps=true, .style=AnimStyle::Fade, .pause_gap=0.45f, .max_words=4,
+        .all_caps=true, .style=AnimStyle::None, .pause_gap=0.45f, .max_words=4,
         .tracking=0.22f, .ts={ .shadow_enabled=false } },
 
     {   .id="kinetic", .label="Kinetic",
@@ -403,7 +403,7 @@ static const TypographyPreset g_typo_presets[] = {
         .category="Retro", .font="monoton",
         .grouping=SubtitleMode::Phrase, .custom_n=2,
         .font_size=0.11f, .sub_pos=1, .sub_wrap_w=0.85f,
-        .color={0.3f, 0.95f, 1.f, 1.f}, .all_caps=true, .style=AnimStyle::Fade,
+        .color={0.3f, 0.95f, 1.f, 1.f}, .all_caps=true, .style=AnimStyle::None,
         .pause_gap=0.4f, .max_words=3,
         .ts={ .shadow_enabled=false, .glow_enabled=true, .glow_r=14.f, .glow_col={0.3f,0.9f,1.f,0.8f} } },
 
@@ -412,7 +412,7 @@ static const TypographyPreset g_typo_presets[] = {
         .category="Retro", .font="spacemono",
         .grouping=SubtitleMode::Phrase, .custom_n=3,
         .font_size=0.09f, .sub_pos=1, .sub_wrap_w=0.85f,
-        .color={1.f, 0.6f, 0.9f, 1.f}, .all_caps=true, .style=AnimStyle::Fade,
+        .color={1.f, 0.6f, 0.9f, 1.f}, .all_caps=true, .style=AnimStyle::None,
         .pause_gap=0.5f, .max_words=4, .tracking=0.12f,
         .ts={ .shadow_enabled=true, .shadow_ox=3.f, .shadow_oy=0.f, .shadow_col={0.3f,0.9f,1.f,0.7f} } },
 
@@ -421,7 +421,7 @@ static const TypographyPreset g_typo_presets[] = {
         .category="Retro", .font="lobster",
         .grouping=SubtitleMode::Phrase, .custom_n=3,
         .font_size=0.12f, .sub_pos=1, .sub_wrap_w=0.8f,
-        .color={1.f, 0.7f, 0.3f, 1.f}, .style=AnimStyle::Fade,
+        .color={1.f, 0.7f, 0.3f, 1.f}, .style=AnimStyle::None,
         .pause_gap=0.45f, .max_words=4, .ease=EASE_OUT_CUBIC,
         .ts={ .shadow_enabled=true, .shadow_ox=2.f, .shadow_oy=2.f, .shadow_col={0.4f,0.15f,0.f,0.6f} } },
 
@@ -464,7 +464,7 @@ static const TypographyPreset g_typo_presets[] = {
         .category="Retro", .font="spacemono",
         .grouping=SubtitleMode::Phrase, .custom_n=3,
         .font_size=0.06f, .sub_pos=1, .sub_wrap_w=0.78f,
-        .color={0.93f, 0.87f, 0.72f, 1.f}, .style=AnimStyle::Fade,
+        .color={0.93f, 0.87f, 0.72f, 1.f}, .style=AnimStyle::None,
         .pause_gap=0.45f, .max_words=5,
         .fx={ {FXType::FilmGrain, 0.f} }, .n_fx=1, .text_case=2, .ts={ .shadow_enabled=false } },
 
@@ -491,7 +491,7 @@ static const TypographyPreset g_typo_presets[] = {
         .category="Kinetic",
         .grouping=SubtitleMode::Phrase, .custom_n=3,
         .font_size=0.08f, .sub_pos=1, .sub_wrap_w=0.8f,
-        .style=AnimStyle::Fade, .pause_gap=0.35f, .max_words=6,
+        .style=AnimStyle::Typewriter, .pause_gap=0.35f, .max_words=6,
         .anim_unit=1, .anim_stagger=0.08f },
 
     {   .id="staggerslide", .label="Stagger Slide",
@@ -543,7 +543,7 @@ static const TypographyPreset g_typo_presets[] = {
         .category="Kinetic", .font="vt323",
         .grouping=SubtitleMode::CustomN, .custom_n=5,
         .font_size=0.08f, .sub_pos_x=0.08f, .sub_pos=0, .sub_pos_y=0.85f, .sub_anchor_h=0, .sub_wrap_w=0.85f,
-        .color={0.3f, 1.f, 0.4f, 1.f}, .style=AnimStyle::Fade, .pause_gap=0.4f, .max_words=8,
+        .color={0.3f, 1.f, 0.4f, 1.f}, .style=AnimStyle::Typewriter, .pause_gap=0.4f, .max_words=8,
         .anim_unit=2, .anim_stagger=0.035f, .ts={ .shadow_enabled=false } },
 
     {   .id="wave", .label="Wave",
@@ -591,7 +591,7 @@ static const TypographyPreset g_typo_presets[] = {
         .category="Kinetic", .font="spacemono",
         .grouping=SubtitleMode::CustomN, .custom_n=4,
         .font_size=0.075f, .sub_pos=1, .sub_wrap_w=0.85f,
-        .color={1.f, 0.8f, 0.4f, 1.f}, .style=AnimStyle::Fade, .pause_gap=0.4f, .max_words=6,
+        .color={1.f, 0.8f, 0.4f, 1.f}, .style=AnimStyle::Typewriter, .pause_gap=0.4f, .max_words=6,
         .anim_unit=2, .anim_stagger=0.04f,
         .ts={ .shadow_enabled=false, .glow_enabled=true, .glow_r=6.f, .glow_col={1.f,0.7f,0.3f,0.5f} } },
 
@@ -646,7 +646,7 @@ static const TypographyPreset g_typo_presets[] = {
         .category="Gradient", .font="poppins",
         .grouping=SubtitleMode::Phrase, .custom_n=3,
         .font_size=0.11f, .sub_pos=1, .sub_wrap_w=0.85f,
-        .color={1.f, 0.75f, 0.25f, 1.f}, .style=AnimStyle::Fade, .pause_gap=0.4f, .max_words=4,
+        .color={1.f, 0.75f, 0.25f, 1.f}, .style=AnimStyle::None, .pause_gap=0.4f, .max_words=4,
         .ease=EASE_OUT_CUBIC, .grad_mode=1, .grad_col2={1.f, 0.25f, 0.55f, 1.f},
         .ts={ .shadow_enabled=false } },
 
@@ -655,7 +655,7 @@ static const TypographyPreset g_typo_presets[] = {
         .category="Gradient", .font="spacegrotesk",
         .grouping=SubtitleMode::Phrase, .custom_n=3,
         .font_size=0.11f, .sub_pos=1, .sub_wrap_w=0.85f,
-        .all_caps=true, .style=AnimStyle::Fade, .pause_gap=0.4f, .max_words=4,
+        .all_caps=true, .style=AnimStyle::None, .pause_gap=0.4f, .max_words=4,
         .tracking=0.04f, .grad_mode=3, .ts={ .shadow_enabled=false } },
 
     {   .id="duotone", .label="Duotone",
@@ -672,7 +672,7 @@ static const TypographyPreset g_typo_presets[] = {
         .category="Gradient", .font="cinzel",
         .grouping=SubtitleMode::Phrase, .custom_n=3,
         .font_size=0.10f, .sub_pos=1, .sub_wrap_w=0.85f,
-        .color={1.f, 0.92f, 0.55f, 1.f}, .all_caps=true, .style=AnimStyle::Fade,
+        .color={1.f, 0.92f, 0.55f, 1.f}, .all_caps=true, .style=AnimStyle::None,
         .pause_gap=0.5f, .max_words=4, .ease=EASE_OUT_CUBIC, .tracking=0.05f,
         .grad_mode=1, .grad_col2={0.7f, 0.5f, 0.15f, 1.f},
         .ts={ .shadow_enabled=false, .glow_enabled=true, .glow_r=8.f, .glow_col={1.f,0.8f,0.35f,0.4f} } },
