@@ -853,9 +853,10 @@ void draw_pipeline_strip(AppState& state, float w) {
     dl->AddRectFilled(p, {p.x + w, p.y + h}, to_u32(Col::bg_soft));
     dl->AddLine({p.x, p.y + h}, {p.x + w, p.y + h}, to_u32(Col::line));
 
-    // Progress fill
-    dl->AddRectFilled(p, {p.x + w * state.pipeline.progress, p.y + h},
-        IM_COL32(255,255,255,18));
+    // Clean progress bar along the bottom edge — same look as bg removal. An
+    // indeterminate sweep until real progress starts (model download / warmup).
+    float pp = state.pipeline.progress > 0.001f ? state.pipeline.progress : -1.f;
+    ui_progress_bar(dl, p.x, p.y + h - 3.f, w, pp, IM_COL32(255, 165, 0, 255), 3.f);
 
     // Status dot
     float pulse = 0.5f + 0.5f * sinf((float)ImGui::GetTime() * 4.f);

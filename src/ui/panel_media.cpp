@@ -183,6 +183,17 @@ bool is_image_path(const std::string& p) {
         || ext==".heic"||ext==".heif"||ext==".gif";
 }
 
+// An animated image is image-kind (silent, no audio track — see the audio_path
+// guard in add_clip) but plays back like a video: it gets a full MJPEG proxy
+// (proxy.cpp's is_image_ext deliberately excludes .gif for exactly this) and
+// must NOT be pinned to a single Still in the preview, or it freezes on frame 0.
+bool is_animated_image(const std::string& p) {
+    fs::path fp(p);
+    std::string ext = fp.extension().string();
+    for (auto& c : ext) c = (char)tolower((unsigned char)c);
+    return ext==".gif";
+}
+
 // ── Bin helpers ──────────────────────────────────────────────────────────────
 
 MediaKind kind_for_path(const std::string& path) {
@@ -291,7 +302,7 @@ void panel_media_browser(AppState& state, float w, bool is_video) {
     }
 
     ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
-    ImGui::TextWrapped("Click to add at playhead. Drag onto a track.");
+    ImGui::TextWrapped("Drag onto a track, or tap + to add at the playhead.");
     ImGui::PopStyleColor();
     ImGui::Dummy({0.f, 8.f});
 
@@ -313,7 +324,7 @@ void panel_media_browser(AppState& state, float w, bool is_video) {
     const float GAP    = 6.f;
     const float COL_W  = floorf((w - GAP * 3.f) * 0.5f);
     const float THUMB_H = floorf(COL_W * 9.f / 16.f);
-    const float CARD_H  = THUMB_H + 30.f;
+    const float CARD_H  = THUMB_H + 46.f;   // room for a wrapped (up to 2-line) title
     float base_y = ImGui::GetCursorPosY();
 
     for (int i = 0; i < (int)valid.size(); ++i) {
@@ -328,6 +339,7 @@ void panel_media_browser(AppState& state, float w, bool is_video) {
         ImDrawList* dl = ImGui::GetWindowDrawList();
 
         ImGui::PushID(i);
+        ImGui::SetNextItemAllowOverlap();
         ImGui::InvisibleButton("##mc", {COL_W, CARD_H});
         bool hov = ImGui::IsItemHovered();
 
@@ -374,19 +386,40 @@ void panel_media_browser(AppState& state, float w, bool is_video) {
         // Filename
         fs::path fp(path);
         std::string name = fp.filename().string();
-        if ((int)name.size() > 20) name = name.substr(0,17) + "…";
-        ImVec2 tsz = ImGui::CalcTextSize(name.c_str());
-        dl->AddText({cp.x+(COL_W-tsz.x)*0.5f, cp.y+THUMB_H+8.f},
+        dl->AddText(ImGui::GetFont(), ImGui::GetFontSize(), {cp.x+5.f, cp.y+THUMB_H+6.f},
                     hov ? IM_COL32(255,255,255,230) : IM_COL32(190,190,205,200),
-                    name.c_str());
+                    name.c_str(), nullptr, COL_W - 10.f);
 
         // Border
         dl->AddRect(cp, {cp.x+COL_W, cp.y+CARD_H},
                     hov ? IM_COL32(255,255,255,160) : IM_COL32(48,48,68,180),
                     6.f, 0, hov ? 1.5f : 1.f);
 
-        // Click → add clip on an empty track (new track at top only if none)
-        if (ImGui::IsItemClicked()) {
+        // Large hover preview of the thumbnail (after a short dwell).
+        ui_card_hover_secs(40000 + i, hov);
+        if (tex && ui_card_hover_ready(40000 + i, 0.30f)) {
+            std::string full = fp.filename().string();
+            char sub[64];
+            if (tw > 0 && th > 0)
+                snprintf(sub, sizeof(sub), "%d x %d  -  %s", tw, th, is_video ? "video" : "image");
+            else
+                snprintf(sub, sizeof(sub), "%s", is_video ? "video" : "image");
+            ui_card_image_popover(cp, (ImTextureID)(uintptr_t)tex,
+                                  (float)tw, (float)th, false, full.c_str(), sub);
+        }
+
+        // Drag-drop source (whole card)
+        if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
+            const char* ptype = is_video ? "MEDIA_VID" : "MEDIA_IMG";
+            ImGui::SetDragDropPayload(ptype, path.c_str(), path.size()+1);
+            if (tex) ImGui::Image((ImTextureID)(uintptr_t)tex, {96.f, 54.f});
+            ImGui::TextUnformatted(name.c_str());
+            ImGui::TextDisabled("Drop onto timeline track");
+            ImGui::EndDragDropSource();
+        }
+
+        // "+" → add clip at playhead on an empty track (new track if none)
+        if (ui_card_add_btn(cp, COL_W, i)) {
             float dur = is_video ? video_probe_duration(path) : 0.f;
             if (dur <= 0.f) dur = is_video ? 4.f : 5.f;
             Clip cl; cl.clip_type = ClipType::Video; cl.text = path;
@@ -408,16 +441,6 @@ void panel_media_browser(AppState& state, float w, bool is_video) {
             recent_media_push(path, is_video ? MediaKind::Video : MediaKind::Image);
             s_panel_view = PanelView::Clip;
             history_push(state, (is_video ? "Add video: " : "Add image: ") + fp.filename().string());
-        }
-
-        // Drag-drop source
-        if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
-            const char* ptype = is_video ? "MEDIA_VID" : "MEDIA_IMG";
-            ImGui::SetDragDropPayload(ptype, path.c_str(), path.size()+1);
-            if (tex) ImGui::Image((ImTextureID)(uintptr_t)tex, {96.f, 54.f});
-            ImGui::TextUnformatted(name.c_str());
-            ImGui::TextDisabled("Drop onto timeline track");
-            ImGui::EndDragDropSource();
         }
 
         ImGui::PopID();
@@ -672,7 +695,7 @@ void panel_audio_browser(AppState& state, float w) {
     }
 
     ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
-    ImGui::TextWrapped("Click to add at playhead. Drag onto a track.");
+    ImGui::TextWrapped("Drag onto a track, or tap + to add at the playhead.");
     ImGui::PopStyleColor();
     ImGui::Dummy({0.f, 8.f});
 
@@ -688,7 +711,7 @@ void panel_audio_browser(AppState& state, float w) {
         return;
     }
 
-    const float CARD_H  = 62.f;
+    const float CARD_H  = 68.f;  // room for a wrapped (up to 2-line) title
     const float CARD_W  = w - 8.f;
     const float BAR_W   = 36.f;  // waveform bars area
     const float GAP     = 5.f;
@@ -702,6 +725,7 @@ void panel_audio_browser(AppState& state, float w) {
         ImDrawList* dl = ImGui::GetWindowDrawList();
 
         ImGui::SetCursorPosX(4.f);
+        ImGui::SetNextItemAllowOverlap();
         ImGui::InvisibleButton("##ac", {CARD_W, CARD_H});
         bool hov = ImGui::IsItemHovered();
 
@@ -727,23 +751,25 @@ void panel_audio_browser(AppState& state, float w) {
             }
         }
 
-        // Filename
+        // Filename (wraps; no truncation)
         std::string name = fp.filename().string();
-        if ((int)name.size() > 28) name = name.substr(0,25) + "…";
         float tx = cp.x + BAR_W + 14.f;
+        float nmax_w = cp.x + CARD_W - tx - 12.f;
         ImGui::PushFont(g_font_bold);
-        dl->AddText(ImGui::GetFont(), 12.f, {tx, cp.y + 12.f},
+        dl->AddText(g_font_bold, 12.f, {tx, cp.y + 10.f},
                     hov ? IM_COL32(255,255,255,230) : IM_COL32(200,215,205,210),
-                    name.c_str());
+                    name.c_str(), nullptr, nmax_w);
+        float nh = g_font_bold->CalcTextSizeA(12.f, FLT_MAX, nmax_w, name.c_str()).y;
         ImGui::PopFont();
+        float infoy = cp.y + 10.f + nh + 3.f;
 
-        // Extension badge
+        // Extension + duration on one line below the (wrapped) title.
         std::string ext = fp.extension().string();
         for (auto& c : ext) c = (char)toupper((unsigned char)c);
         if (!ext.empty() && ext[0]=='.') ext = ext.substr(1);
-        dl->AddText({tx, cp.y + 30.f}, IM_COL32(80,160,100,180), ext.c_str());
+        dl->AddText({tx, infoy}, IM_COL32(80,160,100,180), ext.c_str());
+        float extw = ext.empty() ? 0.f : ImGui::CalcTextSize(ext.c_str()).x;
 
-        // Duration (probe from cache if available)
         auto dit = s_source_durations.find(path);
         if (dit == s_source_durations.end()) {
             AudioMeta meta{};
@@ -753,14 +779,20 @@ void panel_audio_browser(AppState& state, float w) {
         }
         if (dit != s_source_durations.end() && dit->second > 0.f) {
             std::string ds = fmt_time_short(dit->second);
-            dl->AddText({tx, cp.y + 44.f}, IM_COL32(100,130,110,180), ds.c_str());
+            dl->AddText({tx + extw + 10.f, infoy}, IM_COL32(100,130,110,180), ds.c_str());
         }
 
         dl->AddRect(cp, {cp.x+CARD_W, cp.y+CARD_H},
                     hov ? IM_COL32(80,220,130,160) : IM_COL32(38,58,44,180),
                     6.f, 0, hov ? 1.5f : 1.f);
 
-        if (ImGui::IsItemClicked()) {
+        if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
+            ImGui::SetDragDropPayload("MEDIA_AUD", path.c_str(), path.size()+1);
+            ImGui::TextUnformatted(name.c_str());
+            ImGui::TextDisabled("Drop onto timeline track");
+            ImGui::EndDragDropSource();
+        }
+        if (ui_card_add_btn(cp, CARD_W, i)) {
             AudioMeta meta{};
             float dur = audio_probe(path, meta) ? meta.duration_secs : 4.f;
             if (dur <= 0.f) dur = 4.f;
@@ -780,13 +812,6 @@ void panel_audio_browser(AppState& state, float w) {
             recent_media_push(path, MediaKind::Audio);
             s_panel_view = PanelView::Clip;
             history_push(state, "Add audio: " + fp.filename().string());
-        }
-
-        if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
-            ImGui::SetDragDropPayload("MEDIA_AUD", path.c_str(), path.size()+1);
-            ImGui::TextUnformatted(name.c_str());
-            ImGui::TextDisabled("Drop onto timeline track");
-            ImGui::EndDragDropSource();
         }
 
         ImGui::Dummy({0.f, GAP});

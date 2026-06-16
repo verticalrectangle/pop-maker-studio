@@ -772,6 +772,45 @@ void main() {
 }
 )glsl";
 
+// 40: BeautySmooth — person-masked beauty smoothing. Bilateral blur runs
+// only inside the body mask AND a skin-tone gate, so a skin-toned wall
+// behind you stays sharp and so do eyes/hair inside the silhouette.
+static const char* k_frag_BeautySmooth = R"glsl(
+float luma_bs(vec3 c){ return dot(c, vec3(0.299, 0.587, 0.114)); }
+float skin_bs(vec3 c){
+    float cb = 0.5 - 0.168736*c.r - 0.331264*c.g + 0.5*c.b;
+    float cr = 0.5 + 0.5*c.r - 0.418688*c.g - 0.081312*c.b;
+    float w  = 0.02 + 0.06*p1;
+    float mb = smoothstep(0.302-w,0.302+w,cb)*(1.0-smoothstep(0.498-w,0.498+w,cb));
+    float mr = smoothstep(0.522-w,0.522+w,cr)*(1.0-smoothstep(0.678-w,0.678+w,cr));
+    return mb*mr;
+}
+void main() {
+    vec4 orig = texture(u_src, v_uv);
+    float m   = texture(u_mask, v_uv).r;
+    float gate = m * skin_bs(orig.rgb);
+    if (gate < 0.01) { frag = orig; return; }
+    vec2 px = 1.0 / vec2(textureSize(u_src, 0));
+    float lc = luma_bs(orig.rgb);
+    vec3 acc = orig.rgb;
+    float wsum = 1.0;
+    float r = max(1.0, p0);
+    for (int dy = -2; dy <= 2; ++dy) {
+        for (int dx = -2; dx <= 2; ++dx) {
+            if (dx == 0 && dy == 0) continue;
+            vec3 s = texture(u_src, v_uv + vec2(float(dx), float(dy)) * (r*0.5) * px).rgb;
+            float dl = abs(luma_bs(s) - lc);
+            float wr = exp(-dl*dl*60.0);
+            float ws = exp(-float(dx*dx + dy*dy)*0.12);
+            acc  += s * wr * ws;
+            wsum += wr * ws;
+        }
+    }
+    vec4 result = vec4(mix(orig.rgb, acc / wsum, gate), orig.a);
+    frag = mix(orig, result, u_amount);
+}
+)glsl";
+
 // ── Effect info table ─────────────────────────────────────────────────────────
 
 // Accent colors as IM_COL32(r,g,b,a) encoded as unsigned int
@@ -983,6 +1022,11 @@ static const BodyFXInfo g_body_fx_infos[] = {
       ACOL(255,120,20), 2,
       {{"Intensity", 0.f, 1.f, 0.7f}, {"Speed", 0.5f, 3.f, 1.f}, {}, {}},
       k_frag_FireAura },
+    // 40: BeautySmooth
+    { BodyFXType::BeautySmooth, "Beauty Smooth", "Skin smoothing masked to the person — background stays sharp", "Beauty",
+      ACOL(255,180,160), 2,
+      {{"Smoothness", 1.f, 6.f, 3.f}, {"Skin Range", 0.f, 1.f, 0.5f}, {}, {}},
+      k_frag_BeautySmooth },
 };
 
 static const int k_n_body_fx = (int)(sizeof(g_body_fx_infos) / sizeof(g_body_fx_infos[0]));

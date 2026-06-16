@@ -272,36 +272,48 @@ static void cpu_apply_corruption(uint8_t* px, int w, int h, float intensity, flo
     }
 }
 
-// Corrupt JPEG scan data in place to produce real Huffman decoder artifacts.
-// intensity 0..1 — number of corrupted bytes (1 at 0, 21 at 1.0).
-// seed — time-varying so corruption animates on playback.
-static void corrupt_jpeg_buf(uint8_t* buf, size_t sz, float intensity, uint32_t seed) {
-    // Find SOS marker (0xFF 0xDA)
-    size_t sos = sz;
-    for (size_t i = 0; i + 1 < sz; ++i) {
-        if (buf[i] == 0xFF && buf[i+1] == 0xDA) { sos = i; break; }
-    }
-    if (sos >= sz || sos + 3 >= sz) return;
+// Datamosh on a decoded RGB buffer (w*h*3, in place). Block-displacement +
+// chroma bleed — the recognizable "moshy" P-frame-bloom smear. JPEG-bitstream
+// corruption (the old approach) was unreliable: the proxy MJPEG's restart
+// markers heal mild corruption, and aggressive corruption just makes the
+// decoder return null (silent no-op). This is deterministic per frame (seed
+// from time → it animates), always visible, and shared by preview + export.
+static inline uint32_t dm_hash(uint32_t a, uint32_t b) {
+    uint32_t h = a * 0x9E3779B1u ^ b * 0x85EBCA77u;
+    h ^= h >> 15; h *= 0xC2B2AE3Du; h ^= h >> 13;
+    return h;
+}
+static void datamosh_rgb(uint8_t* rgb, int w, int h, float intensity, float time_sec) {
+    if (!rgb || intensity <= 0.f || w <= 0 || h <= 0) return;
+    if (intensity > 1.f) intensity = 1.f;
+    static thread_local std::vector<uint8_t> src;
+    src.assign(rgb, rgb + (size_t)w * h * 3);
 
-    // Skip past SOS header: marker (2) + length field (2 bytes) + header bytes
-    size_t hlen = ((size_t)buf[sos+2] << 8) | buf[sos+3];
-    size_t scan = sos + 2 + hlen;
-    if (scan >= sz) return;
-
-    size_t scan_sz = sz - scan;
-    size_t n_corrupt = (size_t)(intensity * 20.f) + 1;
-
-    uint32_t rng = seed ^ 0xDEADBEEFu;
-    for (size_t i = 0; i < n_corrupt; ++i) {
-        rng = rng * 1664525u + 1013904223u;
-        float u = (float)(rng >> 1) / (float)0x7FFFFFFFu;  // 0..1
-        // Square root bias: pulls positions toward the start of the scan
-        // so cascades run from near the top downward, distributing evenly.
-        float t = u * u;
-        size_t pos = scan + (size_t)(t * (float)scan_sz);
-        if (pos >= scan + scan_sz) pos = scan + scan_sz - 1;
-        rng = rng * 1664525u + 1013904223u;
-        buf[pos] = (uint8_t)(rng >> 24);
+    const int  B        = 16;                              // block size (px)
+    const int  max_disp = 8 + (int)(intensity * 56.f);     // max smear distance
+    const uint32_t frame = (uint32_t)(time_sec * 24.f);    // animate at ~film rate
+    auto at = [&](int x, int y, int c) -> uint8_t {
+        if (x < 0) x = 0; else if (x >= w) x = w - 1;
+        if (y < 0) y = 0; else if (y >= h) y = h - 1;
+        return src[((size_t)y * w + x) * 3 + c];
+    };
+    for (int by = 0; by < h; by += B) {
+        for (int bx = 0; bx < w; bx += B) {
+            uint32_t hb = dm_hash((uint32_t)(bx/B) | ((uint32_t)(by/B) << 16), frame);
+            // Only a fraction of blocks (scaled by intensity) smear each frame;
+            // the rest pass through clean — that patchy spread reads as mosh.
+            if ((float)(hb & 0xFFFF) / 65535.f > intensity * 0.85f + 0.05f) continue;
+            int dx = ((int)((hb >> 16) & 0xFF) - 128) * max_disp / 128;
+            int dy = ((int)((hb >> 24) & 0xFF) - 128) * max_disp / 128;
+            int hx = dx / 2, hy = dy / 2;             // chroma lags luma → bleed
+            for (int y = by; y < by + B && y < h; ++y)
+                for (int x = bx; x < bx + B && x < w; ++x) {
+                    uint8_t* d = rgb + ((size_t)y * w + x) * 3;
+                    d[0] = at(x + dx, y + dy, 0);     // R fully displaced
+                    d[1] = at(x + hx, y + hy, 1);     // G half (chroma bleed)
+                    d[2] = at(x,      y,      2);     // B stays
+                }
+        }
     }
 }
 
@@ -662,6 +674,11 @@ static void apply_pixel_fx_rgb(uint8_t* pixels, int w, int h,
     bool bg_active = (bg_mask != nullptr && bg_mask_w > 0 && bg_mask_h > 0);
     bool want_rgba = (pfx && pfx->chroma_key_on) || do_corr_bleed || bg_active;
 
+    // Datamosh first, on the raw RGB — applies on BOTH the proxy and native
+    // preview sources (this is the only shared post-decode hook).
+    if (pfx && pfx->datamosh_on && pfx->datamosh_intensity > 0.01f)
+        datamosh_rgb(pixels, w, h, pfx->datamosh_intensity, pfx->time);
+
     if (pfx) {
         bool need_grade = fabsf(pfx->brightness) > 0.005f || fabsf(pfx->contrast - 1.f) > 0.005f ||
                           fabsf(pfx->saturation - 1.f) > 0.005f || fabsf(pfx->hue_deg) > 0.1f;
@@ -701,8 +718,12 @@ static void apply_pixel_fx_rgb(uint8_t* pixels, int w, int h,
                 rgba_out[i*4+0] = pixels[i*3+0];
                 rgba_out[i*4+1] = pixels[i*3+1];
                 rgba_out[i*4+2] = pixels[i*3+2];
+                // Matte control (bg_remove_softness, -1..1): >0 trims the edge
+                // tighter, <0 lifts the partial-mask edge pixels back in so the
+                // cutout stops eating into the subject. Gamma on the mask alpha.
                 float a = bg_mask[i] / 255.f;
-                if (bg_softness > 0.01f) a = powf(a, 1.f + bg_softness * 3.f);
+                if (bg_softness > 0.001f)       a = powf(a, 1.f + bg_softness * 3.f);
+                else if (bg_softness < -0.001f) a = powf(a, 1.f / (1.f - bg_softness * 3.f));
                 rgba_out[i*4+3] = (uint8_t)(a * 255.f + 0.5f);
             }
         } else {
@@ -987,11 +1008,8 @@ static void prepare_proxy_frame_cpu(PreviewState& pv, DecodedFrame& f, int frame
         }
     }
 
-    // Datamosh: corrupt JPEG bytes (per-frame buffer, no shared state).
-    if (pfx.datamosh_on && pfx.datamosh_intensity > 0.01f) {
-        uint32_t seed = (uint32_t)(pfx.time * 60.f);
-        corrupt_jpeg_buf(f.jpeg_buf.data(), got, pfx.datamosh_intensity, seed);
-    }
+    // Datamosh is applied to the DECODED RGB inside process_jpeg_cpu (the
+    // proxy bitstream has restart markers that heal byte corruption).
 
     // ── Phase 2 (unlocked): JPEG decode + CPU FX ────────────────────────────
     const uint8_t* bg_ptr = (pfx.bg_remove_on && !bg_mask_snapshot.empty())
@@ -2134,6 +2152,20 @@ int video_export_width(int slot) {
     if (slot < 0 || slot >= MAX_VIDEO_TRACKS * 2) return 0;
     return g_ex[slot].info.width;
 }
+
+// Preview-frame dimensions for a playback slot (0,0 if not decoded yet). The
+// aspect matches the clip's source. Uses the live GL texture size (set on every
+// path — proxy and native), falling back to the probed source info.
+void video_preview_dims(int slot, int* w, int* h) {
+    if (w) *w = 0;
+    if (h) *h = 0;
+    if (slot < 0 || slot >= MAX_VIDEO_TRACKS) return;
+    PreviewState& pv = g_pv[slot];
+    int tw = pv.tex_w, th = pv.tex_h;
+    if (tw <= 0 || th <= 0) { tw = pv.info.width; th = pv.info.height; }
+    if (w) *w = tw;
+    if (h) *h = th;
+}
 int video_export_height(int slot) {
     if (slot < 0 || slot >= MAX_VIDEO_TRACKS * 2) return 0;
     return g_ex[slot].info.height;
@@ -2252,10 +2284,12 @@ void video_apply_bg_remove_export(VideoFrame* vf, const Clip& cl, int mask_frame
         if (mx >= mw) mx = mw - 1;
         if (my >= mh) my = mh - 1;
         uint8_t alpha = dec[(size_t)my * mw + mx];
-        // Softness: blend mask alpha with full-opacity based on cl.bg_remove_softness.
-        float soft = fmaxf(0.f, fminf(1.f, cl.bg_remove_softness));
+        // Matte (bg_remove_softness, -1..1): same gamma transform as the preview
+        // (process_jpeg_cpu) — >0 trims tighter, <0 keeps more of the subject.
+        float soft = fmaxf(-1.f, fminf(1.f, cl.bg_remove_softness));
         float fa = alpha / 255.f;
-        fa = fa < soft ? 0.f : (fa - soft) / fmaxf(1.f - soft, 0.001f);
+        if (soft > 0.001f)       fa = powf(fa, 1.f + soft * 3.f);
+        else if (soft < -0.001f) fa = powf(fa, 1.f / (1.f - soft * 3.f));
         vf->data[i * 4 + 3] = (uint8_t)(fmaxf(0.f, fminf(1.f, fa)) * 255.f);
     }
     stbi_image_free(dec);
@@ -2264,55 +2298,21 @@ void video_apply_bg_remove_export(VideoFrame* vf, const Clip& cl, int mask_frame
 void video_apply_datamosh(VideoFrame* vf, float intensity, float time_sec) {
     if (!vf || !vf->data || intensity <= 0.f) return;
     int W = vf->width, H = vf->height;
-
-    // stbi_write_jpg produces no restart markers, so a single corruption near the
-    // start of the scan cascades through the entire image → solid black.
-    // Work at proxy scale (~540px wide) so JPEG scan size matches what the proxy
-    // corruption was tuned for; nearest-neighbour upscale preserves block artifacts.
-    const int TARGET_W = 540;
-    int sw = (W > TARGET_W) ? TARGET_W : W;
-    int sh = (sw == W) ? H : (int)((float)H * sw / W + 0.5f);
-    if (sh < 1) sh = 1;
-
-    // Downscale RGBA → small RGB via nearest-neighbour
-    std::vector<uint8_t> small((size_t)sw * sh * 3);
-    for (int y = 0; y < sh; ++y) {
-        int sy = (int)((float)y / sh * H);
-        for (int x = 0; x < sw; ++x) {
-            int sx = (int)((float)x / sw * W);
-            const uint8_t* s = vf->data + (sy * W + sx) * 4;
-            uint8_t* d = small.data() + (y * sw + x) * 3;
-            d[0]=s[0]; d[1]=s[1]; d[2]=s[2];
-        }
+    // Mosh the RGB through the shared block-displacement core (identical look
+    // to the preview), then write it back into the RGBA frame keeping alpha.
+    static thread_local std::vector<uint8_t> rgb;
+    rgb.resize((size_t)W * H * 3);
+    for (int i = 0; i < W * H; ++i) {
+        rgb[(size_t)i*3+0] = vf->data[(size_t)i*4+0];
+        rgb[(size_t)i*3+1] = vf->data[(size_t)i*4+1];
+        rgb[(size_t)i*3+2] = vf->data[(size_t)i*4+2];
     }
-
-    std::vector<uint8_t> jpeg;
-    auto cb = [](void* ctx, void* data, int sz) {
-        auto* v = (std::vector<uint8_t>*)ctx;
-        v->insert(v->end(), (uint8_t*)data, (uint8_t*)data + sz);
-    };
-    stbi_write_jpg_to_func(cb, &jpeg, sw, sh, 3, small.data(), 85);
-    if (jpeg.empty()) return;
-
-    corrupt_jpeg_buf(jpeg.data(), jpeg.size(), intensity, (uint32_t)(time_sec * 60.f));
-
-    int dw, dh, dch;
-    uint8_t* dec = stbi_load_from_memory(jpeg.data(), (int)jpeg.size(), &dw, &dh, &dch, 3);
-    if (!dec) return;
-
-    // Upscale corrupted small image back into original RGBA buffer (nearest-neighbour)
-    for (int y = 0; y < H; ++y) {
-        int sy = (int)((float)y / H * dh);
-        if (sy >= dh) sy = dh - 1;
-        for (int x = 0; x < W; ++x) {
-            int sx = (int)((float)x / W * dw);
-            if (sx >= dw) sx = dw - 1;
-            const uint8_t* s = dec + (sy * dw + sx) * 3;
-            uint8_t* d = vf->data + (y * W + x) * 4;
-            d[0]=s[0]; d[1]=s[1]; d[2]=s[2];
-        }
+    datamosh_rgb(rgb.data(), W, H, intensity, time_sec);
+    for (int i = 0; i < W * H; ++i) {
+        vf->data[(size_t)i*4+0] = rgb[(size_t)i*3+0];
+        vf->data[(size_t)i*4+1] = rgb[(size_t)i*3+1];
+        vf->data[(size_t)i*4+2] = rgb[(size_t)i*3+2];
     }
-    stbi_image_free(dec);
 }
 
 // ── FX preview thumbnails ─────────────────────────────────────────────────────
@@ -2363,6 +2363,119 @@ static void fxp_upload(FXPrev& pv, const std::vector<uint8_t>& px) {
                  GL_RGB, GL_UNSIGNED_BYTE, px.data());
 }
 
+// The built-in portrait uploaded as a GL texture — the default preview source
+// (and the source for generated-effect card thumbnails).
+static void ensure_portrait_gl() {
+    if (s_fxp_portrait_gl) return;
+    if (s_fxp_src.empty()) fxp_make_sources();
+    glGenTextures(1, &s_fxp_portrait_gl);
+    glBindTexture(GL_TEXTURE_2D, s_fxp_portrait_gl);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, FXP_W, FXP_H, 0,
+                 GL_RGB, GL_UNSIGNED_BYTE, portrait_preview_rgb);
+    glBindTexture(GL_TEXTURE_2D, 0);
+}
+
+uintptr_t video_default_preview_tex() {
+    ensure_portrait_gl();
+    return (uintptr_t)s_fxp_portrait_gl;
+}
+
+// Apply one legacy CPU preview effect onto `src` (RGB, w*h*3) → `out` (RGB), at
+// time t. Size-parametric so the same code drives both the small card thumbnail
+// and the big hover popover. `synthetic` enables the canned framing (green
+// screen for chroma-key, etc.) that only makes sense on the built-in portrait;
+// on real footage those degrade to showing the source. Returns true if animated.
+static bool fxp_cpu_effect(FXType ft, const std::vector<uint8_t>& src,
+                           std::vector<uint8_t>& out, int w, int h,
+                           float t, bool synthetic) {
+    bool animated = false;
+    switch (ft) {
+        case FXType::Grade:
+            out = src;
+            cpu_apply_grade(out.data(), w, h, 0.06f, 1.45f, 1.7f, 0.f);
+            break;
+        case FXType::ChromaKey:
+            if (synthetic && w == FXP_W && h == FXP_H) {
+                // Key the canned green screen and checker the transparent pixels.
+                out.resize((size_t)w * h * 3);
+                std::vector<uint8_t> rgba((size_t)w * h * 4);
+                cpu_apply_chroma_key(s_fxp_src_ck.data(), rgba.data(),
+                                     w, h, 0.f, 1.f, 0.f, 0.28f, 0.12f);
+                for (int y = 0; y < h; ++y)
+                    for (int x = 0; x < w; ++x) {
+                        size_t i = (size_t)y * w + x;
+                        if (rgba[i*4+3] < 200) {
+                            bool chk = ((x / 2) + (y / 2)) % 2 == 0;
+                            uint8_t v = chk ? 38 : 24;
+                            out[i*3+0] = v; out[i*3+1] = v; out[i*3+2] = v;
+                        } else {
+                            out[i*3+0] = rgba[i*4+0];
+                            out[i*3+1] = rgba[i*4+1];
+                            out[i*3+2] = rgba[i*4+2];
+                        }
+                    }
+            } else {
+                out = src;   // real footage has no key colour — show it as-is
+            }
+            break;
+        case FXType::Glitch:
+            out = src;
+            cpu_apply_glitch(out.data(), w, h, 12.f, 0.7f, t);
+            cpu_apply_corruption(out.data(), w, h, 0.55f, t);
+            animated = true;
+            break;
+        case FXType::ZoomPunch: {
+            out.resize((size_t)w * h * 3);
+            float scale = 1.22f, cx_f = w * 0.5f, cy_f = h * 0.5f;
+            for (int y = 0; y < h; ++y)
+                for (int x = 0; x < w; ++x) {
+                    int sx = (int)((x - cx_f) / scale + cx_f);
+                    int sy = (int)((y - cy_f) / scale + cy_f);
+                    sx = sx < 0 ? 0 : sx >= w ? w-1 : sx;
+                    sy = sy < 0 ? 0 : sy >= h ? h-1 : sy;
+                    size_t di = ((size_t)y*w+x)*3, si = ((size_t)sy*w+sx)*3;
+                    out[di+0] = src[si+0]; out[di+1] = src[si+1]; out[di+2] = src[si+2];
+                }
+            break;
+        }
+        case FXType::LUT:
+            out = src;
+            cpu_apply_grade(out.data(), w, h, -0.04f, 1.25f, 0.75f, 18.f);
+            break;
+        case FXType::LightLeak:
+            out = src;
+            for (int y = 0; y < h; ++y)
+                for (int x = 0; x < w; ++x) {
+                    float dx = ((float)x - w * 0.78f) / (w * 0.35f);
+                    float dy = ((float)y - h * 0.18f) / (h * 0.45f);
+                    float flr = fmaxf(0.f, 1.f - (dx*dx + dy*dy)) * 0.82f;
+                    size_t i = ((size_t)y*w+x)*3;
+                    out[i+0] = cu8((int)(out[i+0] + 255.f * flr * 0.88f));
+                    out[i+1] = cu8((int)(out[i+1] + 255.f * flr * 0.35f));
+                    out[i+2] = cu8((int)(out[i+2] + 255.f * flr * 0.05f));
+                }
+            break;
+        case FXType::VHS:
+            out = src;
+            cpu_apply_vhs(out.data(), w, h, 0.65f, 9.f, 0.55f, t);
+            animated = true;
+            break;
+        case FXType::Datamosh:
+            out = src;
+            datamosh_rgb(out.data(), w, h, 0.7f, t);
+            animated = true;
+            break;
+        default:
+            out = src;
+            break;
+    }
+    return animated;
+}
+
 uintptr_t video_fx_preview_texture(FXType ft, float t) {
     int idx = (int)ft;
 
@@ -2370,19 +2483,7 @@ uintptr_t video_fx_preview_texture(FXType ft, float t) {
     // animated legacy effects), then blit into a stable per-effect texture so
     // simultaneous picker cards don't alias the shared output slot.
     if (idx >= FXP_N) {
-        // Upload portrait source texture once
-        if (!s_fxp_portrait_gl) {
-            if (s_fxp_src.empty()) fxp_make_sources();
-            glGenTextures(1, &s_fxp_portrait_gl);
-            glBindTexture(GL_TEXTURE_2D, s_fxp_portrait_gl);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, FXP_W, FXP_H, 0,
-                         GL_RGB, GL_UNSIGNED_BYTE, portrait_preview_rgb);
-            glBindTexture(GL_TEXTURE_2D, 0);
-        }
+        ensure_portrait_gl();
 
         // Render into the shared slot with live t
         uintptr_t shared = fx_preview_gen_effect(ft, (uintptr_t)s_fxp_portrait_gl,
@@ -2431,127 +2532,110 @@ uintptr_t video_fx_preview_texture(FXType ft, float t) {
     if (!need) return (uintptr_t)pv.tex;
 
     std::vector<uint8_t> px;
-
-    switch (ft) {
-        case FXType::Grade: {
-            px = s_fxp_src;
-            cpu_apply_grade(px.data(), FXP_W, FXP_H, 0.06f, 1.45f, 1.7f, 0.f);
-            break;
-        }
-        case FXType::ChromaKey: {
-            // Show the key with right side keyed → dark checkerboard
-            px.resize(FXP_W * FXP_H * 3);
-            std::vector<uint8_t> rgba(FXP_W * FXP_H * 4);
-            cpu_apply_chroma_key(s_fxp_src_ck.data(), rgba.data(),
-                                 FXP_W, FXP_H, 0.f, 1.f, 0.f, 0.28f, 0.12f);
-            for (int y = 0; y < FXP_H; ++y) {
-                for (int x = 0; x < FXP_W; ++x) {
-                    size_t i = ((size_t)y * FXP_W + x);
-                    uint8_t a = rgba[i*4+3];
-                    if (a < 200) {
-                        // Fine transparency checker — 2px tiles, near-black tones
-                        bool chk = ((x / 2) + (y / 2)) % 2 == 0;
-                        uint8_t v = chk ? 38 : 24;
-                        px[i*3+0] = v;
-                        px[i*3+1] = v;
-                        px[i*3+2] = v;
-                    } else {
-                        px[i*3+0] = rgba[i*4+0];
-                        px[i*3+1] = rgba[i*4+1];
-                        px[i*3+2] = rgba[i*4+2];
-                    }
-                }
-            }
-            break;
-        }
-        case FXType::Glitch: {
-            px = s_fxp_src;
-            cpu_apply_glitch(px.data(), FXP_W, FXP_H, 12.f, 0.7f, t);
-            cpu_apply_corruption(px.data(), FXP_W, FXP_H, 0.55f, t);
-            pv.animated = true;
-            break;
-        }
-        case FXType::ZoomPunch: {
-            // Static zoom-in crop — shows scale spike at peak
-            px.resize(FXP_W * FXP_H * 3);
-            float scale = 1.22f;
-            float cx_f = FXP_W * 0.5f, cy_f = FXP_H * 0.5f;
-            for (int y = 0; y < FXP_H; ++y) {
-                for (int x = 0; x < FXP_W; ++x) {
-                    int sx = (int)((x - cx_f) / scale + cx_f);
-                    int sy = (int)((y - cy_f) / scale + cy_f);
-                    sx = sx < 0 ? 0 : sx >= FXP_W ? FXP_W-1 : sx;
-                    sy = sy < 0 ? 0 : sy >= FXP_H ? FXP_H-1 : sy;
-                    size_t di = ((size_t)y*FXP_W+x)*3, si = ((size_t)sy*FXP_W+sx)*3;
-                    px[di+0] = s_fxp_src[si+0];
-                    px[di+1] = s_fxp_src[si+1];
-                    px[di+2] = s_fxp_src[si+2];
-                }
-            }
-            break;
-        }
-        case FXType::LUT: {
-            // Simulate a teal-orange cinematic grade — warm shadows, cool highlights
-            px = s_fxp_src;
-            cpu_apply_grade(px.data(), FXP_W, FXP_H, -0.04f, 1.25f, 0.75f, 18.f);
-            break;
-        }
-        case FXType::LightLeak: {
-            // Source + warm additive flare blob upper-right
-            px = s_fxp_src;
-            for (int y = 0; y < FXP_H; ++y) {
-                for (int x = 0; x < FXP_W; ++x) {
-                    float dx = ((float)x - FXP_W * 0.78f) / (FXP_W * 0.35f);
-                    float dy = ((float)y - FXP_H * 0.18f) / (FXP_H * 0.45f);
-                    float r2  = dx*dx + dy*dy;
-                    float flr = fmaxf(0.f, 1.f - r2) * 0.82f;
-                    size_t i  = ((size_t)y*FXP_W+x)*3;
-                    px[i+0] = cu8((int)(px[i+0] + 255.f * flr * 0.88f));
-                    px[i+1] = cu8((int)(px[i+1] + 255.f * flr * 0.35f));
-                    px[i+2] = cu8((int)(px[i+2] + 255.f * flr * 0.05f));
-                }
-            }
-            break;
-        }
-        case FXType::VHS: {
-            px = s_fxp_src;
-            cpu_apply_vhs(px.data(), FXP_W, FXP_H, 0.65f, 9.f, 0.55f, t);
-            pv.animated = true;
-            break;
-        }
-        case FXType::Datamosh: {
-            // Encode → corrupt → decode to show real JPEG scan-data corruption
-            static std::vector<uint8_t> s_jpeg_preview;
-            s_jpeg_preview.clear();
-            auto jpeg_cb = [](void* ctx, void* data, int sz) {
-                auto* v = (std::vector<uint8_t>*)ctx;
-                v->insert(v->end(), (uint8_t*)data, (uint8_t*)data + sz);
-            };
-            stbi_write_jpg_to_func(jpeg_cb, &s_jpeg_preview, FXP_W, FXP_H, 3,
-                                   s_fxp_src.data(), 85);
-            if (!s_jpeg_preview.empty()) {
-                corrupt_jpeg_buf(s_jpeg_preview.data(), s_jpeg_preview.size(),
-                                 0.75f, (uint32_t)(t * 60.f));
-                int w2, h2, ch2;
-                uint8_t* dec = stbi_load_from_memory(
-                    s_jpeg_preview.data(), (int)s_jpeg_preview.size(), &w2, &h2, &ch2, 3);
-                if (dec) {
-                    px.assign(dec, dec + FXP_W * FXP_H * 3);
-                    stbi_image_free(dec);
-                } else {
-                    px = s_fxp_src;
-                }
-            } else {
-                px = s_fxp_src;
-            }
-            pv.animated = true;
-            break;
-        }
-        default: px = s_fxp_src; break;
-    }
-
+    pv.animated = fxp_cpu_effect(ft, s_fxp_src, px, FXP_W, FXP_H, t, true);
     fxp_upload(pv, px);
     return (uintptr_t)pv.tex;
+}
+
+// ── Big hover-preview (popover) ──────────────────────────────────────────────
+// Renders an effect (or grade) onto an arbitrary source texture at w×h for the
+// FX-card hover popover, so the preview is large and runs on the user's actual
+// footage. src_tex==0 → the built-in portrait. One popover shows at a time, so a
+// single resize/output buffer pair is reused.
+static GLuint s_bigsrc_tex = 0, s_bigsrc_fbo = 0;
+static GLuint s_bigout_tex = 0, s_bigout_fbo = 0;
+static int    s_big_w = 0, s_big_h = 0;
+
+static void big_ensure(int w, int h) {
+    if (s_bigsrc_tex && s_big_w == w && s_big_h == h) return;
+    if (s_bigsrc_tex) {
+        glDeleteTextures(1, &s_bigsrc_tex);  glDeleteFramebuffers(1, &s_bigsrc_fbo);
+        glDeleteTextures(1, &s_bigout_tex);  glDeleteFramebuffers(1, &s_bigout_fbo);
+    }
+    auto mk = [&](GLuint& tex, GLuint& fbo) {
+        glGenTextures(1, &tex);
+        glBindTexture(GL_TEXTURE_2D, tex);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+        glGenFramebuffers(1, &fbo);
+        glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tex, 0);
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    };
+    mk(s_bigsrc_tex, s_bigsrc_fbo);
+    mk(s_bigout_tex, s_bigout_fbo);
+    s_big_w = w; s_big_h = h;
+}
+
+// Resize `src_tex` into the w×h source buffer and read it back as RGB.
+static void big_source_rgb(uintptr_t src_tex, int w, int h, std::vector<uint8_t>& rgb) {
+    fx_blit(src_tex, s_bigsrc_fbo, w, h);
+    rgb.resize((size_t)w * h * 3);
+    glBindFramebuffer(GL_FRAMEBUFFER, s_bigsrc_fbo);
+    glPixelStorei(GL_PACK_ALIGNMENT, 1);
+    glReadPixels(0, 0, w, h, GL_RGB, GL_UNSIGNED_BYTE, rgb.data());
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+}
+
+uintptr_t video_fx_preview_big(FXType ft, float t, uintptr_t src_tex, int w, int h) {
+    bool synthetic = (src_tex == 0);
+    if (synthetic) src_tex = video_default_preview_tex();
+    if (w < 8 || h < 8) return 0;
+    big_ensure(w, h);
+
+    int idx = (int)ft;
+    if (idx >= FXP_N) {
+        // Generated GPU effect: resize source then run the effect on it, and
+        // copy out of the shared preview slot so card thumbnails can't clobber it.
+        fx_blit(src_tex, s_bigsrc_fbo, w, h);
+        uintptr_t shared = fx_preview_gen_effect(ft, (uintptr_t)s_bigsrc_tex, w, h, t);
+        fx_blit(shared, s_bigout_fbo, w, h);
+        return (uintptr_t)s_bigout_tex;
+    }
+
+    std::vector<uint8_t> src, out;
+    big_source_rgb(src_tex, w, h, src);
+    fxp_cpu_effect(ft, src, out, w, h, t, synthetic);
+    glBindTexture(GL_TEXTURE_2D, s_bigout_tex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, w, h, 0, GL_RGB, GL_UNSIGNED_BYTE, out.data());
+    glBindTexture(GL_TEXTURE_2D, 0);
+    return (uintptr_t)s_bigout_tex;
+}
+
+uintptr_t video_adj_preview_big(uintptr_t src_tex, int w, int h,
+                                float brightness, float contrast,
+                                float saturation, float hue,
+                                float blur, float vignette) {
+    if (src_tex == 0) src_tex = video_default_preview_tex();
+    if (w < 8 || h < 8) return 0;
+    big_ensure(w, h);
+    std::vector<uint8_t> rgb;
+    big_source_rgb(src_tex, w, h, rgb);
+    // Mirrors video_adj_preview_texture's order/feel (grade → blur → vignette).
+    if (contrast != 1.f || brightness != 0.f || saturation != 1.f || fabsf(hue) > 0.1f)
+        cpu_apply_grade(rgb.data(), w, h, brightness, contrast, saturation, hue);
+    if (blur > 0.1f)
+        cpu_apply_blur(rgb.data(), w, h, blur * 2.f);
+    if (vignette > 0.01f) {
+        float cx_f = w * 0.5f, cy_f = h * 0.5f, rad = fmaxf(cx_f, cy_f);
+        for (int y = 0; y < h; ++y)
+            for (int x = 0; x < w; ++x) {
+                float dx = (x - cx_f) / rad, dy = (y - cy_f) / rad;
+                float d  = fminf(1.f, sqrtf(dx*dx + dy*dy));
+                float vig = d * d * vignette;
+                size_t i = ((size_t)y*w+x)*3;
+                rgb[i+0] = cu8((int)(rgb[i+0] * (1.f - vig)));
+                rgb[i+1] = cu8((int)(rgb[i+1] * (1.f - vig)));
+                rgb[i+2] = cu8((int)(rgb[i+2] * (1.f - vig)));
+            }
+    }
+    glBindTexture(GL_TEXTURE_2D, s_bigout_tex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, w, h, 0, GL_RGB, GL_UNSIGNED_BYTE, rgb.data());
+    glBindTexture(GL_TEXTURE_2D, 0);
+    return (uintptr_t)s_bigout_tex;
 }
 
 // ── Adjustment preset preview textures ───────────────────────────────────────

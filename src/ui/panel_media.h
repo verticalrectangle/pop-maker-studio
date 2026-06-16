@@ -16,6 +16,7 @@ struct RecentMedia { std::vector<std::string> videos, images, audio; };
 RecentMedia& recent_media();
 void recent_media_push(const std::string& path, MediaKind kind);
 bool is_image_path(const std::string& p);
+bool is_animated_image(const std::string& p);   // .gif — image-kind but proxied/played like video
 
 // Bin — project-scoped media library (lives on AppState.bin).
 // bin_add is a no-op when the path is already present, so the same file

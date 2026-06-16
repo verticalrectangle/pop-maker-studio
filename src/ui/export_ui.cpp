@@ -275,6 +275,12 @@ void draw_export_modal(AppState& state) {
         ImGui::TextUnformatted(state.render.running ? state.render.stage.c_str() : "Ready");
         ImGui::PopStyleColor();
 
+        // Auto-open the finished file (session preference).
+        static bool s_open_when_done = false;
+        static bool s_auto_opened    = false;
+        ImGui::SetCursorPosX(ImGui::GetStyle().WindowPadding.x + 8.f);
+        ImGui::Checkbox("Open when finished##exp_oof", &s_open_when_done);
+
         ImGui::Dummy({0.f, 8.f});
         ImGui::SetCursorPosX(ImGui::GetStyle().WindowPadding.x + 8.f);
         if (state.render.running) {
@@ -283,6 +289,7 @@ void draw_export_modal(AppState& state) {
             ImGui::BeginDisabled(!any_active);
             if (ui_btn("Start render  ->", true, false)) {
                 state.render_done = false;
+                s_auto_opened     = false;   // arm auto-open for this render
                 // Output precedence: a saved project exports next to its
                 // .pms (what users expect); the audio-stem subdir is the
                 // legacy lyric-video flow for projects with no file yet.
@@ -321,22 +328,50 @@ void draw_export_modal(AppState& state) {
         // Downloads (shown after render completes)
         if (state.render_done || !state.out_mp4.empty()) {
             ImGui::Dummy({0.f, 8.f}); ui_separator(); ImGui::Dummy({0.f, 6.f});
+
+            // Primary output: show its full path, and offer Open (the file) +
+            // Reveal (its folder).
+            std::string out = state.render_settings.gif_export ? state.out_gif : state.out_mp4;
+            bool have_out = !out.empty() && fs::exists(out);
+            if (have_out && state.render_done && s_open_when_done && !s_auto_opened) {
+                std::string cmd = "xdg-open \"" + out + "\" >/dev/null 2>&1 &";
+                (void)system(cmd.c_str());
+                s_auto_opened = true;
+            }
+            if (have_out) {
+                ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+                ImGui::TextUnformatted("Saved to");
+                ImGui::PopStyleColor();
+                ImGui::PushStyleColor(ImGuiCol_Text, Col::fg);
+                ImGui::TextWrapped("%s", out.c_str());
+                ImGui::PopStyleColor();
+                ImGui::Dummy({0.f, 4.f});
+                if (ui_btn("Open##exp_open", true, true)) {
+                    std::string cmd = "xdg-open \"" + out + "\" >/dev/null 2>&1 &";
+                    (void)system(cmd.c_str());
+                }
+                ImGui::SameLine(0.f, 4.f);
+                if (ui_btn("Reveal in folder##exp_reveal", false, true)) {
+                    std::string cmd = "xdg-open \"" + fs::path(out).parent_path().string() + "\" >/dev/null 2>&1 &";
+                    (void)system(cmd.c_str());
+                }
+                ImGui::Dummy({0.f, 8.f});
+            }
+
+            // Secondary artifacts — open their containing folder.
             ImGui::SetCursorPosX(ImGui::GetStyle().WindowPadding.x + 8.f);
             struct Dl2 { const char* tag; const char* name; std::string path; bool ok; };
             Dl2 dls[] = {
-                {".MP4", "Lyric video", state.out_mp4, state.render_done && !state.render_settings.gif_export && !state.out_mp4.empty()},
-                {".GIF", "Animated GIF", state.out_gif, state.render_done && state.render_settings.gif_export && !state.out_gif.empty() && fs::exists(state.out_gif)},
                 {".WAV", "Vocals stem", state.out_wav, !state.out_wav.empty() && fs::exists(state.out_wav)},
                 {".SRT", "Subtitles",   state.out_srt, !state.out_srt.empty() && fs::exists(state.out_srt)},
             };
             for (auto& dl : dls) {
-                if (!dl.ok) ImGui::BeginDisabled();
+                if (!dl.ok) continue;
                 char did[32]; snprintf(did, sizeof(did), "%s %s##dlm", dl.tag, dl.name);
                 if (ui_btn(did, false, true)) {
-                    std::string cmd = "xdg-open \"" + fs::path(dl.path).parent_path().string() + "\"";
-                    system(cmd.c_str());
+                    std::string cmd = "xdg-open \"" + fs::path(dl.path).parent_path().string() + "\" >/dev/null 2>&1 &";
+                    (void)system(cmd.c_str());
                 }
-                if (!dl.ok) ImGui::EndDisabled();
                 ImGui::SameLine(0.f, 4.f);
             }
         }

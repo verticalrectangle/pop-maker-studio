@@ -101,3 +101,5 @@
     DnaHelix,   // DNA Helix Grid
     DoubleExposure,   // Double Exposure
     KenBurns,   // Ken Burns
+    SkinSmooth,   // Skin Smooth
+    GlowUp,   // Glow Up

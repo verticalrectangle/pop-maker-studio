@@ -1,15 +1,18 @@
 #include "project.h"
+#include "ui/timeline.h"
 #include "body_fx.h"
 #include "ui/panel_media.h"  // bin_backfill_from_timeline
 #include <algorithm>
 #include <fstream>
 #include <cstdint>
 #include <filesystem>
+#include <map>
+#include <set>
 
 // ── Binary serialization helpers ──────────────────────────────────────────────
 
 static const uint32_t MAGIC   = 0x534D5001u; // "PMS\x01"
-static const uint32_t VERSION = 39u;  // v39: per-clip AudioFX chain
+static const uint32_t VERSION = 51u;  // v51: audio FX brick dry/wet mix
 
 struct Writer {
     std::ofstream f;
@@ -216,7 +219,34 @@ static void write_clip(Writer& w, const Clip& c) {
         w.str(fx.voice_model_path);
         w.pod((uint8_t)fx.voice_pitch_auto);
         w.pod(fx.voice_pitch_semitones);
+        w.pod(fx.mix);   // v51: brick dry/wet
     }
+    // v40: FX-brick coupling
+    w.pod((uint8_t)c.fx_coupled);
+    w.str(c.fx_host_sid);
+    // v43: face filter
+    w.pod(c.face_filter);
+    w.pod(c.face_filter_amt);
+    // v45: non-destructive letter case (render-time; the typed case is preserved)
+    w.pod(c.text_case);
+    // v46: frame-rate conform (src_fps = native rate; flags drive blend / loop)
+    w.pod(c.src_fps);
+    w.pod((uint8_t)c.conform_smooth);
+    w.pod((uint8_t)c.clip_loop);
+    // v48: Capture IMG brick (photo-mode camera brick — takes are stills)
+    w.pod((uint8_t)c.rec_photo);
+    // v49: A/V camera capture (record mic + manual sync offset)
+    w.pod((uint8_t)c.rec_audio);
+    w.pod(c.rec_av_offset_ms);
+    // v50: typography face + kinetic/styling params
+    w.str(c.sub_font);
+    w.pod(c.ease);
+    w.pod(c.tracking);
+    w.pod(c.anim_unit);
+    w.pod(c.anim_stagger);
+    w.pod(c.karaoke_mode);
+    w.pod(c.grad_mode);
+    w.pod(c.grad_col2[0]); w.pod(c.grad_col2[1]); w.pod(c.grad_col2[2]); w.pod(c.grad_col2[3]);
 }
 
 static Clip read_clip(Reader& r, uint32_t version) {
@@ -397,6 +427,12 @@ static Clip read_clip(Reader& r, uint32_t version) {
             if (c.rec_take_sel < 0 && !c.rec_takes.empty())
                 c.rec_take_sel = (int)c.rec_takes.size() - 1;
         }
+        // VideoRecord bricks mirror the selected take into text (video
+        // draw/export paths consume clip.text).
+        if (c.clip_type == ClipType::VideoRecord)
+            c.text = (c.rec_take_sel >= 0 &&
+                      c.rec_take_sel < (int)c.rec_takes.size())
+                     ? c.rec_takes[(size_t)c.rec_take_sel] : "";
     }
     if (version >= 39u) {
         AudioFX& fx = c.audio_fx;
@@ -420,12 +456,43 @@ static Clip read_clip(Reader& r, uint32_t version) {
         fx.voice_model_path = r.str();
         fx.voice_pitch_auto = (bool)r.pod<uint8_t>();
         fx.voice_pitch_semitones = r.pod<int>();
+        if (version >= 51u) fx.mix = r.pod<float>();
         // Model file may have been deleted from the cache since saving
         if (!fx.voice_model_path.empty() &&
             !std::filesystem::exists(fx.voice_model_path)) {
             fx.voice_model_path.clear();
             fx.voice_convert_on = false;
         }
+    }
+    if (version >= 40u) {
+        c.fx_coupled  = (bool)r.pod<uint8_t>();
+        c.fx_host_sid = r.str();
+    }
+    if (version >= 43u) {
+        c.face_filter     = r.pod<int>();
+        c.face_filter_amt = r.pod<float>();
+    }
+    if (version >= 45u) c.text_case = r.pod<int>();
+    if (version >= 46u) {
+        c.src_fps        = r.pod<float>();
+        c.conform_smooth = (bool)r.pod<uint8_t>();
+        c.clip_loop      = (bool)r.pod<uint8_t>();
+    }
+    if (version >= 48u) c.rec_photo = (bool)r.pod<uint8_t>();
+    if (version >= 49u) {
+        c.rec_audio        = (bool)r.pod<uint8_t>();
+        c.rec_av_offset_ms = r.pod<float>();
+    }
+    if (version >= 50u) {
+        c.sub_font     = r.str();
+        c.ease         = r.pod<int>();
+        c.tracking     = r.pod<float>();
+        c.anim_unit    = r.pod<int>();
+        c.anim_stagger = r.pod<float>();
+        c.karaoke_mode = r.pod<int>();
+        c.grad_mode    = r.pod<int>();
+        c.grad_col2[0] = r.pod<float>(); c.grad_col2[1] = r.pod<float>();
+        c.grad_col2[2] = r.pod<float>(); c.grad_col2[3] = r.pod<float>();
     }
     return c;
 }
@@ -446,6 +513,7 @@ static Track read_track(Reader& r, uint32_t version) {
     t.visible = (bool)r.pod<uint8_t>(); t.muted = (bool)r.pod<uint8_t>();
     if (version >= 9u) t.locked = (bool)r.pod<uint8_t>();
     t.sub_row = r.pod<int>();
+    if (version >= 42u && version < 47u) (void)r.pod<int>();  // old track.bus — discard
     uint32_t nc = r.pod<uint32_t>();
     for (uint32_t i = 0; i < nc && r.ok; ++i)
         t.clips.push_back(read_clip(r, version));
@@ -509,6 +577,7 @@ bool project_save(const AppState& state, const std::string& path) {
         w.pod(m.time);
         w.str(m.label);
         w.pod(m.color);
+        w.pod((uint8_t)m.chapter);   // v44
     }
 
     // v33: lyrics word edits
@@ -521,6 +590,14 @@ bool project_save(const AppState& state, const std::string& path) {
     // v36: project bin
     w.pod((uint32_t)state.bin.size());
     for (auto& p : state.bin) w.str(p);
+
+    // v47: global buses removed (bus bricks are plain clips). Nothing written
+    // here anymore; the loader skips the old block for versions 42..46.
+
+    // v44: loop brace region (armed state + in/out)
+    w.pod((uint8_t)state.loop_play);
+    w.pod(state.loop_in);
+    w.pod(state.loop_out);
 
     return w.ok;
 }
@@ -594,6 +671,8 @@ bool project_load(AppState& state, const std::string& path) {
             m.time  = r.pod<float>();
             m.label = r.str();
             m.color = r.pod<uint32_t>();
+            // Pre-v44 markers were all "chapter markers"; preserve that intent.
+            m.chapter = (version >= 44u) ? (bool)r.pod<uint8_t>() : true;
             state.markers.push_back(std::move(m));
         }
     }
@@ -615,9 +694,138 @@ bool project_load(AppState& state, const std::string& path) {
         for (uint32_t i = 0; i < nb && r.ok; ++i)
             state.bin.push_back(r.str());
     }
+    // v42: audio buses
+    // v42..46: old global buses block — read and discard to keep byte alignment
+    // (bus bricks are now plain clips, already loaded as part of the tracks).
+    if (version >= 42u && version < 47u) {
+        uint32_t nbus = r.pod<uint32_t>();
+        for (uint32_t i = 0; i < nbus && r.ok; ++i) {
+            (void)r.str();           // name
+            (void)r.pod<float>();    // gain
+            uint32_t nch = r.pod<uint32_t>();
+            for (uint32_t k = 0; k < nch && r.ok; ++k)
+                (void)read_clip(r, version);   // discard fx-chain entries
+        }
+    }
+
+    // v44: loop brace region
+    if (version >= 44u) {
+        state.loop_play = (bool)r.pod<uint8_t>();
+        state.loop_in   = r.pod<float>();
+        state.loop_out  = r.pod<float>();
+    }
+
     // Backfill for pre-v36 projects: derive the bin from existing clip paths
     // so users opening older projects still see their media in the bin.
     bin_backfill_from_timeline(state);
 
+    // Pre-v40 migration: overlap-glass was implicit — every video FX brick
+    // sitting on content becomes a coupled Video Multi-FX chain (stacked
+    // bricks merge into one per host, stacking order preserved). Same couple
+    // semantics as the timeline's 1.5 s ring, minus the wait.
+    if (r.ok && version < 41u) {
+        for (int ti = 0; ti < (int)state.tracks.size(); ++ti) {
+            auto& clips = state.tracks[ti].clips;
+            for (int ci = 0; ci < (int)clips.size(); ) {
+                Clip& c = clips[(size_t)ci];
+                bool fx_kind = c.clip_type == ClipType::Effect ||
+                               c.clip_type == ClipType::MultiFX ||
+                               c.clip_type == ClipType::BodyFX ||
+                               c.clip_type == ClipType::AudioMultiFX;
+                bool audio_kind = fx_brick_is_audio_kind(c);
+                if (fx_kind && !c.fx_coupled &&
+                    (audio_kind || fx_brick_is_video(c))) {
+                    int best = -1; float bov = 0.05f;
+                    for (int k = 0; k < (int)clips.size(); ++k) {
+                        const Clip& hc = clips[(size_t)k];
+                        bool hostable = audio_kind
+                            ? (hc.clip_type == ClipType::Audio ||
+                               hc.clip_type == ClipType::Record ||
+                               hc.clip_type == ClipType::Video ||
+                               hc.clip_type == ClipType::VideoRecord)
+                            : (clip_is_videolike_type(hc.clip_type) ||
+                               hc.clip_type == ClipType::Background);
+                        if (!hostable) continue;
+                        float ov = fminf(c.end, hc.end) - fmaxf(c.start, hc.start);
+                        if (ov > bov) { bov = ov; best = k; }
+                    }
+                    if (best >= 0) {
+                        int nci = timeline_couple_fx_brick(state, ti, ci, best);
+                        // Merged-away brick shrinks the list — don't advance.
+                        if (nci != ci) continue;
+                    }
+                }
+                ++ci;
+            }
+        }
+    }
+
     return r.ok;
+}
+
+// ── Collect: produce a self-contained project folder ──────────────────────────
+bool collect_project(AppState& state, const std::string& pms_path,
+                     std::string& err, int* copied) {
+    namespace fs = std::filesystem;
+    std::error_code ec;
+
+    fs::path dest_pms(pms_path);
+    fs::path dest_dir = dest_pms.parent_path();
+    fs::path media_dir = dest_dir / "media";
+    fs::create_directories(media_dir, ec);
+    if (ec) { err = "could not create " + media_dir.string(); return false; }
+    std::string media_canon = fs::weakly_canonical(media_dir, ec).string();
+
+    std::map<std::string, std::string> remap;   // original abs path -> collected copy
+    std::set<std::string>              used;     // destination filenames in use
+    int n_copied = 0;
+
+    // Copy one referenced file into media/ and rewrite the reference in place.
+    // A reference that isn't an existing regular file (literal text, a preset
+    // token, an empty string) is left untouched.
+    auto collect_one = [&](std::string& ref) {
+        if (ref.empty()) return;
+        fs::path src(ref);
+        std::error_code e;
+        if (!fs::exists(src, e) || !fs::is_regular_file(src, e)) return;
+        std::string srcabs = fs::weakly_canonical(src, e).string();
+        if (srcabs.empty()) srcabs = src.string();
+
+        // Already inside this project's media folder → nothing to do.
+        if (!media_canon.empty() && srcabs.rfind(media_canon, 0) == 0) return;
+
+        auto it = remap.find(srcabs);
+        if (it != remap.end()) { ref = it->second; return; }
+
+        // Unique destination name (dedup basename collisions across sources).
+        std::string base = src.filename().string();
+        std::string name = base;
+        for (int k = 1; used.count(name); ++k) {
+            std::string stem = fs::path(base).stem().string();
+            std::string ext  = fs::path(base).extension().string();
+            name = stem + "_" + std::to_string(k) + ext;
+        }
+        fs::path dst = media_dir / name;
+        fs::copy_file(src, dst, fs::copy_options::overwrite_existing, e);
+        if (e) return;   // copy failed: leave the reference pointing at the original
+        used.insert(name);
+        std::string dstabs = dst.string();
+        remap[srcabs] = dstabs;
+        ref = dstabs;
+        ++n_copied;
+    };
+
+    for (auto& tr : state.tracks)
+        for (auto& cl : tr.clips) {
+            collect_one(cl.text);
+            collect_one(cl.source_id);
+            collect_one(cl.fx_lut_path);
+        }
+    collect_one(state.audio_path);
+    for (auto& b : state.bin) collect_one(b);
+
+    state.project_path = pms_path;
+    if (!project_save(state, pms_path)) { err = "could not save " + pms_path; return false; }
+    if (copied) *copied = n_copied;
+    return true;
 }

@@ -43,6 +43,13 @@ struct AudioFX {
     bool        voice_pitch_auto      = true;
     int         voice_pitch_semitones = 0;   // -24 … +24
 
+    // Brick-level dry/wet blend (1 = fully wet / current behaviour, 0 = dry
+    // bypass). Applies to the WHOLE effect stage — so non-mixable effects
+    // (autotune, pitch, formant) can sit subtly under the dry voice, and
+    // delay/reverb get a blend on top of their own internal mix. Honoured by
+    // the shared FXUnit, so monitor, playback, export and bake all match.
+    float mix = 1.f;
+
     bool any_active() const {
         return autotune_on || pitch_on || formant_on ||
                delay_on || reverb_on || voice_convert_on;
@@ -50,6 +57,28 @@ struct AudioFX {
 };
 
 uint64_t audio_fx_hash(const AudioFX& fx);
+
+// ── Streaming chain ───────────────────────────────────────────────────────────
+// Ordered AudioFX stages as a live per-sample processor — the SAME DSP the
+// offline bake runs, so live monitoring, preview and export can't diverge.
+// create on a control thread; process is RT-safe (no locks, no allocs).
+// Voice conversion is offline-only and ignored by the chain.
+struct AudioFXChain;
+AudioFXChain* audio_fx_chain_create(const std::vector<AudioFX>& stages, float sample_rate);
+void          audio_fx_chain_process(AudioFXChain* c, float& L, float& R);
+void          audio_fx_chain_free(AudioFXChain* c);
+
+// Windowed variant for live clip playback (DAW-style): units only process
+// inside their window in SOURCE seconds, with ~12 ms edge fades; a
+// non-consecutive frame_idx (seek, loop wrap) wipes state RT-safely.
+struct AudioFXSegment;
+AudioFXChain* audio_fx_chain_create_seg(const std::vector<AudioFXSegment>& segs,
+                                        float sample_rate);
+void          audio_fx_chain_process_seg(AudioFXChain* c, float& L, float& R,
+                                         float src_t, int64_t frame_idx);
+// Approximate group latency of the chain's grain stages (frames @ chain sr) —
+// buses read ahead by this much so grain FX don't smear bus timing (PDC).
+int           audio_fx_chain_latency_frames(const AudioFXChain* c);
 
 // ── Windowed FX segments ──────────────────────────────────────────────────────
 // An audio FX brick applies only over its own timeline range. Each segment is

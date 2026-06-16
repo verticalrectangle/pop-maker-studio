@@ -2,15 +2,32 @@
 #include "app.h"
 #include <imgui.h>
 #include <string>
+#include <cstring>
 #include <cctype>
+#include <vector>
 
 #include "inter_font.h"
 #include "mono_font.h"
+#include "display_fonts.h"   // generated: g_embedded_fonts[] (display typefaces)
 
 ImFont* g_font_regular = nullptr;
 ImFont* g_font_bold    = nullptr;
 ImFont* g_font_black   = nullptr;
 ImFont* g_font_mono    = nullptr;
+
+// Registered display faces, parallel to g_embedded_fonts[]. Filled in theme_apply
+// once the atlas is built; looked up by sanitized family name via typo_font_get.
+namespace {
+    struct TypoFace { const char* name; ImFont* font; };
+    std::vector<TypoFace> g_typo_faces;
+}
+
+ImFont* typo_font_get(const char* id) {
+    if (id && *id)
+        for (const auto& f : g_typo_faces)
+            if (f.font && strcmp(f.name, id) == 0) return f.font;
+    return g_font_black;   // default lyrics face / graceful fallback
+}
 
 void theme_apply() {
     ImGuiIO& io = ImGui::GetIO();
@@ -53,6 +70,17 @@ void theme_apply() {
     g_font_mono = io.Fonts->AddFontFromMemoryTTF(
         (void*)jetbrains_mono_regular_ttf, (int)jetbrains_mono_regular_ttf_size,
         20.f, &cfg, mono_ranges);
+
+    // Bundled display typefaces for typography presets. Baked at 44px (lyrics
+    // text upscales from the atlas; 44 keeps big on-canvas type crisp without
+    // bloating the atlas across ~30 faces). Registered by sanitized family name.
+    g_typo_faces.clear();
+    for (int i = 0; i < g_n_embedded_fonts; ++i) {
+        ImFont* f = io.Fonts->AddFontFromMemoryTTF(
+            (void*)g_embedded_fonts[i].data, (int)g_embedded_fonts[i].size,
+            44.f, &cfg);
+        g_typo_faces.push_back({ g_embedded_fonts[i].name, f });
+    }
 
     io.Fonts->Build();
 
@@ -170,4 +198,123 @@ bool ui_btn(const char* label, bool filled, bool small) {
     else        ImGui::PopStyleColor(5);
     ImGui::PopStyleVar();
     return clicked;
+}
+
+// A small round "+" button pinned to a card's top-right corner — the explicit
+// "add at playhead" action, sitting on top of the (drag-source) card body.
+// Call right after the card's InvisibleButton + drag-source block; the caller
+// must have called ImGui::SetNextItemAllowOverlap() before the card so this
+// button can receive clicks over it. `uid` keeps the button id unique.
+bool ui_card_add_btn(ImVec2 card_tl, float card_w, int uid) {
+    const float sz = 20.f, pad = 5.f;
+    // The "+" is an overlay anchored to the card's top-right. Save and restore
+    // the layout cursor around it — otherwise SetCursorScreenPos clobbers the
+    // advance the card's InvisibleButton already made, and the next card stacks
+    // on top of this one (cards end up overlapping by their lower half).
+    ImVec2 save = ImGui::GetCursorScreenPos();
+    ImGui::SetCursorScreenPos({card_tl.x + card_w - sz - pad, card_tl.y + pad});
+    ImGui::PushID(uid);
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {0.f, 0.f});
+    ImGui::PushStyleColor(ImGuiCol_Button,        IM_COL32(235, 120, 60, 235));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(255, 150, 80, 255));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive,  IM_COL32(210, 100, 45, 255));
+    ImGui::PushStyleColor(ImGuiCol_Text,          IM_COL32(20, 16, 12, 255));
+    bool clicked = ImGui::Button("+##cardadd", {sz, sz});
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Add at playhead");
+    ImGui::PopStyleColor(4);
+    ImGui::PopStyleVar();
+    ImGui::PopID();
+    ImGui::SetCursorScreenPos(save);
+    return clicked;
+}
+
+// ── Shared progress UI ───────────────────────────────────────────────────────
+void ui_progress_bar(ImDrawList* dl, float x, float y, float bw, float progress,
+                     ImU32 accent, float bh) {
+    if (bw <= 0.f) return;
+    ImU32 track = (accent & 0x00FFFFFFu) | ((ImU32)40 << IM_COL32_A_SHIFT);
+    dl->AddRectFilled({x, y}, {x + bw, y + bh}, track, bh * 0.5f);
+    if (progress < 0.f) {
+        float seg = bw * 0.35f;
+        float tt  = fmodf((float)ImGui::GetTime() * 0.8f, 1.f);
+        float x0  = x + (bw - seg) * tt;
+        dl->AddRectFilled({x0, y}, {x0 + seg, y + bh}, accent, bh * 0.5f);
+    } else {
+        float pct = progress < 0.02f ? 0.02f : (progress > 1.f ? 1.f : progress);
+        dl->AddRectFilled({x, y}, {x + bw * pct, y + bh}, accent, bh * 0.5f);
+    }
+}
+
+void ui_canvas_progress_banner(ImDrawList* dl, ImVec2 p, float w, float h,
+                               const char* title, float progress, ImU32 accent) {
+    if (!title) title = "Working…";
+    ImVec2 ts = ImGui::CalcTextSize(title);
+    const float pad = 10.f;
+    float bw = ts.x + pad * 2.f, bh = ts.y + pad + 10.f;
+    ImVec2 bp = {p.x + (w - bw) * 0.5f, p.y + h - bh - 16.f};
+    dl->AddRectFilled(bp, {bp.x + bw, bp.y + bh}, IM_COL32(10, 10, 16, 225), 6.f);
+    dl->AddRect(bp, {bp.x + bw, bp.y + bh},
+                (accent & 0x00FFFFFFu) | ((ImU32)190 << IM_COL32_A_SHIFT), 6.f, 0, 1.5f);
+    dl->AddText({bp.x + pad, bp.y + pad * 0.55f}, IM_COL32(255, 210, 140, 255), title);
+    ui_progress_bar(dl, bp.x + pad, bp.y + bh - 8.f, bw - pad * 2.f, progress, accent, 3.f);
+}
+
+// ── Shared library-card hover-dwell clock + image popover ────────────────────
+static int    s_card_hover_id = -1;
+static double s_card_hover_t0 = 0.0;
+
+float ui_card_hover_secs(int card_id, bool hovered) {
+    if (hovered) {
+        if (s_card_hover_id != card_id) {
+            s_card_hover_id = card_id;
+            s_card_hover_t0 = ImGui::GetTime();
+        }
+        return (float)(ImGui::GetTime() - s_card_hover_t0);
+    }
+    if (s_card_hover_id == card_id) s_card_hover_id = -1;
+    return 0.f;
+}
+
+bool ui_card_hover_ready(int card_id, float dwell_secs) {
+    return s_card_hover_id == card_id &&
+           (float)(ImGui::GetTime() - s_card_hover_t0) >= dwell_secs;
+}
+
+void ui_card_image_popover(ImVec2 card_tl, ImTextureID tex,
+                           float img_w, float img_h, bool flip,
+                           const char* name, const char* subtitle) {
+    if (!tex || img_w <= 0.f || img_h <= 0.f) return;
+    const float maxw = 240.f, maxh = 390.f, pad = 9.f;
+    float txt_h = (subtitle ? 42.f : 26.f);
+    float iw = maxw, ih = iw * (img_h / img_w);
+    if (ih > maxh) { ih = maxh; iw = ih * (img_w / img_h); }
+
+    ImGuiViewport* vp = ImGui::GetMainViewport();
+    float x1 = card_tl.x - 14.f, x0 = x1 - iw;
+    float minx = vp->Pos.x + 8.f;
+    if (x0 < minx) { x0 = minx; x1 = x0 + iw; }
+    float box_h = ih + txt_h + pad;
+    float y0 = card_tl.y - 6.f;
+    float maxy = vp->Pos.y + vp->Size.y - 8.f;
+    if (y0 + box_h + pad > maxy) y0 = maxy - box_h - pad;
+    if (y0 < vp->Pos.y + 8.f) y0 = vp->Pos.y + 8.f;
+
+    ImDrawList* dl = ImGui::GetForegroundDrawList();
+    dl->AddRectFilled({x0 - pad, y0 - pad}, {x1 + pad, y0 + box_h + pad},
+                      IM_COL32(14, 14, 20, 252), 9.f);
+    dl->AddRect({x0 - pad, y0 - pad}, {x1 + pad, y0 + box_h + pad},
+                IM_COL32(90, 90, 120, 255), 9.f, 0, 1.5f);
+    ImVec2 uv0 = flip ? ImVec2(0, 1) : ImVec2(0, 0);
+    ImVec2 uv1 = flip ? ImVec2(1, 0) : ImVec2(1, 1);
+    dl->AddImageRounded(tex, {x0, y0}, {x0 + iw, y0 + ih}, uv0, uv1, IM_COL32_WHITE, 6.f);
+    dl->AddRect({x0, y0}, {x0 + iw, y0 + ih}, IM_COL32(255, 255, 255, 40), 6.f);
+    if (name) {
+        ImGui::PushFont(g_font_bold);
+        dl->AddText(ImGui::GetFont(), 15.f, {x0, y0 + ih + 7.f},
+                    IM_COL32(255, 255, 255, 245), name);
+        ImGui::PopFont();
+    }
+    if (subtitle)
+        dl->AddText({x0, y0 + ih + 26.f}, IM_COL32(160, 160, 175, 220), subtitle);
 }

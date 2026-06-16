@@ -91,6 +91,20 @@ def main():
                 lines.append(f'    float fx_{eid}_{p["name"]}_beat = 0.0f;')  # beat sync (shader effects only)
     write(os.path.join(GEN_DIR, "fx_clip_fields.h"), "\n".join(lines) + "\n")
 
+    # ── fx_kf_fields.h ────────────────────────────────────────────────────────
+    # Keyframe-registry rows (name -> &Clip::member) for every generated FX
+    # amount + param, so eval_prop() can interpolate them. ALL params (incl.
+    # hidden) are listed because fx_collect_cases routes every param read through
+    # eval_prop — an unregistered name would make eval_prop return 0 and break
+    # the effect. _beat sync fields are deliberately excluded (not keyframable).
+    lines = []
+    for e in effects:
+        eid = e["id"]
+        lines.append(f'    {{"fx_{eid}_amount", &Clip::fx_{eid}_amount}},')
+        for p in e["params"]:
+            lines.append(f'    {{"fx_{eid}_{p["name"]}", &Clip::fx_{eid}_{p["name"]}}},')
+    write(os.path.join(GEN_DIR, "fx_kf_fields.h"), "\n".join(lines) + "\n")
+
     # ── fx_collect_cases.h ────────────────────────────────────────────────────
     # Note: for shader effects, _cl_beat_pulse must be pre-computed.
     # For transform effects, _cl_t must be pre-computed (current playhead time).
@@ -102,13 +116,15 @@ def main():
         lines.append(f'            acc.{eid}_on = true;')
         if not is_transform:
             lines.append(f'            acc.any_gen_fx = true;')
-            lines.append(f'            acc.{eid}_amount = fmaxf(acc.{eid}_amount, cl.fx_{eid}_amount);')
+            lines.append(f'            acc.{eid}_amount = fmaxf(acc.{eid}_amount, cl.eval_prop("fx_{eid}_amount", _cl_t));')
             for p in e["params"]:
                 pmin = float(p["min"])
                 pmax = float(p["max"])
                 lines.append(f'            {{')
                 lines.append(f'                float _bi = cl.fx_{eid}_{p["name"]}_beat;')
-                lines.append(f'                float _bv = cl.fx_{eid}_{p["name"]};')
+                # eval_prop animates a keyframed param per-frame and falls back to
+                # the static field when un-keyed. Beat-sync (when on) overrides it.
+                lines.append(f'                float _bv = cl.eval_prop("fx_{eid}_{p["name"]}", _cl_t);')
                 lines.append(f'                acc.{eid}_{p["name"]} = fmaxf(acc.{eid}_{p["name"]}, (_bi > 0.001f) ? ({pmin}f + ({pmax}f - {pmin}f) * _bi * _cl_beat_pulse) : _bv);')
                 lines.append(f'            }}')
         else:
@@ -118,9 +134,9 @@ def main():
             lines.append(f'                float _p = (_dur > 0.001f) ? (_cl_t - cl.start) / _dur : 0.f;')
             lines.append(f'                _p = (_p < 0.f) ? 0.f : (_p > 1.f ? 1.f : _p);')
             lines.append(f'                acc.{eid}_progress = _p;')
-            lines.append(f'                acc.{eid}_amount   = fmaxf(acc.{eid}_amount, cl.fx_{eid}_amount);')
+            lines.append(f'                acc.{eid}_amount   = fmaxf(acc.{eid}_amount, cl.eval_prop("fx_{eid}_amount", _cl_t));')
             for p in e["params"]:
-                lines.append(f'                acc.{eid}_{p["name"]} = cl.fx_{eid}_{p["name"]};')
+                lines.append(f'                acc.{eid}_{p["name"]} = cl.eval_prop("fx_{eid}_{p["name"]}", _cl_t);')
             lines.append(f'            }}')
         lines.append(f'            break;')
     write(os.path.join(GEN_DIR, "fx_collect_cases.h"), "\n".join(lines) + "\n")
@@ -207,35 +223,39 @@ def main():
 
     # ── fx_ui_inspector.h ─────────────────────────────────────────────────────
     # Amount slider first (system), then effect params with beat sync buttons.
+    # Every base slider routes through the kfx() lambda (defined at each include
+    # site) = the shared kf_slider keyframe control: diamond toggle, prev/next
+    # nav, autokey. When a param's beat-sync is ON the beat curve owns the
+    # animation, so we fall back to a disabled raw slider + the beat-intensity
+    # slider (no keyframe diamonds — they wouldn't apply).
     lines = []
     for e in effects:
         eid = e["id"]
         elabel = e["label"]
         lines.append(f'        case FXType::{e["enum"]}:')
-        lines.append(f'            ui_label("Amount");')
-        lines.append(f'            ImGui::SetNextItemWidth(sw);')
-        lines.append(f'            ImGui::SliderFloat("##gen_{eid}_amount", &clip.fx_{eid}_amount, 0.0f, 1.0f, "%.2f");')
-        lines.append(f'            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "{elabel}: Amount");')
+        lines.append(f'            kfx("fx_{eid}_amount", "Amount", &clip.fx_{eid}_amount, 0.0f, 1.0f, "%.2f", sw);')
         for i, p in enumerate(e["params"]):
             if p.get("hidden"): continue
             pname = p["name"]
             plabel = p["label"]
+            pmin = float(p["min"]); pmax = float(p["max"]); pfmt = p["fmt"]
             is_transform = e.get("kind") == "transform"
             lines.append('            ImGui::Dummy({0.f, 4.f});')
-            lines.append(f'            ui_label("{plabel}");')
             if is_transform:
-                # Transform effects: simple slider only (no beat sync)
-                lines.append(f'            ImGui::SetNextItemWidth(sw);')
-                lines.append(f'            ImGui::SliderFloat("##gen_{eid}_{pname}", &clip.fx_{eid}_{pname}, {float(p["min"])}f, {float(p["max"])}f, "{p["fmt"]}");')
-                lines.append(f'            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "{elabel}: {plabel}");')
+                # Transform effects: keyframable slider only (no beat sync).
+                lines.append(f'            kfx("fx_{eid}_{pname}", "{plabel}", &clip.fx_{eid}_{pname}, {pmin}f, {pmax}f, "{pfmt}", sw);')
             else:
                 lines.append(f'            {{')
                 lines.append(f'                bool _bon = clip.fx_{eid}_{pname}_beat > 0.001f;')
-                lines.append(f'                if (_bon) ImGui::BeginDisabled();')
-                lines.append(f'                ImGui::SetNextItemWidth(sw - 26.f);')
-                lines.append(f'                ImGui::SliderFloat("##gen_{eid}_{pname}", &clip.fx_{eid}_{pname}, {float(p["min"])}f, {float(p["max"])}f, "{p["fmt"]}");')
-                lines.append(f'                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "{elabel}: {plabel}");')
-                lines.append(f'                if (_bon) ImGui::EndDisabled();')
+                lines.append(f'                if (_bon) {{')
+                lines.append(f'                    ui_label("{plabel}");')
+                lines.append(f'                    ImGui::BeginDisabled();')
+                lines.append(f'                    ImGui::SetNextItemWidth(sw - 26.f);')
+                lines.append(f'                    ImGui::SliderFloat("##gen_{eid}_{pname}", &clip.fx_{eid}_{pname}, {pmin}f, {pmax}f, "{pfmt}");')
+                lines.append(f'                    ImGui::EndDisabled();')
+                lines.append(f'                }} else {{')
+                lines.append(f'                    kfx("fx_{eid}_{pname}", "{plabel}", &clip.fx_{eid}_{pname}, {pmin}f, {pmax}f, "{pfmt}", sw - 26.f);')
+                lines.append(f'                }}')
                 lines.append(f'                ImGui::SameLine(0.f, 4.f);')
                 lines.append(f'                ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));')
                 lines.append(f'                if (ImGui::SmallButton("B##bt_{eid}_{pname}")) {{')
@@ -260,7 +280,8 @@ def main():
         color_cases.append(f'        case FXType::{e["enum"]}: return IM_COL32({col[0]},{col[1]},{col[2]},{col[3]});')
         abbrev_cases.append(f'        case FXType::{e["enum"]}: return "{e["abbrev"]}";')
         label_cases.append(f'        case FXType::{e["enum"]}: return "{e["label"]}";')
-        picker_entries.append(f'        {{FXType::{e["enum"]}, "{e["label"]}", "{e["description"]}", IM_COL32({col[0]},{col[1]},{col[2]},{col[3]})}},')
+        cat = e.get("category", "Other")
+        picker_entries.append(f'        {{FXType::{e["enum"]}, "{e["label"]}", "{e["description"]}", IM_COL32({col[0]},{col[1]},{col[2]},{col[3]}), "{cat}"}},')
 
     write(os.path.join(GEN_DIR, "fx_ui_color.h"),   "\n".join(color_cases)   + "\n")
     write(os.path.join(GEN_DIR, "fx_ui_abbrev.h"),  "\n".join(abbrev_cases)  + "\n")

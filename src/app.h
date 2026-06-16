@@ -32,7 +32,13 @@ static const int MAX_VIDEO_TRACKS = 32;
 enum class AnimStyle {
     Fade, Glitch, Typewriter, Bounce, Scale,
     Slide, Stack, Block,
-    None   // sentinel: inherit project default (state.style)
+    None,   // sentinel: inherit project default (state.style)
+    // ── Wave 2 per-element motions (used with anim_unit = word/letter) ───────
+    // Appended after None so existing serialized clip_style ints are unchanged.
+    WaveText,   // continuous sine ripple across letters
+    Jitter,     // continuous per-letter vibration
+    Explode,    // elements fly in from random offsets (intro)
+    Gravity     // elements drop from above and bounce to the baseline (intro)
 };
 
 // ── Background removal status ─────────────────────────────────────────────────
@@ -74,7 +80,14 @@ enum class OutputFormat { Vertical, Horizontal, Square };
 // ── Track / clip data model ───────────────────────────────────────────────────
 
 // Each clip carries its own type so any track can hold mixed content.
-enum class ClipType { Text, Lyrics, Subtitle, Video, Audio, Effect, Background, BodyFX, MultiFX, Record };
+enum class ClipType { Text, Lyrics, Subtitle, Video, Audio, Effect, Background, BodyFX, MultiFX, Record, VideoRecord, AudioMultiFX, Bus };
+
+// A clip that composites as video: a Video clip, or a VideoRecord brick whose
+// selected take is mirrored into `text` (path consumers stay unchanged).
+struct Clip;
+inline bool clip_is_videolike_type(ClipType t) {
+    return t == ClipType::Video || t == ClipType::VideoRecord;
+}
 
 struct WordEntry {
     std::string text;
@@ -124,6 +137,16 @@ struct Clip {
     float in_point  = 0.f;    // seconds into source file to begin playback
     float out_point = -1.f;   // seconds into source file to end (-1 = until end of source)
 
+    // Frame-rate conform (see conform.h). src_fps is the source's native rate
+    // (0 = not yet probed, -1 = still/no-conform). When it differs from the
+    // project fps the source is transcoded to a project-fps copy and the
+    // proxy/export decode that instead — so preview == export and judder is
+    // smoothed. The toggles control blend-vs-cadence and seamless looping.
+    float src_fps        = 0.f;
+    bool  conform_smooth = true;   // blend frames (vs dup/drop to keep cadence)
+    bool  clip_loop      = false;  // conform cyclically so a perfect loop stays seamless
+    bool  conform_ready_cache = false;  // transient: last-seen conform readiness (slot-reopen edge)
+
     // stereo pan: -1=full left, 0=center, +1=full right (Video embedded audio + Audio clips)
     float pan = 0.f;
 
@@ -140,7 +163,18 @@ struct Clip {
     int   sub_anchor_h = 1;    // horizontal anchor: 0=left 1=center 2=right
     float sub_color[4] = {1.f, 1.f, 1.f, 1.f};  // RGBA base / unspoken color
     bool  sub_color_override = false;
+    int   text_case = 0;       // 0=as-typed 1=UPPERCASE 2=lowercase (render-time; non-destructive)
     float karaoke_highlight_color[4] = {1.f, 0.85f, 0.1f, 1.f};  // active word color
+
+    // ── Typography face + kinetic params ─────────────────────────────────────
+    std::string sub_font;          // typography face id ("" = default Inter Black)
+    int   ease         = 0;        // easing curve id (text_anim.h EASE_*)
+    float tracking     = 0.f;      // extra letter-spacing, fraction of font size
+    int   anim_unit    = 0;        // 0=block 1=word 2=letter (per-element motion)
+    float anim_stagger = 0.06f;    // per-element delay step (seconds)
+    int   karaoke_mode = 0;        // 0=color 1=fill-wipe 2=pop 3=bouncing-ball
+    int   grad_mode    = 0;        // 0=none 1=vertical 2=diagonal 3=hue-cycle
+    float grad_col2[4] = {1.f, 1.f, 1.f, 1.f};  // second gradient stop
 
     TextStyle ts;
 
@@ -304,11 +338,43 @@ struct Clip {
     std::vector<Clip>  fx_chain;          // ordered sub-effects for MultiFX bricks
     int                fx_chain_selected = -1;
 
+    // FX-brick coupling: a coupled brick belongs to the content clip it sits
+    // on — it snaps to the host's span, follows it through edits, applies to
+    // it exclusively, and lets go only via explicit decouple. Host identity
+    // is a source fingerprint (indices shift): source_id/text for media,
+    // "\x01vrecord"/"\x01record" sentinels for record bricks. Glass == coupled
+    // for video FX bricks; uncoupled bricks are global.
+    bool        fx_coupled = false;
+    std::string fx_host_sid;
+
+    // Face filter (VideoRecord bricks): id into face_filters.h's list +
+    // intensity. Applies to the live mirror; take playback uses the same
+    // recipe via the cached landmark pass (stage 3).
+    int   face_filter     = 0;
+    float face_filter_amt = 1.f;
+
     // Record brick (ClipType::Record) — loop-recorded takes (WAV paths in the
     // managed takes dir). The selected take plays in preview/export like an
     // audio clip with in_point 0 / speed 1; the rest wait in the panel tray.
     std::vector<std::string> rec_takes;
     int                      rec_take_sel = -1;
+
+    // Capture IMG brick: a VideoRecord brick in photo mode — each take is a
+    // single still JPEG (rec_takes hold .jpg paths) grabbed from the webcam
+    // instead of a loop-recorded video. The selected still mirrors into `text`
+    // and renders through the normal image-still path. Same camera panel.
+    bool rec_photo = false;
+
+    // Video Record brick: capture the mic alongside the webcam so each take is a
+    // synced A/V mp4 (one ffmpeg captures both → single clock). rec_av_offset_ms
+    // nudges audio vs video to dial out fixed device latency (+ = delay audio).
+    bool  rec_audio       = true;
+    float rec_av_offset_ms = 0.f;
+
+    // Content clip: when true, the coupled FX chains expand into per-FX timing
+    // lanes drawn beneath the clip (the track grows), so each effect's run can
+    // be trimmed individually. Collapsed by default; view state, not exported.
+    bool  fx_expanded = false;
 };
 
 // Split `cl` at absolute timeline time `cut` and return the right half.
@@ -322,6 +388,13 @@ Clip clip_split_at(Clip& cl, float cut);
 // stay put on the timeline.
 void clip_keys_shift(Clip& cl, float dt);
 
+// Registry of keyframable float fields on Clip (defined in app.cpp). Single
+// source of truth for eval_prop's fallback, the render's per-frame evaluation,
+// and the keyframe slider UI.
+struct ClipKfField { const char* name; float Clip::* f; };
+extern const ClipKfField kClipKfFields[];
+extern const int kClipKfFieldCount;
+
 struct Track {
     std::string       name;
     std::vector<Clip> clips;
@@ -331,6 +404,13 @@ struct Track {
     bool              managed = false;  // owned by typography system — preset rewrites clips in-place
     int               sub_row = 0;
 };
+
+// ── Audio bus brick ────────────────────────────────────────────────────────────
+// A Bus is a Clip (ClipType::Bus) placed on a track: it submixes the audio of
+// every track BELOW it (down to the next bus brick), gated by its own time span,
+// then applies its FX chain (clip.fx_chain — same Effect-Clip shape as the Audio
+// Multi-FX brick) and gain (clip.volume) before summing to the output. Replaces
+// the old global per-track bus routing.
 
 // ── Creative FX accumulator ───────────────────────────────────────────────────
 
@@ -448,6 +528,9 @@ struct Marker {
     float       time  = 0.f;
     std::string label;
     uint32_t    color = 0xFF4A90E2u;  // ABGR, default cornflower blue
+    // A marker is always a navigation locator (jump/loop anchor). `chapter`
+    // additionally flags it as an exported chapter point (YouTube etc.).
+    bool        chapter = false;
 };
 
 // ── Central app state ─────────────────────────────────────────────────────────
@@ -455,6 +538,7 @@ struct Marker {
 struct AppState {
     // splash
     float splash_timer = 1.6f;  // counts down from launch; studio shows when <= 0
+    bool  in_studio    = false; // false = show the home/launcher; true = the editor
 
     // files
     std::string project_path;   // path of the .pms file last saved/loaded (empty = unsaved)
@@ -502,6 +586,14 @@ struct AppState {
     // wall-clock playback sync
     std::chrono::steady_clock::time_point play_start_wall;
     float play_start_pos = 0.f;
+
+    // Loop transport: when on, playback cycles seamlessly instead of stopping
+    // at the end (the audio clock wraps sample-accurately). loop_in/loop_out
+    // define the loop brace region; loop_in < 0 (or out <= in) means "no region
+    // set" → loop the whole timeline.
+    bool  loop_play = false;
+    float loop_in   = -1.f;
+    float loop_out  = -1.f;
 
     // timeline view
     float tl_scroll       = 0.f;
@@ -603,6 +695,10 @@ struct AppState {
     bool show_tutorial  = false;
     int  tutorial_step  = 0;   // 0-4 = steps 1-5; >=5 = finished
 
+    // View ▸ Social safe zones: overlay the TikTok/Reels/Shorts keep-out chrome
+    // on the 9:16 canvas and shift the drag centre-snap to the visible box.
+    bool show_social_safe = false;
+
     // scroll-to-clip request (set by preview click, consumed by draw_timeline)
     bool request_scroll_to_clip = false;
 
@@ -652,8 +748,8 @@ struct AppState {
     // tune overrides (-1 / 0 = use preset default)
     float        typo_font_size  = 0.f;       // 0 = use preset
     float        typo_color[4]   = {0.f,0.f,0.f,0.f}; // all-zero = use preset
-    bool         typo_all_caps_override = false;
-    bool         typo_all_caps   = false;
+    bool         typo_case_override = false;     // user overrode the preset's letter case
+    int          typo_case       = 0;            // 0=as-typed 1=UPPERCASE 2=lowercase
     SubtitleMode typo_grouping   = SubtitleMode::Word; // mirrors preset until overridden
     int          typo_custom_n   = 3;
 
@@ -697,8 +793,26 @@ CreativeFXAccum  collect_glass_fx    (const AppState& state, float t, int video_
 // Used by the scene compositor to apply per-track global FX in z-order.
 EffectAccum      collect_effects_for_track     (const AppState& state, float t, int track_idx);
 CreativeFXAccum  collect_creative_fx_for_track (const AppState& state, float t, int track_idx);
-// Visual check: does this FX clip sit directly above any video/audio clip (time overlap)?
+// Glass check: video FX bricks are glass iff coupled to a resolvable host;
+// audio FX bricks keep the legacy same-track-overlap rule until the audio
+// chain brick lands.
 bool             fx_clip_is_glass    (const AppState& state, int fx_ti, const Clip& fx_cl);
+// Index of the host clip a coupled FX brick belongs to (-1 if none).
+// Canvas handles and FX panels redirect transform edits through this.
+int              fx_glass_host_index (const AppState& state, int fx_ti, const Clip& fx_cl);
+
+// ── FX-brick coupling ─────────────────────────────────────────────────────────
+bool             fx_brick_is_video   (const Clip& c);   // Effect(video)/MultiFX/BodyFX
+bool             fx_brick_is_audio_kind(const Clip& c); // Effect(audio)/AudioMultiFX
+// Stable host fingerprint (source_id/text; record bricks get sentinels).
+std::string      fx_host_fingerprint (const Clip& host);
+// Resolve a coupled brick's host on its track: fingerprint match, then max
+// overlap when several clips share a source. -1 = unresolvable.
+int              fx_coupled_host     (const AppState& state, int fx_ti, const Clip& fx_cl);
+// Per-frame constraint pass: coupled bricks snap to their host's span and
+// follow it through every edit; bricks whose host vanished decouple to
+// free/global. Call once per frame from app_frame.
+void             fx_coupling_tick    (AppState& state);
 
 // Beat sync: returns exp-decay pulse [0..1] from most recent beat before t in the referenced clip.
 // src_track/src_clip = -1 → always returns 0.

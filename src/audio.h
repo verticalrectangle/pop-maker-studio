@@ -26,12 +26,18 @@ void     audio_clear_loop();
 bool     audio_loop_active();
 uint64_t audio_loop_cycles();  // increments once per wrap — recorder slices takes on this clock
 
-// ── Mic capture (record brick) ────────────────────────────────────────────────
-// Separate miniaudio capture device: interleaved stereo f32 @ 44100, same
-// format the mixer uses, so takes feed straight back into the clip system.
-bool  audio_capture_start();
-void  audio_capture_stop();
+// ── Mic capture (record brick) — performance mode ─────────────────────────────
+// Opening the mic swaps the playback-only device for ONE duplex device with
+// small periods (~128 frames): the same callback renders the timeline mix,
+// sums the gated live input straight into the output (zero-buffer monitor
+// path, ~6 ms round trip), and feeds the raw input to the capture ring.
+// Interleaved stereo f32 @ 44100 throughout, so takes feed straight back
+// into the clip system. The master clock is shared — playback continues
+// seamlessly across the device swap.
+bool  audio_capture_start();    // enter performance mode
+void  audio_capture_stop();     // leave performance mode
 bool  audio_capture_active();
+float audio_input_peak();       // live mic peak 0–1 (0 when not capturing)
 // Move all captured samples since the last drain into `out` (appends).
 void  audio_capture_drain(std::vector<float>& out);
 float audio_capture_latency();  // input period in seconds (0 if not capturing)
@@ -41,12 +47,38 @@ float audio_capture_latency();  // input period in seconds (0 if not capturing)
 std::vector<std::string> audio_capture_devices();
 void audio_capture_select(int index);
 int  audio_capture_selected();
+// PulseAudio/PipeWire source name for a capture-device index (from the last
+// audio_capture_devices() enumeration), for feeding ffmpeg `-f pulse -i <name>`.
+// Empty string for index < 0 (system default) or an unknown index.
+std::string audio_capture_pulse_source(int index);
 
-// Input monitoring: route live mic into the playback mix (capture must be
-// running). Round-trip latency = input + output period — fine for VO, audible
-// for tight singing, hence default off.
+// Input monitoring: sum the live mic into the output inside the duplex
+// callback. Latency = one input + one output period of the duplex device.
+// Enters performance mode on demand.
 void audio_monitor_set(bool on);
 bool audio_monitor_get();
+
+// Monitor noise gate (silvertune companion port): smoothed gate on the
+// monitored signal. The recorded stream stays raw unless bake is on.
+void audio_gate_set(bool on);
+bool audio_gate_get();
+void audio_gate_bake_set(bool on);  // also gate the recorded takes
+bool audio_gate_bake_get();
+
+// "Hear effects": run the record brick's audio FX chain on the MONITOR
+// signal only — takes record dry, playback re-applies the same chain, so
+// what you sing against is what the take becomes. The chain is built on the
+// UI thread (audio_monitor_chain_set; empty clears) and processed per
+// sample in the duplex input path.
+void audio_monitor_fx_set(bool on);
+bool audio_monitor_fx_get();
+void audio_monitor_chain_set(const std::vector<AudioFX>& stages);
+bool audio_monitor_chain_active();
+
+// Perf-mode health: true while the duplex device owns audio; xruns counts
+// suspicious callback gaps since capture start (any nonzero = audible risk).
+bool     audio_perf_mode();
+uint32_t audio_perf_xruns();
 
 // ── Processed-audio lookups (export bake) ─────────────────────────────────────
 // Copy out the preview system's buffers so the exporter can bake audio FX
@@ -66,7 +98,23 @@ bool audio_probe(const std::string& path, AudioMeta& meta);
 
 // ── Clip-based audio ──────────────────────────────────────────────────────────
 
+// Bus brick snapshot — one per ClipType::Bus clip. Submixes the audio of every
+// track BELOW `track` (down to the next bus brick), gated by [start,end], then
+// applies `stages` + `gain`. Stages flattened from the brick's fx_chain entries.
+struct AudioBusBrick {
+    int      track   = 0;    // the brick's track index (groups tracks > this)
+    float    start   = 0.f;  // span on the timeline (seconds)
+    float    end      = 0.f;
+    std::vector<AudioFX> stages;
+    float    gain    = 1.f;
+    uint64_t hash    = 0;    // change detector for the live chain registry
+};
+
+// Push the bus-brick set — called every frame like clips.
+void audio_bus_bricks_update(const std::vector<AudioBusBrick>& bricks);
+
 struct AudioClipDesc {
+    int         track     = 0;    // routing: the clip's track index (for bus-brick lookup)
     float       tl_start  = 0.f;  // clip start on timeline (seconds)
     float       tl_end    = 0.f;  // clip end on timeline
     float       in_point  = 0.f;  // source offset at tl_start

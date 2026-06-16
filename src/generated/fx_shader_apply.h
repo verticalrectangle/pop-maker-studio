@@ -2269,3 +2269,44 @@
             }
         }
     }
+
+    if (cfx.skin_smooth_on && cfx.skin_smooth_amount > 0.01f) {
+        GLuint p = g_gen_progs[(int)FXType::SkinSmooth];
+        if (p) {
+            GLuint pre_tex = cur;
+            glUseProgram(p);
+            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
+            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
+            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
+            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.skin_smooth_amount);
+            glUniform1f(glGetUniformLocation(p, "u_radius"), cfx.skin_smooth_radius);
+            glUniform1f(glGetUniformLocation(p, "u_tone"), cfx.skin_smooth_tone);
+            run1(p);
+            if (cfx.skin_smooth_amount < 0.999f) {
+                draw_blend_pass(pre_tex, cur, cfx.skin_smooth_amount, g_pp.fbo[pslot], w, h);
+                cur = g_pp.tex[pslot];
+                pslot ^= 1;
+            }
+        }
+    }
+
+    if (cfx.glow_up_on && cfx.glow_up_amount > 0.01f) {
+        GLuint p = g_gen_progs[(int)FXType::GlowUp];
+        if (p) {
+            GLuint pre_tex = cur;
+            glUseProgram(p);
+            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
+            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
+            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
+            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.glow_up_amount);
+            glUniform1f(glGetUniformLocation(p, "u_glow"), cfx.glow_up_glow);
+            glUniform1f(glGetUniformLocation(p, "u_warmth"), cfx.glow_up_warmth);
+            glUniform1f(glGetUniformLocation(p, "u_brighten"), cfx.glow_up_brighten);
+            run1(p);
+            if (cfx.glow_up_amount < 0.999f) {
+                draw_blend_pass(pre_tex, cur, cfx.glow_up_amount, g_pp.fbo[pslot], w, h);
+                cur = g_pp.tex[pslot];
+                pslot ^= 1;
+            }
+        }
+    }

@@ -2193,6 +2193,47 @@ static void fx_attached_inspector(AttachedFX& afx, float sw, AppState& state, Cl
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Ken Burns: End Y");
             break;
         }
+        case FXType::SkinSmooth: {
+            if ((int)afx.params.size() < 2) afx.params.resize(2, 0.f);
+            ui_label("Amount");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##afx_skin_smooth_amount", &afx.amount, 0.0f, 1.0f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Skin Smooth: Amount");
+            ImGui::Dummy({0.f, 4.f});
+            ui_label("Smoothness");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##afx_skin_smooth_radius", &afx.params[0], 1.0f, 6.0f, "%.1f px");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Skin Smooth: Smoothness");
+            ImGui::Dummy({0.f, 4.f});
+            ui_label("Skin Range");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##afx_skin_smooth_tone", &afx.params[1], 0.0f, 1.0f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Skin Smooth: Skin Range");
+            break;
+        }
+        case FXType::GlowUp: {
+            if ((int)afx.params.size() < 3) afx.params.resize(3, 0.f);
+            ui_label("Amount");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##afx_glow_up_amount", &afx.amount, 0.0f, 1.0f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Glow Up: Amount");
+            ImGui::Dummy({0.f, 4.f});
+            ui_label("Glow");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##afx_glow_up_glow", &afx.params[0], 0.0f, 1.0f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Glow Up: Glow");
+            ImGui::Dummy({0.f, 4.f});
+            ui_label("Warmth");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##afx_glow_up_warmth", &afx.params[1], -1.0f, 1.0f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Glow Up: Warmth");
+            ImGui::Dummy({0.f, 4.f});
+            ui_label("Brighten");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##afx_glow_up_brighten", &afx.params[2], 0.0f, 0.5f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Glow Up: Brighten");
+            break;
+        }
         default: break;
     }
 }

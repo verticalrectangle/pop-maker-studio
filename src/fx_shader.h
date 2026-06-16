@@ -17,6 +17,32 @@ void fx_shader_shutdown();
 //        ImDrawList that is submitted later in the same frame.
 // w, h:  pixel dimensions of src_tex.
 // t:     animation time (seconds, e.g. clip-local or absolute playhead).
+// Face-filter warp: bumps = n × {cx, cy, radius, scale, dx, dy} in frame UV.
+// Renders into the slot's FBO and returns its texture (src on no-op).
+uintptr_t face_warp_apply(uintptr_t src_tex, int slot, int w, int h,
+                          const float* bumps, int n_bumps);
+
+// Face-warp/sprite output slot for a video clip — a bank parallel to the
+// per-clip fx slots, so the warped texture survives until scene composite
+// without clobbering the clip's own fx_apply output.
+int fx_face_clip_slot(int video_slot);
+
+// Dedicated output slots for the face-filter PICKER preview thumbnails — one
+// per filter id, persistent so the whole grid can show all warps at once.
+int fx_face_preview_slot(int filter_id);
+
+// Doggy sprites at playback/export: alpha-blend textured quads over src_tex
+// inside the slot's FBO. Corner positions in target-frame UV ((0,0) = image
+// top-left), order tl/tr/br/bl; u0/u1 flip the sprite art horizontally.
+// In-place when src_tex is already the slot's texture (face_warp output).
+struct FaceSpriteQuad {
+    unsigned tex = 0;
+    float    p[4][2];
+    float    u0 = 0.f, u1 = 1.f;
+};
+uintptr_t face_sprites_apply(uintptr_t src_tex, int slot, int w, int h,
+                             const FaceSpriteQuad* quads, int n);
+
 uintptr_t fx_apply(uintptr_t src_tex, int slot, int w, int h,
                    const EffectAccum& ea, const CreativeFXAccum& cfx, float t);
 

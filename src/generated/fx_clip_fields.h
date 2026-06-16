@@ -661,3 +661,15 @@
     float fx_ken_burns_start_y = 0.5f;
     float fx_ken_burns_end_x = 0.5f;
     float fx_ken_burns_end_y = 0.5f;
+    float fx_skin_smooth_amount = 1.0f;
+    float fx_skin_smooth_radius = 3.0f;
+    float fx_skin_smooth_radius_beat = 0.0f;
+    float fx_skin_smooth_tone = 0.5f;
+    float fx_skin_smooth_tone_beat = 0.0f;
+    float fx_glow_up_amount = 1.0f;
+    float fx_glow_up_glow = 0.5f;
+    float fx_glow_up_glow_beat = 0.0f;
+    float fx_glow_up_warmth = 0.25f;
+    float fx_glow_up_warmth_beat = 0.0f;
+    float fx_glow_up_brighten = 0.15f;
+    float fx_glow_up_brighten_beat = 0.0f;

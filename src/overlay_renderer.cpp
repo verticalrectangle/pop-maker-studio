@@ -3,6 +3,7 @@
 #include "ui/theme.h"
 #include "ui/pipeline.h"  // SAFE_TOP, SAFE_BOT
 #include "text_renderer.h"
+#include "text_anim.h"
 
 #include <imgui.h>
 #include <cmath>
@@ -12,7 +13,7 @@
 extern ImFont* g_font_black;
 
 void draw_text_overlays(ImDrawList* dl, const AppState& state, float t,
-                        ImVec2 p, float w, float h)
+                        ImVec2 p, float w, float h, int only_track)
 {
     if (state.tracks.empty()) return;
 
@@ -59,20 +60,30 @@ void draw_text_overlays(ImDrawList* dl, const AppState& state, float t,
             if (has_text) ++text_rendered;
             continue;
         }
+        // Per-track render: skip drawing other tracks but still count them so the
+        // target track's vertical stacking offset is unchanged.
+        if (only_track >= 0 && ti != only_track) { ++text_rendered; continue; }
 
-        ImFont* txt_font = g_font_black;
+        ImFont* txt_font = typo_font_get(active->sub_font.c_str());
         // font_size is stored as a fraction of canvas height (0 = use default).
         // Default fraction chosen so the text looks the same proportion in the
         // preview canvas and the full-res FBO — do NOT use a fixed pixel size.
         static constexpr float kDefaultFontFrac = 0.055f;
-        float fsz = active->font_size > 0.f ? active->font_size * h
-                                            : h * kDefaultFontFrac;
+        // Keyframable text transform: read font size / wrap / position via
+        // eval_prop(t) so an animated value matches the preview (eval_prop
+        // returns the static field when un-keyed).
+        float fs_kf = active->eval_prop("font_size", t);
+        float fsz = fs_kf > 0.f ? fs_kf * h : h * kDefaultFontFrac;
         float line_h = fsz * 1.25f;
 
-        float max_line_w = fmaxf(40.f, active->sub_wrap_w * w);
+        float max_line_w = fmaxf(40.f, active->eval_prop("sub_wrap_w", t) * w);
         std::vector<std::string> txt_lines;
+        // Render-time letter case (non-destructive): the typed text keeps its case.
+        std::string disp_text = active->text;
+        if      (active->text_case == 1) for (auto& ch : disp_text) ch = (char)toupper((unsigned char)ch);
+        else if (active->text_case == 2) for (auto& ch : disp_text) ch = (char)tolower((unsigned char)ch);
         {
-            const char* src = active->text.c_str();
+            const char* src = disp_text.c_str();
             const char* wp  = src;
             std::string cur;
             while (true) {
@@ -94,20 +105,11 @@ void draw_text_overlays(ImDrawList* dl, const AppState& state, float t,
             if (txt_lines.empty()) txt_lines.push_back("");
         }
 
-        // Post-wrap font scale: ensure no rendered line overflows the canvas given the anchor.
-        // Mirrors canvas.cpp lines ~1052-1073.
+        // Post-wrap font scale: only clamp a single over-long token to the wrap
+        // column — no safe-margin penalty, so text keeps its size wherever it's
+        // placed (matches canvas.cpp; preview/export parity).
         {
-            float max_fit_w;
-            if (active->sub_anchor_h == 0)
-                max_fit_w = (1.f - active->sub_pos_x - SAFE_SIDE) * w;
-            else if (active->sub_anchor_h == 2)
-                max_fit_w = (active->sub_pos_x - SAFE_SIDE) * w;
-            else
-                max_fit_w = 2.f * fminf(active->sub_pos_x - SAFE_SIDE,
-                                        1.f - active->sub_pos_x - SAFE_SIDE) * w;
-            max_fit_w = fminf(max_fit_w, max_line_w);   // also cap at wrap column
-            max_fit_w = fmaxf(max_fit_w, 40.f);          // safety floor
-
+            float max_fit_w = fmaxf(40.f, max_line_w);
             float max_rendered_w = 0.f;
             for (auto& ln : txt_lines)
                 max_rendered_w = fmaxf(max_rendered_w,
@@ -130,11 +132,15 @@ void draw_text_overlays(ImDrawList* dl, const AppState& state, float t,
         else if (active->sub_pos == 2)
             slot_y = p.y + sz_top + text_rendered * slot_h;
         else if (active->sub_pos == 3)
-            slot_y = p.y + active->sub_pos_y * h - block_h * 0.5f;
+            slot_y = p.y + active->eval_prop("sub_pos_y", t) * h - block_h * 0.5f;
         else
             slot_y = p.y + h - sz_bot - block_h - text_rendered * slot_h;
-        // Clamp to safe zone so text never lands under platform UI chrome.
-        slot_y = fmaxf(p.y + sz_top, fminf(p.y + h - sz_bot - block_h, slot_y));
+        // Preset positions (Bottom/Center/Top) are penned into the safe zone so
+        // they never land under platform UI chrome. Custom (dragged) text — the
+        // canvas writes sub_pos == 3 — honours its exact position, including
+        // past the margins and off-canvas, matching the canvas drag's [-1, 2].
+        if (active->sub_pos != 3)
+            slot_y = fmaxf(p.y + sz_top, fminf(p.y + h - sz_bot - block_h, slot_y));
 
         float local_t  = t - active->start;
         float clip_dur = active->end - active->start;
@@ -146,46 +152,19 @@ void draw_text_overlays(ImDrawList* dl, const AppState& state, float t,
         float anim_dx    = 0.f;
         float anim_dy    = 0.f;
         float anim_alpha = 1.f;
+        float anim_scale = 1.f;
 
         AnimStyle eff_style = (active->clip_style != AnimStyle::None)
                               ? active->clip_style : state.style;
 
-        switch (eff_style) {
-            case AnimStyle::Fade:
-                if (local_t < fade_in)       anim_alpha = local_t / fade_in;
-                else if (local_t > clip_dur - fade_out)
-                                              anim_alpha = (clip_dur - local_t) / fade_out;
-                break;
-            case AnimStyle::Glitch: {
-                float decay = fmaxf(0.f, 1.f - local_t / 0.5f);
-                anim_dx = sinf(local_t * 97.f + sinf(local_t * 53.f) * 31.f) * 12.f * decay;
-                break;
-            }
-            case AnimStyle::Typewriter:
-                if (local_t < fade_in) {
-                    anim_alpha = local_t / fade_in;
-                    anim_dy    = (fade_in - local_t) / fade_in * (-8.f);
-                }
-                break;
-            case AnimStyle::Bounce: {
-                float bd = fminf(0.6f, clip_dur);
-                if (local_t < bd) {
-                    float p2 = local_t / bd;
-                    anim_dy = sinf(p2 * 3.14159f) * (-60.f) * expf(-p2 * 4.f);
-                }
-                break;
-            }
-            case AnimStyle::Slide:
-                if (local_t < fade_in)
-                    anim_dx = (local_t / fade_in - 1.f) * w * 0.6f;
-                else if (local_t > clip_dur - fade_out)
-                    anim_dx = ((local_t - (clip_dur - fade_out)) / fade_out) * w * 0.6f;
-                break;
-            case AnimStyle::Stack:
-                if (local_t < fade_in)
-                    anim_dy = (1.f - local_t / fade_in) * 80.f;
-                break;
-            default: break;
+        // Shared with the live canvas (text_anim.cpp) so preview == export.
+        // Per-element clips animate inside render_text_block — keep the block
+        // transform identity here so motion isn't applied twice.
+        if (active->anim_unit == 0) {
+            BlockAnim ba = compute_block_anim(eff_style, local_t, clip_dur,
+                                              fade_in, fade_out, w, active->ease);
+            anim_dx = ba.dx; anim_dy = ba.dy;
+            anim_alpha = ba.alpha; anim_scale = ba.scale;
         }
 
         if (text_fx.any_text) {
@@ -194,8 +173,13 @@ void draw_text_overlays(ImDrawList* dl, const AppState& state, float t,
             line_h      = fsz * 1.25f;
             block_h     = txt_lines.size() * line_h;
         }
+        if (anim_scale != 1.f) {                 // AnimStyle::Scale pop
+            fsz    *= anim_scale;
+            line_h  = fsz * 1.25f;
+            block_h = txt_lines.size() * line_h;
+        }
 
-        float block_cx = p.x + active->sub_pos_x * w;
+        float block_cx = p.x + active->eval_prop("sub_pos_x", t) * w;
         float ty_anim  = slot_y + anim_dy;
 
         std::vector<const WordEntry*> clip_words;
@@ -222,6 +206,8 @@ void draw_text_overlays(ImDrawList* dl, const AppState& state, float t,
             trc.ty         = ty_anim;
             trc.line_h     = line_h;
             trc.t          = t;
+            trc.rotation   = active->eval_prop("rotation", t);
+            trc.canvas_w   = w;
             trc.clip_words = has_karaoke ? &clip_words : nullptr;
             render_text_block(trc, txt_lines);
         }

@@ -13,6 +13,7 @@
 #include "panel_agent.h"
 #include "../agent_harness.h"
 #include "../recorder.h"
+#include "../video_recorder.h"
 #include "export_ui.h"
 #include "theme.h"
 #include "app.h"
@@ -24,6 +25,13 @@
 #include "noise_reduce.h"
 #include "transcribe.h"
 #include "filepicker.h"
+#include "paths.h"
+
+// Default location offered by the Save dialog: the existing project path, or a
+// fresh name under ~/Videos/Pop Maker Studio Projects.
+static std::string project_save_default(const AppState& s) {
+    return s.project_path.empty() ? (projects_dir() + "/Untitled.pms") : s.project_path;
+}
 #include "globals.h"
 #include "render.h"
 #include "history.h"
@@ -49,7 +57,79 @@ extern ImFont* g_font_black;
 
 // s_panel_view — declared extern in studio_shared.h for helpers that switch it
 PanelView s_panel_view = PanelView::Project;
+
+// One-shot panel-view request (see request_panel_view in studio_shared.h). The
+// panel router checks this before deriving a view from the selection so a lane
+// click can land directly on the FX tab. -1 sentinel = no request pending.
+static int s_panel_request = -1;
+void request_panel_view(PanelView v) { s_panel_request = (int)v; }
+// "Hear effects" sync: keep the live monitor chain matched to the record
+// brick's audio FX (the recording target, else the selected Record brick,
+// else the first one). Rebuilds only when the effective chain changes.
+static void monitor_chain_sync(AppState& state) {
+    static uint64_t s_last_chain_hash = 0;
+    if (!audio_capture_active() || !audio_monitor_fx_get()) {
+        if (s_last_chain_hash) { audio_monitor_chain_set({}); s_last_chain_hash = 0; }
+        return;
+    }
+    // Both record bricks monitor through this chain — Audio Record and Video
+    // Record (its mic) share the same "Hear effects" path and the same coupled
+    // audio-FX. Treat either as a candidate, else a Video Rec brick's effects
+    // are never heard while monitoring.
+    auto is_rec = [](ClipType t) {
+        return t == ClipType::Record || t == ClipType::VideoRecord;
+    };
+    int bti = -1, bci = -1;
+    for (int ti = 0; ti < (int)state.tracks.size() && bti < 0; ++ti)
+        for (int ci = 0; ci < (int)state.tracks[ti].clips.size(); ++ci)
+            if (is_rec(state.tracks[ti].clips[ci].clip_type) &&
+                (recorder_is_target(ti, ci) || vrecorder_is_target(ti, ci)))
+                { bti = ti; bci = ci; break; }
+    if (bti < 0 && state.selected_track >= 0 &&
+        state.selected_track < (int)state.tracks.size() &&
+        state.selected_clip >= 0 &&
+        state.selected_clip < (int)state.tracks[state.selected_track].clips.size() &&
+        is_rec(state.tracks[state.selected_track].clips[state.selected_clip].clip_type)) {
+        bti = state.selected_track; bci = state.selected_clip;
+    }
+    if (bti < 0)
+        for (int ti = 0; ti < (int)state.tracks.size() && bti < 0; ++ti)
+            for (int ci = 0; ci < (int)state.tracks[ti].clips.size(); ++ci)
+                if (is_rec(state.tracks[ti].clips[ci].clip_type))
+                    { bti = ti; bci = ci; break; }
+
+    std::vector<AudioFX> stages;
+    uint64_t h = 1469598103934665603ull;
+    if (bti >= 0) {
+        const Clip& rbrick = state.tracks[bti].clips[bci];
+        auto segs = collect_audio_fx_segments(state, bti, rbrick);
+        // Each segment's [t0,t1] is brick-relative source time. While the
+        // transport is actually moving (playing or recording), apply a stage
+        // only while the live playhead is inside its window, so coupled audio FX
+        // activate over their own spans — monitoring then matches the placed
+        // take. When idle (just monitoring input to dial in the sound), the
+        // playhead is parked and span-gating would mute everything, so pass all
+        // active stages through; that's what "Hear effects" is for.
+        bool moving = state.playing || recorder_active();
+        float ptime = state.playhead - rbrick.start;
+        for (auto& sg : segs) {
+            if (sg.fx.voice_convert_on && !sg.fx.any_active()) continue;
+            if (moving && (ptime < sg.t0 || ptime >= sg.t1)) continue;
+            stages.push_back(sg.fx);
+            h = (h ^ audio_fx_hash(sg.fx)) * 1099511628211ull;
+        }
+    }
+    if (h != s_last_chain_hash) {
+        audio_monitor_chain_set(stages);
+        s_last_chain_hash = h;
+    }
+}
+
 static bool s_user_nav = false; // user explicitly chose Animation/History tab
+// Coupled Multi-FX brick shown in the selected content's FX tab this frame.
+static int  s_host_fx_ti  = -1;
+static int  s_host_fx_ci  = -1;
+static int  s_host_afx_ci = -1;
 
 static void handle_shortcuts(AppState& state) {
     if (terminal_is_focused()) return;
@@ -95,21 +175,17 @@ static void handle_shortcuts(AppState& state) {
     // ── Save / Open ───────────────────────────────────────────────────────────
     if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_S)) {
         if (state.project_path.empty())
-            state.project_path = filepicker_save("Save project", "PMS Project", "*.pms");
-        if (!state.project_path.empty()) project_save(state, state.project_path);
+            state.project_path = filepicker_save("Save project", "PMS Project", "*.pms", project_save_default(state).c_str());
+        if (!state.project_path.empty()) { project_save(state, state.project_path); recent_projects_push(state.project_path); recovery_clear(); }
         return;
     }
     if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_S)) {
-        std::string p = filepicker_save("Save project as", "PMS Project", "*.pms");
-        if (!p.empty()) { state.project_path = p; project_save(state, p); }
+        std::string p = filepicker_save("Save project as", "PMS Project", "*.pms", project_save_default(state).c_str());
+        if (!p.empty()) { state.project_path = p; project_save(state, p); recent_projects_push(p); recovery_clear(); }
         return;
     }
     if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_N)) {
-        transcribe_cancel(); history_clear();
-        audio_shutdown(); audio_clips_clear(); video_close();
-        state = AppState{}; state.splash_timer = 0.f;
-        audio_init();
-        history_push(state, "New project");  // baseline so the first edit is undoable
+        enter_new_project(state);  // preserves models flags + keeps us in the editor
         return;
     }
 
@@ -127,6 +203,11 @@ static void handle_shortcuts(AppState& state) {
     }
     if (ImGui::IsKeyPressed(ImGuiKey_Home)) { seek_to(state, 0.f);  return; }
     if (ImGui::IsKeyPressed(ImGuiKey_End))  { seek_to(state, dur);  return; }
+
+    // Markers / locators: M drops one at the playhead, [ / ] jump between them.
+    if (ImGui::IsKeyPressed(ImGuiKey_M))            { marker_add(state, state.playhead); return; }
+    if (ImGui::IsKeyPressed(ImGuiKey_LeftBracket))  { marker_jump(state, -1); return; }
+    if (ImGui::IsKeyPressed(ImGuiKey_RightBracket)) { marker_jump(state, +1); return; }
 
     // ── Clip operations (need a selected clip) ────────────────────────────────
     if (state.selected_track<0 || state.selected_clip<0) return;
@@ -155,6 +236,114 @@ static void handle_shortcuts(AppState& state) {
         return;
     }
 }
+// ── API provider presets + brand glyphs (Settings > Agent) ────────────────────
+// Each provider is an OpenAI-compatible endpoint. Glyphs are simplified brand
+// marks drawn with ImDrawList — no asset files, crisp at any size.
+namespace {
+constexpr float PI_F = 3.14159265358979f;
+
+void glyph_anthropic(ImDrawList* dl, ImVec2 c, float r, ImU32 col) {
+    // 6-arm burst (three crossing strokes) — Anthropic's asterisk-like mark.
+    const float th = r * 0.30f;
+    const float deg[3] = { 90.f, 30.f, 150.f };
+    for (float dgr : deg) {
+        float a = dgr * PI_F / 180.f;
+        ImVec2 d = { cosf(a), -sinf(a) };
+        dl->AddLine({c.x - d.x*r, c.y - d.y*r}, {c.x + d.x*r, c.y + d.y*r}, col, th);
+        dl->AddCircleFilled({c.x + d.x*r, c.y + d.y*r}, th*0.5f, col);
+        dl->AddCircleFilled({c.x - d.x*r, c.y - d.y*r}, th*0.5f, col);
+    }
+}
+void glyph_openai(ImDrawList* dl, ImVec2 c, float r, ImU32 col) {
+    // Hexagonal knot → hexagon ring with vertex nodes and an inner ring.
+    const float th = r * 0.16f;
+    dl->AddNgon(c, r, col, 6, th);
+    for (int i = 0; i < 6; ++i) {
+        float a = (i / 6.f) * 2 * PI_F - PI_F/2;
+        dl->AddCircleFilled({c.x + cosf(a)*r, c.y + sinf(a)*r}, th*0.9f, col);
+    }
+    dl->AddNgon(c, r*0.42f, col, 6, th*0.85f);
+}
+void glyph_deepseek(ImDrawList* dl, ImVec2 c, float r, ImU32 col, ImU32 bg) {
+    // Minimal blue whale: round body + tail fluke + spout + eye.
+    ImVec2 bc = { c.x - r*0.12f, c.y + r*0.08f };
+    float  br = r * 0.70f;
+    dl->AddCircleFilled(bc, br, col);
+    dl->AddTriangleFilled({c.x + r*0.40f, c.y + r*0.02f},
+                          {c.x + r*0.98f, c.y - r*0.52f},
+                          {c.x + r*0.98f, c.y + r*0.34f}, col);
+    dl->AddLine({bc.x - br*0.15f, bc.y - br*0.95f},
+                {bc.x - br*0.15f, bc.y - br*1.35f}, col, r*0.12f);
+    dl->AddCircleFilled({bc.x - br*0.28f, bc.y - br*0.12f}, br*0.16f, bg);
+}
+void glyph_gemini(ImDrawList* dl, ImVec2 c, float r, ImU32 col) {
+    // Four-point spark (concave star) drawn as a center-fan of triangles.
+    ImVec2 p[8];
+    float inner = r * 0.34f;
+    for (int i = 0; i < 8; ++i) {
+        float a = (i / 8.f) * 2 * PI_F - PI_F/2;
+        float rad = (i % 2 == 0) ? r : inner;
+        p[i] = { c.x + cosf(a)*rad, c.y + sinf(a)*rad };
+    }
+    for (int i = 0; i < 8; ++i)
+        dl->AddTriangleFilled(c, p[i], p[(i+1)%8], col);
+}
+void glyph_custom(ImDrawList* dl, ImVec2 c, float r, ImU32 col, ImU32 bg) {
+    // Three sliders — a clean "settings / custom endpoint" mark.
+    const float th = r * 0.13f;
+    for (int i = 0; i < 3; ++i) {
+        float y  = c.y - r*0.55f + i * (r*0.55f);
+        dl->AddLine({c.x - r*0.85f, y}, {c.x + r*0.85f, y}, col, th);
+        float kx = c.x + (i % 2 == 0 ? -r*0.38f : r*0.38f);
+        dl->AddCircleFilled({kx, y}, th*1.7f, col);
+        dl->AddCircleFilled({kx, y}, th*0.95f, bg);
+    }
+}
+
+struct ApiProvider {
+    const char* name;       // short label on the card
+    const char* full;       // full company name (tooltip / dropdown)
+    const char* base_url;   // OpenAI-compatible endpoint
+    const char* models[4];  // suggested model ids (nullptr-terminated)
+    ImU32       color;      // brand accent
+    int         kind;       // 0 anthropic,1 openai,2 deepseek,3 gemini,4 custom
+};
+const ApiProvider kProviders[] = {
+    { "Claude",   "Anthropic", "https://api.anthropic.com/v1/",
+      { "claude-sonnet-4-5", "claude-opus-4-1", "claude-3-5-haiku-latest", nullptr },
+      IM_COL32(217, 119, 87, 255), 0 },
+    { "OpenAI",   "OpenAI", "https://api.openai.com/v1",
+      { "gpt-4o", "gpt-4o-mini", "o3-mini", nullptr },
+      IM_COL32(16, 163, 127, 255), 1 },
+    { "DeepSeek", "DeepSeek", "https://api.deepseek.com",
+      { "deepseek-chat", "deepseek-reasoner", nullptr, nullptr },
+      IM_COL32(77, 107, 254, 255), 2 },
+    { "Gemini",   "Google", "https://generativelanguage.googleapis.com/v1beta/openai/",
+      { "gemini-2.0-flash", "gemini-1.5-pro", "gemini-1.5-flash", nullptr },
+      IM_COL32(66, 133, 244, 255), 3 },
+    { "Custom",   "Custom endpoint", "",
+      { nullptr, nullptr, nullptr, nullptr },
+      IM_COL32(150, 150, 165, 255), 4 },
+};
+constexpr int kProviderCount = (int)(sizeof(kProviders)/sizeof(kProviders[0]));
+
+void draw_provider_glyph(ImDrawList* dl, int kind, ImVec2 c, float r, ImU32 col, ImU32 bg) {
+    switch (kind) {
+        case 0: glyph_anthropic(dl, c, r, col); break;
+        case 1: glyph_openai(dl, c, r, col); break;
+        case 2: glyph_deepseek(dl, c, r, col, bg); break;
+        case 3: glyph_gemini(dl, c, r, col); break;
+        default: glyph_custom(dl, c, r, col, bg); break;
+    }
+}
+// Which preset matches the current base URL? -1 → Custom (last entry).
+int provider_for_url(const std::string& url) {
+    for (int i = 0; i < kProviderCount; ++i)
+        if (kProviders[i].base_url[0] && url == kProviders[i].base_url) return i;
+    return kProviderCount - 1;  // Custom
+}
+} // namespace
+
 void ui_studio(AppState& state) {
     ImGuiIO& io   = ImGui::GetIO();
     float    win_w = io.DisplaySize.x;
@@ -270,10 +459,12 @@ void ui_studio(AppState& state) {
         if (video_source(slot) == PreviewSource::Proxy) continue;  // terminal state
 
         std::string src = source_from_key(key);
-        if (is_image_path(src)) {
-            // Images never get an MJPEG proxy — keep them out of the generic
-            // native/proxy logic below (per-frame libav opens). Still is their
-            // terminal state; repair both Closed slots (the add-time open
+        if (is_image_path(src) && !is_animated_image(src)) {
+            // Still images never get an MJPEG proxy — keep them out of the
+            // generic native/proxy logic below (per-frame libav opens).
+            // Animated images (.gif) fall through to the proxy path so they
+            // play instead of freezing on frame 0.
+            // Still is their terminal state; repair both Closed slots (the add-time open
             // races the background still generator for brand-new files) and
             // slots stuck in Native (libav opens a PNG as a one-frame video,
             // then every decode past t=0 fails and the clip renders blank).
@@ -333,8 +524,10 @@ void ui_studio(AppState& state) {
         for (auto& tr : state.tracks) {
             bool started = false;
             for (auto& cl : tr.clips) {
-                if (cl.clip_type != ClipType::Video) continue;
-                if (cl.text.empty() || is_image_path(cl.text)) continue;
+                if (!clip_is_videolike_type(cl.clip_type)) continue;
+                // Still images get no proxy; animated images (.gif) do.
+                if (cl.text.empty() ||
+                    (is_image_path(cl.text) && !is_animated_image(cl.text))) continue;
                 if (!proxy_is_ready(cl.text)) {
                     proxy_start(cl.text);
                     started = true;
@@ -457,6 +650,8 @@ void ui_studio(AppState& state) {
 
     // Loop recorder: drain mic, slice takes on the loop-cycle clock.
     recorder_tick(state);
+    vrecorder_tick(state);
+    monitor_chain_sync(state);
 
     // Push clip snapshots to audio system every frame.
     // The callback reads these to position audio correctly — no separate volume hack needed.
@@ -475,10 +670,17 @@ void ui_studio(AppState& state) {
                         cl.rec_take_sel >= (int)cl.rec_takes.size() ||
                         recorder_is_target(tr_idx, ci)) continue;
                     AudioClipDesc d;
+                    d.track    = tr_idx;
                     d.tl_start = cl.start;    d.tl_end   = cl.end;
                     d.in_point = 0.f;         d.speed    = 1.f;
                     d.volume   = cl.volume;   d.pan      = cl.pan;
                     d.fade_in  = cl.fade_in;  d.fade_out = cl.fade_out;
+                    // Keyframed volume/pan animate in the live mix too (same as
+                    // audio/video clips below — audio.cpp reads vol_keys/pan_keys).
+                    if (auto it = cl.ktracks.find("volume"); it != cl.ktracks.end())
+                        d.vol_keys = it->second;
+                    if (auto it = cl.ktracks.find("pan"); it != cl.ktracks.end())
+                        d.pan_keys = it->second;
                     d.path     = cl.rec_takes[cl.rec_take_sel];
                     // Converted voice substitutes the take, same as Audio clips
                     if (cl.vc_status == VcStatus::Ready && !cl.vc_out_path.empty())
@@ -506,6 +708,7 @@ void ui_studio(AppState& state) {
                 }
                 if (cl.text.empty() || cl.muted) continue;
                 AudioClipDesc d;
+                d.track    = tr_idx;
                 d.tl_start = cl.start;    d.tl_end   = cl.end;
                 d.in_point = cl.in_point; d.speed    = cl.speed;
                 d.volume   = cl.volume;   d.pan      = cl.pan;
@@ -545,7 +748,9 @@ void ui_studio(AppState& state) {
                         d.fx_hash = audio_fx_segments_hash(d.fx_segs);
                     }
                 }
-                if (cl.clip_type == ClipType::Video) {
+                if (clip_is_videolike_type(cl.clip_type) && !is_image_path(cl.text)) {
+                    // Video clips and camera A/V takes (.mkv with mic audio) play
+                    // their audio in the live mix; photo (.jpg) takes are silent.
                     vdescs.push_back(d);
                     audio_source_ensure(cl.text);
                 } else if (cl.clip_type == ClipType::Audio) {
@@ -556,6 +761,7 @@ void ui_studio(AppState& state) {
         }
         video_audio_clips_update(vdescs);
         audio_clips_update(adescs);
+        audio_bus_bricks_update(collect_bus_bricks(state));
     }
 
     if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_H))
@@ -573,22 +779,22 @@ void ui_studio(AppState& state) {
 
         if (ImGui::BeginMenu("File")) {
             if (ImGui::MenuItem("New Project", "Ctrl+N")) {
-                transcribe_cancel();
-                history_clear();
-                state = AppState{};
-                state.splash_timer = 0.f;
-                audio_shutdown(); audio_clips_clear(); audio_init();
-                video_close();
-                history_push(state, "New project");  // baseline so the first edit is undoable
+                enter_new_project(state);
+            }
+            if (ImGui::MenuItem("Back to Home…")) {
+                state.in_studio = false;   // return to the launcher / recent-projects page
             }
             if (ImGui::MenuItem("Open Project…", "Ctrl+Shift+O")) {
                 std::string picked = filepicker_open("Open project", "PMS Project", "*.pms");
                 if (!picked.empty()) {
                     AppState loaded;
                     if (project_load(loaded, picked)) {
+                        bool mr = state.models_ready, ms = state.models_skipped;
                         transcribe_cancel(); history_clear();
                         audio_shutdown(); audio_clips_clear(); video_close();
                         state = std::move(loaded);
+                        state.models_ready = mr; state.models_skipped = ms;
+                        state.in_studio = true;
                         state.project_path = picked;
                         audio_init();
                         if (!state.audio_path.empty()) audio_load(state.audio_path.c_str());
@@ -598,18 +804,37 @@ void ui_studio(AppState& state) {
                             for (auto& cl : tr.clips)
                                 if (cl.clip_type == ClipType::Audio && !cl.text.empty())
                                     audio_source_ensure(cl.text);
+                        recent_projects_push(picked);
                         history_push(state, "Open project");  // baseline so the first edit is undoable
                     }
                 }
             }
             if (ImGui::MenuItem("Save Project", "Ctrl+S")) {
                 if (state.project_path.empty())
-                    state.project_path = filepicker_save("Save project", "PMS Project", "*.pms");
-                if (!state.project_path.empty()) project_save(state, state.project_path);
+                    state.project_path = filepicker_save("Save project", "PMS Project", "*.pms", project_save_default(state).c_str());
+                if (!state.project_path.empty()) { project_save(state, state.project_path); recent_projects_push(state.project_path); recovery_clear(); }
             }
             if (ImGui::MenuItem("Save Project As…", "Ctrl+Shift+S")) {
-                std::string p = filepicker_save("Save project as", "PMS Project", "*.pms");
-                if (!p.empty()) { state.project_path = p; project_save(state, p); }
+                std::string p = filepicker_save("Save project as", "PMS Project", "*.pms", project_save_default(state).c_str());
+                if (!p.empty()) { state.project_path = p; project_save(state, p); recent_projects_push(p); recovery_clear(); }
+            }
+            if (ImGui::MenuItem("Collect (self-contained copy)…")) {
+                // Default to a fresh folder under the projects dir, named after the
+                // project, with the .pms inside it — Collect drops a media/ beside it.
+                std::string nm = state.project_path.empty()
+                    ? std::string("Untitled")
+                    : std::filesystem::path(state.project_path).stem().string();
+                std::string def = projects_dir() + "/" + nm + "/" + nm + ".pms";
+                std::string p = filepicker_save("Collect project into folder", "PMS Project", "*.pms", def.c_str());
+                if (!p.empty()) {
+                    std::string err; int copied = 0;
+                    if (collect_project(state, p, err, &copied)) {
+                        recent_projects_push(p);
+                        recovery_clear();
+                        std::string cmd = "xdg-open \"" + std::filesystem::path(p).parent_path().string() + "\" >/dev/null 2>&1 &";
+                        system(cmd.c_str());
+                    }
+                }
             }
             ImGui::Separator();
             if (ImGui::MenuItem("Import Audio / Video…", "Ctrl+O")) {
@@ -707,6 +932,12 @@ void ui_studio(AppState& state) {
                 }
             }
             ImGui::Separator();
+            {
+                bool soc = state.show_social_safe;
+                if (ImGui::MenuItem("Social safe zones (9:16)", nullptr, soc))
+                    state.show_social_safe = !soc;
+            }
+            ImGui::Separator();
             if (ImGui::MenuItem("History", "Ctrl+Shift+H")) s_panel_view = PanelView::History;
             ImGui::EndMenu();
         }
@@ -716,12 +947,6 @@ void ui_studio(AppState& state) {
                 state.show_tutorial = true;
                 state.tutorial_step = 0;
             }
-            ImGui::Separator();
-            bool already = state.models_ready;
-            if (already) ImGui::BeginDisabled();
-            if (ImGui::MenuItem("Set Up AI Features…"))
-                state.show_model_dl_modal = true;
-            if (already) ImGui::EndDisabled();
             ImGui::EndMenu();
         }
 
@@ -792,7 +1017,7 @@ void ui_studio(AppState& state) {
         ImGui::OpenPopup("##settings_modal");
         ImVec2 center = ImGui::GetMainViewport()->GetCenter();
         ImGui::SetNextWindowPos(center, ImGuiCond_Always, {0.5f, 0.5f});
-        ImGui::SetNextWindowSize({480.f, 0.f});
+        ImGui::SetNextWindowSize({500.f, 0.f});
         ImGui::PushStyleColor(ImGuiCol_PopupBg, to_u32(Col::bg));
         ImGui::PushStyleColor(ImGuiCol_Border,  to_u32(Col::line));
 
@@ -809,29 +1034,7 @@ void ui_studio(AppState& state) {
             ui_separator();
             ImGui::Dummy({0.f, 10.f});
 
-
-            // ── Lyric extraction models ───────────────────────────────────────
-            ui_label("Lyric extraction models");
-            ImGui::Dummy({0.f, 4.f});
-            ImGui::SetCursorPosX(ImGui::GetStyle().WindowPadding.x + 8.f);
-            if (state.models_ready) {
-                ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(100, 220, 130, 255));
-                ImGui::TextUnformatted("Installed");
-                ImGui::PopStyleColor();
-            } else {
-                ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
-                ImGui::TextUnformatted("Not installed");
-                ImGui::PopStyleColor();
-                ImGui::SameLine(0.f, 12.f);
-                if (ui_btn("Download…", false, true)) {
-                    state.show_settings_modal = false;
-                    state.show_model_dl_modal = true;
-                    ImGui::CloseCurrentPopup();
-                }
-            }
-
             // ── Agent (in-app AI) ─────────────────────────────────────────────
-            ImGui::Dummy({0.f, 16.f});
             ui_label("Agent");
             ImGui::Dummy({0.f, 4.f});
             {
@@ -841,12 +1044,108 @@ void ui_studio(AppState& state) {
                 static char s_url_buf[256] = {};
                 static char s_model_buf[128] = {};
                 static bool s_synced = false;
+                static int  s_prov_sel = -1;  // -1 → derive from base URL
                 if (!s_synced) {
                     strncpy(s_url_buf,   acfg.base_url.c_str(), sizeof(s_url_buf)-1);
                     strncpy(s_model_buf, acfg.model.c_str(),    sizeof(s_model_buf)-1);
                     s_synced = true;
                 }
+                ImU32 bgc = to_u32(Col::bg);
 
+                // ── Provider card grid ────────────────────────────────────────
+                ImGui::SetCursorPosX(lx);
+                ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+                ImGui::TextUnformatted("Provider"); ImGui::PopStyleColor();
+                ImGui::Dummy({0.f, 4.f});
+
+                int sel = (s_prov_sel >= 0) ? s_prov_sel : provider_for_url(acfg.base_url);
+                ImVec2 grid0 = ImGui::GetCursorPos();
+                grid0.x = lx;
+                const float cw = 144.f, ch = 60.f, gp = 10.f;
+                const int   pr = 3;
+                ImDrawList* dl = ImGui::GetWindowDrawList();
+                for (int i = 0; i < kProviderCount; ++i) {
+                    const ApiProvider& pv = kProviders[i];
+                    int rr = i / pr, cc = i % pr;
+                    ImGui::SetCursorPos({grid0.x + cc*(cw+gp), grid0.y + rr*(ch+gp)});
+                    ImGui::PushID(i);
+                    ImGui::InvisibleButton("##prov", {cw, ch});
+                    bool hov = ImGui::IsItemHovered();
+                    bool clk = ImGui::IsItemClicked();
+                    if (hov) ImGui::SetTooltip("%s", pv.full);
+                    ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
+                    bool on = (i == sel);
+                    dl->AddRectFilled(a, b, hov ? IM_COL32(40,40,52,255)
+                                                : IM_COL32(28,28,37,255), 9.f);
+                    if (on) dl->AddRectFilled(a, b, (pv.color & 0x00FFFFFFu) | (38u<<24), 9.f);
+                    dl->AddRect(a, b, on ? pv.color : IM_COL32(62,62,80,255),
+                                9.f, 0, on ? 2.f : 1.f);
+                    draw_provider_glyph(dl, pv.kind, {a.x + cw*0.5f, a.y + 21.f},
+                                        12.f, pv.color, bgc);
+                    ImVec2 ts = ImGui::CalcTextSize(pv.name);
+                    dl->AddText({a.x + (cw-ts.x)*0.5f, b.y - 19.f},
+                                on ? IM_COL32(240,240,250,255) : to_u32(Col::muted), pv.name);
+                    ImGui::PopID();
+                    if (clk && i != sel) {
+                        s_prov_sel = i;
+                        if (pv.base_url[0]) {
+                            acfg.base_url = pv.base_url;
+                            strncpy(s_url_buf, pv.base_url, sizeof(s_url_buf)-1);
+                            s_url_buf[sizeof(s_url_buf)-1] = 0;
+                        }
+                        if (pv.models[0]) {
+                            acfg.model = pv.models[0];
+                            strncpy(s_model_buf, pv.models[0], sizeof(s_model_buf)-1);
+                            s_model_buf[sizeof(s_model_buf)-1] = 0;
+                        }
+                        agent_set_config(acfg);
+                        sel = i;
+                    }
+                }
+                int rows = (kProviderCount + pr - 1) / pr;
+                ImGui::SetCursorPos({grid0.x, grid0.y + rows*(ch+gp) + 2.f});
+
+                // ── Custom endpoint: editable Base URL ────────────────────────
+                if (kProviders[sel].kind == 4) {
+                    ImGui::SetCursorPosX(lx);
+                    ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+                    ImGui::TextUnformatted("Base URL"); ImGui::PopStyleColor();
+                    ImGui::SameLine(0.f, 8.f);
+                    ImGui::SetNextItemWidth(228.f);
+                    if (ImGui::InputText("##agent_url", s_url_buf, sizeof(s_url_buf))) {
+                        acfg.base_url = s_url_buf; agent_set_config(acfg);
+                        s_prov_sel = -1;  // re-derive (a pasted known URL re-highlights)
+                    }
+                }
+
+                // ── Model: editable field + suggestions dropdown ──────────────
+                ImGui::SetCursorPosX(lx);
+                ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+                ImGui::TextUnformatted("Model   "); ImGui::PopStyleColor();
+                ImGui::SameLine(0.f, 8.f);
+                ImGui::SetNextItemWidth(200.f);
+                if (ImGui::InputText("##agent_model", s_model_buf, sizeof(s_model_buf))) {
+                    acfg.model = s_model_buf; agent_set_config(acfg);
+                }
+                ImGui::SameLine(0.f, 4.f);
+                if (ImGui::Button("\xe2\x96\xbc##model_sug")) ImGui::OpenPopup("##model_sug");
+                if (ImGui::BeginPopup("##model_sug")) {
+                    const ApiProvider& pv = kProviders[sel];
+                    bool any = false;
+                    for (int m = 0; m < 4 && pv.models[m]; ++m) {
+                        any = true;
+                        if (ImGui::MenuItem(pv.models[m])) {
+                            strncpy(s_model_buf, pv.models[m], sizeof(s_model_buf)-1);
+                            s_model_buf[sizeof(s_model_buf)-1] = 0;
+                            acfg.model = pv.models[m]; agent_set_config(acfg);
+                        }
+                    }
+                    if (!any) ImGui::TextDisabled("no suggestions — type a model id");
+                    ImGui::EndPopup();
+                }
+
+                // ── API key (per provider, stored in the system keyring) ──────
+                ImGui::Dummy({0.f, 6.f});
                 ImGui::SetCursorPosX(lx);
                 if (!agent_key_available()) {
                     ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
@@ -875,23 +1174,7 @@ void ui_studio(AppState& state) {
                     }
                 }
 
-                ImGui::Dummy({0.f, 6.f});
-                ImGui::SetCursorPosX(lx);
-                ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
-                ImGui::TextUnformatted("Base URL"); ImGui::PopStyleColor();
-                ImGui::SameLine(0.f, 8.f);
-                ImGui::SetNextItemWidth(230.f);
-                if (ImGui::InputText("##agent_url", s_url_buf, sizeof(s_url_buf))) {
-                    acfg.base_url = s_url_buf; agent_set_config(acfg);
-                }
-                ImGui::SetCursorPosX(lx);
-                ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
-                ImGui::TextUnformatted("Model   "); ImGui::PopStyleColor();
-                ImGui::SameLine(0.f, 8.f);
-                ImGui::SetNextItemWidth(230.f);
-                if (ImGui::InputText("##agent_model", s_model_buf, sizeof(s_model_buf))) {
-                    acfg.model = s_model_buf; agent_set_config(acfg);
-                }
+                ImGui::Dummy({0.f, 2.f});
                 ImGui::SetCursorPosX(lx);
                 bool vis = acfg.vision;
                 if (ImGui::Checkbox("Send snapshot images to the model (vision)", &vis)) {
@@ -984,8 +1267,8 @@ void ui_studio(AppState& state) {
             { "Bin",         PanelView::LibBin,  IM_COL32(220, 200, 120, 255), false },
             { "Backgrounds", PanelView::LibBG,   IM_COL32(180,  60, 160, 255), true  },
             { "Text",        PanelView::LibText, IM_COL32( 80, 140, 220, 255), false },
-            { "Effects",     PanelView::LibFX,   IM_COL32(210, 110,  30, 255), true  },
             { "Filters",     PanelView::LibAdj,  IM_COL32(100,  80, 200, 255), false },
+            { "Video FX",    PanelView::LibFX,   IM_COL32(210, 110,  30, 255), true  },
             { "Body FX",     PanelView::LibBFX,  IM_COL32( 20, 180, 160, 255), false },
             { "Audio FX",    PanelView::LibAFX,  IM_COL32( 30, 200, 150, 255), false },
             { "Video",       PanelView::LibVID,  IM_COL32(140,  60, 220, 255), true  },
@@ -1023,33 +1306,93 @@ void ui_studio(AppState& state) {
             BY += BTN_H + 6.f;
         }
 
-        // ── Record — action button, not a library view: drops a Record brick
-        // at the playhead and opens its panel ready to arm.
+        // ── Record actions — not library views: each drops its brick at the
+        // playhead and opens the panel ready to arm.
         {
             tdl->AddLine({sp.x + 6.f, BY - 5.f}, {sp.x + TB_W - 6.f, BY - 5.f},
                          IM_COL32(50, 50, 65, 180), 1.f);
             BY += 4.f;
-            const ImU32 accent = IM_COL32(220, 50, 50, 255);
-            ImVec2 bmin = { BX, BY }, bmax = { BX + BTN_W, BY + BTN_H };
-            bool hov = ImGui::IsMouseHoveringRect(bmin, bmax);
-            bool armed = recorder_active();
-            ImU32 fill = armed ? accent
-                       : hov   ? IM_COL32(58, 26, 30, 255)
-                                : IM_COL32(34, 18, 20, 255);
-            tdl->AddRectFilled(bmin, bmax, fill, 4.f);
-            if (armed || hov)
-                tdl->AddRect(bmin, bmax,
-                    armed ? accent : IM_COL32(150, 60, 65, 200), 4.f, 0, 1.2f);
-            const char* lbl = "\xe2\x97\x8f Record";
-            ImU32 tc = armed ? IM_COL32(255,255,255,255) : IM_COL32(220,140,145,220);
-            ImVec2 tsz = ImGui::CalcTextSize(lbl);
-            tdl->AddText({BX + (BTN_W - tsz.x) * 0.5f, BY + (BTN_H - tsz.y) * 0.5f}, tc, lbl);
-            ImGui::SetCursorScreenPos(bmin);
-            ImGui::InvisibleButton("##tb_record", { BTN_W, BTN_H });
-            if (ImGui::IsItemClicked() && !armed) {
-                add_record_brick(state);
-                s_panel_view = PanelView::Clip;
-                s_user_nav   = false;
+
+            struct RecBtn {
+                const char* lbl; const char* id;
+                ImU32 accent, hov_fill, idle_fill, idle_border, idle_text;
+                bool  is_video;
+            };
+            const RecBtn btns[] = {
+                { "\xe2\x97\x8f Audio Rec", "##tb_record",
+                  IM_COL32(220, 50, 50, 255), IM_COL32(58, 26, 30, 255),
+                  IM_COL32(34, 18, 20, 255),  IM_COL32(150, 60, 65, 200),
+                  IM_COL32(220, 140, 145, 220), false },
+                { "\xe2\x97\x8f Video Rec", "##tb_vrecord",
+                  IM_COL32(235, 90, 40, 255), IM_COL32(60, 34, 22, 255),
+                  IM_COL32(36, 22, 16, 255),  IM_COL32(170, 95, 55, 200),
+                  IM_COL32(235, 165, 120, 220), true },
+            };
+            for (auto& b : btns) {
+                ImVec2 bmin = { BX, BY }, bmax = { BX + BTN_W, BY + BTN_H };
+                bool hov   = ImGui::IsMouseHoveringRect(bmin, bmax);
+                bool armed = b.is_video ? vrecorder_active() : recorder_active();
+                ImU32 fill = armed ? b.accent : hov ? b.hov_fill : b.idle_fill;
+                tdl->AddRectFilled(bmin, bmax, fill, 4.f);
+                if (armed || hov)
+                    tdl->AddRect(bmin, bmax, armed ? b.accent : b.idle_border,
+                                 4.f, 0, 1.2f);
+                ImU32 tc = armed ? IM_COL32(255,255,255,255) : b.idle_text;
+                ImVec2 tsz = ImGui::CalcTextSize(b.lbl);
+                tdl->AddText({BX + (BTN_W - tsz.x) * 0.5f,
+                              BY + (BTN_H - tsz.y) * 0.5f}, tc, b.lbl);
+                ImGui::SetCursorScreenPos(bmin);
+                ImGui::InvisibleButton(b.id, { BTN_W, BTN_H });
+                if (ImGui::IsItemClicked() && !armed) {
+                    if (b.is_video) add_video_record_brick(state);
+                    else            add_record_brick(state);
+                    s_panel_view = PanelView::Clip;
+                    s_user_nav   = false;
+                }
+                BY += BTN_H + 6.f;
+            }
+            // Capture IMG brick — a camera brick in photo mode: snaps a single
+            // still from the webcam (same camera panel as Video Rec). Sits right
+            // below the Video Rec pill.
+            {
+                ImVec2 bmin = { BX, BY }, bmax = { BX + BTN_W, BY + BTN_H };
+                bool hov = ImGui::IsMouseHoveringRect(bmin, bmax);
+                tdl->AddRectFilled(bmin, bmax,
+                                   hov ? IM_COL32(22, 40, 60, 255) : IM_COL32(14, 26, 38, 255), 4.f);
+                if (hov) tdl->AddRect(bmin, bmax, IM_COL32(70, 150, 235, 200), 4.f, 0, 1.2f);
+                const char* lbl = "\xe2\x97\x8f Capture IMG";
+                ImVec2 tsz = ImGui::CalcTextSize(lbl);
+                tdl->AddText({BX + (BTN_W - tsz.x) * 0.5f, BY + (BTN_H - tsz.y) * 0.5f},
+                             IM_COL32(140, 195, 245, 220), lbl);
+                ImGui::SetCursorScreenPos(bmin);
+                ImGui::InvisibleButton("##tb_capimg", { BTN_W, BTN_H });
+                if (ImGui::IsItemClicked()) {
+                    add_photo_capture_brick(state);
+                    s_panel_view = PanelView::Clip;
+                    s_user_nav   = false;
+                }
+                BY += BTN_H + 6.f;
+            }
+            // Audio Bus brick — drops on a new top track and submixes the
+            // tracks below it (gain + FX on the grouped audio).
+            {
+                ImVec2 bmin = { BX, BY }, bmax = { BX + BTN_W, BY + BTN_H };
+                bool hov = ImGui::IsMouseHoveringRect(bmin, bmax);
+                tdl->AddRectFilled(bmin, bmax,
+                                   hov ? IM_COL32(20, 46, 42, 255) : IM_COL32(14, 30, 26, 255), 4.f);
+                if (hov) tdl->AddRect(bmin, bmax, IM_COL32(30, 170, 135, 200), 4.f, 0, 1.2f);
+                const char* lbl = "Audio Bus";
+                ImVec2 tsz = ImGui::CalcTextSize(lbl);
+                tdl->AddText({BX + (BTN_W - tsz.x) * 0.5f, BY + (BTN_H - tsz.y) * 0.5f},
+                             IM_COL32(120, 215, 185, 220), lbl);
+                ImGui::SetCursorScreenPos(bmin);
+                ImGui::InvisibleButton("##tb_bus", { BTN_W, BTN_H });
+                if (ImGui::IsItemClicked()) {
+                    add_bus_brick(state);
+                    s_panel_view = PanelView::Clip;
+                    s_user_nav   = false;
+                }
+                BY += BTN_H + 6.f;
             }
         }
     }
@@ -1178,7 +1521,11 @@ void ui_studio(AppState& state) {
                 if (scrub_held) seek_to(state, mouse_t);
             }
 
-            float played_frac = fmaxf(0.f, fminf(1.f, state.playhead / dur));
+            // Snap the knob to the very end when parked on the last whole frame
+            // (matches the timeline marker — the transport can't sit past it).
+            float played_frac = (state.playhead >= last_playable_time(state) - 1e-4f)
+                                ? 1.f
+                                : fmaxf(0.f, fminf(1.f, state.playhead / dur));
             float play_sx = scrub_x0 + played_frac * scrub_w;
             float bh2 = s_scrub_h_anim * 0.5f;
 
@@ -1235,7 +1582,8 @@ void ui_studio(AppState& state) {
             const float SB  = 26.f;
             const float PB  = 38.f;
             const float GAP = 8.f;
-            float btns_total = SB * 4.f + PB + GAP * 4.f;
+            // 5 small buttons (|< < > >| loop) + 1 large play button.
+            float btns_total = SB * 5.f + PB + GAP * 5.f;
             float btn_row_y  = pill_y0 + PILL_PAD_Y + SCRUB_H + 10.f;
             float bx = pill_x0 + (PILL_W - btns_total) * 0.5f;
             float btn_cy = btn_row_y + BTN_ROW_H * 0.5f;
@@ -1340,6 +1688,44 @@ void ui_studio(AppState& state) {
                 dl->AddTriangleFilled({cx2-r*0.9f, btn_cy-r}, {cx2-r*0.9f, btn_cy+r}, {cx2+r*0.9f, btn_cy}, ic);
                 dl->AddRectFilled({cx2+r*1.1f, btn_cy-r}, {cx2+r*1.6f, btn_cy+r}, ic, 1.f);
                 if (c) seek_to(state, dur);
+            }
+
+            // Loop toggle — tints green when engaged; playback cycles the whole
+            // timeline seamlessly instead of stopping at the end.
+            {
+                float sz = SB;
+                float cy2 = btn_row_y + (BTN_ROW_H - sz) * 0.5f;
+                ImGui::SetCursorScreenPos({bx, cy2});
+                ImGui::InvisibleButton("##t_loop", {sz, sz});
+                bool h = ImGui::IsItemHovered();
+                bool a = ImGui::IsItemActive();
+                bool c = ImGui::IsItemClicked();
+                if (a) any_active_this_frame = true;
+                float cx2 = bx + sz*0.5f, cy3 = cy2 + sz*0.5f;
+                bool on = state.loop_play;
+                dl->AddCircleFilled({cx2, cy3}, sz*0.5f,
+                    on ? fa(IM_COL32(90,210,150, a?75:h?58:42))
+                       : fa(IM_COL32(255,255,255, a?45:h?28:12)));
+                dl->AddCircle({cx2, cy3}, sz*0.5f - 0.5f,
+                    on ? fa(IM_COL32(120,240,180,150))
+                       : fa(IM_COL32(255,255,255, a?80:h?50:22)), 0, 1.f);
+                ImU32 ic = on ? fa(IM_COL32(150,250,200,255))
+                              : fa(IM_COL32(255,255,255, a?255:h?230:180));
+                // Circular-arrow glyph (~300° arc + tangent arrowhead).
+                float r = sz * 0.27f;
+                float a0 = 0.7f, a1 = 0.7f + 5.2f;
+                dl->PathArcTo({cx2, cy3}, r, a0, a1, 22);
+                dl->PathStroke(ic, 0, 1.8f);
+                float ex = cx2 + cosf(a1)*r, ey = cy3 + sinf(a1)*r;
+                float tgx = -sinf(a1), tgy = cosf(a1);   // tangent (travel dir)
+                float rdx =  cosf(a1), rdy = sinf(a1);   // radial
+                float ah = sz * 0.20f;
+                dl->AddTriangleFilled(
+                    {ex + tgx*ah,            ey + tgy*ah},
+                    {ex + rdx*ah*0.7f,       ey + rdy*ah*0.7f},
+                    {ex - rdx*ah*0.7f,       ey - rdy*ah*0.7f}, ic);
+                if (c) state.loop_play = !state.loop_play;
+                bx += sz + GAP;
             }
 
             // ── Timecode — centered row below buttons ─────────────────────────
@@ -1495,7 +1881,20 @@ void ui_studio(AppState& state) {
         {
             static int s_last_sel_track = -1, s_last_sel_clip = -1;
             int st = state.selected_track, sc = state.selected_clip;
-            if (st != s_last_sel_track || sc != s_last_sel_clip) {
+            if (s_panel_request >= 0) {
+                // A timeline lane click already moved the selection to the host
+                // clip and asked for a specific view. Honour it and absorb the
+                // selection change so the derive branch below doesn't clobber it.
+                // The request is NOT cleared here — it's re-applied once more
+                // AFTER the tab bar (see post-tab-bar force) because ImGui only
+                // resolves the target tab's SetSelected after the earlier Clip /
+                // Typography tab bodies have already re-asserted their own view.
+                PanelView prev = s_panel_view;
+                s_panel_view = (PanelView)s_panel_request;
+                s_user_nav = false;
+                if (s_panel_view != prev) s_switch_tab = true;
+                s_last_sel_track = st; s_last_sel_clip = sc;
+            } else if (st != s_last_sel_track || sc != s_last_sel_clip) {
                 PanelView prev = s_panel_view;
                 if (st >= 0 && sc >= 0) {
                     PanelView derived = pv_derive(state);
@@ -1524,9 +1923,46 @@ void ui_studio(AppState& state) {
             // change tabs — never every frame, to avoid fighting user clicks.
             bool do_switch = s_switch_tab;
             s_switch_tab = false;
+            // Snapshot the view we want active BEFORE rendering any tab item.
+            // Each tab body sets s_panel_view live when its tab is open, so a tab
+            // rendered earlier in the list (Clip) would clobber s_panel_view before
+            // a later tab's (FX) tf() is evaluated — and SetSelected would never
+            // reach the target. Comparing against this stable copy fixes that.
+            PanelView want_view = s_panel_view;
             auto tf = [&](PanelView target) -> ImGuiTabItemFlags {
-                return (do_switch && s_panel_view == target) ? ImGuiTabItemFlags_SetSelected : 0;
+                return (do_switch && want_view == target) ? ImGuiTabItemFlags_SetSelected : 0;
             };
+
+            // FX tabs appear only while the selected content has coupled
+            // chain bricks on its track: "FX" = video chain, "Audio FX" =
+            // audio chain (a video clip can carry both).
+            int host_fx_ti = -1, host_fx_ci = -1;
+            int host_afx_ci = -1;
+            if (has_sel && state.selected_track >= 0 &&
+                state.selected_track < (int)state.tracks.size()) {
+                auto& cls = state.tracks[state.selected_track].clips;
+                if (state.selected_clip >= 0 && state.selected_clip < (int)cls.size()) {
+                    for (int k = 0; k < (int)cls.size(); ++k) {
+                        const Clip& oc = cls[(size_t)k];
+                        if (!oc.fx_coupled) continue;
+                        if (oc.clip_type != ClipType::MultiFX &&
+                            oc.clip_type != ClipType::AudioMultiFX) continue;
+                        if (fx_coupled_host(state, state.selected_track, oc)
+                                != state.selected_clip) continue;
+                        if (oc.clip_type == ClipType::MultiFX) {
+                            host_fx_ti = state.selected_track;
+                            host_fx_ci = k;
+                        } else {
+                            host_fx_ti = state.selected_track;
+                            host_afx_ci = k;
+                        }
+                    }
+                }
+            }
+            if (s_panel_view == PanelView::HostFX && host_fx_ci < 0)
+                s_panel_view = PanelView::Clip;   // brick decoupled/deleted
+            if (s_panel_view == PanelView::HostAudioFX && host_afx_ci < 0)
+                s_panel_view = PanelView::Clip;
 
             if (ImGui::BeginTabBar("##panel_tabs")) {
                 if (show_clip_tabs) {
@@ -1534,15 +1970,38 @@ void ui_studio(AppState& state) {
                         { s_panel_view = PanelView::Clip; s_user_nav = false; ImGui::EndTabItem(); }
                     if (is_text_like && ImGui::BeginTabItem("Typography", nullptr, tf(PanelView::Typography)))
                         { s_panel_view = PanelView::Typography; s_user_nav = false; ImGui::EndTabItem(); }
+                    if (host_fx_ci >= 0 && ImGui::BeginTabItem("FX", nullptr, tf(PanelView::HostFX)))
+                        { s_panel_view = PanelView::HostFX; s_user_nav = false; ImGui::EndTabItem(); }
+                    if (host_afx_ci >= 0 && ImGui::BeginTabItem("Audio FX", nullptr, tf(PanelView::HostAudioFX)))
+                        { s_panel_view = PanelView::HostAudioFX; s_user_nav = false; ImGui::EndTabItem(); }
                 }
                 if (ImGui::BeginTabItem("History", nullptr, tf(PanelView::History)))
                     { s_panel_view = PanelView::History; s_user_nav = true; ImGui::EndTabItem(); }
                 ImGui::EndTabBar();
             }
+            s_host_fx_ti  = host_fx_ti;
+            s_host_fx_ci  = host_fx_ci;
+            s_host_afx_ci = host_afx_ci;
+
+            // Post-tab-bar force: a pending lane-click request wins over whatever
+            // the tab bodies just set s_panel_view to. SetSelected (s_switch_tab)
+            // moves the visible tab for next frame; this guarantees the CONTENT
+            // below matches the requested FX view from the very first frame.
+            if (s_panel_request >= 0) {
+                PanelView want = (PanelView)s_panel_request;
+                bool ok = (want == PanelView::HostFX      && host_fx_ci  >= 0) ||
+                          (want == PanelView::HostAudioFX && host_afx_ci >= 0) ||
+                          (want != PanelView::HostFX && want != PanelView::HostAudioFX);
+                if (ok) s_panel_view = want;
+                s_panel_request = -1;
+            }
 
             ImGui::PopStyleColor(2);
             ImGui::PopStyleVar();
         }
+        // Drop a stale request if the tab bar wasn't shown this frame (no
+        // selection / library / override view) so it can't leak to a later frame.
+        s_panel_request = -1;
 
         // ── Panel content ─────────────────────────────────────────────────────
         ImGui::BeginChild("##panel_scroll", {0.f, 0.f});
@@ -1552,6 +2011,40 @@ void ui_studio(AppState& state) {
         switch (s_panel_view) {
             case PanelView::Clip:        panel_clip(state, pw);                  break;
             case PanelView::Typography:  panel_typography(state, pw);            break;
+            case PanelView::HostAudioFX:
+                panel_audio_multifx_for(state, pw, s_host_fx_ti, s_host_afx_ci);
+                break;
+            case PanelView::OverrideAudioMultiFX:
+                panel_audio_multifx(state, pw);
+                break;
+            case PanelView::HostFX: {
+                // Coupled chain of the selected content + the way out.
+                panel_multifx_for(state, pw, s_host_fx_ti, s_host_fx_ci);
+                if (s_host_fx_ti >= 0 && s_host_fx_ci >= 0 &&
+                    s_host_fx_ti < (int)state.tracks.size() &&
+                    s_host_fx_ci < (int)state.tracks[s_host_fx_ti].clips.size()) {
+                    Clip& bk = state.tracks[s_host_fx_ti].clips[(size_t)s_host_fx_ci];
+                    if (bk.clip_type == ClipType::MultiFX && bk.fx_coupled) {
+                        ImGui::Dummy({0.f, 8.f});
+                        ImGui::SetCursorPosX(8.f);
+                        if (ui_btn("Decouple Multi-FX brick", false, true)) {
+                            int host = fx_coupled_host(state, s_host_fx_ti, bk);
+                            float blen = bk.end - bk.start;
+                            bk.fx_coupled = false;
+                            bk.fx_host_sid.clear();
+                            if (host >= 0) {
+                                const Clip& hc = state.tracks[s_host_fx_ti]
+                                                     .clips[(size_t)host];
+                                bk.start = hc.end;
+                                bk.end   = hc.end + fminf(2.f, fmaxf(0.5f, blen));
+                            }
+                            history_push(state, "Decouple Multi-FX brick");
+                            s_panel_view = PanelView::Clip;
+                        }
+                    }
+                }
+                break;
+            }
             case PanelView::Project:     panel_project(state, pw);               break;
             case PanelView::History:     panel_history(state, pw);               break;
             case PanelView::LibBG:           panel_background(state, pw);            break;
@@ -1655,6 +2148,38 @@ void ui_studio(AppState& state) {
         tl_dl->AddText({hdr_tl.x+8.f, hdr_tl.y+4.f}, to_u32(Col::muted), "TIMELINE");
         ImGui::PopFont();
 
+        // Loop + marker controls — always visible here (the transport pill's
+        // loop button auto-hides, so the timeline is their discoverable home).
+        {
+            ImGui::SetCursorScreenPos({hdr_tl.x + 86.f, hdr_tl.y + 2.f});
+            ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {6.f, 2.f});
+            // Loop toggle — green when armed.
+            bool on = state.loop_play;
+            ImVec4 loop_btn  = on ? ImVec4(0.16f,0.59f,0.35f,1.f) : Col::bg_soft;
+            ImVec4 loop_btnh = on ? ImVec4(0.20f,0.69f,0.41f,1.f) : Col::bg_soft_hov;
+            ImGui::PushStyleColor(ImGuiCol_Button,        loop_btn);
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, loop_btnh);
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive,  loop_btnh);
+            if (ImGui::SmallButton("Loop##tlloop")) state.loop_play = !state.loop_play;
+            ImGui::PopStyleColor(3);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Loop playback over the brace region (whole timeline if none set)");
+            ImGui::SameLine(0.f, 8.f);
+            ImGui::PushStyleColor(ImGuiCol_Button,        Col::bg_soft);
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, Col::bg_soft_hov);
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive,  Col::bg_soft_hov);
+            if (ImGui::SmallButton("+Mark##tlmark")) marker_add(state, state.playhead);
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Drop a marker at the playhead (M)");
+            ImGui::SameLine(0.f, 6.f);
+            if (ImGui::SmallButton("<##tlmprev")) marker_jump(state, -1);
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Jump to previous marker ([)");
+            ImGui::SameLine(0.f, 2.f);
+            if (ImGui::SmallButton(">##tlmnext")) marker_jump(state, +1);
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Jump to next marker (])");
+            ImGui::PopStyleColor(3);
+            ImGui::PopStyleVar();
+        }
+
         // Zoom controls in header. The readout is the position within the
         // usable zoom range: 0% = fully zoomed out (whole project fits),
         // 100% = maximum zoom. Log-mapped so steps feel uniform — raw px/s is
@@ -1746,7 +2271,7 @@ void ui_studio(AppState& state) {
             bool has_video = false;
             for (auto& tr : state.tracks)
                 for (auto& cl : tr.clips)
-                    if (cl.clip_type == ClipType::Video) { has_video = true; break; }
+                    if (clip_is_videolike_type(cl.clip_type)) { has_video = true; break; }
             if (has_video) state.tutorial_step = 1;
         }
         if (state.tutorial_step == 2 && !state.beats.empty())

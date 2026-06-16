@@ -19,6 +19,9 @@ pkg_check_modules(FREETYPE  REQUIRED freetype2)
 pkg_check_modules(AUBIO     REQUIRED aubio)
 pkg_check_modules(VTERM     REQUIRED vterm)
 pkg_check_modules(TURBOJPEG REQUIRED libturbojpeg)
+# Native low-latency audio backend (perf mode); optional — the miniaudio
+# duplex path is the fallback when PipeWire is absent.
+pkg_check_modules(PIPEWIRE libpipewire-0.3)
 
 # ── ImGui ─────────────────────────────────────────────────────────────────────
 set(IMGUI_DIR ${CMAKE_SOURCE_DIR}/vendor/imgui)
@@ -41,13 +44,22 @@ set(SOURCES
     src/main.cpp
     src/app.cpp
     src/audio.cpp
+    src/audio_pw.cpp
+    src/face_track.cpp
+    src/face_cache.cpp
+    src/face_filters.cpp
     src/recorder.cpp
+    src/video_recorder.cpp
+    src/av_sync.cpp
+    src/av_measure.cpp
+    src/text_anim.cpp
     src/transcribe.cpp
     src/render.cpp
     src/history.cpp
     src/filepicker.cpp
     src/video.cpp
     src/proxy.cpp
+    src/conform.cpp
     src/waveform.cpp
     src/beat_detect.cpp
     src/blender_export.cpp
@@ -68,6 +80,7 @@ set(SOURCES
     src/forced_align.cpp
     src/ui/screen_splash.cpp
     src/ui/screen_setup.cpp
+    src/ui/screen_home.cpp
     src/terminal.cpp
     src/ui/screen_studio.cpp
     src/ui/studio_shared.cpp
@@ -92,6 +105,10 @@ set(SOURCES
 
 add_executable(pop-maker-studio ${SOURCES} ${IMGUI_SOURCES})
 
+if(PIPEWIRE_FOUND)
+    target_compile_definitions(pop-maker-studio PRIVATE HAVE_PIPEWIRE)
+endif()
+
 target_include_directories(pop-maker-studio PRIVATE
     src
     ${IMGUI_DIR}
@@ -108,6 +125,7 @@ target_include_directories(pop-maker-studio PRIVATE
     ${AUBIO_INCLUDE_DIRS}
     ${VTERM_INCLUDE_DIRS}
     ${TURBOJPEG_INCLUDE_DIRS}
+    ${PIPEWIRE_INCLUDE_DIRS}
 )
 
 target_link_libraries(pop-maker-studio PRIVATE
@@ -122,6 +140,7 @@ target_link_libraries(pop-maker-studio PRIVATE
     ${AUBIO_LIBRARIES}
     ${VTERM_LIBRARIES}
     ${TURBOJPEG_LIBRARIES}
+    ${PIPEWIRE_LIBRARIES}
     onnxruntime
     $<IF:$<TARGET_EXISTS:whisper::whisper>,whisper::whisper,whisper>
     fftw3f
@@ -172,6 +191,21 @@ add_custom_command(
 add_custom_target(embed_mono DEPENDS ${CMAKE_BINARY_DIR}/mono_font.h)
 add_dependencies(pop-maker-studio embed_mono)
 
+# Embed all bundled display typefaces (typography presets) as one byte-array
+# header with a master table. Add/remove a .ttf in assets/fonts/display and
+# re-run CMake to pick it up.
+file(GLOB DISPLAY_FONT_FILES ${CMAKE_SOURCE_DIR}/assets/fonts/display/*.ttf)
+add_custom_command(
+    OUTPUT ${CMAKE_BINARY_DIR}/display_fonts.h
+    COMMAND ${CMAKE_SOURCE_DIR}/scripts/embed_fonts_dir.sh
+            ${CMAKE_SOURCE_DIR}/assets/fonts/display
+            ${CMAKE_BINARY_DIR}/display_fonts.h
+    DEPENDS ${DISPLAY_FONT_FILES}
+    COMMENT "Embedding ${CMAKE_SOURCE_DIR}/assets/fonts/display display typefaces"
+)
+add_custom_target(embed_display DEPENDS ${CMAKE_BINARY_DIR}/display_fonts.h)
+add_dependencies(pop-maker-studio embed_display)
+
 target_include_directories(pop-maker-studio PRIVATE ${CMAKE_BINARY_DIR})
 
 # Embed portrait preview photo as raw RGB
@@ -181,10 +215,40 @@ add_custom_command(
             ${CMAKE_SOURCE_DIR}/assets/imgs/portrait.jpg
             ${CMAKE_BINARY_DIR}/portrait_preview.h
     DEPENDS ${CMAKE_SOURCE_DIR}/assets/imgs/portrait.jpg
+            ${CMAKE_SOURCE_DIR}/scripts/embed_portrait.sh
     COMMENT "Embedding portrait preview image"
 )
 add_custom_target(embed_portrait DEPENDS ${CMAKE_BINARY_DIR}/portrait_preview.h)
 add_dependencies(pop-maker-studio embed_portrait)
+
+# Embed base face photo as raw RGB — source for the camera brick's face-filter
+# preview thumbnails (live landmark-warp render). Swap assets/imgs/face.jpg.
+add_custom_command(
+    OUTPUT ${CMAKE_BINARY_DIR}/face_preview.h
+    COMMAND ${CMAKE_SOURCE_DIR}/scripts/embed_face.sh
+            ${CMAKE_SOURCE_DIR}/assets/imgs/face.jpg
+            ${CMAKE_BINARY_DIR}/face_preview.h
+    DEPENDS ${CMAKE_SOURCE_DIR}/assets/imgs/face.jpg
+            ${CMAKE_SOURCE_DIR}/scripts/embed_face.sh
+    COMMENT "Embedding face-filter preview photo"
+)
+add_custom_target(embed_face DEPENDS ${CMAKE_BINARY_DIR}/face_preview.h)
+add_dependencies(pop-maker-studio embed_face)
+
+# Guard: the in-app agent harness compiles src/generated/agent_tools.h, generated
+# from mcp_server/server.py by tools/gen_agent_tools.py. If server.py changed
+# without regenerating, fail the build so the harness can't silently ship a stale
+# toolset. Regenerate with:  python3 tools/gen_agent_tools.py
+# (Degrades to a no-op when the python mcp deps aren't installed — see --check.)
+find_program(PYTHON3_EXECUTABLE NAMES python3 python)
+if(PYTHON3_EXECUTABLE)
+    add_custom_target(check_agent_tools ALL
+        COMMAND ${PYTHON3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/gen_agent_tools.py --check
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        COMMENT "Checking agent_tools.h is in sync with mcp_server/server.py"
+    )
+    add_dependencies(pop-maker-studio check_agent_tools)
+endif()
 
 install(TARGETS pop-maker-studio DESTINATION bin)
 

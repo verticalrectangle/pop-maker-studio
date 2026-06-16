@@ -1,11 +1,18 @@
 #include "ipc_server.h"
+#include "audio.h"
+#include "recorder.h"
+#include "video_recorder.h"
+#include "face_track.h"
 #include "agent_harness.h"
 #include "render.h"
 #include "bg_presets.h"
 #include "bg_remove.h"
 #include "history.h"
 #include "runtime_fx.h"
+#include "ui/canvas.h"
+#include "ui/timeline.h"
 #include "ui/pipeline.h"
+#include "ui/screens.h"   // recent_projects_push
 #include "ui/panel_animation.h"
 #include "ui/panel_media.h"
 #include "ui/studio_shared.h"
@@ -33,6 +40,7 @@ static const char* k_gen_fx_names[] = {
 
 #include <cstdio>
 #include <cstring>
+#include <deque>
 #include <string>
 #include <vector>
 #include <algorithm>
@@ -172,7 +180,11 @@ static std::string clip_type_str(ClipType t) {
         case ClipType::Background: return "background";
         case ClipType::BodyFX:     return "body_fx";
         case ClipType::MultiFX:    return "multi_fx";
+        case ClipType::AudioMultiFX: return "audio_multi_fx";
         case ClipType::Record:     return "record";
+        case ClipType::VideoRecord: return "video_record";
+        case ClipType::Bus:        return "bus";
+        default: break;
     }
     return "unknown";
 }
@@ -186,6 +198,10 @@ static AnimStyle parse_anim_style(const std::string& s) {
     if (s == "slide")      return AnimStyle::Slide;
     if (s == "stack")      return AnimStyle::Stack;
     if (s == "block")      return AnimStyle::Block;
+    if (s == "wave")       return AnimStyle::WaveText;
+    if (s == "jitter")     return AnimStyle::Jitter;
+    if (s == "explode")    return AnimStyle::Explode;
+    if (s == "gravity")    return AnimStyle::Gravity;
     return AnimStyle::None;
 }
 
@@ -201,6 +217,11 @@ static FXType parse_fx_type(const std::string& s) {
     if (s == "datamosh")   return FXType::Datamosh;
     if (s == "chroma_key") return FXType::ChromaKey;
     if (s == "ken_burns")  return FXType::KenBurns;
+    if (s == "audio_autotune") return FXType::AudioAutotune;
+    if (s == "audio_pitch")    return FXType::AudioPitch;
+    if (s == "audio_formant")  return FXType::AudioFormant;
+    if (s == "audio_delay")    return FXType::AudioDelay;
+    if (s == "audio_reverb")   return FXType::AudioReverb;
     for (int i = 0; i < k_gen_fx_count; ++i)
         if (s == k_gen_fx_names[i]) return k_gen_fx_types[i];
     return FXType::Grade;
@@ -302,9 +323,22 @@ static json clip_to_json_slim(int idx, const Clip& c) {
     j["in_point"] = c.in_point;
     if (!c.source_id.empty()) j["source"] = c.source_id;
     if (!c.text.empty())      j["text"]   = c.text;
-    if (c.clip_type == ClipType::Record) {
+    if (c.clip_type == ClipType::Record ||
+        c.clip_type == ClipType::VideoRecord) {
         j["takes"]         = c.rec_takes;
         j["selected_take"] = c.rec_take_sel;
+        if (c.clip_type == ClipType::VideoRecord) j["photo_mode"] = c.rec_photo;
+    }
+    if (c.fx_coupled) j["coupled"] = true;
+    if (c.clip_type == ClipType::Effect && fx_type_is_audio_fx(c.fx_type)) {
+        json a;
+        a["autotune_on"] = c.audio_fx.autotune_on;
+        a["pitch_on"]    = c.audio_fx.pitch_on;
+        a["pitch_semitones"] = c.audio_fx.pitch_semitones;
+        a["formant_on"]  = c.audio_fx.formant_on;
+        a["delay_on"]    = c.audio_fx.delay_on;
+        a["reverb_on"]   = c.audio_fx.reverb_on;
+        j["audio_fx"]    = a;
     }
     return j;
 }
@@ -391,10 +425,13 @@ static json clip_to_json(int idx, const Clip& c) {
         }
         if (!kfs.empty()) j["keyframes"] = std::move(kfs);
     }
-    if (c.clip_type == ClipType::Record) {
+    if (c.clip_type == ClipType::Record ||
+        c.clip_type == ClipType::VideoRecord) {
         j["takes"]         = c.rec_takes;
         j["selected_take"] = c.rec_take_sel;
+        if (c.clip_type == ClipType::VideoRecord) j["photo_mode"] = c.rec_photo;
     }
+    if (c.fx_coupled) j["coupled"] = true;
     return j;
 }
 
@@ -510,6 +547,8 @@ static ClipType parse_clip_type(const std::string& s) {
     if (s == "background") return ClipType::Background;
     if (s == "body_fx")   return ClipType::BodyFX;
     if (s == "record")    return ClipType::Record;
+    if (s == "video_record") return ClipType::VideoRecord;
+    if (s == "bus")       return ClipType::Bus;
     return ClipType::Text;
 }
 
@@ -591,6 +630,55 @@ static int track_by_name_or_index(const AppState& state, const json& params) {
         return -1;
     }
     return params.value("track", -1);
+}
+
+// Auto-couple a freshly added video FX brick to the best-overlap content
+// clip on its track — agents get the coupled end-state instantly (the UI's
+// 1.5 s ring is a human affordance). Returns the brick's resulting index.
+static int ipc_autocouple_fx(AppState& state, int ti, int ci) {
+    auto& clips = state.tracks[ti].clips;
+    if (ci < 0 || ci >= (int)clips.size()) return ci;
+    Clip& c = clips[(size_t)ci];
+    if (c.fx_coupled || !(fx_brick_is_video(c) || fx_brick_is_audio_kind(c)))
+        return ci;
+    const bool audio_kind = fx_brick_is_audio_kind(c);
+    int best = -1; float bov = 0.05f;
+    for (int k = 0; k < (int)clips.size(); ++k) {
+        if (k == ci) continue;
+        const Clip& hc = clips[(size_t)k];
+        bool hostable = audio_kind
+            ? (hc.clip_type == ClipType::Audio ||
+               hc.clip_type == ClipType::Record ||
+               hc.clip_type == ClipType::Video ||
+               hc.clip_type == ClipType::VideoRecord)
+            : (clip_is_videolike_type(hc.clip_type) ||
+               hc.clip_type == ClipType::Background);
+        if (!hostable) continue;
+        float ov = fminf(c.end, hc.end) - fmaxf(c.start, hc.start);
+        if (ov > bov) { bov = ov; best = k; }
+    }
+    if (best < 0) return ci;
+    return timeline_couple_fx_brick(state, ti, ci, best);
+}
+
+// ── Synthetic mouse input (ui_input) ──────────────────────────────────────────
+// Agents can't reach the canvas handles through any structured IPC method —
+// transform handles are pure mouse interactions. ui_input queues scripted
+// mouse steps; the main loop feeds exactly one per frame into ImGui (after
+// the GLFW backend's events, so an injected position wins the frame). Used
+// for agent-driven UI testing; everything runs on the main thread.
+struct InputStep { float x = 0, y = 0; bool has_pos = false; int btn = -1; float wheel = 0; };  // btn: 0 down, 1 up
+static std::deque<InputStep> g_input_steps;
+
+void ipc_debug_input_tick() {
+    if (g_input_steps.empty()) return;
+    InputStep s = g_input_steps.front();
+    g_input_steps.pop_front();
+    ImGuiIO& io = ImGui::GetIO();
+    if (s.has_pos)     io.AddMousePosEvent(s.x, s.y);
+    if (s.btn == 0)    io.AddMouseButtonEvent(0, true);
+    else if (s.btn == 1) io.AddMouseButtonEvent(0, false);
+    if (s.wheel != 0.f)  io.AddMouseWheelEvent(0.f, s.wheel);
 }
 
 // ── Command dispatch ──────────────────────────────────────────────────────────
@@ -1172,27 +1260,335 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         if (path.empty()) { err = "no project path — provide 'path' param or save once from UI"; return {}; }
         if (!project_save(state, path)) { err = "project_save failed"; return {}; }
         state.project_path = path;   // exports default next to the .pms
+        recent_projects_push(path);  // surface on the home/launcher page
+        recovery_clear();            // saved → no stale crash-recovery slot
         json r; r["path"] = path;
+        return r;
+    }
+
+    if (method == "collect_project") {
+        std::string path = params.value("path", state.project_path);
+        if (path.empty()) { err = "no project path — provide 'path' param"; return {}; }
+        std::string e; int copied = 0;
+        if (!collect_project(state, path, e, &copied)) { err = e; return {}; }
+        recent_projects_push(path);
+        recovery_clear();
+        json r; r["path"] = path; r["copied"] = copied;
         return r;
     }
 
     if (method == "seek") {
         float t = params.value("time", 0.f);
         state.playhead = t;
+        audio_seek(t);   // keep the audio master clock with the playhead
         return json::object();
     }
 
+    if (method == "ui_input") {
+        // steps: [{x, y, down?, up?}] — one consumed per UI frame. A drag is
+        // move → down → N moves → up. Holding a position for a frame = a step
+        // with the same x/y.
+        if (!params.contains("steps") || !params["steps"].is_array()) {
+            err = "ui_input needs steps: [{x,y,down?,up?}]"; return {};
+        }
+        for (auto& st : params["steps"]) {
+            InputStep s;
+            if (st.contains("x") && st.contains("y")) {
+                s.x = st.value("x", 0.f); s.y = st.value("y", 0.f);
+                s.has_pos = true;
+            }
+            if (st.value("down", false))     s.btn = 0;
+            else if (st.value("up", false))  s.btn = 1;
+            s.wheel = st.value("wheel", 0.f);
+            g_input_steps.push_back(s);
+        }
+        json r; r["queued"] = (int)g_input_steps.size();
+        return r;
+    }
+
+    if (method == "select_clip") {
+        // Set the canvas selection (the clip whose transform handles show).
+        int ti = track_by_name_or_index(state, params), ci = params.value("clip", -1);
+        if (ci < 0) { state.selected_track = state.selected_clip = -1; return json::object(); }
+        if (!check_clip(state, ti, ci, err)) return {};
+        state.selected_track = ti;
+        state.selected_clip  = ci;
+        return json::object();
+    }
+
+    if (method == "get_timeline_geometry") {
+        // Screen-px rects of clips, their FX disclosure triangles, and expanded
+        // FX lanes from the last drawn frame — pairs with ui_input.
+        const TLGeom& g = tl_geom();
+        json r, ca = json::array(), la = json::array();
+        for (auto& c : g.clips) {
+            json j; j["track"]=c.track; j["clip"]=c.clip;
+            j["x0"]=c.x0; j["y0"]=c.y0; j["x1"]=c.x1; j["y1"]=c.y1;
+            j["has_fx"]=c.has_fx; j["expanded"]=c.expanded;
+            j["disc_x"]=c.disc_cx; j["disc_y"]=c.disc_cy;
+            ca.push_back(j);
+        }
+        for (auto& l : g.lanes) {
+            json j; j["track"]=l.track; j["clip"]=l.clip; j["lane"]=l.idx;
+            j["x0"]=l.x0; j["y0"]=l.y0; j["x1"]=l.x1; j["y1"]=l.y1;
+            j["audio"]=l.audio;
+            la.push_back(j);
+        }
+        r["clips"]=ca; r["lanes"]=la;
+        return r;
+    }
+
+    if (method == "get_canvas_geometry") {
+        // Transform-handle geometry from the last drawn frame (screen px) —
+        // pairs with ui_input so agents can hit the handles deterministically.
+        CanvasHandleGeom g = canvas_handle_geom();
+        json r;
+        r["valid"] = g.valid;
+        if (g.valid) {
+            r["bbox"]     = {g.bx0, g.by0, g.bx1, g.by1};
+            r["rotate_knob"] = {g.rot_x, g.rot_y};
+            r["center"]   = {g.cx, g.cy};
+        }
+        r["selected_track"] = state.selected_track;
+        r["selected_clip"]  = state.selected_clip;
+        if (state.selected_track >= 0 && state.selected_track < (int)state.tracks.size() &&
+            state.selected_clip >= 0 &&
+            state.selected_clip < (int)state.tracks[state.selected_track].clips.size()) {
+            Clip& sc = state.tracks[state.selected_track].clips[state.selected_clip];
+            r["rotation"] = sc.rotation;
+            r["scale_x"]  = sc.scale_x;
+            r["pos_x"]    = sc.pos_x;
+            r["pos_y"]    = sc.pos_y;
+        }
+        r["pending_input_steps"] = (int)g_input_steps.size();
+        return r;
+    }
+
+    if (method == "get_live_peaks") {
+        // Debug: the live-recording waveform exactly as the timeline sees it.
+        int n = params.value("n", 64);
+        if (n < 1 || n > 4096) n = 64;
+        std::vector<float> pk((size_t)n, 0.f);
+        bool ok = recorder_live_peaks(n, pk.data());
+        json r; r["active"] = ok;
+        if (ok) r["peaks"] = pk;
+        return r;
+    }
+
+    if (method == "decouple_fx_brick") {
+        int ti = track_by_name_or_index(state, params), ci = params.value("clip", -1);
+        if (!check_clip(state, ti, ci, err)) return {};
+        if (!state.tracks[ti].clips[(size_t)ci].fx_coupled) {
+            err = "clip is not a coupled FX brick"; return {};
+        }
+        // Lift onto a fresh track just below the content — clean movable brick.
+        decouple_fx_to_new_track(state, ti, ci);
+        return json::object();
+    }
+
+    // (Old global bus IPC — set_track_bus / set_bus / get_buses — removed with
+    // the global bus system. Bus bricks are plain clips: add_clip(type="bus"),
+    // set_clip_prop(volume=gain), placed on a track to group the tracks below.)
+
+    if (method == "get_fx_segments") {
+        int ti = track_by_name_or_index(state, params), ci = params.value("clip", -1);
+        if (!check_clip(state, ti, ci, err)) return {};
+        auto segs = collect_audio_fx_segments(state, ti, state.tracks[ti].clips[(size_t)ci]);
+        json arr = json::array();
+        for (auto& sg : segs) {
+            json e; e["t0"] = sg.t0; e["t1"] = sg.t1;
+            e["pitch_on"] = sg.fx.pitch_on; e["semitones"] = sg.fx.pitch_semitones;
+            e["reverb_on"] = sg.fx.reverb_on; e["delay_on"] = sg.fx.delay_on;
+            e["autotune_on"] = sg.fx.autotune_on;
+            arr.push_back(e);
+        }
+        json r; r["segments"] = arr;
+        // Coupling diagnostics for every FX brick on the track
+        json bricks = json::array();
+        for (int k = 0; k < (int)state.tracks[ti].clips.size(); ++k) {
+            const Clip& bc = state.tracks[ti].clips[(size_t)k];
+            if (bc.clip_type != ClipType::AudioMultiFX &&
+                bc.clip_type != ClipType::MultiFX) continue;
+            json b;
+            b["index"]   = k;
+            b["type"]    = clip_type_str(bc.clip_type);
+            b["coupled"] = bc.fx_coupled;
+            b["host_sid"] = bc.fx_host_sid;
+            b["resolved_host"] = fx_coupled_host(state, ti, bc);
+            json ents = json::array();
+            for (auto& se : bc.fx_chain) {
+                json e; e["fx_type"] = (int)se.fx_type;
+                e["pitch_on"] = se.audio_fx.pitch_on;
+                e["rel0"] = se.rel_start; e["rel1"] = se.rel_end;
+                ents.push_back(e);
+            }
+            b["entries"] = ents;
+            bricks.push_back(b);
+        }
+        r["bricks"] = bricks;
+        return r;
+    }
+
+    if (method == "dump_face_input") {
+        bool ok = face_track_dump_last("/tmp/face_input.ppm");
+        json r; r["ok"] = ok;
+        return r;
+    }
+
+    if (method == "get_face_track") {
+        FaceObs obs;
+        bool ok = face_track_latest(obs);
+        json r;
+        r["available"] = face_track_available();
+        r["valid"]     = ok;
+        {
+            extern std::atomic<int> g_dbg_flip180, g_dbg_since_detect, g_dbg_detects;
+            r["flip180"]      = g_dbg_flip180.load();
+            r["since_detect"] = g_dbg_since_detect.load();
+            r["detects"]      = g_dbg_detects.load();
+        }
+        if (ok) {
+            r["score"] = obs.score;
+            r["frame"] = {obs.w, obs.h};
+            r["nose"]  = {obs.pts[80][0], obs.pts[80][1]};
+            r["chin"]  = {obs.pts[0][0], obs.pts[0][1]};
+            r["eyeB"]  = {obs.pts[90][0], obs.pts[90][1]};
+            if (params.value("full", false)) {
+                json pts = json::array();
+                for (int k = 0; k < 106; ++k)
+                    pts.push_back({obs.pts[k][0], obs.pts[k][1]});
+                r["pts"] = pts;
+            }
+        }
+        // Mirror overlay debug: quad geometry + raw-frame landmarks exactly
+        // as the doggy overlay consumes them (post rotation remap).
+        MirrorDebugGeom mg = mirror_debug_geom();
+        if (mg.valid) {
+            json m;
+            m["center"]  = {mg.cx, mg.cy};
+            m["half"]    = {mg.hw, mg.hh};
+            m["rot_deg"] = mg.rot_deg;
+            m["cam"]     = {mg.cam_w, mg.cam_h};
+            m["face_valid"] = mg.face_valid;
+            if (mg.face_valid && params.value("full", false)) {
+                json pts = json::array();
+                for (int k = 0; k < 106; ++k)
+                    pts.push_back({mg.pts[k][0], mg.pts[k][1]});
+                m["pts"] = pts;
+            }
+            r["mirror"] = m;
+        }
+        return r;
+    }
+
+    if (method == "debug_fx_tone") {
+        // DSP self-test: 2 s of 440 Hz through process_audio_fx with the
+        // given params; returns Goertzel powers so divergence between the
+        // collection layer and the DSP layer is attributable in one call.
+        AudioFX fx;
+        fx.pitch_on        = true;
+        fx.pitch_semitones = params.value("semitones", 12.f);
+        const int sr = 44100, n = sr * 2;
+        std::vector<float> raw((size_t)n * 2);
+        for (int i = 0; i < n; ++i) {
+            float v = 0.5f * sinf(2.f * 3.14159265f * 440.f * (float)i / sr);
+            raw[(size_t)i*2] = raw[(size_t)i*2+1] = v;
+        }
+        std::vector<float> proc = process_audio_fx(raw, fx, (float)sr);
+        auto goertzel = [&](const std::vector<float>& b, float freq) {
+            double k = 2.0 * 3.14159265358979 * freq / sr, s0, s1 = 0, s2 = 0;
+            for (size_t i = b.size()/2; i + 1 < b.size(); i += 2) {
+                s0 = b[i] + 2.0*cos(k)*s1 - s2; s2 = s1; s1 = s0;
+            }
+            return s1*s1 + s2*s2 - 2.0*cos(k)*s1*s2;
+        };
+        json r;
+        r["in_440"]   = goertzel(raw, 440.f);
+        r["out_440"]  = goertzel(proc, 440.f);
+        r["out_880"]  = goertzel(proc, 880.f);
+        return r;
+    }
+
+    if (method == "set_monitor") {
+        // Live mic monitoring controls — parity with the record panel's
+        // "Hear yourself" / "Hear effects" / gate toggles.
+        bool on = params.value("on", true);
+        if (on && !audio_capture_start()) { err = "mic open failed"; return {}; }
+        audio_monitor_set(on);
+        if (params.contains("hear_fx"))
+            audio_monitor_fx_set(params.value("hear_fx", false));
+        if (params.contains("gate"))
+            audio_gate_set(params.value("gate", true));
+        if (!on && !recorder_active()) audio_capture_stop();
+        return json::object();
+    }
+
+    if (method == "get_audio_perf") {
+        // Low-latency duplex (performance mode) health — see audio.h.
+        json r;
+        r["perf_mode"]     = audio_perf_mode();
+        r["xruns"]         = audio_perf_xruns();
+        r["out_latency_s"] = audio_latency();
+        r["in_latency_s"]  = audio_capture_latency();
+        r["monitor"]       = audio_monitor_get();
+        r["gate"]          = audio_gate_get();
+        r["hear_fx"]       = audio_monitor_fx_get();
+        r["chain_active"]  = audio_monitor_chain_active();
+        return r;
+    }
+
+    if (method == "set_camera_monitor") {
+        bool on = params.value("on", true);
+        vrecorder_monitor_set(on);
+        json r; r["monitor"] = vrecorder_monitor_get();
+        return r;
+    }
+
+    if (method == "vrecord_start") {
+        int ti = params.value("track", -1);
+        int ci = params.value("clip", -1);
+        if (!vrecorder_start(state, ti, ci)) { err = "vrecord_start failed (not a camera brick / too short / capture failed)"; return {}; }
+        json r; r["status"] = "recording";
+        r["test_pattern"] = vrecorder_using_test_pattern();
+        return r;
+    }
+    if (method == "vrecord_stop") {
+        vrecorder_stop(state);
+        json r; r["takes"] = vrecorder_take_count();
+        return r;
+    }
+    if (method == "capture_photo") {
+        int ti = params.value("track", -1);
+        int ci = params.value("clip", -1);
+        bool ok = vrecorder_capture_photo(state, ti, ci);
+        json r;
+        r["captured"]     = ok;
+        r["warming"]      = !ok && vrecorder_error().empty() == false;
+        r["test_pattern"] = vrecorder_using_test_pattern();
+        if (ok && ti >= 0 && ti < (int)state.tracks.size() &&
+            ci >= 0 && ci < (int)state.tracks[ti].clips.size())
+            r["take"] = state.tracks[ti].clips[ci].text;
+        if (!ok && !vrecorder_error().empty()) r["message"] = vrecorder_error();
+        return r;
+    }
+
     if (method == "play") {
+        // Mirror toggle_play: without audio_play() the audio engine never
+        // started for agent-driven playback (playhead ran on the wall-clock
+        // fallback, output stream stayed corked).
         if (!state.playing) {
             state.playing = true;
             state.play_start_wall = std::chrono::steady_clock::now();
             state.play_start_pos  = state.playhead;
+            audio_seek(state.playhead);
+            audio_play();
         }
         return json::object();
     }
 
     if (method == "pause") {
         state.playing = false;
+        audio_pause();
         return json::object();
     }
 
@@ -1391,8 +1787,10 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         int ti = params.value("track", -1), ci = params.value("clip", -1);
         if (!check_clip(state, ti, ci, err)) return {};
         const Clip& cl_pre = state.tracks[ti].clips[ci];
-        if (cl_pre.clip_type != ClipType::Video || cl_pre.text.empty()) {
-            err = "clip is not a video clip"; return {};
+        // Camera bricks count: a selected take mirrors its path into `text`,
+        // so the mask pipeline reads it like any video clip.
+        if (!clip_is_videolike_type(cl_pre.clip_type) || cl_pre.text.empty()) {
+            err = "clip is not a video clip (or camera brick with a take)"; return {};
         }
         // Refuse fast when the MJPEG proxy isn't on disk yet — the bg_remove
         // mask pipeline reads frames from the proxy, so without it we'd
@@ -1753,6 +2151,8 @@ static json dispatch(AppState& state, const std::string& method, const json& par
             else if (prop == "scale_x")   { cl.scale_x   = jval_float(val); }
             else if (prop == "scale_y")   { cl.scale_y   = jval_float(val); }
             else if (prop == "rotation")  { cl.rotation  = jval_float(val); }
+            else if (prop == "face_filter")     { cl.face_filter = (int)jval_float(val); }
+            else if (prop == "face_filter_amt") { cl.face_filter_amt = jval_float(val); }
             // Crop: clamp against the opposite side so a sliver stays visible
             else if (prop == "crop_l")    { cl.crop_l = fmaxf(0.f, fminf(jval_float(val), 0.95f - cl.crop_r)); }
             else if (prop == "crop_r")    { cl.crop_r = fmaxf(0.f, fminf(jval_float(val), 0.95f - cl.crop_l)); }
@@ -1766,7 +2166,19 @@ static json dispatch(AppState& state, const std::string& method, const json& par
             else if (prop == "sub_anchor_h") { cl.sub_anchor_h = jval_int(val); }
             else if (prop == "sub_wrap_w"){ cl.sub_wrap_w= jval_float(val); }
             else if (prop == "karaoke")   { cl.karaoke   = jval_bool(val); }
+            else if (prop == "karaoke_mode") { cl.karaoke_mode = jval_int(val); }
+            else if (prop == "fx_expanded") { cl.fx_expanded = jval_bool(val); }
             else if (prop == "clip_style"){ cl.clip_style= parse_anim_style(val.get<std::string>()); }
+            else if (prop == "sub_font")  { cl.sub_font  = val.get<std::string>(); }
+            else if (prop == "ease")      { cl.ease      = jval_int(val); }
+            else if (prop == "tracking")  { cl.tracking  = jval_float(val); }
+            else if (prop == "anim_unit") { cl.anim_unit = jval_int(val); }
+            else if (prop == "anim_stagger") { cl.anim_stagger = jval_float(val); }
+            else if (prop == "grad_mode") { cl.grad_mode = jval_int(val); }
+            else if (prop == "grad_col2") {
+                if (!val.is_array() || val.size() != 4) { err = "grad_col2 must be [r,g,b,a]"; return {}; }
+                for (int i = 0; i < 4; ++i) cl.grad_col2[i] = jval_float(val[i]);
+            }
             else if (prop == "sub_color") {
                 if (!val.is_array() || val.size() != 4) { err = "sub_color must be [r,g,b,a]"; return {}; }
                 for (int i = 0; i < 4; ++i) cl.sub_color[i] = jval_float(val[i]);
@@ -1821,13 +2233,11 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         int ti = track_by_name_or_index(state, params), ci = params.value("clip", -1);
         std::string prop = params.value("prop", "");
         if (!check_clip(state, ti, ci, err)) return {};
-        static const std::set<std::string> kf_props = {
-            "pos_x", "pos_y", "scale_x", "scale_y",
-            "rotation", "opacity", "volume", "pan"
-        };
-        if (!kf_props.count(prop)) {
-            err = "prop '" + prop + "' is not keyframable (allowed: pos_x pos_y "
-                  "scale_x scale_y rotation opacity volume pan)";
+        bool ok_prop = (prop == "opacity");          // opacity is special-cased in eval_prop
+        for (int i = 0; !ok_prop && i < kClipKfFieldCount; ++i)
+            if (prop == kClipKfFields[i].name) ok_prop = true;
+        if (!ok_prop) {
+            err = "prop '" + prop + "' is not keyframable";
             return {};
         }
         if (!params.contains("keys") || !params["keys"].is_array()) {
@@ -1889,6 +2299,8 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         else if (prop == "scale_x")  { cl.scale_x  = jval_float(val); }
         else if (prop == "scale_y")  { cl.scale_y  = jval_float(val); }
         else if (prop == "rotation") { cl.rotation = jval_float(val); }
+        else if (prop == "face_filter")     { cl.face_filter = (int)jval_float(val); }
+        else if (prop == "face_filter_amt") { cl.face_filter_amt = jval_float(val); }
         // Crop: clamp against the opposite side so a sliver stays visible
         else if (prop == "crop_l")   { cl.crop_l = fmaxf(0.f, fminf(jval_float(val), 0.95f - cl.crop_r)); }
         else if (prop == "crop_r")   { cl.crop_r = fmaxf(0.f, fminf(jval_float(val), 0.95f - cl.crop_l)); }
@@ -1903,6 +2315,7 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         else if (prop == "sub_anchor_h") { cl.sub_anchor_h = jval_int(val); }
         else if (prop == "sub_wrap_w") { cl.sub_wrap_w = jval_float(val); }
         else if (prop == "karaoke")    { cl.karaoke   = jval_bool(val); }
+        else if (prop == "fx_expanded") { cl.fx_expanded = jval_bool(val); }
         else if (prop == "clip_style") { cl.clip_style = parse_anim_style(val.get<std::string>()); }
         else if (prop == "sub_color") {
             if (!val.is_array() || val.size() != 4) { err = "sub_color must be [r,g,b,a]"; return {}; }
@@ -1977,7 +2390,8 @@ static json dispatch(AppState& state, const std::string& method, const json& par
     }
 
     if (method == "add_marker") {
-        float mtime  = params.value("time", 0.f);
+        // Markers live on the frame grid like the playhead — never mid-frame.
+        float mtime  = snap_to_frame(state, fmaxf(0.f, params.value("time", 0.f)));
         std::string mlabel = params.value("label", "");
         uint32_t mcolor = 0xFF4A90E2u;
         if (params.contains("color") && params["color"].is_string()) {
@@ -1994,6 +2408,26 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         int idx = (int)(it - state.markers.begin());
         state.markers.insert(it, m);
         json r; r["index"] = idx;
+        return r;
+    }
+
+    if (method == "set_loop_region") {
+        // Arm/disarm the transport loop and optionally set the brace region.
+        // Omit start/end (or pass end<=start) to loop the whole timeline.
+        state.loop_play = params.value("enabled", true);
+        if (params.contains("start") && params.contains("end")) {
+            // Snap the brace to the frame grid so the loop never wraps mid-frame.
+            float s = snap_to_frame(state, params.value("start", 0.f));
+            float e = snap_to_frame(state, params.value("end", 0.f));
+            if (e > s) { state.loop_in = s; state.loop_out = e; }
+            else       { state.loop_in = -1.f; state.loop_out = -1.f; }
+        } else {
+            state.loop_in = -1.f; state.loop_out = -1.f;
+        }
+        json r;
+        r["loop_play"] = state.loop_play;
+        r["loop_in"]   = state.loop_in;
+        r["loop_out"]  = state.loop_out;
         return r;
     }
 
@@ -2132,13 +2566,119 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         cl.start     = start;
         cl.end       = end;
 
-        if (params.contains("params") && params["params"].is_object()) {
+        // Audio FX bricks: enable the effect and take its params directly.
+        if (fx_type_is_audio_fx(cl.fx_type)) {
+            json ap = params.value("params", json::object());
+            AudioFX& afx = cl.audio_fx;
+            switch (cl.fx_type) {
+                case FXType::AudioAutotune:
+                    afx.autotune_on    = true;
+                    afx.autotune_key   = ap.value("key",   afx.autotune_key);
+                    afx.autotune_scale = ap.value("scale", afx.autotune_scale);
+                    afx.autotune_speed = ap.value("speed_ms", afx.autotune_speed);
+                    break;
+                case FXType::AudioPitch:
+                    afx.pitch_on        = true;
+                    afx.pitch_semitones = ap.value("semitones", afx.pitch_semitones);
+                    break;
+                case FXType::AudioFormant:
+                    afx.formant_on    = true;
+                    afx.formant_shift = ap.value("shift", afx.formant_shift);
+                    break;
+                case FXType::AudioDelay:
+                    afx.delay_on       = true;
+                    afx.delay_time     = ap.value("time",     afx.delay_time);
+                    afx.delay_feedback = ap.value("feedback", afx.delay_feedback);
+                    afx.delay_mix      = ap.value("mix",      afx.delay_mix);
+                    break;
+                case FXType::AudioReverb:
+                    afx.reverb_on   = true;
+                    afx.reverb_room = ap.value("room", afx.reverb_room);
+                    afx.reverb_damp = ap.value("damp", afx.reverb_damp);
+                    afx.reverb_mix  = ap.value("mix",  afx.reverb_mix);
+                    break;
+                default: break;
+            }
+            afx.mix = ap.value("dry_wet", afx.mix);   // brick dry/wet (1=wet, 0=dry)
+        } else if (params.contains("params") && params["params"].is_object()) {
             if (!apply_effect_params(cl, params["params"], fx_s, err)) return {};
         }
 
         if (fx_overlap_on_track(state, ti, start, end, -1, err)) return {};
         state.tracks[ti].clips.push_back(cl);
-        json r; r["clip"] = (int)state.tracks[ti].clips.size() - 1;
+        int nci = ipc_autocouple_fx(state, ti, (int)state.tracks[ti].clips.size() - 1);
+        json r; r["clip"] = nci;
+        r["coupled"] = state.tracks[ti].clips[(size_t)nci].fx_coupled;
+        return r;
+    }
+
+    if (method == "add_audio_multifx_brick") {
+        // Audio chain brick: effects = [{fx_type: audio_*, params, rel_start?,
+        // rel_end?}]. Auto-couples to the best-overlap audio content.
+        int ti = track_by_name_or_index(state, params);
+        if (!check_track(state, ti, err)) return {};
+        if (state.tracks[ti].locked) { err = "track is locked"; return {}; }
+        float start = snap_to_frame(params.value("start", 0.f), state.fps);
+        float end   = snap_end_to_frame(params.value("end", start + 2.f), state.fps);
+
+        Clip brick;
+        brick.clip_type = ClipType::AudioMultiFX;
+        brick.start     = start;
+        brick.end       = end;
+        if (params.contains("effects") && params["effects"].is_array()) {
+            for (auto& e : params["effects"]) {
+                std::string fxt = e.value("fx_type", "audio_autotune");
+                Clip se;
+                se.clip_type = ClipType::Effect;
+                se.fx_type   = parse_fx_type(fxt);
+                if (!fx_type_is_audio_fx(se.fx_type)) {
+                    err = "'" + fxt + "' is not an audio effect — the Audio "
+                          "Multi-FX brick takes audio effects only";
+                    return {};
+                }
+                se.rel_start = e.value("rel_start", 0.f);
+                se.rel_end   = e.value("rel_end",   0.f);
+                json ap = e.value("params", json::object());
+                AudioFX& afx = se.audio_fx;
+                switch (se.fx_type) {
+                    case FXType::AudioAutotune:
+                        afx.autotune_on    = true;
+                        afx.autotune_key   = ap.value("key",   afx.autotune_key);
+                        afx.autotune_scale = ap.value("scale", afx.autotune_scale);
+                        afx.autotune_speed = ap.value("speed_ms", afx.autotune_speed);
+                        break;
+                    case FXType::AudioPitch:
+                        afx.pitch_on        = true;
+                        afx.pitch_semitones = ap.value("semitones", afx.pitch_semitones);
+                        break;
+                    case FXType::AudioFormant:
+                        afx.formant_on    = true;
+                        afx.formant_shift = ap.value("shift", afx.formant_shift);
+                        break;
+                    case FXType::AudioDelay:
+                        afx.delay_on       = true;
+                        afx.delay_time     = ap.value("time",     afx.delay_time);
+                        afx.delay_feedback = ap.value("feedback", afx.delay_feedback);
+                        afx.delay_mix      = ap.value("mix",      afx.delay_mix);
+                        break;
+                    case FXType::AudioReverb:
+                        afx.reverb_on   = true;
+                        afx.reverb_room = ap.value("room", afx.reverb_room);
+                        afx.reverb_damp = ap.value("damp", afx.reverb_damp);
+                        afx.reverb_mix  = ap.value("mix",  afx.reverb_mix);
+                        break;
+                    default: break;
+                }
+                afx.mix = ap.value("dry_wet", afx.mix);   // brick dry/wet
+                brick.fx_chain.push_back(se);
+            }
+        }
+        brick.fx_chain_selected = brick.fx_chain.empty() ? -1 : 0;
+        if (fx_overlap_on_track(state, ti, start, end, -1, err)) return {};
+        state.tracks[ti].clips.push_back(brick);
+        int nci = ipc_autocouple_fx(state, ti, (int)state.tracks[ti].clips.size() - 1);
+        json r; r["clip"] = nci;
+        r["coupled"] = state.tracks[ti].clips[(size_t)nci].fx_coupled;
         return r;
     }
 
@@ -2181,6 +2721,12 @@ static json dispatch(AppState& state, const std::string& method, const json& par
                 } else {
                     se.clip_type = ClipType::Effect;
                     se.fx_type   = parse_fx_type(fxt);
+                    if (fx_type_is_audio_fx(se.fx_type)) {
+                        err = "'" + fxt + "' is an audio effect — the Video Multi-FX "
+                              "brick takes video effects only (audio gets its own "
+                              "chain brick)";
+                        return {};
+                    }
                     if (e.contains("params") && e["params"].is_object()) {
                         if (!apply_effect_params(se, e["params"], fxt, err)) return {};
                     }
@@ -2191,7 +2737,9 @@ static json dispatch(AppState& state, const std::string& method, const json& par
 
         if (fx_overlap_on_track(state, ti, start, end, -1, err)) return {};
         state.tracks[ti].clips.push_back(brick);
-        json r; r["clip"] = (int)state.tracks[ti].clips.size() - 1;
+        int nci = ipc_autocouple_fx(state, ti, (int)state.tracks[ti].clips.size() - 1);
+        json r; r["clip"] = nci;
+        r["coupled"] = state.tracks[ti].clips[(size_t)nci].fx_coupled;
         return r;
     }
 
@@ -2202,6 +2750,8 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         state.models_ready   = mr;
         state.models_skipped = ms;
         state.splash_timer   = 0.f;
+        state.in_studio      = true;   // an agent creating a project wants the
+                                       // editor active, not the home launcher
         // Fresh history + baseline snapshot (same reasoning as load_project).
         history_clear();
         history_push(state, "New project");

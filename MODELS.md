@@ -106,6 +106,21 @@ RVC `.pth` models are loaded and exported to ONNX entirely in C++ (zip+pickle pa
 
 ---
 
+## SCRFD + 2d106det — Face Tracking (Live Filters)
+
+| | |
+|---|---|
+| **Files** | `face/scrfd_10g.onnx` (~17 MB), `face/2d106det.onnx` (~5 MB), `face/sprite_ear.png`, `face/sprite_nose.png`, `face/sprite_tongue.png` |
+| **Cache path** | `models/face/` next to the binary |
+| **Source** | [huggingface.co/verticalrectangle/pop-maker-studio-models](https://huggingface.co/verticalrectangle/pop-maker-studio-models) (`face/`) |
+| **Original models** | InsightFace SCRFD-10G face detector + 2d106det 106-point landmarks |
+| **License** | InsightFace models — non-commercial research (check upstream) |
+| **When used** | Camera-brick face filters (Pretty, Doggy, …) — optional; filters hide when absent |
+
+The detector runs sparse (re-detect on loss or every ~2 s), the landmark net dense at camera rate, on a worker thread. The 2d106 contour ordering is a zig-zag (chin = point 0, jawlines 9–16 / 25–32) — see `src/face_track.h`. Sprite PNGs are pre-rendered art for the Doggy overlay.
+
+---
+
 ## Summary
 
 | Model | Size | Auto-download | Required for |
@@ -116,3 +131,4 @@ RVC `.pth` models are loaded and exported to ONNX entirely in C++ (zip+pickle pa
 | HuBERT | ~190 MB | **No — manual** | Voice conversion |
 | Piper voices | ~30–60 MB each | Yes (on first use) | TTS |
 | RVC voice models | Varies | Via HF browser | Voice conversion |
+| SCRFD + 2d106det + sprites | ~22 MB | No — ships in `models/face/` | Face filters (optional) |

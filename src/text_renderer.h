@@ -17,6 +17,8 @@ struct TextRenderCtx {
     float       ty;         // top-y of first line (already animated)
     float       line_h;
     float       t;          // playhead / render time
+    float       rotation;   // clip rotation in degrees (rotates the whole block)
+    float       canvas_w = 0.f;  // canvas width px (per-element slide distance)
     // Non-null when clip->karaoke is active
     const std::vector<const WordEntry*>* clip_words;
 };

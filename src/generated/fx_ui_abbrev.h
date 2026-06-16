@@ -101,3 +101,5 @@
         case FXType::DnaHelix: return "DNA";
         case FXType::DoubleExposure: return "DEXP";
         case FXType::KenBurns: return "KB";
+        case FXType::SkinSmooth: return "SKIN";
+        case FXType::GlowUp: return "GLOW";

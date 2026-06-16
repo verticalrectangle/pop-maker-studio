@@ -1,6 +1,8 @@
 #include "studio_types.h"
 #include "studio_shared.h"
+#include "conform.h"
 #include "panel_clip.h"
+#include "panel_fx.h"
 #include "pipeline.h"
 #include "app.h"
 #include "audio.h"
@@ -18,7 +20,14 @@
 #include "bg_remove.h"
 #include "body_fx.h"
 #include "noise_reduce.h"
+#include "generated/fx_clip_set_dispatch.h"  // fx_clip_set_param for beauty preset chips
+#include "face_track.h"
+#include "face_filters.h"
+#include "face_cache.h"
 #include "../recorder.h"
+#include "../video_recorder.h"
+#include "../av_measure.h"
+#include "../video.h"
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <filesystem>
@@ -374,50 +383,50 @@ static void section_position(AppState& state, Clip& clip, float w) {
     ImGui::PushStyleColor(ImGuiCol_SliderGrab, Col::fg);
     ImGui::PushStyleColor(ImGuiCol_FrameBg,    Col::bg_soft);
 
-    // Vertical preset buttons + custom Y slider
-    struct PosBtn { int v; const char* label; };
-    PosBtn pbtns[] = {{0,"Bottom"},{1,"Center"},{2,"Top"}};
+    // Vertical preset buttons + custom Y slider. Clicking a preset also syncs
+    // the Y slider to the slot it represents, so the control always reflects the
+    // text's position (Center maps exactly to 0.5; Bottom/Top use the slot's
+    // nominal centre within the SAFE_TOP/SAFE_BOT margins). A preset is a static
+    // choice, so any sub_pos_y keyframes are cleared.
+    struct PosBtn { int v; const char* label; float y; };
+    PosBtn pbtns[] = {{0,"Bottom",0.85f},{1,"Center",0.5f},{2,"Top",0.12f}};
     for (auto& pb : pbtns) {
         if (ui_btn(pb.label, clip.sub_pos == pb.v, true)) {
-            clip.sub_pos = pb.v; history_push(state, "Position");
+            clip.sub_pos   = pb.v;
+            clip.sub_pos_y = pb.y;
+            clip.ktracks.erase("sub_pos_y");
+            history_push(state, "Position");
         }
         ImGui::SameLine(0.f, 4.f);
     }
     ImGui::NewLine();
     ImGui::Dummy({0.f, 4.f});
-    ImGui::PushStyleColor(ImGuiCol_Text, Col::muted); ImGui::TextUnformatted("Y"); ImGui::PopStyleColor();
-    ImGui::SetNextItemWidth(bar_w);
-    if (ImGui::SliderFloat("##sub_y", &clip.sub_pos_y, 0.f, 1.f, "%.2f")) {
+    // Subtitle transform is keyframable — diamond control on each (the props are
+    // in kClipKfFields and the preview + export text renderers read them via
+    // eval_prop). Editing Y also flips to custom-position mode.
+    int sti = state.selected_track, sci = state.selected_clip;
+    if (::kf_slider(state, clip, sti, sci, bar_w, "sub_pos_y", "Y",
+                    &clip.sub_pos_y, 0.f, 1.f, "%.2f"))
         clip.sub_pos = 3;
-    }
-    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Position Y");
 
     ImGui::Dummy({0.f, 4.f});
-    ImGui::PushStyleColor(ImGuiCol_Text, Col::muted); ImGui::TextUnformatted("X"); ImGui::PopStyleColor();
-    ImGui::SetNextItemWidth(bar_w);
-    if (ImGui::SliderFloat("##sub_x", &clip.sub_pos_x, 0.f, 1.f, "%.2f"))
-        if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Position X");
-    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Position X");
+    ::kf_slider(state, clip, sti, sci, bar_w, "sub_pos_x", "X",
+                &clip.sub_pos_x, 0.f, 1.f, "%.2f");
 
     ImGui::Dummy({0.f, 4.f});
-    ImGui::PushStyleColor(ImGuiCol_Text, Col::muted); ImGui::TextUnformatted("Wrap width"); ImGui::PopStyleColor();
-    ImGui::SetNextItemWidth(bar_w);
-    if (ImGui::SliderFloat("##sub_wrap", &clip.sub_wrap_w, 0.1f, 1.f, "%.2f"))
-        if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Wrap width");
-    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Wrap width");
+    ::kf_slider(state, clip, sti, sci, bar_w, "sub_wrap_w", "Wrap width",
+                &clip.sub_wrap_w, 0.1f, 1.f, "%.2f");
 
     ImGui::Dummy({0.f, 4.f});
-    ImGui::PushStyleColor(ImGuiCol_Text, Col::muted); ImGui::TextUnformatted("Font size"); ImGui::PopStyleColor();
-    ImGui::SetNextItemWidth(bar_w - 52.f);
-    // stored as fraction of canvas height; expose as 1–50 percent
-    float fs_pct = clip.font_size > 0.f ? clip.font_size * 100.f : 0.f;
-    if (ImGui::SliderFloat("##font_sz", &fs_pct, 1.f, 50.f, "%.1f%%")) {
-        clip.font_size = fs_pct / 100.f;
-    }
-    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Font size");
+    // Font size is stored as a fraction of canvas height; expose as 1–50 percent
+    // (disp=100). The Reset button clears it back to auto (0).
+    ::kf_slider(state, clip, sti, sci, bar_w - 52.f, "font_size", "Font size",
+                &clip.font_size, 1.f, 50.f, "%.1f%%", 100.f);
     ImGui::SameLine(0.f, 4.f);
     if (ui_btn("Reset##fs", clip.font_size == 0.f, true)) {
-        clip.font_size = 0.f; history_push(state, "Font size");
+        clip.font_size = 0.f;
+        clip.ktracks.erase("font_size");
+        history_push(state, "Font size");
     }
 
     ImGui::PopStyleColor(2);
@@ -430,13 +439,19 @@ static void section_position(AppState& state, Clip& clip, float w) {
 
 #include "palette_presets.h"
 
-void palette_widget(const char* id, float** slots, int n_slots, bool has_alpha) {
+void palette_widget(const char* id, float** slots, int n_slots, bool has_alpha,
+                    int* ext_focus) {
     struct WidgetState {
         char search[48] = {};
         int  tag        = 0;   // index into g_palette_tags; 0 = All
+        int  focus      = 0;   // which slot a single-swatch click targets
     };
     static std::unordered_map<std::string, WidgetState> s_ws;
     WidgetState& ws = s_ws[id];
+    // The caller can own the focus (and show its own slot chooser); otherwise
+    // we keep it internally and draw the "Apply to" chips below.
+    int* focusp = ext_focus ? ext_focus : &ws.focus;
+    if (*focusp >= n_slots || *focusp < 0) *focusp = 0;
 
     ImGui::PushID(id);
     ImGui::Dummy({0.f, 6.f});
@@ -478,6 +493,36 @@ void palette_widget(const char* id, float** slots, int n_slots, bool has_alpha) 
     }
     ImGui::PopStyleVar(2);
     ImGui::Dummy({0.f, 5.f});
+
+    // ── Per-slot focus (multi-slot targets only) ─────────────────────────────
+    // A single-swatch click lands in the focused slot; clicking a card's name
+    // area still applies the whole palette across every slot. One slot needs no
+    // chooser. Each chip shows the slot's current colour; the focused one is
+    // ringed gold.
+    if (n_slots > 1 && !ext_focus) {
+        ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+        ImGui::TextUnformatted("Apply to");
+        ImGui::PopStyleColor();
+        ImGui::SameLine(0.f, 8.f);
+        ImDrawList* fdl = ImGui::GetWindowDrawList();
+        const float chip = 18.f;
+        for (int s = 0; s < n_slots; ++s) {
+            ImGui::PushID(s);
+            ImVec2 cp = ImGui::GetCursorScreenPos();
+            ImGui::InvisibleButton("##slotfocus", {chip, chip});
+            if (ImGui::IsItemClicked()) *focusp = s;
+            ImU32 col = IM_COL32((int)(slots[s][0]*255), (int)(slots[s][1]*255),
+                                 (int)(slots[s][2]*255), 255);
+            fdl->AddRectFilled(cp, {cp.x+chip, cp.y+chip}, col, 3.f);
+            bool foc = (*focusp == s);
+            fdl->AddRect(cp, {cp.x+chip, cp.y+chip},
+                         foc ? IM_COL32(255,200,60,255) : IM_COL32(70,70,90,200),
+                         3.f, 0, foc ? 2.f : 1.f);
+            ImGui::PopID();
+            if (s < n_slots - 1) ImGui::SameLine(0.f, 4.f);
+        }
+        ImGui::Dummy({0.f, 5.f});
+    }
 
     // ── Scrollable palette grid ──────────────────────────────────────────────
     const float CARD_H   = 30.f;
@@ -522,8 +567,13 @@ void palette_widget(const char* id, float** slots, int n_slots, bool has_alpha) 
     float scroll_h = fminf((float)n_rows * (CARD_H + GAP) + GAP, 210.f);
 
     ImGui::PushStyleColor(ImGuiCol_ChildBg, IM_COL32(14, 14, 22, 255));
-    ImGui::BeginChild("##palscroll", {avail, scroll_h}, ImGuiChildFlags_None,
-                      ImGuiWindowFlags_NoScrollbar);
+    // Contained scroll box: the palette grid scrolls INSIDE this fixed-height
+    // child instead of pushing the rest of the panel down. Draw to the child's
+    // own draw list (re-captured here) so cards clip to the box — the outer `dl`
+    // is the parent window's and would bleed the cards past the child.
+    ImGui::BeginChild("##palscroll", {avail, scroll_h}, ImGuiChildFlags_Borders,
+                      ImGuiWindowFlags_None);
+    dl = ImGui::GetWindowDrawList();
 
     float base_y = ImGui::GetCursorPosY();
 
@@ -548,6 +598,18 @@ void palette_widget(const char* id, float** slots, int n_slots, bool has_alpha) 
         // Color strip
         const auto& pe = g_palettes[pi];
         float sw = COL_W / pe.n;
+
+        // Which swatch is the cursor over? (the top STRIP_H band is the swatches;
+        // the name row below it is the whole-palette apply target).
+        int hov_sw = -1;
+        if (hov) {
+            ImVec2 m = ImGui::GetMousePos();
+            if (m.y <= cp.y + 2.f + STRIP_H) {
+                hov_sw = (int)((m.x - cp.x) / sw);
+                hov_sw = hov_sw < 0 ? 0 : (hov_sw >= pe.n ? pe.n - 1 : hov_sw);
+            }
+        }
+
         for (int ci = 0; ci < pe.n; ++ci) {
             ImVec2 s0 = {cp.x + ci*sw, cp.y + 2.f};
             ImVec2 s1 = {cp.x + (ci+1)*sw, cp.y + 2.f + STRIP_H};
@@ -556,6 +618,8 @@ void palette_widget(const char* id, float** slots, int n_slots, bool has_alpha) 
             if (ci == pe.n - 1) rf = ImDrawFlags_RoundCornersTopRight | ImDrawFlags_RoundCornersBottomRight;
             if (pe.n == 1)      rf = ImDrawFlags_RoundCornersAll;
             dl->AddRectFilled(s0, s1, IM_COL32(pe.c[ci][0], pe.c[ci][1], pe.c[ci][2], 255), 4.f, rf);
+            if (ci == hov_sw)  // highlight the swatch under the cursor
+                dl->AddRect(s0, s1, IM_COL32(255,255,255,235), 4.f, rf, 2.f);
         }
 
         // Name
@@ -568,18 +632,34 @@ void palette_widget(const char* id, float** slots, int n_slots, bool has_alpha) 
         dl->AddRect(cp, {cp.x+COL_W, cp.y+CARD_H},
             hov ? IM_COL32(140,120,255,200) : IM_COL32(45,42,65,180), 5.f, 0, 1.f);
 
-        // Click → apply to all slots
+        // Click: a single swatch → the focused slot (then auto-advance so you can
+        // fill a multi-colour target swatch-by-swatch); the name row → the whole
+        // palette across every slot.
         if (ImGui::IsItemClicked()) {
-            for (int si = 0; si < n_slots; ++si) {
-                int ci = si < pe.n ? si : pe.n - 1;
-                slots[si][0] = pe.c[ci][0] / 255.f;
-                slots[si][1] = pe.c[ci][1] / 255.f;
-                slots[si][2] = pe.c[ci][2] / 255.f;
-                (void)has_alpha; // alpha always preserved — we never touch [3]
+            (void)has_alpha;  // alpha always preserved — we never touch [3]
+            if (hov_sw >= 0) {
+                slots[*focusp][0] = pe.c[hov_sw][0] / 255.f;
+                slots[*focusp][1] = pe.c[hov_sw][1] / 255.f;
+                slots[*focusp][2] = pe.c[hov_sw][2] / 255.f;
+                if (n_slots > 1) *focusp = (*focusp + 1) % n_slots;
+            } else {
+                for (int si = 0; si < n_slots; ++si) {
+                    int ci = si < pe.n ? si : pe.n - 1;
+                    slots[si][0] = pe.c[ci][0] / 255.f;
+                    slots[si][1] = pe.c[ci][1] / 255.f;
+                    slots[si][2] = pe.c[ci][2] / 255.f;
+                }
             }
         }
 
-        if (hov) ImGui::SetTooltip("%s  ·  %s", pe.name, pe.tag);
+        if (hov) {
+            if (hov_sw >= 0 && n_slots > 1)
+                ImGui::SetTooltip("%s  \xc2\xb7  swatch \xe2\x86\x92 slot %d", pe.name, *focusp + 1);
+            else if (hov_sw >= 0)
+                ImGui::SetTooltip("%s  \xc2\xb7  use this colour", pe.name);
+            else
+                ImGui::SetTooltip("%s  \xc2\xb7  apply whole palette", pe.name);
+        }
         ImGui::PopID();
     }
 
@@ -752,6 +832,10 @@ void panel_clip(AppState& state, float w) {
 
     // ── Keyframe slider helper (shared by transform + audio sections) ─────────
     float t_local = state.playhead - clip.start;
+    // "On this keyframe" means the playhead sits on the key's exact frame. Both
+    // are frame-snapped, so the match window is half a frame — a fixed 0.05 s
+    // window used to span ~1.5 frames (3 at 60 fps) and lit up one frame early.
+    float kf_tol  = 0.5f / fmaxf(1.f, tl_fps(state));
     int   sel_ti  = state.selected_track, sel_ci = state.selected_clip;
 
     // Keyframable slider: ◆ toggle + label row, full-width slider beneath
@@ -760,77 +844,13 @@ void panel_clip(AppState& state, float w) {
     // vmin/vmax/fmt are in display units, the field and keys store raw.
     // prop2 mirrors key add/remove/update onto a second track — used by the
     // unified Size slider which drives scale_x + scale_y together.
+    // Thin forwarder to the shared kf_slider (studio_shared) so the brick panels
+    // (panel_fx.cpp) can reuse the exact same diamond + nav + auto-key control.
     auto kf_slider = [&](const char* prop, const char* label,
                           float* val_ptr, float vmin, float vmax, const char* fmt,
-                          float disp = 1.f, const char* prop2 = nullptr) -> bool
-    {
-        bool changed = false;
-        auto  it_pt  = clip.ktracks.find(prop);
-        PropTrack* pt = (it_pt != clip.ktracks.end()) ? &it_pt->second : nullptr;
-        bool has_keys = pt && !pt->empty();
-        bool has_kf   = pt && pt->find_nearest(t_local, 0.05f) >= 0;
-
-        ImGui::PushStyleColor(ImGuiCol_Button,
-            has_kf ? IM_COL32(255,200,60,200)
-                   : has_keys ? IM_COL32(140,120,60,180) : IM_COL32(80,80,80,180));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(255,220,80,220));
-        char kbid[64]; snprintf(kbid, sizeof(kbid), "\xe2\x97\x86##kf_%s", prop);
-        if (ImGui::Button(kbid, {20.f, 0.f})) {
-            if (has_kf) {
-                pt->remove_at(t_local, 0.05f);
-                if (pt->empty()) clip.ktracks.erase(prop);
-                if (prop2) {
-                    auto it2 = clip.ktracks.find(prop2);
-                    if (it2 != clip.ktracks.end()) {
-                        it2->second.remove_at(t_local, 0.05f);
-                        if (it2->second.empty()) clip.ktracks.erase(it2);
-                    }
-                }
-                history_push(state, std::string("Remove KF ") + prop);
-            } else {
-                clip.ktracks[prop].set(t_local, clip.eval_prop(prop, state.playhead));
-                if (prop2)
-                    clip.ktracks[prop2].set(t_local, clip.eval_prop(prop2, state.playhead));
-                state.kf_sel_track = sel_ti; state.kf_sel_clip = sel_ci;
-                state.kf_sel_prop  = prop;
-                state.kf_sel_idx   = clip.ktracks[prop].find_nearest(t_local, 0.1f);
-                history_push(state, std::string("Add KF ") + prop);
-            }
-        }
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip(has_kf ? "Remove keyframe at playhead"
-                                     : "Add keyframe at playhead");
-        ImGui::PopStyleColor(2);
-        ImGui::SameLine(0.f, 6.f);
-        ImGui::PushStyleColor(ImGuiCol_Text, Col::muted); ImGui::TextUnformatted(label); ImGui::PopStyleColor();
-        ImGui::PushStyleColor(ImGuiCol_SliderGrab, has_keys ? IM_COL32(255,200,60,255) : to_u32(Col::fg));
-        ImGui::PushStyleColor(ImGuiCol_FrameBg, Col::bg_soft);
-        ImGui::SetNextItemWidth(w - 16.f);
-        char sid[64]; snprintf(sid, sizeof(sid), "##kfs_%s", prop);
-        // When keys exist, the slider shows/edits the animated value at the
-        // playhead — editing it retargets the key under the playhead (if any)
-        // instead of the static field, which the renderer would ignore.
-        float dv = (has_keys ? clip.eval_prop(prop, state.playhead) : *val_ptr) * disp;
-        if (ImGui::SliderFloat(sid, &dv, vmin, vmax, fmt)) {
-            changed = true;
-            float raw = dv / disp;
-            *val_ptr = raw;
-            if (has_keys) {
-                // Auto-key: retarget the key under the playhead, or drop a new
-                // one there — otherwise the edit would go to the static field,
-                // which the renderer ignores once keys exist.
-                int ki = pt->find_nearest(t_local, 0.05f);
-                if (ki >= 0) pt->keys[ki].value = raw; else pt->set(t_local, raw);
-                if (prop2) {
-                    PropTrack& p2 = clip.ktracks[prop2];
-                    int k2 = p2.find_nearest(t_local, 0.05f);
-                    if (k2 >= 0) p2.keys[k2].value = raw; else p2.set(t_local, raw);
-                }
-            }
-        }
-        ImGui::PopStyleColor(2);
-        if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, std::string("Edit ") + prop);
-        return changed;
+                          float disp = 1.f, const char* prop2 = nullptr) -> bool {
+        return ::kf_slider(state, clip, sel_ti, sel_ci, w, prop, label,
+                           val_ptr, vmin, vmax, fmt, disp, prop2);
     };
 
     // Interp bar for whichever keyframe is selected
@@ -1405,6 +1425,46 @@ void panel_clip(AppState& state, float w) {
             ImGui::NewLine();
         }
 
+        // ── Frame rate (conform) ─────────────────────────────────────────────
+        // Only when the clip's native rate differs from the project — it's
+        // transcoded to the project fps so preview == export and judder smooths.
+        if (clip_needs_conform(clip, state.fps)) {
+            ImGui::Dummy({0.f, 10.f}); ui_separator(); ImGui::Dummy({0.f, 6.f});
+            ui_label("Frame Rate");
+            ImGui::Dummy({0.f, 4.f});
+            ConformStatus cs = conform_status(clip.text, state.fps, clip.conform_smooth, clip.clip_loop);
+            const char* st = cs.state == ConformState::Ready   ? "conformed"
+                           : cs.state == ConformState::Working ? "conforming\xe2\x80\xa6"
+                           : cs.state == ConformState::Queued  ? "queued\xe2\x80\xa6"
+                                                               : "pending";
+            char line[96];
+            snprintf(line, sizeof(line), "%.0f \xe2\x86\x92 %d fps  \xc2\xb7  %s",
+                     clip.src_fps, state.fps, st);
+            ImGui::PushStyleColor(ImGuiCol_Text, cs.state == ConformState::Ready
+                                  ? IM_COL32(120,210,140,235) : IM_COL32(235,200,90,235));
+            ImGui::TextUnformatted(line);
+            ImGui::PopStyleColor();
+            ImGui::Dummy({0.f, 6.f});
+            // Toggling a flag selects a different conformed file — conform_tick
+            // re-conforms + swaps automatically; reset the readiness edge so the
+            // preview reopens once the new variant lands.
+            bool sm = clip.conform_smooth;
+            if (ImGui::Checkbox("Smooth motion (blend frames)##cf_sm", &sm)) {
+                clip.conform_smooth = sm; clip.conform_ready_cache = false;
+                history_push(state, "Conform: smooth");
+            }
+            bool lp = clip.clip_loop;
+            if (ImGui::Checkbox("Seamless loop##cf_lp", &lp)) {
+                clip.clip_loop = lp; clip.conform_ready_cache = false;
+                history_push(state, "Conform: loop");
+            }
+            ImGui::Dummy({0.f, 2.f});
+            ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+            ImGui::TextWrapped("Transcoded to the project rate so preview and export match. "
+                               "Smooth blends frames; off keeps the original cadence.");
+            ImGui::PopStyleColor();
+        }
+
         // ── Sound ────────────────────────────────────────────────────────────
         ImGui::Dummy({0.f, 10.f}); ui_separator(); ImGui::Dummy({0.f, 6.f});
         ui_label("Sound");
@@ -1420,19 +1480,8 @@ void panel_clip(AppState& state, float w) {
         // ── AI Tools ─────────────────────────────────────────────────────────
         bool busy     = transcribe_running();
         bool has_path = !clip.text.empty();
-        bool ml_avail = state.models_ready;
 
-        // Shared install gate — shown once above all AI tools if needed
-        if (!ml_avail) {
-            ImGui::Dummy({0.f, 10.f}); ui_separator(); ImGui::Dummy({0.f, 6.f});
-            ui_label("AI Tools");
-            ImGui::Dummy({0.f, 6.f});
-            ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
-            ImGui::TextWrapped("AI models not set up yet.");
-            ImGui::PopStyleColor();
-            ImGui::Dummy({0.f, 4.f});
-            if (ui_btn("Set Up AI Features", false, true)) state.show_model_dl_modal = true;
-        } else {
+        {
             // Shared progress bar helper — renders under whichever tool is running
             auto ai_progress = [&]() {
                 ImVec2 bp = ImGui::GetCursorScreenPos();
@@ -1616,12 +1665,14 @@ void panel_clip(AppState& state, float w) {
                 ImGui::TextUnformatted("Ready");
                 ImGui::PopStyleColor();
                 ImGui::Dummy({0.f, 6.f});
-                ImGui::PushStyleColor(ImGuiCol_Text, Col::muted); ImGui::TextUnformatted("Edge softness"); ImGui::PopStyleColor();
+                ImGui::PushStyleColor(ImGuiCol_Text, Col::muted); ImGui::TextUnformatted("Matte  (− keep more · + trim tighter)"); ImGui::PopStyleColor();
                 ImGui::PushStyleColor(ImGuiCol_SliderGrab, to_u32(Col::fg));
                 ImGui::PushStyleColor(ImGuiCol_FrameBg,    Col::bg_soft);
                 ImGui::SetNextItemWidth(bar_w);
-                if (ImGui::SliderFloat("##bgrsoft", &clip.bg_remove_softness, 0.f, 1.f, "%.2f"))
-                    history_push(state, "BG Softness");
+                if (ImGui::SliderFloat("##bgrsoft", &clip.bg_remove_softness, -1.f, 1.f, "%.2f"))
+                    history_push(state, "BG Matte");
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Drag left if the cutout eats into the subject; right to trim the edge tighter.");
                 ImGui::PopStyleColor(2);
                 ImGui::Dummy({0.f, 6.f});
                 bool box_tog = clip.bg_remove_box_on;
@@ -1660,6 +1711,13 @@ void panel_clip(AppState& state, float w) {
                 ImGui::Dummy({0.f, 4.f});
                 if (ui_btn("Re-run", false, true))
                     bg_remove_start(state, state.selected_track, state.selected_clip);
+                ImGui::SameLine();
+                if (ui_btn("Turn off", false, true)) {
+                    clip.bg_remove_on     = false;
+                    clip.bg_remove_status = BgRemoveStatus::Idle;
+                    clip.bg_remove_mask_dir.clear();
+                    history_push(state, "Turn off background removal");
+                }
 
             } else if (status == BgRemoveStatus::Error) {
                 ImVec2 bp = ImGui::GetCursorScreenPos();
@@ -1865,18 +1923,8 @@ void panel_clip(AppState& state, float w) {
         // ── AI Tools ─────────────────────────────────────────────────────────
         bool busy     = transcribe_running();
         bool has_path = !clip.text.empty();
-        bool ml_avail = state.models_ready;
 
-        if (!ml_avail) {
-            ImGui::Dummy({0.f, 10.f}); ui_separator(); ImGui::Dummy({0.f, 6.f});
-            ui_label("AI Tools");
-            ImGui::Dummy({0.f, 6.f});
-            ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
-            ImGui::TextWrapped("AI models not set up yet.");
-            ImGui::PopStyleColor();
-            ImGui::Dummy({0.f, 4.f});
-            if (ui_btn("Set Up AI Features", false, true)) state.show_model_dl_modal = true;
-        } else {
+        {
             auto ai_progress = [&]() {
                 ImVec2 bp = ImGui::GetCursorScreenPos();
                 ImDrawList* bdl = ImGui::GetWindowDrawList();
@@ -2118,11 +2166,10 @@ void panel_clip(AppState& state, float w) {
 
             ImGui::Dummy({0.f, 4.f});
             bool mon = audio_monitor_get();
-            if (ImGui::Checkbox("Monitor input", &mon)) {
+            if (ImGui::Checkbox("Hear yourself", &mon)) {
                 if (mon) {
-                    // Idle monitoring runs the capture device on its own so
-                    // you can hear the mic before arming; audio_monitor_set
-                    // keeps the output device alive while paused.
+                    // Monitoring swaps in the low-latency duplex device so
+                    // you hear yourself near-instantly, before arming.
                     if (audio_capture_start()) audio_monitor_set(true);
                 } else {
                     audio_monitor_set(false);
@@ -2131,10 +2178,73 @@ void panel_clip(AppState& state, float w) {
             }
             if (ImGui::IsItemHovered()) {
                 ImGui::BeginTooltip();
-                ImGui::TextUnformatted("Hear the mic in the mix. Round-trip latency is one\n"
-                                       "input + one output period \xe2\x80\x94 fine for voice-over,\n"
-                                       "noticeable for tight singing.");
+                ImGui::TextUnformatted("Your mic plays in your headphones while you\n"
+                                       "record \xe2\x80\x94 tight enough to sing against.");
                 ImGui::EndTooltip();
+            }
+
+            ImGui::SameLine(0.f, 12.f);
+            bool gate = audio_gate_get();
+            if (ImGui::Checkbox("Reduce mic noise", &gate)) audio_gate_set(gate);
+            if (ImGui::IsItemHovered()) {
+                ImGui::BeginTooltip();
+                ImGui::TextUnformatted("Mutes the mic between phrases so hiss and room\n"
+                                       "noise don't pile up.");
+                ImGui::EndTooltip();
+            }
+            if (gate) {
+                ImGui::Dummy({0.f, 2.f});
+                ImGui::Indent(22.f);
+                bool bake = audio_gate_bake_get();
+                if (ImGui::Checkbox("Apply to recordings", &bake)) audio_gate_bake_set(bake);
+                if (ImGui::IsItemHovered()) {
+                    ImGui::BeginTooltip();
+                    ImGui::TextUnformatted("Off: recordings keep the raw mic and only what\n"
+                                           "you hear is cleaned. On: the cleanup is saved\n"
+                                           "into the take itself.");
+                    ImGui::EndTooltip();
+                }
+                ImGui::Unindent(22.f);
+            }
+
+            // "Hear effects": the brick's audio FX chain (autotune, reverb…)
+            // applied to what YOU hear while singing. Takes stay dry.
+            {
+                auto segs = collect_audio_fx_segments(state, state.selected_track, clip);
+                bool has_fx = !segs.empty();
+                if (!has_fx) ImGui::BeginDisabled();
+                bool hfx = audio_monitor_fx_get();
+                if (ImGui::Checkbox("Hear effects", &hfx)) audio_monitor_fx_set(hfx);
+                if (!has_fx) ImGui::EndDisabled();
+                if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+                    ImGui::BeginTooltip();
+                    if (has_fx)
+                        ImGui::TextUnformatted("Sing through this brick's audio effects\n"
+                                               "(autotune, reverb\xe2\x80\xa6) live in your headphones.\n"
+                                               "Recordings stay dry \xe2\x80\x94 playback applies the\n"
+                                               "same effects.");
+                    else
+                        ImGui::TextUnformatted("Drop an audio effect on this brick first \xe2\x80\x94\n"
+                                               "autotune, reverb, delay\xe2\x80\xa6");
+                    ImGui::EndTooltip();
+                }
+            }
+
+            // Perf-mode health line: actual device latency + stalls. Only
+            // shown while the duplex device runs — the numbers are honest,
+            // straight from the device, not the config request.
+            if (audio_perf_mode()) {
+                float rt_ms = (audio_latency() + audio_capture_latency()) * 1000.f;
+                uint32_t xr = audio_perf_xruns();
+                ImGui::Dummy({0.f, 2.f});
+                if (xr == 0) {
+                    ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+                    ImGui::Text("mic delay %.0f ms", rt_ms);
+                } else {
+                    ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(242, 140, 64, 255));
+                    ImGui::Text("mic delay %.0f ms \xc2\xb7 %u dropouts", rt_ms, xr);
+                }
+                ImGui::PopStyleColor();
             }
         }
 
@@ -2209,6 +2319,744 @@ void panel_clip(AppState& state, float w) {
                 history_push(state, "Place take on track");
                 return;
             }
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // CAMERA BRICK — cycle video recording: transport loops the brick, every
+    // pass lands a video take; the selected take plays on the brick like a
+    // video clip (mirrored into clip.text).
+    // ═══════════════════════════════════════════════════════════════════════════
+    else if (clip.clip_type == ClipType::VideoRecord) {
+        float bar_w = w - 16.f;
+        bool rec_here = vrecorder_is_target(state.selected_track, state.selected_clip);
+
+        ImGui::Dummy({0.f, 4.f});
+        ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+        if (clip.rec_photo)
+            ImGui::TextWrapped("Snap a still from the webcam. Turn on the camera "
+                               "preview below, frame the shot, then Capture \xe2\x80\x94 "
+                               "each photo lands as a take and the selected one "
+                               "shows on the brick.");
+        else
+            ImGui::TextWrapped("Loops %s \xe2\x80\x93 %s while recording. Every pass "
+                               "over the loop lands a video take below; the newest "
+                               "take plays back on the brick.",
+                               fmt_time(clip.start).c_str(), fmt_time(clip.end).c_str());
+        ImGui::PopStyleColor();
+        ImGui::Dummy({0.f, 6.f});
+
+        if (clip.rec_photo) {
+            // Photo mode: one button snaps the current live frame as a still.
+            ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.18f, 0.42f, 0.72f, 1.f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.24f, 0.52f, 0.85f, 1.f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive,  ImVec4(0.16f, 0.36f, 0.64f, 1.f));
+            const char* cap_lbl = vrecorder_monitor_get()
+                ? "\xe2\x97\x8f Capture Photo"
+                : "\xe2\x97\x8f Capture Photo  (turns on camera)";
+            if (ImGui::Button(cap_lbl, {bar_w, 34.f}))
+                vrecorder_capture_photo(state, state.selected_track, state.selected_clip);
+            ImGui::PopStyleColor(3);
+            if (vrecorder_using_test_pattern()) {
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.75f, 0.3f, 1.f));
+                ImGui::TextWrapped("No camera found \xe2\x80\x94 capturing the test pattern.");
+                ImGui::PopStyleColor();
+            }
+            ImGui::Dummy({0.f, 6.f});
+        } else if (rec_here) {
+            float t = (float)ImGui::GetTime();
+            float pulse = 0.65f + 0.35f * sinf(t * 6.f);
+            ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.85f*pulse, 0.30f, 0.08f, 1.f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.95f, 0.38f, 0.12f, 1.f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive,  ImVec4(0.75f, 0.28f, 0.08f, 1.f));
+            char stop_lbl[64];
+            if (vrecorder_warming())
+                snprintf(stop_lbl, sizeof(stop_lbl), "Starting camera\xe2\x80\xa6");
+            else
+                snprintf(stop_lbl, sizeof(stop_lbl), "\xe2\x96\xa0 Stop  (%d take%s)",
+                         vrecorder_take_count(), vrecorder_take_count() == 1 ? "" : "s");
+            if (ImGui::Button(stop_lbl, {bar_w, 34.f}))
+                vrecorder_stop(state);
+            ImGui::PopStyleColor(3);
+            if (vrecorder_using_test_pattern()) {
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.75f, 0.3f, 1.f));
+                ImGui::TextWrapped("No camera found \xe2\x80\x94 recording a test pattern.");
+                ImGui::PopStyleColor();
+            }
+            ImGui::Dummy({0.f, 6.f});
+        } else {
+            bool busy = vrecorder_active();   // recording a different brick
+            if (busy) ImGui::BeginDisabled();
+            ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.70f, 0.28f, 0.08f, 1.f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.85f, 0.34f, 0.10f, 1.f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive,  ImVec4(0.60f, 0.24f, 0.07f, 1.f));
+            if (ImGui::Button("\xe2\x97\x8f Record video", {bar_w, 34.f}))
+                vrecorder_start(state, state.selected_track, state.selected_clip);
+            ImGui::PopStyleColor(3);
+            if (busy) ImGui::EndDisabled();
+            ImGui::Dummy({0.f, 6.f});
+        }
+        if (!vrecorder_error().empty()) {
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.3f, 0.3f, 1.f));
+            ImGui::TextWrapped("%s", vrecorder_error().c_str());
+            ImGui::PopStyleColor();
+            ImGui::Dummy({0.f, 4.f});
+        }
+
+        // ── Tabs: Camera setup / Filters / Takes ──────────────────────────────
+        // Lightweight button-row selector (not ImGui::BeginTabBar) so the early
+        // returns in the Beauty/Takes sections can't unbalance an open tab item.
+        static int s_rec_tab = 0;  // 0 = Camera, 1 = Filters, 2 = Takes
+        ImGui::Dummy({0.f, 10.f}); ui_separator(); ImGui::Dummy({0.f, 8.f});
+        {
+            const char* rt_names[3] = { "Camera", "Filters", "Takes" };
+            for (int rt = 0; rt < 3; ++rt) {
+                if (rt) ImGui::SameLine(0.f, 6.f);
+                bool on = (s_rec_tab == rt);
+                if (on) ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(235, 120, 60, 255));
+                if (ui_btn(rt_names[rt], on, true)) s_rec_tab = rt;
+                if (on) ImGui::PopStyleColor();
+            }
+        }
+        ImGui::Dummy({0.f, 8.f});
+
+        // ── Camera tab: device + layout + beauty ──────────────────────────────
+        if (s_rec_tab == 0) {
+        ui_label("Camera");
+        ImGui::Dummy({0.f, 6.f});
+        {
+            static std::vector<VCamDevice> s_cams;
+            static bool s_cams_init = false;
+            if (!s_cams_init) { s_cams = vrecorder_devices(); s_cams_init = true; }
+            bool busy_cam = vrecorder_active() || vrecorder_monitor_get();
+            int  cam_sel  = vrecorder_device_selected();
+            const char* cur = s_cams.empty() ? "No camera (test pattern)"
+                : (cam_sel >= 0 && cam_sel < (int)s_cams.size())
+                  ? s_cams[(size_t)cam_sel].name.c_str()
+                  : s_cams[0].name.c_str();
+            if (busy_cam) ImGui::BeginDisabled();
+            ImGui::PushStyleColor(ImGuiCol_FrameBg, Col::bg_soft);
+            ImGui::SetNextItemWidth(bar_w);
+            if (ImGui::BeginCombo("##vrec_cam", cur)) {
+                if (ImGui::IsWindowAppearing()) s_cams = vrecorder_devices();
+                for (int di = 0; di < (int)s_cams.size(); ++di) {
+                    ImGui::PushID(di);
+                    char lbl2[128];
+                    snprintf(lbl2, sizeof(lbl2), "%s  (%s)",
+                             s_cams[(size_t)di].name.c_str(),
+                             s_cams[(size_t)di].path.c_str());
+                    if (ImGui::Selectable(lbl2, cam_sel == di))
+                        vrecorder_device_select(di);
+                    ImGui::PopID();
+                }
+                if (s_cams.empty()) {
+                    ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+                    ImGui::TextUnformatted("No V4L2 capture devices");
+                    ImGui::PopStyleColor();
+                }
+                ImGui::EndCombo();
+            }
+            ImGui::PopStyleColor();
+            if (busy_cam) ImGui::EndDisabled();
+
+            ImGui::Dummy({0.f, 4.f});
+            bool mon = vrecorder_monitor_get();
+            if (ImGui::Checkbox("Preview camera", &mon))
+                vrecorder_monitor_set(mon);
+            if (ImGui::IsItemHovered()) {
+                ImGui::BeginTooltip();
+                ImGui::TextUnformatted("Show the live camera on the canvas before\n"
+                                       "recording \xe2\x80\x94 frame yourself, check the light.");
+                ImGui::EndTooltip();
+            }
+
+            // Audio capture — record the mic with the webcam (video takes only).
+            // Mirrors the Audio Record brick's mic settings 1:1 (device picker,
+            // hear-yourself, noise gate, hear-effects) so both bricks behave the
+            // same — plus the video-specific A/V offset.
+            if (!clip.rec_photo) {
+                ImGui::Dummy({0.f, 6.f});
+                ImGui::Checkbox("Record mic", &clip.rec_audio);
+                if (ImGui::IsItemHovered()) {
+                    ImGui::BeginTooltip();
+                    ImGui::TextUnformatted("Capture the microphone with the webcam so each\n"
+                                           "take is a synced audio + video clip.");
+                    ImGui::EndTooltip();
+                }
+                if (clip.rec_audio) {
+                    // ── Mic device picker (shared with Audio Record) + camera-mic ─
+                    static std::vector<std::string> s_mic_devs;
+                    static bool s_mic_devs_init = false;
+                    if (!s_mic_devs_init) { s_mic_devs = audio_capture_devices(); s_mic_devs_init = true; }
+                    // Which capture device is the camera's own mic. Cached — the
+                    // lookup re-enumerates V4L2 + audio, so only recompute when the
+                    // camera selection changes.
+                    static int s_cam_mic = -1, s_cam_mic_for = -2;
+                    int cur_cam = vrecorder_device_selected();
+                    if (cur_cam != s_cam_mic_for) {
+                        s_cam_mic = vrecorder_camera_mic(cur_cam);
+                        s_cam_mic_for = cur_cam;
+                    }
+                    int cam_mic = s_cam_mic;
+                    bool busy = recorder_active();
+                    int  mic_sel = audio_capture_selected();
+                    const char* mcur = (mic_sel >= 0 && mic_sel < (int)s_mic_devs.size())
+                                       ? s_mic_devs[mic_sel].c_str() : "System default";
+                    ImGui::Dummy({0.f, 4.f});
+                    if (busy) ImGui::BeginDisabled();
+                    ImGui::PushStyleColor(ImGuiCol_FrameBg, Col::bg_soft);
+                    ImGui::SetNextItemWidth(bar_w);
+                    if (ImGui::BeginCombo("##vrec_mic", mcur)) {
+                        if (ImGui::IsWindowAppearing()) {
+                            s_mic_devs = audio_capture_devices();
+                            s_cam_mic = vrecorder_camera_mic(cur_cam); cam_mic = s_cam_mic;
+                        }
+                        if (ImGui::Selectable("System default", mic_sel < 0))
+                            audio_capture_select(-1);
+                        for (int di = 0; di < (int)s_mic_devs.size(); ++di) {
+                            ImGui::PushID(di);
+                            char lbl[176];
+                            if (di == cam_mic)
+                                snprintf(lbl, sizeof(lbl), "\xf0\x9f\x93\xb7 %s  (camera mic)",
+                                         s_mic_devs[(size_t)di].c_str());
+                            else
+                                snprintf(lbl, sizeof(lbl), "%s", s_mic_devs[(size_t)di].c_str());
+                            if (ImGui::Selectable(lbl, mic_sel == di))
+                                audio_capture_select(di);
+                            ImGui::PopID();
+                        }
+                        ImGui::EndCombo();
+                    }
+                    ImGui::PopStyleColor();
+                    if (busy) ImGui::EndDisabled();
+
+                    // Which device the synced take records from — and whether it's
+                    // the camera's own mic (consistent latency → tight sync) or a
+                    // separate one (the A/V offset may need a nudge).
+                    ImGui::Dummy({0.f, 2.f});
+                    if (cam_mic >= 0 && mic_sel == cam_mic) {
+                        ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(90, 200, 120, 255));
+                        ImGui::TextWrapped("\xe2\x9c\x93 Camera's own mic (%s) \xe2\x80\x94 tightest A/V sync.",
+                                           s_mic_devs[(size_t)cam_mic].c_str());
+                        ImGui::PopStyleColor();
+                    } else if (cam_mic >= 0) {
+                        ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(232, 184, 74, 255));
+                        ImGui::TextWrapped("Recording a separate mic. The camera's own mic (%s) is "
+                                           "available \xe2\x80\x94 it gives steadier A/V sync.",
+                                           s_mic_devs[(size_t)cam_mic].c_str());
+                        ImGui::PopStyleColor();
+                    } else {
+                        ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+                        ImGui::TextWrapped("No camera mic detected \xe2\x80\x94 recording from %s. "
+                                           "Tune the A/V offset if lips drift.", mcur);
+                        ImGui::PopStyleColor();
+                    }
+
+                    ImGui::Dummy({0.f, 4.f});
+                    ImGui::SetNextItemWidth(bar_w - 70.f);
+                    ImGui::SliderFloat("A/V offset", &clip.rec_av_offset_ms,
+                                       -200.f, 200.f, "%.0f ms");
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::BeginTooltip();
+                        ImGui::TextUnformatted("Nudge audio against video to dial out fixed\n"
+                                               "camera latency. + delays the audio. Only needed\n"
+                                               "if the lips drift on playback.");
+                        ImGui::EndTooltip();
+                    }
+
+                    // ── Measure A/V offset (GCC-PHAT) + A/B ───────────────────
+                    // Only meaningful when a SEPARATE mic is the source and the
+                    // camera has its own mic: we record both for a few seconds
+                    // (the cam mic rides the video pipeline, so it stands in for
+                    // the video's timing) and cross-correlate to find the lag.
+                    // If you're already on the camera mic there's nothing to
+                    // measure — you're aligned by construction.
+                    if (cam_mic >= 0 && mic_sel != cam_mic) {
+                        static bool  s_m_has = false;
+                        static float s_m_off = 0.f, s_m_conf = 0.f;
+                        static std::string s_m_err;
+
+                        // Pick up a finished run and apply it to this clip.
+                        AVMeasureResult mr;
+                        if (av_measure_poll(mr)) {
+                            if (mr.ok) {
+                                s_m_has = true; s_m_off = mr.offset_ms; s_m_conf = mr.confidence;
+                                s_m_err.clear();
+                                clip.rec_av_offset_ms =
+                                    mr.offset_ms < -200.f ? -200.f :
+                                    (mr.offset_ms > 200.f ? 200.f : mr.offset_ms);
+                            } else {
+                                s_m_has = false; s_m_err = mr.error;
+                            }
+                        }
+
+                        bool measuring = av_measure_active();
+                        ImGui::Dummy({0.f, 2.f});
+                        if (measuring) {
+                            ImGui::BeginDisabled();
+                            char lbl[48];
+                            snprintf(lbl, sizeof(lbl), "Listening\xe2\x80\xa6 %.1fs", av_measure_elapsed());
+                            ImGui::Button(lbl, {bar_w - 70.f, 0.f});
+                            ImGui::EndDisabled();
+                        } else if (ImGui::Button("Measure A/V offset", {bar_w - 70.f, 0.f})) {
+                            std::string clean = audio_capture_pulse_source(mic_sel);
+                            std::string camsr = audio_capture_pulse_source(cam_mic);
+                            if (clean.empty()) clean = "default";
+                            av_measure_start(clean, camsr, 3.5f);
+                            s_m_err.clear();
+                        }
+                        if (!measuring && ImGui::IsItemHovered()) {
+                            ImGui::BeginTooltip();
+                            ImGui::TextUnformatted("Make a sharp sound (a clap) for ~3 seconds.\n"
+                                                   "Records your mic and the camera's mic together\n"
+                                                   "and measures the lag between them, then sets\n"
+                                                   "the A/V offset for you.");
+                            ImGui::EndTooltip();
+                        }
+
+                        if (measuring) {
+                            ImGui::SameLine(0.f, 8.f);
+                            ImGui::TextColored(ImVec4(0.62f, 0.78f, 1.f, 1.f), "clap now");
+                        }
+
+                        if (s_m_has && !measuring) {
+                            // A/B: flip the live offset between the measured value
+                            // and 0 so you can play a take both ways and judge it.
+                            bool on_meas = fabsf(clip.rec_av_offset_ms - s_m_off) < 0.5f;
+                            ImGui::Dummy({0.f, 2.f});
+                            if (ImGui::RadioButton("Measured", on_meas))
+                                clip.rec_av_offset_ms =
+                                    s_m_off < -200.f ? -200.f : (s_m_off > 200.f ? 200.f : s_m_off);
+                            ImGui::SameLine(0.f, 10.f);
+                            if (ImGui::RadioButton("Off", fabsf(clip.rec_av_offset_ms) < 0.5f))
+                                clip.rec_av_offset_ms = 0.f;
+                            ImGui::SameLine(0.f, 10.f);
+                            ImGui::TextDisabled("(%+.0f ms)", s_m_off);
+
+                            if (s_m_conf < 0.5f) {
+                                ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(232, 184, 74, 255));
+                                ImGui::TextWrapped("Weak match \xe2\x80\x94 the room may have been too "
+                                                   "quiet. Try again with a clear clap.");
+                                ImGui::PopStyleColor();
+                            }
+                        }
+                        if (!s_m_err.empty() && !measuring) {
+                            ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(232, 120, 100, 255));
+                            ImGui::TextWrapped("%s", s_m_err.c_str());
+                            ImGui::PopStyleColor();
+                        }
+                    }
+
+                    // Clean input monitoring — same as the Audio Record brick:
+                    // hear yourself + a live mic meter while you frame the shot.
+                    ImGui::Dummy({0.f, 6.f});
+                    bool amon = audio_monitor_get();
+                    if (ImGui::Checkbox("Hear yourself", &amon)) {
+                        if (amon) { if (audio_capture_start()) audio_monitor_set(true); }
+                        else {
+                            audio_monitor_set(false);
+                            if (!recorder_active()) audio_capture_stop();
+                        }
+                    }
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::BeginTooltip();
+                        ImGui::TextUnformatted("Hear your mic in your headphones and watch the\n"
+                                               "level while you set up \xe2\x80\x94 doesn't affect the\n"
+                                               "recorded take.");
+                        ImGui::EndTooltip();
+                    }
+
+                    // Noise gate — same controls as Audio Record.
+                    ImGui::SameLine(0.f, 12.f);
+                    bool gate = audio_gate_get();
+                    if (ImGui::Checkbox("Reduce mic noise", &gate)) audio_gate_set(gate);
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::BeginTooltip();
+                        ImGui::TextUnformatted("Mutes the mic between phrases so hiss and room\n"
+                                               "noise don't pile up.");
+                        ImGui::EndTooltip();
+                    }
+                    if (gate) {
+                        ImGui::Dummy({0.f, 2.f});
+                        ImGui::Indent(22.f);
+                        bool bake = audio_gate_bake_get();
+                        if (ImGui::Checkbox("Apply to recordings", &bake)) audio_gate_bake_set(bake);
+                        if (ImGui::IsItemHovered()) {
+                            ImGui::BeginTooltip();
+                            ImGui::TextUnformatted("Off: the take keeps the raw mic and only what you\n"
+                                                   "hear is cleaned. On: the noise cleanup is baked\n"
+                                                   "into the recorded take itself.");
+                            ImGui::EndTooltip();
+                        }
+                        ImGui::Unindent(22.f);
+                    }
+
+                    // Hear effects — sing/talk through the brick's coupled audio FX.
+                    {
+                        auto segs = collect_audio_fx_segments(state, state.selected_track, clip);
+                        bool has_fx = !segs.empty();
+                        if (!has_fx) ImGui::BeginDisabled();
+                        bool hfx = audio_monitor_fx_get();
+                        if (ImGui::Checkbox("Hear effects", &hfx)) audio_monitor_fx_set(hfx);
+                        if (!has_fx) ImGui::EndDisabled();
+                        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+                            ImGui::BeginTooltip();
+                            ImGui::TextUnformatted(has_fx
+                                ? "Monitor through this brick's audio effects live.\n"
+                                  "Recordings stay dry \xe2\x80\x94 playback applies them."
+                                : "Drop an audio effect on this brick first \xe2\x80\x94\n"
+                                  "autotune, reverb, delay\xe2\x80\xa6");
+                            ImGui::EndTooltip();
+                        }
+                    }
+
+                    if (audio_capture_active()) {
+                        ImGui::Dummy({0.f, 4.f});
+                        static float s_cam_mic_lvl = 0.f;
+                        s_cam_mic_lvl = fmaxf(audio_input_peak(), s_cam_mic_lvl * 0.85f);
+                        float lvl = fminf(1.f, s_cam_mic_lvl);
+                        ImDrawList* pdl = ImGui::GetWindowDrawList();
+                        ImVec2 mp = ImGui::GetCursorScreenPos();
+                        pdl->AddRectFilled(mp, {mp.x + bar_w, mp.y + 6.f}, IM_COL32(35,35,50,255), 3.f);
+                        ImU32 lc = lvl > 0.9f ? IM_COL32(230,60,60,255)
+                                 : lvl > 0.7f ? IM_COL32(230,180,60,255)
+                                              : IM_COL32(70,200,110,255);
+                        pdl->AddRectFilled(mp, {mp.x + bar_w*lvl, mp.y + 6.f}, lc, 3.f);
+                        ImGui::Dummy({0.f, 10.f});
+                    }
+                }
+            }
+        }
+
+        // ── Layout ───────────────────────────────────────────────────────────
+        ImGui::Dummy({0.f, 10.f}); ui_separator(); ImGui::Dummy({0.f, 6.f});
+        ui_label("Layout");
+        ImGui::Dummy({0.f, 6.f});
+        {
+            ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+            ImGui::TextUnformatted("Rotation");
+            ImGui::PopStyleColor();
+            ImGui::PushStyleColor(ImGuiCol_SliderGrab, to_u32(Col::fg));
+            ImGui::PushStyleColor(ImGuiCol_FrameBg,    Col::bg_soft);
+            ImGui::SetNextItemWidth(bar_w - 70.f);
+            ImGui::SliderFloat("##vrec_rot", &clip.rotation, -180.f, 180.f, "%.0f\xc2\xb0");
+            ImGui::PopStyleColor(2);
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Rotate camera");
+            ImGui::SameLine(0.f, 6.f);
+            if (ui_btn("\xe2\x9f\xb3 90\xc2\xb0", false, true)) {
+                clip.rotation = fmodf(clip.rotation + 90.f + 180.f, 360.f) - 180.f;
+                history_push(state, "Rotate camera");
+            }
+        }
+
+        // ── Beauty presets ───────────────────────────────────────────────────
+        // One-tap looks: each chip drops (or retunes) a glass Multi-FX brick
+        // spanning this camera brick. The brick is a normal Multi-FX clip —
+        // open it to tweak or extend the chain.
+        ImGui::Dummy({0.f, 10.f}); ui_separator(); ImGui::Dummy({0.f, 6.f});
+        ui_label("Beauty");
+        ImGui::Dummy({0.f, 6.f});
+        {
+            struct BParam  { const char* param; float v; };
+            struct BFx     { const char* id; FXType type; BParam ps[4]; int np; };
+            struct BPreset { const char* name; BFx fx[2]; int nfx; };
+            static const BPreset k_beauty[] = {
+                {"No Makeup",
+                 {{"skin_smooth", FXType::SkinSmooth,
+                   {{"amount",0.50f},{"radius",2.5f},{"tone",0.50f}}, 3}}, 1},
+                {"Soft Glam",
+                 {{"skin_smooth", FXType::SkinSmooth,
+                   {{"amount",0.85f},{"radius",3.5f},{"tone",0.55f}}, 3},
+                  {"glow_up", FXType::GlowUp,
+                   {{"glow",0.45f},{"warmth",0.20f},{"brighten",0.10f}}, 3}}, 2},
+                {"Golden Hour",
+                 {{"skin_smooth", FXType::SkinSmooth, {{"amount",0.70f}}, 1},
+                  {"golden_hour", FXType::GoldenHour, {{"amount",0.90f}}, 1}}, 2},
+            };
+            ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+            ImGui::TextWrapped("One-tap looks \xe2\x80\x94 lands a Multi-FX brick on the camera.");
+            ImGui::PopStyleColor();
+            ImGui::Dummy({0.f, 4.f});
+            int hit = -1;
+            for (int bi = 0; bi < (int)(sizeof(k_beauty)/sizeof(k_beauty[0])); ++bi) {
+                if (bi > 0) ImGui::SameLine(0.f, 6.f);
+                if (ui_btn(k_beauty[bi].name, false, true)) hit = bi;
+            }
+            if (hit >= 0) {
+                const BPreset& bp = k_beauty[hit];
+                std::vector<Clip> chain;
+                for (int fi = 0; fi < bp.nfx; ++fi) {
+                    Clip se;
+                    se.clip_type = ClipType::Effect;
+                    se.fx_type   = bp.fx[fi].type;
+                    for (int pi = 0; pi < bp.fx[fi].np; ++pi)
+                        fx_clip_set_param(se, bp.fx[fi].id,
+                                          bp.fx[fi].ps[pi].param, bp.fx[fi].ps[pi].v);
+                    chain.push_back(se);
+                }
+                Track& tr = state.tracks[state.selected_track];
+                int existing = -1;
+                for (int ci = 0; ci < (int)tr.clips.size(); ++ci) {
+                    Clip& mc = tr.clips[(size_t)ci];
+                    if (mc.clip_type == ClipType::MultiFX &&
+                        mc.start < clip.end && mc.end > clip.start) { existing = ci; break; }
+                }
+                if (existing >= 0) {
+                    tr.clips[(size_t)existing].fx_chain = std::move(chain);
+                    tr.clips[(size_t)existing].fx_chain_selected = 0;
+                    tr.clips[(size_t)existing].fx_coupled  = true;
+                    tr.clips[(size_t)existing].fx_host_sid = fx_host_fingerprint(clip);
+                } else {
+                    Clip nb;
+                    nb.clip_type = ClipType::MultiFX;
+                    nb.start     = clip.start;
+                    nb.end       = clip.end;
+                    nb.fx_chain  = std::move(chain);
+                    nb.fx_chain_selected = 0;
+                    nb.fx_coupled  = true;
+                    nb.fx_host_sid = fx_host_fingerprint(clip);
+                    tr.clips.push_back(std::move(nb));   // invalidates `clip` —
+                }
+                history_push(state, std::string("Beauty preset: ") + bp.name);
+                return;                                  // — bail out this frame
+            }
+        }
+        }   // ── end Camera tab ──
+
+        // ── Filters tab: face-warp picker with live previews ──────────────────
+        else if (s_rec_tab == 1) {
+        ui_label("Face filters");
+        ImGui::Dummy({0.f, 6.f});
+        if (!face_track_available()) {
+            ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+            ImGui::TextWrapped("Face models missing (models/face) \xe2\x80\x94 filters still "
+                               "record, but the previews can't render the warp.");
+            ImGui::PopStyleColor();
+            ImGui::Dummy({0.f, 6.f});
+        }
+        // Preview grid — each card shows the filter applied to a base face.
+        {
+            int pw = 0, ph = 0; face_filter_preview_dims(&pw, &ph);
+            float aspect = (ph > 0) ? (float)pw / (float)ph : 0.75f;
+            const int   cols = 3;
+            const float gap  = 8.f;
+            float cardw = (bar_w - gap * (cols - 1)) / (float)cols;
+            float imgh  = cardw / aspect;
+            float cardh = imgh + 20.f;
+            ImDrawList* dl = ImGui::GetWindowDrawList();
+            for (int fi = 0; fi < face_filter_count(); ++fi) {
+                if (fi % cols) ImGui::SameLine(0.f, gap);
+                ImGui::PushID(30000 + fi);
+                ImGui::InvisibleButton("##ff", {cardw, cardh});
+                bool hov = ImGui::IsItemHovered();
+                bool on  = (clip.face_filter == fi);
+                if (ImGui::IsItemClicked()) {
+                    clip.face_filter = fi;
+                    history_push(state, std::string("Face filter: ") + face_filter_name(fi));
+                    if (fi != 0 && !clip.text.empty()) {
+                        int rq = ((int)lroundf(clip.rotation / 90.f) % 4 + 4) % 4;
+                        face_cache_request(clip.text, rq);
+                    }
+                }
+                ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
+                uintptr_t tex = face_filter_preview_texture(fi, 1.f);
+                if (tex)
+                    dl->AddImageRounded((ImTextureID)tex, a, {b.x, a.y + imgh},
+                                        {0, 0}, {1, 1}, IM_COL32_WHITE, 7.f);
+                else
+                    dl->AddRectFilled(a, {b.x, a.y + imgh}, IM_COL32(30, 30, 40, 255), 7.f);
+                dl->AddText({a.x + 4.f, a.y + imgh + 3.f},
+                            on ? IM_COL32(245, 180, 120, 255) : to_u32(Col::muted),
+                            face_filter_name(fi));
+                dl->AddRect(a, b, on ? IM_COL32(235, 120, 60, 255)
+                                     : (hov ? IM_COL32(120, 120, 150, 220)
+                                            : IM_COL32(55, 55, 72, 200)),
+                            7.f, 0, on ? 2.f : 1.f);
+                ImGui::PopID();
+            }
+        }
+        if (clip.face_filter != 0) {
+            ImGui::Dummy({0.f, 8.f});
+            ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+            ImGui::TextUnformatted("Strength");
+            ImGui::PopStyleColor();
+            ImGui::PushStyleColor(ImGuiCol_SliderGrab, to_u32(Col::fg));
+            ImGui::PushStyleColor(ImGuiCol_FrameBg,    Col::bg_soft);
+            ImGui::SetNextItemWidth(bar_w);
+            ImGui::SliderFloat("##face_amt", &clip.face_filter_amt, 0.f, 1.5f, "%.2f");
+            ImGui::PopStyleColor(2);
+            if (ImGui::IsItemDeactivatedAfterEdit())
+                history_push(state, "Face filter strength");
+            if (!clip.text.empty()) {
+                float fp = 0.f;
+                FaceCacheStatus fst = face_cache_status(clip.text, &fp);
+                if (fst == FaceCacheStatus::Building) {
+                    ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+                    ImGui::Text("Tracking face in take\xe2\x80\xa6 %d%%", (int)(fp * 100.f));
+                    ImGui::PopStyleColor();
+                } else if (fst == FaceCacheStatus::Failed) {
+                    ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+                    ImGui::TextWrapped("No face found in this take.");
+                    ImGui::PopStyleColor();
+                }
+            }
+        }
+        }   // ── end Filters tab ──
+
+        // ── Takes tab ─────────────────────────────────────────────────────────
+        else if (s_rec_tab == 2) {
+        ui_label("Takes");
+        ImGui::Dummy({0.f, 6.f});
+        if (clip.rec_takes.empty()) {
+            ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+            ImGui::TextUnformatted("No takes yet \xe2\x80\x94 hit Record.");
+            ImGui::PopStyleColor();
+        }
+        int place_idx = -1, delete_idx = -1;
+        for (int i = 0; i < (int)clip.rec_takes.size(); ++i) {
+            ImGui::PushID(20000 + i);
+            bool sel = (clip.rec_take_sel == i);
+            char lbl[80];
+            snprintf(lbl, sizeof(lbl), "%s Take %d",
+                     sel ? "\xe2\x96\xb6" : " ", i + 1);
+            if (ImGui::Selectable(lbl, sel, 0, {bar_w - 110.f, 0.f})) {
+                clip.rec_take_sel = i;
+                clip.text = clip.rec_takes[(size_t)i];   // mirror for draw/export
+                state.proxy_scan_needed = true;
+                history_push(state, "Select take");
+            }
+            ImGui::SameLine(bar_w - 100.f);
+            if (ui_btn("Place", false, true)) place_idx = i;
+            ImGui::SameLine(0.f, 4.f);
+            if (ui_btn("\xc3\x97", false, true)) delete_idx = i;
+            ImGui::PopID();
+        }
+        if (delete_idx >= 0) {
+            clip.rec_takes.erase(clip.rec_takes.begin() + delete_idx);
+            if (clip.rec_take_sel == delete_idx) clip.rec_take_sel = -1;
+            else if (clip.rec_take_sel > delete_idx) --clip.rec_take_sel;
+            if (clip.rec_take_sel < 0 && !clip.rec_takes.empty())
+                clip.rec_take_sel = (int)clip.rec_takes.size() - 1;
+            clip.text = (clip.rec_take_sel >= 0)
+                        ? clip.rec_takes[(size_t)clip.rec_take_sel] : "";
+            state.proxy_scan_needed = true;
+            history_push(state, "Delete take");
+        }
+
+        // Deferred placement as a plain Video clip on a new track.
+        if (place_idx >= 0 && place_idx < (int)clip.rec_takes.size()) {
+            std::string path  = clip.rec_takes[(size_t)place_idx];
+            float       start = clip.start;
+            float dur = video_probe_duration(path);
+            if (dur <= 0.f) dur = clip.end - clip.start;
+            float qfps = tl_fps(state);
+            Clip nc;
+            nc.clip_type = ClipType::Video;
+            nc.text      = path;
+            nc.source_id = path;
+            nc.start     = start;
+            nc.end       = snap_end_to_frame(start + dur, (int)qfps);
+            Track t;
+            char n[48];
+            snprintf(n, sizeof(n), "Cam take %d", place_idx + 1);
+            t.name = n;
+            t.clips.push_back(std::move(nc));
+            state.tracks.insert(state.tracks.begin(), std::move(t));
+            state.selected_track += 1;
+            history_push(state, "Place take on track");
+            return;
+        }
+        }   // ── end Takes tab ──
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // BUS BRICK — submixes the tracks below it (gain + audio FX chain)
+    // ═══════════════════════════════════════════════════════════════════════════
+    else if (clip.clip_type == ClipType::Bus) {
+        float bar_w = w - 16.f;
+        ImGui::Dummy({0.f, 4.f});
+        ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(120, 215, 185, 255));
+        ImGui::TextUnformatted("Audio Bus");
+        ImGui::PopStyleColor();
+        ImGui::Dummy({0.f, 4.f});
+
+        // What it groups: every track below, down to the next bus brick.
+        int my_ti = state.selected_track;
+        int grouped = 0, withaud = 0;
+        for (int ti = my_ti + 1; ti < (int)state.tracks.size(); ++ti) {
+            bool is_bus = false, aud = false;
+            for (auto& c : state.tracks[(size_t)ti].clips) {
+                if (c.clip_type == ClipType::Bus) is_bus = true;
+                if (c.clip_type == ClipType::Audio || c.clip_type == ClipType::Video) aud = true;
+            }
+            if (is_bus) break;
+            grouped++; if (aud) withaud++;
+        }
+        ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+        ImGui::Text("Submixes %d track%s below it (%d with audio),\nwithin this brick's span on the timeline.",
+                    grouped, grouped == 1 ? "" : "s", withaud);
+        ImGui::PopStyleColor();
+
+        ImGui::Dummy({0.f, 10.f}); ui_separator(); ImGui::Dummy({0.f, 8.f});
+
+        // ── Gain ──────────────────────────────────────────────────────────────
+        ui_label("Gain");
+        ImGui::PushStyleColor(ImGuiCol_SliderGrab, IM_COL32(30, 200, 160, 255));
+        ImGui::PushStyleColor(ImGuiCol_FrameBg,    Col::bg_soft);
+        ImGui::SetNextItemWidth(bar_w);
+        ImGui::SliderFloat("##bus_gain", &clip.volume, 0.f, 2.f, "%.2f");
+        ImGui::PopStyleColor(2);
+        if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Bus gain");
+
+        // ── Audio FX chain (clip.fx_chain) ────────────────────────────────────
+        ImGui::Dummy({0.f, 10.f}); ui_separator(); ImGui::Dummy({0.f, 8.f});
+        ui_label("Effects");
+        ImGui::Dummy({0.f, 4.f});
+        int remove_idx = -1;
+        for (int i = 0; i < (int)clip.fx_chain.size(); ++i) {
+            Clip& se = clip.fx_chain[(size_t)i];
+            ImGui::PushID(43000 + i);
+            bool selrow = clip.fx_chain_selected == i;
+            if (ImGui::Selectable(fx_type_name(se.fx_type), selrow, 0, {bar_w - 24.f, 0.f}))
+                clip.fx_chain_selected = i;
+            ImGui::SameLine(bar_w - 16.f);
+            if (ui_btn("\xc3\x97", false, true)) remove_idx = i;
+            ImGui::PopID();
+        }
+        if (remove_idx >= 0) {
+            clip.fx_chain.erase(clip.fx_chain.begin() + remove_idx);
+            if (clip.fx_chain_selected >= (int)clip.fx_chain.size())
+                clip.fx_chain_selected = (int)clip.fx_chain.size() - 1;
+            history_push(state, "Bus: remove effect");
+        }
+        static const struct { const char* lbl; FXType t; } k_addable[] = {
+            {"+AT", FXType::AudioAutotune}, {"+Pitch", FXType::AudioPitch},
+            {"+Form", FXType::AudioFormant}, {"+Delay", FXType::AudioDelay},
+            {"+Verb", FXType::AudioReverb},
+        };
+        for (int i = 0; i < 5; ++i) {
+            if (i) ImGui::SameLine(0.f, 4.f);
+            if (ui_btn(k_addable[i].lbl, false, true)) {
+                Clip se;
+                se.clip_type = ClipType::Effect;
+                se.fx_type   = k_addable[i].t;
+                switch (k_addable[i].t) {
+                    case FXType::AudioAutotune: se.audio_fx.autotune_on = true; break;
+                    case FXType::AudioPitch:    se.audio_fx.pitch_on    = true; break;
+                    case FXType::AudioFormant:  se.audio_fx.formant_on  = true; break;
+                    case FXType::AudioDelay:    se.audio_fx.delay_on    = true; break;
+                    case FXType::AudioReverb:   se.audio_fx.reverb_on   = true; break;
+                    default: break;
+                }
+                clip.fx_chain.push_back(se);
+                clip.fx_chain_selected = (int)clip.fx_chain.size() - 1;
+                history_push(state, "Bus: add effect");
+            }
+        }
+        int si = clip.fx_chain_selected;
+        if (si >= 0 && si < (int)clip.fx_chain.size()) {
+            ImGui::Dummy({0.f, 6.f});
+            audio_chain_entry_params_ui(state, clip.fx_chain[(size_t)si], bar_w);
         }
     }
 
@@ -2391,5 +3239,7 @@ void panel_clip(AppState& state, float w) {
                 ImGui::Dummy({0.f, 4.f});
             }
         }
+
+        glass_host_layout(state, clip, w);
     }
 }

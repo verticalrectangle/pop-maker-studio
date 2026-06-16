@@ -11,6 +11,7 @@
 #include <filesystem>
 
 #include "app.h"
+#include "ipc_server.h"
 #include "paths.h"
 #include "video.h"
 #include "fx_shader.h"
@@ -192,6 +193,11 @@ int main(int argc, char** argv) {
     if (const char* home = getenv("HOME"))
         g_managed_dir = (fs::path(home) / ".local" / "share" / "pop-maker-studio").string();
 
+    // Keep the regeneratable media cache from growing without bound. Pruning at
+    // startup means nothing is in use yet, so we never yank a proxy/conform out
+    // from under an open project.
+    cache_prune();
+
     glfwSetErrorCallback(glfw_error_callback);
     if (!glfwInit()) return 1;
 
@@ -231,6 +237,14 @@ int main(int argc, char** argv) {
     app_init(state);
     state.models_ready = models_detect();
 
+    // --new: skip the home/launcher and drop straight into a blank project.
+    for (int i = 1; i < argc; ++i) {
+        if (std::string(argv[i]) == "--new") {
+            state.in_studio = true;
+            break;
+        }
+    }
+
     // Vsync is on during normal interactive use (smooth UI, low CPU). While an
     // export is running we let the main loop free-run so render_tick_gl isn't
     // capped at the display refresh — otherwise the export's wall-clock speed
@@ -250,6 +264,7 @@ int main(int argc, char** argv) {
 
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplGlfw_NewFrame();
+        ipc_debug_input_tick();  // synthetic mouse steps land after the backend's
         ImGui::NewFrame();
 
         app_frame(state);

@@ -3,7 +3,18 @@
 
 #include "studio_types.h"
 #include "app.h"
+#include "audio.h"
 #include <cmath>
+#include <vector>
+
+// ── Timeline geometry capture (for IPC-driven testing of clicks/drags) ────────
+// draw_timeline() fills this each frame with screen-px rects of clips, their FX
+// disclosure triangles, and the expanded FX lanes, so a test harness can drive
+// ui_input at exact targets the way get_canvas_geometry does for the canvas.
+struct TLGeomClip { int track, clip; float x0, y0, x1, y1; bool has_fx, expanded; float disc_cx, disc_cy; };
+struct TLGeomLane { int track, clip, idx; float x0, y0, x1, y1; bool audio; };
+struct TLGeom { std::vector<TLGeomClip> clips; std::vector<TLGeomLane> lanes; };
+const TLGeom& tl_geom();
 
 // ── Frame-boundary snapping ───────────────────────────────────────────────────
 inline float snap_to_frame(float t, int fps) {
@@ -27,12 +38,61 @@ std::string fmt_time_short(float s);
 void seek_to(AppState& state, float t);
 void toggle_play(AppState& state);
 float tl_fps(const AppState& state);
+// Latest position the playhead can occupy and still show a frame: the start of
+// the last whole frame. Clips are half-open [start,end), so a playhead at exactly
+// `duration` selects nothing — this is the real end-of-timeline for playback,
+// seeking and scrubbing. 0 when there's no content.
+float last_playable_time(const AppState& state);
+
+// Quantize a time to the timeline frame grid (round to the nearest frame). The
+// playhead, markers and loop-region edges all live on frame boundaries so they
+// never land mid-frame (which makes loops wrap and markers cut between frames).
+float snap_to_frame(const AppState& state, float t);
+
+// ── Loop region ────────────────────────────────────────────────────────────────
+// Effective loop bounds. Fills lo/hi with the region to cycle: the loop brace
+// [loop_in,loop_out] when one is set, otherwise the whole timeline [0,duration].
+// Returns true when a custom brace region is set (vs the whole-timeline default).
+// Single source of truth for playback (app.cpp), prefetch (canvas.cpp) and the
+// brace drawing (timeline.cpp).
+bool loop_region(const AppState& state, float& lo, float& hi);
+
+// ── Markers / locators ──────────────────────────────────────────────────────────
+// Drop a marker at `time` (auto-labels "Marker N" when label is empty), keeping
+// state.markers sorted by time. Returns the index of the new marker.
+int  marker_add(AppState& state, float time, const char* label = nullptr);
+// Seek to the nearest marker before (dir<0) or after (dir>0) the playhead.
+void marker_jump(AppState& state, int dir);
+
+// Decouple a welded FX brick (track ti, clip ci): free it and lift it onto a
+// fresh track inserted just BELOW the content track, keeping its span. This
+// makes it a normal, movable, global brick instead of leaving it on the content
+// track where it re-arms the weld timer / reads as stuck. Returns the new track
+// index, or -1 on bad input.
+int decouple_fx_to_new_track(AppState& state, int ti, int ci);
+
+// ── Keyframable slider control ─────────────────────────────────────────────────
+// Renders a "‹ ◆ › Label  [slider]" row: the diamond toggles a keyframe at the
+// playhead (filled on a key, hollow gold when animated off-key, faint when no
+// keys), the arrows jump prev/next key, and editing the slider auto-keys the
+// value at the playhead when keys exist. Keyframes are stored on `clip` under
+// `prop` (clip == the brick for FX bricks, == the content clip for transform).
+// `w` is the available panel width; `disp` scales the field for display (100 →
+// percent); `prop2` mirrors keys onto a second track (the unified Size slider).
+// Returns true when the value changed this frame.
+bool kf_slider(AppState& state, Clip& clip, int sel_ti, int sel_ci, float w,
+               const char* prop, const char* label, float* val_ptr,
+               float vmin, float vmax, const char* fmt,
+               float disp = 1.f, const char* prop2 = nullptr);
 
 // ── Record brick ──────────────────────────────────────────────────────────────
 // Insert a fresh Record brick (8 s, frame-snapped) at the playhead on a new
 // top track, select it, and push history. Used by the toolbox rail and the
 // timeline context menu.
 void add_record_brick(AppState& state);
+void add_video_record_brick(AppState& state);
+void add_photo_capture_brick(AppState& state);
+void add_bus_brick(AppState& state);
 
 // ── Retime ────────────────────────────────────────────────────────────────────
 // Rescale a media clip's timeline width and any FX bricks overlapping it,
@@ -60,6 +120,17 @@ void add_clip_to_track(AppState& state, int track_idx, const std::string& path, 
 int  slot_for_video(AppState& state, const std::string& key, const std::string& src);
 void gc_video_slots(AppState& state);
 void reopen_video_slots(AppState& state);
+
+// ── Frame-rate conform ────────────────────────────────────────────────────────
+// True if this clip's native fps differs enough from the project to warrant a
+// conform (src_fps must already be probed; stills/src_fps<=0 are never conformed).
+bool clip_needs_conform(const Clip& cl, int project_fps);
+// The file the proxy/export should actually decode for this clip: the conformed
+// copy when it's ready, otherwise the original (clip.text).
+std::string clip_video_src(const AppState& state, const Clip& cl);
+// Per-frame: probe native fps lazily, kick conforms, and reopen video slots when
+// a conform becomes ready so the preview/export swap to it. Call from app_frame.
+void conform_tick(AppState& state);
 float project_end(const AppState& state);
 bool  is_audio_file(const std::string& path);
 
@@ -81,6 +152,11 @@ bool fx_type_is_audio_fx(FXType ft);
 // Windowed audio FX for one clip: a segment per overlapping audio FX brick
 // (and per audio entry inside overlapping MultiFX chains), each mapped into
 // the clip's source time. The FX applies only over the brick's range.
+// Extract the AudioFX params from a single audio FX entry (brick or chain
+// entry). Returns false when the entry is inactive/not audio.
+bool audio_fx_from_brick_pub(const Clip& cl, AudioFX& out);
+// Bus-brick configs for the live mixer (one per ClipType::Bus clip).
+std::vector<AudioBusBrick> collect_bus_bricks(const AppState& state);
 std::vector<AudioFXSegment> collect_audio_fx_segments(const AppState& state,
                                                       int track_idx,
                                                       const Clip& audio_clip);
@@ -94,8 +170,18 @@ FxBrickColors fx_brick_colors(FXType ft, bool sel);
 extern std::unordered_map<std::string, float> s_source_durations;
 
 // ── Palette widget (defined in panel_clip.cpp, shared across panels) ──────────
-void palette_widget(const char* id, float** slots, int n_slots, bool has_alpha = false);
+// ext_focus (optional): the caller owns the "which slot a single swatch targets"
+// state and shows the slot chooser itself — the widget then skips its built-in
+// "Apply to" chips and reads/advances *ext_focus instead.
+void palette_widget(const char* id, float** slots, int n_slots, bool has_alpha = false,
+                    int* ext_focus = nullptr);
 void palette_widget(const char* id, float* rgb);
+
+// Wrapping row of category filter pills: "All" + each category in `cats`.
+// `sel` is the active filter ("" = All) and is updated on click. Returns true
+// if the selection changed this frame. Shared by the typography / FX / background
+// libraries so they all filter in place the same way.
+bool category_pills(const char* id, const std::vector<const char*>& cats, std::string& sel);
 
 // ── group_words helper (defined in pipeline.cpp, used by panel_animation) ─────
 std::vector<Clip> group_words(const std::vector<Clip>& words, SubtitleMode mode,
@@ -105,3 +191,11 @@ std::vector<Clip> group_words(const std::vector<Clip>& words, SubtitleMode mode,
 // Defined in screen_studio.cpp; some helpers (add_clip_to_track, panel_media,
 // generate_typography) need to switch the panel on selection changes.
 extern PanelView s_panel_view;
+
+// A timeline interaction (clicking an FX lane below an expanded clip) can ask the
+// props panel to open a specific view NEXT — overriding the default view that the
+// panel router would otherwise derive from the new selection. The lane click
+// selects the HOST content clip (so its FX tab can inspect the coupled brick) and
+// requests HostFX/HostAudioFX so the clicked entry's keyframable sliders open
+// straight away. Set by timeline.cpp, consumed once by the panel router.
+void request_panel_view(PanelView v);

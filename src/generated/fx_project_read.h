@@ -665,3 +665,17 @@
         c.fx_ken_burns_end_x = r.pod<float>();
         c.fx_ken_burns_end_y = r.pod<float>();
     }
+    if (version >= 23u) {
+        c.fx_skin_smooth_amount = r.pod<float>();
+        c.fx_skin_smooth_radius = r.pod<float>();
+        c.fx_skin_smooth_radius_beat = r.pod<float>();
+        c.fx_skin_smooth_tone = r.pod<float>();
+        c.fx_skin_smooth_tone_beat = r.pod<float>();
+        c.fx_glow_up_amount = r.pod<float>();
+        c.fx_glow_up_glow = r.pod<float>();
+        c.fx_glow_up_glow_beat = r.pod<float>();
+        c.fx_glow_up_warmth = r.pod<float>();
+        c.fx_glow_up_warmth_beat = r.pod<float>();
+        c.fx_glow_up_brighten = r.pod<float>();
+        c.fx_glow_up_brighten_beat = r.pod<float>();
+    }

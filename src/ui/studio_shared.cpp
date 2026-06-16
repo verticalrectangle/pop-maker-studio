@@ -5,8 +5,10 @@
 #include "audio.h"
 #include "video.h"
 #include "proxy.h"
+#include "conform.h"
 #include "history.h"
 #include "fx_shader.h"
+#include "theme.h"
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <filesystem>
@@ -50,12 +52,49 @@ int find_empty_track(const AppState& state) {
 
 // ── Multi-selection ops ───────────────────────────────────────────────────────
 bool delete_selected_clips(AppState& state) {
+    auto is_fx = [](const Clip& c) {
+        return c.clip_type == ClipType::Effect  || c.clip_type == ClipType::MultiFX ||
+               c.clip_type == ClipType::BodyFX  || c.clip_type == ClipType::AudioMultiFX;
+    };
+    // A content clip's welded FX bricks must die with it — otherwise deleting the
+    // content (selecting a glass brick selects its host) leaves the FX orphaned.
+    auto add_coupled = [&](int ti, int ci, std::vector<int>& out) {
+        auto& cls = state.tracks[(size_t)ti].clips;
+        for (int k = 0; k < (int)cls.size(); ++k)
+            if (k != ci && cls[(size_t)k].fx_coupled && is_fx(cls[(size_t)k]) &&
+                fx_coupled_host(state, ti, cls[(size_t)k]) == ci)
+                out.push_back(k);
+    };
+    // Deleting a "Remove Background" body-FX brick turns the cutout back off on
+    // its host clip — otherwise the decode-time bg_remove_on flag lingers and the
+    // background stays removed even though the effect is gone.
+    auto clear_bg_for_deleted = [&](int ti, const std::vector<int>& dels) {
+        auto& cls = state.tracks[(size_t)ti].clips;
+        for (int k : dels) {
+            if (k < 0 || k >= (int)cls.size()) continue;
+            const Clip& d = cls[(size_t)k];
+            if (d.clip_type != ClipType::BodyFX ||
+                d.body_fx_type != BodyFXType::RemoveBackground) continue;
+            for (auto& h : cls)
+                if (clip_is_videolike_type(h.clip_type) && !h.source_id.empty() &&
+                    h.source_id == d.source_id) {
+                    h.bg_remove_on     = false;
+                    h.bg_remove_status = BgRemoveStatus::Idle;
+                }
+        }
+    };
+
     if (state.clip_selection.size() <= 1) {
         if (state.selected_track < 0 || state.selected_clip < 0) return false;
         if (state.selected_track >= (int)state.tracks.size()) return false;
         Track& tr = state.tracks[state.selected_track];
         if (state.selected_clip >= (int)tr.clips.size()) return false;
-        tr.clips.erase(tr.clips.begin() + state.selected_clip);
+        std::vector<int> dels{state.selected_clip};
+        add_coupled(state.selected_track, state.selected_clip, dels);
+        std::sort(dels.begin(), dels.end(), std::greater<int>());
+        clear_bg_for_deleted(state.selected_track, dels);
+        for (int k : dels)
+            if (k >= 0 && k < (int)tr.clips.size()) tr.clips.erase(tr.clips.begin() + k);
         state.selected_clip = -1;
         state.clip_selection.clear();
         return true;
@@ -64,10 +103,15 @@ bool delete_selected_clips(AppState& state) {
     // out from under us within a track.
     std::vector<std::vector<int>> by_track(state.tracks.size());
     for (auto& [ti, ci] : state.clip_selection)
-        if (ti >= 0 && ti < (int)state.tracks.size()) by_track[ti].push_back(ci);
+        if (ti >= 0 && ti < (int)state.tracks.size()) {
+            by_track[ti].push_back(ci);
+            add_coupled(ti, ci, by_track[ti]);
+        }
     for (int ti = 0; ti < (int)by_track.size(); ++ti) {
         auto& cis = by_track[ti];
         std::sort(cis.begin(), cis.end(), std::greater<int>());
+        cis.erase(std::unique(cis.begin(), cis.end()), cis.end());
+        clear_bg_for_deleted(ti, cis);
         for (int ci : cis)
             if (ci >= 0 && ci < (int)state.tracks[ti].clips.size())
                 state.tracks[ti].clips.erase(state.tracks[ti].clips.begin() + ci);
@@ -132,13 +176,19 @@ bool duplicate_selected_clips(AppState& state) {
 }
 
 // ── Playback helpers ──────────────────────────────────────────────────────────
+float snap_to_frame(const AppState& state, float t) {
+    float fps = tl_fps(state);
+    if (!(fps > 0.f)) fps = 30.f;
+    return roundf(t * fps) / fps;
+}
+
 void seek_to(AppState& state, float t) {
-    // Quantize to the video's actual frame grid (falls back to 30 fps). A
-    // hard-coded 30 fps grid eats sub-frame steps for >30 fps content, which
-    // made back-arrow stick at high zoom on 60 fps footage.
-    float qfps = tl_fps(state);
-    if (!(qfps > 0.f)) qfps = 30.f;
-    t = roundf(t * qfps) / qfps;
+    // Quantize to the timeline frame grid (falls back to 30 fps). A hard-coded
+    // 30 fps grid eats sub-frame steps for >30 fps content, which made the
+    // back-arrow stick at high zoom on 60 fps footage.
+    t = snap_to_frame(state, t);
+    // Never past the last playable frame (a playhead at `duration` shows nothing).
+    t = fmaxf(0.f, fminf(t, last_playable_time(state)));
     state.playhead = t;
     audio_seek(t);
     if (state.playing) {
@@ -163,8 +213,229 @@ void toggle_play(AppState& state) {
 }
 
 float tl_fps(const AppState& state) {
-    return (state.proxy_ready && video_info(0).fps > 0.0)
-           ? (float)video_info(0).fps : (float)state.fps;
+    // The timeline frame grid. Default to the project (timeline/export) fps —
+    // that's the rate the playhead, frame-stepping and last_playable_time should
+    // snap to. The MJPEG preview proxy is fps-capped (and some are coarse — a
+    // 10 fps proxy would otherwise drag the playhead onto a 0.1 s grid and park
+    // it short of the clip's true end), so only let the proxy's rate RAISE the
+    // grid when it's genuinely finer, never lower it.
+    float tf = (float)state.fps;
+    if (!(tf > 0.f)) tf = 30.f;
+    if (state.proxy_ready) {
+        double vf = video_info(0).fps;
+        if (vf > (double)tf) tf = (float)vf;
+    }
+    return tf;
+}
+
+float last_playable_time(const AppState& state) {
+    if (state.duration <= 0.f) return 0.f;
+    float fps = tl_fps(state);
+    if (!(fps > 0.f)) fps = 30.f;
+    // Start time of the last whole frame: ceil(duration*fps) is the frame count,
+    // minus one → last index, /fps → its start. Always strictly inside [0,duration).
+    float lf = (ceilf(state.duration * fps) - 1.f) / fps;
+    return fmaxf(0.f, lf);
+}
+
+bool loop_region(const AppState& state, float& lo, float& hi) {
+    bool custom = state.loop_in >= 0.f && state.loop_out > state.loop_in;
+    lo = custom ? fmaxf(0.f, state.loop_in) : 0.f;
+    hi = custom ? state.loop_out : state.duration;
+    // The brace edges are the loop's wrap points — force them onto the frame
+    // grid so a loop can never cycle mid-frame (set paths already snap; this is
+    // the belt-and-braces guard for older saved regions).
+    if (custom) { lo = snap_to_frame(state, lo); hi = snap_to_frame(state, hi); }
+    if (hi > state.duration) hi = state.duration;   // never cycle past content
+    if (hi <= lo) { lo = 0.f; hi = state.duration; return false; }  // degenerate → whole
+    return custom;
+}
+
+int marker_add(AppState& state, float time, const char* label) {
+    Marker m;
+    m.time = snap_to_frame(state, fmaxf(0.f, time));
+    if (label && *label) {
+        m.label = label;
+    } else {
+        char buf[24];
+        snprintf(buf, sizeof(buf), "Marker %d", (int)state.markers.size() + 1);
+        m.label = buf;
+    }
+    // Keep markers sorted by time so prev/next jumps and the ruler walk are linear.
+    auto it = std::lower_bound(state.markers.begin(), state.markers.end(), m.time,
+                               [](const Marker& a, float t){ return a.time < t; });
+    int idx = (int)(it - state.markers.begin());
+    state.markers.insert(it, std::move(m));
+    history_push(state, "Add marker");
+    return idx;
+}
+
+bool kf_slider(AppState& state, Clip& clip, int sel_ti, int sel_ci, float w,
+               const char* prop, const char* label, float* val_ptr,
+               float vmin, float vmax, const char* fmt,
+               float disp, const char* prop2) {
+    // Keyframes must land ON a frame — snap the playhead to the frame grid before
+    // taking the clip-local time, so you can't drop one between two frames (the
+    // FX-brick sliders read straight off the playhead, which can sit sub-frame).
+    float t_local = snap_to_frame(state.playhead, (int)tl_fps(state)) - clip.start;
+    float kf_tol  = 0.5f / fmaxf(1.f, tl_fps(state));   // half a frame: exact-frame match
+    bool changed = false;
+    auto it_pt = clip.ktracks.find(prop);
+    PropTrack* pt = (it_pt != clip.ktracks.end()) ? &it_pt->second : nullptr;
+    bool has_keys = pt && !pt->empty();
+    bool has_kf   = pt && pt->find_nearest(t_local, kf_tol) >= 0;
+
+    auto toggle_key_here = [&]() {
+        if (has_kf) {
+            pt->remove_at(t_local, kf_tol);
+            if (pt->empty()) clip.ktracks.erase(prop);
+            if (prop2) {
+                auto it2 = clip.ktracks.find(prop2);
+                if (it2 != clip.ktracks.end()) {
+                    it2->second.remove_at(t_local, kf_tol);
+                    if (it2->second.empty()) clip.ktracks.erase(it2);
+                }
+            }
+            history_push(state, std::string("Remove KF ") + prop);
+        } else {
+            clip.ktracks[prop].set(t_local, clip.eval_prop(prop, state.playhead));
+            if (prop2) clip.ktracks[prop2].set(t_local, clip.eval_prop(prop2, state.playhead));
+            state.kf_sel_track = sel_ti; state.kf_sel_clip = sel_ci;
+            state.kf_sel_prop  = prop;
+            state.kf_sel_idx   = clip.ktracks[prop].find_nearest(t_local, kf_tol);
+            history_push(state, std::string("Add KF ") + prop);
+        }
+    };
+    {
+        ImDrawList* kdl = ImGui::GetWindowDrawList();
+        float rh = ImGui::GetFrameHeight();
+        const ImU32 gold = IM_COL32(255,200,60,255), gold_dim = IM_COL32(190,160,70,220),
+                    faint = IM_COL32(120,120,130,200), off = IM_COL32(70,70,78,150);
+        ImGui::InvisibleButton((std::string("##kfprev_") + prop).c_str(), {12.f, rh});
+        {
+            ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
+            float cx = (a.x+b.x)*0.5f, cy = (a.y+b.y)*0.5f;
+            ImU32 c = !has_keys ? off : ImGui::IsItemHovered() ? gold : faint;
+            kdl->AddTriangleFilled({cx+3,cy-4},{cx+3,cy+4},{cx-3,cy}, c);
+            if (has_keys && ImGui::IsItemClicked()) {
+                float best = -1.f;
+                for (auto& k : pt->keys) if (k.time < t_local - 1e-4f) best = k.time;
+                if (best >= 0.f) seek_to(state, clip.start + best);
+            }
+        }
+        ImGui::SameLine(0.f, 1.f);
+        ImGui::InvisibleButton((std::string("##kftog_") + prop).c_str(), {16.f, rh});
+        {
+            ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
+            float cx = (a.x+b.x)*0.5f, cy = (a.y+b.y)*0.5f, r = 5.5f;
+            bool hv = ImGui::IsItemHovered();
+            ImU32 c = has_kf ? gold : has_keys ? gold_dim : (hv ? gold_dim : faint);
+            if (hv) c = gold;
+            ImVec2 top{cx,cy-r}, rt{cx+r,cy}, bot{cx,cy+r}, lf{cx-r,cy};
+            if (has_kf) kdl->AddQuadFilled(top, rt, bot, lf, c);
+            else        kdl->AddQuad(top, rt, bot, lf, c, 1.6f);
+            if (ImGui::IsItemClicked()) toggle_key_here();
+            if (hv) ImGui::SetTooltip(has_kf ? "Remove keyframe here"
+                                   : has_keys ? "Add keyframe here"
+                                              : "Animate this property");
+        }
+        ImGui::SameLine(0.f, 1.f);
+        ImGui::InvisibleButton((std::string("##kfnext_") + prop).c_str(), {12.f, rh});
+        {
+            ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
+            float cx = (a.x+b.x)*0.5f, cy = (a.y+b.y)*0.5f;
+            ImU32 c = !has_keys ? off : ImGui::IsItemHovered() ? gold : faint;
+            kdl->AddTriangleFilled({cx-3,cy-4},{cx-3,cy+4},{cx+3,cy}, c);
+            if (has_keys && ImGui::IsItemClicked()) {
+                float nxt = -1.f;
+                for (auto& k : pt->keys) if (k.time > t_local + 1e-4f) { nxt = k.time; break; }
+                if (nxt >= 0.f) seek_to(state, clip.start + nxt);
+            }
+        }
+    }
+    ImGui::SameLine(0.f, 6.f);
+    ImGui::PushStyleColor(ImGuiCol_Text, Col::muted); ImGui::TextUnformatted(label); ImGui::PopStyleColor();
+    ImGui::PushStyleColor(ImGuiCol_SliderGrab, has_keys ? IM_COL32(255,200,60,255) : to_u32(Col::fg));
+    ImGui::PushStyleColor(ImGuiCol_FrameBg, Col::bg_soft);
+    ImGui::SetNextItemWidth(w - 16.f);
+    char sid[80]; snprintf(sid, sizeof(sid), "##kfs_%s", prop);
+    float dv = (has_keys ? clip.eval_prop(prop, state.playhead) : *val_ptr) * disp;
+    if (ImGui::SliderFloat(sid, &dv, vmin, vmax, fmt)) {
+        changed = true;
+        float raw = dv / disp;
+        *val_ptr = raw;
+        if (has_keys) {
+            int ki = pt->find_nearest(t_local, kf_tol);
+            if (ki >= 0) pt->keys[ki].value = raw; else pt->set(t_local, raw);
+            if (prop2) {
+                PropTrack& p2 = clip.ktracks[prop2];
+                int k2 = p2.find_nearest(t_local, kf_tol);
+                if (k2 >= 0) p2.keys[k2].value = raw; else p2.set(t_local, raw);
+            }
+        }
+    }
+    ImGui::PopStyleColor(2);
+    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, std::string("Edit ") + prop);
+    return changed;
+}
+
+int decouple_fx_to_new_track(AppState& state, int ti, int ci) {
+    if (ti < 0 || ti >= (int)state.tracks.size()) return -1;
+    auto& clips = state.tracks[ti].clips;
+    if (ci < 0 || ci >= (int)clips.size()) return -1;
+    Clip brick = std::move(clips[(size_t)ci]);
+    brick.fx_coupled = false;
+    brick.fx_host_sid.clear();
+    clips.erase(clips.begin() + ci);
+    Track nt;
+    nt.name = "FX";
+    nt.clips.push_back(std::move(brick));
+    int new_ti = ti + 1;
+    state.tracks.insert(state.tracks.begin() + new_ti, std::move(nt));
+    return new_ti;
+}
+
+bool category_pills(const char* id, const std::vector<const char*>& cats, std::string& sel) {
+    // Drop a stale filter (category no longer present) back to All.
+    if (!sel.empty()) {
+        bool ok = false;
+        for (auto* c : cats) if (sel == c) { ok = true; break; }
+        if (!ok) sel.clear();
+    }
+    bool changed = false;
+    ImGui::PushID(id);
+    std::vector<const char*> pills{"All"};
+    for (auto* c : cats) pills.push_back(c);
+    // Screen-space right edge so the wrap test matches GetItemRectMax.
+    float x2 = ImGui::GetWindowPos().x + ImGui::GetWindowContentRegionMax().x;
+    for (size_t i = 0; i < pills.size(); ++i) {
+        bool s = (i == 0) ? sel.empty() : (sel == pills[i]);
+        if (ui_btn(pills[i], s, true)) {
+            sel = (i == 0) ? std::string() : std::string(pills[i]);
+            changed = true;
+        }
+        if (i + 1 < pills.size()) {
+            float lx = ImGui::GetItemRectMax().x;
+            float nw = ImGui::CalcTextSize(pills[i + 1]).x +
+                       ImGui::GetStyle().FramePadding.x * 2.f + 8.f;
+            if (lx + ImGui::GetStyle().ItemSpacing.x + nw < x2) ImGui::SameLine();
+        }
+    }
+    ImGui::PopID();
+    return changed;
+}
+
+void marker_jump(AppState& state, int dir) {
+    if (state.markers.empty()) return;
+    const float eps = 1e-3f;
+    float here = state.playhead;
+    float best = -1.f;
+    if (dir < 0) {
+        for (auto& m : state.markers) if (m.time < here - eps) best = m.time;  // sorted → last match
+    } else {
+        for (auto& m : state.markers) if (m.time > here + eps) { best = m.time; break; }
+    }
+    if (best >= 0.f) seek_to(state, best);
 }
 
 // ── Clip / slot helpers ───────────────────────────────────────────────────────
@@ -192,8 +463,8 @@ void gc_video_slots(AppState& state) {
     std::set<std::string> live;
     for (auto& tr : state.tracks)
         for (auto& cl : tr.clips)
-            if (cl.clip_type == ClipType::Video && !cl.text.empty())
-                live.insert(clip_slot_key(cl.text, cl.start));
+            if (clip_is_videolike_type(cl.clip_type) && !cl.text.empty())
+                live.insert(clip_slot_key(clip_video_src(state, cl), cl.start));
     for (int i = 0; i < MAX_VIDEO_TRACKS; ++i) {
         if (!state.proxy_paths[i].empty() && !live.count(state.proxy_paths[i])) {
             video_close(i);
@@ -205,22 +476,28 @@ void gc_video_slots(AppState& state) {
 void reopen_video_slots(AppState& state) {
     for (auto& tr : state.tracks) {
         for (auto& cl : tr.clips) {
-            if (cl.clip_type != ClipType::Video || cl.text.empty()) continue;
-            std::string key = clip_slot_key(cl.text, cl.start);
-            int slot = slot_for_video(state, key, cl.text);
+            if (!clip_is_videolike_type(cl.clip_type) || cl.text.empty()) continue;
+            // Decode the conformed copy when ready, else the original. (Stills
+            // are never conformed, so `src` keeps the .png/.gif extension and the
+            // image branch below still fires for them; a conformed clip's `src`
+            // is a .mp4 and falls through to the proxy/native video path.)
+            std::string src = clip_video_src(state, cl);
+            std::string key = clip_slot_key(src, cl.start);
+            int slot = slot_for_video(state, key, src);
             if (slot < 0) continue;
-            // Images go straight to Still — never native. libav happily opens
-            // a PNG as a one-frame video, but then any decode past t=0 fails
-            // and the clip renders blank (this is how MCP-added images
+            // Still images go straight to Still — never native. libav happily
+            // opens a PNG as a one-frame video, but then any decode past t=0
+            // fails and the clip renders blank (this is how MCP-added images
             // vanished from the preview: add_clip → proxy_scan → native PNG).
-            if (is_image_path(cl.text)) {
+            // Animated images (.gif) fall through to the proxy path below.
+            if (is_image_path(src) && !is_animated_image(src)) {
                 if (video_source(slot) != PreviewSource::Still)
-                    video_open_still(slot, proxy_still_path(cl.text));
+                    video_open_still(slot, proxy_still_path(src));
                 continue;
             }
-            if (proxy_is_ready(cl.text)) {
+            if (proxy_is_ready(src)) {
                 ProxyInfo pi;
-                if (proxy_load(cl.text, pi)) {
+                if (proxy_load(src, pi)) {
                     video_open_proxy(slot, pi);
                     if (slot == 0) state.proxy_ready = true;
                     continue;
@@ -229,10 +506,70 @@ void reopen_video_slots(AppState& state) {
             // No proxy yet — try native (libav direct decode) for instant
             // preview. Falls back to the still placeholder if libav can't open
             // the file (unusual codec, corrupt container).
-            if (!video_open_native(slot, cl.text))
-                video_open_still(slot, proxy_still_path(cl.text));
+            if (!video_open_native(slot, src))
+                video_open_still(slot, proxy_still_path(src));
         }
     }
+}
+
+// ── Frame-rate conform ────────────────────────────────────────────────────────
+bool clip_needs_conform(const Clip& cl, int project_fps) {
+    if (project_fps <= 0 || cl.src_fps <= 0.f) return false;  // 0=unprobed, -1=still
+    return std::fabs(cl.src_fps - (float)project_fps) > (float)project_fps * 0.01f;
+}
+
+std::string clip_video_src(const AppState& state, const Clip& cl) {
+    if (clip_needs_conform(cl, state.fps) &&
+        conform_is_ready(cl.text, state.fps, cl.conform_smooth, cl.clip_loop))
+        return conform_path(cl.text, state.fps, cl.conform_smooth, cl.clip_loop);
+    return cl.text;
+}
+
+// One-time migration: remove the exact old-format sidecars that earlier
+// versions wrote next to a source file (now centralized in the media cache).
+// Only the unambiguous PMS-generated patterns are touched.
+static void migrate_clean_sidecars(const std::string& path) {
+    std::error_code ec;
+    for (const char* sfx : {".pms_proxy.mjpeg", ".pms_proxy.idx",
+                            ".pms_proxy.mjpeg.prog", ".pms_still.jpg"})
+        fs::remove(path + sfx, ec);
+    fs::path p(path), dir = p.parent_path();
+    std::string fname = p.filename().string(), stem = p.stem().string();
+    if (fs::exists(dir, ec)) {
+        for (auto& e : fs::directory_iterator(dir, ec)) {
+            std::string n = e.path().filename().string();
+            if (n.rfind(fname + ".pms_conform_", 0) == 0) fs::remove(e.path(), ec);
+        }
+    }
+    fs::remove_all(dir / (stem + "_bg_masks"), ec);
+    fs::remove_all(dir / (stem + "_bg_hires"), ec);
+}
+
+void conform_tick(AppState& state) {
+    bool reopen = false, probed_one = false;
+    for (auto& tr : state.tracks) {
+        for (auto& cl : tr.clips) {
+            if (cl.clip_type != ClipType::Video || cl.text.empty()) continue;
+            // Lazy native-fps probe — at most one ffprobe per frame so a load of
+            // many clips doesn't hitch.
+            if (cl.src_fps == 0.f && !probed_one) {
+                MediaFileInfo mi = video_probe_file(cl.text);
+                cl.src_fps = (mi.fps > 0.0) ? (float)mi.fps : -1.f;
+                // Animated GIFs are loops by nature — default to seamless conform.
+                if (mi.fps > 0.0 && is_animated_image(cl.text)) cl.clip_loop = true;
+                migrate_clean_sidecars(cl.text);   // sweep old scattered files
+                probed_one = true;
+            }
+            if (!clip_needs_conform(cl, state.fps)) continue;
+            conform_start(cl.text, state.fps, cl.conform_smooth, cl.clip_loop);
+            bool ready = conform_is_ready(cl.text, state.fps, cl.conform_smooth, cl.clip_loop);
+            if (ready) proxy_start(conform_path(cl.text, state.fps, cl.conform_smooth, cl.clip_loop));
+            // Edge-trigger a slot reopen so the preview swaps to the conform the
+            // moment it lands (and back to the original if it ever goes away).
+            if (ready != cl.conform_ready_cache) { cl.conform_ready_cache = ready; reopen = true; }
+        }
+    }
+    if (reopen) { gc_video_slots(state); reopen_video_slots(state); }
 }
 
 float project_end(const AppState& state) {
@@ -325,7 +662,8 @@ bool pv_is_lib(PanelView v) {
 bool pv_is_override(PanelView v) {
     return v == PanelView::OverrideFX    || v == PanelView::OverrideAdj ||
            v == PanelView::OverrideBG    || v == PanelView::OverrideAudioFX ||
-           v == PanelView::OverrideMultiFX;
+           v == PanelView::OverrideMultiFX ||
+           v == PanelView::OverrideAudioMultiFX;
 }
 
 bool fx_type_is_audio_fx(FXType ft) {
@@ -336,7 +674,16 @@ bool fx_type_is_audio_fx(FXType ft) {
 
 // One brick's contribution as a standalone AudioFX. VoiceConvert is excluded
 // — it's an ML job handled via vc_out_path substitution, not offline DSP.
+bool audio_fx_from_brick_pub(const Clip& cl, AudioFX& out) {
+    extern bool audio_fx_from_brick_impl(const Clip&, AudioFX&);
+    return audio_fx_from_brick_impl(cl, out);
+}
+bool audio_fx_from_brick_impl(const Clip& cl, AudioFX& out);
 static bool audio_fx_from_brick(const Clip& cl, AudioFX& out) {
+    return audio_fx_from_brick_impl(cl, out);
+}
+bool audio_fx_from_brick_impl(const Clip& cl, AudioFX& out) {
+    out.mix = cl.audio_fx.mix;   // brick dry/wet applies to every audio FX kind
     switch (cl.fx_type) {
         case FXType::AudioAutotune:
             out.autotune_on    = cl.audio_fx.autotune_on;
@@ -392,11 +739,17 @@ std::vector<AudioFXSegment> collect_audio_fx_segments(const AppState& state,
         if (&cl == &ac) continue;
         if (cl.end <= ac.start || cl.start >= ac.end) continue;
         if (cl.clip_type == ClipType::Effect && fx_type_is_audio_fx(cl.fx_type)) {
+            // Transitional single audio brick (pre-coupling) — legacy overlap.
             AudioFX fx;
             if (audio_fx_from_brick(cl, fx)) add_window(cl.start, cl.end, fx);
-        } else if (cl.clip_type == ClipType::MultiFX) {
-            // MultiFX chains stack audio FX: one segment per audio entry,
-            // honoring the entry's rel_start/rel_end sub-window.
+        } else if (cl.clip_type == ClipType::AudioMultiFX) {
+            // Audio chain brick: one segment per entry, honoring the entry's
+            // rel sub-window. Coupled bricks apply only to their host.
+            if (cl.fx_coupled) {
+                int host = fx_coupled_host(state, track_idx, cl);
+                if (host < 0 ||
+                    &state.tracks[track_idx].clips[(size_t)host] != &ac) continue;
+            }
             for (const auto& se : cl.fx_chain) {
                 if (!fx_type_is_audio_fx(se.fx_type)) continue;
                 AudioFX fx;
@@ -412,6 +765,32 @@ std::vector<AudioFXSegment> collect_audio_fx_segments(const AppState& state,
     return segs;
 }
 
+std::vector<AudioBusBrick> collect_bus_bricks(const AppState& state) {
+    std::vector<AudioBusBrick> out;
+    for (int ti = 0; ti < (int)state.tracks.size(); ++ti) {
+        const Track& tr = state.tracks[(size_t)ti];
+        for (const auto& cl : tr.clips) {
+            if (cl.clip_type != ClipType::Bus) continue;
+            AudioBusBrick d;
+            d.track = ti;
+            d.start = cl.start;
+            d.end   = cl.end;
+            d.gain  = cl.volume;          // the brick's gain
+            uint64_t h = 14695981039346656037ull;
+            for (const auto& se : cl.fx_chain) {   // audio FX entries
+                if (!fx_type_is_audio_fx(se.fx_type)) continue;
+                AudioFX fx;
+                if (!audio_fx_from_brick(se, fx)) continue;
+                d.stages.push_back(fx);
+                h = (h ^ audio_fx_hash(fx)) * 1099511628211ull;
+            }
+            d.hash = d.stages.empty() ? 0 : h;
+            out.push_back(d);
+        }
+    }
+    return out;
+}
+
 PanelView pv_derive(const AppState& state) {
     bool hs = state.selected_track >= 0 &&
               state.selected_track < (int)state.tracks.size() &&
@@ -420,7 +799,15 @@ PanelView pv_derive(const AppState& state) {
     if (!hs) return PanelView::Project;
     const Clip& cl = state.tracks[state.selected_track].clips[state.selected_clip];
     if (cl.clip_type == ClipType::Background) return PanelView::OverrideBG;
-    if (cl.clip_type == ClipType::MultiFX) return PanelView::OverrideMultiFX;
+    // Coupled bricks have no standalone panel — their chain lives in the
+    // host content's FX tab (left-click can't even select them anymore;
+    // this guard covers stale selections).
+    if (cl.clip_type == ClipType::MultiFX && !cl.fx_coupled)
+        return PanelView::OverrideMultiFX;
+    if (cl.clip_type == ClipType::MultiFX) return PanelView::Clip;
+    if (cl.clip_type == ClipType::AudioMultiFX && !cl.fx_coupled)
+        return PanelView::OverrideAudioMultiFX;
+    if (cl.clip_type == ClipType::AudioMultiFX) return PanelView::Clip;
     if (cl.clip_type == ClipType::Effect) {
         if (cl.fx_type == FXType::Grade    ||
             cl.fx_type == FXType::Blur     ||
@@ -446,6 +833,7 @@ ImVec4 clip_type_badge_color(ClipType ct) {
         case ClipType::Background: return {180.f/255,60.f/255,160.f/255,1.f};
         case ClipType::BodyFX:     return {255.f/255,80.f/255,160.f/255,1.f};
         case ClipType::Record:     return {220.f/255,50.f/255,50.f/255,1.f};
+        case ClipType::VideoRecord: return {235.f/255,90.f/255,40.f/255,1.f};
         default:                   return {120.f/255,80.f/255,220.f/255,1.f};
     }
 }
@@ -460,6 +848,7 @@ const char* clip_type_name(ClipType ct) {
         case ClipType::Background: return "BG";
         case ClipType::BodyFX:     return "BODY FX";
         case ClipType::Record:     return "REC";
+        case ClipType::VideoRecord: return "CAM";
         default:                   return "ADJUST";
     }
 }
@@ -524,6 +913,9 @@ ImU32 clip_badge_color(const Clip& c) {
 const char* clip_display_name(const Clip& c) {
     if (c.clip_type == ClipType::Effect)  return fx_type_name(c.fx_type);
     if (c.clip_type == ClipType::MultiFX) return "MULTI";
+    // Capture IMG brick is a camera brick in photo mode — badge it as IMG so it
+    // reads distinctly from the Video Record "CAM" brick.
+    if (c.clip_type == ClipType::VideoRecord && c.rec_photo) return "IMG";
     return clip_type_name(c.clip_type);
 }
 
@@ -562,6 +954,69 @@ void add_record_brick(AppState& state) {
     // If the brick lands past the current view, zoom out to fit it.
     state.tl_zoom_to_fit_end = fmaxf(state.tl_zoom_to_fit_end, clip_end);
     history_push(state, "Add Record Brick");
+}
+
+void add_video_record_brick(AppState& state) {
+    float qfps = tl_fps(state);
+    if (!(qfps > 0.f)) qfps = 30.f;
+    Clip cl;
+    cl.clip_type = ClipType::VideoRecord;
+    cl.start     = snap_to_frame(state.playhead, (int)qfps);
+    cl.end       = snap_end_to_frame(cl.start + 8.f, (int)qfps);
+    Track t;
+    char n[32];
+    snprintf(n, sizeof(n), "Camera %d", (int)state.tracks.size() + 1);
+    t.name = n;
+    float clip_end = cl.end;
+    t.clips.push_back(std::move(cl));
+    state.tracks.insert(state.tracks.begin(), std::move(t));
+    state.selected_track = 0;
+    state.selected_clip  = 0;
+    // If the brick lands past the current view, zoom out to fit it.
+    state.tl_zoom_to_fit_end = fmaxf(state.tl_zoom_to_fit_end, clip_end);
+    history_push(state, "Add Record Brick");
+}
+
+void add_photo_capture_brick(AppState& state) {
+    float qfps = tl_fps(state);
+    if (!(qfps > 0.f)) qfps = 30.f;
+    Clip cl;
+    cl.clip_type = ClipType::VideoRecord;   // camera brick, in photo mode
+    cl.rec_photo = true;
+    cl.start     = snap_to_frame(state.playhead, (int)qfps);
+    cl.end       = snap_end_to_frame(cl.start + 4.f, (int)qfps);
+    Track t;
+    char n[32];
+    snprintf(n, sizeof(n), "Photo %d", (int)state.tracks.size() + 1);
+    t.name = n;
+    float clip_end = cl.end;
+    t.clips.push_back(std::move(cl));
+    state.tracks.insert(state.tracks.begin(), std::move(t));
+    state.selected_track = 0;
+    state.selected_clip  = 0;
+    state.tl_zoom_to_fit_end = fmaxf(state.tl_zoom_to_fit_end, clip_end);
+    history_push(state, "Add Capture IMG Brick");
+}
+
+void add_bus_brick(AppState& state) {
+    float qfps = tl_fps(state);
+    if (!(qfps > 0.f)) qfps = 30.f;
+    Clip cl;
+    cl.clip_type = ClipType::Bus;
+    cl.start     = 0.f;
+    cl.end       = snap_end_to_frame(fmaxf(8.f, state.duration), (int)qfps);
+    cl.volume    = 1.f;                       // gain (1.0 = unity)
+    Track t;
+    char n[32];
+    snprintf(n, sizeof(n), "Bus %d", (int)state.tracks.size() + 1);
+    t.name = n;
+    float clip_end = cl.end;
+    t.clips.push_back(std::move(cl));
+    state.tracks.insert(state.tracks.begin(), std::move(t));  // top → groups every track below
+    state.selected_track = 0;
+    state.selected_clip  = 0;
+    state.tl_zoom_to_fit_end = fmaxf(state.tl_zoom_to_fit_end, clip_end);
+    history_push(state, "Add Bus Brick");
 }
 
 // Rescale a media clip's own timeline width AND any FX bricks (Effect / BodyFX

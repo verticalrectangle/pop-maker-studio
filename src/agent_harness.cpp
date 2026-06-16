@@ -823,6 +823,12 @@ static const char* kSystemPrompt =
     "trigger_export, detect_screen_activity, ...) call its get_*_status tool "
     "ONCE — it blocks internally until the operation finishes and returns "
     "the final result. Never poll in a loop.\n"
+    "PROBE BEFORE ASKING: when the user provides media, gather facts with tools "
+    "before asking them anything — get_media_info for resolution/duration/codec, "
+    "describe_video + get_video_description for visual content, get_transcript / "
+    "search_transcript for spoken content, trigger_pipeline for lyrics. Only ask "
+    "the user about subjective choices (style, pacing, colors) that tools cannot "
+    "determine.\n"
     "Be concise in prose — do the work with tools and summarize briefly.";
 
 static void worker_turn() {
@@ -989,8 +995,10 @@ void agent_send(const std::string& user_text) {
     if (s_running || user_text.empty()) return;
     {
         std::lock_guard<std::mutex> lk(s_mu);
-        if (s_wire.empty())
-            s_wire.push_back({{"role", "system"}, {"content", kSystemPrompt}});
+        if (s_wire.empty()) {
+            std::string sys = std::string(kSystemPrompt) + "\n\n" + AGENT_TOOLS_INDEX;
+            s_wire.push_back({{"role", "system"}, {"content", sys}});
+        }
         s_wire.push_back({{"role", "user"}, {"content", user_text}});
         s_rows.push_back({AgentRole::User, user_text, "", false});
     }

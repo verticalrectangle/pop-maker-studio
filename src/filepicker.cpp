@@ -78,9 +78,11 @@ std::string filepicker_open(const char* title,
 
 std::string filepicker_save(const char* title,
                              const char* filter_name,
-                             const char* filter_patterns)
+                             const char* filter_patterns,
+                             const char* default_path)
 {
 #if defined(__APPLE__)
+    (void)default_path;
     char cmd[1024];
     snprintf(cmd, sizeof(cmd),
         "osascript -e 'POSIX path of (choose file name with prompt \"%s\")' 2>/dev/null",
@@ -101,10 +103,14 @@ std::string filepicker_save(const char* title,
 
 #else
     char cmd[2048];
+    // Seed the starting dir + suggested name when a default is given.
+    char fnarg[1280] = {};
+    if (default_path && *default_path)
+        snprintf(fnarg, sizeof(fnarg), "--filename='%s' ", default_path);
     snprintf(cmd, sizeof(cmd),
         "zenity --file-selection --save --confirm-overwrite --title='%s' "
-        "--file-filter='%s | %s' 2>/dev/null",
-        title, filter_name, filter_patterns);
+        "%s--file-filter='%s | %s' 2>/dev/null",
+        title, fnarg, filter_name, filter_patterns);
     FILE* p = popen(cmd, "r");
     if (p) {
         char buf[4096] = {};
@@ -120,8 +126,8 @@ std::string filepicker_save(const char* title,
     }
 
     snprintf(cmd, sizeof(cmd),
-        "kdialog --getsavefilename . '%s' --title '%s' 2>/dev/null",
-        filter_patterns, title);
+        "kdialog --getsavefilename '%s' '%s' --title '%s' 2>/dev/null",
+        (default_path && *default_path) ? default_path : ".", filter_patterns, title);
     p = popen(cmd, "r");
     if (p) {
         char buf[4096] = {};

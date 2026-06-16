@@ -33,8 +33,18 @@ OUT = ROOT / "src" / "generated" / "agent_tools.h"
 def main():
     dump = subprocess.run(
         [sys.executable, str(SERVER), "--dump-tools"],
-        capture_output=True, text=True, check=True,
+        capture_output=True, text=True,
     )
+    if dump.returncode != 0:
+        # The MCP server couldn't enumerate its tools (typically the `mcp` package
+        # isn't installed in this environment). In --check mode this is a build
+        # guard, not the point of the build — skip rather than break a checkout
+        # that just wants the editor. A real regen (no --check) still fails loudly.
+        if "--check" in sys.argv:
+            print("agent_tools.h check skipped — could not run server.py "
+                  "--dump-tools (mcp deps missing?)")
+            return
+        raise SystemExit(f"server.py --dump-tools failed:\n{dump.stderr}")
     tools = json.loads(dump.stdout)
 
     ipc_src = IPC.read_text()
@@ -42,12 +52,37 @@ def main():
     if not methods:
         raise SystemExit("no IPC methods found in ipc_server.cpp — wrong path?")
 
-    for t in tools:
+    # The in-app harness gets the AGENT audience only: operator tools (ui_input,
+    # camera/monitor toggles, vrecord, canvas geometry) drive the live UI and are
+    # reserved for an external driver, not the autonomous editing agent.
+    operator = [t for t in tools if t.get("audience") == "operator"]
+    agent_tools = [t for t in tools if t.get("audience") != "operator"]
+
+    for t in agent_tools:
         t["ipc"] = t["name"] in methods
 
-    n_ipc = sum(t["ipc"] for t in tools)
-    payload = json.dumps(tools, ensure_ascii=False, separators=(",", ":"))
-    if ")PMSTOOLS" in payload:
+    # Categorized index — a compact navigable map the harness appends to its
+    # system prompt so the model can orient across the surface by domain.
+    by_cat: dict[str, list[str]] = {}
+    for t in agent_tools:
+        by_cat.setdefault(t.get("category", "misc"), []).append(t["name"])
+    cat_order = ["read", "timeline", "text", "fx", "audio", "transcript",
+                 "export", "project", "capture", "playback", "system", "misc"]
+    index_lines = [
+        f"{cat}: " + ", ".join(sorted(by_cat[cat]))
+        for cat in cat_order if cat in by_cat
+    ]
+    index_str = "TOOLS BY CATEGORY (call by exact name):\n" + "\n".join(index_lines)
+
+    # Strip metadata the C++ OpenAI decl doesn't need (category/audience).
+    slim = [
+        {"name": t["name"], "description": t["description"],
+         "inputSchema": t["inputSchema"], "ipc": t["ipc"]}
+        for t in agent_tools
+    ]
+    n_ipc = sum(t["ipc"] for t in slim)
+    payload = json.dumps(slim, ensure_ascii=False, separators=(",", ":"))
+    if ")PMSTOOLS" in payload or ")PMSIDX" in index_str:
         raise SystemExit("raw-string delimiter collision — change the delimiter")
 
     header = (
@@ -55,11 +90,15 @@ def main():
         "// Source of truth: mcp_server/server.py (--dump-tools) intersected with\n"
         "// the IPC methods in src/ipc_server.cpp. Regenerate after changing tool\n"
         "// definitions:  python3 tools/gen_agent_tools.py\n"
-        f"// {len(tools)} tools: {n_ipc} dispatched straight to the IPC socket,\n"
-        "// the rest through the harness's server.py MCP stdio bridge.\n"
+        f"// {len(slim)} agent tools ({n_ipc} direct-IPC, {len(slim) - n_ipc} via the\n"
+        f"// server.py bridge); {len(operator)} operator-only tools withheld from the\n"
+        "// in-app harness ("
+        + ", ".join(sorted(t["name"] for t in operator)) + ").\n"
         "#pragma once\n\n"
         "// JSON array of {name, description, inputSchema, ipc}.\n"
-        "static const char* AGENT_TOOLS_JSON = R\"PMSTOOLS(" + payload + ")PMSTOOLS\";\n"
+        "static const char* AGENT_TOOLS_JSON = R\"PMSTOOLS(" + payload + ")PMSTOOLS\";\n\n"
+        "// Categorized name index, appended to the harness system prompt.\n"
+        "static const char* AGENT_TOOLS_INDEX = R\"PMSIDX(" + index_str + ")PMSIDX\";\n"
     )
     if "--check" in sys.argv:
         current = OUT.read_text() if OUT.exists() else ""
@@ -72,8 +111,9 @@ def main():
         return
 
     OUT.write_text(header)
-    print(f"wrote {OUT.relative_to(ROOT)}: {len(tools)} tools, {n_ipc} direct-IPC")
-    bridged = sorted(t["name"] for t in tools if not t["ipc"])
+    print(f"wrote {OUT.relative_to(ROOT)}: {len(slim)} agent tools, {n_ipc} direct-IPC, "
+          f"{len(operator)} operator-only withheld")
+    bridged = sorted(t["name"] for t in slim if not t["ipc"])
     print("python-only (served via the server.py bridge):", ", ".join(bridged))
 
 

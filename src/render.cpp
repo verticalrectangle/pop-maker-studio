@@ -7,6 +7,8 @@
 #include "fx_shader.h"
 #include "runtime_fx.h"
 #include "body_fx.h"
+#include "face_filters.h"
+#include "face_cache.h"
 
 #define GL_GLEXT_PROTOTYPES
 #include <GL/gl.h>
@@ -139,20 +141,78 @@ static std::string bake_audio_fx_wav(const std::string& src,
     return out_path;
 }
 
+// Does a media file have an audio stream? Cached probe (file-scope mirror of the
+// local lambda used in the per-stream builder).
+static bool render_path_has_audio(const std::string& p) {
+    static std::map<std::string, bool> cache;
+    auto it = cache.find(p);
+    if (it != cache.end()) return it->second;
+    bool ok = video_probe_file(p).has_audio;
+    cache[p] = ok;
+    return ok;
+}
+
+// The bus brick a clip on track `ti` over [t0,t1] routes through: the brick on
+// the highest track ABOVE it (lower index) whose span overlaps the clip. Mirrors
+// the live mixer's owner_brick (nearest above, span-gated). null = ungrouped.
+static const Clip* bus_brick_for(const AppState& state, int ti, float t0, float t1) {
+    const Clip* best = nullptr; int best_track = -1;
+    for (int bt = 0; bt < ti && bt < (int)state.tracks.size(); ++bt) {
+        for (const auto& c : state.tracks[(size_t)bt].clips) {
+            if (c.clip_type != ClipType::Bus) continue;
+            if (c.start < t1 && c.end > t0 && bt > best_track) {   // spans overlap
+                best = &c; best_track = bt;
+            }
+        }
+    }
+    return best;
+}
+
+// Cumulative bus-brick gain for a clip on track `ti` (the owning brick's gain;
+// 1.0 when ungrouped). Applied at the per-stream volume stage. The brick's span
+// is honored at the FX stage; for gain we apply the brick's gain to the clip
+// (exact when the clip sits within the span — the intended grouping case).
+static float bus_brick_gain(const AppState& state, int ti, const Clip& cl) {
+    const Clip* bb = bus_brick_for(state, ti, cl.start, cl.end);
+    return bb ? bb->volume : 1.f;
+}
+
 // Effective FX segments for an exported clip — same rules as the preview:
 // the clip's own chain covers its whole range, otherwise track bricks apply
 // windowed to their overlap. Voice conversion is an ML job handled via
 // vc_out_path substitution, never offline-baked.
 static std::vector<AudioFXSegment> export_fx_segments(const AppState& state,
                                                       int ti, const Clip& cl) {
+    std::vector<AudioFXSegment> segs;
     if (cl.audio_fx.any_active()) {
         AudioFX own = cl.audio_fx;
         own.voice_convert_on = false;
-        if (!own.any_active()) return {};
-        float spd = fmaxf(0.01f, cl.speed);
-        return {{cl.in_point, cl.in_point + (cl.end - cl.start) * spd, own}};
+        if (own.any_active()) {
+            float spd = fmaxf(0.01f, cl.speed);
+            segs.push_back({cl.in_point,
+                            cl.in_point + (cl.end - cl.start) * spd, own});
+        }
+    } else {
+        segs = collect_audio_fx_segments(state, ti, cl);
     }
-    return collect_audio_fx_segments(state, ti, cl);
+    // Bus brick: the clip routes through the nearest bus brick above it (lower
+    // track index) whose span overlaps the clip. Its FX chain bakes over the
+    // overlap window (clip↔span, mapped to source time). Linear inserts
+    // (EQ/comp/reverb/gain) match the summed-stem result; grain FX differ
+    // marginally on overlapping clips. The brick's gain is applied separately at
+    // the per-stream volume stage (bus_brick_gain).
+    if (const Clip* bb = bus_brick_for(state, ti, cl.start, cl.end)) {
+        float spd = fmaxf(0.01f, cl.speed);
+        float ov0 = fmaxf(cl.start, bb->start);
+        float ov1 = fminf(cl.end,   bb->end);
+        float s0  = cl.in_point + (ov0 - cl.start) * spd;
+        float s1  = cl.in_point + (ov1 - cl.start) * spd;
+        for (const auto& se : bb->fx_chain) {
+            AudioFX fx;
+            if (audio_fx_from_brick_pub(se, fx)) segs.push_back({s0, s1, fx});
+        }
+    }
+    return segs;
 }
 
 // ── Font extraction ───────────────────────────────────────────────────────────
@@ -915,6 +975,25 @@ static bool write_filter_script(
                     y_off = buf;
                     break;
                 }
+                case AnimStyle::Scale: {
+                    // drawtext fontsize isn't a per-frame expression, so the
+                    // scale-pop can't be reproduced in this legacy filter-graph
+                    // path (the GL overlay export does the real thing). Fall back
+                    // to the Fade alpha ramp so the entrance isn't a hard cut.
+                    char buf[256];
+                    snprintf(buf, sizeof(buf),
+                        "if(lt(%s,%.3f)"
+                        ",clip(%s/%.3f\\,0\\,1)"
+                        ",if(gt(%s,%.3f)"
+                        ",clip((%.3f-%s)/%.3f\\,0\\,1)"
+                        ",1))",
+                        lt.c_str(), (double)fade_in,
+                        lt.c_str(), (double)fade_in,
+                        lt.c_str(), (double)(clip_dur - fade_out),
+                        (double)clip_dur, lt.c_str(), (double)fade_out);
+                    alpha_mod = buf;
+                    break;
+                }
                 case AnimStyle::Block: {
                     // Box drawn via drawtext box=1 option (text_w/text_h not available in drawbox)
                     break;
@@ -1126,12 +1205,25 @@ static std::vector<std::string> build_args(AppState& state) {
             if (cl.clip_type == ClipType::Effect || cl.clip_type == ClipType::MultiFX) {
                 continue;  // applied per-layer via collect_effects, not as a render layer
             } else if (cl.clip_type == ClipType::Video) {
-                if (cl.text.empty() || !fs::exists(cl.text)) continue;
-                int arr_idx = get_vid_input(cl.text, cl.start, cl.end);
+                std::string vsrc = clip_video_src(state, cl);  // conformed copy if ready
+                if (vsrc.empty() || !fs::exists(vsrc)) continue;
+                int arr_idx = get_vid_input(vsrc, cl.start, cl.end);
                 RLayer rl; rl.kind = RLayer::Vid;
                 rl.track_idx = ti; rl.clip_idx = ci;
                 rl.in_idx    = arr_idx;  // resolved to real ffmpeg idx below
                 layers.push_back(rl);
+                // The video's own audio must respect the bus brick gain too. It
+                // usually arrives via state.audio_path (added above at vol 1.0);
+                // replace that entry's volume with the bus-gained value (mirrors
+                // the Audio-clip dedup below), else add it as its own stream.
+                if (render_path_has_audio(cl.text)) {
+                    float vvol = (state.tracks[ti].muted ? 0.f : cl.volume)
+                                 * bus_brick_gain(state, ti, cl);
+                    bool found = false;
+                    for (auto& ai : audio_ins)
+                        if (ai.path == cl.text) { ai.vol = vvol; found = true; break; }
+                    if (!found) audio_ins.push_back({cl.text, cl.start, cl.end, vvol});
+                }
             } else if (cl.clip_type == ClipType::Text   ||
                        cl.clip_type == ClipType::Lyrics ||
                        cl.clip_type == ClipType::Subtitle) {
@@ -1140,7 +1232,8 @@ static std::vector<std::string> build_args(AppState& state) {
                 layers.push_back(rl);
             } else if (cl.clip_type == ClipType::Audio) {
                 if (cl.text.empty() || !fs::exists(cl.text)) continue;
-                float vol = state.tracks[ti].muted ? 0.f : cl.volume;
+                float vol = (state.tracks[ti].muted ? 0.f : cl.volume)
+                            * bus_brick_gain(state, ti, cl);
                 // Replace primary audio entry if same path, else add new stream
                 bool found = false;
                 for (auto& ai : audio_ins) {
@@ -1315,8 +1408,9 @@ static std::vector<std::string> build_snapshot_args(AppState& state,
             const Clip& cl = state.tracks[ti].clips[ci];
             if (cl.clip_type == ClipType::Effect || cl.clip_type == ClipType::MultiFX) continue;
             if (cl.clip_type == ClipType::Video) {
-                if (cl.text.empty() || !fs::exists(cl.text)) continue;
-                int arr_idx = get_vid_input(cl.text);
+                std::string vsrc = clip_video_src(state, cl);  // conformed copy if ready
+                if (vsrc.empty() || !fs::exists(vsrc)) continue;
+                int arr_idx = get_vid_input(vsrc);
                 RLayer rl; rl.kind = RLayer::Vid;
                 rl.track_idx = ti; rl.clip_idx = ci;
                 rl.in_idx    = arr_idx;
@@ -1476,7 +1570,7 @@ void render_snapshot_start(AppState& state, float snap_t) {
     if (base_path.empty()) {
         for (auto& tr : state.tracks)
             for (auto& cl : tr.clips)
-                if (cl.clip_type == ClipType::Video && !cl.text.empty())
+                if (clip_is_videolike_type(cl.clip_type) && !cl.text.empty())
                     { base_path = cl.text; goto found_base; }
     }
     found_base:
@@ -1577,6 +1671,8 @@ static struct GlExport {
     // — shaves the per-frame glMapBuffer wait when GPU runs faster than CPU.
     GLuint  pbo[3]        = {};
     bool    use_vaapi     = false;  // h264_vaapi encoder active
+    // Face-filter landmark caches still building — frames wait on these.
+    std::vector<std::pair<std::string, int>> face_waits;   // (take path, rot_q)
 } g_gl_ex;
 
 static void gl_cleanup_export();
@@ -1584,6 +1680,55 @@ static bool gl_render_vid_clip(ImDrawList& dl, const Clip* cl, float at_time,
                                 float alpha_mul, GLuint tex_id, int fx_slot,
                                 float W, float H, const AppState& state, int ti,
                                 bool use_scene = false);
+
+// Render one track's active text overlay to a texture and composite it into the
+// current scene at that track's z (shared by preview canvas + GL export).
+void scene_add_text_layer(const AppState& state, float t, int ti, int w, int h) {
+    static GLuint fbo = 0, tex = 0; static int fw = 0, fh = 0;
+    if (!fbo) glGenFramebuffers(1, &fbo);
+    if (!tex) glGenTextures(1, &tex);
+    if (fw != w || fh != h) {
+        glBindTexture(GL_TEXTURE_2D, tex);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tex, 0);
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        fw = w; fh = h;
+    }
+    // Build just this track's text into a scratch draw list.
+    ImDrawList tdl(ImGui::GetDrawListSharedData());
+    tdl._ResetForNewFrame();
+    tdl.PushClipRect({0.f, 0.f}, {(float)w, (float)h});
+    tdl.PushTexture(ImGui::GetIO().Fonts->TexRef);
+    draw_text_overlays(&tdl, state, t, {0.f, 0.f}, (float)w, (float)h, ti);
+    tdl.PopTexture(); tdl.PopClipRect();
+    if (tdl.VtxBuffer.Size == 0) return;   // no active text on this track
+
+    GLint prev_fbo = 0; glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prev_fbo);
+    GLint vp[4];        glGetIntegerv(GL_VIEWPORT, vp);
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+    glViewport(0, 0, w, h);
+    glClearColor(0.f, 0.f, 0.f, 0.f);
+    glClear(GL_COLOR_BUFFER_BIT);
+    ImDrawData dd;
+    dd.DisplayPos       = {0.f, 0.f};
+    dd.DisplaySize      = {(float)w, (float)h};
+    dd.FramebufferScale = {1.f, 1.f};
+    dd.Textures         = &ImGui::GetIO().Fonts->TexList;
+    dd.AddDrawList(&tdl);
+    ImGui_ImplOpenGL3_RenderDrawData(&dd);
+    glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)prev_fbo);
+    glViewport(vp[0], vp[1], vp[2], vp[3]);
+
+    // Composite full-frame at this track's z. The scene samples bottom-up vs
+    // ImGui's top-down render, so flip V (v0=1, v1=0) to keep the text upright.
+    scene_add_layer((uintptr_t)tex, w * 0.5f, h * 0.5f, w * 0.5f, h * 0.5f,
+                    1.f, 0.f, 1.f, 0.f, 1.f, 1.f, 0.f);
+}
 
 // ── GL snapshot — identical to preview ───────────────────────────────────────
 
@@ -1595,20 +1740,21 @@ void render_snapshot_gl(AppState& state, float snap_t, bool open_folder) {
     if (base_path.empty()) {
         for (auto& tr : state.tracks)
             for (auto& cl : tr.clips)
-                if (cl.clip_type == ClipType::Video && !cl.text.empty())
+                if (clip_is_videolike_type(cl.clip_type) && !cl.text.empty())
                     { base_path = cl.text; goto snap_found_base; }
     }
     snap_found_base:
     if (base_path.empty()) {
-        state.snapshot_msg     = "Snapshot failed — no media loaded";
-        state.snapshot_msg_new = true;
-        // Complete the IPC handshake too — without this, agents polling
-        // get_snapshot_status on a text-only project hang until timeout.
-        state.snapshot_done_err = "no video/audio media loaded — render "
-                                  "snapshots need at least one media clip; "
-                                  "use source='canvas' for text-only scenes";
-        state.snapshot_done     = true;
-        return;
+        // No video/audio media — a text / background / image / FX composition,
+        // i.e. someone making a still image. base_path is only used to name the
+        // output file, so derive one from the project (else HOME) and render the
+        // frame full-res anyway instead of refusing.
+        if (!state.project_path.empty()) {
+            base_path = state.project_path;
+        } else {
+            const char* home = std::getenv("HOME");
+            base_path = std::string(home ? home : ".") + "/pms_snapshot";
+        }
     }
 
     int total_ms = (int)(snap_t * 1000.f);
@@ -1666,13 +1812,43 @@ void render_snapshot_gl(AppState& state, float snap_t, bool open_folder) {
 
     glBindFramebuffer(GL_FRAMEBUFFER, fbo);
     glViewport(0, 0, out_w, out_h);
-    glClearColor(0.f, 0.f, 0.f, 1.f);
+    // Clear transparent (not black) so a still export keeps its alpha: a
+    // text/image/FX composition with empty regions saves as a transparent PNG
+    // (stickers, overlays), while a full-frame video stays fully opaque. The
+    // mp4 export path (render_tick_gl) is unchanged — it still clears black.
+    glClearColor(0.f, 0.f, 0.f, 0.f);
     glClear(GL_COLOR_BUFFER_BIT);
 
     ImDrawList dl(ImGui::GetDrawListSharedData());
     dl._ResetForNewFrame();
     dl.PushClipRect({0.f, 0.f}, {W, H});
     dl.PushTexture(ImGui::GetIO().Fonts->TexRef);
+
+    // Per-track scene FX: standalone FX bricks process the tracks below them.
+    // Flush the accumulated draw list into the FBO, then run the brick's FX on
+    // it in place, then keep building (tracks above composite over the result).
+    auto flush_dl = [&]() {
+        dl.PopTexture(); dl.PopClipRect();
+        ImDrawData fdd; fdd.DisplayPos = {0,0}; fdd.DisplaySize = {W,H};
+        fdd.FramebufferScale = {1,1}; fdd.Textures = &ImGui::GetIO().Fonts->TexList;
+        fdd.AddDrawList(&dl);
+        ImGui_ImplOpenGL3_RenderDrawData(&fdd);
+        dl._ResetForNewFrame();
+        dl.PushClipRect({0.f, 0.f}, {W, H});
+        dl.PushTexture(ImGui::GetIO().Fonts->TexRef);
+    };
+    auto apply_track_fx = [&](int ti) {
+        EffectAccum     ea  = collect_effects_for_track(state, t, ti);
+        CreativeFXAccum cfx = collect_creative_fx_for_track(state, t, ti);
+        if (!(ea.any_color || ea.any_blur || ea.any_vignette || ea.any_text ||
+              cfx.any_cfx || cfx.any_gen_fx)) return;
+        flush_dl();                                   // below-tracks → FBO
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);         // detach so col_tex is readable
+        uintptr_t out = fx_apply((uintptr_t)col_tex, kSceneFxSlot, out_w, out_h, ea, cfx, t);
+        glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+        glViewport(0, 0, out_w, out_h);
+        if (out != (uintptr_t)col_tex) fx_blit(out, fbo, out_w, out_h);
+    };
 
     // Reuse the same video-clip rendering path as render_tick_gl.
     // Per-slot decoders self-track their open file, so no path-cache bookkeeping needed.
@@ -1720,7 +1896,8 @@ void render_snapshot_gl(AppState& state, float snap_t, bool open_folder) {
         const Clip* active = nullptr; int active_ci = -1;
         for (int ci = 0; ci < (int)track.clips.size(); ++ci) {
             auto& cl = track.clips[ci];
-            if (cl.clip_type == ClipType::Video && t >= cl.start && t < cl.end)
+            if (clip_is_videolike_type(cl.clip_type) && !cl.text.empty() &&
+                t >= cl.start && t < cl.end)
                 { active = &cl; active_ci = ci; break; }
         }
         if (!active) {
@@ -1733,7 +1910,11 @@ void render_snapshot_gl(AppState& state, float snap_t, bool open_folder) {
                     { active = &track.clips[ci]; active_ci = ci; break; }
             }
         }
-        if (!active) continue;
+        if (!active) {  // text-only / FX-only track — still draw text + run its FX
+            draw_text_overlays(&dl, state, t, {0.f, 0.f}, W, H, ti);
+            apply_track_fx(ti);
+            continue;
+        }
 
         bool in_trans_out = (active->transition_type != TransitionType::None &&
                              active->transition_pre > 0.f &&
@@ -1788,10 +1969,13 @@ void render_snapshot_gl(AppState& state, float snap_t, bool open_folder) {
         } else {
             gl_render_vid_clip(dl, active, t, 1.f, vid_texs[slot_pri], slot_pri, W, H, state, ti);
         }
+        // This track's text, drawn right after its video so it layers at the
+        // track's z-order (foreground tracks composite on top of it next).
+        draw_text_overlays(&dl, state, t, {0.f, 0.f}, W, H, ti);
+        apply_track_fx(ti);   // standalone FX bricks process the tracks below
     }
     video_close_export_all();
 
-    draw_text_overlays(&dl, state, t, {0.f, 0.f}, W, H);
     dl.PopTexture();
     dl.PopClipRect();
 
@@ -1804,6 +1988,9 @@ void render_snapshot_gl(AppState& state, float snap_t, bool open_folder) {
     dd.Textures = &ImGui::GetIO().Fonts->TexList;
     dd.AddDrawList(&dl);
     ImGui_ImplOpenGL3_RenderDrawData(&dd);
+
+    // (Scene FX are applied per-track during the loop above — each standalone FX
+    // brick processes the tracks below it — so there's no whole-frame FX pass.)
 
     // ── Read back + vertical flip ─────────────────────────────────────────────
     std::vector<uint8_t> raw((size_t)out_w * out_h * 4);
@@ -1983,6 +2170,11 @@ static bool gl_render_vid_clip(ImDrawList& dl, const Clip* cl, float at_time,
         // Non-destructive crop: sample only the clip's UV window.
         ImVec2 uv0{cl->crop_l,       cl->crop_t};
         ImVec2 uv1{1.f - cl->crop_r, 1.f - cl->crop_b};
+        // Camera-record takes export MIRRORED — matches the live preview and
+        // playback (front-facing-cam convention). Swap the horizontal window.
+        if (cl->clip_type == ClipType::VideoRecord) {
+            float t = uv0.x; uv0.x = uv1.x; uv1.x = t;
+        }
         if (use_scene) {
             scene_add_layer(cur_tex, cx, cy, hw, hh, cos_r, sin_r,
                             fmaxf(0.f, fminf(1.f, alpha)),
@@ -2040,7 +2232,9 @@ static bool gl_render_vid_clip(ImDrawList& dl, const Clip* cl, float at_time,
     if (cl->bg_remove_status == BgRemoveStatus::Ready && !cl->bg_remove_mask_dir.empty()) {
         std::string mask_dir = cl->bg_remove_mask_dir;
         float mask_fps = bg_remove_read_fps(mask_dir);
-        float bfx_src_t = cl->in_point + (at_time - cl->start) / cl->speed;
+        // Same source-time mapping as the frame fetch (×speed — this used to
+        // divide, desyncing body-FX masks on any retimed clip).
+        float bfx_src_t = cl->in_point + (at_time - cl->start) * cl->speed;
         int frame_i = (int)(bfx_src_t * mask_fps);
 
         // Standalone glass BodyFX bricks on this track
@@ -2078,6 +2272,12 @@ static bool gl_render_vid_clip(ImDrawList& dl, const Clip* cl, float at_time,
     if (!cl->runtime_fx_id.empty())
         cur_tex = runtime_fx_apply(cl->runtime_fx_id, cur_tex, vid_w, vid_h,
                                    cl->runtime_fx_params, cl->runtime_fx_amount, at_time);
+
+    // Face filter on the take — same cached-landmark helper as preview.
+    // Export prep blocks until the cache is built (see export start).
+    if (cl->face_filter != 0)
+        cur_tex = face_filter_apply_take(*cl, (double)src_t, cur_tex,
+                                         fx_slot, vid_w, vid_h);
 
     // BodyFX is now a solid brick on its own track — applied post-composite (see below).
 
@@ -2138,6 +2338,9 @@ static bool gl_render_vid_clip(ImDrawList& dl, const Clip* cl, float at_time,
     // Non-destructive crop: sample only the clip's UV window.
     float cu0 = cl->crop_l,       cv0 = cl->crop_t;
     float cu1 = 1.f - cl->crop_r, cv1 = 1.f - cl->crop_b;
+    // Camera-record takes export MIRRORED — matches the live preview and
+    // playback (front-facing-cam convention). Swap the horizontal window.
+    if (cl->clip_type == ClipType::VideoRecord) { float t = cu0; cu0 = cu1; cu1 = t; }
     if (use_scene) {
         scene_add_layer(draw_tex, cx, cy, hw, hh, cos_r, sin_r,
                         fmaxf(0.f, fminf(1.f, alpha)),
@@ -2170,6 +2373,19 @@ void render_start_gl(AppState& state) {
     int fps          = state.fps;
     int total_frames = (int)(state.duration * fps + 0.5f);
     if (total_frames <= 0 || state.out_mp4.empty()) return;
+
+    // Face filters: kick landmark-cache builds NOW so they run while the rest
+    // of the export sets up; render_tick_gl waits on the stragglers before
+    // the first frame (filters silently missing from an export would read as
+    // "export is broken").
+    std::vector<std::pair<std::string, int>> face_waits;
+    for (auto& tr : state.tracks)
+        for (auto& cl : tr.clips)
+            if (cl.face_filter != 0 && !cl.text.empty()) {
+                int rq = ((int)lroundf(cl.rotation / 90.f) % 4 + 4) % 4;
+                face_cache_request(cl.text, rq);
+                face_waits.push_back({cl.text, rq});
+            }
 
     // ── Create FBO ────────────────────────────────────────────────────────────
     GLuint fbo = 0, col_tex = 0;
@@ -2271,11 +2487,22 @@ void render_start_gl(AppState& state) {
                     }
                     AudioIn ai;
                     ai.path  = tp;
-                    ai.vol   = state.tracks[ti].muted ? 0.f : cl.volume;
+                    ai.vol   = (state.tracks[ti].muted ? 0.f : cl.volume)
+                               * bus_brick_gain(state, ti, cl);
                     ai.ss    = fmaxf(0.f, -cl.start);   // overhang past t=0
                     ai.to    = cl.end - cl.start;
                     ai.delay = fmaxf(0.f, cl.start);
                     ai.pan   = state.tracks[ti].muted ? 0.f : cl.pan;
+                    // Keyframed volume/pan (take plays at 1x, pts base 0) — mirror
+                    // the general clip path so a record take exports as it previews.
+                    if (!state.tracks[ti].muted) {
+                        if (auto kv = cl.ktracks.find("volume");
+                            kv != cl.ktracks.end() && !kv->second.empty())
+                            ai.vol_e = prop_expr(cl, "volume", 1.f, cl.volume, -1.f, 1.f, 0.f);
+                        if (auto kp = cl.ktracks.find("pan");
+                            kp != cl.ktracks.end() && !kp->second.empty())
+                            ai.pan_e = prop_expr(cl, "pan", 1.f, cl.pan, -1.f, 1.f, 0.f);
+                    }
                     if (cl.fade_in > 0.f)  { ai.fade_in = cl.fade_in;  ai.fade_in_st = 0.f; }
                     if (cl.fade_out > 0.f) {
                         ai.fade_out    = cl.fade_out;
@@ -2286,12 +2513,15 @@ void render_start_gl(AppState& state) {
                     continue;
                 }
                 if (cl.text.empty()) continue;
+                // Audio clips and any video-like clip whose source carries audio
+                // (imported video, or a camera A/V take recorded with the mic).
                 if (cl.clip_type != ClipType::Audio &&
-                    cl.clip_type != ClipType::Video) continue;
+                    !clip_is_videolike_type(cl.clip_type)) continue;
                 if (!fs::exists(cl.text)) continue;
-                if (cl.clip_type == ClipType::Video && !path_has_audio(cl.text)) continue;
+                if (clip_is_videolike_type(cl.clip_type) && !path_has_audio(cl.text)) continue;
                 float speed = fmaxf(0.01f, cl.speed);
-                float vol   = state.tracks[ti].muted ? 0.f : cl.volume;
+                float vol   = (state.tracks[ti].muted ? 0.f : cl.volume)
+                              * bus_brick_gain(state, ti, cl);
                 // Clips dragged left past t=0 (start < 0): only the part from
                 // timeline 0 is audible. Fold the overhang into in_point so
                 // the ss/to/itsoffset math below needs no negative offsets —
@@ -2438,7 +2668,10 @@ void render_start_gl(AppState& state) {
                                       !stream_needs_work(audio_ins[0]) &&
                                       audio_ins[0].delay <= 0.001f;
             if (simple_passthrough) {
-                args.push_back("-map"); args.push_back("1:a");
+                // Trailing '?' → optional stream: if the source turns out to
+                // have no audio (probe false positives on some AVIs), ffmpeg
+                // skips it instead of aborting the whole export.
+                args.push_back("-map"); args.push_back("1:a?");
             } else {
                 // Per-stream chain: volume → afade → pan → atempo, then amix.
                 // Volume/fade/pan run BEFORE atempo so their `t` is the
@@ -2648,6 +2881,7 @@ void render_start_gl(AppState& state) {
     g_gl_ex.pbo[1]        = pbos[1];
     g_gl_ex.pbo[2]        = pbos[2];
     g_gl_ex.use_vaapi     = use_vaapi;
+    g_gl_ex.face_waits    = std::move(face_waits);
     video_close_export_all();  // reset all decoder slots for the new render session
     g_ffmpeg_pid.store(pid);
 
@@ -2729,6 +2963,33 @@ void render_tick_gl(AppState& state) {
         return;
     }
 
+    // Face-filter caches still building: hold the first frame until they're
+    // ready (a filter silently missing from an export reads as "broken").
+    // Failed builds are dropped — those clips export unfiltered.
+    if (!g_gl_ex.face_waits.empty() && g_gl_ex.current_frame == 0) {
+        float worst = 1.f;
+        auto& fw = g_gl_ex.face_waits;
+        for (auto it = fw.begin(); it != fw.end();) {
+            float p = 0.f;
+            FaceCacheStatus st = face_cache_status(it->first, &p);
+            if (st == FaceCacheStatus::Ready || st == FaceCacheStatus::Failed ||
+                st == FaceCacheStatus::None) {
+                it = fw.erase(it);
+            } else {
+                worst = std::min(worst, p);
+                ++it;
+            }
+        }
+        if (!fw.empty()) {
+            char buf[64];
+            snprintf(buf, sizeof(buf), "Tracking faces… %d%%",
+                     (int)(worst * 100.f));
+            state.render.stage = buf;
+            return;
+        }
+        state.render.stage = "Encoding…";
+    }
+
     auto tick_t0 = perf_clock::now();
 
     // Triple-buffer pipeline: at tick N we collect frame N-2 (kicked at tick
@@ -2803,6 +3064,39 @@ void render_tick_gl(AppState& state) {
     dl.PushClipRect({0.f, 0.f}, {W, H});
     dl.PushTexture(ImGui::GetIO().Fonts->TexRef);
 
+    // Bind + clear the export FBO up front so standalone FX bricks can flush the
+    // tracks-below into it and run their FX mid-loop (group-bus scoping).
+    glBindFramebuffer(GL_FRAMEBUFFER, g_gl_ex.fbo);
+    glViewport(0, 0, g_gl_ex.out_w, g_gl_ex.out_h);
+    glClearColor(0.f, 0.f, 0.f, 1.f);
+    glClear(GL_COLOR_BUFFER_BIT);
+    auto flush_dl = [&]() {
+        dl.PopTexture(); dl.PopClipRect();
+        ImDrawData fdd; fdd.DisplayPos = {0,0}; fdd.DisplaySize = {W,H};
+        fdd.FramebufferScale = {1,1}; fdd.Textures = &ImGui::GetIO().Fonts->TexList;
+        fdd.AddDrawList(&dl);
+        glBindFramebuffer(GL_FRAMEBUFFER, g_gl_ex.fbo);  // per-clip FX may have rebound
+        glViewport(0, 0, g_gl_ex.out_w, g_gl_ex.out_h);
+        ImGui_ImplOpenGL3_RenderDrawData(&fdd);
+        dl._ResetForNewFrame();
+        dl.PushClipRect({0.f, 0.f}, {W, H});
+        dl.PushTexture(ImGui::GetIO().Fonts->TexRef);
+    };
+    auto apply_track_fx = [&](int ti) {
+        EffectAccum     ea  = collect_effects_for_track(state, t, ti);
+        CreativeFXAccum cfx = collect_creative_fx_for_track(state, t, ti);
+        if (!(ea.any_color || ea.any_blur || ea.any_vignette || ea.any_text ||
+              cfx.any_cfx || cfx.any_gen_fx)) return;
+        flush_dl();                                   // below-tracks → FBO
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);         // detach so color_tex is readable
+        uintptr_t out = fx_apply((uintptr_t)g_gl_ex.color_tex, kSceneFxSlot,
+                                 g_gl_ex.out_w, g_gl_ex.out_h, ea, cfx, t);
+        glBindFramebuffer(GL_FRAMEBUFFER, g_gl_ex.fbo);
+        glViewport(0, 0, g_gl_ex.out_w, g_gl_ex.out_h);
+        if (out != (uintptr_t)g_gl_ex.color_tex)
+            fx_blit(out, g_gl_ex.fbo, g_gl_ex.out_w, g_gl_ex.out_h);
+    };
+
     for (int ti = (int)state.tracks.size() - 1; ti >= 0; --ti) {
         const auto& track = state.tracks[ti];
         if (!track.visible) continue;
@@ -2855,7 +3149,8 @@ void render_tick_gl(AppState& state) {
         int active_ci = -1;
         for (int ci = 0; ci < (int)track.clips.size(); ++ci) {
             auto& cl = track.clips[ci];
-            if (cl.clip_type == ClipType::Video && t >= cl.start && t < cl.end)
+            if (clip_is_videolike_type(cl.clip_type) && !cl.text.empty() &&
+                t >= cl.start && t < cl.end)
                 { active = &cl; active_ci = ci; break; }
         }
         // Check incoming transition clip (visible before its own start time)
@@ -2869,7 +3164,11 @@ void render_tick_gl(AppState& state) {
                     { active = &track.clips[ci]; active_ci = ci; break; }
             }
         }
-        if (!active) continue;
+        if (!active) {  // text-only / FX-only track — still draw text + run its FX
+            draw_text_overlays(&dl, state, t, {0.f, 0.f}, W, H, ti);
+            apply_track_fx(ti);   // standalone FX bricks process the tracks below
+            continue;
+        }
 
         rlog("  vid_clip track=%d clip=%d path=%s\n", ti, active_ci, active->text.c_str());
 
@@ -2933,18 +3232,22 @@ void render_tick_gl(AppState& state) {
         } else {
             gl_render_vid_clip(dl, active, t, 1.f, tex_pri, slot_pri, W, H, state, ti);
         }
+        // This track's text at its z-order (foreground tracks composite over it).
+        draw_text_overlays(&dl, state, t, {0.f, 0.f}, W, H, ti);
+        apply_track_fx(ti);   // standalone FX bricks process the tracks below
     }
 
     g_perf.compose_us += us_since(compose_t0);
     rlog("  vid_clips_done\n");
 
-    // ── Phase 2: Render video clips to export FBO ─────────────────────────────
-    // Bind and clear the export FBO, then render the ImDrawList into it.
+    // ── Phase 2: Render remaining video clips to export FBO ───────────────────
+    // The FBO was bound + cleared up front (before the loop); standalone FX
+    // bricks flushed the tracks below them into it mid-loop. Here we render any
+    // dl content accumulated after the last flush — it blends over the FBO at
+    // the correct z-order. No clear: that would erase the per-track FX results.
     auto render_t0 = perf_clock::now();
-    glBindFramebuffer(GL_FRAMEBUFFER, g_gl_ex.fbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, g_gl_ex.fbo);  // per-track FX may have rebound
     glViewport(0, 0, g_gl_ex.out_w, g_gl_ex.out_h);
-    glClearColor(0.f, 0.f, 0.f, 1.f);
-    glClear(GL_COLOR_BUFFER_BIT);
     {
         dl.PopTexture();
         dl.PopClipRect();
@@ -2959,60 +3262,12 @@ void render_tick_gl(AppState& state) {
     g_perf.render_us += us_since(render_t0);
     rlog("  vid_render_done\n");
 
-    // ── Phase 3: Global FX ────────────────────────────────────────────────────
-    // MUST run after RenderDrawData so per-clip fx slot textures are no longer
-    // referenced by a live draw list.  Unbind the export FBO before calling
-    // fx_apply so g_gl_ex.color_tex (the FBO's colour attachment) can be safely
-    // sampled without an undefined read-while-attached feedback loop.
-    auto fx_t0 = perf_clock::now();
-    {
-        EffectAccum     global_ea  = collect_effects    (state, t, (int)state.tracks.size());
-        CreativeFXAccum global_cfx = collect_creative_fx(state, t, (int)state.tracks.size());
-        if (global_ea.any_color || global_ea.any_blur || global_ea.any_vignette ||
-            global_ea.any_text  || global_cfx.any_cfx || global_cfx.any_gen_fx) {
-            glBindFramebuffer(GL_FRAMEBUFFER, 0);  // detach so color_tex is readable
-            uintptr_t out = fx_apply((uintptr_t)g_gl_ex.color_tex, kSceneFxSlot,
-                                     g_gl_ex.out_w, g_gl_ex.out_h,
-                                     global_ea, global_cfx, t);
-            glBindFramebuffer(GL_FRAMEBUFFER, g_gl_ex.fbo);
-            glViewport(0, 0, g_gl_ex.out_w, g_gl_ex.out_h);
-            if (out != (uintptr_t)g_gl_ex.color_tex)
-                fx_blit(out, g_gl_ex.fbo, g_gl_ex.out_w, g_gl_ex.out_h);
-        }
-    }
-    g_perf.fx_us += us_since(fx_t0);
-    rlog("  fx_done\n");
+    // (Scene FX are applied per-track during the loop above — each standalone FX
+    // brick processes the tracks below it — so there's no whole-frame FX pass.)
 
-    // ── Phase 4: Text overlays (ImDrawList on top of the composited frame) ────
-    // Export FBO must be bound — it is, either from Phase 2 (no global FX) or
-    // re-bound explicitly in Phase 3 / Phase 3b.
-    auto text_t0 = perf_clock::now();
-    glBindFramebuffer(GL_FRAMEBUFFER, g_gl_ex.fbo);
-    glViewport(0, 0, g_gl_ex.out_w, g_gl_ex.out_h);
-    {
-        ImDrawList text_dl(ImGui::GetDrawListSharedData());
-        text_dl._ResetForNewFrame();
-        text_dl.PushClipRect({0.f, 0.f}, {W, H});
-        text_dl.PushTexture(ImGui::GetIO().Fonts->TexRef);
-
-        draw_text_overlays(&text_dl, state, t, {0.f, 0.f}, W, H);
-
-        rlog("  text_overlays_done  vtx=%d idx=%d cmd=%d\n",
-             text_dl.VtxBuffer.Size, text_dl.IdxBuffer.Size, text_dl.CmdBuffer.Size);
-
-        text_dl.PopTexture();
-        text_dl.PopClipRect();
-
-        ImDrawData tdd;
-        tdd.DisplayPos       = {0.f, 0.f};
-        tdd.DisplaySize      = {W, H};
-        tdd.FramebufferScale = {1.f, 1.f};
-        tdd.Textures         = &ImGui::GetIO().Fonts->TexList;
-        tdd.AddDrawList(&text_dl);
-        ImGui_ImplOpenGL3_RenderDrawData(&tdd);
-        rlog("  imgui_render_done\n");
-    }
-    g_perf.text_us += us_since(text_t0);
+    // (Text overlays are now drawn per-track inside Phase 1's video loop so they
+    // composite at each track's z-order instead of always on top. The old
+    // always-on-top Phase 4 pass is gone.)
 
     // ── Kick async GPU→PBO DMA (non-blocking — returns immediately) ───────────
     // The GPU will fill pbo[current_frame % 3] while the CPU processes the next

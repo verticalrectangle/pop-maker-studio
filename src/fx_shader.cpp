@@ -125,10 +125,14 @@ out vec4 frag;
 uniform sampler2D u_tex;
 uniform float u_chroma;    // chroma offset as fraction of width
 uniform float u_jitter;    // row-jitter intensity 0..1
+uniform float u_corrupt;       // block/pixel corruption intensity 0..1
+uniform float u_corrupt_bleed; // 0 = noisy datamosh blocks, 1 = transparent holes
 uniform float u_time;
 uniform float u_tex_h;     // texture height in pixels (avoids textureSize driver bugs)
+uniform float u_tex_w;     // texture width in pixels
 
 float hash(float n) { return fract(sin(n) * 43758.5453); }
+float hash2(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
 
 void main() {
     float y_id = floor(v_uv.y * u_tex_h);
@@ -143,6 +147,25 @@ void main() {
     float b = texture(u_tex, clamp(vec2(v_uv.x + jshift - u_chroma, v_uv.y), 0.0, 1.0)).b;
     float a = texture(u_tex, clamp(vec2(v_uv.x + jshift,            v_uv.y), 0.0, 1.0)).a;
     frag = vec4(r, g, b, a);
+
+    // Block corruption — chunky datamosh "pixels": the frame is diced into
+    // blocks, and a fraction of them (scaled by u_corrupt) get shoved sideways
+    // and recolored each tick. u_corrupt_bleed fades the corrupted blocks toward
+    // transparent holes instead of noisy colour.
+    if (u_corrupt > 0.01) {
+        float bs = 16.0;                                  // block size in px
+        vec2  px  = vec2(v_uv.x * u_tex_w, v_uv.y * u_tex_h);
+        vec2  blk = floor(px / bs);
+        float tq  = floor(u_time * 7.0);                  // ~7 reshuffles/sec
+        float br  = hash2(blk + tq * 1.7);
+        if (br < u_corrupt * 0.6) {
+            float sh  = (hash2(blk.yx + tq * 3.1) - 0.5) * 0.30 * u_corrupt; // sideways shove
+            vec4  src = texture(u_tex, clamp(vec2(v_uv.x + sh, v_uv.y), 0.0, 1.0));
+            float n   = hash2(floor(px / 3.0) + tq);      // coarse per-cluster noise
+            vec4  noisy = vec4(src.rgb * (0.35 + 1.0 * n), src.a);
+            frag = mix(noisy, vec4(0.0), u_corrupt_bleed);
+        }
+    }
 }
 )glsl";
 
@@ -380,7 +403,29 @@ static GLuint g_solid_tex = 0;
 
 // Per-slot stable output textures — indexed by fx_apply's 'slot' argument.
 // These persist between pass chains so deferred ImDrawList commands are safe.
-static const int kMaxSlots = MAX_VIDEO_TRACKS * 2;
+// Slot map: [0 .. MAX*2-1] per-clip fx (== video decode slot) + scene/mirror
+// specials at the top of that range; [MAX*2] mirror face-warp; [MAX*2+1 ..
+// MAX*4] face-warp/sprite outputs for clips (one per video slot — the warp
+// output must outlive the clip's fx_apply output until scene composite);
+// [MAX*4+1] (kMaxSlots-1) fx-picker preview thumbnails. The preview slot
+// previously shared MAX*2 with the mirror face-warp — now exclusive.
+// + a dedicated bank for the face-filter picker previews (one per filter id) so
+// the whole grid of warps can be shown at once without clobbering each other.
+static const int kFacePreviewSlots    = 8;
+static const int kFacePreviewSlotBase = MAX_VIDEO_TRACKS * 4 + 2;
+static const int kMaxSlots = MAX_VIDEO_TRACKS * 4 + 2 + kFacePreviewSlots;
+static const int kFaceClipSlotBase = MAX_VIDEO_TRACKS * 2 + 1;
+
+int fx_face_clip_slot(int video_slot) {
+    if (video_slot < 0) video_slot = 0;
+    return kFaceClipSlotBase + (video_slot % (MAX_VIDEO_TRACKS * 2));
+}
+
+int fx_face_preview_slot(int filter_id) {
+    if (filter_id < 0) filter_id = 0;
+    return kFacePreviewSlotBase + (filter_id % kFacePreviewSlots);
+}
+
 static struct {
     GLuint fbo = 0, tex = 0;
     int w = 0, h = 0;
@@ -559,6 +604,139 @@ void fx_shader_shutdown() {
     if (g_bg_ebo)  glDeleteBuffers(1, &g_bg_ebo);
 }
 
+// ── Face warp (filters) ───────────────────────────────────────────────────────
+// One pass, up to 12 local "bumps": radial scale (enlarge/shrink) + content
+// shift with gaussian falloff. Landmark logic stays on the CPU; this shader
+// is dumb on purpose.
+static const char* k_face_warp_fs = R"(#version 330 core
+in vec2 v_uv; out vec4 frag;
+uniform sampler2D u_tex;
+uniform int  u_n;
+uniform vec4 u_ba[12];   // cx, cy, radius, scale
+uniform vec4 u_bb[12];   // dx, dy, aspect, _
+void main() {
+    vec2 uv = v_uv;
+    for (int i = 0; i < u_n; ++i) {
+        vec2 c = u_ba[i].xy;
+        float r = max(u_ba[i].z, 1e-4);
+        vec2 d = v_uv - c;
+        d.x *= u_bb[i].z;            // aspect-correct the falloff
+        float g = exp(-dot(d, d) / (r * r * 0.45));
+        uv -= (u_bb[i].xy + (v_uv - c) * u_ba[i].w) * g;
+    }
+    frag = texture(u_tex, clamp(uv, vec2(0.001), vec2(0.999)));
+}
+)";
+static GLuint g_face_warp_prog = 0;
+
+uintptr_t face_warp_apply(uintptr_t src_tex, int slot, int w, int h,
+                          const float* bumps, int n_bumps) {
+    if (n_bumps <= 0 || slot < 0 || slot >= kMaxSlots || w <= 0 || h <= 0)
+        return src_tex;
+    if (!g_face_warp_prog) {
+        g_face_warp_prog = link_prog(k_face_warp_fs);
+        if (!g_face_warp_prog) return src_tex;
+    }
+    if (n_bumps > 12) n_bumps = 12;
+
+    GLint prev_fbo = 0;
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prev_fbo);
+    GLint prev_vp[4];
+    glGetIntegerv(GL_VIEWPORT, prev_vp);
+
+    out_ensure(slot, w, h);
+    glBindVertexArray(g_vao);
+    glBindFramebuffer(GL_FRAMEBUFFER, g_out[slot].fbo);
+    glViewport(0, 0, w, h);
+    glUseProgram(g_face_warp_prog);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, (GLuint)src_tex);
+    glUniform1i(glGetUniformLocation(g_face_warp_prog, "u_tex"), 0);
+    glUniform1i(glGetUniformLocation(g_face_warp_prog, "u_n"), n_bumps);
+    float ba[48] = {}, bb[48] = {};
+    float aspect = (float)w / (float)h;
+    for (int i = 0; i < n_bumps; ++i) {
+        ba[i*4+0] = bumps[i*6+0];           // cx
+        ba[i*4+1] = bumps[i*6+1];           // cy
+        ba[i*4+2] = bumps[i*6+2];           // radius
+        ba[i*4+3] = bumps[i*6+3];           // scale
+        bb[i*4+0] = bumps[i*6+4];           // dx
+        bb[i*4+1] = bumps[i*6+5];           // dy
+        bb[i*4+2] = aspect;
+    }
+    glUniform4fv(glGetUniformLocation(g_face_warp_prog, "u_ba"), 12, ba);
+    glUniform4fv(glGetUniformLocation(g_face_warp_prog, "u_bb"), 12, bb);
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)prev_fbo);
+    glViewport(prev_vp[0], prev_vp[1], prev_vp[2], prev_vp[3]);
+    return (uintptr_t)g_out[slot].tex;
+}
+
+// ── Face sprites (doggy ears/nose/tongue at playback/export) ─────────────────
+// Attribute-less quad: corners come in as uniforms, gl_VertexID picks them.
+// Position UV convention matches the fx pipeline: (0,0) = image top-left =
+// texture row 0 = NDC (-1,-1).
+static const char* k_sprite_vs = R"(#version 330 core
+uniform vec2 u_p[4];     // tl, tr, br, bl in target UV
+uniform vec2 u_uv[4];
+out vec2 v_uv;
+void main() {
+    int idx[6] = int[6](0, 1, 2, 0, 2, 3);
+    int i = idx[gl_VertexID];
+    gl_Position = vec4(u_p[i] * 2.0 - 1.0, 0.0, 1.0);
+    v_uv = u_uv[i];
+}
+)";
+static const char* k_sprite_fs = R"(#version 330 core
+in vec2 v_uv; out vec4 frag;
+uniform sampler2D u_tex;
+void main() { frag = texture(u_tex, v_uv); }
+)";
+static GLuint g_sprite_prog = 0;
+
+uintptr_t face_sprites_apply(uintptr_t src_tex, int slot, int w, int h,
+                             const FaceSpriteQuad* quads, int n) {
+    if (n <= 0 || slot < 0 || slot >= kMaxSlots || w <= 0 || h <= 0)
+        return src_tex;
+    if (!g_sprite_prog) {
+        g_sprite_prog = link_prog2(k_sprite_vs, k_sprite_fs);
+        if (!g_sprite_prog) return src_tex;
+    }
+    GLint prev_fbo = 0;
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prev_fbo);
+    GLint prev_vp[4];
+    glGetIntegerv(GL_VIEWPORT, prev_vp);
+
+    out_ensure(slot, w, h);
+    glBindVertexArray(g_vao);
+    // face_warp_apply output already lives in this slot — draw in place.
+    if ((GLuint)src_tex != g_out[slot].tex)
+        draw_pass(g_out[slot].fbo, (GLuint)src_tex, w, h, g_prog.blit);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, g_out[slot].fbo);
+    glViewport(0, 0, w, h);
+    glUseProgram(g_sprite_prog);
+    glEnable(GL_BLEND);
+    glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA,
+                        GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+    glActiveTexture(GL_TEXTURE0);
+    glUniform1i(glGetUniformLocation(g_sprite_prog, "u_tex"), 0);
+    for (int i = 0; i < n; ++i) {
+        const FaceSpriteQuad& q = quads[i];
+        if (!q.tex) continue;
+        float uv[8] = {q.u0, 0.f, q.u1, 0.f, q.u1, 1.f, q.u0, 1.f};
+        glUniform2fv(glGetUniformLocation(g_sprite_prog, "u_p"),  4, &q.p[0][0]);
+        glUniform2fv(glGetUniformLocation(g_sprite_prog, "u_uv"), 4, uv);
+        glBindTexture(GL_TEXTURE_2D, (GLuint)q.tex);
+        glDrawArrays(GL_TRIANGLES, 0, 6);
+    }
+    glDisable(GL_BLEND);
+    glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)prev_fbo);
+    glViewport(prev_vp[0], prev_vp[1], prev_vp[2], prev_vp[3]);
+    return (uintptr_t)g_out[slot].tex;
+}
+
 uintptr_t fx_apply(uintptr_t src_tex_in, int slot, int w, int h,
                    const EffectAccum& ea, const CreativeFXAccum& cfx, float t)
 {
@@ -568,7 +746,8 @@ uintptr_t fx_apply(uintptr_t src_tex_in, int slot, int w, int h,
     bool need_vig      = ea.any_vignette && ea.vignette > 0.001f;
     bool need_blur     = ea.any_blur     && ea.blur > 0.1f;
     bool need_chroma   = cfx.chroma_key_on;
-    bool need_glitch   = cfx.glitch_on   && (cfx.glitch_chroma >= 0.1f || cfx.glitch_jitter >= 0.01f);
+    bool need_glitch   = cfx.glitch_on   && (cfx.glitch_chroma >= 0.1f || cfx.glitch_jitter >= 0.01f
+                                             || cfx.glitch_corruption >= 0.01f);
     bool need_vhs      = cfx.vhs_on      && (cfx.vhs_noise >= 0.01f || cfx.vhs_bleed >= 0.1f || cfx.vhs_tracking >= 0.01f);
     bool need_leak     = cfx.leak_on     && cfx.leak_intensity > 0.01f;
     bool need_datamosh = cfx.datamosh_on && cfx.datamosh_spread > 0.01f;
@@ -643,8 +822,11 @@ uintptr_t fx_apply(uintptr_t src_tex_in, int slot, int w, int h,
         glUseProgram(p);
         glUniform1f(glGetUniformLocation(p, "u_chroma"), cfx.glitch_chroma / (float)w);
         glUniform1f(glGetUniformLocation(p, "u_jitter"), cfx.glitch_jitter);
+        glUniform1f(glGetUniformLocation(p, "u_corrupt"),       cfx.glitch_corruption);
+        glUniform1f(glGetUniformLocation(p, "u_corrupt_bleed"), cfx.glitch_corruption_bleed);
         glUniform1f(glGetUniformLocation(p, "u_time"),   t);
         glUniform1f(glGetUniformLocation(p, "u_tex_h"),  (float)h);
+        glUniform1f(glGetUniformLocation(p, "u_tex_w"),  (float)w);
         run1(p);
     }
 

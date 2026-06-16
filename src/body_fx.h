@@ -20,6 +20,8 @@ enum class BodyFXType : int {
     Hologram, MatrixRainBg, BodyMosaic, WireframeBg, Vaporwave,
     // Party
     StrobeBg, DiscoBody, UVPaint, FireAura,
+    // Beauty
+    BeautySmooth,
     Count
 };
 

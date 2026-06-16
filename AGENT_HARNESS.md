@@ -53,16 +53,61 @@ server.py stays the single source of truth; its hand-tuned descriptions are
 the most curated prose in the repo and live best in Python.
 
 - `python mcp_server/server.py --dump-tools` prints
-  `[{name, description, inputSchema, python_only}]` and exits — no socket,
-  no MCP loop, no side effects.
+  `[{name, description, inputSchema, category, audience}]` and exits — no
+  socket, no MCP loop, no side effects.
 - `tools/gen_agent_tools.py` renders that into
-  `src/generated/agent_tools.h`: one raw-string JSON literal +
-  a small accessor. **The generated header is committed** (same policy as
-  `generated/fx_enum_entries.h`) so builds never require Python and diffs
-  show what a description change did to the C++ side.
-- Regeneration is a manual step (`python3 tools/gen_agent_tools.py`), same
-  workflow as the fx codegen — run it after changing tool definitions and
-  commit the result. No build-time Python dependency.
+  `src/generated/agent_tools.h`: two raw-string literals —
+  `AGENT_TOOLS_JSON` (the function declarations + `ipc` flag) and
+  `AGENT_TOOLS_INDEX` (a categorized name map appended to the system prompt).
+  **The generated header is committed** (same policy as
+  `generated/fx_enum_entries.h`) so diffs show what a description change did
+  to the C++ side.
+- Regeneration is `python3 tools/gen_agent_tools.py`. It no longer rots
+  silently: CMake runs `--check` as a build step (`check_agent_tools`,
+  no-op if the python `mcp` deps are absent) and `tools/pre-commit-hook.sh`
+  runs it plus the coverage test on commit.
+
+### Taxonomy: categories + audience
+
+`mcp_server/server.py` carries three small tables (`_CATEGORIES`,
+`OPERATOR_TOOLS`, `MCP_IPC_ALIASES`) that are the single source of truth for
+how the surface is organized:
+
+- **Category** (read / timeline / text / fx / audio / transcript / export /
+  project / capture / playback / system) groups the ~90 tools into a
+  navigable map. The generator emits it as `AGENT_TOOLS_INDEX`, appended to
+  the harness system prompt so the model can orient by domain instead of
+  scanning a flat wall of functions.
+- **Audience** — `operator` tools drive the live UI / hardware
+  (`ui_input`, `get_canvas_geometry`, `set_monitor`, `set_camera_monitor`,
+  `vrecord_start/stop`). They stay on the **external** MCP surface (a driver
+  like Claude Code uses them) but the generator **withholds** them from the
+  autonomous in-app harness, which shouldn't move its own mouse. Everything
+  else is `agent`.
+
+### MCP↔IPC vocabulary
+
+The agent-facing MCP names are friendly verbs; some wrap a lower-level IPC
+method under a different name. The map lives in `MCP_IPC_ALIASES` so it is
+documented in exactly one place and the coverage test treats the wrapped
+method as covered:
+
+| MCP tool                | IPC method              |
+|-------------------------|-------------------------|
+| `add_chapter_marker`    | `add_marker`            |
+| `remove_chapter_marker` | `remove_marker`         |
+| `get_chapter_markers`   | `get_markers`           |
+| `remove_background`     | `start_bg_remove`       |
+| `process_body_fx_masks` | `start_body_fx_process` |
+
+### Coverage guard
+
+`tools/check_tool_coverage.py` greps the `method == "..."` dispatch out of
+`ipc_server.cpp` and fails if any IPC method is neither exposed as an MCP
+tool, an alias target, nor on the `INTERNAL_IPC` allowlist (the agent's own
+loop, debug hooks, and status pollers that blocking tools already wait on).
+This is what keeps the surface *complete*: a new IPC method that nobody wired
+up to an agent tool fails the check instead of silently going unreachable.
 
 ### python_only tools — the server.py bridge
 
@@ -73,8 +118,8 @@ mechanically: it greps the actual `method == "..."` dispatch strings out of
 ipc_server.cpp and tags each tool `ipc: true/false` by intersection — there
 is no list that can rot.
 
-`ipc: true` tools (currently 55 of 75) dispatch straight to the editor
-socket. `ipc: false` tools route through a persistent **server.py child**
+`ipc: true` tools (currently 66 of 87 agent tools) dispatch straight to the
+editor socket. `ipc: false` tools route through a persistent **server.py child**
 spawned lazily on first use: MCP over stdio, newline-delimited JSON-RPC —
 the exact transport external agents use, so server.py stays the single
 source of truth and the loop closes neatly (app → server.py child → back
@@ -89,8 +134,9 @@ error and everything IPC-served keeps working.
 
 OpenAI-compatible messages array:
 
-1. System prompt: editor briefing (assembled from a short static preamble +
-   the generated tool docs are carried by the `tools` field itself).
+1. System prompt: a short static editor briefing + the generated
+   `AGENT_TOOLS_INDEX` (categorized tool map). Full per-tool schemas ride the
+   `tools` field, not the prompt.
 2. `POST {base_url}/chat/completions` with `model`, `messages`,
    `tools` (function declarations from the generated JSON), `stream: true`.
 3. Stream deltas:

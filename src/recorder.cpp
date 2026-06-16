@@ -26,6 +26,39 @@ static size_t s_lat_off    = 0;        // capture→loop-grid offset in interlea
 static int    s_take_count = 0;
 static float  s_level      = 0.f;
 
+// Live waveform bins for the pass in progress — per-bin RMS accumulated
+// incrementally as fresh capture lands, then normalized to the running peak
+// in recorder_live_peaks. Same math as waveform.cpp runs on the finished
+// file, so the live wave looks like the placed take will (the old version
+// drew raw unnormalized peaks of sparse samples — a mic peaking at 0.3
+// rendered three times thinner live than placed).
+static constexpr int LIVE_BINS = 2048;
+static double   s_lb_sumsq[LIVE_BINS];
+static uint32_t s_lb_cnt[LIVE_BINS];
+static size_t   s_lb_scanned = 0;      // absolute s_buf offset already binned
+
+static void live_bins_reset() {
+    memset(s_lb_sumsq, 0, sizeof(s_lb_sumsq));
+    memset(s_lb_cnt,   0, sizeof(s_lb_cnt));
+}
+
+// Fold fresh capture into the current pass's bins (mono = left channel).
+static void live_bins_scan() {
+    if (s_take_len == 0) return;
+    size_t base = s_lat_off + (size_t)s_take_count * s_take_len;
+    if (s_lb_scanned < base) s_lb_scanned = base;
+    size_t i = s_lb_scanned & ~(size_t)1;  // keep L/R phase
+    for (; i + 1 < s_buf.size(); i += 2) {
+        size_t off = i - base;
+        if (off >= s_take_len) break;      // next pass — binned after finalize
+        int b = (int)((unsigned long long)off * LIVE_BINS / s_take_len);
+        float s = s_buf[i];
+        s_lb_sumsq[b] += (double)s * s;
+        s_lb_cnt[b]   += 1;
+    }
+    s_lb_scanned = i;
+}
+
 // ── WAV io ────────────────────────────────────────────────────────────────────
 // 16-bit PCM stereo 44100 — read by ffmpeg (audio_source_ensure) and every DAW.
 
@@ -122,16 +155,25 @@ static bool finalize_take(AppState& state, const float* smp, size_t n) {
 bool recorder_live_peaks(int n, float* out) {
     if (!s_active || n <= 0 || s_take_len == 0) return false;
     memset(out, 0, (size_t)n * sizeof(float));
-    size_t base = s_lat_off + (size_t)s_take_count * s_take_len;
-    if (s_buf.size() <= base) return true;  // recording, nothing landed yet
-    size_t avail = std::min(s_buf.size() - base, s_take_len);
-    // Stride so a long loop doesn't cost millions of reads per frame; peaks
-    // stay honest enough for a timeline-height waveform.
-    size_t stride = std::max<size_t>(2, s_take_len / ((size_t)n * 64) & ~1ull);
-    for (size_t i = 0; i < avail; i += stride) {
-        int b = (int)(((unsigned long long)i * (unsigned long long)n) / s_take_len);
-        if (b < 0 || b >= n) break;
-        out[b] = fmaxf(out[b], fabsf(s_buf[base + i]));
+
+    // Per-bin RMS + running-peak normalization — the live preview of what
+    // waveform.cpp will compute for the finished file. Unreached bins stay 0
+    // (the timeline draws them flat).
+    static float rms[LIVE_BINS];
+    float norm = 0.02f;  // floor: don't blow room tone up to full height
+    for (int b = 0; b < LIVE_BINS; ++b) {
+        if (s_lb_cnt[b] == 0) { rms[b] = -1.f; continue; }
+        rms[b] = sqrtf((float)(s_lb_sumsq[b] / (double)s_lb_cnt[b]));
+        if (rms[b] > norm) norm = rms[b];
+    }
+    for (int ob = 0; ob < n; ++ob) {
+        int b0 = (int)((long long)ob * LIVE_BINS / n);
+        int b1 = (int)((long long)(ob + 1) * LIVE_BINS / n);
+        if (b1 <= b0) b1 = b0 + 1;
+        float v = -1.f;
+        for (int b = b0; b < b1 && b < LIVE_BINS; ++b)
+            if (rms[b] > v) v = rms[b];
+        out[ob] = v < 0.f ? 0.f : fminf(1.f, v / norm);
     }
     return true;
 }
@@ -173,6 +215,8 @@ bool recorder_start(AppState& state, int ti, int ci) {
     discard.clear();
     audio_capture_drain(discard);  // drop pre-roll: stream origin = playback start
 
+    live_bins_reset();
+    s_lb_scanned = 0;
     s_take_len = (size_t)((lp_end - lp_start) * 44100.f) * 2;
     // The performer tracks what they hear (one output period late); the mic's
     // samples arrive one input period after that. Skipping that much of the
@@ -198,8 +242,13 @@ void recorder_stop(AppState& state, bool keep_partial) {
     size_t done = s_lat_off + (size_t)s_take_count * s_take_len;
     if (keep_partial && s_buf.size() > done + 44100u
         && s_take_len > 0 && s_buf.size() > s_lat_off) {
-        size_t n = std::min(s_buf.size() - done, s_take_len);
-        finalize_take(state, s_buf.data() + done, n);
+        // Pad the partial pass up to a FULL brick span with silence so a take
+        // never ends partway through the clip — audio is sample-exact, so just
+        // zero-fill the tail to the loop length.
+        size_t avail = std::min(s_buf.size() - done, s_take_len);
+        std::vector<float> padded(s_take_len, 0.f);
+        std::copy(s_buf.data() + done, s_buf.data() + done + avail, padded.begin());
+        finalize_take(state, padded.data(), s_take_len);
     }
 
     if (s_take_count > 0)
@@ -243,5 +292,7 @@ void recorder_tick(AppState& state) {
             recorder_stop(state, false);  // disk/brick failure — don't spin
             return;
         }
+        live_bins_reset();  // fresh pass starts on the brick
     }
+    live_bins_scan();
 }
