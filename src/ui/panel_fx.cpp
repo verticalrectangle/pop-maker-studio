@@ -1286,6 +1286,11 @@ void panel_fx_audio(AppState& state, float w) {
             dl->AddText({cp.x+card_w-sz.x-10.f, cp.y+card_h-16.f}, IM_COL32(30,220,180,220), al);
         }
 
+        // Same card+drag+"+ Add" pattern as the video FX cards: the card itself
+        // is a drag source, and a dedicated "+" button (overlaid) does click-to-add.
+        // Using IsItemClicked() on the card AND a drag source on the same item ate
+        // the drag-start as a click, so dragging onto the timeline never fired.
+        ImGui::SetNextItemAllowOverlap();
         ImGui::SetCursorScreenPos(cp);
         ImGui::InvisibleButton("##afxcard", {card_w, card_h});
         if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
@@ -1295,7 +1300,7 @@ void panel_fx_audio(AppState& state, float w) {
             ImGui::TextDisabled("Drop onto an audio clip");
             ImGui::EndDragDropSource();
         }
-        if (ImGui::IsItemClicked()) {
+        if (ui_card_add_btn(cp, card_w, (int)fc.type + 20000)) {
             // Find selected audio track, or first audio track, or create one
             int target_ti = -1;
             if (state.selected_track >= 0 && state.selected_track < (int)state.tracks.size()) {
