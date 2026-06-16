@@ -534,15 +534,24 @@ void panel_typography(AppState& state, float w) {
             dl->AddRect({px0, py0}, {px1, py1}, IM_COL32(40, 36, 58, 180), 3.f);
             dl->PushClipRect({px0, py0}, {px1, py1}, true);
 
-            // Sample string in the preset's own letter case (Stay / STAY / stay).
+            // Sample string in the preset's own letter case. Presets that group
+            // by phrase/line/segment shine on a full sentence, so preview them
+            // with one; word-grouped presets get a single word. Rendered in the
+            // preset's actual face so the card shows the real typeface.
             int pc = (pr.text_case >= 0) ? pr.text_case : (pr.all_caps ? 1 : 0);
-            char sample[8] = "Stay";
-            if      (pc == 1) memcpy(sample, "STAY", 5);
-            else if (pc == 2) memcpy(sample, "stay", 5);
+            bool sentence = (pr.grouping != SubtitleMode::Word);
+            std::string sample = sentence ? "I want to see you every night." : "Stay";
+            if      (pc == 1) for (auto& ch : sample) ch = (char)toupper((unsigned char)ch);
+            else if (pc == 2) for (auto& ch : sample) ch = (char)tolower((unsigned char)ch);
 
-            ImFont* pfont = g_font_black;
+            ImFont* pfont = typo_font_get(pr.font);
             float pfsz = fmaxf(8.f, fminf(20.f, pr.font_size * ph * 4.5f));
-            ImVec2 tsz2 = pfont->CalcTextSizeA(pfsz, FLT_MAX, -1.f, sample);
+            ImVec2 tsz2 = pfont->CalcTextSizeA(pfsz, FLT_MAX, -1.f, sample.c_str());
+            // Shrink to fit the preview width — sentences would overflow otherwise.
+            if (tsz2.x > pw - 4.f && tsz2.x > 0.f) {
+                pfsz = fmaxf(7.f, pfsz * (pw - 4.f) / tsz2.x);
+                tsz2 = pfont->CalcTextSizeA(pfsz, FLT_MAX, -1.f, sample.c_str());
+            }
 
             // Horizontal anchor
             float pax = px0 + pr.sub_pos_x * pw;
@@ -562,7 +571,7 @@ void panel_typography(AppState& state, float w) {
 
             ImU32 tcol = IM_COL32((int)(pr.color[0]*255), (int)(pr.color[1]*255),
                                    (int)(pr.color[2]*255), (int)(pr.color[3]*255));
-            dl->AddText(pfont, pfsz, {plx, ply}, tcol, sample);
+            dl->AddText(pfont, pfsz, {plx, ply}, tcol, sample.c_str());
 
             // Anim style badge bottom-right inside preview
             const char* style_tag = nullptr;
