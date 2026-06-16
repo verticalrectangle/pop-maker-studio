@@ -158,7 +158,9 @@ void draw_text_overlays(ImDrawList* dl, const AppState& state, float t,
                               ? active->clip_style : state.style;
 
         // Shared with the live canvas (text_anim.cpp) so preview == export.
-        {
+        // Per-element clips animate inside render_text_block — keep the block
+        // transform identity here so motion isn't applied twice.
+        if (active->anim_unit == 0) {
             BlockAnim ba = compute_block_anim(eff_style, local_t, clip_dur,
                                               fade_in, fade_out, w, active->ease);
             anim_dx = ba.dx; anim_dy = ba.dy;
@@ -205,6 +207,7 @@ void draw_text_overlays(ImDrawList* dl, const AppState& state, float t,
             trc.line_h     = line_h;
             trc.t          = t;
             trc.rotation   = active->eval_prop("rotation", t);
+            trc.canvas_w   = w;
             trc.clip_words = has_karaoke ? &clip_words : nullptr;
             render_text_block(trc, txt_lines);
         }

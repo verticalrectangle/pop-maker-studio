@@ -32,7 +32,13 @@ static const int MAX_VIDEO_TRACKS = 32;
 enum class AnimStyle {
     Fade, Glitch, Typewriter, Bounce, Scale,
     Slide, Stack, Block,
-    None   // sentinel: inherit project default (state.style)
+    None,   // sentinel: inherit project default (state.style)
+    // ── Wave 2 per-element motions (used with anim_unit = word/letter) ───────
+    // Appended after None so existing serialized clip_style ints are unchanged.
+    WaveText,   // continuous sine ripple across letters
+    Jitter,     // continuous per-letter vibration
+    Explode,    // elements fly in from random offsets (intro)
+    Gravity     // elements drop from above and bounce to the baseline (intro)
 };
 
 // ── Background removal status ─────────────────────────────────────────────────

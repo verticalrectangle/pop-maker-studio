@@ -198,6 +198,10 @@ static AnimStyle parse_anim_style(const std::string& s) {
     if (s == "slide")      return AnimStyle::Slide;
     if (s == "stack")      return AnimStyle::Stack;
     if (s == "block")      return AnimStyle::Block;
+    if (s == "wave")       return AnimStyle::WaveText;
+    if (s == "jitter")     return AnimStyle::Jitter;
+    if (s == "explode")    return AnimStyle::Explode;
+    if (s == "gravity")    return AnimStyle::Gravity;
     return AnimStyle::None;
 }
 
@@ -2162,8 +2166,19 @@ static json dispatch(AppState& state, const std::string& method, const json& par
             else if (prop == "sub_anchor_h") { cl.sub_anchor_h = jval_int(val); }
             else if (prop == "sub_wrap_w"){ cl.sub_wrap_w= jval_float(val); }
             else if (prop == "karaoke")   { cl.karaoke   = jval_bool(val); }
+            else if (prop == "karaoke_mode") { cl.karaoke_mode = jval_int(val); }
             else if (prop == "fx_expanded") { cl.fx_expanded = jval_bool(val); }
             else if (prop == "clip_style"){ cl.clip_style= parse_anim_style(val.get<std::string>()); }
+            else if (prop == "sub_font")  { cl.sub_font  = val.get<std::string>(); }
+            else if (prop == "ease")      { cl.ease      = jval_int(val); }
+            else if (prop == "tracking")  { cl.tracking  = jval_float(val); }
+            else if (prop == "anim_unit") { cl.anim_unit = jval_int(val); }
+            else if (prop == "anim_stagger") { cl.anim_stagger = jval_float(val); }
+            else if (prop == "grad_mode") { cl.grad_mode = jval_int(val); }
+            else if (prop == "grad_col2") {
+                if (!val.is_array() || val.size() != 4) { err = "grad_col2 must be [r,g,b,a]"; return {}; }
+                for (int i = 0; i < 4; ++i) cl.grad_col2[i] = jval_float(val[i]);
+            }
             else if (prop == "sub_color") {
                 if (!val.is_array() || val.size() != 4) { err = "sub_color must be [r,g,b,a]"; return {}; }
                 for (int i = 0; i < 4; ++i) cl.sub_color[i] = jval_float(val[i]);

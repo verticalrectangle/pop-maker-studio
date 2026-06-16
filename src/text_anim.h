@@ -32,3 +32,21 @@ struct BlockAnim {
 // width in px (slide distance).
 BlockAnim compute_block_anim(AnimStyle style, float local_t, float clip_dur,
                              float fade_in, float fade_out, float w, int ease);
+
+// Per-element (per-word / per-letter) transform for kinetic typography. Element
+// `i` of `n` enters on a stagger (`i * stagger` seconds late) so words/letters
+// cascade in. The "intro ramp" styles (Fade/Scale/Slide/Stack/Typewriter/Bounce)
+// reuse compute_block_anim per element, gated so an element is invisible until
+// its turn; WaveText/Jitter are continuous; Explode/Gravity are staggered intros
+// with motion that needs the element index. dx/dy are pixel offsets, scale is a
+// multiplier about the element's centre, alpha multiplies the element's opacity.
+struct ElemAnim {
+    float alpha = 1.f;
+    float dx    = 0.f;
+    float dy    = 0.f;
+    float scale = 1.f;
+};
+
+ElemAnim compute_elem_anim(AnimStyle style, float local_t, float clip_dur,
+                           float fade_in, float fade_out, float w, int ease,
+                           int i, int n, float stagger, float line_h);

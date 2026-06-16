@@ -2164,7 +2164,10 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
             AnimStyle eff_style = (show->clip_style != AnimStyle::None)
                                   ? show->clip_style : state.style;
 
-            if (active_ci >= 0) {
+            // Per-element clips (anim_unit != 0) animate each word/letter inside
+            // render_text_block — leave the block transform at identity here so
+            // the motion isn't applied twice.
+            if (active_ci >= 0 && show->anim_unit == 0) {
                 BlockAnim ba = compute_block_anim(eff_style, local_t, clip_dur,
                                                   fade_in, fade_out, w, show->ease);
                 anim_dx = ba.dx; anim_dy = ba.dy;
@@ -2225,6 +2228,7 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                 trc.line_h      = line_h;
                 trc.t           = state.playhead;
                 trc.rotation    = render_clip.eval_prop("rotation", state.playhead);
+                trc.canvas_w    = w;
                 trc.clip_words  = has_karaoke ? &clip_words : nullptr;
                 render_text_block(trc, txt_lines);
             }

@@ -85,7 +85,77 @@ BlockAnim compute_block_anim(AnimStyle style, float local_t, float clip_dur,
                 a.alpha = (clip_dur - local_t) / fade_out;
             }
             break;
-        default: break;
+        default: break;   // WaveText/Jitter/Explode/Gravity are per-element only
+    }
+    return a;
+}
+
+// Deterministic per-element pseudo-random in [0,1) — no global RNG so preview
+// and export (and every replay) agree frame-for-frame.
+static inline float hash01(int i, int salt) {
+    unsigned int x = (unsigned int)(i * 2654435761u) ^ (unsigned int)(salt * 40503u);
+    x ^= x >> 13; x *= 0x5bd1e995u; x ^= x >> 15;
+    return (x & 0xFFFFFFu) / (float)0x1000000u;
+}
+
+ElemAnim compute_elem_anim(AnimStyle style, float local_t, float clip_dur,
+                           float fade_in, float fade_out, float w, int ease,
+                           int i, int n, float stagger, float line_h) {
+    ElemAnim a;
+    float et       = local_t - (float)i * stagger;   // element-local time
+    float tail     = clip_dur - fade_out;
+    float exit_mul = (local_t > tail && fade_out > 0.f)
+                     ? fmaxf(0.f, (clip_dur - local_t) / fade_out) : 1.f;
+
+    switch (style) {
+        case AnimStyle::WaveText: {
+            // Continuous ripple: each element bobs on a sine phased by its index.
+            float intro = fade_in > 0.f ? ease_eval(EASE_OUT_CUBIC, local_t / fade_in) : 1.f;
+            a.dy    = sinf(local_t * 4.f + (float)i * 0.6f) * (line_h * 0.16f);
+            a.alpha = intro * exit_mul;
+            break;
+        }
+        case AnimStyle::Jitter: {
+            float intro = fade_in > 0.f ? ease_eval(EASE_OUT_CUBIC, local_t / fade_in) : 1.f;
+            float ph    = local_t * 38.f;
+            a.dx    = (sinf(ph + (float)i * 12.9898f) ) * (line_h * 0.05f);
+            a.dy    = (cosf(ph * 1.13f + (float)i * 4.1414f)) * (line_h * 0.05f);
+            a.alpha = intro * exit_mul;
+            break;
+        }
+        case AnimStyle::Explode: {
+            // Fly in from a random direction/distance to the resting spot.
+            if (et < 0.f) { a.alpha = 0.f; break; }
+            float p   = fade_in > 0.f ? ease_eval(EASE_OUT_CUBIC, et / fade_in) : 1.f;
+            float ang = hash01(i, 1) * 6.2831853f;
+            float dist= (0.6f + hash01(i, 2)) * w * 0.4f;
+            a.dx    = cosf(ang) * dist * (1.f - p);
+            a.dy    = sinf(ang) * dist * (1.f - p);
+            a.scale = 0.4f + 0.6f * p;
+            a.alpha = ease_eval(EASE_LINEAR, et / fmaxf(0.0001f, fade_in)) * exit_mul;
+            if (a.alpha > 1.f) a.alpha = 1.f;
+            break;
+        }
+        case AnimStyle::Gravity: {
+            // Drop from above and bounce to the baseline, staggered per element.
+            if (et < 0.f) { a.alpha = 0.f; break; }
+            float dur = fmaxf(0.25f, fminf(0.7f, clip_dur));
+            float p   = ease_eval(EASE_OUT_BOUNCE, et / dur);
+            a.dy    = (p - 1.f) * line_h * 3.f;   // starts 3 lines up, bounces to 0
+            a.alpha = exit_mul;
+            break;
+        }
+        default: {
+            // Intro-ramp styles applied per element: hidden until the element's
+            // staggered turn, then it runs the normal block motion; exit fades
+            // uniformly so the line leaves together.
+            if (et < 0.f) { a.alpha = 0.f; break; }
+            BlockAnim b = compute_block_anim(style, et, clip_dur + (float)i * stagger,
+                                             fade_in, fade_out, w, ease);
+            a.dx = b.dx; a.dy = b.dy; a.scale = b.scale;
+            a.alpha = b.alpha * exit_mul;
+            break;
+        }
     }
     return a;
 }
