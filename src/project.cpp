@@ -12,7 +12,7 @@
 // ── Binary serialization helpers ──────────────────────────────────────────────
 
 static const uint32_t MAGIC   = 0x534D5001u; // "PMS\x01"
-static const uint32_t VERSION = 50u;  // v50: typography face + kinetic/styling params
+static const uint32_t VERSION = 51u;  // v51: audio FX brick dry/wet mix
 
 struct Writer {
     std::ofstream f;
@@ -219,6 +219,7 @@ static void write_clip(Writer& w, const Clip& c) {
         w.str(fx.voice_model_path);
         w.pod((uint8_t)fx.voice_pitch_auto);
         w.pod(fx.voice_pitch_semitones);
+        w.pod(fx.mix);   // v51: brick dry/wet
     }
     // v40: FX-brick coupling
     w.pod((uint8_t)c.fx_coupled);
@@ -455,6 +456,7 @@ static Clip read_clip(Reader& r, uint32_t version) {
         fx.voice_model_path = r.str();
         fx.voice_pitch_auto = (bool)r.pod<uint8_t>();
         fx.voice_pitch_semitones = r.pod<int>();
+        if (version >= 51u) fx.mix = r.pod<float>();
         // Model file may have been deleted from the cache since saving
         if (!fx.voice_model_path.empty() &&
             !std::filesystem::exists(fx.voice_model_path)) {

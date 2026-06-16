@@ -1396,6 +1396,16 @@ void panel_audio_fx_clip(AppState& state, float w) {
         if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, lbl);
     };
 
+    // Brick dry/wet — blends the whole effect under the dry voice. Shown for
+    // every DSP audio FX (voice-conversion is a full offline replacement).
+    if (clip.fx_type != FXType::AudioVoiceConvert) {
+        pct_slider("##afx_mix", "Dry/Wet", &afx.mix, 0.f, 1.f, "Dry/Wet %.0f%%");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("How much of the effect you hear vs the raw voice.\n"
+                              "100%% = full effect, 0%% = bypassed (dry).");
+        ImGui::Dummy({0.f, 6.f});
+    }
+
     switch (clip.fx_type) {
         case FXType::AudioAutotune: {
             static const char* keys[]   = {"C","C#","D","D#","E","F","F#","G","G#","A","A#","B"};
@@ -2720,6 +2730,8 @@ void audio_chain_entry_params_ui(AppState& state, Clip& se, float sw) {
             break;
         default: break;
     }
+    // Brick dry/wet for this chain entry (1 = full effect, 0 = dry bypass).
+    slider("##e_mix", "Dry / Wet", &fx.mix, 0.f, 1.f, "%.2f", "Audio FX: dry/wet");
     ImGui::PopStyleColor(2);
 }
 

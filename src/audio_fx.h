@@ -43,6 +43,13 @@ struct AudioFX {
     bool        voice_pitch_auto      = true;
     int         voice_pitch_semitones = 0;   // -24 … +24
 
+    // Brick-level dry/wet blend (1 = fully wet / current behaviour, 0 = dry
+    // bypass). Applies to the WHOLE effect stage — so non-mixable effects
+    // (autotune, pitch, formant) can sit subtly under the dry voice, and
+    // delay/reverb get a blend on top of their own internal mix. Honoured by
+    // the shared FXUnit, so monitor, playback, export and bake all match.
+    float mix = 1.f;
+
     bool any_active() const {
         return autotune_on || pitch_on || formant_on ||
                delay_on || reverb_on || voice_convert_on;

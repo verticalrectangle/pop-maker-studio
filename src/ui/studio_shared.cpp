@@ -683,6 +683,7 @@ static bool audio_fx_from_brick(const Clip& cl, AudioFX& out) {
     return audio_fx_from_brick_impl(cl, out);
 }
 bool audio_fx_from_brick_impl(const Clip& cl, AudioFX& out) {
+    out.mix = cl.audio_fx.mix;   // brick dry/wet applies to every audio FX kind
     switch (cl.fx_type) {
         case FXType::AudioAutotune:
             out.autotune_on    = cl.audio_fx.autotune_on;

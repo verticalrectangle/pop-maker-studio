@@ -54,6 +54,7 @@ uint64_t audio_fx_hash(const AudioFX& fx) {
     acc = h(acc, &fx.reverb_mix,  sizeof(fx.reverb_mix));
     acc = h(acc, &fx.voice_convert_on, sizeof(fx.voice_convert_on));
     for (char c : fx.voice_model_path) acc = h(acc, &c, 1);
+    acc = h(acc, &fx.mix, sizeof(fx.mix));
     return acc;
 }
 
@@ -452,6 +453,9 @@ struct FXUnit {
     }
 
     void process(float& L, float& R) {
+        // Capture the dry input so the brick-level dry/wet can blend the whole
+        // stage afterwards (lets autotune/pitch/formant sit under the dry voice).
+        const float dryL = L, dryR = R;
         // ── Autotune ────────────────────────────────────────────────────────
         if (fx.autotune_on) {
             float mono    = (L + R) * 0.5f;
@@ -481,6 +485,11 @@ struct FXUnit {
             reverb.process(L, R, rL, rR);
             L = L * (1.f - fx.reverb_mix) + rL * fx.reverb_mix;
             R = R * (1.f - fx.reverb_mix) + rR * fx.reverb_mix;
+        }
+        // ── Brick dry/wet ────────────────────────────────────────────────────
+        if (fx.mix < 0.9999f) {
+            L = dryL + fx.mix * (L - dryL);
+            R = dryR + fx.mix * (R - dryR);
         }
     }
 };

@@ -2599,6 +2599,7 @@ static json dispatch(AppState& state, const std::string& method, const json& par
                     break;
                 default: break;
             }
+            afx.mix = ap.value("dry_wet", afx.mix);   // brick dry/wet (1=wet, 0=dry)
         } else if (params.contains("params") && params["params"].is_object()) {
             if (!apply_effect_params(cl, params["params"], fx_s, err)) return {};
         }
@@ -2668,6 +2669,7 @@ static json dispatch(AppState& state, const std::string& method, const json& par
                         break;
                     default: break;
                 }
+                afx.mix = ap.value("dry_wet", afx.mix);   // brick dry/wet
                 brick.fx_chain.push_back(se);
             }
         }
