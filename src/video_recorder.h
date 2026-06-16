@@ -45,6 +45,11 @@ std::vector<VCamDevice> vrecorder_devices();
 void vrecorder_device_select(int idx);           // -1 = auto (first device)
 int  vrecorder_device_selected();
 
+// Best-guess index (into audio_capture_devices()) of the selected camera's own
+// built-in mic, matched by device name, or -1 if there's no confident match.
+// Caller should cache — this re-enumerates V4L2 + audio devices.
+int  vrecorder_camera_mic(int cam_sel);
+
 // Latest captured JPEG frame + a serial that bumps per frame (for the live
 // mirror's texture upload). UI-thread only (same thread as the tick).
 bool     vrecorder_latest_jpeg(std::vector<uint8_t>& out);

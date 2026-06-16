@@ -2483,10 +2483,20 @@ void panel_clip(AppState& state, float w) {
                     ImGui::EndTooltip();
                 }
                 if (clip.rec_audio) {
-                    // ── Mic device picker (same list/selection as Audio Record) ──
+                    // ── Mic device picker (shared with Audio Record) + camera-mic ─
                     static std::vector<std::string> s_mic_devs;
                     static bool s_mic_devs_init = false;
                     if (!s_mic_devs_init) { s_mic_devs = audio_capture_devices(); s_mic_devs_init = true; }
+                    // Which capture device is the camera's own mic. Cached — the
+                    // lookup re-enumerates V4L2 + audio, so only recompute when the
+                    // camera selection changes.
+                    static int s_cam_mic = -1, s_cam_mic_for = -2;
+                    int cur_cam = vrecorder_device_selected();
+                    if (cur_cam != s_cam_mic_for) {
+                        s_cam_mic = vrecorder_camera_mic(cur_cam);
+                        s_cam_mic_for = cur_cam;
+                    }
+                    int cam_mic = s_cam_mic;
                     bool busy = recorder_active();
                     int  mic_sel = audio_capture_selected();
                     const char* mcur = (mic_sel >= 0 && mic_sel < (int)s_mic_devs.size())
@@ -2496,12 +2506,21 @@ void panel_clip(AppState& state, float w) {
                     ImGui::PushStyleColor(ImGuiCol_FrameBg, Col::bg_soft);
                     ImGui::SetNextItemWidth(bar_w);
                     if (ImGui::BeginCombo("##vrec_mic", mcur)) {
-                        if (ImGui::IsWindowAppearing()) s_mic_devs = audio_capture_devices();
+                        if (ImGui::IsWindowAppearing()) {
+                            s_mic_devs = audio_capture_devices();
+                            s_cam_mic = vrecorder_camera_mic(cur_cam); cam_mic = s_cam_mic;
+                        }
                         if (ImGui::Selectable("System default", mic_sel < 0))
                             audio_capture_select(-1);
                         for (int di = 0; di < (int)s_mic_devs.size(); ++di) {
                             ImGui::PushID(di);
-                            if (ImGui::Selectable(s_mic_devs[di].c_str(), mic_sel == di))
+                            char lbl[176];
+                            if (di == cam_mic)
+                                snprintf(lbl, sizeof(lbl), "\xf0\x9f\x93\xb7 %s  (camera mic)",
+                                         s_mic_devs[(size_t)di].c_str());
+                            else
+                                snprintf(lbl, sizeof(lbl), "%s", s_mic_devs[(size_t)di].c_str());
+                            if (ImGui::Selectable(lbl, mic_sel == di))
                                 audio_capture_select(di);
                             ImGui::PopID();
                         }
@@ -2509,6 +2528,28 @@ void panel_clip(AppState& state, float w) {
                     }
                     ImGui::PopStyleColor();
                     if (busy) ImGui::EndDisabled();
+
+                    // Which device the synced take records from — and whether it's
+                    // the camera's own mic (consistent latency → tight sync) or a
+                    // separate one (the A/V offset may need a nudge).
+                    ImGui::Dummy({0.f, 2.f});
+                    if (cam_mic >= 0 && mic_sel == cam_mic) {
+                        ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(90, 200, 120, 255));
+                        ImGui::TextWrapped("\xe2\x9c\x93 Camera's own mic (%s) \xe2\x80\x94 tightest A/V sync.",
+                                           s_mic_devs[(size_t)cam_mic].c_str());
+                        ImGui::PopStyleColor();
+                    } else if (cam_mic >= 0) {
+                        ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(232, 184, 74, 255));
+                        ImGui::TextWrapped("Recording a separate mic. The camera's own mic (%s) is "
+                                           "available \xe2\x80\x94 it gives steadier A/V sync.",
+                                           s_mic_devs[(size_t)cam_mic].c_str());
+                        ImGui::PopStyleColor();
+                    } else {
+                        ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+                        ImGui::TextWrapped("No camera mic detected \xe2\x80\x94 recording from %s. "
+                                           "Tune the A/V offset if lips drift.", mcur);
+                        ImGui::PopStyleColor();
+                    }
 
                     ImGui::Dummy({0.f, 4.f});
                     ImGui::SetNextItemWidth(bar_w - 70.f);
@@ -2556,6 +2597,13 @@ void panel_clip(AppState& state, float w) {
                         ImGui::Indent(22.f);
                         bool bake = audio_gate_bake_get();
                         if (ImGui::Checkbox("Apply to recordings", &bake)) audio_gate_bake_set(bake);
+                        if (ImGui::IsItemHovered()) {
+                            ImGui::BeginTooltip();
+                            ImGui::TextUnformatted("Off: the take keeps the raw mic and only what you\n"
+                                                   "hear is cleaned. On: the noise cleanup is baked\n"
+                                                   "into the recorded take itself.");
+                            ImGui::EndTooltip();
+                        }
                         ImGui::Unindent(22.f);
                     }
 

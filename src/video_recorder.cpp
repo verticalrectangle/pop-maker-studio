@@ -87,6 +87,59 @@ std::vector<VCamDevice> vrecorder_devices() {
 void vrecorder_device_select(int idx) { s_device_sel = idx; }
 int  vrecorder_device_selected()      { return s_device_sel; }
 
+// Match the selected camera's V4L2 card name against the audio device names /
+// PulseAudio source names. A USB webcam exposes both with matching product names
+// (card "Brio 100" ↔ source "Brio 100 Mono" / "...Brio_100..."), so a token match
+// finds the camera's own mic. Returns an audio_capture_devices() index, or -1
+// (generic camera name, no built-in mic). NOTE: re-enumerates devices — cache it.
+int vrecorder_camera_mic(int cam_sel) {
+    auto cams = vrecorder_devices();
+    if (cams.empty()) return -1;
+    int ci = (cam_sel >= 0 && cam_sel < (int)cams.size()) ? cam_sel : 0;
+
+    // lowercase, non-alphanumeric → space
+    auto norm = [](const std::string& s) {
+        std::string o;
+        for (char c : s) {
+            if      (c >= 'A' && c <= 'Z') o += (char)(c - 'A' + 'a');
+            else if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')) o += c;
+            else o += ' ';
+        }
+        return o;
+    };
+    auto split = [&](const std::string& s) {
+        std::vector<std::string> t; std::string w;
+        for (char c : norm(s)) {
+            if (c == ' ') { if (!w.empty()) { t.push_back(w); w.clear(); } }
+            else w += c;
+        }
+        if (!w.empty()) t.push_back(w);
+        return t;
+    };
+
+    // distinctive camera tokens (drop generic words / 1-char tokens)
+    static const char* kGeneric[] = {"usb","camera","webcam","video","cam","hd",
+                                     "fhd","uhd","integrated","device","audio"};
+    std::vector<std::string> ct;
+    for (auto& t : split(cams[(size_t)ci].name)) {
+        bool g = false;
+        for (auto* w : kGeneric) if (t == w) { g = true; break; }
+        if (!g && t.size() >= 2) ct.push_back(t);
+    }
+    if (ct.empty()) return -1;           // nothing distinctive (e.g. "USB Camera")
+
+    auto devs = audio_capture_devices();
+    int best = -1, best_score = 0;
+    for (int i = 0; i < (int)devs.size(); ++i) {
+        std::string hay = norm(devs[(size_t)i]) + " " +
+                          norm(audio_capture_pulse_source(i));
+        int score = 0;
+        for (auto& t : ct) if (hay.find(t) != std::string::npos) ++score;
+        if (score > best_score) { best_score = score; best = i; }
+    }
+    return best_score > 0 ? best : -1;
+}
+
 // Does the device deliver MJPEG natively? (Stream-copy when it does; phone
 // bridges like v4l2loopback often only do planar YUV — re-encode those.)
 static bool device_has_mjpeg(const std::string& path) {
