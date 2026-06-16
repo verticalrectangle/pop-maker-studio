@@ -72,23 +72,30 @@ static void monitor_chain_sync(AppState& state) {
         if (s_last_chain_hash) { audio_monitor_chain_set({}); s_last_chain_hash = 0; }
         return;
     }
+    // Both record bricks monitor through this chain — Audio Record and Video
+    // Record (its mic) share the same "Hear effects" path and the same coupled
+    // audio-FX. Treat either as a candidate, else a Video Rec brick's effects
+    // are never heard while monitoring.
+    auto is_rec = [](ClipType t) {
+        return t == ClipType::Record || t == ClipType::VideoRecord;
+    };
     int bti = -1, bci = -1;
     for (int ti = 0; ti < (int)state.tracks.size() && bti < 0; ++ti)
         for (int ci = 0; ci < (int)state.tracks[ti].clips.size(); ++ci)
-            if (state.tracks[ti].clips[ci].clip_type == ClipType::Record &&
-                recorder_is_target(ti, ci)) { bti = ti; bci = ci; break; }
+            if (is_rec(state.tracks[ti].clips[ci].clip_type) &&
+                (recorder_is_target(ti, ci) || vrecorder_is_target(ti, ci)))
+                { bti = ti; bci = ci; break; }
     if (bti < 0 && state.selected_track >= 0 &&
         state.selected_track < (int)state.tracks.size() &&
         state.selected_clip >= 0 &&
         state.selected_clip < (int)state.tracks[state.selected_track].clips.size() &&
-        state.tracks[state.selected_track].clips[state.selected_clip].clip_type
-            == ClipType::Record) {
+        is_rec(state.tracks[state.selected_track].clips[state.selected_clip].clip_type)) {
         bti = state.selected_track; bci = state.selected_clip;
     }
     if (bti < 0)
         for (int ti = 0; ti < (int)state.tracks.size() && bti < 0; ++ti)
             for (int ci = 0; ci < (int)state.tracks[ti].clips.size(); ++ci)
-                if (state.tracks[ti].clips[ci].clip_type == ClipType::Record)
+                if (is_rec(state.tracks[ti].clips[ci].clip_type))
                     { bti = ti; bci = ci; break; }
 
     std::vector<AudioFX> stages;
