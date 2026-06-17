@@ -2537,11 +2537,13 @@ void render_start_gl(AppState& state) {
                 float ss    = inpoint;
                 float dur   = (cl.end - cstart) * speed;
                 float to    = ss + dur;
-                // Modern FFmpeg keeps absolute timestamps after -ss (input option),
-                // so the stream's pts starts at ~in_point, not 0.  To place audio at
-                // cl.start on the output timeline we need itsoffset = cl.start - in_point,
-                // not cl.start.  Clamped to 0 — negative itsoffset is unsupported.
-                float delay = fmaxf(0.f, cstart - inpoint);
+                // Each audio stream is reset to pts 0 by asetpts=PTS-STARTPTS in the
+                // filter graph (see below), so timeline placement is the FULL clip
+                // start — adelay = cl.start, same as the Record-take path. (It used
+                // to subtract in_point, which silently collapsed to 0 for clips whose
+                // in_point equals their start — e.g. sequential slices of one source —
+                // so every such clip played at t=0 at once instead of in sequence.)
+                float delay = fmaxf(0.f, cstart);
                 // Preview parity: converted voice substitutes the source, and
                 // any effective AudioFX chain is baked into a processed WAV.
                 // Full-source bake — ss/to/itsoffset math below is unchanged.
