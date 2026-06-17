@@ -1709,7 +1709,8 @@ MediaFileInfo video_probe_file(const std::string& path) {
 
 std::string video_extract_segment(const std::string& src,
                                   double start_sec, double end_sec,
-                                  const std::string& dst) {
+                                  const std::string& dst,
+                                  bool audio_only) {
     AVFormatContext* in_ctx = nullptr;
     const std::string& url2 = src;
     if (avformat_open_input(&in_ctx, url2.c_str(), nullptr, nullptr) < 0)
@@ -1749,6 +1750,8 @@ std::string video_extract_segment(const std::string& src,
         if (cp->codec_type != AVMEDIA_TYPE_VIDEO &&
             cp->codec_type != AVMEDIA_TYPE_AUDIO)
             continue;
+        if (audio_only && cp->codec_type == AVMEDIA_TYPE_VIDEO)
+            continue;   // rip audio: drop the picture entirely
         AVStream* out_st = avformat_new_stream(out_ctx, nullptr);
         if (!out_st) {
             avformat_close_input(&in_ctx);

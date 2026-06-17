@@ -1640,9 +1640,11 @@ void extract_audio_start(AppState& state, const std::string& video_path) {
         fs::path vp(video_path);
         fs::path outdir = vp.parent_path() / vp.stem();
         fs::create_directories(outdir);
-        std::string out_audio = (outdir / (vp.stem().string() + "_audio.webm")).string();
+        // .mka (Matroska audio) holds the source audio codec via stream-copy for
+        // basically any codec; .webm rejected H.264/AAC so the rip silently failed.
+        std::string out_audio = (outdir / (vp.stem().string() + "_audio.mka")).string();
 
-        std::string err = video_extract_segment(video_path, 0.0, 1e9, out_audio);
+        std::string err = video_extract_segment(video_path, 0.0, 1e9, out_audio, /*audio_only=*/true);
         bool ok = err.empty() && fs::exists(out_audio);
         if (ok) state.extract_wav_path = out_audio;
         state.extract_running = false;

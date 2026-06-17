@@ -188,9 +188,13 @@ MediaFileInfo video_probe_file(const std::string& path);
 // Extract a time segment from src into dst via stream-copy (no re-encode).
 // Returns an empty string on success, or an error message on failure.
 // dst should be a .webm or .mkv path; the container is inferred from the extension.
+// audio_only=true drops the video stream (for "rip audio"); pair it with a
+// container that holds the source audio codec by copy — .mka (Matroska audio)
+// takes essentially anything, .webm only Vorbis/Opus.
 std::string video_extract_segment(const std::string& src,
                                   double start_sec, double end_sec,
-                                  const std::string& dst);
+                                  const std::string& dst,
+                                  bool audio_only = false);
 
 // Browser thumbnail cache: load any JPEG/PNG file as a GL texture.
 // Returns 0 if the file does not exist yet. Textures are cached by path

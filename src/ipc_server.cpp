@@ -1027,7 +1027,8 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         if (src.empty()) { err = "src required"; return {}; }
         if (dst.empty()) { err = "dst required"; return {}; }
         if (end <= start) { err = "end must be greater than start"; return {}; }
-        std::string extract_err = video_extract_segment(src, start, end, dst);
+        bool audio_only = params.value("audio_only", false);
+        std::string extract_err = video_extract_segment(src, start, end, dst, audio_only);
         if (!extract_err.empty()) { err = extract_err; return {}; }
         json r;
         r["dst"]      = dst;
