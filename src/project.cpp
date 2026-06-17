@@ -12,7 +12,7 @@
 // ── Binary serialization helpers ──────────────────────────────────────────────
 
 static const uint32_t MAGIC   = 0x534D5001u; // "PMS\x01"
-static const uint32_t VERSION = 51u;  // v51: audio FX brick dry/wet mix
+static const uint32_t VERSION = 52u;  // v52: persist voice-conversion result (status/out/model)
 
 struct Writer {
     std::ofstream f;
@@ -247,6 +247,13 @@ static void write_clip(Writer& w, const Clip& c) {
     w.pod(c.karaoke_mode);
     w.pod(c.grad_mode);
     w.pod(c.grad_col2[0]); w.pod(c.grad_col2[1]); w.pod(c.grad_col2[2]); w.pod(c.grad_col2[3]);
+    // v52: voice-conversion RESULT (so a converted take survives a reload — the
+    // FX settings were already saved, but the Ready status + output path weren't,
+    // so playback/export fell back to the original on load). Transient fields
+    // (progress, error) aren't persisted.
+    w.pod((int32_t)c.vc_status);
+    w.str(c.vc_out_path);
+    w.str(c.vc_model_used);
 }
 
 static Clip read_clip(Reader& r, uint32_t version) {
@@ -493,6 +500,16 @@ static Clip read_clip(Reader& r, uint32_t version) {
         c.grad_mode    = r.pod<int>();
         c.grad_col2[0] = r.pod<float>(); c.grad_col2[1] = r.pod<float>();
         c.grad_col2[2] = r.pod<float>(); c.grad_col2[3] = r.pod<float>();
+    }
+    if (version >= 52u) {
+        c.vc_status     = (VcStatus)r.pod<int32_t>();
+        c.vc_out_path   = r.str();
+        c.vc_model_used = r.str();
+        // A Processing status can't survive a reload (the job is gone); settle it
+        // to Ready if the output exists, else Idle so it can be re-run.
+        if (c.vc_status == VcStatus::Processing)
+            c.vc_status = (!c.vc_out_path.empty() && std::filesystem::exists(c.vc_out_path))
+                          ? VcStatus::Ready : VcStatus::Idle;
     }
     return c;
 }
