@@ -2594,7 +2594,17 @@ void render_start_gl(AppState& state) {
         // path still produces audio. For video-editing workflows the per-clip entries
         // above own the audio and the fallback would just produce an un-edited
         // duplicate that ignores cuts/speed.
-        if (!state.audio_path.empty() && !covered_paths.count(state.audio_path)) {
+        //
+        // ...BUT never when the source clip is muted. If the user muted the original
+        // (e.g. replaced it with converted-voice segments on other tracks), re-adding
+        // it here plays the raw take under everything — the mute has to win.
+        bool src_muted = false;
+        if (!state.audio_path.empty())
+            for (int ti = 0; ti < (int)state.tracks.size() && !src_muted; ++ti)
+                for (const auto& cl : state.tracks[ti].clips)
+                    if (cl.text == state.audio_path &&
+                        (state.tracks[ti].muted || cl.muted)) { src_muted = true; break; }
+        if (!state.audio_path.empty() && !covered_paths.count(state.audio_path) && !src_muted) {
             AudioIn ai; ai.path = state.audio_path; ai.to = -1.f;
             audio_ins.push_back(std::move(ai));
         }
