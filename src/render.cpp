@@ -1158,7 +1158,11 @@ static bool write_filter_script(
             }
             std::ostringstream& lo = line();
             for (int i = 0; i < (int)aud_ins.size(); ++i) lo << "[amix" << i << "]";
-            lo << "amix=inputs=" << aud_ins.size() << ":duration=longest[aout]";
+            // normalize=0: sum the streams (matching the additive preview mixer in
+            // audio.cpp). amix's default normalize=1 divides by the input count, so
+            // the export comes out ~10 dB quieter than what's heard in the project.
+            lo << "amix=inputs=" << aud_ins.size()
+               << ":duration=longest:normalize=0[aout]";
         }
         aout_label = "[aout]";
     }
@@ -2783,6 +2787,14 @@ void render_start_gl(AppState& state) {
                             fc += chain[k];
                         }
                     }
+                    // Regenerate timestamps from the sample count so the chain
+                    // emits strictly monotonic pts with no NOPTS flush packet.
+                    // adelay (and input-seeked matroska/AAC sources with encoder
+                    // priming) can leave a NOPTS final packet that a lone aac
+                    // encoder tolerates but amix propagates — the muxer then sees
+                    // a non-monotonic dts (NOPTS) and aborts the whole export.
+                    // N/SR/TB rewrites pts = sample_index/sample_rate, killing it.
+                    fc += ",asetpts=N/SR/TB";
                     char tail[32]; snprintf(tail, sizeof(tail), "[a%df];", i + 1);
                     fc += tail;
                     char lbl[32]; snprintf(lbl, sizeof(lbl), "[a%df]", i + 1);
@@ -2795,8 +2807,13 @@ void render_start_gl(AppState& state) {
                     args.push_back("-map"); args.push_back(mix_ins[0]);
                 } else {
                     for (auto& s : mix_ins) fc += s;
-                    char mixbuf[64];
-                    snprintf(mixbuf, sizeof(mixbuf), "amix=inputs=%d:duration=longest[aout]",
+                    char mixbuf[80];
+                    // normalize=0: sum the streams to match the additive preview
+                    // mixer (audio.cpp). amix defaults to normalize=1, which divides
+                    // by the input count and makes the export ~10 dB quieter than
+                    // what's heard in the project.
+                    snprintf(mixbuf, sizeof(mixbuf),
+                             "amix=inputs=%d:duration=longest:normalize=0[aout]",
                              (int)mix_ins.size());
                     fc += mixbuf;
                     args.push_back("-filter_complex"); args.push_back(fc);
