@@ -1367,26 +1367,16 @@ static std::string dl_key(const std::string& repo, const std::string& file) {
 
 // ── Right panel: Creative FX clip controls ────────────────────────────────────
 
-void panel_audio_fx_clip(AppState& state, float w) {
-    if (state.selected_track < 0 || state.selected_track >= (int)state.tracks.size()) return;
-    Track& track = state.tracks[state.selected_track];
-    if (state.selected_clip < 0 || state.selected_clip >= (int)track.clips.size()) return;
-    Clip& clip = track.clips[state.selected_clip];
-    AudioFX& afx = clip.audio_fx;
-
+// Full per-FX settings: params + presets + the voice-convert model picker and
+// conversion controls. SHARED by the standalone audio-FX brick panel and the
+// welded-chain selected-entry editor, so a welded effect opens the SAME full
+// page as a standalone one. ti / [fx_start,fx_end] locate the audio clips a
+// voice-convert should process (the clips overlapping the brick on that track).
+void audio_fx_settings_ui(AppState& state, float w, FXType fx_type, AudioFX& afx,
+                          int ti, float fx_start, float fx_end) {
+    if (ti < 0 || ti >= (int)state.tracks.size()) return;
+    Track& track = state.tracks[ti];
     float bar_w = w - 16.f;
-    ImGui::Dummy({0.f, 8.f});
-    ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(30,220,180,255));
-    ImGui::TextUnformatted(fx_type_display(clip.fx_type));
-    ImGui::PopStyleColor();
-    ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
-    char info[128];
-    snprintf(info, sizeof(info), "%s  ·  %.2fs – %.2fs", track.name.c_str(), clip.start, clip.end);
-    ImGui::TextUnformatted(info);
-    ImGui::PopStyleColor();
-    ImGui::Dummy({0.f, 8.f});
-    ui_separator();
-    ImGui::Dummy({0.f, 8.f});
 
     auto pct_slider = [&](const char* id, const char* lbl, float* v, float mn, float mx, const char* fmt) {
         ImGui::SetNextItemWidth(bar_w);
@@ -1398,7 +1388,7 @@ void panel_audio_fx_clip(AppState& state, float w) {
 
     // Brick dry/wet — blends the whole effect under the dry voice. Shown for
     // every DSP audio FX (voice-conversion is a full offline replacement).
-    if (clip.fx_type != FXType::AudioVoiceConvert) {
+    if (fx_type != FXType::AudioVoiceConvert) {
         pct_slider("##afx_mix", "Dry/Wet", &afx.mix, 0.f, 1.f, "Dry/Wet %.0f%%");
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("How much of the effect you hear vs the raw voice.\n"
@@ -1406,7 +1396,7 @@ void panel_audio_fx_clip(AppState& state, float w) {
         ImGui::Dummy({0.f, 6.f});
     }
 
-    switch (clip.fx_type) {
+    switch (fx_type) {
         case FXType::AudioAutotune: {
             static const char* keys[]   = {"C","C#","D","D#","E","F","F#","G","G#","A","A#","B"};
             static const char* scales[] = {"Major","Minor","Chromatic"};
@@ -1512,7 +1502,6 @@ void panel_audio_fx_clip(AppState& state, float w) {
 
             // ── Find overlapping audio clips on this track ────────────────────
             // We need them to show conversion state and to trigger vc_start.
-            int ti = state.selected_track;
             struct AudioRef { int ci; };
             std::vector<AudioRef> audio_refs;
             for (int ci = 0; ci < (int)track.clips.size(); ++ci) {
@@ -1522,7 +1511,7 @@ void panel_audio_fx_clip(AppState& state, float w) {
                                 ac.rec_take_sel >= 0 &&
                                 ac.rec_take_sel < (int)ac.rec_takes.size();
                 if (!is_audio && !is_take) continue;
-                if (ac.end <= clip.start || ac.start >= clip.end) continue;
+                if (ac.end <= fx_start || ac.start >= fx_end) continue;
                 audio_refs.push_back({ci});
             }
 
@@ -1876,6 +1865,28 @@ void beat_sync_source_ui(AppState& state, Clip& target, float w) {
         ImGui::SliderFloat("##bdecay", &target.beat_decay, 0.02f, 1.0f, "%.2fs");
         if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "FX: beat decay");
     }
+}
+
+// Standalone audio-FX brick inspector — header + the shared full settings.
+void panel_audio_fx_clip(AppState& state, float w) {
+    if (state.selected_track < 0 || state.selected_track >= (int)state.tracks.size()) return;
+    Track& track = state.tracks[state.selected_track];
+    if (state.selected_clip < 0 || state.selected_clip >= (int)track.clips.size()) return;
+    Clip& clip = track.clips[state.selected_clip];
+
+    ImGui::Dummy({0.f, 8.f});
+    ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(30,220,180,255));
+    ImGui::TextUnformatted(fx_type_display(clip.fx_type));
+    ImGui::PopStyleColor();
+    ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+    char info[128];
+    snprintf(info, sizeof(info), "%s  ·  %.2fs – %.2fs", track.name.c_str(), clip.start, clip.end);
+    ImGui::TextUnformatted(info);
+    ImGui::PopStyleColor();
+    ImGui::Dummy({0.f, 8.f}); ui_separator(); ImGui::Dummy({0.f, 8.f});
+
+    audio_fx_settings_ui(state, w, clip.fx_type, clip.audio_fx,
+                         state.selected_track, clip.start, clip.end);
 }
 
 void panel_fx_clip(AppState& state, float w) {
@@ -2659,10 +2670,13 @@ void panel_audio_multifx_for(AppState& state, float w, int b_ti, int b_ci) {
     int si = brick.fx_chain_selected;
     if (si < 0 || si >= (int)brick.fx_chain.size()) { ImGui::Dummy({0.f, 8.f}); return; }
     Clip& se = brick.fx_chain[(size_t)si];
-    AudioFX& fx = se.audio_fx;
 
     ImGui::Dummy({0.f, 8.f}); ui_separator(); ImGui::Dummy({0.f, 6.f});
-    audio_chain_entry_params_ui(state, se, sw);
+    // Full settings for the selected entry — the SAME page as a standalone brick,
+    // including voice-convert model picker + conversion controls (the condensed
+    // audio_chain_entry_params_ui is now only the bus chain's inline editor). The
+    // VC host is the audio clip this chain rides on: track b_ti, the brick span.
+    audio_fx_settings_ui(state, w, se.fx_type, se.audio_fx, b_ti, brick.start, brick.end);
 
     ImGui::Dummy({0.f, 12.f}); ui_separator(); ImGui::Dummy({0.f, 8.f});
     if (track.locked) ImGui::BeginDisabled();
