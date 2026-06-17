@@ -1988,6 +1988,27 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         if ((cl.clip_type == ClipType::Video || cl.clip_type == ClipType::Audio) &&
             !is_image_clip && state.audio_path.empty())
             state.audio_path = state.vocals_path = text;
+
+        // Text overlays live on their OWN tracks — never stack a Text/Subtitle/
+        // Lyrics clip on top of a content clip (or vice-versa) on the same track
+        // row. They render on top regardless of track; sharing a row is illegal.
+        {
+            auto is_txt = [](ClipType t){ return t==ClipType::Text ||
+                t==ClipType::Subtitle || t==ClipType::Lyrics; };
+            auto is_con = [](ClipType t){ return t==ClipType::Video ||
+                t==ClipType::Audio || t==ClipType::Background ||
+                t==ClipType::VideoRecord || t==ClipType::Record; };
+            bool n_txt = is_txt(cl.clip_type), n_con = is_con(cl.clip_type);
+            if (n_txt || n_con)
+                for (const auto& oc : state.tracks[ti].clips)
+                    if (cl.start < oc.end && cl.end > oc.start &&
+                        ((n_txt && is_con(oc.clip_type)) ||
+                         (n_con && is_txt(oc.clip_type)))) {
+                        err = "text and content can't share a track — put the text "
+                              "on its own track (it still renders on top)";
+                        return {};
+                    }
+        }
         state.tracks[ti].clips.push_back(cl);
         int new_ci = (int)state.tracks[ti].clips.size() - 1;
 

@@ -1532,7 +1532,10 @@ void panel_clip(AppState& state, float w) {
             if (is_subs) { ai_progress(); }
             else { if (!has_path || busy) ImGui::BeginDisabled();
                    if (ui_btn("Extract Subtitles", false, true)) {
-                       state.pipeline_on_done = apply_subtitle_mode;
+                       // Builds an actual Subtitles track (ClipType::Subtitle).
+                       // (Was wired to apply_subtitle_mode — the lyrics builder —
+                       // so the subtitle track never got created.)
+                       state.pipeline_on_done = apply_subtitle_pipeline;
                        kick_pipeline(state, clip.text, PipelineMode::TranscribeOnly);
                    }
                    if (!has_path || busy) ImGui::EndDisabled(); }
