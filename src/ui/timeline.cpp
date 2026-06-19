@@ -4173,6 +4173,10 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                 kick_pipeline(state, cc->text, PipelineMode::Both);
             }
             if (ImGui::MenuItem("Transcribe  (subtitles only)")) {
+                // Build the Subtitles track (ClipType::Subtitle) when transcription
+                // finishes. Without this callback the pipeline ran but nothing
+                // populated the timeline — same bug the Extract Subtitles button hit.
+                state.pipeline_on_done = apply_subtitle_pipeline;
                 kick_pipeline(state, cc->text, PipelineMode::TranscribeOnly);
             }
             if (ImGui::MenuItem("Separate vocals")) {
