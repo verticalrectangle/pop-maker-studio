@@ -12,7 +12,7 @@
 // ── Binary serialization helpers ──────────────────────────────────────────────
 
 static const uint32_t MAGIC   = 0x534D5001u; // "PMS\x01"
-static const uint32_t VERSION = 52u;  // v52: persist voice-conversion result (status/out/model)
+static const uint32_t VERSION = 54u;  // v54: typography tweak X/Y + fade + text-style fields
 
 struct Writer {
     std::ofstream f;
@@ -616,6 +616,36 @@ bool project_save(const AppState& state, const std::string& path) {
     w.pod(state.loop_in);
     w.pod(state.loop_out);
 
+    // v53: typography active preset + per-field tweak/hold (pin) store, so a
+    // tweaked-and-pinned look survives a reload (the styled clips already carry
+    // baked values; this restores which fields stay pinned across preset switches).
+    w.str(state.typo_preset_id);
+    w.pod(state.typo.active);
+    w.pod(state.typo.held);
+    w.pod(state.typo.font_size);
+    for (int i = 0; i < 4; ++i) w.pod(state.typo.color[i]);
+    w.pod(state.typo.text_case);
+    w.pod(state.typo.anchor_h);
+    w.pod(state.typo.tracking);
+    w.pod(state.typo.wrap_w);
+    w.pod(state.typo.pos_v);
+
+    // v54: extra typography tweak fields — X/Y offset, fade, text style.
+    {
+        const TextStyle& t = state.typo.ts;
+        w.pod(state.typo.pos_x);   w.pod(state.typo.pos_y);
+        w.pod(state.typo.fade_in); w.pod(state.typo.fade_out);
+        w.pod((uint8_t)t.shadow_enabled); w.pod(t.shadow_ox); w.pod(t.shadow_oy);
+        for (int i=0;i<4;++i) w.pod(t.shadow_col[i]);
+        w.pod((uint8_t)t.stroke_enabled); w.pod(t.stroke_w);
+        for (int i=0;i<4;++i) w.pod(t.stroke_col[i]);
+        w.pod((uint8_t)t.glow_enabled); w.pod(t.glow_r);
+        for (int i=0;i<4;++i) w.pod(t.glow_col[i]);
+        w.pod((uint8_t)t.bg_enabled);
+        for (int i=0;i<4;++i) w.pod(t.bg_col[i]);
+        w.pod(t.bg_pad_x); w.pod(t.bg_pad_y); w.pod(t.bg_corner);
+    }
+
     return w.ok;
 }
 
@@ -775,6 +805,36 @@ bool project_load(AppState& state, const std::string& path) {
                 ++ci;
             }
         }
+    }
+
+    // v53: typography active preset + tweak/hold (pin) store
+    if (version >= 53u) {
+        state.typo_preset_id = r.str();
+        state.typo.active    = r.pod<unsigned>();
+        state.typo.held      = r.pod<unsigned>();
+        state.typo.font_size = r.pod<float>();
+        for (int i = 0; i < 4; ++i) state.typo.color[i] = r.pod<float>();
+        state.typo.text_case = r.pod<int>();
+        state.typo.anchor_h  = r.pod<int>();
+        state.typo.tracking  = r.pod<float>();
+        state.typo.wrap_w    = r.pod<float>();
+        state.typo.pos_v     = r.pod<int>();
+    }
+
+    // v54: extra typography tweak fields — X/Y offset, fade, text style.
+    if (version >= 54u) {
+        TextStyle& t = state.typo.ts;
+        state.typo.pos_x   = r.pod<float>(); state.typo.pos_y   = r.pod<float>();
+        state.typo.fade_in = r.pod<float>(); state.typo.fade_out = r.pod<float>();
+        t.shadow_enabled = (bool)r.pod<uint8_t>(); t.shadow_ox = r.pod<float>(); t.shadow_oy = r.pod<float>();
+        for (int i=0;i<4;++i) t.shadow_col[i] = r.pod<float>();
+        t.stroke_enabled = (bool)r.pod<uint8_t>(); t.stroke_w = r.pod<float>();
+        for (int i=0;i<4;++i) t.stroke_col[i] = r.pod<float>();
+        t.glow_enabled = (bool)r.pod<uint8_t>(); t.glow_r = r.pod<float>();
+        for (int i=0;i<4;++i) t.glow_col[i] = r.pod<float>();
+        t.bg_enabled = (bool)r.pod<uint8_t>();
+        for (int i=0;i<4;++i) t.bg_col[i] = r.pod<float>();
+        t.bg_pad_x = r.pod<float>(); t.bg_pad_y = r.pod<float>(); t.bg_corner = r.pod<float>();
     }
 
     return r.ok;

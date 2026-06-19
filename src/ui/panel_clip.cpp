@@ -697,95 +697,100 @@ static void section_color(AppState& state, Clip& clip, float w) {
     ImGui::PopStyleColor();
 }
 
-static void section_fade(AppState& state, Clip& clip, float w) {
+bool section_fade(AppState& state, float& fade_in, float& fade_out, float w) {
+    bool edited = false;
     ImGui::PushStyleColor(ImGuiCol_SliderGrab, Col::fg);
     ImGui::PushStyleColor(ImGuiCol_FrameBg,    Col::bg_soft);
     float sw = w - 16.f;
-    ImGui::SetNextItemWidth(sw); ImGui::SliderFloat("Fade in##fi",  &clip.fade_in,  0.f, 4.f, "%.2fs");
+    ImGui::SetNextItemWidth(sw);
+    if (ImGui::SliderFloat("Fade in##fi",  &fade_in,  0.f, 4.f, "%.2fs")) edited = true;
     if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Fade in");
-    ImGui::SetNextItemWidth(sw); ImGui::SliderFloat("Fade out##fo", &clip.fade_out, 0.f, 4.f, "%.2fs");
+    ImGui::SetNextItemWidth(sw);
+    if (ImGui::SliderFloat("Fade out##fo", &fade_out, 0.f, 4.f, "%.2fs")) edited = true;
     if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Fade out");
     ImGui::PopStyleColor(2);
     ImGui::Dummy({0.f, 2.f});
     ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
     ImGui::TextWrapped("Opacity ramp — add manual opacity keyframes to override.");
     ImGui::PopStyleColor();
+    return edited;
 }
 
-static void section_text_style(AppState& state, Clip& clip, float w) {
-    TextStyle& ts = clip.ts;
+bool section_text_style(AppState& state, TextStyle& ts, float w) {
+    bool edited = false;
     float sw = w - 16.f;
     ImGui::PushStyleColor(ImGuiCol_SliderGrab, Col::fg);
     ImGui::PushStyleColor(ImGuiCol_FrameBg,    Col::bg_soft);
 
     // Shadow
     bool shad = ts.shadow_enabled;
-    if (ImGui::Checkbox("Shadow##ts_shad", &shad)) { ts.shadow_enabled = shad; history_push(state, "Text shadow"); }
+    if (ImGui::Checkbox("Shadow##ts_shad", &shad)) { ts.shadow_enabled = shad; history_push(state, "Text shadow"); edited = true; }
     if (ts.shadow_enabled) {
         ImGui::SameLine(0.f, 8.f); ImGui::SetNextItemWidth(54.f);
-        if (ImGui::SliderFloat("ox##ts_sox", &ts.shadow_ox, -20.f, 20.f, "%.0f"))
-            history_push(state, "Shadow offset");
+        if (ImGui::SliderFloat("ox##ts_sox", &ts.shadow_ox, -20.f, 20.f, "%.0f")) edited = true;
+        if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Shadow offset");
         ImGui::SameLine(0.f, 4.f); ImGui::SetNextItemWidth(54.f);
-        if (ImGui::SliderFloat("oy##ts_soy", &ts.shadow_oy, -20.f, 20.f, "%.0f"))
-            history_push(state, "Shadow offset");
+        if (ImGui::SliderFloat("oy##ts_soy", &ts.shadow_oy, -20.f, 20.f, "%.0f")) edited = true;
+        if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Shadow offset");
         ImGui::SameLine(0.f, 4.f); ImGui::SetNextItemWidth(sw - 130.f);
         if (ImGui::ColorEdit4("##ts_scol", ts.shadow_col,
-                ImGuiColorEditFlags_NoLabel | ImGuiColorEditFlags_AlphaBar))
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Shadow color");
+                ImGuiColorEditFlags_NoLabel | ImGuiColorEditFlags_AlphaBar)) edited = true;
+        if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Shadow color");
     }
 
     ImGui::Dummy({0.f, 2.f});
 
     // Stroke
     bool stk = ts.stroke_enabled;
-    if (ImGui::Checkbox("Stroke##ts_stk", &stk)) { ts.stroke_enabled = stk; history_push(state, "Text stroke"); }
+    if (ImGui::Checkbox("Stroke##ts_stk", &stk)) { ts.stroke_enabled = stk; history_push(state, "Text stroke"); edited = true; }
     if (ts.stroke_enabled) {
         ImGui::SameLine(0.f, 8.f); ImGui::SetNextItemWidth(70.f);
-        if (ImGui::SliderFloat("w##ts_sw", &ts.stroke_w, 0.5f, 10.f, "%.1f"))
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Stroke width");
+        if (ImGui::SliderFloat("w##ts_sw", &ts.stroke_w, 0.5f, 10.f, "%.1f")) edited = true;
+        if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Stroke width");
         ImGui::SameLine(0.f, 4.f); ImGui::SetNextItemWidth(sw - 100.f);
         if (ImGui::ColorEdit4("##ts_stkcol", ts.stroke_col,
-                ImGuiColorEditFlags_NoLabel | ImGuiColorEditFlags_AlphaBar))
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Stroke color");
+                ImGuiColorEditFlags_NoLabel | ImGuiColorEditFlags_AlphaBar)) edited = true;
+        if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Stroke color");
     }
 
     ImGui::Dummy({0.f, 2.f});
 
     // Glow
     bool glow = ts.glow_enabled;
-    if (ImGui::Checkbox("Glow##ts_glow", &glow)) { ts.glow_enabled = glow; history_push(state, "Text glow"); }
+    if (ImGui::Checkbox("Glow##ts_glow", &glow)) { ts.glow_enabled = glow; history_push(state, "Text glow"); edited = true; }
     if (ts.glow_enabled) {
         ImGui::SameLine(0.f, 8.f); ImGui::SetNextItemWidth(70.f);
-        if (ImGui::SliderFloat("r##ts_gr", &ts.glow_r, 1.f, 30.f, "%.0f"))
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Glow radius");
+        if (ImGui::SliderFloat("r##ts_gr", &ts.glow_r, 1.f, 30.f, "%.0f")) edited = true;
+        if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Glow radius");
         ImGui::SameLine(0.f, 4.f); ImGui::SetNextItemWidth(sw - 100.f);
         if (ImGui::ColorEdit4("##ts_gcol", ts.glow_col,
-                ImGuiColorEditFlags_NoLabel | ImGuiColorEditFlags_AlphaBar))
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Glow color");
+                ImGuiColorEditFlags_NoLabel | ImGuiColorEditFlags_AlphaBar)) edited = true;
+        if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Glow color");
     }
 
     ImGui::Dummy({0.f, 2.f});
 
     // Background box
     bool bg = ts.bg_enabled;
-    if (ImGui::Checkbox("Background##ts_bg", &bg)) { ts.bg_enabled = bg; history_push(state, "Text background"); }
+    if (ImGui::Checkbox("Background##ts_bg", &bg)) { ts.bg_enabled = bg; history_push(state, "Text background"); edited = true; }
     if (ts.bg_enabled) {
         ImGui::SetNextItemWidth(sw);
         if (ImGui::ColorEdit4("##ts_bgcol", ts.bg_col,
-                ImGuiColorEditFlags_NoLabel | ImGuiColorEditFlags_AlphaBar))
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Background color");
+                ImGuiColorEditFlags_NoLabel | ImGuiColorEditFlags_AlphaBar)) edited = true;
+        if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Background color");
         ImGui::SetNextItemWidth(54.f);
-        if (ImGui::SliderFloat("pad x##ts_bpx", &ts.bg_pad_x, 0.f, 40.f, "%.0f"))
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Background padding");
+        if (ImGui::SliderFloat("pad x##ts_bpx", &ts.bg_pad_x, 0.f, 40.f, "%.0f")) edited = true;
+        if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Background padding");
         ImGui::SameLine(0.f, 4.f); ImGui::SetNextItemWidth(54.f);
-        if (ImGui::SliderFloat("pad y##ts_bpy", &ts.bg_pad_y, 0.f, 40.f, "%.0f"))
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Background padding");
+        if (ImGui::SliderFloat("pad y##ts_bpy", &ts.bg_pad_y, 0.f, 40.f, "%.0f")) edited = true;
+        if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Background padding");
         ImGui::SameLine(0.f, 4.f); ImGui::SetNextItemWidth(60.f);
-        if (ImGui::SliderFloat("corner##ts_bc", &ts.bg_corner, 0.f, 20.f, "%.0f"))
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Background corner");
+        if (ImGui::SliderFloat("corner##ts_bc", &ts.bg_corner, 0.f, 20.f, "%.0f")) edited = true;
+        if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Background corner");
     }
 
     ImGui::PopStyleColor(2);
+    return edited;
 }
 
 void panel_clip(AppState& state, float w) {
@@ -915,10 +920,10 @@ void panel_clip(AppState& state, float w) {
             ImGui::Dummy({0.f, 4.f}); section_color(state, clip, w); ImGui::Dummy({0.f, 4.f});
         }
         if (ImGui::CollapsingHeader("Fade")) {
-            ImGui::Dummy({0.f, 4.f}); section_fade(state, clip, w); ImGui::Dummy({0.f, 4.f});
+            ImGui::Dummy({0.f, 4.f}); section_fade(state, clip.fade_in, clip.fade_out, w); ImGui::Dummy({0.f, 4.f});
         }
         if (ImGui::CollapsingHeader("Text Style")) {
-            ImGui::Dummy({0.f, 4.f}); section_text_style(state, clip, w); ImGui::Dummy({0.f, 4.f});
+            ImGui::Dummy({0.f, 4.f}); section_text_style(state, clip.ts, w); ImGui::Dummy({0.f, 4.f});
         }
     }
 
@@ -995,18 +1000,15 @@ void panel_clip(AppState& state, float w) {
             ImGui::Dummy({0.f, 4.f});
         }
 
-        if (ImGui::CollapsingHeader("Position")) {
-            ImGui::Dummy({0.f, 4.f}); section_position(state, clip, w); ImGui::Dummy({0.f, 4.f});
-        }
-        if (ImGui::CollapsingHeader("Color")) {
-            ImGui::Dummy({0.f, 4.f}); section_color(state, clip, w); ImGui::Dummy({0.f, 4.f});
-        }
-        if (ImGui::CollapsingHeader("Fade")) {
-            ImGui::Dummy({0.f, 4.f}); section_fade(state, clip, w); ImGui::Dummy({0.f, 4.f});
-        }
-        if (ImGui::CollapsingHeader("Text Style")) {
-            ImGui::Dummy({0.f, 4.f}); section_text_style(state, clip, w); ImGui::Dummy({0.f, 4.f});
-        }
+        // Style for a managed Lyrics track is owned by the Typography tab so it
+        // stays uniform across the track — per-clip style controls here used to
+        // desync individual lines. The Clip tab keeps content/words/grouping.
+        ImGui::Dummy({0.f, 4.f});
+        ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+        ImGui::TextWrapped("Font, color, position & alignment for the whole lyric "
+                           "track are set in the Typography tab.");
+        ImGui::PopStyleColor();
+        ImGui::Dummy({0.f, 4.f});
 
         if (ImGui::CollapsingHeader("Grouping")) {
             ImGui::Dummy({0.f, 4.f});
@@ -1283,17 +1285,14 @@ void panel_clip(AppState& state, float w) {
             ImGui::Dummy({0.f, 4.f});
         }
 
-        if (ImGui::CollapsingHeader("Style")) {
-            ImGui::Dummy({0.f, 4.f});
-            ImGui::PushStyleColor(ImGuiCol_Text, Col::muted); ImGui::TextUnformatted("Position"); ImGui::PopStyleColor();
-            ImGui::Dummy({0.f, 2.f});
-            section_position(state, clip, w);
-            ImGui::Dummy({0.f, 6.f});
-            ImGui::PushStyleColor(ImGuiCol_Text, Col::muted); ImGui::TextUnformatted("Color"); ImGui::PopStyleColor();
-            ImGui::Dummy({0.f, 2.f});
-            section_color(state, clip, w);
-            ImGui::Dummy({0.f, 4.f});
-        }
+        // Style is owned track-wide by the Typography tab so all subtitle lines
+        // stay uniform (Option A). The Clip tab keeps the per-line text/timing list.
+        ImGui::Dummy({0.f, 4.f});
+        ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+        ImGui::TextWrapped("Font, color, position & alignment for the whole subtitle "
+                           "track are set in the Typography tab.");
+        ImGui::PopStyleColor();
+        ImGui::Dummy({0.f, 4.f});
     }
 
     // ═══════════════════════════════════════════════════════════════════════════

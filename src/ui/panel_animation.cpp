@@ -1,6 +1,7 @@
 #include "studio_types.h"
 #include "studio_shared.h"
 #include "panel_animation.h"
+#include "panel_clip.h"   // section_fade / section_text_style (shared style controls)
 #include "text_styles.h"
 #include "pipeline.h"
 #include "app.h"
@@ -31,22 +32,22 @@ extern ImFont* g_font_black;
 static constexpr const char* TYPO_FX_TAG = "__typo_fx__";
 
 static void apply_typo_style(Clip& c, const TypographyPreset& pr, const AppState& state) {
-    float fs   = (state.typo_font_size  > 0.001f) ? state.typo_font_size  : pr.font_size;
-    // Letter case: a user override wins; else the preset's text_case (or, for
-    // older presets that predate it, derived from all_caps). 0=as-typed 1=UPPER 2=lower.
-    int   tcase = state.typo_case_override ? state.typo_case
+    // Each styled field takes the user's tweak when that field is active in the
+    // hold store, otherwise the preset's value. Letter case: tweak wins; else the
+    // preset's text_case (or, for older presets, derived from all_caps).
+    const TypoTweaks& tw = state.typo;
+    int   tcase = tw.on(TF_Case) ? tw.text_case
                 : (pr.text_case >= 0 ? pr.text_case : (pr.all_caps ? 1 : 0));
-    bool  has_color_override = (state.typo_color[3] > 0.001f);
 
-    c.font_size         = fs;
-    c.sub_pos           = pr.sub_pos;
-    c.sub_pos_y         = pr.sub_pos_y;
-    c.sub_pos_x         = pr.sub_pos_x;
-    c.sub_anchor_h      = pr.sub_anchor_h;
-    c.sub_wrap_w        = pr.sub_wrap_w;
+    c.font_size         = tw.on(TF_FontSize) ? tw.font_size : pr.font_size;
+    c.sub_pos           = tw.on(TF_PosV)     ? tw.pos_v     : pr.sub_pos;
+    c.sub_pos_y         = tw.on(TF_PosY)     ? tw.pos_y     : pr.sub_pos_y;
+    c.sub_pos_x         = tw.on(TF_PosX)     ? tw.pos_x     : pr.sub_pos_x;
+    c.sub_anchor_h      = tw.on(TF_AnchorH)  ? tw.anchor_h  : pr.sub_anchor_h;
+    c.sub_wrap_w        = tw.on(TF_Wrap)     ? tw.wrap_w    : pr.sub_wrap_w;
     c.sub_color_override = true;
-    if (has_color_override)
-        memcpy(c.sub_color, state.typo_color, sizeof(c.sub_color));
+    if (tw.on(TF_Color))
+        memcpy(c.sub_color, tw.color, sizeof(c.sub_color));
     else
         memcpy(c.sub_color, pr.color, sizeof(c.sub_color));
     c.karaoke           = pr.karaoke;
@@ -55,7 +56,7 @@ static void apply_typo_style(Clip& c, const TypographyPreset& pr, const AppState
     c.clip_style        = pr.style;
     c.sub_font          = pr.font ? pr.font : "";
     c.ease              = pr.ease;
-    c.tracking          = pr.tracking;
+    c.tracking          = tw.on(TF_Tracking) ? tw.tracking : pr.tracking;
     c.anim_unit         = pr.anim_unit;
     c.anim_stagger      = pr.anim_stagger > 0.f ? pr.anim_stagger : 0.06f;
     c.grad_mode         = pr.grad_mode;
@@ -73,10 +74,14 @@ static void apply_typo_style(Clip& c, const TypographyPreset& pr, const AppState
         c.text_case = tcase;
     }
 
-    // Styling (shadow/stroke/glow/box) now travels with the preset — no more
-    // per-id special-casing. Presets that want plain text carry a default
-    // TextStyle (shadow on); styled ones set glow/stroke/bg in their struct.
-    c.ts = pr.ts;
+    // Styling (shadow/stroke/glow/box) travels with the preset unless the user
+    // pinned/overrode it in the tweak store.
+    c.ts = tw.on(TF_TextStyle) ? tw.ts : pr.ts;
+
+    // Fade isn't a preset property — only apply it when the user set it, so an
+    // existing per-clip fade is left alone otherwise (and a tweak lands track-wide).
+    if (tw.on(TF_FadeIn))  c.fade_in  = tw.fade_in;
+    if (tw.on(TF_FadeOut)) c.fade_out = tw.fade_out;
 }
 
 void generate_typography(AppState& state) {
@@ -370,8 +375,9 @@ static bool typo_selected_is_standalone(const AppState& state) {
     auto& clips = state.tracks[state.selected_track].clips;
     if (state.selected_clip < 0 || state.selected_clip >= (int)clips.size())
         return false;
-    ClipType ct = clips[state.selected_clip].clip_type;
-    return ct == ClipType::Text || ct == ClipType::Subtitle;
+    // Only a one-off Text brick styles in isolation. Lyrics AND Subtitle clips
+    // are a managed group — they restyle together across the whole track.
+    return clips[state.selected_clip].clip_type == ClipType::Text;
 }
 
 static void typo_restyle_live(AppState& state) {
@@ -382,11 +388,40 @@ static void typo_restyle_live(AppState& state) {
                          *pr, state);
         return;
     }
-    const std::string src = state.audio_path;
+    // Managed group: restyle every clip sharing the selected clip's type and
+    // source (lyrics or subtitles), so a tweak lands on the whole track at once.
+    // Fall back to the lyrics-for-the-current-audio set when there's no usable
+    // selection (e.g. called right after generation).
+    ClipType ct  = ClipType::Lyrics;
+    std::string src = state.audio_path;
+    if (state.selected_track >= 0 && state.selected_track < (int)state.tracks.size()) {
+        auto& clips = state.tracks[state.selected_track].clips;
+        if (state.selected_clip >= 0 && state.selected_clip < (int)clips.size()) {
+            const Clip& sel = clips[state.selected_clip];
+            if (sel.clip_type == ClipType::Lyrics || sel.clip_type == ClipType::Subtitle) {
+                ct  = sel.clip_type;
+                src = sel.source_id;
+            }
+        }
+    }
     for (auto& t : state.tracks)
         for (auto& c : t.clips)
-            if (c.clip_type == ClipType::Lyrics && c.source_id == src)
+            if (c.clip_type == ct && c.source_id == src)
                 apply_typo_style(c, *pr, state);
+}
+
+// Small "Hold" pin toggle drawn after a tweakable control's label. Filled when
+// the field is pinned — pinned tweaks survive switching to another preset.
+static void typo_hold_btn(AppState& state, TypoField f) {
+    ImGui::SameLine(0.f, 6.f);
+    bool held = state.typo.pinned(f);
+    ImGui::PushID((int)f);
+    if (ui_btn(held ? "Held" : "Hold", held, true))
+        state.typo.pin(f, !held);
+    ImGui::PopID();
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip(held ? "Pinned — kept when you switch presets (click to unpin)"
+                               : "Pin so this setting survives switching presets");
 }
 
 // Category accent color
@@ -435,11 +470,20 @@ void panel_typography(AppState& state, float w) {
     // Try to find it by matching the clip's stored preset_id if we stamped it, else fall back to state.
     // We use state.typo_preset_id as the committed selection (updated on click).
 
-    // ── Preset grid (2 columns) ───────────────────────────────────────────────
+    // ── Browse presets (collapsible) ──────────────────────────────────────────
+    // The preset grid is a chooser, not the daily driver — collapse it so the
+    // tune controls below are the first thing you see. The active preset's name
+    // rides in the header so it's clear what's applied while collapsed.
+    const TypographyPreset* apr = typo_preset_by_id(state.typo_preset_id.c_str());
+    char blbl[96];
+    snprintf(blbl, sizeof(blbl), "Browse presets  ·  %s###typo_browse",
+             apr ? apr->label : "none");
     ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
-    ImGui::TextUnformatted("STYLE");
+    bool browse_open = ImGui::TreeNodeEx(blbl,
+        ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_FramePadding);
     ImGui::PopStyleColor();
-    ImGui::Dummy({0.f, 4.f});
+    if (browse_open) {
+    ImGui::Dummy({0.f, 6.f});
 
     // Category filter pills (in place) — pick a category instead of scrolling
     // the whole catalogue. Shared with the FX / background libraries.
@@ -621,9 +665,9 @@ void panel_typography(AppState& state, float w) {
         ImGui::InvisibleButton(btn_id, {cell_w, cell_h});
         if (ImGui::IsItemClicked()) {
             state.typo_preset_id = pr.id;
-            state.typo_font_size = 0.f;
-            memset(state.typo_color, 0, sizeof(state.typo_color));
-            state.typo_case_override = false;   // take the preset's own letter case
+            // Keep only the pinned (held) tweaks; everything else reverts to the
+            // new preset's own look — that's the sticky/hold UX.
+            state.typo.keep_held();
             // A standalone Text/Subtitle brick just takes the preset's look
             // (font, colour, position, animation) on that one clip. Lyrics
             // regenerate the managed transcript track (regroup + lyrics FX).
@@ -640,45 +684,84 @@ void panel_typography(AppState& state, float w) {
         if (col_idx >= 2) { col_idx = 0; ImGui::Dummy({0.f, gap}); }
     }
     if (col_idx == 1) ImGui::NewLine();
+    ImGui::TreePop();
+    }   // browse_open
 
     ImGui::Dummy({0.f, 10.f}); ui_separator(); ImGui::Dummy({0.f, 8.f});
 
     // ── Tune ──────────────────────────────────────────────────────────────────
+    // Every control below tweaks the active preset. Its "Hold" pin keeps that
+    // tweak when you switch to another preset (keep_held on the card click).
     const TypographyPreset* pr = typo_preset_by_id(state.typo_preset_id.c_str());
+    auto& tw = state.typo;
 
-    ui_label("Font Size");
-    float fs = (state.typo_font_size > 0.001f) ? state.typo_font_size : (pr ? pr->font_size : 0.09f);
+    ui_label("Font Size"); typo_hold_btn(state, TF_FontSize);
+    float fs = tw.on(TF_FontSize) ? tw.font_size : (pr ? pr->font_size : 0.09f);
     ImGui::SetNextItemWidth(full_w);
     ImGui::PushStyleColor(ImGuiCol_FrameBg, Col::bg_soft);
     if (ImGui::SliderFloat("##tyfo", &fs, 0.03f, 0.30f, "%.2f")) {
-        state.typo_font_size = fs;
+        tw.font_size = fs; tw.tweak(TF_FontSize);
         typo_restyle_live(state);
     }
     ImGui::PopStyleColor();
 
     ImGui::Dummy({0.f, 8.f});
 
-    ui_label("Color");
+    ui_label("Color"); typo_hold_btn(state, TF_Color);
     float col_buf[4];
-    const float* src_col = (state.typo_color[3] > 0.001f) ? state.typo_color
-                           : (pr ? pr->color : state.typo_color);
+    const float* src_col = tw.on(TF_Color) ? tw.color : (pr ? pr->color : tw.color);
     memcpy(col_buf, src_col, sizeof(col_buf));
     ImGui::SetNextItemWidth(full_w);
     if (ImGui::ColorEdit4("##tycol", col_buf,
             ImGuiColorEditFlags_NoLabel | ImGuiColorEditFlags_AlphaBar)) {
-        memcpy(state.typo_color, col_buf, sizeof(state.typo_color));
+        memcpy(tw.color, col_buf, sizeof(tw.color)); tw.tweak(TF_Color);
         typo_restyle_live(state);
     }
     palette_widget("##pal_typo", col_buf);
     // Only a palette-swatch click (which mutates col_buf in place) is a real
-    // edit. Compare against what we loaded (src_col), NOT state.typo_color —
-    // that's {0,0,0,0} until the first override, so comparing to it fired a
-    // spurious restyle on the very first frame the panel was shown, silently
-    // re-styling the selected clip just by opening the Typography tab.
+    // edit. Compare against what we loaded (src_col) so just opening the tab
+    // doesn't fire a spurious restyle.
     if (memcmp(col_buf, src_col, sizeof(col_buf)) != 0) {
-        memcpy(state.typo_color, col_buf, sizeof(state.typo_color));
+        memcpy(tw.color, col_buf, sizeof(tw.color)); tw.tweak(TF_Color);
         typo_restyle_live(state);
     }
+
+    ImGui::Dummy({0.f, 8.f});
+
+    // Horizontal alignment — left / center / right (writes sub_anchor_h, which
+    // the renderer already honors; previously only presets could set it).
+    ui_label("Alignment"); typo_hold_btn(state, TF_AnchorH);
+    int cur_align = tw.on(TF_AnchorH) ? tw.anchor_h : (pr ? pr->sub_anchor_h : 1);
+    struct AlignBtn { int v; const char* label; };
+    AlignBtn abtns[] = {{0,"Left"},{1,"Center"},{2,"Right"}};
+    ImGui::PushID("ty_align");   // scope: "Center" also exists in Vertical below
+    for (auto& ab : abtns) {
+        if (ui_btn(ab.label, cur_align == ab.v, true)) {
+            tw.anchor_h = ab.v; tw.tweak(TF_AnchorH);
+            typo_restyle_live(state);
+        }
+        ImGui::SameLine(0.f, 4.f);
+    }
+    ImGui::PopID();
+    ImGui::NewLine();
+
+    ImGui::Dummy({0.f, 8.f});
+
+    // Vertical placement — bottom / center / top (sub_pos). Pairs with alignment.
+    ui_label("Vertical"); typo_hold_btn(state, TF_PosV);
+    int cur_pos = tw.on(TF_PosV) ? tw.pos_v : (pr ? pr->sub_pos : 1);
+    struct VBtn { int v; const char* label; };
+    VBtn vbtns[] = {{0,"Bottom"},{1,"Center"},{2,"Top"}};
+    ImGui::PushID("ty_vert");
+    for (auto& vb : vbtns) {
+        if (ui_btn(vb.label, cur_pos == vb.v, true)) {
+            tw.pos_v = vb.v; tw.tweak(TF_PosV);
+            typo_restyle_live(state);
+        }
+        ImGui::SameLine(0.f, 4.f);
+    }
+    ImGui::PopID();
+    ImGui::NewLine();
 
     ImGui::Dummy({0.f, 10.f});
 
@@ -690,37 +773,91 @@ void panel_typography(AppState& state, float w) {
     if (adv_open) {
         ImGui::Dummy({0.f, 6.f});
 
-        // Letter case — a 3-way control (As typed / UPPER / lower). For a
-        // standalone Text/Subtitle brick it sets that clip's own render-time
-        // flag directly; for lyrics it tracks the global preset override.
-        bool standalone = typo_selected_is_standalone(state);
-        int cur_case = standalone
-            ? state.tracks[state.selected_track].clips[state.selected_clip].text_case
-            : (state.typo_case_override ? state.typo_case
-               : (pr ? (pr->text_case >= 0 ? pr->text_case : (pr->all_caps ? 1 : 0)) : 0));
-        ui_label("Letter case");
+        // Letter case — 3-way (As typed / UPPER / lower).
+        ui_label("Letter case"); typo_hold_btn(state, TF_Case);
+        int cur_case = tw.on(TF_Case) ? tw.text_case
+            : (pr ? (pr->text_case >= 0 ? pr->text_case : (pr->all_caps ? 1 : 0)) : 0);
         struct CaseBtn { int v; const char* label; };
         CaseBtn cbtns[] = {{0,"As typed"},{1,"AA"},{2,"aa"}};
         for (auto& cb : cbtns) {
             if (ui_btn(cb.label, cur_case == cb.v, true)) {
-                if (standalone) {
-                    state.tracks[state.selected_track].clips[state.selected_clip].text_case = cb.v;
-                    history_push(state, "Letter case");
-                } else {
-                    state.typo_case_override = true;
-                    state.typo_case = cb.v;
-                    typo_restyle_live(state);
-                }
+                tw.text_case = cb.v; tw.tweak(TF_Case);
+                typo_restyle_live(state);
             }
             ImGui::SameLine(0.f, 4.f);
         }
         ImGui::NewLine();
 
         ImGui::Dummy({0.f, 8.f});
-        if (ui_btn("Reset font & color to preset", false, true)) {
-            state.typo_font_size     = 0.f;
-            state.typo_color[3]      = 0.f;
-            state.typo_case_override = false;
+        ui_label("Letter spacing"); typo_hold_btn(state, TF_Tracking);
+        float trk = tw.on(TF_Tracking) ? tw.tracking : (pr ? pr->tracking : 0.f);
+        ImGui::SetNextItemWidth(full_w);
+        ImGui::PushStyleColor(ImGuiCol_FrameBg, Col::bg_soft);
+        if (ImGui::SliderFloat("##tytrk", &trk, -0.1f, 0.5f, "%.2f")) {
+            tw.tracking = trk; tw.tweak(TF_Tracking);
+            typo_restyle_live(state);
+        }
+        ImGui::PopStyleColor();
+
+        ImGui::Dummy({0.f, 8.f});
+        ui_label("Wrap width"); typo_hold_btn(state, TF_Wrap);
+        float wrp = tw.on(TF_Wrap) ? tw.wrap_w : (pr ? pr->sub_wrap_w : 0.85f);
+        ImGui::SetNextItemWidth(full_w);
+        ImGui::PushStyleColor(ImGuiCol_FrameBg, Col::bg_soft);
+        if (ImGui::SliderFloat("##tywrap", &wrp, 0.2f, 1.0f, "%.2f")) {
+            tw.wrap_w = wrp; tw.tweak(TF_Wrap);
+            typo_restyle_live(state);
+        }
+        ImGui::PopStyleColor();
+
+        // Fine horizontal / vertical offset.
+        ImGui::Dummy({0.f, 8.f});
+        ui_label("X offset"); typo_hold_btn(state, TF_PosX);
+        float px = tw.on(TF_PosX) ? tw.pos_x : (pr ? pr->sub_pos_x : 0.5f);
+        ImGui::SetNextItemWidth(full_w);
+        ImGui::PushStyleColor(ImGuiCol_FrameBg, Col::bg_soft);
+        if (ImGui::SliderFloat("##typx", &px, 0.f, 1.f, "%.2f")) {
+            tw.pos_x = px; tw.tweak(TF_PosX);
+            typo_restyle_live(state);
+        }
+        ImGui::PopStyleColor();
+
+        ImGui::Dummy({0.f, 8.f});
+        ui_label("Y offset"); typo_hold_btn(state, TF_PosY);
+        float py = tw.on(TF_PosY) ? tw.pos_y : (pr ? pr->sub_pos_y : 0.85f);
+        ImGui::SetNextItemWidth(full_w);
+        ImGui::PushStyleColor(ImGuiCol_FrameBg, Col::bg_soft);
+        if (ImGui::SliderFloat("##typy", &py, 0.f, 1.f, "%.2f")) {
+            // A manual Y offset means a custom vertical position (sub_pos=3).
+            tw.pos_y = py; tw.tweak(TF_PosY);
+            tw.pos_v = 3; tw.tweak(TF_PosV);
+            typo_restyle_live(state);
+        }
+        ImGui::PopStyleColor();
+
+        // Fade in/out — track-wide via the shared section. apply_typo_style only
+        // applies these when the field is active, so existing fades aren't wiped.
+        ImGui::Dummy({0.f, 10.f});
+        ui_label("Fade"); typo_hold_btn(state, TF_FadeIn);
+        if (!tw.on(TF_FadeIn)) tw.fade_in = 0.f;     // show 0 until the user sets it
+        if (!tw.on(TF_FadeOut)) tw.fade_out = 0.f;
+        if (section_fade(state, tw.fade_in, tw.fade_out, full_w)) {
+            tw.tweak(TF_FadeIn); tw.tweak(TF_FadeOut);
+            typo_restyle_live(state);
+        }
+
+        // Text style (shadow/stroke/glow/box) — shared with the Clip tab.
+        ImGui::Dummy({0.f, 10.f});
+        ui_label("Text style"); typo_hold_btn(state, TF_TextStyle);
+        if (!tw.on(TF_TextStyle) && pr) tw.ts = pr->ts;   // seed from preset until tweaked
+        if (section_text_style(state, tw.ts, full_w)) {
+            tw.tweak(TF_TextStyle);
+            typo_restyle_live(state);
+        }
+
+        ImGui::Dummy({0.f, 8.f});
+        if (ui_btn("Reset all to preset", false, true)) {
+            tw.active = 0; tw.held = 0;   // drop every tweak and pin
             typo_restyle_live(state);
         }
 
