@@ -60,12 +60,26 @@ static uintptr_t fx_preview_source_tex(AppState& state, bool* flip, int* sw, int
             int slot = slot_for_video(state, clip_slot_key(c.text, c.start), c.text);
             float src_t = c.in_point + (state.playhead - c.start) * c.speed;
             if (slot >= 0 && video_is_open(slot)) {
+                // Cache the fetched clip frame across UI frames. video_get_texture
+                // re-runs the clip's decode + pixel-FX path, and calling it every
+                // frame while hovering an FX card stalled the UI thread — that's
+                // why per-clip hover lagged while project hover (scene_result, an
+                // already-rendered texture) stayed smooth. Reuse the last result
+                // while the clip slot and source time are unchanged.
+                static int s_slot = -1; static double s_t = -1e30;
+                static uintptr_t s_tex = 0; static int s_sw = 0, s_sh = 0;
+                if (slot == s_slot && (double)src_t == s_t && s_tex) {
+                    *sw = s_sw; *sh = s_sh; *flip = false;
+                    return s_tex;
+                }
                 uintptr_t tex = video_get_texture(slot, (double)src_t);
                 if (tex) {
                     video_preview_dims(slot, sw, sh);
                     // Clip textures upload top-down (same as the portrait default),
                     // so they draw upright with normal UVs — no V-flip. Only
                     // scene_result (a bottom-up FBO) needs flipping.
+                    s_slot = slot; s_t = (double)src_t;
+                    s_tex = tex; s_sw = *sw; s_sh = *sh;
                     *flip = false;
                     return tex;
                 }
