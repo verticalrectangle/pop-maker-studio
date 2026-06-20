@@ -289,9 +289,10 @@ static void datamosh_rgb(uint8_t* rgb, int w, int h, float intensity, float time
     static thread_local std::vector<uint8_t> src;
     src.assign(rgb, rgb + (size_t)w * h * 3);
 
-    const int  B        = 16;                              // block size (px)
-    const int  max_disp = 8 + (int)(intensity * 56.f);     // max smear distance
-    const uint32_t frame = (uint32_t)(time_sec * 24.f);    // animate at ~film rate
+    const int   B     = 16;                          // macroblock size (px)
+    const float reach = 6.f + intensity * 70.f;      // max smear length
+    const int   TAPS  = 5;                            // samples along each trail
+    const uint32_t frame = (uint32_t)(time_sec * 24.f);
     auto at = [&](int x, int y, int c) -> uint8_t {
         if (x < 0) x = 0; else if (x >= w) x = w - 1;
         if (y < 0) y = 0; else if (y >= h) y = h - 1;
@@ -299,19 +300,47 @@ static void datamosh_rgb(uint8_t* rgb, int w, int h, float intensity, float time
     };
     for (int by = 0; by < h; by += B) {
         for (int bx = 0; bx < w; bx += B) {
-            uint32_t hb = dm_hash((uint32_t)(bx/B) | ((uint32_t)(by/B) << 16), frame);
-            // Only a fraction of blocks (scaled by intensity) smear each frame;
-            // the rest pass through clean — that patchy spread reads as mosh.
-            if ((float)(hb & 0xFFFF) / 65535.f > intensity * 0.85f + 0.05f) continue;
-            int dx = ((int)((hb >> 16) & 0xFF) - 128) * max_disp / 128;
-            int dy = ((int)((hb >> 24) & 0xFF) - 128) * max_disp / 128;
-            int hx = dx / 2, hy = dy / 2;             // chroma lags luma → bleed
+            int bxi = bx / B, byi = by / B;
+            uint32_t hb = dm_hash((uint32_t)bxi | ((uint32_t)byi << 16), frame);
+
+            // Coherent pseudo-motion flow: a low-frequency field (neighbouring
+            // blocks share a direction, so it reads as a moving region rather than
+            // noise) plus a per-block jitter. This is what fakes the "P-frame
+            // motion applied to the wrong content" smear without a real codec.
+            float fa = sinf(bxi * 0.20f + time_sec * 1.3f) + cosf(byi * 0.17f - time_sec * 0.9f);
+            float fb = cosf(bxi * 0.15f - time_sec * 1.1f) + sinf(byi * 0.23f + time_sec * 0.7f);
+            float vx = fa * 0.6f + (((int)((hb >> 8)  & 0xFF) - 128) / 128.f) * 0.8f;
+            float vy = fb * 0.6f + (((int)((hb >> 16) & 0xFF) - 128) / 128.f) * 0.8f;
+            float vl = sqrtf(vx*vx + vy*vy) + 1e-4f; vx /= vl; vy /= vl;
+            float mag = reach * (0.4f + 0.6f * ((hb & 0xFF) / 255.f));
+
+            // Patchy block selection (scaled by intensity); a rare few "lose" the
+            // macroblock entirely → frozen, channel-swapped flat region.
+            float pick = (float)((hb >> 24) & 0xFF) / 255.f;
+            bool smear = pick < intensity * 0.9f + 0.05f;
+            bool lost  = pick > 0.97f - intensity * 0.10f;
+            if (!smear && !lost) continue;            // clean blocks pass through
+
             for (int y = by; y < by + B && y < h; ++y)
                 for (int x = bx; x < bx + B && x < w; ++x) {
                     uint8_t* d = rgb + ((size_t)y * w + x) * 3;
-                    d[0] = at(x + dx, y + dy, 0);     // R fully displaced
-                    d[1] = at(x + hx, y + hy, 1);     // G half (chroma bleed)
-                    d[2] = at(x,      y,      2);     // B stays
+                    if (lost) {                        // decoder gave up here
+                        int sx = x - (int)(vx * mag), sy = y - (int)(vy * mag);
+                        d[0] = at(sx, sy, 1); d[1] = at(sx, sy, 2); d[2] = at(sx, sy, 0);
+                        continue;
+                    }
+                    // Directional smear: average taps back along the flow → a
+                    // trail. Chroma lags luma (G half-shift, B static) → the
+                    // signature cyan/magenta datamosh bleed along the streak.
+                    int rs = 0, gs = 0;
+                    for (int k = 0; k < TAPS; ++k) {
+                        float f = (float)k / (TAPS - 1);
+                        rs += at(x - (int)(vx * mag * f),        y - (int)(vy * mag * f),        0);
+                        gs += at(x - (int)(vx * mag * f * 0.5f), y - (int)(vy * mag * f * 0.5f), 1);
+                    }
+                    d[0] = (uint8_t)(rs / TAPS);
+                    d[1] = (uint8_t)(gs / TAPS);
+                    d[2] = at(x, y, 2);
                 }
         }
     }
