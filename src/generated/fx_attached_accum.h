@@ -800,6 +800,13 @@ static void fx_accum_from_attached(CreativeFXAccum& acc, FXType type, float amou
             if ((int)pv.size() > 2) acc.glow_up_brighten = fmaxf(acc.glow_up_brighten, pv[2]);
             acc.any_gen_fx = true;
             break;
+        case FXType::CamShake:
+            acc.cam_shake_on = true;
+            acc.cam_shake_amount = fmaxf(acc.cam_shake_amount, amount);
+            if ((int)pv.size() > 0) acc.cam_shake_intensity = fmaxf(acc.cam_shake_intensity, pv[0]);
+            if ((int)pv.size() > 1) acc.cam_shake_speed = fmaxf(acc.cam_shake_speed, pv[1]);
+            acc.any_gen_fx = true;
+            break;
         default: break;
     }
 }

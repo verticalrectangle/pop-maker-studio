@@ -103,3 +103,4 @@
         case FXType::KenBurns: return "Ken Burns";
         case FXType::SkinSmooth: return "Skin Smooth";
         case FXType::GlowUp: return "Glow Up";
+        case FXType::CamShake: return "Cam Shake";

@@ -673,3 +673,8 @@
     w.pod(c.fx_glow_up_warmth_beat);
     w.pod(c.fx_glow_up_brighten);
     w.pod(c.fx_glow_up_brighten_beat);
+    w.pod(c.fx_cam_shake_amount);
+    w.pod(c.fx_cam_shake_intensity);
+    w.pod(c.fx_cam_shake_intensity_beat);
+    w.pod(c.fx_cam_shake_speed);
+    w.pod(c.fx_cam_shake_speed_beat);

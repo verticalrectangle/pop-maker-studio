@@ -2310,3 +2310,23 @@
             }
         }
     }
+
+    if (cfx.cam_shake_on && cfx.cam_shake_amount > 0.01f) {
+        GLuint p = g_gen_progs[(int)FXType::CamShake];
+        if (p) {
+            GLuint pre_tex = cur;
+            glUseProgram(p);
+            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
+            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
+            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
+            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.cam_shake_amount);
+            glUniform1f(glGetUniformLocation(p, "u_intensity"), cfx.cam_shake_intensity);
+            glUniform1f(glGetUniformLocation(p, "u_speed"), cfx.cam_shake_speed);
+            run1(p);
+            if (cfx.cam_shake_amount < 0.999f) {
+                draw_blend_pass(pre_tex, cur, cfx.cam_shake_amount, g_pp.fbo[pslot], w, h);
+                cur = g_pp.tex[pslot];
+                pslot ^= 1;
+            }
+        }
+    }

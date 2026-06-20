@@ -103,3 +103,4 @@
         {FXType::KenBurns, "Ken Burns", "Animated zoom & pan — push in or pull back across the clip duration", IM_COL32(80,180,255,255), "Motion"},
         {FXType::SkinSmooth, "Skin Smooth", "Beauty smoothing  ·  edge-preserving, skin-tone gated  ·  pores soften, jawlines don't", IM_COL32(255,180,160,255), "Beauty"},
         {FXType::GlowUp, "Glow Up", "Soft-focus portrait glow  ·  warmth + lift  ·  diffusion-filter look", IM_COL32(255,210,140,255), "Beauty"},
+        {FXType::CamShake, "Cam Shake", "Handheld camera shake  ·  continuous jitter + micro-zoom  ·  TikTok energy", IM_COL32(255,90,90,255), "Motion"},

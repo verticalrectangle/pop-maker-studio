@@ -103,3 +103,4 @@
     KenBurns,   // Ken Burns
     SkinSmooth,   // Skin Smooth
     GlowUp,   // Glow Up
+    CamShake,   // Cam Shake

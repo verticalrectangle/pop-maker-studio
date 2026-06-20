@@ -673,3 +673,8 @@
     float fx_glow_up_warmth_beat = 0.0f;
     float fx_glow_up_brighten = 0.15f;
     float fx_glow_up_brighten_beat = 0.0f;
+    float fx_cam_shake_amount = 1.0f;
+    float fx_cam_shake_intensity = 0.5f;
+    float fx_cam_shake_intensity_beat = 0.0f;
+    float fx_cam_shake_speed = 1.0f;
+    float fx_cam_shake_speed_beat = 0.0f;

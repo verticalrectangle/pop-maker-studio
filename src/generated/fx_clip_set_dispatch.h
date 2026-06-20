@@ -987,5 +987,13 @@ static bool fx_clip_set_param(Clip& c, const std::string& fx_id,
         if (param == "brighten_beat") { c.fx_glow_up_brighten_beat = value; return true; }
         return false;
     }
+    if (fx_id == "cam_shake") {
+        if (param == "amount") { c.fx_cam_shake_amount = value; return true; }
+        if (param == "intensity") { c.fx_cam_shake_intensity = value; return true; }
+        if (param == "intensity_beat") { c.fx_cam_shake_intensity_beat = value; return true; }
+        if (param == "speed") { c.fx_cam_shake_speed = value; return true; }
+        if (param == "speed_beat") { c.fx_cam_shake_speed_beat = value; return true; }
+        return false;
+    }
     return false;
 }

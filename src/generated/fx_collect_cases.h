@@ -1940,3 +1940,18 @@
                 acc.glow_up_brighten = fmaxf(acc.glow_up_brighten, (_bi > 0.001f) ? (0.0f + (0.5f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
+        case FXType::CamShake:
+            acc.cam_shake_on = true;
+            acc.any_gen_fx = true;
+            acc.cam_shake_amount = fmaxf(acc.cam_shake_amount, cl.eval_prop("fx_cam_shake_amount", _cl_t));
+            {
+                float _bi = cl.fx_cam_shake_intensity_beat;
+                float _bv = cl.eval_prop("fx_cam_shake_intensity", _cl_t);
+                acc.cam_shake_intensity = fmaxf(acc.cam_shake_intensity, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
+            }
+            {
+                float _bi = cl.fx_cam_shake_speed_beat;
+                float _bv = cl.eval_prop("fx_cam_shake_speed", _cl_t);
+                acc.cam_shake_speed = fmaxf(acc.cam_shake_speed, (_bi > 0.001f) ? (0.1f + (4.0f - 0.1f) * _bi * _cl_beat_pulse) : _bv);
+            }
+            break;

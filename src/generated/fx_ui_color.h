@@ -103,3 +103,4 @@
         case FXType::KenBurns: return IM_COL32(80,180,255,255);
         case FXType::SkinSmooth: return IM_COL32(255,180,160,255);
         case FXType::GlowUp: return IM_COL32(255,210,140,255);
+        case FXType::CamShake: return IM_COL32(255,90,90,255);
