@@ -362,6 +362,11 @@ void panel_adjustment_library(AppState& state, float w) {
             if (fx_card_popover_ready(19000 + i)) {
                 bool flip = false; int sw = 0, sh = 0;
                 uintptr_t src = fx_preview_source_tex(state, &flip, &sw, &sh);
+                // Ken Burns / beauty effects render the big preview on their own
+                // upright source (still / face), so ignore the live source's flip
+                // (which goes true once a clip is on the timeline → scene_result).
+                if (fc.type == FXType::KenBurns || fc.type == FXType::SkinSmooth ||
+                    fc.type == FXType::GlowUp) flip = false;
                 int rw, rh; fx_render_dims(sw, sh, &rw, &rh);
                 uintptr_t big = video_fx_preview_big(fc.type, fx_card_hover_elapsed(19000 + i),
                                                      src, rw, rh);
@@ -1151,6 +1156,9 @@ void panel_fx_creative(AppState& state, float w) {
         if (fx_card_popover_ready(9000 + i)) {
             bool flip = false; int sw = 0, sh = 0;
             uintptr_t src = fx_preview_source_tex(state, &flip, &sw, &sh);
+            // Upright internal source for these (still / face) — see note above.
+            if (fc.type == FXType::KenBurns || fc.type == FXType::SkinSmooth ||
+                fc.type == FXType::GlowUp) flip = false;
             int rw, rh; fx_render_dims(sw, sh, &rw, &rh);
             uintptr_t big = video_fx_preview_big(fc.type, fx_card_hover_elapsed(9000 + i),
                                                  src, rw, rh);
