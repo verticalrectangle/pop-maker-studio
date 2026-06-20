@@ -149,6 +149,10 @@ void video_set_pixel_fx(int track_id, const PixelFX& fx);
 // Animated types (Glitch, VHS) regenerate each frame; others cached after first call.
 uintptr_t video_fx_preview_texture(FXType ft, float t);
 
+// Advance the shared FX-preview source clip to the frame for `now` (seconds).
+// Call once per UI frame while the FX picker is visible so the cards show motion.
+void fxp_motion_advance(double now);
+
 // Large hover-popover preview: render effect `ft` onto `src_tex` (0 = built-in
 // portrait) at w×h and return a stable GL texture. Runs on the user's footage.
 uintptr_t video_fx_preview_big(FXType ft, float t, uintptr_t src_tex, int w, int h);

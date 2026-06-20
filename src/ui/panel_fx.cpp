@@ -1072,6 +1072,8 @@ void panel_background(AppState& state, float w, bool clip_only) {
 // ── Right panel: Creative FX library ─────────────────────────────────────────
 
 void panel_fx_creative(AppState& state, float w) {
+    // Cycle the shared preview source so the generated-effect cards animate.
+    fxp_motion_advance(ImGui::GetTime());
     ImGui::Dummy({0.f, 8.f});
     ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(180,240,255,255));
     ImGui::TextUnformatted("FX");
