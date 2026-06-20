@@ -100,8 +100,16 @@ static void dump_fx_previews(const char* out_dir) {
     render_init_fonts();
     fx_shader_init();
 
-    // FX preview thumbnails are 108x192 (portrait_preview dimensions)
-    const int W = 108, H = 192;
+    // FX preview thumbnails match the portrait_preview source dimensions.
+    // (Hardcoding 108x192 here overflowed the readback buffers — the source is
+    // actually 270x480 — and segfaulted the whole dump.)
+    const int W = portrait_preview_w, H = portrait_preview_h;
+
+    // Tight pack/unpack: a 270px RGB row = 810 bytes isn't 4-aligned, so the
+    // default alignment of 4 pads each row — overrunning the W*H*3 readback
+    // buffers (heap corruption) and shearing every upload. Force 1-byte both ways.
+    glPixelStorei(GL_PACK_ALIGNMENT, 1);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
 
     // Existing hand-written effects
     static const struct { FXType ft; const char* name; } kBuiltin[] = {
@@ -121,10 +129,8 @@ static void dump_fx_previews(const char* out_dir) {
         std::vector<uint8_t> px((size_t)W * H * 3);
         glBindTexture(GL_TEXTURE_2D, (GLuint)tex);
         glGetTexImage(GL_TEXTURE_2D, 0, GL_RGB, GL_UNSIGNED_BYTE, px.data());
-        // Flip vertically (GL origin is bottom-left)
-        std::vector<uint8_t> flipped((size_t)W * H * 3);
-        for (int y = 0; y < H; ++y)
-            memcpy(flipped.data() + y*W*3, px.data() + (H-1-y)*W*3, W*3);
+        // glGetTexImage returns data in upload order (top-down here), so no flip.
+        std::vector<uint8_t>& flipped = px;
         std::string path = std::string(out_dir) + "/" + b.name + ".png";
         stbi_write_png(path.c_str(), W, H, 3, flipped.data(), W*3);
         printf("  %s\n", path.c_str());
@@ -148,21 +154,14 @@ static void dump_fx_previews(const char* out_dir) {
 #include "generated/fx_gen_names.h"
     };
 
-    // Generated effects — rendered via fx_preview_gen_effect
+    // Generated effects — go through the real preview path so the dump reflects
+    // per-effect sources (face for Skin Smooth/Glow Up) and the faked Ken Burns.
     for (int i = 0; i < k_gen_fx_count; ++i) {
-        uintptr_t out = fx_preview_gen_effect(k_gen_fx_types[i], (uintptr_t)src_tex, W, H, 0.5f);
-        // Read back RGBA from the output texture
-        std::vector<uint8_t> px((size_t)W * H * 4);
-        glBindTexture(GL_TEXTURE_2D, (GLuint)out);
-        glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, px.data());
-        // Convert RGBA → RGB and flip vertically
-        std::vector<uint8_t> flipped((size_t)W * H * 3);
-        for (int y = 0; y < H; ++y)
-            for (int x = 0; x < W; ++x) {
-                const uint8_t* s = px.data() + ((H-1-y)*W + x) * 4;
-                uint8_t* d = flipped.data() + (y*W + x) * 3;
-                d[0]=s[0]; d[1]=s[1]; d[2]=s[2];
-            }
+        uintptr_t tex = video_fx_preview_texture(k_gen_fx_types[i], 0.5f);
+        std::vector<uint8_t> px((size_t)W * H * 3);
+        glBindTexture(GL_TEXTURE_2D, (GLuint)tex);
+        glGetTexImage(GL_TEXTURE_2D, 0, GL_RGB, GL_UNSIGNED_BYTE, px.data());
+        std::vector<uint8_t>& flipped = px;   // upload order is top-down — no flip
         std::string name = (i < (int)(sizeof(kGenNames)/sizeof(kGenNames[0]))) ? kGenNames[i] : std::to_string(i);
         std::string path = std::string(out_dir) + "/" + name + ".png";
         stbi_write_png(path.c_str(), W, H, 3, flipped.data(), W*3);
