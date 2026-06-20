@@ -71,7 +71,7 @@ enum class FXType {
 
 // ── Transition type ───────────────────────────────────────────────────────────
 
-enum class TransitionType { None, Dissolve, FadeBlack, DipWhite };
+enum class TransitionType { None, Dissolve, FadeBlack, DipWhite, Shake };
 
 // ── Output format ─────────────────────────────────────────────────────────────
 

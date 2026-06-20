@@ -1685,7 +1685,7 @@ static void gl_cleanup_export();
 static bool gl_render_vid_clip(ImDrawList& dl, const Clip* cl, float at_time,
                                 float alpha_mul, GLuint tex_id, int fx_slot,
                                 float W, float H, const AppState& state, int ti,
-                                bool use_scene = false);
+                                bool use_scene = false, float shake = 0.f);
 
 // Render one track's active text overlay to a texture and composite it into the
 // current scene at that track's z (shared by preview canvas + GL export).
@@ -1950,6 +1950,13 @@ void render_snapshot_gl(AppState& state, float snap_t, bool open_folder) {
             } else if (active->transition_type == TransitionType::FadeBlack) {
                 gl_render_vid_clip(dl, active, t, 1.f-t_a, vid_texs[slot_pri], slot_pri, W, H, state, ti);
                 gl_render_vid_clip(dl, next_cl, t, t_b, vid_texs[slot_sec], slot_sec, W, H, state, ti);
+            } else if (active->transition_type == TransitionType::Shake) {
+                // Hard cut at the cut point; the shake ramps up into it and
+                // decays out of it, so it whips rather than blends.
+                if (t_b <= 0.f)
+                    gl_render_vid_clip(dl, active, t, 1.f, vid_texs[slot_pri], slot_pri, W, H, state, ti, false, t_a);
+                else
+                    gl_render_vid_clip(dl, next_cl, t, 1.f, vid_texs[slot_sec], slot_sec, W, H, state, ti, false, 1.f-t_b);
             } else {
                 gl_render_vid_clip(dl, active, t, 1.f-t_a, vid_texs[slot_pri], slot_pri, W, H, state, ti);
                 float wa = t_a*(1.f-t_b);
@@ -1966,6 +1973,8 @@ void render_snapshot_gl(AppState& state, float snap_t, bool open_folder) {
                 gl_render_vid_clip(dl, active, t, tf, vid_texs[slot_pri], slot_pri, W, H, state, ti);
             } else if (prev_cl->transition_type == TransitionType::FadeBlack) {
                 gl_render_vid_clip(dl, active, t, tf, vid_texs[slot_pri], slot_pri, W, H, state, ti);
+            } else if (prev_cl->transition_type == TransitionType::Shake) {
+                gl_render_vid_clip(dl, active, t, 1.f, vid_texs[slot_pri], slot_pri, W, H, state, ti, false, 1.f-tf);
             } else {
                 float wa = 1.f-tf;
                 if (wa > 0.01f)
@@ -2091,7 +2100,7 @@ static bool is_still_ext(const std::string& path) {
 static bool gl_render_vid_clip(ImDrawList& dl, const Clip* cl, float at_time,
                                 float alpha_mul, GLuint tex_id, int fx_slot,
                                 float W, float H, const AppState& state, int ti,
-                                bool use_scene)
+                                bool use_scene, float shake)
 {
     if (!cl || cl->text.empty()) return false;
     float src_t = cl->in_point + (at_time - cl->start) * cl->speed;
@@ -2334,6 +2343,15 @@ static bool gl_render_vid_clip(ImDrawList& dl, const Clip* cl, float at_time,
         hh = fit_h * kbs * 0.5f;
         cx = kbx * W;
         cy = kby * H;
+    }
+
+    // Transition shake: jitter the clip's screen centre. shake² gives a punchy
+    // peak; multi-frequency per axis reads as a handheld whip, not a slide.
+    if (shake > 0.f) {
+        float seed = floorf(at_time * 60.f);
+        float amp  = shake * shake * fminf(W, H) * 0.05f;
+        cx += (sinf(seed * 127.1f) + 0.5f * sinf(seed * 57.7f)) * amp;
+        cy += (cosf(seed * 311.7f) + 0.5f * cosf(seed * 91.3f)) * amp;
     }
 
     float rad = rot * 3.14159265f / 180.f;
@@ -3236,6 +3254,11 @@ void render_tick_gl(AppState& state) {
             } else if (active->transition_type == TransitionType::FadeBlack) {
                 gl_render_vid_clip(dl, active,  t, 1.f-t_a, tex_pri, slot_pri, W, H, state, ti);
                 gl_render_vid_clip(dl, next_cl, t, t_b, tex_sec, slot_sec, W, H, state, ti);
+            } else if (active->transition_type == TransitionType::Shake) {
+                if (t_b <= 0.f)
+                    gl_render_vid_clip(dl, active,  t, 1.f, tex_pri, slot_pri, W, H, state, ti, false, t_a);
+                else
+                    gl_render_vid_clip(dl, next_cl, t, 1.f, tex_sec, slot_sec, W, H, state, ti, false, 1.f-t_b);
             } else { // DipWhite
                 gl_render_vid_clip(dl, active, t, 1.f-t_a, tex_pri, slot_pri, W, H, state, ti);
                 float white_a = t_a * (1.f - t_b);
@@ -3253,6 +3276,8 @@ void render_tick_gl(AppState& state) {
                 gl_render_vid_clip(dl, active, t, tf, tex_pri, slot_pri, W, H, state, ti);
             } else if (prev_cl->transition_type == TransitionType::FadeBlack) {
                 gl_render_vid_clip(dl, active, t, tf, tex_pri, slot_pri, W, H, state, ti);
+            } else if (prev_cl->transition_type == TransitionType::Shake) {
+                gl_render_vid_clip(dl, active, t, 1.f, tex_pri, slot_pri, W, H, state, ti, false, 1.f-tf);
             } else { // DipWhite
                 float white_a = 1.f - tf;
                 if (white_a > 0.01f)

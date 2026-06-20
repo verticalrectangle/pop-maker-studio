@@ -2718,6 +2718,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                 if (hov_body && s_glass_drag == 0) {
                     const char* tname = (a.transition_type == TransitionType::Dissolve)  ? "Dissolve"
                                       : (a.transition_type == TransitionType::FadeBlack) ? "Fade to Black"
+                                      : (a.transition_type == TransitionType::Shake)     ? "Shake"
                                       : "Dip to White";
                     ImGui::SetTooltip("%s  %.2fs | %.2fs", tname, a.transition_pre, a.transition_post);
                 }
@@ -3252,6 +3253,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                 {TransitionType::Dissolve, "Dissolve"},
                 {TransitionType::FadeBlack,"Fade to Black"},
                 {TransitionType::DipWhite, "Dip to White"},
+                {TransitionType::Shake,    "Shake"},
             };
             ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {4.f, 4.f});
             for (auto& b : btns) {
