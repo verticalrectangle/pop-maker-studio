@@ -1158,7 +1158,11 @@ static bool write_filter_script(
             }
             std::ostringstream& lo = line();
             for (int i = 0; i < (int)aud_ins.size(); ++i) lo << "[amix" << i << "]";
-            lo << "amix=inputs=" << aud_ins.size() << ":duration=longest[aout]";
+            // normalize=0: sum the streams (matching the additive preview mixer in
+            // audio.cpp). amix's default normalize=1 divides by the input count, so
+            // the export comes out ~10 dB quieter than what's heard in the project.
+            lo << "amix=inputs=" << aud_ins.size()
+               << ":duration=longest:normalize=0[aout]";
         }
         aout_label = "[aout]";
     }
@@ -1640,9 +1644,11 @@ void extract_audio_start(AppState& state, const std::string& video_path) {
         fs::path vp(video_path);
         fs::path outdir = vp.parent_path() / vp.stem();
         fs::create_directories(outdir);
-        std::string out_audio = (outdir / (vp.stem().string() + "_audio.webm")).string();
+        // .mka (Matroska audio) holds the source audio codec via stream-copy for
+        // basically any codec; .webm rejected H.264/AAC so the rip silently failed.
+        std::string out_audio = (outdir / (vp.stem().string() + "_audio.mka")).string();
 
-        std::string err = video_extract_segment(video_path, 0.0, 1e9, out_audio);
+        std::string err = video_extract_segment(video_path, 0.0, 1e9, out_audio, /*audio_only=*/true);
         bool ok = err.empty() && fs::exists(out_audio);
         if (ok) state.extract_wav_path = out_audio;
         state.extract_running = false;
@@ -2535,11 +2541,13 @@ void render_start_gl(AppState& state) {
                 float ss    = inpoint;
                 float dur   = (cl.end - cstart) * speed;
                 float to    = ss + dur;
-                // Modern FFmpeg keeps absolute timestamps after -ss (input option),
-                // so the stream's pts starts at ~in_point, not 0.  To place audio at
-                // cl.start on the output timeline we need itsoffset = cl.start - in_point,
-                // not cl.start.  Clamped to 0 — negative itsoffset is unsupported.
-                float delay = fmaxf(0.f, cstart - inpoint);
+                // Each audio stream is reset to pts 0 by asetpts=PTS-STARTPTS in the
+                // filter graph (see below), so timeline placement is the FULL clip
+                // start — adelay = cl.start, same as the Record-take path. (It used
+                // to subtract in_point, which silently collapsed to 0 for clips whose
+                // in_point equals their start — e.g. sequential slices of one source —
+                // so every such clip played at t=0 at once instead of in sequence.)
+                float delay = fmaxf(0.f, cstart);
                 // Preview parity: converted voice substitutes the source, and
                 // any effective AudioFX chain is baked into a processed WAV.
                 // Full-source bake — ss/to/itsoffset math below is unchanged.
@@ -2592,7 +2600,17 @@ void render_start_gl(AppState& state) {
         // path still produces audio. For video-editing workflows the per-clip entries
         // above own the audio and the fallback would just produce an un-edited
         // duplicate that ignores cuts/speed.
-        if (!state.audio_path.empty() && !covered_paths.count(state.audio_path)) {
+        //
+        // ...BUT never when the source clip is muted. If the user muted the original
+        // (e.g. replaced it with converted-voice segments on other tracks), re-adding
+        // it here plays the raw take under everything — the mute has to win.
+        bool src_muted = false;
+        if (!state.audio_path.empty())
+            for (int ti = 0; ti < (int)state.tracks.size() && !src_muted; ++ti)
+                for (const auto& cl : state.tracks[ti].clips)
+                    if (cl.text == state.audio_path &&
+                        (state.tracks[ti].muted || cl.muted)) { src_muted = true; break; }
+        if (!state.audio_path.empty() && !covered_paths.count(state.audio_path) && !src_muted) {
             AudioIn ai; ai.path = state.audio_path; ai.to = -1.f;
             audio_ins.push_back(std::move(ai));
         }
@@ -2769,6 +2787,14 @@ void render_start_gl(AppState& state) {
                             fc += chain[k];
                         }
                     }
+                    // Regenerate timestamps from the sample count so the chain
+                    // emits strictly monotonic pts with no NOPTS flush packet.
+                    // adelay (and input-seeked matroska/AAC sources with encoder
+                    // priming) can leave a NOPTS final packet that a lone aac
+                    // encoder tolerates but amix propagates — the muxer then sees
+                    // a non-monotonic dts (NOPTS) and aborts the whole export.
+                    // N/SR/TB rewrites pts = sample_index/sample_rate, killing it.
+                    fc += ",asetpts=N/SR/TB";
                     char tail[32]; snprintf(tail, sizeof(tail), "[a%df];", i + 1);
                     fc += tail;
                     char lbl[32]; snprintf(lbl, sizeof(lbl), "[a%df]", i + 1);
@@ -2781,8 +2807,13 @@ void render_start_gl(AppState& state) {
                     args.push_back("-map"); args.push_back(mix_ins[0]);
                 } else {
                     for (auto& s : mix_ins) fc += s;
-                    char mixbuf[64];
-                    snprintf(mixbuf, sizeof(mixbuf), "amix=inputs=%d:duration=longest[aout]",
+                    char mixbuf[80];
+                    // normalize=0: sum the streams to match the additive preview
+                    // mixer (audio.cpp). amix defaults to normalize=1, which divides
+                    // by the input count and makes the export ~10 dB quieter than
+                    // what's heard in the project.
+                    snprintf(mixbuf, sizeof(mixbuf),
+                             "amix=inputs=%d:duration=longest:normalize=0[aout]",
                              (int)mix_ins.size());
                     fc += mixbuf;
                     args.push_back("-filter_complex"); args.push_back(fc);

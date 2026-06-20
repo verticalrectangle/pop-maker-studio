@@ -12,7 +12,7 @@
 // ── Binary serialization helpers ──────────────────────────────────────────────
 
 static const uint32_t MAGIC   = 0x534D5001u; // "PMS\x01"
-static const uint32_t VERSION = 51u;  // v51: audio FX brick dry/wet mix
+static const uint32_t VERSION = 54u;  // v54: typography tweak X/Y + fade + text-style fields
 
 struct Writer {
     std::ofstream f;
@@ -247,6 +247,13 @@ static void write_clip(Writer& w, const Clip& c) {
     w.pod(c.karaoke_mode);
     w.pod(c.grad_mode);
     w.pod(c.grad_col2[0]); w.pod(c.grad_col2[1]); w.pod(c.grad_col2[2]); w.pod(c.grad_col2[3]);
+    // v52: voice-conversion RESULT (so a converted take survives a reload — the
+    // FX settings were already saved, but the Ready status + output path weren't,
+    // so playback/export fell back to the original on load). Transient fields
+    // (progress, error) aren't persisted.
+    w.pod((int32_t)c.vc_status);
+    w.str(c.vc_out_path);
+    w.str(c.vc_model_used);
 }
 
 static Clip read_clip(Reader& r, uint32_t version) {
@@ -494,6 +501,16 @@ static Clip read_clip(Reader& r, uint32_t version) {
         c.grad_col2[0] = r.pod<float>(); c.grad_col2[1] = r.pod<float>();
         c.grad_col2[2] = r.pod<float>(); c.grad_col2[3] = r.pod<float>();
     }
+    if (version >= 52u) {
+        c.vc_status     = (VcStatus)r.pod<int32_t>();
+        c.vc_out_path   = r.str();
+        c.vc_model_used = r.str();
+        // A Processing status can't survive a reload (the job is gone); settle it
+        // to Ready if the output exists, else Idle so it can be re-run.
+        if (c.vc_status == VcStatus::Processing)
+            c.vc_status = (!c.vc_out_path.empty() && std::filesystem::exists(c.vc_out_path))
+                          ? VcStatus::Ready : VcStatus::Idle;
+    }
     return c;
 }
 
@@ -598,6 +615,36 @@ bool project_save(const AppState& state, const std::string& path) {
     w.pod((uint8_t)state.loop_play);
     w.pod(state.loop_in);
     w.pod(state.loop_out);
+
+    // v53: typography active preset + per-field tweak/hold (pin) store, so a
+    // tweaked-and-pinned look survives a reload (the styled clips already carry
+    // baked values; this restores which fields stay pinned across preset switches).
+    w.str(state.typo_preset_id);
+    w.pod(state.typo.active);
+    w.pod(state.typo.held);
+    w.pod(state.typo.font_size);
+    for (int i = 0; i < 4; ++i) w.pod(state.typo.color[i]);
+    w.pod(state.typo.text_case);
+    w.pod(state.typo.anchor_h);
+    w.pod(state.typo.tracking);
+    w.pod(state.typo.wrap_w);
+    w.pod(state.typo.pos_v);
+
+    // v54: extra typography tweak fields — X/Y offset, fade, text style.
+    {
+        const TextStyle& t = state.typo.ts;
+        w.pod(state.typo.pos_x);   w.pod(state.typo.pos_y);
+        w.pod(state.typo.fade_in); w.pod(state.typo.fade_out);
+        w.pod((uint8_t)t.shadow_enabled); w.pod(t.shadow_ox); w.pod(t.shadow_oy);
+        for (int i=0;i<4;++i) w.pod(t.shadow_col[i]);
+        w.pod((uint8_t)t.stroke_enabled); w.pod(t.stroke_w);
+        for (int i=0;i<4;++i) w.pod(t.stroke_col[i]);
+        w.pod((uint8_t)t.glow_enabled); w.pod(t.glow_r);
+        for (int i=0;i<4;++i) w.pod(t.glow_col[i]);
+        w.pod((uint8_t)t.bg_enabled);
+        for (int i=0;i<4;++i) w.pod(t.bg_col[i]);
+        w.pod(t.bg_pad_x); w.pod(t.bg_pad_y); w.pod(t.bg_corner);
+    }
 
     return w.ok;
 }
@@ -758,6 +805,36 @@ bool project_load(AppState& state, const std::string& path) {
                 ++ci;
             }
         }
+    }
+
+    // v53: typography active preset + tweak/hold (pin) store
+    if (version >= 53u) {
+        state.typo_preset_id = r.str();
+        state.typo.active    = r.pod<unsigned>();
+        state.typo.held      = r.pod<unsigned>();
+        state.typo.font_size = r.pod<float>();
+        for (int i = 0; i < 4; ++i) state.typo.color[i] = r.pod<float>();
+        state.typo.text_case = r.pod<int>();
+        state.typo.anchor_h  = r.pod<int>();
+        state.typo.tracking  = r.pod<float>();
+        state.typo.wrap_w    = r.pod<float>();
+        state.typo.pos_v     = r.pod<int>();
+    }
+
+    // v54: extra typography tweak fields — X/Y offset, fade, text style.
+    if (version >= 54u) {
+        TextStyle& t = state.typo.ts;
+        state.typo.pos_x   = r.pod<float>(); state.typo.pos_y   = r.pod<float>();
+        state.typo.fade_in = r.pod<float>(); state.typo.fade_out = r.pod<float>();
+        t.shadow_enabled = (bool)r.pod<uint8_t>(); t.shadow_ox = r.pod<float>(); t.shadow_oy = r.pod<float>();
+        for (int i=0;i<4;++i) t.shadow_col[i] = r.pod<float>();
+        t.stroke_enabled = (bool)r.pod<uint8_t>(); t.stroke_w = r.pod<float>();
+        for (int i=0;i<4;++i) t.stroke_col[i] = r.pod<float>();
+        t.glow_enabled = (bool)r.pod<uint8_t>(); t.glow_r = r.pod<float>();
+        for (int i=0;i<4;++i) t.glow_col[i] = r.pod<float>();
+        t.bg_enabled = (bool)r.pod<uint8_t>();
+        for (int i=0;i<4;++i) t.bg_col[i] = r.pod<float>();
+        t.bg_pad_x = r.pod<float>(); t.bg_pad_y = r.pod<float>(); t.bg_corner = r.pod<float>();
     }
 
     return r.ok;

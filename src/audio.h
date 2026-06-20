@@ -73,6 +73,14 @@ bool audio_gate_bake_get();
 void audio_monitor_fx_set(bool on);
 bool audio_monitor_fx_get();
 void audio_monitor_chain_set(const std::vector<AudioFX>& stages);
+// Windowed monitor chain: while the transport rolls, the live mic runs through
+// these source-time FX windows via process_seg (matching playback/export
+// exactly, edge crossfades included). brick_start = the host record brick's
+// timeline start (seconds), to map the master clock into source time. Empty
+// segs clears. Used while playing/recording; audio_monitor_chain_set is the
+// parked/dial-in path.
+void audio_monitor_chain_set_seg(const std::vector<AudioFXSegment>& segs,
+                                 float brick_start);
 bool audio_monitor_chain_active();
 
 // Perf-mode health: true while the duplex device owns audio; xruns counts

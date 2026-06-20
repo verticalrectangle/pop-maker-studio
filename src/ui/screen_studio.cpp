@@ -98,29 +98,32 @@ static void monitor_chain_sync(AppState& state) {
                 if (is_rec(state.tracks[ti].clips[ci].clip_type))
                     { bti = ti; bci = ci; break; }
 
-    std::vector<AudioFX> stages;
+    // The monitor is fed from the SAME windows the take/export use, gated on the
+    // live playhead: each coupled FX activates over its own span with the same
+    // edge crossfades as playback — whether you're recording, playing, or just
+    // scrubbing. So "what you monitor is what the take becomes", and to dial in
+    // / preview an effect you park the playhead inside its brick (a brick that
+    // spans the whole take is "always on"). The segments don't change as the
+    // playhead moves, so this rebuilds only when a brick is edited; the audio
+    // thread does the per-sample span gating.
+    std::vector<AudioFXSegment> win_segs;
+    float brick_start = 0.f;
     uint64_t h = 1469598103934665603ull;
     if (bti >= 0) {
         const Clip& rbrick = state.tracks[bti].clips[bci];
+        brick_start = rbrick.start;
         auto segs = collect_audio_fx_segments(state, bti, rbrick);
-        // Each segment's [t0,t1] is brick-relative source time. While the
-        // transport is actually moving (playing or recording), apply a stage
-        // only while the live playhead is inside its window, so coupled audio FX
-        // activate over their own spans — monitoring then matches the placed
-        // take. When idle (just monitoring input to dial in the sound), the
-        // playhead is parked and span-gating would mute everything, so pass all
-        // active stages through; that's what "Hear effects" is for.
-        bool moving = state.playing || recorder_active();
-        float ptime = state.playhead - rbrick.start;
         for (auto& sg : segs) {
-            if (sg.fx.voice_convert_on && !sg.fx.any_active()) continue;
-            if (moving && (ptime < sg.t0 || ptime >= sg.t1)) continue;
-            stages.push_back(sg.fx);
+            if (!sg.fx.any_active()) continue;
+            win_segs.push_back(sg);
             h = (h ^ audio_fx_hash(sg.fx)) * 1099511628211ull;
+            // Window bounds feed the hash so moving/resizing a brick rebuilds.
+            h = (h ^ (uint64_t)(sg.t0 * 1000.f)
+                   ^ ((uint64_t)(sg.t1 * 1000.f) << 21)) * 1099511628211ull;
         }
     }
     if (h != s_last_chain_hash) {
-        audio_monitor_chain_set(stages);
+        audio_monitor_chain_set_seg(win_segs, brick_start);
         s_last_chain_hash = h;
     }
 }

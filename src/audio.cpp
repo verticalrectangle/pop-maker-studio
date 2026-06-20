@@ -106,6 +106,18 @@ static constexpr float GATE_RELEASE   = 0.9999f;  // ~104 ms release
 // chains free after a grace period long enough for any in-flight block.
 static std::atomic<bool>          g_mon_fx_on{false};
 static std::atomic<AudioFXChain*> g_mon_chain{nullptr};
+// When the chain is a windowed (seg) chain, the audio thread runs it through
+// process_seg with the live transport position so coupled FX activate over
+// their own spans exactly like playback/export (edge crossfades and all).
+// g_mon_brick_start is the host record brick's timeline start (seconds), used
+// to map the master clock into the brick's source time.
+static std::atomic<bool>          g_mon_windowed{false};
+static std::atomic<float>         g_mon_brick_start{0.f};
+// Free-running monitor frame index for process_seg's seek detection. It only
+// ever increments, so a PARKED playhead (static master clock) isn't mistaken
+// for a per-block seek that would reset the effect every block — the window
+// gating uses src_t (the live playhead), not this counter.
+static int64_t                    g_mon_frame_ctr = 0;  // audio thread only
 
 // Click-free device swaps: output ramps 0→1 over FADE_LEN frames after any
 // device (re)start. Audio thread consumes; control thread arms via store(0).
@@ -389,6 +401,17 @@ static void perf_input_block(const float* in, uint32_t frameCount) {
     const bool gate = g_gate_on.load(std::memory_order_relaxed);
     const bool bake = g_gate_bake.load(std::memory_order_relaxed);
     const bool mon  = g_monitor_on.load(std::memory_order_relaxed);
+    // Windowed monitoring: run the FX through the same windowed processor
+    // playback/export use, gated on the LIVE playhead — so the monitor follows
+    // each brick's span whether you're recording, playing, or just scrubbing.
+    // src_t advances per sample while rolling and stays put while parked;
+    // perf_input_block runs before perf_output_block advances g_read_pos, so
+    // mon_base is the block-start master frame (also tracks manual seeks).
+    const bool win_mon = g_mon_windowed.load(std::memory_order_relaxed);
+    const bool rolling = g_transport.load(std::memory_order_relaxed);
+    const float mon_bstart = g_mon_brick_start.load(std::memory_order_relaxed);
+    const int64_t mon_base = (int64_t)(g_read_pos.load(std::memory_order_relaxed) / 2);
+    const float inv_sr = 1.f / 44100.f;
     uint32_t cw = g_cap_w.load(std::memory_order_relaxed);
     const uint32_t cr = g_cap_r.load(std::memory_order_acquire);
     uint32_t mw = g_monr_w.load(std::memory_order_relaxed);
@@ -406,7 +429,16 @@ static void perf_input_block(const float* in, uint32_t frameCount) {
         float gg = gate ? g_gate_gain : 1.f;
         if (mon && (mw - mr) < MONR_N - 2) {
             float ml = l * gg, mr2 = r2 * gg;
-            if (fxc) audio_fx_chain_process(fxc, ml, mr2);
+            if (fxc) {
+                if (win_mon) {
+                    float src_t = (float)(mon_base + (rolling ? (int64_t)f : 0))
+                                  * inv_sr - mon_bstart;
+                    audio_fx_chain_process_seg(fxc, ml, mr2, src_t, g_mon_frame_ctr);
+                } else {
+                    audio_fx_chain_process(fxc, ml, mr2);
+                }
+                ++g_mon_frame_ctr;
+            }
             g_monr[mw++ & MONR_MASK] = ml;
             g_monr[mw++ & MONR_MASK] = mr2;
         }
@@ -805,10 +837,26 @@ bool audio_monitor_fx_get()        { return g_mon_fx_on.load(std::memory_order_r
 void audio_monitor_chain_set(const std::vector<AudioFX>& stages) {
     AudioFXChain* next = stages.empty()
                        ? nullptr : audio_fx_chain_create(stages, 44100.f);
+    g_mon_windowed.store(false, std::memory_order_release);   // plain (dial-in)
     AudioFXChain* old = g_mon_chain.exchange(next, std::memory_order_acq_rel);
     if (old) {
         // Grace period: any in-flight audio block is ≤ a few ms; 20 ms is
         // generous. UI-thread sleep, imperceptible at chain-change cadence.
+        struct timespec ts = {0, 20 * 1000 * 1000};
+        nanosleep(&ts, nullptr);
+        audio_fx_chain_free(old);
+    }
+}
+
+void audio_monitor_chain_set_seg(const std::vector<AudioFXSegment>& segs,
+                                 float brick_start) {
+    AudioFXChain* next = segs.empty()
+                       ? nullptr : audio_fx_chain_create_seg(segs, 44100.f);
+    g_mon_brick_start.store(brick_start, std::memory_order_release);
+    // windowed only when there's actually a chain; clears fall back to plain.
+    g_mon_windowed.store(next != nullptr, std::memory_order_release);
+    AudioFXChain* old = g_mon_chain.exchange(next, std::memory_order_acq_rel);
+    if (old) {
         struct timespec ts = {0, 20 * 1000 * 1000};
         nanosleep(&ts, nullptr);
         audio_fx_chain_free(old);

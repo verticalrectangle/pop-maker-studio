@@ -1709,7 +1709,8 @@ MediaFileInfo video_probe_file(const std::string& path) {
 
 std::string video_extract_segment(const std::string& src,
                                   double start_sec, double end_sec,
-                                  const std::string& dst) {
+                                  const std::string& dst,
+                                  bool audio_only) {
     AVFormatContext* in_ctx = nullptr;
     const std::string& url2 = src;
     if (avformat_open_input(&in_ctx, url2.c_str(), nullptr, nullptr) < 0)
@@ -1749,6 +1750,8 @@ std::string video_extract_segment(const std::string& src,
         if (cp->codec_type != AVMEDIA_TYPE_VIDEO &&
             cp->codec_type != AVMEDIA_TYPE_AUDIO)
             continue;
+        if (audio_only && cp->codec_type == AVMEDIA_TYPE_VIDEO)
+            continue;   // rip audio: drop the picture entirely
         AVStream* out_st = avformat_new_stream(out_ctx, nullptr);
         if (!out_st) {
             avformat_close_input(&in_ctx);
@@ -2514,7 +2517,11 @@ uintptr_t video_fx_preview_texture(FXType ft, float t) {
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, draw_fbo);
         glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
                                GL_TEXTURE_2D, dedicated, 0);
-        glBlitFramebuffer(0, 0, FXP_W, FXP_H, 0, 0, FXP_W, FXP_H,
+        // fx_apply renders into a bottom-up FBO, but the card draws this texture
+        // with top-down UVs (matching the CPU-effect path). Flip V during the
+        // blit so the shader previews aren't mirrored — directional effects were
+        // running upside-down (motion going up when it should go down).
+        glBlitFramebuffer(0, 0, FXP_W, FXP_H, 0, FXP_H, FXP_W, 0,
                           GL_COLOR_BUFFER_BIT, GL_NEAREST);
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
         glDeleteFramebuffers(1, &read_fbo);

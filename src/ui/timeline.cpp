@@ -186,9 +186,14 @@ static bool fx_bricks_weldable(const Clip& a, const Clip& b) {
 }
 static bool clips_conflict(const Clip& a, const Clip& b) {
     // FX bricks never conflict with content clips (glass bricks ride over
-    // video on the same track), but FX-on-FX overlap is illegal: bricks
-    // weld into a MultiFX chain or bounce back — they never stack.
+    // video on the same track). Among FX bricks, only SAME-kind ones conflict:
+    // two audio (or two video) bricks must weld into a chain or bounce back,
+    // never stack. A video chain and an audio chain are different kinds that
+    // coexist as separate glass bricks on the same host — so they don't
+    // conflict, and a solo video FX brick can be dragged onto content that
+    // already carries an audio chain (and vice-versa).
     if (is_fx_clip(a) != is_fx_clip(b)) return false;
+    if (fx_brick_is_audio_kind(a) != fx_brick_is_audio_kind(b)) return false;
     return a.start < b.end && a.end > b.start;
 }
 static bool is_chain_brick(const Clip& c) {
@@ -260,6 +265,13 @@ int timeline_couple_fx_brick(AppState& state, int ti, int ci, int host_ci) {
 
     const ClipType chain_type = fx_brick_is_audio_kind(clips[(size_t)ci])
                               ? ClipType::AudioMultiFX : ClipType::MultiFX;
+
+    // Coupling an audio FX brick onto a record brick turns "Hear effects" on, so
+    // you immediately monitor through it (and can dial in its dry/wet).
+    if (chain_type == ClipType::AudioMultiFX &&
+        (host.clip_type == ClipType::Record ||
+         host.clip_type == ClipType::VideoRecord))
+        audio_monitor_fx_set(true);
 
     // Host already has a coupled chain of this kind? Merge into it.
     for (int k = 0; k < (int)clips.size(); ++k) {
@@ -4161,6 +4173,10 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                 kick_pipeline(state, cc->text, PipelineMode::Both);
             }
             if (ImGui::MenuItem("Transcribe  (subtitles only)")) {
+                // Build the Subtitles track (ClipType::Subtitle) when transcription
+                // finishes. Without this callback the pipeline ran but nothing
+                // populated the timeline — same bug the Extract Subtitles button hit.
+                state.pipeline_on_done = apply_subtitle_pipeline;
                 kick_pipeline(state, cc->text, PipelineMode::TranscribeOnly);
             }
             if (ImGui::MenuItem("Separate vocals")) {
