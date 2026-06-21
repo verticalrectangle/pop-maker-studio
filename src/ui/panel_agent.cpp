@@ -30,7 +30,8 @@ struct StagedDrop {
     int         dir_count = 0;  // media files added to the bin from a folder
 };
 static std::vector<StagedDrop> s_staged;
-static bool s_input_focused = false;  // was the input active last frame (drop routing)
+static bool  s_input_focused = false;  // was the input active last frame (drop routing)
+static float s_drop_flash_t  = 0.f;    // seconds remaining on the just-dropped flash
 
 namespace fs = std::filesystem;
 
@@ -63,6 +64,16 @@ static std::string build_message_with_attachments(const char* text) {
 
 bool  agent_input_is_focused() { return s_input_focused; }
 float agent_input_height()     { return s_staged.empty() ? 42.f : 42.f + 30.f; }
+
+// Drop-target affordance strength (0..1): a gentle steady accent while the input
+// is focused ("drops land here"), ramping bright on a brief flash right after a
+// drop lands. GLFW gives no drag-hover event, so the steady focused accent — not
+// a live drag-over highlight — is what signals the target.
+float agent_drop_highlight() {
+    float base  = s_input_focused ? 0.30f : 0.f;
+    float flash = s_drop_flash_t > 0.f ? std::min(s_drop_flash_t / 0.6f, 1.f) : 0.f;
+    return std::max(base, flash);
+}
 
 // ── Prompt history (Up/Down recalls past prompts, shell-style) ──────────────
 static std::vector<std::string> s_history;
@@ -407,11 +418,13 @@ void draw_agent_input(AppState& state, float panel_w) {
     // ── Claim OS file drops while the input is focused ────────────────────────
     // Stage them into the Bin + the chip tray. The studio/terminal drop handlers
     // stand down when agent_input_is_focused() (see screen_studio), so we own it.
+    if (s_drop_flash_t > 0.f) s_drop_flash_t -= ImGui::GetIO().DeltaTime;
     if (s_input_focused && !g_drop_batch.empty()) {
         for (auto& p : g_drop_batch) stage_drop(state, p);
         g_drop_batch.clear();
         g_dropped_file.clear();   // claimed — don't let it place a clip too
-        s_refocus = true;         // keep the caret in the input after a drop
+        s_refocus    = true;      // keep the caret in the input after a drop
+        s_drop_flash_t = 0.6f;    // flash the border to confirm the drop landed
     }
 
     // ── Staging tray: removable chips for dropped files ───────────────────────

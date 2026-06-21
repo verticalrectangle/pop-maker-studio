@@ -2249,7 +2249,18 @@ void ui_studio(AppState& state) {
             ImGui::EndChild();
             ImGui::PopStyleColor(2);
             ImGui::PushStyleColor(ImGuiCol_ChildBg, IM_COL32(0x16, 0x16, 0x20, 255));
-            ImGui::PushStyleColor(ImGuiCol_Border,  Col::line);
+            // Border accents toward the agent magenta when the input is the drop
+            // target (focused), brightening on a brief flash right after a drop.
+            float hl = agent_drop_highlight();
+            ImVec4 inp_border = Col::line;
+            if (hl > 0.f) {
+                const ImVec4 acc = {0.73f, 0.60f, 0.97f, 1.0f};  // agent magenta
+                inp_border.x = Col::line.x + (acc.x - Col::line.x) * hl;
+                inp_border.y = Col::line.y + (acc.y - Col::line.y) * hl;
+                inp_border.z = Col::line.z + (acc.z - Col::line.z) * hl;
+                inp_border.w = Col::line.w + (0.85f - Col::line.w) * hl;
+            }
+            ImGui::PushStyleColor(ImGuiCol_Border, inp_border);
             if (ImGui::BeginChild("##agent_inp_zone", {agent_w, inp_h},
                                   ImGuiChildFlags_Borders,
                                   ImGuiWindowFlags_NoScrollbar |

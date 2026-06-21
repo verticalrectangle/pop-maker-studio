@@ -10,3 +10,5 @@ void draw_agent_input(AppState& state, float panel_w);
 bool agent_input_is_focused();
 // Height of the input zone, grown to fit the drop-staging chip tray when present.
 float agent_input_height();
+// Drop-target border accent strength (0..1): steady while focused, flashes on drop.
+float agent_drop_highlight();
