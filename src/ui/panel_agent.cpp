@@ -32,7 +32,9 @@ struct StagedDrop {
 static std::vector<StagedDrop> s_staged;
 static bool  s_input_focused = false;  // was the input active last frame (drop routing)
 static float s_drop_flash_t  = 0.f;    // seconds remaining on the just-dropped flash
-static constexpr float kStageTrayH = 64.f;  // chip-tray height (wraps + scrolls inside)
+static float s_input_extra_h = 0.f;    // height beyond one row: the input grows UP as text wraps
+static constexpr float kStageTrayH   = 64.f;  // chip-tray height (wraps + scrolls inside)
+static constexpr int   kMaxInputRows = 6;     // input grows to this many rows, then scrolls
 
 namespace fs = std::filesystem;
 
@@ -64,7 +66,8 @@ static std::string build_message_with_attachments(const char* text) {
 }
 
 bool  agent_input_is_focused() { return s_input_focused; }
-float agent_input_height()     { return s_staged.empty() ? 42.f : 42.f + kStageTrayH; }
+float agent_input_height()     { float base = 42.f + s_input_extra_h;
+                                 return s_staged.empty() ? base : base + kStageTrayH; }
 
 // Drop-target affordance strength (0..1): a gentle steady accent while the input
 // is focused ("drops land here"), ramping bright on a brief flash right after a
@@ -472,17 +475,34 @@ void draw_agent_input(AppState& state, float panel_w) {
     }
 
     ImGui::PushStyleColor(ImGuiCol_FrameBg, IM_COL32(0x1e, 0x1e, 0x2c, 255));
-    // Size off the content region so the row ends at the same window padding
-    // on the right as it starts with on the left (two 6 px SameLine gaps).
-    ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x -
-                            send_w - clear_w - 12.f);
+    // Width leaves room for the Send/Clear buttons (two 6 px SameLine gaps).
+    float input_w = ImGui::GetContentRegionAvail().x - send_w - clear_w - 12.f;
+    // Measure how many wrapped rows the text needs, so the zone grows UPWARD as
+    // you type instead of the text scrolling off to the right. agent_input_height
+    // reads s_input_extra_h (next frame) to enlarge the zone; the log above
+    // shrinks to match. Capped at kMaxInputRows, then the field scrolls.
+    {
+        float line_h = ImGui::GetTextLineHeight();
+        const char* tb = s_input[0] ? s_input : " ";
+        float wrap_w = input_w - ImGui::GetStyle().FramePadding.x * 2.f;
+        float th = ImGui::CalcTextSize(tb, nullptr, false, wrap_w).y;
+        int rows = (int)(th / line_h + 0.5f);
+        rows = rows < 1 ? 1 : (rows > kMaxInputRows ? kMaxInputRows : rows);
+        s_input_extra_h = (rows - 1) * line_h;
+    }
+    float input_h = ImGui::GetContentRegionAvail().y;  // fill the (grown) zone
     if (s_refocus) { ImGui::SetKeyboardFocusHere(); s_refocus = false; }
-    bool submit = ImGui::InputText("##agent_in", s_input, sizeof(s_input),
-                                   ImGuiInputTextFlags_EnterReturnsTrue |
-                                   ImGuiInputTextFlags_CallbackHistory,
-                                   input_history_cb);
+    // Multiline + word-wrap: long prompts wrap and the box grows up. Enter sends;
+    // Shift+Enter / Ctrl+Enter insert a newline (CtrlEnterForNewLine).
+    bool submit = ImGui::InputTextMultiline(
+        "##agent_in", s_input, sizeof(s_input), {input_w, input_h},
+        ImGuiInputTextFlags_WordWrap | ImGuiInputTextFlags_EnterReturnsTrue |
+        ImGuiInputTextFlags_CtrlEnterForNewLine | ImGuiInputTextFlags_CallbackHistory,
+        input_history_cb);
     ImGui::PopStyleColor();
-    const ImGuiID input_id = ImGui::GetItemID();
+    // The text widget's ID is GetID(label) in this (parent) scope — GetItemID()
+    // after a multiline returns the wrapping group, so query it directly.
+    const ImGuiID input_id = ImGui::GetID("##agent_in");
     // Whether the input owns keyboard focus this frame — drives drop routing
     // (read by agent_input_is_focused() next frame, and the studio drop guard).
     s_input_focused = ImGui::IsItemActive() || ImGui::IsItemFocused();
@@ -532,9 +552,8 @@ void draw_agent_input(AppState& state, float panel_w) {
             std::string out(s_input, (size_t)a);
             out += cb;
             out.append(s_input + b);
-            // Single-line input: control characters would render as garbage.
-            for (char& ch : out)
-                if (ch == '\n' || ch == '\r' || ch == '\t') ch = ' ';
+            // Multi-line input: keep newlines, just drop carriage returns.
+            out.erase(std::remove(out.begin(), out.end(), '\r'), out.end());
             if (out.size() >= sizeof(s_input)) out.resize(sizeof(s_input) - 1);
             memcpy(s_input, out.c_str(), out.size() + 1);
             apply(std::min(a + (int)strlen(cb), (int)out.size()));
