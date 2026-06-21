@@ -1987,7 +1987,7 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         }
         // Images are ClipType::Video but carry no audio — never let a PNG
         // become the project's audio source (it used to, and even kicked a
-        // WhisperX transcription on the pixels below).
+        // whisper.cpp transcription on the pixels below).
         bool is_image_clip = cl.clip_type == ClipType::Video && is_image_path(text);
         if ((cl.clip_type == ClipType::Video || cl.clip_type == ClipType::Audio) &&
             !is_image_clip && state.audio_path.empty())

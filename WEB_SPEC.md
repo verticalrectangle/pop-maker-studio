@@ -51,7 +51,7 @@ What the engine assumes today that a server must not:
 | Local media paths | `add_clip text=/path` | per-session tmpfs paths handed out by the asset service |
 | UI screenshot/backbuffer reads | `source=canvas` / `source=ui` snapshots | `canvas` reads the offscreen FBO; `ui` is meaningless server-side (disabled) |
 
-ML inference (WhisperX via faster-whisper, MDX-Net, vision describe) is already
+ML inference (whisper.cpp, MDX-Net, vision describe) is already
 local subprocess work — it moves to a GPU job queue without architectural
 change.
 
@@ -81,7 +81,7 @@ WebSocket to a `<canvas>` client.
                           ┌──────▼─────┐   ┌─────▼──────────┐
                           │ GPU job     │   │ token pool      │
                           │ queue       │   │ (self-hosted    │
-                          │ (WhisperX,  │   │  DeepSeek on    │
+                          │ (whisper,   │   │  DeepSeek on    │
                           │  MDX-Net,    │   │  vLLM/SGLang)   │
                           │  vision)    │   └────────────────┘
                           └────────────┘
@@ -171,7 +171,7 @@ transcripts and frame snapshots in the prompt. Therefore:
 
 ### 3.6 Inference placement — local opt-in
 
-The desktop app already runs WhisperX/MDX-Net/vision locally behind the
+The desktop app already runs whisper.cpp/MDX-Net/vision locally behind the
 "Set Up AI Features" download modal. Extend that pattern instead of
 replacing it: **inference follows the media, and the user chooses where the
 agent brain lives.**
@@ -201,7 +201,7 @@ honest "your GPU can't run this well" message.
 
 ### 3.7 GPU job queue (ML inference)
 
-- WhisperX, MDX-Net, vision describe run as jobs against the session's tmpfs,
+- whisper.cpp, MDX-Net, vision describe run as jobs against the session's tmpfs,
   either inside the session box (GPU TEE tier) or on attested workers that
   receive the per-session scratch key and stream results back.
 - Same progress plumbing as today: jobs report via `agent_status` so progress

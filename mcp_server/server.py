@@ -1614,7 +1614,7 @@ async def list_tools() -> list[Tool]:
                 "Writes the canonical cache JSON next to the audio file and reloads the "
                 "in-memory word cache so generate_typography uses your words immediately.\n\n"
                 "USE THIS WHEN:\n"
-                "  - WhisperX on the current audio produced wrong / sparse word timings and "
+                "  - whisper.cpp on the current audio produced wrong / sparse word timings and "
                 "you want to override with hand-edited words.\n"
                 "  - You computed words from another source (different transcriber, manual "
                 "alignment) and want the managed Lyrics path to use them.\n\n"
@@ -1648,7 +1648,7 @@ async def list_tools() -> list[Tool]:
             description=(
                 "Repurpose another file's cached transcript as the project's transcript, "
                 "with a time shift and optional clipping. Closes the gap when a long source "
-                "(e.g. full song) has a clean WhisperX transcript but you're working on an "
+                "(e.g. full song) has a clean whisper.cpp transcript but you're working on an "
                 "extracted section where re-transcribing produces worse results.\n\n"
                 "FLOW: extract section /tmp/section.flac from full.flac starting at 88.71s → "
                 "add the section as the project audio → "
