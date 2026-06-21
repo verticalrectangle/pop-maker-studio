@@ -32,6 +32,7 @@ struct StagedDrop {
 static std::vector<StagedDrop> s_staged;
 static bool  s_input_focused = false;  // was the input active last frame (drop routing)
 static float s_drop_flash_t  = 0.f;    // seconds remaining on the just-dropped flash
+static constexpr float kStageTrayH = 64.f;  // chip-tray height (wraps + scrolls inside)
 
 namespace fs = std::filesystem;
 
@@ -63,7 +64,7 @@ static std::string build_message_with_attachments(const char* text) {
 }
 
 bool  agent_input_is_focused() { return s_input_focused; }
-float agent_input_height()     { return s_staged.empty() ? 42.f : 42.f + 30.f; }
+float agent_input_height()     { return s_staged.empty() ? 42.f : 42.f + kStageTrayH; }
 
 // Drop-target affordance strength (0..1): a gentle steady accent while the input
 // is focused ("drops land here"), ramping bright on a brief flash right after a
@@ -428,18 +429,27 @@ void draw_agent_input(AppState& state, float panel_w) {
     }
 
     // ── Staging tray: removable chips for dropped files ───────────────────────
+    // Chips wrap to new lines and the tray scrolls vertically, so a folder drop
+    // of dozens of files never runs off the edge with no way to reach them.
     if (!s_staged.empty()) {
+        ImGui::PushStyleColor(ImGuiCol_ChildBg, IM_COL32(0, 0, 0, 0));
+        ImGui::BeginChild("##stage_tray", ImVec2(0.f, kStageTrayH), false);
         ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(7, 2));
-        const int kMaxShown = 8;
-        int shown = std::min((int)s_staged.size(), kMaxShown);
-        for (int i = 0; i < shown; ++i) {
-            if (i) ImGui::SameLine(0.f, 4.f);
+        const float spacing = 4.f;
+        const float avail   = ImGui::GetContentRegionAvail().x;
+        const float pad2    = ImGui::GetStyle().FramePadding.x * 2.f + 2.f;
+        float x = 0.f;
+        int remove_idx = -1;
+        for (int i = 0; i < (int)s_staged.size(); ++i) {
             const StagedDrop& s = s_staged[i];
             std::string name = fs::path(s.path).filename().string();
-            if (name.size() > 20) name = name.substr(0, 19) + "…";
+            if (name.size() > 18) name = name.substr(0, 17) + "…";
             std::string label = s.is_dir
                 ? "[dir] " + name + " (" + std::to_string(s.dir_count) + ")"
                 : s.kind + "  " + name;
+            float cw = ImGui::CalcTextSize(label.c_str()).x + pad2;
+            if (x > 0.f && x + spacing + cw > avail) x = 0.f;      // wrap to next line
+            if (x > 0.f) { ImGui::SameLine(0.f, spacing); x += spacing; }
             ImU32 col = s.is_dir            ? IM_COL32(96, 72, 150, 255)
                       : s.kind == "video"   ? IM_COL32(40, 80, 150, 255)
                       : s.kind == "image"   ? IM_COL32(40, 120, 80, 255)
@@ -452,13 +462,13 @@ void draw_agent_input(AppState& state, float panel_w) {
             if (ImGui::IsItemHovered())
                 ImGui::SetTooltip("%s\n(in Bin — click to unstage)", s.path.c_str());
             ImGui::PopID();
-            if (remove) { s_staged.erase(s_staged.begin() + i); break; }
+            x += cw;
+            if (remove) remove_idx = i;
         }
-        if ((int)s_staged.size() > kMaxShown) {
-            ImGui::SameLine(0.f, 4.f);
-            ImGui::TextDisabled("+%d more", (int)s_staged.size() - kMaxShown);
-        }
+        if (remove_idx >= 0) s_staged.erase(s_staged.begin() + remove_idx);
         ImGui::PopStyleVar();
+        ImGui::EndChild();
+        ImGui::PopStyleColor();
     }
 
     ImGui::PushStyleColor(ImGuiCol_FrameBg, IM_COL32(0x1e, 0x1e, 0x2c, 255));
