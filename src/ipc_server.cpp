@@ -1145,6 +1145,10 @@ static json dispatch(AppState& state, const std::string& method, const json& par
             r["words"]      = words;
             r["path"]       = src.string();
             r["provenance"] = provenance;  // "canonical" or "search"
+            // Which audio these words came from: "vocals" (MDX-Net stem, lyrics-
+            // grade), "raw" (original mix / subtitles path), or "" (legacy cache).
+            // Lets a lyrics request detect a raw cache and re-run on the vocals.
+            r["source"]     = transcript_source(src.string());
         } catch (...) {
             r["status"]  = "error";
             r["message"] = "failed to parse words JSON";

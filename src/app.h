@@ -18,9 +18,9 @@
 struct AppState;
 
 enum class PipelineMode {
-    Both,            // Demucs + transcription
-    TranscribeOnly,  // transcription on original file (no Demucs)
-    SeparateOnly,    // Demucs only, no subtitles
+    Both,            // MDX-Net + transcription
+    TranscribeOnly,  // transcription on original file (no MDX-Net)
+    SeparateOnly,    // MDX-Net only, no subtitles
 };
 
 // ── Constants ─────────────────────────────────────────────────────────────────

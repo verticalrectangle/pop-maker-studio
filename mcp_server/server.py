@@ -1190,7 +1190,7 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="trigger_pipeline",
             description=(
-                "Kick off the ML pipeline (Demucs + transcription) on the project audio. NON-BLOCKING: "
+                "Kick off the ML pipeline (MDX-Net + transcription) on the project audio. NON-BLOCKING: "
                 "returns immediately with stage='running'. Poll get_pipeline_status every 2–3s until "
                 "stage='done', then call generate_typography(preset='...') to lay the lyric/subtitle "
                 "bricks on the timeline. No batch needed.\n\n"
@@ -1205,10 +1205,10 @@ async def list_tools() -> list[Tool]:
                 "If lyric bricks are already on the timeline you can skip this entirely. "
                 "Only call trigger_pipeline when no transcript exists for this audio.\n\n"
                 "PIPELINE MODES:\n"
-                "  both            — (default) Demucs stem separation → vocals.wav → transcription. "
+                "  both            — (default) MDX-Net stem separation → vocals.wav → transcription. "
                 "Transcribes the isolated vocal stem, not the raw mix. Best for music.\n"
                 "  transcribe_only — Skip separation, transcribe source audio directly. Faster; use for speech/podcasts.\n"
-                "  separate_only   — Run Demucs only, no transcription. No bricks to lay afterward.\n\n"
+                "  separate_only   — Run MDX-Net only, no transcription. No bricks to lay afterward.\n\n"
                 "PRESET QUICK-PICKS for step 4 (full list in generate_typography):\n"
                 "  flash    — one word, white, all caps, hard cuts (TikTok default)\n"
                 "  apple    — one word, white, large, smooth fade\n"

@@ -225,7 +225,7 @@ The MCP server is a **Python** process using the official `mcp` SDK. Single-file
 
 - Reads `/tmp/pop-maker-studio.lock` to discover the running app's socket path (errors gracefully if no app instance is running, and starts PMS lazily if the binary is on `PATH`).
 - Registers ~70 tools at startup. A handful have explicit Python handlers (the ones doing client-side orchestration like `find_and_add_clip`'s windowed search loop, or `remove_background` which adds a body_fx brick before calling the IPC `start_bg_remove`); the rest forward through a generic dispatcher that sends the method name verbatim over the socket.
-- Marshals tool results as `TextContent` (JSON `dumps`'d). MCP progress notifications are forwarded from the C++ search status via `_send_search_progress` so the client sees Demucs / Whisper / window progress live.
+- Marshals tool results as `TextContent` (JSON `dumps`'d). MCP progress notifications are forwarded from the C++ search status via `_send_search_progress` so the client sees MDX-Net / Whisper / window progress live.
 
 **Location:** `mcp_server/` directory at repo root.
 

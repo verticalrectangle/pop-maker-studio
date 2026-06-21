@@ -779,7 +779,14 @@ void import_file(AppState& state, const std::string& path) {
         state.vocals_path        = (outdir / "vocals.wav").string();
         state.out_wav            = state.vocals_path;
         load_words_cache(state);
-        generate_typography(state);
+        // A raw-mix transcript (produced by a subtitles-only run) is not lyrics-
+        // grade, so don't let it silently regenerate lyric typography on import.
+        // The words are still loaded for subtitles/search/display; a Make-lyric-
+        // video / Extract-Lyrics pass re-runs on the vocal stem and supersedes
+        // the cache (re-tagging it "vocals"). Legacy caches (no sidecar, "") keep
+        // the old behavior so nothing regresses for pre-provenance projects.
+        if (transcript_source(words_candidate) != "raw")
+            generate_typography(state);
     }
     {
         std::string src = (outdir / "vocals.wav").string();

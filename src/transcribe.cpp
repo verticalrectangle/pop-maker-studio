@@ -37,7 +37,7 @@ fs::path whisper_model_path() {
 // find_and_add_clip search uses the SAME model as the full pipeline.
 // Tiny.en used to be the search model for speed, but it hallucinated [Music]/♪♪
 // on quiet (low-amplitude) vocals and forced a tiny-vs-large quality fork
-// between the search cache and the canonical cache.  Demucs per-chunk
+// between the search cache and the canonical cache.  MDX-Net per-chunk
 // dominates latency anyway, so the large-v3-turbo cost delta is small.
 fs::path whisper_search_model_path() {
     return whisper_model_path();
@@ -162,7 +162,7 @@ static void vad_gate_inplace(std::vector<float>& pcm) {
 //
 // Reuses the vad_gate_inplace RMS math to answer one question about a chunk:
 // "does the vocal stem contain any speech-energy stretch ≥ 250 ms?"  Used by
-// transcribe_search to skip whisper entirely on windows where Demucs produced
+// transcribe_search to skip whisper entirely on windows where MDX-Net produced
 // a dead stem — no [Music]/♪♪ pollution, no wasted inference, no fallback to
 // the raw mix.  Only meaningful when applied to an isolated vocal stem;
 // running it on a raw mix returns true for any music.
@@ -304,6 +304,29 @@ static void extract_words_segments(
         }
         if (!cur_word.empty()) emit();
     }
+}
+
+// ── Transcript provenance sidecar ─────────────────────────────────────────────
+// "<...>_words.json" → "<...>_words.src" (a one-word file: vocals | raw).
+static std::string words_src_sidecar(const std::string& words_json) {
+    if (words_json.size() > 5 &&
+        words_json.compare(words_json.size() - 5, 5, ".json") == 0)
+        return words_json.substr(0, words_json.size() - 5) + ".src";
+    return words_json + ".src";
+}
+
+void transcript_write_source(const std::string& words_json, bool from_vocals) {
+    std::ofstream f(words_src_sidecar(words_json));
+    if (f) f << (from_vocals ? "vocals" : "raw");
+}
+
+std::string transcript_source(const std::string& words_json) {
+    std::ifstream f(words_src_sidecar(words_json));
+    if (!f) return "";   // legacy cache with no sidecar → unknown
+    std::string s; std::getline(f, s);
+    while (!s.empty() && (s.back() == '\n' || s.back() == '\r' || s.back() == ' '))
+        s.pop_back();
+    return s;
 }
 
 // ── Main transcription worker ─────────────────────────────────────────────────
@@ -577,6 +600,9 @@ static void do_transcribe(
 
     { std::ofstream f(out_words_json); f << words_arr.dump(2); }
     { std::ofstream f(segs_json);      f << segs_arr.dump(2); }
+    // Record what audio these words came from so a later lyrics request can tell
+    // a vocal-stem transcript from a raw-mix (subtitles) one and re-run if needed.
+    transcript_write_source(out_words_json, use_vocals);
 
     status.stage    = PipelineStage::Done;
     status.progress = 1.0f;
@@ -597,7 +623,7 @@ static whisper_context* load_whisper_ctx() {
 }
 
 // Whisper's known music/non-speech surface tokens.  When fed silence or
-// instrumental-only audio (e.g. a dead Demucs stem or a raw mix during an
+// instrumental-only audio (e.g. a dead MDX-Net stem or a raw mix during an
 // instrumental break), whisper emits these as "transcribed" content.  We
 // strip them at the word level before stitching/saving, so the cache stays
 // clean even when we let whisper run on dubious chunks (raw-mix fallback,
@@ -739,16 +765,16 @@ TranscribeSearchResult transcribe_search(
         if (do_separate) {
             const std::string range = fmt_time(window_start) + " – " + fmt_time(win_end);
             set_search_status(true, window_start, total_dur,
-                "Demucs " + range + ": separating vocals…");
+                "MDX-Net " + range + ": separating vocals…");
             std::string sep_err = separate_run(path, tmp_vocals, tmp_inst,
                 [&](float /*p*/, const std::string& msg) {
                     set_search_status(true, window_start, total_dur,
-                        "Demucs " + range + ": " + msg);
+                        "MDX-Net " + range + ": " + msg);
                 },
                 window_start, dur);
             if (sep_err.empty() && fs::exists(tmp_vocals)) {
                 set_search_status(true, window_start, total_dur,
-                    "Demucs " + range + ": decoding vocal stem…");
+                    "MDX-Net " + range + ": decoding vocal stem…");
                 pcm = decode_16k(tmp_vocals);
                 if (!pcm.empty()) used_vocal_stem = true;
             }
@@ -763,8 +789,8 @@ TranscribeSearchResult transcribe_search(
         // a whisper pass on dead audio.  Not applied to raw-mix PCM — that
         // would gate on music energy and skip everything.
         // Vocal-presence gate: previously this skipped the chunk entirely
-        // when Demucs produced a dead stem — but that silently dropped
-        // chunks where Demucs failed on quiet/whispered vocals (soft outro
+        // when MDX-Net produced a dead stem — but that silently dropped
+        // chunks where MDX-Net failed on quiet/whispered vocals (soft outro
         // fades, low-amplitude breaths).  Now: when the stem reads dead,
         // fall back to running whisper on the RAW MIX for that chunk.
         // Music-token hallucinations whisper-large emits on instrumental
@@ -794,7 +820,7 @@ TranscribeSearchResult transcribe_search(
 
         // Post-filter music-token hallucinations ([Music], ♪♪, etc.).
         // Whisper-large emits these on instrumental audio (raw-mix fallback
-        // chunks, or stems where Demucs leaked instrumental).  Stripping at
+        // chunks, or stems where MDX-Net leaked instrumental).  Stripping at
         // the word level keeps the cached transcript clean.
         {
             nlohmann::json filtered = nlohmann::json::array();
