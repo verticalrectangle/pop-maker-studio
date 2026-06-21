@@ -2794,14 +2794,37 @@ static void big_ensure(int w, int h) {
     s_big_w = w; s_big_h = h;
 }
 
-// Resize `src_tex` into the w×h source buffer and read it back as RGB.
-static void big_source_rgb(uintptr_t src_tex, int w, int h, std::vector<uint8_t>& rgb) {
+// Resize `src_tex` into the w×h source buffer (s_bigsrc_tex/fbo) and read it
+// back as RGB. The fx_blit reads src_tex and the glReadPixels forces a full
+// GPU→CPU flush; doing both every frame while a clip is selected serialized the
+// readback against the decoder's live per-frame upload into video_get_texture's
+// preview texture — that contention (absent on the settled scene FBO) is why FX
+// hover lagged with a clip selected but stayed smooth on the whole project.
+// The hovered source frame is static, so cache the result by (src_tex, w, h)
+// and only touch the GPU when it actually changes; callers get a private copy
+// they may mutate in place (grade/effect). The same hit leaves s_bigsrc_tex
+// holding the resized source for the generated-effect GPU path.
+static uintptr_t s_bigsrc_key_tex = 0;
+static int       s_bigsrc_key_w = 0, s_bigsrc_key_h = 0;
+static std::vector<uint8_t> s_bigsrc_cache;
+
+static bool big_source_prep(uintptr_t src_tex, int w, int h) {
+    if (src_tex == s_bigsrc_key_tex && w == s_bigsrc_key_w && h == s_bigsrc_key_h &&
+        s_bigsrc_cache.size() == (size_t)w * h * 3)
+        return false;  // s_bigsrc_tex + cache already hold this source
     fx_blit(src_tex, s_bigsrc_fbo, w, h);
-    rgb.resize((size_t)w * h * 3);
+    s_bigsrc_cache.resize((size_t)w * h * 3);
     glBindFramebuffer(GL_FRAMEBUFFER, s_bigsrc_fbo);
     glPixelStorei(GL_PACK_ALIGNMENT, 1);
-    glReadPixels(0, 0, w, h, GL_RGB, GL_UNSIGNED_BYTE, rgb.data());
+    glReadPixels(0, 0, w, h, GL_RGB, GL_UNSIGNED_BYTE, s_bigsrc_cache.data());
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    s_bigsrc_key_tex = src_tex; s_bigsrc_key_w = w; s_bigsrc_key_h = h;
+    return true;
+}
+
+static void big_source_rgb(uintptr_t src_tex, int w, int h, std::vector<uint8_t>& rgb) {
+    big_source_prep(src_tex, w, h);
+    rgb = s_bigsrc_cache;  // cheap CPU copy; caller mutates in place
 }
 
 uintptr_t video_fx_preview_big(FXType ft, float t, uintptr_t src_tex, int w, int h) {
@@ -2828,7 +2851,10 @@ uintptr_t video_fx_preview_big(FXType ft, float t, uintptr_t src_tex, int w, int
     if (idx >= FXP_N) {
         // Generated GPU effect: resize source then run the effect on it, and
         // copy out of the shared preview slot so card thumbnails can't clobber it.
-        fx_blit(src_tex, s_bigsrc_fbo, w, h);
+        // big_source_prep blits into s_bigsrc_tex only when the source frame
+        // changes (skips the per-frame read of the live clip texture); the
+        // effect still re-runs each frame so time-driven motion animates.
+        big_source_prep(src_tex, w, h);
         uintptr_t shared = fx_preview_gen_effect(ft, (uintptr_t)s_bigsrc_tex, w, h, t);
         fx_blit(shared, s_bigout_fbo, w, h);
         return (uintptr_t)s_bigout_tex;
