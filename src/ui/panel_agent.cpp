@@ -32,7 +32,7 @@ struct StagedDrop {
 static std::vector<StagedDrop> s_staged;
 static bool  s_input_focused = false;  // was the input active last frame (drop routing)
 static float s_drop_flash_t  = 0.f;    // seconds remaining on the just-dropped flash
-static float s_input_extra_h = 0.f;    // height beyond one row: the input grows UP as text wraps
+static float s_input_zone_h  = 42.f;   // full input-zone height (input box + tray + padding)
 static constexpr float kStageTrayH   = 64.f;  // chip-tray height (wraps + scrolls inside)
 static constexpr int   kMaxInputRows = 6;     // input grows to this many rows, then scrolls
 
@@ -66,8 +66,7 @@ static std::string build_message_with_attachments(const char* text) {
 }
 
 bool  agent_input_is_focused() { return s_input_focused; }
-float agent_input_height()     { float base = 42.f + s_input_extra_h;
-                                 return s_staged.empty() ? base : base + kStageTrayH; }
+float agent_input_height()     { return s_input_zone_h; }
 
 // Drop-target affordance strength (0..1): a gentle steady accent while the input
 // is focused ("drops land here"), ramping bright on a brief flash right after a
@@ -479,27 +478,33 @@ void draw_agent_input(AppState& state, float panel_w) {
     ImGui::PushStyleColor(ImGuiCol_FrameBg, IM_COL32(0x1e, 0x1e, 0x2c, 255));
     // Width leaves room for the Send/Clear buttons (two 6 px SameLine gaps).
     float input_w = ImGui::GetContentRegionAvail().x - send_w - clear_w - 12.f;
-    // Measure how many wrapped rows the text needs, so the zone grows UPWARD as
-    // you type instead of the text scrolling off to the right. agent_input_height
-    // reads s_input_extra_h (next frame) to enlarge the zone; the log above
-    // shrinks to match. Capped at kMaxInputRows, then the field scrolls.
+    // Size the box EXPLICITLY from the wrapped row count, NOT by filling the
+    // remaining zone. A multiline's visible text area is its height minus its
+    // frame padding, so "fill the remainder" left it a few px short of one line:
+    // the editor then permanently auto-scrolled to the cursor, clipping the text
+    // and jittering it up/down on every keystroke. input_h = rows*line + 2*pad
+    // makes one line always fully fit; it grows to kMaxInputRows, then scrolls.
+    const ImGuiStyle& st = ImGui::GetStyle();
+    float line_h = ImGui::GetTextLineHeight();
+    int rows;
     {
-        float line_h = ImGui::GetTextLineHeight();
-        // Trim trailing spaces/tabs for the measurement only (keep newlines): a
-        // trailing space makes CalcTextSize report an extra wrapped row, which
-        // bounced the box up/down every time you typed a space. The editor keeps
-        // the space on the current line, so the measured height shouldn't change.
+        // Trim trailing spaces/tabs for the measurement only (keep newlines) so a
+        // trailing space doesn't bump the wrapped height by a phantom row.
         int n = (int)strlen(s_input);
         while (n > 0 && (s_input[n - 1] == ' ' || s_input[n - 1] == '\t')) --n;
         std::string meas(s_input, (size_t)n);
         if (meas.empty()) meas = " ";
-        float wrap_w = input_w - ImGui::GetStyle().FramePadding.x * 2.f;
+        float wrap_w = input_w - st.FramePadding.x * 2.f;
         float th = ImGui::CalcTextSize(meas.c_str(), nullptr, false, wrap_w).y;
-        int rows = (int)(th / line_h + 0.5f);
+        rows = (int)(th / line_h + 0.5f);
         rows = rows < 1 ? 1 : (rows > kMaxInputRows ? kMaxInputRows : rows);
-        s_input_extra_h = (rows - 1) * line_h;
     }
-    float input_h = ImGui::GetContentRegionAvail().y;  // fill the (grown) zone
+    float input_h = rows * line_h + 2.f * st.FramePadding.y + 2.f;  // fits `rows` full lines
+    // Zone height (read by agent_input_height next frame): the input box + the
+    // chip tray reserved SEPARATELY + the child's window padding, so a staged
+    // chip never shrinks the input below a full line.
+    float tray_block = s_staged.empty() ? 0.f : (kStageTrayH + st.ItemSpacing.y);
+    s_input_zone_h = 2.f * st.WindowPadding.y + tray_block + input_h;
     if (s_refocus) { ImGui::SetKeyboardFocusHere(); s_refocus = false; }
     // Multiline + word-wrap: long prompts wrap and the box grows up. Enter sends;
     // Shift+Enter / Ctrl+Enter insert a newline (CtrlEnterForNewLine).
