@@ -389,6 +389,8 @@ void draw_agent_log(AppState& state, float panel_w, float panel_h) {
 
 // Up/Down cycles through past prompts; the in-progress line is stashed and
 // restored when cycling back past the newest entry.
+void agent_focus_input() { s_refocus = true; }   // caret into the input next draw
+
 static int input_history_cb(ImGuiInputTextCallbackData* data) {
     if (data->EventFlag != ImGuiInputTextFlags_CallbackHistory) return 0;
     const int prev = s_hist_pos;
@@ -483,9 +485,16 @@ void draw_agent_input(AppState& state, float panel_w) {
     // shrinks to match. Capped at kMaxInputRows, then the field scrolls.
     {
         float line_h = ImGui::GetTextLineHeight();
-        const char* tb = s_input[0] ? s_input : " ";
+        // Trim trailing spaces/tabs for the measurement only (keep newlines): a
+        // trailing space makes CalcTextSize report an extra wrapped row, which
+        // bounced the box up/down every time you typed a space. The editor keeps
+        // the space on the current line, so the measured height shouldn't change.
+        int n = (int)strlen(s_input);
+        while (n > 0 && (s_input[n - 1] == ' ' || s_input[n - 1] == '\t')) --n;
+        std::string meas(s_input, (size_t)n);
+        if (meas.empty()) meas = " ";
         float wrap_w = input_w - ImGui::GetStyle().FramePadding.x * 2.f;
-        float th = ImGui::CalcTextSize(tb, nullptr, false, wrap_w).y;
+        float th = ImGui::CalcTextSize(meas.c_str(), nullptr, false, wrap_w).y;
         int rows = (int)(th / line_h + 0.5f);
         rows = rows < 1 ? 1 : (rows > kMaxInputRows ? kMaxInputRows : rows);
         s_input_extra_h = (rows - 1) * line_h;

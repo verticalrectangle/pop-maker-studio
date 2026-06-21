@@ -5,6 +5,9 @@
 void draw_agent_log(AppState& state, float panel_w, float panel_h);
 void draw_agent_input(AppState& state, float panel_w);
 
+// Put the keyboard caret into the agent input on the next draw (e.g. when the
+// Agent panel is opened).
+void agent_focus_input();
 // True when the agent input held keyboard focus last frame — the studio/terminal
 // OS-drop handlers stand down so dropped files stage into the agent chat instead.
 bool agent_input_is_focused();

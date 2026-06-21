@@ -1078,7 +1078,10 @@ void ui_studio(AppState& state) {
             accent_btn("Terminal", state.terminal_open);
             // The bottom strip is single-occupancy: opening one closes the
             // other (a 50/50 split cramped both panels).
-            if (state.agent_panel_open && !was_agent) state.terminal_open    = false;
+            if (state.agent_panel_open && !was_agent) {
+                state.terminal_open = false;
+                agent_focus_input();   // drop the caret straight into the input
+            }
             if (state.terminal_open    && !was_term)  state.agent_panel_open = false;
 
             ImGui::SameLine(0.f, 6.f);
