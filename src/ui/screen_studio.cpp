@@ -490,8 +490,10 @@ void ui_studio(AppState& state) {
     // filename order. Off-track, it's Bin-only (the "gather assets" path).
     if (is_batch_drop && editor_owns_drop) {
         std::vector<std::string> media;
+        bool had_dir = false;
         for (auto& p : g_drop_batch) {
             if (path_is_dir(p)) {
+                had_dir = true;
                 for (auto& f : dir_media_files(p)) media.push_back(f);
             } else if (is_media_path(p)) {
                 media.push_back(p);
@@ -528,6 +530,10 @@ void ui_studio(AppState& state) {
                                     " clips on " + state.tracks[target].name);
             }
         }
+        // A dropped directory dumps its media into the Bin — surface it by
+        // switching the panel to the Bin tab so the user sees what landed.
+        if (had_dir) s_panel_view = PanelView::LibBin;
+
         g_dropped_file.clear(); // a single-folder drop set this; we handled it
         g_drop_batch.clear();   // consumed; don't let it linger to the agent path
     }
