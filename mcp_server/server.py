@@ -3253,18 +3253,31 @@ async def _add_clip(arguments: dict) -> dict:
 
 # ── find_and_add_clip ─────────────────────────────────────────────────────────
 
+def _cache_path(source: str, suffix: str) -> Path:
+    """Mirror of C++ cache_path() (src/paths.cpp): caches live in the shared cache
+    dir, not next to the user's media. Byte-identical FNV-1a hash so both sides
+    agree on the path."""
+    xdg = os.environ.get("XDG_CACHE_HOME")
+    home = os.environ.get("HOME")
+    base = xdg if xdg else (f"{home}/.cache" if home else "/tmp")
+    cache_dir = Path(base) / "pop-maker-studio" / "media"
+    h = 1469598103934665603
+    for b in source.encode():
+        h = ((h ^ b) * 1099511628211) & 0xFFFFFFFFFFFFFFFF
+    return cache_dir / f"{Path(source).stem}.{h:016x}{suffix}"
+
+
 def _words_cache_paths(audio_path: str) -> tuple[Path, Path]:
-    """Return (canonical, search) words.json paths for a given audio file.
+    """Return (canonical, search) words.json cache paths for a given audio file.
 
     Canonical (_words.json) is owned by the full pipeline (do_transcribe):
     DTW + forced alignment + segment splits. Authoritative when present.
     Search (_words_search.json) is the windowed find_and_add_clip output:
     best-effort, used as fallback when canonical hasn't been produced yet.
     """
-    p = Path(audio_path)
     return (
-        p.parent / p.stem / f"{p.stem}_words.json",
-        p.parent / p.stem / f"{p.stem}_words_search.json",
+        _cache_path(audio_path, "_words.json"),
+        _cache_path(audio_path, "_words_search.json"),
     )
 
 
@@ -3701,7 +3714,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         target_path = arguments.get("path") or proj.get("audio_path")
         if target_path:
             p = Path(target_path)
-            cached_words = p.parent / p.stem / f"{p.stem}_words.json"
+            cached_words = _cache_path(target_path, "_words.json")
             if cached_words.exists():
                 raise ValueError(
                     f"Transcript already cached for {p.name} at {cached_words}.\n"

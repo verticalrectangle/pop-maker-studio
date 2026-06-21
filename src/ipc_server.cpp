@@ -1256,19 +1256,16 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         return r;
     }
 
-    // Canonical cache path: <dir>/<stem>/<stem>_words.json (matches pipeline writer)
+    // Canonical cache path in the shared cache dir (matches the pipeline writer).
     auto words_cache_path_for = [](const std::string& audio_path) -> std::filesystem::path {
         if (audio_path.empty()) return {};
-        std::filesystem::path p(audio_path);
-        return p.parent_path() / p.stem() / (p.stem().string() + "_words.json");
+        return cache_path(audio_path, "_words.json");
     };
-    // Search cache path: <dir>/<stem>/<stem>_words_search.json (windowed
-    // find_and_add_clip writes here).  Used as a fallback when the
-    // canonical (full-pipeline) cache hasn't been produced yet.
+    // Search cache (windowed find_and_add_clip). Fallback when the canonical
+    // full-pipeline cache hasn't been produced yet.
     auto search_words_path_for = [](const std::string& audio_path) -> std::filesystem::path {
         if (audio_path.empty()) return {};
-        std::filesystem::path p(audio_path);
-        return p.parent_path() / p.stem() / (p.stem().string() + "_words_search.json");
+        return cache_path(audio_path, "_words_search.json");
     };
 
     if (method == "get_transcript") {

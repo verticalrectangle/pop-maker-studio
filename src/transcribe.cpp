@@ -211,14 +211,12 @@ static bool has_vocal_presence(const std::vector<float>& pcm) {
 // No ffmpeg fallback — if the model is not ready, the user must download the model.
 static bool separate_channels(
     const std::string& in,
-    const std::string& outdir,
+    const std::string& voc,
+    const std::string& inst,
     PipelineStatus&    status,
     float clip_in  = 0.f,
     float clip_dur = 0.f)
 {
-    std::string voc  = outdir + "/vocals.wav";
-    std::string inst = outdir + "/instrumental.wav";
-
     std::string err = separate_run(in, voc, inst, [&](float p, const std::string& msg) {
         status.progress = 0.05f + p * 0.15f;
         status.message  = msg;
@@ -350,21 +348,21 @@ static void do_transcribe(
     float              clip_in,
     float              clip_dur)
 {
+    // Derived artifacts live in the shared cache dir (~/.cache/pop-maker-studio),
+    // not next to the user's media — keyed by the source path so readers agree.
     fs::path audio(audio_path);
-    fs::path outdir = audio.parent_path() / audio.stem();
-    fs::create_directories(outdir);
-
     std::string stem       = audio.stem().string();
-    out_words_json         = (outdir / (stem + "_words.json")).string();
-    out_vocals_wav         = (outdir / "vocals.wav").string();
-    std::string segs_json  = (outdir / (stem + "_segments.json")).string();
+    out_words_json         = cache_path(audio_path, "_words.json");
+    out_vocals_wav         = cache_path(audio_path, "_vocals.wav");
+    std::string inst_wav   = cache_path(audio_path, "_instrumental.wav");
+    std::string segs_json  = cache_path(audio_path, "_segments.json");
 
     // ── Separation ────────────────────────────────────────────────────────────
     if (mode == PipelineMode::Both || mode == PipelineMode::SeparateOnly) {
         status.stage    = PipelineStage::Extract;
         status.progress = 0.02f;
         status.message  = "Separating vocals (MDX-Net)…";
-        if (!separate_channels(audio_path, outdir.string(), status, clip_in, clip_dur)) {
+        if (!separate_channels(audio_path, out_vocals_wav, inst_wav, status, clip_in, clip_dur)) {
             g_running.store(false);
             return;
         }
@@ -817,9 +815,7 @@ TranscribeSearchResult transcribe_search(
     // shadowed by the windowed search cache.  get_transcript / find_and_add_clip
     // prefer the canonical path and fall back to the search path.
     fs::path src(path);
-    fs::path outdir = src.parent_path() / src.stem();
-    fs::create_directories(outdir);
-    std::string words_json_path = (outdir / (src.stem().string() + "_words_search.json")).string();
+    std::string words_json_path = cache_path(path, "_words_search.json");
 
     const float window_sec  = std::max(90.f, std::min(300.f, total_dur / 4.f));
     const float overlap_sec = std::min(30.f, window_sec * 0.15f);

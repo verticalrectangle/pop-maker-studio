@@ -9,6 +9,7 @@
 #include "history.h"
 #include "filepicker.h"
 #include "transcribe.h"
+#include "paths.h"
 #include "beat_detect.h"
 #include "waveform.h"
 #include "theme.h"
@@ -269,11 +270,13 @@ void run_envelope_extract(AppState& state) {
     std::string src = state.vocals_path.empty() ? state.audio_path : state.vocals_path;
     if (src.empty() || !fs::exists(src)) return;
 
-    fs::path out = fs::path(src).parent_path() / "envelope.json";
-    state.envelope_json_path = out.string();
+    // Keyed by the audio source so the reader in `import` finds it; lives in the
+    // cache dir, not next to the user's media.
+    std::string key = state.audio_path.empty() ? src : state.audio_path;
+    state.envelope_json_path = cache_path(key, "_envelope.json");
     state.envelope_running   = true;
 
-    std::string outpath = out.string();
+    std::string outpath = state.envelope_json_path;
 
     std::thread([&state, src, outpath]() {
         const float env_fps = 24.f;
@@ -769,14 +772,12 @@ void import_file(AppState& state, const std::string& path) {
         state.tl_zoom_to_fit_end = ac.end;
     }
 
-    // Pre-fill output paths in case user already has JSON from a previous run
-    fs::path outdir = fp.parent_path() / fp.stem();
-    std::string words_candidate = (outdir / (fp.stem().string() + "_words.json")).string();
-    std::string segs_candidate  = (outdir / (fp.stem().string() + "_segments.json")).string();
+    // Pre-fill output paths in case a previous run already cached them.
+    std::string words_candidate = cache_path(path, "_words.json");
     if (fs::exists(words_candidate)) {
         state.words_json_path    = words_candidate;
-        state.segments_json_path = (outdir / (fp.stem().string() + "_segments.json")).string();
-        state.vocals_path        = (outdir / "vocals.wav").string();
+        state.segments_json_path = cache_path(path, "_segments.json");
+        state.vocals_path        = cache_path(path, "_vocals.wav");
         state.out_wav            = state.vocals_path;
         load_words_cache(state);
         // A raw-mix transcript (produced by a subtitles-only run) is not lyrics-
@@ -789,9 +790,7 @@ void import_file(AppState& state, const std::string& path) {
             generate_typography(state);
     }
     {
-        std::string src = (outdir / "vocals.wav").string();
-        if (!fs::exists(src)) src = path;
-        std::string ec = (fs::path(src).parent_path() / "envelope.json").string();
+        std::string ec = cache_path(path, "_envelope.json");
         if (fs::exists(ec)) { state.envelope_json_path = ec; load_envelope_cache(state); }
     }
 
@@ -806,12 +805,9 @@ void kick_pipeline(AppState& state, const std::string& path, PipelineMode mode) 
     state.audio_path = path;
     state.pipeline   = PipelineStatus{};
 
-    fs::path audio(path);
-    fs::path outdir = audio.parent_path() / audio.stem();
-    std::string words_json = (outdir / (audio.stem().string() + "_words.json")).string();
-    std::string vocals_out = (outdir / "vocals.wav").string();
-    state.words_json_path    = words_json;
-    state.segments_json_path = (outdir / (audio.stem().string() + "_segments.json")).string();
+    std::string vocals_out   = cache_path(path, "_vocals.wav");
+    state.words_json_path    = cache_path(path, "_words.json");
+    state.segments_json_path = cache_path(path, "_segments.json");
     state.vocals_path        = vocals_out;
     state.out_wav            = vocals_out;
 

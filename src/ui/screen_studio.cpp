@@ -701,11 +701,11 @@ void ui_studio(AppState& state) {
         if (m == PipelineMode::TranscribeOnly) {
             state.lyrics_edits.clear();
             load_words_cache(state);
-            save_all_srts(state);
+            // SRTs are no longer written here — subtitles render in-app on managed
+            // tracks; an .srt is produced only on explicit export (export_ui).
         } else if (m == PipelineMode::Both) {
             state.lyrics_edits.clear();
             load_words_cache(state);
-            save_all_srts(state);
         } else if (m == PipelineMode::SeparateOnly &&
                    !state.vocals_path.empty() && fs::exists(state.vocals_path)) {
             bool already_present = false;
