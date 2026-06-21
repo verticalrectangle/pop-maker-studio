@@ -347,6 +347,34 @@ int provider_for_url(const std::string& url) {
 }
 } // namespace
 
+// Natural ("01, 02, 10" not "01, 10, 2") filename order for multi-file drops, so
+// numbered b-roll sequences in the right order. Case-insensitive; compares digit
+// runs by numeric value with leading zeros ignored.
+static bool natural_less(const std::string& a, const std::string& b) {
+    size_t i = 0, j = 0;
+    while (i < a.size() && j < b.size()) {
+        bool da = isdigit((unsigned char)a[i]), db = isdigit((unsigned char)b[j]);
+        if (da && db) {
+            size_t i2 = i, j2 = j;
+            while (i2 < a.size() && isdigit((unsigned char)a[i2])) ++i2;
+            while (j2 < b.size() && isdigit((unsigned char)b[j2])) ++j2;
+            size_t ia = i; while (ia + 1 < i2 && a[ia] == '0') ++ia;
+            size_t ja = j; while (ja + 1 < j2 && b[ja] == '0') ++ja;
+            size_t la = i2 - ia, lb = j2 - ja;
+            if (la != lb) return la < lb;                       // longer number = larger
+            int c = a.compare(ia, la, b, ja, lb);
+            if (c != 0) return c < 0;
+            i = i2; j = j2;
+        } else {
+            char ca = (char)tolower((unsigned char)a[i]);
+            char cb = (char)tolower((unsigned char)b[j]);
+            if (ca != cb) return ca < cb;
+            ++i; ++j;
+        }
+    }
+    return (a.size() - i) < (b.size() - j);
+}
+
 void ui_studio(AppState& state) {
     ImGuiIO& io   = ImGui::GetIO();
     float    win_w = io.DisplaySize.x;
@@ -372,9 +400,15 @@ void ui_studio(AppState& state) {
     // handler stands down. The terminal panel will inject the path at the
     // shell prompt later this frame.
     extern std::string g_dropped_file;
+    extern std::vector<std::string> g_drop_batch;
     bool term_claims_drop  = state.terminal_open && terminal_is_focused();
     bool agent_claims_drop = state.agent_panel_open && agent_input_is_focused();
-    if (!g_dropped_file.empty() && !term_claims_drop && !agent_claims_drop) {
+    bool editor_owns_drop  = !term_claims_drop && !agent_claims_drop;
+    // A "batch" drop is multiple files, or a single folder. Those go to the Bin
+    // (and sequence over a track) rather than single-clip placement below.
+    bool is_batch_drop = g_drop_batch.size() > 1 ||
+                         (g_drop_batch.size() == 1 && path_is_dir(g_drop_batch[0]));
+    if (!g_dropped_file.empty() && editor_owns_drop && !is_batch_drop) {
         const std::string& dp = g_dropped_file;
         fs::path fp(dp);
         std::string ext = fp.extension().string();
@@ -447,6 +481,55 @@ void ui_studio(AppState& state) {
             s_drop_flash_t = 0.6f;
         }
         g_dropped_file.clear();
+    }
+
+    // ── Multi-file / folder drop on the editor ────────────────────────────────
+    // Every dropped media file lands in the Bin (folders expand to their media).
+    // When the cursor is over a timeline track, also lay the visual media
+    // end-to-end on that track from the playhead — a quick sequence — in natural
+    // filename order. Off-track, it's Bin-only (the "gather assets" path).
+    if (is_batch_drop && editor_owns_drop) {
+        std::vector<std::string> media;
+        for (auto& p : g_drop_batch) {
+            if (path_is_dir(p)) {
+                for (auto& f : dir_media_files(p)) media.push_back(f);
+            } else if (is_media_path(p)) {
+                media.push_back(p);
+            }
+        }
+        std::sort(media.begin(), media.end(), natural_less);
+        for (auto& m : media) bin_add(state, m);   // ensure binned (covers single-folder)
+
+        bool over_track = s_tl_hover_track >= 0 &&
+                          s_tl_hover_track < (int)state.tracks.size();
+        if (over_track) {
+            int target = s_tl_hover_track;
+            float cursor = state.playhead;
+            int placed = 0;
+            for (auto& m : media) {
+                if (kind_for_path(m) == MediaKind::Audio) continue;  // audio stays in the Bin
+                float dur = video_probe_duration(m);                 // images → 0 → default
+                if (dur <= 0.f) dur = is_image_path(m) ? 5.f : 4.f;
+                Clip cl;
+                cl.clip_type = ClipType::Video;
+                cl.text = m; cl.source_id = m;
+                cl.start = cursor; cl.end = cursor + dur;
+                state.tracks[target].clips.push_back(cl);
+                proxy_start(m);
+                int slot = slot_for_video(state, clip_slot_key(m, cl.start), m);
+                if (slot >= 0) video_open_still(slot, proxy_still_path(m));
+                cursor += dur; ++placed;
+            }
+            if (placed > 0) {
+                state.video_loaded = true;
+                s_drop_flash_track = target;
+                s_drop_flash_t     = 0.6f;
+                history_push(state, "Sequence " + std::to_string(placed) +
+                                    " clips on " + state.tracks[target].name);
+            }
+        }
+        g_dropped_file.clear(); // a single-folder drop set this; we handled it
+        g_drop_batch.clear();   // consumed; don't let it linger to the agent path
     }
 
     // Per-slot video open/upgrade — handles four states:
