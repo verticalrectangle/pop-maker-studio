@@ -12,6 +12,8 @@
 #include <cstdlib>
 #include <vector>
 #include <string>
+#include <unordered_set>
+#include <cctype>
 #include "json.hpp"
 #include <unistd.h>
 #include <fcntl.h>
@@ -329,6 +331,13 @@ std::string transcript_source(const std::string& words_json) {
     return s;
 }
 
+// Hallucination filters (defined below, near the search path that first used
+// them). is_music_token: [Music]/♪♪/[Applause] surface tokens — never real
+// content. is_hallucination_phrase: whisper's stock non-speech inventions
+// ("thank you", "thanks for watching", …) — never real song lyrics.
+static bool is_music_token(const std::string& w);
+static bool is_hallucination_phrase(const std::string& seg_text);
+
 // ── Main transcription worker ─────────────────────────────────────────────────
 
 static void do_transcribe(
@@ -423,7 +432,16 @@ static void do_transcribe(
     // but the capitalization-driven segment splitter places those boundaries
     // at the real word onsets anyway, so the artifact aligns with the truth
     // instead of distorting it.
-    vad_gate_inplace(pcm);
+    //
+    // BUT only on the raw mix. An MDX-Net vocal stem is already isolated —
+    // non-vocal regions are quiet by construction — so the gate is redundant
+    // AND destructive there: on quiet, reverb-heavy sung stems (dreampop, etc.)
+    // its noise-floor estimate sits ABOVE the vocal level and zeros the actual
+    // singing, leaving whisper to hallucinate "Thank you." over 30 s of
+    // silence. Measured on "Just Like Honey": gated → ' Thank you.'; ungated →
+    // the real lyrics. Whisper's own no_speech_thold + the output-side
+    // hallucination filter handle dead stems without nuking live ones.
+    if (!use_vocals) vad_gate_inplace(pcm);
 
     // ── Init whisper ──────────────────────────────────────────────────────────
     status.progress = 0.28f;
@@ -486,6 +504,37 @@ static void do_transcribe(
     nlohmann::json segs_arr  = nlohmann::json::array();
     extract_words_segments(ctx, words_arr, segs_arr);
     whisper_free(ctx);
+
+    // ── Hallucination / non-speech cleanup ────────────────────────────────────
+    // The main pipeline never filtered its output (only the search path did), so
+    // whisper's stock inventions leaked straight into the canonical cache. Drop
+    // music tokens ([Music]/♪♪) on any path — they're never real content — and
+    // drop whole segments that are pure speech hallucinations ("Thank you",
+    // "thanks for watching") on the vocal-stem path, where they're spurious by
+    // construction. Words inside a dropped segment go with it.
+    {
+        std::vector<std::pair<float, float>> dropped;  // [start,end] removed segs
+        nlohmann::json segs_keep = nlohmann::json::array();
+        for (auto& s : segs_arr) {
+            std::string txt = s.value("text", "");
+            bool bad = is_music_token(txt) ||
+                       (use_vocals && is_hallucination_phrase(txt));
+            if (bad) dropped.push_back({s.value("start", 0.f), s.value("end", 0.f)});
+            else     segs_keep.push_back(s);
+        }
+        segs_arr = std::move(segs_keep);
+
+        nlohmann::json words_keep = nlohmann::json::array();
+        for (auto& w : words_arr) {
+            if (is_music_token(w.value("word", ""))) continue;
+            float ws = w.value("start", 0.f);
+            bool in_dropped = false;
+            for (auto& d : dropped)
+                if (ws >= d.first - 0.01f && ws < d.second + 0.01f) { in_dropped = true; break; }
+            if (!in_dropped) words_keep.push_back(w);
+        }
+        words_arr = std::move(words_keep);
+    }
 
     // ── CTC forced alignment ──────────────────────────────────────────────────
     if (!words_arr.empty() && !pcm.empty()) {
@@ -652,6 +701,48 @@ static bool is_music_token(const std::string& w) {
         } else { all_notes = false; break; }
     }
     return all_notes;
+}
+
+// Whisper's stock hallucinations on near-silent / non-speech audio: the YouTube
+// outro boilerplate it was trained on ("thank you", "thanks for watching",
+// "please subscribe", …). These are never real song lyrics, so we drop whole
+// segments that match on the vocal-stem (lyrics) path. Matched on the full,
+// normalized segment text (lowercased, punctuation/whitespace collapsed) so a
+// real line that merely contains the word "you" is never touched.
+static bool is_hallucination_phrase(const std::string& seg_text) {
+    std::string s;
+    s.reserve(seg_text.size());
+    bool prev_space = false;
+    for (unsigned char c : seg_text) {
+        if (std::isalnum(c)) { s += (char)std::tolower(c); prev_space = false; }
+        else if (c == ' ' || c == '\t' || std::ispunct(c)) {
+            if (!prev_space && !s.empty()) { s += ' '; prev_space = true; }
+        }
+    }
+    while (!s.empty() && s.back() == ' ') s.pop_back();
+    if (s.empty()) return false;
+
+    static const std::unordered_set<std::string> kPhrases = {
+        "thank you",
+        "thank you very much",
+        "thank you so much",
+        "thank you all",
+        "thanks for watching",
+        "thank you for watching",
+        "thanks for watching the video",
+        "thank you for watching the video",
+        "thanks for watching this video",
+        "thanks for listening",
+        "thank you for listening",
+        "please subscribe",
+        "like and subscribe",
+        "please like and subscribe",
+        "dont forget to subscribe",
+        "see you next time",
+        "see you in the next video",
+        "see you next video",
+    };
+    return kPhrases.count(s) > 0;
 }
 
 // Score a word list against query words (intersection / query_size).
