@@ -2,6 +2,8 @@
 // state lives in agent_harness.cpp and is snapshotted per frame.
 #include "panel_agent.h"
 #include "../agent_harness.h"
+#include "../globals.h"
+#include "panel_media.h"
 #include "theme.h"
 #include <imgui.h>
 #include <imgui_internal.h>
@@ -9,12 +11,58 @@
 #include <cstring>
 #include <string>
 #include <vector>
+#include <filesystem>
 
 extern ImFont* g_font_mono;
 
 static char s_input[4096] = {};
 static int  s_detail_row  = -1;   // row index with expanded detail, -1 = none
 static size_t s_last_rows = 0;    // autoscroll when new rows arrive
+
+// ── Drop staging tray ───────────────────────────────────────────────────────
+// Files/folders dropped while the agent input is focused are added to the Bin
+// and shown as removable chips above the input; on submit their exact paths are
+// appended to the message so the agent never has to guess a path.
+struct StagedDrop {
+    std::string path;
+    std::string kind;        // "video" | "image" | "audio" | "file" | "folder"
+    bool        is_dir = false;
+    int         dir_count = 0;  // media files added to the bin from a folder
+};
+static std::vector<StagedDrop> s_staged;
+static bool s_input_focused = false;  // was the input active last frame (drop routing)
+
+namespace fs = std::filesystem;
+
+static void stage_drop(AppState& state, const std::string& p) {
+    for (auto& s : s_staged) if (s.path == p) return;  // dedupe within the tray
+    if (path_is_dir(p)) {
+        auto files = dir_media_files(p);
+        for (auto& f : files) bin_add(state, f);        // folder → its media into the bin
+        s_staged.push_back({p, "folder", true, (int)files.size()});
+    } else {
+        bool media = is_media_path(p);
+        if (media) bin_add(state, p);                    // non-media (scripts, etc.) stays out of the bin
+        s_staged.push_back({p, media ? media_kind_label(kind_for_path(p)) : "file", false, 0});
+    }
+}
+
+static std::string build_message_with_attachments(const char* text) {
+    std::string body = text ? text : "";
+    if (s_staged.empty()) return body;
+    std::string block = "\n\n[Files just added to the project Bin — use these exact paths, do not guess:]\n";
+    for (auto& s : s_staged) {
+        if (s.is_dir)
+            block += "- folder  " + s.path + "  (" + std::to_string(s.dir_count) +
+                     " media files added to the Bin; call list_dir for the full listing)\n";
+        else
+            block += "- " + s.kind + "  " + s.path + "\n";
+    }
+    return body.empty() ? block.substr(2) : body + block;  // strip leading blank when no typed text
+}
+
+bool  agent_input_is_focused() { return s_input_focused; }
+float agent_input_height()     { return s_staged.empty() ? 42.f : 42.f + 30.f; }
 
 // ── Prompt history (Up/Down recalls past prompts, shell-style) ──────────────
 static std::vector<std::string> s_history;
@@ -351,11 +399,55 @@ static int input_history_cb(ImGuiInputTextCallbackData* data) {
 }
 
 void draw_agent_input(AppState& state, float panel_w) {
-    (void)state;
     (void)panel_w;
     bool running = agent_running();
     float send_w = 64.f, clear_w = 60.f;
     ImGui::PushFont(g_font_mono);
+
+    // ── Claim OS file drops while the input is focused ────────────────────────
+    // Stage them into the Bin + the chip tray. The studio/terminal drop handlers
+    // stand down when agent_input_is_focused() (see screen_studio), so we own it.
+    if (s_input_focused && !g_drop_batch.empty()) {
+        for (auto& p : g_drop_batch) stage_drop(state, p);
+        g_drop_batch.clear();
+        g_dropped_file.clear();   // claimed — don't let it place a clip too
+        s_refocus = true;         // keep the caret in the input after a drop
+    }
+
+    // ── Staging tray: removable chips for dropped files ───────────────────────
+    if (!s_staged.empty()) {
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(7, 2));
+        const int kMaxShown = 8;
+        int shown = std::min((int)s_staged.size(), kMaxShown);
+        for (int i = 0; i < shown; ++i) {
+            if (i) ImGui::SameLine(0.f, 4.f);
+            const StagedDrop& s = s_staged[i];
+            std::string name = fs::path(s.path).filename().string();
+            if (name.size() > 20) name = name.substr(0, 19) + "…";
+            std::string label = s.is_dir
+                ? "[dir] " + name + " (" + std::to_string(s.dir_count) + ")"
+                : s.kind + "  " + name;
+            ImU32 col = s.is_dir            ? IM_COL32(96, 72, 150, 255)
+                      : s.kind == "video"   ? IM_COL32(40, 80, 150, 255)
+                      : s.kind == "image"   ? IM_COL32(40, 120, 80, 255)
+                      : s.kind == "audio"   ? IM_COL32(150, 95, 40, 255)
+                                            : IM_COL32(70, 70, 84, 255);
+            ImGui::PushID(i);
+            ImGui::PushStyleColor(ImGuiCol_Button, col);
+            bool remove = ImGui::SmallButton(label.c_str());
+            ImGui::PopStyleColor();
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("%s\n(in Bin — click to unstage)", s.path.c_str());
+            ImGui::PopID();
+            if (remove) { s_staged.erase(s_staged.begin() + i); break; }
+        }
+        if ((int)s_staged.size() > kMaxShown) {
+            ImGui::SameLine(0.f, 4.f);
+            ImGui::TextDisabled("+%d more", (int)s_staged.size() - kMaxShown);
+        }
+        ImGui::PopStyleVar();
+    }
+
     ImGui::PushStyleColor(ImGuiCol_FrameBg, IM_COL32(0x1e, 0x1e, 0x2c, 255));
     // Size off the content region so the row ends at the same window padding
     // on the right as it starts with on the left (two 6 px SameLine gaps).
@@ -368,6 +460,9 @@ void draw_agent_input(AppState& state, float panel_w) {
                                    input_history_cb);
     ImGui::PopStyleColor();
     const ImGuiID input_id = ImGui::GetItemID();
+    // Whether the input owns keyboard focus this frame — drives drop routing
+    // (read by agent_input_is_focused() next frame, and the studio drop guard).
+    s_input_focused = ImGui::IsItemActive() || ImGui::IsItemFocused();
 
     // Right-click context menu. Selection/cursor must be captured at click
     // time: opening the popup moves focus and the live state goes stale.
@@ -445,13 +540,16 @@ void draw_agent_input(AppState& state, float panel_w) {
         s_last_rows  = 0;
         sel_clear();
     }
-    if (submit && !running && s_input[0]) {
-        if (s_history.empty() || s_history.back() != s_input)
+    // Submit when there's typed text OR staged drops (a bare drop + Enter sends
+    // just the attachment references).
+    if (submit && !running && (s_input[0] || !s_staged.empty())) {
+        if (s_input[0] && (s_history.empty() || s_history.back() != s_input))
             s_history.emplace_back(s_input);
         s_hist_pos = -1;
         s_draft.clear();
-        agent_send(s_input);
+        agent_send(build_message_with_attachments(s_input));
         s_input[0] = '\0';
+        s_staged.clear();
         ImGui::SetKeyboardFocusHere(-1);
     }
     ImGui::PopFont();

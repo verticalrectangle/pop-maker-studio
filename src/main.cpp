@@ -27,6 +27,7 @@ namespace fs = std::filesystem;
 // Definitions of globals declared in globals.h
 std::string g_dropped_file;
 std::string g_managed_dir;
+std::vector<std::string> g_drop_batch;
 
 // Drop queues. Single-file drops follow the legacy g_dropped_file path so the
 // existing readers (screen_studio, screen_upload, panel_terminal) handle
@@ -38,6 +39,12 @@ static std::deque<std::string> g_bin_pending;     // multi-file: drained into Ap
 
 static void glfw_drop_callback(GLFWwindow*, int count, const char** paths) {
     if (count <= 0 || !paths) return;
+    // Record every dropped path for focus-aware consumers (the agent chat stages
+    // these as chips when its input is focused). Independent of the legacy
+    // single/multi routing below, which still drives default placement/binning.
+    for (int i = 0; i < count; ++i)
+        if (paths[i] && paths[i][0]) g_drop_batch.emplace_back(paths[i]);
+
     if (count == 1) {
         if (paths[0] && paths[0][0])
             g_dropped_queue.emplace_back(paths[0]);
@@ -60,7 +67,14 @@ static void drain_dropped_queue() {
 // from the main loop right after drain_dropped_queue.
 static void drain_bin_pending(AppState& state) {
     while (!g_bin_pending.empty()) {
-        bin_add(state, g_bin_pending.front());
+        const std::string& p = g_bin_pending.front();
+        // A dropped folder expands to the media files inside it (shallow), so the
+        // bin never holds a bare directory path masquerading as a media item.
+        if (path_is_dir(p)) {
+            for (auto& f : dir_media_files(p)) bin_add(state, f);
+        } else {
+            bin_add(state, p);
+        }
         g_bin_pending.pop_front();
     }
 }
@@ -267,6 +281,9 @@ int main(int argc, char** argv) {
         ImGui::NewFrame();
 
         app_frame(state);
+        // One-frame lifetime: whoever wanted this drop (agent chat staging) has
+        // had its chance during app_frame; default placement/binning ran above.
+        g_drop_batch.clear();
 
         ImGui::Render();
         int display_w, display_h;

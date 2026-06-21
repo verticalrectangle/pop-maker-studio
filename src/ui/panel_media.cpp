@@ -18,6 +18,7 @@
 #include "json.hpp"
 #include <filesystem>
 #include <algorithm>
+#include <unordered_set>
 #include <fstream>
 #include <cmath>
 #include <cstdio>
@@ -224,6 +225,53 @@ void bin_add(AppState& state, const std::string& path) {
 void bin_remove(AppState& state, const std::string& path) {
     state.bin.erase(std::remove(state.bin.begin(), state.bin.end(), path),
                     state.bin.end());
+}
+
+const char* media_kind_label(MediaKind k) {
+    switch (k) {
+        case MediaKind::Video: return "video";
+        case MediaKind::Image: return "image";
+        case MediaKind::Audio: return "audio";
+    }
+    return "media";
+}
+
+// Explicit media-extension test. Unlike kind_for_path (which buckets anything
+// non-image/non-video as Audio), this returns false for non-media files so a
+// dropped folder doesn't dump .cue/.log/.json/.txt sidecars into the bin.
+bool is_media_path(const std::string& p) {
+    if (is_image_path(p)) return true;
+    std::string ext = fs::path(p).extension().string();
+    for (auto& c : ext) c = (char)tolower((unsigned char)c);
+    if (!ext.empty() && ext[0] == '.') ext.erase(0, 1);
+    static const std::unordered_set<std::string> media = {
+        "mp4","mov","mkv","webm","avi","m4v","mpg","mpeg","wmv","flv","ts","m2ts",
+        "flac","wav","mp3","m4a","aac","ogg","opus","aiff","aif","wma","alac",
+    };
+    return media.count(ext) > 0;
+}
+
+bool path_is_dir(const std::string& p) {
+    std::error_code ec;
+    return fs::is_directory(p, ec);
+}
+
+// Shallow-list the media files directly inside `dir` (not recursive), sorted by
+// name, capped. Used to expand a dropped folder into the bin so its b-roll is
+// immediately usable without the agent enumerating it first.
+std::vector<std::string> dir_media_files(const std::string& dir, int cap) {
+    std::vector<std::string> out;
+    std::error_code ec;
+    for (fs::directory_iterator it(dir, fs::directory_options::skip_permission_denied, ec), end;
+         !ec && it != end; it.increment(ec)) {
+        std::error_code e2;
+        if (it->is_directory(e2)) continue;
+        std::string p = it->path().string();
+        if (is_media_path(p)) out.push_back(p);
+        if ((int)out.size() >= cap) break;
+    }
+    std::sort(out.begin(), out.end());
+    return out;
 }
 
 int bin_used_count(const AppState& state, const std::string& path) {

@@ -372,8 +372,9 @@ void ui_studio(AppState& state) {
     // handler stands down. The terminal panel will inject the path at the
     // shell prompt later this frame.
     extern std::string g_dropped_file;
-    bool term_claims_drop = state.terminal_open && terminal_is_focused();
-    if (!g_dropped_file.empty() && !term_claims_drop) {
+    bool term_claims_drop  = state.terminal_open && terminal_is_focused();
+    bool agent_claims_drop = state.agent_panel_open && agent_input_is_focused();
+    if (!g_dropped_file.empty() && !term_claims_drop && !agent_claims_drop) {
         const std::string& dp = g_dropped_file;
         fs::path fp(dp);
         std::string ext = fp.extension().string();
@@ -2235,8 +2236,9 @@ void ui_studio(AppState& state) {
         if (state.agent_panel_open) {
             float agent_w = win_w;
             // Tall enough for the input row + padding — content must never
-            // exceed this, since the zone deliberately can't scroll.
-            float inp_h = 42.f;
+            // exceed this, since the zone deliberately can't scroll. Grows to
+            // fit the drop-staging chip tray when files are staged.
+            float inp_h = agent_input_height();
             float log_h = term_h - inp_h;
             ImGui::PushStyleColor(ImGuiCol_ChildBg, IM_COL32(0x16, 0x16, 0x20, 255));
             ImGui::PushStyleColor(ImGuiCol_Border,  Col::line);
