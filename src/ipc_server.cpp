@@ -1103,6 +1103,98 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         return r;
     }
 
+    if (method == "list_dir") {
+        namespace fs = std::filesystem;
+        std::string path = params.value("path", "");
+        if (path.empty()) { err = "path required"; return {}; }
+        std::string kind_filter = params.value("kind", std::string("all")); // all|media|video|audio|image
+        bool recursive = params.value("recursive", false);
+
+        std::error_code ec;
+        fs::path dir(path);
+        // Accept a file path too: list its containing folder. The harness usually
+        // has a media file path (e.g. audio_path) and wants "the directory it's in".
+        if (fs::is_regular_file(dir, ec)) dir = dir.parent_path();
+        if (!fs::is_directory(dir, ec)) { err = "not a directory: " + dir.string(); return {}; }
+
+        auto kind_of = [](std::string e) -> const char* {
+            for (auto& c : e) c = (char)std::tolower((unsigned char)c);
+            static const std::unordered_set<std::string> vid =
+                {"mp4","mov","mkv","webm","avi","m4v","mpg","mpeg","wmv","flv","ts","m2ts"};
+            static const std::unordered_set<std::string> aud =
+                {"flac","wav","mp3","m4a","aac","ogg","opus","aiff","aif","wma","alac"};
+            static const std::unordered_set<std::string> img =
+                {"png","jpg","jpeg","gif","bmp","webp","tif","tiff","heic","heif"};
+            if (vid.count(e)) return "video";
+            if (aud.count(e)) return "audio";
+            if (img.count(e)) return "image";
+            return "other";
+        };
+        auto want = [&](const std::string& k) {
+            if (kind_filter == "all")   return true;
+            if (kind_filter == "media") return k == "video" || k == "audio" || k == "image";
+            return k == kind_filter;
+        };
+
+        std::vector<json> dirs, files;
+        const size_t kCap = 1000;
+        bool truncated = false;
+
+        auto consider = [&](const fs::directory_entry& e) -> bool {
+            if (dirs.size() + files.size() >= kCap) { truncated = true; return false; }
+            std::error_code e2;
+            std::string name = e.path().filename().string();
+            if (name.empty() || name[0] == '.') return true;   // skip hidden/dotfiles
+            if (e.is_directory(e2)) {
+                json j; j["name"] = name; j["path"] = e.path().string();
+                j["is_dir"] = true; j["kind"] = "dir";
+                dirs.push_back(std::move(j));
+                return true;
+            }
+            std::string ext = e.path().has_extension()
+                ? e.path().extension().string().substr(1) : std::string();
+            std::string k = kind_of(ext);
+            if (!want(k)) return true;
+            json j; j["name"] = name; j["path"] = e.path().string();
+            j["is_dir"] = false; j["kind"] = k; j["ext"] = ext;
+            uintmax_t sz = e.file_size(e2); if (!e2) j["size_bytes"] = (uint64_t)sz;
+            files.push_back(std::move(j));
+            return true;
+        };
+
+        if (recursive) {
+            auto it = fs::recursive_directory_iterator(
+                dir, fs::directory_options::skip_permission_denied, ec);
+            for (; !ec && it != fs::recursive_directory_iterator(); it.increment(ec)) {
+                if (it.depth() > 3) it.disable_recursion_pending();
+                if (!consider(*it)) break;
+            }
+        } else {
+            auto it = fs::directory_iterator(
+                dir, fs::directory_options::skip_permission_denied, ec);
+            for (; !ec && it != fs::directory_iterator(); it.increment(ec))
+                if (!consider(*it)) break;
+        }
+
+        auto by_name = [](const json& a, const json& b) {
+            return a.value("name", std::string()) < b.value("name", std::string());
+        };
+        std::sort(dirs.begin(),  dirs.end(),  by_name);
+        std::sort(files.begin(), files.end(), by_name);
+
+        json entries = json::array();
+        for (auto& d : dirs)  entries.push_back(d);   // subfolders first, for navigation
+        for (auto& f : files) entries.push_back(f);
+
+        json r;
+        r["dir"]     = dir.string();
+        r["entries"] = entries;
+        r["n_dirs"]  = (int)dirs.size();
+        r["n_files"] = (int)files.size();
+        if (truncated) r["truncated"] = true;
+        return r;
+    }
+
     // Canonical cache path: <dir>/<stem>/<stem>_words.json (matches pipeline writer)
     auto words_cache_path_for = [](const std::string& audio_path) -> std::filesystem::path {
         if (audio_path.empty()) return {};

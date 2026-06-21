@@ -53,7 +53,7 @@ from mcp.types import Tool, TextContent, ImageContent
 # Domain groups — give the agent a navigable map instead of a flat 90-tool wall.
 _CATEGORIES: dict[str, list[str]] = {
     "read": [
-        "get_project", "get_clips", "get_all_clips", "get_media_info", "get_stills",
+        "get_project", "get_clips", "get_all_clips", "get_media_info", "list_dir", "get_stills",
         "get_video_description", "describe_video", "get_canvas_geometry",
         "get_face_track", "verify_clips", "make_contact_sheet",
     ],
@@ -621,6 +621,35 @@ async def list_tools() -> list[Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {"path": {"type": "string", "description": "Absolute path to the media file"}},
+                "required": ["path"],
+            },
+        ),
+        Tool(
+            name="list_dir",
+            description=(
+                "List the files and subfolders in a directory. Use this to DISCOVER media on "
+                "disk instead of guessing paths or probing files one by one. Accepts a folder "
+                "path, OR a file path (lists the folder that contains it — handy when you only "
+                "have an audio/video path).\n\n"
+                "Returns {dir, entries, n_dirs, n_files, truncated?}. Each entry is "
+                "{name, path, is_dir, kind, ext, size_bytes}; kind is video|audio|image|other|"
+                "dir. Subfolders are listed first so you can navigate into them.\n\n"
+                "kind: filter results — 'all' (default), 'media' (video+audio+image), 'video', "
+                "'audio', or 'image'. To find mp4s/movies in a folder, pass kind='video'.\n"
+                "recursive: when true, walks subfolders (depth-capped; max 1000 entries, then "
+                "truncated=true). Default false (shallow). Hidden/dotfiles are skipped. "
+                "Read-only — no batch needed."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string",
+                             "description": "Absolute path to a folder (or a file, to list its folder)"},
+                    "kind": {"type": "string", "default": "all",
+                             "description": "all | media | video | audio | image"},
+                    "recursive": {"type": "boolean", "default": False,
+                                  "description": "Walk subfolders (depth-capped)"},
+                },
                 "required": ["path"],
             },
         ),
