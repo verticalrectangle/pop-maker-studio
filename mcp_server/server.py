@@ -98,6 +98,10 @@ TOOL_CATEGORY: dict[str, str] = {
 OPERATOR_TOOLS: set[str] = {
     "ui_input", "get_canvas_geometry", "set_monitor", "set_camera_monitor",
     "vrecord_start", "vrecord_stop",
+    # Withheld from the in-app harness: a full project wipe is too destructive for
+    # the cheaper model to reach for (it bailed to it mid-task). The IPC handler
+    # also refuses on a non-empty project unless force=true.
+    "new_project",
 }
 
 # MCP tool → the IPC method it wraps, where the names diverge (#7). The MCP names

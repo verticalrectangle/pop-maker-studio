@@ -189,6 +189,63 @@ static std::string clip_type_str(ClipType t) {
     return "unknown";
 }
 
+// Compact ASCII timeline so the agent can SEE the track-layering system (Z-order)
+// + clip timing + overlaps WITHOUT a vision model. Track 0 is the top layer.
+static std::string build_timeline_ascii(const AppState& state) {
+    if (state.tracks.empty()) return "(no tracks yet)";
+    float dur = state.duration;
+    for (auto& t : state.tracks)
+        for (auto& c : t.clips) if (c.end > dur) dur = c.end;
+    if (dur <= 0.f) dur = 1.f;
+
+    const int W = 48;
+    std::string out =
+        "Track 0 is the TOP layer and composites OVER the tracks below it. An "
+        "FX/adjustment/background brick affects everything below it on the timeline. "
+        "Managed tracks (lyrics/subtitles, generated FX) are rebuilt by the "
+        "typography/FX system — change them via generate_typography, not by editing "
+        "clips directly.\n";
+    char head[64];
+    snprintf(head, sizeof(head), "    (0s --> %.1fs, each cell ~%.2fs)\n",
+             dur, dur / (float)W);
+    out += head;
+
+    std::string legend;
+    int nt = (int)state.tracks.size();
+    for (int ti = 0; ti < nt && ti < 24; ++ti) {
+        const Track& t = state.tracks[ti];
+        std::string bar((size_t)W, '.');
+        for (int ci = 0; ci < (int)t.clips.size() && ci < 62; ++ci) {
+            const Clip& c = t.clips[ci];
+            int a = (int)(c.start / dur * W);
+            int b = (int)(c.end   / dur * W);
+            if (a < 0) a = 0; if (a > W - 1) a = W - 1;
+            if (b <= a) b = a + 1; if (b > W) b = W;
+            char ch = ci < 10 ? char('0' + ci)
+                    : ci < 36 ? char('a' + ci - 10) : char('A' + ci - 36);
+            for (int x = a; x < b; ++x) bar[(size_t)x] = ch;
+            std::string lbl = !c.text.empty() ? c.text : c.source_id;
+            size_t sl = lbl.find_last_of('/');
+            if (sl != std::string::npos) lbl = lbl.substr(sl + 1);
+            if (lbl.size() > 28) lbl = lbl.substr(0, 27) + "...";
+            char le[224];
+            snprintf(le, sizeof(le), "   %c = T%d.%d %-9s %.1f-%.1fs %s\n",
+                     ch, ti, ci, clip_type_str(c.clip_type).c_str(),
+                     c.start, c.end, lbl.c_str());
+            legend += le;
+        }
+        const char* tag = (ti == 0) ? "  <- top"
+                        : (ti == nt - 1) ? "  <- bottom" : "";
+        std::string nm = t.name.size() > 9 ? t.name.substr(0, 9) : t.name;
+        char line[128];
+        snprintf(line, sizeof(line), "T%-2d %-9s |%s|%s%s\n",
+                 ti, nm.c_str(), bar.c_str(), t.managed ? " managed" : "", tag);
+        out += line;
+    }
+    if (!legend.empty()) out += "legend:\n" + legend;
+    return out;
+}
+
 static AnimStyle parse_anim_style(const std::string& s) {
     if (s == "fade")       return AnimStyle::Fade;
     if (s == "glitch")     return AnimStyle::Glitch;
@@ -711,7 +768,11 @@ static json dispatch(AppState& state, const std::string& method, const json& par
     // ── Read-only: no batch required ─────────────────────────────────────────
     if (method == "get_project") {
         bool verbose = params.value("verbose", false);
-        return verbose ? state_to_json(state) : state_to_json_slim(state);
+        json r = verbose ? state_to_json(state) : state_to_json_slim(state);
+        // ASCII map of the track-layering system (Z-order, timing, overlaps) so a
+        // non-vision agent can actually picture the editing surface.
+        r["timeline"] = build_timeline_ascii(state);
+        return r;
     }
 
     if (method == "get_clips") {
@@ -2862,14 +2923,34 @@ static json dispatch(AppState& state, const std::string& method, const json& par
     }
 
     if (method == "new_project") {
+        // Destructive: wipes every track, audio, and transcript. Refuse when the
+        // project has content unless explicitly forced — so a confused agent can't
+        // nuke the user's work mid-task; it gets an actionable error and bails here
+        // instead of starting over.
+        bool has_content = !state.audio_path.empty();
+        for (auto& t : state.tracks) if (!t.clips.empty()) { has_content = true; break; }
+        if (has_content && !params.value("force", false)) {
+            err = "Refused: new_project wipes the current project (tracks, audio, "
+                  "transcript) — destructive. Only do this if the user explicitly asked "
+                  "to start over (then pass force=true). Otherwise make targeted edits "
+                  "(delete_clip / delete_track) or undo.";
+            return {};
+        }
         bool mr = state.models_ready;
         bool ms = state.models_skipped;
+        // Preserve the bottom-strip panel state across the wipe — otherwise
+        // state = AppState{} resets agent_panel_open/terminal_open and the agent
+        // window collapses out from under the user.
+        bool ap = state.agent_panel_open;
+        bool tp = state.terminal_open;
         state = AppState{};
-        state.models_ready   = mr;
-        state.models_skipped = ms;
-        state.splash_timer   = 0.f;
-        state.in_studio      = true;   // an agent creating a project wants the
-                                       // editor active, not the home launcher
+        state.models_ready     = mr;
+        state.models_skipped   = ms;
+        state.agent_panel_open = ap;
+        state.terminal_open    = tp;
+        state.splash_timer     = 0.f;
+        state.in_studio        = true;   // an agent creating a project wants the
+                                         // editor active, not the home launcher
         // Fresh history + baseline snapshot (same reasoning as load_project).
         history_clear();
         history_push(state, "New project");

@@ -17,6 +17,8 @@
 #include <filesystem>
 #include <mutex>
 #include <thread>
+#include <unordered_map>
+#include <set>
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
@@ -59,6 +61,11 @@ static const char* kSockPath   = "/tmp/pop-maker-studio.sock";
 // resumes where the turn stopped.
 static const int   kMaxToolIters = 64;
 static const size_t kToolResultCap = 8 * 1024;
+// Repetition guard (the real budget): the iteration cap is a last-resort backstop,
+// this catches the actual runaway pattern early. Same (tool, args) repeated this
+// many times → a one-shot corrective nudge; repeated this many → stop the turn.
+static const int   kRepeatNudge = 3;
+static const int   kRepeatStop  = 5;
 
 // ── Display rows ──────────────────────────────────────────────────────────────
 
@@ -809,9 +816,15 @@ static const char* kSystemPrompt =
     "You are the embedded editing agent inside Pop Maker Studio, a desktop "
     "video editor. You edit the project the user currently has open by "
     "calling tools; the user watches the canvas and timeline update live. "
-    "Track 0 is the top/foreground layer. Times are in seconds. Mutations "
-    "return small acks; call get_project or get_clips when you need to read "
-    "state. You can put videos and images on the timeline.\n"
+    "LAYERING: Track 0 is the TOP layer and composites OVER the tracks below "
+    "it; an FX/adjustment/background brick affects everything below it on the "
+    "timeline. get_project returns an ASCII 'timeline' map — read it to see "
+    "track order, clip timing, and where clips overlap. Lyrics/subtitle and "
+    "generated-FX tracks are 'managed': change them with generate_typography, "
+    "not by editing their clips. Times are in seconds. Mutations return small "
+    "acks; call get_project or get_clips when you need to read state. You can "
+    "put videos and images on the timeline. Never call new_project to recover "
+    "from confusion — it wipes the user's work; make targeted edits or undo.\n"
     "PERCEPTION: to understand video content, use describe_video + "
     "get_video_description — local scene captions as text, they work even "
     "without vision. For spoken content use get_transcript / "
@@ -847,6 +860,11 @@ static void worker_turn() {
     url += "/chat/completions";
 
     static const json tools_decl = tools_decl_json();
+
+    // Repetition tracking for this turn: (tool|args) -> count, and which sigs
+    // already got their one-shot nudge.
+    std::unordered_map<std::string, int> rep_counts;
+    std::set<std::string> rep_nudged;
 
     for (int iter = 0; iter < kMaxToolIters && !s_stop; ++iter) {
         json body;
@@ -946,6 +964,7 @@ static void worker_turn() {
 
         // ── Execute tool calls serially ───────────────────────────────────────
         size_t answered = 0;
+        std::string nudge_tool, kill_tool;   // repetition verdicts for this round
         for (auto& call : calls) {
             if (s_stop) break;
             std::string tname = call["function"]["name"].get<std::string>();
@@ -968,6 +987,17 @@ static void worker_turn() {
                               {"content", result}});
             for (auto& m : extra) s_wire.push_back(m);
             ++answered;
+
+            // Repetition guard: same tool + identical args, over and over, is the
+            // runaway/flail pattern (and the bail-to-new_project loop). Nudge once,
+            // then stop — far earlier than the 64-iteration backstop.
+            std::string sig = tname + "\x1f" + targs_s;
+            int rep = ++rep_counts[sig];
+            if (rep >= kRepeatStop) kill_tool = tname;
+            else if (rep >= kRepeatNudge && !rep_nudged.count(sig)) {
+                rep_nudged.insert(sig);
+                nudge_tool = tname;
+            }
         }
         // Every tool_call_id must get a tool message or the API rejects the
         // whole history next turn. Synthesize results for calls skipped by
@@ -979,6 +1009,22 @@ static void worker_turn() {
                                   {"tool_call_id", calls[i]["id"]},
                                   {"content", "(cancelled by user before execution)"}});
         }
+        // Repetition verdicts (after the wire is consistent for this round).
+        if (!kill_tool.empty()) {
+            row_add(AgentRole::Error,
+                    "(stopped: '" + kill_tool + "' was repeated with the same "
+                    "arguments and made no progress)");
+            break;
+        }
+        if (!nudge_tool.empty()) {
+            std::lock_guard<std::mutex> lk(s_mu);
+            s_wire.push_back({{"role", "user"},
+                {"content", "[editor] You've called '" + nudge_tool +
+                 "' with identical arguments several times with no progress. Stop "
+                 "repeating it — use a different tool, or tell me what's blocking you. "
+                 "Read the get_project 'timeline' map if you've lost track of state."}});
+        }
+
         if (iter == kMaxToolIters - 1)
             row_add(AgentRole::Error,
                     "tool budget exhausted for this turn \xe2\x80\x94 send "
@@ -997,6 +1043,13 @@ void agent_send(const std::string& user_text) {
         std::lock_guard<std::mutex> lk(s_mu);
         if (s_wire.empty()) {
             std::string sys = std::string(kSystemPrompt) + "\n\n" + AGENT_TOOLS_INDEX;
+            if (s_cfg.vision)
+                sys += "\n\nVISION: you can see images — use your own eyes before "
+                       "asking the user. Call take_snapshot (source='ui' for the "
+                       "timeline/panels, 'canvas' for the composition) to look at the "
+                       "project yourself and verify your edits visually before asking. "
+                       "(Still use describe_video for video CONTENT, not snapshots, and "
+                       "don't scrub the playhead.)";
             s_wire.push_back({{"role", "system"}, {"content", sys}});
         }
         s_wire.push_back({{"role", "user"}, {"content", user_text}});
