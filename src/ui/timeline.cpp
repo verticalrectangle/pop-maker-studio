@@ -464,6 +464,14 @@ static std::vector<int> coupled_fx_of(AppState& state, int ti, int host_ci) {
 static int              s_ctx_fx_del_ti = -1;
 static std::vector<int> s_ctx_fx_del_cis;
 
+// Lyric brick body-drag — managed lyrics track only. The brick slides within
+// its own track, clamped to its neighbors (no overlap, can't leave the track).
+// Kept separate from the video drag machinery: no cross-track, no JSON. The new
+// position is saved with the project; an explicit preset/grouping change re-lays
+// from the transcript and supersedes the manual nudge.
+static int   s_lyric_dt = -1, s_lyric_dc = -1;
+static float s_lyric_off = 0.f, s_lyric_o_start = 0.f, s_lyric_o_end = 0.f;
+
 static void couple_pending_tick(AppState& state) {
     int pti = -1, pci = -1, phost = -1;
     for (int ti = 0; ti < (int)state.tracks.size() && pti < 0; ++ti) {
@@ -2038,6 +2046,14 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                                     g_tl.drag_multi.push_back({stc, stci, sc.start, sc.end});
                                 }
                             }
+                        } else if (clip.clip_type == ClipType::Lyrics) {
+                            // Managed lyrics track: slide the brick within its
+                            // track (clamped to neighbors below). Separate from
+                            // the cross-track body-move blocked just above.
+                            s_lyric_dt = ti; s_lyric_dc = ci;
+                            s_lyric_off = (mouse.x - origin.x - TL_LABEL_W + scroll) / zoom - clip.start;
+                            s_lyric_o_start = clip.start; s_lyric_o_end = clip.end;
+                            g_tl.drag_multi.clear();
                         }
                     }
                     if ((drag_left || drag_right) && !clip.text.empty() &&
@@ -3692,6 +3708,41 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                     {cp.x + csz.x + 6.f, cp.y + csz.y + 4.f},
                     IM_COL32(120, 120, 160, 200), 4.f);
         dl->AddText(cp, IM_COL32(230, 230, 245, 255), chip);
+    }
+
+    // ── Lyric brick body-drag (managed lyrics track) ─────────────────────────
+    // Slides within its own track, clamped so it never overlaps a neighbor or
+    // leaves the track. Neighbors are classified by the brick's ORIGINAL start
+    // (fixed during the drag) so the clamp walls don't flip as it moves.
+    if (s_lyric_dt >= 0 && s_lyric_dc >= 0 &&
+        s_lyric_dt < (int)state.tracks.size() &&
+        s_lyric_dc < (int)state.tracks[s_lyric_dt].clips.size()) {
+        auto& lclips = state.tracks[s_lyric_dt].clips;
+        Clip& ldc = lclips[s_lyric_dc];
+        if (ImGui::IsMouseDragging(0)) {
+            ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
+            s_drag_moved = true;
+            float dur = s_lyric_o_end - s_lyric_o_start;
+            float raw = (mouse.x - origin.x - TL_LABEL_W + scroll) / zoom - s_lyric_off;
+            if (!ImGui::GetIO().KeyCtrl) raw = roundf(raw * fps) / fps;  // frame snap
+            float lo = 0.f, hi = 1e9f;
+            for (int k = 0; k < (int)lclips.size(); ++k) {
+                if (k == s_lyric_dc) continue;
+                if (lclips[k].start < s_lyric_o_start) lo = fmaxf(lo, lclips[k].end);
+                else                                   hi = fminf(hi, lclips[k].start);
+            }
+            float ns = fmaxf(0.f, fmaxf(lo, fminf(raw, hi - dur)));
+            ldc.start = ns; ldc.end = ns + dur;
+        }
+        if (ImGui::IsMouseReleased(0)) {
+            float delta = ldc.start - s_lyric_o_start;
+            if (fabsf(delta) > 0.5f / fps) {
+                // Keep the per-word (karaoke) times in step with the moved brick.
+                for (auto& w : ldc.words) { w.start += delta; w.end += delta; }
+                history_push(state, "Move lyric");
+            }
+            s_lyric_dt = -1; s_lyric_dc = -1; s_drag_moved = false;
+        }
     }
 
     if (ImGui::IsMouseReleased(0)) {
