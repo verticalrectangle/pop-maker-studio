@@ -520,7 +520,7 @@ void panel_bin(AppState& state, float w) {
     ImGui::PopStyleColor();
 
     ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
-    ImGui::TextWrapped("Project media. Click to place, drag to a track.");
+    ImGui::TextWrapped("Project media. Drag onto a track, or tap + to add at the playhead.");
     ImGui::PopStyleColor();
     ImGui::Dummy({0.f, 8.f});
 
@@ -552,7 +552,6 @@ void panel_bin(AppState& state, float w) {
 
         ImGui::InvisibleButton("##bin_row", {CARD_W, ROW_H});
         bool hov = ImGui::IsItemHovered();
-        bool clk = ImGui::IsItemClicked();
 
         ImU32 bg = hov ? IM_COL32(28, 28, 38, 255) : IM_COL32(16, 16, 22, 255);
         dl->AddRectFilled(cp, {cp.x + CARD_W, cp.y + ROW_H}, bg, 5.f);
@@ -636,32 +635,25 @@ void panel_bin(AppState& state, float w) {
                     hov ? IM_COL32(255, 255, 255, 140) : IM_COL32(40, 40, 56, 180),
                     5.f, 0, hov ? 1.4f : 1.f);
 
-        // Hover × — top-right small button. Use InvisibleButton over the X
-        // area so the row's click handler doesn't also fire on the X.
-        if (hov) {
-            float xsz = 16.f;
-            ImVec2 xp = {cp.x + CARD_W - xsz - 4.f, cp.y + 4.f};
-            ImGui::SetCursorScreenPos(xp);
-            ImGui::InvisibleButton("##bin_x", {xsz, xsz});
-            bool x_hov = ImGui::IsItemHovered();
-            bool x_clk = ImGui::IsItemClicked();
-            dl->AddRectFilled(xp, {xp.x + xsz, xp.y + xsz},
-                              x_hov ? IM_COL32(180, 60, 60, 220)
-                                    : IM_COL32(60, 60, 80, 180), 4.f);
-            // Draw an X
-            float pad = 4.f;
-            ImU32 xcol = IM_COL32(240, 240, 240, 230);
-            dl->AddLine({xp.x + pad, xp.y + pad}, {xp.x + xsz - pad, xp.y + xsz - pad}, xcol, 1.4f);
-            dl->AddLine({xp.x + xsz - pad, xp.y + pad}, {xp.x + pad, xp.y + xsz - pad}, xcol, 1.4f);
-            if (x_clk) {
-                pending_remove = path;
-                clk = false;  // suppress row click in the same frame
-            }
+        // Drag-drop source (whole row) — payload kind matches existing
+        // MEDIA_VID/IMG/AUD so timeline drop sites accept it without changes.
+        // Bound to the row InvisibleButton above (the draws between aren't items),
+        // and submitted before the +/× overlays so it owns the row body — same
+        // ordering the Library cards and FX cards use.
+        if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
+            const char* ptype = (kind == MediaKind::Audio) ? "MEDIA_AUD"
+                              : (kind == MediaKind::Image) ? "MEDIA_IMG" : "MEDIA_VID";
+            ImGui::SetDragDropPayload(ptype, path.c_str(), path.size() + 1);
+            if (tex && kind != MediaKind::Audio)
+                ImGui::Image((ImTextureID)(uintptr_t)tex, {96.f, 54.f});
+            ImGui::TextUnformatted(name.c_str());
+            ImGui::TextDisabled("Drop onto timeline track");
+            ImGui::EndDragDropSource();
         }
 
-        // Row click → place at playhead. Lands on the hovered track if the
-        // user is hovering one, otherwise on a fresh track at the top.
-        if (clk && exists) {
+        // "+" overlay (top-right) → add at playhead, on the hovered track if any,
+        // else a fresh track. Same affordance as the Library / FX cards.
+        if (exists && ui_card_add_btn(cp, CARD_W, i)) {
             ClipType ct = (kind == MediaKind::Audio) ? ClipType::Audio : ClipType::Video;
             int target;
             if (s_tl_hover_track >= 0 && s_tl_hover_track < (int)state.tracks.size()) {
@@ -675,17 +667,26 @@ void panel_bin(AppState& state, float w) {
             s_panel_view = PanelView::Clip;
         }
 
-        // Drag-drop source — payload kind matches existing MEDIA_VID/IMG/AUD
-        // so timeline drop sites accept it without changes.
-        if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
-            const char* ptype = (kind == MediaKind::Audio) ? "MEDIA_AUD"
-                              : (kind == MediaKind::Image) ? "MEDIA_IMG" : "MEDIA_VID";
-            ImGui::SetDragDropPayload(ptype, path.c_str(), path.size() + 1);
-            if (tex && kind != MediaKind::Audio)
-                ImGui::Image((ImTextureID)(uintptr_t)tex, {96.f, 54.f});
-            ImGui::TextUnformatted(name.c_str());
-            ImGui::TextDisabled("Drop onto timeline track");
-            ImGui::EndDragDropSource();
+        // Hover × — to the LEFT of the + so they don't overlap. Removes from bin.
+        if (hov) {
+            const float asz = 20.f, apad = 5.f;   // mirror ui_card_add_btn geometry
+            float xsz = 16.f;
+            ImVec2 xsave = ImGui::GetCursorScreenPos();   // restore so layout isn't disturbed
+            ImVec2 xp = {cp.x + CARD_W - asz - apad - 4.f - xsz, cp.y + apad + 2.f};
+            ImGui::SetCursorScreenPos(xp);
+            ImGui::InvisibleButton("##bin_x", {xsz, xsz});
+            bool x_hov = ImGui::IsItemHovered();
+            bool x_clk = ImGui::IsItemClicked();
+            dl->AddRectFilled(xp, {xp.x + xsz, xp.y + xsz},
+                              x_hov ? IM_COL32(180, 60, 60, 220)
+                                    : IM_COL32(60, 60, 80, 180), 4.f);
+            float pad = 4.f;
+            ImU32 xcol = IM_COL32(240, 240, 240, 230);
+            dl->AddLine({xp.x + pad, xp.y + pad}, {xp.x + xsz - pad, xp.y + xsz - pad}, xcol, 1.4f);
+            dl->AddLine({xp.x + xsz - pad, xp.y + pad}, {xp.x + pad, xp.y + xsz - pad}, xcol, 1.4f);
+            if (x_hov) ImGui::SetTooltip("Remove from bin");
+            if (x_clk) pending_remove = path;
+            ImGui::SetCursorScreenPos(xsave);
         }
 
         ImGui::Dummy({0.f, GAP});
