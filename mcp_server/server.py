@@ -660,19 +660,21 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="crop_media",
             description=(
-                "Crop a video or image file to a target aspect ratio and save the result. "
-                "Call this before add_clip whenever the user asks to crop source files, or "
-                "when the source aspect ratio differs from the canvas.\n\n"
+                "Reframe a video/image to a target aspect ratio. NON-DESTRUCTIVE by default: "
+                "computes the crop box (with face detection) and applies it as the clip's "
+                "crop_l/crop_t/crop_r/crop_b props — NO file is written and the engine composites "
+                "the crop live. If the source is already on the timeline it sets the crop on those "
+                "clips; otherwise it returns the insets for you to set after add_clip.\n\n"
                 "aspect: 'square' (1:1), 'vertical' (9:16), 'horizontal' (16:9), or 'W:H'.\n"
-                "face_detect: when true (default), automatically detects the face bounding box "
-                "and centers the crop on it with padding — no need to guess x_pct/y_pct.\n"
-                "x_pct / y_pct: manual fallback when face_detect=false or no face is found. "
-                "Default 0.5/0.5 = dead center.\n"
-                "pad_top / pad_bottom: extra padding above/below the detected face as a fraction "
-                "of face height (default 0.4 / 0.3).\n\n"
-                "Returns {path, width, height, crop, face_detected} plus an inline thumbnail "
-                "so you can verify framing immediately. "
-                "Supports HEIC, JPG, PNG (images) and MOV, MP4, etc. (video). Read-only — no batch needed."
+                "face_detect (default true): auto-detect the face box and center the crop on it.\n"
+                "x_pct / y_pct: manual center when face_detect=false (0.5/0.5 = dead center).\n"
+                "pad_top / pad_bottom: padding around the face (fraction of face height).\n"
+                "to_file (default false): set true ONLY when you genuinely need a cropped FILE on "
+                "disk (re-encodes a {stem}_crop.{mp4,png}). Leave false for editing — it litters "
+                "and is destructive.\n\n"
+                "Returns {mode:'clip_props', crop_l..crop_b, applied_to, face_detected} (default) "
+                "or {path, ...} (to_file) plus an inline thumbnail. Supports HEIC/JPG/PNG and "
+                "MOV/MP4 etc. Read-only — no batch needed."
             ),
             inputSchema={
                 "type": "object",
@@ -690,6 +692,8 @@ async def list_tools() -> list[Tool]:
                                      "description": "Horizontal center of crop (0=left, 1=right) — used when face_detect=false"},
                     "y_pct":        {"type": "number", "default": 0.5,
                                      "description": "Vertical center of crop (0=top, 1=bottom) — used when face_detect=false"},
+                    "to_file":      {"type": "boolean", "default": False,
+                                     "description": "Render a cropped FILE instead of setting clip crop props (destructive; default false)"},
                 },
                 "required": ["source_path"],
             },
@@ -855,11 +859,11 @@ async def list_tools() -> list[Tool]:
                 "message — it includes the colliding clip's snapped end (e.g. \"[90.100s – 90.767s]\"). Use "
                 "that snapped end as the next clip's start. Better: call get_clips after each add and use the "
                 "returned 'end' field as the next clip's start.\n\n"
-                "FILE PATH CONVENTIONS:\n"
-                "  Cropped media:       {parent}/{stem}_crop.mp4  (video)  or  {parent}/{stem}_crop.png  (image)\n"
-                "  Extracted segments:  {parent}/{stem}/{stem}_{start_int}_{end_int}.webm\n"
-                "  Transcripts:         {parent}/{stem}/{stem}_words.json\n\n"
-                "Always call crop_media before add_clip when the source aspect ratio differs from the canvas."
+                "Derived artifacts (transcripts, stems, extracted segments) live in a shared "
+                "cache dir (~/.cache/pop-maker-studio), NOT next to the user's media — don't "
+                "construct or rely on sidecar paths. To reframe/crop, set clip props "
+                "(crop_l/crop_t/crop_r/crop_b, pos, scale) — it's non-destructive and writes no "
+                "file; crop_media (which renders a new file) is only for an explicit on-disk crop."
             ),
             inputSchema={
                 "type": "object",
@@ -3230,16 +3234,15 @@ async def _add_clip(arguments: dict) -> dict:
 
         already_extracted = bool(re.search(r'_\d+_\d+\.(webm|flac|mp3|wav|ogg|aac)$', text))
         if not already_extracted and source_dur > needed_end * 2:
-            p = Path(text)
+            # Stream-copy guard so the engine doesn't load a multi-hour source for a
+            # short clip. The segment goes to the shared cache dir (content-addressed
+            # by source+range, LRU-pruned) — NOT a sidecar next to the user's media.
             s_int = int(in_point)
             e_int = int(needed_end) + 1
-            cache_dir = p.parent / p.stem
-            # Audio-only files must use a compatible container; inherit source ext
-            has_video = bool(_call("get_media_info", {"path": text}).get("has_video", True))
-            seg_ext = p.suffix  # inherit source container so stream-copy stays codec-compatible
-            dst = str(cache_dir / f"{p.stem}_{s_int}_{e_int}{seg_ext}")
+            seg_ext = Path(text).suffix  # inherit source container so stream-copy stays codec-compatible
+            dst = str(_cache_path(text, f"_{s_int}_{e_int}{seg_ext}"))
             if not Path(dst).exists():
-                cache_dir.mkdir(parents=True, exist_ok=True)
+                Path(dst).parent.mkdir(parents=True, exist_ok=True)
                 _call("extract_clip_segment", {
                     "src":   text,
                     "dst":   dst,
@@ -4212,6 +4215,40 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 crop_h = int(crop_w * ar_h / ar_w)
             x = max(0, min(int((src_w - crop_w) * x_pct), src_w - crop_w))
             y = max(0, min(int((src_h - crop_h) * y_pct), src_h - crop_h))
+
+        # ── Non-destructive crop (default): apply as clip props, no file ─────
+        # The crop box (x,y,crop_w,crop_h) is in DISPLAY space (src_w/src_h were
+        # swapped for rotated video above), so the insets map straight onto the
+        # clip's crop_l/t/r/b — the engine composites the crop live, no re-encode.
+        to_file = bool(arguments.get("to_file", False))
+        crop_l = round(max(0.0, x / src_w), 4)
+        crop_t = round(max(0.0, y / src_h), 4)
+        crop_r = round(max(0.0, (src_w - x - crop_w) / src_w), 4)
+        crop_b = round(max(0.0, (src_h - y - crop_h) / src_h), 4)
+        if not to_file:
+            applied = []
+            try:
+                for tr in _call("get_all_clips"):
+                    for cl in tr.get("clips", []):
+                        if cl.get("source") == src or cl.get("text") == src:
+                            _call("set_clip_props", {
+                                "track": tr["index"], "clip": cl["index"],
+                                "crop_l": crop_l, "crop_t": crop_t,
+                                "crop_r": crop_r, "crop_b": crop_b})
+                            applied.append([tr["index"], cl["index"]])
+            except Exception:
+                pass
+            note = ("Crop applied as non-destructive clip props — no file written."
+                    if applied else
+                    "Crop insets computed (source not on the timeline yet): add_clip the "
+                    "ORIGINAL source, then set these crop_l/crop_t/crop_r/crop_b props on it.")
+            return [TextContent(type="text", text=json.dumps({
+                "mode": "clip_props",
+                "crop_l": crop_l, "crop_t": crop_t, "crop_r": crop_r, "crop_b": crop_b,
+                "crop_w": crop_w, "crop_h": crop_h,
+                "face_detected": face_detected, "applied_to": applied,
+                "note": note,
+            }, indent=2))]
 
         p = Path(src)
         out_ext = ".png" if is_image else ".mp4"
