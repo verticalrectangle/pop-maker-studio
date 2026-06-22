@@ -1522,6 +1522,11 @@ async def list_tools() -> list[Tool]:
                 "with the release install.\n\n"
                 "Use this to map a WHOLE video (summaries, find_video_moment scoring) — or when you "
                 "have no vision capability of your own.\n\n"
+                "BATCH (preferred for many clips): pass paths=[...] (up to 64) to caption a whole "
+                "set in ONE call — don't loop describe_video per file. Then a single "
+                "get_video_description returns {results:[{path, frames}]} for all of them (cached "
+                "sidecars are reused, so re-runs are instant). Captioning is CPU-bound and runs "
+                "sequentially internally, but you only spend ONE describe + ONE poll.\n\n"
                 "TEXT-MODE CONTACT SHEET: pass times=[...] (max 48) to caption exactly those "
                 "timestamps instead of auto-detected scenes — e.g. to verify segment boundaries "
                 "from detect_screen_activity without vision. Custom-times runs skip the sidecar "
@@ -1537,21 +1542,23 @@ async def list_tools() -> list[Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "path": {"type": "string", "description": "Absolute path to the video file"},
+                    "path": {"type": "string", "description": "Absolute path to one video file"},
+                    "paths": {"type": "array", "items": {"type": "string"},
+                              "description": "Batch: caption many videos in one call (up to 64). Use instead of looping per file."},
                     "force": {"type": "boolean", "description": "Recompute even if a cached sidecar exists"},
                     "times": {"type": "array", "items": {"type": "number"},
                               "description": "Caption exactly these source times in seconds (max 48) instead of auto-detected scenes"},
                 },
-                "required": ["path"],
             },
         ),
         Tool(
             name="get_video_description",
             description=(
-                "Poll scene analysis started by describe_video. "
-                "Returns {status: 'idle'|'running'|'done'|'error', frames?, capped?}. "
-                "When done, frames is [{timestamp, description}] — pass to find_video_moment "
-                "to score against a query, or scan it yourself for the moment you need."
+                "Poll scene analysis started by describe_video (blocks internally until done — "
+                "call ONCE, not in a loop). Single run → {status, frames:[{timestamp, "
+                "description}], capped}. Batch run (describe_video paths=[...]) → {status, "
+                "results:[{path, frames}]} for every video. Pass frames to find_video_moment to "
+                "score against a query, or scan them yourself."
             ),
             inputSchema={"type": "object", "properties": {}},
         ),

@@ -67,6 +67,8 @@ static struct {
     std::atomic<bool> done{false};
     std::string       sidecar_path;
     std::string       error;
+    bool              is_batch = false;   // paths[] run → results aggregated in `batch`
+    nlohmann::json    batch;              // [{path, frames|error, capped}]
 } s_scene_analysis;
 
 static int  g_srv_fd   = -1;
@@ -244,6 +246,43 @@ static std::string build_timeline_ascii(const AppState& state) {
     }
     if (!legend.empty()) out += "legend:\n" + legend;
     return out;
+}
+
+// Caption one video into a frames json (auto scene keyframes), reusing a fresh
+// .pms_scene.json sidecar when present. Returns {frames:[...], capped} or {error}.
+// Shared by single describe_video and the paths[] batch path.
+static nlohmann::json caption_video_to_json(const std::string& path, bool force) {
+    namespace fs = std::filesystem;
+    std::string sp = path + ".pms_scene.json";
+    std::error_code ec;
+    if (!force && fs::exists(sp, ec) &&
+        fs::last_write_time(sp, ec) >= fs::last_write_time(path, ec)) {
+        try {
+            std::ifstream f(sp); nlohmann::json sc; f >> sc;
+            nlohmann::json r;
+            r["frames"] = sc.value("frames", nlohmann::json::array());
+            r["capped"] = sc.value("capped", false);
+            return r;
+        } catch (...) {}
+    }
+    bool capped = false;
+    std::vector<KeyFrame> frames = extract_keyframes(path, 60, &capped);
+    if (frames.empty()) {
+        nlohmann::json r; r["error"] = "keyframe extraction failed or no scene changes"; return r;
+    }
+    nlohmann::json sidecar;
+    sidecar["source"] = path; sidecar["model"] = "moondream2"; sidecar["capped"] = capped;
+    nlohmann::json frames_arr = nlohmann::json::array();
+    for (auto& kf : frames) {
+        SceneResult res = caption_frame(kf.jpeg_path);
+        nlohmann::json e;
+        e["timestamp"]   = kf.timestamp;
+        e["description"] = res.ok ? res.description : "";
+        frames_arr.push_back(e);
+    }
+    sidecar["frames"] = frames_arr;
+    { std::ofstream f(sp); f << sidecar.dump(2); }
+    nlohmann::json r; r["frames"] = frames_arr; r["capped"] = capped; return r;
 }
 
 static AnimStyle parse_anim_style(const std::string& s) {
@@ -976,14 +1015,51 @@ static json dispatch(AppState& state, const std::string& method, const json& par
     }
 
     if (method == "describe_video") {
-        std::string path = params.value("path", "");
-        if (path.empty()) { err = "path required"; return {}; }
         // Vision models ship with the release — there is no runtime download.
         if (!std::filesystem::exists(app_models_dir() + "/moondream-decoder.onnx")) {
             err = "vision models missing — reinstall the release (models/ folder "
                   "must include the moondream files)";
             return {};
         }
+
+        // ── Batch: paths[] captions many videos in ONE call (cached sidecars
+        // reused). Get the lot back with a single get_video_description. ───────
+        if (params.contains("paths") && params["paths"].is_array()) {
+            if (s_scene_analysis.running.load()) {
+                err = "scene analysis already running — wait for get_video_description.";
+                return {};
+            }
+            std::vector<std::string> paths;
+            for (auto& p : params["paths"])
+                if (p.is_string() && !p.get<std::string>().empty())
+                    paths.push_back(p.get<std::string>());
+            if (paths.empty()) { err = "paths array is empty"; return {}; }
+            if (paths.size() > 64) paths.resize(64);
+            bool force = params.value("force", false);
+            s_scene_analysis.running.store(true);
+            s_scene_analysis.done.store(false);
+            s_scene_analysis.error.clear();
+            s_scene_analysis.is_batch = true;
+            s_scene_analysis.batch = json::array();
+            std::thread([paths, force]() {
+                json batch = json::array();
+                for (auto& p : paths) {
+                    json one = caption_video_to_json(p, force);
+                    json entry; entry["path"] = p;
+                    if (one.contains("error")) entry["error"] = one["error"];
+                    else { entry["frames"] = one["frames"]; entry["capped"] = one.value("capped", false); }
+                    batch.push_back(entry);
+                }
+                s_scene_analysis.batch = batch;
+                s_scene_analysis.done.store(true);
+                s_scene_analysis.running.store(false);
+            }).detach();
+            json r; r["status"] = "started"; r["count"] = (int)paths.size(); return r;
+        }
+
+        std::string path = params.value("path", "");
+        if (path.empty()) { err = "path or paths[] required"; return {}; }
+        s_scene_analysis.is_batch = false;
         if (s_scene_analysis.running.load()) {
             err = "scene analysis already running — describe_video is ONE AT A TIME. "
                   "Call get_video_description to finish the current video, then start "
@@ -1067,6 +1143,10 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         if (!s_scene_analysis.done.load())   { json r; r["status"] = "idle"; return r; }
         if (!s_scene_analysis.error.empty()) {
             json r; r["status"] = "error"; r["message"] = s_scene_analysis.error; return r;
+        }
+        // Batch run → every video's descriptions in one shot.
+        if (s_scene_analysis.is_batch) {
+            json r; r["status"] = "done"; r["results"] = s_scene_analysis.batch; return r;
         }
         // Read sidecar JSON and return it
         std::string sp = s_scene_analysis.sidecar_path;
