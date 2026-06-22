@@ -45,6 +45,7 @@ static const char* k_gen_fx_names[] = {
 #include <vector>
 #include <algorithm>
 #include <atomic>
+#include <functional>
 #include <mutex>
 #include <thread>
 #include <unordered_set>
@@ -69,7 +70,21 @@ static struct {
     std::string       error;
     bool              is_batch = false;   // paths[] run → results aggregated in `batch`
     nlohmann::json    batch;              // [{path, frames|error, capped}]
+    // Live progress for the canvas banner (a static singleton, never copied).
+    std::atomic<int>  vid_idx{0}, vid_total{0};     // current / total videos (1-based)
+    std::atomic<int>  frame_idx{0}, frame_total{0}; // captioned / total in this video
 } s_scene_analysis;
+
+// Live scene-analysis (describe_video) progress for the canvas banner. Returns
+// true while a run is active and fills the counts (any may be null).
+bool scene_analysis_progress(int* vid_idx, int* vid_total, int* frame_idx, int* frame_total) {
+    if (!s_scene_analysis.running.load()) return false;
+    if (vid_idx)     *vid_idx     = s_scene_analysis.vid_idx.load();
+    if (vid_total)   *vid_total   = s_scene_analysis.vid_total.load();
+    if (frame_idx)   *frame_idx   = s_scene_analysis.frame_idx.load();
+    if (frame_total) *frame_total = s_scene_analysis.frame_total.load();
+    return true;
+}
 
 static int  g_srv_fd   = -1;
 static std::string g_sock_path;
@@ -251,7 +266,8 @@ static std::string build_timeline_ascii(const AppState& state) {
 // Caption one video into a frames json (auto scene keyframes), reusing a fresh
 // .pms_scene.json sidecar when present. Returns {frames:[...], capped} or {error}.
 // Shared by single describe_video and the paths[] batch path.
-static nlohmann::json caption_video_to_json(const std::string& path, bool force) {
+static nlohmann::json caption_video_to_json(const std::string& path, bool force,
+                                            const std::function<void(int,int)>& on_frame = {}) {
     namespace fs = std::filesystem;
     std::string sp = path + ".pms_scene.json";
     std::error_code ec;
@@ -273,10 +289,11 @@ static nlohmann::json caption_video_to_json(const std::string& path, bool force)
     nlohmann::json sidecar;
     sidecar["source"] = path; sidecar["model"] = "moondream2"; sidecar["capped"] = capped;
     nlohmann::json frames_arr = nlohmann::json::array();
-    for (auto& kf : frames) {
-        SceneResult res = caption_frame(kf.jpeg_path);
+    for (size_t i = 0; i < frames.size(); ++i) {
+        if (on_frame) on_frame((int)i, (int)frames.size());
+        SceneResult res = caption_frame(frames[i].jpeg_path);
         nlohmann::json e;
-        e["timestamp"]   = kf.timestamp;
+        e["timestamp"]   = frames[i].timestamp;
         e["description"] = res.ok ? res.description : "";
         frames_arr.push_back(e);
     }
@@ -1041,11 +1058,19 @@ static json dispatch(AppState& state, const std::string& method, const json& par
             s_scene_analysis.error.clear();
             s_scene_analysis.is_batch = true;
             s_scene_analysis.batch = json::array();
+            s_scene_analysis.vid_total.store((int)paths.size());
+            s_scene_analysis.vid_idx.store(0);
+            s_scene_analysis.frame_idx.store(0);
+            s_scene_analysis.frame_total.store(0);
             std::thread([paths, force]() {
                 json batch = json::array();
-                for (auto& p : paths) {
-                    json one = caption_video_to_json(p, force);
-                    json entry; entry["path"] = p;
+                for (size_t vi = 0; vi < paths.size(); ++vi) {
+                    s_scene_analysis.vid_idx.store((int)vi + 1);
+                    json one = caption_video_to_json(paths[vi], force, [](int fi, int ft) {
+                        s_scene_analysis.frame_idx.store(fi);
+                        s_scene_analysis.frame_total.store(ft);
+                    });
+                    json entry; entry["path"] = paths[vi];
                     if (one.contains("error")) entry["error"] = one["error"];
                     else { entry["frames"] = one["frames"]; entry["capped"] = one.value("capped", false); }
                     batch.push_back(entry);
@@ -1097,6 +1122,10 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         s_scene_analysis.done.store(false);
         s_scene_analysis.error.clear();
         s_scene_analysis.sidecar_path.clear();
+        s_scene_analysis.vid_idx.store(1);
+        s_scene_analysis.vid_total.store(1);
+        s_scene_analysis.frame_idx.store(0);
+        s_scene_analysis.frame_total.store(0);
         std::thread([path, req_times]() {
             bool capped = false;
             std::vector<KeyFrame> frames = req_times.empty()
@@ -1116,10 +1145,12 @@ static json dispatch(AppState& state, const std::string& method, const json& par
             sidecar["model"]  = "moondream2";
             sidecar["capped"] = capped;
             json frames_arr = json::array();
-            for (auto& kf : frames) {
-                SceneResult res = caption_frame(kf.jpeg_path);
+            for (size_t i = 0; i < frames.size(); ++i) {
+                s_scene_analysis.frame_idx.store((int)i);
+                s_scene_analysis.frame_total.store((int)frames.size());
+                SceneResult res = caption_frame(frames[i].jpeg_path);
                 json entry;
-                entry["timestamp"]   = kf.timestamp;
+                entry["timestamp"]   = frames[i].timestamp;
                 entry["description"] = res.ok ? res.description : "";
                 frames_arr.push_back(entry);
             }

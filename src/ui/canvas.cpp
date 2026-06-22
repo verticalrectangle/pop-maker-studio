@@ -13,6 +13,7 @@
 #include "fx_shader.h"
 #include "bg_presets.h"
 #include "theme.h"
+#include "../ipc_server.h"
 #include "render.h"
 #include "waveform.h"
 #include "body_fx.h"
@@ -2382,6 +2383,25 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
             snprintf(msg, sizeof(msg), "Converting voice…  %d%%",
                      (int)(fmaxf(0.f, fminf(1.f, vcp->vc_progress)) * 100.f));
             ui_canvas_progress_banner(dl, p, w, h, msg, vcp->vc_progress);
+        }
+
+        // Scene analysis (describe_video) — the agent's vision pass. Show what
+        // it's chewing through so the long wait isn't a mystery box.
+        {
+            int vi = 0, vt = 0, fi = 0, ft = 0;
+            if (scene_analysis_progress(&vi, &vt, &fi, &ft)) {
+                char msg[80];
+                if (vt > 1)
+                    snprintf(msg, sizeof(msg), "Analyzing video %d/%d…  caption %d/%d",
+                             vi, vt, fi + (ft > 0), ft);
+                else
+                    snprintf(msg, sizeof(msg), "Analyzing video…  caption %d/%d", fi + (ft > 0), ft);
+                // Progress across the whole batch: completed videos + this video's frames.
+                float per_vid = (ft > 0) ? (float)fi / (float)ft : 0.f;
+                float prog = (vt > 0) ? ((float)(vi - 1) + per_vid) / (float)vt
+                                      : (ft > 0 ? per_vid : -1.f);
+                ui_canvas_progress_banner(dl, p, w, h, msg, prog);
+            }
         }
     }
 
