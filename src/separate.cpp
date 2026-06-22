@@ -5,6 +5,7 @@
 #include "separate.h"
 #include "paths.h"
 #include <onnxruntime_cxx_api.h>
+#include <dnnl_provider_options.h>
 #include <fftw3.h>
 #include <filesystem>
 #include <cmath>
@@ -13,6 +14,7 @@
 #include <algorithm>
 #include <functional>
 #include <complex>
+#include <thread>
 #include <cstdlib>
 #include <cstdio>
 #include <unistd.h>
@@ -216,9 +218,21 @@ std::string separate_run(
 
     Ort::Env env(ORT_LOGGING_LEVEL_WARNING, "mdx");
     Ort::SessionOptions opts;
-    opts.SetIntraOpNumThreads(4);
+    // MDX-Net is conv-heavy and compute-bound; the default 4 intra-op threads
+    // left most of the CPU idle. Use the cores, less a couple so the main/UI
+    // loop and audio thread keep ticking while separation runs on its own
+    // background thread (e.g. 6c/12t → 10). This is the safe CPU lever; the big
+    // one is a GPU EP — this box has an AMD RX 7700 XT, MIGraphX lands separately.
+    unsigned hw = std::thread::hardware_concurrency();
+    opts.SetIntraOpNumThreads(hw >= 4 ? (int)hw - 2 : 4);
     opts.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
+    // Provider order = preference: CUDA (NVIDIA; throws/no-op here), then oneDNN
+    // (optimised CPU conv/gemm kernels), else ORT's default CPU EP. Each append
+    // throws when the provider isn't in this build → catch and continue.
     try { OrtCUDAProviderOptions cuda{}; opts.AppendExecutionProvider_CUDA(cuda); }
+    catch (...) {}
+    try { OrtDnnlProviderOptions dnnl{}; dnnl.use_arena = 1;
+          opts.AppendExecutionProvider_Dnnl(dnnl); }
     catch (...) {}
 
     Ort::Session session(env, separate_model_path().c_str(), opts);
