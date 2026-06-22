@@ -861,9 +861,12 @@ static void worker_turn() {
 
     static const json tools_decl = tools_decl_json();
 
-    // Repetition tracking for this turn: (tool|args) -> count, and which sigs
-    // already got their one-shot nudge.
-    std::unordered_map<std::string, int> rep_counts;
+    // Repetition tracking for this turn: a call only counts as "no progress" when
+    // the SAME (tool|args) returns the SAME result — so legitimately repeated calls
+    // that advance a workflow (e.g. get_video_description{} per clip, each a
+    // different description) never trip it. rep_last holds the last result hash.
+    std::unordered_map<std::string, int>    rep_counts;
+    std::unordered_map<std::string, size_t> rep_last;
     std::set<std::string> rep_nudged;
 
     for (int iter = 0; iter < kMaxToolIters && !s_stop; ++iter) {
@@ -988,15 +991,25 @@ static void worker_turn() {
             for (auto& m : extra) s_wire.push_back(m);
             ++answered;
 
-            // Repetition guard: same tool + identical args, over and over, is the
-            // runaway/flail pattern (and the bail-to-new_project loop). Nudge once,
-            // then stop — far earlier than the 64-iteration backstop.
+            // Repetition guard: same tool + identical args returning the SAME
+            // result, over and over, is the real runaway/flail pattern (and the
+            // bail-to-new_project loop). A changed result = progress → reset, so
+            // valid repeated calls (polling, per-item status) don't trip it. Nudge
+            // once, then stop — far earlier than the 64-iteration backstop.
             std::string sig = tname + "\x1f" + targs_s;
-            int rep = ++rep_counts[sig];
-            if (rep >= kRepeatStop) kill_tool = tname;
-            else if (rep >= kRepeatNudge && !rep_nudged.count(sig)) {
-                rep_nudged.insert(sig);
-                nudge_tool = tname;
+            size_t rh = std::hash<std::string>{}(result);
+            auto rit = rep_last.find(sig);
+            if (rit != rep_last.end() && rit->second == rh) {
+                int rep = ++rep_counts[sig];
+                if (rep >= kRepeatStop) kill_tool = tname;
+                else if (rep >= kRepeatNudge && !rep_nudged.count(sig)) {
+                    rep_nudged.insert(sig);
+                    nudge_tool = tname;
+                }
+            } else {
+                rep_last[sig]   = rh;     // new/changed result → progress made
+                rep_counts[sig] = 1;
+                rep_nudged.erase(sig);
             }
         }
         // Every tool_call_id must get a tool message or the API rejects the

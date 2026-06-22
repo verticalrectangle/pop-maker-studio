@@ -984,7 +984,12 @@ static json dispatch(AppState& state, const std::string& method, const json& par
                   "must include the moondream files)";
             return {};
         }
-        if (s_scene_analysis.running.load()) { err = "scene analysis already running"; return {}; }
+        if (s_scene_analysis.running.load()) {
+            err = "scene analysis already running — describe_video is ONE AT A TIME. "
+                  "Call get_video_description to finish the current video, then start "
+                  "the next. Don't fire describe_video on multiple clips at once.";
+            return {};
+        }
         // Optional times[]: caption exactly these timestamps instead of
         // auto-detected scene changes — the text-mode contact sheet for
         // agents without vision. Capped like make_contact_sheet.
