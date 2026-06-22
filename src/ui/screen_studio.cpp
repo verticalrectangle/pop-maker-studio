@@ -1270,6 +1270,32 @@ void ui_studio(AppState& state) {
                     }
                 }
 
+                // ── Apply & Test connection ───────────────────────────────────
+                ImGui::Dummy({0.f, 8.f});
+                ImGui::SetCursorPosX(lx);
+                if (ui_btn("Apply & Test", false, true)) {
+                    acfg.base_url = s_url_buf;
+                    acfg.model    = s_model_buf;
+                    agent_set_config(acfg);    // commit + persist
+                    agent_test_begin(acfg);    // confirm model + url + key actually work
+                }
+                {
+                    std::string tmsg; int tst = agent_test_state(tmsg);
+                    if (tst != 0) {
+                        ImGui::SetCursorPosX(lx);
+                        ImU32 c = (tst == 1) ? to_u32(Col::muted)
+                                : (tst == 2) ? IM_COL32(100, 220, 130, 255)
+                                             : IM_COL32(235, 110, 110, 255);
+                        const char* pfx = (tst == 2) ? "\xe2\x9c\x93 "
+                                        : (tst == 3) ? "\xe2\x9c\x97 " : "";
+                        ImGui::PushStyleColor(ImGuiCol_Text, c);
+                        ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 320.f);
+                        ImGui::Text("%s%s", pfx, tmsg.c_str());
+                        ImGui::PopTextWrapPos();
+                        ImGui::PopStyleColor();
+                    }
+                }
+
                 ImGui::Dummy({0.f, 2.f});
                 ImGui::SetCursorPosX(lx);
                 bool vis = acfg.vision;

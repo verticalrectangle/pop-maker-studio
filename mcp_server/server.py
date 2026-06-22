@@ -63,9 +63,9 @@ _CATEGORIES: dict[str, list[str]] = {
         "set_clip_prop", "set_clip_props", "set_clip_keyframes", "rename_track", "add_to_bin",
         "remove_from_bin", "set_format", "set_loop_region", "add_callout", "add_chapter_marker",
         "remove_chapter_marker", "get_chapter_markers", "generate_chapters", "crop_media",
-        "extract_clip_segment", "find_and_add_clip", "find_video_moment", "apply_multicam_cuts",
+        "find_and_add_clip", "find_video_moment", "apply_multicam_cuts",
     ],
-    "text": ["generate_typography", "set_text_style", "set_transcript", "shift_transcript"],
+    "text": ["generate_typography", "set_text_style", "set_transcript"],
     "fx": [
         "add_effect_brick", "add_multifx_brick", "add_audio_multifx_brick", "add_body_fx_brick",
         "decouple_fx_brick", "set_clip_fx", "process_body_fx_masks", "remove_background",
@@ -705,30 +705,9 @@ async def list_tools() -> list[Tool]:
                 "Returns: running (bool), progress (0–1), message, "
                 "found (bool), start (seconds), end (seconds), excerpt, error.\n\n"
                 "Call every 3s until running=false. Print message each poll so the user sees progress. "
-                "When done: if found=true, call extract_clip_segment then add_clip."
+                "When done: if found=true, the matched segment has already been extracted and added to the timeline."
             ),
             inputSchema={"type": "object", "properties": {}},
-        ),
-        Tool(
-            name="extract_clip_segment",
-            description=(
-                "Stream-copy a time range from a source media file to a new file (no re-encode). "
-                "Near-instant for any codec. Use after find_and_add_clip reports a match to "
-                "extract just the relevant segment before adding it to the timeline.\n\n"
-                "NEVER use ffmpeg or shell commands to cut audio/video segments — this tool is "
-                "instant, codec-agnostic, and handles FLAC/MP3/WAV/MP4/MOV/WebM correctly.\n\n"
-                "Returns: {dst, duration}. dst is the path to add as a video clip."
-            ),
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "src":   {"type": "string", "description": "Source media file path"},
-                    "dst":   {"type": "string", "description": "Output file path. Use .webm for video sources. For audio-only sources (FLAC/MP3/WAV), match the source extension (e.g. .flac) — the container is chosen from the source format, not the dst extension."},
-                    "start": {"type": "number", "description": "Start time in seconds"},
-                    "end":   {"type": "number", "description": "End time in seconds"},
-                },
-                "required": ["src", "dst", "start", "end"],
-            },
         ),
         Tool(
             name="get_pipeline_status",
@@ -1261,11 +1240,10 @@ async def list_tools() -> list[Tool]:
                 "DO NOT use this to search for a specific moment — use find_and_add_clip instead "
                 "(windowed search, much faster).\n\n"
                 "NEVER run this on a full-length song/track when the user only wants a section. "
-                "Instead: (1) find_and_add_clip(path=full_file, query='end phrase') — returns exact end "
-                "timestamp AND auto-extracts the segment to result.dst; "
-                "(2) extract_clip_segment(src=full_file, start=0, end=result.end) → short clip; "
-                "(3) add_track + add_clip(audio, short clip); "
-                "(4) trigger_pipeline on the short clip only. "
+                "Instead: (1) find_and_add_clip(path=full_file, query='end phrase') — returns the exact "
+                "end timestamp and adds the located clip; "
+                "(2) add the song to the timeline and trim the audio brick to the section; "
+                "(3) trigger_pipeline on that brick (it transcribes only the trimmed region). "
                 "NEVER add padding beyond result.end — find_and_add_clip gives exact word-boundary timestamps."
             ),
             inputSchema={
@@ -1611,18 +1589,18 @@ async def list_tools() -> list[Tool]:
                 "only a section of a song. The canonical flow is:\n"
                 "  1. find_and_add_clip(path=full_file, query='start phrase')  → start timestamp\n"
                 "  2. find_and_add_clip(path=full_file, query='end phrase')    → end timestamp\n"
-                "  3. extract_clip_segment(src=full_file, dst='/tmp/scoped.flac', start=startA, end=endB + tail_sec)\n"
-                "  4. add_track + add_clip(audio, /tmp/scoped.flac) + trigger_pipeline\n"
+                "  3. add_track + add_clip(audio, full_file), then trim_clip the brick to [start, end]\n"
+                "  4. trigger_pipeline on that brick — it transcribes only the trimmed region\n"
                 "  5. poll get_pipeline_status until stage='done', then generate_typography(preset='flash')\n"
-                "DO NOT skip step (2): the auto-extracted dst only covers a small window around the matched "
-                "phrase, not from start to end of section. You need both timestamps to extract the full span.\n\n"
+                "DO NOT skip step (2): you need both timestamps to bound the section; find_and_add_clip's "
+                "auto-added clip only covers a small window around a single matched phrase.\n\n"
                 "CHUNK-STRADDLING PHRASES are handled internally: when a partial match lands at the trailing "
                 "edge of a search chunk, the scanner extends into the next chunk before reporting found, so "
                 "result.end reflects the real phrase end (not the chunk boundary). Same goes for queries whose "
                 "match lives past an existing cached transcript — the cache is extended automatically.\n\n"
                 "Blocks until the match is found — no polling needed. Returns status=found.\n\n"
-                "Always returns extracted=true with a ready-to-use dst file. NEVER call extract_clip_segment "
-                "manually after this — the tool handles extraction internally.\n\n"
+                "Always returns extracted=true with a ready-to-use dst file at result.dst — extraction is "
+                "handled internally.\n\n"
                 "result includes in_point = offset into dst where your content starts.\n\n"
                 "MATCH QUALITY: result includes score (0-1, fraction of query words found) and "
                 "partial_match (true when score<1.0 OR the located span is wider than ~1.5s/word). "
@@ -1655,8 +1633,7 @@ async def list_tools() -> list[Tool]:
                 "STATUS IDLE — what to do next depends on your task:\n"
                 "  Finding a specific moment/phrase → use find_and_add_clip (windowed, stops early, MUCH faster).\n"
                 "    DO NOT run trigger_pipeline just to search.\n"
-                "  Generating full subtitles/karaoke for a clip already on the timeline → use trigger_pipeline.\n"
-                "  Re-using a previously-transcribed file's words for a new section audio → use shift_transcript."
+                "  Generating full subtitles/karaoke for a clip already on the timeline → use trigger_pipeline."
             ),
             inputSchema={
                 "type": "object",
@@ -1676,8 +1653,6 @@ async def list_tools() -> list[Tool]:
                 "you want to override with hand-edited words.\n"
                 "  - You computed words from another source (different transcriber, manual "
                 "alignment) and want the managed Lyrics path to use them.\n\n"
-                "DON'T USE THIS FOR: shifting/clipping a transcript across audio files — call "
-                "shift_transcript, which handles the offset and source-file selection for you.\n\n"
                 "After this call, generate_typography(preset='flash'|...) will lay lyric clips at "
                 "the timings you provided. words: [{word: str, start: float, end: float}, ...]"
             ),
@@ -1699,35 +1674,6 @@ async def list_tools() -> list[Tool]:
                     },
                 },
                 "required": ["words"],
-            },
-        ),
-        Tool(
-            name="shift_transcript",
-            description=(
-                "Repurpose another file's cached transcript as the project's transcript, "
-                "with a time shift and optional clipping. Closes the gap when a long source "
-                "(e.g. full song) has a clean whisper.cpp transcript but you're working on an "
-                "extracted section where re-transcribing produces worse results.\n\n"
-                "FLOW: extract section /tmp/section.flac from full.flac starting at 88.71s → "
-                "add the section as the project audio → "
-                "shift_transcript(source_path='/path/to/full.flac', offset=-88.71, start=88.71, end=127) → "
-                "generate_typography(preset='flash'). Done.\n\n"
-                "source_path: optional — the file whose cached transcript to read. Defaults to "
-                "the project's current transcript (useful for shifting in place).\n"
-                "start, end: optional — keep only words overlapping this range in SOURCE-file "
-                "time (pre-shift). Use to clip to the section you extracted.\n"
-                "offset: required — seconds added to every word's start/end. Pass the negative "
-                "of the section's start timestamp to convert source-time to section-time."
-            ),
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "offset":      {"type": "number", "description": "Seconds added to every word timestamp (pass -section_start to convert source time → section time)"},
-                    "start":       {"type": "number", "description": "Lower bound in source-file seconds (pre-shift) for clipping"},
-                    "end":         {"type": "number", "description": "Upper bound in source-file seconds (pre-shift) for clipping"},
-                    "source_path": {"type": "string", "description": "Optional source file whose transcript to read. Defaults to project's current transcript."},
-                },
-                "required": ["offset"],
             },
         ),
         Tool(
@@ -3366,7 +3312,7 @@ def _search_transcript_in_words(words: list, query: str) -> tuple[float, float, 
 async def _find_and_add_clip(arguments: dict) -> dict:
     """
     Step 1: check cache or start transcription search. Returns immediately.
-    If cached=true, returns found result so Claude can call extract_clip_segment + add_clip.
+    If cached=true, returns the found result with the segment already extracted (result.dst).
     If cached=false, starts background search; Claude polls get_search_status then continues.
     """
     path    = arguments.get("path", "")
@@ -3743,8 +3689,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 raise ValueError(
                     f"Transcript already cached for {p.name} at {cached_words}.\n"
                     "Call get_transcript() to read it — re-transcribing is wasted work.\n"
-                    "If the cached transcript is wrong, you have two cleaner options than re-transcribing:\n"
-                    "  - shift_transcript(source_path=..., offset=..., start=..., end=...) to repurpose another file's transcript\n"
+                    "If the cached transcript is wrong, the cleaner option than re-transcribing is:\n"
                     "  - set_transcript(words=[...]) to install a hand-edited word list\n"
                     f"Or to force a fresh re-transcription, delete {cached_words} first."
                 )
@@ -3754,9 +3699,8 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 f"trigger_pipeline on a {duration:.0f}s clip is too slow. "
                 "If you only need a section (e.g. 'beginning to phrase X'), use this pattern instead:\n"
                 "  1. find_and_add_clip(phrase='X', path=<audio_path>) — windowed search, finds the timestamp fast\n"
-                "  2. extract_clip_segment(src=<audio_path>, dst=..., start=0, end=<found_end + 0.3>)\n"
-                "  3. Replace the audio clip on the timeline with the extracted segment\n"
-                "  4. Then call trigger_pipeline on the short clip\n"
+                "  2. add the audio to the timeline and trim the brick to the section\n"
+                "  3. Then call trigger_pipeline on that brick (it transcribes only the trimmed region)\n"
                 "Only call trigger_pipeline directly if you genuinely need a full transcript of everything."
             )
         if not arguments.get("path") and proj.get("audio_path") and 30 < duration <= 300:
@@ -3770,9 +3714,8 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                     "was probably skipped.\n\n"
                     "If you only need a section of this file, use this pattern first:\n"
                     "  1. find_and_add_clip(path=<audio_path>, query='<end phrase>') — locates the exact timestamp\n"
-                    "  2. extract_clip_segment(src=<audio_path>, dst=..., start=<start>, end=<found_end>)\n"
-                    "  3. Replace the timeline audio clip with the trimmed segment\n"
-                    "  4. Then call trigger_pipeline\n\n"
+                    "  2. trim the timeline audio brick to the section\n"
+                    "  3. Then call trigger_pipeline (it transcribes only the trimmed region)\n\n"
                     "If you genuinely need the full file transcribed, pass path=<audio_path> "
                     "to trigger_pipeline directly to bypass this check."
                 )
@@ -3814,12 +3757,6 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         return [TextContent(type="text", text=json.dumps(result, indent=2))]
     if name == "process_body_fx_masks":
         result = _call("start_body_fx_process", arguments)
-        return [TextContent(type="text", text=json.dumps(result, indent=2))]
-    if name == "extract_clip_segment":
-        dst = arguments.get("dst", "")
-        if dst:
-            Path(dst).parent.mkdir(parents=True, exist_ok=True)
-        result = _call("extract_clip_segment", arguments)
         return [TextContent(type="text", text=json.dumps(result, indent=2))]
     if name == "add_clip":
         result = await _add_clip(arguments)
