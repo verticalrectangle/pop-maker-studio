@@ -220,7 +220,7 @@ static std::string build_timeline_ascii(const AppState& state) {
         "Track 0 is the TOP layer and composites OVER the tracks below it. An "
         "FX/adjustment/background brick affects everything below it on the timeline. "
         "Managed tracks (lyrics/subtitles, generated FX) are rebuilt by the "
-        "typography/FX system — change them via generate_typography, not by editing "
+        "typography/FX system — change them via set_typography_preset, not by editing "
         "clips directly.\n";
     char head[64];
     snprintf(head, sizeof(head), "    (0s --> %.1fs, each cell ~%.2fs)\n",
@@ -974,7 +974,7 @@ static json dispatch(AppState& state, const std::string& method, const json& par
                 if (lyrics_present) break;
             }
             if (!lyrics_present)
-                j["next_action_hint"] = "Transcript is ready. To lay lyric clips, call generate_typography(preset='flash'|'apple'|'spotify'|'karaoke'|'headline'|...). For raw word access without bricks, call get_transcript.";
+                j["next_action_hint"] = "Transcript is ready. To lay lyric clips, call set_typography_preset(preset='flash'|'apple'|'spotify'|'karaoke'|'headline'|...). For raw word access without bricks, call get_transcript.";
         }
         return j;
     }
@@ -1460,7 +1460,7 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         r["count"]   = (int)state.words_cache.size();
         r["skipped"] = skipped;
         r["next_action_hint"] = "Custom transcript installed at " + target.string()
-            + ". Call generate_typography(preset='flash'|'apple'|'spotify'|...) to lay lyric clips against it.";
+            + ". Call set_typography_preset(preset='flash'|'apple'|'spotify'|...) to lay lyric clips against it.";
         return r;
     }
 
@@ -1522,7 +1522,7 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         r["count"]  = (int)state.words_cache.size();
         r["source"] = src_cache.string();
         r["offset"] = offset;
-        r["next_action_hint"] = "Transcript shifted/clipped and installed. Call generate_typography(preset='flash'|...) to lay lyric clips.";
+        r["next_action_hint"] = "Transcript shifted/clipped and installed. Call set_typography_preset(preset='flash'|...) to lay lyric clips.";
         return r;
     }
 
@@ -2259,23 +2259,33 @@ static json dispatch(AppState& state, const std::string& method, const json& par
             !is_image_clip && state.audio_path.empty())
             state.audio_path = state.vocals_path = text;
 
-        // Text overlays live on their OWN tracks — never stack a Text/Subtitle/
-        // Lyrics clip on top of a content clip (or vice-versa) on the same track
-        // row. They render on top regardless of track; sharing a row is illegal.
+        // One row, one stream: content (video/audio/background) and text
+        // (text/subtitle/lyrics) clips each occupy the timeline exclusively, so no
+        // two of them may overlap on the same track. Catches BOTH text-vs-content
+        // AND content-vs-content / text-vs-text overlap — the latter is what let
+        // the agent stack video clips so the lower-index one rendered straight over
+        // its neighbour (it "kept playing" through the next clip). FX/adjustment
+        // bricks (Effect, MultiFX, BodyFX, AudioMultiFX, Bus) are exempt: they ride
+        // over content by design and have their own non-overlap rule above.
+        // Frame-adjacent clips (touching at a boundary) are fine — hence the 1ms
+        // slack so snap rounding can't trip a false overlap.
         {
             auto is_txt = [](ClipType t){ return t==ClipType::Text ||
                 t==ClipType::Subtitle || t==ClipType::Lyrics; };
             auto is_con = [](ClipType t){ return t==ClipType::Video ||
                 t==ClipType::Audio || t==ClipType::Background ||
                 t==ClipType::VideoRecord || t==ClipType::Record; };
-            bool n_txt = is_txt(cl.clip_type), n_con = is_con(cl.clip_type);
-            if (n_txt || n_con)
+            auto occupies_row = [&](ClipType t){ return is_txt(t) || is_con(t); };
+            if (occupies_row(cl.clip_type))
                 for (const auto& oc : state.tracks[ti].clips)
-                    if (cl.start < oc.end && cl.end > oc.start &&
-                        ((n_txt && is_con(oc.clip_type)) ||
-                         (n_con && is_txt(oc.clip_type)))) {
-                        err = "text and content can't share a track — put the text "
-                              "on its own track (it still renders on top)";
+                    if (occupies_row(oc.clip_type) &&
+                        cl.start < oc.end - 1e-3f && cl.end > oc.start + 1e-3f) {
+                        err = (is_txt(cl.clip_type) != is_txt(oc.clip_type))
+                            ? "text and content can't share a track — put the text "
+                              "on its own track (it still renders on top)"
+                            : "clip overlap: that time range is already occupied on "
+                              "this track. Clips on one track can't overlap — choose a "
+                              "free slot, trim/move the existing clip, or use another track.";
                         return {};
                     }
         }
@@ -2344,7 +2354,7 @@ static json dispatch(AppState& state, const std::string& method, const json& par
                     if (lyrics_present) break;
                 }
                 if (!lyrics_present)
-                    r["warning"] = "A transcript is ready for this project's audio but no managed Lyrics track exists. For lyric videos / captions, prefer generate_typography(preset='flash'|'apple'|'spotify'|...) — it lays styled, idempotent lyric clips on a managed track. type='text' is intended for one-off labels (or use add_callout).";
+                    r["warning"] = "A transcript is ready for this project's audio but no managed Lyrics track exists. For lyric videos / captions, prefer set_typography_preset(preset='flash'|'apple'|'spotify'|...) — it lays styled, idempotent lyric clips on a managed track. type='text' is intended for one-off labels (or use add_callout).";
             }
         }
         return r;
@@ -2430,7 +2440,6 @@ static json dispatch(AppState& state, const std::string& method, const json& par
             }
             else if (prop == "opacity")   { cl.opacity   = jval_float(val); }
             else if (prop == "muted")     { cl.muted     = jval_bool(val); }
-            else if (prop == "in_point")  { cl.in_point  = jval_float(val); }
             else if (prop == "fade_in")   { cl.fade_in   = jval_float(val); }
             else if (prop == "fade_out")  { cl.fade_out  = jval_float(val); }
             else if (prop == "blend_mode"){ cl.blend_mode= jval_int(val); }
@@ -2577,7 +2586,13 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         }
         else if (prop == "opacity")  { cl.opacity    = jval_float(val); }
         else if (prop == "muted")    { cl.muted      = jval_bool(val); }
-        else if (prop == "in_point") { cl.in_point   = jval_float(val); }
+        else if (prop == "in_point") {
+            // in_point is an internal value, not an agent knob — a human never
+            // types it, they drag the brick's edge. Trim/move/split derive it.
+            err = "in_point isn't settable directly — trim the brick with trim_clip "
+                  "(or make_section), exactly like dragging its edge in the UI.";
+            return {};
+        }
         else if (prop == "fade_in")  { cl.fade_in    = jval_float(val); }
         else if (prop == "fade_out") { cl.fade_out   = jval_float(val); }
         else if (prop == "blend_mode") { cl.blend_mode = jval_int(val); }
@@ -2750,8 +2765,10 @@ static json dispatch(AppState& state, const std::string& method, const json& par
     if (method == "trigger_pipeline") {
         std::string mode_s = params.value("mode", "both");
         PipelineMode mode = PipelineMode::Both;
-        if (mode_s == "transcribe_only") mode = PipelineMode::TranscribeOnly;
-        else if (mode_s == "separate_only") mode = PipelineMode::SeparateOnly;
+        // transcribe_only is retired for tool callers: every agent-triggered
+        // transcription separates vocals first (Kim_Vocal_2 gives clean voices on
+        // any source), so a legacy mode='transcribe_only' now falls through to Both.
+        if (mode_s == "separate_only") mode = PipelineMode::SeparateOnly;
         std::string src = params.value("path", "");
         if (!src.empty()) state.audio_path = src;
         if (state.audio_path.empty()) { err = "no audio file loaded"; return {}; }
@@ -2817,12 +2834,12 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         r["stage"]    = "running";
         r["progress"] = state.pipeline.progress;
         r["next_action_hint"] = (mode != PipelineMode::SeparateOnly && on_timeline)
-            ? "Poll get_pipeline_status every 2-3s until stage='done'. The styled lyric bricks are laid AUTOMATICALLY on completion — do NOT call generate_typography to place them (only to swap presets, and only if the audio brick has not moved since). Never hand-roll add_clip(type='text') for lyrics."
+            ? "Poll get_pipeline_status every 2-3s until stage='done'. The styled lyric bricks are laid AUTOMATICALLY on completion — do NOT call set_typography_preset to place them (only to swap presets, and only if the audio brick has not moved since). Never hand-roll add_clip(type='text') for lyrics."
             : "Poll get_pipeline_status every 2-3s until stage='done'. No audio clip is on the timeline for this source, so no lyric bricks are laid — read get_transcript for the words.";
         return r;
     }
 
-    if (method == "generate_typography") {
+    if (method == "set_typography_preset" || method == "generate_typography") {
         std::string preset = params.value("preset", "");
         if (!preset.empty()) state.typo_preset_id = preset;
         generate_typography(state);
@@ -3153,6 +3170,42 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         }
         history_push(state, "trim_all_to");
         json r; r["time"] = t; return r;
+    }
+
+    if (method == "make_section") {
+        // Crop the whole timeline to [start, end] and shift it to begin at 0 —
+        // the "extract a section" primitive. Clips fully outside the window are
+        // dropped; straddlers are clamped; audio/video in_point advances by what
+        // is trimmed off the left so the source still plays the right span. Every
+        // kept clip shifts by -start, so all tracks move together and managed
+        // lyrics stay aligned without re-running generate_typography. One undo.
+        double start = params.value("start", -1.0);
+        double end   = params.value("end",   -1.0);
+        if (start < 0.0 || end <= start) {
+            err = "make_section needs start >= 0 and end > start"; return {};
+        }
+        float s = (float)start, e = (float)end;
+        for (auto& tr : state.tracks) {
+            std::vector<Clip> kept;
+            for (auto& cl : tr.clips) {
+                float ns = std::max(cl.start, s);
+                float ne = std::min(cl.end,   e);
+                if (ne <= ns) continue;                 // fully outside the window
+                float left_trim = ns - cl.start;        // trimmed off the left edge
+                if (left_trim > 0.f &&
+                    (cl.clip_type == ClipType::Audio || cl.clip_type == ClipType::Video))
+                    cl.in_point += left_trim;
+                cl.start = ns - s;                      // shift section start -> 0
+                cl.end   = ne - s;
+                kept.push_back(cl);
+            }
+            tr.clips = std::move(kept);
+        }
+        state.duration = e - s;
+        state.playhead = std::max(0.f, std::min(state.playhead - s, e - s));
+        audio_seek(state.playhead);
+        history_push(state, "make_section");
+        json r; r["start"] = s; r["end"] = e; r["duration"] = e - s; return r;
     }
 
     if (method == "delete_clips_after") {
