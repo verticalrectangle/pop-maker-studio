@@ -178,6 +178,39 @@ static std::vector<CharSeg> merge_repeats(const std::vector<PathPoint>& path, in
 //   7. Words with no vocabulary-mapped chars get NaN — filled by linear
 //      interpolation between the nearest aligned neighbours afterward.
 
+// First-vocal-onset from the audio envelope, used ONLY to start the FIRST
+// segment's CTC window. whisper lumps a long instrumental intro into segment 0
+// and pins the first word's DTW onset to ~0, so the window-start clamp below
+// (max(st, word.start - cushion)) can't pull the window off the dead pre-vocal
+// audio — the CTC then collapses the first line onto frame 0 (the "first verse
+// at t=0" bug). Scanning for the first 20 ms frame above a low fraction of the
+// window's peak RMS recovers the true onset. This only chooses where the window
+// STARTS; it never zeroes or alters samples, so it is NOT the audio gating that
+// poisoned the reverted fc56525 (that zeroed quiet singing).
+static float first_energy_onset(const std::vector<float>& a, float t0, float t1) {
+    const int FRAME = (int)(0.02 * SAMPLE_RATE);          // 20 ms
+    int s0 = std::max(0, (int)(t0 * SAMPLE_RATE));
+    int s1 = std::min((int)a.size(), (int)(t1 * SAMPLE_RATE));
+    if (s1 - s0 < FRAME * 2) return t0;
+
+    std::vector<float> rms;
+    rms.reserve((size_t)(s1 - s0) / FRAME + 1);
+    float peak = 0.f;
+    for (int i = s0; i + FRAME <= s1; i += FRAME) {
+        float e = 0.f;
+        for (int j = i; j < i + FRAME; ++j) e += a[j] * a[j];
+        float r = std::sqrt(e / (float)FRAME);
+        rms.push_back(r);
+        peak = std::max(peak, r);
+    }
+    if (peak <= 1e-6f) return t0;                          // silent window — leave as-is
+    const float thr = peak * 0.08f;                        // low: keeps quiet onsets
+    for (size_t k = 0; k < rms.size(); ++k)
+        if (rms[k] > thr)
+            return t0 + (float)k * (float)FRAME / (float)SAMPLE_RATE;
+    return t0;
+}
+
 std::vector<WordEntry> forced_align(
     const std::vector<float>&               audio16k,
     const std::vector<WordEntry>&           whisper_words,
@@ -226,7 +259,7 @@ std::vector<WordEntry> forced_align(
             while (wi < N && whisper_words[wi].start < en - 0.001f) ++wi;
             int w1 = wi - 1;
             if (w0 <= w1) {
-                // Clamp the CTC window's start to the first word's DTW onset, not
+                // Clamp the CTC window's start to the first word's onset, not
                 // whisper's loose segment boundary (which just inherits the prior
                 // segment's end and can sit a second before the word actually
                 // starts — on the tail of the previous word). Since a word's time
@@ -234,7 +267,16 @@ std::vector<WordEntry> forced_align(
                 // the first word back into that dead pre-onset audio (the "behind
                 // placed 2s early on the held note" bug). Verified on wav2vec2:
                 // Behind, 14.14 -> 15.77, no other word moved.
-                float t0 = std::max(st, whisper_words[w0].start - 0.08f);
+                //
+                // For the VERY FIRST word (w0 == 0), whisper's DTW onset is as
+                // unreliable as its segment boundary — both ~0 when a long
+                // instrumental intro is swallowed into segment 0 — so recover the
+                // onset from the audio envelope instead (the "first verse at t=0"
+                // bug). Interior words keep their accurate DTW onset.
+                float onset   = (w0 == 0) ? first_energy_onset(audio16k, st, en)
+                                          : whisper_words[w0].start;
+                float cushion = (w0 == 0) ? 0.12f : 0.08f;
+                float t0 = std::max(st, onset - cushion);
                 segs.push_back({w0, w1, t0, en});
             }
         }

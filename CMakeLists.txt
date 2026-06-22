@@ -311,3 +311,24 @@ target_compile_options(export-hubert PRIVATE
     -Wall -Wextra -Wno-unused-parameter
     $<$<CONFIG:Release>:-O2>
 )
+
+# ── forced_align_probe: standalone harness to verify alignment changes ────────
+# Runs forced_align() against the real wav2vec2 model on a cached stem, without
+# the whole transcription pipeline. See tools/forced_align_probe.cpp.
+add_executable(forced_align_probe
+    tools/forced_align_probe.cpp
+    src/forced_align.cpp
+    src/paths.cpp
+)
+target_include_directories(forced_align_probe PRIVATE
+    src
+    ${CMAKE_SOURCE_DIR}/vendor
+)
+if(DEFINED ONNXRUNTIME_ROOT)
+    target_include_directories(forced_align_probe PRIVATE ${ONNXRUNTIME_ROOT}/include)
+    target_link_directories(forced_align_probe PRIVATE ${ONNXRUNTIME_ROOT}/lib)
+else()
+    target_include_directories(forced_align_probe PRIVATE /usr/include/onnxruntime)
+endif()
+target_link_libraries(forced_align_probe PRIVATE onnxruntime dl pthread)
+target_compile_options(forced_align_probe PRIVATE -Wall -Wextra -Wno-unused-parameter -O2)
