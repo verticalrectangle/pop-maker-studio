@@ -160,51 +160,6 @@ static void vad_gate_inplace(std::vector<float>& pcm) {
     }
 }
 
-// ── Vocal-presence gate (search-only) ─────────────────────────────────────────
-//
-// Reuses the vad_gate_inplace RMS math to answer one question about a chunk:
-// "does the vocal stem contain any speech-energy stretch ≥ 250 ms?"  Used by
-// transcribe_search to skip whisper entirely on windows where MDX-Net produced
-// a dead stem — no [Music]/♪♪ pollution, no wasted inference, no fallback to
-// the raw mix.  Only meaningful when applied to an isolated vocal stem;
-// running it on a raw mix returns true for any music.
-static bool has_vocal_presence(const std::vector<float>& pcm) {
-    constexpr int kWin = 480;   // 30 ms @ 16 kHz
-    constexpr int kHop = 160;   // 10 ms
-    constexpr int kMinSpeechFrames = 25;  // 250 ms
-
-    if ((int)pcm.size() < kWin + kHop) return false;
-    int n_frames = ((int)pcm.size() - kWin) / kHop;
-    if (n_frames < kMinSpeechFrames) return false;
-
-    std::vector<float> rms(n_frames);
-    float max_rms = 0.f;
-    for (int i = 0; i < n_frames; ++i) {
-        double sumsq = 0;
-        const float* p = pcm.data() + i * kHop;
-        for (int j = 0; j < kWin; ++j) sumsq += (double)p[j] * p[j];
-        rms[i] = (float)std::sqrt(sumsq / kWin);
-        if (rms[i] > max_rms) max_rms = rms[i];
-    }
-    if (max_rms < 1e-5f) return false;
-
-    std::vector<float> sorted_rms = rms;
-    size_t k = sorted_rms.size() * 3 / 10;
-    std::nth_element(sorted_rms.begin(), sorted_rms.begin() + k, sorted_rms.end());
-    float noise_floor = sorted_rms[k];
-
-    float thresh = std::max(noise_floor * 4.0f, 1e-4f);
-    int run = 0;
-    for (int i = 0; i < n_frames; ++i) {
-        if (rms[i] > thresh) {
-            if (++run >= kMinSpeechFrames) return true;
-        } else {
-            run = 0;
-        }
-    }
-    return false;
-}
-
 // ── Stem separation ───────────────────────────────────────────────────────────
 
 // Calls the C++ MDX-Net (Kim_Vocal_2) vocal separation. Returns false and sets status on error.
@@ -870,29 +825,22 @@ TranscribeSearchResult transcribe_search(
             pcm = decode_16k(path, window_start, dur);  // separation unavailable
         if (pcm.empty()) { window_start += step_sec; continue; }
 
-        // Vocal-presence gate: when we have an isolated vocal stem, skip
-        // whisper on chunks with no speech-energy stretch ≥ 250 ms.  Keeps
-        // [Music]/♪♪ tokens out of the cached transcript and avoids burning
-        // a whisper pass on dead audio.  Not applied to raw-mix PCM — that
-        // would gate on music energy and skip everything.
-        // Vocal-presence gate: previously this skipped the chunk entirely
-        // when MDX-Net produced a dead stem — but that silently dropped
-        // chunks where MDX-Net failed on quiet/whispered vocals (soft outro
-        // fades, low-amplitude breaths).  Now: when the stem reads dead,
-        // fall back to running whisper on the RAW MIX for that chunk.
-        // Music-token hallucinations whisper-large emits on instrumental
-        // audio (♪♪, [Music], …) are post-filtered after extraction below.
-        if (used_vocal_stem && !has_vocal_presence(pcm)) {
-            set_search_status(true, window_start, total_dur,
-                "Dead vocal stem — raw-mix fallback for "
-                + fmt_time(window_start) + " – " + fmt_time(win_end));
-            std::vector<float> raw_pcm = decode_16k(path, window_start, dur);
-            if (raw_pcm.empty()) { window_start += step_sec; continue; }
-            pcm = std::move(raw_pcm);
-            used_vocal_stem = false;
+        // Skip whisper only on a GENUINELY SILENT vocal stem (an instrumental
+        // window). The old RMS-floor presence gate rejected merely-quiet vocals
+        // (dreampop / whispered / outro fades) as "dead" and fell back to the raw
+        // mix — which just transcribes the music into [Music]/"Thank you"
+        // hallucinations and never finds the actual sung line. A true-silence
+        // check keeps quiet vocals; a silent stem is simply skipped (no raw-mix
+        // fallback). Same lesson as the full pipeline: don't gate the stem.
+        if (used_vocal_stem) {
+            float peak = 0.f;
+            for (float s : pcm) { float a = fabsf(s); if (a > peak) peak = a; }
+            if (peak < 0.005f) { window_start += step_sec; continue; }
         }
 
-        vad_gate_inplace(pcm);
+        // Only gate the raw mix; an isolated vocal stem is already clean and the
+        // gate would zero quiet singing (the bug we fixed in do_transcribe).
+        if (!used_vocal_stem) vad_gate_inplace(pcm);
 
         set_search_status(true, window_start, total_dur,
             "Whisper " + fmt_time(window_start) + " – " + fmt_time(win_end) + "…");
