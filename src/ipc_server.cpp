@@ -2755,10 +2755,60 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         std::string src = params.value("path", "");
         if (!src.empty()) state.audio_path = src;
         if (state.audio_path.empty()) { err = "no audio file loaded"; return {}; }
-        // MCP callers expect the transcript only — no surprise lyric clips on the
-        // timeline. Leaving pipeline_on_done null means the completion handler
-        // does its data-loading work and stops there.
-        state.pipeline_on_done = {};
+        // Optional preset chosen up front so the completion callback lays the
+        // FINAL styled lyric bricks in one shot, the way the UI does.
+        std::string preset = params.value("preset", "");
+        if (!preset.empty()) state.typo_preset_id = preset;
+        // Lay lyrics exactly like the UI's "Generate Lyrics" button: from the
+        // pipeline-done callback (screen_studio fires it the instant the pipeline
+        // reaches Done), while the audio brick is still where it was at transcribe
+        // time — so the timeline offset (clip.start - clip.in_point) is exact.
+        // The agent used to lay lyrics in a SEPARATE, later generate_typography
+        // call after it had added/trimmed clips, which drifted the first words
+        // into the intro. Only auto-lay when this audio is actually a clip on the
+        // timeline and the mode produces a transcript; a detached transcript fetch
+        // (path = a file not on the timeline) leaves the timeline clean as before.
+        bool on_timeline = false;
+        float clip_in = 0.f, clip_dur = 0.f;
+        for (auto& t : state.tracks) {
+            for (auto& c : t.clips)
+                if ((c.clip_type == ClipType::Audio || c.clip_type == ClipType::Video) &&
+                    c.source_id == state.audio_path) {
+                    clip_in = c.in_point; clip_dur = c.end - c.start;
+                    on_timeline = true; break;
+                }
+            if (on_timeline) break;
+        }
+
+        // Procedural guard against redundant re-transcription: a transcript is
+        // source-relative (do_transcribe adds clip_in back), so trimming the brick
+        // never invalidates it. If a cached transcript already COVERS this brick's
+        // region, skip the heavy separation+whisper and just (re-)lay the lyrics
+        // with the chosen preset — re-running after a trim or a preset swap then
+        // costs ~nothing (the agent does exactly this on a misread). _words.span
+        // records the source-relative range each transcript covers. force=true
+        // forces a real re-run.
+        bool force = params.value("force", false);
+        if (!force && mode != PipelineMode::SeparateOnly && on_timeline &&
+            std::filesystem::exists(cache_path(state.audio_path, "_words.json"))) {
+            std::ifstream sp(cache_path(state.audio_path, "_words.span"));
+            float lo = 0.f, hi = -1.f;
+            if (sp && (sp >> lo >> hi) &&
+                clip_in >= lo - 0.05f && clip_in + clip_dur <= hi + 0.05f) {
+                load_words_cache(state);
+                generate_typography(state);
+                json r;
+                r["stage"]             = "done";
+                r["reused_transcript"] = true;
+                r["next_action_hint"]  = "Reused the cached transcript (a trim doesn't invalidate it) and re-laid the lyrics with the preset — no re-transcription. Pass force:true only to truly re-run separation+transcription.";
+                return r;
+            }
+        }
+
+        if (mode != PipelineMode::SeparateOnly && on_timeline)
+            state.pipeline_on_done = generate_typography;
+        else
+            state.pipeline_on_done = {};
         kick_pipeline(state, state.audio_path, mode);
         // Non-blocking: return immediately with stage=running so the caller can
         // poll get_pipeline_status. The pipeline runs in the background thread
@@ -2766,7 +2816,9 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         json r;
         r["stage"]    = "running";
         r["progress"] = state.pipeline.progress;
-        r["next_action_hint"] = "Poll get_pipeline_status every 2-3s until stage='done', then call generate_typography(preset='flash'|'apple'|'spotify'|'karaoke'|'headline'|...) to lay lyric clips. Do NOT hand-roll text clips with add_clip(type='text') for lyrics — generate_typography handles styling, grouping and idempotency.";
+        r["next_action_hint"] = (mode != PipelineMode::SeparateOnly && on_timeline)
+            ? "Poll get_pipeline_status every 2-3s until stage='done'. The styled lyric bricks are laid AUTOMATICALLY on completion — do NOT call generate_typography to place them (only to swap presets, and only if the audio brick has not moved since). Never hand-roll add_clip(type='text') for lyrics."
+            : "Poll get_pipeline_status every 2-3s until stage='done'. No audio clip is on the timeline for this source, so no lyric bricks are laid — read get_transcript for the words.";
         return r;
     }
 

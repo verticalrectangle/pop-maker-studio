@@ -116,6 +116,13 @@ static const std::vector<std::pair<std::string, ToolInfo>>& tool_table() {
         std::vector<std::pair<std::string, ToolInfo>> t;
         json all = json::parse(AGENT_TOOLS_JSON);
         for (auto& tool : all) {
+            std::string name = tool["name"].get<std::string>();
+            // find_and_add_clip is retired from the in-app agent: it ran its own
+            // windowed MDX-Net+whisper pass into a throwaway cache and dropped a
+            // stray clip that drifted lyric offsets. The agent transcribes via
+            // trigger_pipeline (which lays the lyrics) and locates phrases with
+            // search_transcript — one transcription path, no divergent second one.
+            if (name == "find_and_add_clip") continue;
             ToolInfo info;
             info.ipc = tool.value("ipc", false);
             info.decl = {
@@ -129,7 +136,7 @@ static const std::vector<std::pair<std::string, ToolInfo>>& tool_table() {
             auto& schema = tool["inputSchema"];
             info.has_quiet = schema.contains("properties") &&
                              schema["properties"].contains("quiet");
-            t.push_back({tool["name"].get<std::string>(), std::move(info)});
+            t.push_back({name, std::move(info)});
         }
         return t;
     }();
@@ -836,10 +843,26 @@ static const char* kSystemPrompt =
     "trigger_export, detect_screen_activity, ...) call its get_*_status tool "
     "ONCE — it blocks internally until the operation finishes and returns "
     "the final result. Never poll in a loop.\n"
+    "LYRICS (trigger_pipeline lays them — like the UI's Generate Lyrics button): "
+    "when the audio is a clip on the timeline, trigger_pipeline lays the styled "
+    "lyric bricks itself the moment it finishes, positioned to the brick — you do "
+    "NOT call generate_typography to place them. Flow: (1) put the song on the "
+    "timeline (add_track + add_clip type='audio'); (2) if you only want a SECTION, "
+    "trim the audio brick to it FIRST; (3) trigger_pipeline(preset='flash'|'apple'|"
+    "'spotify'|...) ONCE — default mode isolates vocals for clean lyrics "
+    "(transcribe_only is for speech, not music); (4) call get_pipeline_status once "
+    "to wait for stage='done'. Lyric timings are placed relative to the brick, so "
+    "if you move or trim the brick AFTER transcribing, re-run generate_typography "
+    "to re-fit them (that is also how you swap presets). NEVER run a second "
+    "transcription to 'locate' a section — use search_transcript on the existing "
+    "transcript. One transcription per audio: if one is running or done, read "
+    "get_transcript / get_pipeline_status instead of starting another.\n"
     "PROBE BEFORE ASKING: when the user provides media, gather facts with tools "
     "before asking them anything — get_media_info for resolution/duration/codec, "
     "describe_video + get_video_description for visual content, get_transcript / "
-    "search_transcript for spoken content, trigger_pipeline for lyrics. Only ask "
+    "search_transcript for spoken content, trigger_pipeline for lyrics (for a "
+    "SECTION, trim the brick first — see LYRICS; never transcribe the whole song "
+    "when only a part is wanted). Only ask "
     "the user about subjective choices (style, pacing, colors) that tools cannot "
     "determine.\n"
     "Be concise in prose — do the work with tools and summarize briefly.";
@@ -1055,7 +1078,13 @@ void agent_send(const std::string& user_text) {
     {
         std::lock_guard<std::mutex> lk(s_mu);
         if (s_wire.empty()) {
-            std::string sys = std::string(kSystemPrompt) + "\n\n" + AGENT_TOOLS_INDEX;
+            // Keep the category index consistent with the filtered tool table:
+            // find_and_add_clip is dropped from the in-app agent (see tool_table).
+            std::string index = AGENT_TOOLS_INDEX;
+            const std::string drop = "find_and_add_clip, ";
+            size_t fp = index.find(drop);
+            if (fp != std::string::npos) index.erase(fp, drop.size());
+            std::string sys = std::string(kSystemPrompt) + "\n\n" + index;
             if (s_cfg.vision)
                 sys += "\n\nVISION: you can see images — use your own eyes before "
                        "asking the user. Call take_snapshot (source='ui' for the "

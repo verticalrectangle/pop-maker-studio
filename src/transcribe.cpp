@@ -605,6 +605,16 @@ static void do_transcribe(
     // Record what audio these words came from so a later lyrics request can tell
     // a vocal-stem transcript from a raw-mix (subtitles) one and re-run if needed.
     transcript_write_source(out_words_json, use_vocals);
+    // Record the SOURCE-relative span this transcript covers. A transcript is
+    // source-relative (clip_in was added back above), so trimming the brick never
+    // invalidates it — trigger_pipeline reuses this to skip re-separation/whisper
+    // when a later trim stays inside [span_lo, span_hi]. clip_dur<=0 == whole file.
+    {
+        float span_lo = clip_in;
+        float span_hi = clip_dur > 0.f ? clip_in + clip_dur : 1e9f;
+        std::ofstream f(cache_path(audio_path, "_words.span"));
+        f << span_lo << " " << span_hi << "\n";
+    }
 
     status.stage    = PipelineStage::Done;
     status.progress = 1.0f;

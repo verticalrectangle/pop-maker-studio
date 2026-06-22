@@ -1229,15 +1229,21 @@ async def list_tools() -> list[Tool]:
             description=(
                 "Kick off the ML pipeline (MDX-Net + transcription) on the project audio. NON-BLOCKING: "
                 "returns immediately with stage='running'. Poll get_pipeline_status every 2–3s until "
-                "stage='done', then call generate_typography(preset='...') to lay the lyric/subtitle "
-                "bricks on the timeline. No batch needed.\n\n"
+                "stage='done'. When the audio is a clip on the timeline, the lyric bricks are laid "
+                "AUTOMATICALLY on completion — styled by `preset`, positioned to the brick — exactly "
+                "like the UI's Generate Lyrics button. You do NOT need a separate generate_typography "
+                "call to place them. RE-RUNNING after a trim or a preset change REUSES the cached "
+                "transcript (no re-transcription — a trim never invalidates a source-relative "
+                "transcript); it just re-lays the lyrics. Pass force=true to force a real re-run. "
+                "No batch needed.\n\n"
                 "FULL WORKFLOW:\n"
-                "  1. add_track('Audio') + add_clip(type='audio', text=<path>) — audio MUST be on the\n"
-                "     timeline before this tool will accept the call.\n"
-                "  2. trigger_pipeline(mode='both')  → returns stage='running'\n"
-                "  3. loop: get_pipeline_status() every 2–3s until stage='done' (or 'error').\n"
-                "  4. generate_typography(preset='flash')  ← lays the lyric bricks in the chosen style.\n"
-                "  5. (optional) generate_typography(preset='...') again to swap the visual style.\n\n"
+                "  1. add_track('Audio') + add_clip(type='audio', text=<path>) — put the song on the\n"
+                "     timeline and trim the brick to its FINAL span before transcribing.\n"
+                "  2. trigger_pipeline(mode='both', preset='flash')  → returns stage='running'\n"
+                "  3. loop: get_pipeline_status() every 2–3s until stage='done' (or 'error'); the styled\n"
+                "     lyric bricks are laid automatically when it finishes — no generate_typography needed.\n"
+                "  4. (optional) generate_typography(preset='...') to swap the style, or to re-fit the\n"
+                "     lyrics if you moved/trimmed the audio brick AFTER transcribing.\n\n"
                 "PROBE FIRST: call get_transcript() — if status='ready' the transcript is already cached on disk. "
                 "If lyric bricks are already on the timeline you can skip this entirely. "
                 "Only call trigger_pipeline when no transcript exists for this audio.\n\n"
@@ -1273,6 +1279,14 @@ async def list_tools() -> list[Tool]:
                     "path": {
                         "type": "string",
                         "description": "Absolute path to media file. Transcribes this file without adding it to the timeline.",
+                    },
+                    "preset": {
+                        "type": "string",
+                        "description": "Typography preset for the lyric bricks laid automatically on completion (flash, apple, spotify, karaoke, headline, ...). Applied like the UI's Generate Lyrics. Omit to keep the current preset.",
+                    },
+                    "force": {
+                        "type": "boolean",
+                        "description": "Force a real re-run of separation+transcription even when a cached transcript already covers the brick. Default false: after trimming the brick or changing preset the cached transcript is reused and only the lyrics are re-laid (no re-transcription).",
                     },
                 },
             },
