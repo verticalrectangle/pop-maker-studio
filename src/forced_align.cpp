@@ -225,8 +225,18 @@ std::vector<WordEntry> forced_align(
             // Use a small epsilon to handle floating-point boundary alignment.
             while (wi < N && whisper_words[wi].start < en - 0.001f) ++wi;
             int w1 = wi - 1;
-            if (w0 <= w1)
-                segs.push_back({w0, w1, st, en});
+            if (w0 <= w1) {
+                // Clamp the CTC window's start to the first word's DTW onset, not
+                // whisper's loose segment boundary (which just inherits the prior
+                // segment's end and can sit a second before the word actually
+                // starts — on the tail of the previous word). Since a word's time
+                // is seg.t0 + frame*ratio, an over-early t0 lets the aligner drag
+                // the first word back into that dead pre-onset audio (the "behind
+                // placed 2s early on the held note" bug). Verified on wav2vec2:
+                // Behind, 14.14 -> 15.77, no other word moved.
+                float t0 = std::max(st, whisper_words[w0].start - 0.08f);
+                segs.push_back({w0, w1, t0, en});
+            }
         }
         // Any words not covered by a segment (rare timing edge case)
         if (wi < N) {
