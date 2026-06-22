@@ -147,10 +147,15 @@ std::vector<Clip> group_words(
     case SubtitleMode::CustomN: {
         int n = (custom_n < 1) ? 1 : custom_n;
         if (max_words > 0 && max_words < n) n = max_words;
+        // Break the group on a pause too, so an N-word brick never stretches
+        // across a silence (otherwise it spans "nothing" between two sung words).
+        // Honors the preset's pause_gap (e.g. Drill = 0.25s) when set.
+        float kGap = (pause_gap > 0.f) ? pause_gap : 0.8f;
         for (size_t i = 0; i < words.size(); ) {
-            Clip c = words[i++];
-            for (int k = 1; k < n && i < words.size(); ++k, ++i) {
-                c.text += " " + words[i].text; c.end = words[i].end;
+            Clip c = words[i]; ++i;
+            for (int k = 1; k < n && i < words.size(); ++k) {
+                if (words[i].start - words[i - 1].end > kGap) break;  // pause → flush
+                c.text += " " + words[i].text; c.end = words[i].end; ++i;
             }
             out.push_back(c);
         }
