@@ -645,6 +645,15 @@ void app_frame(AppState& state) {
         audio_clear_loop();
     }
 
+    // Keep state.duration covering all content. It's set ad-hoc on import /
+    // typography and goes stale when a clip is dragged to a later start or a
+    // second clip extends past it — which pinned the playhead at the old length
+    // (couldn't scrub or play past ~30s) and made exports mismatch the real
+    // content. Grow only, so deleting a clip never silently truncates the project.
+    for (const auto& tr : state.tracks)
+        for (const auto& c : tr.clips)
+            if (c.end > state.duration) state.duration = c.end;
+
     // Update playhead BEFORE rendering so the video frame shown this cycle
     // matches the audio position this cycle, not last cycle's.
     if (state.playing) {
