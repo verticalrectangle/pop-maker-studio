@@ -625,12 +625,15 @@ void audio_set_volume(float v) { g_volume = (v < 0.f) ? 0.f : (v > 4.f) ? 4.f : 
 
 void audio_seek(float seconds) {
     if (g_loading.load()) return;
-    size_t sample = (size_t)(seconds * 44100.f) * 2;
-    if (!g_samples.empty())
-        g_read_pos.store(sample < g_samples.size() ? sample : g_samples.size(),
-                         std::memory_order_relaxed);
-    else
-        g_read_pos.store(sample, std::memory_order_relaxed);
+    if (seconds < 0.f) seconds = 0.f;
+    // g_read_pos is the master TIMELINE clock — clips mix at their own positions
+    // (g_samples isn't the mix; it's just the loaded master-audio buffer), and the
+    // timeline can extend PAST that buffer when a video/lyric clip sits later than
+    // the master audio's length. Do NOT clamp the seek to g_samples.size(); the
+    // timeline end is enforced upstream (last_playable_time / end-of-project
+    // auto-stop). Clamping here pinned playback at the master audio's length, so
+    // pressing play past that point snapped the playhead back to it.
+    g_read_pos.store((size_t)(seconds * 44100.f) * 2, std::memory_order_relaxed);
 }
 
 float audio_duration()   { return g_duration; }

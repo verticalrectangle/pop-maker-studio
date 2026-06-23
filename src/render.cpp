@@ -1221,7 +1221,7 @@ static std::vector<std::string> build_args(AppState& state) {
                 // replace that entry's volume with the bus-gained value (mirrors
                 // the Audio-clip dedup below), else add it as its own stream.
                 if (render_path_has_audio(cl.text)) {
-                    float vvol = (state.tracks[ti].muted ? 0.f : cl.volume)
+                    float vvol = ((state.tracks[ti].muted || cl.muted) ? 0.f : cl.volume)
                                  * bus_brick_gain(state, ti, cl);
                     bool found = false;
                     for (auto& ai : audio_ins)
@@ -1236,7 +1236,7 @@ static std::vector<std::string> build_args(AppState& state) {
                 layers.push_back(rl);
             } else if (cl.clip_type == ClipType::Audio) {
                 if (cl.text.empty() || !fs::exists(cl.text)) continue;
-                float vol = (state.tracks[ti].muted ? 0.f : cl.volume)
+                float vol = ((state.tracks[ti].muted || cl.muted) ? 0.f : cl.volume)
                             * bus_brick_gain(state, ti, cl);
                 // Replace primary audio entry if same path, else add new stream
                 bool found = false;
@@ -2551,7 +2551,7 @@ void render_start_gl(AppState& state) {
                 if (!fs::exists(cl.text)) continue;
                 if (clip_is_videolike_type(cl.clip_type) && !path_has_audio(cl.text)) continue;
                 float speed = fmaxf(0.01f, cl.speed);
-                float vol   = (state.tracks[ti].muted ? 0.f : cl.volume)
+                float vol   = ((state.tracks[ti].muted || cl.muted) ? 0.f : cl.volume)
                               * bus_brick_gain(state, ti, cl);
                 // Clips dragged left past t=0 (start < 0): only the part from
                 // timeline 0 is audible. Fold the overhang into in_point so
@@ -2596,7 +2596,7 @@ void render_start_gl(AppState& state) {
                 // start timestamps — measured, not folklore), so the clip's
                 // first sample is always pts 0; placement happens via adelay.
                 float pts0 = 0.f;
-                if (!state.tracks[ti].muted) {
+                if (!state.tracks[ti].muted && !cl.muted) {
                     if (auto kv = cl.ktracks.find("volume");
                         kv != cl.ktracks.end() && !kv->second.empty())
                         ai.vol_e = prop_expr(cl, "volume", 1.f, cl.volume, -1.f,
