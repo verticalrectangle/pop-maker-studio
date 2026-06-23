@@ -1988,13 +1988,20 @@ static json dispatch(AppState& state, const std::string& method, const json& par
     if (method == "undo") {
         if (!history_can_undo()) { err = "nothing to undo"; return {}; }
         history_undo(state);
-        return state_to_json_slim(state);
+        // history_pos changes on every real step, so repeated undo returns a
+        // distinct result — without it, undoing clip-detail edits leaves the slim
+        // state identical and the harness repetition guard reads it as no-progress.
+        json r = state_to_json_slim(state);
+        r["history_pos"] = history_pos();
+        return r;
     }
 
     if (method == "redo") {
         if (!history_can_redo()) { err = "nothing to redo"; return {}; }
         history_redo(state);
-        return state_to_json_slim(state);
+        json r = state_to_json_slim(state);
+        r["history_pos"] = history_pos();
+        return r;
     }
 
     // ── Background removal / BodyFX mask processing ───────────────────────────
@@ -2223,7 +2230,11 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         state.tracks[ti].clips.erase(state.tracks[ti].clips.begin() + ci);
         if (state.selected_track == ti && state.selected_clip == ci)
             state.selected_clip = -1;
-        return json::object();
+        // Changing result (remaining count) so deleting clips one-by-one by index
+        // doesn't trip the harness repetition guard — see delete_track.
+        json r; r["deleted_clip"] = ci;
+        r["clips_remaining"] = (int)state.tracks[ti].clips.size();
+        return r;
     }
 
     if (method == "add_clip") {
@@ -2693,7 +2704,13 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         if (!check_track(state, ti, err)) return {};
         state.tracks.erase(state.tracks.begin() + ti);
         if (state.selected_track == ti) { state.selected_track = -1; state.selected_clip = -1; }
-        return json::object();
+        // Return the new count so peeling tracks one-by-one (always track:0)
+        // yields a changing result — a constant {} ack reads as no-progress and
+        // trips the harness repetition guard even though each call deletes a
+        // different track.
+        json r; r["deleted_track"] = ti;
+        r["tracks_remaining"] = (int)state.tracks.size();
+        return r;
     }
 
     if (method == "add_marker") {
