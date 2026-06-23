@@ -754,9 +754,13 @@ void ui_studio(AppState& state) {
             if (tr.muted) continue;
             int tr_idx = (int)(&tr - state.tracks.data());
             for (auto& cl : tr.clips) {
-                // Record brick: the selected take plays like an audio clip
-                // (in_point 0, speed 1). Muted while that brick is recording
-                // so the previous pass doesn't bleed under the new one.
+                // Record brick: the selected take plays like an audio clip.
+                // Takes record at speed 1, but in_point is honored so the left
+                // handle trims the take (reveals/hides content) like every other
+                // brick instead of sliding the take under a fixed edge — and it
+                // matches collect_audio_fx_segments, which maps FX windows
+                // through in_point. Muted while that brick is recording so the
+                // previous pass doesn't bleed under the new one.
                 if (cl.clip_type == ClipType::Record) {
                     int ci = (int)(&cl - tr.clips.data());
                     if (cl.muted || cl.rec_take_sel < 0 ||
@@ -765,7 +769,7 @@ void ui_studio(AppState& state) {
                     AudioClipDesc d;
                     d.track    = tr_idx;
                     d.tl_start = cl.start;    d.tl_end   = cl.end;
-                    d.in_point = 0.f;         d.speed    = 1.f;
+                    d.in_point = cl.in_point; d.speed    = 1.f;
                     d.volume   = cl.volume;   d.pan      = cl.pan;
                     d.fade_in  = cl.fade_in;  d.fade_out = cl.fade_out;
                     // Keyframed volume/pan animate in the live mix too (same as
@@ -785,8 +789,12 @@ void ui_studio(AppState& state) {
                         if (cl.audio_fx.any_active()) {
                             AudioFX own = cl.audio_fx;
                             own.voice_convert_on = false;
+                            // Window in source time (take speed 1), offset by
+                            // in_point so the brick's own chain tracks a left
+                            // trim — mirrors export_fx_segments().
                             if (own.any_active())
-                                segs.push_back({0.f, cl.end - cl.start, own});
+                                segs.push_back({cl.in_point,
+                                                cl.in_point + (cl.end - cl.start), own});
                         } else {
                             segs = collect_audio_fx_segments(state, tr_idx, cl);
                         }

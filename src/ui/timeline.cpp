@@ -2278,13 +2278,16 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                         }
                     }
                 } else if (has_take) {
-                    // Takes are recorded on the loop grid: in_point 0, speed 1.
+                    // Take waveform. Takes record at speed 1, but in_point is
+                    // honored so a left-trim reveals/hides take content (the
+                    // waveform stays anchored to the timeline) — same mapping as
+                    // a plain Audio clip, not a slide of the whole take.
                     const WaveformData* wd = waveform_get(clip.rec_takes[clip.rec_take_sel]);
                     if (wd && !wd->samples.empty()) {
                         ImU32 wcol = sel ? IM_COL32(25, 25, 45, 190)
                                          : IM_COL32(190, 190, 220, 130);
                         for (float px2 = vis_x0; px2 < vis_x1; px2 += 1.f) {
-                            float t_src = (px2 - cx0) / zoom;
+                            float t_src = clip.in_point + (px2 - cx0) / zoom;
                             int   fi    = (int)(t_src * WAVEFORM_FPS);
                             if (fi < 0 || fi >= (int)wd->samples.size()) continue;
                             float amp = wd->samples[fi] * half;

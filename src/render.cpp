@@ -2492,8 +2492,9 @@ void render_start_gl(AppState& state) {
         for (int ti = (int)state.tracks.size() - 1; ti >= 0; --ti) {
             for (auto& cl : state.tracks[ti].clips) {
                 // Record brick: its selected take is its audio. Same math as
-                // an Audio clip with in_point 0 / speed 1 (takes are recorded
-                // on the loop grid, so they start exactly at cl.start).
+                // an Audio clip at speed 1 — in_point is honored, so a left
+                // trim seeks into the take (the FX bake windows, built by
+                // export_fx_segments, are mapped through in_point too).
                 if (cl.clip_type == ClipType::Record) {
                     if (cl.muted || cl.rec_take_sel < 0 ||
                         cl.rec_take_sel >= (int)cl.rec_takes.size()) continue;
@@ -2509,13 +2510,19 @@ void render_start_gl(AppState& state) {
                         std::string baked = bake_audio_fx_wav(tp, segs);
                         if (!baked.empty()) tp = baked;
                     }
+                    // Fold a past-t=0 overhang into in_point (take speed 1),
+                    // so ss/to seek into the take exactly like the Audio path.
+                    float cstart  = cl.start;
+                    float inpoint = cl.in_point;
+                    if (cstart < 0.f) { inpoint += -cstart; cstart = 0.f; }
+                    float dur = cl.end - cstart;
                     AudioIn ai;
                     ai.path  = tp;
                     ai.vol   = (state.tracks[ti].muted ? 0.f : cl.volume)
                                * bus_brick_gain(state, ti, cl);
-                    ai.ss    = fmaxf(0.f, -cl.start);   // overhang past t=0
-                    ai.to    = cl.end - cl.start;
-                    ai.delay = fmaxf(0.f, cl.start);
+                    ai.ss    = inpoint;
+                    ai.to    = inpoint + dur;
+                    ai.delay = fmaxf(0.f, cstart);
                     ai.pan   = state.tracks[ti].muted ? 0.f : cl.pan;
                     // Keyframed volume/pan (take plays at 1x, pts base 0) — mirror
                     // the general clip path so a record take exports as it previews.
@@ -2530,7 +2537,7 @@ void render_start_gl(AppState& state) {
                     if (cl.fade_in > 0.f)  { ai.fade_in = cl.fade_in;  ai.fade_in_st = 0.f; }
                     if (cl.fade_out > 0.f) {
                         ai.fade_out    = cl.fade_out;
-                        ai.fade_out_st = fmaxf(0.f, (cl.end - cl.start) - cl.fade_out);
+                        ai.fade_out_st = fmaxf(0.f, dur - cl.fade_out);
                     }
                     audio_ins.push_back(std::move(ai));
                     covered_paths.insert(tp);
