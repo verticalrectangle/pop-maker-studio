@@ -324,14 +324,29 @@ static void mix_master(float* out, ma_uint32 frameCount) {
             if (tb < cl.tl_start || tb >= cl.tl_end) return;
             const std::vector<float>* buf_ptr = cl.buf ? cl.buf.get() : nullptr;
             if (!buf_ptr || buf_ptr->empty()) return;
-            float src_t = cl.in_point + (tb - cl.tl_start) * cl.speed;
-            size_t sp = (size_t)(src_t * 44100.f) * 2;
+            // Source SAMPLE position in double, built directly from the integer
+            // master frame — NOT float src_t*44100. When in_point*44100 lands on
+            // or near an integer (in_point 0, or any take trimmed to a "round"
+            // point like 7.8 s → 343980), the float product straddles sample
+            // boundaries and (size_t)(src_t*44100) stalls then jumps every few
+            // samples. That stutters plain playback, and the FX chain's frame_idx
+            // (below) keeps failing its == last+1 test, machine-gunning the
+            // jump-reset that wipes grain/autotune state into dropouts & silence.
+            double lat   = (ob >= 0 ? (double)snap->bricks[ob].lat_s : 0.0);
+            double frame = (double)(fpos / 2) + lat * 44100.0;
+            double src_samp = (double)cl.in_point * 44100.0
+                            + (frame - (double)cl.tl_start * 44100.0) * (double)cl.speed;
+            if (src_samp < 0.0) return;
+            size_t sp = (size_t)src_samp * 2;
             if (sp + 1 >= buf_ptr->size()) return;
             float sl = (*buf_ptr)[sp], sr2 = (*buf_ptr)[sp+1];
-            // Live FX, pre-fader — same FXUnits the export bake runs.
+            float src_t = (float)(src_samp * (1.0 / 44100.0));   // seconds, for FX windows
+            // Live FX, pre-fader — same FXUnits the export bake runs. frame_idx
+            // is the integer master frame, so contiguous playback never trips the
+            // jump-reset (mirrors the monitor path's g_mon_frame_ctr counter).
             if (cl.chain)
                 audio_fx_chain_process_seg(cl.chain, sl, sr2, src_t,
-                                           (int64_t)(sp / 2));
+                                           (int64_t)(fpos / 2));
             float fade = clip_fade(cl, tb);
             float vraw = cl.vol_keys.empty() ? cl.volume
                        : cl.vol_keys.eval(tb - cl.tl_start);
