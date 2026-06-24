@@ -5,7 +5,15 @@
 #include "separate.h"
 #include "paths.h"
 #include <onnxruntime_cxx_api.h>
-#include <dnnl_provider_options.h>
+// oneDNN provider options ship only with ORT builds that bundle the dnnl EP
+// (a full/source build, like the local dev one). The prebuilt onnxruntime-linux-x64
+// package the release CI uses does NOT, so guard on the header's presence — without
+// it the dnnl Append below is compiled out and ORT falls back to its CPU EP (which
+// is all the prebuilt supports anyway).
+#if __has_include(<dnnl_provider_options.h>)
+#  include <dnnl_provider_options.h>
+#  define PMS_HAVE_DNNL 1
+#endif
 #include <fftw3.h>
 #include <filesystem>
 #include <cmath>
@@ -231,9 +239,11 @@ std::string separate_run(
     // throws when the provider isn't in this build → catch and continue.
     try { OrtCUDAProviderOptions cuda{}; opts.AppendExecutionProvider_CUDA(cuda); }
     catch (...) {}
+#ifdef PMS_HAVE_DNNL
     try { OrtDnnlProviderOptions dnnl{}; dnnl.use_arena = 1;
           opts.AppendExecutionProvider_Dnnl(dnnl); }
     catch (...) {}
+#endif
 
     Ort::Session session(env, separate_model_path().c_str(), opts);
     Ort::AllocatorWithDefaultOptions alloc;
