@@ -640,6 +640,10 @@ void ui_studio(AppState& state) {
     // Poll background removal and voice conversion jobs.
     bg_remove_poll(state);
     vc_poll(state);
+    // Revert clips whose voice-convert FX was removed (brick deleted, chain
+    // entry pulled, decoupled). Runs after vc_poll so a job that lands this
+    // frame is reverted the same frame if its brick is already gone — no flash.
+    vc_reconcile(state);
 
     // Poll noise reduction — on completion, set denoised WAV as playback source.
     {
