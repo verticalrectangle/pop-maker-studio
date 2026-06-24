@@ -1515,7 +1515,7 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
             if (slot < 0 || !video_is_open(slot)) return;
             if (already_queued(slot)) return;
             video_set_pixel_fx(slot, make_pfx(cl, ti));
-            float src_t = cl->in_point + (at_time - cl->start) * cl->speed;
+            float src_t = clip_src_time(*cl, at_time);
             reqs.push_back({slot, (double)(src_t + lookahead), max_frames});
         };
 
@@ -1663,7 +1663,7 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                 std::string vsrc = clip_video_src(state, *cl_ptr);  // conformed copy if ready
                 int slot = slot_for_video(const_cast<AppState&>(state),
                                clip_slot_key(vsrc, cl_ptr->start), vsrc);
-                float src_t = cl_ptr->in_point + (at_time - cl_ptr->start) * cl_ptr->speed;
+                float src_t = clip_src_time(*cl_ptr, at_time);
 
                 // Glass-only cfx for CPU-side datamosh and ZoomPunch — global FX
                 // are applied once to the full composite via scene_apply_fx, not per-clip.
@@ -1711,7 +1711,7 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                     float mask_fps = bg_remove_read_fps(mask_dir);
                     // Same source-time mapping as the frame fetch (×speed —
                     // this used to divide, desyncing masks on retimed clips).
-                    float src_t = cl_ptr->in_point + (at_time - cl_ptr->start) * cl_ptr->speed;
+                    float src_t = clip_src_time(*cl_ptr, at_time);
                     int frame_i = (int)(src_t * mask_fps);
                     VideoInfo vi_g = video_info(slot);
                     int bw = (vi_g.width  > 0) ? vi_g.width  : (int)w;

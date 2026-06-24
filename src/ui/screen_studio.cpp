@@ -561,16 +561,23 @@ void ui_studio(AppState& state) {
             // slots stuck in Native (libav opens a PNG as a one-frame video,
             // then every decode past t=0 fails and the clip renders blank).
             if (video_source(slot) != PreviewSource::Still) {
-                std::string still = proxy_still_path(src);
-                if (fs::exists(still)) {
-                    video_open_still(slot, still);
-                } else {
-                    // Still missing entirely (generation failed once, or the
-                    // file was deleted). proxy_start regenerates it for images
-                    // in a background thread, but has no in-flight dedup —
-                    // kick it once per source, not per frame.
-                    static std::set<std::string> s_still_kicked;
-                    if (s_still_kicked.insert(src).second) proxy_start(src);
+                // A still image is already an image — open the ORIGINAL at full
+                // quality (PNG keeps its alpha), no lossy/downscaled JPEG still.
+                video_open_still(slot, src);
+                if (video_source(slot) != PreviewSource::Still) {
+                    // Only formats stb_image can't read (HEIC/WEBP/TIFF) get here
+                    // — fall back to the converted still proxy.
+                    std::string still = proxy_still_path(src);
+                    if (fs::exists(still)) {
+                        video_open_still(slot, still);
+                    } else {
+                        // Still missing entirely (generation failed once, or the
+                        // file was deleted). proxy_start regenerates it for images
+                        // in a background thread, but has no in-flight dedup —
+                        // kick it once per source, not per frame.
+                        static std::set<std::string> s_still_kicked;
+                        if (s_still_kicked.insert(src).second) proxy_start(src);
+                    }
                 }
             }
             continue;

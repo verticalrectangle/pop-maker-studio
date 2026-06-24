@@ -51,14 +51,41 @@ static void mark_ready_cached(const std::string& path) {
 
 std::string proxy_mjpeg_path(const std::string& vp) { return cache_path(vp, ".proxy.mjpeg"); }
 std::string proxy_idx_path  (const std::string& vp) { return cache_path(vp, ".proxy.idx");   }
+// Does this file's CONTENT decode with stb_image (PNG/JPEG/BMP/GIF)? The
+// EXTENSION lies — a ".png" is very often really WebP/HEIC/AVIF, which stb can't
+// read, so loading the "original" renders blank. Magic-byte sniff, cached (this
+// is hit per-frame for image clips).
+static bool content_is_stbi_image(const std::string& path) {
+    static std::mutex mu;
+    static std::unordered_map<std::string, bool> cache;
+    {
+        std::lock_guard<std::mutex> lk(mu);
+        auto it = cache.find(path);
+        if (it != cache.end()) return it->second;
+    }
+    bool ok = false;
+    if (FILE* f = fopen(path.c_str(), "rb")) {
+        unsigned char b[12] = {0};
+        size_t n = fread(b, 1, sizeof(b), f);
+        fclose(f);
+        if (n >= 4)
+            ok = (b[0]==0x89 && b[1]=='P' && b[2]=='N' && b[3]=='G') ||  // PNG
+                 (b[0]==0xFF && b[1]==0xD8 && b[2]==0xFF)            ||  // JPEG
+                 (b[0]=='B'  && b[1]=='M')                          ||  // BMP
+                 (b[0]=='G'  && b[1]=='I' && b[2]=='F');                // GIF
+    }
+    std::lock_guard<std::mutex> lk(mu);
+    cache[path] = ok;
+    return ok;
+}
+
 std::string proxy_still_path(const std::string& vp) {
-    // PNGs are loaded directly so transparency is preserved — a JPEG proxy
-    // would flatten the alpha channel and the image would render as opaque.
-    fs::path p(vp);
-    std::string ext = p.extension().string();
-    for (auto& c : ext) c = (char)tolower((unsigned char)c);
-    if (ext == ".png") return vp;
-    return cache_path(vp, ".still.jpg");
+    // Load the original directly only when its BYTES are a stb-readable image —
+    // full quality, alpha intact. The extension can't be trusted (".png" files
+    // are routinely WebP/HEIC); those get a CONVERTED still, written as PNG so a
+    // transparent source keeps its alpha (a JPEG still would flatten it).
+    if (content_is_stbi_image(vp)) return vp;
+    return cache_path(vp, ".still.png");
 }
 
 // ── Queue + worker pool state ─────────────────────────────────────────────────
@@ -514,22 +541,24 @@ void proxy_start(const std::string& video_path) {
         std::string still = proxy_still_path(video_path);
         if (fs::exists(still)) return;
         std::string img_src = "file:" + video_path;
-        // Run in background thread so we don't block the render loop
+        // Convert to a FULL-RES PNG so alpha (e.g. a transparent WebP) survives
+        // and the image isn't softened — it's already a finished image, not a
+        // video that needs a lightweight proxy.
         std::thread([video_path, img_src, still]() {
             const char* args[] = {
                 "ffmpeg", "-hide_banner", "-loglevel", "error",
-                "-y", "-i", img_src.c_str(), "-vf", "scale=iw/2:ih/2",
+                "-y", "-i", img_src.c_str(), "-frames:v", "1",
                 still.c_str(), nullptr
             };
             pid_t p = spawn_ffmpeg(args);
             if (p > 0) { int st; waitpid(p, &st, 0); }
 
             if (!fs::exists(still)) {
-                std::string tmp = still + ".tmp.jpg";
+                std::string tmp = still + ".tmp.png";
                 std::string cmd = "heif-convert \"" + video_path + "\" \"" + tmp + "\" 2>/dev/null";
                 if (system(cmd.c_str()) == 0 && fs::exists(tmp)) { // NOLINT
                     const char* a2[] = {"ffmpeg","-hide_banner","-loglevel","error",
-                                        "-y","-i",tmp.c_str(),"-vf","scale=iw/2:ih/2",
+                                        "-y","-i",tmp.c_str(),"-frames:v","1",
                                         still.c_str(), nullptr};
                     pid_t p2 = spawn_ffmpeg(a2);
                     if (p2 > 0) { int st; waitpid(p2, &st, 0); }

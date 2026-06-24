@@ -1338,11 +1338,13 @@ void video_open_still(int track_id, const std::string& jpeg_path) {
     fread(buf.data(), 1, (size_t)sz, f);
     fclose(f);
 
-    // PNG magic — decode via stb_image so the alpha channel survives. The
-    // JPEG path below would otherwise flatten alpha to opaque black.
-    bool is_png = sz >= 8 &&
-                  buf[0] == 0x89 && buf[1] == 'P' && buf[2] == 'N' && buf[3] == 'G';
-    if (is_png) {
+    // Decode with stb_image for everything that isn't a baseline JPEG — PNG
+    // (alpha preserved), BMP, static GIF, TGA… all at full quality. A format
+    // stb can't read (HEIC/WEBP/TIFF) leaves the slot CLOSED so the caller can
+    // fall back to a converted still proxy — we must NOT mark it Still with an
+    // empty texture. JPEG keeps its own path below (orientation/colour handling).
+    bool is_jpeg = sz >= 3 && buf[0] == 0xFF && buf[1] == 0xD8 && buf[2] == 0xFF;
+    if (!is_jpeg) {
         int w = 0, h = 0, ch = 0;
         uint8_t* px = stbi_load_from_memory(buf.data(), (int)sz, &w, &h, &ch, 4);
         if (!px) return;

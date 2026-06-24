@@ -515,6 +515,11 @@ void reopen_video_slots(AppState& state) {
 // ── Frame-rate conform ────────────────────────────────────────────────────────
 bool clip_needs_conform(const Clip& cl, int project_fps) {
     if (project_fps <= 0 || cl.src_fps <= 0.f) return false;  // 0=unprobed, -1=still
+    // Still images report a PHANTOM frame rate from ffprobe (a PNG comes back as
+    // 25/1), which used to drag them through the fps conform — re-encoding them
+    // into an mp4 that strips alpha and softens the image (the "shitty proxy").
+    // A static image is never conformed; only animated images (.gif) are.
+    if (is_image_path(cl.text) && !is_animated_image(cl.text)) return false;
     return std::fabs(cl.src_fps - (float)project_fps) > (float)project_fps * 0.01f;
 }
 
@@ -552,9 +557,15 @@ void conform_tick(AppState& state) {
             if (cl.clip_type != ClipType::Video || cl.text.empty()) continue;
             // Lazy native-fps probe — at most one ffprobe per frame so a load of
             // many clips doesn't hitch.
-            if (cl.src_fps == 0.f && !probed_one) {
+            // Probe when unprobed (src_fps 0). Also re-probe a loaded looping
+            // clip that's missing its duration: src_fps is serialized but
+            // src_duration (v46 projects) is not, so a saved GIF needs its loop
+            // length recovered. -1 = probed-but-none, so we don't retry forever.
+            if ((cl.src_fps == 0.f ||
+                 (cl.clip_loop && cl.src_duration == 0.f)) && !probed_one) {
                 MediaFileInfo mi = video_probe_file(cl.text);
                 cl.src_fps = (mi.fps > 0.0) ? (float)mi.fps : -1.f;
+                cl.src_duration = (mi.duration > 0.0) ? (float)mi.duration : -1.f;
                 // Animated GIFs are loops by nature — default to seamless conform.
                 if (mi.fps > 0.0 && is_animated_image(cl.text)) cl.clip_loop = true;
                 migrate_clean_sidecars(cl.text);   // sweep old scattered files

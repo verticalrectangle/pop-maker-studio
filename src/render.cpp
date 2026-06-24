@@ -2103,7 +2103,7 @@ static bool gl_render_vid_clip(ImDrawList& dl, const Clip* cl, float at_time,
                                 bool use_scene, float shake)
 {
     if (!cl || cl->text.empty()) return false;
-    float src_t = cl->in_point + (at_time - cl->start) * cl->speed;
+    float src_t = clip_src_time(*cl, at_time);
 
     // One-shot per-clip diagnostic: prints once on the first frame for each
     // distinct (clip.start, clip.end, speed) tuple seen during the export so
@@ -2125,11 +2125,13 @@ static bool gl_render_vid_clip(ImDrawList& dl, const Clip* cl, float at_time,
         }
     }
 
-    // Still images (HEIC, JPEG, PNG…): FFmpeg can't reliably decode these,
-    // especially HEIC without libheif. Use the proxy JPEG via stb_image instead.
+    // Still images: a PNG/JPEG is already a renderable image — load the ORIGINAL
+    // at full quality (PNG keeps alpha) via stb_image, no lossy JPEG still. Only
+    // formats stb can't read (HEIC/WEBP/TIFF — FFmpeg can't reliably decode them
+    // either) fall back to the converted still proxy. We do NOT gate on the proxy
+    // existing anymore: that silently dropped stills from the export whenever the
+    // background still generator hadn't finished (or wasn't needed at all).
     if (is_still_ext(cl->text)) {
-        std::string still = proxy_still_path(cl->text);
-        if (!fs::exists(still)) return false;
         // Per-tex-slot cache: a still clip that spans the whole timeline would
         // otherwise call stbi_load() + glTexImage2D() on every output frame
         // (~5 ms × 10k frames × N still tracks). Key on (path, tex_id) so each
@@ -2138,14 +2140,18 @@ static bool gl_render_vid_clip(ImDrawList& dl, const Clip* cl, float at_time,
         static std::unordered_map<GLuint, StillCacheEntry> s_still_cache;
         auto& cache_entry = s_still_cache[tex_id];
         int vid_w = cache_entry.w, vid_h = cache_entry.h;
-        if (cache_entry.path != still || vid_w == 0 || vid_h == 0) {
+        if (cache_entry.path != cl->text || vid_w == 0 || vid_h == 0) {
             int sw = 0, sh = 0, sc = 0;
-            uint8_t* px = stbi_load(still.c_str(), &sw, &sh, &sc, 4);
+            uint8_t* px = stbi_load(cl->text.c_str(), &sw, &sh, &sc, 4);
+            if (!px) {   // exotic format → converted still proxy
+                std::string still = proxy_still_path(cl->text);
+                px = stbi_load(still.c_str(), &sw, &sh, &sc, 4);
+            }
             if (!px) return false;
             glBindTexture(GL_TEXTURE_2D, tex_id);
             glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, sw, sh, 0, GL_RGBA, GL_UNSIGNED_BYTE, px);
             stbi_image_free(px);
-            cache_entry.path = still;
+            cache_entry.path = cl->text;
             cache_entry.w = sw;
             cache_entry.h = sh;
             vid_w = sw; vid_h = sh;
@@ -2249,7 +2255,7 @@ static bool gl_render_vid_clip(ImDrawList& dl, const Clip* cl, float at_time,
         float mask_fps = bg_remove_read_fps(mask_dir);
         // Same source-time mapping as the frame fetch (×speed — this used to
         // divide, desyncing body-FX masks on any retimed clip).
-        float bfx_src_t = cl->in_point + (at_time - cl->start) * cl->speed;
+        float bfx_src_t = clip_src_time(*cl, at_time);
         int frame_i = (int)(bfx_src_t * mask_fps);
 
         // Standalone glass BodyFX bricks on this track
