@@ -551,6 +551,13 @@ void ui_studio(AppState& state) {
         if (video_source(slot) == PreviewSource::Proxy) continue;  // terminal state
 
         std::string src = source_from_key(key);
+        if (is_animated_image(src)) {
+            // GIF: decode to full-res RGBA frames once (lossless + alpha) and show
+            // the frame at the playhead — no lossy mp4 conform / MJPEG proxy that
+            // softened them and dropped transparency.
+            if (!video_is_gif(slot)) video_open_gif(slot, src);
+            continue;
+        }
         if (is_image_path(src) && !is_animated_image(src)) {
             // Still images never get an MJPEG proxy — keep them out of the
             // generic native/proxy logic below (per-frame libav opens).

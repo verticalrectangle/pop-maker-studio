@@ -564,6 +564,17 @@ struct PreviewState {
     PixelFX   pixel_fx;
     bool      pixel_fx_dirty = false;
     uint64_t  fx_stamp       = 1;   // bumped on decode-affecting FX change
+
+    // ── Animated GIF (source == Still, gif == true) ───────────────────────
+    // Decoded to full-res RGBA frames via stb_image — lossless and alpha-safe,
+    // no lossy mp4 conform / MJPEG proxy. The preview uploads the frame at the
+    // playhead into `tex`; export keeps decoding the original via libav.
+    bool                 gif          = false;
+    std::vector<uint8_t> gif_px;            // every frame, contiguous RGBA
+    std::vector<float>   gif_end;           // cumulative end time (s) per frame
+    float                gif_total    = 0.f;
+    int                  gif_w = 0, gif_h = 0, gif_n = 0;
+    int                  gif_uploaded = -1; // frame index currently on `tex`
     // BG remove mask MJPEG (streamed, one grayscale-alpha JPEG per frame)
     FILE*                bg_mjpeg_file        = nullptr;
     std::vector<uint64_t> bg_mjpeg_offsets;            // SOI byte offsets
@@ -1319,6 +1330,8 @@ static void close_slot(PreviewState& pv) {
     pv.bg_mjpeg_offsets.clear();
     pv.bg_mjpeg_dir.clear();
     pv.bg_mask_alpha.clear();
+    pv.gif = false; pv.gif_total = 0.f; pv.gif_w = pv.gif_h = pv.gif_n = 0;
+    pv.gif_uploaded = -1; pv.gif_px.clear(); pv.gif_end.clear();
     ring_invalidate(pv);
     pv.fx_stamp++;
 }
@@ -1539,10 +1552,72 @@ static void      prepare_native_frame_cpu(PreviewState& pv, DecodedFrame& f, int
 static uintptr_t decode_native_frame      (PreviewState& pv, int frame_idx);
 static int       max_frame_idx_for        (const PreviewState& pv);
 
+bool video_is_gif(int track_id) {
+    if (track_id < 0 || track_id >= MAX_VIDEO_TRACKS) return false;
+    return g_pv[track_id].is_open && g_pv[track_id].gif;
+}
+
+// Decode an animated GIF to full-res RGBA frames (lossless, alpha-safe) via
+// stb_image and hold them in the slot. The preview uploads the frame at the
+// playhead — no lossy mp4 conform / MJPEG proxy. Export keeps using libav.
+bool video_open_gif(int track_id, const std::string& path) {
+    if (track_id < 0 || track_id >= MAX_VIDEO_TRACKS) return false;
+    PreviewState& pv = g_pv[track_id];
+    close_slot(pv);
+
+    FILE* f = fopen(path.c_str(), "rb");
+    if (!f) return false;
+    fseek(f, 0, SEEK_END); long sz = ftell(f); rewind(f);
+    if (sz <= 0) { fclose(f); return false; }
+    std::vector<uint8_t> buf((size_t)sz);
+    size_t got = fread(buf.data(), 1, (size_t)sz, f); fclose(f);
+    if (got != (size_t)sz) return false;
+
+    int* delays = nullptr; int w = 0, h = 0, n = 0, comp = 0;
+    uint8_t* px = stbi_load_gif_from_memory(buf.data(), (int)sz, &delays, &w, &h, &n, &comp, 4);
+    if (!px || n < 1 || w <= 0 || h <= 0) { if (px) stbi_image_free(px); free(delays); return false; }
+
+    size_t fsz = (size_t)w * h * 4;
+    pv.gif_px.assign(px, px + fsz * (size_t)n);
+    pv.gif_end.resize((size_t)n);
+    float t = 0.f;
+    for (int i = 0; i < n; ++i) {
+        float d = (delays && delays[i] > 0) ? (float)delays[i] / 1000.f : 0.1f;  // GIF delay → seconds
+        t += d; pv.gif_end[(size_t)i] = t;
+    }
+    free(delays);
+    stbi_image_free(px);
+
+    pv.gif       = true;
+    pv.gif_w = w; pv.gif_h = h; pv.gif_n = n;
+    pv.gif_total = (t > 0.f) ? t : 0.1f;
+    pv.gif_uploaded = 0;
+    upload_pixels_gl(&pv.tex, &pv.tex_w, &pv.tex_h, &pv.tex_rgba, pv.gif_px.data(), w, h, true);
+    pv.is_open    = true;
+    pv.source     = PreviewSource::Still;   // rendered like a still; the gif flag picks the frame
+    pv.info.width = w; pv.info.height = h;
+    return true;
+}
+
 uintptr_t video_get_texture(int track_id, double playhead) {
     if (track_id < 0 || track_id >= MAX_VIDEO_TRACKS) return 0;
     PreviewState& pv = g_pv[track_id];
     if (!pv.is_open) return 0;
+
+    // Animated GIF: upload the frame at this playhead (full-res RGBA, looped).
+    if (pv.gif && pv.gif_n > 0) {
+        float tt = pv.gif_total > 0.f ? (float)fmod(playhead, (double)pv.gif_total) : 0.f;
+        if (tt < 0.f) tt += pv.gif_total;
+        int idx = 0;
+        while (idx < pv.gif_n - 1 && tt >= pv.gif_end[(size_t)idx]) ++idx;
+        if (idx != pv.gif_uploaded && pv.gif_w > 0) {
+            size_t fsz = (size_t)pv.gif_w * pv.gif_h * 4;
+            upload_pixels_gl(&pv.tex, &pv.tex_w, &pv.tex_h, &pv.tex_rgba,
+                             pv.gif_px.data() + (size_t)idx * fsz, pv.gif_w, pv.gif_h, true);
+            pv.gif_uploaded = idx;
+        }
+        return pv.tex ? (uintptr_t)pv.tex : 0;
+    }
 
     if (pv.source == PreviewSource::Still || pv.source == PreviewSource::None)
         return pv.tex ? (uintptr_t)pv.tex : 0;

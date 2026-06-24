@@ -48,6 +48,10 @@ enum class PreviewSource { None, Still, Proxy, Native };
 void          video_open_still (int track_id, const std::string& jpeg_path);
 bool          video_open_proxy (int track_id, const ProxyInfo& proxy);
 bool          video_open_native(int track_id, const std::string& path);
+// Animated GIF → full-res RGBA frames (lossless, alpha); preview shows the frame
+// at the playhead. video_is_gif() reports whether a slot already holds one.
+bool          video_open_gif   (int track_id, const std::string& path);
+bool          video_is_gif     (int track_id);
 void          video_close      (int track_id = -1);
 bool          video_is_open    (int track_id = 0);
 PreviewSource video_source     (int track_id);

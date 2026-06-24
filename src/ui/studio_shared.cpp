@@ -490,6 +490,12 @@ void reopen_video_slots(AppState& state) {
             // fails and the clip renders blank (this is how MCP-added images
             // vanished from the preview: add_clip → proxy_scan → native PNG).
             // Animated images (.gif) fall through to the proxy path below.
+            if (is_animated_image(src)) {
+                // GIF: decode to full-res RGBA frames once (lossless + alpha) and
+                // show the frame at the playhead — no lossy mp4 conform / MJPEG.
+                if (!video_is_gif(slot)) video_open_gif(slot, src);
+                continue;
+            }
             if (is_image_path(src) && !is_animated_image(src)) {
                 if (video_source(slot) != PreviewSource::Still)
                     video_open_still(slot, proxy_still_path(src));
@@ -515,11 +521,12 @@ void reopen_video_slots(AppState& state) {
 // ── Frame-rate conform ────────────────────────────────────────────────────────
 bool clip_needs_conform(const Clip& cl, int project_fps) {
     if (project_fps <= 0 || cl.src_fps <= 0.f) return false;  // 0=unprobed, -1=still
-    // Still images report a PHANTOM frame rate from ffprobe (a PNG comes back as
-    // 25/1), which used to drag them through the fps conform — re-encoding them
-    // into an mp4 that strips alpha and softens the image (the "shitty proxy").
-    // A static image is never conformed; only animated images (.gif) are.
-    if (is_image_path(cl.text) && !is_animated_image(cl.text)) return false;
+    // No image is conformed. Stills report a phantom frame rate from ffprobe (a
+    // PNG comes back as 25/1) and would be re-encoded into an alpha-stripped,
+    // softened mp4; GIFs now render as full-res RGBA frames (video_open_gif) in
+    // preview and via libav on export, so the lossy mp4 conform is unwanted there
+    // too — it was the main thing degrading GIF quality.
+    if (is_image_path(cl.text)) return false;
     return std::fabs(cl.src_fps - (float)project_fps) > (float)project_fps * 0.01f;
 }
 
