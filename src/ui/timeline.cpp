@@ -1275,6 +1275,23 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
     // IsMouseHoveringRect always return false because its rect is below track_area_bot.
     ImGui::PushClipRect({origin.x, track_area_top}, {origin.x+total_w-TL_VSCROLLBAR_W, track_area_bot}, true);
 
+    // A freshly-added brick (clip_flash → glow_start) gets a quick bright pulse on
+    // its rect so you can see where it landed — for your adds and the agent's. The
+    // -1 sentinel set at add time is stamped with the current time on first draw,
+    // then fades over NEW_GLOW_DUR. glfwPollEvents keeps the loop ticking so it
+    // animates; the track-area clip rect keeps it inside the visible band.
+    const float NEW_GLOW_DUR = 0.40f;
+    auto draw_added_glow = [&](Clip& c, float gx0, float gy0, float gx1, float gy1) {
+        if (c.glow_start < 0.0) c.glow_start = ImGui::GetTime();   // stamp pending
+        if (c.glow_start <= 0.0) return;
+        float el = (float)(ImGui::GetTime() - c.glow_start);
+        if (el >= NEW_GLOW_DUR) return;
+        float a = 1.f - el / NEW_GLOW_DUR; a *= a;                 // ease-out
+        dl->AddRectFilled({gx0, gy0}, {gx1, gy1}, IM_COL32(150, 220, 255, (int)(55.f * a)), 2.f);
+        dl->AddRect({gx0 - 1.f, gy0 - 1.f}, {gx1 + 1.f, gy1 + 1.f},
+                    IM_COL32(175, 228, 255, (int)(210.f * a)), 3.f, 0, 2.f);
+    };
+
     for (int ti = 0; ti < (int)state.tracks.size(); ++ti) {
         Track& track = state.tracks[ti];
         ImVec2 row_tl = {origin.x, track_y};
@@ -3047,6 +3064,18 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                     }
                 }
             }
+        }
+
+        // New-brick glow — drawn on top of this track's clips (content AND FX),
+        // for any brick clip_flash() marked. Recompute the rect like the passes.
+        for (int gci = 0; gci < (int)track.clips.size(); ++gci) {
+            Clip& gc = track.clips[gci];
+            if (gc.glow_start == 0.0) continue;            // idle — cheap skip
+            float gcx0 = origin.x+TL_LABEL_W+gc.start*zoom-scroll;
+            float gcx1 = origin.x+TL_LABEL_W+gc.end*zoom-scroll;
+            if (gcx1 < origin.x+TL_LABEL_W || gcx0 > origin.x+total_w) continue;
+            draw_added_glow(gc, fmaxf(gcx0, origin.x+TL_LABEL_W), track_y+3.f,
+                            fminf(gcx1, origin.x+total_w), track_y+TL_TRACK_H-3.f);
         }
 
         track_y += track_h(ti);   // variable: grows when a clip's FX are expanded

@@ -466,7 +466,7 @@ void ui_studio(AppState& state) {
             bin_add(state, dp);
 
             if (s_tl_hover_track >= 0 && s_tl_hover_track < (int)state.tracks.size()) {
-                add_clip_to_track(state, s_tl_hover_track, dp, drop_ct);
+                add_clip_to_track(state, s_tl_hover_track, dp, drop_ct, /*reveal=*/false);
                 if (state.audio_path.empty()) {
                     state.audio_path = dp;
                     audio_load(dp);

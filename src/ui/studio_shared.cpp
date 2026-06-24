@@ -606,7 +606,7 @@ bool is_audio_file(const std::string& path) {
            ext==".mkv"||ext==".webm";
 }
 
-void add_clip_to_track(AppState& state, int ti, const std::string& path, ClipType ct) {
+void add_clip_to_track(AppState& state, int ti, const std::string& path, ClipType ct, bool reveal) {
     if (ti < 0 || ti >= (int)state.tracks.size()) return;
     Track& tr = state.tracks[ti];
 
@@ -652,6 +652,12 @@ void add_clip_to_track(AppState& state, int ti, const std::string& path, ClipTyp
     tr.clips.push_back(cl);
     std::sort(tr.clips.begin(), tr.clips.end(),
               [](const Clip& a, const Clip& b){ return a.start < b.start; });
+    // Glow the just-placed clip (the sort shifted its index). reveal=false for
+    // drops — the user dropped it where they're already looking.
+    for (int i = 0; i < (int)tr.clips.size(); ++i)
+        if (tr.clips[i].start == cl.start && tr.clips[i].text == cl.text) {
+            clip_flash(state, ti, i, reveal); break;
+        }
 
     // Ask draw_timeline to zoom out if the clip extends past the visible right edge.
     // Deferred so it always runs with a valid clip_area_w even on the very first frame.
@@ -969,6 +975,7 @@ void add_record_brick(AppState& state) {
     state.tracks.insert(state.tracks.begin(), std::move(t));
     state.selected_track = 0;
     state.selected_clip  = 0;
+    clip_flash(state, 0, 0, /*reveal=*/true);
     // If the brick lands past the current view, zoom out to fit it.
     state.tl_zoom_to_fit_end = fmaxf(state.tl_zoom_to_fit_end, clip_end);
     history_push(state, "Add Record Brick");
@@ -990,6 +997,7 @@ void add_video_record_brick(AppState& state) {
     state.tracks.insert(state.tracks.begin(), std::move(t));
     state.selected_track = 0;
     state.selected_clip  = 0;
+    clip_flash(state, 0, 0, /*reveal=*/true);
     // If the brick lands past the current view, zoom out to fit it.
     state.tl_zoom_to_fit_end = fmaxf(state.tl_zoom_to_fit_end, clip_end);
     history_push(state, "Add Record Brick");
@@ -1012,6 +1020,7 @@ void add_photo_capture_brick(AppState& state) {
     state.tracks.insert(state.tracks.begin(), std::move(t));
     state.selected_track = 0;
     state.selected_clip  = 0;
+    clip_flash(state, 0, 0, /*reveal=*/true);
     state.tl_zoom_to_fit_end = fmaxf(state.tl_zoom_to_fit_end, clip_end);
     history_push(state, "Add Capture IMG Brick");
 }
@@ -1033,6 +1042,7 @@ void add_bus_brick(AppState& state) {
     state.tracks.insert(state.tracks.begin(), std::move(t));  // top → groups every track below
     state.selected_track = 0;
     state.selected_clip  = 0;
+    clip_flash(state, 0, 0, /*reveal=*/true);
     state.tl_zoom_to_fit_end = fmaxf(state.tl_zoom_to_fit_end, clip_end);
     history_push(state, "Add Bus Brick");
 }

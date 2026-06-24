@@ -208,6 +208,10 @@ struct Clip {
     // Mirror the content (UV flip) — independent of scale/position, unlike the
     // negative-scale hack. Applied in preview and export for image/video clips.
     bool  flip_h = false, flip_v = false;
+    // Transient (never serialized): a freshly-added brick glows briefly so you see
+    // where it landed. -1 = "just added, stamp the time on the next timeline draw";
+    // >0 = ImGui time the glow began; 0 = idle. Set via clip_flash().
+    double glow_start = 0.0;
     // Aspect of the visible (cropped) region — use this everywhere the
     // canvas-fit box is computed so preview, export, and click-picking agree.
     float cropped_aspect(int src_w, int src_h) const {
@@ -392,6 +396,12 @@ Clip clip_split_at(Clip& cl, float cut);
 // brick welded to it so each half keeps the slice of the chain that sat over it.
 // Inserts the right content half after `ci` and appends the right-half bricks.
 void clip_split_with_fx(AppState& state, int ti, int ci, float cut);
+
+// Mark a freshly-added brick (ti,ci) so it glows briefly in the timeline. When
+// reveal=true also scrolls the timeline to it (minimal, only if off-screen) and
+// selects it — pass reveal=false for drag-drops, where the user placed it where
+// they're already looking. Safe to call with out-of-range indices (no-op).
+void clip_flash(AppState& state, int ti, int ci, bool reveal);
 
 // Source-time for a video-like clip at timeline time `at`. For a looping clip
 // (animated GIF — clip_loop set) whose brick was stretched past the source, the

@@ -179,6 +179,17 @@ Clip clip_split_at(Clip& cl, float cut) {
     return right;
 }
 
+void clip_flash(AppState& state, int ti, int ci, bool reveal) {
+    if (ti < 0 || ti >= (int)state.tracks.size()) return;
+    if (ci < 0 || ci >= (int)state.tracks[ti].clips.size()) return;
+    state.tracks[ti].clips[ci].glow_start = -1.0;  // pending — timeline stamps the time
+    if (reveal) {
+        state.selected_track = ti;
+        state.selected_clip  = ci;
+        state.request_scroll_to_clip = true;        // existing minimal/only-if-hidden reveal
+    }
+}
+
 void clip_split_with_fx(AppState& state, int ti, int ci, float cut) {
     if (ti < 0 || ti >= (int)state.tracks.size()) return;
     auto& clips = state.tracks[ti].clips;

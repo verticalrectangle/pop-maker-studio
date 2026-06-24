@@ -931,6 +931,7 @@ static void add_text_brick_here(AppState& state) {
     state.tracks[target].clips.push_back(std::move(c));
     state.selected_track = target;
     state.selected_clip  = (int)state.tracks[target].clips.size() - 1;
+    clip_flash(state, target, state.selected_clip, /*reveal=*/true);
     s_panel_view = PanelView::Typography;   // jump straight to styling
     history_push(state, "Add text brick");
 }

@@ -336,6 +336,7 @@ void panel_media_browser(AppState& state, float w, bool is_video) {
                 state.tracks[target].clips.push_back(cl);
                 state.selected_track = target;
                 state.selected_clip  = (int)state.tracks[target].clips.size() - 1;
+                clip_flash(state, target, state.selected_clip, /*reveal=*/true);
                 proxy_start(picked);
                 int slot = slot_for_video(state, clip_slot_key(picked, cl.start), picked);
                 if (slot >= 0) video_open_still(slot, proxy_still_path(picked));
@@ -482,6 +483,7 @@ void panel_media_browser(AppState& state, float w, bool is_video) {
             state.tracks[target].clips.push_back(cl);
             state.selected_track = target;
             state.selected_clip  = (int)state.tracks[target].clips.size() - 1;
+            clip_flash(state, target, state.selected_clip, /*reveal=*/true);
             proxy_start(path);
             int slot = slot_for_video(state, clip_slot_key(path, cl.start), path);
             if (slot >= 0) video_open_still(slot, proxy_still_path(path));
@@ -734,6 +736,7 @@ void panel_audio_browser(AppState& state, float w) {
                 state.tracks[target].clips.push_back(cl);
                 state.selected_track = target;
                 state.selected_clip  = (int)state.tracks[target].clips.size() - 1;
+                clip_flash(state, target, state.selected_clip, /*reveal=*/true);
                 audio_source_ensure(picked);
                 s_panel_view = PanelView::Clip;
                 history_push(state, "Import audio: " + fs::path(picked).filename().string());
@@ -857,6 +860,7 @@ void panel_audio_browser(AppState& state, float w) {
             state.tracks[target].clips.push_back(cl);
             state.selected_track = target;
             state.selected_clip  = (int)state.tracks[target].clips.size() - 1;
+            clip_flash(state, target, state.selected_clip, /*reveal=*/true);
             audio_source_ensure(path);
             recent_media_push(path, MediaKind::Audio);
             s_panel_view = PanelView::Clip;

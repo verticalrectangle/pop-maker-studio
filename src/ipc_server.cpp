@@ -2302,6 +2302,8 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         }
         state.tracks[ti].clips.push_back(cl);
         int new_ci = (int)state.tracks[ti].clips.size() - 1;
+        // Glow + scroll to it so an agent-placed brick is visibly surfaced.
+        clip_flash(state, ti, new_ci, /*reveal=*/true);
 
         // Auto-refresh audio_path when the project's current audio source is no
         // longer on the timeline. Agents adding a *different* audio file as the

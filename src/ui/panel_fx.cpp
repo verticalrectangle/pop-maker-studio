@@ -875,6 +875,7 @@ void panel_background(AppState& state, float w, bool clip_only) {
             state.tracks[target].clips.push_back(std::move(c));
             state.selected_track = target;
             state.selected_clip  = (int)state.tracks[target].clips.size() - 1;
+            clip_flash(state, target, state.selected_clip, /*reveal=*/true);
             bgclip = &state.tracks[target].clips[state.selected_clip];
             history_push(state, "Add background");
         }
@@ -1072,6 +1073,7 @@ void panel_background(AppState& state, float w, bool clip_only) {
                 state.tracks[target].clips.push_back(std::move(c));
                 state.selected_track = target;
                 state.selected_clip  = (int)state.tracks[target].clips.size()-1;
+                clip_flash(state, target, state.selected_clip, /*reveal=*/true);
             } else {
                 bgclip->text = pr.id;
                 memcpy(bgclip->bg_c1, pr.dc1, sizeof(float)*4);

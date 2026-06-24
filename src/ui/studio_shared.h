@@ -116,7 +116,9 @@ bool duplicate_selected_clips(AppState& state);
 int find_empty_track(const AppState& state);
 std::string clip_slot_key(const std::string& src, float start);
 std::string source_from_key(const std::string& key);
-void add_clip_to_track(AppState& state, int track_idx, const std::string& path, ClipType ct);
+// reveal: scroll the timeline to the new clip (default). Pass false for drops —
+// the user placed it where they're already looking, so just glow it in place.
+void add_clip_to_track(AppState& state, int track_idx, const std::string& path, ClipType ct, bool reveal = true);
 int  slot_for_video(AppState& state, const std::string& key, const std::string& src);
 void gc_video_slots(AppState& state);
 void reopen_video_slots(AppState& state);
