@@ -225,8 +225,7 @@ static void handle_shortcuts(AppState& state) {
         ImGui::IsKeyChordPressed(ImGuiMod_Ctrl|ImGuiKey_B)) {
         float cut = state.playhead;
         if (cut > clip.start + f_dt && cut < clip.end - f_dt) {
-            Clip right = clip_split_at(clip, cut);
-            track.clips.insert(track.clips.begin()+state.selected_clip+1, std::move(right));
+            clip_split_with_fx(state, state.selected_track, state.selected_clip, cut);
             history_push(state, "Split clip");
         }
         return;
@@ -1002,12 +1001,10 @@ void ui_studio(AppState& state) {
         if (ImGui::BeginMenu("Clip")) {
             if (!has_clip) { ImGui::BeginDisabled(); }
             if (ImGui::MenuItem("Split at playhead", "S") && has_clip) {
-                Track& t = state.tracks[state.selected_track];
-                Clip& c = t.clips[state.selected_clip];
+                Clip& c = state.tracks[state.selected_track].clips[state.selected_clip];
                 float cut = state.playhead;
                 if (cut>c.start+0.02f && cut<c.end-0.02f) {
-                    Clip r = clip_split_at(c, cut);
-                    t.clips.insert(t.clips.begin()+state.selected_clip+1, std::move(r));
+                    clip_split_with_fx(state, state.selected_track, state.selected_clip, cut);
                     history_push(state, "Split clip");
                 }
             }

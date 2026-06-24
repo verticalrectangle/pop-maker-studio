@@ -143,6 +143,9 @@ struct Clip {
     // proxy/export decode that instead — so preview == export and judder is
     // smoothed. The toggles control blend-vs-cadence and seamless looping.
     float src_fps        = 0.f;
+    float src_duration   = 0.f;    // source length secs (0 = not yet probed) —
+                                   // animated GIFs loop over this when the brick
+                                   // span is stretched past it
     bool  conform_smooth = true;   // blend frames (vs dup/drop to keep cadence)
     bool  clip_loop      = false;  // conform cyclically so a perfect loop stays seamless
     bool  conform_ready_cache = false;  // transient: last-seen conform readiness (slot-reopen edge)
@@ -382,6 +385,20 @@ struct Clip {
 // keep the animation they showed before the split. Caller inserts the
 // returned clip after `cl` on the track.
 Clip clip_split_at(Clip& cl, float cut);
+// Split the content clip at (ti,ci) at timeline-time `cut`, AND split every FX
+// brick welded to it so each half keeps the slice of the chain that sat over it.
+// Inserts the right content half after `ci` and appends the right-half bricks.
+void clip_split_with_fx(AppState& state, int ti, int ci, float cut);
+
+// Source-time for a video-like clip at timeline time `at`. For a looping clip
+// (animated GIF — clip_loop set) whose brick was stretched past the source, the
+// time wraps so the source repeats instead of freezing on the last frame.
+inline float clip_src_time(const Clip& cl, float at) {
+    float t = cl.in_point + (at - cl.start) * cl.speed;
+    if (cl.clip_loop && cl.src_duration > 0.f && t >= cl.src_duration)
+        t = std::fmod(t, cl.src_duration);
+    return t;
+}
 
 // Shift every keyframe time by dt seconds. Use when clip.start moves but the
 // content shouldn't (left-edge trim): pass -(new_start - old_start) so keys

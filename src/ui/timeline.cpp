@@ -44,8 +44,9 @@ extern ImFont* g_font_black;
 TlState g_tl;
 
 // How long a drag must dwell on a merge target before it welds — shared by
-// keyframe super diamonds and FX brick merging so the gesture feels the same.
-static const double kWeldHoldSec = 1.5;
+// keyframe super diamonds, FX brick merging, and content coupling so the
+// gesture feels the same everywhere.
+static const double kWeldHoldSec = 1.0;
 
 // In-progress keyframe-diamond retime drag. Grabbing a super diamond drags
 // every key at that timestamp (one entry per member prop); member indices are
@@ -2371,6 +2372,17 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                 dl->AddLine({ix+4.f,iy-3.f},{ix+1.f,iy+2.f}, ic, 1.2f);
             }
 
+            // Hold-to-weld ring: a dragged FX brick is parked over this content
+            // clip and will couple onto it when the dwell completes — same
+            // visual language as the FX-merge ring drawn on brick targets.
+            if (g_tl.drag_couple_ti == ti && g_tl.drag_couple_ci == ci) {
+                float pulse = 0.5f + 0.5f * sinf((float)ImGui::GetTime() * 6.f);
+                ImU32 mc = IM_COL32(80, 255, 220, (int)(120 + 80 * pulse));
+                dl->AddRect({vis_x0, cy0}, {vis_x1, cy1}, mc, 2.f, 0, 2.5f);
+                draw_fx_weld_ring(dl, vis_x0, vis_x1, cy0, cy1,
+                                  IM_COL32(80, 255, 220, 230));
+            }
+
             // Capture geometry for IPC-driven testing.
             {
                 TLGeomClip g; g.track = ti; g.clip = ci;
@@ -3181,8 +3193,11 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                               mouse.y > origin.y+TL_RULER_H && mouse.y < origin.y+total_h - TL_SCROLLBAR_H &&
                               s_rename_track < 0;  // don't deselect while renaming
 
-        // Start box select when clicking empty body space (no clip was hit)
-        if (lclick && in_body && !s_clip_hit) {
+        // Start box select when clicking empty body space (no clip was hit).
+        // Gate on !IsAnyItemActive() — same as the label-deselect below — so
+        // clicking a widget that lives in the timeline body (an on-brick slider,
+        // an InvisibleButton) doesn't read as an empty-space click and deselect.
+        if (lclick && in_body && !s_clip_hit && !ImGui::IsAnyItemActive()) {
             s_box_selecting = true;
             s_box_start     = mouse;
             if (!ImGui::GetIO().KeyCtrl && !ImGui::GetIO().KeyShift) {
@@ -3604,6 +3619,8 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
             // the same way as a same-track drop.
             g_tl.drag_merge_ti = -1;
             g_tl.drag_merge_ci = -1;
+            g_tl.drag_couple_ti = -1;
+            g_tl.drag_couple_ci = -1;
             if (!drag_left && !drag_right && drag_hot_gap < 0) {
                 const Clip& dc_ref = state.tracks[drag_track].clips[drag_clip];
                 int tt = (drag_hot_track >= 0 &&
@@ -3622,47 +3639,88 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                         }
                     }
                 }
-                // Hold-to-weld: overlapping a target only arms the dwell
-                // timer (ring drawn at the target brick); the merge fires when
-                // it completes. Multi-drags never merge.
-                if (g_tl.drag_multi.size() > 1) {
-                    g_tl.drag_merge_ti = -1;
-                    g_tl.drag_merge_ci = -1;
+                // No FX-brick to merge into? Hold-to-weld onto the bare hostable
+                // content under the brick instead. Audio bricks effectively had
+                // this already — their host usually carries a chain to merge into
+                // — while bare video content didn't, forcing a precise drop. Pick
+                // the best-overlap host on the mouse row (same rule as couple_fx_now).
+                if (g_tl.drag_merge_ci < 0 && is_fx_clip(dc_ref) && !dc_ref.fx_coupled) {
+                    bool audio_kind = fx_brick_is_audio_kind(dc_ref);
+                    float best_ov = 0.05f; int best = -1;
+                    for (int ci2 = 0; ci2 < (int)state.tracks[tt].clips.size(); ++ci2) {
+                        if (tt == drag_track && ci2 == drag_clip) continue;
+                        const Clip& hc = state.tracks[tt].clips[ci2];
+                        bool hostable = audio_kind
+                            ? (hc.clip_type == ClipType::Audio ||
+                               hc.clip_type == ClipType::Record ||
+                               hc.clip_type == ClipType::Video ||
+                               hc.clip_type == ClipType::VideoRecord)
+                            : (clip_is_videolike_type(hc.clip_type) ||
+                               hc.clip_type == ClipType::Background);
+                        if (!hostable) continue;
+                        float ov = fminf(dc_ref.end, hc.end) - fmaxf(dc_ref.start, hc.start);
+                        if (ov > best_ov) { best_ov = ov; best = ci2; }
+                    }
+                    if (best >= 0) { g_tl.drag_couple_ti = tt; g_tl.drag_couple_ci = best; }
                 }
-                if (g_tl.drag_merge_ti != s_fx_weld.target_ti ||
-                    g_tl.drag_merge_ci != s_fx_weld.target_ci) {
-                    s_fx_weld.target_ti = g_tl.drag_merge_ti;   // new candidate
-                    s_fx_weld.target_ci = g_tl.drag_merge_ci;
+                // Multi-drags never weld (merge or couple).
+                if (g_tl.drag_multi.size() > 1) {
+                    g_tl.drag_merge_ti = -1;  g_tl.drag_merge_ci = -1;
+                    g_tl.drag_couple_ti = -1; g_tl.drag_couple_ci = -1;
+                }
+                // Unified hold-to-weld: prefer an FX-brick merge, else a content
+                // couple. Overlapping a target only arms the dwell timer (ring at
+                // the target); the weld fires when it completes.
+                bool couple = g_tl.drag_merge_ci < 0 && g_tl.drag_couple_ci >= 0;
+                int wt_ti = couple ? g_tl.drag_couple_ti : g_tl.drag_merge_ti;
+                int wt_ci = couple ? g_tl.drag_couple_ci : g_tl.drag_merge_ci;
+                if (wt_ti != s_fx_weld.target_ti || wt_ci != s_fx_weld.target_ci) {
+                    s_fx_weld.target_ti = wt_ti;   // new candidate
+                    s_fx_weld.target_ci = wt_ci;
                     s_fx_weld.t0        = ImGui::GetTime();     // arm the timer
                 }
-                if (g_tl.drag_merge_ci >= 0 &&
-                    ImGui::GetTime() - s_fx_weld.t0 >= kWeldHoldSec) {
-                    int tgt_ti = g_tl.drag_merge_ti;
-                    int tgt_ci = g_tl.drag_merge_ci;
-                    Clip dragged_copy = state.tracks[drag_track].clips[drag_clip];
-                    merge_fx_clips(state.tracks[tgt_ti].clips[tgt_ci], dragged_copy);
-                    state.tracks[drag_track].clips.erase(
-                        state.tracks[drag_track].clips.begin() + drag_clip);
-                    int sel_ci = (tgt_ti == drag_track && tgt_ci > drag_clip)
+                if (wt_ci >= 0 && ImGui::GetTime() - s_fx_weld.t0 >= kWeldHoldSec) {
+                    int sel_ti, sel_ci;
+                    if (couple) {
+                        // Move the brick onto the host's track if needed, then
+                        // couple — timeline_couple_fx_brick windows entries to the
+                        // host span and absorbs into the host's existing chain.
+                        int hci = wt_ci;
+                        Clip brick = state.tracks[drag_track].clips[drag_clip];
+                        state.tracks[drag_track].clips.erase(
+                            state.tracks[drag_track].clips.begin() + drag_clip);
+                        if (wt_ti == drag_track && hci > drag_clip) --hci;
+                        state.tracks[wt_ti].clips.push_back(std::move(brick));
+                        int bci = (int)state.tracks[wt_ti].clips.size() - 1;
+                        sel_ci = timeline_couple_fx_brick(state, wt_ti, bci, hci);
+                        sel_ti = wt_ti;
+                        history_push(state, "Couple FX brick");
+                    } else {
+                        int tgt_ti = wt_ti, tgt_ci = wt_ci;
+                        Clip dragged_copy = state.tracks[drag_track].clips[drag_clip];
+                        merge_fx_clips(state.tracks[tgt_ti].clips[tgt_ci], dragged_copy);
+                        state.tracks[drag_track].clips.erase(
+                            state.tracks[drag_track].clips.begin() + drag_clip);
+                        sel_ci = (tgt_ti == drag_track && tgt_ci > drag_clip)
                                      ? tgt_ci - 1 : tgt_ci;
-                    state.selected_track = tgt_ti;
+                        sel_ti = tgt_ti;
+                        history_push(state, "Merge FX bricks");
+                    }
+                    state.selected_track = sel_ti;
                     state.selected_clip  = sel_ci;
                     state.clip_selection.clear();
-                    state.clip_selection.insert({tgt_ti, sel_ci});
+                    state.clip_selection.insert({sel_ti, sel_ci});
                     s_fx_flash.active = true;
                     s_fx_flash.t0     = ImGui::GetTime();
-                    s_fx_flash.ti     = tgt_ti;
+                    s_fx_flash.ti     = sel_ti;
                     s_fx_flash.ci     = sel_ci;
-                    history_push(state, "Merge FX bricks");
-                    // End the drag — the merged brick stays selected, so
-                    // re-grabbing it is one click. (Diamonds keep dragging
-                    // their merged group; bricks stop, deliberately.)
+                    // End the drag — the welded brick stays selected, so
+                    // re-grabbing it is one click.
                     drag_track = -1; drag_clip = -1;
                     drag_hot_track = -1; drag_hot_gap = -1;
-                    g_tl.drag_merge_ti  = -1;
-                    g_tl.drag_merge_ci  = -1;
-                    s_fx_weld.target_ti = -1;
-                    s_fx_weld.target_ci = -1;
+                    g_tl.drag_merge_ti  = -1; g_tl.drag_merge_ci  = -1;
+                    g_tl.drag_couple_ti = -1; g_tl.drag_couple_ci = -1;
+                    s_fx_weld.target_ti = -1; s_fx_weld.target_ci = -1;
                     s_drag_moved = false;
                     s_body_snap_held_start = -1.f; s_body_snap_held_cand = -1.f;
                     g_tl.drag_multi.clear();
@@ -3673,6 +3731,8 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
         s_snap_indicator = -1.f;
         g_tl.drag_merge_ti = -1;
         g_tl.drag_merge_ci = -1;
+        g_tl.drag_couple_ti = -1;
+        g_tl.drag_couple_ci = -1;
         s_fx_weld.target_ti = -1;
         s_fx_weld.target_ci = -1;
     }
@@ -4331,8 +4391,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
             if (valid) {
                 float cut = state.playhead;
                 if (cut > cc->start+0.02f && cut < cc->end-0.02f) {
-                    Clip right = clip_split_at(*cc, cut);
-                    ct->clips.insert(ct->clips.begin()+ci+1, std::move(right));
+                    clip_split_with_fx(state, ti, ci, cut);
                     history_push(state, "Split clip");
                 }
             }
