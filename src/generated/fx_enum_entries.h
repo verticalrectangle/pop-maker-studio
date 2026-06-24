@@ -104,3 +104,4 @@
     SkinSmooth,   // Skin Smooth
     GlowUp,   // Glow Up
     CamShake,   // Cam Shake
+    GreenScreen,   // Chroma Key

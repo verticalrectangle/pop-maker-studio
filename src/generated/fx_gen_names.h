@@ -104,3 +104,4 @@
     "skin_smooth",
     "glow_up",
     "cam_shake",
+    "greenscreen",

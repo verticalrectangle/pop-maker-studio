@@ -2330,3 +2330,27 @@
             }
         }
     }
+
+    if (cfx.greenscreen_on && cfx.greenscreen_amount > 0.01f) {
+        GLuint p = g_gen_progs[(int)FXType::GreenScreen];
+        if (p) {
+            GLuint pre_tex = cur;
+            glUseProgram(p);
+            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
+            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
+            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
+            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.greenscreen_amount);
+            glUniform1f(glGetUniformLocation(p, "u_key_r"), cfx.greenscreen_key_r);
+            glUniform1f(glGetUniformLocation(p, "u_key_g"), cfx.greenscreen_key_g);
+            glUniform1f(glGetUniformLocation(p, "u_key_b"), cfx.greenscreen_key_b);
+            glUniform1f(glGetUniformLocation(p, "u_similarity"), cfx.greenscreen_similarity);
+            glUniform1f(glGetUniformLocation(p, "u_smoothness"), cfx.greenscreen_smoothness);
+            glUniform1f(glGetUniformLocation(p, "u_spill"), cfx.greenscreen_spill);
+            run1(p);
+            if (cfx.greenscreen_amount < 0.999f) {
+                draw_blend_pass(pre_tex, cur, cfx.greenscreen_amount, g_pp.fbo[pslot], w, h);
+                cur = g_pp.tex[pslot];
+                pslot ^= 1;
+            }
+        }
+    }

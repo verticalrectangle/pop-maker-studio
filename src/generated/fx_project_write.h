@@ -678,3 +678,16 @@
     w.pod(c.fx_cam_shake_intensity_beat);
     w.pod(c.fx_cam_shake_speed);
     w.pod(c.fx_cam_shake_speed_beat);
+    w.pod(c.fx_greenscreen_amount);
+    w.pod(c.fx_greenscreen_key_r);
+    w.pod(c.fx_greenscreen_key_r_beat);
+    w.pod(c.fx_greenscreen_key_g);
+    w.pod(c.fx_greenscreen_key_g_beat);
+    w.pod(c.fx_greenscreen_key_b);
+    w.pod(c.fx_greenscreen_key_b_beat);
+    w.pod(c.fx_greenscreen_similarity);
+    w.pod(c.fx_greenscreen_similarity_beat);
+    w.pod(c.fx_greenscreen_smoothness);
+    w.pod(c.fx_greenscreen_smoothness_beat);
+    w.pod(c.fx_greenscreen_spill);
+    w.pod(c.fx_greenscreen_spill_beat);

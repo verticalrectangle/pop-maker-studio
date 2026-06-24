@@ -500,3 +500,11 @@
     float cam_shake_amount = 0.0f;
     float cam_shake_intensity = 0.0f;
     float cam_shake_speed = 0.1f;
+    bool  greenscreen_on = false;
+    float greenscreen_amount = 0.0f;
+    float greenscreen_key_r = 0.0f;
+    float greenscreen_key_g = 0.0f;
+    float greenscreen_key_b = 0.0f;
+    float greenscreen_similarity = 0.01f;
+    float greenscreen_smoothness = 0.0f;
+    float greenscreen_spill = 0.0f;

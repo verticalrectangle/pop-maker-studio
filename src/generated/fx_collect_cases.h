@@ -1955,3 +1955,38 @@
                 acc.cam_shake_speed = fmaxf(acc.cam_shake_speed, (_bi > 0.001f) ? (0.1f + (4.0f - 0.1f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
+        case FXType::GreenScreen:
+            acc.greenscreen_on = true;
+            acc.any_gen_fx = true;
+            acc.greenscreen_amount = fmaxf(acc.greenscreen_amount, cl.eval_prop("fx_greenscreen_amount", _cl_t));
+            {
+                float _bi = cl.fx_greenscreen_key_r_beat;
+                float _bv = cl.eval_prop("fx_greenscreen_key_r", _cl_t);
+                acc.greenscreen_key_r = fmaxf(acc.greenscreen_key_r, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
+            }
+            {
+                float _bi = cl.fx_greenscreen_key_g_beat;
+                float _bv = cl.eval_prop("fx_greenscreen_key_g", _cl_t);
+                acc.greenscreen_key_g = fmaxf(acc.greenscreen_key_g, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
+            }
+            {
+                float _bi = cl.fx_greenscreen_key_b_beat;
+                float _bv = cl.eval_prop("fx_greenscreen_key_b", _cl_t);
+                acc.greenscreen_key_b = fmaxf(acc.greenscreen_key_b, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
+            }
+            {
+                float _bi = cl.fx_greenscreen_similarity_beat;
+                float _bv = cl.eval_prop("fx_greenscreen_similarity", _cl_t);
+                acc.greenscreen_similarity = fmaxf(acc.greenscreen_similarity, (_bi > 0.001f) ? (0.01f + (1.0f - 0.01f) * _bi * _cl_beat_pulse) : _bv);
+            }
+            {
+                float _bi = cl.fx_greenscreen_smoothness_beat;
+                float _bv = cl.eval_prop("fx_greenscreen_smoothness", _cl_t);
+                acc.greenscreen_smoothness = fmaxf(acc.greenscreen_smoothness, (_bi > 0.001f) ? (0.0f + (0.5f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
+            }
+            {
+                float _bi = cl.fx_greenscreen_spill_beat;
+                float _bv = cl.eval_prop("fx_greenscreen_spill", _cl_t);
+                acc.greenscreen_spill = fmaxf(acc.greenscreen_spill, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
+            }
+            break;

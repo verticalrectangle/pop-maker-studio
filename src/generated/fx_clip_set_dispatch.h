@@ -995,5 +995,21 @@ static bool fx_clip_set_param(Clip& c, const std::string& fx_id,
         if (param == "speed_beat") { c.fx_cam_shake_speed_beat = value; return true; }
         return false;
     }
+    if (fx_id == "greenscreen") {
+        if (param == "amount") { c.fx_greenscreen_amount = value; return true; }
+        if (param == "key_r") { c.fx_greenscreen_key_r = value; return true; }
+        if (param == "key_r_beat") { c.fx_greenscreen_key_r_beat = value; return true; }
+        if (param == "key_g") { c.fx_greenscreen_key_g = value; return true; }
+        if (param == "key_g_beat") { c.fx_greenscreen_key_g_beat = value; return true; }
+        if (param == "key_b") { c.fx_greenscreen_key_b = value; return true; }
+        if (param == "key_b_beat") { c.fx_greenscreen_key_b_beat = value; return true; }
+        if (param == "similarity") { c.fx_greenscreen_similarity = value; return true; }
+        if (param == "similarity_beat") { c.fx_greenscreen_similarity_beat = value; return true; }
+        if (param == "smoothness") { c.fx_greenscreen_smoothness = value; return true; }
+        if (param == "smoothness_beat") { c.fx_greenscreen_smoothness_beat = value; return true; }
+        if (param == "spill") { c.fx_greenscreen_spill = value; return true; }
+        if (param == "spill_beat") { c.fx_greenscreen_spill_beat = value; return true; }
+        return false;
+    }
     return false;
 }

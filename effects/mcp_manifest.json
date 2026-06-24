@@ -2985,5 +2985,60 @@
         "fmt": "%.2f"
       }
     ]
+  },
+  {
+    "id": "greenscreen",
+    "label": "Chroma Key",
+    "description": "Clean colour keyer - green screen - keys a colour out so the track below shows through",
+    "params": [
+      {
+        "name": "key_r",
+        "label": "Key R",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.0,
+        "fmt": "%.2f"
+      },
+      {
+        "name": "key_g",
+        "label": "Key G",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 1.0,
+        "fmt": "%.2f"
+      },
+      {
+        "name": "key_b",
+        "label": "Key B",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.0,
+        "fmt": "%.2f"
+      },
+      {
+        "name": "similarity",
+        "label": "Similarity",
+        "min": 0.01,
+        "max": 1.0,
+        "default": 0.4,
+        "fmt": "%.2f"
+      },
+      {
+        "name": "smoothness",
+        "label": "Edge Softness",
+        "min": 0.0,
+        "max": 0.5,
+        "default": 0.08,
+        "fmt": "%.2f"
+      },
+      {
+        "name": "spill",
+        "label": "Spill Kill",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.5,
+        "fmt": "%.2f"
+      }
+    ]
   }
 ]

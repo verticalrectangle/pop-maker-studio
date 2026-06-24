@@ -709,3 +709,13 @@
             cfx.cam_shake_intensity = 0.5f;
             cfx.cam_shake_speed = 1.0f;
             break;
+        case FXType::GreenScreen:
+            cfx.greenscreen_on = true;
+            cfx.greenscreen_amount = 1.0f;
+            cfx.greenscreen_key_r = 0.0f;
+            cfx.greenscreen_key_g = 1.0f;
+            cfx.greenscreen_key_b = 0.0f;
+            cfx.greenscreen_similarity = 0.4f;
+            cfx.greenscreen_smoothness = 0.08f;
+            cfx.greenscreen_spill = 0.5f;
+            break;
