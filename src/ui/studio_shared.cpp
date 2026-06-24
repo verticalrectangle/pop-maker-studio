@@ -885,7 +885,7 @@ ImU32 fx_type_accent(FXType ft) {
         case FXType::LightLeak:  return IM_COL32(255,90,160,255);
         case FXType::VHS:        return IM_COL32(110,195,95,255);
         case FXType::Datamosh:   return IM_COL32(255,60,100,255);
-        case FXType::ChromaKey:  return IM_COL32(50,220,120,255);
+        case FXType::ChromaKey:  return IM_COL32(180,90,230,255);  // "Chroma Melt" — trippy smear, not a key
 #include "generated/fx_ui_color.h"
         default:                return IM_COL32(120,80,220,255);
     }
@@ -899,7 +899,7 @@ const char* fx_type_name(FXType ft) {
         case FXType::LightLeak: return "LEAK";
         case FXType::VHS:       return "VHS";
         case FXType::Datamosh:  return "MOSH";
-        case FXType::ChromaKey: return "KEY";
+        case FXType::ChromaKey: return "MELT";
         case FXType::Grade:              return "Grade";
         case FXType::Blur:               return "Blur";
         case FXType::Vignette:           return "Vignette";
@@ -922,7 +922,7 @@ const char* fx_type_display(FXType ft) {
         case FXType::LightLeak: return "Light Leak";
         case FXType::VHS:       return "VHS";
         case FXType::Datamosh:  return "Datamosh";
-        case FXType::ChromaKey: return "Chroma Key";
+        case FXType::ChromaKey: return "Chroma Melt";
 #include "generated/fx_ui_label.h"
         default:                return "FX";
     }

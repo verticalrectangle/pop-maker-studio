@@ -104,3 +104,4 @@
         case FXType::SkinSmooth: return "SKIN";
         case FXType::GlowUp: return "GLOW";
         case FXType::CamShake: return "SHAKE";
+        case FXType::GreenScreen: return "KEY";

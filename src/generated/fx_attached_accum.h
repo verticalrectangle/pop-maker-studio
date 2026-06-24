@@ -807,6 +807,17 @@ static void fx_accum_from_attached(CreativeFXAccum& acc, FXType type, float amou
             if ((int)pv.size() > 1) acc.cam_shake_speed = fmaxf(acc.cam_shake_speed, pv[1]);
             acc.any_gen_fx = true;
             break;
+        case FXType::GreenScreen:
+            acc.greenscreen_on = true;
+            acc.greenscreen_amount = fmaxf(acc.greenscreen_amount, amount);
+            if ((int)pv.size() > 0) acc.greenscreen_key_r = fmaxf(acc.greenscreen_key_r, pv[0]);
+            if ((int)pv.size() > 1) acc.greenscreen_key_g = fmaxf(acc.greenscreen_key_g, pv[1]);
+            if ((int)pv.size() > 2) acc.greenscreen_key_b = fmaxf(acc.greenscreen_key_b, pv[2]);
+            if ((int)pv.size() > 3) acc.greenscreen_similarity = fmaxf(acc.greenscreen_similarity, pv[3]);
+            if ((int)pv.size() > 4) acc.greenscreen_smoothness = fmaxf(acc.greenscreen_smoothness, pv[4]);
+            if ((int)pv.size() > 5) acc.greenscreen_spill = fmaxf(acc.greenscreen_spill, pv[5]);
+            acc.any_gen_fx = true;
+            break;
         default: break;
     }
 }

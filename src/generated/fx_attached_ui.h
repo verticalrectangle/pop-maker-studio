@@ -2252,6 +2252,44 @@ static void fx_attached_inspector(AttachedFX& afx, float sw, AppState& state, Cl
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Cam Shake: Speed");
             break;
         }
+        case FXType::GreenScreen: {
+            if ((int)afx.params.size() < 6) afx.params.resize(6, 0.f);
+            ui_label("Amount");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##afx_greenscreen_amount", &afx.amount, 0.0f, 1.0f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Chroma Key: Amount");
+            ImGui::Dummy({0.f, 4.f});
+            ui_label("Key R");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##afx_greenscreen_key_r", &afx.params[0], 0.0f, 1.0f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Chroma Key: Key R");
+            ImGui::Dummy({0.f, 4.f});
+            ui_label("Key G");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##afx_greenscreen_key_g", &afx.params[1], 0.0f, 1.0f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Chroma Key: Key G");
+            ImGui::Dummy({0.f, 4.f});
+            ui_label("Key B");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##afx_greenscreen_key_b", &afx.params[2], 0.0f, 1.0f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Chroma Key: Key B");
+            ImGui::Dummy({0.f, 4.f});
+            ui_label("Similarity");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##afx_greenscreen_similarity", &afx.params[3], 0.01f, 1.0f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Chroma Key: Similarity");
+            ImGui::Dummy({0.f, 4.f});
+            ui_label("Edge Softness");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##afx_greenscreen_smoothness", &afx.params[4], 0.0f, 0.5f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Chroma Key: Edge Softness");
+            ImGui::Dummy({0.f, 4.f});
+            ui_label("Spill Kill");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##afx_greenscreen_spill", &afx.params[5], 0.0f, 1.0f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Chroma Key: Spill Kill");
+            break;
+        }
         default: break;
     }
 }

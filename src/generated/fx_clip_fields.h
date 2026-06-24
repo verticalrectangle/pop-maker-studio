@@ -678,3 +678,16 @@
     float fx_cam_shake_intensity_beat = 0.0f;
     float fx_cam_shake_speed = 1.0f;
     float fx_cam_shake_speed_beat = 0.0f;
+    float fx_greenscreen_amount = 1.0f;
+    float fx_greenscreen_key_r = 0.0f;
+    float fx_greenscreen_key_r_beat = 0.0f;
+    float fx_greenscreen_key_g = 1.0f;
+    float fx_greenscreen_key_g_beat = 0.0f;
+    float fx_greenscreen_key_b = 0.0f;
+    float fx_greenscreen_key_b_beat = 0.0f;
+    float fx_greenscreen_similarity = 0.4f;
+    float fx_greenscreen_similarity_beat = 0.0f;
+    float fx_greenscreen_smoothness = 0.08f;
+    float fx_greenscreen_smoothness_beat = 0.0f;
+    float fx_greenscreen_spill = 0.5f;
+    float fx_greenscreen_spill_beat = 0.0f;

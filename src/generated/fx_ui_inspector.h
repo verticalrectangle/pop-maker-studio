@@ -7330,3 +7330,157 @@
                 }
             }
             break;
+
+        case FXType::GreenScreen:
+            kfx("fx_greenscreen_amount", "Amount", &clip.fx_greenscreen_amount, 0.0f, 1.0f, "%.2f", sw);
+            ImGui::Dummy({0.f, 4.f});
+            {
+                bool _bon = clip.fx_greenscreen_key_r_beat > 0.001f;
+                if (_bon) {
+                    ui_label("Key R");
+                    ImGui::BeginDisabled();
+                    ImGui::SetNextItemWidth(sw - 26.f);
+                    ImGui::SliderFloat("##gen_greenscreen_key_r", &clip.fx_greenscreen_key_r, 0.0f, 1.0f, "%.2f");
+                    ImGui::EndDisabled();
+                } else {
+                    kfx("fx_greenscreen_key_r", "Key R", &clip.fx_greenscreen_key_r, 0.0f, 1.0f, "%.2f", sw - 26.f);
+                }
+                ImGui::SameLine(0.f, 4.f);
+                ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
+                if (ImGui::SmallButton("B##bt_greenscreen_key_r")) {
+                    clip.fx_greenscreen_key_r_beat = _bon ? 0.f : 0.5f;
+                    history_push(state, "Chroma Key: Beat Sync");
+                }
+                ImGui::PopStyleColor();
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_greenscreen_key_r", &clip.fx_greenscreen_key_r_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Chroma Key: Beat Intensity");
+                }
+            }
+            ImGui::Dummy({0.f, 4.f});
+            {
+                bool _bon = clip.fx_greenscreen_key_g_beat > 0.001f;
+                if (_bon) {
+                    ui_label("Key G");
+                    ImGui::BeginDisabled();
+                    ImGui::SetNextItemWidth(sw - 26.f);
+                    ImGui::SliderFloat("##gen_greenscreen_key_g", &clip.fx_greenscreen_key_g, 0.0f, 1.0f, "%.2f");
+                    ImGui::EndDisabled();
+                } else {
+                    kfx("fx_greenscreen_key_g", "Key G", &clip.fx_greenscreen_key_g, 0.0f, 1.0f, "%.2f", sw - 26.f);
+                }
+                ImGui::SameLine(0.f, 4.f);
+                ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
+                if (ImGui::SmallButton("B##bt_greenscreen_key_g")) {
+                    clip.fx_greenscreen_key_g_beat = _bon ? 0.f : 0.5f;
+                    history_push(state, "Chroma Key: Beat Sync");
+                }
+                ImGui::PopStyleColor();
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_greenscreen_key_g", &clip.fx_greenscreen_key_g_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Chroma Key: Beat Intensity");
+                }
+            }
+            ImGui::Dummy({0.f, 4.f});
+            {
+                bool _bon = clip.fx_greenscreen_key_b_beat > 0.001f;
+                if (_bon) {
+                    ui_label("Key B");
+                    ImGui::BeginDisabled();
+                    ImGui::SetNextItemWidth(sw - 26.f);
+                    ImGui::SliderFloat("##gen_greenscreen_key_b", &clip.fx_greenscreen_key_b, 0.0f, 1.0f, "%.2f");
+                    ImGui::EndDisabled();
+                } else {
+                    kfx("fx_greenscreen_key_b", "Key B", &clip.fx_greenscreen_key_b, 0.0f, 1.0f, "%.2f", sw - 26.f);
+                }
+                ImGui::SameLine(0.f, 4.f);
+                ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
+                if (ImGui::SmallButton("B##bt_greenscreen_key_b")) {
+                    clip.fx_greenscreen_key_b_beat = _bon ? 0.f : 0.5f;
+                    history_push(state, "Chroma Key: Beat Sync");
+                }
+                ImGui::PopStyleColor();
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_greenscreen_key_b", &clip.fx_greenscreen_key_b_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Chroma Key: Beat Intensity");
+                }
+            }
+            ImGui::Dummy({0.f, 4.f});
+            {
+                bool _bon = clip.fx_greenscreen_similarity_beat > 0.001f;
+                if (_bon) {
+                    ui_label("Similarity");
+                    ImGui::BeginDisabled();
+                    ImGui::SetNextItemWidth(sw - 26.f);
+                    ImGui::SliderFloat("##gen_greenscreen_similarity", &clip.fx_greenscreen_similarity, 0.01f, 1.0f, "%.2f");
+                    ImGui::EndDisabled();
+                } else {
+                    kfx("fx_greenscreen_similarity", "Similarity", &clip.fx_greenscreen_similarity, 0.01f, 1.0f, "%.2f", sw - 26.f);
+                }
+                ImGui::SameLine(0.f, 4.f);
+                ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
+                if (ImGui::SmallButton("B##bt_greenscreen_similarity")) {
+                    clip.fx_greenscreen_similarity_beat = _bon ? 0.f : 0.5f;
+                    history_push(state, "Chroma Key: Beat Sync");
+                }
+                ImGui::PopStyleColor();
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_greenscreen_similarity", &clip.fx_greenscreen_similarity_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Chroma Key: Beat Intensity");
+                }
+            }
+            ImGui::Dummy({0.f, 4.f});
+            {
+                bool _bon = clip.fx_greenscreen_smoothness_beat > 0.001f;
+                if (_bon) {
+                    ui_label("Edge Softness");
+                    ImGui::BeginDisabled();
+                    ImGui::SetNextItemWidth(sw - 26.f);
+                    ImGui::SliderFloat("##gen_greenscreen_smoothness", &clip.fx_greenscreen_smoothness, 0.0f, 0.5f, "%.2f");
+                    ImGui::EndDisabled();
+                } else {
+                    kfx("fx_greenscreen_smoothness", "Edge Softness", &clip.fx_greenscreen_smoothness, 0.0f, 0.5f, "%.2f", sw - 26.f);
+                }
+                ImGui::SameLine(0.f, 4.f);
+                ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
+                if (ImGui::SmallButton("B##bt_greenscreen_smoothness")) {
+                    clip.fx_greenscreen_smoothness_beat = _bon ? 0.f : 0.5f;
+                    history_push(state, "Chroma Key: Beat Sync");
+                }
+                ImGui::PopStyleColor();
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_greenscreen_smoothness", &clip.fx_greenscreen_smoothness_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Chroma Key: Beat Intensity");
+                }
+            }
+            ImGui::Dummy({0.f, 4.f});
+            {
+                bool _bon = clip.fx_greenscreen_spill_beat > 0.001f;
+                if (_bon) {
+                    ui_label("Spill Kill");
+                    ImGui::BeginDisabled();
+                    ImGui::SetNextItemWidth(sw - 26.f);
+                    ImGui::SliderFloat("##gen_greenscreen_spill", &clip.fx_greenscreen_spill, 0.0f, 1.0f, "%.2f");
+                    ImGui::EndDisabled();
+                } else {
+                    kfx("fx_greenscreen_spill", "Spill Kill", &clip.fx_greenscreen_spill, 0.0f, 1.0f, "%.2f", sw - 26.f);
+                }
+                ImGui::SameLine(0.f, 4.f);
+                ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
+                if (ImGui::SmallButton("B##bt_greenscreen_spill")) {
+                    clip.fx_greenscreen_spill_beat = _bon ? 0.f : 0.5f;
+                    history_push(state, "Chroma Key: Beat Sync");
+                }
+                ImGui::PopStyleColor();
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_greenscreen_spill", &clip.fx_greenscreen_spill_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Chroma Key: Beat Intensity");
+                }
+            }
+            break;

@@ -683,4 +683,17 @@
         c.fx_cam_shake_intensity_beat = r.pod<float>();
         c.fx_cam_shake_speed = r.pod<float>();
         c.fx_cam_shake_speed_beat = r.pod<float>();
+        c.fx_greenscreen_amount = r.pod<float>();
+        c.fx_greenscreen_key_r = r.pod<float>();
+        c.fx_greenscreen_key_r_beat = r.pod<float>();
+        c.fx_greenscreen_key_g = r.pod<float>();
+        c.fx_greenscreen_key_g_beat = r.pod<float>();
+        c.fx_greenscreen_key_b = r.pod<float>();
+        c.fx_greenscreen_key_b_beat = r.pod<float>();
+        c.fx_greenscreen_similarity = r.pod<float>();
+        c.fx_greenscreen_similarity_beat = r.pod<float>();
+        c.fx_greenscreen_smoothness = r.pod<float>();
+        c.fx_greenscreen_smoothness_beat = r.pod<float>();
+        c.fx_greenscreen_spill = r.pod<float>();
+        c.fx_greenscreen_spill_beat = r.pod<float>();
     }

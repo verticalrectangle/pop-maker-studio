@@ -154,7 +154,7 @@ static EffectPreset preset_from_clip(const Clip& clip, const std::string& name) 
 // ── Shared FX card catalogue ──────────────────────────────────────────────────
 struct FXCard { FXType type; const char* name; const char* tagline; ImU32 accent; const char* category; };
 static const FXCard g_fx_cards[] = {
-    {FXType::ChromaKey, "Chroma Key",  "Color-range keyer  ·  green screen  ·  compositing", IM_COL32(50,220,120,255), "Tools"},
+    {FXType::ChromaKey, "Chroma Melt", "Trippy digital chroma smear  ·  color-melt, not a clean key", IM_COL32(180,90,230,255), "Glitch"},
     {FXType::Glitch,    "Glitch",      "RGB split  ·  row corruption  ·  digital tear",       IM_COL32(0,210,220,255),  "Glitch"},
     {FXType::ZoomPunch, "Zoom Punch",  "Beat-synced scale spike  ·  shake",                   IM_COL32(255,135,40,255), "Motion"},
     {FXType::LUT,       "LUT Grade",   "Load any .cube file  ·  cinematic color grade",       IM_COL32(255,205,55,255), "Color"},

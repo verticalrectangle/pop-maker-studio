@@ -4670,6 +4670,25 @@
       ],
       "amount_default": 1.0,
       "category": "Motion"
+    },
+    {
+      "id": "greenscreen",
+      "enum": "GreenScreen",
+      "label": "Chroma Key",
+      "abbrev": "KEY",
+      "color": [50, 220, 120, 255],
+      "description": "Clean colour keyer - green screen - keys a colour out so the track below shows through",
+      "shader": "shaders/greenscreen.glsl",
+      "params": [
+        { "name": "key_r",      "label": "Key R",         "min": 0.0,  "max": 1.0, "default": 0.0,  "fmt": "%.2f", "curve": 1.0 },
+        { "name": "key_g",      "label": "Key G",         "min": 0.0,  "max": 1.0, "default": 1.0,  "fmt": "%.2f", "curve": 1.0 },
+        { "name": "key_b",      "label": "Key B",         "min": 0.0,  "max": 1.0, "default": 0.0,  "fmt": "%.2f", "curve": 1.0 },
+        { "name": "similarity", "label": "Similarity",    "min": 0.01, "max": 1.0, "default": 0.40, "fmt": "%.2f", "curve": 1.0 },
+        { "name": "smoothness", "label": "Edge Softness", "min": 0.0,  "max": 0.5, "default": 0.08, "fmt": "%.2f", "curve": 1.0 },
+        { "name": "spill",      "label": "Spill Kill",    "min": 0.0,  "max": 1.0, "default": 0.50, "fmt": "%.2f", "curve": 1.0 }
+      ],
+      "amount_default": 1.0,
+      "category": "Tools"
     }
   ]
 }
