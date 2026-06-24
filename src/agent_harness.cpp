@@ -15,8 +15,11 @@
 #include <atomic>
 #include <chrono>
 #include <filesystem>
+#include <fstream>
 #include <mutex>
 #include <thread>
+#include <unordered_map>
+#include <set>
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
@@ -52,6 +55,12 @@ static std::atomic<bool>     s_stop{false};
 static std::atomic<pid_t>    s_curl_pid{0};
 static std::thread           s_worker;
 
+// Settings → Apply & Test connection state.
+static std::atomic<int>      s_test_state{0};   // 0 idle, 1 running, 2 ok, 3 fail
+static std::string           s_test_msg;
+static std::mutex            s_test_mu;
+static std::thread           s_test_thread;
+
 static const char* kSockPath   = "/tmp/pop-maker-studio.sock";
 // Per-turn cap on model round-trips (each can carry several tool calls).
 // Runaway-loop protection, not a work limit — real editing tasks routinely
@@ -59,6 +68,11 @@ static const char* kSockPath   = "/tmp/pop-maker-studio.sock";
 // resumes where the turn stopped.
 static const int   kMaxToolIters = 64;
 static const size_t kToolResultCap = 8 * 1024;
+// Repetition guard (the real budget): the iteration cap is a last-resort backstop,
+// this catches the actual runaway pattern early. Same (tool, args) repeated this
+// many times → a one-shot corrective nudge; repeated this many → stop the turn.
+static const int   kRepeatNudge = 3;
+static const int   kRepeatStop  = 5;
 
 // ── Display rows ──────────────────────────────────────────────────────────────
 
@@ -109,6 +123,13 @@ static const std::vector<std::pair<std::string, ToolInfo>>& tool_table() {
         std::vector<std::pair<std::string, ToolInfo>> t;
         json all = json::parse(AGENT_TOOLS_JSON);
         for (auto& tool : all) {
+            std::string name = tool["name"].get<std::string>();
+            // find_and_add_clip is retired from the in-app agent: it ran its own
+            // windowed MDX-Net+whisper pass into a throwaway cache and dropped a
+            // stray clip that drifted lyric offsets. The agent transcribes via
+            // trigger_pipeline (which lays the lyrics) and locates phrases with
+            // search_transcript — one transcription path, no divergent second one.
+            if (name == "find_and_add_clip") continue;
             ToolInfo info;
             info.ipc = tool.value("ipc", false);
             info.decl = {
@@ -122,16 +143,24 @@ static const std::vector<std::pair<std::string, ToolInfo>>& tool_table() {
             auto& schema = tool["inputSchema"];
             info.has_quiet = schema.contains("properties") &&
                              schema["properties"].contains("quiet");
-            t.push_back({tool["name"].get<std::string>(), std::move(info)});
+            t.push_back({name, std::move(info)});
         }
         return t;
     }();
     return table;
 }
 
-static json tools_decl_json() {
+static json tools_decl_json(bool vision) {
     json arr = json::array();
-    for (auto& [name, info] : tool_table()) arr.push_back(info.decl);
+    for (auto& [name, info] : tool_table()) {
+        // A vision-enabled harness sees frames with its own eyes (take_snapshot /
+        // get_stills / make_contact_sheet), so the local Moondream scene-captioning
+        // pair is redundant — and slow (CPU ONNX, 824 MB autoregressive decoder).
+        // Drop it when "send snapshot images to the model" (cfg.vision) is on.
+        if (vision && (name == "describe_video" || name == "get_video_description"))
+            continue;
+        arr.push_back(info.decl);
+    }
     return arr;
 }
 
@@ -809,9 +838,15 @@ static const char* kSystemPrompt =
     "You are the embedded editing agent inside Pop Maker Studio, a desktop "
     "video editor. You edit the project the user currently has open by "
     "calling tools; the user watches the canvas and timeline update live. "
-    "Track 0 is the top/foreground layer. Times are in seconds. Mutations "
-    "return small acks; call get_project or get_clips when you need to read "
-    "state. You can put videos and images on the timeline.\n"
+    "LAYERING: Track 0 is the TOP layer and composites OVER the tracks below "
+    "it; an FX/adjustment/background brick affects everything below it on the "
+    "timeline. get_project returns an ASCII 'timeline' map — read it to see "
+    "track order, clip timing, and where clips overlap. Lyrics/subtitle and "
+    "generated-FX tracks are 'managed': change them with set_typography_preset, "
+    "not by editing their clips. Times are in seconds. Mutations return small "
+    "acks; call get_project or get_clips when you need to read state. You can "
+    "put videos and images on the timeline. Never call new_project to recover "
+    "from confusion — it wipes the user's work; make targeted edits or undo.\n"
     "PERCEPTION: to understand video content, use describe_video + "
     "get_video_description — local scene captions as text, they work even "
     "without vision. For spoken content use get_transcript / "
@@ -823,10 +858,31 @@ static const char* kSystemPrompt =
     "trigger_export, detect_screen_activity, ...) call its get_*_status tool "
     "ONCE — it blocks internally until the operation finishes and returns "
     "the final result. Never poll in a loop.\n"
+    "LYRICS (trigger_pipeline lays them — like the UI's Generate Lyrics button): "
+    "when the audio is a clip on the timeline, trigger_pipeline lays the styled "
+    "lyric bricks itself the moment it finishes, positioned to the brick — you do "
+    "NOT call set_typography_preset to place them. Flow: (1) put the song on the "
+    "timeline (add_track + add_clip type='audio'); (2) if you only want a SECTION, "
+    "trim the audio brick to it FIRST; (3) trigger_pipeline(preset='flash'|'apple'|"
+    "'spotify'|...) ONCE — it separates vocals first (clean voices on any source); "
+    "(4) call get_pipeline_status once "
+    "to wait for stage='done'. Lyric timings are placed relative to the brick, so "
+    "if you move or trim the brick AFTER transcribing, re-run set_typography_preset "
+    "to re-fit them (that is also how you swap presets). NEVER run a second "
+    "transcription to 'locate' a section — use search_transcript on the existing "
+    "transcript. One transcription per audio: if one is running or done, read "
+    "get_transcript / get_pipeline_status instead of starting another.\n"
+    "MAKE A SECTION: to cut an existing full project down to one part, delete the "
+    "off-section clips, then call make_section(start, end) ONCE — it trims the audio "
+    "to the window, shifts everything to t=0, and keeps every track in sync. NEVER "
+    "leave the audio full-length with the kept clips floating in the middle of the "
+    "timeline; deleting clips is only half the job.\n"
     "PROBE BEFORE ASKING: when the user provides media, gather facts with tools "
     "before asking them anything — get_media_info for resolution/duration/codec, "
     "describe_video + get_video_description for visual content, get_transcript / "
-    "search_transcript for spoken content, trigger_pipeline for lyrics. Only ask "
+    "search_transcript for spoken content, trigger_pipeline for lyrics (for a "
+    "SECTION, trim the brick first — see LYRICS; never transcribe the whole song "
+    "when only a part is wanted). Only ask "
     "the user about subjective choices (style, pacing, colors) that tools cannot "
     "determine.\n"
     "Be concise in prose — do the work with tools and summarize briefly.";
@@ -846,7 +902,17 @@ static void worker_turn() {
     while (!url.empty() && url.back() == '/') url.pop_back();
     url += "/chat/completions";
 
-    static const json tools_decl = tools_decl_json();
+    // Per-turn (not static): the toolset depends on cfg.vision, which the user
+    // can toggle in settings between turns.
+    json tools_decl = tools_decl_json(cfg.vision);
+
+    // Repetition tracking for this turn: a call only counts as "no progress" when
+    // the SAME (tool|args) returns the SAME result — so legitimately repeated calls
+    // that advance a workflow (e.g. get_video_description{} per clip, each a
+    // different description) never trip it. rep_last holds the last result hash.
+    std::unordered_map<std::string, int>    rep_counts;
+    std::unordered_map<std::string, size_t> rep_last;
+    std::set<std::string> rep_nudged;
 
     for (int iter = 0; iter < kMaxToolIters && !s_stop; ++iter) {
         json body;
@@ -946,6 +1012,7 @@ static void worker_turn() {
 
         // ── Execute tool calls serially ───────────────────────────────────────
         size_t answered = 0;
+        std::string nudge_tool, kill_tool;   // repetition verdicts for this round
         for (auto& call : calls) {
             if (s_stop) break;
             std::string tname = call["function"]["name"].get<std::string>();
@@ -968,6 +1035,27 @@ static void worker_turn() {
                               {"content", result}});
             for (auto& m : extra) s_wire.push_back(m);
             ++answered;
+
+            // Repetition guard: same tool + identical args returning the SAME
+            // result, over and over, is the real runaway/flail pattern (and the
+            // bail-to-new_project loop). A changed result = progress → reset, so
+            // valid repeated calls (polling, per-item status) don't trip it. Nudge
+            // once, then stop — far earlier than the 64-iteration backstop.
+            std::string sig = tname + "\x1f" + targs_s;
+            size_t rh = std::hash<std::string>{}(result);
+            auto rit = rep_last.find(sig);
+            if (rit != rep_last.end() && rit->second == rh) {
+                int rep = ++rep_counts[sig];
+                if (rep >= kRepeatStop) kill_tool = tname;
+                else if (rep >= kRepeatNudge && !rep_nudged.count(sig)) {
+                    rep_nudged.insert(sig);
+                    nudge_tool = tname;
+                }
+            } else {
+                rep_last[sig]   = rh;     // new/changed result → progress made
+                rep_counts[sig] = 1;
+                rep_nudged.erase(sig);
+            }
         }
         // Every tool_call_id must get a tool message or the API rejects the
         // whole history next turn. Synthesize results for calls skipped by
@@ -979,6 +1067,22 @@ static void worker_turn() {
                                   {"tool_call_id", calls[i]["id"]},
                                   {"content", "(cancelled by user before execution)"}});
         }
+        // Repetition verdicts (after the wire is consistent for this round).
+        if (!kill_tool.empty()) {
+            row_add(AgentRole::Error,
+                    "(stopped: '" + kill_tool + "' was repeated with the same "
+                    "arguments and made no progress)");
+            break;
+        }
+        if (!nudge_tool.empty()) {
+            std::lock_guard<std::mutex> lk(s_mu);
+            s_wire.push_back({{"role", "user"},
+                {"content", "[editor] You've called '" + nudge_tool +
+                 "' with identical arguments several times with no progress. Stop "
+                 "repeating it — use a different tool, or tell me what's blocking you. "
+                 "Read the get_project 'timeline' map if you've lost track of state."}});
+        }
+
         if (iter == kMaxToolIters - 1)
             row_add(AgentRole::Error,
                     "tool budget exhausted for this turn \xe2\x80\x94 send "
@@ -989,14 +1093,180 @@ static void worker_turn() {
     s_running = false;
 }
 
+// ── Config persistence ────────────────────────────────────────────────────────
+// base_url/model/vision live in ~/.config/pop-maker-studio/agent.json so settings
+// survive a restart (previously they were in-memory only — nothing reloaded them,
+// so every launch reverted to the deepseek-chat default). The API key is NOT here;
+// it stays in the system keyring.
+
+static std::string agent_config_path() {
+    const char* xdg  = getenv("XDG_CONFIG_HOME");
+    const char* home = getenv("HOME");
+    std::string base = (xdg && *xdg) ? std::string(xdg)
+                     : home          ? std::string(home) + "/.config"
+                                     : std::string("/tmp");
+    std::string dir = base + "/pop-maker-studio";
+    std::error_code ec; std::filesystem::create_directories(dir, ec);
+    return dir + "/agent.json";
+}
+
+static void save_config_locked() {   // caller holds s_mu
+    json j = {{"base_url", s_cfg.base_url}, {"model", s_cfg.model},
+              {"vision", s_cfg.vision}};
+    std::ofstream f(agent_config_path());
+    if (f) f << j.dump(2);
+}
+
+static void ensure_config_loaded() {
+    static std::once_flag once;
+    std::call_once(once, [] {
+        std::lock_guard<std::mutex> lk(s_mu);
+        std::ifstream f(agent_config_path());
+        if (f) {
+            json j = json::parse(f, nullptr, false);
+            if (!j.is_discarded()) {
+                if (j.value("base_url", std::string()) != "") s_cfg.base_url = j["base_url"];
+                if (j.value("model",    std::string()) != "") s_cfg.model    = j["model"];
+                if (j.contains("vision") && j["vision"].is_boolean())
+                    s_cfg.vision = j["vision"].get<bool>();
+            }
+        }
+        // Env overrides always win (dev/test) — re-apply on top of the file.
+        if (const char* u = getenv("PMS_AGENT_BASE_URL")) s_cfg.base_url = u;
+        if (const char* m = getenv("PMS_AGENT_MODEL"))    s_cfg.model    = m;
+    });
+}
+
+// ── Connection test (Settings → Apply & Test) ─────────────────────────────────
+// One non-streaming, one-token request to (base_url, model, key) to confirm the
+// whole chain before a real turn — catches a bad model id, a 401, or a wrong URL
+// instead of failing silently mid-conversation.
+
+// Blocking POST: key via a 0600 --config file (never argv), body via a temp file,
+// HTTP status appended by curl's -w. fork/exec (no shell) so a user-set URL can't
+// inject. `out` ends with "\n<http_code>".
+static bool curl_post_blocking(const std::string& url, const std::string& key,
+                               const std::string& body, std::string& out) {
+    char hdr_tmpl[]  = "/tmp/pms_test_hdr_XXXXXX";
+    char body_tmpl[] = "/tmp/pms_test_body_XXXXXX";
+    int hfd = mkstemp(hdr_tmpl), bfd = mkstemp(body_tmpl);
+    if (hfd < 0 || bfd < 0) {
+        if (hfd >= 0) { close(hfd); unlink(hdr_tmpl); }
+        if (bfd >= 0) { close(bfd); unlink(body_tmpl); }
+        return false;
+    }
+    fchmod(hfd, 0600); fchmod(bfd, 0600);
+    std::string hdr = "header = \"Authorization: Bearer " + key + "\"\n";
+    if (write(hfd, hdr.data(),  hdr.size())  < 0) { /* best effort */ }
+    if (write(bfd, body.data(), body.size()) < 0) { /* best effort */ }
+    close(hfd); close(bfd);
+
+    int pipefd[2];
+    if (pipe(pipefd) != 0) { unlink(hdr_tmpl); unlink(body_tmpl); return false; }
+    pid_t pid = fork();
+    if (pid < 0) { close(pipefd[0]); close(pipefd[1]);
+                   unlink(hdr_tmpl); unlink(body_tmpl); return false; }
+    if (pid == 0) {
+        dup2(pipefd[1], STDOUT_FILENO);
+        close(pipefd[0]); close(pipefd[1]);
+        int dn = open("/dev/null", O_WRONLY);
+        if (dn >= 0) { dup2(dn, STDERR_FILENO); close(dn); }
+        std::string data_arg = "@" + std::string(body_tmpl);
+        execlp("curl", "curl", "-sS", "-m", "20", "-w", "\n%{http_code}",
+               "--config", hdr_tmpl, "-H", "Content-Type: application/json",
+               "--data-binary", data_arg.c_str(), url.c_str(), (char*)nullptr);
+        _exit(127);
+    }
+    close(pipefd[1]);
+    char buf[4096]; ssize_t n;
+    while ((n = read(pipefd[0], buf, sizeof(buf))) > 0) out.append(buf, (size_t)n);
+    close(pipefd[0]);
+    int st = 0; waitpid(pid, &st, 0);
+    unlink(hdr_tmpl); unlink(body_tmpl);
+    return true;
+}
+
+static void test_worker(AgentConfig cfg) {
+    auto finish = [](int state, const std::string& msg) {
+        std::lock_guard<std::mutex> lk(s_test_mu);
+        s_test_msg = msg; s_test_state = state;
+    };
+    std::string key = key_lookup();
+    if (key.empty()) { finish(3, "No API key \xe2\x80\x94 add one below, then test."); return; }
+
+    std::string url = cfg.base_url;
+    while (!url.empty() && url.back() == '/') url.pop_back();
+    url += "/chat/completions";
+    json body = {{"model", cfg.model},
+                 {"messages", json::array({{{"role","user"},{"content","ping"}}})},
+                 {"max_tokens", 1}, {"stream", false}};
+
+    std::string resp;
+    if (!curl_post_blocking(url, key, body.dump(), resp) || resp.empty()) {
+        finish(3, "Couldn't reach " + url); return;
+    }
+    size_t nl = resp.find_last_of('\n');
+    int  http = (nl != std::string::npos) ? atoi(resp.c_str() + nl + 1) : 0;
+    std::string bodytext = (nl != std::string::npos) ? resp.substr(0, nl) : resp;
+    json j = json::parse(bodytext, nullptr, false);
+
+    if (http == 200 && !j.is_discarded() && j.contains("choices")) {
+        finish(2, cfg.model + " responded");
+        return;
+    }
+    std::string emsg;
+    if (!j.is_discarded() && j.contains("error"))
+        emsg = j["error"].is_object() ? j["error"].value("message", j["error"].dump())
+                                      : j["error"].dump();
+    else
+        emsg = bodytext.substr(0, 200);
+    if (emsg.empty()) emsg = "HTTP " + std::to_string(http);
+    finish(3, emsg);
+}
+
+void agent_test_begin(const AgentConfig& cfg) {
+    int idle = 0;
+    if (!s_test_state.compare_exchange_strong(idle, 1)) return;  // already running
+    { std::lock_guard<std::mutex> lk(s_test_mu); s_test_msg = "testing\xe2\x80\xa6"; }
+    if (s_test_thread.joinable()) s_test_thread.join();
+    s_test_thread = std::thread(test_worker, cfg);
+}
+
+int agent_test_state(std::string& out) {
+    std::lock_guard<std::mutex> lk(s_test_mu);
+    out = s_test_msg;
+    return s_test_state.load();
+}
+
 // ── Public API ────────────────────────────────────────────────────────────────
 
 void agent_send(const std::string& user_text) {
+    ensure_config_loaded();
     if (s_running || user_text.empty()) return;
     {
         std::lock_guard<std::mutex> lk(s_mu);
         if (s_wire.empty()) {
-            std::string sys = std::string(kSystemPrompt) + "\n\n" + AGENT_TOOLS_INDEX;
+            // Keep the category index consistent with the filtered tool table.
+            // find_and_add_clip is always dropped from the in-app agent; the
+            // describe_video / get_video_description pair is dropped when vision
+            // is on (see tools_decl_json).
+            std::string index = AGENT_TOOLS_INDEX;
+            auto drop_tool = [&](const std::string& name) {
+                std::string pat = name + ", ";
+                size_t fp = index.find(pat);
+                if (fp != std::string::npos) index.erase(fp, pat.size());
+            };
+            drop_tool("find_and_add_clip");
+            if (s_cfg.vision) { drop_tool("describe_video"); drop_tool("get_video_description"); }
+            std::string sys = std::string(kSystemPrompt) + "\n\n" + index;
+            if (s_cfg.vision)
+                sys += "\n\nVISION: you can see images — use your own eyes before "
+                       "asking the user. Call take_snapshot (source='ui' for the "
+                       "timeline/panels, 'canvas' for the composition) to look at the "
+                       "project yourself and verify your edits visually before asking. "
+                       "describe_video / get_video_description are OFF for you — to read "
+                       "a source video's CONTENT, pull frames you can see directly with "
+                       "make_contact_sheet or get_stills; don't scrub the playhead.";
             s_wire.push_back({{"role", "system"}, {"content", sys}});
         }
         s_wire.push_back({{"role", "user"}, {"content", user_text}});
@@ -1031,12 +1301,14 @@ void agent_clear() {
 
 void agent_shutdown() {
     agent_stop();
-    if (s_worker.joinable()) s_worker.join();
+    if (s_worker.joinable())      s_worker.join();
+    if (s_test_thread.joinable()) s_test_thread.join();
     std::lock_guard<std::mutex> lk(s_bridge_mu);
     bridge_close_locked();
 }
 
 AgentConfig agent_get_config() {
+    ensure_config_loaded();
     std::lock_guard<std::mutex> lk(s_mu);
     return s_cfg;
 }
@@ -1044,4 +1316,5 @@ AgentConfig agent_get_config() {
 void agent_set_config(const AgentConfig& cfg) {
     std::lock_guard<std::mutex> lk(s_mu);
     s_cfg = cfg;
+    save_config_locked();   // persist so it survives the next launch
 }

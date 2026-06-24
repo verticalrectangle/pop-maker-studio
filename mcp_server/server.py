@@ -53,19 +53,19 @@ from mcp.types import Tool, TextContent, ImageContent
 # Domain groups — give the agent a navigable map instead of a flat 90-tool wall.
 _CATEGORIES: dict[str, list[str]] = {
     "read": [
-        "get_project", "get_clips", "get_all_clips", "get_media_info", "get_stills",
+        "get_project", "get_clips", "get_all_clips", "get_media_info", "list_dir", "get_stills",
         "get_video_description", "describe_video", "get_canvas_geometry",
         "get_face_track", "verify_clips", "make_contact_sheet",
     ],
     "timeline": [
         "add_clip", "add_clip_sequence", "add_track", "delete_clip", "delete_clips_after",
-        "delete_track", "move_clip", "split_clip", "trim_clip", "trim_all_to", "select_clip",
+        "delete_track", "move_clip", "split_clip", "trim_clip", "trim_all_to", "make_section", "select_clip",
         "set_clip_prop", "set_clip_props", "set_clip_keyframes", "rename_track", "add_to_bin",
         "remove_from_bin", "set_format", "set_loop_region", "add_callout", "add_chapter_marker",
         "remove_chapter_marker", "get_chapter_markers", "generate_chapters", "crop_media",
-        "extract_clip_segment", "find_and_add_clip", "find_video_moment", "apply_multicam_cuts",
+        "find_and_add_clip", "find_video_moment", "apply_multicam_cuts",
     ],
-    "text": ["generate_typography", "set_text_style", "set_transcript", "shift_transcript"],
+    "text": ["set_typography_preset", "set_text_style", "set_transcript"],
     "fx": [
         "add_effect_brick", "add_multifx_brick", "add_audio_multifx_brick", "add_body_fx_brick",
         "decouple_fx_brick", "set_clip_fx", "process_body_fx_masks", "remove_background",
@@ -98,6 +98,10 @@ TOOL_CATEGORY: dict[str, str] = {
 OPERATOR_TOOLS: set[str] = {
     "ui_input", "get_canvas_geometry", "set_monitor", "set_camera_monitor",
     "vrecord_start", "vrecord_stop",
+    # Withheld from the in-app harness: a full project wipe is too destructive for
+    # the cheaper model to reach for (it bailed to it mid-task). The IPC handler
+    # also refuses on a non-empty project unless force=true.
+    "new_project",
 }
 
 # MCP tool → the IPC method it wraps, where the names diverge (#7). The MCP names
@@ -625,21 +629,52 @@ async def list_tools() -> list[Tool]:
             },
         ),
         Tool(
+            name="list_dir",
+            description=(
+                "List the files and subfolders in a directory. Use this to DISCOVER media on "
+                "disk instead of guessing paths or probing files one by one. Accepts a folder "
+                "path, OR a file path (lists the folder that contains it — handy when you only "
+                "have an audio/video path).\n\n"
+                "Returns {dir, entries, n_dirs, n_files, truncated?}. Each entry is "
+                "{name, path, is_dir, kind, ext, size_bytes}; kind is video|audio|image|other|"
+                "dir. Subfolders are listed first so you can navigate into them.\n\n"
+                "kind: filter results — 'all' (default), 'media' (video+audio+image), 'video', "
+                "'audio', or 'image'. To find mp4s/movies in a folder, pass kind='video'.\n"
+                "recursive: when true, walks subfolders (depth-capped; max 1000 entries, then "
+                "truncated=true). Default false (shallow). Hidden/dotfiles are skipped. "
+                "Read-only — no batch needed."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string",
+                             "description": "Absolute path to a folder (or a file, to list its folder)"},
+                    "kind": {"type": "string", "default": "all",
+                             "description": "all | media | video | audio | image"},
+                    "recursive": {"type": "boolean", "default": False,
+                                  "description": "Walk subfolders (depth-capped)"},
+                },
+                "required": ["path"],
+            },
+        ),
+        Tool(
             name="crop_media",
             description=(
-                "Crop a video or image file to a target aspect ratio and save the result. "
-                "Call this before add_clip whenever the user asks to crop source files, or "
-                "when the source aspect ratio differs from the canvas.\n\n"
+                "Reframe a video/image to a target aspect ratio. NON-DESTRUCTIVE by default: "
+                "computes the crop box (with face detection) and applies it as the clip's "
+                "crop_l/crop_t/crop_r/crop_b props — NO file is written and the engine composites "
+                "the crop live. If the source is already on the timeline it sets the crop on those "
+                "clips; otherwise it returns the insets for you to set after add_clip.\n\n"
                 "aspect: 'square' (1:1), 'vertical' (9:16), 'horizontal' (16:9), or 'W:H'.\n"
-                "face_detect: when true (default), automatically detects the face bounding box "
-                "and centers the crop on it with padding — no need to guess x_pct/y_pct.\n"
-                "x_pct / y_pct: manual fallback when face_detect=false or no face is found. "
-                "Default 0.5/0.5 = dead center.\n"
-                "pad_top / pad_bottom: extra padding above/below the detected face as a fraction "
-                "of face height (default 0.4 / 0.3).\n\n"
-                "Returns {path, width, height, crop, face_detected} plus an inline thumbnail "
-                "so you can verify framing immediately. "
-                "Supports HEIC, JPG, PNG (images) and MOV, MP4, etc. (video). Read-only — no batch needed."
+                "face_detect (default true): auto-detect the face box and center the crop on it.\n"
+                "x_pct / y_pct: manual center when face_detect=false (0.5/0.5 = dead center).\n"
+                "pad_top / pad_bottom: padding around the face (fraction of face height).\n"
+                "to_file (default false): set true ONLY when you genuinely need a cropped FILE on "
+                "disk (re-encodes a {stem}_crop.{mp4,png}). Leave false for editing — it litters "
+                "and is destructive.\n\n"
+                "Returns {mode:'clip_props', crop_l..crop_b, applied_to, face_detected} (default) "
+                "or {path, ...} (to_file) plus an inline thumbnail. Supports HEIC/JPG/PNG and "
+                "MOV/MP4 etc. Read-only — no batch needed."
             ),
             inputSchema={
                 "type": "object",
@@ -657,6 +692,8 @@ async def list_tools() -> list[Tool]:
                                      "description": "Horizontal center of crop (0=left, 1=right) — used when face_detect=false"},
                     "y_pct":        {"type": "number", "default": 0.5,
                                      "description": "Vertical center of crop (0=top, 1=bottom) — used when face_detect=false"},
+                    "to_file":      {"type": "boolean", "default": False,
+                                     "description": "Render a cropped FILE instead of setting clip crop props (destructive; default false)"},
                 },
                 "required": ["source_path"],
             },
@@ -668,30 +705,9 @@ async def list_tools() -> list[Tool]:
                 "Returns: running (bool), progress (0–1), message, "
                 "found (bool), start (seconds), end (seconds), excerpt, error.\n\n"
                 "Call every 3s until running=false. Print message each poll so the user sees progress. "
-                "When done: if found=true, call extract_clip_segment then add_clip."
+                "When done: if found=true, the matched segment has already been extracted and added to the timeline."
             ),
             inputSchema={"type": "object", "properties": {}},
-        ),
-        Tool(
-            name="extract_clip_segment",
-            description=(
-                "Stream-copy a time range from a source media file to a new file (no re-encode). "
-                "Near-instant for any codec. Use after find_and_add_clip reports a match to "
-                "extract just the relevant segment before adding it to the timeline.\n\n"
-                "NEVER use ffmpeg or shell commands to cut audio/video segments — this tool is "
-                "instant, codec-agnostic, and handles FLAC/MP3/WAV/MP4/MOV/WebM correctly.\n\n"
-                "Returns: {dst, duration}. dst is the path to add as a video clip."
-            ),
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "src":   {"type": "string", "description": "Source media file path"},
-                    "dst":   {"type": "string", "description": "Output file path. Use .webm for video sources. For audio-only sources (FLAC/MP3/WAV), match the source extension (e.g. .flac) — the container is chosen from the source format, not the dst extension."},
-                    "start": {"type": "number", "description": "Start time in seconds"},
-                    "end":   {"type": "number", "description": "End time in seconds"},
-                },
-                "required": ["src", "dst", "start", "end"],
-            },
         ),
         Tool(
             name="get_pipeline_status",
@@ -785,6 +801,10 @@ async def list_tools() -> list[Tool]:
                 "type: video | audio | text | lyrics | subtitle | effect | background | body_fx | record\n"
                 "effect/body_fx bricks cannot overlap another FX brick on the same track — "
                 "rejected; layer effects with add_multifx_brick instead.\n"
+                "NO OVERLAP: content/text clips (video, audio, text, lyrics, subtitle, background) "
+                "cannot overlap another clip on the same track — rejected. Clips on one track are "
+                "sequential; for simultaneous clips put them on separate tracks. Frame-adjacent (one "
+                "clip ends where the next starts) is fine.\n"
                 "type='record' is a loop-record brick: the user records mic takes over its "
                 "range in the app (agents cannot record). Its 'takes' (WAV paths) and "
                 "'selected_take' appear in get_project/get_clips; the selected take plays in "
@@ -793,11 +813,14 @@ async def list_tools() -> list[Tool]:
                 "For video files (.mp4 .mov .webm etc): type='video', text=absolute path.\n"
                 "For audio-only files (.flac .mp3 .wav .ogg etc): type='audio', text=absolute path. "
                 "NEVER use type='video' for audio-only files — it will fail with 'cannot write output header'.\n"
-                "Images (PNG/JPG/HEIC) must be converted to video first with crop_media — "
-                "use type='video' with the resulting .mp4 path, not the raw image.\n\n"
+                "Images & GIFs (PNG/JPG/WEBP/HEIC/GIF): type='video', text=absolute path — "
+                "place the file DIRECTLY. Do NOT convert it to a video first (that was the old "
+                "flow and is no longer needed). Stills render at full quality with transparency "
+                "preserved; a GIF animates and loops to fill the clip's span. Set 'end' for how "
+                "long it shows (defaults to start+2s). Reframe with the crop/pos/scale props.\n\n"
                 "TEXT CLIPS — read this before adding any:\n"
                 "  For LYRICS / CAPTIONS / KARAOKE: do NOT hand-build clips here. Call trigger_pipeline "
-                "(it transcribes and lays styled lyric bricks for you), then optionally generate_typography "
+                "(it transcribes and lays styled lyric bricks for you), then optionally set_typography_preset "
                 "(preset=...) to swap the visual style. type='lyrics' clips placed here will render with "
                 "default positioning that may be off-canvas and won't follow the global typography preset.\n"
                 "  For a SINGLE LABELED CALLOUT (label an object, person, action on screen): use add_callout "
@@ -822,11 +845,11 @@ async def list_tools() -> list[Tool]:
                 "message — it includes the colliding clip's snapped end (e.g. \"[90.100s – 90.767s]\"). Use "
                 "that snapped end as the next clip's start. Better: call get_clips after each add and use the "
                 "returned 'end' field as the next clip's start.\n\n"
-                "FILE PATH CONVENTIONS:\n"
-                "  Cropped media:       {parent}/{stem}_crop.mp4  (video)  or  {parent}/{stem}_crop.png  (image)\n"
-                "  Extracted segments:  {parent}/{stem}/{stem}_{start_int}_{end_int}.webm\n"
-                "  Transcripts:         {parent}/{stem}/{stem}_words.json\n\n"
-                "Always call crop_media before add_clip when the source aspect ratio differs from the canvas."
+                "Derived artifacts (transcripts, stems, extracted segments) live in a shared "
+                "cache dir (~/.cache/pop-maker-studio), NOT next to the user's media — don't "
+                "construct or rely on sidecar paths. To reframe/crop, set clip props "
+                "(crop_l/crop_t/crop_r/crop_b, pos, scale) — it's non-destructive and writes no "
+                "file; crop_media (which renders a new file) is only for an explicit on-disk crop."
             ),
             inputSchema={
                 "type": "object",
@@ -940,6 +963,9 @@ async def list_tools() -> list[Tool]:
             description=(
                 "Set one property on a clip.\n\n"
                 "LAYOUT:    pos_x, pos_y (0–1 canvas fraction), scale_x, scale_y, rotation\n"
+                "FLIP:      flip_h, flip_v (bool) — MIRROR the content (face the other way /\n"
+                "           upside-down). Use these, NOT a negative scale_x/scale_y: negative\n"
+                "           scale mirrors AND resizes (e.g. -0.1 shrinks to 10%).\n"
                 "CROP:      crop_l, crop_t, crop_r, crop_b (0–0.95 fraction trimmed per side,\n"
                 "           display orientation). Non-destructive render-time UV window —\n"
                 "           prefer this over crop_media when the media is already on the\n"
@@ -950,7 +976,8 @@ async def list_tools() -> list[Tool]:
                 "           ripple: a shrunk clip leaves a gap — close it with move_clip.\n"
                 "           Pass retime=false to keep start/end and change which source\n"
                 "           range plays instead), opacity (0–1), muted (bool),\n"
-                "           fade_in, fade_out, in_point (source offset seconds)\n"
+                "           fade_in, fade_out\n"
+                "           (in_point is NOT settable — trim the brick with trim_clip, like the UI)\n"
                 "TEXT:      text, font_size (0=auto), sub_pos (0=bottom 1=center 2=top 3=custom),\n"
                 "           sub_pos_x/y (0–1), sub_anchor_h (0=left 1=center 2=right),\n"
                 "           sub_wrap_w (0–1), sub_color ([r,g,b,a] 0–1)\n"
@@ -1093,7 +1120,7 @@ async def list_tools() -> list[Tool]:
                 "WARNING — do NOT call this on lyrics/subtitle clips generated by trigger_pipeline. "
                 "Those clips inherit style from the global preset; overriding a single clip detaches it "
                 "from the global system and produces inconsistent results. "
-                "If the user wants a different text style, call generate_typography with the preset "
+                "If the user wants a different text style, call set_typography_preset with the preset "
                 "that best matches their request — the preset IS the style. "
                 "Only use set_text_style on individual text clips (type='text') when the user explicitly "
                 "asks for a per-clip override."
@@ -1124,19 +1151,22 @@ async def list_tools() -> list[Tool]:
             },
         ),
         Tool(
-            name="generate_typography",
+            name="set_typography_preset",
             description=(
-                "Lay lyric/subtitle bricks on the timeline using a typography preset. Call this AFTER "
-                "trigger_pipeline finishes (stage='done' via get_pipeline_status) — that's how lyrics "
-                "get onto the timeline. Also call again to swap to a different visual style: idempotent, "
-                "clears the existing lyric clips for the current audio source and re-lays them with the "
-                "new preset.\n\n"
+                "ASSIGN a typography preset to the project's managed lyric bricks. The per-word/phrase "
+                "lyric bricks come from trigger_pipeline (they live on a managed 'Lyrics' track); this "
+                "tool sets the STYLE they render in — it does not transcribe or hand-build text. "
+                "Idempotent: re-assign any time to swap the look (clears the lyric clips for the current "
+                "audio and re-lays them in the new preset). If a transcript is ready but no lyric bricks "
+                "exist yet, assigning a preset lays them in that style.\n\n"
+                "You usually don't need this right after trigger_pipeline — the pipeline already lays the "
+                "bricks in the preset you passed it. Reach for this to CHANGE the preset.\n\n"
                 "PRESET SYSTEM: each preset bundles grouping, position, animation, color, and optional FX clips. "
-                "The preset IS the style — do NOT call set_text_style on the generated clips afterward to tweak "
+                "The preset IS the style — do NOT call set_text_style on the lyric clips afterward to tweak "
                 "them; that breaks the global styling. Match the user's style request to the closest preset here "
-                "and use that preset. Karaoke is a preset — use preset='karaoke', do NOT set karaoke=true manually.\n\n"
+                "and assign it. Karaoke is a preset — use preset='karaoke', do NOT set karaoke=true manually.\n\n"
                 "INTERPRET, DON'T HAND-ROLL: if the user describes a style (e.g. 'bold white caps with drop shadow', "
-                "'tiktok one-word', 'spotify bottom bar'), map it to the closest preset below and call this tool. "
+                "'tiktok one-word', 'spotify bottom bar'), map it to the closest preset below and assign it. "
                 "Do NOT build text clips manually via add_clip(type='text') just because the user's wording doesn't "
                 "match a preset name verbatim — the presets are deliberately broad and the closest fit is correct.\n\n"
                 "PRESET GUIDE — pick based on user's style request:\n"
@@ -1190,26 +1220,32 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="trigger_pipeline",
             description=(
-                "Kick off the ML pipeline (Demucs + transcription) on the project audio. NON-BLOCKING: "
+                "Kick off the ML pipeline (MDX-Net + transcription) on the project audio. NON-BLOCKING: "
                 "returns immediately with stage='running'. Poll get_pipeline_status every 2–3s until "
-                "stage='done', then call generate_typography(preset='...') to lay the lyric/subtitle "
-                "bricks on the timeline. No batch needed.\n\n"
+                "stage='done'. When the audio is a clip on the timeline, the lyric bricks are laid "
+                "AUTOMATICALLY on completion — styled by `preset`, positioned to the brick — exactly "
+                "like the UI's Generate Lyrics button. You do NOT need a separate set_typography_preset "
+                "call to place them. RE-RUNNING after a trim or a preset change REUSES the cached "
+                "transcript (no re-transcription — a trim never invalidates a source-relative "
+                "transcript); it just re-lays the lyrics. Pass force=true to force a real re-run. "
+                "No batch needed.\n\n"
                 "FULL WORKFLOW:\n"
-                "  1. add_track('Audio') + add_clip(type='audio', text=<path>) — audio MUST be on the\n"
-                "     timeline before this tool will accept the call.\n"
-                "  2. trigger_pipeline(mode='both')  → returns stage='running'\n"
-                "  3. loop: get_pipeline_status() every 2–3s until stage='done' (or 'error').\n"
-                "  4. generate_typography(preset='flash')  ← lays the lyric bricks in the chosen style.\n"
-                "  5. (optional) generate_typography(preset='...') again to swap the visual style.\n\n"
+                "  1. add_track('Audio') + add_clip(type='audio', text=<path>) — put the song on the\n"
+                "     timeline and trim the brick to its FINAL span before transcribing.\n"
+                "  2. trigger_pipeline(mode='both', preset='flash')  → returns stage='running'\n"
+                "  3. loop: get_pipeline_status() every 2–3s until stage='done' (or 'error'); the styled\n"
+                "     lyric bricks are laid automatically when it finishes — no set_typography_preset needed.\n"
+                "  4. (optional) set_typography_preset(preset='...') to swap the style, or to re-fit the\n"
+                "     lyrics if you moved/trimmed the audio brick AFTER transcribing.\n\n"
                 "PROBE FIRST: call get_transcript() — if status='ready' the transcript is already cached on disk. "
                 "If lyric bricks are already on the timeline you can skip this entirely. "
                 "Only call trigger_pipeline when no transcript exists for this audio.\n\n"
                 "PIPELINE MODES:\n"
-                "  both            — (default) Demucs stem separation → vocals.wav → transcription. "
-                "Transcribes the isolated vocal stem, not the raw mix. Best for music.\n"
-                "  transcribe_only — Skip separation, transcribe source audio directly. Faster; use for speech/podcasts.\n"
-                "  separate_only   — Run Demucs only, no transcription. No bricks to lay afterward.\n\n"
-                "PRESET QUICK-PICKS for step 4 (full list in generate_typography):\n"
+                "  both          — (default) MDX-Net (Kim_Vocal_2) stem separation → vocals.wav → "
+                "transcription of the isolated vocal stem. ALWAYS separates first — it yields clean "
+                "voices on any source (music, speech, noisy capture), so there is no raw-mix mode.\n"
+                "  separate_only — Run MDX-Net only, no transcription. No bricks to lay afterward.\n\n"
+                "PRESET QUICK-PICKS for step 4 (full list in set_typography_preset):\n"
                 "  flash    — one word, white, all caps, hard cuts (TikTok default)\n"
                 "  apple    — one word, white, large, smooth fade\n"
                 "  spotify  — phrases, white, bottom center, clean fade\n"
@@ -1218,11 +1254,10 @@ async def list_tools() -> list[Tool]:
                 "DO NOT use this to search for a specific moment — use find_and_add_clip instead "
                 "(windowed search, much faster).\n\n"
                 "NEVER run this on a full-length song/track when the user only wants a section. "
-                "Instead: (1) find_and_add_clip(path=full_file, query='end phrase') — returns exact end "
-                "timestamp AND auto-extracts the segment to result.dst; "
-                "(2) extract_clip_segment(src=full_file, start=0, end=result.end) → short clip; "
-                "(3) add_track + add_clip(audio, short clip); "
-                "(4) trigger_pipeline on the short clip only. "
+                "Instead: (1) find_and_add_clip(path=full_file, query='end phrase') — returns the exact "
+                "end timestamp and adds the located clip; "
+                "(2) add the song to the timeline and trim the audio brick to the section; "
+                "(3) trigger_pipeline on that brick (it transcribes only the trimmed region). "
                 "NEVER add padding beyond result.end — find_and_add_clip gives exact word-boundary timestamps."
             ),
             inputSchema={
@@ -1230,12 +1265,20 @@ async def list_tools() -> list[Tool]:
                 "properties": {
                     "mode": {
                         "type": "string",
-                        "enum": ["both", "transcribe_only", "separate_only"],
+                        "enum": ["both", "separate_only"],
                         "default": "both",
                     },
                     "path": {
                         "type": "string",
                         "description": "Absolute path to media file. Transcribes this file without adding it to the timeline.",
+                    },
+                    "preset": {
+                        "type": "string",
+                        "description": "Typography preset for the lyric bricks laid automatically on completion (flash, apple, spotify, karaoke, headline, ...). Applied like the UI's Generate Lyrics. Omit to keep the current preset.",
+                    },
+                    "force": {
+                        "type": "boolean",
+                        "description": "Force a real re-run of separation+transcription even when a cached transcript already covers the brick. Default false: after trimming the brick or changing preset the cached transcript is reused and only the lyrics are re-laid (no re-transcription).",
                     },
                 },
             },
@@ -1485,6 +1528,11 @@ async def list_tools() -> list[Tool]:
                 "with the release install.\n\n"
                 "Use this to map a WHOLE video (summaries, find_video_moment scoring) — or when you "
                 "have no vision capability of your own.\n\n"
+                "BATCH (preferred for many clips): pass paths=[...] (up to 64) to caption a whole "
+                "set in ONE call — don't loop describe_video per file. Then a single "
+                "get_video_description returns {results:[{path, frames}]} for all of them (cached "
+                "sidecars are reused, so re-runs are instant). Captioning is CPU-bound and runs "
+                "sequentially internally, but you only spend ONE describe + ONE poll.\n\n"
                 "TEXT-MODE CONTACT SHEET: pass times=[...] (max 48) to caption exactly those "
                 "timestamps instead of auto-detected scenes — e.g. to verify segment boundaries "
                 "from detect_screen_activity without vision. Custom-times runs skip the sidecar "
@@ -1500,21 +1548,23 @@ async def list_tools() -> list[Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "path": {"type": "string", "description": "Absolute path to the video file"},
+                    "path": {"type": "string", "description": "Absolute path to one video file"},
+                    "paths": {"type": "array", "items": {"type": "string"},
+                              "description": "Batch: caption many videos in one call (up to 64). Use instead of looping per file."},
                     "force": {"type": "boolean", "description": "Recompute even if a cached sidecar exists"},
                     "times": {"type": "array", "items": {"type": "number"},
                               "description": "Caption exactly these source times in seconds (max 48) instead of auto-detected scenes"},
                 },
-                "required": ["path"],
             },
         ),
         Tool(
             name="get_video_description",
             description=(
-                "Poll scene analysis started by describe_video. "
-                "Returns {status: 'idle'|'running'|'done'|'error', frames?, capped?}. "
-                "When done, frames is [{timestamp, description}] — pass to find_video_moment "
-                "to score against a query, or scan it yourself for the moment you need."
+                "Poll scene analysis started by describe_video (blocks internally until done — "
+                "call ONCE, not in a loop). Single run → {status, frames:[{timestamp, "
+                "description}], capped}. Batch run (describe_video paths=[...]) → {status, "
+                "results:[{path, frames}]} for every video. Pass frames to find_video_moment to "
+                "score against a query, or scan them yourself."
             ),
             inputSchema={"type": "object", "properties": {}},
         ),
@@ -1553,18 +1603,18 @@ async def list_tools() -> list[Tool]:
                 "only a section of a song. The canonical flow is:\n"
                 "  1. find_and_add_clip(path=full_file, query='start phrase')  → start timestamp\n"
                 "  2. find_and_add_clip(path=full_file, query='end phrase')    → end timestamp\n"
-                "  3. extract_clip_segment(src=full_file, dst='/tmp/scoped.flac', start=startA, end=endB + tail_sec)\n"
-                "  4. add_track + add_clip(audio, /tmp/scoped.flac) + trigger_pipeline\n"
-                "  5. poll get_pipeline_status until stage='done', then generate_typography(preset='flash')\n"
-                "DO NOT skip step (2): the auto-extracted dst only covers a small window around the matched "
-                "phrase, not from start to end of section. You need both timestamps to extract the full span.\n\n"
+                "  3. add_track + add_clip(audio, full_file), then trim_clip the brick to [start, end]\n"
+                "  4. trigger_pipeline on that brick — it transcribes only the trimmed region\n"
+                "  5. poll get_pipeline_status until stage='done', then set_typography_preset(preset='flash')\n"
+                "DO NOT skip step (2): you need both timestamps to bound the section; find_and_add_clip's "
+                "auto-added clip only covers a small window around a single matched phrase.\n\n"
                 "CHUNK-STRADDLING PHRASES are handled internally: when a partial match lands at the trailing "
                 "edge of a search chunk, the scanner extends into the next chunk before reporting found, so "
                 "result.end reflects the real phrase end (not the chunk boundary). Same goes for queries whose "
                 "match lives past an existing cached transcript — the cache is extended automatically.\n\n"
                 "Blocks until the match is found — no polling needed. Returns status=found.\n\n"
-                "Always returns extracted=true with a ready-to-use dst file. NEVER call extract_clip_segment "
-                "manually after this — the tool handles extraction internally.\n\n"
+                "Always returns extracted=true with a ready-to-use dst file at result.dst — extraction is "
+                "handled internally.\n\n"
                 "result includes in_point = offset into dst where your content starts.\n\n"
                 "MATCH QUALITY: result includes score (0-1, fraction of query words found) and "
                 "partial_match (true when score<1.0 OR the located span is wider than ~1.5s/word). "
@@ -1597,8 +1647,7 @@ async def list_tools() -> list[Tool]:
                 "STATUS IDLE — what to do next depends on your task:\n"
                 "  Finding a specific moment/phrase → use find_and_add_clip (windowed, stops early, MUCH faster).\n"
                 "    DO NOT run trigger_pipeline just to search.\n"
-                "  Generating full subtitles/karaoke for a clip already on the timeline → use trigger_pipeline.\n"
-                "  Re-using a previously-transcribed file's words for a new section audio → use shift_transcript."
+                "  Generating full subtitles/karaoke for a clip already on the timeline → use trigger_pipeline."
             ),
             inputSchema={
                 "type": "object",
@@ -1612,15 +1661,13 @@ async def list_tools() -> list[Tool]:
             description=(
                 "Install a custom word-level transcript for the project's current audio. "
                 "Writes the canonical cache JSON next to the audio file and reloads the "
-                "in-memory word cache so generate_typography uses your words immediately.\n\n"
+                "in-memory word cache so set_typography_preset uses your words immediately.\n\n"
                 "USE THIS WHEN:\n"
-                "  - WhisperX on the current audio produced wrong / sparse word timings and "
+                "  - whisper.cpp on the current audio produced wrong / sparse word timings and "
                 "you want to override with hand-edited words.\n"
                 "  - You computed words from another source (different transcriber, manual "
                 "alignment) and want the managed Lyrics path to use them.\n\n"
-                "DON'T USE THIS FOR: shifting/clipping a transcript across audio files — call "
-                "shift_transcript, which handles the offset and source-file selection for you.\n\n"
-                "After this call, generate_typography(preset='flash'|...) will lay lyric clips at "
+                "After this call, set_typography_preset(preset='flash'|...) will lay lyric clips at "
                 "the timings you provided. words: [{word: str, start: float, end: float}, ...]"
             ),
             inputSchema={
@@ -1641,35 +1688,6 @@ async def list_tools() -> list[Tool]:
                     },
                 },
                 "required": ["words"],
-            },
-        ),
-        Tool(
-            name="shift_transcript",
-            description=(
-                "Repurpose another file's cached transcript as the project's transcript, "
-                "with a time shift and optional clipping. Closes the gap when a long source "
-                "(e.g. full song) has a clean WhisperX transcript but you're working on an "
-                "extracted section where re-transcribing produces worse results.\n\n"
-                "FLOW: extract section /tmp/section.flac from full.flac starting at 88.71s → "
-                "add the section as the project audio → "
-                "shift_transcript(source_path='/path/to/full.flac', offset=-88.71, start=88.71, end=127) → "
-                "generate_typography(preset='flash'). Done.\n\n"
-                "source_path: optional — the file whose cached transcript to read. Defaults to "
-                "the project's current transcript (useful for shifting in place).\n"
-                "start, end: optional — keep only words overlapping this range in SOURCE-file "
-                "time (pre-shift). Use to clip to the section you extracted.\n"
-                "offset: required — seconds added to every word's start/end. Pass the negative "
-                "of the section's start timestamp to convert source-time to section-time."
-            ),
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "offset":      {"type": "number", "description": "Seconds added to every word timestamp (pass -section_start to convert source time → section time)"},
-                    "start":       {"type": "number", "description": "Lower bound in source-file seconds (pre-shift) for clipping"},
-                    "end":         {"type": "number", "description": "Upper bound in source-file seconds (pre-shift) for clipping"},
-                    "source_path": {"type": "string", "description": "Optional source file whose transcript to read. Defaults to project's current transcript."},
-                },
-                "required": ["offset"],
             },
         ),
         Tool(
@@ -2395,6 +2413,29 @@ async def list_tools() -> list[Tool]:
                     "time": {"type": "number", "description": "Maximum end time in seconds"},
                 },
                 "required": ["time"],
+            },
+        ),
+        Tool(
+            name="make_section",
+            description=(
+                "Crop the whole project to a [start, end] window and shift it to begin at 0 — "
+                "the one-call way to turn a full song into just a section. Clips fully outside the "
+                "window are dropped; straddlers are clamped to it; audio/video in_point advances by "
+                "whatever is trimmed off the left so the source still plays the right span. Every kept "
+                "clip moves by -start, so audio, video and lyric/subtitle tracks shift TOGETHER and "
+                "stay in sync — no need to re-run set_typography_preset. One undo step.\n\n"
+                "USE THIS after deleting off-section clips: e.g. you kept the intro's lyrics/videos but "
+                "the audio is still the full song — make_section(start, end) trims the audio to the "
+                "section AND closes the leading gap in one shot. Times are seconds in the CURRENT "
+                "timeline (pre-shift)."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "start": {"type": "number", "description": "Section start in current-timeline seconds (becomes t=0)"},
+                    "end":   {"type": "number", "description": "Section end in current-timeline seconds"},
+                },
+                "required": ["start", "end"],
             },
         ),
         Tool(
@@ -3197,16 +3238,15 @@ async def _add_clip(arguments: dict) -> dict:
 
         already_extracted = bool(re.search(r'_\d+_\d+\.(webm|flac|mp3|wav|ogg|aac)$', text))
         if not already_extracted and source_dur > needed_end * 2:
-            p = Path(text)
+            # Stream-copy guard so the engine doesn't load a multi-hour source for a
+            # short clip. The segment goes to the shared cache dir (content-addressed
+            # by source+range, LRU-pruned) — NOT a sidecar next to the user's media.
             s_int = int(in_point)
             e_int = int(needed_end) + 1
-            cache_dir = p.parent / p.stem
-            # Audio-only files must use a compatible container; inherit source ext
-            has_video = bool(_call("get_media_info", {"path": text}).get("has_video", True))
-            seg_ext = p.suffix  # inherit source container so stream-copy stays codec-compatible
-            dst = str(cache_dir / f"{p.stem}_{s_int}_{e_int}{seg_ext}")
+            seg_ext = Path(text).suffix  # inherit source container so stream-copy stays codec-compatible
+            dst = str(_cache_path(text, f"_{s_int}_{e_int}{seg_ext}"))
             if not Path(dst).exists():
-                cache_dir.mkdir(parents=True, exist_ok=True)
+                Path(dst).parent.mkdir(parents=True, exist_ok=True)
                 _call("extract_clip_segment", {
                     "src":   text,
                     "dst":   dst,
@@ -3220,18 +3260,31 @@ async def _add_clip(arguments: dict) -> dict:
 
 # ── find_and_add_clip ─────────────────────────────────────────────────────────
 
+def _cache_path(source: str, suffix: str) -> Path:
+    """Mirror of C++ cache_path() (src/paths.cpp): caches live in the shared cache
+    dir, not next to the user's media. Byte-identical FNV-1a hash so both sides
+    agree on the path."""
+    xdg = os.environ.get("XDG_CACHE_HOME")
+    home = os.environ.get("HOME")
+    base = xdg if xdg else (f"{home}/.cache" if home else "/tmp")
+    cache_dir = Path(base) / "pop-maker-studio" / "media"
+    h = 1469598103934665603
+    for b in source.encode():
+        h = ((h ^ b) * 1099511628211) & 0xFFFFFFFFFFFFFFFF
+    return cache_dir / f"{Path(source).stem}.{h:016x}{suffix}"
+
+
 def _words_cache_paths(audio_path: str) -> tuple[Path, Path]:
-    """Return (canonical, search) words.json paths for a given audio file.
+    """Return (canonical, search) words.json cache paths for a given audio file.
 
     Canonical (_words.json) is owned by the full pipeline (do_transcribe):
     DTW + forced alignment + segment splits. Authoritative when present.
     Search (_words_search.json) is the windowed find_and_add_clip output:
     best-effort, used as fallback when canonical hasn't been produced yet.
     """
-    p = Path(audio_path)
     return (
-        p.parent / p.stem / f"{p.stem}_words.json",
-        p.parent / p.stem / f"{p.stem}_words_search.json",
+        _cache_path(audio_path, "_words.json"),
+        _cache_path(audio_path, "_words_search.json"),
     )
 
 
@@ -3296,7 +3349,7 @@ def _search_transcript_in_words(words: list, query: str) -> tuple[float, float, 
 async def _find_and_add_clip(arguments: dict) -> dict:
     """
     Step 1: check cache or start transcription search. Returns immediately.
-    If cached=true, returns found result so Claude can call extract_clip_segment + add_clip.
+    If cached=true, returns the found result with the segment already extracted (result.dst).
     If cached=false, starts background search; Claude polls get_search_status then continues.
     """
     path    = arguments.get("path", "")
@@ -3668,13 +3721,12 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         target_path = arguments.get("path") or proj.get("audio_path")
         if target_path:
             p = Path(target_path)
-            cached_words = p.parent / p.stem / f"{p.stem}_words.json"
+            cached_words = _cache_path(target_path, "_words.json")
             if cached_words.exists():
                 raise ValueError(
                     f"Transcript already cached for {p.name} at {cached_words}.\n"
                     "Call get_transcript() to read it — re-transcribing is wasted work.\n"
-                    "If the cached transcript is wrong, you have two cleaner options than re-transcribing:\n"
-                    "  - shift_transcript(source_path=..., offset=..., start=..., end=...) to repurpose another file's transcript\n"
+                    "If the cached transcript is wrong, the cleaner option than re-transcribing is:\n"
                     "  - set_transcript(words=[...]) to install a hand-edited word list\n"
                     f"Or to force a fresh re-transcription, delete {cached_words} first."
                 )
@@ -3684,9 +3736,8 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 f"trigger_pipeline on a {duration:.0f}s clip is too slow. "
                 "If you only need a section (e.g. 'beginning to phrase X'), use this pattern instead:\n"
                 "  1. find_and_add_clip(phrase='X', path=<audio_path>) — windowed search, finds the timestamp fast\n"
-                "  2. extract_clip_segment(src=<audio_path>, dst=..., start=0, end=<found_end + 0.3>)\n"
-                "  3. Replace the audio clip on the timeline with the extracted segment\n"
-                "  4. Then call trigger_pipeline on the short clip\n"
+                "  2. add the audio to the timeline and trim the brick to the section\n"
+                "  3. Then call trigger_pipeline on that brick (it transcribes only the trimmed region)\n"
                 "Only call trigger_pipeline directly if you genuinely need a full transcript of everything."
             )
         if not arguments.get("path") and proj.get("audio_path") and 30 < duration <= 300:
@@ -3700,16 +3751,15 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                     "was probably skipped.\n\n"
                     "If you only need a section of this file, use this pattern first:\n"
                     "  1. find_and_add_clip(path=<audio_path>, query='<end phrase>') — locates the exact timestamp\n"
-                    "  2. extract_clip_segment(src=<audio_path>, dst=..., start=<start>, end=<found_end>)\n"
-                    "  3. Replace the timeline audio clip with the trimmed segment\n"
-                    "  4. Then call trigger_pipeline\n\n"
+                    "  2. trim the timeline audio brick to the section\n"
+                    "  3. Then call trigger_pipeline (it transcribes only the trimmed region)\n\n"
                     "If you genuinely need the full file transcribed, pass path=<audio_path> "
                     "to trigger_pipeline directly to bypass this check."
                 )
         # Kick off the pipeline and return immediately. The engine runs separation
         # + transcription in a background thread; the caller polls get_pipeline_status
-        # until stage='done', then (for modes 'both' / 'transcribe_only') calls
-        # generate_typography(preset=...) to lay the lyric bricks.
+        # until stage='done', then (for mode 'both') calls
+        # set_typography_preset(preset=...) to lay the lyric bricks.
         result = _call("trigger_pipeline", arguments)
         return [TextContent(type="text", text=json.dumps(result, indent=2))]
     if name == "remove_silence":
@@ -3744,12 +3794,6 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         return [TextContent(type="text", text=json.dumps(result, indent=2))]
     if name == "process_body_fx_masks":
         result = _call("start_body_fx_process", arguments)
-        return [TextContent(type="text", text=json.dumps(result, indent=2))]
-    if name == "extract_clip_segment":
-        dst = arguments.get("dst", "")
-        if dst:
-            Path(dst).parent.mkdir(parents=True, exist_ok=True)
-        result = _call("extract_clip_segment", arguments)
         return [TextContent(type="text", text=json.dumps(result, indent=2))]
     if name == "add_clip":
         result = await _add_clip(arguments)
@@ -4166,6 +4210,40 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 crop_h = int(crop_w * ar_h / ar_w)
             x = max(0, min(int((src_w - crop_w) * x_pct), src_w - crop_w))
             y = max(0, min(int((src_h - crop_h) * y_pct), src_h - crop_h))
+
+        # ── Non-destructive crop (default): apply as clip props, no file ─────
+        # The crop box (x,y,crop_w,crop_h) is in DISPLAY space (src_w/src_h were
+        # swapped for rotated video above), so the insets map straight onto the
+        # clip's crop_l/t/r/b — the engine composites the crop live, no re-encode.
+        to_file = bool(arguments.get("to_file", False))
+        crop_l = round(max(0.0, x / src_w), 4)
+        crop_t = round(max(0.0, y / src_h), 4)
+        crop_r = round(max(0.0, (src_w - x - crop_w) / src_w), 4)
+        crop_b = round(max(0.0, (src_h - y - crop_h) / src_h), 4)
+        if not to_file:
+            applied = []
+            try:
+                for tr in _call("get_all_clips"):
+                    for cl in tr.get("clips", []):
+                        if cl.get("source") == src or cl.get("text") == src:
+                            _call("set_clip_props", {
+                                "track": tr["index"], "clip": cl["index"],
+                                "crop_l": crop_l, "crop_t": crop_t,
+                                "crop_r": crop_r, "crop_b": crop_b})
+                            applied.append([tr["index"], cl["index"]])
+            except Exception:
+                pass
+            note = ("Crop applied as non-destructive clip props — no file written."
+                    if applied else
+                    "Crop insets computed (source not on the timeline yet): add_clip the "
+                    "ORIGINAL source, then set these crop_l/crop_t/crop_r/crop_b props on it.")
+            return [TextContent(type="text", text=json.dumps({
+                "mode": "clip_props",
+                "crop_l": crop_l, "crop_t": crop_t, "crop_r": crop_r, "crop_b": crop_b,
+                "crop_w": crop_w, "crop_h": crop_h,
+                "face_detected": face_detected, "applied_to": applied,
+                "note": note,
+            }, indent=2))]
 
         p = Path(src)
         out_ext = ".png" if is_image else ".mp4"

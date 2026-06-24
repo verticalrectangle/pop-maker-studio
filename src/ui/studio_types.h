@@ -52,6 +52,10 @@ struct TlState {
     // FX brick (track, clip) to weld into — follows the mouse row, so
     // cross-track welds work. -1 = no candidate.
     int drag_merge_ti=-1, drag_merge_ci=-1;
+    // Content clip (track, clip) a dragged FX brick is hovering to COUPLE onto,
+    // when no FX-brick merge target exists — hold-to-weld onto bare content so
+    // video/filter bricks weld by holding like audio ones do. -1 = none.
+    int drag_couple_ti=-1, drag_couple_ci=-1;
     // Loop brace (ruler) drag: 0 none, 1 left edge, 2 right edge, 3 move body,
     // 4 create (drag out a new region).
     int   loop_drag=0;

@@ -179,6 +179,76 @@ Clip clip_split_at(Clip& cl, float cut) {
     return right;
 }
 
+void clip_flash(AppState& state, int ti, int ci, bool reveal) {
+    if (ti < 0 || ti >= (int)state.tracks.size()) return;
+    if (ci < 0 || ci >= (int)state.tracks[ti].clips.size()) return;
+    state.tracks[ti].clips[ci].glow_start = -1.0;  // pending — timeline stamps the time
+    if (reveal) {
+        state.selected_track = ti;
+        state.selected_clip  = ci;
+        state.request_scroll_to_clip = true;        // existing minimal/only-if-hidden reveal
+    }
+}
+
+void clip_split_with_fx(AppState& state, int ti, int ci, float cut) {
+    if (ti < 0 || ti >= (int)state.tracks.size()) return;
+    auto& clips = state.tracks[ti].clips;
+    if (ci < 0 || ci >= (int)clips.size()) return;
+    if (cut <= clips[(size_t)ci].start || cut >= clips[(size_t)ci].end) return;
+
+    // FX bricks welded to THIS content (snapshot indices before any mutation).
+    // fx_coupled is only set on FX bricks, so it doubles as the kind guard.
+    std::vector<int> fxk;
+    for (int k = 0; k < (int)clips.size(); ++k) {
+        if (k == ci || !clips[(size_t)k].fx_coupled) continue;
+        if (fx_coupled_host(state, ti, clips[(size_t)k]) == ci) fxk.push_back(k);
+    }
+
+    // Clip every chain entry to [lo,hi]. b0/b1 = the brick's ORIGINAL span (entry
+    // rel is relative to b0; rel_end<=0 means "always on" = the full brick).
+    // Entries with no overlap drop; a full-cover entry becomes always-on (0/0).
+    auto rewindow = [](Clip& brick, float b0, float b1, float lo, float hi) {
+        std::vector<Clip> kept;
+        for (Clip se : brick.fx_chain) {
+            float a0 = (se.rel_end <= 0.f) ? b0 : b0 + se.rel_start;
+            float a1 = (se.rel_end <= 0.f) ? b1 : b0 + se.rel_end;
+            float c0 = fmaxf(lo, a0), c1 = fminf(hi, a1);
+            if (c1 - c0 < 0.001f) continue;
+            if (c0 <= lo + 0.001f && c1 >= hi - 0.001f) { se.rel_start = 0.f; se.rel_end = 0.f; }
+            else { se.rel_start = c0 - lo; se.rel_end = c1 - lo; }
+            kept.push_back(std::move(se));
+        }
+        brick.fx_chain = std::move(kept);
+        if (brick.fx_chain_selected >= (int)brick.fx_chain.size())
+            brick.fx_chain_selected = brick.fx_chain.empty() ? -1 : 0;
+    };
+
+    // Build right-half bricks + window the left halves in place (indices valid
+    // until we insert below). Identity fingerprint matches both content halves,
+    // so on the next coupling tick overlap routes each half-brick to its half.
+    std::vector<Clip> right_bricks;
+    for (int k : fxk) {
+        Clip& b = clips[(size_t)k];
+        float b0 = b.start, b1 = b.end;
+        if (cut <= b0 || cut >= b1) continue;   // brick sits entirely on one side
+        Clip rb = b;
+        rb.start = cut; rb.end = b1;
+        rewindow(rb, b0, b1, cut, b1);
+        if (!rb.fx_chain.empty()) right_bricks.push_back(std::move(rb));
+        b.end = cut;
+        rewindow(b, b0, b1, b0, cut);
+    }
+
+    Clip right_content = clip_split_at(clips[(size_t)ci], cut);
+    clips.insert(clips.begin() + ci + 1, std::move(right_content));
+    for (auto& rb : right_bricks) clips.push_back(std::move(rb));
+
+    // A half whose whole chain went to the other side is left empty — drop it.
+    for (int k = (int)clips.size() - 1; k >= 0; --k)
+        if (clips[(size_t)k].fx_coupled && clips[(size_t)k].fx_chain.empty())
+            clips.erase(clips.begin() + k);
+}
+
 void clip_keys_shift(Clip& cl, float dt) {
     if (dt == 0.f) return;
     for (auto& [name, pt] : cl.ktracks)
@@ -644,6 +714,15 @@ void app_frame(AppState& state) {
         // (never a recorder's — those clear it themselves on stop).
         audio_clear_loop();
     }
+
+    // Keep state.duration covering all content. It's set ad-hoc on import /
+    // typography and goes stale when a clip is dragged to a later start or a
+    // second clip extends past it — which pinned the playhead at the old length
+    // (couldn't scrub or play past ~30s) and made exports mismatch the real
+    // content. Grow only, so deleting a clip never silently truncates the project.
+    for (const auto& tr : state.tracks)
+        for (const auto& c : tr.clips)
+            if (c.end > state.duration) state.duration = c.end;
 
     // Update playhead BEFORE rendering so the video frame shown this cycle
     // matches the audio position this cycle, not last cycle's.

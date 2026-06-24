@@ -17,3 +17,7 @@ void ipc_server_stop();
 // ImGui. Call from the main loop between ImGui_ImplGlfw_NewFrame() and
 // ImGui::NewFrame() so injected events land after the backend's own.
 void ipc_debug_input_tick();
+
+// Live scene-analysis (describe_video) progress for the canvas banner. Returns
+// true while a run is active; fills the counts (any pointer may be null).
+bool scene_analysis_progress(int* vid_idx, int* vid_total, int* frame_idx, int* frame_total);

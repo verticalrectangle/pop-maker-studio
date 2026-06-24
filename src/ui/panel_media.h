@@ -22,6 +22,11 @@ bool is_animated_image(const std::string& p);   // .gif — image-kind but proxi
 // bin_add is a no-op when the path is already present, so the same file
 // dropped twice doesn't create duplicate entries.
 MediaKind kind_for_path(const std::string& path);
+const char* media_kind_label(MediaKind k);             // "video" | "image" | "audio"
+bool      is_media_path  (const std::string& path);    // true for known video/audio/image extensions
+bool      path_is_dir    (const std::string& path);
+// Shallow (non-recursive) list of media files directly inside `dir`, sorted, capped.
+std::vector<std::string> dir_media_files(const std::string& dir, int cap = 200);
 bool      bin_contains   (const AppState& state, const std::string& path);
 void      bin_add        (AppState& state, const std::string& path);
 void      bin_remove     (AppState& state, const std::string& path);

@@ -29,7 +29,12 @@ void agent_clear();                              // wipe transcript + history
 void agent_shutdown();                           // join worker (app exit)
 
 AgentConfig agent_get_config();
-void        agent_set_config(const AgentConfig& cfg);
+void        agent_set_config(const AgentConfig& cfg);  // also persists to disk
+
+// Settings → Apply & Test: fire a one-token request to confirm (base_url, model,
+// key) actually work. Runs on a background thread; poll agent_test_state.
+void agent_test_begin(const AgentConfig& cfg);
+int  agent_test_state(std::string& out);  // 0 idle, 1 running, 2 ok, 3 fail
 
 // DeepSeek/API key via the Secret Service (secret-tool subprocess).
 // The key never touches the settings file.

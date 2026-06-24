@@ -1366,6 +1366,16 @@ void panel_clip(AppState& state, float w) {
             ImGui::Dummy({0.f, 4.f});
             kf_slider("rotation", "Rotation", &clip.rotation, -180.f, 180.f, "%.1f\xc2\xb0");
             kf_interp_bar();
+            ImGui::Dummy({0.f, 6.f});
+            // Flip — mirror the content (a real UV flip, independent of size and
+            // position; not the negative-scale trick that also shrinks the clip).
+            if (ui_btn("Flip H", clip.flip_h, true)) {
+                clip.flip_h = !clip.flip_h; history_push(state, "Flip horizontal");
+            }
+            ImGui::SameLine(0.f, 6.f);
+            if (ui_btn("Flip V", clip.flip_v, true)) {
+                clip.flip_v = !clip.flip_v; history_push(state, "Flip vertical");
+            }
         }
 
         // ── Crop (non-destructive UV window; edit visually via Crop button) ──

@@ -1221,7 +1221,7 @@ static std::vector<std::string> build_args(AppState& state) {
                 // replace that entry's volume with the bus-gained value (mirrors
                 // the Audio-clip dedup below), else add it as its own stream.
                 if (render_path_has_audio(cl.text)) {
-                    float vvol = (state.tracks[ti].muted ? 0.f : cl.volume)
+                    float vvol = ((state.tracks[ti].muted || cl.muted) ? 0.f : cl.volume)
                                  * bus_brick_gain(state, ti, cl);
                     bool found = false;
                     for (auto& ai : audio_ins)
@@ -1236,7 +1236,7 @@ static std::vector<std::string> build_args(AppState& state) {
                 layers.push_back(rl);
             } else if (cl.clip_type == ClipType::Audio) {
                 if (cl.text.empty() || !fs::exists(cl.text)) continue;
-                float vol = (state.tracks[ti].muted ? 0.f : cl.volume)
+                float vol = ((state.tracks[ti].muted || cl.muted) ? 0.f : cl.volume)
                             * bus_brick_gain(state, ti, cl);
                 // Replace primary audio entry if same path, else add new stream
                 bool found = false;
@@ -1682,10 +1682,11 @@ static struct GlExport {
 } g_gl_ex;
 
 static void gl_cleanup_export();
+static void clear_ex_still_tex();
 static bool gl_render_vid_clip(ImDrawList& dl, const Clip* cl, float at_time,
                                 float alpha_mul, GLuint tex_id, int fx_slot,
                                 float W, float H, const AppState& state, int ti,
-                                bool use_scene = false);
+                                bool use_scene = false, float shake = 0.f);
 
 // Render one track's active text overlay to a texture and composite it into the
 // current scene at that track's z (shared by preview canvas + GL export).
@@ -1802,6 +1803,7 @@ void render_snapshot_gl(AppState& state, float snap_t, bool open_folder) {
 
     // Per-track video textures for this snapshot (freed at end)
     GLuint vid_texs[MAX_VIDEO_TRACKS * 2] = {};
+    clear_ex_still_tex();   // free the previous render's per-path still textures
     glGenTextures(MAX_VIDEO_TRACKS * 2, vid_texs);
     for (int i = 0; i < MAX_VIDEO_TRACKS * 2; ++i) {
         glBindTexture(GL_TEXTURE_2D, vid_texs[i]);
@@ -1950,6 +1952,13 @@ void render_snapshot_gl(AppState& state, float snap_t, bool open_folder) {
             } else if (active->transition_type == TransitionType::FadeBlack) {
                 gl_render_vid_clip(dl, active, t, 1.f-t_a, vid_texs[slot_pri], slot_pri, W, H, state, ti);
                 gl_render_vid_clip(dl, next_cl, t, t_b, vid_texs[slot_sec], slot_sec, W, H, state, ti);
+            } else if (active->transition_type == TransitionType::Shake) {
+                // Hard cut at the cut point; the shake ramps up into it and
+                // decays out of it, so it whips rather than blends.
+                if (t_b <= 0.f)
+                    gl_render_vid_clip(dl, active, t, 1.f, vid_texs[slot_pri], slot_pri, W, H, state, ti, false, t_a);
+                else
+                    gl_render_vid_clip(dl, next_cl, t, 1.f, vid_texs[slot_sec], slot_sec, W, H, state, ti, false, 1.f-t_b);
             } else {
                 gl_render_vid_clip(dl, active, t, 1.f-t_a, vid_texs[slot_pri], slot_pri, W, H, state, ti);
                 float wa = t_a*(1.f-t_b);
@@ -1966,6 +1975,8 @@ void render_snapshot_gl(AppState& state, float snap_t, bool open_folder) {
                 gl_render_vid_clip(dl, active, t, tf, vid_texs[slot_pri], slot_pri, W, H, state, ti);
             } else if (prev_cl->transition_type == TransitionType::FadeBlack) {
                 gl_render_vid_clip(dl, active, t, tf, vid_texs[slot_pri], slot_pri, W, H, state, ti);
+            } else if (prev_cl->transition_type == TransitionType::Shake) {
+                gl_render_vid_clip(dl, active, t, 1.f, vid_texs[slot_pri], slot_pri, W, H, state, ti, false, 1.f-tf);
             } else {
                 float wa = 1.f-tf;
                 if (wa > 0.01f)
@@ -2088,13 +2099,27 @@ static bool is_still_ext(const std::string& path) {
         || ext==".tiff"||ext==".heic"||ext==".heif";
 }
 
+// One GL texture per DISTINCT still image, keyed by source path, for the whole
+// render. The per-track tex_id slots (vid_texs[ti % MAX_VIDEO_TRACKS]) alias when
+// a project has more image tracks than slots, and the draws are deferred — so a
+// still that loaded into a slot a later clip overwrote came out as that other
+// image (or black). A per-path texture is stable; repeated uses share it. Freed
+// in each render's teardown via clear_ex_still_tex().
+struct ExStillTex { GLuint tex = 0; int w = 0, h = 0; };
+static std::unordered_map<std::string, ExStillTex> g_ex_still_tex;
+static void clear_ex_still_tex() {
+    for (auto& kv : g_ex_still_tex)
+        if (kv.second.tex) glDeleteTextures(1, &kv.second.tex);
+    g_ex_still_tex.clear();
+}
+
 static bool gl_render_vid_clip(ImDrawList& dl, const Clip* cl, float at_time,
                                 float alpha_mul, GLuint tex_id, int fx_slot,
                                 float W, float H, const AppState& state, int ti,
-                                bool use_scene)
+                                bool use_scene, float shake)
 {
     if (!cl || cl->text.empty()) return false;
-    float src_t = cl->in_point + (at_time - cl->start) * cl->speed;
+    float src_t = clip_src_time(*cl, at_time);
 
     // One-shot per-clip diagnostic: prints once on the first frame for each
     // distinct (clip.start, clip.end, speed) tuple seen during the export so
@@ -2116,33 +2141,39 @@ static bool gl_render_vid_clip(ImDrawList& dl, const Clip* cl, float at_time,
         }
     }
 
-    // Still images (HEIC, JPEG, PNG…): FFmpeg can't reliably decode these,
-    // especially HEIC without libheif. Use the proxy JPEG via stb_image instead.
+    // Still images: a PNG/JPEG is already a renderable image — load the ORIGINAL
+    // at full quality (PNG keeps alpha) via stb_image, no lossy JPEG still. Only
+    // formats stb can't read (HEIC/WEBP/TIFF — FFmpeg can't reliably decode them
+    // either) fall back to the converted still proxy. We do NOT gate on the proxy
+    // existing anymore: that silently dropped stills from the export whenever the
+    // background still generator hadn't finished (or wasn't needed at all).
     if (is_still_ext(cl->text)) {
-        std::string still = proxy_still_path(cl->text);
-        if (!fs::exists(still)) return false;
-        // Per-tex-slot cache: a still clip that spans the whole timeline would
-        // otherwise call stbi_load() + glTexImage2D() on every output frame
-        // (~5 ms × 10k frames × N still tracks). Key on (path, tex_id) so each
-        // slot reuses its own decoded upload until the source path changes.
-        struct StillCacheEntry { std::string path; int w = 0, h = 0; };
-        static std::unordered_map<GLuint, StillCacheEntry> s_still_cache;
-        auto& cache_entry = s_still_cache[tex_id];
-        int vid_w = cache_entry.w, vid_h = cache_entry.h;
-        if (cache_entry.path != still || vid_w == 0 || vid_h == 0) {
+        // One texture per distinct image (keyed by path), decoded once for the
+        // whole render — NOT the shared per-track tex_id, which aliases across
+        // clips and corrupted repeated images on export. Repeated uses of the
+        // same image share this texture; it's freed in clear_ex_still_tex().
+        ExStillTex& st = g_ex_still_tex[cl->text];
+        if (st.tex == 0) {
             int sw = 0, sh = 0, sc = 0;
-            uint8_t* px = stbi_load(still.c_str(), &sw, &sh, &sc, 4);
+            uint8_t* px = stbi_load(cl->text.c_str(), &sw, &sh, &sc, 4);
+            if (!px) {   // exotic format → converted still proxy
+                std::string still = proxy_still_path(cl->text);
+                px = stbi_load(still.c_str(), &sw, &sh, &sc, 4);
+            }
             if (!px) return false;
-            glBindTexture(GL_TEXTURE_2D, tex_id);
+            glGenTextures(1, &st.tex);
+            glBindTexture(GL_TEXTURE_2D, st.tex);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
             glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, sw, sh, 0, GL_RGBA, GL_UNSIGNED_BYTE, px);
             stbi_image_free(px);
-            cache_entry.path = still;
-            cache_entry.w = sw;
-            cache_entry.h = sh;
-            vid_w = sw; vid_h = sh;
+            st.w = sw; st.h = sh;
         }
+        int vid_w = st.w, vid_h = st.h;
 
-        uintptr_t cur_tex = (uintptr_t)tex_id;
+        uintptr_t cur_tex = (uintptr_t)st.tex;
         {
             EffectAccum glass_ea = collect_glass_effects(state, at_time, ti);
             CreativeFXAccum glass_cfx = collect_glass_fx(state, at_time, ti);
@@ -2181,6 +2212,8 @@ static bool gl_render_vid_clip(ImDrawList& dl, const Clip* cl, float at_time,
         if (cl->clip_type == ClipType::VideoRecord) {
             float t = uv0.x; uv0.x = uv1.x; uv1.x = t;
         }
+        if (cl->flip_h) { float t = uv0.x; uv0.x = uv1.x; uv1.x = t; }
+        if (cl->flip_v) { float t = uv0.y; uv0.y = uv1.y; uv1.y = t; }
         if (use_scene) {
             scene_add_layer(cur_tex, cx, cy, hw, hh, cos_r, sin_r,
                             fmaxf(0.f, fminf(1.f, alpha)),
@@ -2240,7 +2273,7 @@ static bool gl_render_vid_clip(ImDrawList& dl, const Clip* cl, float at_time,
         float mask_fps = bg_remove_read_fps(mask_dir);
         // Same source-time mapping as the frame fetch (×speed — this used to
         // divide, desyncing body-FX masks on any retimed clip).
-        float bfx_src_t = cl->in_point + (at_time - cl->start) * cl->speed;
+        float bfx_src_t = clip_src_time(*cl, at_time);
         int frame_i = (int)(bfx_src_t * mask_fps);
 
         // Standalone glass BodyFX bricks on this track
@@ -2336,6 +2369,15 @@ static bool gl_render_vid_clip(ImDrawList& dl, const Clip* cl, float at_time,
         cy = kby * H;
     }
 
+    // Transition shake: jitter the clip's screen centre. shake² gives a punchy
+    // peak; multi-frequency per axis reads as a handheld whip, not a slide.
+    if (shake > 0.f) {
+        float seed = floorf(at_time * 60.f);
+        float amp  = shake * shake * fminf(W, H) * 0.05f;
+        cx += (sinf(seed * 127.1f) + 0.5f * sinf(seed * 57.7f)) * amp;
+        cy += (cosf(seed * 311.7f) + 0.5f * cosf(seed * 91.3f)) * amp;
+    }
+
     float rad = rot * 3.14159265f / 180.f;
     float cos_r = cosf(rad), sin_r = sinf(rad);
     auto rot_pt = [&](float ox, float oy) -> ImVec2 {
@@ -2347,6 +2389,8 @@ static bool gl_render_vid_clip(ImDrawList& dl, const Clip* cl, float at_time,
     // Camera-record takes export MIRRORED — matches the live preview and
     // playback (front-facing-cam convention). Swap the horizontal window.
     if (cl->clip_type == ClipType::VideoRecord) { float t = cu0; cu0 = cu1; cu1 = t; }
+    if (cl->flip_h) { float t = cu0; cu0 = cu1; cu1 = t; }
+    if (cl->flip_v) { float t = cv0; cv0 = cv1; cv1 = t; }
     if (use_scene) {
         scene_add_layer(draw_tex, cx, cy, hw, hh, cos_r, sin_r,
                         fmaxf(0.f, fminf(1.f, alpha)),
@@ -2418,6 +2462,7 @@ void render_start_gl(AppState& state) {
 
     // ── Create per-track video textures ───────────────────────────────────────
     GLuint vid_texs[MAX_VIDEO_TRACKS * 2] = {};
+    clear_ex_still_tex();   // free the previous render's per-path still textures
     glGenTextures(MAX_VIDEO_TRACKS * 2, vid_texs);
     for (int i = 0; i < MAX_VIDEO_TRACKS * 2; ++i) {
         glBindTexture(GL_TEXTURE_2D, vid_texs[i]);
@@ -2474,8 +2519,9 @@ void render_start_gl(AppState& state) {
         for (int ti = (int)state.tracks.size() - 1; ti >= 0; --ti) {
             for (auto& cl : state.tracks[ti].clips) {
                 // Record brick: its selected take is its audio. Same math as
-                // an Audio clip with in_point 0 / speed 1 (takes are recorded
-                // on the loop grid, so they start exactly at cl.start).
+                // an Audio clip at speed 1 — in_point is honored, so a left
+                // trim seeks into the take (the FX bake windows, built by
+                // export_fx_segments, are mapped through in_point too).
                 if (cl.clip_type == ClipType::Record) {
                     if (cl.muted || cl.rec_take_sel < 0 ||
                         cl.rec_take_sel >= (int)cl.rec_takes.size()) continue;
@@ -2491,13 +2537,19 @@ void render_start_gl(AppState& state) {
                         std::string baked = bake_audio_fx_wav(tp, segs);
                         if (!baked.empty()) tp = baked;
                     }
+                    // Fold a past-t=0 overhang into in_point (take speed 1),
+                    // so ss/to seek into the take exactly like the Audio path.
+                    float cstart  = cl.start;
+                    float inpoint = cl.in_point;
+                    if (cstart < 0.f) { inpoint += -cstart; cstart = 0.f; }
+                    float dur = cl.end - cstart;
                     AudioIn ai;
                     ai.path  = tp;
                     ai.vol   = (state.tracks[ti].muted ? 0.f : cl.volume)
                                * bus_brick_gain(state, ti, cl);
-                    ai.ss    = fmaxf(0.f, -cl.start);   // overhang past t=0
-                    ai.to    = cl.end - cl.start;
-                    ai.delay = fmaxf(0.f, cl.start);
+                    ai.ss    = inpoint;
+                    ai.to    = inpoint + dur;
+                    ai.delay = fmaxf(0.f, cstart);
                     ai.pan   = state.tracks[ti].muted ? 0.f : cl.pan;
                     // Keyframed volume/pan (take plays at 1x, pts base 0) — mirror
                     // the general clip path so a record take exports as it previews.
@@ -2512,7 +2564,7 @@ void render_start_gl(AppState& state) {
                     if (cl.fade_in > 0.f)  { ai.fade_in = cl.fade_in;  ai.fade_in_st = 0.f; }
                     if (cl.fade_out > 0.f) {
                         ai.fade_out    = cl.fade_out;
-                        ai.fade_out_st = fmaxf(0.f, (cl.end - cl.start) - cl.fade_out);
+                        ai.fade_out_st = fmaxf(0.f, dur - cl.fade_out);
                     }
                     audio_ins.push_back(std::move(ai));
                     covered_paths.insert(tp);
@@ -2526,7 +2578,7 @@ void render_start_gl(AppState& state) {
                 if (!fs::exists(cl.text)) continue;
                 if (clip_is_videolike_type(cl.clip_type) && !path_has_audio(cl.text)) continue;
                 float speed = fmaxf(0.01f, cl.speed);
-                float vol   = (state.tracks[ti].muted ? 0.f : cl.volume)
+                float vol   = ((state.tracks[ti].muted || cl.muted) ? 0.f : cl.volume)
                               * bus_brick_gain(state, ti, cl);
                 // Clips dragged left past t=0 (start < 0): only the part from
                 // timeline 0 is audible. Fold the overhang into in_point so
@@ -2571,7 +2623,7 @@ void render_start_gl(AppState& state) {
                 // start timestamps — measured, not folklore), so the clip's
                 // first sample is always pts 0; placement happens via adelay.
                 float pts0 = 0.f;
-                if (!state.tracks[ti].muted) {
+                if (!state.tracks[ti].muted && !cl.muted) {
                     if (auto kv = cl.ktracks.find("volume");
                         kv != cl.ktracks.end() && !kv->second.empty())
                         ai.vol_e = prop_expr(cl, "volume", 1.f, cl.volume, -1.f,
@@ -3236,6 +3288,11 @@ void render_tick_gl(AppState& state) {
             } else if (active->transition_type == TransitionType::FadeBlack) {
                 gl_render_vid_clip(dl, active,  t, 1.f-t_a, tex_pri, slot_pri, W, H, state, ti);
                 gl_render_vid_clip(dl, next_cl, t, t_b, tex_sec, slot_sec, W, H, state, ti);
+            } else if (active->transition_type == TransitionType::Shake) {
+                if (t_b <= 0.f)
+                    gl_render_vid_clip(dl, active,  t, 1.f, tex_pri, slot_pri, W, H, state, ti, false, t_a);
+                else
+                    gl_render_vid_clip(dl, next_cl, t, 1.f, tex_sec, slot_sec, W, H, state, ti, false, 1.f-t_b);
             } else { // DipWhite
                 gl_render_vid_clip(dl, active, t, 1.f-t_a, tex_pri, slot_pri, W, H, state, ti);
                 float white_a = t_a * (1.f - t_b);
@@ -3253,6 +3310,8 @@ void render_tick_gl(AppState& state) {
                 gl_render_vid_clip(dl, active, t, tf, tex_pri, slot_pri, W, H, state, ti);
             } else if (prev_cl->transition_type == TransitionType::FadeBlack) {
                 gl_render_vid_clip(dl, active, t, tf, tex_pri, slot_pri, W, H, state, ti);
+            } else if (prev_cl->transition_type == TransitionType::Shake) {
+                gl_render_vid_clip(dl, active, t, 1.f, tex_pri, slot_pri, W, H, state, ti, false, 1.f-tf);
             } else { // DipWhite
                 float white_a = 1.f - tf;
                 if (white_a > 0.01f)

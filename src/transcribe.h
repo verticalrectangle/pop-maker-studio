@@ -25,6 +25,19 @@ void transcribe_start(
 void transcribe_cancel();
 bool transcribe_running();
 
+// ── Transcript provenance ─────────────────────────────────────────────────────
+// Which audio a canonical _words.json was transcribed from. Lyrics quality needs
+// the isolated MDX-Net vocal stem; the subtitles path (TranscribeOnly) runs on
+// the raw mix. We record this in a tiny sidecar (<...>_words.src) next to the
+// cache so any consumer can tell whether a cached transcript is lyrics-grade
+// WITHOUT re-running the pipeline — e.g. import won't let a raw cache silently
+// drive lyric typography, and an agent can detect it via get_transcript.
+//   "vocals" — MDX-Net vocal stem (lyrics-grade)
+//   "raw"    — original mix (subtitles path)
+//   ""       — legacy cache written before provenance existed (treat as unknown)
+std::string transcript_source(const std::string& words_json);
+void        transcript_write_source(const std::string& words_json, bool from_vocals);
+
 // Search a media file for a spoken query using chunked Whisper inference.
 // Decodes and transcribes 5-minute windows until the query is found, then stops.
 // Returns timestamps relative to the source file.

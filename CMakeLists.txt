@@ -221,6 +221,33 @@ add_custom_command(
 add_custom_target(embed_portrait DEPENDS ${CMAKE_BINARY_DIR}/portrait_preview.h)
 add_dependencies(pop-maker-studio embed_portrait)
 
+# Embed the FX-preview motion source clip (CC BY 3.0 — see CREDITS) as a byte array
+add_custom_command(
+    OUTPUT ${CMAKE_BINARY_DIR}/fx_motion_webm.h
+    COMMAND ${CMAKE_SOURCE_DIR}/scripts/embed_fx_motion.sh
+            ${CMAKE_SOURCE_DIR}/assets/fx_preview_skater.webm
+            ${CMAKE_BINARY_DIR}/fx_motion_webm.h
+    DEPENDS ${CMAKE_SOURCE_DIR}/assets/fx_preview_skater.webm
+            ${CMAKE_SOURCE_DIR}/scripts/embed_fx_motion.sh
+    COMMENT "Embedding FX-preview motion source"
+)
+add_custom_target(embed_fx_motion DEPENDS ${CMAKE_BINARY_DIR}/fx_motion_webm.h)
+add_dependencies(pop-maker-studio embed_fx_motion)
+
+# Embed the beauty-FX preview backdrop (assets/imgs/beauty_fx.jpg) as a 9:16
+# source for face-centric effects (Skin Smooth, Glow Up)
+add_custom_command(
+    OUTPUT ${CMAKE_BINARY_DIR}/fx_face.h
+    COMMAND ${CMAKE_SOURCE_DIR}/scripts/embed_fx_face.sh
+            ${CMAKE_SOURCE_DIR}/assets/imgs/beauty_fx.jpg
+            ${CMAKE_BINARY_DIR}/fx_face.h
+    DEPENDS ${CMAKE_SOURCE_DIR}/assets/imgs/beauty_fx.jpg
+            ${CMAKE_SOURCE_DIR}/scripts/embed_fx_face.sh
+    COMMENT "Embedding beauty-FX preview source"
+)
+add_custom_target(embed_fx_face DEPENDS ${CMAKE_BINARY_DIR}/fx_face.h)
+add_dependencies(pop-maker-studio embed_fx_face)
+
 # Embed base face photo as raw RGB — source for the camera brick's face-filter
 # preview thumbnails (live landmark-warp render). Swap assets/imgs/face.jpg.
 add_custom_command(
@@ -284,3 +311,24 @@ target_compile_options(export-hubert PRIVATE
     -Wall -Wextra -Wno-unused-parameter
     $<$<CONFIG:Release>:-O2>
 )
+
+# ── forced_align_probe: standalone harness to verify alignment changes ────────
+# Runs forced_align() against the real wav2vec2 model on a cached stem, without
+# the whole transcription pipeline. See tools/forced_align_probe.cpp.
+add_executable(forced_align_probe
+    tools/forced_align_probe.cpp
+    src/forced_align.cpp
+    src/paths.cpp
+)
+target_include_directories(forced_align_probe PRIVATE
+    src
+    ${CMAKE_SOURCE_DIR}/vendor
+)
+if(DEFINED ONNXRUNTIME_ROOT)
+    target_include_directories(forced_align_probe PRIVATE ${ONNXRUNTIME_ROOT}/include)
+    target_link_directories(forced_align_probe PRIVATE ${ONNXRUNTIME_ROOT}/lib)
+else()
+    target_include_directories(forced_align_probe PRIVATE /usr/include/onnxruntime)
+endif()
+target_link_libraries(forced_align_probe PRIVATE onnxruntime dl pthread)
+target_compile_options(forced_align_probe PRIVATE -Wall -Wextra -Wno-unused-parameter -O2)

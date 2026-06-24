@@ -60,12 +60,26 @@ static uintptr_t fx_preview_source_tex(AppState& state, bool* flip, int* sw, int
             int slot = slot_for_video(state, clip_slot_key(c.text, c.start), c.text);
             float src_t = c.in_point + (state.playhead - c.start) * c.speed;
             if (slot >= 0 && video_is_open(slot)) {
+                // Cache the fetched clip frame across UI frames. video_get_texture
+                // re-runs the clip's decode + pixel-FX path, and calling it every
+                // frame while hovering an FX card stalled the UI thread — that's
+                // why per-clip hover lagged while project hover (scene_result, an
+                // already-rendered texture) stayed smooth. Reuse the last result
+                // while the clip slot and source time are unchanged.
+                static int s_slot = -1; static double s_t = -1e30;
+                static uintptr_t s_tex = 0; static int s_sw = 0, s_sh = 0;
+                if (slot == s_slot && (double)src_t == s_t && s_tex) {
+                    *sw = s_sw; *sh = s_sh; *flip = false;
+                    return s_tex;
+                }
                 uintptr_t tex = video_get_texture(slot, (double)src_t);
                 if (tex) {
                     video_preview_dims(slot, sw, sh);
                     // Clip textures upload top-down (same as the portrait default),
                     // so they draw upright with normal UVs — no V-flip. Only
                     // scene_result (a bottom-up FBO) needs flipping.
+                    s_slot = slot; s_t = (double)src_t;
+                    s_tex = tex; s_sw = *sw; s_sh = *sh;
                     *flip = false;
                     return tex;
                 }
@@ -362,6 +376,11 @@ void panel_adjustment_library(AppState& state, float w) {
             if (fx_card_popover_ready(19000 + i)) {
                 bool flip = false; int sw = 0, sh = 0;
                 uintptr_t src = fx_preview_source_tex(state, &flip, &sw, &sh);
+                // Ken Burns / beauty effects render the big preview on their own
+                // upright source (still / face), so ignore the live source's flip
+                // (which goes true once a clip is on the timeline → scene_result).
+                if (fc.type == FXType::KenBurns || fc.type == FXType::SkinSmooth ||
+                    fc.type == FXType::GlowUp) flip = false;
                 int rw, rh; fx_render_dims(sw, sh, &rw, &rh);
                 uintptr_t big = video_fx_preview_big(fc.type, fx_card_hover_elapsed(19000 + i),
                                                      src, rw, rh);
@@ -856,6 +875,7 @@ void panel_background(AppState& state, float w, bool clip_only) {
             state.tracks[target].clips.push_back(std::move(c));
             state.selected_track = target;
             state.selected_clip  = (int)state.tracks[target].clips.size() - 1;
+            clip_flash(state, target, state.selected_clip, /*reveal=*/true);
             bgclip = &state.tracks[target].clips[state.selected_clip];
             history_push(state, "Add background");
         }
@@ -1053,6 +1073,7 @@ void panel_background(AppState& state, float w, bool clip_only) {
                 state.tracks[target].clips.push_back(std::move(c));
                 state.selected_track = target;
                 state.selected_clip  = (int)state.tracks[target].clips.size()-1;
+                clip_flash(state, target, state.selected_clip, /*reveal=*/true);
             } else {
                 bgclip->text = pr.id;
                 memcpy(bgclip->bg_c1, pr.dc1, sizeof(float)*4);
@@ -1072,6 +1093,8 @@ void panel_background(AppState& state, float w, bool clip_only) {
 // ── Right panel: Creative FX library ─────────────────────────────────────────
 
 void panel_fx_creative(AppState& state, float w) {
+    // Cycle the shared preview source so the generated-effect cards animate.
+    fxp_motion_advance(ImGui::GetTime());
     ImGui::Dummy({0.f, 8.f});
     ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(180,240,255,255));
     ImGui::TextUnformatted("FX");
@@ -1149,6 +1172,9 @@ void panel_fx_creative(AppState& state, float w) {
         if (fx_card_popover_ready(9000 + i)) {
             bool flip = false; int sw = 0, sh = 0;
             uintptr_t src = fx_preview_source_tex(state, &flip, &sw, &sh);
+            // Upright internal source for these (still / face) — see note above.
+            if (fc.type == FXType::KenBurns || fc.type == FXType::SkinSmooth ||
+                fc.type == FXType::GlowUp) flip = false;
             int rw, rh; fx_render_dims(sw, sh, &rw, &rh);
             uintptr_t big = video_fx_preview_big(fc.type, fx_card_hover_elapsed(9000 + i),
                                                  src, rw, rh);

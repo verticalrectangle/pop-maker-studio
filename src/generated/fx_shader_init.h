@@ -103,4 +103,5 @@ void fx_generated_init() {
     g_gen_progs[(int)FXType::DoubleExposure] = link_prog(k_double_exposure_frag);
     g_gen_progs[(int)FXType::SkinSmooth] = link_prog(k_skin_smooth_frag);
     g_gen_progs[(int)FXType::GlowUp] = link_prog(k_glow_up_frag);
+    g_gen_progs[(int)FXType::CamShake] = link_prog(k_cam_shake_frag);
 }

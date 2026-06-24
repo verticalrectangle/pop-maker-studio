@@ -12,6 +12,8 @@
 #include <cstdlib>
 #include <vector>
 #include <string>
+#include <unordered_set>
+#include <cctype>
 #include "json.hpp"
 #include <unistd.h>
 #include <fcntl.h>
@@ -37,7 +39,7 @@ fs::path whisper_model_path() {
 // find_and_add_clip search uses the SAME model as the full pipeline.
 // Tiny.en used to be the search model for speed, but it hallucinated [Music]/♪♪
 // on quiet (low-amplitude) vocals and forced a tiny-vs-large quality fork
-// between the search cache and the canonical cache.  Demucs per-chunk
+// between the search cache and the canonical cache.  MDX-Net per-chunk
 // dominates latency anyway, so the large-v3-turbo cost delta is small.
 fs::path whisper_search_model_path() {
     return whisper_model_path();
@@ -158,65 +160,18 @@ static void vad_gate_inplace(std::vector<float>& pcm) {
     }
 }
 
-// ── Vocal-presence gate (search-only) ─────────────────────────────────────────
-//
-// Reuses the vad_gate_inplace RMS math to answer one question about a chunk:
-// "does the vocal stem contain any speech-energy stretch ≥ 250 ms?"  Used by
-// transcribe_search to skip whisper entirely on windows where Demucs produced
-// a dead stem — no [Music]/♪♪ pollution, no wasted inference, no fallback to
-// the raw mix.  Only meaningful when applied to an isolated vocal stem;
-// running it on a raw mix returns true for any music.
-static bool has_vocal_presence(const std::vector<float>& pcm) {
-    constexpr int kWin = 480;   // 30 ms @ 16 kHz
-    constexpr int kHop = 160;   // 10 ms
-    constexpr int kMinSpeechFrames = 25;  // 250 ms
-
-    if ((int)pcm.size() < kWin + kHop) return false;
-    int n_frames = ((int)pcm.size() - kWin) / kHop;
-    if (n_frames < kMinSpeechFrames) return false;
-
-    std::vector<float> rms(n_frames);
-    float max_rms = 0.f;
-    for (int i = 0; i < n_frames; ++i) {
-        double sumsq = 0;
-        const float* p = pcm.data() + i * kHop;
-        for (int j = 0; j < kWin; ++j) sumsq += (double)p[j] * p[j];
-        rms[i] = (float)std::sqrt(sumsq / kWin);
-        if (rms[i] > max_rms) max_rms = rms[i];
-    }
-    if (max_rms < 1e-5f) return false;
-
-    std::vector<float> sorted_rms = rms;
-    size_t k = sorted_rms.size() * 3 / 10;
-    std::nth_element(sorted_rms.begin(), sorted_rms.begin() + k, sorted_rms.end());
-    float noise_floor = sorted_rms[k];
-
-    float thresh = std::max(noise_floor * 4.0f, 1e-4f);
-    int run = 0;
-    for (int i = 0; i < n_frames; ++i) {
-        if (rms[i] > thresh) {
-            if (++run >= kMinSpeechFrames) return true;
-        } else {
-            run = 0;
-        }
-    }
-    return false;
-}
-
 // ── Stem separation ───────────────────────────────────────────────────────────
 
 // Calls the C++ MDX-Net (Kim_Vocal_2) vocal separation. Returns false and sets status on error.
 // No ffmpeg fallback — if the model is not ready, the user must download the model.
 static bool separate_channels(
     const std::string& in,
-    const std::string& outdir,
+    const std::string& voc,
+    const std::string& inst,
     PipelineStatus&    status,
     float clip_in  = 0.f,
     float clip_dur = 0.f)
 {
-    std::string voc  = outdir + "/vocals.wav";
-    std::string inst = outdir + "/instrumental.wav";
-
     std::string err = separate_run(in, voc, inst, [&](float p, const std::string& msg) {
         status.progress = 0.05f + p * 0.15f;
         status.message  = msg;
@@ -306,6 +261,36 @@ static void extract_words_segments(
     }
 }
 
+// ── Transcript provenance sidecar ─────────────────────────────────────────────
+// "<...>_words.json" → "<...>_words.src" (a one-word file: vocals | raw).
+static std::string words_src_sidecar(const std::string& words_json) {
+    if (words_json.size() > 5 &&
+        words_json.compare(words_json.size() - 5, 5, ".json") == 0)
+        return words_json.substr(0, words_json.size() - 5) + ".src";
+    return words_json + ".src";
+}
+
+void transcript_write_source(const std::string& words_json, bool from_vocals) {
+    std::ofstream f(words_src_sidecar(words_json));
+    if (f) f << (from_vocals ? "vocals" : "raw");
+}
+
+std::string transcript_source(const std::string& words_json) {
+    std::ifstream f(words_src_sidecar(words_json));
+    if (!f) return "";   // legacy cache with no sidecar → unknown
+    std::string s; std::getline(f, s);
+    while (!s.empty() && (s.back() == '\n' || s.back() == '\r' || s.back() == ' '))
+        s.pop_back();
+    return s;
+}
+
+// Hallucination filters (defined below, near the search path that first used
+// them). is_music_token: [Music]/♪♪/[Applause] surface tokens — never real
+// content. is_hallucination_phrase: whisper's stock non-speech inventions
+// ("thank you", "thanks for watching", …) — never real song lyrics.
+static bool is_music_token(const std::string& w);
+static bool is_hallucination_phrase(const std::string& seg_text);
+
 // ── Main transcription worker ─────────────────────────────────────────────────
 
 static void do_transcribe(
@@ -318,21 +303,21 @@ static void do_transcribe(
     float              clip_in,
     float              clip_dur)
 {
+    // Derived artifacts live in the shared cache dir (~/.cache/pop-maker-studio),
+    // not next to the user's media — keyed by the source path so readers agree.
     fs::path audio(audio_path);
-    fs::path outdir = audio.parent_path() / audio.stem();
-    fs::create_directories(outdir);
-
     std::string stem       = audio.stem().string();
-    out_words_json         = (outdir / (stem + "_words.json")).string();
-    out_vocals_wav         = (outdir / "vocals.wav").string();
-    std::string segs_json  = (outdir / (stem + "_segments.json")).string();
+    out_words_json         = cache_path(audio_path, "_words.json");
+    out_vocals_wav         = cache_path(audio_path, "_vocals.wav");
+    std::string inst_wav   = cache_path(audio_path, "_instrumental.wav");
+    std::string segs_json  = cache_path(audio_path, "_segments.json");
 
     // ── Separation ────────────────────────────────────────────────────────────
     if (mode == PipelineMode::Both || mode == PipelineMode::SeparateOnly) {
         status.stage    = PipelineStage::Extract;
         status.progress = 0.02f;
         status.message  = "Separating vocals (MDX-Net)…";
-        if (!separate_channels(audio_path, outdir.string(), status, clip_in, clip_dur)) {
+        if (!separate_channels(audio_path, out_vocals_wav, inst_wav, status, clip_in, clip_dur)) {
             g_running.store(false);
             return;
         }
@@ -400,7 +385,16 @@ static void do_transcribe(
     // but the capitalization-driven segment splitter places those boundaries
     // at the real word onsets anyway, so the artifact aligns with the truth
     // instead of distorting it.
-    vad_gate_inplace(pcm);
+    //
+    // BUT only on the raw mix. An MDX-Net vocal stem is already isolated —
+    // non-vocal regions are quiet by construction — so the gate is redundant
+    // AND destructive there: on quiet, reverb-heavy sung stems (dreampop, etc.)
+    // its noise-floor estimate sits ABOVE the vocal level and zeros the actual
+    // singing, leaving whisper to hallucinate "Thank you." over 30 s of
+    // silence. Measured on "Just Like Honey": gated → ' Thank you.'; ungated →
+    // the real lyrics. Whisper's own no_speech_thold + the output-side
+    // hallucination filter handle dead stems without nuking live ones.
+    if (!use_vocals) vad_gate_inplace(pcm);
 
     // ── Init whisper ──────────────────────────────────────────────────────────
     status.progress = 0.28f;
@@ -463,6 +457,37 @@ static void do_transcribe(
     nlohmann::json segs_arr  = nlohmann::json::array();
     extract_words_segments(ctx, words_arr, segs_arr);
     whisper_free(ctx);
+
+    // ── Hallucination / non-speech cleanup ────────────────────────────────────
+    // The main pipeline never filtered its output (only the search path did), so
+    // whisper's stock inventions leaked straight into the canonical cache. Drop
+    // music tokens ([Music]/♪♪) on any path — they're never real content — and
+    // drop whole segments that are pure speech hallucinations ("Thank you",
+    // "thanks for watching") on the vocal-stem path, where they're spurious by
+    // construction. Words inside a dropped segment go with it.
+    {
+        std::vector<std::pair<float, float>> dropped;  // [start,end] removed segs
+        nlohmann::json segs_keep = nlohmann::json::array();
+        for (auto& s : segs_arr) {
+            std::string txt = s.value("text", "");
+            bool bad = is_music_token(txt) ||
+                       (use_vocals && is_hallucination_phrase(txt));
+            if (bad) dropped.push_back({s.value("start", 0.f), s.value("end", 0.f)});
+            else     segs_keep.push_back(s);
+        }
+        segs_arr = std::move(segs_keep);
+
+        nlohmann::json words_keep = nlohmann::json::array();
+        for (auto& w : words_arr) {
+            if (is_music_token(w.value("word", ""))) continue;
+            float ws = w.value("start", 0.f);
+            bool in_dropped = false;
+            for (auto& d : dropped)
+                if (ws >= d.first - 0.01f && ws < d.second + 0.01f) { in_dropped = true; break; }
+            if (!in_dropped) words_keep.push_back(w);
+        }
+        words_arr = std::move(words_keep);
+    }
 
     // ── CTC forced alignment ──────────────────────────────────────────────────
     if (!words_arr.empty() && !pcm.empty()) {
@@ -577,6 +602,19 @@ static void do_transcribe(
 
     { std::ofstream f(out_words_json); f << words_arr.dump(2); }
     { std::ofstream f(segs_json);      f << segs_arr.dump(2); }
+    // Record what audio these words came from so a later lyrics request can tell
+    // a vocal-stem transcript from a raw-mix (subtitles) one and re-run if needed.
+    transcript_write_source(out_words_json, use_vocals);
+    // Record the SOURCE-relative span this transcript covers. A transcript is
+    // source-relative (clip_in was added back above), so trimming the brick never
+    // invalidates it — trigger_pipeline reuses this to skip re-separation/whisper
+    // when a later trim stays inside [span_lo, span_hi]. clip_dur<=0 == whole file.
+    {
+        float span_lo = clip_in;
+        float span_hi = clip_dur > 0.f ? clip_in + clip_dur : 1e9f;
+        std::ofstream f(cache_path(audio_path, "_words.span"));
+        f << span_lo << " " << span_hi << "\n";
+    }
 
     status.stage    = PipelineStage::Done;
     status.progress = 1.0f;
@@ -597,7 +635,7 @@ static whisper_context* load_whisper_ctx() {
 }
 
 // Whisper's known music/non-speech surface tokens.  When fed silence or
-// instrumental-only audio (e.g. a dead Demucs stem or a raw mix during an
+// instrumental-only audio (e.g. a dead MDX-Net stem or a raw mix during an
 // instrumental break), whisper emits these as "transcribed" content.  We
 // strip them at the word level before stitching/saving, so the cache stays
 // clean even when we let whisper run on dubious chunks (raw-mix fallback,
@@ -626,6 +664,48 @@ static bool is_music_token(const std::string& w) {
         } else { all_notes = false; break; }
     }
     return all_notes;
+}
+
+// Whisper's stock hallucinations on near-silent / non-speech audio: the YouTube
+// outro boilerplate it was trained on ("thank you", "thanks for watching",
+// "please subscribe", …). These are never real song lyrics, so we drop whole
+// segments that match on the vocal-stem (lyrics) path. Matched on the full,
+// normalized segment text (lowercased, punctuation/whitespace collapsed) so a
+// real line that merely contains the word "you" is never touched.
+static bool is_hallucination_phrase(const std::string& seg_text) {
+    std::string s;
+    s.reserve(seg_text.size());
+    bool prev_space = false;
+    for (unsigned char c : seg_text) {
+        if (std::isalnum(c)) { s += (char)std::tolower(c); prev_space = false; }
+        else if (c == ' ' || c == '\t' || std::ispunct(c)) {
+            if (!prev_space && !s.empty()) { s += ' '; prev_space = true; }
+        }
+    }
+    while (!s.empty() && s.back() == ' ') s.pop_back();
+    if (s.empty()) return false;
+
+    static const std::unordered_set<std::string> kPhrases = {
+        "thank you",
+        "thank you very much",
+        "thank you so much",
+        "thank you all",
+        "thanks for watching",
+        "thank you for watching",
+        "thanks for watching the video",
+        "thank you for watching the video",
+        "thanks for watching this video",
+        "thanks for listening",
+        "thank you for listening",
+        "please subscribe",
+        "like and subscribe",
+        "please like and subscribe",
+        "dont forget to subscribe",
+        "see you next time",
+        "see you in the next video",
+        "see you next video",
+    };
+    return kPhrases.count(s) > 0;
 }
 
 // Score a word list against query words (intersection / query_size).
@@ -700,9 +780,7 @@ TranscribeSearchResult transcribe_search(
     // shadowed by the windowed search cache.  get_transcript / find_and_add_clip
     // prefer the canonical path and fall back to the search path.
     fs::path src(path);
-    fs::path outdir = src.parent_path() / src.stem();
-    fs::create_directories(outdir);
-    std::string words_json_path = (outdir / (src.stem().string() + "_words_search.json")).string();
+    std::string words_json_path = cache_path(path, "_words_search.json");
 
     const float window_sec  = std::max(90.f, std::min(300.f, total_dur / 4.f));
     const float overlap_sec = std::min(30.f, window_sec * 0.15f);
@@ -739,16 +817,16 @@ TranscribeSearchResult transcribe_search(
         if (do_separate) {
             const std::string range = fmt_time(window_start) + " – " + fmt_time(win_end);
             set_search_status(true, window_start, total_dur,
-                "Demucs " + range + ": separating vocals…");
+                "MDX-Net " + range + ": separating vocals…");
             std::string sep_err = separate_run(path, tmp_vocals, tmp_inst,
                 [&](float /*p*/, const std::string& msg) {
                     set_search_status(true, window_start, total_dur,
-                        "Demucs " + range + ": " + msg);
+                        "MDX-Net " + range + ": " + msg);
                 },
                 window_start, dur);
             if (sep_err.empty() && fs::exists(tmp_vocals)) {
                 set_search_status(true, window_start, total_dur,
-                    "Demucs " + range + ": decoding vocal stem…");
+                    "MDX-Net " + range + ": decoding vocal stem…");
                 pcm = decode_16k(tmp_vocals);
                 if (!pcm.empty()) used_vocal_stem = true;
             }
@@ -757,29 +835,22 @@ TranscribeSearchResult transcribe_search(
             pcm = decode_16k(path, window_start, dur);  // separation unavailable
         if (pcm.empty()) { window_start += step_sec; continue; }
 
-        // Vocal-presence gate: when we have an isolated vocal stem, skip
-        // whisper on chunks with no speech-energy stretch ≥ 250 ms.  Keeps
-        // [Music]/♪♪ tokens out of the cached transcript and avoids burning
-        // a whisper pass on dead audio.  Not applied to raw-mix PCM — that
-        // would gate on music energy and skip everything.
-        // Vocal-presence gate: previously this skipped the chunk entirely
-        // when Demucs produced a dead stem — but that silently dropped
-        // chunks where Demucs failed on quiet/whispered vocals (soft outro
-        // fades, low-amplitude breaths).  Now: when the stem reads dead,
-        // fall back to running whisper on the RAW MIX for that chunk.
-        // Music-token hallucinations whisper-large emits on instrumental
-        // audio (♪♪, [Music], …) are post-filtered after extraction below.
-        if (used_vocal_stem && !has_vocal_presence(pcm)) {
-            set_search_status(true, window_start, total_dur,
-                "Dead vocal stem — raw-mix fallback for "
-                + fmt_time(window_start) + " – " + fmt_time(win_end));
-            std::vector<float> raw_pcm = decode_16k(path, window_start, dur);
-            if (raw_pcm.empty()) { window_start += step_sec; continue; }
-            pcm = std::move(raw_pcm);
-            used_vocal_stem = false;
+        // Skip whisper only on a GENUINELY SILENT vocal stem (an instrumental
+        // window). The old RMS-floor presence gate rejected merely-quiet vocals
+        // (dreampop / whispered / outro fades) as "dead" and fell back to the raw
+        // mix — which just transcribes the music into [Music]/"Thank you"
+        // hallucinations and never finds the actual sung line. A true-silence
+        // check keeps quiet vocals; a silent stem is simply skipped (no raw-mix
+        // fallback). Same lesson as the full pipeline: don't gate the stem.
+        if (used_vocal_stem) {
+            float peak = 0.f;
+            for (float s : pcm) { float a = fabsf(s); if (a > peak) peak = a; }
+            if (peak < 0.005f) { window_start += step_sec; continue; }
         }
 
-        vad_gate_inplace(pcm);
+        // Only gate the raw mix; an isolated vocal stem is already clean and the
+        // gate would zero quiet singing (the bug we fixed in do_transcribe).
+        if (!used_vocal_stem) vad_gate_inplace(pcm);
 
         set_search_status(true, window_start, total_dur,
             "Whisper " + fmt_time(window_start) + " – " + fmt_time(win_end) + "…");
@@ -794,7 +865,7 @@ TranscribeSearchResult transcribe_search(
 
         // Post-filter music-token hallucinations ([Music], ♪♪, etc.).
         // Whisper-large emits these on instrumental audio (raw-mix fallback
-        // chunks, or stems where Demucs leaked instrumental).  Stripping at
+        // chunks, or stems where MDX-Net leaked instrumental).  Stripping at
         // the word level keeps the cached transcript clean.
         {
             nlohmann::json filtered = nlohmann::json::array();

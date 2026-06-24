@@ -45,6 +45,7 @@ static const char* k_gen_fx_names[] = {
 #include <vector>
 #include <algorithm>
 #include <atomic>
+#include <functional>
 #include <mutex>
 #include <thread>
 #include <unordered_set>
@@ -67,7 +68,23 @@ static struct {
     std::atomic<bool> done{false};
     std::string       sidecar_path;
     std::string       error;
+    bool              is_batch = false;   // paths[] run → results aggregated in `batch`
+    nlohmann::json    batch;              // [{path, frames|error, capped}]
+    // Live progress for the canvas banner (a static singleton, never copied).
+    std::atomic<int>  vid_idx{0}, vid_total{0};     // current / total videos (1-based)
+    std::atomic<int>  frame_idx{0}, frame_total{0}; // captioned / total in this video
 } s_scene_analysis;
+
+// Live scene-analysis (describe_video) progress for the canvas banner. Returns
+// true while a run is active and fills the counts (any may be null).
+bool scene_analysis_progress(int* vid_idx, int* vid_total, int* frame_idx, int* frame_total) {
+    if (!s_scene_analysis.running.load()) return false;
+    if (vid_idx)     *vid_idx     = s_scene_analysis.vid_idx.load();
+    if (vid_total)   *vid_total   = s_scene_analysis.vid_total.load();
+    if (frame_idx)   *frame_idx   = s_scene_analysis.frame_idx.load();
+    if (frame_total) *frame_total = s_scene_analysis.frame_total.load();
+    return true;
+}
 
 static int  g_srv_fd   = -1;
 static std::string g_sock_path;
@@ -187,6 +204,102 @@ static std::string clip_type_str(ClipType t) {
         default: break;
     }
     return "unknown";
+}
+
+// Compact ASCII timeline so the agent can SEE the track-layering system (Z-order)
+// + clip timing + overlaps WITHOUT a vision model. Track 0 is the top layer.
+static std::string build_timeline_ascii(const AppState& state) {
+    if (state.tracks.empty()) return "(no tracks yet)";
+    float dur = state.duration;
+    for (auto& t : state.tracks)
+        for (auto& c : t.clips) if (c.end > dur) dur = c.end;
+    if (dur <= 0.f) dur = 1.f;
+
+    const int W = 48;
+    std::string out =
+        "Track 0 is the TOP layer and composites OVER the tracks below it. An "
+        "FX/adjustment/background brick affects everything below it on the timeline. "
+        "Managed tracks (lyrics/subtitles, generated FX) are rebuilt by the "
+        "typography/FX system — change them via set_typography_preset, not by editing "
+        "clips directly.\n";
+    char head[64];
+    snprintf(head, sizeof(head), "    (0s --> %.1fs, each cell ~%.2fs)\n",
+             dur, dur / (float)W);
+    out += head;
+
+    std::string legend;
+    int nt = (int)state.tracks.size();
+    for (int ti = 0; ti < nt && ti < 24; ++ti) {
+        const Track& t = state.tracks[ti];
+        std::string bar((size_t)W, '.');
+        for (int ci = 0; ci < (int)t.clips.size() && ci < 62; ++ci) {
+            const Clip& c = t.clips[ci];
+            int a = (int)(c.start / dur * W);
+            int b = (int)(c.end   / dur * W);
+            if (a < 0) a = 0; if (a > W - 1) a = W - 1;
+            if (b <= a) b = a + 1; if (b > W) b = W;
+            char ch = ci < 10 ? char('0' + ci)
+                    : ci < 36 ? char('a' + ci - 10) : char('A' + ci - 36);
+            for (int x = a; x < b; ++x) bar[(size_t)x] = ch;
+            std::string lbl = !c.text.empty() ? c.text : c.source_id;
+            size_t sl = lbl.find_last_of('/');
+            if (sl != std::string::npos) lbl = lbl.substr(sl + 1);
+            if (lbl.size() > 28) lbl = lbl.substr(0, 27) + "...";
+            char le[224];
+            snprintf(le, sizeof(le), "   %c = T%d.%d %-9s %.1f-%.1fs %s\n",
+                     ch, ti, ci, clip_type_str(c.clip_type).c_str(),
+                     c.start, c.end, lbl.c_str());
+            legend += le;
+        }
+        const char* tag = (ti == 0) ? "  <- top"
+                        : (ti == nt - 1) ? "  <- bottom" : "";
+        std::string nm = t.name.size() > 9 ? t.name.substr(0, 9) : t.name;
+        char line[128];
+        snprintf(line, sizeof(line), "T%-2d %-9s |%s|%s%s\n",
+                 ti, nm.c_str(), bar.c_str(), t.managed ? " managed" : "", tag);
+        out += line;
+    }
+    if (!legend.empty()) out += "legend:\n" + legend;
+    return out;
+}
+
+// Caption one video into a frames json (auto scene keyframes), reusing a fresh
+// .pms_scene.json sidecar when present. Returns {frames:[...], capped} or {error}.
+// Shared by single describe_video and the paths[] batch path.
+static nlohmann::json caption_video_to_json(const std::string& path, bool force,
+                                            const std::function<void(int,int)>& on_frame = {}) {
+    namespace fs = std::filesystem;
+    std::string sp = path + ".pms_scene.json";
+    std::error_code ec;
+    if (!force && fs::exists(sp, ec) &&
+        fs::last_write_time(sp, ec) >= fs::last_write_time(path, ec)) {
+        try {
+            std::ifstream f(sp); nlohmann::json sc; f >> sc;
+            nlohmann::json r;
+            r["frames"] = sc.value("frames", nlohmann::json::array());
+            r["capped"] = sc.value("capped", false);
+            return r;
+        } catch (...) {}
+    }
+    bool capped = false;
+    std::vector<KeyFrame> frames = extract_keyframes(path, 60, &capped);
+    if (frames.empty()) {
+        nlohmann::json r; r["error"] = "keyframe extraction failed or no scene changes"; return r;
+    }
+    nlohmann::json sidecar;
+    sidecar["source"] = path; sidecar["model"] = "moondream2"; sidecar["capped"] = capped;
+    nlohmann::json frames_arr = nlohmann::json::array();
+    for (size_t i = 0; i < frames.size(); ++i) {
+        if (on_frame) on_frame((int)i, (int)frames.size());
+        SceneResult res = caption_frame(frames[i].jpeg_path);
+        nlohmann::json e;
+        e["timestamp"]   = frames[i].timestamp;
+        e["description"] = res.ok ? res.description : "";
+        frames_arr.push_back(e);
+    }
+    sidecar["frames"] = frames_arr;
+    { std::ofstream f(sp); f << sidecar.dump(2); }
+    nlohmann::json r; r["frames"] = frames_arr; r["capped"] = capped; return r;
 }
 
 static AnimStyle parse_anim_style(const std::string& s) {
@@ -711,7 +824,11 @@ static json dispatch(AppState& state, const std::string& method, const json& par
     // ── Read-only: no batch required ─────────────────────────────────────────
     if (method == "get_project") {
         bool verbose = params.value("verbose", false);
-        return verbose ? state_to_json(state) : state_to_json_slim(state);
+        json r = verbose ? state_to_json(state) : state_to_json_slim(state);
+        // ASCII map of the track-layering system (Z-order, timing, overlaps) so a
+        // non-vision agent can actually picture the editing surface.
+        r["timeline"] = build_timeline_ascii(state);
+        return r;
     }
 
     if (method == "get_clips") {
@@ -857,7 +974,7 @@ static json dispatch(AppState& state, const std::string& method, const json& par
                 if (lyrics_present) break;
             }
             if (!lyrics_present)
-                j["next_action_hint"] = "Transcript is ready. To lay lyric clips, call generate_typography(preset='flash'|'apple'|'spotify'|'karaoke'|'headline'|...). For raw word access without bricks, call get_transcript.";
+                j["next_action_hint"] = "Transcript is ready. To lay lyric clips, call set_typography_preset(preset='flash'|'apple'|'spotify'|'karaoke'|'headline'|...). For raw word access without bricks, call get_transcript.";
         }
         return j;
     }
@@ -915,15 +1032,65 @@ static json dispatch(AppState& state, const std::string& method, const json& par
     }
 
     if (method == "describe_video") {
-        std::string path = params.value("path", "");
-        if (path.empty()) { err = "path required"; return {}; }
         // Vision models ship with the release — there is no runtime download.
         if (!std::filesystem::exists(app_models_dir() + "/moondream-decoder.onnx")) {
             err = "vision models missing — reinstall the release (models/ folder "
                   "must include the moondream files)";
             return {};
         }
-        if (s_scene_analysis.running.load()) { err = "scene analysis already running"; return {}; }
+
+        // ── Batch: paths[] captions many videos in ONE call (cached sidecars
+        // reused). Get the lot back with a single get_video_description. ───────
+        if (params.contains("paths") && params["paths"].is_array()) {
+            if (s_scene_analysis.running.load()) {
+                err = "scene analysis already running — wait for get_video_description.";
+                return {};
+            }
+            std::vector<std::string> paths;
+            for (auto& p : params["paths"])
+                if (p.is_string() && !p.get<std::string>().empty())
+                    paths.push_back(p.get<std::string>());
+            if (paths.empty()) { err = "paths array is empty"; return {}; }
+            if (paths.size() > 64) paths.resize(64);
+            bool force = params.value("force", false);
+            s_scene_analysis.running.store(true);
+            s_scene_analysis.done.store(false);
+            s_scene_analysis.error.clear();
+            s_scene_analysis.is_batch = true;
+            s_scene_analysis.batch = json::array();
+            s_scene_analysis.vid_total.store((int)paths.size());
+            s_scene_analysis.vid_idx.store(0);
+            s_scene_analysis.frame_idx.store(0);
+            s_scene_analysis.frame_total.store(0);
+            std::thread([paths, force]() {
+                json batch = json::array();
+                for (size_t vi = 0; vi < paths.size(); ++vi) {
+                    s_scene_analysis.vid_idx.store((int)vi + 1);
+                    json one = caption_video_to_json(paths[vi], force, [](int fi, int ft) {
+                        s_scene_analysis.frame_idx.store(fi);
+                        s_scene_analysis.frame_total.store(ft);
+                    });
+                    json entry; entry["path"] = paths[vi];
+                    if (one.contains("error")) entry["error"] = one["error"];
+                    else { entry["frames"] = one["frames"]; entry["capped"] = one.value("capped", false); }
+                    batch.push_back(entry);
+                }
+                s_scene_analysis.batch = batch;
+                s_scene_analysis.done.store(true);
+                s_scene_analysis.running.store(false);
+            }).detach();
+            json r; r["status"] = "started"; r["count"] = (int)paths.size(); return r;
+        }
+
+        std::string path = params.value("path", "");
+        if (path.empty()) { err = "path or paths[] required"; return {}; }
+        s_scene_analysis.is_batch = false;
+        if (s_scene_analysis.running.load()) {
+            err = "scene analysis already running — describe_video is ONE AT A TIME. "
+                  "Call get_video_description to finish the current video, then start "
+                  "the next. Don't fire describe_video on multiple clips at once.";
+            return {};
+        }
         // Optional times[]: caption exactly these timestamps instead of
         // auto-detected scene changes — the text-mode contact sheet for
         // agents without vision. Capped like make_contact_sheet.
@@ -955,6 +1122,10 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         s_scene_analysis.done.store(false);
         s_scene_analysis.error.clear();
         s_scene_analysis.sidecar_path.clear();
+        s_scene_analysis.vid_idx.store(1);
+        s_scene_analysis.vid_total.store(1);
+        s_scene_analysis.frame_idx.store(0);
+        s_scene_analysis.frame_total.store(0);
         std::thread([path, req_times]() {
             bool capped = false;
             std::vector<KeyFrame> frames = req_times.empty()
@@ -974,10 +1145,12 @@ static json dispatch(AppState& state, const std::string& method, const json& par
             sidecar["model"]  = "moondream2";
             sidecar["capped"] = capped;
             json frames_arr = json::array();
-            for (auto& kf : frames) {
-                SceneResult res = caption_frame(kf.jpeg_path);
+            for (size_t i = 0; i < frames.size(); ++i) {
+                s_scene_analysis.frame_idx.store((int)i);
+                s_scene_analysis.frame_total.store((int)frames.size());
+                SceneResult res = caption_frame(frames[i].jpeg_path);
                 json entry;
-                entry["timestamp"]   = kf.timestamp;
+                entry["timestamp"]   = frames[i].timestamp;
                 entry["description"] = res.ok ? res.description : "";
                 frames_arr.push_back(entry);
             }
@@ -1001,6 +1174,10 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         if (!s_scene_analysis.done.load())   { json r; r["status"] = "idle"; return r; }
         if (!s_scene_analysis.error.empty()) {
             json r; r["status"] = "error"; r["message"] = s_scene_analysis.error; return r;
+        }
+        // Batch run → every video's descriptions in one shot.
+        if (s_scene_analysis.is_batch) {
+            json r; r["status"] = "done"; r["results"] = s_scene_analysis.batch; return r;
         }
         // Read sidecar JSON and return it
         std::string sp = s_scene_analysis.sidecar_path;
@@ -1103,19 +1280,108 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         return r;
     }
 
-    // Canonical cache path: <dir>/<stem>/<stem>_words.json (matches pipeline writer)
+    if (method == "list_dir") {
+        namespace fs = std::filesystem;
+        std::string path = params.value("path", "");
+        if (path.empty()) { err = "path required"; return {}; }
+        std::string kind_filter = params.value("kind", std::string("all")); // all|media|video|audio|image
+        bool recursive = params.value("recursive", false);
+
+        std::error_code ec;
+        fs::path dir(path);
+        // Accept a file path too: list its containing folder. The harness usually
+        // has a media file path (e.g. audio_path) and wants "the directory it's in".
+        if (fs::is_regular_file(dir, ec)) dir = dir.parent_path();
+        if (!fs::is_directory(dir, ec)) { err = "not a directory: " + dir.string(); return {}; }
+
+        auto kind_of = [](std::string e) -> const char* {
+            for (auto& c : e) c = (char)std::tolower((unsigned char)c);
+            static const std::unordered_set<std::string> vid =
+                {"mp4","mov","mkv","webm","avi","m4v","mpg","mpeg","wmv","flv","ts","m2ts"};
+            static const std::unordered_set<std::string> aud =
+                {"flac","wav","mp3","m4a","aac","ogg","opus","aiff","aif","wma","alac"};
+            static const std::unordered_set<std::string> img =
+                {"png","jpg","jpeg","gif","bmp","webp","tif","tiff","heic","heif"};
+            if (vid.count(e)) return "video";
+            if (aud.count(e)) return "audio";
+            if (img.count(e)) return "image";
+            return "other";
+        };
+        auto want = [&](const std::string& k) {
+            if (kind_filter == "all")   return true;
+            if (kind_filter == "media") return k == "video" || k == "audio" || k == "image";
+            return k == kind_filter;
+        };
+
+        std::vector<json> dirs, files;
+        const size_t kCap = 1000;
+        bool truncated = false;
+
+        auto consider = [&](const fs::directory_entry& e) -> bool {
+            if (dirs.size() + files.size() >= kCap) { truncated = true; return false; }
+            std::error_code e2;
+            std::string name = e.path().filename().string();
+            if (name.empty() || name[0] == '.') return true;   // skip hidden/dotfiles
+            if (e.is_directory(e2)) {
+                json j; j["name"] = name; j["path"] = e.path().string();
+                j["is_dir"] = true; j["kind"] = "dir";
+                dirs.push_back(std::move(j));
+                return true;
+            }
+            std::string ext = e.path().has_extension()
+                ? e.path().extension().string().substr(1) : std::string();
+            std::string k = kind_of(ext);
+            if (!want(k)) return true;
+            json j; j["name"] = name; j["path"] = e.path().string();
+            j["is_dir"] = false; j["kind"] = k; j["ext"] = ext;
+            uintmax_t sz = e.file_size(e2); if (!e2) j["size_bytes"] = (uint64_t)sz;
+            files.push_back(std::move(j));
+            return true;
+        };
+
+        if (recursive) {
+            auto it = fs::recursive_directory_iterator(
+                dir, fs::directory_options::skip_permission_denied, ec);
+            for (; !ec && it != fs::recursive_directory_iterator(); it.increment(ec)) {
+                if (it.depth() > 3) it.disable_recursion_pending();
+                if (!consider(*it)) break;
+            }
+        } else {
+            auto it = fs::directory_iterator(
+                dir, fs::directory_options::skip_permission_denied, ec);
+            for (; !ec && it != fs::directory_iterator(); it.increment(ec))
+                if (!consider(*it)) break;
+        }
+
+        auto by_name = [](const json& a, const json& b) {
+            return a.value("name", std::string()) < b.value("name", std::string());
+        };
+        std::sort(dirs.begin(),  dirs.end(),  by_name);
+        std::sort(files.begin(), files.end(), by_name);
+
+        json entries = json::array();
+        for (auto& d : dirs)  entries.push_back(d);   // subfolders first, for navigation
+        for (auto& f : files) entries.push_back(f);
+
+        json r;
+        r["dir"]     = dir.string();
+        r["entries"] = entries;
+        r["n_dirs"]  = (int)dirs.size();
+        r["n_files"] = (int)files.size();
+        if (truncated) r["truncated"] = true;
+        return r;
+    }
+
+    // Canonical cache path in the shared cache dir (matches the pipeline writer).
     auto words_cache_path_for = [](const std::string& audio_path) -> std::filesystem::path {
         if (audio_path.empty()) return {};
-        std::filesystem::path p(audio_path);
-        return p.parent_path() / p.stem() / (p.stem().string() + "_words.json");
+        return cache_path(audio_path, "_words.json");
     };
-    // Search cache path: <dir>/<stem>/<stem>_words_search.json (windowed
-    // find_and_add_clip writes here).  Used as a fallback when the
-    // canonical (full-pipeline) cache hasn't been produced yet.
+    // Search cache (windowed find_and_add_clip). Fallback when the canonical
+    // full-pipeline cache hasn't been produced yet.
     auto search_words_path_for = [](const std::string& audio_path) -> std::filesystem::path {
         if (audio_path.empty()) return {};
-        std::filesystem::path p(audio_path);
-        return p.parent_path() / p.stem() / (p.stem().string() + "_words_search.json");
+        return cache_path(audio_path, "_words_search.json");
     };
 
     if (method == "get_transcript") {
@@ -1145,6 +1411,10 @@ static json dispatch(AppState& state, const std::string& method, const json& par
             r["words"]      = words;
             r["path"]       = src.string();
             r["provenance"] = provenance;  // "canonical" or "search"
+            // Which audio these words came from: "vocals" (MDX-Net stem, lyrics-
+            // grade), "raw" (original mix / subtitles path), or "" (legacy cache).
+            // Lets a lyrics request detect a raw cache and re-run on the vocals.
+            r["source"]     = transcript_source(src.string());
         } catch (...) {
             r["status"]  = "error";
             r["message"] = "failed to parse words JSON";
@@ -1190,7 +1460,7 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         r["count"]   = (int)state.words_cache.size();
         r["skipped"] = skipped;
         r["next_action_hint"] = "Custom transcript installed at " + target.string()
-            + ". Call generate_typography(preset='flash'|'apple'|'spotify'|...) to lay lyric clips against it.";
+            + ". Call set_typography_preset(preset='flash'|'apple'|'spotify'|...) to lay lyric clips against it.";
         return r;
     }
 
@@ -1252,7 +1522,7 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         r["count"]  = (int)state.words_cache.size();
         r["source"] = src_cache.string();
         r["offset"] = offset;
-        r["next_action_hint"] = "Transcript shifted/clipped and installed. Call generate_typography(preset='flash'|...) to lay lyric clips.";
+        r["next_action_hint"] = "Transcript shifted/clipped and installed. Call set_typography_preset(preset='flash'|...) to lay lyric clips.";
         return r;
     }
 
@@ -1718,13 +1988,20 @@ static json dispatch(AppState& state, const std::string& method, const json& par
     if (method == "undo") {
         if (!history_can_undo()) { err = "nothing to undo"; return {}; }
         history_undo(state);
-        return state_to_json_slim(state);
+        // history_pos changes on every real step, so repeated undo returns a
+        // distinct result — without it, undoing clip-detail edits leaves the slim
+        // state identical and the harness repetition guard reads it as no-progress.
+        json r = state_to_json_slim(state);
+        r["history_pos"] = history_pos();
+        return r;
     }
 
     if (method == "redo") {
         if (!history_can_redo()) { err = "nothing to redo"; return {}; }
         history_redo(state);
-        return state_to_json_slim(state);
+        json r = state_to_json_slim(state);
+        r["history_pos"] = history_pos();
+        return r;
     }
 
     // ── Background removal / BodyFX mask processing ───────────────────────────
@@ -1953,7 +2230,11 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         state.tracks[ti].clips.erase(state.tracks[ti].clips.begin() + ci);
         if (state.selected_track == ti && state.selected_clip == ci)
             state.selected_clip = -1;
-        return json::object();
+        // Changing result (remaining count) so deleting clips one-by-one by index
+        // doesn't trip the harness repetition guard — see delete_track.
+        json r; r["deleted_clip"] = ci;
+        r["clips_remaining"] = (int)state.tracks[ti].clips.size();
+        return r;
     }
 
     if (method == "add_clip") {
@@ -1983,34 +2264,46 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         }
         // Images are ClipType::Video but carry no audio — never let a PNG
         // become the project's audio source (it used to, and even kicked a
-        // WhisperX transcription on the pixels below).
+        // whisper.cpp transcription on the pixels below).
         bool is_image_clip = cl.clip_type == ClipType::Video && is_image_path(text);
         if ((cl.clip_type == ClipType::Video || cl.clip_type == ClipType::Audio) &&
             !is_image_clip && state.audio_path.empty())
             state.audio_path = state.vocals_path = text;
 
-        // Text overlays live on their OWN tracks — never stack a Text/Subtitle/
-        // Lyrics clip on top of a content clip (or vice-versa) on the same track
-        // row. They render on top regardless of track; sharing a row is illegal.
+        // One row, one stream: content (video/audio/background) and text
+        // (text/subtitle/lyrics) clips each occupy the timeline exclusively, so no
+        // two of them may overlap on the same track. Catches BOTH text-vs-content
+        // AND content-vs-content / text-vs-text overlap — the latter is what let
+        // the agent stack video clips so the lower-index one rendered straight over
+        // its neighbour (it "kept playing" through the next clip). FX/adjustment
+        // bricks (Effect, MultiFX, BodyFX, AudioMultiFX, Bus) are exempt: they ride
+        // over content by design and have their own non-overlap rule above.
+        // Frame-adjacent clips (touching at a boundary) are fine — hence the 1ms
+        // slack so snap rounding can't trip a false overlap.
         {
             auto is_txt = [](ClipType t){ return t==ClipType::Text ||
                 t==ClipType::Subtitle || t==ClipType::Lyrics; };
             auto is_con = [](ClipType t){ return t==ClipType::Video ||
                 t==ClipType::Audio || t==ClipType::Background ||
                 t==ClipType::VideoRecord || t==ClipType::Record; };
-            bool n_txt = is_txt(cl.clip_type), n_con = is_con(cl.clip_type);
-            if (n_txt || n_con)
+            auto occupies_row = [&](ClipType t){ return is_txt(t) || is_con(t); };
+            if (occupies_row(cl.clip_type))
                 for (const auto& oc : state.tracks[ti].clips)
-                    if (cl.start < oc.end && cl.end > oc.start &&
-                        ((n_txt && is_con(oc.clip_type)) ||
-                         (n_con && is_txt(oc.clip_type)))) {
-                        err = "text and content can't share a track — put the text "
-                              "on its own track (it still renders on top)";
+                    if (occupies_row(oc.clip_type) &&
+                        cl.start < oc.end - 1e-3f && cl.end > oc.start + 1e-3f) {
+                        err = (is_txt(cl.clip_type) != is_txt(oc.clip_type))
+                            ? "text and content can't share a track — put the text "
+                              "on its own track (it still renders on top)"
+                            : "clip overlap: that time range is already occupied on "
+                              "this track. Clips on one track can't overlap — choose a "
+                              "free slot, trim/move the existing clip, or use another track.";
                         return {};
                     }
         }
         state.tracks[ti].clips.push_back(cl);
         int new_ci = (int)state.tracks[ti].clips.size() - 1;
+        // Glow + scroll to it so an agent-placed brick is visibly surfaced.
+        clip_flash(state, ti, new_ci, /*reveal=*/true);
 
         // Auto-refresh audio_path when the project's current audio source is no
         // longer on the timeline. Agents adding a *different* audio file as the
@@ -2074,7 +2367,7 @@ static json dispatch(AppState& state, const std::string& method, const json& par
                     if (lyrics_present) break;
                 }
                 if (!lyrics_present)
-                    r["warning"] = "A transcript is ready for this project's audio but no managed Lyrics track exists. For lyric videos / captions, prefer generate_typography(preset='flash'|'apple'|'spotify'|...) — it lays styled, idempotent lyric clips on a managed track. type='text' is intended for one-off labels (or use add_callout).";
+                    r["warning"] = "A transcript is ready for this project's audio but no managed Lyrics track exists. For lyric videos / captions, prefer set_typography_preset(preset='flash'|'apple'|'spotify'|...) — it lays styled, idempotent lyric clips on a managed track. type='text' is intended for one-off labels (or use add_callout).";
             }
         }
         return r;
@@ -2160,7 +2453,6 @@ static json dispatch(AppState& state, const std::string& method, const json& par
             }
             else if (prop == "opacity")   { cl.opacity   = jval_float(val); }
             else if (prop == "muted")     { cl.muted     = jval_bool(val); }
-            else if (prop == "in_point")  { cl.in_point  = jval_float(val); }
             else if (prop == "fade_in")   { cl.fade_in   = jval_float(val); }
             else if (prop == "fade_out")  { cl.fade_out  = jval_float(val); }
             else if (prop == "blend_mode"){ cl.blend_mode= jval_int(val); }
@@ -2180,6 +2472,8 @@ static json dispatch(AppState& state, const std::string& method, const json& par
             else if (prop == "crop_r")    { cl.crop_r = fmaxf(0.f, fminf(jval_float(val), 0.95f - cl.crop_l)); }
             else if (prop == "crop_t")    { cl.crop_t = fmaxf(0.f, fminf(jval_float(val), 0.95f - cl.crop_b)); }
             else if (prop == "crop_b")    { cl.crop_b = fmaxf(0.f, fminf(jval_float(val), 0.95f - cl.crop_t)); }
+            else if (prop == "flip_h")    { cl.flip_h = jval_bool(val); }
+            else if (prop == "flip_v")    { cl.flip_v = jval_bool(val); }
             else if (prop == "text")      { cl.text      = val.get<std::string>(); }
             else if (prop == "font_size") { cl.font_size = jval_float(val); }
             else if (prop == "sub_pos")   { cl.sub_pos   = jval_int(val); }
@@ -2307,7 +2601,13 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         }
         else if (prop == "opacity")  { cl.opacity    = jval_float(val); }
         else if (prop == "muted")    { cl.muted      = jval_bool(val); }
-        else if (prop == "in_point") { cl.in_point   = jval_float(val); }
+        else if (prop == "in_point") {
+            // in_point is an internal value, not an agent knob — a human never
+            // types it, they drag the brick's edge. Trim/move/split derive it.
+            err = "in_point isn't settable directly — trim the brick with trim_clip "
+                  "(or make_section), exactly like dragging its edge in the UI.";
+            return {};
+        }
         else if (prop == "fade_in")  { cl.fade_in    = jval_float(val); }
         else if (prop == "fade_out") { cl.fade_out   = jval_float(val); }
         else if (prop == "blend_mode") { cl.blend_mode = jval_int(val); }
@@ -2328,6 +2628,10 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         else if (prop == "crop_r")   { cl.crop_r = fmaxf(0.f, fminf(jval_float(val), 0.95f - cl.crop_l)); }
         else if (prop == "crop_t")   { cl.crop_t = fmaxf(0.f, fminf(jval_float(val), 0.95f - cl.crop_b)); }
         else if (prop == "crop_b")   { cl.crop_b = fmaxf(0.f, fminf(jval_float(val), 0.95f - cl.crop_t)); }
+        // Mirror the content — a TRUE flip (UV mirror), not negative scale (which
+        // also shrinks the clip). Use these to face/turn an image, not scale_x/y.
+        else if (prop == "flip_h")   { cl.flip_h = jval_bool(val); }
+        else if (prop == "flip_v")   { cl.flip_v = jval_bool(val); }
         // ── Text props ───────────────────────────────────────────────────────
         else if (prop == "text")       { cl.text      = val.get<std::string>(); }
         else if (prop == "font_size")  { cl.font_size = jval_float(val); }
@@ -2408,7 +2712,13 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         if (!check_track(state, ti, err)) return {};
         state.tracks.erase(state.tracks.begin() + ti);
         if (state.selected_track == ti) { state.selected_track = -1; state.selected_clip = -1; }
-        return json::object();
+        // Return the new count so peeling tracks one-by-one (always track:0)
+        // yields a changing result — a constant {} ack reads as no-progress and
+        // trips the harness repetition guard even though each call deletes a
+        // different track.
+        json r; r["deleted_track"] = ti;
+        r["tracks_remaining"] = (int)state.tracks.size();
+        return r;
     }
 
     if (method == "add_marker") {
@@ -2480,15 +2790,67 @@ static json dispatch(AppState& state, const std::string& method, const json& par
     if (method == "trigger_pipeline") {
         std::string mode_s = params.value("mode", "both");
         PipelineMode mode = PipelineMode::Both;
-        if (mode_s == "transcribe_only") mode = PipelineMode::TranscribeOnly;
-        else if (mode_s == "separate_only") mode = PipelineMode::SeparateOnly;
+        // transcribe_only is retired for tool callers: every agent-triggered
+        // transcription separates vocals first (Kim_Vocal_2 gives clean voices on
+        // any source), so a legacy mode='transcribe_only' now falls through to Both.
+        if (mode_s == "separate_only") mode = PipelineMode::SeparateOnly;
         std::string src = params.value("path", "");
         if (!src.empty()) state.audio_path = src;
         if (state.audio_path.empty()) { err = "no audio file loaded"; return {}; }
-        // MCP callers expect the transcript only — no surprise lyric clips on the
-        // timeline. Leaving pipeline_on_done null means the completion handler
-        // does its data-loading work and stops there.
-        state.pipeline_on_done = {};
+        // Optional preset chosen up front so the completion callback lays the
+        // FINAL styled lyric bricks in one shot, the way the UI does.
+        std::string preset = params.value("preset", "");
+        if (!preset.empty()) state.typo_preset_id = preset;
+        // Lay lyrics exactly like the UI's "Generate Lyrics" button: from the
+        // pipeline-done callback (screen_studio fires it the instant the pipeline
+        // reaches Done), while the audio brick is still where it was at transcribe
+        // time — so the timeline offset (clip.start - clip.in_point) is exact.
+        // The agent used to lay lyrics in a SEPARATE, later generate_typography
+        // call after it had added/trimmed clips, which drifted the first words
+        // into the intro. Only auto-lay when this audio is actually a clip on the
+        // timeline and the mode produces a transcript; a detached transcript fetch
+        // (path = a file not on the timeline) leaves the timeline clean as before.
+        bool on_timeline = false;
+        float clip_in = 0.f, clip_dur = 0.f;
+        for (auto& t : state.tracks) {
+            for (auto& c : t.clips)
+                if ((c.clip_type == ClipType::Audio || c.clip_type == ClipType::Video) &&
+                    c.source_id == state.audio_path) {
+                    clip_in = c.in_point; clip_dur = c.end - c.start;
+                    on_timeline = true; break;
+                }
+            if (on_timeline) break;
+        }
+
+        // Procedural guard against redundant re-transcription: a transcript is
+        // source-relative (do_transcribe adds clip_in back), so trimming the brick
+        // never invalidates it. If a cached transcript already COVERS this brick's
+        // region, skip the heavy separation+whisper and just (re-)lay the lyrics
+        // with the chosen preset — re-running after a trim or a preset swap then
+        // costs ~nothing (the agent does exactly this on a misread). _words.span
+        // records the source-relative range each transcript covers. force=true
+        // forces a real re-run.
+        bool force = params.value("force", false);
+        if (!force && mode != PipelineMode::SeparateOnly && on_timeline &&
+            std::filesystem::exists(cache_path(state.audio_path, "_words.json"))) {
+            std::ifstream sp(cache_path(state.audio_path, "_words.span"));
+            float lo = 0.f, hi = -1.f;
+            if (sp && (sp >> lo >> hi) &&
+                clip_in >= lo - 0.05f && clip_in + clip_dur <= hi + 0.05f) {
+                load_words_cache(state);
+                generate_typography(state);
+                json r;
+                r["stage"]             = "done";
+                r["reused_transcript"] = true;
+                r["next_action_hint"]  = "Reused the cached transcript (a trim doesn't invalidate it) and re-laid the lyrics with the preset — no re-transcription. Pass force:true only to truly re-run separation+transcription.";
+                return r;
+            }
+        }
+
+        if (mode != PipelineMode::SeparateOnly && on_timeline)
+            state.pipeline_on_done = generate_typography;
+        else
+            state.pipeline_on_done = {};
         kick_pipeline(state, state.audio_path, mode);
         // Non-blocking: return immediately with stage=running so the caller can
         // poll get_pipeline_status. The pipeline runs in the background thread
@@ -2496,11 +2858,13 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         json r;
         r["stage"]    = "running";
         r["progress"] = state.pipeline.progress;
-        r["next_action_hint"] = "Poll get_pipeline_status every 2-3s until stage='done', then call generate_typography(preset='flash'|'apple'|'spotify'|'karaoke'|'headline'|...) to lay lyric clips. Do NOT hand-roll text clips with add_clip(type='text') for lyrics — generate_typography handles styling, grouping and idempotency.";
+        r["next_action_hint"] = (mode != PipelineMode::SeparateOnly && on_timeline)
+            ? "Poll get_pipeline_status every 2-3s until stage='done'. The styled lyric bricks are laid AUTOMATICALLY on completion — do NOT call set_typography_preset to place them (only to swap presets, and only if the audio brick has not moved since). Never hand-roll add_clip(type='text') for lyrics."
+            : "Poll get_pipeline_status every 2-3s until stage='done'. No audio clip is on the timeline for this source, so no lyric bricks are laid — read get_transcript for the words.";
         return r;
     }
 
-    if (method == "generate_typography") {
+    if (method == "set_typography_preset" || method == "generate_typography") {
         std::string preset = params.value("preset", "");
         if (!preset.empty()) state.typo_preset_id = preset;
         generate_typography(state);
@@ -2766,14 +3130,34 @@ static json dispatch(AppState& state, const std::string& method, const json& par
     }
 
     if (method == "new_project") {
+        // Destructive: wipes every track, audio, and transcript. Refuse when the
+        // project has content unless explicitly forced — so a confused agent can't
+        // nuke the user's work mid-task; it gets an actionable error and bails here
+        // instead of starting over.
+        bool has_content = !state.audio_path.empty();
+        for (auto& t : state.tracks) if (!t.clips.empty()) { has_content = true; break; }
+        if (has_content && !params.value("force", false)) {
+            err = "Refused: new_project wipes the current project (tracks, audio, "
+                  "transcript) — destructive. Only do this if the user explicitly asked "
+                  "to start over (then pass force=true). Otherwise make targeted edits "
+                  "(delete_clip / delete_track) or undo.";
+            return {};
+        }
         bool mr = state.models_ready;
         bool ms = state.models_skipped;
+        // Preserve the bottom-strip panel state across the wipe — otherwise
+        // state = AppState{} resets agent_panel_open/terminal_open and the agent
+        // window collapses out from under the user.
+        bool ap = state.agent_panel_open;
+        bool tp = state.terminal_open;
         state = AppState{};
-        state.models_ready   = mr;
-        state.models_skipped = ms;
-        state.splash_timer   = 0.f;
-        state.in_studio      = true;   // an agent creating a project wants the
-                                       // editor active, not the home launcher
+        state.models_ready     = mr;
+        state.models_skipped   = ms;
+        state.agent_panel_open = ap;
+        state.terminal_open    = tp;
+        state.splash_timer     = 0.f;
+        state.in_studio        = true;   // an agent creating a project wants the
+                                         // editor active, not the home launcher
         // Fresh history + baseline snapshot (same reasoning as load_project).
         history_clear();
         history_push(state, "New project");
@@ -2811,6 +3195,42 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         }
         history_push(state, "trim_all_to");
         json r; r["time"] = t; return r;
+    }
+
+    if (method == "make_section") {
+        // Crop the whole timeline to [start, end] and shift it to begin at 0 —
+        // the "extract a section" primitive. Clips fully outside the window are
+        // dropped; straddlers are clamped; audio/video in_point advances by what
+        // is trimmed off the left so the source still plays the right span. Every
+        // kept clip shifts by -start, so all tracks move together and managed
+        // lyrics stay aligned without re-running generate_typography. One undo.
+        double start = params.value("start", -1.0);
+        double end   = params.value("end",   -1.0);
+        if (start < 0.0 || end <= start) {
+            err = "make_section needs start >= 0 and end > start"; return {};
+        }
+        float s = (float)start, e = (float)end;
+        for (auto& tr : state.tracks) {
+            std::vector<Clip> kept;
+            for (auto& cl : tr.clips) {
+                float ns = std::max(cl.start, s);
+                float ne = std::min(cl.end,   e);
+                if (ne <= ns) continue;                 // fully outside the window
+                float left_trim = ns - cl.start;        // trimmed off the left edge
+                if (left_trim > 0.f &&
+                    (cl.clip_type == ClipType::Audio || cl.clip_type == ClipType::Video))
+                    cl.in_point += left_trim;
+                cl.start = ns - s;                      // shift section start -> 0
+                cl.end   = ne - s;
+                kept.push_back(cl);
+            }
+            tr.clips = std::move(kept);
+        }
+        state.duration = e - s;
+        state.playhead = std::max(0.f, std::min(state.playhead - s, e - s));
+        audio_seek(state.playhead);
+        history_push(state, "make_section");
+        json r; r["start"] = s; r["end"] = e; r["duration"] = e - s; return r;
     }
 
     if (method == "delete_clips_after") {

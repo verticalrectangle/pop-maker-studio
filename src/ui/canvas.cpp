@@ -13,6 +13,7 @@
 #include "fx_shader.h"
 #include "bg_presets.h"
 #include "theme.h"
+#include "../ipc_server.h"
 #include "render.h"
 #include "waveform.h"
 #include "body_fx.h"
@@ -1514,7 +1515,7 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
             if (slot < 0 || !video_is_open(slot)) return;
             if (already_queued(slot)) return;
             video_set_pixel_fx(slot, make_pfx(cl, ti));
-            float src_t = cl->in_point + (at_time - cl->start) * cl->speed;
+            float src_t = clip_src_time(*cl, at_time);
             reqs.push_back({slot, (double)(src_t + lookahead), max_frames});
         };
 
@@ -1662,7 +1663,7 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                 std::string vsrc = clip_video_src(state, *cl_ptr);  // conformed copy if ready
                 int slot = slot_for_video(const_cast<AppState&>(state),
                                clip_slot_key(vsrc, cl_ptr->start), vsrc);
-                float src_t = cl_ptr->in_point + (at_time - cl_ptr->start) * cl_ptr->speed;
+                float src_t = clip_src_time(*cl_ptr, at_time);
 
                 // Glass-only cfx for CPU-side datamosh and ZoomPunch — global FX
                 // are applied once to the full composite via scene_apply_fx, not per-clip.
@@ -1710,7 +1711,7 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                     float mask_fps = bg_remove_read_fps(mask_dir);
                     // Same source-time mapping as the frame fetch (×speed —
                     // this used to divide, desyncing masks on retimed clips).
-                    float src_t = cl_ptr->in_point + (at_time - cl_ptr->start) * cl_ptr->speed;
+                    float src_t = clip_src_time(*cl_ptr, at_time);
                     int frame_i = (int)(src_t * mask_fps);
                     VideoInfo vi_g = video_info(slot);
                     int bw = (vi_g.width  > 0) ? vi_g.width  : (int)w;
@@ -1829,15 +1830,15 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                     // defined in source space, so the editing view is source
                     // view (the overlay rect in draw_crop_mode matches this).
                     scene_add_layer(tex, cx, cy, hw, hh, 1.f, 0.f, alpha);
-                else if (cl_ptr->has_crop()) {
+                else {
+                    // UV window (crop), then mirror/flip by swapping the U and/or
+                    // V extents — a real flip, independent of scale/position.
                     float u0 = cl_ptr->crop_l, u1 = 1.f - cl_ptr->crop_r;
-                    if (mirror) { float t = u0; u0 = u1; u1 = t; }
-                    scene_add_layer(tex, cx, cy, hw, hh, cos_r, sin_r, alpha,
-                                    u0, cl_ptr->crop_t, u1, 1.f - cl_ptr->crop_b);
-                } else {
-                    float u0 = mirror ? 1.f : 0.f, u1 = mirror ? 0.f : 1.f;
-                    scene_add_layer(tex, cx, cy, hw, hh, cos_r, sin_r, alpha,
-                                    u0, 0.f, u1, 1.f);
+                    float v0 = cl_ptr->crop_t, v1 = 1.f - cl_ptr->crop_b;
+                    if (mirror)         { float t = u0; u0 = u1; u1 = t; }
+                    if (cl_ptr->flip_h) { float t = u0; u0 = u1; u1 = t; }
+                    if (cl_ptr->flip_v) { float t = v0; v0 = v1; v1 = t; }
+                    scene_add_layer(tex, cx, cy, hw, hh, cos_r, sin_r, alpha, u0, v0, u1, v1);
                 }
             };
 
@@ -2382,6 +2383,25 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
             snprintf(msg, sizeof(msg), "Converting voice…  %d%%",
                      (int)(fmaxf(0.f, fminf(1.f, vcp->vc_progress)) * 100.f));
             ui_canvas_progress_banner(dl, p, w, h, msg, vcp->vc_progress);
+        }
+
+        // Scene analysis (describe_video) — the agent's vision pass. Show what
+        // it's chewing through so the long wait isn't a mystery box.
+        {
+            int vi = 0, vt = 0, fi = 0, ft = 0;
+            if (scene_analysis_progress(&vi, &vt, &fi, &ft)) {
+                char msg[80];
+                if (vt > 1)
+                    snprintf(msg, sizeof(msg), "Analyzing video %d/%d…  caption %d/%d",
+                             vi, vt, fi + (ft > 0), ft);
+                else
+                    snprintf(msg, sizeof(msg), "Analyzing video…  caption %d/%d", fi + (ft > 0), ft);
+                // Progress across the whole batch: completed videos + this video's frames.
+                float per_vid = (ft > 0) ? (float)fi / (float)ft : 0.f;
+                float prog = (vt > 0) ? ((float)(vi - 1) + per_vid) / (float)vt
+                                      : (ft > 0 ? per_vid : -1.f);
+                ui_canvas_progress_banner(dl, p, w, h, msg, prog);
+            }
         }
     }
 

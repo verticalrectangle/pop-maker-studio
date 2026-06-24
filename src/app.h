@@ -18,9 +18,9 @@
 struct AppState;
 
 enum class PipelineMode {
-    Both,            // Demucs + transcription
-    TranscribeOnly,  // transcription on original file (no Demucs)
-    SeparateOnly,    // Demucs only, no subtitles
+    Both,            // MDX-Net + transcription
+    TranscribeOnly,  // transcription on original file (no MDX-Net)
+    SeparateOnly,    // MDX-Net only, no subtitles
 };
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -71,7 +71,7 @@ enum class FXType {
 
 // ── Transition type ───────────────────────────────────────────────────────────
 
-enum class TransitionType { None, Dissolve, FadeBlack, DipWhite };
+enum class TransitionType { None, Dissolve, FadeBlack, DipWhite, Shake };
 
 // ── Output format ─────────────────────────────────────────────────────────────
 
@@ -143,6 +143,9 @@ struct Clip {
     // proxy/export decode that instead — so preview == export and judder is
     // smoothed. The toggles control blend-vs-cadence and seamless looping.
     float src_fps        = 0.f;
+    float src_duration   = 0.f;    // source length secs (0 = not yet probed) —
+                                   // animated GIFs loop over this when the brick
+                                   // span is stretched past it
     bool  conform_smooth = true;   // blend frames (vs dup/drop to keep cadence)
     bool  clip_loop      = false;  // conform cyclically so a perfect loop stays seamless
     bool  conform_ready_cache = false;  // transient: last-seen conform readiness (slot-reopen edge)
@@ -202,6 +205,13 @@ struct Clip {
     float crop_l = 0.f, crop_t = 0.f, crop_r = 0.f, crop_b = 0.f;
     bool  has_crop() const { return crop_l > 0.f || crop_t > 0.f ||
                                     crop_r > 0.f || crop_b > 0.f; }
+    // Mirror the content (UV flip) — independent of scale/position, unlike the
+    // negative-scale hack. Applied in preview and export for image/video clips.
+    bool  flip_h = false, flip_v = false;
+    // Transient (never serialized): a freshly-added brick glows briefly so you see
+    // where it landed. -1 = "just added, stamp the time on the next timeline draw";
+    // >0 = ImGui time the glow began; 0 = idle. Set via clip_flash().
+    double glow_start = 0.0;
     // Aspect of the visible (cropped) region — use this everywhere the
     // canvas-fit box is computed so preview, export, and click-picking agree.
     float cropped_aspect(int src_w, int src_h) const {
@@ -382,6 +392,26 @@ struct Clip {
 // keep the animation they showed before the split. Caller inserts the
 // returned clip after `cl` on the track.
 Clip clip_split_at(Clip& cl, float cut);
+// Split the content clip at (ti,ci) at timeline-time `cut`, AND split every FX
+// brick welded to it so each half keeps the slice of the chain that sat over it.
+// Inserts the right content half after `ci` and appends the right-half bricks.
+void clip_split_with_fx(AppState& state, int ti, int ci, float cut);
+
+// Mark a freshly-added brick (ti,ci) so it glows briefly in the timeline. When
+// reveal=true also scrolls the timeline to it (minimal, only if off-screen) and
+// selects it — pass reveal=false for drag-drops, where the user placed it where
+// they're already looking. Safe to call with out-of-range indices (no-op).
+void clip_flash(AppState& state, int ti, int ci, bool reveal);
+
+// Source-time for a video-like clip at timeline time `at`. For a looping clip
+// (animated GIF — clip_loop set) whose brick was stretched past the source, the
+// time wraps so the source repeats instead of freezing on the last frame.
+inline float clip_src_time(const Clip& cl, float at) {
+    float t = cl.in_point + (at - cl.start) * cl.speed;
+    if (cl.clip_loop && cl.src_duration > 0.f && t >= cl.src_duration)
+        t = std::fmod(t, cl.src_duration);
+    return t;
+}
 
 // Shift every keyframe time by dt seconds. Use when clip.start moves but the
 // content shouldn't (left-edge trim): pass -(new_start - old_start) so keys

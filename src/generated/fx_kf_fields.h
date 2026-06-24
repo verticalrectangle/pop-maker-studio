@@ -391,3 +391,6 @@
     {"fx_glow_up_glow", &Clip::fx_glow_up_glow},
     {"fx_glow_up_warmth", &Clip::fx_glow_up_warmth},
     {"fx_glow_up_brighten", &Clip::fx_glow_up_brighten},
+    {"fx_cam_shake_amount", &Clip::fx_cam_shake_amount},
+    {"fx_cam_shake_intensity", &Clip::fx_cam_shake_intensity},
+    {"fx_cam_shake_speed", &Clip::fx_cam_shake_speed},

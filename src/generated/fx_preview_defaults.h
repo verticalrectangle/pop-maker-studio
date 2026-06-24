@@ -703,3 +703,9 @@
             cfx.glow_up_warmth = 0.25f;
             cfx.glow_up_brighten = 0.15f;
             break;
+        case FXType::CamShake:
+            cfx.cam_shake_on = true;
+            cfx.cam_shake_amount = 1.0f;
+            cfx.cam_shake_intensity = 0.5f;
+            cfx.cam_shake_speed = 1.0f;
+            break;

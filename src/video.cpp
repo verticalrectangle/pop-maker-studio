@@ -289,9 +289,10 @@ static void datamosh_rgb(uint8_t* rgb, int w, int h, float intensity, float time
     static thread_local std::vector<uint8_t> src;
     src.assign(rgb, rgb + (size_t)w * h * 3);
 
-    const int  B        = 16;                              // block size (px)
-    const int  max_disp = 8 + (int)(intensity * 56.f);     // max smear distance
-    const uint32_t frame = (uint32_t)(time_sec * 24.f);    // animate at ~film rate
+    const int   B     = 16;                          // macroblock size (px)
+    const float reach = 6.f + intensity * 70.f;      // max smear length
+    const int   TAPS  = 5;                            // samples along each trail
+    const uint32_t frame = (uint32_t)(time_sec * 24.f);
     auto at = [&](int x, int y, int c) -> uint8_t {
         if (x < 0) x = 0; else if (x >= w) x = w - 1;
         if (y < 0) y = 0; else if (y >= h) y = h - 1;
@@ -299,19 +300,47 @@ static void datamosh_rgb(uint8_t* rgb, int w, int h, float intensity, float time
     };
     for (int by = 0; by < h; by += B) {
         for (int bx = 0; bx < w; bx += B) {
-            uint32_t hb = dm_hash((uint32_t)(bx/B) | ((uint32_t)(by/B) << 16), frame);
-            // Only a fraction of blocks (scaled by intensity) smear each frame;
-            // the rest pass through clean — that patchy spread reads as mosh.
-            if ((float)(hb & 0xFFFF) / 65535.f > intensity * 0.85f + 0.05f) continue;
-            int dx = ((int)((hb >> 16) & 0xFF) - 128) * max_disp / 128;
-            int dy = ((int)((hb >> 24) & 0xFF) - 128) * max_disp / 128;
-            int hx = dx / 2, hy = dy / 2;             // chroma lags luma → bleed
+            int bxi = bx / B, byi = by / B;
+            uint32_t hb = dm_hash((uint32_t)bxi | ((uint32_t)byi << 16), frame);
+
+            // Coherent pseudo-motion flow: a low-frequency field (neighbouring
+            // blocks share a direction, so it reads as a moving region rather than
+            // noise) plus a per-block jitter. This is what fakes the "P-frame
+            // motion applied to the wrong content" smear without a real codec.
+            float fa = sinf(bxi * 0.20f + time_sec * 1.3f) + cosf(byi * 0.17f - time_sec * 0.9f);
+            float fb = cosf(bxi * 0.15f - time_sec * 1.1f) + sinf(byi * 0.23f + time_sec * 0.7f);
+            float vx = fa * 0.6f + (((int)((hb >> 8)  & 0xFF) - 128) / 128.f) * 0.8f;
+            float vy = fb * 0.6f + (((int)((hb >> 16) & 0xFF) - 128) / 128.f) * 0.8f;
+            float vl = sqrtf(vx*vx + vy*vy) + 1e-4f; vx /= vl; vy /= vl;
+            float mag = reach * (0.4f + 0.6f * ((hb & 0xFF) / 255.f));
+
+            // Patchy block selection (scaled by intensity); a rare few "lose" the
+            // macroblock entirely → frozen, channel-swapped flat region.
+            float pick = (float)((hb >> 24) & 0xFF) / 255.f;
+            bool smear = pick < intensity * 0.9f + 0.05f;
+            bool lost  = pick > 0.97f - intensity * 0.10f;
+            if (!smear && !lost) continue;            // clean blocks pass through
+
             for (int y = by; y < by + B && y < h; ++y)
                 for (int x = bx; x < bx + B && x < w; ++x) {
                     uint8_t* d = rgb + ((size_t)y * w + x) * 3;
-                    d[0] = at(x + dx, y + dy, 0);     // R fully displaced
-                    d[1] = at(x + hx, y + hy, 1);     // G half (chroma bleed)
-                    d[2] = at(x,      y,      2);     // B stays
+                    if (lost) {                        // decoder gave up here
+                        int sx = x - (int)(vx * mag), sy = y - (int)(vy * mag);
+                        d[0] = at(sx, sy, 1); d[1] = at(sx, sy, 2); d[2] = at(sx, sy, 0);
+                        continue;
+                    }
+                    // Directional smear: average taps back along the flow → a
+                    // trail. Chroma lags luma (G half-shift, B static) → the
+                    // signature cyan/magenta datamosh bleed along the streak.
+                    int rs = 0, gs = 0;
+                    for (int k = 0; k < TAPS; ++k) {
+                        float f = (float)k / (TAPS - 1);
+                        rs += at(x - (int)(vx * mag * f),        y - (int)(vy * mag * f),        0);
+                        gs += at(x - (int)(vx * mag * f * 0.5f), y - (int)(vy * mag * f * 0.5f), 1);
+                    }
+                    d[0] = (uint8_t)(rs / TAPS);
+                    d[1] = (uint8_t)(gs / TAPS);
+                    d[2] = at(x, y, 2);
                 }
         }
     }
@@ -535,6 +564,17 @@ struct PreviewState {
     PixelFX   pixel_fx;
     bool      pixel_fx_dirty = false;
     uint64_t  fx_stamp       = 1;   // bumped on decode-affecting FX change
+
+    // ── Animated GIF (source == Still, gif == true) ───────────────────────
+    // Decoded to full-res RGBA frames via stb_image — lossless and alpha-safe,
+    // no lossy mp4 conform / MJPEG proxy. The preview uploads the frame at the
+    // playhead into `tex`; export keeps decoding the original via libav.
+    bool                 gif          = false;
+    std::vector<uint8_t> gif_px;            // every frame, contiguous RGBA
+    std::vector<float>   gif_end;           // cumulative end time (s) per frame
+    float                gif_total    = 0.f;
+    int                  gif_w = 0, gif_h = 0, gif_n = 0;
+    int                  gif_uploaded = -1; // frame index currently on `tex`
     // BG remove mask MJPEG (streamed, one grayscale-alpha JPEG per frame)
     FILE*                bg_mjpeg_file        = nullptr;
     std::vector<uint64_t> bg_mjpeg_offsets;            // SOI byte offsets
@@ -1290,6 +1330,8 @@ static void close_slot(PreviewState& pv) {
     pv.bg_mjpeg_offsets.clear();
     pv.bg_mjpeg_dir.clear();
     pv.bg_mask_alpha.clear();
+    pv.gif = false; pv.gif_total = 0.f; pv.gif_w = pv.gif_h = pv.gif_n = 0;
+    pv.gif_uploaded = -1; pv.gif_px.clear(); pv.gif_end.clear();
     ring_invalidate(pv);
     pv.fx_stamp++;
 }
@@ -1309,11 +1351,13 @@ void video_open_still(int track_id, const std::string& jpeg_path) {
     fread(buf.data(), 1, (size_t)sz, f);
     fclose(f);
 
-    // PNG magic — decode via stb_image so the alpha channel survives. The
-    // JPEG path below would otherwise flatten alpha to opaque black.
-    bool is_png = sz >= 8 &&
-                  buf[0] == 0x89 && buf[1] == 'P' && buf[2] == 'N' && buf[3] == 'G';
-    if (is_png) {
+    // Decode with stb_image for everything that isn't a baseline JPEG — PNG
+    // (alpha preserved), BMP, static GIF, TGA… all at full quality. A format
+    // stb can't read (HEIC/WEBP/TIFF) leaves the slot CLOSED so the caller can
+    // fall back to a converted still proxy — we must NOT mark it Still with an
+    // empty texture. JPEG keeps its own path below (orientation/colour handling).
+    bool is_jpeg = sz >= 3 && buf[0] == 0xFF && buf[1] == 0xD8 && buf[2] == 0xFF;
+    if (!is_jpeg) {
         int w = 0, h = 0, ch = 0;
         uint8_t* px = stbi_load_from_memory(buf.data(), (int)sz, &w, &h, &ch, 4);
         if (!px) return;
@@ -1508,10 +1552,72 @@ static void      prepare_native_frame_cpu(PreviewState& pv, DecodedFrame& f, int
 static uintptr_t decode_native_frame      (PreviewState& pv, int frame_idx);
 static int       max_frame_idx_for        (const PreviewState& pv);
 
+bool video_is_gif(int track_id) {
+    if (track_id < 0 || track_id >= MAX_VIDEO_TRACKS) return false;
+    return g_pv[track_id].is_open && g_pv[track_id].gif;
+}
+
+// Decode an animated GIF to full-res RGBA frames (lossless, alpha-safe) via
+// stb_image and hold them in the slot. The preview uploads the frame at the
+// playhead — no lossy mp4 conform / MJPEG proxy. Export keeps using libav.
+bool video_open_gif(int track_id, const std::string& path) {
+    if (track_id < 0 || track_id >= MAX_VIDEO_TRACKS) return false;
+    PreviewState& pv = g_pv[track_id];
+    close_slot(pv);
+
+    FILE* f = fopen(path.c_str(), "rb");
+    if (!f) return false;
+    fseek(f, 0, SEEK_END); long sz = ftell(f); rewind(f);
+    if (sz <= 0) { fclose(f); return false; }
+    std::vector<uint8_t> buf((size_t)sz);
+    size_t got = fread(buf.data(), 1, (size_t)sz, f); fclose(f);
+    if (got != (size_t)sz) return false;
+
+    int* delays = nullptr; int w = 0, h = 0, n = 0, comp = 0;
+    uint8_t* px = stbi_load_gif_from_memory(buf.data(), (int)sz, &delays, &w, &h, &n, &comp, 4);
+    if (!px || n < 1 || w <= 0 || h <= 0) { if (px) stbi_image_free(px); free(delays); return false; }
+
+    size_t fsz = (size_t)w * h * 4;
+    pv.gif_px.assign(px, px + fsz * (size_t)n);
+    pv.gif_end.resize((size_t)n);
+    float t = 0.f;
+    for (int i = 0; i < n; ++i) {
+        float d = (delays && delays[i] > 0) ? (float)delays[i] / 1000.f : 0.1f;  // GIF delay → seconds
+        t += d; pv.gif_end[(size_t)i] = t;
+    }
+    free(delays);
+    stbi_image_free(px);
+
+    pv.gif       = true;
+    pv.gif_w = w; pv.gif_h = h; pv.gif_n = n;
+    pv.gif_total = (t > 0.f) ? t : 0.1f;
+    pv.gif_uploaded = 0;
+    upload_pixels_gl(&pv.tex, &pv.tex_w, &pv.tex_h, &pv.tex_rgba, pv.gif_px.data(), w, h, true);
+    pv.is_open    = true;
+    pv.source     = PreviewSource::Still;   // rendered like a still; the gif flag picks the frame
+    pv.info.width = w; pv.info.height = h;
+    return true;
+}
+
 uintptr_t video_get_texture(int track_id, double playhead) {
     if (track_id < 0 || track_id >= MAX_VIDEO_TRACKS) return 0;
     PreviewState& pv = g_pv[track_id];
     if (!pv.is_open) return 0;
+
+    // Animated GIF: upload the frame at this playhead (full-res RGBA, looped).
+    if (pv.gif && pv.gif_n > 0) {
+        float tt = pv.gif_total > 0.f ? (float)fmod(playhead, (double)pv.gif_total) : 0.f;
+        if (tt < 0.f) tt += pv.gif_total;
+        int idx = 0;
+        while (idx < pv.gif_n - 1 && tt >= pv.gif_end[(size_t)idx]) ++idx;
+        if (idx != pv.gif_uploaded && pv.gif_w > 0) {
+            size_t fsz = (size_t)pv.gif_w * pv.gif_h * 4;
+            upload_pixels_gl(&pv.tex, &pv.tex_w, &pv.tex_h, &pv.tex_rgba,
+                             pv.gif_px.data() + (size_t)idx * fsz, pv.gif_w, pv.gif_h, true);
+            pv.gif_uploaded = idx;
+        }
+        return pv.tex ? (uintptr_t)pv.tex : 0;
+    }
 
     if (pv.source == PreviewSource::Still || pv.source == PreviewSource::None)
         return pv.tex ? (uintptr_t)pv.tex : 0;
@@ -2324,6 +2430,10 @@ void video_apply_datamosh(VideoFrame* vf, float intensity, float time_sec) {
 // Animated types (Glitch, VHS) regenerate every frame — 20,736 pixels, negligible.
 
 #include "portrait_preview.h"
+#include "fx_motion_webm.h"   // embedded FX-preview motion clip (CC BY 3.0 — see CREDITS)
+#include "fx_face.h"          // embedded AI-woman face for face-centric effect previews
+#include "paths.h"
+#include <fstream>
 
 static const int FXP_W = portrait_preview_w;   // 108
 static const int FXP_H = portrait_preview_h;   // 192
@@ -2387,6 +2497,138 @@ uintptr_t video_default_preview_tex() {
     return (uintptr_t)s_fxp_portrait_gl;
 }
 
+// Static portrait still (portrait.jpg, never touched by the motion clip) — the
+// Ken Burns hover renders its pan/zoom on this so the move reads clearly.
+static GLuint s_fxp_still_gl = 0;
+static uintptr_t ensure_still_gl() {
+    if (!s_fxp_still_gl) {
+        glGenTextures(1, &s_fxp_still_gl);
+        glBindTexture(GL_TEXTURE_2D, s_fxp_still_gl);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, FXP_W, FXP_H, 0,
+                     GL_RGB, GL_UNSIGNED_BYTE, portrait_preview_rgb);
+        glBindTexture(GL_TEXTURE_2D, 0);
+    }
+    return (uintptr_t)s_fxp_still_gl;
+}
+
+// AI-woman face source — for face-centric effects (Skin Smooth, Glow Up) so the
+// smoothing/glow reads on an actual face. (face.jpg — StyleGAN2, see CREDITS.)
+static GLuint s_fxp_face_gl = 0;
+static uintptr_t ensure_face_gl() {
+    if (!s_fxp_face_gl) {
+        glGenTextures(1, &s_fxp_face_gl);
+        glBindTexture(GL_TEXTURE_2D, s_fxp_face_gl);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, fx_face_w, fx_face_h, 0,
+                     GL_RGB, GL_UNSIGNED_BYTE, fx_face_rgb);
+        glBindTexture(GL_TEXTURE_2D, 0);
+    }
+    return (uintptr_t)s_fxp_face_gl;
+}
+
+// ── FX-preview motion source ──────────────────────────────────────────────────
+// The bundled clip decoded once into preview-sized RGB frames, then cycled by
+// fxp_motion_advance() so the FX picker cards show motion instead of a frozen
+// still. Generated-effect previews re-render every frame and sample the GL
+// portrait texture, so re-uploading it when the frame flips is enough for them
+// to animate. (CC BY 3.0 — Hackensack Meridian Health; see CREDITS.)
+static std::vector<std::vector<uint8_t>> s_fxp_motion;   // RGB, FXP_W×FXP_H
+static int  s_fxp_motion_cur   = -1;
+static bool s_fxp_motion_tried = false;
+
+static void fxp_load_motion() {
+    s_fxp_motion_tried = true;
+    // Materialise the embedded clip to a cache file, then decode it with a plain
+    // file-based libav loop (simpler/safer than custom-AVIO memory IO).
+    std::string path = media_cache_dir() + "/fx_preview_motion.webm";
+    { std::ofstream f(path, std::ios::binary);
+      f.write(reinterpret_cast<const char*>(fx_motion_webm),
+              (std::streamsize)fx_motion_webm_size); }
+
+    AVFormatContext* fc = nullptr;
+    if (avformat_open_input(&fc, path.c_str(), nullptr, nullptr) != 0) return;
+    if (avformat_find_stream_info(fc, nullptr) < 0) { avformat_close_input(&fc); return; }
+
+    int vs = -1;
+    for (unsigned i = 0; i < fc->nb_streams; ++i)
+        if (fc->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) { vs = (int)i; break; }
+    if (vs < 0) { avformat_close_input(&fc); return; }
+
+    AVCodecParameters* cp = fc->streams[vs]->codecpar;
+    const AVCodec* dec = avcodec_find_decoder(cp->codec_id);
+    AVCodecContext* cc = dec ? avcodec_alloc_context3(dec) : nullptr;
+    if (!cc) { avformat_close_input(&fc); return; }
+    avcodec_parameters_to_context(cc, cp);
+    if (avcodec_open2(cc, dec, nullptr) < 0) {
+        avcodec_free_context(&cc); avformat_close_input(&fc); return;
+    }
+
+    SwsContext* sws = nullptr;
+    AVFrame*  fr = av_frame_alloc();
+    AVPacket* pk = av_packet_alloc();
+    auto emit = [&]() {
+        if (!sws)
+            sws = sws_getContext(fr->width, fr->height, (AVPixelFormat)fr->format,
+                                 FXP_W, FXP_H, AV_PIX_FMT_RGB24,
+                                 SWS_BILINEAR, nullptr, nullptr, nullptr);
+        if (!sws) return;
+        std::vector<uint8_t> rgb((size_t)FXP_W * FXP_H * 3);
+        uint8_t* d[1]  = { rgb.data() };
+        int      ls[1] = { FXP_W * 3 };
+        sws_scale(sws, fr->data, fr->linesize, 0, fr->height, d, ls);
+        s_fxp_motion.push_back(std::move(rgb));
+    };
+    while (av_read_frame(fc, pk) >= 0) {
+        if (pk->stream_index == vs && avcodec_send_packet(cc, pk) == 0)
+            while (avcodec_receive_frame(cc, fr) == 0) emit();
+        av_packet_unref(pk);
+    }
+    avcodec_send_packet(cc, nullptr);            // flush
+    while (avcodec_receive_frame(cc, fr) == 0) emit();
+
+    av_packet_free(&pk);
+    av_frame_free(&fr);
+    if (sws) sws_freeContext(sws);
+    avcodec_free_context(&cc);
+    avformat_close_input(&fc);
+}
+
+// Advance the shared preview source to the clip frame for `now` (seconds). Cheap
+// when the frame hasn't changed; re-uploads the GL portrait when it flips.
+void fxp_motion_advance(double now) {
+    if (!s_fxp_motion_tried) fxp_load_motion();
+    if (s_fxp_motion.empty()) return;
+    const double kFps = 24.0;
+    int n   = (int)s_fxp_motion.size();
+    int idx = (int)((long long)(now * kFps) % n);
+    if (idx < 0) idx += n;
+    if (idx == s_fxp_motion_cur) return;
+    s_fxp_motion_cur = idx;
+
+    if (s_fxp_src.empty()) fxp_make_sources();   // ensure size/buffers exist
+    s_fxp_src = s_fxp_motion[idx];
+    // Rebuild the chroma-key source (green over the right 55%) from the new frame.
+    s_fxp_src_ck = s_fxp_src;
+    for (int y = 0; y < FXP_H; ++y)
+        for (int x = (int)(FXP_W * 0.45f); x < FXP_W; ++x) {
+            size_t i = ((size_t)y * FXP_W + x) * 3;
+            s_fxp_src_ck[i+0] = 20; s_fxp_src_ck[i+1] = 200; s_fxp_src_ck[i+2] = 40;
+        }
+    if (s_fxp_portrait_gl) {
+        glBindTexture(GL_TEXTURE_2D, s_fxp_portrait_gl);
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, FXP_W, FXP_H,
+                        GL_RGB, GL_UNSIGNED_BYTE, s_fxp_src.data());
+        glBindTexture(GL_TEXTURE_2D, 0);
+    }
+}
+
 // Apply one legacy CPU preview effect onto `src` (RGB, w*h*3) → `out` (RGB), at
 // time t. Size-parametric so the same code drives both the small card thumbnail
 // and the big hover popover. `synthetic` enables the canned framing (green
@@ -2433,7 +2675,12 @@ static bool fxp_cpu_effect(FXType ft, const std::vector<uint8_t>& src,
             break;
         case FXType::ZoomPunch: {
             out.resize((size_t)w * h * 3);
-            float scale = 1.22f, cx_f = w * 0.5f, cy_f = h * 0.5f;
+            // Repeating beat-style punch so the preview reads as a pulse, not a
+            // static crop: spike in then decay back, once per ~0.6s.
+            float ph    = fmodf(t, 0.6f) / 0.6f;        // phase within a beat
+            float env   = expf(-ph * 5.5f);             // sharp attack, smooth decay
+            float scale = 1.f + 0.28f * env;
+            float cx_f = w * 0.5f, cy_f = h * 0.5f;
             for (int y = 0; y < h; ++y)
                 for (int x = 0; x < w; ++x) {
                     int sx = (int)((x - cx_f) / scale + cx_f);
@@ -2443,6 +2690,7 @@ static bool fxp_cpu_effect(FXType ft, const std::vector<uint8_t>& src,
                     size_t di = ((size_t)y*w+x)*3, si = ((size_t)sy*w+sx)*3;
                     out[di+0] = src[si+0]; out[di+1] = src[si+1]; out[di+2] = src[si+2];
                 }
+            animated = true;
             break;
         }
         case FXType::LUT:
@@ -2479,8 +2727,49 @@ static bool fxp_cpu_effect(FXType ft, const std::vector<uint8_t>& src,
     return animated;
 }
 
+// Ken Burns is a geometric zoom+pan (render.cpp drives it from the clip
+// timeline), so the shader preview path can't show it. Fake a CPU zoom+pan over
+// a ping-ponged clock so the card actually reads as a Ken Burns move.
+static void kenburns_cpu(const unsigned char* src, std::vector<uint8_t>& out,
+                         int w, int h, float t) {
+    out.resize((size_t)w * h * 3);
+    float p   = fabsf(fmodf(t, 8.f) / 4.f - 1.f);   // 0 → 1 → 0 over 8s
+    float sc  = 1.f + 0.30f * p;                     // zoom 1.0 → 1.3
+    float cxf = (0.40f + 0.20f * p) * w;             // pan right + down
+    float cyf = (0.42f + 0.16f * p) * h;
+    for (int y = 0; y < h; ++y)
+        for (int x = 0; x < w; ++x) {
+            int sx = (int)((x - w * 0.5f) / sc + cxf);
+            int sy = (int)((y - h * 0.5f) / sc + cyf);
+            sx = sx < 0 ? 0 : sx >= w ? w-1 : sx;
+            sy = sy < 0 ? 0 : sy >= h ? h-1 : sy;
+            size_t di = ((size_t)y*w+x)*3, si = ((size_t)sy*w+sx)*3;
+            out[di+0] = src[si+0]; out[di+1] = src[si+1]; out[di+2] = src[si+2];
+        }
+}
+
 uintptr_t video_fx_preview_texture(FXType ft, float t) {
     int idx = (int)ft;
+
+    // Ken Burns: faked CPU zoom+pan on the still (the real transform happens at
+    // render time, so the shader preview would otherwise show no movement).
+    if (ft == FXType::KenBurns) {
+        static GLuint kb_tex = 0;
+        std::vector<uint8_t> out;
+        kenburns_cpu(portrait_preview_rgb, out, FXP_W, FXP_H, t);
+        if (!kb_tex) {
+            glGenTextures(1, &kb_tex);
+            glBindTexture(GL_TEXTURE_2D, kb_tex);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        } else glBindTexture(GL_TEXTURE_2D, kb_tex);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, FXP_W, FXP_H, 0,
+                     GL_RGB, GL_UNSIGNED_BYTE, out.data());
+        glBindTexture(GL_TEXTURE_2D, 0);
+        return (uintptr_t)kb_tex;
+    }
 
     // Generated effects — re-render every frame with current t (same as the
     // animated legacy effects), then blit into a stable per-effect texture so
@@ -2488,9 +2777,13 @@ uintptr_t video_fx_preview_texture(FXType ft, float t) {
     if (idx >= FXP_N) {
         ensure_portrait_gl();
 
+        // Per-effect source: face for beauty effects (Skin Smooth, Glow Up),
+        // else the moving clip (default).
+        uintptr_t src = (uintptr_t)s_fxp_portrait_gl;
+        if (ft == FXType::SkinSmooth || ft == FXType::GlowUp) src = ensure_face_gl();
+
         // Render into the shared slot with live t
-        uintptr_t shared = fx_preview_gen_effect(ft, (uintptr_t)s_fxp_portrait_gl,
-                                                 FXP_W, FXP_H, t);
+        uintptr_t shared = fx_preview_gen_effect(ft, src, FXP_W, FXP_H, t);
 
         // Ensure a dedicated texture exists for this effect
         GLuint dedicated = s_gen_fxp_cache.count(idx) ? s_gen_fxp_cache[idx] : 0;
@@ -2517,11 +2810,12 @@ uintptr_t video_fx_preview_texture(FXType ft, float t) {
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, draw_fbo);
         glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
                                GL_TEXTURE_2D, dedicated, 0);
-        // fx_apply renders into a bottom-up FBO, but the card draws this texture
-        // with top-down UVs (matching the CPU-effect path). Flip V during the
-        // blit so the shader previews aren't mirrored — directional effects were
-        // running upside-down (motion going up when it should go down).
-        glBlitFramebuffer(0, 0, FXP_W, FXP_H, 0, FXP_H, FXP_W, 0,
+        // fx_apply preserves the source orientation, and the preview source
+        // (s_fxp_portrait_gl) is uploaded top-down — same as the CPU-effect and
+        // adjustment paths — so the output is already top-down. A straight copy
+        // (no V-flip) keeps it upright when the card draws it with top-down UVs;
+        // the earlier flip here left every generated preview upside-down.
+        glBlitFramebuffer(0, 0, FXP_W, FXP_H, 0, 0, FXP_W, FXP_H,
                           GL_COLOR_BUFFER_BIT, GL_NEAREST);
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
         glDeleteFramebuffers(1, &read_fbo);
@@ -2577,14 +2871,37 @@ static void big_ensure(int w, int h) {
     s_big_w = w; s_big_h = h;
 }
 
-// Resize `src_tex` into the w×h source buffer and read it back as RGB.
-static void big_source_rgb(uintptr_t src_tex, int w, int h, std::vector<uint8_t>& rgb) {
+// Resize `src_tex` into the w×h source buffer (s_bigsrc_tex/fbo) and read it
+// back as RGB. The fx_blit reads src_tex and the glReadPixels forces a full
+// GPU→CPU flush; doing both every frame while a clip is selected serialized the
+// readback against the decoder's live per-frame upload into video_get_texture's
+// preview texture — that contention (absent on the settled scene FBO) is why FX
+// hover lagged with a clip selected but stayed smooth on the whole project.
+// The hovered source frame is static, so cache the result by (src_tex, w, h)
+// and only touch the GPU when it actually changes; callers get a private copy
+// they may mutate in place (grade/effect). The same hit leaves s_bigsrc_tex
+// holding the resized source for the generated-effect GPU path.
+static uintptr_t s_bigsrc_key_tex = 0;
+static int       s_bigsrc_key_w = 0, s_bigsrc_key_h = 0;
+static std::vector<uint8_t> s_bigsrc_cache;
+
+static bool big_source_prep(uintptr_t src_tex, int w, int h) {
+    if (src_tex == s_bigsrc_key_tex && w == s_bigsrc_key_w && h == s_bigsrc_key_h &&
+        s_bigsrc_cache.size() == (size_t)w * h * 3)
+        return false;  // s_bigsrc_tex + cache already hold this source
     fx_blit(src_tex, s_bigsrc_fbo, w, h);
-    rgb.resize((size_t)w * h * 3);
+    s_bigsrc_cache.resize((size_t)w * h * 3);
     glBindFramebuffer(GL_FRAMEBUFFER, s_bigsrc_fbo);
     glPixelStorei(GL_PACK_ALIGNMENT, 1);
-    glReadPixels(0, 0, w, h, GL_RGB, GL_UNSIGNED_BYTE, rgb.data());
+    glReadPixels(0, 0, w, h, GL_RGB, GL_UNSIGNED_BYTE, s_bigsrc_cache.data());
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    s_bigsrc_key_tex = src_tex; s_bigsrc_key_w = w; s_bigsrc_key_h = h;
+    return true;
+}
+
+static void big_source_rgb(uintptr_t src_tex, int w, int h, std::vector<uint8_t>& rgb) {
+    big_source_prep(src_tex, w, h);
+    rgb = s_bigsrc_cache;  // cheap CPU copy; caller mutates in place
 }
 
 uintptr_t video_fx_preview_big(FXType ft, float t, uintptr_t src_tex, int w, int h) {
@@ -2593,11 +2910,28 @@ uintptr_t video_fx_preview_big(FXType ft, float t, uintptr_t src_tex, int w, int
     if (w < 8 || h < 8) return 0;
     big_ensure(w, h);
 
+    // Beauty effects preview on the AI-woman face; Ken Burns gets a faked CPU
+    // zoom+pan (its real transform is render-time, invisible to the shader path).
+    if (ft == FXType::SkinSmooth || ft == FXType::GlowUp) {
+        src_tex = ensure_face_gl();
+    } else if (ft == FXType::KenBurns) {
+        std::vector<uint8_t> src, out;
+        big_source_rgb(ensure_still_gl(), w, h, src);   // portrait.jpg, not the live source
+        kenburns_cpu(src.data(), out, w, h, t);
+        glBindTexture(GL_TEXTURE_2D, s_bigout_tex);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, w, h, 0, GL_RGB, GL_UNSIGNED_BYTE, out.data());
+        glBindTexture(GL_TEXTURE_2D, 0);
+        return (uintptr_t)s_bigout_tex;
+    }
+
     int idx = (int)ft;
     if (idx >= FXP_N) {
         // Generated GPU effect: resize source then run the effect on it, and
         // copy out of the shared preview slot so card thumbnails can't clobber it.
-        fx_blit(src_tex, s_bigsrc_fbo, w, h);
+        // big_source_prep blits into s_bigsrc_tex only when the source frame
+        // changes (skips the per-frame read of the live clip texture); the
+        // effect still re-runs each frame so time-driven motion animates.
+        big_source_prep(src_tex, w, h);
         uintptr_t shared = fx_preview_gen_effect(ft, (uintptr_t)s_bigsrc_tex, w, h, t);
         fx_blit(shared, s_bigout_fbo, w, h);
         return (uintptr_t)s_bigout_tex;

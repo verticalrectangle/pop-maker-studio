@@ -496,3 +496,7 @@
     float glow_up_glow = 0.0f;
     float glow_up_warmth = -1.0f;
     float glow_up_brighten = 0.0f;
+    bool  cam_shake_on = false;
+    float cam_shake_amount = 0.0f;
+    float cam_shake_intensity = 0.0f;
+    float cam_shake_speed = 0.1f;

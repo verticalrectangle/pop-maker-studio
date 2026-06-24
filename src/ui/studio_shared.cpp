@@ -490,6 +490,12 @@ void reopen_video_slots(AppState& state) {
             // fails and the clip renders blank (this is how MCP-added images
             // vanished from the preview: add_clip → proxy_scan → native PNG).
             // Animated images (.gif) fall through to the proxy path below.
+            if (is_animated_image(src)) {
+                // GIF: decode to full-res RGBA frames once (lossless + alpha) and
+                // show the frame at the playhead — no lossy mp4 conform / MJPEG.
+                if (!video_is_gif(slot)) video_open_gif(slot, src);
+                continue;
+            }
             if (is_image_path(src) && !is_animated_image(src)) {
                 if (video_source(slot) != PreviewSource::Still)
                     video_open_still(slot, proxy_still_path(src));
@@ -515,6 +521,12 @@ void reopen_video_slots(AppState& state) {
 // ── Frame-rate conform ────────────────────────────────────────────────────────
 bool clip_needs_conform(const Clip& cl, int project_fps) {
     if (project_fps <= 0 || cl.src_fps <= 0.f) return false;  // 0=unprobed, -1=still
+    // No image is conformed. Stills report a phantom frame rate from ffprobe (a
+    // PNG comes back as 25/1) and would be re-encoded into an alpha-stripped,
+    // softened mp4; GIFs now render as full-res RGBA frames (video_open_gif) in
+    // preview and via libav on export, so the lossy mp4 conform is unwanted there
+    // too — it was the main thing degrading GIF quality.
+    if (is_image_path(cl.text)) return false;
     return std::fabs(cl.src_fps - (float)project_fps) > (float)project_fps * 0.01f;
 }
 
@@ -552,9 +564,15 @@ void conform_tick(AppState& state) {
             if (cl.clip_type != ClipType::Video || cl.text.empty()) continue;
             // Lazy native-fps probe — at most one ffprobe per frame so a load of
             // many clips doesn't hitch.
-            if (cl.src_fps == 0.f && !probed_one) {
+            // Probe when unprobed (src_fps 0). Also re-probe a loaded looping
+            // clip that's missing its duration: src_fps is serialized but
+            // src_duration (v46 projects) is not, so a saved GIF needs its loop
+            // length recovered. -1 = probed-but-none, so we don't retry forever.
+            if ((cl.src_fps == 0.f ||
+                 (cl.clip_loop && cl.src_duration == 0.f)) && !probed_one) {
                 MediaFileInfo mi = video_probe_file(cl.text);
                 cl.src_fps = (mi.fps > 0.0) ? (float)mi.fps : -1.f;
+                cl.src_duration = (mi.duration > 0.0) ? (float)mi.duration : -1.f;
                 // Animated GIFs are loops by nature — default to seamless conform.
                 if (mi.fps > 0.0 && is_animated_image(cl.text)) cl.clip_loop = true;
                 migrate_clean_sidecars(cl.text);   // sweep old scattered files
@@ -588,7 +606,7 @@ bool is_audio_file(const std::string& path) {
            ext==".mkv"||ext==".webm";
 }
 
-void add_clip_to_track(AppState& state, int ti, const std::string& path, ClipType ct) {
+void add_clip_to_track(AppState& state, int ti, const std::string& path, ClipType ct, bool reveal) {
     if (ti < 0 || ti >= (int)state.tracks.size()) return;
     Track& tr = state.tracks[ti];
 
@@ -634,6 +652,12 @@ void add_clip_to_track(AppState& state, int ti, const std::string& path, ClipTyp
     tr.clips.push_back(cl);
     std::sort(tr.clips.begin(), tr.clips.end(),
               [](const Clip& a, const Clip& b){ return a.start < b.start; });
+    // Glow the just-placed clip (the sort shifted its index). reveal=false for
+    // drops — the user dropped it where they're already looking.
+    for (int i = 0; i < (int)tr.clips.size(); ++i)
+        if (tr.clips[i].start == cl.start && tr.clips[i].text == cl.text) {
+            clip_flash(state, ti, i, reveal); break;
+        }
 
     // Ask draw_timeline to zoom out if the clip extends past the visible right edge.
     // Deferred so it always runs with a valid clip_area_w even on the very first frame.
@@ -951,6 +975,7 @@ void add_record_brick(AppState& state) {
     state.tracks.insert(state.tracks.begin(), std::move(t));
     state.selected_track = 0;
     state.selected_clip  = 0;
+    clip_flash(state, 0, 0, /*reveal=*/true);
     // If the brick lands past the current view, zoom out to fit it.
     state.tl_zoom_to_fit_end = fmaxf(state.tl_zoom_to_fit_end, clip_end);
     history_push(state, "Add Record Brick");
@@ -972,6 +997,7 @@ void add_video_record_brick(AppState& state) {
     state.tracks.insert(state.tracks.begin(), std::move(t));
     state.selected_track = 0;
     state.selected_clip  = 0;
+    clip_flash(state, 0, 0, /*reveal=*/true);
     // If the brick lands past the current view, zoom out to fit it.
     state.tl_zoom_to_fit_end = fmaxf(state.tl_zoom_to_fit_end, clip_end);
     history_push(state, "Add Record Brick");
@@ -994,6 +1020,7 @@ void add_photo_capture_brick(AppState& state) {
     state.tracks.insert(state.tracks.begin(), std::move(t));
     state.selected_track = 0;
     state.selected_clip  = 0;
+    clip_flash(state, 0, 0, /*reveal=*/true);
     state.tl_zoom_to_fit_end = fmaxf(state.tl_zoom_to_fit_end, clip_end);
     history_push(state, "Add Capture IMG Brick");
 }
@@ -1015,6 +1042,7 @@ void add_bus_brick(AppState& state) {
     state.tracks.insert(state.tracks.begin(), std::move(t));  // top → groups every track below
     state.selected_track = 0;
     state.selected_clip  = 0;
+    clip_flash(state, 0, 0, /*reveal=*/true);
     state.tl_zoom_to_fit_end = fmaxf(state.tl_zoom_to_fit_end, clip_end);
     history_push(state, "Add Bus Brick");
 }

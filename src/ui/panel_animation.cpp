@@ -163,6 +163,20 @@ void generate_typography(AppState& state) {
                     c.text  = seg["text"].get<std::string>();
                     c.start = seg["start"].get<float>();
                     c.end   = seg["end"].get<float>();
+                    // Whisper segment timestamps overrun into silence and don't
+                    // line up to word onsets (Newspaper looked stretched over
+                    // nothing). Tie the brick to the words it actually contains —
+                    // source space, same as the segment times. Fall back to the
+                    // raw segment span only when we have no word list.
+                    if (has_cache) {
+                        float w0 = -1.f, w1 = -1.f;
+                        for (auto& w : state.words_cache)
+                            if (w.start >= c.start - 0.05f && w.start < c.end + 0.05f) {
+                                if (w0 < 0.f) w0 = w.start;
+                                w1 = w.end;
+                            }
+                        if (w0 >= 0.f) { c.start = w0; c.end = w1; }
+                    }
                     raw.push_back(c);
                 }
                 from_segments = true;
@@ -917,6 +931,7 @@ static void add_text_brick_here(AppState& state) {
     state.tracks[target].clips.push_back(std::move(c));
     state.selected_track = target;
     state.selected_clip  = (int)state.tracks[target].clips.size() - 1;
+    clip_flash(state, target, state.selected_clip, /*reveal=*/true);
     s_panel_view = PanelView::Typography;   // jump straight to styling
     history_push(state, "Add text brick");
 }

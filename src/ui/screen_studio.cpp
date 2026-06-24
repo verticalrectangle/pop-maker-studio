@@ -225,8 +225,7 @@ static void handle_shortcuts(AppState& state) {
         ImGui::IsKeyChordPressed(ImGuiMod_Ctrl|ImGuiKey_B)) {
         float cut = state.playhead;
         if (cut > clip.start + f_dt && cut < clip.end - f_dt) {
-            Clip right = clip_split_at(clip, cut);
-            track.clips.insert(track.clips.begin()+state.selected_clip+1, std::move(right));
+            clip_split_with_fx(state, state.selected_track, state.selected_clip, cut);
             history_push(state, "Split clip");
         }
         return;
@@ -347,6 +346,34 @@ int provider_for_url(const std::string& url) {
 }
 } // namespace
 
+// Natural ("01, 02, 10" not "01, 10, 2") filename order for multi-file drops, so
+// numbered b-roll sequences in the right order. Case-insensitive; compares digit
+// runs by numeric value with leading zeros ignored.
+static bool natural_less(const std::string& a, const std::string& b) {
+    size_t i = 0, j = 0;
+    while (i < a.size() && j < b.size()) {
+        bool da = isdigit((unsigned char)a[i]), db = isdigit((unsigned char)b[j]);
+        if (da && db) {
+            size_t i2 = i, j2 = j;
+            while (i2 < a.size() && isdigit((unsigned char)a[i2])) ++i2;
+            while (j2 < b.size() && isdigit((unsigned char)b[j2])) ++j2;
+            size_t ia = i; while (ia + 1 < i2 && a[ia] == '0') ++ia;
+            size_t ja = j; while (ja + 1 < j2 && b[ja] == '0') ++ja;
+            size_t la = i2 - ia, lb = j2 - ja;
+            if (la != lb) return la < lb;                       // longer number = larger
+            int c = a.compare(ia, la, b, ja, lb);
+            if (c != 0) return c < 0;
+            i = i2; j = j2;
+        } else {
+            char ca = (char)tolower((unsigned char)a[i]);
+            char cb = (char)tolower((unsigned char)b[j]);
+            if (ca != cb) return ca < cb;
+            ++i; ++j;
+        }
+    }
+    return (a.size() - i) < (b.size() - j);
+}
+
 void ui_studio(AppState& state) {
     ImGuiIO& io   = ImGui::GetIO();
     float    win_w = io.DisplaySize.x;
@@ -372,8 +399,15 @@ void ui_studio(AppState& state) {
     // handler stands down. The terminal panel will inject the path at the
     // shell prompt later this frame.
     extern std::string g_dropped_file;
-    bool term_claims_drop = state.terminal_open && terminal_is_focused();
-    if (!g_dropped_file.empty() && !term_claims_drop) {
+    extern std::vector<std::string> g_drop_batch;
+    bool term_claims_drop  = state.terminal_open && terminal_is_focused();
+    bool agent_claims_drop = state.agent_panel_open && agent_input_is_focused();
+    bool editor_owns_drop  = !term_claims_drop && !agent_claims_drop;
+    // A "batch" drop is multiple files, or a single folder. Those go to the Bin
+    // (and sequence over a track) rather than single-clip placement below.
+    bool is_batch_drop = g_drop_batch.size() > 1 ||
+                         (g_drop_batch.size() == 1 && path_is_dir(g_drop_batch[0]));
+    if (!g_dropped_file.empty() && editor_owns_drop && !is_batch_drop) {
         const std::string& dp = g_dropped_file;
         fs::path fp(dp);
         std::string ext = fp.extension().string();
@@ -432,7 +466,7 @@ void ui_studio(AppState& state) {
             bin_add(state, dp);
 
             if (s_tl_hover_track >= 0 && s_tl_hover_track < (int)state.tracks.size()) {
-                add_clip_to_track(state, s_tl_hover_track, dp, drop_ct);
+                add_clip_to_track(state, s_tl_hover_track, dp, drop_ct, /*reveal=*/false);
                 if (state.audio_path.empty()) {
                     state.audio_path = dp;
                     audio_load(dp);
@@ -446,6 +480,61 @@ void ui_studio(AppState& state) {
             s_drop_flash_t = 0.6f;
         }
         g_dropped_file.clear();
+    }
+
+    // ── Multi-file / folder drop on the editor ────────────────────────────────
+    // Every dropped media file lands in the Bin (folders expand to their media).
+    // When the cursor is over a timeline track, also lay the visual media
+    // end-to-end on that track from the playhead — a quick sequence — in natural
+    // filename order. Off-track, it's Bin-only (the "gather assets" path).
+    if (is_batch_drop && editor_owns_drop) {
+        std::vector<std::string> media;
+        bool had_dir = false;
+        for (auto& p : g_drop_batch) {
+            if (path_is_dir(p)) {
+                had_dir = true;
+                for (auto& f : dir_media_files(p)) media.push_back(f);
+            } else if (is_media_path(p)) {
+                media.push_back(p);
+            }
+        }
+        std::sort(media.begin(), media.end(), natural_less);
+        for (auto& m : media) bin_add(state, m);   // ensure binned (covers single-folder)
+
+        bool over_track = s_tl_hover_track >= 0 &&
+                          s_tl_hover_track < (int)state.tracks.size();
+        if (over_track) {
+            int target = s_tl_hover_track;
+            float cursor = state.playhead;
+            int placed = 0;
+            for (auto& m : media) {
+                if (kind_for_path(m) == MediaKind::Audio) continue;  // audio stays in the Bin
+                float dur = video_probe_duration(m);                 // images → 0 → default
+                if (dur <= 0.f) dur = is_image_path(m) ? 5.f : 4.f;
+                Clip cl;
+                cl.clip_type = ClipType::Video;
+                cl.text = m; cl.source_id = m;
+                cl.start = cursor; cl.end = cursor + dur;
+                state.tracks[target].clips.push_back(cl);
+                proxy_start(m);
+                int slot = slot_for_video(state, clip_slot_key(m, cl.start), m);
+                if (slot >= 0) video_open_still(slot, proxy_still_path(m));
+                cursor += dur; ++placed;
+            }
+            if (placed > 0) {
+                state.video_loaded = true;
+                s_drop_flash_track = target;
+                s_drop_flash_t     = 0.6f;
+                history_push(state, "Sequence " + std::to_string(placed) +
+                                    " clips on " + state.tracks[target].name);
+            }
+        }
+        // A dropped directory dumps its media into the Bin — surface it by
+        // switching the panel to the Bin tab so the user sees what landed.
+        if (had_dir) s_panel_view = PanelView::LibBin;
+
+        g_dropped_file.clear(); // a single-folder drop set this; we handled it
+        g_drop_batch.clear();   // consumed; don't let it linger to the agent path
     }
 
     // Per-slot video open/upgrade — handles four states:
@@ -462,6 +551,13 @@ void ui_studio(AppState& state) {
         if (video_source(slot) == PreviewSource::Proxy) continue;  // terminal state
 
         std::string src = source_from_key(key);
+        if (is_animated_image(src)) {
+            // GIF: decode to full-res RGBA frames once (lossless + alpha) and show
+            // the frame at the playhead — no lossy mp4 conform / MJPEG proxy that
+            // softened them and dropped transparency.
+            if (!video_is_gif(slot)) video_open_gif(slot, src);
+            continue;
+        }
         if (is_image_path(src) && !is_animated_image(src)) {
             // Still images never get an MJPEG proxy — keep them out of the
             // generic native/proxy logic below (per-frame libav opens).
@@ -472,16 +568,23 @@ void ui_studio(AppState& state) {
             // slots stuck in Native (libav opens a PNG as a one-frame video,
             // then every decode past t=0 fails and the clip renders blank).
             if (video_source(slot) != PreviewSource::Still) {
-                std::string still = proxy_still_path(src);
-                if (fs::exists(still)) {
-                    video_open_still(slot, still);
-                } else {
-                    // Still missing entirely (generation failed once, or the
-                    // file was deleted). proxy_start regenerates it for images
-                    // in a background thread, but has no in-flight dedup —
-                    // kick it once per source, not per frame.
-                    static std::set<std::string> s_still_kicked;
-                    if (s_still_kicked.insert(src).second) proxy_start(src);
+                // A still image is already an image — open the ORIGINAL at full
+                // quality (PNG keeps its alpha), no lossy/downscaled JPEG still.
+                video_open_still(slot, src);
+                if (video_source(slot) != PreviewSource::Still) {
+                    // Only formats stb_image can't read (HEIC/WEBP/TIFF) get here
+                    // — fall back to the converted still proxy.
+                    std::string still = proxy_still_path(src);
+                    if (fs::exists(still)) {
+                        video_open_still(slot, still);
+                    } else {
+                        // Still missing entirely (generation failed once, or the
+                        // file was deleted). proxy_start regenerates it for images
+                        // in a background thread, but has no in-flight dedup —
+                        // kick it once per source, not per frame.
+                        static std::set<std::string> s_still_kicked;
+                        if (s_still_kicked.insert(src).second) proxy_start(src);
+                    }
                 }
             }
             continue;
@@ -550,6 +653,10 @@ void ui_studio(AppState& state) {
     // Poll background removal and voice conversion jobs.
     bg_remove_poll(state);
     vc_poll(state);
+    // Revert clips whose voice-convert FX was removed (brick deleted, chain
+    // entry pulled, decoupled). Runs after vc_poll so a job that lands this
+    // frame is reverted the same frame if its brick is already gone — no flash.
+    vc_reconcile(state);
 
     // Poll noise reduction — on completion, set denoised WAV as playback source.
     {
@@ -611,11 +718,11 @@ void ui_studio(AppState& state) {
         if (m == PipelineMode::TranscribeOnly) {
             state.lyrics_edits.clear();
             load_words_cache(state);
-            save_all_srts(state);
+            // SRTs are no longer written here — subtitles render in-app on managed
+            // tracks; an .srt is produced only on explicit export (export_ui).
         } else if (m == PipelineMode::Both) {
             state.lyrics_edits.clear();
             load_words_cache(state);
-            save_all_srts(state);
         } else if (m == PipelineMode::SeparateOnly &&
                    !state.vocals_path.empty() && fs::exists(state.vocals_path)) {
             bool already_present = false;
@@ -664,9 +771,13 @@ void ui_studio(AppState& state) {
             if (tr.muted) continue;
             int tr_idx = (int)(&tr - state.tracks.data());
             for (auto& cl : tr.clips) {
-                // Record brick: the selected take plays like an audio clip
-                // (in_point 0, speed 1). Muted while that brick is recording
-                // so the previous pass doesn't bleed under the new one.
+                // Record brick: the selected take plays like an audio clip.
+                // Takes record at speed 1, but in_point is honored so the left
+                // handle trims the take (reveals/hides content) like every other
+                // brick instead of sliding the take under a fixed edge — and it
+                // matches collect_audio_fx_segments, which maps FX windows
+                // through in_point. Muted while that brick is recording so the
+                // previous pass doesn't bleed under the new one.
                 if (cl.clip_type == ClipType::Record) {
                     int ci = (int)(&cl - tr.clips.data());
                     if (cl.muted || cl.rec_take_sel < 0 ||
@@ -675,7 +786,7 @@ void ui_studio(AppState& state) {
                     AudioClipDesc d;
                     d.track    = tr_idx;
                     d.tl_start = cl.start;    d.tl_end   = cl.end;
-                    d.in_point = 0.f;         d.speed    = 1.f;
+                    d.in_point = cl.in_point; d.speed    = 1.f;
                     d.volume   = cl.volume;   d.pan      = cl.pan;
                     d.fade_in  = cl.fade_in;  d.fade_out = cl.fade_out;
                     // Keyframed volume/pan animate in the live mix too (same as
@@ -695,8 +806,12 @@ void ui_studio(AppState& state) {
                         if (cl.audio_fx.any_active()) {
                             AudioFX own = cl.audio_fx;
                             own.voice_convert_on = false;
+                            // Window in source time (take speed 1), offset by
+                            // in_point so the brick's own chain tracks a left
+                            // trim — mirrors export_fx_segments().
                             if (own.any_active())
-                                segs.push_back({0.f, cl.end - cl.start, own});
+                                segs.push_back({cl.in_point,
+                                                cl.in_point + (cl.end - cl.start), own});
                         } else {
                             segs = collect_audio_fx_segments(state, tr_idx, cl);
                         }
@@ -900,12 +1015,10 @@ void ui_studio(AppState& state) {
         if (ImGui::BeginMenu("Clip")) {
             if (!has_clip) { ImGui::BeginDisabled(); }
             if (ImGui::MenuItem("Split at playhead", "S") && has_clip) {
-                Track& t = state.tracks[state.selected_track];
-                Clip& c = t.clips[state.selected_clip];
+                Clip& c = state.tracks[state.selected_track].clips[state.selected_clip];
                 float cut = state.playhead;
                 if (cut>c.start+0.02f && cut<c.end-0.02f) {
-                    Clip r = clip_split_at(c, cut);
-                    t.clips.insert(t.clips.begin()+state.selected_clip+1, std::move(r));
+                    clip_split_with_fx(state, state.selected_track, state.selected_clip, cut);
                     history_push(state, "Split clip");
                 }
             }
@@ -988,7 +1101,10 @@ void ui_studio(AppState& state) {
             accent_btn("Terminal", state.terminal_open);
             // The bottom strip is single-occupancy: opening one closes the
             // other (a 50/50 split cramped both panels).
-            if (state.agent_panel_open && !was_agent) state.terminal_open    = false;
+            if (state.agent_panel_open && !was_agent) {
+                state.terminal_open = false;
+                agent_focus_input();   // drop the caret straight into the input
+            }
             if (state.terminal_open    && !was_term)  state.agent_panel_open = false;
 
             ImGui::SameLine(0.f, 6.f);
@@ -1174,6 +1290,32 @@ void ui_studio(AppState& state) {
                     if (has_key) {
                         ImGui::SameLine(0.f, 6.f);
                         if (ui_btn("Clear", false, true)) agent_key_clear();
+                    }
+                }
+
+                // ── Apply & Test connection ───────────────────────────────────
+                ImGui::Dummy({0.f, 8.f});
+                ImGui::SetCursorPosX(lx);
+                if (ui_btn("Apply & Test", false, true)) {
+                    acfg.base_url = s_url_buf;
+                    acfg.model    = s_model_buf;
+                    agent_set_config(acfg);    // commit + persist
+                    agent_test_begin(acfg);    // confirm model + url + key actually work
+                }
+                {
+                    std::string tmsg; int tst = agent_test_state(tmsg);
+                    if (tst != 0) {
+                        ImGui::SetCursorPosX(lx);
+                        ImU32 c = (tst == 1) ? to_u32(Col::muted)
+                                : (tst == 2) ? IM_COL32(100, 220, 130, 255)
+                                             : IM_COL32(235, 110, 110, 255);
+                        const char* pfx = (tst == 2) ? "\xe2\x9c\x93 "
+                                        : (tst == 3) ? "\xe2\x9c\x97 " : "";
+                        ImGui::PushStyleColor(ImGuiCol_Text, c);
+                        ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 320.f);
+                        ImGui::Text("%s%s", pfx, tmsg.c_str());
+                        ImGui::PopTextWrapPos();
+                        ImGui::PopStyleColor();
                     }
                 }
 
@@ -2235,8 +2377,9 @@ void ui_studio(AppState& state) {
         if (state.agent_panel_open) {
             float agent_w = win_w;
             // Tall enough for the input row + padding — content must never
-            // exceed this, since the zone deliberately can't scroll.
-            float inp_h = 42.f;
+            // exceed this, since the zone deliberately can't scroll. Grows to
+            // fit the drop-staging chip tray when files are staged.
+            float inp_h = agent_input_height();
             float log_h = term_h - inp_h;
             ImGui::PushStyleColor(ImGuiCol_ChildBg, IM_COL32(0x16, 0x16, 0x20, 255));
             ImGui::PushStyleColor(ImGuiCol_Border,  Col::line);
@@ -2247,7 +2390,18 @@ void ui_studio(AppState& state) {
             ImGui::EndChild();
             ImGui::PopStyleColor(2);
             ImGui::PushStyleColor(ImGuiCol_ChildBg, IM_COL32(0x16, 0x16, 0x20, 255));
-            ImGui::PushStyleColor(ImGuiCol_Border,  Col::line);
+            // Border accents toward the agent magenta when the input is the drop
+            // target (focused), brightening on a brief flash right after a drop.
+            float hl = agent_drop_highlight();
+            ImVec4 inp_border = Col::line;
+            if (hl > 0.f) {
+                const ImVec4 acc = {0.73f, 0.60f, 0.97f, 1.0f};  // agent magenta
+                inp_border.x = Col::line.x + (acc.x - Col::line.x) * hl;
+                inp_border.y = Col::line.y + (acc.y - Col::line.y) * hl;
+                inp_border.z = Col::line.z + (acc.z - Col::line.z) * hl;
+                inp_border.w = Col::line.w + (0.85f - Col::line.w) * hl;
+            }
+            ImGui::PushStyleColor(ImGuiCol_Border, inp_border);
             if (ImGui::BeginChild("##agent_inp_zone", {agent_w, inp_h},
                                   ImGuiChildFlags_Borders,
                                   ImGuiWindowFlags_NoScrollbar |

@@ -104,5 +104,6 @@ static const FXType k_gen_fx_types[] = {
     FXType::KenBurns,
     FXType::SkinSmooth,
     FXType::GlowUp,
+    FXType::CamShake,
 };
-static const int k_gen_fx_count = 104;
+static const int k_gen_fx_count = 105;

@@ -2234,6 +2234,24 @@ static void fx_attached_inspector(AttachedFX& afx, float sw, AppState& state, Cl
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Glow Up: Brighten");
             break;
         }
+        case FXType::CamShake: {
+            if ((int)afx.params.size() < 2) afx.params.resize(2, 0.f);
+            ui_label("Amount");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##afx_cam_shake_amount", &afx.amount, 0.0f, 1.0f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Cam Shake: Amount");
+            ImGui::Dummy({0.f, 4.f});
+            ui_label("Shake");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##afx_cam_shake_intensity", &afx.params[0], 0.0f, 1.0f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Cam Shake: Shake");
+            ImGui::Dummy({0.f, 4.f});
+            ui_label("Speed");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##afx_cam_shake_speed", &afx.params[1], 0.1f, 4.0f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Cam Shake: Speed");
+            break;
+        }
         default: break;
     }
 }

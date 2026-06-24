@@ -27,6 +27,7 @@ namespace fs = std::filesystem;
 // Definitions of globals declared in globals.h
 std::string g_dropped_file;
 std::string g_managed_dir;
+std::vector<std::string> g_drop_batch;
 
 // Drop queues. Single-file drops follow the legacy g_dropped_file path so the
 // existing readers (screen_studio, screen_upload, panel_terminal) handle
@@ -38,6 +39,12 @@ static std::deque<std::string> g_bin_pending;     // multi-file: drained into Ap
 
 static void glfw_drop_callback(GLFWwindow*, int count, const char** paths) {
     if (count <= 0 || !paths) return;
+    // Record every dropped path for focus-aware consumers (the agent chat stages
+    // these as chips when its input is focused). Independent of the legacy
+    // single/multi routing below, which still drives default placement/binning.
+    for (int i = 0; i < count; ++i)
+        if (paths[i] && paths[i][0]) g_drop_batch.emplace_back(paths[i]);
+
     if (count == 1) {
         if (paths[0] && paths[0][0])
             g_dropped_queue.emplace_back(paths[0]);
@@ -60,7 +67,14 @@ static void drain_dropped_queue() {
 // from the main loop right after drain_dropped_queue.
 static void drain_bin_pending(AppState& state) {
     while (!g_bin_pending.empty()) {
-        bin_add(state, g_bin_pending.front());
+        const std::string& p = g_bin_pending.front();
+        // A dropped folder expands to the media files inside it (shallow), so the
+        // bin never holds a bare directory path masquerading as a media item.
+        if (path_is_dir(p)) {
+            for (auto& f : dir_media_files(p)) bin_add(state, f);
+        } else {
+            bin_add(state, p);
+        }
         g_bin_pending.pop_front();
     }
 }
@@ -100,8 +114,16 @@ static void dump_fx_previews(const char* out_dir) {
     render_init_fonts();
     fx_shader_init();
 
-    // FX preview thumbnails are 108x192 (portrait_preview dimensions)
-    const int W = 108, H = 192;
+    // FX preview thumbnails match the portrait_preview source dimensions.
+    // (Hardcoding 108x192 here overflowed the readback buffers — the source is
+    // actually 270x480 — and segfaulted the whole dump.)
+    const int W = portrait_preview_w, H = portrait_preview_h;
+
+    // Tight pack/unpack: a 270px RGB row = 810 bytes isn't 4-aligned, so the
+    // default alignment of 4 pads each row — overrunning the W*H*3 readback
+    // buffers (heap corruption) and shearing every upload. Force 1-byte both ways.
+    glPixelStorei(GL_PACK_ALIGNMENT, 1);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
 
     // Existing hand-written effects
     static const struct { FXType ft; const char* name; } kBuiltin[] = {
@@ -121,10 +143,8 @@ static void dump_fx_previews(const char* out_dir) {
         std::vector<uint8_t> px((size_t)W * H * 3);
         glBindTexture(GL_TEXTURE_2D, (GLuint)tex);
         glGetTexImage(GL_TEXTURE_2D, 0, GL_RGB, GL_UNSIGNED_BYTE, px.data());
-        // Flip vertically (GL origin is bottom-left)
-        std::vector<uint8_t> flipped((size_t)W * H * 3);
-        for (int y = 0; y < H; ++y)
-            memcpy(flipped.data() + y*W*3, px.data() + (H-1-y)*W*3, W*3);
+        // glGetTexImage returns data in upload order (top-down here), so no flip.
+        std::vector<uint8_t>& flipped = px;
         std::string path = std::string(out_dir) + "/" + b.name + ".png";
         stbi_write_png(path.c_str(), W, H, 3, flipped.data(), W*3);
         printf("  %s\n", path.c_str());
@@ -148,21 +168,14 @@ static void dump_fx_previews(const char* out_dir) {
 #include "generated/fx_gen_names.h"
     };
 
-    // Generated effects — rendered via fx_preview_gen_effect
+    // Generated effects — go through the real preview path so the dump reflects
+    // per-effect sources (face for Skin Smooth/Glow Up) and the faked Ken Burns.
     for (int i = 0; i < k_gen_fx_count; ++i) {
-        uintptr_t out = fx_preview_gen_effect(k_gen_fx_types[i], (uintptr_t)src_tex, W, H, 0.5f);
-        // Read back RGBA from the output texture
-        std::vector<uint8_t> px((size_t)W * H * 4);
-        glBindTexture(GL_TEXTURE_2D, (GLuint)out);
-        glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, px.data());
-        // Convert RGBA → RGB and flip vertically
-        std::vector<uint8_t> flipped((size_t)W * H * 3);
-        for (int y = 0; y < H; ++y)
-            for (int x = 0; x < W; ++x) {
-                const uint8_t* s = px.data() + ((H-1-y)*W + x) * 4;
-                uint8_t* d = flipped.data() + (y*W + x) * 3;
-                d[0]=s[0]; d[1]=s[1]; d[2]=s[2];
-            }
+        uintptr_t tex = video_fx_preview_texture(k_gen_fx_types[i], 0.5f);
+        std::vector<uint8_t> px((size_t)W * H * 3);
+        glBindTexture(GL_TEXTURE_2D, (GLuint)tex);
+        glGetTexImage(GL_TEXTURE_2D, 0, GL_RGB, GL_UNSIGNED_BYTE, px.data());
+        std::vector<uint8_t>& flipped = px;   // upload order is top-down — no flip
         std::string name = (i < (int)(sizeof(kGenNames)/sizeof(kGenNames[0]))) ? kGenNames[i] : std::to_string(i);
         std::string path = std::string(out_dir) + "/" + name + ".png";
         stbi_write_png(path.c_str(), W, H, 3, flipped.data(), W*3);
@@ -268,6 +281,9 @@ int main(int argc, char** argv) {
         ImGui::NewFrame();
 
         app_frame(state);
+        // One-frame lifetime: whoever wanted this drop (agent chat staging) has
+        // had its chance during app_frame; default placement/binning ran above.
+        g_drop_batch.clear();
 
         ImGui::Render();
         int display_w, display_h;

@@ -31,7 +31,7 @@ void poll_clip_beat_analysis(AppState& state);
 // ── Pipeline UI strip ─────────────────────────────────────────────────────────
 void draw_pipeline_strip(AppState& state, float w);
 // Inline status strip for windowed find_and_add_clip / search_transcript runs.
-// Renders the current search range (e.g. "Demucs 1:30 – 2:35: separating
+// Renders the current search range (e.g. "MDX-Net 1:30 – 2:35: separating
 // vocals…"), progress, a cancel control, and disappears when the search ends.
 // Mirrors draw_pipeline_strip so agent-driven searches are visible to the
 // human in the same panel as the full pipeline.

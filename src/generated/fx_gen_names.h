@@ -103,3 +103,4 @@
     "ken_burns",
     "skin_smooth",
     "glow_up",
+    "cam_shake",

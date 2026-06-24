@@ -1,6 +1,6 @@
 {
-  "_comment": "Pop Maker Studio — generated effects registry. Run tools/codegen_effects.py after changes.",
-  "project_version": 23,
+  "_comment": "Pop Maker Studio \u2014 generated effects registry. Run tools/codegen_effects.py after changes.",
+  "project_version": 24,
   "effects": [
     {
       "id": "pixelate",
@@ -13,7 +13,7 @@
         255,
         255
       ],
-      "description": "Mosaic pixel art  ·  lo-fi crunch  ·  adjustable block size",
+      "description": "Mosaic pixel art  \u00b7  lo-fi crunch  \u00b7  adjustable block size",
       "shader": "shaders/pixelate.glsl",
       "params": [
         {
@@ -40,7 +40,7 @@
         120,
         255
       ],
-      "description": "Analog film noise  ·  luma-weighted grain  ·  cinematic texture",
+      "description": "Analog film noise  \u00b7  luma-weighted grain  \u00b7  cinematic texture",
       "shader": "shaders/film_grain.glsl",
       "params": [
         {
@@ -76,7 +76,7 @@
         100,
         255
       ],
-      "description": "CRT horizontal lines  ·  interlace look  ·  retro monitor",
+      "description": "CRT horizontal lines  \u00b7  interlace look  \u00b7  retro monitor",
       "shader": "shaders/scanlines.glsl",
       "params": [
         {
@@ -103,7 +103,7 @@
         180,
         255
       ],
-      "description": "Lens color fringing  ·  R/B channel split  ·  radial distortion",
+      "description": "Lens color fringing  \u00b7  R/B channel split  \u00b7  radial distortion",
       "shader": "shaders/chromatic_aberration.glsl",
       "params": [],
       "amount_default": 1.0,
@@ -120,7 +120,7 @@
         60,
         255
       ],
-      "description": "Two-color gradient map  ·  shadow/highlight toning  ·  poster look",
+      "description": "Two-color gradient map  \u00b7  shadow/highlight toning  \u00b7  poster look",
       "shader": "shaders/duotone.glsl",
       "params": [
         {
@@ -192,7 +192,7 @@
         200,
         255
       ],
-      "description": "Edge bloom  ·  oversaturated halo  ·  cyberpunk",
+      "description": "Edge bloom  \u00b7  oversaturated halo  \u00b7  cyberpunk",
       "shader": "shaders/neon_glow.glsl",
       "params": [
         {
@@ -219,7 +219,7 @@
         0,
         255
       ],
-      "description": "Infrared heat map  ·  iron palette  ·  night-cam look",
+      "description": "Infrared heat map  \u00b7  iron palette  \u00b7  night-cam look",
       "shader": "shaders/thermal.glsl",
       "params": [],
       "amount_default": 1.0,
@@ -236,7 +236,7 @@
         60,
         255
       ],
-      "description": "Amplified green channel  ·  phosphor noise  ·  vignette",
+      "description": "Amplified green channel  \u00b7  phosphor noise  \u00b7  vignette",
       "shader": "shaders/night_vision.glsl",
       "params": [
         {
@@ -272,7 +272,7 @@
         90,
         255
       ],
-      "description": "Sepia  ·  scratches  ·  flicker  ·  aged look",
+      "description": "Sepia  \u00b7  scratches  \u00b7  flicker  \u00b7  aged look",
       "shader": "shaders/old_film.glsl",
       "params": [
         {
@@ -317,7 +317,7 @@
         255,
         255
       ],
-      "description": "Rainbow iridescent overlay  ·  angle-dependent hue shift  ·  foil",
+      "description": "Rainbow iridescent overlay  \u00b7  angle-dependent hue shift  \u00b7  foil",
       "shader": "shaders/holographic.glsl",
       "params": [
         {
@@ -344,7 +344,7 @@
         50,
         255
       ],
-      "description": "Animated channel separation  ·  beat-reactive offset  ·  digital tear",
+      "description": "Animated channel separation  \u00b7  beat-reactive offset  \u00b7  digital tear",
       "shader": "shaders/rgb_split.glsl",
       "params": [
         {
@@ -380,7 +380,7 @@
         50,
         255
       ],
-      "description": "Quantized color steps  ·  screen-print look  ·  comic poster",
+      "description": "Quantized color steps  \u00b7  screen-print look  \u00b7  comic poster",
       "shader": "shaders/posterize.glsl",
       "params": [
         {
@@ -407,7 +407,7 @@
         255,
         255
       ],
-      "description": "Dot grid print  ·  newsprint  ·  pop art raster",
+      "description": "Dot grid print  \u00b7  newsprint  \u00b7  pop art raster",
       "shader": "shaders/halftone.glsl",
       "params": [
         {
@@ -434,7 +434,7 @@
         255,
         255
       ],
-      "description": "Barrel distortion  ·  wide-angle lens warp  ·  GoPro look",
+      "description": "Barrel distortion  \u00b7  wide-angle lens warp  \u00b7  GoPro look",
       "shader": "shaders/fisheye.glsl",
       "params": [],
       "amount_default": 1.0,
@@ -451,7 +451,7 @@
         200,
         255
       ],
-      "description": "High contrast desaturated  ·  film processing look  ·  gritty",
+      "description": "High contrast desaturated  \u00b7  film processing look  \u00b7  gritty",
       "shader": "shaders/bleach_bypass.glsl",
       "params": [],
       "amount_default": 1.0,
@@ -468,7 +468,7 @@
         20,
         255
       ],
-      "description": "Burn blend mode overlay  ·  deep shadow crush  ·  fire palette",
+      "description": "Burn blend mode overlay  \u00b7  deep shadow crush  \u00b7  fire palette",
       "shader": "shaders/color_burn.glsl",
       "params": [
         {
@@ -477,7 +477,7 @@
           "min": 0.0,
           "max": 360.0,
           "default": 0.0,
-          "fmt": "%.0f°",
+          "fmt": "%.0f\u00b0",
           "curve": 1.0
         }
       ],
@@ -495,7 +495,7 @@
         180,
         255
       ],
-      "description": "Screen curvature  ·  phosphor glow  ·  scanlines  ·  border",
+      "description": "Screen curvature  \u00b7  phosphor glow  \u00b7  scanlines  \u00b7  border",
       "shader": "shaders/crt.glsl",
       "params": [
         {
@@ -531,7 +531,7 @@
         180,
         255
       ],
-      "description": "Pencil drawing  ·  edge extraction  ·  paper texture",
+      "description": "Pencil drawing  \u00b7  edge extraction  \u00b7  paper texture",
       "shader": "shaders/sketch.glsl",
       "params": [
         {
@@ -558,7 +558,7 @@
         255,
         255
       ],
-      "description": "Rectangular displacement blocks  ·  heavy digital break  ·  signal loss",
+      "description": "Rectangular displacement blocks  \u00b7  heavy digital break  \u00b7  signal loss",
       "shader": "shaders/glitch_block.glsl",
       "params": [
         {
@@ -594,7 +594,7 @@
         40,
         255
       ],
-      "description": "Vignetted  ·  saturated lo-fi  ·  light leaks  ·  toy camera",
+      "description": "Vignetted  \u00b7  saturated lo-fi  \u00b7  light leaks  \u00b7  toy camera",
       "shader": "shaders/lomo.glsl",
       "params": [
         {
@@ -758,7 +758,7 @@
       "id": "breathe",
       "enum": "Breathe",
       "label": "Breathe",
-      "description": "Edge-driven breathing — contours expand and contract along their normals with hue cycling and chromatic fringing",
+      "description": "Edge-driven breathing \u2014 contours expand and contract along their normals with hue cycling and chromatic fringing",
       "abbrev": "BRT",
       "color": [
         180,
@@ -1334,7 +1334,7 @@
       "id": "oil_paint",
       "enum": "OilPaint",
       "label": "Oil Paint",
-      "description": "Kuwahara painterly filter — sharp but smooth like oil",
+      "description": "Kuwahara painterly filter \u2014 sharp but smooth like oil",
       "abbrev": "OIL",
       "color": [
         180,
@@ -1622,7 +1622,7 @@
       "id": "double_ghost",
       "enum": "DoubleGhost",
       "label": "Double Ghost",
-      "description": "Double-exposure ghost offset — drunk / split double-vision",
+      "description": "Double-exposure ghost offset \u2014 drunk / split double-vision",
       "abbrev": "DGH",
       "color": [
         180,
@@ -1667,7 +1667,7 @@
       "id": "watercolor",
       "enum": "Watercolor",
       "label": "Watercolor",
-      "description": "Watercolor wash — bleeding edges and soft paper texture",
+      "description": "Watercolor wash \u2014 bleeding edges and soft paper texture",
       "abbrev": "WCL",
       "color": [
         100,
@@ -1964,7 +1964,7 @@
       "id": "bit_crush",
       "enum": "BitCrush",
       "label": "Bit Crush",
-      "description": "Bit-depth reduction — chunky posterized pixels with dither",
+      "description": "Bit-depth reduction \u2014 chunky posterized pixels with dither",
       "abbrev": "BCR",
       "color": [
         80,
@@ -2000,7 +2000,7 @@
       "id": "tv_static",
       "enum": "TVStatic",
       "label": "TV Static",
-      "description": "Analog TV static noise — channel between stations",
+      "description": "Analog TV static noise \u2014 channel between stations",
       "abbrev": "TVS",
       "color": [
         200,
@@ -2036,7 +2036,7 @@
       "id": "dither_bayer",
       "enum": "DitherBayer",
       "label": "Dither",
-      "description": "Ordered Bayer dithering — retro 1-bit style",
+      "description": "Ordered Bayer dithering \u2014 retro 1-bit style",
       "abbrev": "DTH",
       "color": [
         40,
@@ -2270,7 +2270,7 @@
       "id": "pointillist",
       "enum": "Pointillist",
       "label": "Pointillism",
-      "description": "Seurat-style pointillist dots — image from colored circles",
+      "description": "Seurat-style pointillist dots \u2014 image from colored circles",
       "abbrev": "PTL",
       "color": [
         200,
@@ -2306,7 +2306,7 @@
       "id": "interlace_glitch",
       "enum": "InterlaceGlitch",
       "label": "Interlace",
-      "description": "CRT interlace field offset glitch — alternating row shift",
+      "description": "CRT interlace field offset glitch \u2014 alternating row shift",
       "abbrev": "ILG",
       "color": [
         200,
@@ -2342,7 +2342,7 @@
       "id": "frosted_glass",
       "enum": "FrostedGlass",
       "label": "Frosted Glass",
-      "description": "Frosted glass — directional blur with edge-dependent scatter",
+      "description": "Frosted glass \u2014 directional blur with edge-dependent scatter",
       "abbrev": "FRG",
       "color": [
         200,
@@ -2387,7 +2387,7 @@
       "id": "mirror_fold",
       "enum": "MirrorFold",
       "label": "Mirror Fold",
-      "description": "Horizontal mirror fold — left half reflects to right",
+      "description": "Horizontal mirror fold \u2014 left half reflects to right",
       "abbrev": "MRF",
       "color": [
         140,
@@ -2756,7 +2756,7 @@
       "id": "kodachrome",
       "enum": "Kodachrome",
       "label": "Kodachrome",
-      "description": "Kodachrome 64 film — deep reds, rich saturation, golden shadows",
+      "description": "Kodachrome 64 film \u2014 deep reds, rich saturation, golden shadows",
       "abbrev": "KDC",
       "color": [
         220,
@@ -2873,7 +2873,7 @@
       "id": "digital_noise",
       "enum": "DigitalNoise",
       "label": "Digital Noise",
-      "description": "Colored RGB pixel noise — digital sensor ISO noise",
+      "description": "Colored RGB pixel noise \u2014 digital sensor ISO noise",
       "abbrev": "DGN",
       "color": [
         120,
@@ -2918,7 +2918,7 @@
       "id": "color_dodge",
       "enum": "ColorDodge",
       "label": "Color Dodge",
-      "description": "Photographic color dodge — luminous blown-out look",
+      "description": "Photographic color dodge \u2014 luminous blown-out look",
       "abbrev": "CDG",
       "color": [
         255,
@@ -2963,7 +2963,7 @@
       "id": "warhol_pop",
       "enum": "WarholPop",
       "label": "Pop Art",
-      "description": "Andy Warhol pop art — bold flat posterized colors",
+      "description": "Andy Warhol pop art \u2014 bold flat posterized colors",
       "abbrev": "POP",
       "color": [
         255,
@@ -3053,7 +3053,7 @@
       "id": "scanline_color",
       "enum": "ScanlineColor",
       "label": "RGB Scanlines",
-      "description": "RGB phosphor triad scanlines — arcade monitor look",
+      "description": "RGB phosphor triad scanlines \u2014 arcade monitor look",
       "abbrev": "SLC",
       "color": [
         60,
@@ -3143,7 +3143,7 @@
       "id": "long_exposure",
       "enum": "LongExposure",
       "label": "Long Exposure",
-      "description": "Simulated long exposure — trails of light brighten",
+      "description": "Simulated long exposure \u2014 trails of light brighten",
       "abbrev": "LXP",
       "color": [
         255,
@@ -4500,7 +4500,7 @@
         255,
         255
       ],
-      "description": "Animated zoom & pan — push in or pull back across the clip duration",
+      "description": "Animated zoom & pan \u2014 push in or pull back across the clip duration",
       "params": [
         {
           "name": "start_scale",
@@ -4508,7 +4508,7 @@
           "min": 0.5,
           "max": 4.0,
           "default": 1.0,
-          "fmt": "%.2f×"
+          "fmt": "%.2f\u00d7"
         },
         {
           "name": "end_scale",
@@ -4516,7 +4516,7 @@
           "min": 0.5,
           "max": 4.0,
           "default": 1.3,
-          "fmt": "%.2f×"
+          "fmt": "%.2f\u00d7"
         },
         {
           "name": "start_x",
@@ -4565,7 +4565,7 @@
         160,
         255
       ],
-      "description": "Beauty smoothing  ·  edge-preserving, skin-tone gated  ·  pores soften, jawlines don't",
+      "description": "Beauty smoothing  \u00b7  edge-preserving, skin-tone gated  \u00b7  pores soften, jawlines don't",
       "shader": "shaders/skin_smooth.glsl",
       "params": [
         {
@@ -4601,7 +4601,7 @@
         140,
         255
       ],
-      "description": "Soft-focus portrait glow  ·  warmth + lift  ·  diffusion-filter look",
+      "description": "Soft-focus portrait glow  \u00b7  warmth + lift  \u00b7  diffusion-filter look",
       "shader": "shaders/glow_up.glsl",
       "params": [
         {
@@ -4634,6 +4634,42 @@
       ],
       "amount_default": 1.0,
       "category": "Beauty"
+    },
+    {
+      "id": "cam_shake",
+      "enum": "CamShake",
+      "label": "Cam Shake",
+      "abbrev": "SHAKE",
+      "color": [
+        255,
+        90,
+        90,
+        255
+      ],
+      "description": "Handheld camera shake  \u00b7  continuous jitter + micro-zoom  \u00b7  TikTok energy",
+      "shader": "shaders/cam_shake.glsl",
+      "params": [
+        {
+          "name": "intensity",
+          "label": "Shake",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 0.5,
+          "fmt": "%.2f",
+          "curve": 1.0
+        },
+        {
+          "name": "speed",
+          "label": "Speed",
+          "min": 0.1,
+          "max": 4.0,
+          "default": 1.0,
+          "fmt": "%.2f",
+          "curve": 1.0
+        }
+      ],
+      "amount_default": 1.0,
+      "category": "Motion"
     }
   ]
 }

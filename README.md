@@ -20,7 +20,7 @@ The ML stack runs fully locally. Nothing is uploaded.
 
 **Vocal separation** uses Kim_Vocal_2, a battle-tested MDX-Net model from the UVR5 community (~64 MB). The STFT (FFTW3, n_fft=6144, hop=1024), chunked ONNX inference with 25% frame overlap, iSTFT, and instrumental extraction (`original − vocals`) are implemented in C++ with ONNX Runtime. No Python. No GPU required.
 
-**Transcription** uses whisper.cpp (`large-v3-turbo-q5_0`, ~584 MB) with DTW token timestamps enabled via `WHISPER_AHEADS_LARGE_V3_TURBO`. BPE tokens are grouped into words by detecting leading spaces in the whisper token stream. A vocal-presence gate (RMS-energy stretch ≥250 ms) skips Whisper entirely on windows where Demucs produced a dead stem, so `[Music]` / `♪♪` tokens never pollute the cached transcript.
+**Transcription** uses whisper.cpp (`large-v3-turbo-q5_0`, ~584 MB) with DTW token timestamps enabled via `WHISPER_AHEADS_LARGE_V3_TURBO`. BPE tokens are grouped into words by detecting leading spaces in the whisper token stream. A vocal-presence gate (RMS-energy stretch ≥250 ms) skips Whisper entirely on windows where MDX-Net produced a dead stem, so `[Music]` / `♪♪` tokens never pollute the cached transcript.
 
 **CTC forced alignment** refines Whisper timestamps to frame-accurate precision. A stay/advance trellis decoder (handrolled in C++, torchaudio forced-alignment algorithm) runs wav2vec2-base-960h (Xenova ONNX quantized, ~94 MB) per Whisper segment. The (T+1)×(L+1) trellis is built in log-prob space; backtracking yields one character span per target token, which are merged into word timestamps. Word timestamps are snapped to MJPEG proxy frame boundaries so karaoke highlighting lands on exact video frames.
 
@@ -98,7 +98,7 @@ Pop Maker Studio exposes its full editing surface to Claude via the Model Contex
 
 **Auto-batching.** Single mutations are wrapped in an implicit one-call batch labelled with the method name, so a one-off `set_clip_prop` is one undo step automatically. `begin_batch`/`end_batch` is only needed when you want a sequence of mutations to undo as a single step (e.g. `add_track` + `add_clip` + `set_clip_prop` setting up a clip from scratch).
 
-**Lyrics search without full transcription.** `find_and_add_clip(path, query)` runs windowed Demucs + Whisper, stops at the first hit, and auto-extracts a segment around the match — orders of magnitude faster than transcribing a whole song just to locate a phrase.
+**Lyrics search without full transcription.** `find_and_add_clip(path, query)` runs windowed MDX-Net + Whisper, stops at the first hit, and auto-extracts a segment around the match — orders of magnitude faster than transcribing a whole song just to locate a phrase.
 
 ### Setup
 

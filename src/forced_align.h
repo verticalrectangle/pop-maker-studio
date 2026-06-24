@@ -5,7 +5,9 @@
 
 // CTC forced alignment using wav2vec2-base-960h ONNX.
 // stay/advance trellis algorithm (torchaudio forced-alignment tutorial):
-//   • per-segment inference — audio window = exact whisper segment bounds
+//   • per-segment inference — audio window = whisper segment bounds, but the
+//     window START is clamped to the first word's DTW onset (a loose segment
+//     boundary would let the CTC drag the first word back into pre-onset audio)
 //   • NaN interpolation for characters not in the model vocabulary
 //
 // seg_bounds: (start_s, end_s) pairs for each whisper segment (0-based,

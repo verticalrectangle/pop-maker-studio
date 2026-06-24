@@ -204,6 +204,57 @@ void vc_poll(AppState& state)
     }
 }
 
+void vc_reconcile(AppState& state)
+{
+    // A voice-convert FX brick that targets clip c: same track, overlapping c,
+    // with a model loaded. Mirrors the trigger's overlap test in
+    // audio_fx_settings_ui (single-FX brick: clip.fx_type; AudioMultiFX brick:
+    // any AudioVoiceConvert entry in its fx_chain — fx_chain entries are Clips).
+    auto is_vc_fx = [](const Clip& b) -> bool {
+        if (b.fx_type == FXType::AudioVoiceConvert &&
+            !b.audio_fx.voice_model_path.empty()) return true;
+        if (b.clip_type == ClipType::AudioMultiFX)
+            for (const Clip& se : b.fx_chain)
+                if (se.fx_type == FXType::AudioVoiceConvert &&
+                    !se.audio_fx.voice_model_path.empty()) return true;
+        return false;
+    };
+
+    for (auto& tr : state.tracks) {
+        for (auto& c : tr.clips) {
+            // Only audio clips and record takes ever carry a conversion.
+            bool convertible =
+                (c.clip_type == ClipType::Audio  && !c.text.empty()) ||
+                (c.clip_type == ClipType::Record && c.rec_take_sel >= 0 &&
+                 c.rec_take_sel < (int)c.rec_takes.size());
+            if (!convertible) continue;
+            if (c.vc_status == VcStatus::Idle && c.vc_out_path.empty()) continue;
+            if (c.vc_status == VcStatus::Processing) continue;  // let the job land first
+
+            // Still targeted? Either the clip's own per-clip VC, or a VC brick
+            // overlapping it on the same track.
+            bool active = c.audio_fx.voice_convert_on &&
+                          !c.audio_fx.voice_model_path.empty();
+            for (const Clip& b : tr.clips) {
+                if (active) break;
+                if (&b == &c) continue;
+                if (b.end <= c.start || b.start >= c.end) continue;  // no overlap
+                if (is_vc_fx(b)) active = true;
+            }
+            if (active) continue;
+
+            // No VC FX left → drop the substitution. Playback/export/UI all key
+            // off vc_status, so they revert to the clip's own source on their own.
+            // The /tmp WAV is left on disk; undo restores this from history.
+            c.vc_status = VcStatus::Idle;
+            c.vc_out_path.clear();
+            c.vc_model_used.clear();
+            c.vc_error.clear();
+            c.vc_progress = 0.f;
+        }
+    }
+}
+
 void vc_cancel_all()
 {
     std::lock_guard<std::mutex> lk(g_jobs_mu);
