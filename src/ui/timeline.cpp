@@ -1110,6 +1110,11 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
     // Vertical scroll: mouse wheel in the track body area
     float track_area_top = origin.y + TL_RULER_H;
     float track_area_bot = origin.y + total_h - TL_SCROLLBAR_H;
+    // Per-track mouse hit-tests below compare against the SCROLLED track_y, which
+    // the visual clip rect doesn't constrain. Gate every one on this so a row
+    // scrolled out of view can't catch clicks up in the ruler, the left toolbar
+    // (label column) or the right panel (track body) — both share the timeline's X.
+    bool mouse_in_track_band = mouse.y >= track_area_top && mouse.y < track_area_bot;
 
     // ── Variable track heights ────────────────────────────────────────────────
     // A content clip with fx_expanded grows its track by a lane per coupled
@@ -1274,7 +1279,11 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
         Track& track = state.tracks[ti];
         ImVec2 row_tl = {origin.x, track_y};
         ImVec2 row_br = {origin.x+total_w, track_y+TL_TRACK_H};
-        bool row_hov = mouse.y >= row_tl.y && mouse.y < row_br.y;
+        // Confine the hover/drop hit to the visible band — same reason as the
+        // clip clamp above: a scrolled-out row must not light up (or accept
+        // drops) from a click up in the ruler or panel.
+        bool row_hov = mouse.y >= fmaxf(row_tl.y, track_area_top) &&
+                       mouse.y < fminf(row_br.y, track_area_bot);
         if (row_hov) s_tl_hover_track = ti;
 
         dl->AddRectFilled(row_tl, row_br,
@@ -1525,7 +1534,8 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
 
         // Track label — single click selects, double-click renames
         bool track_sel = state.selected_track == ti;
-        bool in_label = mouse.x >= origin.x+2.f && mouse.x < origin.x+TL_LABEL_W-54.f &&
+        bool in_label = mouse_in_track_band &&
+                        mouse.x >= origin.x+2.f && mouse.x < origin.x+TL_LABEL_W-54.f &&
                         mouse.y >= track_y && mouse.y < track_y+TL_TRACK_H;
 
         if (s_rename_track == ti) {
@@ -1594,7 +1604,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
         // Eye button
         ImVec2 eye_c = {origin.x + TL_LABEL_W - 13.f, btn_y};
         {
-            bool hov = fabsf(mouse.x-eye_c.x)<8.f && fabsf(mouse.y-eye_c.y)<8.f;
+            bool hov = mouse_in_track_band && fabsf(mouse.x-eye_c.x)<8.f && fabsf(mouse.y-eye_c.y)<8.f;
             ImU32 ecol = to_u32(track.visible ? Col::fg : Col::dim);
             dl->AddCircle(eye_c, 4.5f, ecol, 12, 1.2f);
             dl->AddCircleFilled(eye_c, 1.8f, ecol);
@@ -1610,7 +1620,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
         // Lock button (padlock icon)
         ImVec2 lock_c = {origin.x + TL_LABEL_W - 45.f, btn_y};
         {
-            bool hov  = fabsf(mouse.x-lock_c.x)<8.f && fabsf(mouse.y-lock_c.y)<8.f;
+            bool hov  = mouse_in_track_band && fabsf(mouse.x-lock_c.x)<8.f && fabsf(mouse.y-lock_c.y)<8.f;
             ImU32 lc  = track.locked ? IM_COL32(255,200,60,240) : to_u32(Col::dim);
             // Shackle arc
             dl->AddRect({lock_c.x-3.f, lock_c.y-1.f}, {lock_c.x+3.f, lock_c.y+4.f}, lc, 1.f, 0, 1.2f);
@@ -1628,7 +1638,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
         // Mute button (speaker icon)
         ImVec2 mut_c = {origin.x + TL_LABEL_W - 29.f, btn_y};
         {
-            bool hov = fabsf(mouse.x-mut_c.x)<8.f && fabsf(mouse.y-mut_c.y)<8.f;
+            bool hov = mouse_in_track_band && fabsf(mouse.x-mut_c.x)<8.f && fabsf(mouse.y-mut_c.y)<8.f;
             ImU32 mcol = track.muted ? IM_COL32(255,80,80,230) : to_u32(Col::dim);
             // Simple speaker: small filled rect + triangle
             dl->AddRectFilled({mut_c.x-4.f, mut_c.y-2.5f}, {mut_c.x-1.f, mut_c.y+2.5f}, mcol);
@@ -1651,7 +1661,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                     {origin.x+TL_LABEL_W, track_y+TL_TRACK_H}, to_u32(Col::line));
 
         // Right-click track label
-        if ((!tl_any_popup && ImGui::IsMouseClicked(1)) &&
+        if ((!tl_any_popup && ImGui::IsMouseClicked(1)) && mouse_in_track_band &&
             mouse.x >= origin.x && mouse.x < origin.x+TL_LABEL_W &&
             mouse.y >= track_y  && mouse.y < track_y+TL_TRACK_H) {
             ctx_track = ti; ctx_clip = -1;
@@ -1665,10 +1675,16 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
         bool clip_ctx_opened_this_frame = false;
 
         auto clip_interact = [&](int ci, Clip& clip, float vis_x0, float vis_x1, float cy0, float cy1, bool sel) {
-            // Clamp the Y range used for mouse hit-testing to the track area.
-            // Without this, clips on tracks partially clipped at the bottom
-            // extend cy1 past track_area_bot and steal scrollbar clicks.
+            // Clamp the Y range used for mouse hit-testing to the visible track
+            // area. Without the bottom clamp, clips partially clipped at the
+            // bottom extend cy1 past track_area_bot and steal scrollbar clicks.
+            // Without the top clamp, scrolling down with many tracks pushes the
+            // upper clips' cy0 ABOVE track_area_top — up through the ruler and
+            // into the panel above (the timeline spans the full width) — leaving
+            // a live hit zone that steals ruler/panel clicks. A fully scrolled-out
+            // clip ends up with cy0 > cy1, so the hit test below is empty.
             cy1 = std::min(cy1, track_area_bot);
+            cy0 = std::max(cy0, track_area_top);
             const float ew = 6.f, ew_hit = 12.f;
             // Edge handles — only where the TRUE edge is on screen. vis_x0/x1
             // are clamped to the viewport, so a zoomed-in view mid-clip would
@@ -2628,7 +2644,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
             float cy1 = track_y+TL_TRACK_H-3.f;
             if (cy1 > track_area_bot || track_y < track_area_top) continue;
             float cx = vis_x0 + 9.f, cy = cy1 - 6.f;
-            bool thov = !tl_any_popup &&
+            bool thov = !tl_any_popup && mouse_in_track_band &&
                         mouse.x >= cx - 7.f && mouse.x <= cx + 7.f &&
                         mouse.y >= cy - 7.f && mouse.y <= cy + 7.f;
             // A small dark pad behind the glyph so it reads on any glass tint.
@@ -2651,7 +2667,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
         }
 
         // Left-click empty track body (no clip hit) — deselect
-        if (!s_clip_hit && (!tl_any_popup && ImGui::IsMouseClicked(0)) &&
+        if (!s_clip_hit && (!tl_any_popup && ImGui::IsMouseClicked(0)) && mouse_in_track_band &&
             mouse.y >= track_y && mouse.y < track_y+TL_TRACK_H &&
             mouse.x > origin.x+TL_LABEL_W && mouse.x < origin.x+total_w) {
             state.clip_selection.clear();
@@ -2661,6 +2677,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
 
         // Right-click empty timeline area (this track row, no clip hit)
         if (!clip_ctx_opened_this_frame && (!tl_any_popup && ImGui::IsMouseClicked(1)) &&
+            mouse_in_track_band &&
             mouse.y >= track_y && mouse.y < track_y+TL_TRACK_H &&
             mouse.x >= origin.x+TL_LABEL_W && mouse.x <= origin.x+total_w) {
             open_tl_ctx = true;
@@ -3102,7 +3119,8 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
     {
         ImVec2 row_tl = {origin.x,           track_y};
         ImVec2 row_br = {origin.x + total_w,  track_y + TL_TRACK_H};
-        bool add_hov       = mouse.y >= track_y && mouse.y < track_y + TL_TRACK_H &&
+        bool add_hov       = mouse_in_track_band &&
+                             mouse.y >= track_y && mouse.y < track_y + TL_TRACK_H &&
                              mouse.x >= origin.x && mouse.x <= origin.x + total_w;
         bool add_label_hov = add_hov && mouse.x < origin.x + TL_LABEL_W;
         dl->AddRectFilled(row_tl, {origin.x + TL_LABEL_W, track_y + TL_TRACK_H},
