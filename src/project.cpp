@@ -12,7 +12,7 @@
 // ── Binary serialization helpers ──────────────────────────────────────────────
 
 static const uint32_t MAGIC   = 0x534D5001u; // "PMS\x01"
-static const uint32_t VERSION = 54u;  // v54: typography tweak X/Y + fade + text-style fields
+static const uint32_t VERSION = 55u;  // v55: horizontal / vertical content flip (UV mirror)
 
 struct Writer {
     std::ofstream f;
@@ -254,6 +254,9 @@ static void write_clip(Writer& w, const Clip& c) {
     w.pod((int32_t)c.vc_status);
     w.str(c.vc_out_path);
     w.str(c.vc_model_used);
+    // v55: content flip (UV mirror — independent of scale)
+    w.pod((uint8_t)c.flip_h);
+    w.pod((uint8_t)c.flip_v);
 }
 
 static Clip read_clip(Reader& r, uint32_t version) {
@@ -510,6 +513,10 @@ static Clip read_clip(Reader& r, uint32_t version) {
         if (c.vc_status == VcStatus::Processing)
             c.vc_status = (!c.vc_out_path.empty() && std::filesystem::exists(c.vc_out_path))
                           ? VcStatus::Ready : VcStatus::Idle;
+    }
+    if (version >= 55u) {
+        c.flip_h = (bool)r.pod<uint8_t>();
+        c.flip_v = (bool)r.pod<uint8_t>();
     }
     return c;
 }

@@ -2212,6 +2212,8 @@ static bool gl_render_vid_clip(ImDrawList& dl, const Clip* cl, float at_time,
         if (cl->clip_type == ClipType::VideoRecord) {
             float t = uv0.x; uv0.x = uv1.x; uv1.x = t;
         }
+        if (cl->flip_h) { float t = uv0.x; uv0.x = uv1.x; uv1.x = t; }
+        if (cl->flip_v) { float t = uv0.y; uv0.y = uv1.y; uv1.y = t; }
         if (use_scene) {
             scene_add_layer(cur_tex, cx, cy, hw, hh, cos_r, sin_r,
                             fmaxf(0.f, fminf(1.f, alpha)),
@@ -2387,6 +2389,8 @@ static bool gl_render_vid_clip(ImDrawList& dl, const Clip* cl, float at_time,
     // Camera-record takes export MIRRORED — matches the live preview and
     // playback (front-facing-cam convention). Swap the horizontal window.
     if (cl->clip_type == ClipType::VideoRecord) { float t = cu0; cu0 = cu1; cu1 = t; }
+    if (cl->flip_h) { float t = cu0; cu0 = cu1; cu1 = t; }
+    if (cl->flip_v) { float t = cv0; cv0 = cv1; cv1 = t; }
     if (use_scene) {
         scene_add_layer(draw_tex, cx, cy, hw, hh, cos_r, sin_r,
                         fmaxf(0.f, fminf(1.f, alpha)),

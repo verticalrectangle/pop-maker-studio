@@ -1830,15 +1830,15 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                     // defined in source space, so the editing view is source
                     // view (the overlay rect in draw_crop_mode matches this).
                     scene_add_layer(tex, cx, cy, hw, hh, 1.f, 0.f, alpha);
-                else if (cl_ptr->has_crop()) {
+                else {
+                    // UV window (crop), then mirror/flip by swapping the U and/or
+                    // V extents — a real flip, independent of scale/position.
                     float u0 = cl_ptr->crop_l, u1 = 1.f - cl_ptr->crop_r;
-                    if (mirror) { float t = u0; u0 = u1; u1 = t; }
-                    scene_add_layer(tex, cx, cy, hw, hh, cos_r, sin_r, alpha,
-                                    u0, cl_ptr->crop_t, u1, 1.f - cl_ptr->crop_b);
-                } else {
-                    float u0 = mirror ? 1.f : 0.f, u1 = mirror ? 0.f : 1.f;
-                    scene_add_layer(tex, cx, cy, hw, hh, cos_r, sin_r, alpha,
-                                    u0, 0.f, u1, 1.f);
+                    float v0 = cl_ptr->crop_t, v1 = 1.f - cl_ptr->crop_b;
+                    if (mirror)         { float t = u0; u0 = u1; u1 = t; }
+                    if (cl_ptr->flip_h) { float t = u0; u0 = u1; u1 = t; }
+                    if (cl_ptr->flip_v) { float t = v0; v0 = v1; v1 = t; }
+                    scene_add_layer(tex, cx, cy, hw, hh, cos_r, sin_r, alpha, u0, v0, u1, v1);
                 }
             };
 

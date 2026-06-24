@@ -960,6 +960,9 @@ async def list_tools() -> list[Tool]:
             description=(
                 "Set one property on a clip.\n\n"
                 "LAYOUT:    pos_x, pos_y (0–1 canvas fraction), scale_x, scale_y, rotation\n"
+                "FLIP:      flip_h, flip_v (bool) — MIRROR the content (face the other way /\n"
+                "           upside-down). Use these, NOT a negative scale_x/scale_y: negative\n"
+                "           scale mirrors AND resizes (e.g. -0.1 shrinks to 10%).\n"
                 "CROP:      crop_l, crop_t, crop_r, crop_b (0–0.95 fraction trimmed per side,\n"
                 "           display orientation). Non-destructive render-time UV window —\n"
                 "           prefer this over crop_media when the media is already on the\n"

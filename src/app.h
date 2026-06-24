@@ -205,6 +205,9 @@ struct Clip {
     float crop_l = 0.f, crop_t = 0.f, crop_r = 0.f, crop_b = 0.f;
     bool  has_crop() const { return crop_l > 0.f || crop_t > 0.f ||
                                     crop_r > 0.f || crop_b > 0.f; }
+    // Mirror the content (UV flip) — independent of scale/position, unlike the
+    // negative-scale hack. Applied in preview and export for image/video clips.
+    bool  flip_h = false, flip_v = false;
     // Aspect of the visible (cropped) region — use this everywhere the
     // canvas-fit box is computed so preview, export, and click-picking agree.
     float cropped_aspect(int src_w, int src_h) const {

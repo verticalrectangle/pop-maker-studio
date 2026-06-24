@@ -2470,6 +2470,8 @@ static json dispatch(AppState& state, const std::string& method, const json& par
             else if (prop == "crop_r")    { cl.crop_r = fmaxf(0.f, fminf(jval_float(val), 0.95f - cl.crop_l)); }
             else if (prop == "crop_t")    { cl.crop_t = fmaxf(0.f, fminf(jval_float(val), 0.95f - cl.crop_b)); }
             else if (prop == "crop_b")    { cl.crop_b = fmaxf(0.f, fminf(jval_float(val), 0.95f - cl.crop_t)); }
+            else if (prop == "flip_h")    { cl.flip_h = jval_bool(val); }
+            else if (prop == "flip_v")    { cl.flip_v = jval_bool(val); }
             else if (prop == "text")      { cl.text      = val.get<std::string>(); }
             else if (prop == "font_size") { cl.font_size = jval_float(val); }
             else if (prop == "sub_pos")   { cl.sub_pos   = jval_int(val); }
@@ -2624,6 +2626,10 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         else if (prop == "crop_r")   { cl.crop_r = fmaxf(0.f, fminf(jval_float(val), 0.95f - cl.crop_l)); }
         else if (prop == "crop_t")   { cl.crop_t = fmaxf(0.f, fminf(jval_float(val), 0.95f - cl.crop_b)); }
         else if (prop == "crop_b")   { cl.crop_b = fmaxf(0.f, fminf(jval_float(val), 0.95f - cl.crop_t)); }
+        // Mirror the content — a TRUE flip (UV mirror), not negative scale (which
+        // also shrinks the clip). Use these to face/turn an image, not scale_x/y.
+        else if (prop == "flip_h")   { cl.flip_h = jval_bool(val); }
+        else if (prop == "flip_v")   { cl.flip_v = jval_bool(val); }
         // ── Text props ───────────────────────────────────────────────────────
         else if (prop == "text")       { cl.text      = val.get<std::string>(); }
         else if (prop == "font_size")  { cl.font_size = jval_float(val); }
