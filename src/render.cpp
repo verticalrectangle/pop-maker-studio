@@ -1682,6 +1682,7 @@ static struct GlExport {
 } g_gl_ex;
 
 static void gl_cleanup_export();
+static void clear_ex_still_tex();
 static bool gl_render_vid_clip(ImDrawList& dl, const Clip* cl, float at_time,
                                 float alpha_mul, GLuint tex_id, int fx_slot,
                                 float W, float H, const AppState& state, int ti,
@@ -1802,6 +1803,7 @@ void render_snapshot_gl(AppState& state, float snap_t, bool open_folder) {
 
     // Per-track video textures for this snapshot (freed at end)
     GLuint vid_texs[MAX_VIDEO_TRACKS * 2] = {};
+    clear_ex_still_tex();   // free the previous render's per-path still textures
     glGenTextures(MAX_VIDEO_TRACKS * 2, vid_texs);
     for (int i = 0; i < MAX_VIDEO_TRACKS * 2; ++i) {
         glBindTexture(GL_TEXTURE_2D, vid_texs[i]);
@@ -2097,6 +2099,20 @@ static bool is_still_ext(const std::string& path) {
         || ext==".tiff"||ext==".heic"||ext==".heif";
 }
 
+// One GL texture per DISTINCT still image, keyed by source path, for the whole
+// render. The per-track tex_id slots (vid_texs[ti % MAX_VIDEO_TRACKS]) alias when
+// a project has more image tracks than slots, and the draws are deferred — so a
+// still that loaded into a slot a later clip overwrote came out as that other
+// image (or black). A per-path texture is stable; repeated uses share it. Freed
+// in each render's teardown via clear_ex_still_tex().
+struct ExStillTex { GLuint tex = 0; int w = 0, h = 0; };
+static std::unordered_map<std::string, ExStillTex> g_ex_still_tex;
+static void clear_ex_still_tex() {
+    for (auto& kv : g_ex_still_tex)
+        if (kv.second.tex) glDeleteTextures(1, &kv.second.tex);
+    g_ex_still_tex.clear();
+}
+
 static bool gl_render_vid_clip(ImDrawList& dl, const Clip* cl, float at_time,
                                 float alpha_mul, GLuint tex_id, int fx_slot,
                                 float W, float H, const AppState& state, int ti,
@@ -2132,15 +2148,12 @@ static bool gl_render_vid_clip(ImDrawList& dl, const Clip* cl, float at_time,
     // existing anymore: that silently dropped stills from the export whenever the
     // background still generator hadn't finished (or wasn't needed at all).
     if (is_still_ext(cl->text)) {
-        // Per-tex-slot cache: a still clip that spans the whole timeline would
-        // otherwise call stbi_load() + glTexImage2D() on every output frame
-        // (~5 ms × 10k frames × N still tracks). Key on (path, tex_id) so each
-        // slot reuses its own decoded upload until the source path changes.
-        struct StillCacheEntry { std::string path; int w = 0, h = 0; };
-        static std::unordered_map<GLuint, StillCacheEntry> s_still_cache;
-        auto& cache_entry = s_still_cache[tex_id];
-        int vid_w = cache_entry.w, vid_h = cache_entry.h;
-        if (cache_entry.path != cl->text || vid_w == 0 || vid_h == 0) {
+        // One texture per distinct image (keyed by path), decoded once for the
+        // whole render — NOT the shared per-track tex_id, which aliases across
+        // clips and corrupted repeated images on export. Repeated uses of the
+        // same image share this texture; it's freed in clear_ex_still_tex().
+        ExStillTex& st = g_ex_still_tex[cl->text];
+        if (st.tex == 0) {
             int sw = 0, sh = 0, sc = 0;
             uint8_t* px = stbi_load(cl->text.c_str(), &sw, &sh, &sc, 4);
             if (!px) {   // exotic format → converted still proxy
@@ -2148,16 +2161,19 @@ static bool gl_render_vid_clip(ImDrawList& dl, const Clip* cl, float at_time,
                 px = stbi_load(still.c_str(), &sw, &sh, &sc, 4);
             }
             if (!px) return false;
-            glBindTexture(GL_TEXTURE_2D, tex_id);
+            glGenTextures(1, &st.tex);
+            glBindTexture(GL_TEXTURE_2D, st.tex);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
             glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, sw, sh, 0, GL_RGBA, GL_UNSIGNED_BYTE, px);
             stbi_image_free(px);
-            cache_entry.path = cl->text;
-            cache_entry.w = sw;
-            cache_entry.h = sh;
-            vid_w = sw; vid_h = sh;
+            st.w = sw; st.h = sh;
         }
+        int vid_w = st.w, vid_h = st.h;
 
-        uintptr_t cur_tex = (uintptr_t)tex_id;
+        uintptr_t cur_tex = (uintptr_t)st.tex;
         {
             EffectAccum glass_ea = collect_glass_effects(state, at_time, ti);
             CreativeFXAccum glass_cfx = collect_glass_fx(state, at_time, ti);
@@ -2442,6 +2458,7 @@ void render_start_gl(AppState& state) {
 
     // ── Create per-track video textures ───────────────────────────────────────
     GLuint vid_texs[MAX_VIDEO_TRACKS * 2] = {};
+    clear_ex_still_tex();   // free the previous render's per-path still textures
     glGenTextures(MAX_VIDEO_TRACKS * 2, vid_texs);
     for (int i = 0; i < MAX_VIDEO_TRACKS * 2; ++i) {
         glBindTexture(GL_TEXTURE_2D, vid_texs[i]);
