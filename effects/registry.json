@@ -756,6 +756,7 @@
     },
     {
       "id": "breathe",
+      "since_version": 35,
       "enum": "Breathe",
       "label": "Breathe",
       "description": "Edge-driven breathing \u2014 contours expand and contract along their normals with hue cycling and chromatic fringing",
@@ -4556,6 +4557,7 @@
     },
     {
       "id": "skin_smooth",
+      "since_version": 39,
       "enum": "SkinSmooth",
       "label": "Skin Smooth",
       "abbrev": "SKIN",
@@ -4592,6 +4594,7 @@
     },
     {
       "id": "glow_up",
+      "since_version": 39,
       "enum": "GlowUp",
       "label": "Glow Up",
       "abbrev": "GLOW",
@@ -4637,6 +4640,7 @@
     },
     {
       "id": "cam_shake",
+      "since_version": 54,
       "enum": "CamShake",
       "label": "Cam Shake",
       "abbrev": "SHAKE",
@@ -4673,6 +4677,7 @@
     },
     {
       "id": "greenscreen",
+      "since_version": 55,
       "enum": "GreenScreen",
       "label": "Chroma Key",
       "abbrev": "KEY",

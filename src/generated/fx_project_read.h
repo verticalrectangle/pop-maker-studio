@@ -99,6 +99,8 @@
         c.fx_wave_warp_amplitude_beat = r.pod<float>();
         c.fx_wave_warp_speed = r.pod<float>();
         c.fx_wave_warp_speed_beat = r.pod<float>();
+    }
+    if (version >= 35u) {
         c.fx_breathe_amount = r.pod<float>();
         c.fx_breathe_breathe_rate = r.pod<float>();
         c.fx_breathe_breathe_rate_beat = r.pod<float>();
@@ -110,6 +112,8 @@
         c.fx_breathe_chroma_split_beat = r.pod<float>();
         c.fx_breathe_complexity = r.pod<float>();
         c.fx_breathe_complexity_beat = r.pod<float>();
+    }
+    if (version >= 24u) {
         c.fx_kaleidoscope_amount = r.pod<float>();
         c.fx_kaleidoscope_segments = r.pod<float>();
         c.fx_kaleidoscope_segments_beat = r.pod<float>();
@@ -665,7 +669,7 @@
         c.fx_ken_burns_end_x = r.pod<float>();
         c.fx_ken_burns_end_y = r.pod<float>();
     }
-    if (version >= 24u) {
+    if (version >= 39u) {
         c.fx_skin_smooth_amount = r.pod<float>();
         c.fx_skin_smooth_radius = r.pod<float>();
         c.fx_skin_smooth_radius_beat = r.pod<float>();
@@ -678,11 +682,15 @@
         c.fx_glow_up_warmth_beat = r.pod<float>();
         c.fx_glow_up_brighten = r.pod<float>();
         c.fx_glow_up_brighten_beat = r.pod<float>();
+    }
+    if (version >= 54u) {
         c.fx_cam_shake_amount = r.pod<float>();
         c.fx_cam_shake_intensity = r.pod<float>();
         c.fx_cam_shake_intensity_beat = r.pod<float>();
         c.fx_cam_shake_speed = r.pod<float>();
         c.fx_cam_shake_speed_beat = r.pod<float>();
+    }
+    if (version >= 55u) {
         c.fx_greenscreen_amount = r.pod<float>();
         c.fx_greenscreen_key_r = r.pod<float>();
         c.fx_greenscreen_key_r_beat = r.pod<float>();
