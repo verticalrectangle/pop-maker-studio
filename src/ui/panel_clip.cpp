@@ -793,6 +793,76 @@ bool section_text_style(AppState& state, TextStyle& ts, float w) {
     return edited;
 }
 
+// Shared AI-pipeline progress readout (bar + message + cancel).
+static void ai_pipeline_progress(AppState& state, float bar_w) {
+    ImVec2 bp = ImGui::GetCursorScreenPos();
+    ImDrawList* bdl = ImGui::GetWindowDrawList();
+    bdl->AddRectFilled(bp, {bp.x + bar_w, bp.y + 4.f}, to_u32(Col::line), 2.f);
+    bdl->AddRectFilled(bp, {bp.x + bar_w * state.pipeline.progress, bp.y + 4.f}, to_u32(Col::fg), 2.f);
+    ImGui::Dummy({0.f, 8.f});
+    std::string msg = state.pipeline.message.empty() ? "Processing…" : state.pipeline.message;
+    char pbuf[128];
+    snprintf(pbuf, sizeof(pbuf), "%s  %d%%", msg.c_str(), (int)(state.pipeline.progress * 100.f));
+    ImGui::PushStyleColor(ImGuiCol_Text, Col::muted); ImGui::TextUnformatted(pbuf); ImGui::PopStyleColor();
+    if (!state.pipeline.raw_line.empty()) {
+        std::string raw = state.pipeline.raw_line;
+        if (raw.size() > 100) raw = raw.substr(0, 97) + "...";
+        ImGui::PushStyleColor(ImGuiCol_Text, Col::dim); ImGui::TextUnformatted(raw.c_str()); ImGui::PopStyleColor();
+    }
+    ImGui::Dummy({0.f, 4.f});
+    if (ui_btn("Cancel##aipipe_take", false, true)) transcribe_cancel();
+}
+
+// Extract Lyrics / Subtitles from a record brick's SELECTED take. The take is a
+// clean recording, so it transcribes directly — no MDX vocal separation
+// (TranscribeOnly), which also avoids over-zeroing quiet singing. The pipeline
+// source is the take path; clip_for_pipeline_source() lands the result at the
+// brick's timeline spot rather than t=0.
+static void ai_extract_from_take(AppState& state, Clip& clip, float bar_w, bool dry_vocal) {
+    bool busy     = transcribe_running();
+    bool has_take = clip.rec_take_sel >= 0 && clip.rec_take_sel < (int)clip.rec_takes.size();
+    std::string take = has_take ? clip.rec_takes[(size_t)clip.rec_take_sel] : "";
+
+    ImGui::Dummy({0.f, 10.f}); ui_separator(); ImGui::Dummy({0.f, 6.f});
+    ui_label("Extract Lyrics");
+    ImGui::Dummy({0.f, 6.f});
+    ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+    ImGui::TextWrapped(!has_take
+        ? "Record or select a take first."
+        : dry_vocal
+            ? "Transcribes the selected take into lyric clips synced to it. The take is "
+              "already a clean recording, so no vocal separation is run."
+            : "Transcribes the selected take into lyric clips synced to it. Isolates "
+              "vocals first, so it works even with backing music in the recording.");
+    ImGui::PopStyleColor();
+    ImGui::Dummy({0.f, 4.f});
+    if (!has_take || busy) ImGui::BeginDisabled();
+    if (ui_btn("Extract Lyrics##take", false, true)) {
+        state.pipeline_on_done = apply_subtitle_mode;
+        kick_pipeline(state, take, dry_vocal ? PipelineMode::TranscribeOnly : PipelineMode::Both);
+    }
+    if (!has_take || busy) ImGui::EndDisabled();
+
+    ImGui::Dummy({0.f, 10.f}); ui_separator(); ImGui::Dummy({0.f, 6.f});
+    ui_label("Extract Subtitles");
+    ImGui::Dummy({0.f, 6.f});
+    ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+    ImGui::TextWrapped("Generates subtitle clips from the selected take — no word-level timing.");
+    ImGui::PopStyleColor();
+    ImGui::Dummy({0.f, 4.f});
+    if (!has_take || busy) ImGui::BeginDisabled();
+    if (ui_btn("Extract Subtitles##take", false, true)) {
+        state.pipeline_on_done = apply_subtitle_pipeline;
+        kick_pipeline(state, take, PipelineMode::TranscribeOnly);
+    }
+    if (!has_take || busy) ImGui::EndDisabled();
+
+    if (busy) {
+        ImGui::Dummy({0.f, 8.f});
+        ai_pipeline_progress(state, bar_w);
+    }
+}
+
 void panel_clip(AppState& state, float w) {
     // ── Nothing selected ──────────────────────────────────────────────────────
     if (state.selected_track < 0 || state.selected_track >= (int)state.tracks.size()) {
@@ -2332,6 +2402,10 @@ void panel_clip(AppState& state, float w) {
                 return;
             }
         }
+
+        // Extract lyrics / subtitles straight from the selected take (dry mic
+        // vocal — transcribe directly, no separation).
+        ai_extract_from_take(state, clip, bar_w, /*dry_vocal=*/true);
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -2978,6 +3052,10 @@ void panel_clip(AppState& state, float w) {
             history_push(state, "Place take on track");
             return;
         }
+
+        // Extract lyrics / subtitles from the selected camera take (camera audio
+        // may carry backing music, so lyrics isolate vocals first).
+        ai_extract_from_take(state, clip, bar_w, /*dry_vocal=*/false);
         }   // ── end Takes tab ──
     }
 

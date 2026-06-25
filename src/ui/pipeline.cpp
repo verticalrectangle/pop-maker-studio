@@ -409,26 +409,32 @@ void apply_lyrics_edits(AppState& state, Clip& c) {
 
 // Removes all Lyrics clips with matching source_id from ALL tracks, then
 // places fresh grouped clips on the "Lyrics" track.
+// Find the clip a transcription source belongs to: a placed Audio/Video clip, or a
+// Record/VideoRecord brick whose SELECTED take is this file. The record case lets
+// lyrics/subtitles extracted from a recorded take land at the brick's timeline
+// position (and scope transcription to its window) instead of at t=0.
+static const Clip* clip_for_pipeline_source(const AppState& state, const std::string& src) {
+    if (src.empty()) return nullptr;
+    for (auto& t : state.tracks)
+        for (auto& c : t.clips) {
+            if ((c.clip_type == ClipType::Audio || c.clip_type == ClipType::Video) &&
+                c.source_id == src) return &c;
+            if ((c.clip_type == ClipType::Record || c.clip_type == ClipType::VideoRecord) &&
+                c.rec_take_sel >= 0 && c.rec_take_sel < (int)c.rec_takes.size() &&
+                c.rec_takes[(size_t)c.rec_take_sel] == src) return &c;
+        }
+    return nullptr;
+}
+
 void apply_subtitle_mode(AppState& state) {
     if (state.words_json_path.empty()) return;
     const std::string src = state.audio_path;
 
-    // Compute timeline offset: whisper timestamps are relative to the audio file
-    // start, but the clip may sit at a non-zero timeline position or have an in_point.
-    // offset = clip.start - clip.in_point
+    // Timeline offset: whisper timestamps are relative to the audio file start, but
+    // the clip (or record brick) may sit at a non-zero timeline position / in_point.
     float tl_offset = 0.f;
-    for (auto& t : state.tracks) {
-        bool found = false;
-        for (auto& c : t.clips) {
-            if ((c.clip_type == ClipType::Audio || c.clip_type == ClipType::Video) &&
-                c.source_id == src) {
-                tl_offset = c.start - c.in_point;
-                found = true;
-                break;
-            }
-        }
-        if (found) break;
-    }
+    if (const Clip* c = clip_for_pipeline_source(state, src))
+        tl_offset = c->start - c->in_point;
 
     // Remove all Lyrics clips from this source across all tracks
     if (!src.empty()) {
@@ -544,18 +550,8 @@ void apply_subtitle_pipeline(AppState& state) {
     const std::string src = state.audio_path;
 
     float tl_offset = 0.f;
-    for (auto& t : state.tracks) {
-        bool found = false;
-        for (auto& c : t.clips) {
-            if ((c.clip_type == ClipType::Audio || c.clip_type == ClipType::Video) &&
-                c.source_id == src) {
-                tl_offset = c.start - c.in_point;
-                found = true;
-                break;
-            }
-        }
-        if (found) break;
-    }
+    if (const Clip* c = clip_for_pipeline_source(state, src))
+        tl_offset = c->start - c->in_point;
 
     // Remove existing Subtitle clips from this source across all tracks
     if (!src.empty()) {
@@ -831,16 +827,9 @@ void kick_pipeline(AppState& state, const std::string& path, PipelineMode mode) 
     // [in_point, in_point + (clip.end - clip.start)].
     float clip_in  = 0.f;
     float clip_dur = 0.f;
-    for (auto& t : state.tracks) {
-        for (auto& c : t.clips) {
-            if ((c.clip_type == ClipType::Audio || c.clip_type == ClipType::Video) &&
-                c.source_id == path) {
-                clip_in  = c.in_point;
-                clip_dur = c.end - c.start;
-                break;
-            }
-        }
-        if (clip_dur > 0.f) break;
+    if (const Clip* c = clip_for_pipeline_source(state, path)) {
+        clip_in  = c->in_point;
+        clip_dur = c->end - c->start;
     }
 
     transcribe_start(path, state.pipeline, state.words_json_path, state.vocals_path,
