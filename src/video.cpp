@@ -2031,14 +2031,22 @@ bool video_open_export(int slot, const std::string& path) {
     const AVCodec* codec = avcodec_find_decoder(st->codecpar->codec_id);
     ex.codec_ctx = avcodec_alloc_context3(codec);
     avcodec_parameters_to_context(ex.codec_ctx, st->codecpar);
-    // Multi-threaded decode. Default is 1 thread, which becomes the export
-    // bottleneck the moment a clip has speed > 1 (we then decode N source
-    // frames per output frame, single-threaded). thread_count=0 tells
-    // libavcodec to pick a sensible value based on CPU cores. FF_THREAD_FRAME
-    // scales best for sequential decode — it parallelises across consecutive
-    // frames, which is exactly the access pattern in our export loop.
+    // Multi-threaded decode via SLICE threading only.
+    //
+    // FF_THREAD_FRAME (frame threading) parallelises across consecutive frames,
+    // but its multi-frame output delay does NOT survive our manual
+    // read-packet / drain-frame export loop: at certain GOP / B-frame
+    // boundaries a frame is skipped and never recovered, so
+    // video_decode_frame_at returns null and the caller freezes on the
+    // EOF-hold — the symptom was every clip's tail stuck on one frame in the
+    // exported MP4 (preview, which decodes differently, was fine). Reproduced
+    // down to a standalone harness: frame-threading sticks mid-clip, slice-only
+    // decodes the whole used range correctly. (2026-06-25.)
+    //
+    // FF_THREAD_SLICE parallelises *within* a frame — no reorder delay — so it
+    // stays correct. thread_count=0 lets libavcodec pick based on CPU cores.
     ex.codec_ctx->thread_count = 0;
-    ex.codec_ctx->thread_type  = FF_THREAD_FRAME | FF_THREAD_SLICE;
+    ex.codec_ctx->thread_type  = FF_THREAD_SLICE;
     avcodec_open2(ex.codec_ctx, codec, nullptr);
 
     ex.info.width    = ex.codec_ctx->width;
