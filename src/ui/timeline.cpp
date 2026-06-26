@@ -3560,8 +3560,10 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
         const float vis_t_hi = (scroll + clip_area_w - fit_margin) / zoom;
 
         if (drag_left && !left_locked) {
-            float t = edge_snap(snap(new_t), cands);
-            t = fmaxf(vis_t_lo, fminf(t, vis_t_hi));
+            // Clamp to the visible window first, then snap (see the right-edge note)
+            // so a left trim stays frame-aligned while auto-scrolling toward 0:00.
+            float lt = fmaxf(vis_t_lo, fminf(new_t, vis_t_hi));
+            float t = edge_snap(snap(lt), cands);
             bool still_img_l = dc.clip_type == ClipType::Video && is_image_path(dc.text);
             float src_floor = (src_dur > 0.f && !still_img_l)
                 ? dc.start - dc.in_point / fmaxf(0.01f, dc.speed) : 0.f;
@@ -3577,8 +3579,24 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
             sync_proxy_key();
         } else if (drag_right && !right_locked) {
             float et = (mouse.x - origin.x - TL_LABEL_W + scroll) / zoom;
-            float t = edge_snap(snap(et), cands);
-            t = fmaxf(vis_t_lo, fminf(t, vis_t_hi));
+            // Clamp to the visible window FIRST, then frame-snap, so the edge stays
+            // frame-aligned even while auto-scroll feeds timeline under it. Clamping
+            // AFTER the snap let vis_t_hi — a smooth function of the pixel-by-pixel
+            // scroll — override the snap, so the edge slid smoothly instead of frame
+            // to frame once auto-scroll kicked in.
+            et = fmaxf(vis_t_lo, fminf(et, vis_t_hi));
+            // When the playhead sits at this clip's end it's clamped to follow the
+            // shrinking end (app.cpp). Snapping the edge TO the playhead then makes
+            // the two chase each other and bounce — so drop it (and anything sitting
+            // on it) from the candidate set while they're coupled.
+            std::vector<float> rcands;
+            const std::vector<float>* use = &cands;
+            if (state.playhead >= dc.end - 1.5f * f1) {
+                rcands.reserve(cands.size());
+                for (float c : cands) if (fabsf(c - state.playhead) > 1e-4f) rcands.push_back(c);
+                use = &rcands;
+            }
+            float t = edge_snap(snap(et), *use);
             // Stills hold a single frame indefinitely, so the source-duration
             // cap doesn't apply — let the user stretch the brick freely.
             bool still_img = dc.clip_type == ClipType::Video && is_image_path(dc.text);
