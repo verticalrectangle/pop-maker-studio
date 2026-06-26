@@ -86,8 +86,20 @@ static uintptr_t fx_preview_source_tex(AppState& state, bool* flip, int* sw, int
             }
         }
     }
+    // Composited-canvas fallback (nothing selected) — but only when there's real
+    // video on the timeline. With audio-only the canvas is empty and bottom-up, so
+    // returning it with flip=true drew the default preview upside down; fall through
+    // to the upright synthetic portrait (return 0) instead.
+    bool has_vid = false;
+    for (auto& tr : state.tracks) {
+        for (auto& cl : tr.clips)
+            if (cl.clip_type == ClipType::Video || cl.clip_type == ClipType::VideoRecord) {
+                has_vid = true; break;
+            }
+        if (has_vid) break;
+    }
     for (auto& tr : state.tracks)
-        if (!tr.clips.empty()) {
+        if (has_vid && !tr.clips.empty()) {
             uintptr_t scn = scene_result();
             if (scn) {
                 // Composited frame fills the canvas — preview at the canvas aspect.
@@ -177,6 +189,10 @@ static const int g_n_fx_cards = (int)(sizeof(g_fx_cards) / sizeof(g_fx_cards[0])
 // ── Right panel: Adjustment Library tab ──────────────────────────────────────
 
 void panel_adjustment_library(AppState& state, float w) {
+    // Cycle the shared preview source so hovered grade/FX cards loop the motion
+    // clip (panel_fx_creative does the same) — without this the source is frozen
+    // here and the previews never move.
+    fxp_motion_advance(ImGui::GetTime());
     ImGui::Dummy({0.f, 8.f});
 
     ImGui::TextUnformatted("Adjustment Library");
@@ -218,7 +234,7 @@ void panel_adjustment_library(AppState& state, float w) {
             p.fx_color_on ? p.fx_saturation : 1.f,
             p.fx_color_on ? p.fx_hue        : 0.f,
             p.fx_blur_on     ? p.fx_blur     : 0.f,
-            p.fx_vignette_on ? p.fx_vignette : 0.f);
+            p.fx_vignette_on ? p.fx_vignette : 0.f, hov);
         if (prev_tex) {
             dl->AddImageRounded((ImTextureID)(uintptr_t)prev_tex,
                                 cp, {cp.x+thumb_w, cp.y+card_h},
@@ -387,7 +403,7 @@ void panel_adjustment_library(AppState& state, float w) {
                 ui_card_image_popover(cp, (ImTextureID)(uintptr_t)big, (float)rw, (float)rh,
                                       flip, fc.name, fc.tagline);
             }
-            uintptr_t prev_tex = video_fx_preview_texture(fc.type, fx_card_preview_t(19000 + i, hov));
+            uintptr_t prev_tex = video_fx_preview_texture(fc.type, fx_card_preview_t(19000 + i, hov), hov);
             if (prev_tex)
                 dl->AddImageRounded((ImTextureID)(uintptr_t)prev_tex,
                                     cp, {cp.x+cg_thumb_w, cp.y+cg_card_h},
@@ -1181,7 +1197,7 @@ void panel_fx_creative(AppState& state, float w) {
             ui_card_image_popover(cp, (ImTextureID)(uintptr_t)big, (float)rw, (float)rh,
                                   flip, fc.name, fc.tagline);
         }
-        uintptr_t prev_tex = video_fx_preview_texture(fc.type, fx_card_preview_t(9000 + i, hov));
+        uintptr_t prev_tex = video_fx_preview_texture(fc.type, fx_card_preview_t(9000 + i, hov), hov);
         if (prev_tex)
             dl->AddImageRounded((ImTextureID)(uintptr_t)prev_tex,
                                 cp, {cp.x+thumb_w, cp.y+card_h},

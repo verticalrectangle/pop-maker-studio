@@ -151,7 +151,7 @@ void video_set_pixel_fx(int track_id, const PixelFX& fx);
 
 // FX browser preview thumbnail — 80×45 GL texture per FXType.
 // Animated types (Glitch, VHS) regenerate each frame; others cached after first call.
-uintptr_t video_fx_preview_texture(FXType ft, float t);
+uintptr_t video_fx_preview_texture(FXType ft, float t, bool live = false);
 
 // Advance the shared FX-preview source clip to the frame for `now` (seconds).
 // Call once per UI frame while the FX picker is visible so the cards show motion.
@@ -172,7 +172,7 @@ uintptr_t video_default_preview_tex();
 uintptr_t video_adj_preview_texture(int unique_id,
                                      float brightness, float contrast,
                                      float saturation, float hue,
-                                     float blur, float vignette);
+                                     float blur, float vignette, bool live = false);
 
 // Probe original video container for duration without full stream scan.
 // Reads container header only — safe to call on the main thread, < 100 ms.

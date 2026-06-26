@@ -39,6 +39,11 @@ extern "C" {
 #include <vector>
 #include <filesystem>
 
+#include <unistd.h>
+#include <fcntl.h>
+#include <sys/wait.h>
+#include <cerrno>
+
 namespace fs = std::filesystem;
 
 
@@ -1813,10 +1818,74 @@ MediaFileInfo video_probe_file(const std::string& path) {
     return info;
 }
 
+// Run ffmpeg to completion (blocking). Returns the exit code, or -1 on spawn
+// failure. argv must be NULL-terminated; argv[0] = "ffmpeg".
+static int run_ffmpeg_blocking(const char** argv) {
+    pid_t pid = fork();
+    if (pid < 0) return -1;
+    if (pid == 0) {
+        int devnull = open("/dev/null", O_RDWR);
+        if (devnull >= 0) {
+            dup2(devnull, STDIN_FILENO);
+            dup2(devnull, STDOUT_FILENO);
+            dup2(devnull, STDERR_FILENO);
+            close(devnull);
+        }
+        (void)nice(10);
+        execvp("ffmpeg", const_cast<char**>(argv));
+        _exit(127);
+    }
+    int status = 0;
+    while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {}
+    if (WIFEXITED(status)) return WEXITSTATUS(status);
+    return -1;
+}
+
 std::string video_extract_segment(const std::string& src,
                                   double start_sec, double end_sec,
                                   const std::string& dst,
                                   bool audio_only) {
+    // ── Video segments: re-encode, don't stream-copy ─────────────────────────
+    // A stream copy of a time slice that starts mid-GOP has no leading keyframe,
+    // so the segment is undecodable (the referenced IDR lives outside the slice).
+    // Re-encoding with an input seek decodes from the preceding keyframe and
+    // emits a fresh IDR exactly at start_sec, so the segment always plays. H.264
+    // can't live in a .webm/.ogg container, so we always mux to Matroska
+    // (holds H.264 + copied opus/aac/vorbis audio); callers name the file .mkv.
+    if (!audio_only && video_probe_file(src).has_video) {
+        std::string srcarg = "file:" + src;
+        char ss[32], tt[32];
+        snprintf(ss, sizeof(ss), "%.3f", start_sec < 0.0 ? 0.0 : start_sec);
+        double dur = end_sec - start_sec;
+        std::vector<const char*> args = {
+            "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+            "-ss", ss,
+            "-i", srcarg.c_str(),
+        };
+        // end_sec is sometimes a sentinel (1e9) meaning "to EOF" — only bound
+        // the duration when it's a real, finite span.
+        if (dur > 0.0 && dur < 1e6) {
+            snprintf(tt, sizeof(tt), "%.3f", dur);
+            args.push_back("-t"); args.push_back(tt);
+        }
+        args.push_back("-c:v");     args.push_back("libx264");
+        args.push_back("-crf");     args.push_back("18");
+        args.push_back("-preset");  args.push_back("veryfast");
+        args.push_back("-pix_fmt"); args.push_back("yuv420p");
+        args.push_back("-c:a");     args.push_back("copy");
+        args.push_back("-avoid_negative_ts"); args.push_back("make_zero");
+        args.push_back("-f");       args.push_back("matroska");
+        args.push_back(dst.c_str());
+        args.push_back(nullptr);
+
+        int rc = run_ffmpeg_blocking(args.data());
+        if (rc != 0) {
+            fs::remove(fs::path(dst));   // don't leave a half-written segment cached
+            return "ffmpeg segment re-encode failed (exit " + std::to_string(rc) + ")";
+        }
+        return "";
+    }
+
     AVFormatContext* in_ctx = nullptr;
     const std::string& url2 = src;
     if (avformat_open_input(&in_ctx, url2.c_str(), nullptr, nullptr) < 0)
@@ -2447,7 +2516,7 @@ static const int FXP_W = portrait_preview_w;   // 108
 static const int FXP_H = portrait_preview_h;   // 192
 static const int FXP_N = 8;  // number of legacy FXType enum values
 
-struct FXPrev { GLuint tex = 0; bool animated = false; };
+struct FXPrev { GLuint tex = 0; bool animated = false; int src_ver = -1; };
 static std::array<FXPrev, FXP_N> s_fxp;
 static std::vector<uint8_t> s_fxp_src;      // base source image (RGB)
 
@@ -2756,7 +2825,7 @@ static void kenburns_cpu(const unsigned char* src, std::vector<uint8_t>& out,
         }
 }
 
-uintptr_t video_fx_preview_texture(FXType ft, float t) {
+uintptr_t video_fx_preview_texture(FXType ft, float t, bool live) {
     int idx = (int)ft;
 
     // Ken Burns: faked CPU zoom+pan on the still (the real transform happens at
@@ -2837,12 +2906,17 @@ uintptr_t video_fx_preview_texture(FXType ft, float t) {
     if (s_fxp_src.empty()) fxp_make_sources();
 
     FXPrev& pv = s_fxp[idx];
-    bool need = !pv.tex || pv.animated;
+    // Re-render when the texture's gone, the effect animates with t, or — while
+    // this card is hovered (live) — the shared motion source advanced, so a static
+    // filter still loops the moving footage instead of freezing on the frame it was
+    // first drawn on. Non-hovered cards keep one cached representative frame.
+    bool need = !pv.tex || pv.animated || (live && pv.src_ver != s_fxp_motion_cur);
     if (!need) return (uintptr_t)pv.tex;
 
     std::vector<uint8_t> px;
     pv.animated = fxp_cpu_effect(ft, s_fxp_src, px, FXP_W, FXP_H, t, true);
     fxp_upload(pv, px);
+    pv.src_ver = s_fxp_motion_cur;
     return (uintptr_t)pv.tex;
 }
 
@@ -2992,25 +3066,31 @@ uintptr_t video_adj_preview_big(uintptr_t src_tex, int w, int h,
 // the preset list is static at runtime; we just keep one texture per preset.
 
 static const int ADJ_PREV_MAX = 64;
-struct AdjPrev { int id = -1; GLuint tex = 0; };
+struct AdjPrev { int id = -1; GLuint tex = 0; int src_ver = -1; };
 static std::array<AdjPrev, ADJ_PREV_MAX> s_adj_prev;
 static int s_adj_prev_next = 0;
 
 uintptr_t video_adj_preview_texture(int unique_id,
                                      float brightness, float contrast,
                                      float saturation, float hue,
-                                     float blur, float vignette) {
+                                     float blur, float vignette, bool live) {
     if (s_fxp_src.empty()) fxp_make_sources();
 
-    // Find existing slot
-    for (auto& ap : s_adj_prev) {
-        if (ap.id == unique_id) return (uintptr_t)ap.tex;
+    // Find existing slot. Return its cached texture unless this card is hovered
+    // (live) and the shared motion source advanced — then re-render into the slot
+    // so the grade preview loops the moving footage instead of freezing forever.
+    AdjPrev* slot = nullptr;
+    for (auto& a : s_adj_prev)
+        if (a.id == unique_id) { slot = &a; break; }
+    if (slot && !(live && slot->src_ver != s_fxp_motion_cur))
+        return (uintptr_t)slot->tex;
+    if (!slot) {
+        slot = &s_adj_prev[s_adj_prev_next % ADJ_PREV_MAX];
+        s_adj_prev_next++;
+        slot->id = unique_id;
     }
-
-    // Claim next slot (ring)
-    AdjPrev& ap = s_adj_prev[s_adj_prev_next % ADJ_PREV_MAX];
-    s_adj_prev_next++;
-    ap.id = unique_id;
+    slot->src_ver = s_fxp_motion_cur;
+    AdjPrev& ap = *slot;
 
     std::vector<uint8_t> px = s_fxp_src;
 
@@ -3034,7 +3114,7 @@ uintptr_t video_adj_preview_texture(int unique_id,
         }
     }
 
-    FXPrev tmp;
+    FXPrev tmp; tmp.tex = ap.tex;   // reuse the slot's texture on re-render (no leak)
     fxp_upload(tmp, px);
     ap.tex = tmp.tex;
     return (uintptr_t)ap.tex;
