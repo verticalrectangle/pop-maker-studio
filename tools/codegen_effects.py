@@ -202,6 +202,9 @@ def main():
 
     # ── fx_project_read.h ─────────────────────────────────────────────────────
     # Each effect is gated by its own since_version (defaults to project_version).
+    # Gated on g_fx_read_version (not the clip's `version`) so project_load can
+    # decrement it by 1 to skip an effect introduced at exactly the file's
+    # version without a format bump — recovering files saved just before it.
     lines = []
     cur_pv = None
     for e in effects:
@@ -210,7 +213,7 @@ def main():
         if pv != cur_pv:
             if cur_pv is not None:
                 lines.append('    }')
-            lines.append(f'    if (version >= {pv}u) {{')
+            lines.append(f'    if (g_fx_read_version >= {pv}u) {{')
             cur_pv = pv
         lines.append(f'        c.fx_{eid}_amount = r.pod<float>();')
         for p in e["params"]:

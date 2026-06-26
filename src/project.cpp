@@ -14,6 +14,12 @@
 static const uint32_t MAGIC   = 0x534D5001u; // "PMS\x01"
 static const uint32_t VERSION = 55u;  // v55: horizontal / vertical content flip (UV mirror)
 
+// Version used to gate the registry-effect read block (generated/fx_project_read.h).
+// Normally the file's format version; project_load decrements it by 1 on a retry
+// to skip an effect introduced at exactly the file's version without a format
+// bump, recovering projects saved just before that effect. Load is single-threaded.
+static uint32_t g_fx_read_version = 0u;
+
 struct Writer {
     std::ofstream f;
     bool ok = true;
@@ -656,13 +662,14 @@ bool project_save(const AppState& state, const std::string& path) {
     return w.ok;
 }
 
-bool project_load(AppState& state, const std::string& path) {
+static bool project_load_pass(AppState& state, const std::string& path, int fx_off) {
     Reader r(path);
     if (!r.ok) return false;
 
     uint32_t magic   = r.pod<uint32_t>();
     uint32_t version = r.pod<uint32_t>();
     if (magic != MAGIC || version < 1u || version > VERSION) return false;
+    g_fx_read_version = (uint32_t)((int)version + fx_off);
 
     state = AppState{};
     state.splash_timer = 0.f;
@@ -845,6 +852,17 @@ bool project_load(AppState& state, const std::string& path) {
     }
 
     return r.ok;
+}
+
+bool project_load(AppState& state, const std::string& path) {
+    // First pass uses the real format version. If it fails, the project was saved
+    // at exactly an effect's add-version that landed without a format bump, so it
+    // is missing that effect's fields — the read over-runs the effect block and
+    // derails. Retry once with the effect-read version decremented by one, which
+    // skips effects whose since_version equals the file version. project_load_pass
+    // resets `state` on entry, so the second pass starts from a clean slate.
+    if (project_load_pass(state, path, 0)) return true;
+    return project_load_pass(state, path, -1);
 }
 
 // ── Collect: produce a self-contained project folder ──────────────────────────
