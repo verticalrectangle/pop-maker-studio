@@ -130,6 +130,7 @@ bool duplicate_selected_clips(AppState& state) {
         if (!valid(state.selected_track, state.selected_clip)) return false;
         Track& tr = state.tracks[state.selected_track];
         Clip dup = tr.clips[state.selected_clip];
+        if (dup.clip_type == ClipType::Lyrics) dup.source_id.clear();  // duplicated lyric is freestanding — survives a typography regen
         float len = dup.end - dup.start;
         dup.start = dup.end;
         dup.end   = dup.start + len;
@@ -154,6 +155,7 @@ bool duplicate_selected_clips(AppState& state) {
     for (auto& [ti, ci] : state.clip_selection) {
         if (!valid(ti, ci)) continue;
         Clip d = state.tracks[ti].clips[ci];
+        if (d.clip_type == ClipType::Lyrics) d.source_id.clear();  // duplicated lyric is freestanding
         d.start += shift;
         d.end   += shift;
         dups[ti].push_back(std::move(d));
@@ -680,7 +682,7 @@ bool pv_is_lib(PanelView v) {
     return v == PanelView::LibBG    || v == PanelView::LibFX  || v == PanelView::LibAdj ||
            v == PanelView::LibBFX   || v == PanelView::LibAFX || v == PanelView::LibVID ||
            v == PanelView::LibIMG   || v == PanelView::LibAUD || v == PanelView::LibBin ||
-           v == PanelView::LibText;
+           v == PanelView::LibText  || v == PanelView::LibLyric;
 }
 
 bool pv_is_override(PanelView v) {

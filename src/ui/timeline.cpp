@@ -754,6 +754,33 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
         return result;
     };
 
+    // Edge auto-scroll (horizontal): MUST run before the ruler draws below, so the
+    // ruler ticks and the clips render at the SAME scroll. Done mid-draw (after the
+    // ruler, before the clips) it shifted clips off the ruler by one auto-scroll
+    // step while dragging / trimming / marquee-ing to the timeline edge.
+    if ((g_tl.drag_track >= 0 || g_tl.box_selecting || g_tl.glass_drag != 0) &&
+        ImGui::IsMouseDown(0)) {
+        ImVec2 mp = ImGui::GetIO().MousePos;
+        float  dt = ImGui::GetIO().DeltaTime;
+        float  x_lo = origin.x + TL_LABEL_W, x_hi = x_lo + clip_area_w;
+        // Trims scroll at the margin with NO content ceiling (the dragged edge is the
+        // sole driver, else a content-tied ceiling deadlocks the gesture); plain
+        // scroll keeps the ceiling. Zoom never changes mid-gesture.
+        bool   trim  = (g_tl.drag_left || g_tl.drag_right) && g_tl.drag_track >= 0;
+        float  inset = trim ? fit_margin : 0.f;
+        float  max_scroll = fmaxf(0.f, tl_content_w - clip_area_w + fit_margin);
+        float  ds = 0.f;
+        if      (mp.x < x_lo + inset) ds = -fminf(x_lo + inset - mp.x, 160.f) * 8.f * dt;
+        else if (mp.x > x_hi - inset) ds =  fminf(mp.x - (x_hi - inset), 160.f) * 8.f * dt;
+        if (ds != 0.f) {
+            float ns = scroll + ds;
+            if (!trim) ns = fminf(ns, max_scroll);
+            ns = fmaxf(0.f, ns);
+            if (g_tl.box_selecting) g_tl.box_start.x -= ns - scroll;
+            scroll = ns;
+        }
+    }
+
     // ── Ruler ─────────────────────────────────────────────────────────────────
     float ruler_y = origin.y;
     // Top band of the ruler reserved for the loop brace (grab/resize/move). The
@@ -1210,35 +1237,8 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
         auto edge_step = [&](float overshoot) {
             return fminf(overshoot, 160.f) * 8.f * dt;  // px this frame, capped
         };
-        // Horizontal
-        {
-            float x_lo = origin.x + TL_LABEL_W;
-            float x_hi = x_lo + clip_area_w;
-            // Edge trims scroll early (at the margin line, not the border)
-            // and — crucially — with NO content-derived ceiling: during a
-            // trim the user's push is the only scroll driver. The dragged
-            // edge rides margin-short of the border, so any ceiling tied to
-            // the (edge-defined) content end cancels against the setback and
-            // deadlocks the gesture. Post-release housekeeping glides the
-            // view back into legal bounds.
-            bool  trim  = (g_tl.drag_left || g_tl.drag_right) && g_tl.drag_track >= 0;
-            float inset = trim ? fit_margin : 0.f;
-            float max_scroll = fmaxf(0.f, tl_content_w - clip_area_w + fit_margin);
-            float ds = 0.f;
-            if      (mp.x < x_lo + inset) ds = -edge_step(x_lo + inset - mp.x);
-            else if (mp.x > x_hi - inset) ds =  edge_step(mp.x - (x_hi - inset));
-            if (ds != 0.f) {
-                float ns = scroll + ds;
-                if (!trim) ns = fminf(ns, max_scroll);
-                ns = fmaxf(0.f, ns);
-                if (g_tl.box_selecting) g_tl.box_start.x -= ns - scroll;
-                scroll = ns;
-            }
-            // NOTE: edge trims deliberately never change zoom. A mid-gesture
-            // scale change — even cursor-anchored and floor-latched — swaps
-            // the user's frame of reference while they're measuring by eye.
-            // Auto-scroll at constant zoom is the entire follow behavior.
-        }
+        // (Horizontal auto-scroll moved earlier — to the input phase, before the
+        // ruler — so the ruler and clips stay in sync. Zoom never changes mid-gesture.)
         // Vertical (clip drags move across tracks; marquee spans them)
         if (g_tl.drag_track >= 0 || g_tl.box_selecting) {
             float dv = 0.f;
@@ -1285,6 +1285,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
     auto& open_clip_ctx    = g_tl.open_clip_ctx;
     auto& open_track_ctx   = g_tl.open_track_ctx;
     auto& open_tl_ctx      = g_tl.open_tl_ctx;
+    static float s_tl_ctx_t = 0.f;   // click time captured for the empty-area context menu
     auto& s_trans_track    = g_tl.trans_track;
     auto& s_trans_left_ci  = g_tl.trans_left_ci;
     auto& s_trans_popup_pos= g_tl.trans_popup_pos;
@@ -1347,6 +1348,19 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
             ImGui::InvisibleButton(("##fxdrop" + std::to_string(ti)).c_str(),
                                    {drop_br.x - drop_tl.x, drop_br.y - drop_tl.y});
             if (ImGui::BeginDragDropTarget()) {
+                // A lyrics track is exclusive: only lyric bricks may land on it, and a
+                // lyric brick lands nowhere else (other tracks omit the accept below).
+                if (is_lyrics_track(track)) {
+                    if (ImGui::AcceptDragDropPayload("LYRIC_BRICK")) {
+                        float drop_t = snap_to_frame(state, fmaxf(0.f, (ImGui::GetMousePos().x - (origin.x + TL_LABEL_W) + scroll) / zoom));
+                        track.clips.push_back(make_lyric_brick(state, drop_t));
+                        state.selected_track = ti;
+                        state.selected_clip  = (int)track.clips.size() - 1;
+                        s_drop_flash_track = ti;
+                        s_drop_flash_t     = 0.6f;
+                        history_push(state, "Drop lyric brick");
+                    }
+                } else {
                 if (const ImGuiPayload* pay = ImGui::AcceptDragDropPayload("FX_PRESET")) {
                     int idx = *(const int*)pay->Data;
                     const EffectPreset* preset = nullptr;
@@ -1544,6 +1558,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                     recent_media_push(path, MediaKind::Audio);
                     history_push(state, "Drop audio: " + fs::path(path).filename().string());
                 }
+                }   // end exclusive-lyrics-track else
                 // Highlight the row while dragging over it
                 dl->AddRectFilled(drop_tl, drop_br, IM_COL32(180,130,255,40));
                 dl->AddRect(drop_tl, drop_br, IM_COL32(180,130,255,180), 2.f);
@@ -1603,8 +1618,9 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
             if (ImGui::IsKeyPressed(ImGuiKey_Escape)) s_rename_track = -1;
             ImGui::PopStyleColor(2);
         } else {
-            // Managed track: amber left accent stripe
-            if (track.managed)
+            // Lyrics / FX track: amber left accent stripe (durable via kind, so it
+            // survives reload — managed isn't serialized).
+            if (track.kind != TrackKind::Normal)
                 dl->AddRectFilled({origin.x, track_y+2.f},
                                   {origin.x+3.f, track_y+TL_TRACK_H-2.f},
                                   to_u32(Col::clip_lyrics));
@@ -2096,7 +2112,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                         } else if (right_edge) {
                             drag_track=ti; drag_clip=ci; drag_right=true; drag_left=false; drag_offset=0.f;
                             g_tl.drag_multi.clear();
-                        } else if (!track.managed) {  // body move blocked on managed tracks
+                        } else if (track.kind == TrackKind::Normal) {  // body move blocked on lyrics/FX tracks (they slide)
                             drag_track=ti; drag_clip=ci; drag_left=false; drag_right=false;
                             drag_offset = (mouse.x - origin.x - TL_LABEL_W + scroll) / zoom - clip.start;
                             s_body_snap_held_start = -1.f; s_body_snap_held_cand = -1.f;
@@ -2136,6 +2152,13 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                 mouse.y>=cy0 && mouse.y<=cy1 && mouse.x>=vis_x0 && mouse.x<=vis_x1) {
                 ctx_track = ti; ctx_clip = ci;
                 state.selected_track = ti; state.selected_clip = ci;
+                // Keep the multi-selection coherent: right-clicking outside it collapses
+                // to this clip; right-clicking a member keeps the whole selection, so the
+                // context-menu ops (delete/duplicate/merge) act on what you'd expect.
+                if (!state.clip_selection.count({ti, ci})) {
+                    state.clip_selection.clear();
+                    state.clip_selection.insert({ti, ci});
+                }
                 open_clip_ctx = true;
                 clip_ctx_opened_this_frame = true;
                 ImGui::OpenPopup("##clip_ctx");
@@ -2729,6 +2752,8 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
             mouse.y >= track_y && mouse.y < track_y+TL_TRACK_H &&
             mouse.x >= origin.x+TL_LABEL_W && mouse.x <= origin.x+total_w) {
             open_tl_ctx = true;
+            ctx_track   = ti;
+            s_tl_ctx_t  = snap_to_frame(state, fmaxf(0.f, (mouse.x - origin.x - TL_LABEL_W + scroll) / zoom));
             ImGui::OpenPopup("##tl_ctx");
         }
 
@@ -4186,6 +4211,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                     if (target < 0) {
                         Track nt;
                         nt.name = clip_type_name(cl.clip_type);
+                        if (cl.clip_type == ClipType::Lyrics) nt.kind = TrackKind::Lyrics;
                         state.tracks.push_back(std::move(nt));
                         target = (int)state.tracks.size() - 1;
                     }
@@ -4219,6 +4245,11 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                     AnimStyle st = (AnimStyle)*(const int*)pay->Data;
                     make_new_track(make_text_brick(st, drop_t),
                                    (std::string("Drop text brick: ") + text_style_name(st)).c_str(), true);
+                }
+                if (ImGui::AcceptDragDropPayload("LYRIC_BRICK")) {
+                    // Always a fresh kind==Lyrics track (reuse_empty=false) so the brick
+                    // lands on an exclusive lyrics lane it can call its own.
+                    make_new_track(make_lyric_brick(state, drop_t), "Drop lyric brick", false);
                 }
                 if (const ImGuiPayload* pay = ImGui::AcceptDragDropPayload("FX_CREATIVE")) {
                     FXType ft = (FXType)*(const int*)pay->Data;
@@ -4493,10 +4524,34 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
             }
         }
         if (ImGui::MenuItem("Duplicate clip")) {
-            if (valid) {
-                Clip dup = *cc; dup.start = cc->end; dup.end = dup.start + (cc->end - cc->start);
-                ct->clips.insert(ct->clips.begin()+ci+1, dup);
-                history_push(state, "Duplicate clip");
+            if (duplicate_selected_clips(state)) history_push(state, "Duplicate clip");
+        }
+        // Merge lyric bricks: the selected lyrics on this track, else this brick + the next.
+        if (valid && cc->clip_type == ClipType::Lyrics) {
+            std::vector<int> mids;
+            for (auto& [sti, sci] : state.clip_selection)
+                if (sti == ti) mids.push_back(sci);
+            std::sort(mids.begin(), mids.end());
+            if (mids.size() < 2) {
+                mids.clear();
+                if (ci + 1 < (int)ct->clips.size() && ct->clips[ci + 1].clip_type == ClipType::Lyrics)
+                    mids = {ci, ci + 1};
+            }
+            if (mids.size() >= 2 && ImGui::MenuItem("Merge lyric bricks")) {
+                Clip merged = ct->clips[mids[0]];
+                for (size_t k = 1; k < mids.size(); ++k) {
+                    Clip& o = ct->clips[mids[k]];
+                    merged.end = fmaxf(merged.end, o.end);
+                    for (auto& we : o.words) merged.words.push_back(we);
+                    if (!merged.text.empty() && !o.text.empty()) merged.text += ' ';
+                    merged.text += o.text;
+                }
+                for (int k = (int)mids.size() - 1; k >= 0; --k)
+                    ct->clips.erase(ct->clips.begin() + mids[k]);
+                ct->clips.insert(ct->clips.begin() + mids[0], merged);
+                state.clip_selection.clear();
+                state.selected_track = ti; state.selected_clip = mids[0];
+                history_push(state, "Merge lyric bricks");
             }
         }
         if (valid && cc->clip_type == ClipType::Video &&
@@ -4525,11 +4580,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
         }
         ImGui::Separator();
         if (ImGui::MenuItem("Delete clip")) {
-            if (valid) {
-                ct->clips.erase(ct->clips.begin()+ci);
-                state.selected_clip = -1;
-                history_push(state, "Delete clip");
-            }
+            if (delete_selected_clips(state)) history_push(state, "Delete clip");
         }
         if (trk_locked) ImGui::EndDisabled();
         ImGui::EndPopup();
@@ -4575,16 +4626,19 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
         }
 
         // Managed track controls
-        if (ct && ct->managed) {
+        if (ct && (ct->managed || is_lyrics_track(*ct))) {
             if (ImGui::MenuItem("Detach from preset")) {
                 ct->managed = false;
+                ct->kind    = TrackKind::Normal;   // typography no longer owns/regenerates it
+                for (auto& c : ct->clips)          // its lyrics become freestanding (durable)
+                    if (c.clip_type == ClipType::Lyrics) c.source_id.clear();
                 history_push(state, "Detach track from preset");
             }
             ImGui::Separator();
         }
 
         // ── Add clip to this track ────────────────────────────────────────────
-        if (valid && (!ct || !ct->managed)) {
+        if (valid && (!ct || ct->kind == TrackKind::Normal)) {
             if (ImGui::MenuItem("Add Text Clip")) {
                 add_clip_to_track(state, ti, "", ClipType::Text);
                 s_edit_focus_next = true;
@@ -4639,6 +4693,17 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
 
     if (ImGui::BeginPopup("##tl_ctx")) {
         open_tl_ctx = false;
+        // On a lyrics track, offer the one brick it accepts — at the clicked time.
+        if (ctx_track >= 0 && ctx_track < (int)state.tracks.size() &&
+            is_lyrics_track(state.tracks[ctx_track])) {
+            if (ImGui::MenuItem("Add lyric brick")) {
+                state.tracks[ctx_track].clips.push_back(make_lyric_brick(state, s_tl_ctx_t));
+                state.selected_track = ctx_track;
+                state.selected_clip  = (int)state.tracks[ctx_track].clips.size() - 1;
+                history_push(state, "Add lyric brick");
+            }
+            ImGui::Separator();
+        }
         if (ImGui::MenuItem("Add Track")) {
             Track t;
             char n[32]; snprintf(n,sizeof(n),"Track %d",(int)state.tracks.size()+1);

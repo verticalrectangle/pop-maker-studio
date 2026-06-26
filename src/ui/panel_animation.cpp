@@ -105,6 +105,9 @@ void generate_typography(AppState& state) {
 
     const std::string src = state.audio_path;
     const std::string fx_tag = TYPO_FX_TAG + src;
+    // Provenance keys on source_id==src; an empty src would match (and wipe) the
+    // freestanding manual bricks below, so refuse to regenerate without a real source.
+    if (src.empty()) return;
 
     // Find first analyzed audio/video clip for beat source
     int beat_ti = -1, beat_ci = -1;
@@ -114,14 +117,17 @@ void generate_typography(AppState& state) {
             if (!cl.beats.empty()) { beat_ti = ti; beat_ci = ci; }
         }
 
-    // Find managed lyrics track for this source BEFORE clearing (save index).
+    // Find the lyrics track BEFORE clearing (save index). Prefer one already holding
+    // this source's clips; else fall back to the first lyrics track — kind is durable,
+    // so an empty / manual / freshly-reloaded track is still found (managed isn't saved).
     int typo_ti = -1;
-    for (int i = 0; i < (int)state.tracks.size(); ++i) {
-        if (!state.tracks[i].managed) continue;
-        for (auto& c : state.tracks[i].clips)
-            if (c.clip_type == ClipType::Lyrics && c.source_id == src) { typo_ti = i; break; }
-        if (typo_ti >= 0) break;
-    }
+    for (int i = 0; i < (int)state.tracks.size() && typo_ti < 0; ++i)
+        if (is_lyrics_track(state.tracks[i]))
+            for (auto& c : state.tracks[i].clips)
+                if (c.clip_type == ClipType::Lyrics && c.source_id == src) { typo_ti = i; break; }
+    if (typo_ti < 0)
+        for (int i = 0; i < (int)state.tracks.size(); ++i)
+            if (is_lyrics_track(state.tracks[i])) { typo_ti = i; break; }
 
     // Clear previously generated typography clips and FX clips from all tracks.
     for (auto& t : state.tracks) {
@@ -134,7 +140,7 @@ void generate_typography(AppState& state) {
 
     // Create managed Lyrics track if none found.
     if (typo_ti < 0) {
-        Track lt; lt.name = "Lyrics"; lt.managed = true;
+        Track lt; lt.name = "Lyrics"; lt.managed = true; lt.kind = TrackKind::Lyrics;
         state.tracks.insert(state.tracks.begin(), std::move(lt));
         typo_ti = 0;
         if (beat_ti >= 0) beat_ti++;  // index shifted by insert
@@ -256,7 +262,9 @@ void generate_typography(AppState& state) {
         }
     }
 
-    typo_track->clips.clear();
+    // Do NOT clear the whole track — the scoped erase above already removed this
+    // source's generated bricks. Freestanding manual bricks (empty source_id) must
+    // survive a regen; the loop below appends the freshly-grouped clips around them.
     for (int i = 0; i < (int)grouped.size(); ++i) {
         Clip c = grouped[i];
         stamp(c);
@@ -295,11 +303,10 @@ void generate_typography(AppState& state) {
     if (typo_ti >= 0 && pr->n_fx > 0) {
         Track* fx_track = nullptr;
         if (typo_ti + 1 < (int)state.tracks.size() &&
-            state.tracks[typo_ti + 1].managed &&
-            state.tracks[typo_ti + 1].name == "Lyrics FX")
+            state.tracks[typo_ti + 1].kind == TrackKind::LyricsFX)
             fx_track = &state.tracks[typo_ti + 1];
         else {
-            Track ft; ft.name = "Lyrics FX"; ft.managed = true;
+            Track ft; ft.name = "Lyrics FX"; ft.managed = true; ft.kind = TrackKind::LyricsFX;
             state.tracks.insert(state.tracks.begin() + typo_ti + 1, std::move(ft));
             fx_track = &state.tracks[typo_ti + 1];
         }
@@ -375,6 +382,16 @@ static bool typo_selected_is_standalone(const AppState& state) {
     return clips[state.selected_clip].clip_type == ClipType::Text;
 }
 
+// Restyle every clip of a given type+source in place — no clear, no regroup.
+// Shared by live Tune tweaks and held-grouping preset switches.
+static void typo_restyle_set(AppState& state, const TypographyPreset& pr,
+                             ClipType ct, const std::string& src) {
+    for (auto& t : state.tracks)
+        for (auto& c : t.clips)
+            if (c.clip_type == ct && c.source_id == src)
+                apply_typo_style(c, pr, state);
+}
+
 static void typo_restyle_live(AppState& state) {
     const TypographyPreset* pr = typo_preset_by_id(state.typo_preset_id.c_str());
     if (!pr) return;
@@ -399,10 +416,7 @@ static void typo_restyle_live(AppState& state) {
             }
         }
     }
-    for (auto& t : state.tracks)
-        for (auto& c : t.clips)
-            if (c.clip_type == ct && c.source_id == src)
-                apply_typo_style(c, *pr, state);
+    typo_restyle_set(state, *pr, ct, src);
 }
 
 // Small "Hold" pin toggle drawn after a tweakable control's label. Filled when
@@ -670,6 +684,11 @@ void panel_typography(AppState& state, float w) {
             if (typo_selected_is_standalone(state)) {
                 apply_typo_style(state.tracks[state.selected_track]
                                      .clips[state.selected_clip], pr, state);
+                history_push(state, std::string("Typography — ") + pr.label);
+            } else if (state.typo.pinned(TF_Grouping)) {
+                // Grouping is held: keep the structure, just re-skin the generated
+                // lyrics in place (no clear, no regroup). Manual bricks keep their look.
+                typo_restyle_set(state, pr, ClipType::Lyrics, state.audio_path);
                 history_push(state, std::string("Typography — ") + pr.label);
             } else {
                 generate_typography(state);
@@ -956,6 +975,20 @@ Clip make_text_brick(AnimStyle style, float start) {
     return c;
 }
 
+// A 2 s lyric brick at `start`, skinned by the active typography preset. Left
+// freestanding (empty source_id) so a transcript regen never wipes it.
+Clip make_lyric_brick(AppState& state, float start) {
+    Clip c;
+    c.clip_type = ClipType::Lyrics;
+    c.text      = "Lyric";
+    c.start     = start;
+    c.end       = start + 2.f;
+    const TypographyPreset* pr = typo_preset_by_id(state.typo_preset_id.c_str());
+    if (!pr) pr = &g_typo_presets[0];
+    apply_typo_style(c, *pr, state);
+    return c;
+}
+
 // Drop a plain text brick onto a track / at the playhead, then select it.
 static void add_text_brick_here(AppState& state) {
     Clip c = make_text_brick(AnimStyle::None, state.playhead);
@@ -971,6 +1004,25 @@ static void add_text_brick_here(AppState& state) {
     clip_flash(state, target, state.selected_clip, /*reveal=*/true);
     s_panel_view = PanelView::Typography;   // jump straight to styling
     history_push(state, "Add text brick");
+}
+
+// Drop a lyric brick onto the lyrics track at the playhead, then select it.
+static void add_lyric_brick_here(AppState& state) {
+    Clip c = make_lyric_brick(state, state.playhead);
+    int target = -1;
+    for (int i = 0; i < (int)state.tracks.size(); ++i)
+        if (is_lyrics_track(state.tracks[i])) { target = i; break; }
+    if (target < 0) {
+        Track t; t.name = "Lyrics"; t.kind = TrackKind::Lyrics;
+        state.tracks.insert(state.tracks.begin(), std::move(t));
+        target = 0;
+    }
+    state.tracks[target].clips.push_back(std::move(c));
+    state.selected_track = target;
+    state.selected_clip  = (int)state.tracks[target].clips.size() - 1;
+    clip_flash(state, target, state.selected_clip, /*reveal=*/true);
+    s_panel_view = PanelView::Clip;   // jump to the lyric text editor
+    history_push(state, "Add lyric brick");
 }
 
 void panel_text_library(AppState& state, float w) {
@@ -1015,6 +1067,52 @@ void panel_text_library(AppState& state, float w) {
         ImGui::EndDragDropSource();
     }
     if (hov) ImGui::SetTooltip("Add a plain text brick (style in the Typography tab)");
+
+    ImGui::Dummy({0.f, 12.f});
+}
+
+void panel_lyric_library(AppState& state, float w) {
+    ImGui::Dummy({0.f, 6.f});
+    ImGui::PushFont(g_font_bold);
+    ImGui::TextUnformatted("Lyric");
+    ImGui::PopFont();
+    ImGui::PushStyleColor(ImGuiCol_Text, to_u32(Col::muted));
+    ImGui::TextWrapped("Add a lyric brick — the only brick a lyrics track holds. "
+                       "Click to add at the playhead, or drag onto the timeline. "
+                       "Edit its text in the Clip tab; skin it in Typography.");
+    ImGui::PopStyleColor();
+    ImGui::Dummy({0.f, 8.f});
+
+    float card_w = w - 8.f, card_h = 64.f;
+    ImVec2 cp = ImGui::GetCursorScreenPos();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    bool hov = ImGui::IsMouseHoveringRect(cp, {cp.x + card_w, cp.y + card_h});
+
+    dl->AddRectFilled(cp, {cp.x + card_w, cp.y + card_h},
+                      hov ? IM_COL32(34, 44, 34, 255) : IM_COL32(22, 22, 28, 255), 6.f);
+    dl->AddRect(cp, {cp.x + card_w, cp.y + card_h},
+                hov ? IM_COL32(120, 180, 90, 220) : IM_COL32(50, 50, 62, 200), 6.f, 0, 1.2f);
+    ImGui::PushFont(g_font_bold);
+    dl->AddText(ImGui::GetFont(), 16.f, {cp.x + 14.f, cp.y + 13.f}, to_u32(Col::fg), "+ Add Lyric");
+    ImGui::PopFont();
+    dl->AddText({cp.x + 14.f, cp.y + 37.f}, IM_COL32(140, 140, 160, 220),
+                "Durable line \xe2\x80\x94 typography skins it");
+
+    ImGui::InvisibleButton("##add_lyric_brick", {card_w, card_h});
+    if (ImGui::IsItemClicked()) add_lyric_brick_here(state);
+    if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
+        int dummy = 0;
+        ImGui::SetDragDropPayload("LYRIC_BRICK", &dummy, sizeof(int));
+        ImDrawList* gdl = ImGui::GetForegroundDrawList();
+        ImVec2 gp = ImGui::GetMousePos();
+        gdl->AddRectFilled({gp.x + 8.f, gp.y + 8.f}, {gp.x + 148.f, gp.y + 44.f},
+                           IM_COL32(30, 60, 30, 230), 6.f);
+        gdl->AddRect({gp.x + 8.f, gp.y + 8.f}, {gp.x + 148.f, gp.y + 44.f},
+                     IM_COL32(120, 180, 90, 200), 6.f, 0, 1.2f);
+        gdl->AddText({gp.x + 20.f, gp.y + 20.f}, IM_COL32(255, 255, 255, 240), "Lyric brick");
+        ImGui::EndDragDropSource();
+    }
+    if (hov) ImGui::SetTooltip("Add a lyric brick (text in the Clip tab, skin in Typography)");
 
     ImGui::Dummy({0.f, 12.f});
 }

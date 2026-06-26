@@ -176,6 +176,22 @@ Clip clip_split_at(Clip& cl, float cut) {
         it = it->second.empty() ? cl.ktracks.erase(it) : std::next(it);
     for (auto it = right.ktracks.begin(); it != right.ktracks.end(); )
         it = it->second.empty() ? right.ktracks.erase(it) : std::next(it);
+
+    // Lyrics carry a per-word list: each word belongs to whichever half its time
+    // falls in (the copy above otherwise duplicates the whole list to both sides).
+    // Rebuild each half's text from its words so the split reads correctly.
+    if (cl.clip_type == ClipType::Lyrics && !right.words.empty()) {
+        std::vector<WordEntry> lw, rw;
+        for (auto& we : right.words) (we.start < cut ? lw : rw).push_back(we);
+        cl.words = lw; right.words = rw;
+        auto rebuild_text = [](Clip& c){
+            if (c.words.empty()) return;
+            std::string t;
+            for (auto& w : c.words) { if (!t.empty()) t += ' '; t += w.text; }
+            c.text = t;
+        };
+        rebuild_text(cl); rebuild_text(right);
+    }
     return right;
 }
 

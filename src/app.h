@@ -425,6 +425,11 @@ struct ClipKfField { const char* name; float Clip::* f; };
 extern const ClipKfField kClipKfFields[];
 extern const int kClipKfFieldCount;
 
+// What a track holds. Lyrics/LyricsFX tracks are exclusive (accept only their own
+// brick) and durable across reloads — see is_lyrics_track and project serialization.
+// (managed is NOT serialized; kind is what survives a save/load.)
+enum class TrackKind : uint8_t { Normal = 0, Lyrics = 1, LyricsFX = 2 };
+
 struct Track {
     std::string       name;
     std::vector<Clip> clips;
@@ -433,7 +438,10 @@ struct Track {
     bool              locked  = false;  // when true, blocks all clip edits on this track
     bool              managed = false;  // owned by typography system — preset rewrites clips in-place
     int               sub_row = 0;
+    TrackKind         kind    = TrackKind::Normal;
 };
+
+inline bool is_lyrics_track(const Track& t) { return t.kind == TrackKind::Lyrics; }
 
 // ── Audio bus brick ────────────────────────────────────────────────────────────
 // A Bus is a Clip (ClipType::Bus) placed on a track: it submixes the audio of

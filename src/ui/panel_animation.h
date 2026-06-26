@@ -10,5 +10,8 @@ void panel_typography(AppState& state, float w);
 // drag = timeline). Style cards/preview shared via text_styles.h.
 void panel_text_library(AppState& state, float w);
 
+// Lyric brick library — drag/click a durable lyric brick onto a lyrics track.
+void panel_lyric_library(AppState& state, float w);
+
 // generate_typography — also called from pipeline completion and import_file
 void generate_typography(AppState& state);

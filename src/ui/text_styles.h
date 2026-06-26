@@ -18,3 +18,7 @@ const char* text_style_name(AnimStyle st);
 
 // A centered 4 s text clip with the given style, starting at `start`.
 Clip make_text_brick(AnimStyle style, float start);
+
+// A 2 s lyric brick at `start`, styled by the active typography preset and left
+// freestanding (empty source_id) so a transcript regen never wipes it.
+Clip make_lyric_brick(AppState& state, float start);

@@ -1412,6 +1412,7 @@ void ui_studio(AppState& state) {
             { "Bin",         PanelView::LibBin,  IM_COL32(220, 200, 120, 255), false },
             { "Backgrounds", PanelView::LibBG,   IM_COL32(180,  60, 160, 255), true  },
             { "Text",        PanelView::LibText, IM_COL32( 80, 140, 220, 255), false },
+            { "Lyric",       PanelView::LibLyric,IM_COL32(120, 180,  90, 255), false },
             { "Filters",     PanelView::LibAdj,  IM_COL32(100,  80, 200, 255), false },
             { "Video FX",    PanelView::LibFX,   IM_COL32(210, 110,  30, 255), true  },
             { "Body FX",     PanelView::LibBFX,  IM_COL32( 20, 180, 160, 255), false },
@@ -2194,6 +2195,7 @@ void ui_studio(AppState& state) {
             case PanelView::History:     panel_history(state, pw);               break;
             case PanelView::LibBG:           panel_background(state, pw);            break;
             case PanelView::LibText:         panel_text_library(state, pw);          break;
+            case PanelView::LibLyric:        panel_lyric_library(state, pw);         break;
             case PanelView::LibFX:           panel_fx_creative(state, pw);           break;
             case PanelView::LibAdj:          panel_adjustment_library(state, pw);    break;
             case PanelView::LibBFX:          panel_body_fx_library(state, pw);       break;

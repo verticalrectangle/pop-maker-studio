@@ -577,14 +577,19 @@ void apply_subtitle_mode(AppState& state) {
 
         Track* lyrics = nullptr;
         for (auto& t : state.tracks)
-            if (t.name == "Lyrics") { lyrics = &t; break; }
+            if (is_lyrics_track(t)) { lyrics = &t; break; }
         if (!lyrics) {
             state.tracks.insert(state.tracks.begin(), Track{});
             lyrics = &state.tracks.front();
             lyrics->name = "Lyrics";
         }
         lyrics->managed = true;
-        lyrics->clips = grouped;
+        lyrics->kind    = TrackKind::Lyrics;
+        // Append (don't replace) so freestanding manual bricks survive a re-group;
+        // the scoped erase above already removed this source's generated bricks.
+        for (auto& c : grouped) lyrics->clips.push_back(c);
+        std::sort(lyrics->clips.begin(), lyrics->clips.end(),
+                  [](const Clip& a, const Clip& b){ return a.start < b.start; });
 
         // Extend project duration so all lyrics are reachable on the timeline.
         for (auto& c : lyrics->clips)
