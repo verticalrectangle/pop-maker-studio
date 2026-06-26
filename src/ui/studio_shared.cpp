@@ -215,19 +215,35 @@ void toggle_play(AppState& state) {
 }
 
 float tl_fps(const AppState& state) {
-    // The timeline frame grid. Default to the project (timeline/export) fps —
-    // that's the rate the playhead, frame-stepping and last_playable_time should
-    // snap to. The MJPEG preview proxy is fps-capped (and some are coarse — a
-    // 10 fps proxy would otherwise drag the playhead onto a 0.1 s grid and park
-    // it short of the clip's true end), so only let the proxy's rate RAISE the
-    // grid when it's genuinely finer, never lower it.
+    // The timeline frame grid = the project/export fps — the ONE grid that the ruler
+    // ticks, all snapping, and the normalize pass land on, so nothing ever sits
+    // between frames. A source video's higher native rate does NOT raise the grid:
+    // you cut and export at the project fps, so that's the grid you see and snap to.
     float tf = (float)state.fps;
     if (!(tf > 0.f)) tf = 30.f;
-    if (state.proxy_ready) {
-        double vf = video_info(0).fps;
-        if (vf > (double)tf) tf = (float)vf;
-    }
     return tf;
+}
+
+void normalize_timeline_to_grid(AppState& state) {
+    float fps = tl_fps(state);
+    if (!(fps > 0.f)) return;
+    auto q = [fps](float t){ return std::roundf(t * fps) / fps; };
+    for (auto& tr : state.tracks)
+        for (auto& c : tr.clips) {
+            c.start = q(c.start);
+            c.end   = q(c.end);
+            if (c.end <= c.start) c.end = c.start + 1.f / fps;   // never collapse below a frame
+            c.in_point        = fmaxf(0.f, q(c.in_point));
+            c.transition_pre  = fmaxf(0.f, q(c.transition_pre));
+            c.transition_post = fmaxf(0.f, q(c.transition_post));
+            c.fade_in         = fmaxf(0.f, q(c.fade_in));
+            c.fade_out        = fmaxf(0.f, q(c.fade_out));
+            for (auto& kv : c.ktracks)
+                for (auto& k : kv.second.keys) k.time = fmaxf(0.f, q(k.time));
+        }
+    for (auto& m : state.markers) m.time = fmaxf(0.f, q(m.time));
+    if (state.loop_in  >= 0.f) state.loop_in  = q(state.loop_in);
+    if (state.loop_out >= 0.f) state.loop_out = q(state.loop_out);
 }
 
 float last_playable_time(const AppState& state) {

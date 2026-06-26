@@ -685,8 +685,12 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
     dl->AddRect(origin, {origin.x+total_w, origin.y+total_h}, to_u32(Col::line));
 
     // ── Fps + frame snap helper ───────────────────────────────────────────────
-    float fps = (state.proxy_ready && video_info(0).fps > 0.0)
-                ? (float)video_info(0).fps : 30.f;
+    // Frame-grid invariant: snap every clip edge / in_point / keyframe / marker /
+    // loop point onto the project frame grid every frame, so nothing can sit between
+    // the ruler ticks no matter how it was added (drag, MCP, generation, old project).
+    normalize_timeline_to_grid(state);
+
+    float fps = tl_fps(state);   // the ONE grid — project/export fps, never the source video's
     // snap(t): round t to nearest frame unless Ctrl is held
     auto snap = [&](float t) -> float {
         if (ImGui::GetIO().KeyCtrl || fps <= 0.f) return t;

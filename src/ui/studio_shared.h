@@ -49,6 +49,11 @@ float last_playable_time(const AppState& state);
 // never land mid-frame (which makes loops wrap and markers cut between frames).
 float snap_to_frame(const AppState& state, float t);
 
+// Snap EVERY time-bearing field (clip start/end/in_point/transitions/fades,
+// keyframes, markers, loop points) onto the project frame grid. Run per-frame so
+// nothing can sit between the ruler's frame ticks, however it was added.
+void normalize_timeline_to_grid(AppState& state);
+
 // ── Loop region ────────────────────────────────────────────────────────────────
 // Effective loop bounds. Fills lo/hi with the region to cycle: the loop brace
 // [loop_in,loop_out] when one is set, otherwise the whole timeline [0,duration].
