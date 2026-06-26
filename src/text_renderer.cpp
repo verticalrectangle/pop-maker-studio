@@ -104,7 +104,11 @@ void render_text_block(TextRenderCtx ctx, const std::vector<std::string>& lines)
                    : (ctx.anchor_h == 2) ? ctx.block_cx - block_max_w
                                          : ctx.block_cx - block_max_w * 0.5f;
         float right = left + block_max_w;
-        float lo = ctx.canvas_x0, hi = ctx.canvas_x0 + ctx.canvas_w;
+        // Shortform safe zone: TikTok/Reels/IG zoom-crop the frame to fill and lay
+        // UI over the edges, so inset the clamp bounds instead of pinning flush to
+        // the literal edge — text at the boundary still survives on-platform.
+        float margin = ctx.canvas_w * 0.05f;   // 5% each side; bump if clips still clip
+        float lo = ctx.canvas_x0 + margin, hi = ctx.canvas_x0 + ctx.canvas_w - margin;
         if (block_max_w <= hi - lo) {
             if (left < lo)       ctx.block_cx += lo - left;
             else if (right > hi) ctx.block_cx += hi - right;
