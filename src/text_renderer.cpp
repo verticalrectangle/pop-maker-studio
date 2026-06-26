@@ -71,7 +71,7 @@ static inline ImU32 lerp_rgb_keepa(ImU32 c1rgb, ImU32 c2rgb, float t, unsigned a
     return IM_COL32(r, g, b, a);
 }
 
-void render_text_block(const TextRenderCtx& ctx, const std::vector<std::string>& lines) {
+void render_text_block(TextRenderCtx ctx, const std::vector<std::string>& lines) {
     if (lines.empty()) return;
 
     ImDrawList* dl        = ctx.dl;
@@ -90,6 +90,27 @@ void render_text_block(const TextRenderCtx& ctx, const std::vector<std::string>&
     for (size_t i = 0; i < lines.size(); ++i) {
         lwidths[i] = text_w_tracked(font, fsz, lines[i].c_str(), track);
         if (lwidths[i] > block_max_w) block_max_w = lwidths[i];
+    }
+
+    // Keep the resting block on-canvas. An edge/random anchor (e.g. the rave
+    // preset's per-word positions) on a wide word would otherwise spill off the
+    // frame — block_cx scales with the canvas but never accounted for the text's
+    // own width. Shift block_cx minimally so the block's bbox fits inside
+    // [canvas_x0, canvas_x0+canvas_w]; per-element animation (anim_dx) is applied
+    // afterward and can still travel off-frame intentionally. Text wider than the
+    // canvas is centred (symmetric overflow is unavoidable).
+    if (ctx.canvas_w > 0.f && block_max_w > 0.f) {
+        float left = (ctx.anchor_h == 0) ? ctx.block_cx
+                   : (ctx.anchor_h == 2) ? ctx.block_cx - block_max_w
+                                         : ctx.block_cx - block_max_w * 0.5f;
+        float right = left + block_max_w;
+        float lo = ctx.canvas_x0, hi = ctx.canvas_x0 + ctx.canvas_w;
+        if (block_max_w <= hi - lo) {
+            if (left < lo)       ctx.block_cx += lo - left;
+            else if (right > hi) ctx.block_cx += hi - right;
+        } else {
+            ctx.block_cx += (lo + hi) * 0.5f - (left + right) * 0.5f;
+        }
     }
 
     float block_h = lines.size() * ctx.line_h;

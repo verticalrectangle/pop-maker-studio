@@ -19,8 +19,10 @@ struct TextRenderCtx {
     float       t;          // playhead / render time
     float       rotation;   // clip rotation in degrees (rotates the whole block)
     float       canvas_w = 0.f;  // canvas width px (per-element slide distance)
+    float       canvas_x0 = 0.f; // canvas left edge, same px space as block_cx
     // Non-null when clip->karaoke is active
     const std::vector<const WordEntry*>* clip_words;
 };
 
-void render_text_block(const TextRenderCtx& ctx, const std::vector<std::string>& lines);
+// Takes ctx BY VALUE: it clamps block_cx so the resting block stays on-canvas.
+void render_text_block(TextRenderCtx ctx, const std::vector<std::string>& lines);
