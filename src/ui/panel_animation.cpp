@@ -647,7 +647,8 @@ void panel_typography(AppState& state, float w) {
                 trc.clip = &pc; trc.eff_style = pr.style; trc.anchor_h = 1;
                 trc.block_cx = px0 + pw * 0.5f; trc.ty = bty + a_dy;
                 trc.line_h = dline_h; trc.t = lt; trc.rotation = 0.f;
-                trc.canvas_w = pw; trc.canvas_x0 = px0; trc.clip_words = nullptr;
+                trc.canvas_w = pw; trc.canvas_x0 = px0;
+                trc.canvas_h = ph; trc.canvas_y0 = py0; trc.clip_words = nullptr;
                 std::vector<std::string> plines{ sample };
                 render_text_block(trc, plines);
             }

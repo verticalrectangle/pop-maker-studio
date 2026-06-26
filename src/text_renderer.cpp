@@ -119,6 +119,22 @@ void render_text_block(TextRenderCtx ctx, const std::vector<std::string>& lines)
 
     float block_h = lines.size() * ctx.line_h;
 
+    // Vertical safe zone: the top handle/tabs and (taller) the bottom caption
+    // strip eat into shortform frames, so keep the block out of those bands too.
+    // ty already includes anim_dy (the caller folds it in), so this clamps the
+    // displayed Y — text won't even dip into the caption mid-animation.
+    if (ctx.canvas_h > 0.f) {
+        float top_m = ctx.canvas_h * 0.08f;   // 8%  top    (handle / tabs / status)
+        float bot_m = ctx.canvas_h * 0.15f;   // 15% bottom (caption strip is taller)
+        float lo = ctx.canvas_y0 + top_m, hi = ctx.canvas_y0 + ctx.canvas_h - bot_m;
+        if (block_h <= hi - lo) {
+            if (ctx.ty < lo)                ctx.ty = lo;
+            else if (ctx.ty + block_h > hi) ctx.ty = hi - block_h;
+        } else {
+            ctx.ty = (lo + hi) * 0.5f - block_h * 0.5f;   // taller than zone — centre
+        }
+    }
+
     bool has_karaoke = ctx.clip_words && !ctx.clip_words->empty() && clip->karaoke;
 
     // Per-element (per-word / per-letter) kinetic mode: each word or glyph runs

@@ -2231,6 +2231,8 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                 trc.rotation    = render_clip.eval_prop("rotation", state.playhead);
                 trc.canvas_w    = w;
                 trc.canvas_x0   = p.x;
+                trc.canvas_h    = h;
+                trc.canvas_y0   = p.y;
                 trc.clip_words  = has_karaoke ? &clip_words : nullptr;
                 render_text_block(trc, txt_lines);
             }

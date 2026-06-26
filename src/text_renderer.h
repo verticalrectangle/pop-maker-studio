@@ -20,6 +20,8 @@ struct TextRenderCtx {
     float       rotation;   // clip rotation in degrees (rotates the whole block)
     float       canvas_w = 0.f;  // canvas width px (per-element slide distance)
     float       canvas_x0 = 0.f; // canvas left edge, same px space as block_cx
+    float       canvas_h = 0.f;  // canvas height px (0 = no vertical safe-zone clamp)
+    float       canvas_y0 = 0.f; // canvas top edge, same px space as ty
     // Non-null when clip->karaoke is active
     const std::vector<const WordEntry*>* clip_words;
 };
