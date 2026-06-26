@@ -1753,7 +1753,7 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                     int rh = (vi_r.height > 0) ? vi_r.height : (int)h;
                     tex = runtime_fx_apply(cl_ptr->runtime_fx_id, tex, rw, rh,
                                           cl_ptr->runtime_fx_params,
-                                          cl_ptr->runtime_fx_amount, t_anim);
+                                          cl_ptr->eval_prop("runtime_fx_amount", t_anim), t_anim);
                 }
 
                 // Face filter on the take (Pretty/Doggy…): cached landmark

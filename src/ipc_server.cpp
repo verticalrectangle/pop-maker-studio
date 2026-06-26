@@ -2549,6 +2549,11 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         int ti = track_by_name_or_index(state, params), ci = params.value("clip", -1);
         std::string prop = params.value("prop", "");
         if (!check_clip(state, ti, ci, err)) return {};
+        // "amount" on a video FX brick is its runtime-shader intensity slider —
+        // accept the natural name (the one set_clip_fx uses) and map it to the
+        // real keyframe field so you can ride the Amount knob over time.
+        if (prop == "amount" && !state.tracks[ti].clips[ci].runtime_fx_id.empty())
+            prop = "runtime_fx_amount";
         bool ok_prop = (prop == "opacity");          // opacity is special-cased in eval_prop
         for (int i = 0; !ok_prop && i < kClipKfFieldCount; ++i)
             if (prop == kClipKfFields[i].name) ok_prop = true;

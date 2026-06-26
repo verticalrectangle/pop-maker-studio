@@ -2315,7 +2315,8 @@ static bool gl_render_vid_clip(ImDrawList& dl, const Clip* cl, float at_time,
     // RuntimeFX — custom hot-reload shader on this clip.
     if (!cl->runtime_fx_id.empty())
         cur_tex = runtime_fx_apply(cl->runtime_fx_id, cur_tex, vid_w, vid_h,
-                                   cl->runtime_fx_params, cl->runtime_fx_amount, at_time);
+                                   cl->runtime_fx_params,
+                                   cl->eval_prop("runtime_fx_amount", at_time), at_time);
 
     // Face filter on the take — same cached-landmark helper as preview.
     // Export prep blocks until the cache is built (see export start).
