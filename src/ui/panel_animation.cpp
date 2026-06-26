@@ -94,8 +94,11 @@ void generate_typography(AppState& state) {
     const TypographyPreset* pr = typo_preset_by_id(state.typo_preset_id.c_str());
     if (!pr) pr = &g_typo_presets[0];
 
-    // Grouping and word count come entirely from the preset — no user override.
-    SubtitleMode grouping = pr->grouping;
+    // Grouping comes from the preset unless the user overrode it in the Typography
+    // tab (TF_Grouping) — then it's state.subtitle_mode/_n. The preset still
+    // supplies pause_gap/max_words as the tuning defaults.
+    SubtitleMode grouping = state.typo.on(TF_Grouping) ? state.subtitle_mode : pr->grouping;
+    int          group_n  = state.typo.on(TF_Grouping) ? state.subtitle_n   : pr->custom_n;
 
     const std::string src = state.audio_path;
     const std::string fx_tag = TYPO_FX_TAG + src;
@@ -239,7 +242,7 @@ void generate_typography(AppState& state) {
     std::vector<Clip> grouped;
     if (seg_only)           grouped = raw;  // segments already are the lines
     else if (!segs.empty()) grouped = group_words_segmented(raw, segs, grouping, pr->pause_gap, pr->max_words);
-    else                    grouped = group_words(raw, grouping, pr->custom_n, pr->pause_gap, pr->max_words);
+    else                    grouped = group_words(raw, grouping, group_n, pr->pause_gap, pr->max_words);
 
     // Per-clip word data (always needed for edit replay; karaoke also uses it)
     std::vector<WordEntry> all_words;
@@ -683,6 +686,44 @@ void panel_typography(AppState& state, float w) {
     // tweak when you switch to another preset (keep_held on the card click).
     const TypographyPreset* pr = typo_preset_by_id(state.typo_preset_id.c_str());
     auto& tw = state.typo;
+
+    // Grouping — overrides the preset's word grouping for the managed lyrics track
+    // (value lives in state.subtitle_mode/_n). Hidden for a standalone text brick,
+    // where grouping doesn't apply. Changing it re-lays the transcript track.
+    if (!typo_selected_is_standalone(state)) {
+        ui_label("Grouping"); typo_hold_btn(state, TF_Grouping);
+        SubtitleMode gm = tw.on(TF_Grouping) ? state.subtitle_mode
+                                             : (pr ? pr->grouping : SubtitleMode::Phrase);
+        struct GBtn { SubtitleMode m; const char* label; const char* tip; };
+        static const GBtn gbtns[] = {
+            {SubtitleMode::Word,    "Word",     "One word per brick"},
+            {SubtitleMode::Phrase,  "Phrase",   "Sub-line phrases — a line split at its pauses"},
+            {SubtitleMode::Segment, "Sentence", "One brick per transcript line"},
+            {SubtitleMode::CustomN, "Custom",   "N words per brick"},
+        };
+        ImGui::PushID("ty_group");
+        for (auto& gb : gbtns) {
+            if (ui_btn(gb.label, gm == gb.m, true)) {
+                state.subtitle_mode = gb.m; tw.tweak(TF_Grouping);
+                generate_typography(state);
+            }
+            if (ImGui::IsItemHovered()) { ImGui::BeginTooltip(); ImGui::TextUnformatted(gb.tip); ImGui::EndTooltip(); }
+            ImGui::SameLine(0.f, 4.f);
+        }
+        ImGui::PopID();
+        ImGui::NewLine();
+        if (gm == SubtitleMode::CustomN) {
+            ImGui::SetNextItemWidth(80.f);
+            ImGui::PushStyleColor(ImGuiCol_FrameBg, Col::bg_soft);
+            int n = state.subtitle_n;
+            if (ImGui::InputInt("words/brick##tycn", &n)) {
+                state.subtitle_n = (n < 1) ? 1 : (n > 20) ? 20 : n;
+                tw.tweak(TF_Grouping); generate_typography(state);
+            }
+            ImGui::PopStyleColor();
+        }
+        ImGui::Dummy({0.f, 8.f});
+    }
 
     ui_label("Font Size"); typo_hold_btn(state, TF_FontSize);
     float fs = tw.on(TF_FontSize) ? tw.font_size : (pr ? pr->font_size : 0.09f);

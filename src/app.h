@@ -574,6 +574,7 @@ enum TypoField {
     TF_FontSize = 0, TF_Color, TF_Case, TF_AnchorH,
     TF_Tracking, TF_Wrap, TF_PosV,
     TF_PosX, TF_PosY, TF_TextStyle, TF_FadeIn, TF_FadeOut,
+    TF_Grouping,   // override the preset's grouping; value lives in state.subtitle_mode/_n
     TF_COUNT
 };
 struct TypoTweaks {
