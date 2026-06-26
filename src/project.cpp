@@ -12,7 +12,7 @@
 // ── Binary serialization helpers ──────────────────────────────────────────────
 
 static const uint32_t MAGIC   = 0x534D5001u; // "PMS\x01"
-static const uint32_t VERSION = 55u;  // v55: horizontal / vertical content flip (UV mirror)
+static const uint32_t VERSION = 56u;  // v56: karaoke highlight-colour typography tweak
 
 // Version used to gate the registry-effect read block (generated/fx_project_read.h).
 // Normally the file's format version; project_load decrements it by 1 on a retry
@@ -659,6 +659,9 @@ bool project_save(const AppState& state, const std::string& path) {
         w.pod(t.bg_pad_x); w.pod(t.bg_pad_y); w.pod(t.bg_corner);
     }
 
+    // v56: karaoke highlight-colour tweak (TF_KaraokeHi override).
+    for (int i = 0; i < 4; ++i) w.pod(state.typo.karaoke_hi[i]);
+
     return w.ok;
 }
 
@@ -849,6 +852,12 @@ static bool project_load_pass(AppState& state, const std::string& path, int fx_o
         t.bg_enabled = (bool)r.pod<uint8_t>();
         for (int i=0;i<4;++i) t.bg_col[i] = r.pod<float>();
         t.bg_pad_x = r.pod<float>(); t.bg_pad_y = r.pod<float>(); t.bg_corner = r.pod<float>();
+    }
+
+    // v56: karaoke highlight-colour tweak. Older files don't carry it — keep the
+    // default (and TF_KaraokeHi is unset in their bitmask, so it stays inert).
+    if (version >= 56u) {
+        for (int i = 0; i < 4; ++i) state.typo.karaoke_hi[i] = r.pod<float>();
     }
 
     return r.ok;

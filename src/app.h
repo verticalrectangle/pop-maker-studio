@@ -575,6 +575,7 @@ enum TypoField {
     TF_Tracking, TF_Wrap, TF_PosV,
     TF_PosX, TF_PosY, TF_TextStyle, TF_FadeIn, TF_FadeOut,
     TF_Grouping,   // override the preset's grouping; value lives in state.subtitle_mode/_n
+    TF_KaraokeHi,  // override the preset's karaoke highlight colour (karaoke_hi)
     TF_COUNT
 };
 struct TypoTweaks {
@@ -592,6 +593,7 @@ struct TypoTweaks {
     TextStyle ts;                // shadow/stroke/glow/box
     float     fade_in   = 0.f;
     float     fade_out  = 0.f;
+    float     karaoke_hi[4] = {1.f, 0.85f, 0.1f, 1.f};  // TF_KaraokeHi: karaoke highlight colour
 
     bool on(TypoField f)     const { return (active & (1u << f)) != 0; }
     bool pinned(TypoField f) const { return (held   & (1u << f)) != 0; }

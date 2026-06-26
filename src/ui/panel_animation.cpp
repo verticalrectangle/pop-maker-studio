@@ -52,7 +52,10 @@ static void apply_typo_style(Clip& c, const TypographyPreset& pr, const AppState
         memcpy(c.sub_color, pr.color, sizeof(c.sub_color));
     c.karaoke           = pr.karaoke;
     c.karaoke_mode      = pr.karaoke_mode;
-    memcpy(c.karaoke_highlight_color, pr.karaoke_highlight_color, sizeof(c.karaoke_highlight_color));
+    if (tw.on(TF_KaraokeHi))
+        memcpy(c.karaoke_highlight_color, tw.karaoke_hi, sizeof(c.karaoke_highlight_color));
+    else
+        memcpy(c.karaoke_highlight_color, pr.karaoke_highlight_color, sizeof(c.karaoke_highlight_color));
     c.clip_style        = pr.style;
     c.sub_font          = pr.font ? pr.font : "";
     c.ease              = pr.ease;
@@ -757,6 +760,23 @@ void panel_typography(AppState& state, float w) {
     }
 
     ImGui::Dummy({0.f, 8.f});
+
+    // Karaoke highlight — only meaningful when the active preset does per-word
+    // karaoke. The Color above is the base (unsung) word; this is the sung word.
+    if ((pr && pr->karaoke) || tw.on(TF_KaraokeHi)) {
+        ui_label("Karaoke Highlight"); typo_hold_btn(state, TF_KaraokeHi);
+        float kh[4];
+        const float* src_kh = tw.on(TF_KaraokeHi) ? tw.karaoke_hi
+                            : (pr ? pr->karaoke_highlight_color : tw.karaoke_hi);
+        memcpy(kh, src_kh, sizeof(kh));
+        ImGui::SetNextItemWidth(full_w);
+        if (ImGui::ColorEdit4("##tykhi", kh,
+                ImGuiColorEditFlags_NoLabel | ImGuiColorEditFlags_AlphaBar)) {
+            memcpy(tw.karaoke_hi, kh, sizeof(tw.karaoke_hi)); tw.tweak(TF_KaraokeHi);
+            typo_restyle_live(state);
+        }
+        ImGui::Dummy({0.f, 8.f});
+    }
 
     // Horizontal alignment — left / center / right (writes sub_anchor_h, which
     // the renderer already honors; previously only presets could set it).
