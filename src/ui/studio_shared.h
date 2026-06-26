@@ -185,9 +185,15 @@ void palette_widget(const char* id, float* rgb);
 // libraries so they all filter in place the same way.
 bool category_pills(const char* id, const std::vector<const char*>& cats, std::string& sel);
 
-// ── group_words helper (defined in pipeline.cpp, used by panel_animation) ─────
+// ── group_words helpers (defined in pipeline.cpp, used by panel_animation) ────
 std::vector<Clip> group_words(const std::vector<Clip>& words, SubtitleMode mode,
                                int custom_n = 5, float pause_gap = 0.8f, int max_words = 8);
+// Segment-accurate grouping: words + Whisper segments (same time space) → clips.
+std::vector<Clip> read_segment_clips(const std::string& seg_path);
+std::vector<Clip> group_words_segmented(const std::vector<Clip>& words,
+                                        const std::vector<Clip>& segments,
+                                        SubtitleMode mode, float pause_gap = 0.3f,
+                                        int max_words = 0);
 
 // ── Panel-view write access ───────────────────────────────────────────────────
 // Defined in screen_studio.cpp; some helpers (add_clip_to_track, panel_media,

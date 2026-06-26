@@ -1047,110 +1047,15 @@ void panel_clip(AppState& state, float w) {
             ImGui::Dummy({0.f, 4.f}); draw_word_strip(state, clip, w - 8.f); ImGui::Dummy({0.f, 4.f});
         }
 
-        if (ImGui::CollapsingHeader("Karaoke")) {
-            ImGui::Dummy({0.f, 4.f});
-            bool kar = clip.karaoke;
-            if (ImGui::Checkbox("Enable karaoke highlight##kar", &kar)) {
-                clip.karaoke = kar; history_push(state, "Karaoke toggle");
-            }
-            if (clip.karaoke) {
-                ImGui::Dummy({0.f, 6.f});
-                ImGui::PushStyleColor(ImGuiCol_Text, Col::muted); ImGui::TextUnformatted("Base color"); ImGui::PopStyleColor();
-                ImGui::SetNextItemWidth(w - 16.f);
-                ImGui::ColorEdit4("##lyr_base_col", clip.sub_color,
-                    ImGuiColorEditFlags_NoLabel | ImGuiColorEditFlags_AlphaBar);
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Base color");
-                ImGui::Dummy({0.f, 4.f});
-                ImGui::PushStyleColor(ImGuiCol_Text, Col::muted); ImGui::TextUnformatted("Highlight color"); ImGui::PopStyleColor();
-                ImGui::SetNextItemWidth(w - 16.f);
-                ImGui::ColorEdit4("##lyr_hl_col", clip.karaoke_highlight_color,
-                    ImGuiColorEditFlags_NoLabel | ImGuiColorEditFlags_AlphaBar);
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Highlight color");
-            }
-            ImGui::Dummy({0.f, 4.f});
-        }
-
-        // Style for a managed Lyrics track is owned by the Typography tab so it
-        // stays uniform across the track — per-clip style controls here used to
-        // desync individual lines. The Clip tab keeps content/words/grouping.
+        // Grouping (word / phrase / sentence), styling, color and karaoke for a
+        // managed Lyrics track all live in the Typography tab so the whole track
+        // stays consistent. The Clip tab keeps content + per-word timing only.
         ImGui::Dummy({0.f, 4.f});
         ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
-        ImGui::TextWrapped("Font, color, position & alignment for the whole lyric "
+        ImGui::TextWrapped("Grouping, style, color & karaoke for the whole lyric "
                            "track are set in the Typography tab.");
         ImGui::PopStyleColor();
         ImGui::Dummy({0.f, 4.f});
-
-        if (ImGui::CollapsingHeader("Grouping")) {
-            ImGui::Dummy({0.f, 4.f});
-            if (!state.words_json_path.empty() && fs::exists(state.words_json_path)) {
-                struct ModeBtn { SubtitleMode m; const char* label; const char* tip; };
-                static const ModeBtn modes[] = {
-                    {SubtitleMode::Word,    "Word",    "One clip per word"},
-                    {SubtitleMode::Phrase,  "Phrase",  "Group by short pauses (>0.3s)"},
-                    {SubtitleMode::Line,    "Line",    "Group by breath gaps (>0.8s)"},
-                    {SubtitleMode::Segment, "Segment", "Sentence boundaries"},
-                    {SubtitleMode::CustomN, "Custom",  "N words per clip"},
-                };
-                for (auto& mb : modes) {
-                    bool sel2 = state.subtitle_mode == mb.m;
-                    if (ui_btn(mb.label, sel2, true)) state.subtitle_mode = mb.m;
-                    if (ImGui::IsItemHovered()) { ImGui::BeginTooltip(); ImGui::TextUnformatted(mb.tip); ImGui::EndTooltip(); }
-                    ImGui::SameLine(0.f, 4.f);
-                }
-                ImGui::NewLine();
-                if (state.subtitle_mode == SubtitleMode::CustomN) {
-                    ImGui::Dummy({0.f, 4.f});
-                    ImGui::PushStyleColor(ImGuiCol_FrameBg, Col::bg_soft);
-                    ImGui::PushStyleColor(ImGuiCol_Border,  Col::line);
-                    ImGui::SetNextItemWidth(80.f);
-                    int n = state.subtitle_n;
-                    if (ImGui::InputInt("words/clip##cn", &n))
-                        state.subtitle_n = (n < 1) ? 1 : (n > 20) ? 20 : n;
-                    ImGui::PopStyleColor(2);
-                }
-                ImGui::Dummy({0.f, 6.f});
-                if (ui_btn("Apply grouping", true, true)) {
-                    apply_subtitle_mode(state);
-                    const char* mn = state.subtitle_mode == SubtitleMode::Word ? "Word" :
-                        state.subtitle_mode == SubtitleMode::Phrase  ? "Phrase"  :
-                        state.subtitle_mode == SubtitleMode::Line    ? "Line"    :
-                        state.subtitle_mode == SubtitleMode::Segment ? "Segment" : "Custom";
-                    history_push(state, std::string("Grouping — ") + mn);
-                }
-                // Propagate to multi-selection
-                int sel_count = 0;
-                for (auto& [st2, sc2] : state.clip_selection) {
-                    if (st2 == sel_ti && sc2 == sel_ci) continue;
-                    if (st2 < (int)state.tracks.size() && sc2 < (int)state.tracks[st2].clips.size() &&
-                        state.tracks[st2].clips[sc2].clip_type == ClipType::Lyrics) ++sel_count;
-                }
-                if (sel_count > 0) {
-                    ImGui::SameLine(0.f, 6.f);
-                    char slbl[48]; snprintf(slbl, sizeof(slbl), "Apply to %d selected##lyr", sel_count);
-                    if (ui_btn(slbl, false, true)) {
-                        for (auto& [st2, sc2] : state.clip_selection) {
-                            if (st2 == sel_ti && sc2 == sel_ci) continue;
-                            if (st2 >= (int)state.tracks.size() || sc2 >= (int)state.tracks[st2].clips.size()) continue;
-                            Clip& tgt = state.tracks[st2].clips[sc2];
-                            if (tgt.clip_type != ClipType::Lyrics) continue;
-                            tgt.karaoke = clip.karaoke; tgt.sub_pos = clip.sub_pos;
-                            tgt.sub_pos_y = clip.sub_pos_y;
-                            tgt.sub_color_override = clip.sub_color_override;
-                            memcpy(tgt.sub_color, clip.sub_color, sizeof(clip.sub_color));
-                            memcpy(tgt.karaoke_highlight_color, clip.karaoke_highlight_color,
-                                   sizeof(clip.karaoke_highlight_color));
-                            tgt.ts = clip.ts;
-                        }
-                        history_push(state, "Apply style to selected");
-                    }
-                }
-            } else {
-                ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
-                ImGui::TextWrapped("Run ML Processing on an audio clip to generate word JSON, then grouping controls appear here.");
-                ImGui::PopStyleColor();
-            }
-            ImGui::Dummy({0.f, 4.f});
-        }
     }
 
     // ═══════════════════════════════════════════════════════════════════════════

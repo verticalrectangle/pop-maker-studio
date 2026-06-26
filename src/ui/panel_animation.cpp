@@ -151,61 +151,38 @@ void generate_typography(AppState& state) {
 
     // Build raw word clips — prefer in-memory cache, fall back to JSON on disk.
     std::vector<Clip> raw;
-    bool from_segments = false;
-
-    if (grouping == SubtitleMode::Segment && has_seg_json) {
-        std::ifstream f(state.segments_json_path);
+    if (has_cache) {
+        for (auto& we : state.words_cache) {
+            Clip c; c.text = we.text; c.start = we.start; c.end = we.end;
+            raw.push_back(c);
+        }
+    } else if (has_word_json) {
+        std::ifstream f(state.words_json_path);
         if (f) {
             try {
                 auto j = nlohmann::json::parse(f);
-                for (auto& seg : j) {
+                for (auto& w : j) {
                     Clip c;
-                    c.text  = seg["text"].get<std::string>();
-                    c.start = seg["start"].get<float>();
-                    c.end   = seg["end"].get<float>();
-                    // Whisper segment timestamps overrun into silence and don't
-                    // line up to word onsets (Newspaper looked stretched over
-                    // nothing). Tie the brick to the words it actually contains —
-                    // source space, same as the segment times. Fall back to the
-                    // raw segment span only when we have no word list.
-                    if (has_cache) {
-                        float w0 = -1.f, w1 = -1.f;
-                        for (auto& w : state.words_cache)
-                            if (w.start >= c.start - 0.05f && w.start < c.end + 0.05f) {
-                                if (w0 < 0.f) w0 = w.start;
-                                w1 = w.end;
-                            }
-                        if (w0 >= 0.f) { c.start = w0; c.end = w1; }
-                    }
+                    c.text  = w["word"].get<std::string>();
+                    c.start = w["start"].get<float>();
+                    c.end   = w["end"].get<float>();
                     raw.push_back(c);
                 }
-                from_segments = true;
             } catch (...) {}
         }
     }
 
-    if (!from_segments) {
-        if (has_cache) {
-            for (auto& we : state.words_cache) {
-                Clip c; c.text = we.text; c.start = we.start; c.end = we.end;
-                raw.push_back(c);
-            }
-        } else if (has_word_json) {
-            std::ifstream f(state.words_json_path);
-            if (f) {
-                try {
-                    auto j = nlohmann::json::parse(f);
-                    for (auto& w : j) {
-                        Clip c;
-                        c.text  = w["word"].get<std::string>();
-                        c.start = w["start"].get<float>();
-                        c.end   = w["end"].get<float>();
-                        raw.push_back(c);
-                    }
-                } catch (...) {}
-            }
-        }
-    }
+    // Whisper segments are the real line boundaries — Phrase/Line/Segment grouping
+    // uses them instead of guessing lines from silence gaps. Read in source time;
+    // offset to match `raw` below.
+    std::vector<Clip> segs;
+    const bool line_mode = (grouping == SubtitleMode::Phrase || grouping == SubtitleMode::Line ||
+                            grouping == SubtitleMode::Segment || grouping == SubtitleMode::Karaoke);
+    if (line_mode && has_seg_json) segs = read_segment_clips(state.segments_json_path);
+
+    // No word list but we do have segments → the segments themselves are the lines.
+    const bool seg_only = raw.empty() && !segs.empty();
+    if (seg_only) { raw = std::move(segs); segs.clear(); }
 
     if (raw.empty()) return;
 
@@ -229,10 +206,8 @@ void generate_typography(AppState& state) {
             if (found) break;
         }
         if (tl_offset != 0.f) {
-            for (auto& c : raw) {
-                c.start += tl_offset;
-                c.end   += tl_offset;
-            }
+            for (auto& c : raw)  { c.start += tl_offset; c.end += tl_offset; }
+            for (auto& c : segs) { c.start += tl_offset; c.end += tl_offset; }
         }
     }
 
@@ -245,10 +220,8 @@ void generate_typography(AppState& state) {
     {
         float latency = audio_latency();
         if (latency > 0.f) {
-            for (auto& c : raw) {
-                c.start -= latency;
-                c.end   -= latency;
-            }
+            for (auto& c : raw)  { c.start -= latency; c.end -= latency; }
+            for (auto& c : segs) { c.start -= latency; c.end -= latency; }
         }
     }
 
@@ -263,12 +236,14 @@ void generate_typography(AppState& state) {
         c.end   = snap_end_to_frame(c.end, state.fps);
     }
 
-    auto grouped = from_segments ? raw
-                                 : group_words(raw, grouping, pr->custom_n, pr->pause_gap, pr->max_words);
+    std::vector<Clip> grouped;
+    if (seg_only)           grouped = raw;  // segments already are the lines
+    else if (!segs.empty()) grouped = group_words_segmented(raw, segs, grouping, pr->pause_gap, pr->max_words);
+    else                    grouped = group_words(raw, grouping, pr->custom_n, pr->pause_gap, pr->max_words);
 
     // Per-clip word data (always needed for edit replay; karaoke also uses it)
     std::vector<WordEntry> all_words;
-    if (!from_segments) {
+    if (!seg_only) {
         for (auto& w : raw) {
             WordEntry we; we.text = w.text; we.start = w.start; we.end = w.end;
             all_words.push_back(we);

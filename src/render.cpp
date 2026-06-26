@@ -1113,11 +1113,16 @@ static bool write_filter_script(
 
             // Karaoke overlays: one bright drawtext per word timed to its exact window
             if (has_karaoke) {
+                // Match the preview / GL export: the highlight is the per-clip
+                // karaoke_highlight_color (set by typography presets), not sub_color
+                // (which is the BASE line). Falls back to white when unset. The GL
+                // MP4 export already renders this correctly via the C++ text path;
+                // this is the ffmpeg-filter/GIF path keeping the same colour.
                 char hi_col[32];
-                if (cl.sub_color_override)
+                const float* hc = cl.karaoke_highlight_color;
+                if (hc[3] > 0.01f)
                     snprintf(hi_col, sizeof(hi_col), "0x%02x%02x%02x%02x",
-                        (int)(cl.sub_color[0]*255), (int)(cl.sub_color[1]*255),
-                        (int)(cl.sub_color[2]*255), (int)(cl.sub_color[3]*255));
+                        (int)(hc[0]*255), (int)(hc[1]*255), (int)(hc[2]*255), (int)(hc[3]*255));
                 else
                     strcpy(hi_col, "white");
 

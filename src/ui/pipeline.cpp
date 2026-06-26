@@ -178,6 +178,76 @@ std::vector<Clip> group_words(
     return out;
 }
 
+// Parse a Whisper *_segments.json into raw segment Clips (text/start/end) in
+// source-time. Empty on missing/unreadable/garbage. These are the real line
+// boundaries — far more reliable than re-deriving lines from silence gaps.
+std::vector<Clip> read_segment_clips(const std::string& seg_path) {
+    std::vector<Clip> segs;
+    if (seg_path.empty() || !fs::exists(seg_path)) return segs;
+    std::ifstream f(seg_path);
+    if (!f) return segs;
+    try {
+        auto j = nlohmann::json::parse(f);
+        for (auto& seg : j) {
+            Clip c;
+            c.text  = seg.value("text", std::string());
+            c.start = seg.value("start", 0.f);
+            c.end   = seg.value("end", 0.f);
+            segs.push_back(c);
+        }
+    } catch (...) {}
+    return segs;
+}
+
+// Segment-accurate grouping. Words and segments must be in the SAME time space
+// (both source, or both already offset to the timeline). Each segment claims the
+// words up to the next segment's start (so no word is dropped), then:
+//   Phrase  → sub-split the segment's words at internal pauses (> thresh)
+//   Line / Segment / Sentence / Karaoke → one clip for the whole segment
+// The clip's text comes from the segment (keeps spacing/punctuation) but its
+// timing comes from the contained words' onsets, so it never stretches over the
+// silence a raw Whisper segment timestamp runs into. Falls back to {} if either
+// list is empty (caller then uses the gap-based group_words).
+std::vector<Clip> group_words_segmented(
+    const std::vector<Clip>& words, const std::vector<Clip>& segments,
+    SubtitleMode mode, float pause_gap, int max_words)
+{
+    std::vector<Clip> out;
+    if (words.empty() || segments.empty()) return out;
+    const bool  karaoke = (mode == SubtitleMode::Karaoke);
+    const float thresh  = (pause_gap > 0.f) ? pause_gap : 0.3f;
+    size_t wi = 0;
+    for (size_t si = 0; si < segments.size(); ++si) {
+        float claim_end = (si + 1 < segments.size())
+                            ? segments[si + 1].start - 0.05f : 1e9f;
+        std::vector<const Clip*> bucket;
+        while (wi < words.size() && words[wi].start < claim_end) {
+            bucket.push_back(&words[wi]); ++wi;
+        }
+        if (bucket.empty()) continue;
+        if (mode == SubtitleMode::Phrase) {
+            Clip cur = *bucket[0]; int wc = 1;
+            for (size_t i = 1; i < bucket.size(); ++i) {
+                float gap = bucket[i]->start - bucket[i - 1]->end;
+                if (gap > thresh || (max_words > 0 && wc >= max_words)) {
+                    out.push_back(cur); cur = *bucket[i]; wc = 1;
+                } else {
+                    cur.text += " " + bucket[i]->text;
+                    cur.end   = bucket[i]->end; ++wc;
+                }
+            }
+            out.push_back(cur);
+        } else {
+            Clip cur = *bucket[0];
+            if (!segments[si].text.empty()) cur.text = segments[si].text;
+            cur.end = bucket.back()->end;
+            if (karaoke) cur.karaoke = true;
+            out.push_back(cur);
+        }
+    }
+    return out;
+}
+
 // Load the flat word list from words_json_path into AppState::words_cache.
 // ── Beat detection subprocess ─────────────────────────────────────────────────
 
@@ -451,42 +521,9 @@ void apply_subtitle_mode(AppState& state) {
         c.sub_pos   = 1;          // center
     };
 
-    // For Segment mode, read _segments.json instead
-    if (state.subtitle_mode == SubtitleMode::Segment &&
-        !state.segments_json_path.empty() &&
-        fs::exists(state.segments_json_path)) {
-        std::ifstream f(state.segments_json_path);
-        if (!f) return;
-        try {
-            auto j = nlohmann::json::parse(f);
-            Track* lyrics = nullptr;
-            for (auto& t : state.tracks)
-                if (t.name == "Lyrics") { lyrics = &t; break; }
-            if (!lyrics) {
-                state.tracks.insert(state.tracks.begin(), Track{});
-                lyrics = &state.tracks.front();
-                lyrics->name = "Lyrics";
-            }
-            lyrics->managed = true;
-            lyrics->clips.clear();
-            float latency = audio_latency();
-            for (auto& seg : j) {
-                Clip c;
-                c.text  = seg["text"].get<std::string>();
-                c.start = snap_to_frame(seg["start"].get<float>() + tl_offset - latency, state.fps);
-                c.end   = snap_end_to_frame(seg["end"].get<float>() + tl_offset - latency, state.fps);
-                if (c.end < 0.f) continue;  // skip clips shifted before timeline start
-                stamp(c);
-                lyrics->clips.push_back(c);
-            }
-            // Extend project duration so all lyrics are reachable on the timeline.
-            for (auto& c : lyrics->clips)
-                if (c.end > state.duration) state.duration = c.end;
-        } catch (...) {}
-        return;
-    }
-
-    // Word-level JSON → group
+    // Word-level JSON → group. Segment/Phrase/Line route through the
+    // segment-accurate grouper below (the words give timing, the *_segments.json
+    // gives line boundaries) instead of the old gap-only / overrun-prone paths.
     std::ifstream f(state.words_json_path);
     if (!f) return;
     try {
@@ -500,7 +537,20 @@ void apply_subtitle_mode(AppState& state) {
             c.end   = snap_end_to_frame(w["end"].get<float>() + tl_offset - latency, state.fps);
             raw.push_back(c);
         }
-        auto grouped = group_words(raw, state.subtitle_mode, state.subtitle_n);
+        // Segment-accurate grouping for line-level modes when segments exist.
+        std::vector<Clip> segs;
+        const bool line_mode = (state.subtitle_mode == SubtitleMode::Phrase ||
+                                state.subtitle_mode == SubtitleMode::Line ||
+                                state.subtitle_mode == SubtitleMode::Segment ||
+                                state.subtitle_mode == SubtitleMode::Karaoke);
+        if (line_mode && !state.segments_json_path.empty() &&
+            fs::exists(state.segments_json_path)) {
+            segs = read_segment_clips(state.segments_json_path);
+            for (auto& s : segs) { s.start += tl_offset - latency; s.end += tl_offset - latency; }
+        }
+        std::vector<Clip> grouped = !segs.empty()
+            ? group_words_segmented(raw, segs, state.subtitle_mode)
+            : group_words(raw, state.subtitle_mode, state.subtitle_n);
         for (auto& c : grouped) stamp(c);
 
         // Drop clips that land entirely before timeline start (can happen when
