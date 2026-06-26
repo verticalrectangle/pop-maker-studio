@@ -2970,11 +2970,19 @@ static void big_ensure(int w, int h) {
 // holding the resized source for the generated-effect GPU path.
 static uintptr_t s_bigsrc_key_tex = 0;
 static int       s_bigsrc_key_w = 0, s_bigsrc_key_h = 0;
+static int       s_bigsrc_key_ver = -2;
 static std::vector<uint8_t> s_bigsrc_cache;
 
 static bool big_source_prep(uintptr_t src_tex, int w, int h) {
+    // The built-in motion portrait is updated IN PLACE by fxp_motion_advance
+    // (same texture object, new pixels), so its pointer can't signal the change —
+    // fold the motion frame counter into the key for it, so the big popover
+    // re-reads and animates. Any other source (the live clip frame) is static
+    // while hovering, so keep caching it by pointer alone to avoid the per-frame
+    // GPU readback the note below warns about.
+    int ver = (src_tex == (uintptr_t)s_fxp_portrait_gl) ? s_fxp_motion_cur : -1;
     if (src_tex == s_bigsrc_key_tex && w == s_bigsrc_key_w && h == s_bigsrc_key_h &&
-        s_bigsrc_cache.size() == (size_t)w * h * 3)
+        ver == s_bigsrc_key_ver && s_bigsrc_cache.size() == (size_t)w * h * 3)
         return false;  // s_bigsrc_tex + cache already hold this source
     fx_blit(src_tex, s_bigsrc_fbo, w, h);
     s_bigsrc_cache.resize((size_t)w * h * 3);
@@ -2983,6 +2991,7 @@ static bool big_source_prep(uintptr_t src_tex, int w, int h) {
     glReadPixels(0, 0, w, h, GL_RGB, GL_UNSIGNED_BYTE, s_bigsrc_cache.data());
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     s_bigsrc_key_tex = src_tex; s_bigsrc_key_w = w; s_bigsrc_key_h = h;
+    s_bigsrc_key_ver = ver;
     return true;
 }
 
