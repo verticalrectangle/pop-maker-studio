@@ -305,6 +305,42 @@ int timeline_couple_fx_brick(AppState& state, int ti, int ci, int host_ci) {
     return ci;
 }
 
+// Pick the clip an FX brick should couple to. A deliberate drop should land on
+// the clip you point at, so prefer the hostable clip whose span contains `ref_t`
+// (the cursor / drop position). Only when the reference isn't over content
+// (ref_t < 0, or it falls in a gap) do we fall back to the largest-overlap clip
+// — the old rule, which on a densely sequenced track picked whatever the wide
+// brick body covered most (the "middle of the track" surprise) instead of the
+// clip under the mouse. exclude_ci skips the brick itself.
+static int fx_host_pick(const AppState& state, int ti, int exclude_ci,
+                        bool audio_kind, float b0, float b1, float ref_t) {
+    if (ti < 0 || ti >= (int)state.tracks.size()) return -1;
+    const auto& cls = state.tracks[ti].clips;
+    auto hostable = [&](const Clip& hc) {
+        return audio_kind
+            ? (hc.clip_type == ClipType::Audio || hc.clip_type == ClipType::Record ||
+               hc.clip_type == ClipType::Video || hc.clip_type == ClipType::VideoRecord)
+            : (clip_is_videolike_type(hc.clip_type) ||
+               hc.clip_type == ClipType::Background);
+    };
+    if (ref_t >= 0.f) {
+        for (int k = 0; k < (int)cls.size(); ++k) {
+            if (k == exclude_ci) continue;
+            const Clip& hc = cls[(size_t)k];
+            if (hostable(hc) && ref_t >= hc.start && ref_t < hc.end) return k;
+        }
+    }
+    int best = -1; float bov = 0.05f;   // ≥50 ms overlap to arm
+    for (int k = 0; k < (int)cls.size(); ++k) {
+        if (k == exclude_ci) continue;
+        const Clip& hc = cls[(size_t)k];
+        if (!hostable(hc)) continue;
+        float ov = fminf(b1, hc.end) - fmaxf(b0, hc.start);
+        if (ov > bov) { bov = ov; best = k; }
+    }
+    return best;
+}
+
 // Passive coupling scan: any uncoupled video FX brick resting on content
 // (not mid-drag) arms the 1.5 s ring; completion couples it. One pending
 // brick at a time. Runs every frame, so toolbox drops, drag drops, IPC
@@ -315,7 +351,7 @@ int timeline_couple_fx_brick(AppState& state, int ti, int ci, int host_ci) {
 // repositioning EXISTING bricks). Returns the resulting brick index; pushes
 // no history, so the caller's drop entry captures the welded result as one
 // undo step.
-static int couple_fx_now(AppState& state, int ti, int ci) {
+static int couple_fx_now(AppState& state, int ti, int ci, float ref_t = -1.f) {
     if (ti < 0 || ti >= (int)state.tracks.size()) return ci;
     auto& cls = state.tracks[ti].clips;
     if (ci < 0 || ci >= (int)cls.size()) return ci;
@@ -323,18 +359,7 @@ static int couple_fx_now(AppState& state, int ti, int ci) {
     if (c.fx_coupled || !is_fx_clip(c)) return ci;
     bool audio_kind = fx_brick_is_audio_kind(c);
     if (!audio_kind && !fx_brick_is_video(c)) return ci;
-    int best = -1; float bov = 0.05f;
-    for (int k = 0; k < (int)cls.size(); ++k) {
-        if (k == ci) continue;
-        const Clip& hc = cls[(size_t)k];
-        bool hostable = audio_kind
-            ? (hc.clip_type == ClipType::Audio || hc.clip_type == ClipType::Record ||
-               hc.clip_type == ClipType::Video || hc.clip_type == ClipType::VideoRecord)
-            : (clip_is_videolike_type(hc.clip_type) || hc.clip_type == ClipType::Background);
-        if (!hostable) continue;
-        float ov = fminf(c.end, hc.end) - fmaxf(c.start, hc.start);
-        if (ov > bov) { bov = ov; best = k; }
-    }
+    int best = fx_host_pick(state, ti, ci, audio_kind, c.start, c.end, ref_t);
     if (best < 0) return ci;
     int nci = timeline_couple_fx_brick(state, ti, ci, best);
     s_fx_flash.active = true; s_fx_flash.t0 = ImGui::GetTime();
@@ -490,20 +515,10 @@ static void couple_pending_tick(AppState& state) {
             bool audio_kind = fx_brick_is_audio_kind(c);
             if (!audio_kind && !fx_brick_is_video(c)) continue;
             if (g_tl.drag_track == ti && g_tl.drag_clip == ci) continue;
-            int best = -1; float bov = 0.05f;   // ≥50 ms overlap to arm
-            for (int k = 0; k < (int)cls.size(); ++k) {
-                const Clip& hc = cls[(size_t)k];
-                bool hostable = audio_kind
-                    ? (hc.clip_type == ClipType::Audio ||
-                       hc.clip_type == ClipType::Record ||
-                       hc.clip_type == ClipType::Video ||
-                       hc.clip_type == ClipType::VideoRecord)
-                    : (clip_is_videolike_type(hc.clip_type) ||
-                       hc.clip_type == ClipType::Background);
-                if (!hostable) continue;
-                float ov = fminf(c.end, hc.end) - fmaxf(c.start, hc.start);
-                if (ov > bov) { bov = ov; best = k; }
-            }
+            // Couple to the clip under the brick's leading edge — where the user
+            // dropped it — falling back to largest overlap when the edge sits in
+            // a gap. (No live cursor here; the brick rests, so its start anchors.)
+            int best = fx_host_pick(state, ti, ci, audio_kind, c.start, c.end, c.start);
             if (best >= 0) { pti = ti; pci = ci; phost = best; break; }
         }
     }
@@ -1423,7 +1438,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                     cl.audio_fx.reverb_on        = (ft == FXType::AudioReverb);
                     cl.audio_fx.voice_convert_on = (ft == FXType::AudioVoiceConvert);
                     state.tracks[ti].clips.push_back(cl);
-                    state.selected_clip  = couple_fx_now(state, ti, (int)state.tracks[ti].clips.size() - 1);
+                    state.selected_clip  = couple_fx_now(state, ti, (int)state.tracks[ti].clips.size() - 1, drop_t);
                     state.selected_track = ti;
                     s_drop_flash_track = ti; s_drop_flash_t = 0.6f;
                     history_push(state, std::string("Drop audio FX: ") + fx_type_name(ft));
@@ -3732,21 +3747,12 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                 // the best-overlap host on the mouse row (same rule as couple_fx_now).
                 if (g_tl.drag_merge_ci < 0 && is_fx_clip(dc_ref) && !dc_ref.fx_coupled) {
                     bool audio_kind = fx_brick_is_audio_kind(dc_ref);
-                    float best_ov = 0.05f; int best = -1;
-                    for (int ci2 = 0; ci2 < (int)state.tracks[tt].clips.size(); ++ci2) {
-                        if (tt == drag_track && ci2 == drag_clip) continue;
-                        const Clip& hc = state.tracks[tt].clips[ci2];
-                        bool hostable = audio_kind
-                            ? (hc.clip_type == ClipType::Audio ||
-                               hc.clip_type == ClipType::Record ||
-                               hc.clip_type == ClipType::Video ||
-                               hc.clip_type == ClipType::VideoRecord)
-                            : (clip_is_videolike_type(hc.clip_type) ||
-                               hc.clip_type == ClipType::Background);
-                        if (!hostable) continue;
-                        float ov = fminf(dc_ref.end, hc.end) - fmaxf(dc_ref.start, hc.start);
-                        if (ov > best_ov) { best_ov = ov; best = ci2; }
-                    }
+                    int excl = (tt == drag_track) ? drag_clip : -1;
+                    // Prefer the clip under the cursor on the hovered row so the
+                    // brick welds to what you point at, not the widest overlap.
+                    float cur_t = (mouse.x - origin.x - TL_LABEL_W + scroll) / zoom;
+                    int best = fx_host_pick(state, tt, excl, audio_kind,
+                                            dc_ref.start, dc_ref.end, cur_t);
                     if (best >= 0) { g_tl.drag_couple_ti = tt; g_tl.drag_couple_ci = best; }
                 }
                 // Multi-drags never weld (merge or couple).
@@ -3982,7 +3988,11 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                         int sel = base;
                         const char* act = "Move clip to track";
                         if (is_fx_clip(grp[0])) {
-                            sel = couple_fx_now(state, drag_hot_track, base);
+                            // Couple to the clip under the cursor (drop point), so
+                            // a brick lands where you released it — not on whatever
+                            // the wide brick body overlapped most.
+                            float drop_t = (mouse.x - origin.x - TL_LABEL_W + scroll) / zoom;
+                            sel = couple_fx_now(state, drag_hot_track, base, drop_t);
                             if (sel != base || state.tracks[drag_hot_track]
                                     .clips[(size_t)sel].fx_coupled)
                                 act = "Couple FX brick";
