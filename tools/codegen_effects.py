@@ -405,6 +405,7 @@ def main():
         manifest.append({
             "id":          e["id"],
             "label":       e["label"],
+            "category":    e.get("category", "Other"),
             "description": e["description"],
             "params": [
                 {
