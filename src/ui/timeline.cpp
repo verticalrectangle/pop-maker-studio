@@ -3757,12 +3757,17 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                           drag_hot_track < (int)state.tracks.size())
                              ? drag_hot_track : drag_track;
                 if (is_fx_clip(dc_ref)) {
+                    // Merge onto the FX brick UNDER THE CURSOR — what you point at — not
+                    // whatever the (possibly long) span happens to overlap. Mirrors the
+                    // couple's cursor-first rule so the two can't disagree: cursor over a
+                    // weldable brick → merge here; over bare content → couple (below).
+                    float cur_t = (mouse.x - origin.x - TL_LABEL_W + scroll) / zoom;
                     for (int ci2 = 0; ci2 < (int)state.tracks[tt].clips.size(); ++ci2) {
                         if (tt == drag_track && ci2 == drag_clip) continue;
                         const Clip& oc = state.tracks[tt].clips[ci2];
                         if (!is_fx_clip(oc)) continue;
                         if (!fx_bricks_weldable(dc_ref, oc)) continue;
-                        if (dc_ref.start < oc.end && dc_ref.end > oc.start) {
+                        if (cur_t >= oc.start && cur_t < oc.end) {
                             g_tl.drag_merge_ti = tt;
                             g_tl.drag_merge_ci = ci2;
                             break;
