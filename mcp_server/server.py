@@ -3236,14 +3236,17 @@ async def _add_clip(arguments: dict) -> dict:
         except Exception:
             source_dur = 0.0
 
-        already_extracted = bool(re.search(r'_\d+_\d+\.(webm|flac|mp3|wav|ogg|aac)$', text))
+        already_extracted = bool(re.search(r'_\d+_\d+\.(mkv|webm|flac|mp3|wav|ogg|aac)$', text))
         if not already_extracted and source_dur > needed_end * 2:
-            # Stream-copy guard so the engine doesn't load a multi-hour source for a
+            # Re-encode guard so the engine doesn't load a multi-hour source for a
             # short clip. The segment goes to the shared cache dir (content-addressed
             # by source+range, LRU-pruned) — NOT a sidecar next to the user's media.
             s_int = int(in_point)
             e_int = int(needed_end) + 1
-            seg_ext = Path(text).suffix  # inherit source container so stream-copy stays codec-compatible
+            # The engine re-encodes video segments to H.264/Matroska (it cannot
+            # stream-copy a mid-GOP slice — no leading keyframe), so name them .mkv
+            # regardless of the source container.
+            seg_ext = ".mkv"
             dst = str(_cache_path(text, f"_{s_int}_{e_int}{seg_ext}"))
             if not Path(dst).exists():
                 Path(dst).parent.mkdir(parents=True, exist_ok=True)
@@ -3460,8 +3463,8 @@ async def _find_and_add_clip(arguments: dict) -> dict:
         seg_end   = end + padding
         cache_dir = p.parent / p.stem
         existing_dst = None
-        seg_ext_escaped = re.escape(p.suffix.lstrip("."))
-        seg_pat = re.compile(rf"^{re.escape(p.stem)}_(\d+)_(\d+)\.{seg_ext_escaped}$")
+        # Segments are re-encoded to H.264/Matroska (.mkv) regardless of source.
+        seg_pat = re.compile(rf"^{re.escape(p.stem)}_(\d+)_(\d+)\.mkv$")
         if cache_dir.is_dir():
             for f in cache_dir.iterdir():
                 m = seg_pat.match(f.name)
@@ -3496,7 +3499,7 @@ async def _find_and_add_clip(arguments: dict) -> dict:
         s_int     = int(seg_start)
         e_int     = int(seg_end) + 1
         cache_dir = p.parent / p.stem
-        seg_ext   = p.suffix
+        seg_ext   = ".mkv"   # engine re-encodes video segments to H.264/Matroska
         dst = str(cache_dir / f"{p.stem}_{s_int}_{e_int}{seg_ext}")
         expected_dur = seg_end - seg_start
         dst_path = Path(dst)

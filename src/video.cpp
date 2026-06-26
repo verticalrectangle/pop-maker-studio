@@ -1872,7 +1872,12 @@ std::string video_extract_segment(const std::string& src,
         args.push_back("-crf");     args.push_back("18");
         args.push_back("-preset");  args.push_back("veryfast");
         args.push_back("-pix_fmt"); args.push_back("yuv420p");
-        args.push_back("-c:a");     args.push_back("copy");
+        // Re-encode (not copy) the audio: with a fast input -ss seek, copying audio
+        // keeps the source timestamps and anchors the muxer so the video starts at
+        // pts=start_sec instead of 0. Re-encoding resets both streams to zero, so
+        // the segment begins at pts 0 (in_point=0 = first frame, as callers assume).
+        // AAC also muxes cleanly into the downstream conform .mp4 (opus does not).
+        args.push_back("-c:a");     args.push_back("aac");
         args.push_back("-avoid_negative_ts"); args.push_back("make_zero");
         args.push_back("-f");       args.push_back("matroska");
         args.push_back(dst.c_str());
