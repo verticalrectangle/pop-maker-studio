@@ -201,6 +201,13 @@ static bool is_chain_brick(const Clip& c) {
     return c.clip_type == ClipType::MultiFX ||
            c.clip_type == ClipType::AudioMultiFX;
 }
+// A chain brick on its OWN track (not welded to content) hosts its own fx_chain:
+// it earns the same disclosure chevron + editable per-FX timing lanes a content
+// clip gets for its welded chain. A welded (glass) chain expands from its host
+// content clip instead, so exclude those here.
+static bool fx_brick_self_hosts(const AppState& state, int ti, const Clip& c) {
+    return is_chain_brick(c) && !fx_clip_is_glass(state, ti, c);
+}
 static void merge_fx_clips(Clip& target, Clip dragged) {
     if (is_chain_brick(target)) {
         if (is_chain_brick(dragged)) {
@@ -1123,6 +1130,10 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
     // these helpers, never ti*TL_TRACK_H.
     const float FX_LANE_H = 15.f;
     auto host_fx_count = [&](int ti, int ci) -> int {
+        // A standalone chain brick hosts its own chain (same expand/lanes as a
+        // content clip hosting its welded chain).
+        const Clip& self = state.tracks[(size_t)ti].clips[(size_t)ci];
+        if (fx_brick_self_hosts(state, ti, self)) return (int)self.fx_chain.size();
         int n = 0;
         for (int k : coupled_fx_of(state, ti, ci)) {
             const Clip& b = state.tracks[(size_t)ti].clips[(size_t)k];
@@ -1136,7 +1147,9 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
         float e = 0.f;
         auto& cls = state.tracks[(size_t)ti].clips;
         for (int ci = 0; ci < (int)cls.size(); ++ci) {
-            if (!cls[(size_t)ci].fx_expanded || is_fx_clip(cls[(size_t)ci])) continue;
+            if (!cls[(size_t)ci].fx_expanded ||
+                (is_fx_clip(cls[(size_t)ci]) && !fx_brick_self_hosts(state, ti, cls[(size_t)ci])))
+                continue;
             int n = host_fx_count(ti, ci);
             if (n > 0) e = fmaxf(e, (float)n * FX_LANE_H + 6.f);
         }
@@ -2119,7 +2132,8 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
             Clip& clip = track.clips[ci];
             if (clip.clip_type == ClipType::Effect  ||
                 clip.clip_type == ClipType::MultiFX ||
-                clip.clip_type == ClipType::BodyFX) continue;
+                clip.clip_type == ClipType::BodyFX  ||
+                clip.clip_type == ClipType::AudioMultiFX) continue;
             float cx0 = origin.x+TL_LABEL_W+clip.start*zoom-scroll;
             float cx1 = origin.x+TL_LABEL_W+clip.end*zoom-scroll;
             if (cx1 < origin.x+TL_LABEL_W || cx0 > origin.x+total_w) continue;
@@ -2420,7 +2434,8 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
             {
                 TLGeomClip g; g.track = ti; g.clip = ci;
                 g.x0 = vis_x0; g.y0 = cy0; g.x1 = vis_x1; g.y1 = cy1;
-                g.has_fx = !is_fx_clip(clip) && host_fx_count(ti, ci) > 0;
+                g.has_fx = (!is_fx_clip(clip) || fx_brick_self_hosts(state, ti, clip)) &&
+                           host_fx_count(ti, ci) > 0;
                 g.expanded = clip.fx_expanded;
                 g.disc_cx = vis_x0 + 5.f + 4.5f; g.disc_cy = cy1 - 9.f - 1.f + 4.5f;
                 s_tl_geom.clips.push_back(g);
@@ -2653,7 +2668,8 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
         // here too, so it sits above the glass brick's own hit-testing.
         for (int ci = 0; ci < (int)track.clips.size(); ++ci) {
             Clip& clip = track.clips[(size_t)ci];
-            if (is_fx_clip(clip) || host_fx_count(ti, ci) <= 0) continue;
+            if ((is_fx_clip(clip) && !fx_brick_self_hosts(state, ti, clip)) ||
+                host_fx_count(ti, ci) <= 0) continue;
             float cx0 = origin.x+TL_LABEL_W+clip.start*zoom-scroll;
             float cx1 = origin.x+TL_LABEL_W+clip.end*zoom-scroll;
             if (cx1 < origin.x+TL_LABEL_W || cx0 > origin.x+total_w) continue;
@@ -2944,8 +2960,13 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
         // grew by; the clip body above is unchanged.
         for (int ci = 0; ci < (int)track.clips.size(); ++ci) {
             Clip& host = track.clips[(size_t)ci];
-            if (is_fx_clip(host) || !host.fx_expanded) continue;
-            std::vector<int> fxk = coupled_fx_of(state, ti, ci);
+            if ((is_fx_clip(host) && !fx_brick_self_hosts(state, ti, host)) ||
+                !host.fx_expanded) continue;
+            // A standalone chain brick supplies its own lanes; a content host
+            // supplies its welded children.
+            std::vector<int> fxk = fx_brick_self_hosts(state, ti, host)
+                                 ? std::vector<int>{ci}
+                                 : coupled_fx_of(state, ti, ci);
             if (fxk.empty()) continue;
             float lane_top = track_y + TL_TRACK_H + 3.f;
             int row = 0;
