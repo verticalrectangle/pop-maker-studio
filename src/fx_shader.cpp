@@ -96,11 +96,23 @@ uniform float u_threshold;
 uniform float u_softness;
 
 void main() {
-    vec4 c = texture(u_tex, v_uv);
+    vec4 c = texture(u_tex, v_uv);               // sharp center pixel — the OUTPUT color
+    // Compute the matte on a small box-averaged colour, not the raw pixel. Codec/JPEG
+    // compression shoves scattered green texels off the key colour; on a flat green
+    // that survives as a blocky, half-keyed matte — invisible over black, but ugly
+    // over a lit layer below. Averaging four neighbours pulls those stragglers back
+    // onto the key so they zero out. The OUTPUT stays the sharp center pixel; only the
+    // matte is computed on the smoothed colour, so foreground edges stay crisp.
+    vec2 tx = 1.0 / vec2(textureSize(u_tex, 0));
+    vec3 kc = (c.rgb
+            + texture(u_tex, v_uv + vec2( 2.0 * tx.x, 0.0)).rgb
+            + texture(u_tex, v_uv + vec2(-2.0 * tx.x, 0.0)).rgb
+            + texture(u_tex, v_uv + vec2(0.0,  2.0 * tx.y)).rgb
+            + texture(u_tex, v_uv + vec2(0.0, -2.0 * tx.y)).rgb) * 0.2;
     float lum_k = dot(u_key_color, vec3(0.299, 0.587, 0.114));
     vec3 ck = u_key_color - lum_k;
-    float lum_p = dot(c.rgb, vec3(0.299, 0.587, 0.114));
-    vec3 cp = c.rgb - lum_p;
+    float lum_p = dot(kc, vec3(0.299, 0.587, 0.114));
+    vec3 cp = kc - lum_p;
     float dist = length(cp - ck);
     float soft = max(u_softness, 0.001);
     float t = clamp((dist - u_threshold) / soft, 0.0, 1.0);
