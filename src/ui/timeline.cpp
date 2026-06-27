@@ -3123,6 +3123,13 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                                 ? PanelView::HostAudioFX : PanelView::HostFX);
                             s_clip_hit = true;
                         }
+                        // Right-click a host-disclosed lane → the same per-effect menu
+                        // (shared clipboard). Target = the glass brick (k), entry ei.
+                        if (ImGui::IsMouseClicked(1)) {
+                            s_fxlane_ti = ti; s_fxlane_ci = k; s_fxlane_idx = ei;
+                            s_clip_hit = true;
+                            s_fxlane_open = true;
+                        }
                     }
                 }
                 row++;
