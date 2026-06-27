@@ -288,6 +288,42 @@ int marker_add(AppState& state, float time, const char* label) {
     return idx;
 }
 
+// ── Cross-surface FX clipboard ──────────────────────────────────────────────────
+Clip s_fx_clipboard;
+bool s_fx_clipboard_has   = false;
+bool s_fx_clipboard_audio = false;
+
+void fx_clip_copy(const Clip& se, bool audio) {
+    s_fx_clipboard = se; s_fx_clipboard_has = true; s_fx_clipboard_audio = audio;
+}
+bool fx_clip_can_paste(const Clip& brick) {
+    return s_fx_clipboard_has && s_fx_clipboard_audio == fx_brick_is_audio_kind(brick);
+}
+void fx_chain_duplicate(AppState& state, Clip& brick, int idx) {
+    if (idx < 0 || idx >= (int)brick.fx_chain.size()) return;
+    Clip cp = brick.fx_chain[(size_t)idx];                  // copies params + keyframes
+    brick.fx_chain.insert(brick.fx_chain.begin() + idx + 1, std::move(cp));
+    brick.fx_chain_selected = idx + 1;
+    history_push(state, std::string(fx_brick_is_audio_kind(brick) ? "Audio Multi-FX: " : "Multi-FX: ") + "duplicate effect");
+}
+void fx_chain_paste(AppState& state, Clip& brick, int after_idx) {
+    if (!fx_clip_can_paste(brick)) return;
+    int n  = (int)brick.fx_chain.size();
+    int at = (after_idx >= 0 && after_idx < n) ? after_idx + 1 : n;
+    brick.fx_chain.insert(brick.fx_chain.begin() + at, s_fx_clipboard);
+    brick.fx_chain_selected = at;
+    history_push(state, std::string(fx_brick_is_audio_kind(brick) ? "Audio Multi-FX: " : "Multi-FX: ") + "paste effect");
+}
+void fx_chain_delete(AppState& state, Clip& brick, int idx) {
+    if (idx < 0 || idx >= (int)brick.fx_chain.size()) return;
+    brick.fx_chain.erase(brick.fx_chain.begin() + idx);
+    int n = (int)brick.fx_chain.size();
+    if (n == 0)                             brick.fx_chain_selected = -1;
+    else if (brick.fx_chain_selected > idx) brick.fx_chain_selected--;
+    else if (brick.fx_chain_selected >= n)  brick.fx_chain_selected = n - 1;
+    history_push(state, std::string(fx_brick_is_audio_kind(brick) ? "Audio Multi-FX: " : "Multi-FX: ") + "remove effect");
+}
+
 bool kf_slider(AppState& state, Clip& clip, int sel_ti, int sel_ci, float w,
                const char* prop, const char* label, float* val_ptr,
                float vmin, float vmax, const char* fmt,

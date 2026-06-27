@@ -90,6 +90,19 @@ bool kf_slider(AppState& state, Clip& clip, int sel_ti, int sel_ci, float w,
                float vmin, float vmax, const char* fmt,
                float disp = 1.f, const char* prop2 = nullptr);
 
+// ── Cross-surface FX clipboard ──────────────────────────────────────────────────
+// One copied chain sub-effect — its params AND keyframes ride along on the Clip.
+// Shared by the FX panel and the timeline chain lanes so copy-here / paste-there
+// works either direction. `audio` guards against video<->audio cross-paste.
+extern Clip s_fx_clipboard;
+extern bool s_fx_clipboard_has;
+extern bool s_fx_clipboard_audio;
+void fx_clip_copy(const Clip& se, bool audio);
+bool fx_clip_can_paste(const Clip& brick);          // clipboard full + kind matches brick
+void fx_chain_duplicate(AppState& state, Clip& brick, int idx);
+void fx_chain_paste(AppState& state, Clip& brick, int after_idx);   // after_idx < 0 → append
+void fx_chain_delete(AppState& state, Clip& brick, int idx);
+
 // ── Record brick ──────────────────────────────────────────────────────────────
 // Insert a fresh Record brick (8 s, frame-snapped) at the playhead on a new
 // top track, select it, and push history. Used by the toolbox rail and the

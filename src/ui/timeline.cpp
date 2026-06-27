@@ -389,6 +389,10 @@ static void fx_stack_layout(const Clip& clip, float vis_x0, float vis_x1,
 
 // Morphed (deck↔lane) screen rect for sub-effect slot i, plus the rel-space
 // span it represents. fx_lane_drag editing and the draw path both consume this.
+// Right-clicked FX-chain lane → context-menu target (set on rclick in Pass 2, read
+// by the ##fxlane_ctx popup near the end of draw_timeline).
+static int s_fxlane_ti = -1, s_fxlane_ci = -1, s_fxlane_idx = -1;
+
 struct FxLaneRect { float x0, y0, x1, y1; float rel_s, rel_e; };
 static FxLaneRect fx_lane_rect(const Clip& clip, int i, int shown, float spread,
                                float cx0, float vis_x0, float vis_x1,
@@ -2636,6 +2640,16 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                             s_clip_hit = true;   // keep the empty-track deselect from firing
                             lane_grabbed = true;
                         }
+                        // Right-click a lane → per-effect menu (shared clipboard + ops
+                        // with the FX panel). Pass 2 runs AFTER the clip menu's
+                        // OpenPopup, so this same-level OpenPopup replaces it — a
+                        // right-click on a gap or a collapsed brick still gets the
+                        // brick's clip menu (Decouple).
+                        if (!tl_any_popup && ImGui::IsMouseClicked(1)) {
+                            s_fxlane_ti = ti; s_fxlane_ci = ci; s_fxlane_idx = i;
+                            s_clip_hit = true;
+                            ImGui::OpenPopup("##fxlane_ctx");
+                        }
                         break;
                     }
                     // Clicked the unfolded brick but missed every lane (e.g. the
@@ -4325,6 +4339,33 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
 
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {8.f, 6.f});
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,   {8.f, 4.f});
+
+    // FX chain lane right-click → per-effect menu (shared clipboard + ops with the
+    // FX panel). Named header so there's no doubt which effect you grabbed.
+    if (ImGui::BeginPopup("##fxlane_ctx")) {
+        bool ok = s_fxlane_ti >= 0 && s_fxlane_ti < (int)state.tracks.size() &&
+                  s_fxlane_ci >= 0 && s_fxlane_ci < (int)state.tracks[s_fxlane_ti].clips.size();
+        if (ok) {
+            Clip& brick = state.tracks[s_fxlane_ti].clips[s_fxlane_ci];
+            if (s_fxlane_idx >= 0 && s_fxlane_idx < (int)brick.fx_chain.size()) {
+                const Clip& se = brick.fx_chain[(size_t)s_fxlane_idx];
+                const BodyFXInfo* bfi = (se.clip_type == ClipType::BodyFX)
+                    ? body_fx_find_info(se.body_fx_type) : nullptr;
+                ImGui::TextDisabled("%s", bfi ? bfi->name : fx_type_name(se.fx_type));
+                ImGui::Separator();
+                int act = 0;   // 0=none 1=dup 3=paste 4=del; Copy applies inline (uses se)
+                if (ImGui::MenuItem("Duplicate")) act = 1;
+                if (ImGui::MenuItem("Copy")) fx_clip_copy(se, fx_brick_is_audio_kind(brick));
+                if (ImGui::MenuItem("Paste after", nullptr, false, fx_clip_can_paste(brick))) act = 3;
+                ImGui::Separator();
+                if (ImGui::MenuItem("Delete")) act = 4;
+                if (act == 1)      fx_chain_duplicate(state, brick, s_fxlane_idx);
+                else if (act == 3) fx_chain_paste(state, brick, s_fxlane_idx);
+                else if (act == 4) fx_chain_delete(state, brick, s_fxlane_idx);
+            }
+        }
+        ImGui::EndPopup();
+    }
 
     // Super-diamond unpair menu — pulls members back out of a welded group by
     // nudging their keys one frame apart (just past the grouping tolerance).
