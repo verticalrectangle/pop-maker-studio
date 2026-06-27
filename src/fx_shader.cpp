@@ -779,6 +779,15 @@ uintptr_t fx_apply(uintptr_t src_tex_in, int slot, int w, int h,
     pp_ensure(w, h);
     out_ensure(slot, w, h);
 
+    // Every FX pass (and the final blit into the persistent slot below) OVERWRITES
+    // its target — the shaders composite internally — so GL blending must be off.
+    // The live preview leaves GL_BLEND enabled (ImGui backend), which made the slot
+    // blit BLEND: a chroma-keyed clip's alpha-0 pixels never cleared, so the slot
+    // accumulated last frame's content into a sideways ghost. Export ran blend-off,
+    // hence clean. Force it off for the chain, restore the caller's state after.
+    GLboolean prev_blend = glIsEnabled(GL_BLEND);
+    glDisable(GL_BLEND);
+
     glBindVertexArray(g_vao);
 
     GLuint cur = (GLuint)src_tex_in;
@@ -883,6 +892,7 @@ uintptr_t fx_apply(uintptr_t src_tex_in, int slot, int w, int h,
     glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)prev_fbo);
     glViewport(prev_vp[0], prev_vp[1], prev_vp[2], prev_vp[3]);
     glBindVertexArray(0);
+    if (prev_blend) glEnable(GL_BLEND);
 
     return (uintptr_t)g_out[slot].tex;
 }
