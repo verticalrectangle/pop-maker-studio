@@ -2277,6 +2277,9 @@ static bool gl_render_vid_clip(ImDrawList& dl, const Clip* cl, float at_time,
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, vf->width, vf->height, 0,
                  GL_RGBA, GL_UNSIGNED_BYTE, vf->data);
     int vid_w = vf->width, vid_h = vf->height;
+    double vid_pts = vf->pts;   // the decoded frame's ACTUAL timestamp; the bg mask is
+                                // indexed off this (not the requested src_t) so the cutout
+                                // tracks the exact frame rendered — no temporal lag.
     video_free_frame(vf);
 
     // Pre-composite: glass FX/adjustments on the same track as this video clip.
@@ -2294,9 +2297,10 @@ static bool gl_render_vid_clip(ImDrawList& dl, const Clip* cl, float at_time,
     if (cl->bg_remove_status == BgRemoveStatus::Ready && !cl->bg_remove_mask_dir.empty()) {
         std::string mask_dir = cl->bg_remove_mask_dir;
         // Index by the proxy's COUNTED rate (matches the preview + start_frame), NOT
-        // fps.txt's container rate — otherwise the mask drifts off as src_t grows.
-        float bfx_src_t = clip_src_time(*cl, at_time);
-        int frame_i = export_proxy_frame_idx(cl->text, bfx_src_t);
+        // fps.txt's container rate. Use the DECODED frame's pts, not the requested
+        // src_t: the decoder snaps to the nearest source frame, and keying the mask off
+        // the request rather than the delivered frame is what made the export mask lag.
+        int frame_i = export_proxy_frame_idx(cl->text, vid_pts);
         // Bounding box (keep-region in v_uv — y is bottom-up, so flip t/b) + softness,
         // fed into the RemoveBackground brick shader (was the CPU alpha-bake's job).
         float bg_box[4] = {0.f, 1.f, 0.f, 1.f};
