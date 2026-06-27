@@ -2168,6 +2168,13 @@ static const int k_n_shader_fx = (int)(sizeof(k_shader_fx)/sizeof(k_shader_fx[0]
 
 // ── Multi-FX chain panel ──────────────────────────────────────────────────────
 
+// Cross-brick FX clipboard: copy one chain sub-effect (its params AND keyframes ride
+// along on the Clip) and paste it into any compatible chain — even on a different
+// content brick. `audio` guards against video<->audio cross-paste.
+static Clip s_fx_clip;
+static bool s_fx_clip_has   = false;
+static bool s_fx_clip_audio = false;
+
 void panel_multifx(AppState& state, float w) {
     panel_multifx_for(state, w, state.selected_track, state.selected_clip);
 }
@@ -2201,6 +2208,10 @@ void panel_multifx_for(AppState& state, float w, int b_ti, int b_ci) {
     ImGui::Dummy({0.f, 4.f}); ui_separator(); ImGui::Dummy({0.f, 8.f});
 
     float brick_dur = fmaxf(0.01f, brick.end - brick.start);
+
+    // Per-effect right-click actions, collected during the row loop, applied after.
+    int  dup_idx = -1, paste_idx = -1;
+    bool paste_append = false;
 
     // ── Add Effect dropdown ────────────────────────────────────────────────
     if (ImGui::BeginCombo("##mfx_add", "+ Add Effect", ImGuiComboFlags_NoArrowButton)) {
@@ -2276,6 +2287,10 @@ void panel_multifx_for(AppState& state, float w, int b_ti, int b_ci) {
         }
         ImGui::EndCombo();
     }
+    if (s_fx_clip_has && !s_fx_clip_audio) {
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Paste FX")) paste_append = true;
+    }
     ImGui::Dummy({0.f, 8.f});
 
     // ── Chain list ─────────────────────────────────────────────────────────
@@ -2324,6 +2339,23 @@ void panel_multifx_for(AppState& state, float w, int b_ti, int b_ci) {
                               ImGuiSelectableFlags_DontClosePopups, {80.f, row_h}))
             brick.fx_chain_selected = i;
         ImGui::PopStyleColor();
+
+        // Right-click → per-effect actions, headed by the effect's NAME so there's
+        // no doubt which one you're acting on (Chroma Key vs Chroma Melt, etc.).
+        if (ImGui::BeginPopupContextItem("##fxrowctx")) {
+            ImGui::TextDisabled("%s", entry_name);
+            ImGui::Separator();
+            if (ImGui::MenuItem("Duplicate")) dup_idx = i;
+            if (ImGui::MenuItem("Copy")) {
+                s_fx_clip = se; s_fx_clip_has = true; s_fx_clip_audio = false;
+            }
+            if (ImGui::MenuItem("Paste after", nullptr, false,
+                                s_fx_clip_has && !s_fx_clip_audio))
+                paste_idx = i;
+            ImGui::Separator();
+            if (ImGui::MenuItem("Delete")) del_idx = i;
+            ImGui::EndPopup();
+        }
 
         // Duration mini-bar
         ImGui::SameLine(0.f, 6.f);
@@ -2420,6 +2452,18 @@ void panel_multifx_for(AppState& state, float w, int b_ti, int b_ci) {
         brick.fx_chain.erase(brick.fx_chain.begin() + del_idx);
         brick.fx_chain_selected = fmaxf(-1, (float)(brick.fx_chain_selected - (brick.fx_chain_selected >= del_idx ? 1 : 0)));
         history_push(state, "Multi-FX: remove effect");
+    }
+    if (dup_idx >= 0) {
+        Clip cp = brick.fx_chain[(size_t)dup_idx];   // copies params + keyframes
+        brick.fx_chain.insert(brick.fx_chain.begin() + dup_idx + 1, std::move(cp));
+        brick.fx_chain_selected = dup_idx + 1;
+        history_push(state, "Multi-FX: duplicate effect");
+    }
+    if ((paste_idx >= 0 || paste_append) && s_fx_clip_has && !s_fx_clip_audio) {
+        int at = (paste_idx >= 0) ? paste_idx + 1 : (int)brick.fx_chain.size();
+        brick.fx_chain.insert(brick.fx_chain.begin() + at, s_fx_clip);
+        brick.fx_chain_selected = at;
+        history_push(state, "Multi-FX: paste effect");
     }
 
     if (brick.fx_chain.empty()) {
@@ -2678,13 +2722,29 @@ void panel_audio_multifx_for(AppState& state, float w, int b_ti, int b_ci) {
     ImGui::Dummy({0.f, 4.f}); ui_separator(); ImGui::Dummy({0.f, 8.f});
 
     float sw = w - 16.f;
-    int remove_idx = -1, move_up = -1, move_dn = -1;
+    int remove_idx = -1, move_up = -1, move_dn = -1, dup_idx = -1, paste_idx = -1;
+    bool paste_append = false;
     for (int i = 0; i < (int)brick.fx_chain.size(); ++i) {
         Clip& se = brick.fx_chain[(size_t)i];
         ImGui::PushID(31000 + i);
         bool selrow = brick.fx_chain_selected == i;
         if (ImGui::Selectable(fx_type_name(se.fx_type), selrow, 0, {sw - 70.f, 0.f}))
             brick.fx_chain_selected = i;
+        // Right-click → per-effect actions, headed by the effect's NAME (no confusion).
+        if (ImGui::BeginPopupContextItem("##afxrowctx")) {
+            ImGui::TextDisabled("%s", fx_type_name(se.fx_type));
+            ImGui::Separator();
+            if (ImGui::MenuItem("Duplicate")) dup_idx = i;
+            if (ImGui::MenuItem("Copy")) {
+                s_fx_clip = se; s_fx_clip_has = true; s_fx_clip_audio = true;
+            }
+            if (ImGui::MenuItem("Paste after", nullptr, false,
+                                s_fx_clip_has && s_fx_clip_audio))
+                paste_idx = i;
+            ImGui::Separator();
+            if (ImGui::MenuItem("Delete")) remove_idx = i;
+            ImGui::EndPopup();
+        }
         ImGui::SameLine(sw - 62.f);
         if (ui_btn("^", false, true) && i > 0) move_up = i;
         ImGui::SameLine(0.f, 2.f);
@@ -2692,6 +2752,9 @@ void panel_audio_multifx_for(AppState& state, float w, int b_ti, int b_ci) {
         ImGui::SameLine(0.f, 6.f);
         if (ui_btn("\xc3\x97", false, true)) remove_idx = i;
         ImGui::PopID();
+    }
+    if (s_fx_clip_has && s_fx_clip_audio) {
+        if (ui_btn("Paste FX", false, true)) paste_append = true;
     }
     if (move_up > 0) {
         std::swap(brick.fx_chain[move_up], brick.fx_chain[move_up - 1]);
@@ -2707,6 +2770,18 @@ void panel_audio_multifx_for(AppState& state, float w, int b_ti, int b_ci) {
         if (brick.fx_chain_selected >= (int)brick.fx_chain.size())
             brick.fx_chain_selected = (int)brick.fx_chain.size() - 1;
         history_push(state, "Audio Multi-FX: remove effect");
+    }
+    if (dup_idx >= 0) {
+        Clip cp = brick.fx_chain[(size_t)dup_idx];   // copies params + keyframes
+        brick.fx_chain.insert(brick.fx_chain.begin() + dup_idx + 1, std::move(cp));
+        brick.fx_chain_selected = dup_idx + 1;
+        history_push(state, "Audio Multi-FX: duplicate effect");
+    }
+    if ((paste_idx >= 0 || paste_append) && s_fx_clip_has && s_fx_clip_audio) {
+        int at = (paste_idx >= 0) ? paste_idx + 1 : (int)brick.fx_chain.size();
+        brick.fx_chain.insert(brick.fx_chain.begin() + at, s_fx_clip);
+        brick.fx_chain_selected = at;
+        history_push(state, "Audio Multi-FX: paste effect");
     }
 
     int si = brick.fx_chain_selected;
