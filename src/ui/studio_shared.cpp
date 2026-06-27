@@ -357,6 +357,7 @@ bool kf_slider(AppState& state, Clip& clip, int sel_ti, int sel_ci, float w,
             state.kf_sel_track = sel_ti; state.kf_sel_clip = sel_ci;
             state.kf_sel_prop  = prop;
             state.kf_sel_idx   = clip.ktracks[prop].find_nearest(t_local, kf_tol);
+            state.kf_sel_source = -1;
             history_push(state, std::string("Add KF ") + prop);
             // Auto-expose: if `clip` is a MultiFX sub-effect (not the selected clip
             // itself), reveal it on the timeline — open this effect's per-param rows
@@ -365,6 +366,10 @@ bool kf_slider(AppState& state, Clip& clip, int sel_ti, int sel_ci, float w,
                 sel_ci >= 0 && sel_ci < (int)state.tracks[(size_t)sel_ti].clips.size()) {
                 Clip& owner = state.tracks[(size_t)sel_ti].clips[(size_t)sel_ci];
                 if (&clip != &owner) {
+                    // Record which chain entry this is, so the timeline diamond
+                    // highlights the right key (source-correct selection).
+                    for (int i = 0; i < (int)owner.fx_chain.size(); ++i)
+                        if (&owner.fx_chain[(size_t)i] == &clip) { state.kf_sel_source = i; break; }
                     clip.params_expanded = true;
                     int host = fx_coupled_host(state, sel_ti, owner);
                     if (host >= 0) state.tracks[(size_t)sel_ti].clips[(size_t)host].fx_expanded = true;
@@ -443,6 +448,19 @@ bool kf_slider(AppState& state, Clip& clip, int sel_ti, int sel_ci, float w,
     }
     ImGui::PopStyleColor(2);
     if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, std::string("Edit ") + prop);
+    // Navigate-to-param: a timeline keyframe click set focus_prop → scroll this
+    // slider into view + flash it briefly. One-shot, self-clearing.
+    if (state.focus_prop == prop) {
+        double el = ImGui::GetTime() - state.focus_prop_t;
+        if (el < 0.15) ImGui::SetScrollHereY(0.5f);   // settle the scroll, then release
+        float a = 1.f - (float)(el / 0.6);
+        if (a > 0.f) {
+            ImVec2 mn = ImGui::GetItemRectMin(), mx = ImGui::GetItemRectMax();
+            ImGui::GetWindowDrawList()->AddRect({mn.x-2.f, mn.y-2.f}, {mx.x+2.f, mx.y+2.f},
+                IM_COL32(255,200,60,(int)(200.f*a)), 3.f, 0, 2.f);
+        }
+        if (el > 0.6) { state.focus_prop.clear(); state.focus_prop_t = 0.0; }
+    }
     return changed;
 }
 

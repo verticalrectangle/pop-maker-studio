@@ -718,6 +718,12 @@ struct AppState {
     int         kf_sel_clip  = -1;
     std::string kf_sel_prop;
     int         kf_sel_idx   = -1;
+    int         kf_sel_source = -1;   // -1 = clip's own ktracks; else the fx_chain entry index
+
+    // Navigate-to-param: a timeline keyframe click names a prop to reveal in the
+    // panel (scroll-to + flash). One-shot; consumed/cleared in kf_slider.
+    std::string focus_prop;
+    double      focus_prop_t = 0.0;
 
     // multi-clip selection — set of (track_idx, clip_idx)
     std::set<std::pair<int,int>> clip_selection;

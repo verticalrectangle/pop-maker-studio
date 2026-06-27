@@ -943,6 +943,7 @@ void panel_clip(AppState& state, float w) {
     // Interp bar for whichever keyframe is selected
     auto kf_interp_bar = [&]() {
         bool sel_this = (state.kf_sel_track == sel_ti && state.kf_sel_clip == sel_ci &&
+                         state.kf_sel_source < 0 &&
                          !state.kf_sel_prop.empty() && state.kf_sel_idx >= 0);
         if (!sel_this) return;
         auto it2 = clip.ktracks.find(state.kf_sel_prop);

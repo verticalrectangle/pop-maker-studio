@@ -71,8 +71,21 @@ static struct {
     float  time   = 0.f;         // clip-relative time of the new super diamond
 } s_kf_flash;
 
-// Super-diamond right-click context (unpair menu).
-static struct { int ti = -1, ci = -1; float time = 0.f; } s_kf_ctx;
+// Super-diamond right-click context (unpair menu). source: -1 = clip's own
+// ktracks, else the fx_chain entry index (Pass-3 FX lanes).
+static struct { int ti = -1, ci = -1, source = -1; float time = 0.f; } s_kf_ctx;
+
+// Pass-3 single-key retime drag (FX-chain + content keyframe lanes). Kept
+// SEPARATE from s_kf_drag so it can never collide with L1's group move-loop.
+// ci = owner clip index; source = -1 (owner.ktracks) or the fx_chain entry.
+static struct {
+    bool   active = false;
+    int    ti = -1, ci = -1, source = -1;
+    std::string prop;
+    int    idx = -1;
+    bool   moved = false;
+    float  ref_x = 0.f, ref_t = 0.f;
+} s_kf_subdrag;
 
 // Hold-to-weld for FX brick merging — the keyframe-diamond gesture applied to
 // bricks: overlapping a merge target arms the dwell timer; the merge only
@@ -452,6 +465,14 @@ static void draw_kf_groups(ImDrawList* dl, const std::vector<std::pair<float,int
         draw_one_diamond(dl, kx, mid_y, d, super ? IM_COL32(110,190,255,255)
                                                  : IM_COL32(235,235,235,255));
     }
+}
+// Hit-test one PropTrack's keys against mouse-x (caller owns the y-rect test + the
+// prop name). Mirrors draw_kf_groups' x math. Returns key index or -1.
+static int kf_hit_index(const PropTrack& pt, float x_at_origin, float zoom,
+                        float mouse_x, float r = 8.f) {
+    for (int i = 0; i < (int)pt.keys.size(); ++i)
+        if (fabsf(mouse_x - (x_at_origin + pt.keys[(size_t)i].time * zoom)) <= r) return i;
+    return -1;
 }
 
 static void draw_fx_stack(ImDrawList* dl, const Clip& clip, float cx0,
@@ -1949,7 +1970,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                                  (int)g.mems.size());
                         ImGui::SetTooltip("%s", tip);
                         if (super && ImGui::IsMouseClicked(1)) {
-                            s_kf_ctx.ti = ti; s_kf_ctx.ci = ci;
+                            s_kf_ctx.ti = ti; s_kf_ctx.ci = ci; s_kf_ctx.source = -1;
                             s_kf_ctx.time = g.time;
                             state.selected_track = ti;
                             state.selected_clip  = ci;
@@ -3094,6 +3115,61 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
             }
         }
 
+        // Pass-3 single-key retime: a diamond drag on a content/FX keyframe lane.
+        // Resolves the owner's map (own ktracks or fx_chain[source]); moves one key,
+        // bubble-re-sorts, welds onto a same-prop neighbour on release. Separate
+        // from L1's group drag, so the body lanes are untouched.
+        if (s_kf_subdrag.active && s_kf_subdrag.ti == ti) {
+            Clip* owner = (s_kf_subdrag.ci >= 0 && s_kf_subdrag.ci < (int)track.clips.size())
+                        ? &track.clips[(size_t)s_kf_subdrag.ci] : nullptr;
+            std::unordered_map<std::string, PropTrack>* ktp = nullptr;
+            if (owner) {
+                if (s_kf_subdrag.source < 0) ktp = &owner->ktracks;
+                else if (s_kf_subdrag.source < (int)owner->fx_chain.size())
+                    ktp = &owner->fx_chain[(size_t)s_kf_subdrag.source].ktracks;
+            }
+            PropTrack* pt = nullptr;
+            if (ktp) { auto it = ktp->find(s_kf_subdrag.prop); if (it != ktp->end()) pt = &it->second; }
+            if (!owner || !pt || s_kf_subdrag.idx < 0 || s_kf_subdrag.idx >= (int)pt->keys.size()) {
+                s_kf_subdrag.active = false;   // stale (lane stopped rendering) — finalize
+            } else {
+                float dur = owner->end - owner->start;
+                if (ImGui::IsMouseDragging(0)) {
+                    s_kf_subdrag.moved = true;
+                    float dt = (mouse.x - s_kf_subdrag.ref_x) / zoom;
+                    float t_new = snap_to_frame(state, fmaxf(0.f, fminf(dur, s_kf_subdrag.ref_t + dt)));
+                    pt->keys[(size_t)s_kf_subdrag.idx].time = t_new;
+                    int i = s_kf_subdrag.idx;
+                    while (i > 0 && pt->keys[(size_t)i].time < pt->keys[(size_t)i-1].time) {
+                        std::swap(pt->keys[(size_t)i], pt->keys[(size_t)i-1]); --i;
+                    }
+                    while (i < (int)pt->keys.size()-1 &&
+                           pt->keys[(size_t)i].time > pt->keys[(size_t)i+1].time) {
+                        std::swap(pt->keys[(size_t)i], pt->keys[(size_t)i+1]); ++i;
+                    }
+                    s_kf_subdrag.idx = i;
+                    if (state.kf_sel_track == ti && state.kf_sel_clip == s_kf_subdrag.ci &&
+                        state.kf_sel_source == s_kf_subdrag.source &&
+                        state.kf_sel_prop == s_kf_subdrag.prop)
+                        state.kf_sel_idx = i;
+                }
+                if (ImGui::IsMouseReleased(0)) {
+                    if (s_kf_subdrag.moved) {
+                        // Weld: if it landed on a same-prop sibling, drop the dup.
+                        float tt = pt->keys[(size_t)s_kf_subdrag.idx].time;
+                        for (int j = 0; j < (int)pt->keys.size(); ++j)
+                            if (j != s_kf_subdrag.idx &&
+                                fabsf(pt->keys[(size_t)j].time - tt) < 0.02f) {
+                                pt->keys.erase(pt->keys.begin() + s_kf_subdrag.idx);
+                                break;
+                            }
+                        history_push(state, "Move keyframe");
+                    }
+                    s_kf_subdrag.active = false;
+                }
+            }
+        }
+
         // ── Pass 3: expanded FX timing lanes beneath the clip ─────────────────
         // One bar per coupled effect (video chains first, then audio) showing how
         // long that effect runs on the clip. Drawn in the extra height the track
@@ -3178,6 +3254,34 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                             host.params_expanded = !pex; s_clip_hit = true;
                         }
                     }
+                    // Click the lane → select the clip; on a diamond, seek there too.
+                    // (Param is ambiguous on the merged lane; disclose for per-param.)
+                    else if (!track.locked && !tl_any_popup && ImGui::IsMouseClicked(0) &&
+                             mouse.x >= vx0 && mouse.x <= vx1 &&
+                             mouse.y >= ly0 && mouse.y <= ly1) {
+                        state.selected_track = ti; state.selected_clip = ci;
+                        state.clip_selection.clear(); state.clip_selection.insert({ti, ci});
+                        request_panel_view(PanelView::Clip);
+                        for (auto& g : kg)
+                            if (fabsf(mouse.x - (ax0 + g.first * zoom)) <= 8.f) {
+                                seek_to(state, host.start + g.first); break;
+                            }
+                        s_clip_hit = true;
+                    }
+                    // Right-click a content super diamond → unpair its merged keys.
+                    if (!over_chev && !track.locked && !tl_any_popup && ImGui::IsMouseClicked(1) &&
+                        mouse.y >= ly0 && mouse.y <= ly1) {
+                        for (auto& g : kg)
+                            if (g.second > 1 && fabsf(mouse.x - (ax0 + g.first * zoom)) <= 8.f) {
+                                s_kf_ctx.ti = ti; s_kf_ctx.ci = ci; s_kf_ctx.source = -1;
+                                s_kf_ctx.time = g.first;
+                                state.selected_track = ti; state.selected_clip = ci;
+                                clip_ctx_opened_this_frame = true;
+                                ImGui::OpenPopup("##kf_ctx");
+                                s_clip_hit = true;
+                                break;
+                            }
+                    }
                 }
                 lane_y += FX_LANE_H;
                 if (host.params_expanded) {
@@ -3193,6 +3297,28 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                             std::vector<std::pair<float,int>> pg;
                             for (auto& kk : kv.second.keys) pg.push_back({kk.time, 1});
                             draw_kf_groups(dl, pg, ax0, zoom, vx0, vx1, (sly0 + sly1) * 0.5f);
+                            // Click a diamond → navigate to this param + seek.
+                            if (!track.locked && !tl_any_popup && ImGui::IsMouseClicked(0) &&
+                                mouse.y >= sly0 && mouse.y <= sly1) {
+                                int ki = kf_hit_index(kv.second, ax0, zoom, mouse.x);
+                                if (ki >= 0) {
+                                    state.selected_track = ti; state.selected_clip = ci;
+                                    state.clip_selection.clear(); state.clip_selection.insert({ti, ci});
+                                    request_panel_view(PanelView::Clip);
+                                    state.kf_sel_track = ti; state.kf_sel_clip = ci;
+                                    state.kf_sel_source = -1; state.kf_sel_prop = kv.first;
+                                    state.kf_sel_idx = ki;
+                                    state.focus_prop = (kv.first == "scale_y" ? std::string("scale_x") : kv.first);
+                                    state.focus_prop_t = ImGui::GetTime();
+                                    seek_to(state, host.start + kv.second.keys[(size_t)ki].time);
+                                    s_kf_subdrag.active = true; s_kf_subdrag.ti = ti;
+                                    s_kf_subdrag.ci = ci; s_kf_subdrag.source = -1;
+                                    s_kf_subdrag.prop = kv.first; s_kf_subdrag.idx = ki;
+                                    s_kf_subdrag.moved = false; s_kf_subdrag.ref_x = mouse.x;
+                                    s_kf_subdrag.ref_t = kv.second.keys[(size_t)ki].time;
+                                    s_clip_hit = true;
+                                }
+                            }
                         }
                         lane_y += SUBROW_H;
                     }
@@ -3292,14 +3418,40 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                             brick.fx_chain_selected = ei;
                             request_panel_view(fx_brick_is_audio_kind(brick)
                                 ? PanelView::HostAudioFX : PanelView::HostFX);
+                            // If the click landed on a keyframe diamond, seek there too.
+                            if (ei >= 0) {
+                                float xo = origin.x + TL_LABEL_W + brick.start * zoom - scroll;
+                                for (auto& kv : brick.fx_chain[(size_t)ei].ktracks) {
+                                    int ki = kf_hit_index(kv.second, xo, zoom, mouse.x);
+                                    if (ki >= 0) { seek_to(state, brick.start + kv.second.keys[(size_t)ki].time); break; }
+                                }
+                            }
                             s_clip_hit = true;
                         }
-                        // Right-click a host-disclosed lane → the same per-effect menu
-                        // (shared clipboard). Target = the glass brick (k), entry ei.
+                        // Right-click a host-disclosed lane → unpair a super diamond,
+                        // else the per-effect menu (shared clipboard). Target = the
+                        // glass brick (k), entry ei.
                         if (ImGui::IsMouseClicked(1)) {
-                            s_fxlane_ti = ti; s_fxlane_ci = k; s_fxlane_idx = ei;
+                            int super_n = 0; float super_t = 0.f;
+                            if (ei >= 0) {
+                                float xo = origin.x + TL_LABEL_W + brick.start * zoom - scroll;
+                                std::vector<std::pair<float,int>> kg2;
+                                kf_accumulate_groups(brick.fx_chain[(size_t)ei].ktracks, kg2);
+                                for (auto& g : kg2)
+                                    if (g.second > 1 && fabsf(mouse.x - (xo + g.first*zoom)) <= 8.f) {
+                                        super_n = g.second; super_t = g.first; break;
+                                    }
+                            }
+                            if (super_n > 1) {
+                                s_kf_ctx.ti = ti; s_kf_ctx.ci = k; s_kf_ctx.source = ei;
+                                s_kf_ctx.time = super_t;
+                                clip_ctx_opened_this_frame = true;
+                                ImGui::OpenPopup("##kf_ctx");
+                            } else {
+                                s_fxlane_ti = ti; s_fxlane_ci = k; s_fxlane_idx = ei;
+                                s_fxlane_open = true;
+                            }
                             s_clip_hit = true;
-                            s_fxlane_open = true;
                         }
                     }
                 }
@@ -3319,9 +3471,32 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                             ImGui::PopClipRect();
                             std::vector<std::pair<float,int>> pg;
                             for (auto& kk : kv.second.keys) pg.push_back({kk.time, 1});
-                            draw_kf_groups(dl, pg,
-                                origin.x + TL_LABEL_W + brick.start * zoom - scroll,
-                                zoom, vx0, vx1, (sly0 + sly1) * 0.5f);
+                            float xo = origin.x + TL_LABEL_W + brick.start * zoom - scroll;
+                            draw_kf_groups(dl, pg, xo, zoom, vx0, vx1, (sly0 + sly1) * 0.5f);
+                            // Click a diamond → select the effect + navigate to this param + seek.
+                            if (!track.locked && !tl_any_popup && ImGui::IsMouseClicked(0) &&
+                                mouse.y >= sly0 && mouse.y <= sly1) {
+                                int ki = kf_hit_index(kv.second, xo, zoom, mouse.x);
+                                if (ki >= 0) {
+                                    state.selected_track = ti; state.selected_clip = ci;
+                                    state.clip_selection.clear(); state.clip_selection.insert({ti, ci});
+                                    brick.fx_chain_selected = ei;
+                                    request_panel_view(fx_brick_is_audio_kind(brick)
+                                        ? PanelView::HostAudioFX : PanelView::HostFX);
+                                    state.kf_sel_track = ti; state.kf_sel_clip = k;
+                                    state.kf_sel_source = ei; state.kf_sel_prop = kv.first;
+                                    state.kf_sel_idx = ki;
+                                    state.focus_prop = kv.first;
+                                    state.focus_prop_t = ImGui::GetTime();
+                                    seek_to(state, brick.start + kv.second.keys[(size_t)ki].time);
+                                    s_kf_subdrag.active = true; s_kf_subdrag.ti = ti;
+                                    s_kf_subdrag.ci = k; s_kf_subdrag.source = ei;
+                                    s_kf_subdrag.prop = kv.first; s_kf_subdrag.idx = ki;
+                                    s_kf_subdrag.moved = false; s_kf_subdrag.ref_x = mouse.x;
+                                    s_kf_subdrag.ref_t = kv.second.keys[(size_t)ki].time;
+                                    s_clip_hit = true;
+                                }
+                            }
                         }
                         lane_y += SUBROW_H;
                     }
@@ -4578,12 +4753,19 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
         bool ctx_ok = s_kf_ctx.ti >= 0 && s_kf_ctx.ti < (int)state.tracks.size() &&
                       s_kf_ctx.ci >= 0 &&
                       s_kf_ctx.ci < (int)state.tracks[s_kf_ctx.ti].clips.size();
+        if (ctx_ok) {
+            Clip& kc = state.tracks[s_kf_ctx.ti].clips[s_kf_ctx.ci];
+            ctx_ok = s_kf_ctx.source < 0 || s_kf_ctx.source < (int)kc.fx_chain.size();
+        }
         if (!ctx_ok) {
             ImGui::CloseCurrentPopup();
         } else {
             Clip& kclip = state.tracks[s_kf_ctx.ti].clips[s_kf_ctx.ci];
+            // Unpair targets the clip's own keys, or a Pass-3 FX-chain entry.
+            auto& kt = (s_kf_ctx.source < 0) ? kclip.ktracks
+                                             : kclip.fx_chain[(size_t)s_kf_ctx.source].ktracks;
             std::vector<std::string> mems;
-            for (auto& [p, pt] : kclip.ktracks)
+            for (auto& [p, pt] : kt)
                 if (pt.find_nearest(s_kf_ctx.time, 0.02f) >= 0) mems.push_back(p);
             std::sort(mems.begin(), mems.end());
 
@@ -4593,7 +4775,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                 float dur  = kclip.end - kclip.start;
                 float step = fmaxf(1.f / (float)state.fps, 0.04f);
                 auto occupied = [&](float t) {
-                    for (auto& [p2, pt2] : kclip.ktracks)
+                    for (auto& [p2, pt2] : kt)
                         if (pt2.find_nearest(t, 0.025f) >= 0) return true;
                     return false;
                 };
@@ -4607,8 +4789,8 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                 return nt;
             };
             auto unpair_one = [&](const std::string& prop) {
-                auto it = kclip.ktracks.find(prop);
-                if (it == kclip.ktracks.end()) return;
+                auto it = kt.find(prop);
+                if (it == kt.end()) return;
                 int ki = it->second.find_nearest(s_kf_ctx.time, 0.02f);
                 if (ki < 0) return;
                 it->second.keys[ki].time = free_spot();
