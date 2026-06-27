@@ -1262,6 +1262,16 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
         }
         return n;
     };
+    // Content host's OWN keyframe lane (+ its params sub-rows) drawn at the top of
+    // the disclosed area — visible, unlike the body band that hides under the glass.
+    // 0 for standalone FX bricks / un-keyed clips.
+    auto host_content_h = [&](int ti, int ci) -> float {
+        const Clip& self = state.tracks[(size_t)ti].clips[(size_t)ci];
+        if (fx_brick_self_hosts(state, ti, self)) return 0.f;
+        int nk = nonempty_kt(self);
+        if (nk == 0) return 0.f;
+        return FX_LANE_H + (self.params_expanded ? (float)nk * SUBROW_H : 0.f);
+    };
     auto track_extra_h = [&](int ti) -> float {
         if (ti < 0 || ti >= (int)state.tracks.size()) return 0.f;
         float e = 0.f;
@@ -1272,7 +1282,8 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                 continue;
             int n = host_fx_count(ti, ci);
             if (n > 0) e = fmaxf(e, (float)n * FX_LANE_H +
-                                     (float)host_fx_subrows(ti, ci) * SUBROW_H + 6.f);
+                                     (float)host_fx_subrows(ti, ci) * SUBROW_H +
+                                     host_content_h(ti, ci) + 6.f);
         }
         return e;
     };
@@ -3110,7 +3121,8 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
             {
                 int   n_lanes = host_fx_count(ti, ci);
                 float stack_h = (float)n_lanes * FX_LANE_H +
-                                (float)host_fx_subrows(ti, ci) * SUBROW_H;
+                                (float)host_fx_subrows(ti, ci) * SUBROW_H +
+                                host_content_h(ti, ci);
                 float cxm = origin.x + TL_LABEL_W - 11.f;
                 float gy0 = lane_top, gy1 = lane_top + stack_h - 3.f;
                 float cym = (gy0 + gy1) * 0.5f;
@@ -3129,6 +3141,60 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                         host.fx_expanded = false;
                         s_clip_hit = true;
                         continue;   // host folded — skip drawing its lanes this frame
+                    }
+                }
+            }
+            // Content host's OWN keyframes — a visible lane at the TOP of the disclosed
+            // area (the body band hides under the coupled glass brick). Gold-tinted so
+            // it reads as "the clip", distinct from the FX lanes. Expandable per-param.
+            if (!fx_brick_self_hosts(state, ti, host) && nonempty_kt(host) > 0) {
+                float ly0 = lane_y, ly1 = ly0 + FX_LANE_H - 2.f;
+                float ax0 = origin.x + TL_LABEL_W + host.start * zoom - scroll;
+                float ax1 = origin.x + TL_LABEL_W + host.end * zoom - scroll;
+                float vx0 = fmaxf(ax0, origin.x + TL_LABEL_W);
+                float vx1 = fminf(ax1, origin.x + total_w);
+                if (vx1 < vx0 + 3.f) vx1 = vx0 + 3.f;
+                bool pex = host.params_expanded;
+                bool over_chev = !tl_any_popup && mouse.x >= vx0 && mouse.x <= vx0 + 11.f &&
+                                 mouse.y >= ly0 && mouse.y <= ly1;
+                if (ly1 <= track_area_bot && ly0 >= track_area_top) {
+                    dl->AddRectFilled({vx0, ly0}, {vx1, ly1}, IM_COL32(34, 30, 16, 205), 2.f);
+                    dl->AddRect({vx0, ly0}, {vx1, ly1}, IM_COL32(225, 200, 110, 150), 2.f, 0, 1.f);
+                    float chx = vx0 + 5.f, chy = (ly0 + ly1) * 0.5f, cw = 3.f, ch = 3.f;
+                    ImU32 cc = over_chev ? IM_COL32(255,255,255,255) : IM_COL32(225,210,150,220);
+                    if (pex) { dl->AddLine({chx-cw,chy-ch},{chx,chy+ch},cc,1.6f);
+                               dl->AddLine({chx,chy+ch},{chx+cw,chy-ch},cc,1.6f); }
+                    else     { dl->AddLine({chx-ch,chy-cw},{chx+ch,chy},cc,1.6f);
+                               dl->AddLine({chx+ch,chy},{chx-ch,chy+cw},cc,1.6f); }
+                    ImGui::PushClipRect({vx0, ly0}, {vx1, ly1}, true);
+                    dl->AddText({vx0 + 13.f, ly0 + 1.f}, IM_COL32(238, 224, 175, 255), "Clip");
+                    ImGui::PopClipRect();
+                    std::vector<std::pair<float,int>> kg;
+                    kf_accumulate_groups(host.ktracks, kg);
+                    draw_kf_groups(dl, kg, ax0, zoom, vx0, vx1, chy);
+                    if (over_chev) {
+                        ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+                        if (!track.locked && ImGui::IsMouseClicked(0)) {
+                            host.params_expanded = !pex; s_clip_hit = true;
+                        }
+                    }
+                }
+                lane_y += FX_LANE_H;
+                if (host.params_expanded) {
+                    for (auto& kv : host.ktracks) {
+                        if (kv.second.keys.empty()) continue;
+                        float sly0 = lane_y, sly1 = lane_y + SUBROW_H - 2.f;
+                        if (sly1 <= track_area_bot && sly0 >= track_area_top) {
+                            dl->AddRectFilled({vx0, sly0}, {vx1, sly1}, IM_COL32(26, 22, 12, 175), 2.f);
+                            ImGui::PushClipRect({vx0, sly0}, {vx1, sly1}, true);
+                            dl->AddText({vx0 + 6.f, sly0 - 1.f}, IM_COL32(205, 190, 150, 220),
+                                        kv.first.c_str());
+                            ImGui::PopClipRect();
+                            std::vector<std::pair<float,int>> pg;
+                            for (auto& kk : kv.second.keys) pg.push_back({kk.time, 1});
+                            draw_kf_groups(dl, pg, ax0, zoom, vx0, vx1, (sly0 + sly1) * 0.5f);
+                        }
+                        lane_y += SUBROW_H;
                     }
                 }
             }
