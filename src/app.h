@@ -385,6 +385,9 @@ struct Clip {
     // lanes drawn beneath the clip (the track grows), so each effect's run can
     // be trimmed individually. Collapsed by default; view state, not exported.
     bool  fx_expanded = false;
+    // Per-effect (set on each fx_chain sub-effect): expand this effect's lane into
+    // per-PARAM keyframe sub-rows on the timeline. View state, not exported.
+    bool  params_expanded = false;
 };
 
 // Split `cl` at absolute timeline time `cut` and return the right half.

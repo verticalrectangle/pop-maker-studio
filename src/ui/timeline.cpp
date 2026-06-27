@@ -417,6 +417,43 @@ static FxLaneRect fx_lane_rect(const Clip& clip, int i, int shown, float spread,
     return r;
 }
 
+// ── Draw-only keyframe diamonds (shared by content L1 and the FX-chain levels) ──
+// Read-only siblings of the interactive content-clip renderer (~1843-1854); no
+// hover/select/drag — they just visualize "what animates here". Editing stays in
+// the panel. x_at_origin = screen-x of the owning clip's .start; kx = +time*zoom.
+static void draw_one_diamond(ImDrawList* dl, float cx, float cy, float r, ImU32 fill) {
+    dl->AddQuadFilled({cx, cy-r}, {cx+r, cy}, {cx, cy+r}, {cx-r, cy}, fill);
+    dl->AddQuad({cx, cy-r}, {cx+r, cy}, {cx, cy+r}, {cx-r, cy}, IM_COL32(0,0,0,200), 1.f);
+}
+// Time-bucket keys into {time, count} (0.02s = PropTrack::set tolerance) so
+// simultaneous keys merge into one super-diamond. Accumulates — call once per
+// ktracks map to union a whole chain into one band.
+static void kf_accumulate_groups(const std::unordered_map<std::string, PropTrack>& ktracks,
+                                 std::vector<std::pair<float,int>>& groups, float tol = 0.02f) {
+    for (auto& kv : ktracks)
+        for (auto& k : kv.second.keys) {
+            bool merged = false;
+            for (auto& g : groups)
+                if (fabsf(g.first - k.time) < tol) { g.second++; merged = true; break; }
+            if (!merged) groups.push_back({k.time, 1});
+        }
+}
+// super (count>1) = blue + stacked echo; single = white. Same visual language as
+// L1, minus the hover/selection states (those live only in the interactive path).
+static void draw_kf_groups(ImDrawList* dl, const std::vector<std::pair<float,int>>& groups,
+                           float x_at_origin, float zoom,
+                           float vis_x0, float vis_x1, float mid_y) {
+    for (auto& g : groups) {
+        bool super = g.second > 1;
+        float d  = super ? 6.f : 5.f;
+        float kx = x_at_origin + g.first * zoom;
+        if (kx < vis_x0 - d || kx > vis_x1 + d) continue;
+        if (super) draw_one_diamond(dl, kx + 3.f, mid_y, d - 1.f, IM_COL32(55,110,185,255));
+        draw_one_diamond(dl, kx, mid_y, d, super ? IM_COL32(110,190,255,255)
+                                                 : IM_COL32(235,235,235,255));
+    }
+}
+
 static void draw_fx_stack(ImDrawList* dl, const Clip& clip, float cx0,
                           float vis_x0, float vis_x1, float cy0, float cy1,
                           float zoom, bool sel) {
@@ -460,6 +497,19 @@ static void draw_fx_stack(ImDrawList* dl, const Clip& clip, float cx0,
     } else if (N > shown) {
         char b[12]; snprintf(b, sizeof(b), "+%d", N - shown);
         dl->AddText({vis_x1 - 22.f, cy1 - 14.f}, IM_COL32(220,240,255,220), b);
+    }
+
+    // L2: aggregate keyframe band — the WHOLE chain's keys (not just the shown
+    // deck) merged by time into super-diamonds. The collapsed-brick summary;
+    // the disclosed lanes carry per-effect detail.
+    {
+        std::vector<std::pair<float,int>> kg;
+        for (auto& se : clip.fx_chain) kf_accumulate_groups(se.ktracks, kg);
+        if (!kg.empty()) {
+            float lane_b = cy1 - 2.f, lane_t = fmaxf(cy0 + 2.f, cy1 - 13.f);
+            dl->AddRectFilled({vis_x0, lane_t}, {vis_x1, lane_b}, IM_COL32(8,8,12,170), 3.f);
+            draw_kf_groups(dl, kg, cx0, zoom, vis_x0, vis_x1, (lane_t + lane_b) * 0.5f);
+        }
     }
 }
 
@@ -1193,6 +1243,25 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
         }
         return n;
     };
+    const float SUBROW_H = 12.f;
+    auto nonempty_kt = [](const Clip& se) -> int {
+        int n = 0; for (auto& kv : se.ktracks) if (!kv.second.keys.empty()) ++n; return n;
+    };
+    // L4: param sub-rows reserved by params-expanded VIDEO MultiFX sub-effects (one
+    // per keyframed prop). MUST iterate identically to the Pass-3 draw_lane loop.
+    auto host_fx_subrows = [&](int ti, int ci) -> int {
+        const Clip& self = state.tracks[(size_t)ti].clips[(size_t)ci];
+        std::vector<int> fxk = fx_brick_self_hosts(state, ti, self)
+                             ? std::vector<int>{ci} : coupled_fx_of(state, ti, ci);
+        int n = 0;
+        for (int k : fxk) {
+            const Clip& b = state.tracks[(size_t)ti].clips[(size_t)k];
+            if (b.clip_type != ClipType::MultiFX) continue;   // video MultiFX only
+            for (auto& se : b.fx_chain)
+                if (se.params_expanded) n += nonempty_kt(se);
+        }
+        return n;
+    };
     auto track_extra_h = [&](int ti) -> float {
         if (ti < 0 || ti >= (int)state.tracks.size()) return 0.f;
         float e = 0.f;
@@ -1202,7 +1271,8 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                 (is_fx_clip(cls[(size_t)ci]) && !fx_brick_self_hosts(state, ti, cls[(size_t)ci])))
                 continue;
             int n = host_fx_count(ti, ci);
-            if (n > 0) e = fmaxf(e, (float)n * FX_LANE_H + 6.f);
+            if (n > 0) e = fmaxf(e, (float)n * FX_LANE_H +
+                                     (float)host_fx_subrows(ti, ci) * SUBROW_H + 6.f);
         }
         return e;
     };
@@ -3029,6 +3099,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
             if (fxk.empty()) continue;
             float lane_top = track_y + TL_TRACK_H + 3.f;
             int row = 0;
+            float lane_y = lane_top;   // running Y cursor (lanes + L4 sub-rows vary in height)
 
             // Collapse handle — a plain white chevron in the label gutter, lined
             // up with the lane stack, so there's an obvious spot to fold the lanes
@@ -3038,7 +3109,8 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
             // = "click to fold"; no filled block, just the glyph.
             {
                 int   n_lanes = host_fx_count(ti, ci);
-                float stack_h = (float)n_lanes * FX_LANE_H;
+                float stack_h = (float)n_lanes * FX_LANE_H +
+                                (float)host_fx_subrows(ti, ci) * SUBROW_H;
                 float cxm = origin.x + TL_LABEL_W - 11.f;
                 float gy0 = lane_top, gy1 = lane_top + stack_h - 3.f;
                 float cym = (gy0 + gy1) * 0.5f;
@@ -3070,7 +3142,12 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                 float vx0 = fmaxf(ax0, origin.x + TL_LABEL_W);
                 float vx1 = fminf(ax1, origin.x + total_w);
                 if (vx1 < vx0 + 3.f) vx1 = vx0 + 3.f;
-                float ly0 = lane_top + row * FX_LANE_H, ly1 = ly0 + FX_LANE_H - 2.f;
+                float ly0 = lane_y, ly1 = ly0 + FX_LANE_H - 2.f;
+                bool has_kf_params = ei >= 0 && !fx_brick_is_audio_kind(brick) &&
+                                     nonempty_kt(brick.fx_chain[(size_t)ei]) > 0;
+                bool over_chevron = has_kf_params && !tl_any_popup &&
+                                    mouse.x >= vx0 && mouse.x <= vx0 + 11.f &&
+                                    mouse.y >= ly0 && mouse.y <= ly1;
                 // The lane reads as "selected" whenever its entry is the brick's
                 // active chain entry and the panel is inspecting this lane group —
                 // which means either the host content clip (FX-tab path) or the
@@ -3084,16 +3161,44 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                                       (c.fill & 0x00FFFFFFu) | (selr ? 0xF0000000u : 0xC8000000u), 2.f);
                     dl->AddRect({vx0, ly0}, {vx1, ly1}, c.border, 2.f, 0, selr ? 1.8f : 1.f);
                     ImGui::PushClipRect({vx0, ly0}, {vx1, ly1}, true);
-                    dl->AddText({vx0 + 4.f, ly0 + 1.f}, IM_COL32(235, 240, 250, 255),
-                                fx_type_name(ft));
+                    dl->AddText({vx0 + (has_kf_params ? 13.f : 4.f), ly0 + 1.f},
+                                IM_COL32(235, 240, 250, 255), fx_type_name(ft));
                     ImGui::PopClipRect();
+                    // L3: this effect's keyframes, inline on the lane (read-only).
+                    if (ei >= 0) {
+                        std::vector<std::pair<float,int>> kg;
+                        kf_accumulate_groups(brick.fx_chain[(size_t)ei].ktracks, kg);
+                        if (!kg.empty())
+                            draw_kf_groups(dl, kg,
+                                origin.x + TL_LABEL_W + brick.start * zoom - scroll,
+                                zoom, vx0, vx1, (ly0 + ly1) * 0.5f);
+                    }
+                    // L4 disclosure chevron (left edge) for effects with keyed params.
+                    if (has_kf_params) {
+                        bool pex = brick.fx_chain[(size_t)ei].params_expanded;
+                        float chx = vx0 + 5.f, chy = (ly0 + ly1) * 0.5f, cw = 3.f, ch = 3.f;
+                        ImU32 cc = over_chevron ? IM_COL32(255,255,255,255)
+                                                : IM_COL32(205,212,225,210);
+                        if (pex) { dl->AddLine({chx-cw,chy-ch},{chx,chy+ch},cc,1.6f);
+                                   dl->AddLine({chx,chy+ch},{chx+cw,chy-ch},cc,1.6f); }
+                        else     { dl->AddLine({chx-ch,chy-cw},{chx+ch,chy},cc,1.6f);
+                                   dl->AddLine({chx+ch,chy},{chx-ch,chy+cw},cc,1.6f); }
+                        if (over_chevron) {
+                            ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+                            if (!track.locked && ImGui::IsMouseClicked(0)) {
+                                brick.fx_chain[(size_t)ei].params_expanded = !pex;
+                                s_clip_hit = true;
+                            }
+                        }
+                    }
                     TLGeomLane gl; gl.track = ti; gl.clip = ci; gl.idx = row;
                     gl.x0 = vx0; gl.y0 = ly0; gl.x1 = vx1; gl.y1 = ly1;
                     gl.audio = fx_brick_is_audio_kind(brick);
                     s_tl_geom.lanes.push_back(gl);
 
-                    // Resize / select interaction (chain entries only).
-                    if (ei >= 0 && !track.locked && g_tl.fx_lane_drag == 0 &&
+                    // Resize / select interaction (chain entries only). Skipped over
+                    // the L4 chevron so its click doesn't also start a lane drag.
+                    if (!over_chevron && ei >= 0 && !track.locked && g_tl.fx_lane_drag == 0 &&
                         !tl_any_popup &&
                         mouse.x >= vx0 - 4.f && mouse.x <= vx1 + 4.f &&
                         mouse.y >= ly0 && mouse.y <= ly1) {
@@ -3130,6 +3235,29 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                             s_clip_hit = true;
                             s_fxlane_open = true;
                         }
+                    }
+                }
+                // L4: advance past the lane, then draw this effect's per-param sub-rows.
+                lane_y += FX_LANE_H;
+                if (ei >= 0 && !fx_brick_is_audio_kind(brick) &&
+                    brick.fx_chain[(size_t)ei].params_expanded) {
+                    Clip& se = brick.fx_chain[(size_t)ei];
+                    for (auto& kv : se.ktracks) {
+                        if (kv.second.keys.empty()) continue;
+                        float sly0 = lane_y, sly1 = lane_y + SUBROW_H - 2.f;
+                        if (sly1 <= track_area_bot && sly0 >= track_area_top) {
+                            dl->AddRectFilled({vx0, sly0}, {vx1, sly1}, IM_COL32(8,8,12,150), 2.f);
+                            ImGui::PushClipRect({vx0, sly0}, {vx1, sly1}, true);
+                            dl->AddText({vx0 + 6.f, sly0 - 1.f}, IM_COL32(165,178,200,220),
+                                        kv.first.c_str());
+                            ImGui::PopClipRect();
+                            std::vector<std::pair<float,int>> pg;
+                            for (auto& kk : kv.second.keys) pg.push_back({kk.time, 1});
+                            draw_kf_groups(dl, pg,
+                                origin.x + TL_LABEL_W + brick.start * zoom - scroll,
+                                zoom, vx0, vx1, (sly0 + sly1) * 0.5f);
+                        }
+                        lane_y += SUBROW_H;
                     }
                 }
                 row++;

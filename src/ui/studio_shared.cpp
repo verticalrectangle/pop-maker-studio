@@ -358,6 +358,19 @@ bool kf_slider(AppState& state, Clip& clip, int sel_ti, int sel_ci, float w,
             state.kf_sel_prop  = prop;
             state.kf_sel_idx   = clip.ktracks[prop].find_nearest(t_local, kf_tol);
             history_push(state, std::string("Add KF ") + prop);
+            // Auto-expose: if `clip` is a MultiFX sub-effect (not the selected clip
+            // itself), reveal it on the timeline — open this effect's per-param rows
+            // and the host's coupled-chain lanes.
+            if (sel_ti >= 0 && sel_ti < (int)state.tracks.size() &&
+                sel_ci >= 0 && sel_ci < (int)state.tracks[(size_t)sel_ti].clips.size()) {
+                Clip& owner = state.tracks[(size_t)sel_ti].clips[(size_t)sel_ci];
+                if (&clip != &owner) {
+                    clip.params_expanded = true;
+                    int host = fx_coupled_host(state, sel_ti, owner);
+                    if (host >= 0) state.tracks[(size_t)sel_ti].clips[(size_t)host].fx_expanded = true;
+                    else owner.fx_expanded = true;
+                }
+            }
         }
     };
     {
