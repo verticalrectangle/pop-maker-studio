@@ -22,6 +22,7 @@
 #pragma GCC diagnostic pop
 
 #include "stb_image.h"  // declarations only — implementation lives in video.cpp
+#include "proxy.h"      // proxy_load — the counted frame rate the bg masks are keyed by
 
 #include <fstream>
 #include <sstream>
@@ -2118,6 +2119,28 @@ static void clear_ex_still_tex() {
     g_ex_still_tex.clear();
 }
 
+// Map an export source-time to the proxy frame index the bg-removal masks are keyed
+// by. The masks are indexed by the proxy's COUNTED rate (frames÷duration, e.g. 29.97),
+// the same rate the preview uses (video.cpp:1002 / playhead_to_frame_idx) and that
+// start_frame is computed in. fps.txt instead records the raw proxy MJPEG's CONTAINER
+// rate (a forced 30, see proxy.cpp:238) — using it drifts the mask out of sync as time
+// grows. Cache the rational rate per source path (proxy_load spawns ffprobe).
+static int export_proxy_frame_idx(const std::string& video_path, double t) {
+    static std::map<std::string, std::pair<int64_t,int64_t>> s_cache;  // path → (num, den)
+    auto it = s_cache.find(video_path);
+    if (it == s_cache.end()) {
+        int64_t num = 0, den = 1;
+        ProxyInfo pi;
+        if (proxy_load(video_path, pi) && pi.fps_num > 0 && pi.fps_den > 0) {
+            num = pi.fps_num; den = pi.fps_den;
+        }
+        it = s_cache.insert({video_path, {num, den}}).first;
+    }
+    int64_t num = it->second.first, den = it->second.second;
+    return (num > 0 && den > 0) ? (int)((int64_t)(t * (double)num) / den)
+                                : (int)(t * 30.0);
+}
+
 static bool gl_render_vid_clip(ImDrawList& dl, const Clip* cl, float at_time,
                                 float alpha_mul, GLuint tex_id, int fx_slot,
                                 float W, float H, const AppState& state, int ti,
@@ -2250,8 +2273,9 @@ static bool gl_render_vid_clip(ImDrawList& dl, const Clip* cl, float at_time,
     // correctly composite over background layers.
     if (cl->bg_remove_on && cl->bg_remove_status == BgRemoveStatus::Ready
             && !cl->bg_remove_mask_dir.empty()) {
-        float mask_fps = bg_remove_read_fps(cl->bg_remove_mask_dir);
-        int   frame_i  = (int)(src_t * mask_fps);
+        // Index by the proxy's COUNTED rate (matches the preview + start_frame), NOT
+        // fps.txt's container rate — otherwise the mask drifts off as src_t grows.
+        int frame_i = export_proxy_frame_idx(cl->text, src_t);
         video_apply_bg_remove_export(vf, *cl, frame_i);
     }
 
