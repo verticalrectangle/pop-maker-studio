@@ -88,7 +88,7 @@ void main() {
     float edge = edge_mask(p0 + 1.0);
     vec3 glow_col = hue2rgb(fract(p1 + t * 0.2));
     vec4 body_col = vec4(orig.rgb + glow_col * edge * 2.0, orig.a);
-    vec4 bg_col   = vec4(orig.rgb * 0.1, orig.a);
+    vec4 bg_col   = orig;  // body-only: leave the background untouched
     vec4 result = mix(bg_col, body_col, m);
     frag = mix(orig, result, u_amount);
 }
@@ -148,7 +148,7 @@ void main() {
     float luma = dot(orig.rgb, vec3(0.299, 0.587, 0.114));
     vec3 retro_body = mix(vec3(1.0, 0.1, 0.8), vec3(0.8, 0.1, 1.0), luma);
     vec4 body_col = vec4(mix(orig.rgb, retro_body, p0), orig.a);
-    vec4 bg_col   = vec4(orig.rgb * 0.2 * vec3(0.2, 0.8, 0.8), orig.a);
+    vec4 bg_col   = orig;  // body-only: leave the background untouched
     vec4 result = mix(bg_col, body_col, m);
     frag = mix(orig, result, u_amount);
 }
@@ -480,7 +480,7 @@ void main() {
     float inside_glow = m * luma * 0.4;
     vec3 xray = vec3(0.6, 0.8, 1.0) * (edge * 2.0 + inside_glow);
     vec4 body_col = vec4(clamp(xray, 0.0, 1.0), orig.a);
-    vec4 bg_col   = vec4(0.0, 0.0, 0.0, orig.a);
+    vec4 bg_col   = orig;  // body-only: leave the background untouched
     vec4 result = mix(bg_col, body_col, m);
     frag = mix(orig, result, u_amount);
 }
@@ -496,7 +496,7 @@ void main() {
     float hue_v = fract(t * 0.15 + v_uv.y * 0.1);
     vec3 glow = hue2rgb(hue_v) * edge * pulse * 2.5;
     vec4 body_col = vec4(clamp(orig.rgb + glow, 0.0, 1.0), orig.a);
-    vec4 bg_col   = vec4(orig.rgb * 0.1, orig.a);
+    vec4 bg_col   = orig;  // body-only: leave the background untouched
     vec4 result = mix(bg_col, body_col, m);
     frag = mix(orig, result, u_amount);
 }
@@ -510,7 +510,7 @@ void main() {
     float edge = edge_mask(p1);
     vec3 rim = hue2rgb(p0) * edge * 2.0;
     vec4 body_col = vec4(clamp(orig.rgb + rim, 0.0, 1.0), orig.a);
-    vec4 bg_col   = vec4(orig.rgb * 0.3, orig.a);
+    vec4 bg_col   = orig;  // body-only: leave the background untouched
     vec4 result = mix(bg_col, body_col, m);
     frag = mix(orig, result, u_amount);
 }
@@ -606,7 +606,7 @@ void main() {
     vec3 bio_col = mix(vec3(0.0, 1.0, 0.6), vec3(0.0, 0.8, 1.0), pulse);
     vec3 glow = bio_col * edge * p0 * 2.0;
     vec4 body_col = vec4(clamp(orig.rgb + glow, 0.0, 1.0), orig.a);
-    vec4 bg_col   = vec4(orig.rgb * 0.1, orig.a);
+    vec4 bg_col   = orig;  // body-only: leave the background untouched
     vec4 result = mix(bg_col, body_col, m);
     frag = mix(orig, result, u_amount);
 }
@@ -622,7 +622,7 @@ void main() {
     vec3 holo_col = orig.rgb * scan * flicker;
     holo_col *= vec3(0.3, 0.8, 1.0);
     vec4 body_col = vec4(holo_col, orig.a);
-    vec4 bg_col   = vec4(orig.rgb * 0.05, orig.a);
+    vec4 bg_col   = orig;  // body-only: leave the background untouched
     vec4 result = mix(bg_col, body_col, m);
     frag = mix(orig, result, u_amount);
 }
@@ -736,7 +736,7 @@ void main() {
     float hue_v = fract(v_uv.y + t * p0 + v_uv.x * 0.3);
     vec3 rainbow = hue2rgb(hue_v);
     vec4 body_col = vec4(orig.rgb * rainbow, orig.a);
-    vec4 bg_col   = vec4(orig.rgb * 0.1, orig.a);
+    vec4 bg_col   = orig;  // body-only: leave the background untouched
     vec4 result = mix(bg_col, body_col, m);
     frag = mix(orig, result, u_amount);
 }
@@ -751,7 +751,7 @@ void main() {
     float sat  = length(orig.rgb - vec3(luma));
     vec3 uv_body = clamp(orig.rgb * (1.0 + p0 * sat * 4.0), 0.0, 1.0);
     vec4 body_col = vec4(uv_body, orig.a);
-    vec4 bg_col   = vec4(orig.rgb * 0.05, orig.a);
+    vec4 bg_col   = orig;  // body-only: leave the background untouched
     vec4 result = mix(bg_col, body_col, m);
     frag = mix(orig, result, u_amount);
 }
