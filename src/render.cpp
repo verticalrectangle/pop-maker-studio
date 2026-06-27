@@ -2269,15 +2269,9 @@ static bool gl_render_vid_clip(ImDrawList& dl, const Clip* cl, float at_time,
     if (glass_cfx.datamosh_on && glass_cfx.datamosh_intensity > 0.01f)
         video_apply_datamosh(vf, glass_cfx.datamosh_intensity, (float)src_t);
 
-    // AI bg-remove: apply mask alpha before GL upload so the compositor can
-    // correctly composite over background layers.
-    if (cl->bg_remove_on && cl->bg_remove_status == BgRemoveStatus::Ready
-            && !cl->bg_remove_mask_dir.empty()) {
-        // Index by the proxy's COUNTED rate (matches the preview + start_frame), NOT
-        // fps.txt's container rate — otherwise the mask drifts off as src_t grows.
-        int frame_i = export_proxy_frame_idx(cl->text, src_t);
-        video_apply_bg_remove_export(vf, *cl, frame_i);
-    }
+    // AI bg-removal is applied solely by the RemoveBackground BodyFX brick (below) —
+    // no CPU alpha-bake here. The frame uploads OPAQUE and the brick shader cuts it
+    // once (α = orig.a · mask); baking here too would square the mask.
 
     glBindTexture(GL_TEXTURE_2D, tex_id);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, vf->width, vf->height, 0,
@@ -2299,11 +2293,18 @@ static bool gl_render_vid_clip(ImDrawList& dl, const Clip* cl, float at_time,
     // Both use the video clip's own bg_remove masks (hires at export time).
     if (cl->bg_remove_status == BgRemoveStatus::Ready && !cl->bg_remove_mask_dir.empty()) {
         std::string mask_dir = cl->bg_remove_mask_dir;
-        float mask_fps = bg_remove_read_fps(mask_dir);
-        // Same source-time mapping as the frame fetch (×speed — this used to
-        // divide, desyncing body-FX masks on any retimed clip).
+        // Index by the proxy's COUNTED rate (matches the preview + start_frame), NOT
+        // fps.txt's container rate — otherwise the mask drifts off as src_t grows.
         float bfx_src_t = clip_src_time(*cl, at_time);
-        int frame_i = (int)(bfx_src_t * mask_fps);
+        int frame_i = export_proxy_frame_idx(cl->text, bfx_src_t);
+        // Bounding box (keep-region in v_uv — y is bottom-up, so flip t/b) + softness,
+        // fed into the RemoveBackground brick shader (was the CPU alpha-bake's job).
+        float bg_box[4] = {0.f, 1.f, 0.f, 1.f};
+        if (cl->bg_remove_box_on) {
+            bg_box[0] = cl->bg_remove_box_l;        bg_box[1] = cl->bg_remove_box_r;
+            bg_box[2] = 1.f - cl->bg_remove_box_b;  bg_box[3] = 1.f - cl->bg_remove_box_t;
+        }
+        float bg_soft = cl->bg_remove_softness;
 
         // Standalone glass BodyFX bricks on this track
         for (auto& bfx_cl : state.tracks[ti].clips) {
@@ -2313,7 +2314,7 @@ static bool gl_render_vid_clip(ImDrawList& dl, const Clip* cl, float at_time,
             if (!mask_tex) continue;
             cur_tex = body_fx_apply(bfx_cl.body_fx_type, cur_tex, mask_tex,
                                     vid_w, vid_h, bfx_cl.body_fx_params,
-                                    bfx_cl.body_fx_amount, at_time);
+                                    bfx_cl.body_fx_amount, at_time, bg_box, bg_soft);
         }
 
         // BodyFX sub-effects inside glass MultiFX bricks on this track
@@ -2331,7 +2332,7 @@ static bool gl_render_vid_clip(ImDrawList& dl, const Clip* cl, float at_time,
                 if (!mask_tex) continue;
                 cur_tex = body_fx_apply(se.body_fx_type, cur_tex, mask_tex,
                                         vid_w, vid_h, se.body_fx_params,
-                                        se.body_fx_amount, at_time);
+                                        se.body_fx_amount, at_time, bg_box, bg_soft);
             }
         }
     }

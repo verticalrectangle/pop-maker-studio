@@ -62,7 +62,8 @@ uintptr_t body_fx_apply(BodyFXType type,
                          uintptr_t src_tex, unsigned mask_tex,
                          int w, int h,
                          const float params[4],
-                         float amount, float t);
+                         float amount, float t,
+                         const float bg_box[4] = nullptr, float bg_softness = 0.f);
 
 // Free any GL textures cached for this mask dir (call when clip is deleted).
 void body_fx_evict_mask_cache(const std::string& mask_dir);

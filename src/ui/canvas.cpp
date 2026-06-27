@@ -1483,15 +1483,8 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
         auto make_pfx = [&](const Clip* cl_ptr, int ti) {
             PixelFX pfx;
             CreativeFXAccum cfx2 = collect_glass_fx(state, state.playhead, ti);
-            pfx.bg_remove_on       = cl_ptr->bg_remove_on &&
-                                     cl_ptr->bg_remove_status == BgRemoveStatus::Ready;
-            pfx.bg_remove_mask_dir = cl_ptr->bg_remove_mask_dir;
-            pfx.bg_remove_softness = cl_ptr->bg_remove_softness;
-            pfx.bg_remove_box_on   = cl_ptr->bg_remove_box_on;
-            pfx.bg_remove_box_l    = cl_ptr->bg_remove_box_l;
-            pfx.bg_remove_box_r    = cl_ptr->bg_remove_box_r;
-            pfx.bg_remove_box_t    = cl_ptr->bg_remove_box_t;
-            pfx.bg_remove_box_b    = cl_ptr->bg_remove_box_b;
+            // bg-removal no longer rides PixelFX — the RemoveBackground brick shader
+            // does the cutout (single path; no CPU alpha-bake).
             pfx.datamosh_on        = cfx2.datamosh_on;
             pfx.datamosh_intensity = cfx2.datamosh_intensity;
             pfx.datamosh_spread    = cfx2.datamosh_spread;
@@ -1670,15 +1663,8 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                 CreativeFXAccum cfx = collect_glass_fx(state, at_time, ti);
                 if (slot >= 0) {
                     PixelFX pfx;
-                    pfx.bg_remove_on       = cl_ptr->bg_remove_on &&
-                                             cl_ptr->bg_remove_status == BgRemoveStatus::Ready;
-                    pfx.bg_remove_mask_dir = cl_ptr->bg_remove_mask_dir;
-                    pfx.bg_remove_softness = cl_ptr->bg_remove_softness;
-                    pfx.bg_remove_box_on   = cl_ptr->bg_remove_box_on;
-                    pfx.bg_remove_box_l    = cl_ptr->bg_remove_box_l;
-                    pfx.bg_remove_box_r    = cl_ptr->bg_remove_box_r;
-                    pfx.bg_remove_box_t    = cl_ptr->bg_remove_box_t;
-                    pfx.bg_remove_box_b    = cl_ptr->bg_remove_box_b;
+                    // bg-removal no longer rides PixelFX — the RemoveBackground brick
+                    // shader does the cutout (single path; no CPU alpha-bake).
                     pfx.datamosh_on        = cfx.datamosh_on;
                     pfx.datamosh_intensity = cfx.datamosh_intensity;
                     pfx.datamosh_spread    = cfx.datamosh_spread;
@@ -1708,11 +1694,33 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                     cl_ptr->bg_remove_status == BgRemoveStatus::Ready &&
                     !cl_ptr->bg_remove_mask_dir.empty()) {
                     std::string mask_dir = cl_ptr->bg_remove_mask_dir;
-                    float mask_fps = bg_remove_read_fps(mask_dir);
-                    // Same source-time mapping as the frame fetch (×speed —
-                    // this used to divide, desyncing masks on retimed clips).
+                    // Index by the proxy's COUNTED rate (matches the main decode +
+                    // start_frame), NOT fps.txt's container rate (it drifts over time).
+                    // Cache the rational rate per source path (proxy_load spawns ffprobe).
+                    static std::map<std::string, std::pair<int64_t,int64_t>> s_bgfps;
                     float src_t = clip_src_time(*cl_ptr, at_time);
-                    int frame_i = (int)(src_t * mask_fps);
+                    int frame_i;
+                    {
+                        auto it = s_bgfps.find(cl_ptr->text);
+                        if (it == s_bgfps.end()) {
+                            int64_t num = 0, den = 1; ProxyInfo pi;
+                            if (proxy_load(cl_ptr->text, pi) && pi.fps_num > 0 && pi.fps_den > 0) {
+                                num = pi.fps_num; den = pi.fps_den;
+                            }
+                            it = s_bgfps.insert({cl_ptr->text, {num, den}}).first;
+                        }
+                        int64_t num = it->second.first, den = it->second.second;
+                        frame_i = (num > 0 && den > 0)
+                                ? (int)((int64_t)(src_t * (double)num) / den)
+                                : (int)(src_t * bg_remove_read_fps(mask_dir));
+                    }
+                    // Box (keep-region in v_uv; y bottom-up → flip t/b) + softness → brick.
+                    float bg_box[4] = {0.f, 1.f, 0.f, 1.f};
+                    if (cl_ptr->bg_remove_box_on) {
+                        bg_box[0] = cl_ptr->bg_remove_box_l;        bg_box[1] = cl_ptr->bg_remove_box_r;
+                        bg_box[2] = 1.f - cl_ptr->bg_remove_box_b;  bg_box[3] = 1.f - cl_ptr->bg_remove_box_t;
+                    }
+                    float bg_soft = cl_ptr->bg_remove_softness;
                     VideoInfo vi_g = video_info(slot);
                     int bw = (vi_g.width  > 0) ? vi_g.width  : (int)w;
                     int bh = (vi_g.height > 0) ? vi_g.height : (int)h;
@@ -1724,7 +1732,8 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                         unsigned mask_tex = body_fx_mask_texture(mask_dir, frame_i);
                         if (!mask_tex) continue;
                         tex = body_fx_apply(bfx_cl.body_fx_type, tex, mask_tex, bw, bh,
-                                            bfx_cl.body_fx_params, bfx_cl.body_fx_amount, t_anim);
+                                            bfx_cl.body_fx_params, bfx_cl.body_fx_amount, t_anim,
+                                            bg_box, bg_soft);
                     }
 
                     // BodyFX sub-effects inside glass MultiFX bricks on this track
@@ -1741,7 +1750,8 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                             unsigned mask_tex = body_fx_mask_texture(mask_dir, frame_i);
                             if (!mask_tex) continue;
                             tex = body_fx_apply(se.body_fx_type, tex, mask_tex, bw, bh,
-                                                se.body_fx_params, se.body_fx_amount, t_anim);
+                                                se.body_fx_params, se.body_fx_amount, t_anim,
+                                                bg_box, bg_soft);
                         }
                     }
                 }

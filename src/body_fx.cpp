@@ -41,6 +41,8 @@ uniform sampler2D u_mask;
 uniform float t;
 uniform float u_amount;
 uniform float p0, p1, p2, p3;
+uniform vec4  u_bg_box;       // RemoveBackground: keep-region [x0,x1,y0,y1] in v_uv (0,1,0,1 = full)
+uniform float u_bg_softness;  // RemoveBackground: matte / edge gamma, -1..1
 
 float hash(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}
 float noise(vec2 p){
@@ -67,6 +69,12 @@ static const char* k_frag_RemoveBackground = R"glsl(
 void main() {
     vec4 orig = texture(u_src, v_uv);
     float m   = texture(u_mask, v_uv).r;
+    // Bounding box: zero the mask outside the keep-region (u_bg_box = 0,1,0,1 = off).
+    if (v_uv.x < u_bg_box.x || v_uv.x > u_bg_box.y ||
+        v_uv.y < u_bg_box.z || v_uv.y > u_bg_box.w) m = 0.0;
+    // Matte / edge-softness gamma (-1..1), mirroring the old CPU path.
+    if (u_bg_softness > 0.001)       m = pow(m, 1.0 + u_bg_softness * 3.0);
+    else if (u_bg_softness < -0.001) m = pow(m, 1.0 / (1.0 - u_bg_softness * 3.0));
     vec4 result = vec4(orig.rgb, orig.a * m);
     frag = mix(orig, result, u_amount);
 }
@@ -1334,7 +1342,8 @@ uintptr_t body_fx_apply(BodyFXType type,
                          uintptr_t src_tex, unsigned mask_tex,
                          int w, int h,
                          const float params[4],
-                         float amount, float t_sec) {
+                         float amount, float t_sec,
+                         const float bg_box[4], float bg_softness) {
     int idx = (int)type;
     if (idx < 0 || idx >= (int)BodyFXType::Count) return src_tex;
     GLuint prog = g_programs[idx];
@@ -1375,6 +1384,10 @@ uintptr_t body_fx_apply(BodyFXType type,
     glUniform1f(glGetUniformLocation(prog, "p1"), params ? params[1] : 0.f);
     glUniform1f(glGetUniformLocation(prog, "p2"), params ? params[2] : 0.f);
     glUniform1f(glGetUniformLocation(prog, "p3"), params ? params[3] : 0.f);
+    static const float full_box[4] = {0.f, 1.f, 0.f, 1.f};
+    const float* bx = bg_box ? bg_box : full_box;
+    glUniform4f(glGetUniformLocation(prog, "u_bg_box"), bx[0], bx[1], bx[2], bx[3]);
+    glUniform1f(glGetUniformLocation(prog, "u_bg_softness"), bg_softness);
 
     glDrawArrays(GL_TRIANGLES, 0, 3);
 

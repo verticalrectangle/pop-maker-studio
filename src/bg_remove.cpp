@@ -531,6 +531,29 @@ static void run_job(std::shared_ptr<JobData> data,
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
+// Brick-only background removal: ensure a RemoveBackground BodyFX brick overlaps the
+// video clip on its track — the brick is the sole consumer of the masks now. Mirrors
+// the brick the MCP add_clip(type=body_fx) makes (uncoupled, spanning the clip). No-op
+// when one already overlaps.
+static void ensure_remove_bg_brick(AppState& state, int ti, int ci) {
+    if (ti < 0 || ti >= (int)state.tracks.size()) return;
+    auto& clips = state.tracks[(size_t)ti].clips;
+    if (ci < 0 || ci >= (int)clips.size()) return;
+    float cs = clips[(size_t)ci].start, ce = clips[(size_t)ci].end;
+    for (auto& d : clips)
+        if (d.clip_type == ClipType::BodyFX &&
+            d.body_fx_type == BodyFXType::RemoveBackground &&
+            d.start < ce && d.end > cs)
+            return;
+    Clip brick;
+    brick.clip_type      = ClipType::BodyFX;
+    brick.body_fx_type   = BodyFXType::RemoveBackground;
+    brick.body_fx_amount = 1.f;
+    brick.start = cs;
+    brick.end   = ce;
+    clips.push_back(std::move(brick));
+}
+
 void bg_remove_start(AppState& state, int track_idx, int clip_idx) {
     if (track_idx < 0 || track_idx >= (int)state.tracks.size()) return;
     auto& track = state.tracks[track_idx];
@@ -541,6 +564,7 @@ void bg_remove_start(AppState& state, int track_idx, int clip_idx) {
     std::string mjpeg = proxy_mjpeg_path(clip.text);
     if (!fs::exists(mjpeg)) {
         clip.bg_remove_status = BgRemoveStatus::WaitingForProxy;
+        ensure_remove_bg_brick(state, track_idx, clip_idx);  // brick rides it even pre-proxy
         return;
     }
 
@@ -587,6 +611,10 @@ void bg_remove_start(AppState& state, int track_idx, int clip_idx) {
         std::lock_guard<std::mutex> lk(g_jobs_mu);
         g_jobs[mdir] = std::move(job);
     }
+
+    // Guarantee the brick exists so the masks are actually applied (every removal
+    // trigger flows through here; the MCP path adds the brick first → no-op).
+    ensure_remove_bg_brick(state, track_idx, clip_idx);
 }
 
 void bg_remove_poll(AppState& state) {
