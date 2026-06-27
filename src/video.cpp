@@ -2372,6 +2372,7 @@ struct ExportMaskCache {
     FILE*                 file        = nullptr;
     std::vector<uint64_t> offsets;     // SOI byte offsets inside bg_masks.mjpeg
     long                  scanned_sz  = 0;
+    int                   start_frame = 0;  // proxy frame_idx of mask frame 0 (mirror preview)
 };
 static std::vector<ExportMaskCache> s_ex_masks;
 
@@ -2383,6 +2384,13 @@ static ExportMaskCache* ex_mask_open(const std::string& mdir) {
     nm.dir  = mdir;
     nm.file = fopen((mdir + "/bg_masks.mjpeg").c_str(), "rb");
     if (!nm.file) return nullptr;
+
+    // Masks cover only the clip's USED window: mask frame 0 == proxy frame
+    // `start_frame`. Mirror the preview's offset (video.cpp ~890) so export indexes
+    // the same frame — without it, trimmed clips (in_point>0) index past the mask
+    // range and the background is silently kept on export.
+    FILE* sf = fopen((mdir + "/start_frame.txt").c_str(), "r");
+    if (sf) { if (fscanf(sf, "%d", &nm.start_frame) != 1) nm.start_frame = 0; fclose(sf); }
 
     // Initial scan for SOI markers.
     fseeko(nm.file, 0, SEEK_END);
@@ -2407,6 +2415,11 @@ void video_apply_bg_remove_export(VideoFrame* vf, const Clip& cl, int mask_frame
 
     ExportMaskCache* ms = ex_mask_open(cl.bg_remove_mask_dir);
     if (!ms || !ms->file) return;
+
+    // mask frame 0 == proxy frame start_frame (see ex_mask_open) — the same correction
+    // the preview applies at video.cpp:1002. Without it, in_point>0 clips keep their bg.
+    mask_frame_idx -= ms->start_frame;
+    if (mask_frame_idx < 0) return;
 
     // Incrementally scan for newly appended frames.
     fseeko(ms->file, 0, SEEK_END);

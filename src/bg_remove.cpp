@@ -154,9 +154,13 @@ int bg_remove_read_frame_count(const std::string& mask_dir) {
 
 static std::string u2net_model_path() {
     std::string dir  = app_models_dir();
-    std::string lite = dir + "/u2netp_human_seg.onnx";
-    if (fs::exists(lite)) return lite;
-    return dir + "/u2net_human_seg.onnx";
+    // Prefer the FULL u2net_human_seg model — far more accurate on dark / low-contrast
+    // regions (dark clothing, hair, shadows) than the lightweight "p" variant, which
+    // under-segments them and cuts them as background. Fall back to the lite model
+    // only when the full one isn't bundled.
+    std::string full = dir + "/u2net_human_seg.onnx";
+    if (fs::exists(full)) return full;
+    return dir + "/u2netp_human_seg.onnx";
 }
 
 static const float U2NET_MEAN[3] = {0.485f, 0.456f, 0.406f};
