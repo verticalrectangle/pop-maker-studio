@@ -531,10 +531,12 @@ static void run_job(std::shared_ptr<JobData> data,
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
-// Brick-only background removal: ensure a RemoveBackground BodyFX brick overlaps the
-// video clip on its track — the brick is the sole consumer of the masks now. Mirrors
-// the brick the MCP add_clip(type=body_fx) makes (uncoupled, spanning the clip). No-op
-// when one already overlaps.
+// Ensure SOME body-FX brick overlaps the video clip to consume the masks; if none
+// does, add a default RemoveBackground cutout brick (spanning the clip, uncoupled —
+// mirrors the MCP add_clip(type=body_fx) brick). ANY body-FX brick (NeonOutline,
+// Hologram, …) already samples the masks, so the cutout is only auto-added when the
+// clip has no body-FX at all — e.g. the bare-clip "Remove Background" button. This
+// stops adding a non-cutout body-FX from also spawning an unwanted RemoveBackground.
 static void ensure_remove_bg_brick(AppState& state, int ti, int ci) {
     if (ti < 0 || ti >= (int)state.tracks.size()) return;
     auto& clips = state.tracks[(size_t)ti].clips;
@@ -542,13 +544,11 @@ static void ensure_remove_bg_brick(AppState& state, int ti, int ci) {
     float cs = clips[(size_t)ci].start, ce = clips[(size_t)ci].end;
     for (auto& d : clips) {
         if (d.start >= ce || d.end <= cs) continue;            // no overlap
-        if (d.clip_type == ClipType::BodyFX &&
-            d.body_fx_type == BodyFXType::RemoveBackground)
-            return;                                            // standalone brick exists
-        if (d.clip_type == ClipType::MultiFX)                  // or a glass-chain sub-effect
+        if (d.clip_type == ClipType::BodyFX)                   // any standalone body-FX brick
+            return;                                            // already consumes the masks
+        if (d.clip_type == ClipType::MultiFX)                  // or a glass chain holding one
             for (auto& se : d.fx_chain)
-                if (se.clip_type == ClipType::BodyFX &&
-                    se.body_fx_type == BodyFXType::RemoveBackground)
+                if (se.clip_type == ClipType::BodyFX)
                     return;
     }
     Clip brick;
