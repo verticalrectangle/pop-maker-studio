@@ -65,5 +65,9 @@ uintptr_t body_fx_apply(BodyFXType type,
                          float amount, float t,
                          const float bg_box[4] = nullptr, float bg_softness = 0.f);
 
+// Render a body FX onto the built-in preview portrait + its mask, for the picker
+// card thumbnails. t animates the effect; each type caches its own output texture.
+uintptr_t body_fx_preview_texture(BodyFXType type, float t);
+
 // Free any GL textures cached for this mask dir (call when clip is deleted).
 void body_fx_evict_mask_cache(const std::string& mask_dir);

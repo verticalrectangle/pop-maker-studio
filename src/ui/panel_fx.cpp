@@ -2931,8 +2931,9 @@ void panel_body_fx_library(AppState& state, float w) {
             cur_cat = info.category;
         }
 
-        float card_h = 44.f;
-        float card_w = w - 8.f;
+        float card_h  = 44.f;
+        float card_w  = w - 8.f;
+        float thumb_w = card_h * 9.f / 16.f;   // 9:16 preview strip on the left
         bool selected = bfx_clip && (bfx_clip->body_fx_type == info.type);
 
         ImGui::PushID(70000 + i);
@@ -2950,17 +2951,31 @@ void panel_body_fx_library(AppState& state, float w) {
                      : hov       ? IM_COL32(40, 140, 120, 150)
                                  : IM_COL32(30, 60, 55, 180);
         dl->AddRectFilled(cp, {cp.x + card_w, cp.y + card_h}, fill, 4.f);
+
+        // Live effect thumbnail on the embedded portrait; hover animates it and
+        // opens a big popover — same language as the gen-FX cards. (144x256 source.)
+        uintptr_t prev = body_fx_preview_texture(info.type, fx_card_preview_t(70000 + i, hov));
+        if (prev && fx_card_popover_ready(70000 + i))
+            ui_card_image_popover(cp, (ImTextureID)prev, 144.f, 256.f, false,
+                                  info.name, info.tagline);
+        if (prev)
+            dl->AddImageRounded((ImTextureID)prev, cp, {cp.x + thumb_w, cp.y + card_h},
+                                {0, 0}, {1, 1},
+                                hov ? IM_COL32(255,255,255,235) : IM_COL32(255,255,255,175),
+                                4.f, ImDrawFlags_RoundCornersLeft);
+
         dl->AddRect(cp, {cp.x + card_w, cp.y + card_h}, border, 4.f, 0, selected ? 1.5f : 1.f);
 
+        float tx = cp.x + thumb_w + 8.f;
         ImGui::PushFont(g_font_bold);
         ImU32 nc = selected   ? IM_COL32(80, 240, 210, 255)
                  : !can_act   ? IM_COL32(80, 100, 95, 160)
                               : IM_COL32(200, 230, 225, 220);
-        dl->AddText(ImGui::GetFont(), 13.f, {cp.x + 10.f, cp.y + 8.f}, nc, info.name);
+        dl->AddText(ImGui::GetFont(), 13.f, {tx, cp.y + 8.f}, nc, info.name);
         ImGui::PopFont();
         ImU32 tc = can_act ? to_u32(Col::dim) : IM_COL32(60, 75, 70, 140);
-        dl->AddText(ImGui::GetFont(), ImGui::GetFontSize(), {cp.x + 10.f, cp.y + 24.f},
-                    tc, info.tagline, nullptr, card_w - 20.f);
+        dl->AddText(ImGui::GetFont(), ImGui::GetFontSize(), {tx, cp.y + 24.f},
+                    tc, info.tagline, nullptr, card_w - thumb_w - 18.f);
 
         ImGui::SetCursorScreenPos(cp);
         ImGui::InvisibleButton("##bfx_card", {card_w, card_h});

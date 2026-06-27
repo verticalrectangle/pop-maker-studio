@@ -9,6 +9,7 @@
 #include "stb_image.h"
 
 #include "bg_remove.h"
+#include "generated/body_fx_preview.h"   // embedded card-preview portrait + body mask
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -1413,6 +1414,63 @@ uintptr_t body_fx_apply(BodyFXType type,
     glViewport(prev_vp[0], prev_vp[1], prev_vp[2], prev_vp[3]);
 
     return (uintptr_t)g_out.tex;
+}
+
+// ── Body-FX card preview thumbnails ───────────────────────────────────────────
+// Render each effect onto the embedded preview portrait + its U2Net body mask so
+// the picker cards show a live thumbnail (and the hovered card animates over t).
+// body_fx_apply reuses one shared g_out fbo, so each effect's result is copied to
+// its own cache texture — otherwise every card would show the last one rendered.
+static unsigned g_bfx_prev_src = 0, g_bfx_prev_mask = 0;
+static std::unordered_map<int, unsigned> g_bfx_prev_cache;
+
+static void ensure_bfx_prev_source() {
+    if (g_bfx_prev_src) return;
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    auto mk = [](unsigned& t, GLenum ifmt, GLenum fmt, const void* px) {
+        glGenTextures(1, &t);
+        glBindTexture(GL_TEXTURE_2D, t);
+        glTexImage2D(GL_TEXTURE_2D, 0, ifmt, body_fx_preview_w, body_fx_preview_h, 0,
+                     fmt, GL_UNSIGNED_BYTE, px);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    };
+    mk(g_bfx_prev_src,  GL_RGB, GL_RGB, body_fx_preview_rgb);
+    mk(g_bfx_prev_mask, GL_R8,  GL_RED, body_fx_preview_mask);
+    glBindTexture(GL_TEXTURE_2D, 0);
+}
+
+uintptr_t body_fx_preview_texture(BodyFXType type, float t) {
+    ensure_bfx_prev_source();
+    const int W = body_fx_preview_w, H = body_fx_preview_h;
+    const BodyFXInfo* info = body_fx_find_info(type);
+    float params[4] = {0.f, 0.f, 0.f, 0.f};
+    if (info)
+        for (int i = 0; i < 4; ++i)
+            params[i] = i < info->n_params ? info->params[i].default_val : 0.5f;
+
+    body_fx_apply(type, (uintptr_t)g_bfx_prev_src, g_bfx_prev_mask, W, H, params, 1.f, t);
+
+    unsigned& cache = g_bfx_prev_cache[(int)type];
+    if (!cache) {
+        glGenTextures(1, &cache);
+        glBindTexture(GL_TEXTURE_2D, cache);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, W, H, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    }
+    GLint prev_fbo = 0;
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prev_fbo);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, g_out.fbo);
+    glBindTexture(GL_TEXTURE_2D, cache);
+    glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, W, H);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)prev_fbo);
+    return (uintptr_t)cache;
 }
 
 void body_fx_evict_mask_cache(const std::string& mask_dir) {
