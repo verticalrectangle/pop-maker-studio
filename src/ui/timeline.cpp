@@ -451,19 +451,37 @@ static void kf_accumulate_groups(const std::unordered_map<std::string, PropTrack
             if (!merged) groups.push_back({k.time, 1});
         }
 }
-// super (count>1) = blue + stacked echo; single = white. Same visual language as
-// L1, minus the hover/selection states (those live only in the interactive path).
+// Diamonds with hover + selection states. The interactive Pass-3 lanes pass
+// hover_time / sel_time (the time of the group under the cursor / the selected key);
+// L1/L2 leave them -1 for the plain read-only look. super = blue + echo, single =
+// white; hover brightens + adds a halo that fades in, selection is steady gold.
+static struct { float kx = -1e9f, ky = -1e9f; double t0 = 0.0; } s_kf_glow;
 static void draw_kf_groups(ImDrawList* dl, const std::vector<std::pair<float,int>>& groups,
                            float x_at_origin, float zoom,
-                           float vis_x0, float vis_x1, float mid_y) {
+                           float vis_x0, float vis_x1, float mid_y,
+                           float hover_time = -1.f, float sel_time = -1.f) {
     for (auto& g : groups) {
         bool super = g.second > 1;
-        float d  = super ? 6.f : 5.f;
         float kx = x_at_origin + g.first * zoom;
-        if (kx < vis_x0 - d || kx > vis_x1 + d) continue;
+        if (kx < vis_x0 - 10.f || kx > vis_x1 + 10.f) continue;
+        bool selected = sel_time   >= 0.f && fabsf(g.first - sel_time)   < 0.02f;
+        bool hovered  = hover_time >= 0.f && fabsf(g.first - hover_time) < 0.02f;
+        float d = (super ? 6.f : 5.f) + (hovered ? 1.f : 0.f);
+        if (hovered) {
+            // halo fades in over 100ms when the cursor lands on a NEW diamond — a
+            // calm arrival, not a constant pulse.
+            if (fabsf(kx - s_kf_glow.kx) > 1.5f || fabsf(mid_y - s_kf_glow.ky) > 1.5f) {
+                s_kf_glow.kx = kx; s_kf_glow.ky = mid_y; s_kf_glow.t0 = ImGui::GetTime();
+            }
+            float ga = fminf(1.f, (float)((ImGui::GetTime() - s_kf_glow.t0) / 0.10));
+            dl->AddCircleFilled({kx, mid_y}, d + 4.5f, IM_COL32(255, 232, 150, (int)(64.f * ga)));
+            dl->AddCircleFilled({kx, mid_y}, d + 2.f,  IM_COL32(255, 244, 190, (int)(48.f * ga)));
+        }
         if (super) draw_one_diamond(dl, kx + 3.f, mid_y, d - 1.f, IM_COL32(55,110,185,255));
-        draw_one_diamond(dl, kx, mid_y, d, super ? IM_COL32(110,190,255,255)
-                                                 : IM_COL32(235,235,235,255));
+        ImU32 c = selected ? IM_COL32(255, 200, 60, 255)
+                : hovered  ? (super ? IM_COL32(205, 232, 255, 255) : IM_COL32(255, 255, 255, 255))
+                           : (super ? IM_COL32(110, 190, 255, 255) : IM_COL32(235, 235, 235, 255));
+        draw_one_diamond(dl, kx, mid_y, d, c);
     }
 }
 // Hit-test one PropTrack's keys against mouse-x (caller owns the y-rect test + the
@@ -473,6 +491,17 @@ static int kf_hit_index(const PropTrack& pt, float x_at_origin, float zoom,
     for (int i = 0; i < (int)pt.keys.size(); ++i)
         if (fabsf(mouse_x - (x_at_origin + pt.keys[(size_t)i].time * zoom)) <= r) return i;
     return -1;
+}
+// Time of the currently-selected key IF it belongs to (ti, owner_ci, source) — drives
+// the steady-gold "selected" diamond on the Pass-3 lanes. -1 if the selection is elsewhere.
+static float kf_selected_time(const AppState& state, int ti, int owner_ci, int src,
+                              const std::unordered_map<std::string, PropTrack>& m) {
+    if (state.kf_sel_track != ti || state.kf_sel_clip != owner_ci || state.kf_sel_source != src)
+        return -1.f;
+    auto it = m.find(state.kf_sel_prop);
+    if (it != m.end() && state.kf_sel_idx >= 0 && state.kf_sel_idx < (int)it->second.keys.size())
+        return it->second.keys[(size_t)state.kf_sel_idx].time;
+    return -1.f;
 }
 
 static void draw_fx_stack(ImDrawList* dl, const Clip& clip, float cx0,
@@ -1250,7 +1279,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
     // effect, so the FX timing lanes draw beneath the clip body (the body itself
     // stays TL_TRACK_H). Anything mapping a track index ↔ a Y must go through
     // these helpers, never ti*TL_TRACK_H.
-    const float FX_LANE_H = 15.f;
+    const float FX_LANE_H = 18.f;
     auto host_fx_count = [&](int ti, int ci) -> int {
         // A standalone chain brick hosts its own chain (same expand/lanes as a
         // content clip hosting its welded chain).
@@ -1264,7 +1293,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
         }
         return n;
     };
-    const float SUBROW_H = 12.f;
+    const float SUBROW_H = 16.f;
     auto nonempty_kt = [](const Clip& se) -> int {
         int n = 0; for (auto& kv : se.ktracks) if (!kv.second.keys.empty()) ++n; return n;
     };
@@ -3247,7 +3276,20 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                     ImGui::PopClipRect();
                     std::vector<std::pair<float,int>> kg;
                     kf_accumulate_groups(host.ktracks, kg);
-                    draw_kf_groups(dl, kg, ax0, zoom, vx0, vx1, chy);
+                    {
+                        bool rh = !tl_any_popup && mouse.x >= vx0 && mouse.x <= vx1 &&
+                                  mouse.y >= ly0 && mouse.y <= ly1;
+                        float hov_t = -1.f; int hov_n = 0;
+                        if (rh) for (auto& g : kg)
+                            if (fabsf(mouse.x - (ax0 + g.first * zoom)) <= 8.f) { hov_t = g.first; hov_n = g.second; break; }
+                        float sel_t = kf_selected_time(state, ti, ci, -1, host.ktracks);
+                        draw_kf_groups(dl, kg, ax0, zoom, vx0, vx1, chy, hov_t, sel_t);
+                        if (hov_t >= 0.f && !over_chev) {
+                            if (!track.locked) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+                            ImGui::SetTooltip("clip keyframe \xc2\xb7 t=%.2fs \xc2\xb7 %d key%s\nclick to seek \xc2\xb7 disclose for per-param",
+                                              hov_t, hov_n, hov_n == 1 ? "" : "s");
+                        }
+                    }
                     if (over_chev) {
                         ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
                         if (!track.locked && ImGui::IsMouseClicked(0)) {
@@ -3296,7 +3338,19 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                             ImGui::PopClipRect();
                             std::vector<std::pair<float,int>> pg;
                             for (auto& kk : kv.second.keys) pg.push_back({kk.time, 1});
-                            draw_kf_groups(dl, pg, ax0, zoom, vx0, vx1, (sly0 + sly1) * 0.5f);
+                            bool rh = !tl_any_popup && mouse.y >= sly0 && mouse.y <= sly1;
+                            int hki = rh ? kf_hit_index(kv.second, ax0, zoom, mouse.x) : -1;
+                            float hov_t = hki >= 0 ? kv.second.keys[(size_t)hki].time : -1.f;
+                            float sel_t = (state.kf_sel_track == ti && state.kf_sel_clip == ci &&
+                                           state.kf_sel_source == -1 && state.kf_sel_prop == kv.first &&
+                                           state.kf_sel_idx >= 0 && state.kf_sel_idx < (int)kv.second.keys.size())
+                                        ? kv.second.keys[(size_t)state.kf_sel_idx].time : -1.f;
+                            draw_kf_groups(dl, pg, ax0, zoom, vx0, vx1, (sly0 + sly1) * 0.5f, hov_t, sel_t);
+                            if (hki >= 0 && !track.locked) {
+                                ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+                                ImGui::SetTooltip("%s = %.3f  @ %.2fs\nclick to edit \xc2\xb7 drag to move \xc2\xb7 right-click to unpair",
+                                    kv.first.c_str(), kv.second.keys[(size_t)hki].value, kv.second.keys[(size_t)hki].time);
+                            }
                             // Click a diamond → navigate to this param + seek.
                             if (!track.locked && !tl_any_popup && ImGui::IsMouseClicked(0) &&
                                 mouse.y >= sly0 && mouse.y <= sly1) {
@@ -3360,10 +3414,19 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                     if (ei >= 0) {
                         std::vector<std::pair<float,int>> kg;
                         kf_accumulate_groups(brick.fx_chain[(size_t)ei].ktracks, kg);
-                        if (!kg.empty())
-                            draw_kf_groups(dl, kg,
-                                origin.x + TL_LABEL_W + brick.start * zoom - scroll,
-                                zoom, vx0, vx1, (ly0 + ly1) * 0.5f);
+                        if (!kg.empty()) {
+                            float xo = origin.x + TL_LABEL_W + brick.start * zoom - scroll;
+                            bool rh = !tl_any_popup && mouse.x >= vx0 && mouse.x <= vx1 &&
+                                      mouse.y >= ly0 && mouse.y <= ly1;
+                            float hov_t = -1.f; int hov_n = 0;
+                            if (rh) for (auto& g : kg)
+                                if (fabsf(mouse.x - (xo + g.first * zoom)) <= 8.f) { hov_t = g.first; hov_n = g.second; break; }
+                            float sel_t = kf_selected_time(state, ti, k, ei, brick.fx_chain[(size_t)ei].ktracks);
+                            draw_kf_groups(dl, kg, xo, zoom, vx0, vx1, (ly0 + ly1) * 0.5f, hov_t, sel_t);
+                            if (hov_t >= 0.f && !over_chevron)
+                                ImGui::SetTooltip("%s \xc2\xb7 t=%.2fs \xc2\xb7 %d key%s\ndisclose for per-param",
+                                                  fx_type_name(ft), hov_t, hov_n, hov_n == 1 ? "" : "s");
+                        }
                     }
                     // L4 disclosure chevron (left edge) for effects with keyed params.
                     if (has_kf_params) {
@@ -3472,7 +3535,19 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                             std::vector<std::pair<float,int>> pg;
                             for (auto& kk : kv.second.keys) pg.push_back({kk.time, 1});
                             float xo = origin.x + TL_LABEL_W + brick.start * zoom - scroll;
-                            draw_kf_groups(dl, pg, xo, zoom, vx0, vx1, (sly0 + sly1) * 0.5f);
+                            bool rh = !tl_any_popup && mouse.y >= sly0 && mouse.y <= sly1;
+                            int hki = rh ? kf_hit_index(kv.second, xo, zoom, mouse.x) : -1;
+                            float hov_t = hki >= 0 ? kv.second.keys[(size_t)hki].time : -1.f;
+                            float sel_t = (state.kf_sel_track == ti && state.kf_sel_clip == k &&
+                                           state.kf_sel_source == ei && state.kf_sel_prop == kv.first &&
+                                           state.kf_sel_idx >= 0 && state.kf_sel_idx < (int)kv.second.keys.size())
+                                        ? kv.second.keys[(size_t)state.kf_sel_idx].time : -1.f;
+                            draw_kf_groups(dl, pg, xo, zoom, vx0, vx1, (sly0 + sly1) * 0.5f, hov_t, sel_t);
+                            if (hki >= 0 && !track.locked) {
+                                ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+                                ImGui::SetTooltip("%s = %.3f  @ %.2fs\nclick to edit \xc2\xb7 drag to move \xc2\xb7 right-click to unpair",
+                                    kv.first.c_str(), kv.second.keys[(size_t)hki].value, kv.second.keys[(size_t)hki].time);
+                            }
                             // Click a diamond → select the effect + navigate to this param + seek.
                             if (!track.locked && !tl_any_popup && ImGui::IsMouseClicked(0) &&
                                 mouse.y >= sly0 && mouse.y <= sly1) {
