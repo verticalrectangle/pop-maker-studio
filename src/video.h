@@ -57,6 +57,10 @@ bool          video_is_open    (int track_id = 0);
 PreviewSource video_source     (int track_id);
 VideoInfo     video_info       (int track_id = 0);
 uintptr_t     video_get_texture(int track_id, double playhead);
+// Proxy frame index for a playhead on an open slot — same mapping as
+// video_get_texture, but with NO ffprobe fork, so it is safe in the render path.
+// Returns -1 if the slot is closed.
+int           video_proxy_frame_idx(int track_id, double playhead);
 
 // Parallel pre-decode for multiple tracks. Each pair is (track_id, playhead).
 // Runs JPEG decode + CPU FX in worker threads, then performs the GL uploads

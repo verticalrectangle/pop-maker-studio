@@ -1552,6 +1552,17 @@ static int playhead_to_frame_idx(const PreviewState& pv, double playhead) {
     return -1;
 }
 
+// Public: the proxy frame index a playhead maps to on an open slot — the SAME
+// mapping video_get_texture() uses, but with NO ffprobe fork (it reads the cached
+// proxy rate), so it is safe to call from the render path. The bg-removal brick
+// indexes its per-frame masks with this. Returns -1 if the slot isn't open.
+int video_proxy_frame_idx(int track_id, double playhead) {
+    if (track_id < 0 || track_id >= MAX_VIDEO_TRACKS) return -1;
+    PreviewState& pv = g_pv[track_id];
+    if (!pv.is_open) return -1;
+    return playhead_to_frame_idx(pv, playhead);
+}
+
 // Forward decls — implementations live further down in the Native section.
 static void      prepare_native_frame_cpu(PreviewState& pv, DecodedFrame& f, int frame_idx);
 static uintptr_t decode_native_frame      (PreviewState& pv, int frame_idx);

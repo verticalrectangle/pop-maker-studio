@@ -332,3 +332,14 @@ else()
 endif()
 target_link_libraries(forced_align_probe PRIVATE onnxruntime dl pthread)
 target_compile_options(forced_align_probe PRIVATE -Wall -Wextra -Wno-unused-parameter -O2)
+
+# ── bg_remove_probe: standalone harness for brick-only background removal ─────
+# Decodes the cached bg_masks.mjpeg + matching proxy.mjpeg and replays the
+# RemoveBackground shader math (alpha = orig.a*mask + box + softness) on CPU —
+# verifies the cutout end to end (mask load, mask↔frame index sync, box
+# y-orientation, softness, degenerate masks) without GL or the live app.
+# See tools/bg_remove_probe.cpp.
+add_executable(bg_remove_probe tools/bg_remove_probe.cpp)
+target_include_directories(bg_remove_probe PRIVATE ${CMAKE_SOURCE_DIR}/vendor)
+target_link_libraries(bg_remove_probe PRIVATE m)
+target_compile_options(bg_remove_probe PRIVATE -Wall -Wextra -Wno-unused-parameter -O2)

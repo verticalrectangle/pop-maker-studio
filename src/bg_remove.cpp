@@ -540,11 +540,17 @@ static void ensure_remove_bg_brick(AppState& state, int ti, int ci) {
     auto& clips = state.tracks[(size_t)ti].clips;
     if (ci < 0 || ci >= (int)clips.size()) return;
     float cs = clips[(size_t)ci].start, ce = clips[(size_t)ci].end;
-    for (auto& d : clips)
+    for (auto& d : clips) {
+        if (d.start >= ce || d.end <= cs) continue;            // no overlap
         if (d.clip_type == ClipType::BodyFX &&
-            d.body_fx_type == BodyFXType::RemoveBackground &&
-            d.start < ce && d.end > cs)
-            return;
+            d.body_fx_type == BodyFXType::RemoveBackground)
+            return;                                            // standalone brick exists
+        if (d.clip_type == ClipType::MultiFX)                  // or a glass-chain sub-effect
+            for (auto& se : d.fx_chain)
+                if (se.clip_type == ClipType::BodyFX &&
+                    se.body_fx_type == BodyFXType::RemoveBackground)
+                    return;
+    }
     Clip brick;
     brick.clip_type      = ClipType::BodyFX;
     brick.body_fx_type   = BodyFXType::RemoveBackground;
@@ -552,6 +558,7 @@ static void ensure_remove_bg_brick(AppState& state, int ti, int ci) {
     brick.start = cs;
     brick.end   = ce;
     clips.push_back(std::move(brick));
+    fprintf(stderr, "[bg] auto-added RemoveBackground brick on track %d clip %d\n", ti, ci);
 }
 
 void bg_remove_start(AppState& state, int track_idx, int clip_idx) {
@@ -645,6 +652,18 @@ void bg_remove_poll(AppState& state) {
         else
             ++it;
     }
+
+    // Guarantee a brick for ANY clip with removal on + masks ready — covers projects
+    // LOADED with the flag set but no brick (e.g. made on a pre-brick build), which
+    // bg_remove_start never re-runs. Collect first (ensure mutates clips).
+    std::vector<std::pair<int,int>> need;
+    for (int ti = 0; ti < (int)state.tracks.size(); ++ti)
+        for (int ci = 0; ci < (int)state.tracks[(size_t)ti].clips.size(); ++ci) {
+            auto& c = state.tracks[(size_t)ti].clips[(size_t)ci];
+            if (c.bg_remove_on && c.bg_remove_status == BgRemoveStatus::Ready)
+                need.push_back({ti, ci});
+        }
+    for (auto& tc : need) ensure_remove_bg_brick(state, tc.first, tc.second);
 }
 
 void bg_remove_cancel_all() {

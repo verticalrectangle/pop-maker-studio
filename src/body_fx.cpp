@@ -1282,6 +1282,11 @@ unsigned body_fx_mask_texture(const std::string& mask_dir, int frame_idx) {
 
     // Load from bg_masks.mjpeg via seek table
     const MaskIndex* mi = get_mask_index(mask_dir);
+    static int s_dbg_mt = 0;
+    if (s_dbg_mt++ < 12)
+        fprintf(stderr, "[body_fx] mask lookup: dir=%s mi=%s frame_idx=%d start=%d nframes=%d\n",
+                mask_dir.c_str(), mi ? "ok" : "NULL", frame_idx,
+                mi ? mi->start_frame : -1, mi ? (int)mi->offsets.size() : -1);
     if (!mi) return 0;
     int local_idx = frame_idx - mi->start_frame;
     if (local_idx < 0 || local_idx >= (int)mi->offsets.size()) return 0;
@@ -1347,7 +1352,13 @@ uintptr_t body_fx_apply(BodyFXType type,
     int idx = (int)type;
     if (idx < 0 || idx >= (int)BodyFXType::Count) return src_tex;
     GLuint prog = g_programs[idx];
-    if (!prog || !src_tex || !mask_tex) return src_tex;
+    if (!prog || !src_tex || !mask_tex) {
+        static int s_dbg_ap = 0;
+        if (s_dbg_ap++ < 12)
+            fprintf(stderr, "[body_fx] apply early-return: type=%d prog=%u src=%lu mask=%u\n",
+                    idx, prog, (unsigned long)src_tex, mask_tex);
+        return src_tex;
+    }
 
     ensure_out(w, h);
     if (!g_out.fbo) return src_tex;

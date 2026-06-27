@@ -1694,26 +1694,14 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                     cl_ptr->bg_remove_status == BgRemoveStatus::Ready &&
                     !cl_ptr->bg_remove_mask_dir.empty()) {
                     std::string mask_dir = cl_ptr->bg_remove_mask_dir;
-                    // Index by the proxy's COUNTED rate (matches the main decode +
-                    // start_frame), NOT fps.txt's container rate (it drifts over time).
-                    // Cache the rational rate per source path (proxy_load spawns ffprobe).
-                    static std::map<std::string, std::pair<int64_t,int64_t>> s_bgfps;
-                    float src_t = clip_src_time(*cl_ptr, at_time);
-                    int frame_i;
-                    {
-                        auto it = s_bgfps.find(cl_ptr->text);
-                        if (it == s_bgfps.end()) {
-                            int64_t num = 0, den = 1; ProxyInfo pi;
-                            if (proxy_load(cl_ptr->text, pi) && pi.fps_num > 0 && pi.fps_den > 0) {
-                                num = pi.fps_num; den = pi.fps_den;
-                            }
-                            it = s_bgfps.insert({cl_ptr->text, {num, den}}).first;
-                        }
-                        int64_t num = it->second.first, den = it->second.second;
-                        frame_i = (num > 0 && den > 0)
-                                ? (int)((int64_t)(src_t * (double)num) / den)
-                                : (int)(src_t * bg_remove_read_fps(mask_dir));
-                    }
+                    // Index the masks by the SAME proxy frame the displayed texture
+                    // decoded — video_proxy_frame_idx reads the cached proxy rate with
+                    // NO ffprobe fork. (proxy_load() here used to fork inside the render
+                    // and deadlock Mesa, freezing the app. The masks are 1:1 with the
+                    // proxy, so this index is exact.)
+                    int frame_i = video_proxy_frame_idx(slot, (double)(src_t + lookahead));
+                    if (frame_i < 0)
+                        frame_i = (int)(src_t * bg_remove_read_fps(mask_dir));
                     // Box (keep-region in v_uv; y bottom-up → flip t/b) + softness → brick.
                     float bg_box[4] = {0.f, 1.f, 0.f, 1.f};
                     if (cl_ptr->bg_remove_box_on) {

@@ -6,6 +6,7 @@
 #include "transcribe.h"
 #include "render.h"
 #include "fx_shader.h"
+#include "body_fx.h"
 #include "presets.h"
 #include "runtime_fx.h"
 #include "recorder.h"
@@ -678,6 +679,8 @@ void app_init(AppState& state) {
     audio_init();
     render_init_fonts();
     fx_shader_init();
+    body_fx_init();   // compile the body-FX shaders (RemoveBackground, etc.) — was
+                      // never called, so every body-FX brick silently no-op'd (prog=0)
     state.user_presets = presets_load_user();
     std::string effects_dir = g_managed_dir + "/effects";
     runtime_fx_init(effects_dir);
