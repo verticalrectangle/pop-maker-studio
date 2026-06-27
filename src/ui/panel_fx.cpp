@@ -1,6 +1,7 @@
 #include "studio_types.h"
 #include "studio_shared.h"
 #include "panel_fx.h"
+#include "timeline.h"   // timeline_couple_fx_brick — click-to-weld body FX
 #include "app.h"
 #include "body_fx.h"
 #include "bg_remove.h"
@@ -2908,9 +2909,9 @@ void panel_body_fx_library(AppState& state, float w) {
     if (bfx_clip)
         ImGui::TextWrapped("Click to change the selected brick's effect type.");
     else if (vid_clip)
-        ImGui::TextWrapped("Click to add a Body FX brick to the selected video clip's track.");
+        ImGui::TextWrapped("Click to weld a Body FX onto the selected clip — it covers the whole clip.");
     else
-        ImGui::TextWrapped("Select a video clip, or drag a card onto one, to add Body FX bricks.");
+        ImGui::TextWrapped("Select a video clip to add Body FX.");
     ImGui::PopStyleColor();
     ImGui::Dummy({0.f, 8.f});
 
@@ -2972,21 +2973,28 @@ void panel_body_fx_library(AppState& state, float w) {
                                                    ? info.params[pi].default_val : 0.5f;
                 history_push(state, std::string("Body FX: ") + info.name);
             } else {
-                // Add BodyFX brick to the selected video clip's track
+                // Add a BodyFX brick and immediately weld it onto the video clip —
+                // no drag, no hold-timer (unlike other brick types). The brick spans
+                // the whole content clip: timeline_couple_fx_brick re-windows it to the
+                // host's start/end, so it covers the entire clip ("always on").
                 Clip cl;
                 cl.clip_type     = ClipType::BodyFX;
                 cl.body_fx_type  = info.type;
-                cl.start         = state.playhead;
-                cl.end           = fminf(state.duration, state.playhead + 5.f);
+                cl.start         = vid_clip->start;
+                cl.end           = vid_clip->end;
                 for (int pi = 0; pi < 4; ++pi)
                     cl.body_fx_params[pi] = pi < info.n_params
                                             ? info.params[pi].default_val : 0.5f;
-                state.tracks[vid_ti].clips.push_back(cl);
+                auto& vclips = state.tracks[vid_ti].clips;
+                vclips.push_back(cl);                       // invalidates vid_clip
+                int new_ci     = (int)vclips.size() - 1;
+                int coupled_ci = timeline_couple_fx_brick(state, vid_ti, new_ci, vid_ci);
                 state.selected_track = vid_ti;
-                state.selected_clip  = (int)state.tracks[vid_ti].clips.size() - 1;
+                state.selected_clip  = coupled_ci;
                 history_push(state, std::string("Add Body FX: ") + info.name);
                 // Auto-start bg removal on the video clip if not already ready
-                if (vid_clip->bg_remove_status != BgRemoveStatus::Ready)
+                // (re-fetch by index — vid_clip was invalidated above).
+                if (state.tracks[vid_ti].clips[vid_ci].bg_remove_status != BgRemoveStatus::Ready)
                     bg_remove_start(state, vid_ti, vid_ci);
             }
         }
