@@ -391,7 +391,8 @@ static void fx_stack_layout(const Clip& clip, float vis_x0, float vis_x1,
 // span it represents. fx_lane_drag editing and the draw path both consume this.
 // Right-clicked FX-chain lane → context-menu target (set on rclick in Pass 2, read
 // by the ##fxlane_ctx popup near the end of draw_timeline).
-static int s_fxlane_ti = -1, s_fxlane_ci = -1, s_fxlane_idx = -1;
+static int  s_fxlane_ti = -1, s_fxlane_ci = -1, s_fxlane_idx = -1;
+static bool s_fxlane_open = false;   // set on rclick, consumed where the popup renders
 
 struct FxLaneRect { float x0, y0, x1, y1; float rel_s, rel_e; };
 static FxLaneRect fx_lane_rect(const Clip& clip, int i, int shown, float spread,
@@ -2648,7 +2649,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                         if (!tl_any_popup && ImGui::IsMouseClicked(1)) {
                             s_fxlane_ti = ti; s_fxlane_ci = ci; s_fxlane_idx = i;
                             s_clip_hit = true;
-                            ImGui::OpenPopup("##fxlane_ctx");
+                            s_fxlane_open = true;   // opened where it renders (scope-safe)
                         }
                         break;
                     }
@@ -4341,7 +4342,10 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,   {8.f, 4.f});
 
     // FX chain lane right-click → per-effect menu (shared clipboard + ops with the
-    // FX panel). Named header so there's no doubt which effect you grabbed.
+    // FX panel). Named header so there's no doubt which effect you grabbed. Opened
+    // HERE (not in Pass 2) so OpenPopup + BeginPopup share one ID scope, and AFTER
+    // the clip menu's OpenPopup so it wins the same-level slot.
+    if (s_fxlane_open) { ImGui::OpenPopup("##fxlane_ctx"); s_fxlane_open = false; }
     if (ImGui::BeginPopup("##fxlane_ctx")) {
         bool ok = s_fxlane_ti >= 0 && s_fxlane_ti < (int)state.tracks.size() &&
                   s_fxlane_ci >= 0 && s_fxlane_ci < (int)state.tracks[s_fxlane_ti].clips.size();
