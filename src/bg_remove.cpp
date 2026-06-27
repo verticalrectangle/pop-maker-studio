@@ -568,6 +568,16 @@ void bg_remove_start(AppState& state, int track_idx, int clip_idx) {
     Clip& clip = track.clips[clip_idx];
     if (!clip_is_videolike_type(clip.clip_type) || clip.text.empty()) return;
 
+    // Background removal is keyed to the video clip (one mask set per source path),
+    // so every body-FX brick on it shares the same masks. If a job is already
+    // running, a second trigger — another body-FX brick, a double-click — must not
+    // wipe the partial output and spawn a worker racing the first; the new brick
+    // just rides the in-flight job. (There's no per-job cancel, so restarting
+    // mid-flight would orphan the running worker; a re-run once it's Ready, or a
+    // retry after Error, regenerates cleanly — those statuses fall through.)
+    if (clip.bg_remove_status == BgRemoveStatus::Processing)
+        return;
+
     std::string mjpeg = proxy_mjpeg_path(clip.text);
     if (!fs::exists(mjpeg)) {
         clip.bg_remove_status = BgRemoveStatus::WaitingForProxy;
