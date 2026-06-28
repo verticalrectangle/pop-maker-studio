@@ -221,6 +221,17 @@ static bool is_chain_brick(const Clip& c) {
 static bool fx_brick_self_hosts(const AppState& state, int ti, const Clip& c) {
     return is_chain_brick(c) && !fx_clip_is_glass(state, ti, c);
 }
+// A standalone, unwelded single VIDEO FX brick (a gen-FX Effect, not a chain, not
+// coupled to content) ALSO discloses its own keyframe lanes — same chevron, but with
+// just the brick's param sub-rows (no chain layer, no host "Clip" lane). This is a
+// superset of fx_brick_self_hosts, so substituting it at the disclosure gates leaves
+// chains + content hosts byte-for-byte identical and only newly admits standalone
+// singles. (Audio FX bricks are a deliberate follow-up — their params aren't keyed.)
+static bool fx_brick_self_discloses(const AppState& state, int ti, const Clip& c) {
+    if (fx_brick_self_hosts(state, ti, c)) return true;
+    return c.clip_type == ClipType::Effect && !c.fx_coupled &&
+           fx_brick_is_video(c) && !fx_clip_is_glass(state, ti, c);
+}
 static void merge_fx_clips(Clip& target, Clip dragged) {
     if (is_chain_brick(target)) {
         if (is_chain_brick(dragged)) {
@@ -1285,6 +1296,12 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
         // content clip hosting its welded chain).
         const Clip& self = state.tracks[(size_t)ti].clips[(size_t)ci];
         if (fx_brick_self_hosts(state, ti, self)) return (int)self.fx_chain.size();
+        if (fx_brick_self_discloses(state, ti, self)) {
+            // Standalone single brick = one lane (itself), but only once it has keyed
+            // params — a keyless brick shouldn't sprout a pointless chevron.
+            for (auto& kv : self.ktracks) if (!kv.second.keys.empty()) return 1;
+            return 0;
+        }
         int n = 0;
         for (int k : coupled_fx_of(state, ti, ci)) {
             const Clip& b = state.tracks[(size_t)ti].clips[(size_t)k];
@@ -1301,6 +1318,10 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
     // per keyframed prop). MUST iterate identically to the Pass-3 draw_lane loop.
     auto host_fx_subrows = [&](int ti, int ci) -> int {
         const Clip& self = state.tracks[(size_t)ti].clips[(size_t)ci];
+        // Standalone single brick shows its OWN keyed params as sub-rows directly when
+        // disclosed (no intermediate per-effect chevron — see draw_lane's ei==-1 path).
+        if (fx_brick_self_discloses(state, ti, self) && !fx_brick_self_hosts(state, ti, self))
+            return nonempty_kt(self);
         std::vector<int> fxk = fx_brick_self_hosts(state, ti, self)
                              ? std::vector<int>{ci} : coupled_fx_of(state, ti, ci);
         int n = 0;
@@ -1317,7 +1338,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
     // 0 for standalone FX bricks / un-keyed clips.
     auto host_content_h = [&](int ti, int ci) -> float {
         const Clip& self = state.tracks[(size_t)ti].clips[(size_t)ci];
-        if (fx_brick_self_hosts(state, ti, self)) return 0.f;
+        if (fx_brick_self_discloses(state, ti, self)) return 0.f;
         int nk = nonempty_kt(self);
         if (nk == 0) return 0.f;
         return FX_LANE_H + (self.params_expanded ? (float)nk * SUBROW_H : 0.f);
@@ -1328,7 +1349,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
         auto& cls = state.tracks[(size_t)ti].clips;
         for (int ci = 0; ci < (int)cls.size(); ++ci) {
             if (!cls[(size_t)ci].fx_expanded ||
-                (is_fx_clip(cls[(size_t)ci]) && !fx_brick_self_hosts(state, ti, cls[(size_t)ci])))
+                (is_fx_clip(cls[(size_t)ci]) && !fx_brick_self_discloses(state, ti, cls[(size_t)ci])))
                 continue;
             int n = host_fx_count(ti, ci);
             if (n > 0) e = fmaxf(e, (float)n * FX_LANE_H +
@@ -2612,7 +2633,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
             {
                 TLGeomClip g; g.track = ti; g.clip = ci;
                 g.x0 = vis_x0; g.y0 = cy0; g.x1 = vis_x1; g.y1 = cy1;
-                g.has_fx = (!is_fx_clip(clip) || fx_brick_self_hosts(state, ti, clip)) &&
+                g.has_fx = (!is_fx_clip(clip) || fx_brick_self_discloses(state, ti, clip)) &&
                            host_fx_count(ti, ci) > 0;
                 g.expanded = clip.fx_expanded;
                 g.disc_cx = vis_x0 + 5.f + 4.5f; g.disc_cy = cy1 - 9.f - 1.f + 4.5f;
@@ -2856,7 +2877,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
         // here too, so it sits above the glass brick's own hit-testing.
         for (int ci = 0; ci < (int)track.clips.size(); ++ci) {
             Clip& clip = track.clips[(size_t)ci];
-            if ((is_fx_clip(clip) && !fx_brick_self_hosts(state, ti, clip)) ||
+            if ((is_fx_clip(clip) && !fx_brick_self_discloses(state, ti, clip)) ||
                 host_fx_count(ti, ci) <= 0) continue;
             float cx0 = origin.x+TL_LABEL_W+clip.start*zoom-scroll;
             float cx1 = origin.x+TL_LABEL_W+clip.end*zoom-scroll;
@@ -3205,11 +3226,11 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
         // grew by; the clip body above is unchanged.
         for (int ci = 0; ci < (int)track.clips.size(); ++ci) {
             Clip& host = track.clips[(size_t)ci];
-            if ((is_fx_clip(host) && !fx_brick_self_hosts(state, ti, host)) ||
+            if ((is_fx_clip(host) && !fx_brick_self_discloses(state, ti, host)) ||
                 !host.fx_expanded) continue;
             // A standalone chain brick supplies its own lanes; a content host
             // supplies its welded children.
-            std::vector<int> fxk = fx_brick_self_hosts(state, ti, host)
+            std::vector<int> fxk = fx_brick_self_discloses(state, ti, host)
                                  ? std::vector<int>{ci}
                                  : coupled_fx_of(state, ti, ci);
             if (fxk.empty()) continue;
@@ -3252,7 +3273,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
             // Content host's OWN keyframes — a visible lane at the TOP of the disclosed
             // area (the body band hides under the coupled glass brick). Gold-tinted so
             // it reads as "the clip", distinct from the FX lanes. Expandable per-param.
-            if (!fx_brick_self_hosts(state, ti, host) && nonempty_kt(host) > 0) {
+            if (!fx_brick_self_discloses(state, ti, host) && nonempty_kt(host) > 0) {
                 float ly0 = lane_y, ly1 = ly0 + FX_LANE_H - 2.f;
                 float ax0 = origin.x + TL_LABEL_W + host.start * zoom - scroll;
                 float ax1 = origin.x + TL_LABEL_W + host.end * zoom - scroll;
@@ -3520,9 +3541,12 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                 }
                 // L4: advance past the lane, then draw this effect's per-param sub-rows.
                 lane_y += FX_LANE_H;
-                if (ei >= 0 && !fx_brick_is_audio_kind(brick) &&
-                    brick.fx_chain[(size_t)ei].params_expanded) {
-                    Clip& se = brick.fx_chain[(size_t)ei];
+                // ei>=0: a chain entry's params (gated by its own L4 chevron). ei==-1:
+                // a standalone single brick discloses its OWN params directly when open.
+                bool show_sub = !fx_brick_is_audio_kind(brick) &&
+                                (ei >= 0 ? brick.fx_chain[(size_t)ei].params_expanded : true);
+                if (show_sub) {
+                    Clip& se = (ei >= 0) ? brick.fx_chain[(size_t)ei] : brick;
                     for (auto& kv : se.ktracks) {
                         if (kv.second.keys.empty()) continue;
                         float sly0 = lane_y, sly1 = lane_y + SUBROW_H - 2.f;
@@ -3555,9 +3579,11 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                                 if (ki >= 0) {
                                     state.selected_track = ti; state.selected_clip = ci;
                                     state.clip_selection.clear(); state.clip_selection.insert({ti, ci});
-                                    brick.fx_chain_selected = ei;
-                                    request_panel_view(fx_brick_is_audio_kind(brick)
-                                        ? PanelView::HostAudioFX : PanelView::HostFX);
+                                    if (ei >= 0) {   // chain entry → open the host's FX tab
+                                        brick.fx_chain_selected = ei;
+                                        request_panel_view(fx_brick_is_audio_kind(brick)
+                                            ? PanelView::HostAudioFX : PanelView::HostFX);
+                                    }   // ei==-1: ci IS the brick — pv_derive opens its own FX editor
                                     state.kf_sel_track = ti; state.kf_sel_clip = k;
                                     state.kf_sel_source = ei; state.kf_sel_prop = kv.first;
                                     state.kf_sel_idx = ki;
