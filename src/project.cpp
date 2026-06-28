@@ -12,7 +12,7 @@
 // ── Binary serialization helpers ──────────────────────────────────────────────
 
 static const uint32_t MAGIC   = 0x534D5001u; // "PMS\x01"
-static const uint32_t VERSION = 58u;  // v58: Chroma Melt brick params (color/threshold/persist)
+static const uint32_t VERSION = 59u;  // v59: Chroma Echo brick params (color/threshold/persist)
 
 // Version used to gate the registry-effect read block (generated/fx_project_read.h).
 // Normally the file's format version; project_load decrements it by 1 on a retry
@@ -266,6 +266,9 @@ static void write_clip(Writer& w, const Clip& c) {
     // v58: Chroma Melt brick params (colour / threshold / persist)
     w.pod(c.fx_chroma_melt_r); w.pod(c.fx_chroma_melt_g); w.pod(c.fx_chroma_melt_b);
     w.pod(c.fx_chroma_melt_threshold); w.pod(c.fx_chroma_melt_persist);
+    // v59: Chroma Echo brick params (colour / threshold / persist)
+    w.pod(c.fx_chroma_echo_r); w.pod(c.fx_chroma_echo_g); w.pod(c.fx_chroma_echo_b);
+    w.pod(c.fx_chroma_echo_threshold); w.pod(c.fx_chroma_echo_persist);
 }
 
 static Clip read_clip(Reader& r, uint32_t version) {
@@ -530,6 +533,10 @@ static Clip read_clip(Reader& r, uint32_t version) {
     if (version >= 58u) {
         c.fx_chroma_melt_r = r.pod<float>(); c.fx_chroma_melt_g = r.pod<float>(); c.fx_chroma_melt_b = r.pod<float>();
         c.fx_chroma_melt_threshold = r.pod<float>(); c.fx_chroma_melt_persist = r.pod<float>();
+    }
+    if (version >= 59u) {
+        c.fx_chroma_echo_r = r.pod<float>(); c.fx_chroma_echo_g = r.pod<float>(); c.fx_chroma_echo_b = r.pod<float>();
+        c.fx_chroma_echo_threshold = r.pod<float>(); c.fx_chroma_echo_persist = r.pod<float>();
     }
     return c;
 }

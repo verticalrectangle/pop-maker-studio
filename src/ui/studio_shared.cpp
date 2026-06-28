@@ -1051,6 +1051,7 @@ ImU32 fx_type_accent(FXType ft) {
         case FXType::Datamosh:   return IM_COL32(255,60,100,255);
         case FXType::ChromaKey:  return IM_COL32(90,200,180,255);   // the clean keyer
         case FXType::ChromaMelt: return IM_COL32(180,90,230,255);   // trippy melt — keyed feedback smear
+        case FXType::ChromaEcho: return IM_COL32(230,120,90,255);   // keyed feedback echo — stacked frames
 #include "generated/fx_ui_color.h"
         default:                return IM_COL32(120,80,220,255);
     }
@@ -1066,6 +1067,7 @@ const char* fx_type_name(FXType ft) {
         case FXType::Datamosh:  return "MOSH";
         case FXType::ChromaKey: return "KEY";
         case FXType::ChromaMelt: return "MELT";
+        case FXType::ChromaEcho: return "ECHO";
         case FXType::Grade:              return "Grade";
         case FXType::Blur:               return "Blur";
         case FXType::Vignette:           return "Vignette";
@@ -1090,6 +1092,7 @@ const char* fx_type_display(FXType ft) {
         case FXType::Datamosh:  return "Datamosh";
         case FXType::ChromaKey:  return "Chroma Key";
         case FXType::ChromaMelt: return "Chroma Melt";
+        case FXType::ChromaEcho: return "Chroma Echo";
 #include "generated/fx_ui_label.h"
         default:                return "FX";
     }

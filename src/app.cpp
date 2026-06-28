@@ -115,6 +115,11 @@ const ClipKfField kClipKfFields[] = {
     {"fx_chroma_melt_r", &Clip::fx_chroma_melt_r},
     {"fx_chroma_melt_g", &Clip::fx_chroma_melt_g},
     {"fx_chroma_melt_b", &Clip::fx_chroma_melt_b},
+    {"fx_chroma_echo_threshold", &Clip::fx_chroma_echo_threshold},
+    {"fx_chroma_echo_persist", &Clip::fx_chroma_echo_persist},
+    {"fx_chroma_echo_r", &Clip::fx_chroma_echo_r},
+    {"fx_chroma_echo_g", &Clip::fx_chroma_echo_g},
+    {"fx_chroma_echo_b", &Clip::fx_chroma_echo_b},
     // Body / runtime FX amount, fades, transitions
     {"body_fx_amount", &Clip::body_fx_amount},
     {"runtime_fx_amount", &Clip::runtime_fx_amount},
@@ -385,6 +390,16 @@ static void accum_creative_clip(CreativeFXAccum& acc, const Clip& cl, float _cl_
             acc.chroma_melt_b         = cl.eval_prop("fx_chroma_melt_b", _cl_t);
             acc.chroma_melt_threshold = cl.eval_prop("fx_chroma_melt_threshold", _cl_t);
             acc.chroma_melt_persist   = cl.eval_prop("fx_chroma_melt_persist", _cl_t);
+            break;
+        case FXType::ChromaEcho:
+            // Like Melt but crisp: keyed pixels stack the subject's past frames as
+            // fading ghosts (no drift). Params keyframable via eval_prop.
+            acc.chroma_echo_on        = true; acc.any_cfx = true;
+            acc.chroma_echo_r         = cl.eval_prop("fx_chroma_echo_r", _cl_t);
+            acc.chroma_echo_g         = cl.eval_prop("fx_chroma_echo_g", _cl_t);
+            acc.chroma_echo_b         = cl.eval_prop("fx_chroma_echo_b", _cl_t);
+            acc.chroma_echo_threshold = cl.eval_prop("fx_chroma_echo_threshold", _cl_t);
+            acc.chroma_echo_persist   = cl.eval_prop("fx_chroma_echo_persist", _cl_t);
             break;
         default:
 #include "generated/fx_collect_cases.h"

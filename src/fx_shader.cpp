@@ -298,6 +298,39 @@ void main() {
 }
 )glsl";
 
+// Chroma echo — chroma-keyed feedback ECHO (sibling of Chroma Melt). Same feedback
+// idea, but CRISP: a HARD matte + NO sideways drift, so keyed pixels stack the
+// subject's past frames as distinct fading ghosts ("cool frames over the keyed
+// colour") instead of a smudge. High persist = a longer stack of frames.
+static const char* k_chroma_echo_frag = R"glsl(
+#version 330 core
+in vec2 v_uv;
+out vec4 frag;
+uniform sampler2D u_tex;       // current chain result
+uniform sampler2D u_feedback;  // previous frame's echo output (persistent slot)
+uniform vec3  u_key_color;
+uniform float u_threshold;
+uniform float u_persist;       // echo length (0 = none, ~0.95 = long stack)
+void main() {
+    vec3 cur = texture(u_tex, v_uv).rgb;
+    vec2 tx  = 1.0 / vec2(textureSize(u_tex, 0));
+    vec3 kc = (cur
+            + texture(u_tex, v_uv + vec2( 2.0*tx.x, 0.0)).rgb
+            + texture(u_tex, v_uv + vec2(-2.0*tx.x, 0.0)).rgb
+            + texture(u_tex, v_uv + vec2(0.0,  2.0*tx.y)).rgb
+            + texture(u_tex, v_uv + vec2(0.0, -2.0*tx.y)).rgb) * 0.2;
+    float lum_k = dot(u_key_color, vec3(0.299,0.587,0.114));
+    float lum_p = dot(kc,          vec3(0.299,0.587,0.114));
+    float dist  = length((kc - lum_p) - (u_key_color - lum_k));
+    float fg    = step(u_threshold, dist);   // HARD matte → crisp ghost frames
+    // Keyed pixels keep the previous output (NO drift → frames stay crisp), decaying
+    // toward the key colour. The subject stamps fresh each frame, so its path stacks.
+    vec3 prev   = texture(u_feedback, v_uv).rgb;
+    vec3 echo   = mix(cur, prev, u_persist);
+    frag = vec4(mix(echo, cur, fg), 1.0);
+}
+)glsl";
+
 // Simple blit (passthrough) ────────────────────────────────────────────────
 static const char* k_blit_frag = R"glsl(
 #version 330 core
@@ -422,7 +455,7 @@ static GLuint link_prog2(const char* vert_src, const char* frag_src) {
 static struct {
     GLuint grade = 0, blur = 0, chroma_key = 0, glitch = 0;
     GLuint vhs = 0, leak = 0, datamosh = 0, blit = 0, blend = 0;
-    GLuint composite = 0, chroma_melt = 0;
+    GLuint composite = 0, chroma_melt = 0, chroma_echo = 0;
 } g_prog;
 
 // Generated effects use a map keyed by (int)FXType — no struct fields needed.
@@ -597,6 +630,7 @@ void fx_shader_init() {
     g_prog.blend          = link_prog(k_blend_frag);
     g_prog.composite      = link_prog(k_composite_frag);
     g_prog.chroma_melt    = link_prog(k_chroma_melt_frag);
+    g_prog.chroma_echo    = link_prog(k_chroma_echo_frag);
 
     glGenVertexArrays(1, &g_vao);
 
@@ -799,10 +833,11 @@ uintptr_t fx_apply(uintptr_t src_tex_in, int slot, int w, int h,
     bool need_leak     = cfx.leak_on     && cfx.leak_intensity > 0.01f;
     bool need_datamosh = cfx.datamosh_on && cfx.datamosh_spread > 0.01f;
     bool need_melt     = cfx.chroma_melt_on;
+    bool need_echo     = cfx.chroma_echo_on;
 
     if (!need_grade && !need_vig && !need_blur && !need_chroma &&
         !need_glitch && !need_vhs && !need_leak && !need_datamosh &&
-        !need_melt && !cfx.any_gen_fx)
+        !need_melt && !need_echo && !cfx.any_gen_fx)
         return src_tex_in;
 
     if (w <= 0 || h <= 0) return src_tex_in;
@@ -939,6 +974,30 @@ uintptr_t fx_apply(uintptr_t src_tex_in, int slot, int w, int h,
                     cfx.chroma_melt_r, cfx.chroma_melt_g, cfx.chroma_melt_b);
         glUniform1f(glGetUniformLocation(p, "u_threshold"), cfx.chroma_melt_threshold);
         glUniform1f(glGetUniformLocation(p, "u_persist"),   cfx.chroma_melt_persist);
+        glDrawArrays(GL_TRIANGLES, 0, 3);
+        glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D, 0);
+        glActiveTexture(GL_TEXTURE0);
+        cur = g_pp.tex[pslot];
+        pslot ^= 1;
+    }
+
+    // ── Chroma echo: crisp sibling of melt — keyed pixels stack the subject's past
+    //    frames as fading ghosts (no drift). Also reads g_out[slot] (last frame).
+    if (need_echo) {
+        GLuint p = g_prog.chroma_echo;
+        glBindFramebuffer(GL_FRAMEBUFFER, g_pp.fbo[pslot]);
+        glViewport(0, 0, w, h);
+        glUseProgram(p);
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, cur);
+        glUniform1i(glGetUniformLocation(p, "u_tex"), 0);
+        glActiveTexture(GL_TEXTURE1);
+        glBindTexture(GL_TEXTURE_2D, g_out[slot].tex);   // previous frame = feedback
+        glUniform1i(glGetUniformLocation(p, "u_feedback"), 1);
+        glUniform3f(glGetUniformLocation(p, "u_key_color"),
+                    cfx.chroma_echo_r, cfx.chroma_echo_g, cfx.chroma_echo_b);
+        glUniform1f(glGetUniformLocation(p, "u_threshold"), cfx.chroma_echo_threshold);
+        glUniform1f(glGetUniformLocation(p, "u_persist"),   cfx.chroma_echo_persist);
         glDrawArrays(GL_TRIANGLES, 0, 3);
         glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D, 0);
         glActiveTexture(GL_TEXTURE0);

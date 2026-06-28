@@ -60,6 +60,7 @@ enum class FXType {
     Datamosh,     // temporal ghost buffer + multi-key chroma chaos
     ChromaKey,    // color-range keyer — compositing brick (the clean keyer)
     ChromaMelt,   // chroma-keyed feedback smear (the "trippy melt") — NOT a clean key
+    ChromaEcho,   // chroma-keyed feedback echo — crisp stacked frame-ghosts (no smear)
     // ── Audio FX bricks ─────────────────────────────────────────────────────
     AudioAutotune,      // YIN pitch detection + grain shift + scale quantize
     AudioPitch,         // grain pitch shift, fixed semitone offset
@@ -258,6 +259,12 @@ struct Clip {
     float       fx_chroma_melt_b         = 0.f;
     float       fx_chroma_melt_threshold = 0.30f;
     float       fx_chroma_melt_persist   = 0.88f;
+    // ChromaEcho brick (crisp feedback echo — stacked frame-ghosts, no smear/drift)
+    float       fx_chroma_echo_r         = 0.f;
+    float       fx_chroma_echo_g         = 1.f;
+    float       fx_chroma_echo_b         = 0.f;
+    float       fx_chroma_echo_threshold = 0.30f;
+    float       fx_chroma_echo_persist   = 0.92f;
 
     // Glitch
     float       fx_glitch_chroma     = 8.f;   // RGB channel spread in pixels
@@ -478,6 +485,13 @@ struct CreativeFXAccum {
     float chroma_melt_b         = 0.f;
     float chroma_melt_threshold = 0.30f;
     float chroma_melt_persist   = 0.88f;
+    // ChromaEcho — chroma-keyed feedback echo (crisp stacked frames, no drift)
+    bool  chroma_echo_on        = false;
+    float chroma_echo_r         = 0.f;
+    float chroma_echo_g         = 1.f;
+    float chroma_echo_b         = 0.f;
+    float chroma_echo_threshold = 0.30f;
+    float chroma_echo_persist   = 0.92f;
 
     bool  glitch_on         = false;
     float glitch_chroma     = 0.f;
