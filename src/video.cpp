@@ -992,7 +992,10 @@ static void prepare_proxy_frame_cpu(PreviewState& pv, DecodedFrame& f, int frame
         got = fread(f.jpeg_buf.data(), 1, frame_sz, pv.mjpeg_file);
         if (got == 0) { release_empty(); return; }
 
-        // Load bg_remove mask under the same lock (bg_mask_* is shared state).
+        // DEAD CODE — mechanism A's preview alpha-bake (see the PixelFX bg_remove
+        // fields in video.h). Nothing sets pfx.bg_remove_on anymore, so this whole
+        // block is unreachable; the cutout is the RemoveBackground body-FX brick.
+        // Kept inert rather than unthreaded from this hot decode path.
         if (pfx.bg_remove_on && !pfx.bg_remove_mask_dir.empty()) {
             if (pfx.bg_remove_mask_dir != pv.bg_mjpeg_dir)
                 bg_mjpeg_open(pv, pfx.bg_remove_mask_dir);

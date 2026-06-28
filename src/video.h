@@ -116,6 +116,14 @@ struct PixelFX {
     float datamosh_spread    = 0.3f;
 
     // Remove Background
+    // DEAD CODE — preview-side remnant of "mechanism A", the old CPU alpha-bake
+    // background removal. The brick-only refactor (fba861c) removed every writer of
+    // these fields, so bg_remove_on is always false: the mask-read block in
+    // prepare_proxy_frame_cpu and the bg branch in apply_pixel_fx_rgb never execute.
+    // Background removal is now done entirely by the RemoveBackground body-FX brick
+    // (body_fx_apply, on the GPU). Left inert on purpose — the export half was deleted
+    // (commit 49b6390), but this half threads the hot CPU decode path, so it wasn't
+    // worth churning for zero functional gain. Do NOT wire new code to these fields.
     bool        bg_remove_on       = false;
     std::string bg_remove_mask_dir;
     float       bg_remove_softness = 0.1f;
