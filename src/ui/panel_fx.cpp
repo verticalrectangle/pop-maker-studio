@@ -2075,6 +2075,32 @@ void panel_fx_clip(AppState& state, float w) {
             break;
         }
 
+        case FXType::ChromaMelt: {
+            float sw2 = w - 16.f;
+            kf_color_diamond(state, clip, kti, kci, "fx_chroma_melt");
+            ImGui::SameLine(0.f, 6.f);
+            ui_label("Melt Color");
+            float col3[3] = { clip.fx_chroma_melt_r, clip.fx_chroma_melt_g, clip.fx_chroma_melt_b };
+            ImGui::SetNextItemWidth(sw2);
+            if (ImGui::ColorEdit3("##cmcol", col3, ImGuiColorEditFlags_NoInputs |
+                                                    ImGuiColorEditFlags_PickerHueWheel)) {
+                clip.fx_chroma_melt_r = col3[0]; clip.fx_chroma_melt_g = col3[1]; clip.fx_chroma_melt_b = col3[2];
+                kf_color_edit(state, clip, "fx_chroma_melt", col3[0], col3[1], col3[2]);
+            }
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Chroma Melt: color");
+            palette_widget("##pal_cm", col3);
+            if (col3[0] != clip.fx_chroma_melt_r || col3[1] != clip.fx_chroma_melt_g || col3[2] != clip.fx_chroma_melt_b) {
+                clip.fx_chroma_melt_r = col3[0]; clip.fx_chroma_melt_g = col3[1]; clip.fx_chroma_melt_b = col3[2];
+                kf_color_edit(state, clip, "fx_chroma_melt", col3[0], col3[1], col3[2]);
+                history_push(state, "Chroma Melt: color");
+            }
+            ImGui::Dummy({0.f, 4.f});
+            kfs("fx_chroma_melt_threshold", "Threshold", &clip.fx_chroma_melt_threshold, 0.f, 1.f, "%.2f");
+            ImGui::Dummy({0.f, 4.f});
+            kfs("fx_chroma_melt_persist", "Trail", &clip.fx_chroma_melt_persist, 0.f, 0.98f, "%.2f");
+            break;
+        }
+
 #include "generated/fx_ui_inspector.h"
 
         default: break;
@@ -2600,6 +2626,19 @@ void panel_multifx_for(AppState& state, float w, int b_ti, int b_ci) {
                 kfs("fx_chroma_key_threshold", "Threshold", &clip.fx_chroma_key_threshold, 0.f, 1.f, "%.2f");
                 ImGui::Dummy({0.f, 4.f});
                 kfs("fx_chroma_key_softness", "Softness", &clip.fx_chroma_key_softness, 0.f, 0.5f, "%.2f");
+                break;
+            }
+
+            case FXType::ChromaMelt: {
+                kfs("fx_chroma_melt_r", "Melt Color R", &clip.fx_chroma_melt_r, 0.f, 1.f, "%.2f");
+                ImGui::Dummy({0.f, 4.f});
+                kfs("fx_chroma_melt_g", "Melt Color G", &clip.fx_chroma_melt_g, 0.f, 1.f, "%.2f");
+                ImGui::Dummy({0.f, 4.f});
+                kfs("fx_chroma_melt_b", "Melt Color B", &clip.fx_chroma_melt_b, 0.f, 1.f, "%.2f");
+                ImGui::Dummy({0.f, 4.f});
+                kfs("fx_chroma_melt_threshold", "Threshold", &clip.fx_chroma_melt_threshold, 0.f, 1.f, "%.2f");
+                ImGui::Dummy({0.f, 4.f});
+                kfs("fx_chroma_melt_persist", "Trail", &clip.fx_chroma_melt_persist, 0.f, 0.98f, "%.2f");
                 break;
             }
 

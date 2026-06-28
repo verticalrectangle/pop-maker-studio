@@ -329,6 +329,7 @@ static FXType parse_fx_type(const std::string& s) {
     if (s == "vhs")        return FXType::VHS;
     if (s == "datamosh")   return FXType::Datamosh;
     if (s == "chroma_key") return FXType::ChromaKey;
+    if (s == "chroma_melt") return FXType::ChromaMelt;
     if (s == "ken_burns")  return FXType::KenBurns;
     if (s == "audio_autotune") return FXType::AudioAutotune;
     if (s == "audio_pitch")    return FXType::AudioPitch;
@@ -384,6 +385,12 @@ static bool apply_effect_params(Clip& cl, const json& params,
         else if (k == "chroma_key_b")            { cl.fx_chroma_key_b         = fv; }
         else if (k == "chroma_key_threshold")    { cl.fx_chroma_key_threshold = fv; }
         else if (k == "chroma_key_softness")     { cl.fx_chroma_key_softness  = fv; }
+        // ChromaMelt
+        else if (k == "chroma_melt_r")           { cl.fx_chroma_melt_r         = fv; }
+        else if (k == "chroma_melt_g")           { cl.fx_chroma_melt_g         = fv; }
+        else if (k == "chroma_melt_b")           { cl.fx_chroma_melt_b         = fv; }
+        else if (k == "chroma_melt_threshold")   { cl.fx_chroma_melt_threshold = fv; }
+        else if (k == "chroma_melt_persist")     { cl.fx_chroma_melt_persist   = fv; }
         // All generated shader FX params — dispatched by fx_id + param name
         else if (!fx_clip_set_param(cl, fx_id, k, fv)) {
             err = "unknown param '" + k + "' for fx_type '" + fx_id + "'";

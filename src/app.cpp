@@ -378,9 +378,13 @@ static void accum_creative_clip(CreativeFXAccum& acc, const Clip& cl, float _cl_
             break;
         case FXType::ChromaMelt:
             // Distinct from the keyer: feeds the keyed frame back into the persistent
-            // slot for a trippy temporal smear. Paramless for now — the cfx defaults
-            // (green key, 0.88 persist) drive it.
-            acc.chroma_melt_on = true; acc.any_cfx = true;
+            // slot for a trippy temporal smear. Params keyframable via eval_prop.
+            acc.chroma_melt_on        = true; acc.any_cfx = true;
+            acc.chroma_melt_r         = cl.eval_prop("fx_chroma_melt_r", _cl_t);
+            acc.chroma_melt_g         = cl.eval_prop("fx_chroma_melt_g", _cl_t);
+            acc.chroma_melt_b         = cl.eval_prop("fx_chroma_melt_b", _cl_t);
+            acc.chroma_melt_threshold = cl.eval_prop("fx_chroma_melt_threshold", _cl_t);
+            acc.chroma_melt_persist   = cl.eval_prop("fx_chroma_melt_persist", _cl_t);
             break;
         default:
 #include "generated/fx_collect_cases.h"

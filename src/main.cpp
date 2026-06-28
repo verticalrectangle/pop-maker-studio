@@ -133,6 +133,7 @@ static void dump_fx_previews(const char* out_dir) {
         { FXType::VHS,       "vhs"        },
         { FXType::Datamosh,  "datamosh"   },
         { FXType::ChromaKey, "chroma_key" },
+        { FXType::ChromaMelt, "chroma_melt" },
     };
     for (auto& b : kBuiltin) {
         ImGui_ImplOpenGL3_NewFrame();
