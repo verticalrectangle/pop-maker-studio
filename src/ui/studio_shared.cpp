@@ -464,6 +464,85 @@ bool kf_slider(AppState& state, Clip& clip, int sel_ti, int sel_ci, float w,
     return changed;
 }
 
+void kf_color_diamond(AppState& state, Clip& clip, int sel_ti, int sel_ci, const char* prefix) {
+    char pr[64], pg[64], pb[64];
+    snprintf(pr, sizeof(pr), "%s_r", prefix);
+    snprintf(pg, sizeof(pg), "%s_g", prefix);
+    snprintf(pb, sizeof(pb), "%s_b", prefix);
+    float t_local = snap_to_frame(state.playhead, (int)tl_fps(state)) - clip.start;
+    float kf_tol  = 0.5f / fmaxf(1.f, tl_fps(state));
+    auto it_r = clip.ktracks.find(pr);
+    PropTrack* pt = (it_r != clip.ktracks.end()) ? &it_r->second : nullptr;
+    bool has_keys = pt && !pt->empty();
+    bool has_kf   = pt && pt->find_nearest(t_local, kf_tol) >= 0;
+
+    ImDrawList* kdl = ImGui::GetWindowDrawList();
+    float rh = ImGui::GetFrameHeight();
+    const ImU32 gold = IM_COL32(255,200,60,255), gold_dim = IM_COL32(190,160,70,220),
+                faint = IM_COL32(120,120,130,200);
+    ImGui::InvisibleButton((std::string("##kfcol_") + prefix).c_str(), {16.f, rh});
+    ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
+    float cx = (a.x+b.x)*0.5f, cy = (a.y+b.y)*0.5f, r = 5.5f;
+    bool hv = ImGui::IsItemHovered();
+    ImU32 c = has_kf ? gold : has_keys ? gold_dim : (hv ? gold_dim : faint);
+    if (hv) c = gold;
+    ImVec2 top{cx,cy-r}, rt{cx+r,cy}, bot{cx,cy+r}, lf{cx-r,cy};
+    if (has_kf) kdl->AddQuadFilled(top, rt, bot, lf, c);
+    else        kdl->AddQuad(top, rt, bot, lf, c, 1.6f);
+    if (hv) ImGui::SetTooltip(has_kf ? "Remove colour keyframe"
+                            : has_keys ? "Add colour keyframe here"
+                                       : "Keyframe this colour");
+    if (ImGui::IsItemClicked()) {
+        const char* props[3] = {pr, pg, pb};
+        if (has_kf) {
+            for (const char* p : props) {
+                auto it = clip.ktracks.find(p);
+                if (it != clip.ktracks.end()) {
+                    it->second.remove_at(t_local, kf_tol);
+                    if (it->second.empty()) clip.ktracks.erase(it);
+                }
+            }
+            history_push(state, std::string("Remove KF ") + prefix + " colour");
+        } else {
+            for (const char* p : props)
+                clip.ktracks[p].set(t_local, clip.eval_prop(p, state.playhead));
+            state.kf_sel_track = sel_ti; state.kf_sel_clip = sel_ci;
+            state.kf_sel_prop  = pr;
+            state.kf_sel_idx   = clip.ktracks[pr].find_nearest(t_local, kf_tol);
+            state.kf_sel_source = -1;
+            // Auto-expose if `clip` is a MultiFX sub-effect (mirror kf_slider).
+            if (sel_ti >= 0 && sel_ti < (int)state.tracks.size() &&
+                sel_ci >= 0 && sel_ci < (int)state.tracks[(size_t)sel_ti].clips.size()) {
+                Clip& owner = state.tracks[(size_t)sel_ti].clips[(size_t)sel_ci];
+                if (&clip != &owner) {
+                    for (int i = 0; i < (int)owner.fx_chain.size(); ++i)
+                        if (&owner.fx_chain[(size_t)i] == &clip) { state.kf_sel_source = i; break; }
+                    clip.params_expanded = true;
+                    int host = fx_coupled_host(state, sel_ti, owner);
+                    if (host >= 0) state.tracks[(size_t)sel_ti].clips[(size_t)host].fx_expanded = true;
+                    else owner.fx_expanded = true;
+                }
+            }
+            history_push(state, std::string("Add KF ") + prefix + " colour");
+        }
+    }
+}
+
+void kf_color_edit(AppState& state, Clip& clip, const char* prefix, float r, float g, float b) {
+    float t_local = snap_to_frame(state.playhead, (int)tl_fps(state)) - clip.start;
+    float kf_tol  = 0.5f / fmaxf(1.f, tl_fps(state));
+    const char* sfx[3] = {"_r", "_g", "_b"};
+    float vals[3] = {r, g, b};
+    char nm[64];
+    for (int i = 0; i < 3; ++i) {
+        snprintf(nm, sizeof(nm), "%s%s", prefix, sfx[i]);
+        auto it = clip.ktracks.find(nm);
+        if (it == clip.ktracks.end() || it->second.empty()) continue;
+        int ki = it->second.find_nearest(t_local, kf_tol);
+        if (ki >= 0) it->second.keys[(size_t)ki].value = vals[i];
+    }
+}
+
 int decouple_fx_to_new_track(AppState& state, int ti, int ci) {
     if (ti < 0 || ti >= (int)state.tracks.size()) return -1;
     auto& clips = state.tracks[ti].clips;

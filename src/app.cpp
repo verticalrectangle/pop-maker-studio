@@ -107,6 +107,14 @@ const ClipKfField kClipKfFields[] = {
     {"fx_datamosh_intensity", &Clip::fx_datamosh_intensity},
     {"fx_chroma_key_threshold", &Clip::fx_chroma_key_threshold},
     {"fx_chroma_key_softness", &Clip::fx_chroma_key_softness},
+    {"fx_chroma_key_r", &Clip::fx_chroma_key_r},
+    {"fx_chroma_key_g", &Clip::fx_chroma_key_g},
+    {"fx_chroma_key_b", &Clip::fx_chroma_key_b},
+    {"fx_chroma_melt_threshold", &Clip::fx_chroma_melt_threshold},
+    {"fx_chroma_melt_persist", &Clip::fx_chroma_melt_persist},
+    {"fx_chroma_melt_r", &Clip::fx_chroma_melt_r},
+    {"fx_chroma_melt_g", &Clip::fx_chroma_melt_g},
+    {"fx_chroma_melt_b", &Clip::fx_chroma_melt_b},
     // Body / runtime FX amount, fades, transitions
     {"body_fx_amount", &Clip::body_fx_amount},
     {"runtime_fx_amount", &Clip::runtime_fx_amount},
@@ -362,9 +370,9 @@ static void accum_creative_clip(CreativeFXAccum& acc, const Clip& cl, float _cl_
             break;
         case FXType::ChromaKey:
             acc.chroma_key_on        = true; acc.any_cfx = true;
-            acc.chroma_key_r         = cl.fx_chroma_key_r;
-            acc.chroma_key_g         = cl.fx_chroma_key_g;
-            acc.chroma_key_b         = cl.fx_chroma_key_b;
+            acc.chroma_key_r         = cl.eval_prop("fx_chroma_key_r", _cl_t);
+            acc.chroma_key_g         = cl.eval_prop("fx_chroma_key_g", _cl_t);
+            acc.chroma_key_b         = cl.eval_prop("fx_chroma_key_b", _cl_t);
             acc.chroma_key_threshold = cl.eval_prop("fx_chroma_key_threshold", _cl_t);
             acc.chroma_key_softness  = cl.eval_prop("fx_chroma_key_softness", _cl_t);
             break;

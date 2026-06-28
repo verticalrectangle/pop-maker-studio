@@ -90,6 +90,13 @@ bool kf_slider(AppState& state, Clip& clip, int sel_ti, int sel_ci, float w,
                float vmin, float vmax, const char* fmt,
                float disp = 1.f, const char* prop2 = nullptr);
 
+// Keyframe an RGB colour stored as three Clip float fields named <prefix>_r/_g/_b.
+// kf_color_diamond draws one key-diamond that toggles keys on all three at the
+// playhead (mirrors kf_slider). kf_color_edit, called after a colour picker writes
+// the base r/g/b, mirrors the picked colour into the key at the playhead if one exists.
+void kf_color_diamond(AppState& state, Clip& clip, int sel_ti, int sel_ci, const char* prefix);
+void kf_color_edit(AppState& state, Clip& clip, const char* prefix, float r, float g, float b);
+
 // ── Cross-surface FX clipboard ──────────────────────────────────────────────────
 // One copied chain sub-effect — its params AND keyframes ride along on the Clip.
 // Shared by the FX panel and the timeline chain lanes so copy-here / paste-there

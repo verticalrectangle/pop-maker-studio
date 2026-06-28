@@ -252,6 +252,12 @@ struct Clip {
     float       fx_chroma_key_b         = 0.f;
     float       fx_chroma_key_threshold = 0.30f;
     float       fx_chroma_key_softness  = 0.15f;
+    // ChromaMelt brick (the trippy feedback smear — distinct from the keyer)
+    float       fx_chroma_melt_r         = 0.f;
+    float       fx_chroma_melt_g         = 1.f;
+    float       fx_chroma_melt_b         = 0.f;
+    float       fx_chroma_melt_threshold = 0.30f;
+    float       fx_chroma_melt_persist   = 0.88f;
 
     // Glitch
     float       fx_glitch_chroma     = 8.f;   // RGB channel spread in pixels

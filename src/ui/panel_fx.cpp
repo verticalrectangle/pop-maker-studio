@@ -2049,6 +2049,8 @@ void panel_fx_clip(AppState& state, float w) {
 
         case FXType::ChromaKey: {
             float sw2 = w - 16.f;
+            kf_color_diamond(state, clip, kti, kci, "fx_chroma_key");
+            ImGui::SameLine(0.f, 6.f);
             ui_label("Key Color");
             float col3[3] = { clip.fx_chroma_key_r, clip.fx_chroma_key_g, clip.fx_chroma_key_b };
             ImGui::SetNextItemWidth(sw2);
@@ -2057,23 +2059,19 @@ void panel_fx_clip(AppState& state, float w) {
                 clip.fx_chroma_key_r = col3[0];
                 clip.fx_chroma_key_g = col3[1];
                 clip.fx_chroma_key_b = col3[2];
+                kf_color_edit(state, clip, "fx_chroma_key", col3[0], col3[1], col3[2]);
             }
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Chroma Key: color");
             palette_widget("##pal_ck", col3);
             if (col3[0] != clip.fx_chroma_key_r || col3[1] != clip.fx_chroma_key_g || col3[2] != clip.fx_chroma_key_b) {
                 clip.fx_chroma_key_r = col3[0]; clip.fx_chroma_key_g = col3[1]; clip.fx_chroma_key_b = col3[2];
+                kf_color_edit(state, clip, "fx_chroma_key", col3[0], col3[1], col3[2]);
                 history_push(state, "Chroma Key: color");
             }
             ImGui::Dummy({0.f, 4.f});
-            ui_label("Threshold");
-            ImGui::SetNextItemWidth(sw2);
-            ImGui::SliderFloat("##ckbthresh", &clip.fx_chroma_key_threshold, 0.f, 1.f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Chroma Key: threshold");
+            kfs("fx_chroma_key_threshold", "Threshold", &clip.fx_chroma_key_threshold, 0.f, 1.f, "%.2f");
             ImGui::Dummy({0.f, 4.f});
-            ui_label("Softness");
-            ImGui::SetNextItemWidth(sw2);
-            ImGui::SliderFloat("##ckbsoft", &clip.fx_chroma_key_softness, 0.f, 0.5f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Chroma Key: softness");
+            kfs("fx_chroma_key_softness", "Softness", &clip.fx_chroma_key_softness, 0.f, 0.5f, "%.2f");
             break;
         }
 
@@ -2593,16 +2591,11 @@ void panel_multifx_for(AppState& state, float w, int b_ti, int b_ci) {
                 break;
 
             case FXType::ChromaKey: {
-                float sw2 = sw - 20.f;
-                ui_label("Key Color  R");
-                ImGui::SetNextItemWidth(sw2);
-                ImGui::SliderFloat("##mckr", &clip.fx_chroma_key_r, 0.f, 1.f, "%.2f");
-                ui_label("           G");
-                ImGui::SetNextItemWidth(sw2);
-                ImGui::SliderFloat("##mckg", &clip.fx_chroma_key_g, 0.f, 1.f, "%.2f");
-                ui_label("           B");
-                ImGui::SetNextItemWidth(sw2);
-                ImGui::SliderFloat("##mckb", &clip.fx_chroma_key_b, 0.f, 1.f, "%.2f");
+                kfs("fx_chroma_key_r", "Key Color R", &clip.fx_chroma_key_r, 0.f, 1.f, "%.2f");
+                ImGui::Dummy({0.f, 4.f});
+                kfs("fx_chroma_key_g", "Key Color G", &clip.fx_chroma_key_g, 0.f, 1.f, "%.2f");
+                ImGui::Dummy({0.f, 4.f});
+                kfs("fx_chroma_key_b", "Key Color B", &clip.fx_chroma_key_b, 0.f, 1.f, "%.2f");
                 ImGui::Dummy({0.f, 4.f});
                 kfs("fx_chroma_key_threshold", "Threshold", &clip.fx_chroma_key_threshold, 0.f, 1.f, "%.2f");
                 ImGui::Dummy({0.f, 4.f});
