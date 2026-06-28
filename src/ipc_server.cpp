@@ -331,6 +331,7 @@ static FXType parse_fx_type(const std::string& s) {
     if (s == "chroma_key") return FXType::ChromaKey;
     if (s == "chroma_melt") return FXType::ChromaMelt;
     if (s == "chroma_echo") return FXType::ChromaEcho;
+    if (s == "chroma_frame") return FXType::ChromaFrame;
     if (s == "ken_burns")  return FXType::KenBurns;
     if (s == "audio_autotune") return FXType::AudioAutotune;
     if (s == "audio_pitch")    return FXType::AudioPitch;
@@ -398,6 +399,14 @@ static bool apply_effect_params(Clip& cl, const json& params,
         else if (k == "chroma_echo_b")           { cl.fx_chroma_echo_b         = fv; }
         else if (k == "chroma_echo_threshold")   { cl.fx_chroma_echo_threshold = fv; }
         else if (k == "chroma_echo_persist")     { cl.fx_chroma_echo_persist   = fv; }
+        // ChromaFrame
+        else if (k == "chroma_frame_r")          { cl.fx_chroma_frame_r         = fv; }
+        else if (k == "chroma_frame_g")          { cl.fx_chroma_frame_g         = fv; }
+        else if (k == "chroma_frame_b")          { cl.fx_chroma_frame_b         = fv; }
+        else if (k == "chroma_frame_threshold")  { cl.fx_chroma_frame_threshold = fv; }
+        else if (k == "chroma_frame_taps")       { cl.fx_chroma_frame_taps      = fv; }
+        else if (k == "chroma_frame_spacing")    { cl.fx_chroma_frame_spacing   = fv; }
+        else if (k == "chroma_frame_falloff")    { cl.fx_chroma_frame_falloff   = fv; }
         // All generated shader FX params — dispatched by fx_id + param name
         else if (!fx_clip_set_param(cl, fx_id, k, fv)) {
             err = "unknown param '" + k + "' for fx_type '" + fx_id + "'";

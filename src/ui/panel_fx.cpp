@@ -170,6 +170,7 @@ static const FXCard g_fx_cards[] = {
     {FXType::ChromaKey,  "Chroma Key",  "Clean color-range keyer  ·  composite over the layer below",     IM_COL32(90,200,180,255),  "Glitch"},
     {FXType::ChromaMelt, "Chroma Melt", "Trippy chroma smear  ·  keyed feedback trail, not a clean key",  IM_COL32(180,90,230,255),  "Glitch"},
     {FXType::ChromaEcho, "Chroma Echo", "Keyed feedback echo  ·  stacks the subject's past frames (crisp)", IM_COL32(230,120,90,255), "Glitch"},
+    {FXType::ChromaFrame,"Chroma Frame","Keyed multi-tap delay  ·  discrete frame echoes, beat-syncable",  IM_COL32(255,180,60,255), "Glitch"},
     {FXType::Glitch,    "Glitch",      "RGB split  ·  row corruption  ·  digital tear",       IM_COL32(0,210,220,255),  "Glitch"},
     {FXType::ZoomPunch, "Zoom Punch",  "Beat-synced scale spike  ·  shake",                   IM_COL32(255,135,40,255), "Motion"},
     {FXType::LUT,       "LUT Grade",   "Load any .cube file  ·  cinematic color grade",       IM_COL32(255,205,55,255), "Color"},
@@ -2128,6 +2129,36 @@ void panel_fx_clip(AppState& state, float w) {
             break;
         }
 
+        case FXType::ChromaFrame: {
+            float sw2 = w - 16.f;
+            kf_color_diamond(state, clip, kti, kci, "fx_chroma_frame");
+            ImGui::SameLine(0.f, 6.f);
+            ui_label("Key Color");
+            float col3[3] = { clip.fx_chroma_frame_r, clip.fx_chroma_frame_g, clip.fx_chroma_frame_b };
+            ImGui::SetNextItemWidth(sw2);
+            if (ImGui::ColorEdit3("##cfcol", col3, ImGuiColorEditFlags_NoInputs |
+                                                    ImGuiColorEditFlags_PickerHueWheel)) {
+                clip.fx_chroma_frame_r = col3[0]; clip.fx_chroma_frame_g = col3[1]; clip.fx_chroma_frame_b = col3[2];
+                kf_color_edit(state, clip, "fx_chroma_frame", col3[0], col3[1], col3[2]);
+            }
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Chroma Frame: color");
+            palette_widget("##pal_cf", col3);
+            if (col3[0] != clip.fx_chroma_frame_r || col3[1] != clip.fx_chroma_frame_g || col3[2] != clip.fx_chroma_frame_b) {
+                clip.fx_chroma_frame_r = col3[0]; clip.fx_chroma_frame_g = col3[1]; clip.fx_chroma_frame_b = col3[2];
+                kf_color_edit(state, clip, "fx_chroma_frame", col3[0], col3[1], col3[2]);
+                history_push(state, "Chroma Frame: color");
+            }
+            ImGui::Dummy({0.f, 4.f});
+            kfs("fx_chroma_frame_threshold", "Threshold", &clip.fx_chroma_frame_threshold, 0.f, 1.f, "%.2f");
+            ImGui::Dummy({0.f, 4.f});
+            kfs("fx_chroma_frame_taps", "Taps", &clip.fx_chroma_frame_taps, 1.f, 8.f, "%.0f");
+            ImGui::Dummy({0.f, 4.f});
+            kfs("fx_chroma_frame_spacing", "Spacing", &clip.fx_chroma_frame_spacing, 0.02f, 0.5f, "%.2fs");
+            ImGui::Dummy({0.f, 4.f});
+            kfs("fx_chroma_frame_falloff", "Falloff", &clip.fx_chroma_frame_falloff, 0.3f, 0.98f, "%.2f");
+            break;
+        }
+
 #include "generated/fx_ui_inspector.h"
 
         default: break;
@@ -2679,6 +2710,23 @@ void panel_multifx_for(AppState& state, float w, int b_ti, int b_ci) {
                 kfs("fx_chroma_echo_threshold", "Threshold", &clip.fx_chroma_echo_threshold, 0.f, 1.f, "%.2f");
                 ImGui::Dummy({0.f, 4.f});
                 kfs("fx_chroma_echo_persist", "Echo", &clip.fx_chroma_echo_persist, 0.f, 0.98f, "%.2f");
+                break;
+            }
+
+            case FXType::ChromaFrame: {
+                kfs("fx_chroma_frame_r", "Key Color R", &clip.fx_chroma_frame_r, 0.f, 1.f, "%.2f");
+                ImGui::Dummy({0.f, 4.f});
+                kfs("fx_chroma_frame_g", "Key Color G", &clip.fx_chroma_frame_g, 0.f, 1.f, "%.2f");
+                ImGui::Dummy({0.f, 4.f});
+                kfs("fx_chroma_frame_b", "Key Color B", &clip.fx_chroma_frame_b, 0.f, 1.f, "%.2f");
+                ImGui::Dummy({0.f, 4.f});
+                kfs("fx_chroma_frame_threshold", "Threshold", &clip.fx_chroma_frame_threshold, 0.f, 1.f, "%.2f");
+                ImGui::Dummy({0.f, 4.f});
+                kfs("fx_chroma_frame_taps", "Taps", &clip.fx_chroma_frame_taps, 1.f, 8.f, "%.0f");
+                ImGui::Dummy({0.f, 4.f});
+                kfs("fx_chroma_frame_spacing", "Spacing", &clip.fx_chroma_frame_spacing, 0.02f, 0.5f, "%.2fs");
+                ImGui::Dummy({0.f, 4.f});
+                kfs("fx_chroma_frame_falloff", "Falloff", &clip.fx_chroma_frame_falloff, 0.3f, 0.98f, "%.2f");
                 break;
             }
 

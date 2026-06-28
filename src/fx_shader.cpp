@@ -331,6 +331,43 @@ void main() {
 }
 )glsl";
 
+// Chroma frame — chroma-keyed DISCRETE frame echoes (multi-tap delay). Unlike Melt/Echo
+// (single-buffer feedback → a continuous trail), this samples a per-slot RING of past
+// snapshot frames (u_ring, a 2D array) and composites the subject from N taps spaced
+// `spacing` seconds apart, each fainter — distinct stacked "frames over the keyed colour".
+static const char* k_chroma_frame_frag = R"glsl(
+#version 330 core
+in vec2 v_uv;
+out vec4 frag;
+uniform sampler2D      u_tex;     // live current frame
+uniform sampler2DArray u_ring;    // ring of past snapshots
+uniform int   u_head;             // most-recent ring layer
+uniform int   u_ntaps;            // active taps
+uniform vec3  u_key_color;
+uniform float u_threshold;
+uniform float u_falloff;          // per-tap fade (newest = 1, each older x falloff)
+const int RING = 8;
+float matte(vec3 c) {
+    float lk = dot(u_key_color, vec3(0.299,0.587,0.114));
+    float lp = dot(c,           vec3(0.299,0.587,0.114));
+    return step(u_threshold, length((c - lp) - (u_key_color - lk)));
+}
+void main() {
+    vec3 live = texture(u_tex, v_uv).rgb;
+    float live_fg = matte(live);
+    vec3 echo = live;   // keyed bg starts as the live key colour
+    // Composite taps oldest -> newest (over): newest on top, full strength; oldest faint.
+    for (int i = RING - 1; i >= 0; --i) {
+        if (i >= u_ntaps) continue;
+        int layer = ((u_head - i) % RING + RING) % RING;
+        vec3 tcol = texture(u_ring, vec3(v_uv, float(layer))).rgb;
+        float a = matte(tcol) * pow(u_falloff, float(i));
+        echo = mix(echo, tcol, a);
+    }
+    frag = vec4(mix(echo, live, live_fg), 1.0);   // live subject on top
+}
+)glsl";
+
 // Simple blit (passthrough) ────────────────────────────────────────────────
 static const char* k_blit_frag = R"glsl(
 #version 330 core
@@ -455,7 +492,7 @@ static GLuint link_prog2(const char* vert_src, const char* frag_src) {
 static struct {
     GLuint grade = 0, blur = 0, chroma_key = 0, glitch = 0;
     GLuint vhs = 0, leak = 0, datamosh = 0, blit = 0, blend = 0;
-    GLuint composite = 0, chroma_melt = 0, chroma_echo = 0;
+    GLuint composite = 0, chroma_melt = 0, chroma_echo = 0, chroma_frame = 0;
 } g_prog;
 
 // Generated effects use a map keyed by (int)FXType — no struct fields needed.
@@ -631,6 +668,7 @@ void fx_shader_init() {
     g_prog.composite      = link_prog(k_composite_frag);
     g_prog.chroma_melt    = link_prog(k_chroma_melt_frag);
     g_prog.chroma_echo    = link_prog(k_chroma_echo_frag);
+    g_prog.chroma_frame   = link_prog(k_chroma_frame_frag);
 
     glGenVertexArrays(1, &g_vao);
 
@@ -818,6 +856,43 @@ uintptr_t face_sprites_apply(uintptr_t src_tex, int slot, int w, int h,
     return (uintptr_t)g_out[slot].tex;
 }
 
+// ── Chroma Frame ring: per-slot history of snapshot frames for discrete echoes ──
+// Melt/Echo reuse the single g_out[slot] feedback texture; Frame needs DISTINCT past
+// frames, so each Frame-carrying slot keeps a small 2D-array ring, advanced every
+// `spacing` seconds of clip time. Lazily allocated; only slots with a Frame brick pay.
+static const int kFrameRingLayers = 8;
+struct FrameRing {
+    GLuint arr = 0;         // GL_TEXTURE_2D_ARRAY, kFrameRingLayers layers
+    GLuint fbo = 0;         // scratch FBO for per-layer writes
+    int    w = 0, h = 0;
+    int    head = -1;       // most-recent filled layer
+    int    count = 0;       // layers filled so far
+    float  last_t = -1e9f;  // clip-time of the last tap advance
+};
+static std::unordered_map<int, FrameRing> g_frame_rings;
+
+static FrameRing& frame_ring_ensure(int slot, int w, int h) {
+    FrameRing& r = g_frame_rings[slot];
+    if (r.arr && (r.w != w || r.h != h)) {
+        glDeleteTextures(1, &r.arr); r.arr = 0;
+        r.head = -1; r.count = 0; r.last_t = -1e9f;
+    }
+    if (!r.arr) {
+        glGenTextures(1, &r.arr);
+        glBindTexture(GL_TEXTURE_2D_ARRAY, r.arr);
+        glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_RGB8, w, h, kFrameRingLayers,
+                     0, GL_RGB, GL_UNSIGNED_BYTE, nullptr);
+        glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
+        if (!r.fbo) glGenFramebuffers(1, &r.fbo);
+        r.w = w; r.h = h;
+    }
+    return r;
+}
+
 uintptr_t fx_apply(uintptr_t src_tex_in, int slot, int w, int h,
                    const EffectAccum& ea, const CreativeFXAccum& cfx, float t)
 {
@@ -834,10 +909,11 @@ uintptr_t fx_apply(uintptr_t src_tex_in, int slot, int w, int h,
     bool need_datamosh = cfx.datamosh_on && cfx.datamosh_spread > 0.01f;
     bool need_melt     = cfx.chroma_melt_on;
     bool need_echo     = cfx.chroma_echo_on;
+    bool need_frame    = cfx.chroma_frame_on;
 
     if (!need_grade && !need_vig && !need_blur && !need_chroma &&
         !need_glitch && !need_vhs && !need_leak && !need_datamosh &&
-        !need_melt && !need_echo && !cfx.any_gen_fx)
+        !need_melt && !need_echo && !need_frame && !cfx.any_gen_fx)
         return src_tex_in;
 
     if (w <= 0 || h <= 0) return src_tex_in;
@@ -1000,6 +1076,56 @@ uintptr_t fx_apply(uintptr_t src_tex_in, int slot, int w, int h,
         glUniform1f(glGetUniformLocation(p, "u_persist"),   cfx.chroma_echo_persist);
         glDrawArrays(GL_TRIANGLES, 0, 3);
         glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D, 0);
+        glActiveTexture(GL_TEXTURE0);
+        cur = g_pp.tex[pslot];
+        pslot ^= 1;
+    }
+
+    // ── Chroma frame: discrete multi-tap echoes from a per-slot frame ring ─────
+    if (need_frame) {
+        FrameRing& ring = frame_ring_ensure(slot, w, h);
+        float spacing = fmaxf(0.01f, cfx.chroma_frame_spacing);
+        // Reset on a backward / large time jump (scrub) so echoes don't smear a seek.
+        if (t < ring.last_t - 0.001f || t - ring.last_t > spacing * 8.f) {
+            ring.head = -1; ring.count = 0; ring.last_t = -1e9f;
+        }
+        // Advance one tap every `spacing` seconds (or on first frame): snapshot the
+        // current chain result into the ring head via a layer-targeted blit.
+        if (ring.head < 0 || t - ring.last_t >= spacing) {
+            ring.head = (ring.head + 1) % kFrameRingLayers;
+            if (ring.count < kFrameRingLayers) ring.count++;
+            ring.last_t = t;
+            glBindFramebuffer(GL_FRAMEBUFFER, ring.fbo);
+            glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, ring.arr, 0, ring.head);
+            glViewport(0, 0, w, h);
+            glUseProgram(g_prog.blit);
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, cur);
+            glUniform1i(glGetUniformLocation(g_prog.blit, "u_tex"), 0);
+            glDrawArrays(GL_TRIANGLES, 0, 3);
+        }
+        // Composite the live frame + the ring taps into the ping-pong.
+        int ntaps = (int)(cfx.chroma_frame_taps + 0.5f);
+        ntaps = ntaps < 1 ? 1 : (ntaps > kFrameRingLayers ? kFrameRingLayers : ntaps);
+        if (ntaps > ring.count) ntaps = ring.count;
+        GLuint p = g_prog.chroma_frame;
+        glBindFramebuffer(GL_FRAMEBUFFER, g_pp.fbo[pslot]);
+        glViewport(0, 0, w, h);
+        glUseProgram(p);
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, cur);
+        glUniform1i(glGetUniformLocation(p, "u_tex"), 0);
+        glActiveTexture(GL_TEXTURE1);
+        glBindTexture(GL_TEXTURE_2D_ARRAY, ring.arr);
+        glUniform1i(glGetUniformLocation(p, "u_ring"), 1);
+        glUniform1i(glGetUniformLocation(p, "u_head"), ring.head);
+        glUniform1i(glGetUniformLocation(p, "u_ntaps"), ntaps);
+        glUniform3f(glGetUniformLocation(p, "u_key_color"),
+                    cfx.chroma_frame_r, cfx.chroma_frame_g, cfx.chroma_frame_b);
+        glUniform1f(glGetUniformLocation(p, "u_threshold"), cfx.chroma_frame_threshold);
+        glUniform1f(glGetUniformLocation(p, "u_falloff"),   cfx.chroma_frame_falloff);
+        glDrawArrays(GL_TRIANGLES, 0, 3);
+        glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
         glActiveTexture(GL_TEXTURE0);
         cur = g_pp.tex[pslot];
         pslot ^= 1;

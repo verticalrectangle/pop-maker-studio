@@ -61,6 +61,7 @@ enum class FXType {
     ChromaKey,    // color-range keyer — compositing brick (the clean keyer)
     ChromaMelt,   // chroma-keyed feedback smear (the "trippy melt") — NOT a clean key
     ChromaEcho,   // chroma-keyed feedback echo — crisp stacked frame-ghosts (no smear)
+    ChromaFrame,  // chroma-keyed DISCRETE frame echoes — multi-tap delay (per-slot ring)
     // ── Audio FX bricks ─────────────────────────────────────────────────────
     AudioAutotune,      // YIN pitch detection + grain shift + scale quantize
     AudioPitch,         // grain pitch shift, fixed semitone offset
@@ -265,6 +266,14 @@ struct Clip {
     float       fx_chroma_echo_b         = 0.f;
     float       fx_chroma_echo_threshold = 0.30f;
     float       fx_chroma_echo_persist   = 0.92f;
+    // ChromaFrame brick (discrete multi-tap frame echoes — needs a per-slot frame ring)
+    float       fx_chroma_frame_r         = 0.f;
+    float       fx_chroma_frame_g         = 1.f;
+    float       fx_chroma_frame_b         = 0.f;
+    float       fx_chroma_frame_threshold = 0.30f;
+    float       fx_chroma_frame_taps      = 4.f;     // number of discrete echoes (1..8)
+    float       fx_chroma_frame_spacing   = 0.12f;   // seconds between taps (delay time)
+    float       fx_chroma_frame_falloff   = 0.75f;   // per-tap fade
 
     // Glitch
     float       fx_glitch_chroma     = 8.f;   // RGB channel spread in pixels
@@ -492,6 +501,15 @@ struct CreativeFXAccum {
     float chroma_echo_b         = 0.f;
     float chroma_echo_threshold = 0.30f;
     float chroma_echo_persist   = 0.92f;
+    // ChromaFrame — chroma-keyed discrete multi-tap frame echoes
+    bool  chroma_frame_on        = false;
+    float chroma_frame_r         = 0.f;
+    float chroma_frame_g         = 1.f;
+    float chroma_frame_b         = 0.f;
+    float chroma_frame_threshold = 0.30f;
+    float chroma_frame_taps      = 4.f;
+    float chroma_frame_spacing   = 0.12f;
+    float chroma_frame_falloff   = 0.75f;
 
     bool  glitch_on         = false;
     float glitch_chroma     = 0.f;

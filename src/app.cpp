@@ -120,6 +120,13 @@ const ClipKfField kClipKfFields[] = {
     {"fx_chroma_echo_r", &Clip::fx_chroma_echo_r},
     {"fx_chroma_echo_g", &Clip::fx_chroma_echo_g},
     {"fx_chroma_echo_b", &Clip::fx_chroma_echo_b},
+    {"fx_chroma_frame_threshold", &Clip::fx_chroma_frame_threshold},
+    {"fx_chroma_frame_taps", &Clip::fx_chroma_frame_taps},
+    {"fx_chroma_frame_spacing", &Clip::fx_chroma_frame_spacing},
+    {"fx_chroma_frame_falloff", &Clip::fx_chroma_frame_falloff},
+    {"fx_chroma_frame_r", &Clip::fx_chroma_frame_r},
+    {"fx_chroma_frame_g", &Clip::fx_chroma_frame_g},
+    {"fx_chroma_frame_b", &Clip::fx_chroma_frame_b},
     // Body / runtime FX amount, fades, transitions
     {"body_fx_amount", &Clip::body_fx_amount},
     {"runtime_fx_amount", &Clip::runtime_fx_amount},
@@ -400,6 +407,17 @@ static void accum_creative_clip(CreativeFXAccum& acc, const Clip& cl, float _cl_
             acc.chroma_echo_b         = cl.eval_prop("fx_chroma_echo_b", _cl_t);
             acc.chroma_echo_threshold = cl.eval_prop("fx_chroma_echo_threshold", _cl_t);
             acc.chroma_echo_persist   = cl.eval_prop("fx_chroma_echo_persist", _cl_t);
+            break;
+        case FXType::ChromaFrame:
+            // Discrete multi-tap frame echoes (needs the per-slot frame ring in fx_apply).
+            acc.chroma_frame_on        = true; acc.any_cfx = true;
+            acc.chroma_frame_r         = cl.eval_prop("fx_chroma_frame_r", _cl_t);
+            acc.chroma_frame_g         = cl.eval_prop("fx_chroma_frame_g", _cl_t);
+            acc.chroma_frame_b         = cl.eval_prop("fx_chroma_frame_b", _cl_t);
+            acc.chroma_frame_threshold = cl.eval_prop("fx_chroma_frame_threshold", _cl_t);
+            acc.chroma_frame_taps      = cl.eval_prop("fx_chroma_frame_taps", _cl_t);
+            acc.chroma_frame_spacing   = cl.eval_prop("fx_chroma_frame_spacing", _cl_t);
+            acc.chroma_frame_falloff   = cl.eval_prop("fx_chroma_frame_falloff", _cl_t);
             break;
         default:
 #include "generated/fx_collect_cases.h"

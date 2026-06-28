@@ -135,6 +135,7 @@ static void dump_fx_previews(const char* out_dir) {
         { FXType::ChromaKey, "chroma_key" },
         { FXType::ChromaMelt, "chroma_melt" },
         { FXType::ChromaEcho, "chroma_echo" },
+        { FXType::ChromaFrame, "chroma_frame" },
     };
     for (auto& b : kBuiltin) {
         ImGui_ImplOpenGL3_NewFrame();
