@@ -58,7 +58,8 @@ enum class FXType {
     LightLeak,    // procedural film-light flare synced to amplitude envelope
     VHS,          // chroma bleed + grain + tracking glitch
     Datamosh,     // temporal ghost buffer + multi-key chroma chaos
-    ChromaKey,    // color-range keyer — compositing brick
+    ChromaKey,    // color-range keyer — compositing brick (the clean keyer)
+    ChromaMelt,   // chroma-keyed feedback smear (the "trippy melt") — NOT a clean key
     // ── Audio FX bricks ─────────────────────────────────────────────────────
     AudioAutotune,      // YIN pitch detection + grain shift + scale quantize
     AudioPitch,         // grain pitch shift, fixed semitone offset
@@ -463,6 +464,14 @@ struct CreativeFXAccum {
     float chroma_key_b         = 0.f;
     float chroma_key_threshold = 0.30f;
     float chroma_key_softness  = 0.15f;
+
+    // ChromaMelt — chroma-keyed temporal feedback smear (distinct from the keyer above)
+    bool  chroma_melt_on        = false;
+    float chroma_melt_r         = 0.f;
+    float chroma_melt_g         = 1.f;
+    float chroma_melt_b         = 0.f;
+    float chroma_melt_threshold = 0.30f;
+    float chroma_melt_persist   = 0.88f;
 
     bool  glitch_on         = false;
     float glitch_chroma     = 0.f;
