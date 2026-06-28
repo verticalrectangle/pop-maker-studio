@@ -240,12 +240,6 @@ int video_export_height(int slot = 0);
 // matches the clip's source; used to size the hover-preview popover.
 void video_preview_dims(int slot, int* w, int* h);
 
-// Apply AI bg-remove alpha mask to a decoded export frame in-place.
-// Reads the per-frame grayscale JPEG from cl.bg_remove_mask_dir / bg_masks.mjpeg.
-// The mask is bilinearly scaled to match vf dimensions if they differ.
-// No-op if bg_remove_on is false, mask_dir is empty, or the frame is not found.
-void video_apply_bg_remove_export(VideoFrame* vf, const Clip& cl, int mask_frame_idx);
-
 // Apply CPU JPEG datamosh corruption to an RGBA VideoFrame in-place.
 // Encodes to JPEG, corrupts scan bytes, decodes back.  Modifies vf->data.
 // Skips if intensity <= 0 or encode fails.
