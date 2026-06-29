@@ -1,6 +1,7 @@
 #include "bg_remove.h"
 #include "paths.h"
 #include "proxy.h"
+#include "body_fx.h"   // invalidate/evict the mask caches when masks regenerate
 #include <onnxruntime_cxx_api.h>
 #include <filesystem>
 #include <map>
@@ -596,6 +597,10 @@ void bg_remove_start(AppState& state, int track_idx, int clip_idx) {
         fs::remove(mdir + "/bg_masks.mjpeg");
         fs::remove(mdir + "/start_frame.txt");
     }
+    // The cached seek table indexes the OLD mjpeg's byte offsets; drop it now so the
+    // render rebuilds from the regenerated file (stale offsets read garbage = smudge).
+    // No-GL, so safe regardless of caller thread; the poll re-invalidates on completion.
+    body_fx_invalidate_mask_index(mdir);
 
     {
         std::lock_guard<std::mutex> lk(g_jobs_mu);
@@ -653,6 +658,16 @@ void bg_remove_poll(AppState& state) {
                     clip.bg_remove_error = job.data->error_msg;
                 }
             }
+        }
+        if (st == 1) {
+            // Masks just finished regenerating — drop BOTH stale caches so the render
+            // rebuilds from the new bg_masks.mjpeg. The new file's per-frame byte offsets
+            // differ from the old one, so a stale seek table reads wrong ranges = the
+            // garbage/smudge that "stays" until a process restart (this is the bug:
+            // a Re-run / re-apply rewrote the masks but the caches kept old offsets).
+            // bg_remove_poll runs on the main thread, so the GL evict is safe here.
+            body_fx_invalidate_mask_index(mdir);
+            body_fx_evict_mask_cache(mdir);
         }
     }
 

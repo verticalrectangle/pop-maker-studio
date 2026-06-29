@@ -71,3 +71,8 @@ uintptr_t body_fx_preview_texture(BodyFXType type, float t);
 
 // Free any GL textures cached for this mask dir (call when clip is deleted).
 void body_fx_evict_mask_cache(const std::string& mask_dir);
+
+// Drop the cached mjpeg seek table for a mask dir — call after the masks are wiped /
+// regenerated so the render rebuilds byte offsets from the NEW file. A stale seek table
+// indexes the old file's offsets into the new mjpeg → wrong byte ranges = smudge. No GL.
+void body_fx_invalidate_mask_index(const std::string& mask_dir);
