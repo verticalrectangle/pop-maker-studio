@@ -1713,15 +1713,23 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                     int bw = (vi_g.width  > 0) ? vi_g.width  : (int)w;
                     int bh = (vi_g.height > 0) ? vi_g.height : (int)h;
 
+                    // At most ONE RemoveBackground may apply across both loops: stacking
+                    // the cutout multiplies alpha by the mask twice (mask^2) -> eroded,
+                    // smudgy edges. Other body-FX still stack freely (they preserve alpha).
+                    bool bg_removed = false;
+
                     // Standalone glass BodyFX bricks on this track
                     for (auto& bfx_cl : state.tracks[ti].clips) {
                         if (bfx_cl.clip_type != ClipType::BodyFX) continue;
                         if (at_time < bfx_cl.start || at_time >= bfx_cl.end) continue;
+                        bool is_rmbg = (bfx_cl.body_fx_type == BodyFXType::RemoveBackground);
+                        if (is_rmbg && bg_removed) continue;
                         unsigned mask_tex = body_fx_mask_texture(mask_dir, frame_i);
                         if (!mask_tex) continue;
                         tex = body_fx_apply(bfx_cl.body_fx_type, tex, mask_tex, bw, bh,
                                             bfx_cl.body_fx_params, bfx_cl.body_fx_amount, t_anim,
                                             bg_box, bg_soft);
+                        if (is_rmbg) bg_removed = true;
                     }
 
                     // BodyFX sub-effects inside glass MultiFX bricks on this track
@@ -1735,11 +1743,14 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                             if (se.clip_type != ClipType::BodyFX) continue;
                             float se_end = (se.rel_end <= 0.f) ? parent_dur : se.rel_end;
                             if (rel < se.rel_start || rel >= se_end) continue;
+                            bool is_rmbg = (se.body_fx_type == BodyFXType::RemoveBackground);
+                            if (is_rmbg && bg_removed) continue;
                             unsigned mask_tex = body_fx_mask_texture(mask_dir, frame_i);
                             if (!mask_tex) continue;
                             tex = body_fx_apply(se.body_fx_type, tex, mask_tex, bw, bh,
                                                 se.body_fx_params, se.body_fx_amount, t_anim,
                                                 bg_box, bg_soft);
+                            if (is_rmbg) bg_removed = true;
                         }
                     }
                 }

@@ -2310,15 +2310,23 @@ static bool gl_render_vid_clip(ImDrawList& dl, const Clip* cl, float at_time,
         }
         float bg_soft = cl->bg_remove_softness;
 
+        // At most ONE RemoveBackground may apply per frame across both loops below:
+        // stacking the cutout multiplies alpha by the mask twice (mask^2), eroding the
+        // soft edges into a smudge. Other body-FX still stack freely (they preserve alpha).
+        bool bg_removed = false;
+
         // Standalone glass BodyFX bricks on this track
         for (auto& bfx_cl : state.tracks[ti].clips) {
             if (bfx_cl.clip_type != ClipType::BodyFX) continue;
             if (at_time < bfx_cl.start || at_time >= bfx_cl.end) continue;
+            bool is_rmbg = (bfx_cl.body_fx_type == BodyFXType::RemoveBackground);
+            if (is_rmbg && bg_removed) continue;
             unsigned mask_tex = body_fx_mask_texture(mask_dir, frame_i);
             if (!mask_tex) continue;
             cur_tex = body_fx_apply(bfx_cl.body_fx_type, cur_tex, mask_tex,
                                     vid_w, vid_h, bfx_cl.body_fx_params,
                                     bfx_cl.body_fx_amount, at_time, bg_box, bg_soft);
+            if (is_rmbg) bg_removed = true;
         }
 
         // BodyFX sub-effects inside glass MultiFX bricks on this track
@@ -2332,11 +2340,14 @@ static bool gl_render_vid_clip(ImDrawList& dl, const Clip* cl, float at_time,
                 if (se.clip_type != ClipType::BodyFX) continue;
                 float se_end = (se.rel_end <= 0.f) ? parent_dur : se.rel_end;
                 if (rel < se.rel_start || rel >= se_end) continue;
+                bool is_rmbg = (se.body_fx_type == BodyFXType::RemoveBackground);
+                if (is_rmbg && bg_removed) continue;
                 unsigned mask_tex = body_fx_mask_texture(mask_dir, frame_i);
                 if (!mask_tex) continue;
                 cur_tex = body_fx_apply(se.body_fx_type, cur_tex, mask_tex,
                                         vid_w, vid_h, se.body_fx_params,
                                         se.body_fx_amount, at_time, bg_box, bg_soft);
+                if (is_rmbg) bg_removed = true;
             }
         }
     }
