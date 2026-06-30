@@ -429,8 +429,20 @@ static void do_transcribe(
     wp.print_realtime             = false;
     wp.print_timestamps           = false;
     wp.print_special              = false;
-    // Prevent hallucination loops: don't feed decoded tokens as context for next chunk.
+    // Prevent hallucination loops. `no_context` only suppresses the *initial*
+    // prompt carried over from a *prior* whisper_full call (per whisper.h:
+    // "do not use past transcription as initial prompt") — we call whisper_full
+    // once, so on its own it does nothing here. The real loop driver is
+    // `n_max_text_ctx`: decoded tokens from one 30 s window are fed back as the
+    // decoder prompt for the next window (default cap 16384 tokens). On a
+    // repetitive outro (Ween "Transdermal Celebration": the sung "I'm growing
+    // with the land…" / "lay on the lawn…" refrains) that feedback snowballs
+    // into a 1-segment-per-second loop that swallows the rest of the song.
+    // Capping the past-text prompt to 0 tokens severs the carryover and the
+    // loop disappears — verified end-to-end on that track. (Temperature
+    // fallback alone does NOT fix it, and can even feed the loop.)
     wp.no_context      = true;
+    wp.n_max_text_ctx  = 0;
     wp.no_speech_thold = 0.6f;
     wp.entropy_thold   = 2.4f;
     // Temperature fallback breaks intra-chunk repetition loops: when greedy
@@ -504,57 +516,20 @@ static void do_transcribe(
             we_in.push_back(e);
         }
 
-        // Build forced-alignment segment windows.  Whisper sometimes drops a
-        // sentence boundary (no comma/period) and groups two phrases into one
-        // segment — but it still capitalizes the start of the second sentence.
-        // Detect those mid-segment capitalized words and split, so CTC gets a
-        // clean per-phrase audio window instead of trying to align a long
-        // multi-phrase span across a silent gap (which causes phoneme onsets
-        // like /t/ in "Torn" to snap to the wrong side of the gap).
-        auto is_first_person_I = [](const std::string& w) {
-            return w == "I" || w == "I'm" || w == "I'll" ||
-                   w == "I've" || w == "I'd";
-        };
-        auto strip_punct = [](std::string s) {
-            while (!s.empty() && !std::isalpha((unsigned char)s.back()))
-                s.pop_back();
-            return s;
-        };
-
+        // Build forced-alignment windows: ONE per whisper segment. We used to
+        // sub-split a multi-phrase segment at its capitalized words, to keep CTC
+        // from aligning across a silent gap inside it. But that split at whisper's
+        // word TIMES — and whisper collapses instrumental gaps (it jams a line
+        // against the previous phrase, before the gap), so the split landed in the
+        // wrong place and scrunched / mis-placed the words. forced_align now
+        // excises sustained silence from each window's audio directly
+        // (active_ranges) and aligns only the real vocals, so it handles the gaps
+        // correctly on its own — the per-phrase split is no longer needed.
         std::vector<std::pair<float,float>> sb;
-        {
-            size_t wi = 0;
-            for (auto& s : segs_arr) {
-                float seg_start = s.value("start", 0.f);
-                float seg_end   = s.value("end",   0.f);
-                size_t w0 = wi;
-                while (wi < words_arr.size() &&
-                       words_arr[wi].value("start", 0.f) < seg_end - 0.001f)
-                    ++wi;
-                size_t w1 = wi;  // exclusive
-                if (w0 == w1) continue;
-
-                float cur_start = seg_start;
-                for (size_t k = w0 + 1; k < w1; ++k) {
-                    std::string wtext = strip_punct(words_arr[k].value("word", ""));
-                    if (wtext.empty()) continue;
-                    bool capital = std::isupper((unsigned char)wtext[0]);
-                    if (!capital || is_first_person_I(wtext)) continue;
-
-                    // Split before this capitalized word. Use a 100 ms cushion
-                    // before its start so the onset definitely sits inside the
-                    // new window even when whisper's timestamps have squeezed
-                    // the silent gap shut.
-                    float wstart   = words_arr[k].value("start", 0.f);
-                    float prev_end = words_arr[k - 1].value("end",  wstart);
-                    float split    = std::max(prev_end, wstart - 0.10f);
-                    split          = std::max(split, cur_start + 0.05f);
-                    if (split >= seg_end) continue;
-                    sb.push_back({cur_start, split});
-                    cur_start = split;
-                }
-                sb.push_back({cur_start, seg_end});
-            }
+        for (auto& s : segs_arr) {
+            float seg_start = s.value("start", 0.f);
+            float seg_end   = s.value("end",   0.f);
+            if (seg_end > seg_start) sb.push_back({seg_start, seg_end});
         }
 
         auto we_out = forced_align(pcm, we_in, proxy_fps, sb);
@@ -757,7 +732,11 @@ TranscribeSearchResult transcribe_search(
     wp.print_realtime             = false;
     wp.print_timestamps           = false;
     wp.print_special              = false;
+    // n_max_text_ctx = 0: sever decoded-token carryover between 30 s windows.
+    // See the main pipeline site above — without this, repetitive material
+    // drives a self-reinforcing repetition loop. no_context alone is insufficient.
     wp.no_context      = true;
+    wp.n_max_text_ctx  = 0;
     wp.no_speech_thold = 0.6f;
     wp.entropy_thold   = 2.4f;
     wp.temperature     = 0.0f;
