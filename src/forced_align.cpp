@@ -268,6 +268,42 @@ static std::vector<std::pair<int,int>> active_ranges(
     return ranges;
 }
 
+// Whisper often ends a segment at the consonant of the last sung word and drops
+// the long held vowel / melisma after it — that becomes an orphaned blob of vocal
+// energy with no word on it, and the line scrunches against the short window end
+// (e.g. "...I could see them" packed into ~1 s while "them" is actually held to
+// ~146 s). If strong vocal energy continues right past the window end, push the
+// end forward through it — stopping when the note releases (energy drops for
+// >=0.20 s) or at `cap` (the next segment's start). The CTC's trailing-blank
+// attribution then lets the final word stretch across the held note. Only fires
+// when the energy JUST PAST t1 is still near the in-segment level (a genuine held
+// note, not a normal word release), so ordinary segment ends are untouched.
+static float held_tail_extend(const std::vector<float>& a,
+                              float t0, float t1, float cap) {
+    if (cap <= t1 + 0.10f) return t1;
+    const int FRAME = (int)(0.02 * SAMPLE_RATE);
+    auto rms_at = [&](float t) -> float {
+        int s = (int)(t * SAMPLE_RATE);
+        if (s < 0 || s + FRAME > (int)a.size()) return 0.f;
+        float e = 0.f; for (int j = 0; j < FRAME; ++j) e += a[s+j]*a[s+j];
+        return std::sqrt(e / (float)FRAME);
+    };
+    float ref = 0.f;                                   // in-segment level: peak of last ~1 s
+    for (float t = std::max(t0, t1 - 1.0f); t < t1; t += 0.02f) ref = std::max(ref, rms_at(t));
+    if (ref < 1e-4f) return t1;
+    float just = 0.f;                                  // energy immediately past the boundary
+    for (float t = t1; t < t1 + 0.20f; t += 0.02f) just = std::max(just, rms_at(t));
+    if (just < 0.65f * ref) return t1;                 // not a held note — leave it
+
+    const float thr = 0.60f * ref;
+    float end = t1, low = 0.f;
+    for (float t = t1; t < cap; t += 0.02f) {
+        if (rms_at(t) >= thr) { end = t; low = 0.f; }
+        else { low += 0.02f; if (low >= 0.20f) break; }
+    }
+    return std::min(end + 0.05f, cap);
+}
+
 std::vector<WordEntry> forced_align(
     const std::vector<float>&               audio16k,
     const std::vector<WordEntry>&           whisper_words,
@@ -300,7 +336,7 @@ std::vector<WordEntry> forced_align(
     // ── Build segment list ────────────────────────────────────────────────────
     // Each segment: word range [w0, w1] (inclusive) and audio window [t0, t1].
 
-    struct Seg { int w0, w1; float t0, t1; };
+    struct Seg { int w0, w1; float t0, t1; bool held = false; };
     std::vector<Seg> segs;
 
     if (!seg_bounds.empty()) {
@@ -357,6 +393,22 @@ std::vector<WordEntry> forced_align(
         segs.push_back({sw, N-1,
             whisper_words[sw].start,
             whisper_words[N-1].end});
+    }
+
+    // Extend each window's end through a held final note (see held_tail_extend),
+    // capped at the next segment's start so we never reach into the next phrase.
+    for (size_t i = 0; i < segs.size(); ++i) {
+        float cap = (i + 1 < segs.size()) ? segs[i+1].t0 - 0.10f
+                                          : (float)audio16k.size() / SAMPLE_RATE;
+        float ne = held_tail_extend(audio16k, segs[i].t0, segs[i].t1, cap);
+        if (ne > segs[i].t1 + 0.10f) {
+            if (getenv("PMS_FA_DEBUG"))
+                fprintf(stderr, "[FA] HELDTAIL seg w[%d..%d] '..%s' t1 %.2f -> %.2f\n",
+                        segs[i].w0, segs[i].w1, whisper_words[segs[i].w1].text.c_str(),
+                        segs[i].t1, ne);
+            segs[i].t1   = ne;
+            segs[i].held = true;
+        }
     }
 
     // ── Per-segment alignment ─────────────────────────────────────────────────
@@ -482,6 +534,13 @@ std::vector<WordEntry> forced_align(
             result[seg.w0 + k].end   = snap(frame_to_time(fmax));
             aligned[seg.w0 + k]      = true;
         }
+
+        // Held final note: the CTC ends the last word on its consonant, but the
+        // sustained vowel we extended the window through (held_tail_extend) IS
+        // that word still being sung — stretch its end across the held note so it
+        // doesn't flash for a fraction of a second over seconds of held vocal.
+        if (seg.held && aligned[seg.w1])
+            result[seg.w1].end = std::max(result[seg.w1].end, snap(seg.t1));
     }
 
     // ── NaN interpolation (method=nearest) ────────────────────────────────────
