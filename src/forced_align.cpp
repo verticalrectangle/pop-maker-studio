@@ -268,6 +268,35 @@ static std::vector<std::pair<int,int>> active_ranges(
     return ranges;
 }
 
+// Find the first sustained silence run (>=0.40 s) that STARTS within
+// [from, from+max_look]. Returns {gap_start, gap_end} seconds, or {-1,-1}. The
+// threshold is relative to the vocal level just before `from`, so it measures
+// "silence relative to what was being sung here." Used to relocate a whisper
+// segment boundary that landed inside a held note (see the boundary-snap below).
+static std::pair<float,float> find_gap_after(const std::vector<float>& a,
+                                             float from_t, float max_look) {
+    const int FRAME = (int)(0.02 * SAMPLE_RATE);
+    auto rms_at = [&](float t) -> float {
+        int s = (int)(t * SAMPLE_RATE);
+        if (s < 0 || s + FRAME > (int)a.size()) return 0.f;
+        float e = 0.f; for (int j = 0; j < FRAME; ++j) e += a[s+j]*a[s+j];
+        return std::sqrt(e / (float)FRAME);
+    };
+    float ref = 0.f;
+    for (float t = std::max(0.f, from_t - 0.30f); t < from_t; t += 0.02f) ref = std::max(ref, rms_at(t));
+    if (ref < 1e-4f) return {-1.f, -1.f};
+    const float thr   = ref * 0.15f;
+    const float limit = from_t + max_look;
+    for (float t = from_t; t < limit; t += 0.02f) {
+        if (rms_at(t) >= thr) continue;
+        float g0 = t, tt = t;
+        while (tt < from_t + max_look + 8.0f && rms_at(tt) < thr) tt += 0.02f;
+        if (tt - g0 >= 0.40f) return {g0, tt};
+        t = tt;
+    }
+    return {-1.f, -1.f};
+}
+
 // Whisper often ends a segment at the consonant of the last sung word and drops
 // the long held vowel / melisma after it — that becomes an orphaned blob of vocal
 // energy with no word on it, and the line scrunches against the short window end
@@ -393,6 +422,29 @@ std::vector<WordEntry> forced_align(
         segs.push_back({sw, N-1,
             whisper_words[sw].start,
             whisper_words[N-1].end});
+    }
+
+    // Boundary-snap: whisper sometimes ends a segment INSIDE a held note (the
+    // last word's sustained vowel keeps going past the boundary) and starts the
+    // next segment right there — so the held tail becomes the next window's
+    // leading audio and its first word aligns onto it (e.g. first bridge: "Lay
+    // on" landed at 85.8, on the held tail of "market", instead of after the
+    // gap at 90). When two segments are back-to-back, vocal is continuous across
+    // the boundary, and a real silence starts shortly after, move the boundary
+    // INTO that silence: the previous segment keeps its held tail up to the gap,
+    // the next one starts after it. (remove-silence can't fix this — the tail is
+    // vocal; held_tail_extend can't — the next segment leaves it no room.)
+    for (size_t i = 0; i + 1 < segs.size(); ++i) {
+        if (segs[i+1].t0 - segs[i].t1 > 0.30f) continue;          // real gap already at boundary
+        auto [g0, g1] = find_gap_after(audio16k, segs[i+1].t0, 1.0f);
+        if (g0 < 0.f || g0 < segs[i+1].t0 + 0.15f) continue;      // need an active held tail first
+        if (g1 >= segs[i+1].t1 - 0.20f) continue;                 // must leave audio for the next seg
+        if (getenv("PMS_FA_DEBUG"))
+            fprintf(stderr, "[FA] BOUNDSNAP w[%d..%d]|w[%d..%d] boundary %.2f -> tail %.2f / next %.2f\n",
+                    segs[i].w0, segs[i].w1, segs[i+1].w0, segs[i+1].w1,
+                    segs[i+1].t0, g0, g1);
+        segs[i].t1   = g0;
+        segs[i+1].t0 = g1;
     }
 
     // Extend each window's end through a held final note (see held_tail_extend),
