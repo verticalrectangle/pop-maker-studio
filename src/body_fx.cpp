@@ -1045,9 +1045,13 @@ static const int k_n_body_fx = (int)(sizeof(g_body_fx_infos) / sizeof(g_body_fx_
 static GLuint g_programs[(int)BodyFXType::Count] = {};
 static GLuint g_vao = 0;
 
-// Output FBO/texture (resized lazily)
+// Output FBO/texture — a PING-PONG PAIR (resized lazily). Chaining body-FX feeds one
+// effect's output as the next effect's source; with a single shared FBO that means
+// sampling u_src while rendering into the SAME texture (read-write feedback → undefined →
+// the cutout alpha randomly comes out opaque on a re-scrub). The pair lets each effect
+// read one buffer and write the OTHER, so source != destination always.
 static struct {
-    GLuint fbo = 0, tex = 0;
+    GLuint fbo[2] = {0, 0}, tex[2] = {0, 0};
     int w = 0, h = 0;
 } g_out;
 
@@ -1206,17 +1210,19 @@ static GLuint link_body_prog(const char* frag_body) {
 
 static void ensure_out(int w, int h) {
     if (g_out.w == w && g_out.h == h) return;
-    if (g_out.fbo) { glDeleteFramebuffers(1, &g_out.fbo); glDeleteTextures(1, &g_out.tex); }
-    glGenTextures(1, &g_out.tex);
-    glBindTexture(GL_TEXTURE_2D, g_out.tex);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glGenFramebuffers(1, &g_out.fbo);
-    glBindFramebuffer(GL_FRAMEBUFFER, g_out.fbo);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, g_out.tex, 0);
+    for (int i = 0; i < 2; ++i) {
+        if (g_out.fbo[i]) { glDeleteFramebuffers(1, &g_out.fbo[i]); glDeleteTextures(1, &g_out.tex[i]); }
+        glGenTextures(1, &g_out.tex[i]);
+        glBindTexture(GL_TEXTURE_2D, g_out.tex[i]);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glGenFramebuffers(1, &g_out.fbo[i]);
+        glBindFramebuffer(GL_FRAMEBUFFER, g_out.fbo[i]);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, g_out.tex[i], 0);
+    }
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     g_out.w = w; g_out.h = h;
 }
@@ -1242,8 +1248,10 @@ void body_fx_shutdown() {
         if (g_programs[i]) { glDeleteProgram(g_programs[i]); g_programs[i] = 0; }
     }
     if (g_vao) { glDeleteVertexArrays(1, &g_vao); g_vao = 0; }
-    if (g_out.fbo) { glDeleteFramebuffers(1, &g_out.fbo); g_out.fbo = 0; }
-    if (g_out.tex) { glDeleteTextures(1, &g_out.tex); g_out.tex = 0; }
+    for (int i = 0; i < 2; ++i) {
+        if (g_out.fbo[i]) { glDeleteFramebuffers(1, &g_out.fbo[i]); g_out.fbo[i] = 0; }
+        if (g_out.tex[i]) { glDeleteTextures(1, &g_out.tex[i]); g_out.tex[i] = 0; }
+    }
     g_out.w = g_out.h = 0;
 
     // Free mask cache
@@ -1283,11 +1291,6 @@ unsigned body_fx_mask_texture(const std::string& mask_dir, int frame_idx) {
 
     // Load from bg_masks.mjpeg via seek table
     const MaskIndex* mi = get_mask_index(mask_dir);
-    static int s_dbg_mt = 0;
-    if (s_dbg_mt++ < 12)
-        fprintf(stderr, "[body_fx] mask lookup: dir=%s mi=%s frame_idx=%d start=%d nframes=%d\n",
-                mask_dir.c_str(), mi ? "ok" : "NULL", frame_idx,
-                mi ? mi->start_frame : -1, mi ? (int)mi->offsets.size() : -1);
     if (!mi) return 0;
     int local_idx = frame_idx - mi->start_frame;
     if (local_idx < 0 || local_idx >= (int)mi->offsets.size()) return 0;
@@ -1362,7 +1365,10 @@ uintptr_t body_fx_apply(BodyFXType type,
     }
 
     ensure_out(w, h);
-    if (!g_out.fbo) return src_tex;
+    if (!g_out.fbo[0]) return src_tex;
+    // Ping-pong: render into whichever buffer is NOT the source, so a chained effect
+    // (src == a previous g_out result) never samples the texture it renders into.
+    int oi = (src_tex == (uintptr_t)g_out.tex[0]) ? 1 : 0;
 
     // Save GL state
     GLint prev_fbo = 0;
@@ -1373,8 +1379,15 @@ uintptr_t body_fx_apply(BodyFXType type,
     glGetIntegerv(GL_CURRENT_PROGRAM, &prev_prog);
     GLint prev_vp[4];
     glGetIntegerv(GL_VIEWPORT, prev_vp);
+    // This pass must OVERWRITE the output FBO. The preview leaves GL_BLEND enabled
+    // (ImGui backend), so without disabling it the fullscreen triangle src-overs onto the
+    // buffer's stale content from previous frames — the cutout alpha then accumulates
+    // toward opaque across a live scrub (the bug; export has blend off, hence stayed clean).
+    // scene_add_layer disables blend for exactly this reason.
+    GLboolean prev_blend = glIsEnabled(GL_BLEND);
+    glDisable(GL_BLEND);
 
-    glBindFramebuffer(GL_FRAMEBUFFER, g_out.fbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, g_out.fbo[oi]);
     glViewport(0, 0, w, h);
     glUseProgram(prog);
     glBindVertexArray(g_vao);
@@ -1412,8 +1425,9 @@ uintptr_t body_fx_apply(BodyFXType type,
     glUseProgram(prev_prog);
     glBindFramebuffer(GL_FRAMEBUFFER, prev_fbo);
     glViewport(prev_vp[0], prev_vp[1], prev_vp[2], prev_vp[3]);
+    if (prev_blend) glEnable(GL_BLEND);
 
-    return (uintptr_t)g_out.tex;
+    return (uintptr_t)g_out.tex[oi];
 }
 
 // ── Body-FX card preview thumbnails ───────────────────────────────────────────
@@ -1465,7 +1479,7 @@ uintptr_t body_fx_preview_texture(BodyFXType type, float t) {
     }
     GLint prev_fbo = 0;
     glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prev_fbo);
-    glBindFramebuffer(GL_READ_FRAMEBUFFER, g_out.fbo);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, g_out.fbo[0]);  // preview is a single effect → buffer 0
     glBindTexture(GL_TEXTURE_2D, cache);
     glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, W, H);
     glBindTexture(GL_TEXTURE_2D, 0);
