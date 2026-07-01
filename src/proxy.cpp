@@ -203,10 +203,25 @@ static bool build_seek_table(const std::string& mjpeg_path,
 // ── Public API — path/ready/load (unchanged) ──────────────────────────────────
 
 bool proxy_is_ready(const std::string& video_path) {
+    double now = mono_now_seconds();
     {
         std::lock_guard<std::mutex> lk(g_ready_cache_mu);
-        if (g_ready_cache.count(video_path)) return true;
-        double now = mono_now_seconds();
+        if (g_ready_cache.count(video_path)) {
+            // Positive hits are normally terminal, but the proxy files can vanish
+            // under us (the user clears the cache dir, a disk-full run truncates
+            // them, an old session left a half-written pair). Re-verify existence
+            // at a low rate (~0.5 Hz per path — negligible next to the 60 fps draw
+            // loop) so a missing proxy SELF-HEALS into a regenerate instead of a
+            // permanent blank that only a full app restart clears.
+            auto it = g_last_stat_ts.find(video_path);
+            if (it != g_last_stat_ts.end() && now - it->second < 2.0) return true;
+            g_last_stat_ts[video_path] = now;
+            bool still_there = fs::exists(proxy_mjpeg_path(video_path)) &&
+                               fs::exists(proxy_idx_path(video_path));
+            if (still_there) return true;
+            g_ready_cache.erase(video_path);   // evicted → callers re-queue proxy_start
+            return false;
+        }
         auto it = g_last_stat_ts.find(video_path);
         if (it != g_last_stat_ts.end() && now - it->second < 0.25) return false;
         g_last_stat_ts[video_path] = now;
@@ -416,6 +431,76 @@ static int probe_total_frames(const std::string& video_path) {
     return (int)(dur * proxy_fps + 0.5);
 }
 
+// ── Proxy encode (one attempt) ────────────────────────────────────────────────
+//
+// Runs ffmpeg to build the half-res MJPEG, polling -progress for the % bar.
+// Returns true on a clean exit. Split out so the worker can retry:
+//   • use_hwaccel=true  → -hwaccel auto (GPU decode: vaapi/nvdec/qsv/…)
+//   • use_hwaccel=false → pure software decode
+// -hwaccel auto picks a backend that *fails outright* on some codecs/profiles/
+// GPUs (VAAPI on AMD chokes on assorted H.264/HEVC profiles), and when it fails
+// ffmpeg exits non-zero and the proxy silently never appears. Retrying in
+// software is deterministic and always available — that's the fix for "some
+// clips never get a proxy." -fps_mode cfr + -r 30 forces a constant-rate proxy
+// so VFR / NTSC sources (24000/1001, 2997003/125000, 90000/2999 …) can't emit a
+// broken, unindexable MJPEG.
+static bool proxy_encode_once(const std::string& path, const std::string& src,
+                              const std::string& mj, const std::string& prog_file,
+                              const std::string& threads_str, int total_frames,
+                              bool use_hwaccel) {
+    std::vector<const char*> a;
+    a.push_back("ffmpeg"); a.push_back("-hide_banner");
+    a.push_back("-loglevel"); a.push_back("error");
+    if (use_hwaccel) { a.push_back("-hwaccel"); a.push_back("auto"); }
+    a.push_back("-threads"); a.push_back(threads_str.c_str());
+    a.push_back("-y"); a.push_back("-i"); a.push_back(src.c_str());
+    a.push_back("-vf"); a.push_back("scale=min(iw/2\\,960):-2:flags=fast_bilinear");
+    a.push_back("-r"); a.push_back("30");
+    a.push_back("-fps_mode"); a.push_back("cfr");
+    a.push_back("-c:v"); a.push_back("mjpeg"); a.push_back("-q:v"); a.push_back("16");
+    a.push_back("-an");
+    a.push_back("-progress"); a.push_back(prog_file.c_str());
+    a.push_back(mj.c_str());
+    a.push_back(nullptr);
+
+    pid_t pp = spawn_ffmpeg(a.data());
+    {
+        std::lock_guard<std::mutex> lk(g_mu);
+        g_pid_map[path] = pp;
+    }
+
+    bool ok = false;
+    while (true) {
+        int wst = 0;
+        pid_t r = waitpid(pp, &wst, WNOHANG);
+        if (r == pp) {
+            ok = WIFEXITED(wst) && WEXITSTATUS(wst) == 0;
+            break;
+        }
+        if (r < 0) break;
+        if (g_shutdown.load()) { kill(pp, SIGTERM); waitpid(pp, nullptr, 0); break; }
+
+        if (total_frames > 0) {
+            FILE* pf = fopen(prog_file.c_str(), "r");
+            if (pf) {
+                char line[128]; int last_frame = 0;
+                while (fgets(line, sizeof(line), pf)) {
+                    int fr; if (sscanf(line, "frame=%d", &fr) == 1) last_frame = fr;
+                }
+                fclose(pf);
+                if (last_frame > 0) {
+                    float p = std::min(0.98f, (float)last_frame / (float)total_frames);
+                    std::lock_guard<std::mutex> lk(g_mu);
+                    auto it = g_progress_map.find(path);
+                    if (it != g_progress_map.end()) it->second = p;
+                }
+            }
+        }
+        usleep(100'000);  // 100 ms poll
+    }
+    return ok;
+}
+
 // ── Worker thread ─────────────────────────────────────────────────────────────
 
 static void proxy_worker_fn() {
@@ -456,71 +541,33 @@ static void proxy_worker_fn() {
         // Probe total frame count for accurate progress percentage
         int total_frames = probe_total_frames(path);
 
-        // Use ffmpeg -progress to write key=value updates to a temp file.
-        // -hwaccel auto uses GPU decode when available (vaapi/nvdec/qsv/etc.),
-        // silently falls back to software when not. -threads K caps per-process
-        // thread count so N workers × K threads stays near hardware_concurrency.
+        // Encode the proxy, GPU-decode first. -threads K caps per-process thread
+        // count so N workers × K threads stays near hardware_concurrency. The
         // fast_bilinear scaler trades a little chroma fidelity for ~20% faster
-        // scaling — fine for preview-quality output. -q:v 16 is a touch coarser
-        // than the prior 13 with no visible difference at half-res, shaves bytes
-        // and encode time.
+        // scaling (fine at preview quality); -q:v 16 shaves bytes with no visible
+        // difference at half-res. If hardware decode fails (bad VAAPI/NVDEC
+        // support for this codec) retry ONCE in pure software — deterministic and
+        // always available, so a clip can't be left permanently proxy-less.
         std::string prog_file = mj + ".prog";
         std::string src = "file:" + path;
-        const char* proxy_args[] = {
-            "ffmpeg", "-hide_banner", "-loglevel", "error",
-            "-hwaccel", "auto",
-            "-threads", threads_str.c_str(),
-            "-y", "-i", src.c_str(),
-            "-vf", "scale=min(iw/2\\,960):-2:flags=fast_bilinear",
-            "-r", "30",
-            "-c:v", "mjpeg", "-q:v", "16",
-            "-an",
-            "-progress", prog_file.c_str(),
-            mj.c_str(), nullptr
-        };
 
-        pid_t pp = spawn_ffmpeg(proxy_args);
-        {
-            std::lock_guard<std::mutex> lk(g_mu);
-            g_pid_map[path] = pp;
-        }
-
-        // Poll progress file while ffmpeg runs
-        bool ok = false;
-        while (true) {
-            int wst = 0;
-            pid_t r = waitpid(pp, &wst, WNOHANG);
-            if (r == pp) {
-                ok = WIFEXITED(wst) && WEXITSTATUS(wst) == 0;
-                break;
-            }
-            if (r < 0) break;
-            if (g_shutdown.load()) { kill(pp, SIGTERM); waitpid(pp, nullptr, 0); break; }
-
-            if (total_frames > 0) {
-                FILE* pf = fopen(prog_file.c_str(), "r");
-                if (pf) {
-                    char line[128]; int last_frame = 0;
-                    while (fgets(line, sizeof(line), pf)) {
-                        int fr; if (sscanf(line, "frame=%d", &fr) == 1) last_frame = fr;
-                    }
-                    fclose(pf);
-                    if (last_frame > 0) {
-                        float p = std::min(0.98f, (float)last_frame / (float)total_frames);
-                        std::lock_guard<std::mutex> lk(g_mu);
-                        auto it = g_progress_map.find(path);
-                        if (it != g_progress_map.end()) it->second = p;
-                    }
-                }
-            }
-            usleep(100'000);  // 100 ms poll
+        bool ok = proxy_encode_once(path, src, mj, prog_file, threads_str,
+                                    total_frames, /*use_hwaccel=*/true);
+        if (!ok && !g_shutdown.load()) {
+            fs::remove(mj);
+            fprintf(stderr, "[proxy] hw decode failed, retrying software: %s\n", path.c_str());
+            ok = proxy_encode_once(path, src, mj, prog_file, threads_str,
+                                   total_frames, /*use_hwaccel=*/false);
         }
 
         fs::remove(prog_file);
 
         if (!ok) {
+            if (!g_shutdown.load())
+                fprintf(stderr, "[proxy] generation FAILED (both hw+sw): %s\n", path.c_str());
             fs::remove(mj);
         } else if (!build_seek_table(mj, idx)) {
+            fprintf(stderr, "[proxy] seek-table build failed: %s\n", path.c_str());
             fs::remove(mj);
         } else {
             mark_ready_cached(path);
