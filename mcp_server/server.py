@@ -2011,7 +2011,7 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="remove_background",
             description=(
-                "Remove the background from a video clip using U2Net body segmentation. "
+                "Remove the background from a video clip using RobustVideoMatting (RVM) alpha matting. "
                 "Adds a 'Remove Background' body_fx brick on the same track as the video clip "
                 "(mask processing starts automatically). Blocks until masks are ready. No batch needed.\n\n"
                 "REQUIRES PROXY: fails with 'video proxy not ready yet' when the clip's MJPEG "
