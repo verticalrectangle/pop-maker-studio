@@ -122,7 +122,7 @@ void compute_video_bbox(AppState& state, Clip& cl, ImVec2 p, float w, float h,
     float fit_w = w, fit_h = h;
     bool got_aspect = false;
     std::string vkey = clip_slot_key(clip_video_src(state, cl), cl.start);
-    for (int s = 0; s < MAX_VIDEO_TRACKS; ++s) {
+    for (int s = 0; s < MAX_VIDEO_SLOTS; ++s) {
         if (state.proxy_paths[s] == vkey && video_info(s).width > 0) {
             // Crop changes the displayed aspect — bbox must match the render.
             float va = cl.cropped_aspect(video_info(s).width, video_info(s).height);
@@ -195,7 +195,7 @@ static void draw_crop_mode(AppState& state, ImDrawList* dl, ImVec2 p, float w, f
     int src_w = 0, src_h = 0;
     {
         std::string vkey = clip_slot_key(clip_video_src(state, cl), cl.start);
-        for (int s = 0; s < MAX_VIDEO_TRACKS; ++s)
+        for (int s = 0; s < MAX_VIDEO_SLOTS; ++s)
             if (state.proxy_paths[s] == vkey && video_info(s).width > 0)
                 { src_w = video_info(s).width; src_h = video_info(s).height; break; }
     }

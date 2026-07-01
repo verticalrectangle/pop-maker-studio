@@ -603,7 +603,7 @@ struct PreviewState {
     int          ring_head = 0;   // next eviction target (round-robin)
 };
 
-static PreviewState g_pv[MAX_VIDEO_TRACKS];
+static PreviewState g_pv[MAX_VIDEO_SLOTS];
 
 // Separate texture for hover-preview thumbnails (track 0's proxy).
 static struct ThumbState {
@@ -1345,7 +1345,7 @@ static void close_slot(PreviewState& pv) {
 }
 
 void video_open_still(int track_id, const std::string& jpeg_path) {
-    if (track_id < 0 || track_id >= MAX_VIDEO_TRACKS) return;
+    if (track_id < 0 || track_id >= MAX_VIDEO_SLOTS) return;
     close_slot(g_pv[track_id]);
 
     FILE* f = fopen(jpeg_path.c_str(), "rb");
@@ -1395,7 +1395,7 @@ void video_open_still(int track_id, const std::string& jpeg_path) {
 // opened at all (corrupt container, missing codec). Software decode of typical
 // h264 1080p preview frames is ~15-30 ms per frame; HW is ~5-15 ms.
 bool video_open_native(int track_id, const std::string& path) {
-    if (track_id < 0 || track_id >= MAX_VIDEO_TRACKS) return false;
+    if (track_id < 0 || track_id >= MAX_VIDEO_SLOTS) return false;
     if (path.empty()) return false;
     close_slot(g_pv[track_id]);
     PreviewState& pv = g_pv[track_id];
@@ -1457,12 +1457,12 @@ bool video_open_native(int track_id, const std::string& path) {
 }
 
 PreviewSource video_source(int track_id) {
-    if (track_id < 0 || track_id >= MAX_VIDEO_TRACKS) return PreviewSource::None;
+    if (track_id < 0 || track_id >= MAX_VIDEO_SLOTS) return PreviewSource::None;
     return g_pv[track_id].source;
 }
 
 bool video_open_proxy(int track_id, const ProxyInfo& proxy) {
-    if (track_id < 0 || track_id >= MAX_VIDEO_TRACKS) return false;
+    if (track_id < 0 || track_id >= MAX_VIDEO_SLOTS) return false;
     close_slot(g_pv[track_id]);
 
     FILE* f = fopen(proxy.mjpeg_path.c_str(), "rb");
@@ -1488,26 +1488,26 @@ bool video_open_proxy(int track_id, const ProxyInfo& proxy) {
 
 void video_close(int track_id) {
     if (track_id == -1) {
-        for (int i = 0; i < MAX_VIDEO_TRACKS; ++i) close_slot(g_pv[i]);
+        for (int i = 0; i < MAX_VIDEO_SLOTS; ++i) close_slot(g_pv[i]);
         if (g_th.tex) { glDeleteTextures(1, &g_th.tex); g_th.tex = 0; }
         g_th.tex_w = g_th.tex_h = 0;
         g_th.last_frame_idx = -1;
-    } else if (track_id >= 0 && track_id < MAX_VIDEO_TRACKS) {
+    } else if (track_id >= 0 && track_id < MAX_VIDEO_SLOTS) {
         close_slot(g_pv[track_id]);
     }
 }
 
 bool      video_is_open(int track_id) {
-    if (track_id < 0 || track_id >= MAX_VIDEO_TRACKS) return false;
+    if (track_id < 0 || track_id >= MAX_VIDEO_SLOTS) return false;
     return g_pv[track_id].is_open;
 }
 VideoInfo video_info(int track_id) {
-    if (track_id < 0 || track_id >= MAX_VIDEO_TRACKS) return {};
+    if (track_id < 0 || track_id >= MAX_VIDEO_SLOTS) return {};
     return g_pv[track_id].info;
 }
 
 void video_set_pixel_fx(int track_id, const PixelFX& fx) {
-    if (track_id < 0 || track_id >= MAX_VIDEO_TRACKS) return;
+    if (track_id < 0 || track_id >= MAX_VIDEO_SLOTS) return;
     auto& pv = g_pv[track_id];
     if (pv.pixel_fx == fx) return;
 
@@ -1560,7 +1560,7 @@ static int playhead_to_frame_idx(const PreviewState& pv, double playhead) {
 // proxy rate), so it is safe to call from the render path. The bg-removal brick
 // indexes its per-frame masks with this. Returns -1 if the slot isn't open.
 int video_proxy_frame_idx(int track_id, double playhead) {
-    if (track_id < 0 || track_id >= MAX_VIDEO_TRACKS) return -1;
+    if (track_id < 0 || track_id >= MAX_VIDEO_SLOTS) return -1;
     PreviewState& pv = g_pv[track_id];
     if (!pv.is_open) return -1;
     return playhead_to_frame_idx(pv, playhead);
@@ -1572,7 +1572,7 @@ static uintptr_t decode_native_frame      (PreviewState& pv, int frame_idx);
 static int       max_frame_idx_for        (const PreviewState& pv);
 
 bool video_is_gif(int track_id) {
-    if (track_id < 0 || track_id >= MAX_VIDEO_TRACKS) return false;
+    if (track_id < 0 || track_id >= MAX_VIDEO_SLOTS) return false;
     return g_pv[track_id].is_open && g_pv[track_id].gif;
 }
 
@@ -1580,7 +1580,7 @@ bool video_is_gif(int track_id) {
 // stb_image and hold them in the slot. The preview uploads the frame at the
 // playhead — no lossy mp4 conform / MJPEG proxy. Export keeps using libav.
 bool video_open_gif(int track_id, const std::string& path) {
-    if (track_id < 0 || track_id >= MAX_VIDEO_TRACKS) return false;
+    if (track_id < 0 || track_id >= MAX_VIDEO_SLOTS) return false;
     PreviewState& pv = g_pv[track_id];
     close_slot(pv);
 
@@ -1619,7 +1619,7 @@ bool video_open_gif(int track_id, const std::string& path) {
 }
 
 uintptr_t video_get_texture(int track_id, double playhead) {
-    if (track_id < 0 || track_id >= MAX_VIDEO_TRACKS) return 0;
+    if (track_id < 0 || track_id >= MAX_VIDEO_SLOTS) return 0;
     PreviewState& pv = g_pv[track_id];
     if (!pv.is_open) return 0;
 
@@ -1674,7 +1674,7 @@ void video_prefetch_frames(const VideoPrefetchReq* reqs, int n) {
 
     for (int i = 0; i < n; ++i) {
         int t = reqs[i].track_id;
-        if (t < 0 || t >= MAX_VIDEO_TRACKS) continue;
+        if (t < 0 || t >= MAX_VIDEO_SLOTS) continue;
         PreviewState& pv = g_pv[t];
         if (!pv.is_open) continue;
         if (pv.source != PreviewSource::Proxy && pv.source != PreviewSource::Native) continue;
@@ -2373,7 +2373,7 @@ int video_export_width(int slot) {
 void video_preview_dims(int slot, int* w, int* h) {
     if (w) *w = 0;
     if (h) *h = 0;
-    if (slot < 0 || slot >= MAX_VIDEO_TRACKS) return;
+    if (slot < 0 || slot >= MAX_VIDEO_SLOTS) return;
     PreviewState& pv = g_pv[slot];
     int tw = pv.tex_w, th = pv.tex_h;
     if (tw <= 0 || th <= 0) { tw = pv.info.width; th = pv.info.height; }

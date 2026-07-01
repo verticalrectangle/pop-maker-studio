@@ -4100,7 +4100,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
             if (dc.start == old_dc_start) return;
             std::string old_key = clip_slot_key(dc.text, old_dc_start);
             std::string new_key = clip_slot_key(dc.text, dc.start);
-            for (int i = 0; i < MAX_VIDEO_TRACKS; ++i)
+            for (int i = 0; i < MAX_VIDEO_SLOTS; ++i)
                 if (state.proxy_paths[i] == old_key) { state.proxy_paths[i] = new_key; break; }
         };
 
@@ -4577,7 +4577,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                         && moved_clip.start != drag_origin_start) {
                         std::string old_key = clip_slot_key(moved_clip.text, moved_clip.start);
                         std::string new_key = clip_slot_key(moved_clip.text, drag_origin_start);
-                        for (int i = 0; i < MAX_VIDEO_TRACKS; ++i)
+                        for (int i = 0; i < MAX_VIDEO_SLOTS; ++i)
                             if (state.proxy_paths[i] == old_key) { state.proxy_paths[i] = new_key; break; }
                     }
                     moved_clip.start = drag_origin_start;

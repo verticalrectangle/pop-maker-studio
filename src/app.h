@@ -27,6 +27,15 @@ enum class PipelineMode {
 
 static const int MAX_VIDEO_TRACKS = 32;
 
+// Concurrent video DECODER slots (g_pv[] / AppState::proxy_paths[]). Decoupled
+// from MAX_VIDEO_TRACKS: a project has few tracks but can have hundreds of video
+// clips, and each distinct on-screen source needs a decoder slot. The old code
+// reused MAX_VIDEO_TRACKS (32) here, so the 33rd+ distinct source got no slot and
+// rendered blank. The live set is playhead-scoped (only clips near the playhead
+// hold slots — see gc_video_slots), so this is headroom for a dense window, not a
+// per-project ceiling; idle slots are cheap (empty PreviewState).
+static const int MAX_VIDEO_SLOTS = 96;
+
 // ── Animation style ───────────────────────────────────────────────────────────
 
 enum class AnimStyle {
@@ -750,7 +759,7 @@ struct AppState {
 
     // Proxy slot table: proxy_paths[slot] = source file path (empty = free).
     // Keyed by file path so two clips sharing a source share one proxy.
-    std::string proxy_paths[MAX_VIDEO_TRACKS];
+    std::string proxy_paths[MAX_VIDEO_SLOTS];
 
     // Bin — project-scoped media library. Files added here are "available to
     // the project" but not necessarily on the timeline. Drag from bin → track

@@ -614,12 +614,12 @@ std::string source_from_key(const std::string& key) {
 
 int slot_for_video(AppState& state, const std::string& key, const std::string& /*src*/) {
     if (key.empty()) return -1;
-    for (int i = 0; i < MAX_VIDEO_TRACKS; ++i)
+    for (int i = 0; i < MAX_VIDEO_SLOTS; ++i)
         if (state.proxy_paths[i] == key) return i;
-    for (int i = 0; i < MAX_VIDEO_TRACKS; ++i)
+    for (int i = 0; i < MAX_VIDEO_SLOTS; ++i)
         if (state.proxy_paths[i].empty()) { state.proxy_paths[i] = key; return i; }
     fprintf(stderr, "[video] slot table full (%d slots) — proxy will not load for: %s\n",
-            MAX_VIDEO_TRACKS, key.c_str());
+            MAX_VIDEO_SLOTS, key.c_str());
     return -1;
 }
 
@@ -629,7 +629,7 @@ void gc_video_slots(AppState& state) {
         for (auto& cl : tr.clips)
             if (clip_is_videolike_type(cl.clip_type) && !cl.text.empty())
                 live.insert(clip_slot_key(clip_video_src(state, cl), cl.start));
-    for (int i = 0; i < MAX_VIDEO_TRACKS; ++i) {
+    for (int i = 0; i < MAX_VIDEO_SLOTS; ++i) {
         if (!state.proxy_paths[i].empty() && !live.count(state.proxy_paths[i])) {
             video_close(i);
             state.proxy_paths[i].clear();

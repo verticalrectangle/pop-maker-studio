@@ -545,7 +545,7 @@ void ui_studio(AppState& state) {
     //                                          Still placeholder if libav can't
     //                                          open the file
     // Images never get an MJPEG proxy — skip them to avoid per-frame ffprobe spawns.
-    for (int slot = 0; slot < MAX_VIDEO_TRACKS; ++slot) {
+    for (int slot = 0; slot < MAX_VIDEO_SLOTS; ++slot) {
         const std::string& key = state.proxy_paths[slot];
         if (key.empty()) continue;
         if (video_source(slot) == PreviewSource::Proxy) continue;  // terminal state
