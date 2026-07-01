@@ -2301,10 +2301,19 @@ VideoFrame* video_decode_frame_at(int slot, double seconds) {
         while (!done && avcodec_receive_frame(ex.codec_ctx, frm) == 0) {
             double pts = frm->pts * av_q2d(st->time_base);
             if (pts > seconds + frame_dur * 0.5) {
-                // Overshot — the previous result is already the right frame.
-                // We discard this frame; the decoder's internal queue still holds
-                // any remaining B-frames, so the next sequential call will drain
-                // them before reading more packets from the demuxer.
+                // Overshot the target. Normally the previously kept frame is the
+                // right one and we simply discard this one (the decoder's B-frame
+                // queue still holds any remaining frames for the next sequential
+                // call). But at a clip's FIRST output frame there is no previous
+                // frame: `seconds` is ~0 (in_point 0) and the first decodable
+                // frame of a chunked proxy / container with a non-zero start
+                // offset can carry a pts a hair past the half-frame threshold.
+                // Discarding it left `result` null while last_decoded_pts is still
+                // < 0, so the hold-last-frame fallback below could not fire and the
+                // frame rendered blank — black in export, white in preview: the
+                // black flash at the start of every proxied clip after a cut.
+                // Keep this earliest available frame instead of returning null.
+                if (!result) result = decode_and_rotate(ex, frm);
                 av_frame_unref(frm);
                 done = true;
             } else {
