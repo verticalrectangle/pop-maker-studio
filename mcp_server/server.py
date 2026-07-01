@@ -4086,7 +4086,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             ar_w, ar_h = int(parts[0]), int(parts[1])
 
         is_image = Path(src).suffix.lower() in {".heic", ".heif", ".jpg", ".jpeg",
-                                                 ".png", ".bmp", ".webp", ".tiff"}
+                                                 ".png", ".bmp", ".webp", ".tiff", ".svg"}
         rot = 0  # display rotation; only set for video with rotation metadata
         if is_image:
             out = subprocess.check_output(

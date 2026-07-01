@@ -328,7 +328,23 @@ static bool is_image_ext(const std::string& path) {
     auto ext = fs::path(path).extension().string();
     for (auto& c : ext) c = (char)std::tolower((unsigned char)c);
     return ext==".jpg"||ext==".jpeg"||ext==".png"||ext==".bmp"||ext==".webp"||ext==".tiff"
-        || ext==".heic"||ext==".heif";
+        || ext==".heic"||ext==".heif"||ext==".svg";
+}
+
+static bool is_svg_ext(const std::string& path) {
+    auto ext = fs::path(path).extension().string();
+    for (auto& c : ext) c = (char)std::tolower((unsigned char)c);
+    return ext==".svg" || ext==".svgz";
+}
+
+// SVG is vector XML — neither ffmpeg nor stb_image can decode it, so rasterize it
+// to a PNG still with librsvg (rsvg-convert). Fixed 2000px width, aspect + alpha
+// kept: tiny icons upscale crisply and oversized art downsizes, independent of the
+// SVG's declared size (vectors stay sharp at any scale). Writes dst_png directly.
+static bool rasterize_svg(const std::string& src, const std::string& dst_png) {
+    std::string cmd = "rsvg-convert --width=2000 --keep-aspect-ratio --format=png -o \""
+                      + dst_png + "\" \"" + src + "\" 2>/dev/null";
+    return system(cmd.c_str()) == 0 && fs::exists(dst_png);  // NOLINT
 }
 
 // ── Still generation ──────────────────────────────────────────────────────────
@@ -337,7 +353,9 @@ void proxy_ensure_still(const std::string& video_path) {
     std::string still = proxy_still_path(video_path);
     if (fs::exists(still)) return;
 
-    if (is_image_ext(video_path)) {
+    if (is_svg_ext(video_path)) {
+        rasterize_svg(video_path, still);
+    } else if (is_image_ext(video_path)) {
         std::string img_src = "file:" + video_path;
         const char* args[] = {
             "ffmpeg", "-hide_banner", "-loglevel", "error",
@@ -540,6 +558,10 @@ void proxy_start(const std::string& video_path) {
         // Images: just generate a still, no MJPEG needed
         std::string still = proxy_still_path(video_path);
         if (fs::exists(still)) return;
+        if (is_svg_ext(video_path)) {   // vector → librsvg rasterize, off-thread
+            std::thread([video_path, still]() { rasterize_svg(video_path, still); }).detach();
+            return;
+        }
         std::string img_src = "file:" + video_path;
         // Convert to a FULL-RES PNG so alpha (e.g. a transparent WebP) survives
         // and the image isn't softened — it's already a finished image, not a

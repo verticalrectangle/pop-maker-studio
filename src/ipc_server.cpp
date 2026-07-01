@@ -1324,7 +1324,7 @@ static json dispatch(AppState& state, const std::string& method, const json& par
             static const std::unordered_set<std::string> aud =
                 {"flac","wav","mp3","m4a","aac","ogg","opus","aiff","aif","wma","alac"};
             static const std::unordered_set<std::string> img =
-                {"png","jpg","jpeg","gif","bmp","webp","tif","tiff","heic","heif"};
+                {"png","jpg","jpeg","gif","bmp","webp","tif","tiff","heic","heif","svg"};
             if (vid.count(e)) return "video";
             if (aud.count(e)) return "audio";
             if (img.count(e)) return "image";

@@ -2102,7 +2102,7 @@ static bool is_still_ext(const std::string& path) {
     auto ext = fs::path(path).extension().string();
     for (auto& c : ext) c = (char)std::tolower((unsigned char)c);
     return ext==".jpg"||ext==".jpeg"||ext==".png"||ext==".bmp"||ext==".webp"
-        || ext==".tiff"||ext==".heic"||ext==".heif";
+        || ext==".tiff"||ext==".heic"||ext==".heif"||ext==".svg";
 }
 
 // One GL texture per DISTINCT still image, keyed by source path, for the whole
