@@ -19,6 +19,26 @@ void fx_shader_shutdown();
 // t:     animation time (seconds, e.g. clip-local or absolute playhead).
 // Face-filter warp: bumps = n × {cx, cy, radius, scale, dx, dy} in frame UV.
 // Renders into the slot's FBO and returns its texture (src on no-op).
+// Beauty pass (industry-style): landmark-masked skin smoothing (bilateral-
+// lite), brighten/warmth, and eye pop. Runs BEFORE the warp pass into its own
+// per-slot buffer (never the warp's g_out — same-slot read/write feedback).
+// All geometry is in PIXELS of the w×h texture.
+struct FaceBeautyParams {
+    float smooth   = 0.f;   // 0..1 skin smoothing mix
+    float brighten = 0.f;   // 0..1 soft-light skin lift
+    float warmth   = 0.f;   // 0..1 warm tint on skin
+    float eye_pop  = 0.f;   // 0..1 eye brightening
+    // mask geometry (pixels)
+    float face_cx = 0, face_cy = 0;     // face ellipse center
+    float face_rx = 1, face_ry = 1;     // semi-axes along right/up basis
+    float upx = 0,  upy = -1;           // face up unit vector
+    float eyeL_x = 0, eyeL_y = 0, eyeR_x = 0, eyeR_y = 0, eye_r = 0;
+    float mouth_x = 0, mouth_y = 0, mouth_r = 0;
+    float brow_r  = 0;                  // exclusion above the eyes
+};
+uintptr_t face_beauty_apply(uintptr_t src_tex, int slot, int w, int h,
+                            const FaceBeautyParams& p);
+
 uintptr_t face_warp_apply(uintptr_t src_tex, int slot, int w, int h,
                           const float* bumps, int n_bumps);
 

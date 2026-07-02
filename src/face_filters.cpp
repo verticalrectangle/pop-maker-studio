@@ -13,7 +13,8 @@
 // mouth corners 61/291, chin 152, lower jaw 172/397.
 
 static const char* k_names[] = {
-    "None", "Pretty", "Big Eyes", "Tiny Face", "Big Mouth", "Alien", "Doggy",
+    "None", "Natural", "Big Eyes", "Tiny Face", "Big Mouth", "Alien", "Doggy",
+    "Glam", "Porcelain", "Sculpt", "Honey",
 };
 const char* face_filter_name(int id) {
     if (id < 0 || id >= (int)(sizeof(k_names)/sizeof(k_names[0]))) return "?";
@@ -66,6 +67,34 @@ static inline float bl(const FaceObs& o, int idx) {
     return o.has_blend ? o.blend[idx] : 0.f;
 }
 
+// One parametric beauty engine, five looks. Skin params feed the GPU beauty
+// pass (face_beauty_apply); shape scalars feed the same warp bumps the old
+// Pretty used. Values tuned against the picker preview face.
+struct BeautyLook {
+    float smooth, brighten, warmth, eye_pop;               // skin
+    float eyes, jaw, chin, nose, lips, face_slim;          // shape
+};
+static bool beauty_look_for(int filter_id, BeautyLook& L) {
+    switch ((FaceFilter)filter_id) {
+        case FaceFilter::Pretty:     // "Natural" — believable everyday clean-up
+            L = {0.45f, 0.18f, 0.10f, 0.20f,  0.08f, 0.06f, 0.035f, 0.16f, 0.04f, 0.f};
+            return true;
+        case FaceFilter::Glam:       // full production look — smooth + bright + eyes
+            L = {0.70f, 0.32f, 0.14f, 0.45f,  0.14f, 0.09f, 0.045f, 0.20f, 0.09f, 0.03f};
+            return true;
+        case FaceFilter::Porcelain:  // maximum skin, cool light, shape untouched
+            L = {0.92f, 0.40f, 0.00f, 0.30f,  0.03f, 0.f,   0.f,    0.f,   0.f,   0.f};
+            return true;
+        case FaceFilter::Sculpt:     // contouring: strong shape, moderate skin
+            L = {0.40f, 0.15f, 0.08f, 0.25f,  0.10f, 0.16f, 0.075f, 0.26f, 0.05f, 0.06f};
+            return true;
+        case FaceFilter::Honey:      // warm golden glow, soft everything
+            L = {0.60f, 0.35f, 0.45f, 0.25f,  0.09f, 0.05f, 0.03f,  0.10f, 0.07f, 0.f};
+            return true;
+        default: return false;
+    }
+}
+
 int face_filter_bumps(int filter_id, float amount, const FaceObs& obs,
                       FaceWarpBump* out) {
     if (!obs.valid || obs.w <= 0 || obs.h <= 0) return 0;
@@ -94,24 +123,45 @@ int face_filter_bumps(int filter_id, float amount, const FaceObs& obs,
     };
 
     switch ((FaceFilter)filter_id) {
-        case FaceFilter::Pretty: {
-            // CapCut-style beauty: subtle, layered, face-basis shifts.
+        case FaceFilter::Pretty:
+        case FaceFilter::Glam:
+        case FaceFilter::Porcelain:
+        case FaceFilter::Sculpt:
+        case FaceFilter::Honey: {
+            // Shape half of the beauty looks (skin half runs on the GPU in
+            // face_beauty_apply). Same layered face-basis recipe, scaled per
+            // look — Porcelain barely warps, Sculpt carves.
+            BeautyLook L;
+            if (!beauty_look_for(filter_id, L)) break;
             float d[2];
-            bump(a.eyeA, eyeR, 0.11f * amt, 0, 0);              // eyes a touch bigger
-            bump(a.eyeB, eyeR, 0.11f * amt, 0, 0);
-            inward(a.jawL, 0.085f * amt, d);                    // jaw slim
-            bump(a.jawL, a.eyeDist * 0.55f * ih, 0.f, d[0], d[1]);
-            inward(a.jawR, 0.085f * amt, d);
-            bump(a.jawR, a.eyeDist * 0.55f * ih, 0.f, d[0], d[1]);
-            float k = a.eyeDist * 0.045f * amt;                 // shorter chin
-            bump(a.chin, a.eyeDist * 0.45f * ih, 0.f, a.up[0]*k, a.up[1]*k);
-            bump(a.noseL, a.eyeDist * 0.22f * ih, 0.f,          // nose slim
-                 (a.nose[0] - a.noseL[0]) * 0.22f * amt,
-                 (a.nose[1] - a.noseL[1]) * 0.22f * amt);
-            bump(a.noseR, a.eyeDist * 0.22f * ih, 0.f,
-                 (a.nose[0] - a.noseR[0]) * 0.22f * amt,
-                 (a.nose[1] - a.noseR[1]) * 0.22f * amt);
-            bump(a.mouth, a.mouthW * 0.55f * ih, 0.05f * amt, 0, 0); // soft lip plump
+            if (L.eyes > 0.f) {
+                bump(a.eyeA, eyeR, L.eyes * amt, 0, 0);
+                bump(a.eyeB, eyeR, L.eyes * amt, 0, 0);
+            }
+            if (L.jaw > 0.f) {
+                inward(a.jawL, L.jaw * amt, d);
+                bump(a.jawL, a.eyeDist * 0.55f * ih, 0.f, d[0], d[1]);
+                inward(a.jawR, L.jaw * amt, d);
+                bump(a.jawR, a.eyeDist * 0.55f * ih, 0.f, d[0], d[1]);
+            }
+            if (L.chin > 0.f) {
+                float k = a.eyeDist * L.chin * amt;
+                bump(a.chin, a.eyeDist * 0.45f * ih, 0.f, a.up[0]*k, a.up[1]*k);
+            }
+            if (L.nose > 0.f) {
+                bump(a.noseL, a.eyeDist * 0.22f * ih, 0.f,
+                     (a.nose[0] - a.noseL[0]) * L.nose * amt,
+                     (a.nose[1] - a.noseL[1]) * L.nose * amt);
+                bump(a.noseR, a.eyeDist * 0.22f * ih, 0.f,
+                     (a.nose[0] - a.noseR[0]) * L.nose * amt,
+                     (a.nose[1] - a.noseR[1]) * L.nose * amt);
+            }
+            if (L.lips > 0.f)
+                bump(a.mouth, a.mouthW * 0.55f * ih, L.lips * amt, 0, 0);
+            if (L.face_slim > 0.f) {
+                float c[2] = {a.faceC[0], a.faceC[1]};
+                bump(c, a.eyeDist * 1.7f * ih, -L.face_slim * amt, 0, 0);
+            }
             break;
         }
         case FaceFilter::BigEyes: {
@@ -314,6 +364,37 @@ uintptr_t face_filter_apply_obs(int filter_id, float amount, const FaceObs& obs,
                                 float anim_t, uintptr_t tex,
                                 int slot, int w, int h) {
     if (filter_id == 0 || w <= 0 || h <= 0 || !obs.valid) return tex;
+    // Beauty looks: GPU skin pass first (own buffer), then the shape warp
+    // reads its output — smoothing samples the undistorted image.
+    BeautyLook L;
+    if (beauty_look_for(filter_id, L)) {
+        Anchors a = anchors_from(obs);
+        FaceBeautyParams bp;
+        bp.smooth   = L.smooth   * amount;
+        bp.brighten = L.brighten * amount;
+        bp.warmth   = L.warmth   * amount;
+        bp.eye_pop  = L.eye_pop  * amount;
+        bp.upx = a.up[0]; bp.upy = a.up[1];
+        // Face ellipse: center midway eyes→chin, sized from chin↔forehead
+        // (mesh 10) and the cheek span (234/454), with margin for the jawline.
+        float fx0 = obs.pts[10][0],  fy0 = obs.pts[10][1];    // forehead top
+        float cx  = (a.eyeMid[0] + a.chin[0]) * 0.5f;
+        float cy  = (a.eyeMid[1] + a.chin[1]) * 0.5f;
+        float dxs = obs.pts[454][0] - obs.pts[234][0];
+        float dys = obs.pts[454][1] - obs.pts[234][1];
+        float half_w = 0.5f * sqrtf(dxs*dxs + dys*dys) * 1.10f;
+        float dxh = fx0 - a.chin[0], dyh = fy0 - a.chin[1];
+        float half_h = 0.5f * sqrtf(dxh*dxh + dyh*dyh) * 1.12f;
+        bp.face_cx = cx; bp.face_cy = cy;
+        bp.face_rx = half_w; bp.face_ry = half_h;
+        bp.eyeL_x = a.eyeA[0]; bp.eyeL_y = a.eyeA[1];
+        bp.eyeR_x = a.eyeB[0]; bp.eyeR_y = a.eyeB[1];
+        bp.eye_r  = a.eyeDist * 0.30f;
+        bp.brow_r = a.eyeDist * 0.28f;
+        bp.mouth_x = a.mouth[0]; bp.mouth_y = a.mouth[1];
+        bp.mouth_r = a.mouthW * 0.62f;
+        tex = face_beauty_apply(tex, slot, w, h, bp);
+    }
     FaceWarpBump bumps[MAX_FACE_BUMPS];
     int nb = face_filter_bumps(filter_id, amount, obs, bumps);
     if (nb > 0)

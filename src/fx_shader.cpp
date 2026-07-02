@@ -527,7 +527,7 @@ static GLuint g_solid_tex = 0;
 // previously shared MAX*2 with the mirror face-warp — now exclusive.
 // + a dedicated bank for the face-filter picker previews (one per filter id) so
 // the whole grid of warps can be shown at once without clobbering each other.
-static const int kFacePreviewSlots    = 8;
+static const int kFacePreviewSlots    = 12;  // >= face_filter_count() so picker previews never share an FBO
 static const int kFacePreviewSlotBase = MAX_VIDEO_TRACKS * 4 + 2;
 static const int kMaxSlots = MAX_VIDEO_TRACKS * 4 + 2 + kFacePreviewSlots;
 static const int kFaceClipSlotBase = MAX_VIDEO_TRACKS * 2 + 1;
@@ -759,8 +759,8 @@ uintptr_t face_warp_apply(uintptr_t src_tex, int slot, int w, int h,
     if (n_bumps > 12) n_bumps = 12;
 
     GLint prev_fbo = 0;
-    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prev_fbo);
-    GLint prev_vp[4];
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prev_fbo);   // before out_ensure —
+    GLint prev_vp[4];                                    // it leaves its FBO bound
     glGetIntegerv(GL_VIEWPORT, prev_vp);
 
     out_ensure(slot, w, h);
@@ -790,6 +790,131 @@ uintptr_t face_warp_apply(uintptr_t src_tex, int slot, int w, int h,
     glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)prev_fbo);
     glViewport(prev_vp[0], prev_vp[1], prev_vp[2], prev_vp[3]);
     return (uintptr_t)g_out[slot].tex;
+}
+
+// ── Face beauty (skin smoothing / brighten / eye pop) ─────────────────────────
+// The industry recipe, done procedurally from the mesh: an elliptical skin
+// mask in the face basis with holes punched over eyes/brows/mouth; a 12-tap
+// poisson-disk bilateral-lite blur (taps weighted by luma similarity, so
+// pores melt but edges — glasses, hairline, nostrils — survive); a soft-light
+// brighten + warm tint on the same mask; and a gentle brighten inside the
+// eye discs. Geometry arrives in pixels — no aspect gymnastics in UV space.
+static const char* k_face_beauty_fs = R"(#version 330 core
+in vec2 v_uv; out vec4 frag;
+uniform sampler2D u_tex;
+uniform vec2 u_dim;      // texture w, h in px
+uniform vec4 u_face;     // cx, cy, rx, ry (px)
+uniform vec2 u_up;       // face up unit vector
+uniform vec4 u_eyes;     // eyeL xy, eyeR xy (px)
+uniform vec4 u_feat;     // eye_r, mouth_x, mouth_y, mouth_r
+uniform vec4 u_amt;      // smooth, brighten, warmth, eye_pop
+uniform float u_brow_r;
+float lum(vec3 c) { return dot(c, vec3(0.299, 0.587, 0.114)); }
+void main() {
+    vec2 p   = v_uv * u_dim;
+    vec3 col = texture(u_tex, v_uv).rgb;
+
+    // Skin mask: face ellipse in the (right, up) basis…
+    vec2 rightv = vec2(-u_up.y, u_up.x);
+    vec2 d  = p - u_face.xy;
+    float a = dot(d, rightv) / max(u_face.z, 1.0);
+    float b = dot(d, u_up)   / max(u_face.w, 1.0);
+    float mask = 1.0 - smoothstep(0.72, 1.05, length(vec2(a, b)));
+    // …minus feature discs (eyes + brow band above them + mouth).
+    float er = max(u_feat.x, 1.0);
+    float holeL = 1.0 - smoothstep(er * 0.7, er * 1.25, distance(p, u_eyes.xy));
+    float holeR = 1.0 - smoothstep(er * 0.7, er * 1.25, distance(p, u_eyes.zw));
+    vec2 browL = u_eyes.xy + u_up * er * 1.2;
+    vec2 browR = u_eyes.zw + u_up * er * 1.2;
+    float br = max(u_brow_r, 1.0);
+    float holeBL = 1.0 - smoothstep(br * 0.6, br * 1.1, distance(p, browL));
+    float holeBR = 1.0 - smoothstep(br * 0.6, br * 1.1, distance(p, browR));
+    float mr = max(u_feat.w, 1.0);
+    float holeM = 1.0 - smoothstep(mr * 0.75, mr * 1.3, distance(p, u_feat.yz));
+    mask *= (1.0 - holeL) * (1.0 - holeR) * (1.0 - holeM)
+          * (1.0 - holeBL * 0.85) * (1.0 - holeBR * 0.85);
+
+    // Bilateral-lite smoothing: poisson disk scaled to face size.
+    if (u_amt.x > 0.001 && mask > 0.003) {
+        float rad = max(u_face.z, u_face.w) * 0.045;
+        vec2 taps[12] = vec2[12](
+            vec2(-0.326,-0.406), vec2(-0.840,-0.074), vec2(-0.696, 0.457),
+            vec2(-0.203, 0.621), vec2( 0.962,-0.195), vec2( 0.473,-0.480),
+            vec2( 0.519, 0.767), vec2( 0.185,-0.893), vec2( 0.507, 0.064),
+            vec2( 0.896, 0.412), vec2(-0.322,-0.933), vec2(-0.792,-0.598));
+        float l0 = lum(col);
+        vec3 acc = col; float wsum = 1.0;
+        for (int i = 0; i < 12; ++i) {
+            vec3 c = texture(u_tex, v_uv + taps[i] * rad / u_dim).rgb;
+            float wl = exp(-pow((lum(c) - l0) * 9.0, 2.0));
+            acc  += c * wl;
+            wsum += wl;
+        }
+        col = mix(col, acc / wsum, u_amt.x * mask);
+    }
+    // Soft-light brighten + warmth on skin.
+    if (u_amt.y > 0.001) {
+        vec3 lift = col + (vec3(1.0) - col) * col * 0.9;
+        col = mix(col, lift, u_amt.y * mask);
+    }
+    if (u_amt.z > 0.001)
+        col += vec3(0.035, 0.012, -0.02) * (u_amt.z * mask);
+    // Eye pop: brighten inside the eye discs (soft).
+    if (u_amt.w > 0.001) {
+        float eL = 1.0 - smoothstep(er * 0.35, er * 0.95, distance(p, u_eyes.xy));
+        float eR = 1.0 - smoothstep(er * 0.35, er * 0.95, distance(p, u_eyes.zw));
+        col *= 1.0 + u_amt.w * 0.30 * max(eL, eR);
+    }
+    frag = vec4(clamp(col, 0.0, 1.0), texture(u_tex, v_uv).a);
+}
+)";
+static GLuint g_face_beauty_prog = 0;
+// Own buffer per slot — the warp pass reads this output into g_out[slot];
+// sharing g_out here would be a same-texture read/write feedback loop.
+static struct { GLuint tex = 0, fbo = 0; int w = 0, h = 0; } g_beauty_out[kMaxSlots];
+
+uintptr_t face_beauty_apply(uintptr_t src_tex, int slot, int w, int h,
+                            const FaceBeautyParams& p) {
+    if (slot < 0 || slot >= kMaxSlots || w <= 0 || h <= 0) return src_tex;
+    if (!g_face_beauty_prog) {
+        g_face_beauty_prog = link_prog(k_face_beauty_fs);
+        if (!g_face_beauty_prog) return src_tex;
+    }
+    // Save bindings BEFORE the ensure: make_tex_fbo leaves the fresh FBO
+    // bound, so reading the "previous" binding after it captures OUR buffer —
+    // the restore then pins the rest of the frame into it (one black frame
+    // the first time a size is seen).
+    GLint prev_fbo = 0;
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prev_fbo);
+    GLint prev_vp[4];
+    glGetIntegerv(GL_VIEWPORT, prev_vp);
+    auto& s = g_beauty_out[slot];
+    if (s.w != w || s.h != h) {
+        if (s.fbo) { glDeleteFramebuffers(1, &s.fbo); glDeleteTextures(1, &s.tex); s.fbo = s.tex = 0; }
+        make_tex_fbo(s.tex, s.fbo, w, h);
+        s.w = w; s.h = h;
+    }
+
+    glBindVertexArray(g_vao);
+    glBindFramebuffer(GL_FRAMEBUFFER, s.fbo);
+    glViewport(0, 0, w, h);
+    glUseProgram(g_face_beauty_prog);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, (GLuint)src_tex);
+    auto u = [&](const char* nm) { return glGetUniformLocation(g_face_beauty_prog, nm); };
+    glUniform1i(u("u_tex"), 0);
+    glUniform2f(u("u_dim"), (float)w, (float)h);
+    glUniform4f(u("u_face"), p.face_cx, p.face_cy, p.face_rx, p.face_ry);
+    glUniform2f(u("u_up"), p.upx, p.upy);
+    glUniform4f(u("u_eyes"), p.eyeL_x, p.eyeL_y, p.eyeR_x, p.eyeR_y);
+    glUniform4f(u("u_feat"), p.eye_r, p.mouth_x, p.mouth_y, p.mouth_r);
+    glUniform4f(u("u_amt"), p.smooth, p.brighten, p.warmth, p.eye_pop);
+    glUniform1f(u("u_brow_r"), p.brow_r);
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)prev_fbo);
+    glViewport(prev_vp[0], prev_vp[1], prev_vp[2], prev_vp[3]);
+    return (uintptr_t)s.tex;
 }
 
 // ── Face sprites (doggy ears/nose/tongue at playback/export) ─────────────────

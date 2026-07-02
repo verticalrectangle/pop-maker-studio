@@ -16,9 +16,16 @@ struct FaceWarpBump {
 static const int MAX_FACE_BUMPS = 12;
 
 // Matches the Filters chips on the camera brick panel (order = id).
+// Beauty looks are ids 1 (the original Pretty slot, now "Natural") and 7-10 —
+// appended so serialized face_filter ints stay stable.
 enum class FaceFilter {
-    None = 0, Pretty, BigEyes, TinyFace, BigMouth, Alien, Doggy
+    None = 0, Pretty, BigEyes, TinyFace, BigMouth, Alien, Doggy,
+    Glam, Porcelain, Sculpt, Honey
 };
+inline bool face_filter_is_beauty(int id) {
+    return id == (int)FaceFilter::Pretty ||
+           (id >= (int)FaceFilter::Glam && id <= (int)FaceFilter::Honey);
+}
 const char* face_filter_name(int id);
 int         face_filter_count();
 
