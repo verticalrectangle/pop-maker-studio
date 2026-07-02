@@ -1,5 +1,6 @@
 #include "filepicker.h"
 #include <cstdio>
+#include <sys/wait.h>
 #include <cstring>
 #include <string>
 
@@ -44,17 +45,21 @@ std::string filepicker_open(const char* title,
     if (p) {
         char buf[4096] = {};
         fgets(buf, sizeof(buf), p);
-        int ret = pclose(p);
-        if (ret == 0 && buf[0] != '\0') {
+        int st = pclose(p);
+        int code = (st >= 0 && WIFEXITED(st)) ? WEXITSTATUS(st) : -1;
+        if (code == 0 && buf[0] != '\0') {
             std::string result(buf);
             while (!result.empty() &&
                    (result.back() == '\n' || result.back() == '\r'))
                 result.pop_back();
             if (!result.empty()) return result;
         }
+        // zenity ran and the user CANCELLED (1) or it timed out (5) — done.
+        // Falling through here opened a second (kdialog) dialog on cancel.
+        if (code == 1 || code == 5) return "";
     }
 
-    // Fallback: kdialog
+    // Fallback: kdialog (zenity missing / failed to launch)
     snprintf(cmd, sizeof(cmd),
         "kdialog --getopenfilename . '%s' --title '%s' 2>/dev/null",
         filter_patterns, title);
@@ -115,14 +120,16 @@ std::string filepicker_save(const char* title,
     if (p) {
         char buf[4096] = {};
         fgets(buf, sizeof(buf), p);
-        int ret = pclose(p);
-        if (ret == 0 && buf[0] != '\0') {
+        int st = pclose(p);
+        int code = (st >= 0 && WIFEXITED(st)) ? WEXITSTATUS(st) : -1;
+        if (code == 0 && buf[0] != '\0') {
             std::string result(buf);
             while (!result.empty() &&
                    (result.back() == '\n' || result.back() == '\r'))
                 result.pop_back();
             if (!result.empty()) return result;
         }
+        if (code == 1 || code == 5) return "";   // cancelled — no kdialog fallback
     }
 
     snprintf(cmd, sizeof(cmd),
