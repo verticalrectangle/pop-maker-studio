@@ -79,7 +79,7 @@ jobs:
           curl -fsSL -o release/models/ggml-large-v3-turbo-q5_0.bin     "${BASE}/whisper/ggml-large-v3-turbo-q5_0.bin"
           curl -fsSL -o release/models/ggml-tiny.en.bin                 "${BASE}/whisper/ggml-tiny.en.bin"
           curl -fsSL -o release/models/Kim_Vocal_2.onnx                 "${BASE}/separation/Kim_Vocal_2.onnx"
-          curl -fsSL -o release/models/u2netp_human_seg.onnx            "${BASE}/background/u2netp_human_seg.onnx"
+          curl -fsSL -o release/models/rvm_mobilenetv3_fp32.onnx        "${BASE}/background/rvm_mobilenetv3_fp32.onnx"
           curl -fsSL -o release/models/hubert.onnx                      "${BASE}/hubert/hubert.onnx"
           curl -fsSL -o release/models/rmvpe.onnx                       "${BASE}/rvc/rmvpe.onnx"
           curl -fsSL -o release/models/wav2vec2_ctc.onnx                "${BASE}/alignment/wav2vec2_ctc.onnx"
@@ -98,6 +98,11 @@ jobs:
           done
 
           curl -fsSL -o release/models/rvc_pitch_bases.bin              "${BASE}/rvc/rvc_pitch_bases.bin"
+
+          mkdir -p release/models/face
+          for F in scrfd_10g.onnx 2d106det.onnx sprite_ear.png sprite_nose.png sprite_tongue.png; do
+            curl -fsSL -o "release/models/face/${F}"                    "${BASE}/face/${F}"
+          done
 
           echo "All models downloaded from single HF repo."
 
