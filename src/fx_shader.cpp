@@ -816,6 +816,8 @@ uniform vec4 u_eyeglow;  // rgb, amount
 uniform vec4 u_cyber;    // skin_tint, desat, chrome, scanlines
 uniform vec4 u_tintc;    // skin tint color rgb, _
 uniform vec4 u_mouthax;  // lip ellipse semi-width, semi-height (px), _, _
+uniform vec2 u_lippoly[12];  // outer-lip ring in px — the mask FOLLOWS the mouth
+uniform vec4 u_nose;     // nose bridge xy (px), nose blush amt, freckles amt
 uniform float u_brow_r;
 float lum(vec3 c) { return dot(c, vec3(0.299, 0.587, 0.114)); }
 void main() {
@@ -888,17 +890,65 @@ void main() {
         float bm = max(cL, cR) * u_makeup.x * mask * skin_chroma;
         col = mix(col, col * (0.75 + 0.5 * u_blushc.rgb), bm * 0.55);
     }
-    // Lip tint: an ORIENTED ELLIPSE the shape of the mouth (the old circular
-    // disc painted philtrum and chin — the "smudged lipstick"), and a strict
-    // redness gate: ordinary skin sits at r-g ≈ 0.05-0.10, lips at 0.12+, so
-    // the gate starts above the skin baseline and only true lip pixels tint.
+    // E-girl layer: across-the-nose blush + faux freckles, both in the face
+    // basis so they ride head rotation. Freckles are hash-jittered dots over
+    // an elliptical band spanning the nose bridge and upper cheeks.
+    if (u_nose.z + u_nose.w > 0.001) {
+        vec2 nb = vec2(dot(p - u_nose.xy, rightv), dot(p - u_nose.xy, u_up)) / max(er, 1.0);
+        float band = 1.0 - smoothstep(0.55, 1.0, length(nb * vec2(0.50, 1.55)));
+        if (u_nose.z > 0.001) {
+            float m_cb2 = 0.5 - 0.168736 * col.r - 0.331264 * col.g + 0.5 * col.b;
+            float m_cr2 = 0.5 + 0.5 * col.r - 0.418688 * col.g - 0.081312 * col.b;
+            float sk2 = smoothstep(0.27, 0.31, m_cb2) * (1.0 - smoothstep(0.45, 0.50, m_cb2))
+                      * smoothstep(0.50, 0.54, m_cr2) * (1.0 - smoothstep(0.66, 0.70, m_cr2));
+            col = mix(col, col * (0.75 + 0.5 * u_blushc.rgb),
+                      band * u_nose.z * mask * sk2 * 0.50);
+        }
+        if (u_nose.w > 0.001) {
+            vec2 cell = floor(nb * 6.0);
+            vec2 fr2  = fract(nb * 6.0);
+            float h1 = fract(sin(dot(cell, vec2(127.1, 311.7))) * 43758.5453);
+            vec2 jit = fract(sin(vec2(dot(cell, vec2(269.5, 183.3)),
+                                      dot(cell, vec2(419.2, 371.9)))) * 43758.5453);
+            float fd = length(fr2 - 0.30 - jit * 0.40);
+            // Size + opacity jitter per dot; soft edges and a warm brown so
+            // they read as freckles, not specks.
+            float rsz  = 0.11 + 0.10 * fract(h1 * 7.31);
+            float dotm = (1.0 - smoothstep(rsz * 0.4, rsz + 0.06, fd)) * step(0.45, h1);
+            float op   = 0.35 + 0.30 * fract(h1 * 13.7);
+            col = mix(col, col * vec3(0.74, 0.55, 0.45),
+                      dotm * band * u_nose.w * mask * op);
+        }
+    }
+    // Lip tint: the OUTER-LIP POLYGON from the live mesh (follows a smile
+    // exactly — an ellipse can't bend), feathered by distance to its edge,
+    // with a bitten-lip gradient: strongest at the mouth center, fading to
+    // the edge (the douyin 咬唇 look). Redness gate keeps it off teeth/mic.
     if (u_makeup.y > 0.001) {
+        int crossings = 0;
+        float dmin = 1e9;
+        for (int i = 0; i < 12; ++i) {
+            vec2 a2 = u_lippoly[i];
+            vec2 b2 = u_lippoly[i == 11 ? 0 : i + 1];
+            if ((a2.y > p.y) != (b2.y > p.y)) {
+                float xin = a2.x + (p.y - a2.y) * (b2.x - a2.x) / (b2.y - a2.y);
+                if (p.x < xin) crossings++;
+            }
+            vec2 e2 = b2 - a2;
+            float ts = clamp(dot(p - a2, e2) / max(dot(e2, e2), 1e-4), 0.0, 1.0);
+            dmin = min(dmin, length(p - (a2 + e2 * ts)));
+        }
+        float inside  = float((crossings & 1) == 1);
+        float feather = max(u_mouthax.y * 0.30, 1.5);
+        float lm2 = inside * smoothstep(0.0, feather, dmin)
+                  + (1.0 - inside) * (1.0 - smoothstep(0.0, feather * 0.5, dmin)) * 0.30;
+        // Bitten-lip gradient via the center ellipse.
         vec2 md = p - u_feat.yz;
         float la = dot(md, rightv) / max(u_mouthax.x, 1.0);
         float lb = dot(md, u_up)   / max(u_mouthax.y, 1.0);
-        float lm2 = 1.0 - smoothstep(0.70, 1.10, length(vec2(la, lb)));
-        float lippy = smoothstep(0.055, 0.15, col.r - col.g);
-        float t = u_makeup.y * lm2 * lippy;
+        float grad = 1.0 - 0.55 * u_makeup.z * smoothstep(0.25, 1.0, length(vec2(la, lb)));
+        float lippy = smoothstep(0.04, 0.13, col.r - col.g);
+        float t = u_makeup.y * lm2 * grad * lippy;
         // Colorize toward the lip color, keeping the lip's own shading — a
         // dark goth plum and a hot Barbie pink both read as lipstick.
         vec3 lip_target = u_lipc.rgb * (0.30 + 1.05 * lum(col));
@@ -972,7 +1022,7 @@ uintptr_t face_beauty_apply(uintptr_t src_tex, int slot, int w, int h,
     glUniform4f(u("u_eyes"), p.eyeL_x, p.eyeL_y, p.eyeR_x, p.eyeR_y);
     glUniform4f(u("u_feat"), p.eye_r, p.mouth_x, p.mouth_y, p.mouth_r);
     glUniform4f(u("u_amt"), p.smooth, p.brighten, p.warmth, p.eye_pop);
-    glUniform4f(u("u_makeup"), p.blush, p.lip_tint, 0.f, 0.f);
+    glUniform4f(u("u_makeup"), p.blush, p.lip_tint, p.lip_grad, 0.f);
     glUniform4f(u("u_cheeks"), p.cheekL_x, p.cheekL_y, p.cheekR_x, p.cheekR_y);
     glUniform4f(u("u_blushc"), p.blush_col[0], p.blush_col[1], p.blush_col[2], 0.f);
     glUniform4f(u("u_lipc"), p.lip_col[0], p.lip_col[1], p.lip_col[2], 0.f);
@@ -980,6 +1030,8 @@ uintptr_t face_beauty_apply(uintptr_t src_tex, int slot, int w, int h,
     glUniform4f(u("u_cyber"), p.skin_tint, p.desat, p.chrome, p.scanlines);
     glUniform4f(u("u_tintc"), p.tint_col[0], p.tint_col[1], p.tint_col[2], 0.f);
     glUniform4f(u("u_mouthax"), p.mouth_sw, p.mouth_sh, 0.f, 0.f);
+    glUniform2fv(u("u_lippoly"), 12, &p.lip_poly[0][0]);
+    glUniform4f(u("u_nose"), p.nose_x, p.nose_y, p.nose_blush, p.freckles);
     glUniform1f(u("u_brow_r"), p.brow_r);
     glDrawArrays(GL_TRIANGLES, 0, 3);
 

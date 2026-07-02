@@ -16,7 +16,7 @@ static const char* k_names[] = {
     "None", "Natural", "Big Eyes", "Tiny Face", "Big Mouth", "Alien", "Doggy",
     "Douyin", "Porcelain", "Soft Glam", "Honey",
     "Peach", "Cherry", "Goth", "Barbie", "Bronze",
-    "Chrome", "Neon", "Cyborg", "Hologram", "Rave",
+    "Chrome", "Neon", "Cyborg", "Hologram", "Rave", "Baddie", "E-Girl",
 };
 const char* face_filter_name(int id) {
     if (id < 0 || id >= (int)(sizeof(k_names)/sizeof(k_names[0]))) return "?";
@@ -83,6 +83,9 @@ struct BeautyLook {
     float blush_col[3] = {1.f, 0.45f, 0.55f};   // default rosy
     float lip_col[3]   = {0.95f, 0.25f, 0.35f};
     // cyber
+    float lip_grad = 1.f;      // 1 = bitten-lip gradient, 0 = full matte
+    float nose_blush = 0.f, freckles = 0.f;   // e-girl layer
+    float blush_raise = 0.40f;  // 0 = mid-cheek (contour), 1 = under-eye
     float eye_glow = 0; float eye_glow_col[3] = {0.2f, 0.9f, 1.f};
     float skin_tint = 0; float tint_col[3] = {0.7f, 0.8f, 1.f};
     float desat = 0, chrome = 0, scanlines = 0;
@@ -94,7 +97,9 @@ static bool beauty_look_for(int filter_id, BeautyLook& L) {
             L = {0.42f, 0.16f, 0.08f, 0.15f, 0.10f, 0.08f,  0.06f, 0.03f, 0.05f, 0.10f, 0.03f};
             return true;
         case FaceFilter::Glam:       // "Douyin" — the reference look
-            L = {0.75f, 0.36f, 0.06f, 0.40f, 0.45f, 0.40f,  0.15f, 0.09f, 0.22f, 0.20f, 0.05f};
+            L = {0.78f, 0.42f, 0.00f, 0.40f, 0.42f, 0.50f,  0.15f, 0.09f, 0.22f, 0.20f, 0.05f};
+            set3(L.blush_col, 1.f, 0.55f, 0.60f);        // soft pink, riding high
+            set3(L.lip_col,   0.88f, 0.16f, 0.24f);      // rose red, gradient center
             return true;
         case FaceFilter::Porcelain:  // maximum skin, cool light, shape untouched
             L = {0.92f, 0.38f, 0.00f, 0.28f, 0.14f, 0.10f,  0.03f, 0.f,   0.f,   0.f,   0.f};
@@ -159,6 +164,22 @@ static bool beauty_look_for(int filter_id, BeautyLook& L) {
             L.skin_tint = 0.55f; set3(L.tint_col, 0.35f, 0.95f, 1.f);
             L.desat = 0.5f; L.scanlines = 0.85f;
             L.eye_glow = 0.35f; set3(L.eye_glow_col, 0.4f, 1.f, 1.f);
+            return true;
+        case FaceFilter::Baddie:     // 2016 Instagram: matte nude lip, contour, bronze
+            L = {0.70f, 0.30f, 0.35f, 0.38f, 0.40f, 0.60f,  0.10f, 0.12f, 0.14f, 0.18f, 0.14f};
+            set3(L.blush_col, 0.80f, 0.52f, 0.38f);      // bronze contour tone
+            set3(L.lip_col,   0.70f, 0.44f, 0.40f);      // matte nude mauve
+            L.lip_grad = 0.15f;                          // full matte coverage
+            L.blush_raise = 0.05f;                       // low = contour line
+            return true;
+        case FaceFilter::EGirl:      // nose blush, faux freckles, glossy pink lip
+            L = {0.55f, 0.28f, 0.10f, 0.35f, 0.50f, 0.45f,  0.12f, 0.04f, 0.08f, 0.10f, 0.10f};
+            set3(L.blush_col, 1.f, 0.44f, 0.44f);        // warm sunburn pink
+            set3(L.lip_col,   0.95f, 0.40f, 0.46f);      // glossy pink
+            L.lip_grad = 0.40f;
+            L.blush_raise = 0.55f;                       // high, under the eyes
+            L.nose_blush  = 0.60f;                       // across the nose
+            L.freckles    = 0.55f;
             return true;
         case FaceFilter::Rave:       // UV blacklight — purple skin, acid accents
             L = {0.55f, 0.10f, 0.f, 0.f, 0.55f, 0.60f,  0.10f, 0.f, 0.f, 0.f, 0.06f};
@@ -463,14 +484,35 @@ uintptr_t face_filter_apply_obs(int filter_id, float amount, const FaceObs& obs,
     if (beauty_look_for(filter_id, L)) {
         Anchors a = anchors_from(obs);
         FaceBeautyParams bp;
+        // COORDINATE SPACE: obs landmarks live in the OBSERVATION's pixel
+        // space (full-res raw for takes), but the texture being processed is
+        // w×h (a half-res proxy in playback). The warp path normalizes to UV
+        // so it never noticed; the beauty mask works in texture pixels — the
+        // mismatch put every mask off-face on takes ("makeup visible while
+        // recording, gone on playback, but the warp still applied").
+        float sx_ = (obs.w > 0) ? (float)w / (float)obs.w : 1.f;
+        float sy_ = (obs.h > 0) ? (float)h / (float)obs.h : 1.f;
+        float sr_ = (sx_ + sy_) * 0.5f;   // proxy scaling is uniform in practice
+        auto PX = [&](float v) { return v * sx_; };
+        auto PY = [&](float v) { return v * sy_; };
         bp.smooth   = L.smooth   * amount;
         bp.brighten = L.brighten * amount;
         bp.warmth   = L.warmth   * amount;
         bp.eye_pop  = L.eye_pop  * amount;
         bp.blush    = L.blush    * amount;
         bp.lip_tint = L.lip      * amount;
-        bp.cheekL_x = obs.pts[50][0];  bp.cheekL_y = obs.pts[50][1];   // mesh cheeks
-        bp.cheekR_x = obs.pts[280][0]; bp.cheekR_y = obs.pts[280][1];
+        // Blush rides HIGH (douyin reference: under-eye/cheekbone, not
+        // mid-cheek): pull the mesh cheek anchors 40% toward the eyes.
+        bp.cheekL_x = PX(obs.pts[50][0]  + (a.eyeA[0] - obs.pts[50][0])  * L.blush_raise);
+        bp.cheekL_y = PY(obs.pts[50][1]  + (a.eyeA[1] - obs.pts[50][1])  * L.blush_raise);
+        bp.cheekR_x = PX(obs.pts[280][0] + (a.eyeB[0] - obs.pts[280][0]) * L.blush_raise);
+        bp.cheekR_y = PY(obs.pts[280][1] + (a.eyeB[1] - obs.pts[280][1]) * L.blush_raise);
+        bp.lip_grad = L.lip_grad;
+        // Nose bridge: midway between the eye line and the nose tip.
+        bp.nose_x = PX((a.eyeMid[0] + a.nose[0]) * 0.5f);
+        bp.nose_y = PY((a.eyeMid[1] + a.nose[1]) * 0.5f);
+        bp.nose_blush = L.nose_blush * amount;
+        bp.freckles   = L.freckles   * amount;
         memcpy(bp.blush_col, L.blush_col, sizeof(bp.blush_col));
         memcpy(bp.lip_col,   L.lip_col,   sizeof(bp.lip_col));
         bp.eye_glow = L.eye_glow * amount;
@@ -491,21 +533,27 @@ uintptr_t face_filter_apply_obs(int filter_id, float amount, const FaceObs& obs,
         float half_w = 0.5f * sqrtf(dxs*dxs + dys*dys) * 1.10f;
         float dxh = fx0 - a.chin[0], dyh = fy0 - a.chin[1];
         float half_h = 0.5f * sqrtf(dxh*dxh + dyh*dyh) * 1.12f;
-        bp.face_cx = cx; bp.face_cy = cy;
-        bp.face_rx = half_w; bp.face_ry = half_h;
-        bp.eyeL_x = a.eyeA[0]; bp.eyeL_y = a.eyeA[1];
-        bp.eyeR_x = a.eyeB[0]; bp.eyeR_y = a.eyeB[1];
-        bp.eye_r  = a.eyeDist * 0.30f;
-        bp.brow_r = a.eyeDist * 0.28f;
-        bp.mouth_x = a.mouth[0]; bp.mouth_y = a.mouth[1];
-        bp.mouth_r = a.mouthW * 0.62f;
-        // Lip ellipse: width from the mouth corners, height from the OUTER
-        // lip verticals (mesh 0 = upper outer mid, 17 = lower outer mid).
+        bp.face_cx = PX(cx); bp.face_cy = PY(cy);
+        bp.face_rx = half_w * sr_; bp.face_ry = half_h * sr_;
+        bp.eyeL_x = PX(a.eyeA[0]); bp.eyeL_y = PY(a.eyeA[1]);
+        bp.eyeR_x = PX(a.eyeB[0]); bp.eyeR_y = PY(a.eyeB[1]);
+        bp.eye_r  = a.eyeDist * 0.30f * sr_;
+        bp.brow_r = a.eyeDist * 0.28f * sr_;
+        bp.mouth_x = PX(a.mouth[0]); bp.mouth_y = PY(a.mouth[1]);
+        bp.mouth_r = a.mouthW * 0.62f * sr_;
+        // Lip ellipse (bitten-lip gradient center) + the outer-lip POLYGON —
+        // the polygon is what makes the tint follow a smile.
         {
             float lx = obs.pts[0][0] - obs.pts[17][0];
             float ly = obs.pts[0][1] - obs.pts[17][1];
-            bp.mouth_sw = a.mouthW * 0.58f;
-            bp.mouth_sh = sqrtf(lx*lx + ly*ly) * 0.72f;
+            bp.mouth_sw = a.mouthW * 0.58f * sr_;
+            bp.mouth_sh = sqrtf(lx*lx + ly*ly) * 0.72f * sr_;
+            static const int kLipRing[12] = {61, 40, 37, 0, 267, 270, 291,
+                                             321, 314, 17, 84, 91};
+            for (int i = 0; i < 12; ++i) {
+                bp.lip_poly[i][0] = PX(obs.pts[kLipRing[i]][0]);
+                bp.lip_poly[i][1] = PY(obs.pts[kLipRing[i]][1]);
+            }
         }
         tex = face_beauty_apply(tex, slot, w, h, bp);
     }

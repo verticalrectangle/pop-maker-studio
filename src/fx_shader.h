@@ -30,6 +30,10 @@ struct FaceBeautyParams {
     float eye_pop  = 0.f;   // 0..1 eye brightening
     float blush    = 0.f;   // 0..1 cheek makeup
     float lip_tint = 0.f;   // 0..1 lip color
+    float lip_grad = 1.f;   // bitten-lip gradient amount (0 = full matte)
+    float nose_x = 0, nose_y = 0;   // nose bridge (px)
+    float nose_blush = 0.f; // 0..1 e-girl across-the-nose blush
+    float freckles  = 0.f;  // 0..1 faux freckles over nose + upper cheeks
     float blush_col[3] = {1.f, 0.45f, 0.55f};   // makeup colors
     float lip_col[3]   = {0.95f, 0.25f, 0.35f};
     float cheekL_x = 0, cheekL_y = 0, cheekR_x = 0, cheekR_y = 0;
@@ -48,6 +52,7 @@ struct FaceBeautyParams {
     float eyeL_x = 0, eyeL_y = 0, eyeR_x = 0, eyeR_y = 0, eye_r = 0;
     float mouth_x = 0, mouth_y = 0, mouth_r = 0;
     float mouth_sw = 1, mouth_sh = 1;   // lip ellipse semi-axes (px), face basis
+    float lip_poly[12][2] = {};         // outer-lip ring (px) — follows the smile
     float brow_r  = 0;                  // exclusion above the eyes
 };
 uintptr_t face_beauty_apply(uintptr_t src_tex, int slot, int w, int h,
