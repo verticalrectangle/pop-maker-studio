@@ -844,6 +844,11 @@ void main() {
     float a = dot(d, rightv) / max(u_face.z, 1.0);
     float b = dot(d, u_up)   / max(u_face.w, 1.0);
     float mask = 1.0 - smoothstep(0.72, 1.05, length(vec2(a, b)));
+    // Hard cut at the chin line: the ellipse has margin below the chin, so
+    // brighten/smooth were painting the top of the neck and fading out in a
+    // visible U across the chest. b is the up-axis coordinate; the chin sits
+    // near b = -0.89. Nothing below it gets skin processing.
+    mask *= 1.0 - smoothstep(0.84, 1.0, -b);
     // …minus feature discs (eyes + brow band above them + mouth).
     float er = max(u_feat.x, 1.0);
     float holeL = 1.0 - smoothstep(er * 0.7, er * 1.25, distance(p, u_eyes.xy));
