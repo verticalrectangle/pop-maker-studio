@@ -94,7 +94,7 @@ static bool beauty_look_for(int filter_id, BeautyLook& L) {
             L = {0.42f, 0.16f, 0.08f, 0.15f, 0.10f, 0.08f,  0.06f, 0.03f, 0.05f, 0.10f, 0.03f};
             return true;
         case FaceFilter::Glam:       // "Douyin" — the reference look
-            L = {0.75f, 0.36f, 0.06f, 0.40f, 0.45f, 0.40f,  0.15f, 0.09f, 0.16f, 0.20f, 0.05f};
+            L = {0.75f, 0.36f, 0.06f, 0.40f, 0.45f, 0.40f,  0.15f, 0.09f, 0.22f, 0.20f, 0.05f};
             return true;
         case FaceFilter::Porcelain:  // maximum skin, cool light, shape untouched
             L = {0.92f, 0.38f, 0.00f, 0.28f, 0.14f, 0.10f,  0.03f, 0.f,   0.f,   0.f,   0.f};
@@ -221,9 +221,9 @@ int face_filter_bumps(int filter_id, float amount, const FaceObs& obs,
                 float cheekL[2] = {obs.pts[132][0], obs.pts[132][1]};
                 float cheekR[2] = {obs.pts[361][0], obs.pts[361][1]};
                 inward(cheekL, L.cheek * amt, d);
-                bump(cheekL, a.eyeDist * 0.42f * ih, 0.f, d[0], d[1]);
+                bump(cheekL, a.eyeDist * 0.52f * ih, 0.f, d[0], d[1]);
                 inward(cheekR, L.cheek * amt, d);
-                bump(cheekR, a.eyeDist * 0.42f * ih, 0.f, d[0], d[1]);
+                bump(cheekR, a.eyeDist * 0.52f * ih, 0.f, d[0], d[1]);
             }
             // V-line: pull the lower jaw toward a point slightly BELOW the
             // chin tip — the jaw tapers into a point instead of the chin
@@ -231,12 +231,19 @@ int face_filter_bumps(int filter_id, float amount, const FaceObs& obs,
             if (L.vline > 0.f) {
                 float vx = a.chin[0] - a.up[0] * a.eyeDist * 0.25f;
                 float vy = a.chin[1] - a.up[1] * a.eyeDist * 0.25f;
-                auto toward_v = [&](const float* pnt, float k) {
+                auto toward_v = [&](const float* pnt, float k, float rad) {
                     float dx2 = (vx - pnt[0]) * k, dy2 = (vy - pnt[1]) * k;
-                    bump(pnt, a.eyeDist * 0.40f * ih, 0.f, dx2, dy2);
+                    bump(pnt, a.eyeDist * rad * ih, 0.f, dx2, dy2);
                 };
-                toward_v(a.jawL, L.vline * amt);
-                toward_v(a.jawR, L.vline * amt);
+                // Graded taper down the jawline: low jaw, then the chin
+                // SIDES pull hardest — that's what turns a square chin into
+                // a point instead of leaving flat corners.
+                float chinSideL[2] = {obs.pts[148][0], obs.pts[148][1]};
+                float chinSideR[2] = {obs.pts[377][0], obs.pts[377][1]};
+                toward_v(a.jawL,   L.vline * amt,        0.46f);
+                toward_v(a.jawR,   L.vline * amt,        0.46f);
+                toward_v(chinSideL, L.vline * amt * 1.3f, 0.30f);
+                toward_v(chinSideR, L.vline * amt * 1.3f, 0.30f);
             }
             if (L.nose > 0.f) {
                 bump(a.noseL, a.eyeDist * 0.22f * ih, 0.f,
@@ -492,6 +499,14 @@ uintptr_t face_filter_apply_obs(int filter_id, float amount, const FaceObs& obs,
         bp.brow_r = a.eyeDist * 0.28f;
         bp.mouth_x = a.mouth[0]; bp.mouth_y = a.mouth[1];
         bp.mouth_r = a.mouthW * 0.62f;
+        // Lip ellipse: width from the mouth corners, height from the OUTER
+        // lip verticals (mesh 0 = upper outer mid, 17 = lower outer mid).
+        {
+            float lx = obs.pts[0][0] - obs.pts[17][0];
+            float ly = obs.pts[0][1] - obs.pts[17][1];
+            bp.mouth_sw = a.mouthW * 0.58f;
+            bp.mouth_sh = sqrtf(lx*lx + ly*ly) * 0.72f;
+        }
         tex = face_beauty_apply(tex, slot, w, h, bp);
     }
     FaceWarpBump bumps[MAX_FACE_BUMPS];

@@ -815,6 +815,7 @@ uniform vec4 u_lipc;     // lip color rgb, _
 uniform vec4 u_eyeglow;  // rgb, amount
 uniform vec4 u_cyber;    // skin_tint, desat, chrome, scanlines
 uniform vec4 u_tintc;    // skin tint color rgb, _
+uniform vec4 u_mouthax;  // lip ellipse semi-width, semi-height (px), _, _
 uniform float u_brow_r;
 float lum(vec3 c) { return dot(c, vec3(0.299, 0.587, 0.114)); }
 void main() {
@@ -887,11 +888,16 @@ void main() {
         float bm = max(cL, cR) * u_makeup.x * mask * skin_chroma;
         col = mix(col, col * (0.75 + 0.5 * u_blushc.rgb), bm * 0.55);
     }
-    // Lip tint: rosy saturation inside the mouth disc, only on pixels that
-    // already read reddish (lips) — a gray mic in front stays gray.
+    // Lip tint: an ORIENTED ELLIPSE the shape of the mouth (the old circular
+    // disc painted philtrum and chin — the "smudged lipstick"), and a strict
+    // redness gate: ordinary skin sits at r-g ≈ 0.05-0.10, lips at 0.12+, so
+    // the gate starts above the skin baseline and only true lip pixels tint.
     if (u_makeup.y > 0.001) {
-        float lm2 = 1.0 - smoothstep(mr * 0.35, mr * 0.95, distance(p, u_feat.yz));
-        float lippy = smoothstep(0.01, 0.09, col.r - col.g);
+        vec2 md = p - u_feat.yz;
+        float la = dot(md, rightv) / max(u_mouthax.x, 1.0);
+        float lb = dot(md, u_up)   / max(u_mouthax.y, 1.0);
+        float lm2 = 1.0 - smoothstep(0.70, 1.10, length(vec2(la, lb)));
+        float lippy = smoothstep(0.055, 0.15, col.r - col.g);
         float t = u_makeup.y * lm2 * lippy;
         // Colorize toward the lip color, keeping the lip's own shading — a
         // dark goth plum and a hot Barbie pink both read as lipstick.
@@ -973,6 +979,7 @@ uintptr_t face_beauty_apply(uintptr_t src_tex, int slot, int w, int h,
     glUniform4f(u("u_eyeglow"), p.eye_glow_col[0], p.eye_glow_col[1], p.eye_glow_col[2], p.eye_glow);
     glUniform4f(u("u_cyber"), p.skin_tint, p.desat, p.chrome, p.scanlines);
     glUniform4f(u("u_tintc"), p.tint_col[0], p.tint_col[1], p.tint_col[2], 0.f);
+    glUniform4f(u("u_mouthax"), p.mouth_sw, p.mouth_sh, 0.f, 0.f);
     glUniform1f(u("u_brow_r"), p.brow_r);
     glDrawArrays(GL_TRIANGLES, 0, 3);
 

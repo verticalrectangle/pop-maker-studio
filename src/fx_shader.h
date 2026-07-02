@@ -47,6 +47,7 @@ struct FaceBeautyParams {
     float upx = 0,  upy = -1;           // face up unit vector
     float eyeL_x = 0, eyeL_y = 0, eyeR_x = 0, eyeR_y = 0, eye_r = 0;
     float mouth_x = 0, mouth_y = 0, mouth_r = 0;
+    float mouth_sw = 1, mouth_sh = 1;   // lip ellipse semi-axes (px), face basis
     float brow_r  = 0;                  // exclusion above the eyes
 };
 uintptr_t face_beauty_apply(uintptr_t src_tex, int slot, int w, int h,
