@@ -1800,10 +1800,11 @@ static json dispatch(AppState& state, const std::string& method, const json& par
                 r["eye_blink"] = (obs.blend[FB_EYE_BLINK_L] +
                                   obs.blend[FB_EYE_BLINK_R]) * 0.5f;
             }
-            r["eyeB"]  = {obs.pts[90][0], obs.pts[90][1]};
+            r["eyeA"]  = {obs.pts[468][0], obs.pts[468][1]};   // iris centers
+            r["eyeB"]  = {obs.pts[473][0], obs.pts[473][1]};
             if (params.value("full", false)) {
                 json pts = json::array();
-                for (int k = 0; k < 106; ++k)
+                for (int k = 0; k < FT_NPTS; ++k)
                     pts.push_back({obs.pts[k][0], obs.pts[k][1]});
                 r["pts"] = pts;
             }
@@ -1820,7 +1821,7 @@ static json dispatch(AppState& state, const std::string& method, const json& par
             m["face_valid"] = mg.face_valid;
             if (mg.face_valid && params.value("full", false)) {
                 json pts = json::array();
-                for (int k = 0; k < 106; ++k)
+                for (int k = 0; k < FT_NPTS; ++k)
                     pts.push_back({mg.pts[k][0], mg.pts[k][1]});
                 m["pts"] = pts;
             }

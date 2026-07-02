@@ -3,6 +3,7 @@
 
 #include "studio_types.h"
 #include "app.h"
+#include "../face_track.h"
 #include <imgui.h>
 
 void draw_preview(AppState& state, ImVec2 p, float w, float h);
@@ -40,7 +41,7 @@ struct MirrorDebugGeom {
     float rot_deg = 0;          // brick rotation (screen draw uses -rot)
     int   cam_w = 0, cam_h = 0; // raw frame size
     bool  face_valid = false;
-    float pts[106][2];          // raw-frame landmark px
+    float pts[FT_NPTS][2];      // raw-frame landmark px (full mesh)
 };
 MirrorDebugGeom mirror_debug_geom();
 

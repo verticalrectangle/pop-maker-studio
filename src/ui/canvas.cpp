@@ -1196,7 +1196,7 @@ static uintptr_t camera_live_tex(AppState& st, const Clip*& out_brick,
                         FaceObs raw = obs;
                         raw.w = s_cam_w; raw.h = s_cam_h;
                         float hw2f = (float)(s_cam_w / 2), hh2f = (float)(s_cam_h / 2);
-                        for (int k = 0; k < 106; ++k) {
+                        for (int k = 0; k < FT_NPTS; ++k) {
                             float ux = obs.pts[k][0], uy = obs.pts[k][1];
                             float rx2, ry2;   // half-res raw coords
                             if (s_sub_rotq == 1)      { rx2 = uy;             ry2 = hh2f - 1.f - ux; }
