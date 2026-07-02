@@ -162,6 +162,14 @@ void tick_video_slot_opens(AppState& state, double budget_ms = 20.0);
 // project too, not leave the Home page lying about what state holds.
 bool open_project_path(AppState& state, const std::string& path);
 
+// ── Track groups (folder rows) ────────────────────────────────────────────────
+// A GroupHead track is a folder over the group_children tracks below it.
+// group_head_of: index of the head whose run contains ti (-1 = ungrouped).
+// normalize_track_groups: per-frame self-heal — clamps runs to the track list,
+// stops them at the next head (no nesting), dissolves empty heads.
+int  group_head_of(const AppState& state, int ti);
+void normalize_track_groups(AppState& state);
+
 // ── Save / dirty tracking ─────────────────────────────────────────────────────
 // Call after every successful project save: records the clean history point
 // (project_dirty goes false) and queues the home-screen thumbnail capture.

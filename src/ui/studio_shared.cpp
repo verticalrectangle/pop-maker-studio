@@ -46,6 +46,7 @@ std::string fmt_time_short(float s) {
 int find_empty_track(const AppState& state) {
     for (int ti = 0; ti < (int)state.tracks.size(); ++ti) {
         const Track& t = state.tracks[ti];
+        if (is_group_head(t)) continue;   // folder rows hold no clips
         if (t.clips.empty() && t.visible && !t.locked && !t.managed) return ti;
     }
     return -1;
@@ -611,6 +612,41 @@ void marker_jump(AppState& state, int dir) {
         for (auto& m : state.markers) if (m.time > here + eps) { best = m.time; break; }
     }
     if (best >= 0.f) seek_to(state, best);
+}
+
+int group_head_of(const AppState& state, int ti) {
+    for (int h = 0; h < (int)state.tracks.size(); ++h) {
+        const Track& t = state.tracks[(size_t)h];
+        if (!is_group_head(t)) continue;
+        if (ti > h && ti <= h + t.group_children) return h;
+    }
+    return -1;
+}
+
+void normalize_track_groups(AppState& state) {
+    int nt = (int)state.tracks.size();
+    for (int h = 0; h < nt; ++h) {
+        Track& t = state.tracks[(size_t)h];
+        if (!is_group_head(t)) continue;
+        // A head must never hold clips (it's a folder row, not a lane).
+        if (!t.clips.empty()) t.clips.clear();
+        int max_run = nt - 1 - h;
+        if (t.group_children > max_run) t.group_children = max_run;
+        // No nesting: the run stops before the next head.
+        for (int j = h + 1; j <= h + t.group_children; ++j)
+            if (is_group_head(state.tracks[(size_t)j])) {
+                t.group_children = j - h - 1;
+                break;
+            }
+        // Empty folder dissolves back into a plain (invisible-value) track —
+        // delete it outright so it doesn't linger as a dead row.
+        if (t.group_children <= 0) {
+            if (state.selected_track == h) { state.selected_track = -1; state.selected_clip = -1; }
+            state.tracks.erase(state.tracks.begin() + h);
+            nt = (int)state.tracks.size();
+            --h;
+        }
+    }
 }
 
 void mark_project_saved(AppState& state, const std::string& path) {
@@ -1309,11 +1345,19 @@ void add_video_record_brick(AppState& state) {
     snprintf(n, sizeof(n), "Cam Mic %d", idx);
     tm.name = n;
     tm.clips.push_back(std::move(mic));
+    // The pair lives in a folder row (track group) named after the camera —
+    // collapse it to one line, mute/lock both from the header, drag as one.
+    Track head;
+    snprintf(n, sizeof(n), "Camera %d (A/V)", idx);
+    head.name           = n;
+    head.kind           = TrackKind::GroupHead;
+    head.group_children = 2;
     state.tracks.insert(state.tracks.begin(), std::move(tm));
     state.tracks.insert(state.tracks.begin(), std::move(t));
-    state.selected_track = 0;
+    state.tracks.insert(state.tracks.begin(), std::move(head));
+    state.selected_track = 1;
     state.selected_clip  = 0;
-    clip_flash(state, 0, 0, /*reveal=*/true);
+    clip_flash(state, 1, 0, /*reveal=*/true);
     // If the brick lands past the current view, zoom out to fit it.
     state.tl_zoom_to_fit_end = fmaxf(state.tl_zoom_to_fit_end, clip_end);
     history_push(state, "Add Record A/V Bricks");

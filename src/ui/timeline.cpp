@@ -829,6 +829,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
     // loop point onto the project frame grid every frame, so nothing can sit between
     // the ruler ticks no matter how it was added (drag, MCP, generation, old project).
     normalize_timeline_to_grid(state);
+    normalize_track_groups(state);
 
     float fps = tl_fps(state);   // the ONE grid — project/export fps, never the source video's
     // snap(t): round t to nearest frame unless Ctrl is held
@@ -1382,7 +1383,17 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
         }
         return e;
     };
-    auto track_h     = [&](int ti) -> float { return TL_TRACK_H + track_extra_h(ti); };
+    // Collapsed group members fold away entirely — the head row shows their
+    // merged occupancy. Height 0 keeps track_top_at / y_to_track consistent
+    // without special cases (a 0-height row can never be hit).
+    auto collapsed_child = [&](int ti) -> bool {
+        int h = group_head_of(state, ti);
+        return h >= 0 && state.tracks[(size_t)h].group_collapsed;
+    };
+    auto track_h     = [&](int ti) -> float {
+        if (collapsed_child(ti)) return 0.f;
+        return TL_TRACK_H + track_extra_h(ti);
+    };
     auto track_top_at = [&](int ti) -> float {
         float y = track_area_top - state.tl_v_scroll;
         for (int k = 0; k < ti && k < (int)state.tracks.size(); ++k) y += track_h(k);
@@ -1508,6 +1519,8 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
 
     for (int ti = 0; ti < (int)state.tracks.size(); ++ti) {
         Track& track = state.tracks[ti];
+        if (collapsed_child(ti)) continue;   // folded into its group head (0-height)
+        bool is_head = is_group_head(track);
         ImVec2 row_tl = {origin.x, track_y};
         ImVec2 row_br = {origin.x+total_w, track_y+TL_TRACK_H};
         // Confine the hover/drop hit to the visible band — same reason as the
@@ -1524,7 +1537,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
         // FX preset drag-drop target on the clip area of this row.
         // Clamp to track_area_bot so the button doesn't overlap (and swallow
         // clicks on) the horizontal scrollbar below.
-        {
+        if (!is_head) {
             ImVec2 drop_tl = {origin.x + TL_LABEL_W, track_y};
             ImVec2 drop_br = {origin.x + total_w,
                               fminf(track_y + TL_TRACK_H, track_area_bot)};
@@ -1806,15 +1819,57 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
             if (ImGui::IsKeyPressed(ImGuiKey_Escape)) s_rename_track = -1;
             ImGui::PopStyleColor(2);
         } else {
-            // Lyrics / FX track: amber left accent stripe (durable via kind, so it
-            // survives reload — managed isn't serialized).
-            if (track.kind != TrackKind::Normal)
+            // Group hue: stable per head name — the folder row and its members
+            // share the tint so the family reads at a glance.
+            auto group_hue = [&](const std::string& nm) -> ImU32 {
+                uint32_t h = 2166136261u;
+                for (char c : nm) { h ^= (uint8_t)c; h *= 16777619u; }
+                return IM_COL32(110 + (h & 0x7F), 110 + ((h >> 7) & 0x7F),
+                                110 + ((h >> 14) & 0x7F), 255);
+            };
+            int   head_of = is_head ? -1 : group_head_of(state, ti);
+            float name_x  = origin.x + 8.f;
+            if (is_head) {
+                ImU32 gc = group_hue(track.name);
+                // Folder row wash + accent stripe.
+                dl->AddRectFilled({origin.x, track_y+1.f},
+                                  {origin.x+TL_LABEL_W, track_y+TL_TRACK_H-1.f},
+                                  (gc & 0x00FFFFFFu) | ((ImU32)34 << IM_COL32_A_SHIFT));
+                dl->AddRectFilled({origin.x, track_y+2.f},
+                                  {origin.x+3.f, track_y+TL_TRACK_H-2.f}, gc);
+                // Chevron: ▼ expanded / ▶ collapsed — click toggles.
+                float cxx = origin.x + 12.f, cyy = track_y + TL_TRACK_H * 0.5f;
+                ImU32 cc = to_u32(Col::fg);
+                if (track.group_collapsed) {
+                    dl->AddTriangleFilled({cxx-3.f,cyy-5.f},{cxx-3.f,cyy+5.f},{cxx+4.f,cyy}, cc);
+                } else {
+                    dl->AddTriangleFilled({cxx-5.f,cyy-3.f},{cxx+5.f,cyy-3.f},{cxx,cyy+4.f}, cc);
+                }
+                bool chev_hov = mouse_in_track_band &&
+                                fabsf(mouse.x - cxx) < 9.f && fabsf(mouse.y - cyy) < 9.f;
+                if (chev_hov) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+                if (chev_hov && (!tl_any_popup && ImGui::IsMouseClicked(0))) {
+                    track.group_collapsed = !track.group_collapsed;
+                    history_push(state, track.group_collapsed ? "Collapse group"
+                                                              : "Expand group");
+                }
+                name_x = origin.x + 24.f;
+            } else if (head_of >= 0) {
+                // Group member: shared tint stripe + indented name.
+                dl->AddRectFilled({origin.x, track_y+2.f},
+                                  {origin.x+3.f, track_y+TL_TRACK_H-2.f},
+                                  group_hue(state.tracks[(size_t)head_of].name));
+                name_x = origin.x + 16.f;
+            } else if (track.kind != TrackKind::Normal) {
+                // Lyrics / FX track: amber left accent stripe (durable via kind, so it
+                // survives reload — managed isn't serialized).
                 dl->AddRectFilled({origin.x, track_y+2.f},
                                   {origin.x+3.f, track_y+TL_TRACK_H-2.f},
                                   to_u32(Col::clip_lyrics));
+            }
             // Truncate with ellipsis if the name would overflow into the
             // icon buttons (lock at TL_LABEL_W-45, then mute, eye).
-            float max_w = TL_LABEL_W - 8.f - 54.f;
+            float max_w = TL_LABEL_W - (name_x - origin.x) - 54.f;
             std::string label = track.name;
             if (ImGui::CalcTextSize(label.c_str()).x > max_w) {
                 const char* ell = "\xE2\x80\xA6";  // U+2026
@@ -1829,15 +1884,21 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                 }
                 label += ell;
             }
-            dl->AddText({origin.x+8.f, track_y+(TL_TRACK_H-13.f)*0.5f},
+            dl->AddText({name_x, track_y+(TL_TRACK_H-13.f)*0.5f},
                 to_u32(track_sel ? Col::fg : Col::muted), label.c_str());
-            if ((!tl_any_popup && ImGui::IsMouseClicked(0)) && in_label) {
+            // Folder rows: the chevron zone owns its clicks, and the row is not
+            // label-draggable (dragging the head alone would strand its members
+            // — reorder groups by moving the member tracks for now).
+            bool over_chevron = is_head && mouse.x < origin.x + 22.f;
+            if ((!tl_any_popup && ImGui::IsMouseClicked(0)) && in_label && !over_chevron) {
                 state.selected_track  = ti;
                 state.selected_clip   = -1;
                 state.clip_selection.clear();
-                s_track_drag_src      = ti;
-                s_track_drag_start_y  = mouse.y;
-                s_track_dragging      = false;
+                if (!is_head) {
+                    s_track_drag_src      = ti;
+                    s_track_drag_start_y  = mouse.y;
+                    s_track_dragging      = false;
+                }
             }
             if ((!tl_any_popup && ImGui::IsMouseDoubleClicked(0)) && in_label && !s_track_dragging) {
                 s_track_drag_src = -1;
@@ -1863,6 +1924,10 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
             }
             if (hov && (!tl_any_popup && ImGui::IsMouseClicked(0))) {
                 track.visible = !track.visible;
+                if (is_head)   // folder: fan out to every member
+                    for (int j = ti + 1; j <= ti + track.group_children &&
+                                         j < (int)state.tracks.size(); ++j)
+                        state.tracks[(size_t)j].visible = track.visible;
                 history_push(state, "Toggle track visibility");
             }
         }
@@ -1881,6 +1946,10 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                     {lock_c.x-3.f, lock_c.y-5.f}, {lock_c.x+3.f, lock_c.y-5.f}, lc, 1.2f);
             if (hov && (!tl_any_popup && ImGui::IsMouseClicked(0))) {
                 track.locked = !track.locked;
+                if (is_head)
+                    for (int j = ti + 1; j <= ti + track.group_children &&
+                                         j < (int)state.tracks.size(); ++j)
+                        state.tracks[(size_t)j].locked = track.locked;
                 history_push(state, track.locked ? "Lock track" : "Unlock track");
             }
         }
@@ -1902,6 +1971,10 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
             }
             if (hov && (!tl_any_popup && ImGui::IsMouseClicked(0))) {
                 track.muted = !track.muted;
+                if (is_head)
+                    for (int j = ti + 1; j <= ti + track.group_children &&
+                                         j < (int)state.tracks.size(); ++j)
+                        state.tracks[(size_t)j].muted = track.muted;
                 history_push(state, "Toggle track mute");
             }
         }
@@ -1916,6 +1989,33 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
             ctx_track = ti; ctx_clip = -1;
             open_track_ctx = true;
             ImGui::OpenPopup("##track_ctx");
+        }
+
+        // Folder row clip area: collapsed = merged occupancy of every member
+        // (thin band per member so you still see WHERE things are in time);
+        // expanded = a quiet dimmed lane. Folder rows never hold clips.
+        if (is_head) {
+            if (track.group_collapsed && track.group_children > 0) {
+                float bh = (TL_TRACK_H - 8.f) / (float)track.group_children;
+                for (int k = 0; k < track.group_children; ++k) {
+                    int cti = ti + 1 + k;
+                    if (cti >= (int)state.tracks.size()) break;
+                    float by0 = track_y + 4.f + bh * (float)k;
+                    float by1 = by0 + fmaxf(1.5f, bh - 1.f);
+                    for (const Clip& mc : state.tracks[(size_t)cti].clips) {
+                        float mx0 = origin.x + TL_LABEL_W + mc.start * zoom - scroll;
+                        float mx1 = origin.x + TL_LABEL_W + mc.end   * zoom - scroll;
+                        mx0 = fmaxf(mx0, origin.x + TL_LABEL_W);
+                        mx1 = fminf(mx1, origin.x + total_w);
+                        if (mx1 <= mx0) continue;
+                        ImVec4 bc = clip_type_badge_color(mc.clip_type);
+                        dl->AddRectFilled({mx0, by0}, {mx1, by1},
+                            IM_COL32((int)(bc.x*255), (int)(bc.y*255), (int)(bc.z*255), 210), 1.f);
+                    }
+                }
+            }
+            track_y += track_h(ti);
+            continue;   // no clip passes / interactions on a folder row
         }
 
         // Clips — two passes so FX bricks render on top of video clips.
@@ -4639,7 +4739,21 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                 drag_hot_track >= 0 && drag_hot_track != drag_track) {
                 std::vector<Clip> grp = extract_host_group(state, drag_track, drag_clip);
                 Clip& moved = grp[0];
-                if (drag_hot_track == (int)state.tracks.size()) {
+                // Folder rows hold no clips — bounce the drop back like an overlap.
+                if (drag_hot_track < (int)state.tracks.size() &&
+                    is_group_head(state.tracks[(size_t)drag_hot_track])) {
+                    moved.start = drag_origin_start;
+                    moved.end   = drag_origin_end;
+                    int at = drag_clip < (int)state.tracks[drag_track].clips.size()
+                             ? drag_clip : (int)state.tracks[drag_track].clips.size();
+                    for (int gi = (int)grp.size()-1; gi >= 0; --gi)
+                        state.tracks[drag_track].clips.insert(
+                            state.tracks[drag_track].clips.begin() + at, grp[(size_t)gi]);
+                    state.selected_track = drag_track;
+                    state.selected_clip  = at;
+                    state.clip_selection.clear();
+                    state.clip_selection.insert({state.selected_track, state.selected_clip});
+                } else if (drag_hot_track == (int)state.tracks.size()) {
                     // Drop below all tracks — create new track
                     Track nt;
                     char name[32];
@@ -5377,6 +5491,76 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
             }
             rename_open = ImGui::IsItemActive();
             ImGui::Separator();
+
+            // ── Track groups (folder rows) ────────────────────────────────
+            if (is_group_head(*ct)) {
+                if (ImGui::MenuItem(ct->group_collapsed ? "Expand group"
+                                                        : "Collapse group")) {
+                    ct->group_collapsed = !ct->group_collapsed;
+                    history_push(state, ct->group_collapsed ? "Collapse group"
+                                                            : "Expand group");
+                }
+                if (ImGui::MenuItem("Ungroup")) {
+                    // Delete the folder row; members stay where they are.
+                    if (state.selected_track == ti) { state.selected_track = -1; state.selected_clip = -1; }
+                    state.tracks.erase(state.tracks.begin() + ti);
+                    history_push(state, "Ungroup tracks");
+                    ImGui::CloseCurrentPopup();
+                }
+                ImGui::Separator();
+            } else {
+                int in_grp = group_head_of(state, ti);
+                if (in_grp < 0) {
+                    if (ImGui::MenuItem("New track group")) {
+                        Track head;
+                        char gn[32];
+                        int n_grp = 1;
+                        for (auto& t2 : state.tracks) if (is_group_head(t2)) ++n_grp;
+                        snprintf(gn, sizeof(gn), "Group %d", n_grp);
+                        head.name           = gn;
+                        head.kind           = TrackKind::GroupHead;
+                        head.group_children = 1;
+                        state.tracks.insert(state.tracks.begin() + ti, head);
+                        state.selected_track = -1; state.selected_clip = -1;
+                        history_push(state, "Group tracks");
+                        ImGui::CloseCurrentPopup();
+                    }
+                    // Track sits directly below a group's run — offer to join it.
+                    int above_head = -1;
+                    if (ti > 0) {
+                        if (is_group_head(state.tracks[(size_t)(ti - 1)]) &&
+                            state.tracks[(size_t)(ti - 1)].group_children == 0)
+                            above_head = ti - 1;
+                        else {
+                            int h2 = group_head_of(state, ti - 1);
+                            if (h2 >= 0 && h2 + state.tracks[(size_t)h2].group_children == ti - 1)
+                                above_head = h2;
+                        }
+                    }
+                    if (above_head >= 0) {
+                        char lbl[96];
+                        snprintf(lbl, sizeof(lbl), "Add to \"%s\"",
+                                 state.tracks[(size_t)above_head].name.c_str());
+                        if (ImGui::MenuItem(lbl)) {
+                            ++state.tracks[(size_t)above_head].group_children;
+                            history_push(state, "Add track to group");
+                            ImGui::CloseCurrentPopup();
+                        }
+                    }
+                } else {
+                    Track& gh = state.tracks[(size_t)in_grp];
+                    // Only the LAST member can leave cleanly (contiguity).
+                    bool last = (in_grp + gh.group_children == ti);
+                    if (ImGui::MenuItem("Remove from group", nullptr, false, last)) {
+                        --gh.group_children;
+                        history_push(state, "Remove track from group");
+                        ImGui::CloseCurrentPopup();
+                    }
+                    if (!last && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                        ImGui::SetTooltip("Only the bottom track of a group can leave\n(groups are contiguous)");
+                }
+                ImGui::Separator();
+            }
         }
 
         // Managed track controls
@@ -5439,6 +5623,10 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
         if (ImGui::MenuItem("Delete track", nullptr, false, valid)) {
             std::string tname = ct ? ct->name : "";
             if (state.selected_track == ti) { state.selected_track=-1; state.selected_clip=-1; }
+            // Deleting a group member shrinks its folder's run (deleting the
+            // folder row itself is just an ungroup — members stay).
+            int gh = group_head_of(state, ti);
+            if (gh >= 0) --state.tracks[(size_t)gh].group_children;
             state.tracks.erase(state.tracks.begin()+ti);
             history_push(state, "Delete track — " + tname);
         }

@@ -12,7 +12,7 @@
 // ── Binary serialization helpers ──────────────────────────────────────────────
 
 static const uint32_t MAGIC   = 0x534D5001u; // "PMS\x01"
-static const uint32_t VERSION = 62u;  // v62: clip group_id (right-click clip grouping)
+static const uint32_t VERSION = 63u;  // v63: track groups (GroupHead folder rows: children + collapsed)
 
 // Version used to gate the registry-effect read block (generated/fx_project_read.h).
 // Normally the file's format version; project_load decrements it by 1 on a retry
@@ -562,6 +562,9 @@ static void write_track(Writer& w, const Track& t) {
     w.str(t.name);
     w.pod((uint8_t)t.visible); w.pod((uint8_t)t.muted); w.pod((uint8_t)t.locked); w.pod(t.sub_row);
     w.pod((uint8_t)t.kind);
+    // v63: track groups (folder rows)
+    w.pod(t.group_children);
+    w.pod((uint8_t)t.group_collapsed);
     uint32_t nc = (uint32_t)t.clips.size();
     w.pod(nc);
     for (auto& c : t.clips) write_clip(w, c);
@@ -577,6 +580,10 @@ static Track read_track(Reader& r, uint32_t version) {
     if (version >= 57u) t.kind = (TrackKind)r.pod<uint8_t>();
     else if (t.name == "Lyrics")    t.kind = TrackKind::Lyrics;    // migrate identity by name
     else if (t.name == "Lyrics FX") t.kind = TrackKind::LyricsFX;
+    if (version >= 63u) {
+        t.group_children  = r.pod<int>();
+        t.group_collapsed = (bool)r.pod<uint8_t>();
+    }
     uint32_t nc = r.pod<uint32_t>();
     for (uint32_t i = 0; i < nc && r.ok; ++i)
         t.clips.push_back(read_clip(r, version));

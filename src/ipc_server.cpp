@@ -2316,6 +2316,7 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         int ti = track_by_name_or_index(state, params);
         if (!check_track(state, ti, err)) return {};
         if (state.tracks[ti].locked) { err = "track is locked"; return {}; }
+        if (is_group_head(state.tracks[ti])) { err = "that track is a group folder row — it holds no clips; target a member track"; return {}; }
         std::string type_s = params.value("type", "text");
         float start = snap_to_frame(params.value("start", 0.f), state.fps);
         float end   = snap_end_to_frame(params.value("end", start + 2.f), state.fps);
@@ -2449,6 +2450,7 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         int ti = params.value("track", -1);
         if (!check_track(state, ti, err)) return {};
         if (state.tracks[ti].locked) { err = "track is locked"; return {}; }
+        if (is_group_head(state.tracks[ti])) { err = "that track is a group folder row — it holds no clips; target a member track"; return {}; }
         if (!params.contains("clips") || !params["clips"].is_array()) { err = "clips array required"; return {}; }
         json ids = json::array();
         for (auto& entry : params["clips"]) {
@@ -2768,6 +2770,10 @@ static json dispatch(AppState& state, const std::string& method, const json& par
     if (method == "delete_track") {
         int ti = track_by_name_or_index(state, params);
         if (!check_track(state, ti, err)) return {};
+        {
+            int gh = group_head_of(state, ti);
+            if (gh >= 0) --state.tracks[(size_t)gh].group_children;
+        }
         state.tracks.erase(state.tracks.begin() + ti);
         if (state.selected_track == ti) { state.selected_track = -1; state.selected_clip = -1; }
         // Return the new count so peeling tracks one-by-one (always track:0)

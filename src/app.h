@@ -476,7 +476,8 @@ extern const int kClipKfFieldCount;
 // What a track holds. Lyrics/LyricsFX tracks are exclusive (accept only their own
 // brick) and durable across reloads — see is_lyrics_track and project serialization.
 // (managed is NOT serialized; kind is what survives a save/load.)
-enum class TrackKind : uint8_t { Normal = 0, Lyrics = 1, LyricsFX = 2 };
+enum class TrackKind : uint8_t { Normal = 0, Lyrics = 1, LyricsFX = 2,
+                                 GroupHead = 3 };  // folder row over the N tracks below
 
 struct Track {
     std::string       name;
@@ -487,9 +488,18 @@ struct Track {
     bool              managed = false;  // owned by typography system — preset rewrites clips in-place
     int               sub_row = 0;
     TrackKind         kind    = TrackKind::Normal;
+
+    // Track group (kind == GroupHead): this row is a FOLDER over the next
+    // group_children tracks. Holds no clips; carries the collapse state and
+    // fans mute/lock/visibility out to its children. Contiguity is the rule —
+    // a group is also a contiguous compositing unit (normalize_track_groups
+    // clamps runs so they never swallow another head). v63.
+    int  group_children  = 0;
+    bool group_collapsed = false;
 };
 
 inline bool is_lyrics_track(const Track& t) { return t.kind == TrackKind::Lyrics; }
+inline bool is_group_head(const Track& t)   { return t.kind == TrackKind::GroupHead; }
 
 // ── Audio bus brick ────────────────────────────────────────────────────────────
 // A Bus is a Clip (ClipType::Bus) placed on a track: it submixes the audio of
