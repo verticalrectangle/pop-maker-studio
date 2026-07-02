@@ -26,11 +26,16 @@ enum class FaceFilter {
     // Cyber looks (skin tint / chrome / scanlines / eye glow)
     Chrome, Neon, Cyborg, Hologram, Rave,
     Baddie,  // 2016 Instagram: matte nude lip, bronze contour, warm glow
-    EGirl    // nose blush + faux freckles + glossy pink lip
+    EGirl,   // nose blush + faux freckles + glossy pink lip
+    // Lash + blush generation
+    Doll, Coquette, Latte, CatEye, PeachyGlow, ColdBeauty, Sunset, Angel,
+    // Lash + cyber mixes
+    CyberDoll, NeonCat, Void, PixelPop,
+    Belle    // huge doll eyes, max lashes, porcelain + hot pink
 };
 inline bool face_filter_is_beauty(int id) {
     return id == (int)FaceFilter::Pretty ||
-           (id >= (int)FaceFilter::Glam && id <= (int)FaceFilter::EGirl);
+           (id >= (int)FaceFilter::Glam && id <= (int)FaceFilter::Belle);
 }
 const char* face_filter_name(int id);
 int         face_filter_count();

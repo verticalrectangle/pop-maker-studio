@@ -17,6 +17,8 @@ static const char* k_names[] = {
     "Douyin", "Porcelain", "Soft Glam", "Honey",
     "Peach", "Cherry", "Goth", "Barbie", "Bronze",
     "Chrome", "Neon", "Cyborg", "Hologram", "Rave", "Baddie", "E-Girl",
+    "Doll", "Coquette", "Latte", "Cat Eye", "Peachy Glow", "Cold Beauty",
+    "Sunset", "Angel", "Cyber Doll", "Neon Cat", "Void", "Pixel Pop", "Belle",
 };
 const char* face_filter_name(int id) {
     if (id < 0 || id >= (int)(sizeof(k_names)/sizeof(k_names[0]))) return "?";
@@ -86,6 +88,7 @@ struct BeautyLook {
     float lip_grad = 1.f;      // 1 = bitten-lip gradient, 0 = full matte
     float nose_blush = 0.f, freckles = 0.f;   // e-girl layer
     float chin_tuck = 0.f, jaw_shade = 0.f;    // double-chin treatment
+    float lash = 0.f, liner = 0.f, lash_wing = 0.f;   // lashes, eyeliner, wing
     float blush_raise = 0.40f;  // 0 = mid-cheek (contour), 1 = under-eye
     float eye_glow = 0; float eye_glow_col[3] = {0.2f, 0.9f, 1.f};
     float skin_tint = 0; float tint_col[3] = {0.7f, 0.8f, 1.f};
@@ -96,6 +99,7 @@ static bool beauty_look_for(int filter_id, BeautyLook& L) {
     switch ((FaceFilter)filter_id) {
         case FaceFilter::Pretty:     // "Natural" — believable everyday clean-up
             L = {0.42f, 0.16f, 0.08f, 0.15f, 0.10f, 0.08f,  0.06f, 0.03f, 0.05f, 0.10f, 0.03f};
+                        L.lash = 0.25f; L.liner = 0.15f; L.lash_wing = 0.10f;
             return true;
         case FaceFilter::Glam:       // "Douyin" — the reference look
             // Alien-avoidance: pale but NOT flat — moderate brighten, a hint
@@ -105,16 +109,20 @@ static bool beauty_look_for(int filter_id, BeautyLook& L) {
             set3(L.blush_col, 1.f, 0.55f, 0.60f);        // soft pink, riding high
             set3(L.lip_col,   0.88f, 0.16f, 0.24f);      // rose red, gradient center
             L.chin_tuck = 0.80f; L.jaw_shade = 0.75f;
+                        L.lash = 0.60f; L.liner = 0.50f; L.lash_wing = 0.35f;
             return true;
         case FaceFilter::Porcelain:  // maximum skin, cool light, shape untouched
             L = {0.92f, 0.38f, 0.00f, 0.28f, 0.14f, 0.10f,  0.03f, 0.f,   0.f,   0.f,   0.f};
+                        L.lash = 0.22f; L.liner = 0.12f; L.lash_wing = 0.08f;
             return true;
         case FaceFilter::Sculpt:     // "Soft Glam" — makeup-forward, moderate shape
             L = {0.55f, 0.28f, 0.12f, 0.34f, 0.34f, 0.30f,  0.10f, 0.07f, 0.10f, 0.14f, 0.06f};
             L.chin_tuck = 0.40f; L.jaw_shade = 0.40f;
+                        L.lash = 0.55f; L.liner = 0.45f; L.lash_wing = 0.40f;
             return true;
         case FaceFilter::Honey:      // warm golden glow, soft everything
             L = {0.60f, 0.34f, 0.45f, 0.24f, 0.24f, 0.16f,  0.08f, 0.04f, 0.06f, 0.08f, 0.05f};
+                        L.lash = 0.40f; L.liner = 0.25f; L.lash_wing = 0.20f;
             return true;
 
         // ── Makeup looks ─────────────────────────────────────────────────
@@ -122,27 +130,32 @@ static bool beauty_look_for(int filter_id, BeautyLook& L) {
             L = {0.58f, 0.30f, 0.30f, 0.25f, 0.50f, 0.42f,  0.08f, 0.05f, 0.07f, 0.10f, 0.05f};
             set3(L.blush_col, 1.f, 0.55f, 0.38f);
             set3(L.lip_col,   1.f, 0.42f, 0.30f);
+                        L.lash = 0.45f; L.liner = 0.30f; L.lash_wing = 0.25f;
             return true;
         case FaceFilter::Cherry:     // K-drama cherry lips on pale skin
             L = {0.72f, 0.34f, 0.02f, 0.28f, 0.22f, 0.62f,  0.09f, 0.05f, 0.09f, 0.12f, 0.06f};
             set3(L.blush_col, 1.f, 0.55f, 0.62f);
             set3(L.lip_col,   0.85f, 0.08f, 0.16f);
+                        L.lash = 0.50f; L.liner = 0.40f; L.lash_wing = 0.30f;
             return true;
         case FaceFilter::Goth:       // pale, cool, plum-black lips
             L = {0.62f, 0.20f, 0.00f, 0.35f, 0.10f, 0.75f,  0.07f, 0.05f, 0.08f, 0.10f, 0.03f};
             set3(L.blush_col, 0.75f, 0.55f, 0.70f);
             set3(L.lip_col,   0.28f, 0.05f, 0.14f);
             L.desat = 0.28f;
+                        L.lash = 0.80f; L.liner = 0.85f; L.lash_wing = 0.60f;
             return true;
         case FaceFilter::Barbie:     // maximum pink everything
             L = {0.78f, 0.42f, 0.10f, 0.42f, 0.60f, 0.55f,  0.14f, 0.08f, 0.12f, 0.16f, 0.08f};
             set3(L.blush_col, 1.f, 0.45f, 0.75f);
             set3(L.lip_col,   1.f, 0.25f, 0.60f);
+                        L.lash = 0.70f; L.liner = 0.50f; L.lash_wing = 0.40f;
             return true;
         case FaceFilter::Bronze:     // golden-hour bronze glow
             L = {0.60f, 0.30f, 0.55f, 0.30f, 0.38f, 0.30f,  0.08f, 0.06f, 0.08f, 0.10f, 0.04f};
             set3(L.blush_col, 0.95f, 0.60f, 0.35f);
             set3(L.lip_col,   0.80f, 0.42f, 0.28f);
+                        L.lash = 0.50f; L.liner = 0.40f; L.lash_wing = 0.45f;
             return true;
 
         // ── Cyber looks ──────────────────────────────────────────────────
@@ -151,6 +164,7 @@ static bool beauty_look_for(int filter_id, BeautyLook& L) {
             L.desat = 0.85f; L.chrome = 0.60f; L.skin_tint = 0.22f;
             set3(L.tint_col, 0.75f, 0.82f, 0.95f);
             L.eye_glow = 0.25f; set3(L.eye_glow_col, 0.8f, 0.9f, 1.f);
+                        L.lash = 0.30f; L.liner = 0.40f; L.lash_wing = 0.50f;
             return true;
         case FaceFilter::Neon:       // electric magenta/cyan club face
             L = {0.55f, 0.15f, 0.f, 0.f, 0.55f, 0.60f,  0.10f, 0.05f, 0.08f, 0.10f, 0.05f};
@@ -158,18 +172,21 @@ static bool beauty_look_for(int filter_id, BeautyLook& L) {
             set3(L.lip_col,   1.f, 0.10f, 0.80f);        // electric magenta
             L.eye_glow = 0.55f; set3(L.eye_glow_col, 1.f, 0.15f, 0.85f);
             L.skin_tint = 0.10f; set3(L.tint_col, 0.75f, 0.65f, 1.f);
+                        L.lash = 0.60f; L.liner = 0.70f; L.lash_wing = 0.80f;
             return true;
         case FaceFilter::Cyborg:     // cold steel + red optics
             L = {0.75f, 0.05f, 0.f, 0.f, 0.f, 0.f,  0.05f, 0.04f, 0.05f, 0.f, 0.f};
             L.desat = 0.7f; L.chrome = 0.45f; L.skin_tint = 0.35f;
             set3(L.tint_col, 0.62f, 0.72f, 0.85f);
             L.eye_glow = 0.75f; set3(L.eye_glow_col, 1.f, 0.12f, 0.10f);
+                        L.lash = 0.30f; L.liner = 0.50f; L.lash_wing = 0.40f;
             return true;
         case FaceFilter::Hologram:   // scanlined cyan projection
             L = {0.50f, 0.20f, 0.f, 0.f, 0.f, 0.f,  0.f, 0.f, 0.f, 0.f, 0.f};
             L.skin_tint = 0.55f; set3(L.tint_col, 0.35f, 0.95f, 1.f);
             L.desat = 0.5f; L.scanlines = 0.85f;
             L.eye_glow = 0.35f; set3(L.eye_glow_col, 0.4f, 1.f, 1.f);
+                        L.lash = 0.35f; L.liner = 0.40f; L.lash_wing = 0.40f;
             return true;
         case FaceFilter::Baddie:     // 2016 Instagram: matte nude lip, contour, bronze
             L = {0.70f, 0.30f, 0.35f, 0.38f, 0.40f, 0.60f,  0.10f, 0.12f, 0.14f, 0.18f, 0.14f};
@@ -178,6 +195,7 @@ static bool beauty_look_for(int filter_id, BeautyLook& L) {
             L.lip_grad = 0.15f;                          // full matte coverage
             L.blush_raise = 0.05f;                       // low = contour line
             L.chin_tuck = 0.45f; L.jaw_shade = 0.60f;    // contour look = strong shade
+                        L.lash = 0.75f; L.liner = 0.60f; L.lash_wing = 0.60f;
             return true;
         case FaceFilter::EGirl:      // nose blush, faux freckles, glossy pink lip
             L = {0.55f, 0.28f, 0.10f, 0.35f, 0.50f, 0.45f,  0.12f, 0.04f, 0.08f, 0.10f, 0.10f};
@@ -187,6 +205,7 @@ static bool beauty_look_for(int filter_id, BeautyLook& L) {
             L.blush_raise = 0.55f;                       // high, under the eyes
             L.nose_blush  = 0.60f;                       // across the nose
             L.freckles    = 0.55f;
+                        L.lash = 0.65f; L.liner = 0.70f; L.lash_wing = 0.55f;
             return true;
         case FaceFilter::Rave:       // UV blacklight — purple skin, acid accents
             L = {0.55f, 0.10f, 0.f, 0.f, 0.55f, 0.60f,  0.10f, 0.f, 0.f, 0.f, 0.06f};
@@ -195,6 +214,104 @@ static bool beauty_look_for(int filter_id, BeautyLook& L) {
             set3(L.lip_col,   0.95f, 0.95f, 0.20f);      // yellow lip
             L.eye_glow = 0.45f; set3(L.eye_glow_col, 0.5f, 1.f, 0.3f);
             L.scanlines = 0.20f;
+                        L.lash = 0.60f; L.liner = 0.60f; L.lash_wing = 0.70f;
+            return true;
+        // ── Lash + blush generation ──────────────────────────────────────
+        case FaceFilter::Doll:       // porcelain doll: max lashes, round pink
+            L = {0.70f, 0.34f, 0.05f, 0.45f, 0.55f, 0.45f,  0.16f, 0.06f, 0.10f, 0.14f, 0.08f};
+            set3(L.blush_col, 1.f, 0.50f, 0.62f);
+            set3(L.lip_col,   0.96f, 0.35f, 0.45f);
+            L.lash = 0.85f; L.lash_wing = 0.35f; L.blush_raise = 0.50f; L.liner = 0.50f;
+            L.chin_tuck = 0.35f;
+            return true;
+        case FaceFilter::Coquette:   // soft bows-and-blush: rosy, gentle lash
+            L = {0.60f, 0.28f, 0.12f, 0.30f, 0.55f, 0.40f,  0.09f, 0.05f, 0.08f, 0.10f, 0.06f};
+            set3(L.blush_col, 1.f, 0.48f, 0.52f);
+            set3(L.lip_col,   0.92f, 0.34f, 0.40f);
+            L.lash = 0.55f; L.lash_wing = 0.20f; L.blush_raise = 0.55f; L.liner = 0.30f;
+            L.nose_blush = 0.35f;
+            return true;
+        case FaceFilter::Latte:      // warm browns: bronze blush, nude lip, brown lash
+            L = {0.62f, 0.28f, 0.35f, 0.30f, 0.42f, 0.45f,  0.08f, 0.07f, 0.10f, 0.12f, 0.06f};
+            set3(L.blush_col, 0.85f, 0.58f, 0.40f);
+            set3(L.lip_col,   0.72f, 0.46f, 0.36f);
+            L.lash = 0.60f; L.lash_wing = 0.40f; L.lip_grad = 0.25f; L.liner = 0.45f;
+            L.blush_raise = 0.20f; L.jaw_shade = 0.40f;
+            return true;
+        case FaceFilter::CatEye:     // the dramatic wing: liner-first, red lip
+            L = {0.60f, 0.26f, 0.06f, 0.40f, 0.20f, 0.55f,  0.12f, 0.06f, 0.12f, 0.14f, 0.04f};
+            set3(L.blush_col, 1.f, 0.55f, 0.55f);
+            set3(L.lip_col,   0.80f, 0.10f, 0.16f);
+            L.lash = 0.90f; L.lash_wing = 0.95f; L.lip_grad = 0.20f; L.liner = 1.0f;
+            return true;
+        case FaceFilter::PeachyGlow: // juicy peach blush everywhere, gloss
+            L = {0.62f, 0.34f, 0.30f, 0.32f, 0.65f, 0.42f,  0.10f, 0.05f, 0.08f, 0.10f, 0.08f};
+            set3(L.blush_col, 1.f, 0.58f, 0.42f);
+            set3(L.lip_col,   1.f, 0.48f, 0.36f);
+            L.lash = 0.45f; L.lash_wing = 0.15f; L.blush_raise = 0.45f;
+            L.nose_blush = 0.30f;
+            return true;
+        case FaceFilter::ColdBeauty: // pale gray-cool, wine lip, sharp lash
+            L = {0.72f, 0.30f, 0.00f, 0.38f, 0.16f, 0.55f,  0.12f, 0.08f, 0.16f, 0.16f, 0.03f};
+            set3(L.blush_col, 0.85f, 0.60f, 0.70f);
+            set3(L.lip_col,   0.52f, 0.10f, 0.20f);
+            L.lash = 0.75f; L.lash_wing = 0.55f; L.desat = 0.18f; L.liner = 0.75f;
+            L.lip_grad = 0.30f; L.jaw_shade = 0.45f;
+            return true;
+        case FaceFilter::Sunset:     // orange-pink heat: heavy warm blush, coral lip
+            L = {0.60f, 0.32f, 0.40f, 0.32f, 0.70f, 0.45f,  0.10f, 0.05f, 0.08f, 0.10f, 0.07f};
+            set3(L.blush_col, 1.f, 0.44f, 0.34f);
+            set3(L.lip_col,   0.98f, 0.36f, 0.28f);
+            L.lash = 0.50f; L.lash_wing = 0.30f; L.blush_raise = 0.40f;
+            L.nose_blush = 0.45f;
+            return true;
+        case FaceFilter::Angel:      // luminous white-pink: bright, soft lash, glow
+            L = {0.75f, 0.44f, 0.02f, 0.45f, 0.40f, 0.35f,  0.13f, 0.05f, 0.10f, 0.12f, 0.06f};
+            set3(L.blush_col, 1.f, 0.60f, 0.68f);
+            set3(L.lip_col,   0.95f, 0.45f, 0.52f);
+            L.lash = 0.50f; L.lash_wing = 0.25f; L.blush_raise = 0.60f; L.liner = 0.30f;
+            L.eye_glow = 0.20f; set3(L.eye_glow_col, 1.f, 0.92f, 0.95f);
+            return true;
+
+        // ── Lash + cyber mixes ───────────────────────────────────────────
+        case FaceFilter::CyberDoll:  // doll lashes on chrome-pink android skin
+            L = {0.75f, 0.20f, 0.f, 0.35f, 0.45f, 0.40f,  0.15f, 0.06f, 0.10f, 0.14f, 0.06f};
+            set3(L.blush_col, 1.f, 0.35f, 0.75f);
+            set3(L.lip_col,   1.f, 0.30f, 0.70f);
+            L.lash = 0.85f; L.lash_wing = 0.40f; L.liner = 0.55f;
+            L.skin_tint = 0.22f; set3(L.tint_col, 1.f, 0.80f, 0.92f);
+            L.eye_glow = 0.40f; set3(L.eye_glow_col, 1.f, 0.35f, 0.80f);
+            return true;
+        case FaceFilter::NeonCat:    // huge wing + cyan glow, electric lip
+            L = {0.60f, 0.20f, 0.f, 0.40f, 0.30f, 0.55f,  0.13f, 0.06f, 0.12f, 0.12f, 0.04f};
+            set3(L.blush_col, 0.30f, 0.85f, 1.f);
+            set3(L.lip_col,   0.95f, 0.12f, 0.75f);
+            L.lash = 0.95f; L.lash_wing = 1.0f; L.liner = 0.90f;
+            L.eye_glow = 0.55f; set3(L.eye_glow_col, 0.2f, 0.95f, 1.f);
+            L.skin_tint = 0.08f; set3(L.tint_col, 0.80f, 0.75f, 1.f);
+            return true;
+        case FaceFilter::Void:       // goth-cyber: black lip, heavy lash, purple glow
+            L = {0.65f, 0.16f, 0.f, 0.40f, 0.12f, 0.70f,  0.10f, 0.07f, 0.12f, 0.12f, 0.03f};
+            set3(L.blush_col, 0.60f, 0.45f, 0.70f);
+            set3(L.lip_col,   0.12f, 0.04f, 0.10f);
+            L.lash = 0.90f; L.lash_wing = 0.65f; L.lip_grad = 0.10f; L.liner = 0.85f;
+            L.desat = 0.35f; L.eye_glow = 0.45f; set3(L.eye_glow_col, 0.55f, 0.25f, 0.95f);
+            L.jaw_shade = 0.45f;
+            return true;
+        case FaceFilter::PixelPop:   // arcade: light scanlines, candy blush, teal lip
+            L = {0.55f, 0.28f, 0.05f, 0.35f, 0.55f, 0.50f,  0.11f, 0.04f, 0.08f, 0.10f, 0.06f};
+            set3(L.blush_col, 1.f, 0.45f, 0.55f);
+            set3(L.lip_col,   0.15f, 0.80f, 0.75f);
+            L.lash = 0.55f; L.lash_wing = 0.35f; L.lip_grad = 0.15f;
+            L.scanlines = 0.30f; L.eye_glow = 0.30f; set3(L.eye_glow_col, 1.f, 0.85f, 0.30f);
+            return true;
+        case FaceFilter::Belle:      // huge doll eyes, max lash, porcelain-pink
+            L = {0.72f, 0.40f, 0.02f, 0.50f, 0.60f, 0.45f,  0.25f, 0.05f, 0.10f, 0.12f, 0.10f};
+            set3(L.blush_col, 1.f, 0.42f, 0.55f);        // hot pink
+            set3(L.lip_col,   0.98f, 0.38f, 0.48f);      // glossy pink
+            L.lash = 0.95f; L.liner = 0.80f; L.lash_wing = 0.50f;
+            L.blush_raise = 0.55f; L.nose_blush = 0.50f;
+            L.chin_tuck = 0.40f;
             return true;
         default: return false;
     }
@@ -538,6 +655,20 @@ uintptr_t face_filter_apply_obs(int filter_id, float amount, const FaceObs& obs,
         bp.nose_blush = L.nose_blush * amount;
         bp.freckles   = L.freckles   * amount;
         bp.jaw_shade  = L.jaw_shade  * amount;
+        bp.lash       = L.lash       * amount;
+        bp.liner      = L.liner      * amount;
+        bp.lash_wing  = L.lash_wing;             // wing length is a shape, not a mix
+        bp.eyeoutL_x = PX(obs.pts[33][0]);  bp.eyeoutL_y = PY(obs.pts[33][1]);
+        bp.eyeoutR_x = PX(obs.pts[263][0]); bp.eyeoutR_y = PY(obs.pts[263][1]);
+        // Upper-lid chains, outer→inner — the lash/liner ride these.
+        static const int kLidL[7] = {33, 161, 160, 159, 158, 157, 133};
+        static const int kLidR[7] = {263, 388, 387, 386, 385, 384, 362};
+        for (int i = 0; i < 7; ++i) {
+            bp.lidL[i][0] = PX(obs.pts[kLidL[i]][0]);
+            bp.lidL[i][1] = PY(obs.pts[kLidL[i]][1]);
+            bp.lidR[i][0] = PX(obs.pts[kLidR[i]][0]);
+            bp.lidR[i][1] = PY(obs.pts[kLidR[i]][1]);
+        }
         memcpy(bp.blush_col, L.blush_col, sizeof(bp.blush_col));
         memcpy(bp.lip_col,   L.lip_col,   sizeof(bp.lip_col));
         bp.eye_glow = L.eye_glow * amount;

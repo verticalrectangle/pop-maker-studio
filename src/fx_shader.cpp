@@ -527,7 +527,7 @@ static GLuint g_solid_tex = 0;
 // previously shared MAX*2 with the mirror face-warp — now exclusive.
 // + a dedicated bank for the face-filter picker previews (one per filter id) so
 // the whole grid of warps can be shown at once without clobbering each other.
-static const int kFacePreviewSlots    = 24;  // >= face_filter_count() so picker previews never share an FBO
+static const int kFacePreviewSlots    = 40;  // >= face_filter_count() so picker previews never share an FBO
 static const int kFacePreviewSlotBase = MAX_VIDEO_TRACKS * 4 + 2;
 static const int kMaxSlots = MAX_VIDEO_TRACKS * 4 + 2 + kFacePreviewSlots;
 static const int kFaceClipSlotBase = MAX_VIDEO_TRACKS * 2 + 1;
@@ -819,7 +819,18 @@ uniform vec4 u_mouthax;  // lip ellipse semi-width, semi-height (px), _, _
 uniform vec2 u_lippoly[12];  // outer-lip ring in px — the mask FOLLOWS the mouth
 uniform vec4 u_nose;     // nose bridge xy (px), nose blush amt, freckles amt
 uniform float u_brow_r;
+uniform vec4 u_lash;     // amount, wing, liner, _
+uniform vec4 u_eyeout;   // outer eye corners L xy, R xy (px)
+uniform vec2 u_lidL[7];  // upper-lid chain, outer→inner (px)
+uniform vec2 u_lidR[7];
 float lum(vec3 c) { return dot(c, vec3(0.299, 0.587, 0.114)); }
+
+// Distance to a segment, for the liner wing stroke.
+float seg_dist(vec2 p2, vec2 a2, vec2 b2) {
+    vec2 e2 = b2 - a2;
+    float t2 = clamp(dot(p2 - a2, e2) / max(dot(e2, e2), 1e-4), 0.0, 1.0);
+    return length(p2 - (a2 + e2 * t2));
+}
 void main() {
     vec2 p   = v_uv * u_dim;
     vec3 col = texture(u_tex, v_uv).rgb;
@@ -988,6 +999,51 @@ void main() {
             col += u_tintc.rgb * u_cyber.w * mask * 0.06 * (1.0 - sl);
         }
     }
+    // Lashes + eyeliner along the REAL upper-lid polyline (the parametric
+    // arc floated at brow height — same lesson as the lips: the mesh knows
+    // the true shape, use it). Liner is a crisp line ON the lid edge; the
+    // lash band sits just above it, thicker toward the outer corner; the
+    // wing extends from the outer corner.
+    if (u_lash.x + u_lash.z > 0.001) {
+        vec3 ink = vec3(0.04, 0.03, 0.04);
+        for (int side = 0; side < 2; ++side) {
+            vec2 outc = side == 0 ? u_eyeout.xy : u_eyeout.zw;
+            float dmin2 = 1e9; float tbest = 0.0;
+            for (int i = 0; i < 6; ++i) {
+                vec2 a3 = side == 0 ? u_lidL[i]     : u_lidR[i];
+                vec2 b3 = side == 0 ? u_lidL[i + 1] : u_lidR[i + 1];
+                vec2 e3 = b3 - a3;
+                float ts = clamp(dot(p - a3, e3) / max(dot(e3, e3), 1e-4), 0.0, 1.0);
+                float dd = length(p - (a3 + e3 * ts));
+                if (dd < dmin2) { dmin2 = dd; tbest = (float(i) + ts) / 6.0; }
+            }
+            // Signed side of the chain: positive above the lid.
+            float above = dot(p - outc, u_up);   // coarse, per-eye
+            float taper = 1.0 - tbest * 0.6;     // thicker at the outer corner
+            if (u_lash.z > 0.001) {              // liner: crisp, ON the line
+                float lt = er * 0.055 * taper;
+                float line = 1.0 - smoothstep(lt * 0.5, lt, dmin2);
+                col = mix(col, ink, line * u_lash.z * 0.95);
+            }
+            if (u_lash.x > 0.001) {              // lash band: soft, just above
+                float bt = er * 0.16 * taper;
+                float band = (1.0 - smoothstep(bt * 0.35, bt, dmin2))
+                           * smoothstep(-er * 0.05, er * 0.10, above);
+                col = mix(col, col * 0.30, band * u_lash.x * 0.75);
+            }
+            if (u_lash.y > 0.001) {              // wing from the outer corner
+                vec2 inc = side == 0 ? u_lidL[6] : u_lidR[6];
+                vec2 outdir = normalize(outc - inc);
+                vec2 w1 = outc + (outdir * 0.80 + u_up * 0.35) * er * u_lash.y;
+                float wd = seg_dist(p, outc, w1);
+                float along = clamp(dot(p - outc, w1 - outc) /
+                                    max(dot(w1 - outc, w1 - outc), 1e-4), 0.0, 1.0);
+                float wt = mix(er * 0.10, er * 0.015, along);
+                float wing = 1.0 - smoothstep(wt * 0.4, wt, wd);
+                col = mix(col, ink, wing * max(u_lash.x, u_lash.z) * 0.92);
+            }
+        }
+    }
     // Eye glow: additive colored halo, larger + softer than eye pop.
     if (u_eyeglow.a > 0.001) {
         float gL = 1.0 - smoothstep(er * 0.3, er * 1.6, distance(p, u_eyes.xy));
@@ -1048,6 +1104,10 @@ uintptr_t face_beauty_apply(uintptr_t src_tex, int slot, int w, int h,
     glUniform4f(u("u_mouthax"), p.mouth_sw, p.mouth_sh, 0.f, 0.f);
     glUniform2fv(u("u_lippoly"), 12, &p.lip_poly[0][0]);
     glUniform4f(u("u_nose"), p.nose_x, p.nose_y, p.nose_blush, p.freckles);
+    glUniform4f(u("u_lash"), p.lash, p.lash_wing, p.liner, 0.f);
+    glUniform4f(u("u_eyeout"), p.eyeoutL_x, p.eyeoutL_y, p.eyeoutR_x, p.eyeoutR_y);
+    glUniform2fv(u("u_lidL"), 7, &p.lidL[0][0]);
+    glUniform2fv(u("u_lidR"), 7, &p.lidR[0][0]);
     glUniform1f(u("u_brow_r"), p.brow_r);
     glDrawArrays(GL_TRIANGLES, 0, 3);
 

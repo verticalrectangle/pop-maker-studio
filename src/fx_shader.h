@@ -33,6 +33,11 @@ struct FaceBeautyParams {
     float lip_grad = 1.f;   // bitten-lip gradient amount (0 = full matte)
     float nose_x = 0, nose_y = 0;   // nose bridge (px)
     float jaw_shade = 0.f;  // 0..1 under-jaw contour shadow (double-chin recede)
+    float lash = 0.f;       // 0..1 soft lash band on the upper lid
+    float liner = 0.f;      // 0..1 crisp eyeliner line at the lash line
+    float lash_wing = 0.f;  // 0..1 winged tip from the outer corner
+    float eyeoutL_x = 0, eyeoutL_y = 0, eyeoutR_x = 0, eyeoutR_y = 0; // outer corners (px)
+    float lidL[7][2] = {}, lidR[7][2] = {};  // upper-lid chains, outer→inner (px)
     float nose_blush = 0.f; // 0..1 e-girl across-the-nose blush
     float freckles  = 0.f;  // 0..1 faux freckles over nose + upper cheeks
     float blush_col[3] = {1.f, 0.45f, 0.55f};   // makeup colors
