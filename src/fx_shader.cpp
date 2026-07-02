@@ -820,6 +820,7 @@ uniform vec2 u_lippoly[12];  // outer-lip ring in px — the mask FOLLOWS the mo
 uniform vec4 u_nose;     // nose bridge xy (px), nose blush amt, freckles amt
 uniform float u_brow_r;
 uniform vec4 u_lash;     // amount, wing, liner, _
+uniform vec4 u_chin_px;  // chin x, y (px), crease-smooth amount, _
 uniform vec2 u_blink;    // per-eye blink 0..1 — lid landmarks lag a blink,
                          // so eye makeup fades out for those frames instead
                          // of floating over the closed eye
@@ -893,6 +894,27 @@ void main() {
         float eL = 1.0 - smoothstep(er * 0.35, er * 0.95, distance(p, u_eyes.xy));
         float eR = 1.0 - smoothstep(er * 0.35, er * 0.95, distance(p, u_eyes.zw));
         col *= 1.0 + u_amt.w * 0.30 * max(eL, eR);
+    }
+    // Double-chin crease erase: frequency-separation retouch. The fold reads
+    // as a horizontal crease shadow + bulge highlight; a wide blur in a
+    // chin-anchored region removes that local contrast while the AVERAGE
+    // tone stays identical — no band (nothing painted), no wobble (nothing
+    // moves). Uses its own region, not the face mask (which ends at the chin).
+    if (u_chin_px.z > 0.001) {
+        float below = smoothstep(0.70, 0.95, -b) * (1.0 - smoothstep(1.30, 1.55, -b));
+        float reg = below * (1.0 - smoothstep(er * 1.3, er * 2.3,
+                                              distance(p, u_chin_px.xy)));
+        if (reg > 0.003) {
+            vec2 px2 = 1.0 / u_dim;
+            float rad = er * 0.55;
+            vec3 acc = vec3(0.0);
+            for (int i = 0; i < 12; ++i) {
+                float ang = float(i) * 0.5236;
+                float rr2 = (0.35 + 0.65 * fract(float(i) * 0.618)) * rad;
+                acc += texture(u_tex, v_uv + vec2(cos(ang), sin(ang)) * rr2 * px2).rgb;
+            }
+            col = mix(col, acc * (1.0 / 12.0), reg * u_chin_px.z * 0.8);
+        }
     }
     // Under-jaw contour shadow: a soft darkening band just OUTSIDE the lower
     // face ellipse — the makeup-artist trick that makes a double chin recede.
@@ -1255,6 +1277,7 @@ uintptr_t face_beauty_apply(uintptr_t src_tex, int slot, int w, int h,
     glUniform4f(u("u_nose"), p.nose_x, p.nose_y, p.nose_blush, p.freckles);
     glUniform4f(u("u_lash"), p.lash, p.lash_wing, p.liner, 0.f);
     glUniform2f(u("u_blink"), p.blink_l, p.blink_r);
+    glUniform4f(u("u_chin_px"), p.chin_x, p.chin_y, p.chin_smooth, 0.f);
     glUniform4f(u("u_eyeout"), p.eyeoutL_x, p.eyeoutL_y, p.eyeoutR_x, p.eyeoutR_y);
     glUniform2fv(u("u_lidL"), 7, &p.lidL[0][0]);
     glUniform2fv(u("u_lidR"), 7, &p.lidR[0][0]);

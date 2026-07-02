@@ -87,7 +87,8 @@ struct BeautyLook {
     // cyber
     float lip_grad = 1.f;      // 1 = bitten-lip gradient, 0 = full matte
     float nose_blush = 0.f, freckles = 0.f;   // e-girl layer
-    float chin_tuck = 0.f, jaw_shade = 0.f;    // double-chin treatment
+    float chin_tuck = 0.f, jaw_shade = 0.f;    // (tuck retired: warped the neck)
+    float chin_smooth = 0.f;                    // double-chin crease erase
     float lash = 0.f, liner = 0.f, lash_wing = 0.f;   // lashes, eyeliner, wing
     const char* makeup_tex = nullptr;  // UV-mapped makeup PNG (models/face/)
     float makeup_adapt = 1.f;          // lighting adaptation amount
@@ -113,7 +114,7 @@ static bool beauty_look_for(int filter_id, BeautyLook& L) {
             L = {0.68f, 0.30f, 0.05f, 0.42f, 0.15f, 0.12f,  0.13f, 0.09f, 0.24f, 0.18f, 0.05f};
             set3(L.blush_col, 1.f, 0.55f, 0.60f);
             set3(L.lip_col,   0.88f, 0.16f, 0.24f);
-            L.chin_tuck = 0.80f; L.jaw_shade = 0.75f;
+            L.chin_smooth = 0.92f; L.jaw_shade = 0.f;
             L.makeup_tex = "makeup_douyin.png";
             L.lash = 0.15f; L.liner = 0.00f; L.lash_wing = 0.20f;
             return true;
@@ -123,7 +124,7 @@ static bool beauty_look_for(int filter_id, BeautyLook& L) {
             return true;
         case FaceFilter::Sculpt:     // "Soft Glam" — makeup-forward, moderate shape
             L = {0.55f, 0.28f, 0.12f, 0.34f, 0.34f, 0.30f,  0.10f, 0.07f, 0.10f, 0.14f, 0.06f};
-            L.chin_tuck = 0.40f; L.jaw_shade = 0.40f;
+            L.chin_smooth = 0.46f; L.jaw_shade = 0.f;
                         L.lash = 0.55f; L.liner = 0.45f; L.lash_wing = 0.40f;
             return true;
         case FaceFilter::Honey:      // warm golden glow, soft everything
@@ -200,7 +201,7 @@ static bool beauty_look_for(int filter_id, BeautyLook& L) {
             set3(L.lip_col,   0.70f, 0.44f, 0.40f);      // matte nude mauve
             L.lip_grad = 0.15f;                          // full matte coverage
             L.blush_raise = 0.05f;                       // low = contour line
-            L.chin_tuck = 0.45f; L.jaw_shade = 0.60f;    // contour look = strong shade
+            L.chin_smooth = 0.52f; L.jaw_shade = 0.f;    // contour look = strong shade
                         L.lash = 0.75f; L.liner = 0.60f; L.lash_wing = 0.60f;
             return true;
         case FaceFilter::EGirl:      // nose blush, faux freckles, glossy pink lip
@@ -228,7 +229,7 @@ static bool beauty_look_for(int filter_id, BeautyLook& L) {
             set3(L.blush_col, 1.f, 0.50f, 0.62f);
             set3(L.lip_col,   0.96f, 0.35f, 0.45f);
             L.lash = 0.85f; L.lash_wing = 0.35f; L.blush_raise = 0.50f; L.liner = 0.50f;
-            L.chin_tuck = 0.35f;
+            L.chin_smooth = 0.40f;
             return true;
         case FaceFilter::Coquette:   // soft bows-and-blush: rosy, gentle lash
             L = {0.60f, 0.28f, 0.12f, 0.30f, 0.55f, 0.40f,  0.09f, 0.05f, 0.08f, 0.10f, 0.06f};
@@ -242,7 +243,7 @@ static bool beauty_look_for(int filter_id, BeautyLook& L) {
             set3(L.blush_col, 0.85f, 0.58f, 0.40f);
             set3(L.lip_col,   0.72f, 0.46f, 0.36f);
             L.lash = 0.60f; L.lash_wing = 0.40f; L.lip_grad = 0.25f; L.liner = 0.45f;
-            L.blush_raise = 0.20f; L.jaw_shade = 0.40f;
+            L.blush_raise = 0.20f; L.jaw_shade = 0.f;
             return true;
         case FaceFilter::CatEye:     // the dramatic wing: liner-first, red lip
             L = {0.60f, 0.26f, 0.06f, 0.40f, 0.20f, 0.55f,  0.12f, 0.06f, 0.12f, 0.14f, 0.04f};
@@ -262,7 +263,7 @@ static bool beauty_look_for(int filter_id, BeautyLook& L) {
             set3(L.blush_col, 0.85f, 0.60f, 0.70f);
             set3(L.lip_col,   0.52f, 0.10f, 0.20f);
             L.lash = 0.75f; L.lash_wing = 0.55f; L.desat = 0.18f; L.liner = 0.75f;
-            L.lip_grad = 0.30f; L.jaw_shade = 0.45f;
+            L.lip_grad = 0.30f; L.jaw_shade = 0.f;
             return true;
         case FaceFilter::Sunset:     // orange-pink heat: heavy warm blush, coral lip
             L = {0.60f, 0.32f, 0.40f, 0.32f, 0.70f, 0.45f,  0.10f, 0.05f, 0.08f, 0.10f, 0.07f};
@@ -302,7 +303,7 @@ static bool beauty_look_for(int filter_id, BeautyLook& L) {
             set3(L.lip_col,   0.12f, 0.04f, 0.10f);
             L.lash = 0.90f; L.lash_wing = 0.65f; L.lip_grad = 0.10f; L.liner = 0.85f;
             L.desat = 0.35f; L.eye_glow = 0.45f; set3(L.eye_glow_col, 0.55f, 0.25f, 0.95f);
-            L.jaw_shade = 0.45f;
+            L.jaw_shade = 0.f;
             return true;
         case FaceFilter::PixelPop:   // arcade: light scanlines, candy blush, teal lip
             L = {0.55f, 0.28f, 0.05f, 0.35f, 0.55f, 0.50f,  0.11f, 0.04f, 0.08f, 0.10f, 0.06f};
@@ -317,7 +318,7 @@ static bool beauty_look_for(int filter_id, BeautyLook& L) {
             set3(L.lip_col,   0.98f, 0.38f, 0.48f);      // glossy pink
             L.lash = 0.95f; L.liner = 0.80f; L.lash_wing = 0.50f;
             L.blush_raise = 0.55f; L.nose_blush = 0.50f;
-            L.chin_tuck = 0.40f;
+            L.chin_smooth = 0.46f;
             return true;
         default: return false;
     }
@@ -403,15 +404,12 @@ int face_filter_bumps(int filter_id, float amount, const FaceObs& obs,
                 float fold[2] = {a.chin[0] - a.up[0] * a.eyeDist * 0.45f,
                                  a.chin[1] - a.up[1] * a.eyeDist * 0.45f};
                 float k = L.chin_tuck * amt * 0.48f;
-                bump(fold, a.eyeDist * 0.62f * ih, 0.f,
+                // ONE tight bump. The second, lower pass reached the
+                // necklace/chest — warped neck texture wobbles with head
+                // motion and reads as a band. The fold sits right under the
+                // chin; that's the only place the tuck belongs.
+                bump(fold, a.eyeDist * 0.50f * ih, 0.f,
                      (a.chin[0] - fold[0]) * k, (a.chin[1] - fold[1]) * k);
-                // Second, wider pass lower down catches the neck side of the
-                // fold so the compression doesn't leave a ridge.
-                float fold2[2] = {a.chin[0] - a.up[0] * a.eyeDist * 0.80f,
-                                  a.chin[1] - a.up[1] * a.eyeDist * 0.80f};
-                bump(fold2, a.eyeDist * 0.75f * ih, 0.f,
-                     (a.chin[0] - fold2[0]) * k * 0.5f,
-                     (a.chin[1] - fold2[1]) * k * 0.5f);
             }
             if (L.nose > 0.f) {
                 bump(a.noseL, a.eyeDist * 0.22f * ih, 0.f,
@@ -661,6 +659,8 @@ uintptr_t face_filter_apply_obs(int filter_id, float amount, const FaceObs& obs,
         bp.nose_blush = L.nose_blush * amount;
         bp.freckles   = L.freckles   * amount;
         bp.jaw_shade  = L.jaw_shade  * amount;
+        bp.chin_x = PX(a.chin[0]); bp.chin_y = PY(a.chin[1]);
+        bp.chin_smooth = L.chin_smooth * amount;
         bp.lash       = L.lash       * amount;
         bp.liner      = L.liner      * amount;
         if (obs.has_blend) {

@@ -33,6 +33,8 @@ struct FaceBeautyParams {
     float lip_grad = 1.f;   // bitten-lip gradient amount (0 = full matte)
     float nose_x = 0, nose_y = 0;   // nose bridge (px)
     float jaw_shade = 0.f;  // 0..1 under-jaw contour shadow (double-chin recede)
+    float chin_x = 0, chin_y = 0;   // chin tip (px)
+    float chin_smooth = 0.f;        // 0..1 double-chin crease erase
     float blink_l = 0.f, blink_r = 0.f;  // blendshape blinks — eye makeup fades during a blink
     float lash = 0.f;       // 0..1 soft lash band on the upper lid
     float liner = 0.f;      // 0..1 crisp eyeliner line at the lash line
