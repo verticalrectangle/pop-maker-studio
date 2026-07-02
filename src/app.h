@@ -875,6 +875,17 @@ struct AppState {
 
     // IPC-requested snapshot (ipc_server sets request; GL thread fulfills and sets done)
     bool        snapshot_request    = false;
+    // Save-thumbnail request: canvas capture writes a small PNG here on the
+    // next rendered frame (set on every successful project save). Runtime.
+    std::string thumb_request;
+    // Dirty tracking: history_pos() at the last save/load/new. The project is
+    // dirty when history has moved past this point (undoing back to it counts
+    // as clean again). Runtime, never serialized.
+    int  saved_history_pos = 0;
+    // Quit flow: the close button arms quit_prompt instead of exiting when
+    // dirty; the save-confirm modal sets quit_confirmed to let the app close.
+    bool quit_prompt    = false;
+    bool quit_confirmed = false;
     // source == "canvas": capture the live preview rect from the window
     // framebuffer after ImGui renders — the exact pixels the user sees
     // (scene compositor + text overlays) — instead of re-rendering through

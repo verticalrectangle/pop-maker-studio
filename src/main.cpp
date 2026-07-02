@@ -11,6 +11,8 @@
 #include <filesystem>
 
 #include "app.h"
+#include "history.h"
+#include "ui/studio_shared.h"
 #include "ipc_server.h"
 #include "paths.h"
 #include "video.h"
@@ -267,7 +269,20 @@ int main(int argc, char** argv) {
     // is gated by the monitor (e.g. 60 Hz), and changing the libx264 preset
     // has no observable effect because ffmpeg is starved on stdin.
     bool vsync_on = true;
-    while (!glfwWindowShouldClose(window)) {
+    std::string cur_title;
+    while (!glfwWindowShouldClose(window) || state.quit_prompt) {
+        // Close intercepted: with unsaved edits in the editor, arm the
+        // save-confirm modal instead of dying — the modal either saves and
+        // confirms, discards and confirms, or cancels (quit_prompt drops and
+        // we keep running).
+        if (glfwWindowShouldClose(window)) {
+            if (state.in_studio && project_dirty(state) && !state.quit_confirmed) {
+                glfwSetWindowShouldClose(window, GLFW_FALSE);
+                state.quit_prompt = true;
+            } else break;
+        }
+        if (state.quit_confirmed) break;
+
         glfwPollEvents();
         drain_dropped_queue();   // single-file drops: feed one path per frame
         drain_bin_pending(state); // multi-file drops: dump all into the bin
@@ -276,6 +291,22 @@ int main(int argc, char** argv) {
         if (want_vsync != vsync_on) {
             glfwSwapInterval(want_vsync ? 1 : 0);
             vsync_on = want_vsync;
+        }
+
+        // Title bar: project name + dirty dot. "name — Pop Maker Studio",
+        // updated only when it actually changes (X11 title sets aren't free).
+        {
+            std::string want = "Pop Maker Studio";
+            if (state.in_studio) {
+                std::string name = state.project_path.empty()
+                    ? "Untitled"
+                    : std::filesystem::path(state.project_path).stem().string();
+                want = name + (project_dirty(state) ? " •" : "") + " — Pop Maker Studio";
+            }
+            if (want != cur_title) {
+                cur_title = want;
+                glfwSetWindowTitle(window, cur_title.c_str());
+            }
         }
 
         ImGui_ImplOpenGL3_NewFrame();

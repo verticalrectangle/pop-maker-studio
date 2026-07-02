@@ -179,12 +179,12 @@ static void handle_shortcuts(AppState& state) {
     if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_S)) {
         if (state.project_path.empty())
             state.project_path = filepicker_save("Save project", "PMS Project", "*.pms", project_save_default(state).c_str());
-        if (!state.project_path.empty()) { project_save(state, state.project_path); recent_projects_push(state.project_path); recovery_clear(); }
+        if (!state.project_path.empty()) { project_save(state, state.project_path); recent_projects_push(state.project_path); recovery_clear(); mark_project_saved(state, state.project_path); }
         return;
     }
     if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_S)) {
         std::string p = filepicker_save("Save project as", "PMS Project", "*.pms", project_save_default(state).c_str());
-        if (!p.empty()) { state.project_path = p; project_save(state, p); recent_projects_push(p); recovery_clear(); }
+        if (!p.empty()) { state.project_path = p; project_save(state, p); recent_projects_push(p); recovery_clear(); mark_project_saved(state, p); }
         return;
     }
     if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_N)) {
@@ -941,17 +941,18 @@ void ui_studio(AppState& state) {
                                     audio_source_ensure(cl.text);
                         recent_projects_push(picked);
                         history_push(state, "Open project");  // baseline so the first edit is undoable
+                        mark_project_clean(state);
                     }
                 }
             }
             if (ImGui::MenuItem("Save Project", "Ctrl+S")) {
                 if (state.project_path.empty())
                     state.project_path = filepicker_save("Save project", "PMS Project", "*.pms", project_save_default(state).c_str());
-                if (!state.project_path.empty()) { project_save(state, state.project_path); recent_projects_push(state.project_path); recovery_clear(); }
+                if (!state.project_path.empty()) { project_save(state, state.project_path); recent_projects_push(state.project_path); recovery_clear(); mark_project_saved(state, state.project_path); }
             }
             if (ImGui::MenuItem("Save Project As…", "Ctrl+Shift+S")) {
                 std::string p = filepicker_save("Save project as", "PMS Project", "*.pms", project_save_default(state).c_str());
-                if (!p.empty()) { state.project_path = p; project_save(state, p); recent_projects_push(p); recovery_clear(); }
+                if (!p.empty()) { state.project_path = p; project_save(state, p); recent_projects_push(p); recovery_clear(); mark_project_saved(state, p); }
             }
             if (ImGui::MenuItem("Collect (self-contained copy)…")) {
                 // Default to a fresh folder under the projects dir, named after the
@@ -1989,6 +1990,53 @@ void ui_studio(AppState& state) {
     // (Drag splitters now run in the body-layout section above, BEFORE the
     // panel children render, so the canvas/timeline input guards can see the
     // splitter capture flag in the same frame — see ui_splitter_capture().)
+
+    // ── Quit confirm: unsaved changes ─────────────────────────────────────────
+    if (state.quit_prompt) {
+        ImGui::OpenPopup("Save changes?##quit");
+        state.quit_prompt = false;   // popup owns the flow from here
+    }
+    {
+        ImVec2 dc_ = ImGui::GetIO().DisplaySize;
+        ImGui::SetNextWindowPos({dc_.x * 0.5f, dc_.y * 0.42f}, ImGuiCond_Appearing, {0.5f, 0.5f});
+        if (ImGui::BeginPopupModal("Save changes?##quit", nullptr,
+                ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove)) {
+            std::string name = state.project_path.empty()
+                ? "Untitled"
+                : fs::path(state.project_path).stem().string();
+            ImGui::Text("Save changes to \"%s\" before closing?", name.c_str());
+            ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+            ImGui::TextUnformatted("Your edits since the last save will be lost otherwise.");
+            ImGui::PopStyleColor();
+            ImGui::Dummy({0.f, 8.f});
+            if (ImGui::Button("Save", {110.f, 0.f})) {
+                std::string p = state.project_path;
+                if (p.empty())
+                    p = filepicker_save("Save project", "PMS Project", "*.pms",
+                                        project_save_default(state).c_str());
+                if (!p.empty() && project_save(state, p)) {
+                    state.project_path = p;
+                    recent_projects_push(p);
+                    recovery_clear();
+                    mark_project_saved(state, p);
+                    state.quit_confirmed = true;
+                    ImGui::CloseCurrentPopup();
+                }
+                // picker cancelled / save failed → stay open, nothing lost
+            }
+            ImGui::SameLine(0.f, 8.f);
+            if (ImGui::Button("Don't Save", {110.f, 0.f})) {
+                state.quit_confirmed = true;
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::SameLine(0.f, 8.f);
+            if (ImGui::Button("Cancel", {110.f, 0.f}) ||
+                ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+        }
+    }
 
     // ── Pipeline strip ────────────────────────────────────────────────────────
     if (pipeline_h > 0.f) {

@@ -1007,6 +1007,16 @@ static struct {
     float  w = 0.f, h = 0.f;
 } g_canvas_cap;
 
+// Save-thumbnail capture: same lifecycle as g_canvas_cap but writes a small
+// PNG to a fixed path and never touches the IPC snapshot_done fields.
+static struct {
+    int    frames_left = -1;
+    ImVec2 p{};
+    float  w = 0.f, h = 0.f;
+    std::string path;
+} g_thumb_cap;
+
+
 // ── Live camera preview ───────────────────────────────────────────────────────
 // While the camera brick monitors, warms up, or records, the latest camera
 // frame is composited into the scene AT THE BRICK'S TRANSFORM (pos/scale/
@@ -1238,6 +1248,18 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
     if (g_canvas_cap.frames_left > 0) {
         g_canvas_cap.p = p; g_canvas_cap.w = w; g_canvas_cap.h = h;
         --g_canvas_cap.frames_left;  // 0 → canvas_capture_after_render fires
+    }
+    // Save-thumbnail request (project save): capture the preview rect next
+    // frame and write a small PNG for the home screen's recent-project card.
+    // Separate from g_canvas_cap so it can't disturb an in-flight IPC snapshot.
+    if (!state.thumb_request.empty() && g_thumb_cap.frames_left < 0) {
+        g_thumb_cap.path        = state.thumb_request;
+        g_thumb_cap.frames_left = 2;
+        state.thumb_request.clear();
+    }
+    if (g_thumb_cap.frames_left > 0) {
+        g_thumb_cap.p = p; g_thumb_cap.w = w; g_thumb_cap.h = h;
+        --g_thumb_cap.frames_left;   // 0 → canvas_capture_after_render writes it
     }
 
     // The playhead is clamped to the last playable frame upstream (app.cpp), so
@@ -2630,6 +2652,45 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
 #include "stb_image_write.h"
 
 void canvas_capture_after_render(AppState& state) {
+    // Pending save-thumbnail: read the preview rect and write a ~448px-wide
+    // PNG (box-sampled) for the home screen card. Independent of the IPC
+    // snapshot flow below.
+    if (g_thumb_cap.frames_left == 0) {
+        g_thumb_cap.frames_left = -1;
+        ImGuiIO& tio = ImGui::GetIO();
+        float tsx = tio.DisplayFramebufferScale.x, tsy = tio.DisplayFramebufferScale.y;
+        int tfb_h = (int)(tio.DisplaySize.y * tsy);
+        int trx = (int)(g_thumb_cap.p.x * tsx);
+        int trw = (int)(g_thumb_cap.w   * tsx);
+        int trh = (int)(g_thumb_cap.h   * tsy);
+        int try_ = tfb_h - (int)((g_thumb_cap.p.y + g_thumb_cap.h) * tsy);
+        if (trw > 0 && trh > 0 && !g_thumb_cap.path.empty()) {
+            std::vector<uint8_t> raw((size_t)trw * trh * 4);
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            glPixelStorei(GL_PACK_ALIGNMENT, 1);
+            glReadPixels(trx, try_, trw, trh, GL_RGBA, GL_UNSIGNED_BYTE, raw.data());
+            int ow = 448;
+            if (trw < ow) ow = trw;
+            int oh = (int)((long long)trh * ow / trw);
+            if (oh < 1) oh = 1;
+            std::vector<uint8_t> img((size_t)ow * oh * 4);
+            for (int y = 0; y < oh; ++y) {
+                int sy0 = (int)((long long)y * trh / oh);
+                // GL rows are bottom-up — flip while sampling.
+                const uint8_t* srow = raw.data() + (size_t)(trh - 1 - sy0) * trw * 4;
+                uint8_t* drow = img.data() + (size_t)y * ow * 4;
+                for (int x = 0; x < ow; ++x) {
+                    int sx0 = (int)((long long)x * trw / ow);
+                    const uint8_t* sp = srow + (size_t)sx0 * 4;
+                    uint8_t* dp = drow + (size_t)x * 4;
+                    dp[0]=sp[0]; dp[1]=sp[1]; dp[2]=sp[2]; dp[3]=255;
+                }
+            }
+            stbi_write_png(g_thumb_cap.path.c_str(), ow, oh, 4, img.data(), ow * 4);
+        }
+        g_thumb_cap.path.clear();
+    }
+
     if (g_canvas_cap.frames_left != 0) return;
     g_canvas_cap.frames_left = -1;
 

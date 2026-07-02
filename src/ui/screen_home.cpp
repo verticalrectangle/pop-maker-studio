@@ -155,6 +155,7 @@ void enter_new_project(AppState& state) {
     state.in_studio    = true;
     audio_init();
     history_push(state, "New project");
+    mark_project_clean(state);
 }
 
 static void open_project_path(AppState& state, const std::string& path) {
@@ -180,6 +181,7 @@ static void open_project_path(AppState& state, const std::string& path) {
                 audio_source_ensure(cl.text);
     recent_projects_push(path);
     history_push(state, "Open project");
+    mark_project_clean(state);
 }
 
 // Restore the crash-recovery slot into the live editor. Unlike open_project_path
@@ -213,6 +215,7 @@ static void restore_recovery(AppState& state) {
             if (cl.clip_type == ClipType::Audio && !cl.text.empty())
                 audio_source_ensure(cl.text);
     history_push(state, "Recovered project");
+    mark_project_clean(state);
 }
 
 // ── Rendering ─────────────────────────────────────────────────────────────────
@@ -341,14 +344,30 @@ void ui_home(AppState& state) {
         bool hov = ImGui::IsItemHovered();
         if (ImGui::IsItemClicked()) to_open = recents[i];
         ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
-        // Card: a "thumbnail" band (no real thumb yet) + a name/date footer.
+        // Card: thumbnail band (written by the canvas on every save) + footer.
         dl->AddRectFilled(a, b, hov ? IM_COL32(34, 34, 46, 255) : IM_COL32(24, 24, 33, 255), 8.f);
         float foot = b.y - 44.f;
         dl->AddRectFilled(a, {b.x, foot}, IM_COL32(40, 40, 56, 255),
                           8.f, ImDrawFlags_RoundCornersTop);
-        // Film-strip glyph in the band
-        dl->AddText(g_font_black, 30.f, {a.x + 16.f, a.y + (foot - a.y) * 0.5f - 18.f},
-                    IM_COL32(90, 92, 120, 255), "\xe2\x96\xb6");
+        int tw = 0, th = 0;
+        uintptr_t thumb = video_load_thumb(project_thumb_path(recents[i]), &tw, &th);
+        if (thumb && tw > 0 && th > 0) {
+            // Cover-fit crop into the band (UVs trimmed on the long axis).
+            float bw2 = b.x - a.x, bh2 = foot - a.y;
+            float su = 1.f, sv = 1.f;
+            float img_asp = (float)tw / (float)th, band_asp = bw2 / bh2;
+            if (img_asp > band_asp) su = band_asp / img_asp;
+            else                    sv = img_asp / band_asp;
+            ImVec2 uv0{0.5f - su * 0.5f, 0.5f - sv * 0.5f};
+            ImVec2 uv1{0.5f + su * 0.5f, 0.5f + sv * 0.5f};
+            dl->AddImageRounded((ImTextureID)thumb, a, {b.x, foot}, uv0, uv1,
+                                IM_COL32(255,255,255,255), 8.f,
+                                ImDrawFlags_RoundCornersTop);
+        } else {
+            // No thumb yet (never saved since this feature landed) — glyph band.
+            dl->AddText(g_font_black, 30.f, {a.x + 16.f, a.y + (foot - a.y) * 0.5f - 18.f},
+                        IM_COL32(90, 92, 120, 255), "\xe2\x96\xb6");
+        }
         dl->AddRect(a, b, hov ? IM_COL32(120, 130, 230, 220) : IM_COL32(50, 50, 68, 200),
                     8.f, 0, hov ? 2.f : 1.f);
         std::string name = fs::path(recents[i]).stem().string();

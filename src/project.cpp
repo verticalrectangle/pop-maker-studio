@@ -896,6 +896,17 @@ static bool project_load_pass(AppState& state, const std::string& path, int fx_o
     return r.ok;
 }
 
+std::string project_thumb_path(const std::string& pms_path) {
+    const char* home = std::getenv("HOME");
+    std::string dir = (home ? std::string(home) : std::string("/tmp")) +
+                      "/.config/pop-maker-studio/thumbs";
+    std::error_code ec;
+    std::filesystem::create_directories(dir, ec);
+    char buf[32];
+    snprintf(buf, sizeof(buf), "%016zx", std::hash<std::string>{}(pms_path));
+    return dir + "/" + buf + ".png";
+}
+
 bool project_load(AppState& state, const std::string& path) {
     // First pass uses the real format version. If it fails, the project was saved
     // at exactly an effect's add-version that landed without a format bump, so it

@@ -1599,6 +1599,7 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         std::string path = params.value("path", state.project_path);
         if (path.empty()) { err = "no project path — provide 'path' param or save once from UI"; return {}; }
         if (!project_save(state, path)) { err = "project_save failed"; return {}; }
+        mark_project_saved(state, path);
         state.project_path = path;   // exports default next to the .pms
         recent_projects_push(path);  // surface on the home/launcher page
         recovery_clear();            // saved → no stale crash-recovery slot

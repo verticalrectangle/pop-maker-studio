@@ -153,6 +153,15 @@ void reopen_video_slots(AppState& state);
 void queue_video_slot_opens(AppState& state);
 void tick_video_slot_opens(AppState& state, double budget_ms = 20.0);
 
+// ── Save / dirty tracking ─────────────────────────────────────────────────────
+// Call after every successful project save: records the clean history point
+// (project_dirty goes false) and queues the home-screen thumbnail capture.
+void mark_project_saved(AppState& state, const std::string& path);
+// Call after load / new-project once the baseline history entry is pushed.
+void mark_project_clean(AppState& state);
+// True when edits exist past the last save/load point (undo back = clean).
+bool project_dirty(const AppState& state);
+
 // ── Splitter capture ─────────────────────────────────────────────────────────
 // The studio's panel-resize handles are raw geometry hit-tests (not ImGui
 // items). While one is hot or mid-drag this is true, and mouse consumers that

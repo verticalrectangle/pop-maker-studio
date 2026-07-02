@@ -7,6 +7,7 @@
 #include "proxy.h"
 #include "conform.h"
 #include "history.h"
+#include "project.h"
 #include "fx_shader.h"
 #include "theme.h"
 #include <imgui.h>
@@ -610,6 +611,17 @@ void marker_jump(AppState& state, int dir) {
         for (auto& m : state.markers) if (m.time > here + eps) { best = m.time; break; }
     }
     if (best >= 0.f) seek_to(state, best);
+}
+
+void mark_project_saved(AppState& state, const std::string& path) {
+    state.saved_history_pos = history_pos();
+    if (!path.empty()) state.thumb_request = project_thumb_path(path);
+}
+void mark_project_clean(AppState& state) {
+    state.saved_history_pos = history_pos();
+}
+bool project_dirty(const AppState& state) {
+    return history_pos() != state.saved_history_pos;
 }
 
 float output_px_height(const AppState& state) {
