@@ -4161,11 +4161,34 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
         const float vis_t_lo = (scroll > 0.5f) ? (scroll + fit_margin) / zoom : 0.f;
         const float vis_t_hi = (scroll + clip_area_w - fit_margin) / zoom;
 
+        // Trim walls: a dragged edge stops at the nearest same-stream neighbor
+        // instead of sliding over it. Content/text clips wall against each
+        // other; FX bricks wall against same-kind FX bricks (the rules of
+        // clips_conflict, applied live during the drag — previously only FX
+        // trims were checked, and only with a bounce-back at release).
+        float trim_floor = 0.f;                 // left trim can't cross this
+        float trim_ceil  = std::numeric_limits<float>::max();  // right trim wall
+        {
+            auto same_stream = [&](const Clip& oc) {
+                if (is_fx_clip(dc) != is_fx_clip(oc)) return false;
+                if (fx_brick_is_audio_kind(dc) != fx_brick_is_audio_kind(oc)) return false;
+                return true;
+            };
+            auto& tcl = state.tracks[(size_t)drag_track].clips;
+            for (int oi = 0; oi < (int)tcl.size(); ++oi) {
+                if (oi == drag_clip) continue;
+                const Clip& oc = tcl[(size_t)oi];
+                if (!same_stream(oc)) continue;
+                if (oc.end <= dc.start + 1e-3f)  trim_floor = fmaxf(trim_floor, oc.end);
+                if (oc.start >= dc.end - 1e-3f)  trim_ceil  = fminf(trim_ceil,  oc.start);
+            }
+        }
+
         if (drag_left && !left_locked) {
             // Clamp to the visible window first, then snap (see the right-edge note)
             // so a left trim stays frame-aligned while auto-scrolling toward 0:00.
             float lt = fmaxf(vis_t_lo, fminf(new_t, vis_t_hi));
-            float t = edge_snap(snap(lt), cands);
+            float t = fmaxf(trim_floor, edge_snap(snap(lt), cands));
             bool still_img_l = dc.clip_type == ClipType::Video && is_image_path(dc.text);
             float src_floor = (src_dur > 0.f && !still_img_l)
                 ? dc.start - dc.in_point / fmaxf(0.01f, dc.speed) : 0.f;
@@ -4205,6 +4228,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
             float max_end = (src_dur > 0.f && !still_img)
                 ? dc.start + (src_dur - dc.in_point) / fmaxf(0.01f, dc.speed)
                 : t;
+            max_end = fminf(max_end, trim_ceil);   // wall at the next brick
             dc.end = fmaxf(dc.start + f1, fminf(t, max_end));
         } else if (!drag_left && !drag_right) {
             float dur_clip = dc.end - dc.start;
