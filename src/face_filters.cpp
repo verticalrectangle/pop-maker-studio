@@ -663,6 +663,10 @@ uintptr_t face_filter_apply_obs(int filter_id, float amount, const FaceObs& obs,
         bp.jaw_shade  = L.jaw_shade  * amount;
         bp.lash       = L.lash       * amount;
         bp.liner      = L.liner      * amount;
+        if (obs.has_blend) {
+            bp.blink_l = obs.blend[FB_EYE_BLINK_L];
+            bp.blink_r = obs.blend[FB_EYE_BLINK_R];
+        }
         bp.lash_wing  = L.lash_wing;             // wing length is a shape, not a mix
         bp.eyeoutL_x = PX(obs.pts[33][0]);  bp.eyeoutL_y = PY(obs.pts[33][1]);
         bp.eyeoutR_x = PX(obs.pts[263][0]); bp.eyeoutR_y = PY(obs.pts[263][1]);
@@ -730,7 +734,9 @@ uintptr_t face_filter_apply_obs(int filter_id, float amount, const FaceObs& obs,
                     mpts[i][1] = PY(obs.pts[i][1]);
                 }
                 tex = face_makeup_apply(tex, slot, w, h, mpts, mk,
-                                        amount, L.makeup_adapt);
+                                        amount, L.makeup_adapt,
+                                        bp.eyeL_x, bp.eyeL_y, bp.eyeR_x, bp.eyeR_y,
+                                        bp.eye_r, bp.blink_l, bp.blink_r);
             }
         }
     }

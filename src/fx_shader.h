@@ -33,6 +33,7 @@ struct FaceBeautyParams {
     float lip_grad = 1.f;   // bitten-lip gradient amount (0 = full matte)
     float nose_x = 0, nose_y = 0;   // nose bridge (px)
     float jaw_shade = 0.f;  // 0..1 under-jaw contour shadow (double-chin recede)
+    float blink_l = 0.f, blink_r = 0.f;  // blendshape blinks — eye makeup fades during a blink
     float lash = 0.f;       // 0..1 soft lash band on the upper lid
     float liner = 0.f;      // 0..1 crisp eyeliner line at the lash line
     float lash_wing = 0.f;  // 0..1 winged tip from the outer corner
@@ -69,7 +70,9 @@ uintptr_t face_beauty_apply(uintptr_t src_tex, int slot, int w, int h,
 // landmark pixels in TEXTURE space (>= 468 entries).
 uintptr_t face_makeup_apply(uintptr_t src_tex, int slot, int w, int h,
                             const float (*pts)[2], unsigned makeup_tex,
-                            float opacity, float adapt);
+                            float opacity, float adapt,
+                            float eyeL_x, float eyeL_y, float eyeR_x, float eyeR_y,
+                            float eye_r, float blink_l, float blink_r);
 
 // UV-mapped makeup: draws the tracked face mesh (MediaPipe canonical UVs,
 // 898 tris) textured with a makeup PNG over the frame. pts = 468+ landmark

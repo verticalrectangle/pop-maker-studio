@@ -820,6 +820,9 @@ uniform vec2 u_lippoly[12];  // outer-lip ring in px — the mask FOLLOWS the mo
 uniform vec4 u_nose;     // nose bridge xy (px), nose blush amt, freckles amt
 uniform float u_brow_r;
 uniform vec4 u_lash;     // amount, wing, liner, _
+uniform vec2 u_blink;    // per-eye blink 0..1 — lid landmarks lag a blink,
+                         // so eye makeup fades out for those frames instead
+                         // of floating over the closed eye
 uniform vec4 u_eyeout;   // outer eye corners L xy, R xy (px)
 uniform vec2 u_lidL[7];  // upper-lid chain, outer→inner (px)
 uniform vec2 u_lidR[7];
@@ -891,10 +894,15 @@ void main() {
     // (elen = elliptical distance in the face basis; >1 is outside the face.)
     if (u_makeup.w > 0.001) {
         float elen = length(vec2(a, b));
-        float band = smoothstep(0.90, 1.04, elen) * (1.0 - smoothstep(1.04, 1.32, elen));
-        float below = smoothstep(0.35, 0.85, -b);    // lower face only
-        float sh = u_makeup.w * band * below;
-        col *= 1.0 - sh * vec3(0.26, 0.28, 0.30);
+        float band = smoothstep(0.94, 1.03, elen) * (1.0 - smoothstep(1.03, 1.18, elen));
+        float below = smoothstep(0.45, 0.85, -b);    // lower face only
+        // Hug the CHIN: without this the band relative to the big face
+        // ellipse sweeps a wide U across the neck and chest.
+        vec2 chin_px = u_face.xy - u_up * u_face.w * 0.92;
+        float near_chin = 1.0 - smoothstep(u_face.z * 0.55, u_face.z * 0.95,
+                                           distance(p, chin_px));
+        float sh = u_makeup.w * band * below * near_chin;
+        col *= 1.0 - sh * vec3(0.20, 0.22, 0.24);
     }
     // Makeup gates: geometry says WHERE, chroma says WHAT. Without these the
     // lip disc tinted whatever sat in front of the mouth (a microphone, a
@@ -1007,6 +1015,8 @@ void main() {
     if (u_lash.x + u_lash.z > 0.001) {
         vec3 ink = vec3(0.04, 0.03, 0.04);
         for (int side = 0; side < 2; ++side) {
+            float bfade = 1.0 - 0.9 * smoothstep(0.25, 0.55,
+                                    side == 0 ? u_blink.x : u_blink.y);
             vec2 outc = side == 0 ? u_eyeout.xy : u_eyeout.zw;
             float dmin2 = 1e9; float tbest = 0.0;
             for (int i = 0; i < 6; ++i) {
@@ -1023,13 +1033,13 @@ void main() {
             if (u_lash.z > 0.001) {              // liner: crisp, ON the line
                 float lt = er * 0.055 * taper;
                 float line = 1.0 - smoothstep(lt * 0.5, lt, dmin2);
-                col = mix(col, ink, line * u_lash.z * 0.95);
+                col = mix(col, ink, line * u_lash.z * 0.95 * bfade);
             }
             if (u_lash.x > 0.001) {              // lash band: soft, just above
                 float bt = er * 0.16 * taper;
                 float band = (1.0 - smoothstep(bt * 0.35, bt, dmin2))
                            * smoothstep(-er * 0.05, er * 0.10, above);
-                col = mix(col, col * 0.30, band * u_lash.x * 0.75);
+                col = mix(col, col * 0.30, band * u_lash.x * 0.75 * bfade);
             }
             if (u_lash.y > 0.001) {              // wing from the outer corner
                 vec2 inc = side == 0 ? u_lidL[6] : u_lidR[6];
@@ -1040,7 +1050,7 @@ void main() {
                                     max(dot(w1 - outc, w1 - outc), 1e-4), 0.0, 1.0);
                 float wt = mix(er * 0.10, er * 0.015, along);
                 float wing = 1.0 - smoothstep(wt * 0.4, wt, wd);
-                col = mix(col, ink, wing * max(u_lash.x, u_lash.z) * 0.92);
+                col = mix(col, ink, wing * max(u_lash.x, u_lash.z) * 0.92 * bfade);
             }
         }
     }
@@ -1081,10 +1091,21 @@ uniform sampler2D u_mk;
 uniform sampler2D u_src;
 uniform float u_opacity;
 uniform float u_adapt;    // 0 = raw decal, 1 = full lighting adaptation
+uniform vec4 u_mk_eyes;   // eye centers (px) — for blink fade
+uniform vec4 u_mk_blink;  // blink L, blink R, eye radius px, _
 float lum2(vec3 c) { return dot(c, vec3(0.299, 0.587, 0.114)); }
 void main() {
     vec4 mk   = texture(u_mk, v_mkuv);
     vec3 base = texture(u_src, v_srcuv).rgb;
+    // Blink fade: painted eye makeup would float over a closed eye (the lid
+    // landmarks lag a blink) — fade it inside the eye discs instead.
+    vec2 ppx = v_srcuv * vec2(textureSize(u_src, 0));
+    float er2 = max(u_mk_blink.z, 1.0);
+    float nearL = 1.0 - smoothstep(er2 * 0.8, er2 * 2.2, distance(ppx, u_mk_eyes.xy));
+    float nearR = 1.0 - smoothstep(er2 * 0.8, er2 * 2.2, distance(ppx, u_mk_eyes.zw));
+    float bfade = 1.0 - 0.9 * max(nearL * smoothstep(0.25, 0.55, u_mk_blink.x),
+                                  nearR * smoothstep(0.25, 0.55, u_mk_blink.y));
+    mk.a *= bfade;
     float bl  = lum2(base);
     vec3 tint = base / max(bl, 0.04);
     vec3 lit  = mk.rgb
@@ -1100,7 +1121,9 @@ static struct { GLuint tex = 0, fbo = 0; int w = 0, h = 0; } g_makeup_out[kMaxSl
 
 uintptr_t face_makeup_apply(uintptr_t src_tex, int slot, int w, int h,
                             const float (*pts)[2], unsigned makeup_tex,
-                            float opacity, float adapt) {
+                            float opacity, float adapt,
+                            float eyeL_x, float eyeL_y, float eyeR_x, float eyeR_y,
+                            float eye_r, float blink_l, float blink_r) {
     if (!src_tex || !makeup_tex || slot < 0 || slot >= kMaxSlots ||
         w <= 0 || h <= 0 || opacity <= 0.001f)
         return src_tex;
@@ -1161,6 +1184,10 @@ uintptr_t face_makeup_apply(uintptr_t src_tex, int slot, int w, int h,
     glUniform2f(glGetUniformLocation(g_face_mk_prog, "u_dim"), (float)w, (float)h);
     glUniform1f(glGetUniformLocation(g_face_mk_prog, "u_opacity"), opacity);
     glUniform1f(glGetUniformLocation(g_face_mk_prog, "u_adapt"), adapt);
+    glUniform4f(glGetUniformLocation(g_face_mk_prog, "u_mk_eyes"),
+                eyeL_x, eyeL_y, eyeR_x, eyeR_y);
+    glUniform4f(glGetUniformLocation(g_face_mk_prog, "u_mk_blink"),
+                blink_l, blink_r, eye_r, 0.f);
     glDrawElements(GL_TRIANGLES, FACE_UV_NTRI * 3, GL_UNSIGNED_SHORT, 0);
     glBindVertexArray(0);
     glActiveTexture(GL_TEXTURE0);
@@ -1222,6 +1249,7 @@ uintptr_t face_beauty_apply(uintptr_t src_tex, int slot, int w, int h,
     glUniform2fv(u("u_lippoly"), 12, &p.lip_poly[0][0]);
     glUniform4f(u("u_nose"), p.nose_x, p.nose_y, p.nose_blush, p.freckles);
     glUniform4f(u("u_lash"), p.lash, p.lash_wing, p.liner, 0.f);
+    glUniform2f(u("u_blink"), p.blink_l, p.blink_r);
     glUniform4f(u("u_eyeout"), p.eyeoutL_x, p.eyeoutL_y, p.eyeoutR_x, p.eyeoutR_y);
     glUniform2fv(u("u_lidL"), 7, &p.lidL[0][0]);
     glUniform2fv(u("u_lidR"), 7, &p.lidR[0][0]);
