@@ -236,35 +236,35 @@ int face_filter_bumps(int filter_id, float amount, const FaceObs& obs,
                 bump(a.eyeA, eyeR, L.eyes * amt, 0, 0);
                 bump(a.eyeB, eyeR, L.eyes * amt, 0, 0);
             }
-            // Cheek slim: MID-jaw (mesh 132/361), gentle, small radius — the
-            // old low-jaw squeeze at 0.55ed radius mushed into the chin.
-            if (L.cheek > 0.f) {
-                float cheekL[2] = {obs.pts[132][0], obs.pts[132][1]};
-                float cheekR[2] = {obs.pts[361][0], obs.pts[361][1]};
-                inward(cheekL, L.cheek * amt, d);
-                bump(cheekL, a.eyeDist * 0.52f * ih, 0.f, d[0], d[1]);
-                inward(cheekR, L.cheek * amt, d);
-                bump(cheekR, a.eyeDist * 0.52f * ih, 0.f, d[0], d[1]);
-            }
-            // V-line: pull the lower jaw toward a point slightly BELOW the
-            // chin tip — the jaw tapers into a point instead of the chin
-            // being pushed up (which flattened it square).
-            if (L.vline > 0.f) {
+            // Lower-face shaping: ONE smooth graded field along the whole jaw
+            // contour. The previous version used four strong pulls with
+            // small radii — the outline kinked into sharp corners ("square
+            // sharp jaw") and the flesh between pull points lagged and
+            // bulged ("droops my cheeks like a dog"). Here every contour
+            // point gets a LOW-strength pull with a LARGE radius; the
+            // overlapping fields blend into a clean taper.
+            if (L.vline > 0.f || L.cheek > 0.f) {
                 float vx = a.chin[0] - a.up[0] * a.eyeDist * 0.25f;
                 float vy = a.chin[1] - a.up[1] * a.eyeDist * 0.25f;
-                auto toward_v = [&](const float* pnt, float k, float rad) {
-                    float dx2 = (vx - pnt[0]) * k, dy2 = (vy - pnt[1]) * k;
-                    bump(pnt, a.eyeDist * rad * ih, 0.f, dx2, dy2);
-                };
-                // Graded taper down the jawline: low jaw, then the chin
-                // SIDES pull hardest — that's what turns a square chin into
-                // a point instead of leaving flat corners.
-                float chinSideL[2] = {obs.pts[148][0], obs.pts[148][1]};
-                float chinSideR[2] = {obs.pts[377][0], obs.pts[377][1]};
-                toward_v(a.jawL,   L.vline * amt,        0.46f);
-                toward_v(a.jawR,   L.vline * amt,        0.46f);
-                toward_v(chinSideL, L.vline * amt * 1.3f, 0.30f);
-                toward_v(chinSideR, L.vline * amt * 1.3f, 0.30f);
+                // Jaw contour ear→chin, with a grade t (0 near ear, 1 at the
+                // chin sides). V-line strength rises toward the chin; cheek
+                // slimming fades out toward it.
+                static const int   kJawL[5] = {132, 172, 136, 149, 176};
+                static const int   kJawR[5] = {361, 397, 365, 378, 400};
+                static const float kGrade[5] = {0.25f, 0.45f, 0.65f, 0.85f, 1.0f};
+                for (int j = 0; j < 5; ++j) {
+                    for (int side = 0; side < 2; ++side) {
+                        const float* pnt = obs.pts[side ? kJawR[j] : kJawL[j]];
+                        float g = kGrade[j];
+                        // toward the V point, graded up the chain
+                        float k1 = L.vline * amt * 0.45f * (g * g);
+                        float dxv = (vx - pnt[0]) * k1, dyv = (vy - pnt[1]) * k1;
+                        // inward (cheek slim), fading toward the chin
+                        inward(pnt, L.cheek * amt * (1.f - g) * 0.9f, d);
+                        bump(pnt, a.eyeDist * 0.60f * ih, 0.f,
+                             dxv + d[0], dyv + d[1]);
+                    }
+                }
             }
             if (L.nose > 0.f) {
                 bump(a.noseL, a.eyeDist * 0.22f * ih, 0.f,

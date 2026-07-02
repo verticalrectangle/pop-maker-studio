@@ -13,7 +13,7 @@ struct FaceWarpBump {
     float scale;         // +enlarge / −shrink around center
     float dx, dy;        // content shift in UV
 };
-static const int MAX_FACE_BUMPS = 12;
+static const int MAX_FACE_BUMPS = 20;
 
 // Matches the Filters chips on the camera brick panel (order = id).
 // Beauty looks are ids 1 (the original Pretty slot, now "Natural") and 7-10 —
