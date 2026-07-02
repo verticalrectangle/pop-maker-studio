@@ -55,7 +55,7 @@ std::shared_ptr<CacheData> load_file(const std::string& take_path, int rot_q) {
                fread(&count, 4, 1, f) == 1;
     // v3 = mesh + blendshapes; older caches (106-pt) are silently invalid and
     // rebuild on the next request.
-    if (!hdr || magic != 0x46534D50 || version != 3 || rq != rot_q ||
+    if (!hdr || magic != 0x46534D50 || version != 4 || rq != rot_q ||
         count == 0 || count > 1000000 || fps <= 0.f) {
         fclose(f);
         return nullptr;

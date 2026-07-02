@@ -250,7 +250,15 @@ static std::thread             g_worker;
 static bool                    g_worker_started = false;
 
 static std::mutex g_latest_mtx;
-static FaceObs    g_latest;        // EMA-smoothed
+// Velocity-adaptive smoothing (One-Euro spirit): each landmark picks its own
+// alpha from its own speed — still points smooth hard (no jitter), moving
+// points snap (no trailing makeup during speech or head turns). The old
+// global 0.65 EMA gated on NOSE velocity lagged the mouth by ~3 frames.
+static inline float adaptive_alpha(float speed_px, float frame_w) {
+    float a = 0.35f + (speed_px / frame_w) * 45.f;
+    return a > 1.f ? 1.f : a;
+}
+static FaceObs    g_latest;        // adaptively smoothed
 static FaceObs    g_raw_prev;
 std::atomic<int>  g_dbg_flip180{0};      // worker debug state (IPC readout)
 std::atomic<int>  g_dbg_since_detect{0};
@@ -472,20 +480,22 @@ static void worker_main() {
         } else {
             // Jump = new face/cut → snap; light EMA otherwise (the tracking
             // loop runs at camera rate now, so smoothing can be gentle).
-            float dx = obs.pts[1][0] - g_latest.pts[1][0];   // nose tip
-            float dy = obs.pts[1][1] - g_latest.pts[1][1];
-            float jump = sqrtf(dx*dx + dy*dy);
-            float alpha = jump > obs.w * 0.08f ? 1.f : 0.65f;
             for (int k = 0; k < FT_NPTS; ++k) {
-                g_latest.pts[k][0] += (obs.pts[k][0] - g_latest.pts[k][0]) * alpha;
-                g_latest.pts[k][1] += (obs.pts[k][1] - g_latest.pts[k][1]) * alpha;
+                float ddx = obs.pts[k][0] - g_latest.pts[k][0];
+                float ddy = obs.pts[k][1] - g_latest.pts[k][1];
+                float alpha = adaptive_alpha(sqrtf(ddx*ddx + ddy*ddy), (float)obs.w);
+                g_latest.pts[k][0] += ddx * alpha;
+                g_latest.pts[k][1] += ddy * alpha;
             }
             if (obs.has_blend) {
                 if (!g_latest.has_blend) {
                     for (int k = 0; k < FT_NBLEND; ++k) g_latest.blend[k] = obs.blend[k];
                 } else {
-                    for (int k = 0; k < FT_NBLEND; ++k)
-                        g_latest.blend[k] += (obs.blend[k] - g_latest.blend[k]) * alpha;
+                    for (int k = 0; k < FT_NBLEND; ++k) {
+                        float db = obs.blend[k] - g_latest.blend[k];
+                        float ab = 0.4f + fabsf(db) * 6.f;
+                        g_latest.blend[k] += db * (ab > 1.f ? 1.f : ab);
+                    }
                 }
                 g_latest.has_blend = true;
             }
@@ -621,20 +631,22 @@ bool face_track_build_cache(const std::string& video_path, int rot_q,
         } else if (!smooth.valid) {
             smooth = obs;
         } else {
-            float dx = obs.pts[1][0] - smooth.pts[1][0];   // nose tip
-            float dy = obs.pts[1][1] - smooth.pts[1][1];
-            float jump = sqrtf(dx*dx + dy*dy);
-            float alpha = jump > (float)fw * 0.08f ? 1.f : 0.65f;
             for (int k = 0; k < FT_NPTS; ++k) {
-                smooth.pts[k][0] += (obs.pts[k][0] - smooth.pts[k][0]) * alpha;
-                smooth.pts[k][1] += (obs.pts[k][1] - smooth.pts[k][1]) * alpha;
+                float ddx = obs.pts[k][0] - smooth.pts[k][0];
+                float ddy = obs.pts[k][1] - smooth.pts[k][1];
+                float alpha = adaptive_alpha(sqrtf(ddx*ddx + ddy*ddy), (float)fw);
+                smooth.pts[k][0] += ddx * alpha;
+                smooth.pts[k][1] += ddy * alpha;
             }
             if (obs.has_blend) {
                 if (!smooth.has_blend) {
                     for (int k = 0; k < FT_NBLEND; ++k) smooth.blend[k] = obs.blend[k];
                 } else {
-                    for (int k = 0; k < FT_NBLEND; ++k)
-                        smooth.blend[k] += (obs.blend[k] - smooth.blend[k]) * alpha;
+                    for (int k = 0; k < FT_NBLEND; ++k) {
+                        float db = obs.blend[k] - smooth.blend[k];
+                        float ab = 0.4f + fabsf(db) * 6.f;
+                        smooth.blend[k] += db * (ab > 1.f ? 1.f : ab);
+                    }
                 }
                 smooth.has_blend = true;
             }
@@ -669,7 +681,7 @@ bool face_track_build_cache(const std::string& video_path, int rot_q,
     std::string tmp = out_path + ".tmp";
     FILE* f = fopen(tmp.c_str(), "wb");
     if (!f) return false;
-    uint32_t magic = 0x46534D50, version = 3;   // v3: 478-pt mesh + blendshapes   // 'PMSF'
+    uint32_t magic = 0x46534D50, version = 4;   // v4: adaptive smoothing (v3 lagged fast motion)   // 'PMSF'
     int32_t  rq = rot_q, rw = W, rh = H;
     float    fps = (float)info.fps;
     uint32_t count = (uint32_t)n;
