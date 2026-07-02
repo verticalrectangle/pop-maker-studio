@@ -32,6 +32,7 @@ struct FaceBeautyParams {
     float lip_tint = 0.f;   // 0..1 lip color
     float lip_grad = 1.f;   // bitten-lip gradient amount (0 = full matte)
     float nose_x = 0, nose_y = 0;   // nose bridge (px)
+    float jaw_shade = 0.f;  // 0..1 under-jaw contour shadow (double-chin recede)
     float nose_blush = 0.f; // 0..1 e-girl across-the-nose blush
     float freckles  = 0.f;  // 0..1 faux freckles over nose + upper cheeks
     float blush_col[3] = {1.f, 0.45f, 0.55f};   // makeup colors

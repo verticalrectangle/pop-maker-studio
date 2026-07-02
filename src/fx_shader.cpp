@@ -875,6 +875,16 @@ void main() {
         float eR = 1.0 - smoothstep(er * 0.35, er * 0.95, distance(p, u_eyes.zw));
         col *= 1.0 + u_amt.w * 0.30 * max(eL, eR);
     }
+    // Under-jaw contour shadow: a soft darkening band just OUTSIDE the lower
+    // face ellipse — the makeup-artist trick that makes a double chin recede.
+    // (elen = elliptical distance in the face basis; >1 is outside the face.)
+    if (u_makeup.w > 0.001) {
+        float elen = length(vec2(a, b));
+        float band = smoothstep(0.90, 1.04, elen) * (1.0 - smoothstep(1.04, 1.32, elen));
+        float below = smoothstep(0.35, 0.85, -b);    // lower face only
+        float sh = u_makeup.w * band * below;
+        col *= 1.0 - sh * vec3(0.26, 0.28, 0.30);
+    }
     // Makeup gates: geometry says WHERE, chroma says WHAT. Without these the
     // lip disc tinted whatever sat in front of the mouth (a microphone, a
     // hand) and blush landed on headphone cups inside the face ellipse.
@@ -1028,7 +1038,7 @@ uintptr_t face_beauty_apply(uintptr_t src_tex, int slot, int w, int h,
     glUniform4f(u("u_eyes"), p.eyeL_x, p.eyeL_y, p.eyeR_x, p.eyeR_y);
     glUniform4f(u("u_feat"), p.eye_r, p.mouth_x, p.mouth_y, p.mouth_r);
     glUniform4f(u("u_amt"), p.smooth, p.brighten, p.warmth, p.eye_pop);
-    glUniform4f(u("u_makeup"), p.blush, p.lip_tint, p.lip_grad, 0.f);
+    glUniform4f(u("u_makeup"), p.blush, p.lip_tint, p.lip_grad, p.jaw_shade);
     glUniform4f(u("u_cheeks"), p.cheekL_x, p.cheekL_y, p.cheekR_x, p.cheekR_y);
     glUniform4f(u("u_blushc"), p.blush_col[0], p.blush_col[1], p.blush_col[2], 0.f);
     glUniform4f(u("u_lipc"), p.lip_col[0], p.lip_col[1], p.lip_col[2], 0.f);
