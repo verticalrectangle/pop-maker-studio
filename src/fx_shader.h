@@ -28,6 +28,9 @@ struct FaceBeautyParams {
     float brighten = 0.f;   // 0..1 soft-light skin lift
     float warmth   = 0.f;   // 0..1 warm tint on skin
     float eye_pop  = 0.f;   // 0..1 eye brightening
+    float blush    = 0.f;   // 0..1 rosy cheek makeup
+    float lip_tint = 0.f;   // 0..1 rosy lip color
+    float cheekL_x = 0, cheekL_y = 0, cheekR_x = 0, cheekR_y = 0;
     // mask geometry (pixels)
     float face_cx = 0, face_cy = 0;     // face ellipse center
     float face_rx = 1, face_ry = 1;     // semi-axes along right/up basis

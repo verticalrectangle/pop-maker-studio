@@ -808,6 +808,8 @@ uniform vec2 u_up;       // face up unit vector
 uniform vec4 u_eyes;     // eyeL xy, eyeR xy (px)
 uniform vec4 u_feat;     // eye_r, mouth_x, mouth_y, mouth_r
 uniform vec4 u_amt;      // smooth, brighten, warmth, eye_pop
+uniform vec4 u_makeup;   // blush, lip_tint, _, _
+uniform vec4 u_cheeks;   // cheekL xy, cheekR xy (px)
 uniform float u_brow_r;
 float lum(vec3 c) { return dot(c, vec3(0.299, 0.587, 0.114)); }
 void main() {
@@ -865,6 +867,32 @@ void main() {
         float eR = 1.0 - smoothstep(er * 0.35, er * 0.95, distance(p, u_eyes.zw));
         col *= 1.0 + u_amt.w * 0.30 * max(eL, eR);
     }
+    // Makeup gates: geometry says WHERE, chroma says WHAT. Without these the
+    // lip disc tinted whatever sat in front of the mouth (a microphone, a
+    // hand) and blush landed on headphone cups inside the face ellipse.
+    float m_cb = 0.5 - 0.168736 * col.r - 0.331264 * col.g + 0.5 * col.b;
+    float m_cr = 0.5 + 0.5 * col.r - 0.418688 * col.g - 0.081312 * col.b;
+    float skin_chroma = smoothstep(0.27, 0.31, m_cb) * (1.0 - smoothstep(0.45, 0.50, m_cb))
+                      * smoothstep(0.50, 0.54, m_cr) * (1.0 - smoothstep(0.66, 0.70, m_cr));
+    // Blush: two soft rosy discs on the cheeks, skin-chroma gated.
+    if (u_makeup.x > 0.001) {
+        float br2 = max(u_face.z, u_face.w) * 0.30;
+        float cL = 1.0 - smoothstep(br2 * 0.3, br2, distance(p, u_cheeks.xy));
+        float cR = 1.0 - smoothstep(br2 * 0.3, br2, distance(p, u_cheeks.zw));
+        float bm = max(cL, cR) * u_makeup.x * mask * skin_chroma;
+        vec3 rosy = vec3(1.0, 0.45, 0.55);
+        col = mix(col, col * (0.75 + 0.5 * rosy), bm * 0.55);
+    }
+    // Lip tint: rosy saturation inside the mouth disc, only on pixels that
+    // already read reddish (lips) — a gray mic in front stays gray.
+    if (u_makeup.y > 0.001) {
+        float lm2 = 1.0 - smoothstep(mr * 0.35, mr * 0.95, distance(p, u_feat.yz));
+        float lippy = smoothstep(0.01, 0.09, col.r - col.g);
+        float t = u_makeup.y * lm2 * lippy;
+        col.r = min(1.0, col.r * (1.0 + 0.22 * t) + 0.04 * t);
+        col.g *= 1.0 - 0.10 * t;
+        col.b *= 1.0 - 0.02 * t;
+    }
     frag = vec4(clamp(col, 0.0, 1.0), texture(u_tex, v_uv).a);
 }
 )";
@@ -909,6 +937,8 @@ uintptr_t face_beauty_apply(uintptr_t src_tex, int slot, int w, int h,
     glUniform4f(u("u_eyes"), p.eyeL_x, p.eyeL_y, p.eyeR_x, p.eyeR_y);
     glUniform4f(u("u_feat"), p.eye_r, p.mouth_x, p.mouth_y, p.mouth_r);
     glUniform4f(u("u_amt"), p.smooth, p.brighten, p.warmth, p.eye_pop);
+    glUniform4f(u("u_makeup"), p.blush, p.lip_tint, 0.f, 0.f);
+    glUniform4f(u("u_cheeks"), p.cheekL_x, p.cheekL_y, p.cheekR_x, p.cheekR_y);
     glUniform1f(u("u_brow_r"), p.brow_r);
     glDrawArrays(GL_TRIANGLES, 0, 3);
 

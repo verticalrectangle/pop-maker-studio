@@ -1918,6 +1918,18 @@ void ui_studio(AppState& state) {
                         { s_panel_view = PanelView::HostFX; s_user_nav = false; ImGui::EndTabItem(); }
                     if (host_afx_ci >= 0 && ImGui::BeginTabItem("Audio FX", nullptr, tf(PanelView::HostAudioFX)))
                         { s_panel_view = PanelView::HostAudioFX; s_user_nav = false; ImGui::EndTabItem(); }
+                    // Camera bricks: face filters get their own tab.
+                    {
+                        bool cam_sel = state.selected_track >= 0 &&
+                            state.selected_track < (int)state.tracks.size() &&
+                            state.selected_clip >= 0 &&
+                            state.selected_clip < (int)state.tracks[state.selected_track].clips.size() &&
+                            state.tracks[state.selected_track].clips[state.selected_clip]
+                                .clip_type == ClipType::VideoRecord &&
+                            !state.tracks[state.selected_track].clips[state.selected_clip].rec_photo;
+                        if (cam_sel && ImGui::BeginTabItem("Filters", nullptr, tf(PanelView::Filters)))
+                            { s_panel_view = PanelView::Filters; s_user_nav = false; ImGui::EndTabItem(); }
+                    }
                 }
                 if (ImGui::BeginTabItem("History", nullptr, tf(PanelView::History)))
                     { s_panel_view = PanelView::History; s_user_nav = true; ImGui::EndTabItem(); }
@@ -1954,6 +1966,7 @@ void ui_studio(AppState& state) {
 
         switch (s_panel_view) {
             case PanelView::Clip:        panel_clip(state, pw);                  break;
+            case PanelView::Filters:     panel_face_filters(state, pw);          break;
             case PanelView::Typography:  panel_typography(state, pw);            break;
             case PanelView::HostAudioFX:
                 panel_audio_multifx_for(state, pw, s_host_fx_ti, s_host_afx_ci);

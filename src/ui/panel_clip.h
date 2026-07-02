@@ -5,6 +5,7 @@
 #include "app.h"
 
 void panel_clip(AppState& state, float w);
+void panel_face_filters(AppState& state, float w);
 
 // Reusable style sections — shared with the Typography panel so subtitle/lyric
 // styling (track-wide) and standalone Text (per-clip) use the same controls.

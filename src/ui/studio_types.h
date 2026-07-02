@@ -12,6 +12,7 @@ enum class PanelView {
     LibBG, LibText, LibLyric, LibFX, LibAdj, LibAFX, LibVID, LibIMG, LibAUD, LibBFX, // library browsers
     LibBin,                                              // project bin (this-project media)
     OverrideFX, OverrideAdj, OverrideBG, OverrideAudioFX, OverrideMultiFX, OverrideAudioMultiFX, // clip-type overrides
+    Filters,      // face filters for the selected camera brick
 };
 
 // ── Timeline layout constants ─────────────────────────────────────────────────
