@@ -940,14 +940,20 @@ void main() {
         }
         float inside  = float((crossings & 1) == 1);
         float feather = max(u_mouthax.y * 0.30, 1.5);
-        float lm2 = inside * smoothstep(0.0, feather, dmin)
-                  + (1.0 - inside) * (1.0 - smoothstep(0.0, feather * 0.5, dmin)) * 0.30;
+        // No outside bleed: color above the vermilion border is what reads
+        // as "smudged". The mask is zero outside the ring, full inside past
+        // a short feather.
+        float lm2 = inside * smoothstep(0.0, feather * 0.8, dmin);
         // Bitten-lip gradient via the center ellipse.
         vec2 md = p - u_feat.yz;
         float la = dot(md, rightv) / max(u_mouthax.x, 1.0);
         float lb = dot(md, u_up)   / max(u_mouthax.y, 1.0);
         float grad = 1.0 - 0.55 * u_makeup.z * smoothstep(0.25, 1.0, length(vec2(la, lb)));
-        float lippy = smoothstep(0.04, 0.13, col.r - col.g);
+        // Redness gate polices the EDGES only. Deep inside the lip polygon
+        // geometry wins — a lower lip washed out by window light is still a
+        // lip (the gate-everywhere version painted upper lips only).
+        float deep  = inside * smoothstep(feather, feather * 2.2, dmin);
+        float lippy = max(smoothstep(0.03, 0.12, col.r - col.g), deep);
         float t = u_makeup.y * lm2 * grad * lippy;
         // Colorize toward the lip color, keeping the lip's own shading — a
         // dark goth plum and a hot Barbie pink both read as lipstick.
