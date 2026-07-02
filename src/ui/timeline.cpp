@@ -36,6 +36,24 @@
 #include <vector>
 #include "json.hpp"
 
+// Pull whole groups into the multi-selection: any selected clip with a
+// non-zero group_id drags in every clip sharing that id. Runs after any
+// selection change (click, box select, right-click collapse).
+static void expand_selection_groups(AppState& state) {
+    std::set<int> gids;
+    for (auto& [t2, c2] : state.clip_selection) {
+        if (t2 < 0 || t2 >= (int)state.tracks.size()) continue;
+        if (c2 < 0 || c2 >= (int)state.tracks[t2].clips.size()) continue;
+        int g = state.tracks[t2].clips[c2].group_id;
+        if (g != 0) gids.insert(g);
+    }
+    if (gids.empty()) return;
+    for (int t2 = 0; t2 < (int)state.tracks.size(); ++t2)
+        for (int c2 = 0; c2 < (int)state.tracks[t2].clips.size(); ++c2)
+            if (gids.count(state.tracks[t2].clips[c2].group_id))
+                state.clip_selection.insert({t2, c2});
+}
+
 namespace fs = std::filesystem;
 extern ImFont* g_font_bold;
 extern ImFont* g_font_black;
@@ -1505,10 +1523,13 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
             ImVec2 drop_br = {origin.x + total_w,
                               fminf(track_y + TL_TRACK_H, track_area_bot)};
             if (drop_br.y > drop_tl.y) {
-            ImGui::SetCursorScreenPos(drop_tl);
-            ImGui::InvisibleButton(("##fxdrop" + std::to_string(ti)).c_str(),
-                                   {drop_br.x - drop_tl.x, drop_br.y - drop_tl.y});
-            if (ImGui::BeginDragDropTarget()) {
+            // Rect-based target (no item): the old full-row InvisibleButton
+            // claimed every click on the row (IsAnyItemActive), which blocked
+            // box-select from ever starting over a track — it only worked in
+            // the void below all tracks. A custom target accepts drops over
+            // the same rect without owning mouse presses.
+            if (ImGui::BeginDragDropTargetCustom(ImRect(drop_tl, drop_br),
+                    ImGui::GetID(("##fxdrop" + std::to_string(ti)).c_str()))) {
                 // A lyrics track is exclusive: only lyric bricks may land on it, and a
                 // lyric brick lands nowhere else (other tracks omit the accept below).
                 if (is_lyrics_track(track)) {
@@ -2209,6 +2230,15 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                     }
                 }
             }
+            // Group badge: a small hue-coded tab at the clip's top edge marks
+            // grouped clips; same id = same hue, so siblings read at a glance.
+            if (clip.group_id != 0) {
+                uint32_t h = (uint32_t)clip.group_id * 2654435761u;
+                ImU32 gcol = IM_COL32(120 + (h & 0x7F), 120 + ((h >> 7) & 0x7F),
+                                      120 + ((h >> 14) & 0x7F), 235);
+                dl->AddRectFilled({vis_x0 + 2.f, cy0}, {vis_x0 + 16.f, cy0 + 3.f}, gcol, 1.f);
+            }
+
             // Left click — select / drag
             bool any_popup = ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
             if (!kf_claimed && !s_trans_hit_this_frame && !any_popup && (!tl_any_popup && ImGui::IsMouseClicked(0))) {
@@ -2217,10 +2247,21 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                     auto key = std::make_pair(ti, ci);
                     bool ctrl  = ImGui::GetIO().KeyCtrl;
                     bool shift = ImGui::GetIO().KeyShift;
+                    bool alt   = ImGui::GetIO().KeyAlt;   // Alt = ignore grouping, pick the single clip
                     if (ctrl) {
-                        if (state.clip_selection.count(key))
+                        if (state.clip_selection.count(key)) {
                             state.clip_selection.erase(key);
-                        else
+                            // Ctrl-toggling a grouped clip off removes its whole group.
+                            if (!alt && clip.group_id != 0) {
+                                for (auto it = state.clip_selection.begin(); it != state.clip_selection.end(); ) {
+                                    if (it->first  < (int)state.tracks.size() &&
+                                        it->second < (int)state.tracks[it->first].clips.size() &&
+                                        state.tracks[it->first].clips[it->second].group_id == clip.group_id)
+                                        it = state.clip_selection.erase(it);
+                                    else ++it;
+                                }
+                            }
+                        } else
                             state.clip_selection.insert(key);
                     } else if (shift && state.selected_track >= 0 && state.selected_clip >= 0) {
                         struct TL { float start; int ti, ci; };
@@ -2239,6 +2280,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                         state.clip_selection.clear();
                         state.clip_selection.insert(key);
                     }
+                    if (!alt) expand_selection_groups(state);
                     state.selected_track = ti;
                     state.selected_clip  = ci;
                     // A coupled brick is an attachment of its content: left-
@@ -2319,6 +2361,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                 if (!state.clip_selection.count({ti, ci})) {
                     state.clip_selection.clear();
                     state.clip_selection.insert({ti, ci});
+                    expand_selection_groups(state);
                 }
                 open_clip_ctx = true;
                 clip_ctx_opened_this_frame = true;
@@ -3840,14 +3883,16 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                 // Only select clips when the box has meaningful size — a zero-size
                 // box (single click, t0==t1) would match any clip spanning the cursor,
                 // immediately re-selecting what we just deselected.
-                if (bx1 - bx0 > 4.f || by1 - by0 > 4.f)
-                for (int t2=0; t2<(int)state.tracks.size(); ++t2) {
-                    if (t2 < tr0 || t2 > tr1) continue;
-                    for (int c2=0; c2<(int)state.tracks[t2].clips.size(); ++c2) {
-                        const Clip& bc = state.tracks[t2].clips[c2];
-                        if (bc.end > t0 && bc.start < t1)
-                            state.clip_selection.insert({t2, c2});
+                if (bx1 - bx0 > 4.f || by1 - by0 > 4.f) {
+                    for (int t2=0; t2<(int)state.tracks.size(); ++t2) {
+                        if (t2 < tr0 || t2 > tr1) continue;
+                        for (int c2=0; c2<(int)state.tracks[t2].clips.size(); ++c2) {
+                            const Clip& bc = state.tracks[t2].clips[c2];
+                            if (bc.end > t0 && bc.start < t1)
+                                state.clip_selection.insert({t2, c2});
+                        }
                     }
+                    expand_selection_groups(state);
                 }
             } else {
                 // Released — finalise, update focus to first selected clip
@@ -4197,15 +4242,26 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
             dc.start = fmaxf(0.f, best_start);
             dc.end   = dc.start + dur_clip;
             sync_proxy_key();
-            // Co-move all other selected clips by the same delta
+            // Co-move all other selected clips by the same delta. The delta is
+            // clamped so the EARLIEST clip in the group stops at 0:00 — the old
+            // per-clip fmaxf(0,...) let clips hit the wall one by one, squashing
+            // the group's relative spacing when dragged toward the start.
             if (g_tl.drag_multi.size() > 1) {
                 float delta = dc.start - drag_origin_start;
+                float min_start = drag_origin_start;
+                for (auto& orig : g_tl.drag_multi)
+                    min_start = fminf(min_start, orig.start);
+                if (min_start + delta < 0.f) {
+                    delta    = -min_start;
+                    dc.start = drag_origin_start + delta;
+                    dc.end   = dc.start + dur_clip;
+                }
                 for (auto& orig : g_tl.drag_multi) {
                     if (orig.ti == drag_track && orig.ci == drag_clip) continue;
                     if (orig.ti >= (int)state.tracks.size()) continue;
                     if (orig.ci >= (int)state.tracks[orig.ti].clips.size()) continue;
                     Clip& oc = state.tracks[orig.ti].clips[orig.ci];
-                    oc.start = fmaxf(0.f, orig.start + delta);
+                    oc.start = orig.start + delta;
                     oc.end   = oc.start + (orig.end - orig.start);
                 }
             }
@@ -4469,6 +4525,75 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                 state.clip_selection.clear();
                 state.clip_selection.insert({state.selected_track, state.selected_clip});
                 history_push(state, "Move clip to new track");
+            } else if (!drag_left && !drag_right && s_drag_moved &&
+                drag_hot_track >= 0 && drag_hot_track != drag_track &&
+                g_tl.drag_multi.size() > 1) {
+                // Cross-track MULTI move: every selected clip shifts by the same
+                // track offset, keeping the times the drag already applied. The
+                // old code moved only the grabbed clip and silently left the
+                // rest of the selection behind. All-or-nothing: if any member's
+                // target row is out of range, not a Normal track, locked, or
+                // conflicts with a non-selected clip, the whole drop reverts.
+                int track_delta = drag_hot_track - drag_track;
+                bool ok = drag_hot_track < (int)state.tracks.size();
+                if (ok) for (auto& orig : g_tl.drag_multi) {
+                    int dst = orig.ti + track_delta;
+                    if (dst < 0 || dst >= (int)state.tracks.size() ||
+                        state.tracks[(size_t)dst].kind != TrackKind::Normal ||
+                        state.tracks[(size_t)dst].locked) { ok = false; break; }
+                    if (orig.ti >= (int)state.tracks.size() ||
+                        orig.ci >= (int)state.tracks[orig.ti].clips.size()) { ok = false; break; }
+                    const Clip& mc = state.tracks[orig.ti].clips[orig.ci];
+                    for (int c2 = 0; c2 < (int)state.tracks[(size_t)dst].clips.size(); ++c2) {
+                        bool member = false;
+                        for (auto& o2 : g_tl.drag_multi)
+                            if (o2.ti == dst && o2.ci == c2) { member = true; break; }
+                        if (member) continue;
+                        if (clips_conflict(mc, state.tracks[(size_t)dst].clips[c2])) { ok = false; break; }
+                    }
+                    if (!ok) break;
+                }
+                if (!ok) {
+                    // Revert every member to its drag origin (times only; tracks
+                    // never changed yet).
+                    for (auto& orig : g_tl.drag_multi) {
+                        if (orig.ti >= (int)state.tracks.size()) continue;
+                        if (orig.ci >= (int)state.tracks[orig.ti].clips.size()) continue;
+                        Clip& oc = state.tracks[orig.ti].clips[orig.ci];
+                        oc.start = orig.start;
+                        oc.end   = orig.end;
+                    }
+                } else {
+                    // Extract members per source track in DESCENDING clip order so
+                    // earlier indices stay valid, then append to their targets.
+                    std::vector<TlState::Origin> mems(g_tl.drag_multi.begin(), g_tl.drag_multi.end());
+                    std::sort(mems.begin(), mems.end(), [](const TlState::Origin& a, const TlState::Origin& b){
+                        return a.ti != b.ti ? a.ti < b.ti : a.ci > b.ci;
+                    });
+                    std::vector<std::pair<int, Clip>> moving;   // (dst track, clip)
+                    for (auto& orig : mems) {
+                        if (orig.ti >= (int)state.tracks.size() ||
+                            orig.ci >= (int)state.tracks[orig.ti].clips.size()) continue;
+                        auto& clips = state.tracks[orig.ti].clips;
+                        moving.push_back({orig.ti + track_delta, clips[(size_t)orig.ci]});
+                        clips.erase(clips.begin() + orig.ci);
+                    }
+                    state.clip_selection.clear();
+                    for (auto& [dst, mc] : moving) {
+                        state.tracks[(size_t)dst].clips.push_back(mc);
+                        state.clip_selection.insert({dst, (int)state.tracks[(size_t)dst].clips.size() - 1});
+                    }
+                    state.selected_track = drag_hot_track;
+                    state.selected_clip  = state.clip_selection.count({drag_hot_track,
+                                             (int)state.tracks[(size_t)drag_hot_track].clips.size() - 1})
+                                             ? (int)state.tracks[(size_t)drag_hot_track].clips.size() - 1 : -1;
+                    if (state.selected_clip < 0 && !state.clip_selection.empty()) {
+                        auto first = *state.clip_selection.begin();
+                        state.selected_track = first.first;
+                        state.selected_clip  = first.second;
+                    }
+                    history_push(state, "Move clips to track");
+                }
             } else if (!drag_left && !drag_right && s_drag_moved &&
                 drag_hot_track >= 0 && drag_hot_track != drag_track) {
                 std::vector<Clip> grp = extract_host_group(state, drag_track, drag_clip);
@@ -5063,6 +5188,42 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
         }
         if (ImGui::MenuItem("Duplicate clip")) {
             if (duplicate_selected_clips(state)) history_push(state, "Duplicate clip");
+        }
+        // ── Grouping: clips sharing a group_id select and drag as one ─────────
+        {
+            bool any_grouped = false;
+            for (auto& [sti, sci] : state.clip_selection) {
+                if (sti < 0 || sti >= (int)state.tracks.size()) continue;
+                if (sci < 0 || sci >= (int)state.tracks[sti].clips.size()) continue;
+                if (state.tracks[sti].clips[sci].group_id != 0) { any_grouped = true; break; }
+            }
+            if (state.clip_selection.size() >= 2 &&
+                ImGui::MenuItem("Group clips", nullptr, false, !trk_locked)) {
+                int gid = 0;
+                for (auto& tr : state.tracks)
+                    for (auto& c2 : tr.clips)
+                        if (c2.group_id > gid) gid = c2.group_id;
+                ++gid;
+                for (auto& [sti, sci] : state.clip_selection) {
+                    if (sti < 0 || sti >= (int)state.tracks.size()) continue;
+                    if (sci < 0 || sci >= (int)state.tracks[sti].clips.size()) continue;
+                    state.tracks[sti].clips[sci].group_id = gid;
+                }
+                history_push(state, "Group clips");
+            }
+            if (any_grouped && ImGui::MenuItem("Ungroup", nullptr, false, !trk_locked)) {
+                std::set<int> gids;
+                for (auto& [sti, sci] : state.clip_selection) {
+                    if (sti < 0 || sti >= (int)state.tracks.size()) continue;
+                    if (sci < 0 || sci >= (int)state.tracks[sti].clips.size()) continue;
+                    int g = state.tracks[sti].clips[sci].group_id;
+                    if (g != 0) gids.insert(g);
+                }
+                for (auto& tr : state.tracks)
+                    for (auto& c2 : tr.clips)
+                        if (gids.count(c2.group_id)) c2.group_id = 0;
+                history_push(state, "Ungroup clips");
+            }
         }
         // Merge lyric bricks: the selected lyrics on this track, else this brick + the next.
         if (valid && cc->clip_type == ClipType::Lyrics) {

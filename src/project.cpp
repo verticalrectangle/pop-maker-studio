@@ -12,7 +12,7 @@
 // ── Binary serialization helpers ──────────────────────────────────────────────
 
 static const uint32_t MAGIC   = 0x534D5001u; // "PMS\x01"
-static const uint32_t VERSION = 61u;  // v61: record A/V pair id (camera + mic bricks record in lockstep)
+static const uint32_t VERSION = 62u;  // v62: clip group_id (right-click clip grouping)
 
 // Version used to gate the registry-effect read block (generated/fx_project_read.h).
 // Normally the file's format version; project_load decrements it by 1 on a retry
@@ -275,6 +275,8 @@ static void write_clip(Writer& w, const Clip& c) {
     w.pod(c.fx_chroma_frame_spacing); w.pod(c.fx_chroma_frame_falloff);
     // v61: record A/V pair id (0 = unpaired)
     w.pod(c.rec_pair_id);
+    // v62: clip grouping (0 = ungrouped)
+    w.pod(c.group_id);
 }
 
 static Clip read_clip(Reader& r, uint32_t version) {
@@ -550,6 +552,7 @@ static Clip read_clip(Reader& r, uint32_t version) {
         c.fx_chroma_frame_spacing = r.pod<float>(); c.fx_chroma_frame_falloff = r.pod<float>();
     }
     if (version >= 61u) c.rec_pair_id = r.pod<int>();
+    if (version >= 62u) c.group_id    = r.pod<int>();
     return c;
 }
 

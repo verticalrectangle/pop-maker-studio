@@ -422,6 +422,10 @@ struct Clip {
     // from different passes. 0 = unpaired (solo brick, records its own medium).
     int rec_pair_id = 0;
 
+    // Clip group: clips sharing a non-zero group_id select and drag as one
+    // (right-click → Group clips / Ungroup). 0 = ungrouped.
+    int group_id = 0;
+
     // Content clip: when true, the coupled FX chains expand into per-FX timing
     // lanes drawn beneath the clip (the track grows), so each effect's run can
     // be trimmed individually. Collapsed by default; view state, not exported.
