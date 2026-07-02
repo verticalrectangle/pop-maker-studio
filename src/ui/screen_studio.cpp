@@ -1053,6 +1053,9 @@ void ui_studio(AppState& state) {
                 bool soc = state.show_social_safe;
                 if (ImGui::MenuItem("Social safe zones (9:16)", nullptr, soc))
                     state.show_social_safe = !soc;
+                bool mm = state.show_master_meter;
+                if (ImGui::MenuItem("Master meter (LUFS + peak)", nullptr, mm))
+                    state.show_master_meter = !mm;
             }
             ImGui::Separator();
             if (ImGui::MenuItem("History", "Ctrl+Shift+H")) s_panel_view = PanelView::History;
@@ -1637,6 +1640,46 @@ void ui_studio(AppState& state) {
         ImVec2 stage_p = ImGui::GetCursorScreenPos();
         ImGui::Dummy({sw, sh});
         draw_preview(state, stage_p, sw, sh);
+
+        // ── Master meter (View ▸ Master meter) ───────────────────────────────
+        // Compact strip on the preview's right edge: L/R sample-peak bars
+        // (-60..0 dBFS), a clip light, and momentary / integrated LUFS.
+        // Master-only by design; integrated resets each time playback starts.
+        if (state.show_master_meter) {
+            LoudnessSnapshot ms = audio_master_meter();
+            ImDrawList* mdl = ImGui::GetWindowDrawList();
+            const float MW = 74.f, MH = fminf(sh - 16.f, 220.f);
+            ImVec2 mp0{stage_p.x + sw - MW - 8.f, stage_p.y + 8.f};
+            ImVec2 mp1{mp0.x + MW, mp0.y + MH};
+            mdl->AddRectFilled(mp0, mp1, IM_COL32(10, 10, 16, 215), 6.f);
+            mdl->AddRect(mp0, mp1, IM_COL32(70, 70, 90, 200), 6.f);
+            auto db_of    = [](float lin) { return lin > 1e-6f ? 20.f * log10f(lin) : -120.f; };
+            auto bar_frac = [](float db)  { return fmaxf(0.f, fminf(1.f, (db + 60.f) / 60.f)); };
+            float bar_top = mp0.y + 22.f, bar_bot = mp1.y - 40.f;
+            float bx = mp0.x + 12.f;
+            for (int ch = 0; ch < 2; ++ch) {
+                float db = db_of(ch == 0 ? ms.peak_l : ms.peak_r);
+                float f  = bar_frac(db);
+                float x0 = bx + ch * 16.f, x1 = x0 + 10.f;
+                mdl->AddRectFilled({x0, bar_top}, {x1, bar_bot}, IM_COL32(30, 32, 44, 255), 2.f);
+                float fy = bar_bot - (bar_bot - bar_top) * f;
+                ImU32 bc = db > -3.f  ? IM_COL32(235, 70, 70, 255)
+                         : db > -12.f ? IM_COL32(235, 200, 70, 255)
+                                      : IM_COL32(80, 210, 120, 255);
+                if (f > 0.f) mdl->AddRectFilled({x0, fy}, {x1, bar_bot}, bc, 2.f);
+            }
+            ImU32 clip_c = ms.clipped ? IM_COL32(255, 60, 60, 255) : IM_COL32(60, 60, 74, 255);
+            mdl->AddCircleFilled({mp0.x + MW * 0.5f + 18.f, mp0.y + 13.f}, 4.f, clip_c);
+            mdl->AddText({mp0.x + 10.f, mp0.y + 6.f}, IM_COL32(180, 185, 200, 230), "PEAK");
+            char l1[32], l2[32];
+            if (ms.momentary_lufs > -100.f) snprintf(l1, sizeof(l1), "M %+5.1f", ms.momentary_lufs);
+            else                            snprintf(l1, sizeof(l1), "M   --");
+            if (ms.integrated_lufs > -100.f) snprintf(l2, sizeof(l2), "I %+5.1f", ms.integrated_lufs);
+            else                             snprintf(l2, sizeof(l2), "I   --");
+            mdl->AddText({mp0.x + 10.f, mp1.y - 34.f}, IM_COL32(210, 215, 235, 255), l1);
+            mdl->AddText({mp0.x + 10.f, mp1.y - 18.f}, IM_COL32(160, 200, 255, 255), l2);
+            mdl->AddText({mp0.x + MW - 38.f, mp1.y - 26.f}, IM_COL32(120, 125, 145, 200), "LUFS");
+        }
 
         // ── Busy banner ───────────────────────────────────────────────────────
         // The hover transport pill is gone (it cluttered the preview and ate

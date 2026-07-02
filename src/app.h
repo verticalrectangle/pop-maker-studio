@@ -874,6 +874,16 @@ struct AppState {
     // on the 9:16 canvas and shift the drag centre-snap to the visible box.
     bool show_social_safe = false;
 
+    // View ▸ Master meter: live LUFS + peak strip on the preview (master-only).
+    bool show_master_meter = false;
+
+    // Export loudness report (ffmpeg ebur128 on the finished file, so it
+    // measures what platforms receive — post-mix, post-AAC, true peak).
+    // Runtime only; keyed to the file it measured so a re-export re-runs it.
+    std::string loudness_report;        // human line shown in the export UI
+    std::string loudness_report_for;    // out_mp4 path the report belongs to
+    bool        loudness_measuring = false;
+
     // scroll-to-clip request (set by preview click, consumed by draw_timeline)
     bool request_scroll_to_clip = false;
 

@@ -44,6 +44,7 @@ set(SOURCES
     src/main.cpp
     src/app.cpp
     src/audio.cpp
+    src/loudness.cpp
     src/audio_pw.cpp
     src/face_track.cpp
     src/face_cache.cpp

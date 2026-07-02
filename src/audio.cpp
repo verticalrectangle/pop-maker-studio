@@ -1,4 +1,5 @@
 #include "audio.h"
+#include "loudness.h"
 #include "audio_fx.h"
 #ifdef HAVE_PIPEWIRE
 #include "audio_pw.h"
@@ -401,10 +402,17 @@ static void apply_fade_in(float* out, ma_uint32 frameCount) {
 }
 
 // Normal mode: playback-only device, mix only.
+// Master meter: fed the FINAL post-clamp/post-fade buffer of every output
+// callback — exactly what reaches the device. Integrated resets on play.
+static LoudnessMeter g_master_meter;
+LoudnessSnapshot audio_master_meter() { return g_master_meter.snapshot(); }
+
 static void data_callback(ma_device*, void* pOutput, const void*, ma_uint32 frameCount) {
     float* out = (float*)pOutput;
     mix_master(out, frameCount);
     apply_fade_in(out, frameCount);
+    if (g_transport.load(std::memory_order_relaxed))
+        g_master_meter.process(out, frameCount);
 }
 
 // Performance-mode input: gate the live mic, push the gated signal to the
@@ -497,6 +505,8 @@ static void perf_output_block(float* out, uint32_t frameCount) {
             out[i] = fmaxf(-1.f, fminf(1.f, out[i]));
     }
     apply_fade_in(out, frameCount);
+    if (g_transport.load(std::memory_order_relaxed))
+        g_master_meter.process(out, frameCount);
 }
 
 // miniaudio duplex backend (fallback when PipeWire isn't available): input
@@ -599,6 +609,8 @@ bool audio_load(const std::string& path) {
 }
 
 void audio_play() {
+    // Fresh integrated-LUFS measurement per listen-through.
+    g_master_meter.reset(44100.f);
     g_transport.store(true, std::memory_order_relaxed);
     if (g_cap_init) {
         // Perf mode: the duplex device owns the output and is already running.

@@ -38,6 +38,11 @@ bool  audio_capture_start();    // enter performance mode
 void  audio_capture_stop();     // leave performance mode
 bool  audio_capture_active();
 float audio_input_peak();       // live mic peak 0–1 (0 when not capturing)
+
+// Master output meter (BS.1770): momentary + integrated LUFS and sample peak
+// of the final device buffer. Integrated resets each time playback starts.
+#include "loudness.h"
+LoudnessSnapshot audio_master_meter();
 // Move all captured samples since the last drain into `out` (appends).
 void  audio_capture_drain(std::vector<float>& out);
 float audio_capture_latency();  // input period in seconds (0 if not capturing)
