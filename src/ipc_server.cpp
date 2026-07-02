@@ -1791,8 +1791,15 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         if (ok) {
             r["score"] = obs.score;
             r["frame"] = {obs.w, obs.h};
-            r["nose"]  = {obs.pts[80][0], obs.pts[80][1]};
-            r["chin"]  = {obs.pts[0][0], obs.pts[0][1]};
+            r["nose"]  = {obs.pts[1][0], obs.pts[1][1]};      // mesh nose tip
+            r["chin"]  = {obs.pts[152][0], obs.pts[152][1]};  // mesh chin
+            if (obs.has_blend) {
+                r["jaw_open"]  = obs.blend[FB_JAW_OPEN];
+                r["smile"]     = (obs.blend[FB_MOUTH_SMILE_L] +
+                                  obs.blend[FB_MOUTH_SMILE_R]) * 0.5f;
+                r["eye_blink"] = (obs.blend[FB_EYE_BLINK_L] +
+                                  obs.blend[FB_EYE_BLINK_R]) * 0.5f;
+            }
             r["eyeB"]  = {obs.pts[90][0], obs.pts[90][1]};
             if (params.value("full", false)) {
                 json pts = json::array();
@@ -3430,13 +3437,16 @@ static void process_client(Client& cl, AppState& state) {
 // ── Public API ────────────────────────────────────────────────────────────────
 
 void ipc_server_start() {
-    // Test rig escape hatch: a second instance for measurement/debugging must
-    // not unlink+steal the live app's socket.
+    // Test rig escape hatches: a second instance for measurement/debugging
+    // must not unlink+steal the live app's socket — disable entirely, or give
+    // the rig its own socket path (raw-socket IPC works against it).
     if (getenv("PMS_NO_IPC")) {
         fprintf(stdout, "[ipc] disabled (PMS_NO_IPC)\n");
         return;
     }
-    g_sock_path = "/tmp/pop-maker-studio.sock";
+    const char* sock_override = getenv("PMS_SOCK");
+    g_sock_path = sock_override && *sock_override
+                ? sock_override : "/tmp/pop-maker-studio.sock";
 
     // Remove stale socket
     ::unlink(g_sock_path.c_str());
