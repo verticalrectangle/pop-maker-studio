@@ -123,7 +123,7 @@ def liner(lids, sign):
     l = Image.new("RGBA", (SZ, SZ), (0, 0, 0, 0))
     d = ImageDraw.Draw(l)
     pts = [P(i) for i in lids]                     # outer→inner
-    base = [(x, y - ed*0.012) for x, y in pts]
+    base = [(x, y - ed*0.005) for x, y in pts]
     # tapered liner: draw as segments with shrinking width inward
     for i in range(len(base) - 1):
         wdt = int(ed * (0.052 - 0.028 * (i / (len(base) - 1))))

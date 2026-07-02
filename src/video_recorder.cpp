@@ -165,6 +165,8 @@ static bool device_has_mjpeg(const std::string& path) {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
+static uint64_t s_live_id = 0;      // this session's brick stamp
+
 static Clip* target_brick(AppState& state) {
     auto match = [&](int ti, int ci) -> Clip* {
         if (ti < 0 || ti >= (int)state.tracks.size()) return nullptr;
@@ -172,9 +174,11 @@ static Clip* target_brick(AppState& state) {
         if (ci < 0 || ci >= (int)clips.size()) return nullptr;
         Clip* cl = &clips[ci];
         if (cl->clip_type != ClipType::VideoRecord) return nullptr;
+        // Identity by session stamp — bounds were the old fingerprint, and a
+        // NEW brick with identical bounds inherited a deleted brick's session
+        // ("locked to the previous instance").
         bool rec = s_state == VRecState::Warming || s_state == VRecState::Recording;
-        if (rec && (fabsf(cl->start - s_lp_start) > 1e-4f ||
-                    fabsf(cl->end   - s_lp_end)   > 1e-4f)) return nullptr;
+        if (rec && cl->rec_live_id != s_live_id) return nullptr;
         return cl;
     };
     if (Clip* cl = match(s_ti, s_ci)) return cl;
@@ -580,6 +584,9 @@ bool vrecorder_start(AppState& state, int ti, int ci) {
     s_lp_start = cl->start;
     s_lp_end   = cl->end;
     s_loop_len = s_lp_end - s_lp_start;
+    static uint64_t s_live_counter = 0;
+    s_live_id = ++s_live_counter;
+    cl->rec_live_id = s_live_id;
 
     // Record pair: find the mic twin (a Record brick sharing rec_pair_id).
     // It starts the moment the camera is warm — see the Warming tick.

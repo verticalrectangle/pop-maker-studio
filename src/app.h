@@ -399,6 +399,10 @@ struct Clip {
     // managed takes dir). The selected take plays in preview/export like an
     // audio clip with in_point 0 / speed 1; the rest wait in the panel tray.
     std::vector<std::string> rec_takes;
+    uint64_t rec_live_id = 0;   // transient recorder-session stamp (NOT serialized):
+                                // the recorders resolve their target brick by this,
+                                // not by indices or loop bounds — a new brick with
+                                // identical bounds must never inherit a session.
     int                      rec_take_sel = -1;
 
     // Capture IMG brick: a VideoRecord brick in photo mode — each take is a

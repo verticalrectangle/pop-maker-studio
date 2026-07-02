@@ -19,7 +19,8 @@ namespace fs = std::filesystem;
 
 static bool   s_active     = false;
 static int    s_ti = -1, s_ci = -1;
-static float  s_lp_start = 0.f, s_lp_end = 0.f;  // identity check: brick must keep these bounds
+static float  s_lp_start = 0.f, s_lp_end = 0.f;
+static uint64_t s_live_id = 0;   // session stamp on the target brick
 static std::vector<float> s_buf;       // capture stream since record start (interleaved)
 static size_t s_take_len   = 0;        // loop length in interleaved floats
 static size_t s_lat_off    = 0;        // capture→loop-grid offset in interleaved floats
@@ -109,10 +110,10 @@ static Clip* target_brick(AppState& state) {
         if (ci < 0 || ci >= (int)clips.size()) return nullptr;
         Clip* cl = &clips[ci];
         if (cl->clip_type != ClipType::Record) return nullptr;
-        // Identity check — track/clip indices shift when the timeline is
-        // edited mid-record; the loop bounds are the brick's fingerprint.
-        if (s_active && (fabsf(cl->start - s_lp_start) > 1e-4f ||
-                         fabsf(cl->end   - s_lp_end)   > 1e-4f)) return nullptr;
+        // Identity by session stamp — loop bounds were the old fingerprint,
+        // and a new brick with identical bounds inherited a deleted brick's
+        // session.
+        if (s_active && cl->rec_live_id != s_live_id) return nullptr;
         return cl;
     };
     if (Clip* cl = match(s_ti, s_ci)) return cl;
@@ -190,6 +191,9 @@ bool recorder_start(AppState& state, int ti, int ci) {
     Clip* cl = target_brick(state);
     if (!cl || cl->end - cl->start < 0.25f) { s_ti = s_ci = -1; return false; }
     float lp_start = cl->start, lp_end = cl->end;
+    static uint64_t s_live_counter = 0;
+    s_live_id = ++s_live_counter;
+    cl->rec_live_id = s_live_id;
     s_lp_start = lp_start;
     s_lp_end   = lp_end;
 
