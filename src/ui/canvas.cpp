@@ -108,7 +108,9 @@ static bool s_rot_snapped = false;   // rotate drag is currently angle-snapped
 // ActiveId catches a drag already in progress (it persists across frames).
 static bool ui_widget_claims_mouse() {
     ImGuiContext& g = *GImGui;
-    return g.HoveredIdPreviousFrame != 0 || g.ActiveId != 0;
+    // ui_splitter_capture(): the panel-resize handles are raw hit-tests, not
+    // ImGui items — while one is hot or dragging, the press belongs to it.
+    return g.HoveredIdPreviousFrame != 0 || g.ActiveId != 0 || ui_splitter_capture();
 }
 
 bool camera_live_native_dims(int& cw, int& ch);   // defined below

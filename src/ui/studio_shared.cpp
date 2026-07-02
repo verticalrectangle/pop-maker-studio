@@ -432,9 +432,10 @@ bool kf_slider(AppState& state, Clip& clip, int sel_ti, int sel_ci, float w,
     ImGui::SetNextItemWidth(w - 16.f);
     char sid[80]; snprintf(sid, sizeof(sid), "##kfs_%s", prop);
     float dv = (has_keys ? clip.eval_prop(prop, state.playhead) : *val_ptr) * disp;
-    if (ImGui::SliderFloat(sid, &dv, vmin, vmax, fmt)) {
-        changed = true;
-        float raw = dv / disp;
+    // Applies a new raw value through the same path an edit takes: static
+    // field always, plus the key at the playhead when the prop is animated.
+    auto apply_value = [&](float raw) {
+        changed  = true;
         *val_ptr = raw;
         if (has_keys) {
             int ki = pt->find_nearest(t_local, kf_tol);
@@ -445,9 +446,18 @@ bool kf_slider(AppState& state, Clip& clip, int sel_ti, int sel_ci, float w,
                 if (k2 >= 0) p2.keys[k2].value = raw; else p2.set(t_local, raw);
             }
         }
-    }
+    };
+    if (ImGui::SliderFloat(sid, &dv, vmin, vmax, fmt))
+        apply_value(dv / disp);
     ImGui::PopStyleColor(2);
     if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, std::string("Edit ") + prop);
+    // Homebase: double-click snaps the prop back to its fresh-Clip default
+    // (keyframed props get the default keyed at the playhead, like any edit).
+    if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(0)) {
+        apply_value(clip_prop_default(prop, *val_ptr));
+        ImGui::ClearActiveID();   // release the drag the first click started
+        history_push(state, std::string("Reset ") + prop);
+    }
     // Navigate-to-param: a timeline keyframe click set focus_prop → scroll this
     // slider into view + flash it briefly. One-shot, self-clearing.
     if (state.focus_prop == prop) {
@@ -602,6 +612,34 @@ void marker_jump(AppState& state, int dir) {
     if (best >= 0.f) seek_to(state, best);
 }
 
+// ── Splitter capture ──────────────────────────────────────────────────────────
+static bool g_splitter_capture = false;
+void ui_set_splitter_capture(bool on) { g_splitter_capture = on; }
+bool ui_splitter_capture()            { return g_splitter_capture; }
+
+// ── Slider homebase (double-click reset) ──────────────────────────────────────
+bool ui_slider_home(AppState& state, float* v, float defv, const char* hist_label) {
+    if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(0)) {
+        *v = defv;
+        // The first click of the double-click grabbed the slider and jumped the
+        // value — release it so the reset sticks instead of resuming the drag.
+        ImGui::ClearActiveID();
+        history_push(state, std::string("Reset ") + hist_label);
+        return true;
+    }
+    return false;
+}
+
+// Default ("homebase") value for a keyframable clip prop: what a freshly
+// constructed Clip carries in that field. Falls back to cur when the prop
+// isn't in the registry (then a reset is a no-op rather than a surprise).
+float clip_prop_default(const char* prop, float cur) {
+    static const Clip s_def{};
+    for (int i = 0; i < kClipKfFieldCount; ++i)
+        if (!strcmp(prop, kClipKfFields[i].name)) return s_def.*(kClipKfFields[i].f);
+    return cur;
+}
+
 // ── Clip / slot helpers ───────────────────────────────────────────────────────
 std::string clip_slot_key(const std::string& src, float /*start*/) {
     return src;
@@ -637,49 +675,86 @@ void gc_video_slots(AppState& state) {
     }
 }
 
-void reopen_video_slots(AppState& state) {
+// Open ONE slot for `src` — the per-source body of reopen_video_slots. This is
+// the expensive part (proxy_load spawns ffprobe; GIFs decode all frames), so
+// the project-open path runs it incrementally via the queue below.
+static void open_video_slot_now(AppState& state, int slot, const std::string& src) {
+    // Still images go straight to Still — never native. libav happily
+    // opens a PNG as a one-frame video, but then any decode past t=0
+    // fails and the clip renders blank (this is how MCP-added images
+    // vanished from the preview: add_clip → proxy_scan → native PNG).
+    // Animated images (.gif) fall through to the proxy path below.
+    if (is_animated_image(src)) {
+        // GIF: decode to full-res RGBA frames once (lossless + alpha) and
+        // show the frame at the playhead — no lossy mp4 conform / MJPEG.
+        if (!video_is_gif(slot)) video_open_gif(slot, src);
+        return;
+    }
+    if (is_image_path(src) && !is_animated_image(src)) {
+        if (video_source(slot) != PreviewSource::Still)
+            video_open_still(slot, proxy_still_path(src));
+        return;
+    }
+    if (proxy_is_ready(src)) {
+        ProxyInfo pi;
+        if (proxy_load(src, pi)) {
+            video_open_proxy(slot, pi);
+            if (slot == 0) state.proxy_ready = true;
+            return;
+        }
+    }
+    // No proxy yet — try native (libav direct decode) for instant
+    // preview. Falls back to the still placeholder if libav can't open
+    // the file (unusual codec, corrupt container).
+    if (!video_open_native(slot, src))
+        video_open_still(slot, proxy_still_path(src));
+}
+
+// Assign a slot for every video-like clip source. Returns unique (slot, src)
+// pairs — the work list; sources sharing a slot key appear once.
+static std::vector<std::pair<int, std::string>> collect_slot_opens(AppState& state) {
+    std::vector<std::pair<int, std::string>> items;
+    std::set<int> seen;
     for (auto& tr : state.tracks) {
         for (auto& cl : tr.clips) {
             if (!clip_is_videolike_type(cl.clip_type) || cl.text.empty()) continue;
             // Decode the conformed copy when ready, else the original. (Stills
             // are never conformed, so `src` keeps the .png/.gif extension and the
-            // image branch below still fires for them; a conformed clip's `src`
-            // is a .mp4 and falls through to the proxy/native video path.)
+            // image branch of the opener still fires for them; a conformed clip's
+            // `src` is a .mp4 and falls through to the proxy/native video path.)
             std::string src = clip_video_src(state, cl);
             std::string key = clip_slot_key(src, cl.start);
             int slot = slot_for_video(state, key, src);
-            if (slot < 0) continue;
-            // Still images go straight to Still — never native. libav happily
-            // opens a PNG as a one-frame video, but then any decode past t=0
-            // fails and the clip renders blank (this is how MCP-added images
-            // vanished from the preview: add_clip → proxy_scan → native PNG).
-            // Animated images (.gif) fall through to the proxy path below.
-            if (is_animated_image(src)) {
-                // GIF: decode to full-res RGBA frames once (lossless + alpha) and
-                // show the frame at the playhead — no lossy mp4 conform / MJPEG.
-                if (!video_is_gif(slot)) video_open_gif(slot, src);
-                continue;
-            }
-            if (is_image_path(src) && !is_animated_image(src)) {
-                if (video_source(slot) != PreviewSource::Still)
-                    video_open_still(slot, proxy_still_path(src));
-                continue;
-            }
-            if (proxy_is_ready(src)) {
-                ProxyInfo pi;
-                if (proxy_load(src, pi)) {
-                    video_open_proxy(slot, pi);
-                    if (slot == 0) state.proxy_ready = true;
-                    continue;
-                }
-            }
-            // No proxy yet — try native (libav direct decode) for instant
-            // preview. Falls back to the still placeholder if libav can't open
-            // the file (unusual codec, corrupt container).
-            if (!video_open_native(slot, src))
-                video_open_still(slot, proxy_still_path(src));
+            if (slot < 0 || seen.count(slot)) continue;
+            seen.insert(slot);
+            items.push_back({slot, src});
         }
     }
+    return items;
+}
+
+void reopen_video_slots(AppState& state) {
+    for (auto& [slot, src] : collect_slot_opens(state))
+        open_video_slot_now(state, slot, src);
+}
+
+void queue_video_slot_opens(AppState& state) {
+    state.slot_open_queue = collect_slot_opens(state);
+    state.slot_open_total = (int)state.slot_open_queue.size();
+}
+
+void tick_video_slot_opens(AppState& state, double budget_ms) {
+    if (state.slot_open_queue.empty()) return;
+    double t0 = ImGui::GetTime();
+    size_t i = 0;
+    for (; i < state.slot_open_queue.size(); ++i) {
+        auto& [slot, src] = state.slot_open_queue[i];
+        open_video_slot_now(state, slot, src);
+        if ((ImGui::GetTime() - t0) * 1000.0 > budget_ms) { ++i; break; }
+    }
+    state.slot_open_queue.erase(state.slot_open_queue.begin(),
+                                state.slot_open_queue.begin() + (long)i);
+    if (state.slot_open_queue.empty()) state.slot_open_total = 0;
 }
 
 // ── Frame-rate conform ────────────────────────────────────────────────────────

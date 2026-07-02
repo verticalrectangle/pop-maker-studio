@@ -717,9 +717,11 @@ bool section_fade(AppState& state, float& fade_in, float& fade_out, float w) {
     ImGui::SetNextItemWidth(sw);
     if (ImGui::SliderFloat("Fade in##fi",  &fade_in,  0.f, 4.f, "%.2fs")) edited = true;
     if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Fade in");
+    if (ui_slider_home(state, &fade_in, 0.f, "Fade in")) edited = true;
     ImGui::SetNextItemWidth(sw);
     if (ImGui::SliderFloat("Fade out##fo", &fade_out, 0.f, 4.f, "%.2fs")) edited = true;
     if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Fade out");
+    if (ui_slider_home(state, &fade_out, 0.f, "Fade out")) edited = true;
     ImGui::PopStyleColor(2);
     ImGui::Dummy({0.f, 2.f});
     ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
@@ -741,9 +743,11 @@ bool section_text_style(AppState& state, TextStyle& ts, float w) {
         ImGui::SameLine(0.f, 8.f); ImGui::SetNextItemWidth(54.f);
         if (ImGui::SliderFloat("ox##ts_sox", &ts.shadow_ox, -20.f, 20.f, "%.0f")) edited = true;
         if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Shadow offset");
+        if (ui_slider_home(state, &ts.shadow_ox, struct_field_default(ts, &ts.shadow_ox), "Shadow ox")) edited = true;
         ImGui::SameLine(0.f, 4.f); ImGui::SetNextItemWidth(54.f);
         if (ImGui::SliderFloat("oy##ts_soy", &ts.shadow_oy, -20.f, 20.f, "%.0f")) edited = true;
         if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Shadow offset");
+        if (ui_slider_home(state, &ts.shadow_oy, struct_field_default(ts, &ts.shadow_oy), "Shadow oy")) edited = true;
         ImGui::SameLine(0.f, 4.f); ImGui::SetNextItemWidth(sw - 130.f);
         if (ImGui::ColorEdit4("##ts_scol", ts.shadow_col,
                 ImGuiColorEditFlags_NoLabel | ImGuiColorEditFlags_AlphaBar)) edited = true;
@@ -759,6 +763,7 @@ bool section_text_style(AppState& state, TextStyle& ts, float w) {
         ImGui::SameLine(0.f, 8.f); ImGui::SetNextItemWidth(70.f);
         if (ImGui::SliderFloat("w##ts_sw", &ts.stroke_w, 0.5f, 10.f, "%.1f")) edited = true;
         if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Stroke width");
+        if (ui_slider_home(state, &ts.stroke_w, struct_field_default(ts, &ts.stroke_w), "Stroke width")) edited = true;
         ImGui::SameLine(0.f, 4.f); ImGui::SetNextItemWidth(sw - 100.f);
         if (ImGui::ColorEdit4("##ts_stkcol", ts.stroke_col,
                 ImGuiColorEditFlags_NoLabel | ImGuiColorEditFlags_AlphaBar)) edited = true;
@@ -774,6 +779,7 @@ bool section_text_style(AppState& state, TextStyle& ts, float w) {
         ImGui::SameLine(0.f, 8.f); ImGui::SetNextItemWidth(70.f);
         if (ImGui::SliderFloat("r##ts_gr", &ts.glow_r, 1.f, 30.f, "%.0f")) edited = true;
         if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Glow radius");
+        if (ui_slider_home(state, &ts.glow_r, struct_field_default(ts, &ts.glow_r), "Glow radius")) edited = true;
         ImGui::SameLine(0.f, 4.f); ImGui::SetNextItemWidth(sw - 100.f);
         if (ImGui::ColorEdit4("##ts_gcol", ts.glow_col,
                 ImGuiColorEditFlags_NoLabel | ImGuiColorEditFlags_AlphaBar)) edited = true;
@@ -793,12 +799,15 @@ bool section_text_style(AppState& state, TextStyle& ts, float w) {
         ImGui::SetNextItemWidth(54.f);
         if (ImGui::SliderFloat("pad x##ts_bpx", &ts.bg_pad_x, 0.f, 40.f, "%.0f")) edited = true;
         if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Background padding");
+        if (ui_slider_home(state, &ts.bg_pad_x, struct_field_default(ts, &ts.bg_pad_x), "BG pad x")) edited = true;
         ImGui::SameLine(0.f, 4.f); ImGui::SetNextItemWidth(54.f);
         if (ImGui::SliderFloat("pad y##ts_bpy", &ts.bg_pad_y, 0.f, 40.f, "%.0f")) edited = true;
         if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Background padding");
+        if (ui_slider_home(state, &ts.bg_pad_y, struct_field_default(ts, &ts.bg_pad_y), "BG pad y")) edited = true;
         ImGui::SameLine(0.f, 4.f); ImGui::SetNextItemWidth(60.f);
         if (ImGui::SliderFloat("corner##ts_bc", &ts.bg_corner, 0.f, 20.f, "%.0f")) edited = true;
         if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Background corner");
+        if (ui_slider_home(state, &ts.bg_corner, struct_field_default(ts, &ts.bg_corner), "BG corner")) edited = true;
     }
 
     ImGui::PopStyleColor(2);
@@ -1043,6 +1052,7 @@ void panel_clip(AppState& state, float w) {
             bool ch = ImGui::SliderFloat(id, v, vmin, vmax, fmt, flags);
             ImGui::PopStyleColor(2);
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, label);
+            if (ui_slider_home(state, v, struct_field_default(clip, v), label)) ch = true;
             return ch;
         };
 
@@ -1414,6 +1424,8 @@ void panel_clip(AppState& state, float w) {
                 ImGui::SetNextItemWidth(bar_w);
                 if (ImGui::SliderFloat("##bgrsoft", &clip.bg_remove_softness, -1.f, 1.f, "%.2f"))
                     history_push(state, "BG Matte");
+                ui_slider_home(state, &clip.bg_remove_softness,
+                               struct_field_default(clip, &clip.bg_remove_softness), "BG Matte");
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Drag left if the cutout eats into the subject; right to trim the edge tighter.");
                 ImGui::PopStyleColor(2);
@@ -1432,23 +1444,27 @@ void panel_clip(AppState& state, float w) {
                     ImGui::SetNextItemWidth(half_w);
                     if (ImGui::SliderFloat("##bgrl", &clip.bg_remove_box_l, 0.f, clip.bg_remove_box_r - 0.01f, "%.2f"))
                         history_push(state, "BG Box");
+                    ui_slider_home(state, &clip.bg_remove_box_l, struct_field_default(clip, &clip.bg_remove_box_l), "BG Box left");
                     ImGui::SameLine(0.f, 4.f);
                     ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
                     ImGui::TextUnformatted("Right"); ImGui::PopStyleColor();
                     ImGui::SetNextItemWidth(half_w);
                     if (ImGui::SliderFloat("##bgrr", &clip.bg_remove_box_r, clip.bg_remove_box_l + 0.01f, 1.f, "%.2f"))
                         history_push(state, "BG Box");
+                    ui_slider_home(state, &clip.bg_remove_box_r, struct_field_default(clip, &clip.bg_remove_box_r), "BG Box right");
                     ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
                     ImGui::TextUnformatted("Top"); ImGui::PopStyleColor();
                     ImGui::SetNextItemWidth(half_w);
                     if (ImGui::SliderFloat("##bgrt", &clip.bg_remove_box_t, 0.f, clip.bg_remove_box_b - 0.01f, "%.2f"))
                         history_push(state, "BG Box");
+                    ui_slider_home(state, &clip.bg_remove_box_t, struct_field_default(clip, &clip.bg_remove_box_t), "BG Box top");
                     ImGui::SameLine(0.f, 4.f);
                     ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
                     ImGui::TextUnformatted("Bottom"); ImGui::PopStyleColor();
                     ImGui::SetNextItemWidth(half_w);
                     if (ImGui::SliderFloat("##bgrb", &clip.bg_remove_box_b, clip.bg_remove_box_t + 0.01f, 1.f, "%.2f"))
                         history_push(state, "BG Box");
+                    ui_slider_home(state, &clip.bg_remove_box_b, struct_field_default(clip, &clip.bg_remove_box_b), "BG Box bottom");
                     ImGui::PopStyleColor(2);
                 }
                 ImGui::Dummy({0.f, 4.f});
@@ -1527,6 +1543,7 @@ void panel_clip(AppState& state, float w) {
             bool ch = ImGui::SliderFloat(id, v, vmin, vmax, fmt, flags);
             ImGui::PopStyleColor(2);
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, label);
+            if (ui_slider_home(state, v, struct_field_default(clip, v), label)) ch = true;
             return ch;
         };
 
@@ -1817,6 +1834,7 @@ void panel_clip(AppState& state, float w) {
             bool ch = ImGui::SliderFloat(id, v, vmin, vmax, fmt);
             ImGui::PopStyleColor(2);
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, label);
+            if (ui_slider_home(state, v, struct_field_default(clip, v), label)) ch = true;
             return ch;
         };
 
@@ -2303,6 +2321,7 @@ void panel_clip(AppState& state, float w) {
                     ImGui::SetNextItemWidth(bar_w - 70.f);
                     ImGui::SliderFloat("A/V offset", &clip.rec_av_offset_ms,
                                        -200.f, 200.f, "%.0f ms");
+                    ui_slider_home(state, &clip.rec_av_offset_ms, 0.f, "A/V offset");
                     if (ImGui::IsItemHovered()) {
                         ImGui::BeginTooltip();
                         ImGui::TextUnformatted("Nudge audio against video to dial out fixed\n"
@@ -2489,6 +2508,7 @@ void panel_clip(AppState& state, float w) {
             ImGui::SliderFloat("##vrec_rot", &clip.rotation, -180.f, 180.f, "%.0f\xc2\xb0");
             ImGui::PopStyleColor(2);
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Rotate camera");
+            ui_slider_home(state, &clip.rotation, 0.f, "Rotation");
             ImGui::SameLine(0.f, 6.f);
             if (ui_btn("\xe2\x9f\xb3 90\xc2\xb0", false, true)) {
                 clip.rotation = fmodf(clip.rotation + 90.f + 180.f, 360.f) - 180.f;
@@ -2634,6 +2654,8 @@ void panel_clip(AppState& state, float w) {
             ImGui::PopStyleColor(2);
             if (ImGui::IsItemDeactivatedAfterEdit())
                 history_push(state, "Face filter strength");
+            ui_slider_home(state, &clip.face_filter_amt,
+                           struct_field_default(clip, &clip.face_filter_amt), "Face filter strength");
             if (!clip.text.empty()) {
                 float fp = 0.f;
                 FaceCacheStatus fst = face_cache_status(clip.text, &fp);
@@ -2758,6 +2780,7 @@ void panel_clip(AppState& state, float w) {
         ImGui::SliderFloat("##bus_gain", &clip.volume, 0.f, 2.f, "%.2f");
         ImGui::PopStyleColor(2);
         if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Bus gain");
+        ui_slider_home(state, &clip.volume, 1.f, "Bus gain");
 
         // ── Audio FX chain (clip.fx_chain) ────────────────────────────────────
         ImGui::Dummy({0.f, 10.f}); ui_separator(); ImGui::Dummy({0.f, 8.f});
@@ -2845,6 +2868,7 @@ void panel_clip(AppState& state, float w) {
                 {}
             ImGui::PopStyleColor(2);
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Amount");
+            ui_slider_home(state, &clip.body_fx_amount, 1.f, "Body FX amount");
 
             const BodyFXInfo* info = body_fx_find_info(clip.body_fx_type);
             if (info && info->n_params > 0) {
@@ -2861,6 +2885,7 @@ void panel_clip(AppState& state, float w) {
                     ImGui::SliderFloat(id, &clip.body_fx_params[pi], pd.min_val, pd.max_val, "%.3f");
                     ImGui::PopStyleColor(2);
                     if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, pd.label);
+                    ui_slider_home(state, &clip.body_fx_params[pi], pd.default_val, pd.label);
                     ImGui::Dummy({0.f, 2.f});
                 }
             }
@@ -2954,6 +2979,8 @@ void panel_clip(AppState& state, float w) {
                 ImGui::SetNextItemWidth(bar_w);
                 if (ImGui::SliderFloat("##bfx_bgrsoft", &vc.bg_remove_softness, 0.f, 1.f, "%.2f"))
                     history_push(state, "BG Softness");
+                ui_slider_home(state, &vc.bg_remove_softness,
+                               struct_field_default(vc, &vc.bg_remove_softness), "BG Softness");
                 ImGui::PopStyleColor(2);
                 ImGui::Dummy({0.f, 6.f});
                 if (ui_btn("Re-run", false, true))

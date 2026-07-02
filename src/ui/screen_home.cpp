@@ -171,7 +171,9 @@ static void open_project_path(AppState& state, const std::string& path) {
     state.in_studio    = true;
     audio_init();
     if (!state.audio_path.empty()) audio_load(state.audio_path.c_str());
-    reopen_video_slots(state);
+    // Slots open incrementally in the studio frame (progress bar) — opening
+    // them here synchronously froze the app for seconds on media-heavy projects.
+    queue_video_slot_opens(state);
     for (auto& tr : state.tracks)
         for (auto& cl : tr.clips)
             if (cl.clip_type == ClipType::Audio && !cl.text.empty())
@@ -205,7 +207,7 @@ static void restore_recovery(AppState& state) {
     state.in_studio    = true;
     audio_init();
     if (!state.audio_path.empty()) audio_load(state.audio_path.c_str());
-    reopen_video_slots(state);
+    queue_video_slot_opens(state);
     for (auto& tr : state.tracks)
         for (auto& cl : tr.clips)
             if (cl.clip_type == ClipType::Audio && !cl.text.empty())

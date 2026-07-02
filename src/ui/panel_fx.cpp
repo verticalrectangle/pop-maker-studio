@@ -820,6 +820,7 @@ void panel_adjustment(AppState& state, float w) {
                 ImGui::SetNextItemWidth(sw);
                 ImGui::SliderFloat(p.label.c_str(), &clip.runtime_fx_params[pi], p.min_val, p.max_val, "%.3f");
                 if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Runtime FX: " + p.label);
+                ui_slider_home(state, &clip.runtime_fx_params[pi], p.default_val, p.label.c_str());
                 ImGui::SameLine(0.f, 6.f);
                 char rl[24]; snprintf(rl, sizeof(rl), "R##rfx%d", pi);
                 if (ui_btn(rl, false, true)) {
@@ -832,6 +833,7 @@ void panel_adjustment(AppState& state, float w) {
             ImGui::SetNextItemWidth(sw);
             ImGui::SliderFloat("Amount##rfx", &clip.runtime_fx_amount, 0.f, 1.f, "%.2f");
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Runtime FX: amount");
+            ui_slider_home(state, &clip.runtime_fx_amount, 1.f, "Runtime FX amount");
 
             ImGui::Dummy({0.f, 4.f});
             if (ui_btn("Remove custom FX", false, true)) {
@@ -914,12 +916,18 @@ void panel_background(AppState& state, float w, bool clip_only) {
             ImGui::SetNextItemWidth(w);
             ImGui::SliderFloat("##bg_speed", &bgclip->bg_speed, 0.1f, 4.f, "Speed %.1fx");
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "BG speed");
+            ui_slider_home(state, &bgclip->bg_speed,
+                           struct_field_default(*bgclip, &bgclip->bg_speed), "BG speed");
             ImGui::SetNextItemWidth(w);
             {
                 float pct = bgclip->bg_intensity * 100.f;
                 if (ImGui::SliderFloat("##bg_int", &pct, 0.f, 100.f, "Intensity %.0f%%"))
                     bgclip->bg_intensity = pct / 100.f;
                 if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "BG intensity");
+                if (ui_slider_home(state, &pct,
+                        struct_field_default(*bgclip, &bgclip->bg_intensity) * 100.f,
+                        "BG intensity"))
+                    bgclip->bg_intensity = pct / 100.f;
             }
         }
         ImGui::Dummy({0.f, 4.f});
@@ -1430,6 +1438,8 @@ void audio_fx_settings_ui(AppState& state, float w, FXType fx_type, AudioFX& afx
         if (ImGui::SliderFloat(id, &pct, mn*100.f, mx*100.f, fmt))
             *v = pct / 100.f;
         if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, lbl);
+        if (ui_slider_home(state, &pct, struct_field_default(afx, v) * 100.f, lbl))
+            *v = pct / 100.f;
     };
 
     // Brick dry/wet — blends the whole effect under the dry voice. Shown for
@@ -1456,6 +1466,8 @@ void audio_fx_settings_ui(AppState& state, float w, FXType fx_type, AudioFX& afx
             ImGui::SetNextItemWidth(bar_w);
             ImGui::SliderFloat("##at_sp", &afx.autotune_speed, 0.f, 200.f, "Snap speed %.0f ms");
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Autotune speed");
+            ui_slider_home(state, &afx.autotune_speed,
+                           struct_field_default(afx, &afx.autotune_speed), "Autotune speed");
             ImGui::Dummy({0.f, 6.f});
             ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
             ImGui::TextWrapped("Voice presets:");
@@ -1473,12 +1485,16 @@ void audio_fx_settings_ui(AppState& state, float w, FXType fx_type, AudioFX& afx
             ImGui::SetNextItemWidth(bar_w);
             ImGui::SliderFloat("##pt_st", &afx.pitch_semitones, -24.f, 24.f, "%.0f semitones");
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Pitch semitones");
+            ui_slider_home(state, &afx.pitch_semitones,
+                           struct_field_default(afx, &afx.pitch_semitones), "Pitch semitones");
             break;
         }
         case FXType::AudioFormant: {
             ImGui::SetNextItemWidth(bar_w);
             ImGui::SliderFloat("##fm_sh", &afx.formant_shift, -1.f, 1.f, "Shift %.2f");
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Formant shift");
+            ui_slider_home(state, &afx.formant_shift,
+                           struct_field_default(afx, &afx.formant_shift), "Formant shift");
             ImGui::Dummy({0.f, 6.f});
             ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
             ImGui::TextWrapped("Voice presets:");
@@ -1496,6 +1512,8 @@ void audio_fx_settings_ui(AppState& state, float w, FXType fx_type, AudioFX& afx
             ImGui::SetNextItemWidth(bar_w);
             ImGui::SliderFloat("##dl_t", &afx.delay_time, 0.01f, 2.f, "Time %.2f s");
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Delay time");
+            ui_slider_home(state, &afx.delay_time,
+                           struct_field_default(afx, &afx.delay_time), "Delay time");
             pct_slider("##dl_fb", "Delay feedback", &afx.delay_feedback, 0.f, 0.95f, "Feedback %.0f%%");
             pct_slider("##dl_mx", "Delay mix",      &afx.delay_mix,      0.f, 1.f,   "Mix %.0f%%");
             break;
@@ -1840,6 +1858,7 @@ void glass_host_layout(AppState& state, Clip& brick, float w, int b_ti) {
     ImGui::SliderFloat("##glass_host_rot", &hc.rotation, -180.f, 180.f, "%.0f\xc2\xb0");
     ImGui::PopStyleColor(2);
     if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Rotate clip");
+    ui_slider_home(state, &hc.rotation, 0.f, "Rotation");
     ImGui::SameLine(0.f, 6.f);
     if (ui_btn("\xe2\x9f\xb3 90\xc2\xb0", false, true)) {
         hc.rotation = fmodf(hc.rotation + 90.f + 180.f, 360.f) - 180.f;
@@ -1910,6 +1929,8 @@ void beat_sync_source_ui(AppState& state, Clip& target, float w) {
         ImGui::SetNextItemWidth(w - 16.f);
         ImGui::SliderFloat("##bdecay", &target.beat_decay, 0.02f, 1.0f, "%.2fs");
         if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "FX: beat decay");
+        ui_slider_home(state, &target.beat_decay,
+                       struct_field_default(target, &target.beat_decay), "Beat decay");
     }
 }
 
@@ -2045,6 +2066,8 @@ void panel_fx_clip(AppState& state, float w) {
             ui_label("Spread");
             ImGui::SetNextItemWidth(sw2);
             ImGui::SliderFloat("##dmspread", &clip.fx_datamosh_spread, 0.f, 1.f, "%.2f");
+            ui_slider_home(state, &clip.fx_datamosh_spread,
+                           struct_field_default(clip, &clip.fx_datamosh_spread), "Datamosh spread");
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Datamosh: spread");
             break;
         }
@@ -2576,6 +2599,7 @@ void panel_multifx_for(AppState& state, float w, int b_ti, int b_ci) {
         ImGui::SetNextItemWidth(sw);
         ImGui::SliderFloat("##mfx_bfx_amt", &clip.body_fx_amount, 0.f, 1.f, "%.2f");
         if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Multi-FX Body FX: amount");
+        ui_slider_home(state, &clip.body_fx_amount, 1.f, "Body FX amount");
         if (bfi && bfi->n_params > 0) {
             ImGui::Dummy({0.f, 4.f});
             for (int pi = 0; pi < bfi->n_params && pi < 4; ++pi) {
@@ -2585,6 +2609,7 @@ void panel_multifx_for(AppState& state, float w, int b_ti, int b_ci) {
                 ImGui::SetNextItemWidth(sw);
                 ImGui::SliderFloat(pid, &clip.body_fx_params[pi], pd.min_val, pd.max_val, "%.3f");
                 if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Multi-FX Body FX: param");
+                ui_slider_home(state, &clip.body_fx_params[pi], pd.default_val, pd.label);
                 ImGui::Dummy({0.f, 2.f});
             }
         }
@@ -2672,6 +2697,8 @@ void panel_multifx_for(AppState& state, float w, int b_ti, int b_ci) {
                 ImGui::SetNextItemWidth(sw);
                 ImGui::SliderFloat("##mdmspread", &clip.fx_datamosh_spread, 0.f, 1.f, "%.2f");
                 if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Multi-FX Datamosh: spread");
+                ui_slider_home(state, &clip.fx_datamosh_spread,
+                               struct_field_default(clip, &clip.fx_datamosh_spread), "Datamosh spread");
                 break;
 
             case FXType::ChromaKey: {
@@ -2904,6 +2931,7 @@ void audio_chain_entry_params_ui(AppState& state, Clip& se, float sw) {
         ImGui::SetNextItemWidth(sw);
         ImGui::SliderFloat(id, v, lo, hi, fmt);
         if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, hist);
+        ui_slider_home(state, v, struct_field_default(se, v), hist);
         ImGui::Dummy({0.f, 4.f});
     };
     switch (se.fx_type) {
@@ -2990,7 +3018,8 @@ void panel_body_fx_library(AppState& state, float w) {
         }
 
         auto plain_slider = [&](const char* id, const char* label, float* v,
-                                float vmin, float vmax, const char* fmt) {
+                                float vmin, float vmax, const char* fmt,
+                                float defv = std::numeric_limits<float>::quiet_NaN()) {
             ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
             ImGui::TextUnformatted(label);
             ImGui::PopStyleColor();
@@ -3000,6 +3029,8 @@ void panel_body_fx_library(AppState& state, float w) {
             ImGui::SliderFloat(id, v, vmin, vmax, fmt);
             ImGui::PopStyleColor(2);
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, label);
+            ui_slider_home(state, v,
+                std::isnan(defv) ? struct_field_default(*bfx_clip, v) : defv, label);
         };
 
         ImGui::Dummy({0.f, 6.f});
@@ -3012,7 +3043,7 @@ void panel_body_fx_library(AppState& state, float w) {
                 const BodyFXParamDef& pd = info->params[pi];
                 char id[32]; snprintf(id, sizeof(id), "##lbfxp%d", pi);
                 plain_slider(id, pd.label, &bfx_clip->body_fx_params[pi],
-                             pd.min_val, pd.max_val, "%.3f");
+                             pd.min_val, pd.max_val, "%.3f", pd.default_val);
                 ImGui::Dummy({0.f, 2.f});
             }
         }

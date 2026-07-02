@@ -650,6 +650,23 @@ void ui_studio(AppState& state) {
         reopen_video_slots(state);
     }
 
+    // Project open in progress: open a few decoder slots per frame (each can
+    // spawn an ffprobe) and surface a progress bar instead of freezing the UI.
+    if (!state.slot_open_queue.empty()) {
+        tick_video_slot_opens(state);
+        int done  = state.slot_open_total - (int)state.slot_open_queue.size();
+        char msg[96];
+        snprintf(msg, sizeof(msg), "Opening project…  %d / %d media sources",
+                 done, state.slot_open_total);
+        float ow = fminf(420.f, ImGui::GetIO().DisplaySize.x * 0.6f);
+        ImVec2 op{(ImGui::GetIO().DisplaySize.x - ow) * 0.5f,
+                  ImGui::GetIO().DisplaySize.y * 0.42f};
+        float prog = state.slot_open_total > 0
+                       ? (float)done / (float)state.slot_open_total : -1.f;
+        ui_canvas_progress_banner(ImGui::GetForegroundDrawList(), op, ow, 0.f,
+                                  msg, prog, IM_COL32(120, 170, 255, 255));
+    }
+
     // Poll background removal and voice conversion jobs.
     bg_remove_poll(state);
     vc_poll(state);
@@ -916,7 +933,7 @@ void ui_studio(AppState& state) {
                         state.project_path = picked;
                         audio_init();
                         if (!state.audio_path.empty()) audio_load(state.audio_path.c_str());
-                        reopen_video_slots(state);
+                        queue_video_slot_opens(state);   // incremental — progress bar, no freeze
                         // Ensure sources for all Audio clips
                         for (auto& tr : state.tracks)
                             for (auto& cl : tr.clips)
@@ -1394,6 +1411,77 @@ void ui_studio(AppState& state) {
     const float TB_W = s_tb_w;
     float preview_w = win_w - props_w - TB_W - 2.f;
 
+    // ── Drag splitters ─────────────────────────────────────────────────────────
+    // Runs here in the layout section — BEFORE the panel children render — so
+    // the capture flag is fresh when the canvas/timeline read it this frame.
+    // While a handle is hot or dragged, ui_splitter_capture() is true and the
+    // canvas pick guard refuses the press: the old end-of-frame hit-test let
+    // the same click fall through onto objects in the preview, and the
+    // resulting simultaneous splitter-drag + canvas-drag was also the crashy
+    // combination when panels were resized hard.
+    {
+        static bool s_drag_vsplit = false, s_drag_hsplit = false, s_drag_termsplit = false;
+        ImVec2 wpos = ImGui::GetWindowPos();
+        ImVec2 mpos = ImGui::GetIO().MousePos;
+        float safe_avail_h = fmaxf(1.f, avail_h);   // never divide by zero on tiny windows
+        bool any_hot = false;
+
+        // Vertical splitter between preview and props
+        float vborder_x = wpos.x + TB_W + preview_w + 1.f;
+        bool near_v = fabsf(mpos.x - vborder_x) < 6.f &&
+                      mpos.y > wpos.y + body_top &&
+                      mpos.y < wpos.y + body_top + body_h;
+        if (near_v || s_drag_vsplit) {
+            ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+            if (ImGui::IsMouseClicked(0)) s_drag_vsplit = true;
+        }
+        if (s_drag_vsplit) {
+            state.panel_w = fmaxf(200.f, fminf(win_w * 0.6f, wpos.x + win_w - mpos.x));
+            props_w   = fmaxf(200.f, fminf(win_w * 0.6f, state.panel_w));
+            preview_w = win_w - props_w - TB_W - 2.f;
+        }
+
+        // Horizontal splitter between body and timeline. Terminal sits below
+        // the timeline at the absolute bottom, so its height is excluded from
+        // the splitter math.
+        float hborder_y = wpos.y + body_top + body_h + pipeline_h;
+        bool near_h = fabsf(mpos.y - hborder_y) < 6.f &&
+                      mpos.x > wpos.x &&
+                      mpos.x < wpos.x + win_w;
+        if (near_h || s_drag_hsplit) {
+            ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
+            if (ImGui::IsMouseClicked(0)) s_drag_hsplit = true;
+        }
+        if (s_drag_hsplit) {
+            float new_tl_h = wpos.y + body_top + avail_h - term_h - mpos.y;
+            state.tl_h_frac = fmaxf(0.1f, fminf(0.7f, new_tl_h / safe_avail_h));
+        }
+
+        // Horizontal splitter at the top edge of the terminal/agent strip
+        bool near_t = false;
+        if ((state.terminal_open || state.agent_panel_open) && term_h > 0.f) {
+            float tborder_y = wpos.y + body_top + body_h + tl_h + pipeline_h;
+            near_t = fabsf(mpos.y - tborder_y) < 6.f &&
+                     mpos.x > wpos.x &&
+                     mpos.x < wpos.x + win_w;
+            if (near_t || s_drag_termsplit) {
+                ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
+                if (ImGui::IsMouseClicked(0)) s_drag_termsplit = true;
+            }
+            if (s_drag_termsplit) {
+                float new_term_h = wpos.y + body_top + avail_h - mpos.y;
+                state.term_h_frac = fmaxf(0.f, fminf(0.6f, new_term_h / safe_avail_h));
+            }
+        }
+
+        if (ImGui::IsMouseReleased(0))
+            s_drag_vsplit = s_drag_hsplit = s_drag_termsplit = false;
+
+        any_hot = near_v || near_h || near_t ||
+                  s_drag_vsplit || s_drag_hsplit || s_drag_termsplit;
+        ui_set_splitter_capture(any_hot);
+    }
+
     // ── Toolbox strip (left rail) ──────────────────────────────────────────────
     ImGui::SetCursorPos({0.f, body_top});
     ImGui::PushStyleColor(ImGuiCol_ChildBg, IM_COL32(13, 13, 18, 255));
@@ -1566,336 +1654,19 @@ void ui_studio(AppState& state) {
         ImGui::Dummy({sw, sh});
         draw_preview(state, stage_p, sw, sh);
 
-        // ── Glass transport overlay ───────────────────────────────────────────
-        // Fades in when the mouse enters the preview area and out when it
-        // leaves — keeps the canvas clean while editing, surfaces on demand.
-        // Stays visible while a button is being held mid-drag (s_active_latch)
-        // and during long-running ops (`busy`) so progress is always readable.
+        // ── Busy banner ───────────────────────────────────────────────────────
+        // The hover transport pill is gone (it cluttered the preview and ate
+        // clicks) — playback lives in the timeline transport. Long-running ops
+        // still surface here so "why is it silent/blank" is always answered.
         {
-            ImDrawList* dl  = ImGui::GetWindowDrawList();
-            float fps_v     = tl_fps(state);
-            float f_dt_v    = fps_v > 0.f ? 1.f / fps_v : 1.f / 30.f;
-            float dur       = fmaxf(state.duration, 0.01f);
-            bool  busy      = audio_loading() || proxy_is_generating() || state.extract_running;
-
-            // Hover hit-test against the preview rect (whole stage, not just
-            // the pill — pill becomes interactable as soon as you enter).
-            bool over_preview = ImGui::IsMouseHoveringRect(
-                stage_p, {stage_p.x + sw, stage_p.y + sh});
-
-            // Latched from prior frame: a transport button was active last
-            // frame, so keep the pill visible through the drag even if the
-            // mouse left the preview rect (released-outside cancels nicely).
-            static bool s_active_latch = false;
-
-            float target_op = (over_preview || s_active_latch || busy) ? 1.f : 0.f;
-            static float s_op = 0.f;
-            float rate = (target_op > s_op) ? 16.f : 6.f;  // fade in fast, out slow
-            s_op += (target_op - s_op) * std::min(1.f, ImGui::GetIO().DeltaTime * rate);
-
-            // Skip the entire block when invisible — no draws AND no
-            // InvisibleButtons means hidden controls don't eat clicks.
-            if (s_op < 0.02f) { s_active_latch = false; goto transport_overlay_end; }
-
-            // Lambda can't capture the static — shadow it as a local.
-            {
-                float op = s_op;
-                auto fa = [op](ImU32 c) -> ImU32 {
-                    int a = (int)(((c >> 24) & 0xFF) * op + 0.5f);
-                    if (a > 255) a = 255;
-                    return (c & 0x00FFFFFFu) | ((uint32_t)a << 24);
-                };
-                bool any_active_this_frame = false;
-
-            // ── Geometry ──────────────────────────────────────────────────────
-            const float PILL_PAD_X = 16.f;
-            const float PILL_PAD_Y = 10.f;
-            const float SCRUB_H    = 4.f;   // resting height of scrubber track
-            const float SCRUB_H_H  = 6.f;   // hovered height
-            const float BTN_ROW_H  = 36.f;
-            const float TC_ROW_H   = 18.f;  // timecode row below buttons
-            const float PILL_H     = SCRUB_H + BTN_ROW_H + TC_ROW_H + PILL_PAD_Y * 2.f + 10.f;
-            const float PILL_W     = fminf(sw, fmaxf(360.f, sw * 0.85f));
-            const float PILL_R     = 16.f;
-
-            float pill_x0 = stage_p.x + (sw - PILL_W) * 0.5f;
-            float pill_x1 = pill_x0 + PILL_W;
-            float pill_y1 = stage_p.y + sh - 14.f;
-            float pill_y0 = pill_y1 - PILL_H;
-
-            // Gradient shadow behind pill
-            dl->AddRectFilledMultiColor(
-                {stage_p.x, pill_y0 - 40.f}, {stage_p.x + sw, pill_y1 + 8.f},
-                fa(IM_COL32(0,0,0,0)),   fa(IM_COL32(0,0,0,0)),
-                fa(IM_COL32(0,0,0,160)), fa(IM_COL32(0,0,0,160)));
-
-            // Glass pill body
-            dl->AddRectFilled({pill_x0, pill_y0}, {pill_x1, pill_y1},
-                              fa(IM_COL32(18, 18, 22, 210)), PILL_R);
-            // Top-edge glass highlight
-            dl->AddLine({pill_x0 + PILL_R, pill_y0 + 1.f},
-                        {pill_x1 - PILL_R, pill_y0 + 1.f},
-                        fa(IM_COL32(255,255,255,28)), 1.f);
-            // Outer border
-            dl->AddRect({pill_x0, pill_y0}, {pill_x1, pill_y1},
-                        fa(IM_COL32(255,255,255,22)), PILL_R, 0, 1.f);
-
-            // ── Scrubber ──────────────────────────────────────────────────────
-            float scrub_margin = PILL_PAD_X + 4.f;
-            float scrub_x0 = pill_x0 + scrub_margin;
-            float scrub_x1 = pill_x1 - scrub_margin;
-            float scrub_w  = scrub_x1 - scrub_x0;
-            float scrub_cy = pill_y0 + PILL_PAD_Y + SCRUB_H * 0.5f;
-
-            ImGui::SetCursorScreenPos({scrub_x0, scrub_cy - 10.f});
-            ImGui::InvisibleButton("##scrub", {scrub_w, 20.f});
-            bool scrub_hov  = ImGui::IsItemHovered();
-            bool scrub_held = ImGui::IsItemActive();
-
-            static float s_scrub_h_anim = SCRUB_H;
-            float scrub_h_target = (scrub_hov || scrub_held) ? SCRUB_H_H : SCRUB_H;
-            s_scrub_h_anim += (scrub_h_target - s_scrub_h_anim) * ImGui::GetIO().DeltaTime * 18.f;
-
-            float mouse_t  = 0.f;
-            bool  has_scrub_hov = false;
-            if (scrub_hov || scrub_held) {
-                float frac = (ImGui::GetIO().MousePos.x - scrub_x0) / scrub_w;
-                frac = fmaxf(0.f, fminf(1.f, frac));
-                mouse_t = frac * dur;
-                mouse_t = roundf(mouse_t * 30.f) / 30.f;
-                has_scrub_hov = true;
-                if (scrub_held) seek_to(state, mouse_t);
-            }
-
-            // Snap the knob to the very end when parked on the last whole frame
-            // (matches the timeline marker — the transport can't sit past it).
-            float played_frac = (state.playhead >= last_playable_time(state) - 1e-4f)
-                                ? 1.f
-                                : fmaxf(0.f, fminf(1.f, state.playhead / dur));
-            float play_sx = scrub_x0 + played_frac * scrub_w;
-            float bh2 = s_scrub_h_anim * 0.5f;
-
-            // Track
-            dl->AddRectFilled({scrub_x0, scrub_cy - bh2}, {scrub_x1, scrub_cy + bh2},
-                              fa(IM_COL32(255,255,255,30)), bh2);
-            // Played
-            dl->AddRectFilled({scrub_x0, scrub_cy - bh2}, {play_sx, scrub_cy + bh2},
-                              fa(IM_COL32(220,220,255,200)), bh2);
-
-            if (scrub_held) any_active_this_frame = true;
-
-            // Hover ghost
-            if (has_scrub_hov) {
-                float hsx = scrub_x0 + (mouse_t / dur) * scrub_w;
-                dl->AddRectFilled({scrub_x0, scrub_cy - bh2}, {hsx, scrub_cy + bh2},
-                                  fa(IM_COL32(255,255,255,20)), bh2);
-                // Timecode bubble
-                char htc[16]; snprintf(htc, sizeof(htc), "%s", fmt_time(mouse_t).c_str());
-                float htc_w = ImGui::CalcTextSize(htc).x + 10.f;
-                float htc_x = fmaxf(scrub_x0, fminf(hsx - htc_w*0.5f, scrub_x1 - htc_w));
-                float htc_y = scrub_cy - bh2 - 22.f;
-                dl->AddRectFilled({htc_x-2.f, htc_y-2.f}, {htc_x+htc_w+2.f, htc_y+16.f},
-                                  fa(IM_COL32(30,30,35,220)), 4.f);
-                dl->AddText({htc_x+5.f, htc_y+1.f}, fa(IM_COL32(220,220,220,220)), htc);
-                // Hover dot
-                dl->AddCircleFilled({hsx, scrub_cy}, s_scrub_h_anim + 1.f, fa(IM_COL32(0,0,0,80)));
-                dl->AddCircleFilled({hsx, scrub_cy}, s_scrub_h_anim,       fa(IM_COL32(255,255,255,160)));
-            }
-
-            // Playhead knob
-            float knob_r = (scrub_hov || scrub_held) ? s_scrub_h_anim + 2.f : s_scrub_h_anim;
-            dl->AddCircleFilled({play_sx, scrub_cy}, knob_r + 1.5f, fa(IM_COL32(0,0,0,120)));
-            dl->AddCircleFilled({play_sx, scrub_cy}, knob_r,        fa(IM_COL32(255,255,255,255)));
-
-            // ── Thumbnail above pill on scrub hover ───────────────────────────
-            if (has_scrub_hov) {
-                float hsx = scrub_x0 + (mouse_t / dur) * scrub_w;
-                int th_w = 0, th_h = 0;
-                uintptr_t th_tex = video_get_thumbnail((double)mouse_t, &th_w, &th_h);
-                if (th_tex && th_w > 0 && th_h > 0) {
-                    float td_w = 120.f;
-                    float td_h = td_w * (float)th_h / (float)th_w;
-                    float tx = fmaxf(scrub_x0, fminf(hsx - td_w*0.5f, scrub_x1 - td_w));
-                    float ty = pill_y0 - td_h - 8.f;
-                    dl->AddRectFilled({tx-3.f,ty-3.f},{tx+td_w+3.f,ty+td_h+3.f},
-                                      fa(IM_COL32(20,20,20,220)), 4.f);
-                    dl->AddImage((ImTextureID)(uintptr_t)th_tex, {tx,ty}, {tx+td_w,ty+td_h},
-                                 {0,0}, {1,1}, fa(IM_COL32_WHITE));
-                }
-            }
-
-            // ── Transport button row ──────────────────────────────────────────
-            const float SB  = 26.f;
-            const float PB  = 38.f;
-            const float GAP = 8.f;
-            // 5 small buttons (|< < > >| loop) + 1 large play button.
-            float btns_total = SB * 5.f + PB + GAP * 5.f;
-            float btn_row_y  = pill_y0 + PILL_PAD_Y + SCRUB_H + 10.f;
-            float bx = pill_x0 + (PILL_W - btns_total) * 0.5f;
-            float btn_cy = btn_row_y + BTN_ROW_H * 0.5f;
-
-            // Glass circle button helper
-            auto glass_btn = [&](const char* id, float sz) -> std::pair<bool, ImU32> {
-                float cy2 = btn_row_y + (BTN_ROW_H - sz) * 0.5f;
-                ImGui::SetCursorScreenPos({bx, cy2});
-                ImGui::InvisibleButton(id, {sz, sz});
-                bool h = ImGui::IsItemHovered();
-                bool a = ImGui::IsItemActive();
-                bool c = ImGui::IsItemClicked();
-                if (a) any_active_this_frame = true;
-                float cx2 = bx + sz * 0.5f, cy3 = cy2 + sz * 0.5f;
-                // Glass circle bg
-                dl->AddCircleFilled({cx2, cy3}, sz * 0.5f,
-                    fa(IM_COL32(255,255,255, a ? 45 : h ? 28 : 12)));
-                dl->AddCircle({cx2, cy3}, sz * 0.5f - 0.5f,
-                    fa(IM_COL32(255,255,255, a ? 80 : h ? 50 : 22)), 0, 1.f);
-                ImU32 ic = fa(IM_COL32(255,255,255, a ? 255 : h ? 230 : 180));
-                bx += sz + GAP;
-                return {c, ic};
-            };
-
-            // |< to start
-            {
-                auto [c, ic] = glass_btn("##t_start", SB);
-                float cx2 = ImGui::GetItemRectMin().x + SB*0.5f;
-                float r = SB * 0.22f;
-                dl->AddRectFilled({cx2 - r*1.6f, btn_cy - r}, {cx2 - r*1.1f, btn_cy + r}, ic, 1.f);
-                dl->AddTriangleFilled({cx2-r*0.9f, btn_cy-r}, {cx2-r*0.9f, btn_cy+r}, {cx2+r*0.9f, btn_cy}, ic);
-                if (c) seek_to(state, 0.f);
-            }
-
-            // < frame back
-            {
-                auto [c, ic] = glass_btn("##t_prev", SB);
-                float cx2 = ImGui::GetItemRectMin().x + SB*0.5f;
-                float r = SB * 0.22f;
-                dl->AddTriangleFilled({cx2+r, btn_cy-r}, {cx2+r, btn_cy+r}, {cx2-r, btn_cy}, ic);
-                if (c) seek_to(state, fmaxf(0.f, state.playhead - f_dt_v));
-            }
-
-            // Play / Pause (larger glass circle)
-            {
-                float sz = PB;
-                float cy2 = btn_row_y + (BTN_ROW_H - sz) * 0.5f;
-                ImGui::SetCursorScreenPos({bx, cy2});
-                ImGui::InvisibleButton("##t_play", {sz, sz});
-                bool h = ImGui::IsItemHovered();
-                bool a = ImGui::IsItemActive();
-                bool c = ImGui::IsItemClicked();
-                if (a) any_active_this_frame = true;
-                float cx2 = bx + sz*0.5f, cy3 = cy2 + sz*0.5f;
-                // Glow ring
-                dl->AddCircleFilled({cx2, cy3}, sz*0.5f + 2.f, fa(IM_COL32(180,180,255, h||a ? 18 : 8)));
-                // Glass body
-                dl->AddCircleFilled({cx2, cy3}, sz*0.5f,
-                    fa(IM_COL32(255,255,255, a ? 60 : h ? 42 : 25)));
-                dl->AddCircle({cx2, cy3}, sz*0.5f - 0.5f,
-                    fa(IM_COL32(255,255,255, a ? 100 : h ? 70 : 40)), 0, 1.2f);
-                // Top highlight arc — fake refraction
-                dl->AddCircle({cx2, cy3 - 1.f}, sz*0.5f - 2.f,
-                    fa(IM_COL32(255,255,255, 18)), 0, 1.f);
-
-                ImU32 ic = fa(IM_COL32(255,255,255, a ? 255 : h ? 235 : 200));
-                float r = sz * 0.18f;
-                if (busy) {
-                    float t_spin = fmodf((float)ImGui::GetTime(), 1.2f) / 1.2f;
-                    for (int i = 0; i < 3; ++i) {
-                        float ang = (t_spin + i / 3.f) * 6.2832f;
-                        dl->AddCircleFilled({cx2 + cosf(ang)*r, cy3 + sinf(ang)*r},
-                                            2.2f, fa(IM_COL32(255,255,255,200)));
-                    }
-                } else if (state.playing) {
-                    float bw = r*0.5f, bh3 = r*1.5f;
-                    dl->AddRectFilled({cx2-bw*1.5f, cy3-bh3}, {cx2-bw*0.4f, cy3+bh3}, ic, 1.f);
-                    dl->AddRectFilled({cx2+bw*0.4f, cy3-bh3}, {cx2+bw*1.5f, cy3+bh3}, ic, 1.f);
-                } else {
-                    dl->AddTriangleFilled({cx2-r*0.65f, cy3-r*1.05f},
-                                          {cx2-r*0.65f, cy3+r*1.05f},
-                                          {cx2+r*1.1f,  cy3}, ic);
-                }
-                if (c && !busy) toggle_play(state);
-                bx += sz + GAP;
-            }
-
-            // > frame forward
-            {
-                auto [c, ic] = glass_btn("##t_next", SB);
-                float cx2 = ImGui::GetItemRectMin().x + SB*0.5f;
-                float r = SB * 0.22f;
-                dl->AddTriangleFilled({cx2-r, btn_cy-r}, {cx2-r, btn_cy+r}, {cx2+r, btn_cy}, ic);
-                if (c) seek_to(state, fminf(dur, state.playhead + f_dt_v));
-            }
-
-            // >| to end
-            {
-                auto [c, ic] = glass_btn("##t_end", SB);
-                float cx2 = ImGui::GetItemRectMin().x + SB*0.5f;
-                float r = SB * 0.22f;
-                dl->AddTriangleFilled({cx2-r*0.9f, btn_cy-r}, {cx2-r*0.9f, btn_cy+r}, {cx2+r*0.9f, btn_cy}, ic);
-                dl->AddRectFilled({cx2+r*1.1f, btn_cy-r}, {cx2+r*1.6f, btn_cy+r}, ic, 1.f);
-                if (c) seek_to(state, dur);
-            }
-
-            // Loop toggle — tints green when engaged; playback cycles the whole
-            // timeline seamlessly instead of stopping at the end.
-            {
-                float sz = SB;
-                float cy2 = btn_row_y + (BTN_ROW_H - sz) * 0.5f;
-                ImGui::SetCursorScreenPos({bx, cy2});
-                ImGui::InvisibleButton("##t_loop", {sz, sz});
-                bool h = ImGui::IsItemHovered();
-                bool a = ImGui::IsItemActive();
-                bool c = ImGui::IsItemClicked();
-                if (a) any_active_this_frame = true;
-                float cx2 = bx + sz*0.5f, cy3 = cy2 + sz*0.5f;
-                bool on = state.loop_play;
-                dl->AddCircleFilled({cx2, cy3}, sz*0.5f,
-                    on ? fa(IM_COL32(90,210,150, a?75:h?58:42))
-                       : fa(IM_COL32(255,255,255, a?45:h?28:12)));
-                dl->AddCircle({cx2, cy3}, sz*0.5f - 0.5f,
-                    on ? fa(IM_COL32(120,240,180,150))
-                       : fa(IM_COL32(255,255,255, a?80:h?50:22)), 0, 1.f);
-                ImU32 ic = on ? fa(IM_COL32(150,250,200,255))
-                              : fa(IM_COL32(255,255,255, a?255:h?230:180));
-                // Circular-arrow glyph (~300° arc + tangent arrowhead).
-                float r = sz * 0.27f;
-                float a0 = 0.7f, a1 = 0.7f + 5.2f;
-                dl->PathArcTo({cx2, cy3}, r, a0, a1, 22);
-                dl->PathStroke(ic, 0, 1.8f);
-                float ex = cx2 + cosf(a1)*r, ey = cy3 + sinf(a1)*r;
-                float tgx = -sinf(a1), tgy = cosf(a1);   // tangent (travel dir)
-                float rdx =  cosf(a1), rdy = sinf(a1);   // radial
-                float ah = sz * 0.20f;
-                dl->AddTriangleFilled(
-                    {ex + tgx*ah,            ey + tgy*ah},
-                    {ex + rdx*ah*0.7f,       ey + rdy*ah*0.7f},
-                    {ex - rdx*ah*0.7f,       ey - rdy*ah*0.7f}, ic);
-                if (c) state.loop_play = !state.loop_play;
-                bx += sz + GAP;
-            }
-
-            // ── Timecode — centered row below buttons ─────────────────────────
-            char tcbuf[32];
-            snprintf(tcbuf, sizeof(tcbuf), "%s / %s",
-                fmt_time(state.playhead).c_str(), fmt_time(dur).c_str());
-            float tc_w = ImGui::CalcTextSize(tcbuf).x;
-            float tc_y = btn_row_y + BTN_ROW_H + 2.f;
-            float tc_x = pill_x0 + (PILL_W - tc_w) * 0.5f;
-            dl->AddText({tc_x, tc_y}, fa(IM_COL32(160,160,160,160)), tcbuf);
-
-            // Status text left of timecode when busy
+            bool busy = audio_loading() || proxy_is_generating() || state.extract_running;
             if (busy) {
-                const char* st = audio_loading()       ? "loading…"
+                const char* st = audio_loading()       ? "loading audio…"
                                : proxy_is_generating() ? "building preview…"
                                                        : "extracting…";
-                float st_w = ImGui::CalcTextSize(st).x;
-                float st_x = pill_x0 + (PILL_W - st_w) * 0.5f;
-                dl->AddText({st_x, tc_y}, fa(IM_COL32(140,140,140,160)), st);
+                ui_canvas_progress_banner(ImGui::GetWindowDrawList(), stage_p, sw, sh,
+                                          st, -1.f, IM_COL32(120, 170, 255, 255));
             }
-
-            s_active_latch = any_active_this_frame;
-            }  // close inner scope opened with `float op = s_op;`
-            transport_overlay_end:;
         }
 
         // ── Agent activity overlay (cute notifications) ───────────────────────
@@ -2215,60 +1986,9 @@ void ui_studio(AppState& state) {
     ImGui::EndChild();
     ImGui::PopStyleColor(2);
 
-    // ── Drag splitters ────────────────────────────────────────────────────────
-    {
-        static bool s_drag_vsplit = false, s_drag_hsplit = false, s_drag_termsplit = false;
-        ImVec2 wpos = ImGui::GetWindowPos();
-        ImVec2 mpos = ImGui::GetIO().MousePos;
-
-        // Vertical splitter between preview and props
-        float vborder_x = wpos.x + TB_W + preview_w + 1.f;
-        bool near_v = fabsf(mpos.x - vborder_x) < 6.f &&
-                      mpos.y > wpos.y + body_top &&
-                      mpos.y < wpos.y + body_top + body_h;
-        if (near_v || s_drag_vsplit) {
-            ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
-            if (ImGui::IsMouseClicked(0)) s_drag_vsplit = true;
-        }
-        if (s_drag_vsplit) {
-            state.panel_w = fmaxf(200.f, fminf(win_w * 0.6f, wpos.x + win_w - mpos.x));
-        }
-        if (ImGui::IsMouseReleased(0)) s_drag_vsplit = false;
-
-        // Horizontal splitter between body and timeline. Terminal sits below
-        // the timeline at the absolute bottom, so its height is excluded from
-        // the splitter math.
-        float hborder_y = wpos.y + body_top + body_h + pipeline_h;
-        bool near_h = fabsf(mpos.y - hborder_y) < 6.f &&
-                      mpos.x > wpos.x &&
-                      mpos.x < wpos.x + win_w;
-        if (near_h || s_drag_hsplit) {
-            ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
-            if (ImGui::IsMouseClicked(0)) s_drag_hsplit = true;
-        }
-        if (s_drag_hsplit) {
-            float new_tl_h = wpos.y + body_top + avail_h - term_h - mpos.y;
-            state.tl_h_frac = fmaxf(0.1f, fminf(0.7f, new_tl_h / avail_h));
-        }
-        if (ImGui::IsMouseReleased(0)) s_drag_hsplit = false;
-
-        // Horizontal splitter at the top edge of the terminal/agent strip
-        if ((state.terminal_open || state.agent_panel_open) && term_h > 0.f) {
-            float tborder_y = wpos.y + body_top + body_h + tl_h + pipeline_h;
-            bool near_t = fabsf(mpos.y - tborder_y) < 6.f &&
-                          mpos.x > wpos.x &&
-                          mpos.x < wpos.x + win_w;
-            if (near_t || s_drag_termsplit) {
-                ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
-                if (ImGui::IsMouseClicked(0)) s_drag_termsplit = true;
-            }
-            if (s_drag_termsplit) {
-                float new_term_h = wpos.y + body_top + avail_h - mpos.y;
-                state.term_h_frac = fmaxf(0.f, fminf(0.6f, new_term_h / avail_h));
-            }
-            if (ImGui::IsMouseReleased(0)) s_drag_termsplit = false;
-        }
-    }
+    // (Drag splitters now run in the body-layout section above, BEFORE the
+    // panel children render, so the canvas/timeline input guards can see the
+    // splitter capture flag in the same frame — see ui_splitter_capture().)
 
     // ── Pipeline strip ────────────────────────────────────────────────────────
     if (pipeline_h > 0.f) {

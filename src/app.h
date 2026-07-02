@@ -761,6 +761,13 @@ struct AppState {
     // Keyed by file path so two clips sharing a source share one proxy.
     std::string proxy_paths[MAX_VIDEO_SLOTS];
 
+    // Runtime, never serialized: pending slot opens from a project load. The
+    // studio frame drains a few per frame (tick_video_slot_opens) and shows an
+    // "Opening project…" bar until empty — opening slots synchronously froze
+    // the UI for seconds on media-heavy projects (ffprobe per source).
+    std::vector<std::pair<int, std::string>> slot_open_queue;
+    int slot_open_total = 0;
+
     // Bin — project-scoped media library. Files added here are "available to
     // the project" but not necessarily on the timeline. Drag from bin → track
     // to place. Multi-file drops land here without auto-placement so the

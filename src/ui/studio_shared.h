@@ -147,6 +147,36 @@ void add_clip_to_track(AppState& state, int track_idx, const std::string& path, 
 int  slot_for_video(AppState& state, const std::string& key, const std::string& src);
 void gc_video_slots(AppState& state);
 void reopen_video_slots(AppState& state);
+// Incremental slot opening for project load: queue every video-like source,
+// then open a few per frame (tick) so the UI shows progress instead of
+// freezing. reopen_video_slots() stays synchronous for small in-session heals.
+void queue_video_slot_opens(AppState& state);
+void tick_video_slot_opens(AppState& state, double budget_ms = 20.0);
+
+// ── Splitter capture ─────────────────────────────────────────────────────────
+// The studio's panel-resize handles are raw geometry hit-tests (not ImGui
+// items). While one is hot or mid-drag this is true, and mouse consumers that
+// do their own raw hit-testing (canvas picking) must stand down.
+void ui_set_splitter_capture(bool on);
+bool ui_splitter_capture();
+
+// Double-click "homebase" reset for the LAST submitted slider item: when it is
+// hovered and double-clicked, *v snaps back to defv (and the drag ImGui began
+// on the first click is cancelled). Returns true on reset.
+bool ui_slider_home(AppState& state, float* v, float defv, const char* hist_label);
+// Default ("homebase") value of a keyframable clip prop — what a fresh Clip
+// carries. Returns cur when the prop isn't in the kClipKfFields registry.
+float clip_prop_default(const char* prop, float cur);
+// Default for any float member of a struct instance, derived by pointer
+// offset against a default-constructed twin — no per-field registry needed.
+// Returns *v unchanged when v doesn't point inside obj (e.g. a local copy).
+template <class T>
+inline float struct_field_default(const T& obj, const float* v) {
+    static const T s_def{};
+    ptrdiff_t off = (const char*)v - (const char*)&obj;
+    if (off < 0 || off + (ptrdiff_t)sizeof(float) > (ptrdiff_t)sizeof(T)) return *v;
+    return *(const float*)((const char*)&s_def + off);
+}
 
 // ── Frame-rate conform ────────────────────────────────────────────────────────
 // True if this clip's native fps differs enough from the project to warrant a
