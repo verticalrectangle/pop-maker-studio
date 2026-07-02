@@ -158,10 +158,10 @@ void enter_new_project(AppState& state) {
     mark_project_clean(state);
 }
 
-static void open_project_path(AppState& state, const std::string& path) {
-    if (path.empty()) return;
+bool open_project_path(AppState& state, const std::string& path) {
+    if (path.empty()) return false;
     AppState loaded;
-    if (!project_load(loaded, path)) return;
+    if (!project_load(loaded, path)) return false;
     bool mr = state.models_ready, ms = state.models_skipped;
     transcribe_cancel(); history_clear();
     audio_shutdown(); audio_clips_clear(); video_close();
@@ -182,6 +182,7 @@ static void open_project_path(AppState& state, const std::string& path) {
     recent_projects_push(path);
     history_push(state, "Open project");
     mark_project_clean(state);
+    return true;
 }
 
 // Restore the crash-recovery slot into the live editor. Unlike open_project_path

@@ -153,6 +153,15 @@ void reopen_video_slots(AppState& state);
 void queue_video_slot_opens(AppState& state);
 void tick_video_slot_opens(AppState& state, double budget_ms = 20.0);
 
+// ── Project open (THE load path) ──────────────────────────────────────────────
+// Loads a .pms and performs the full swap: transcript/audio teardown, state
+// move, audio_init + async audio_load, queued (non-blocking) video slot opens,
+// audio_source_ensure per audio clip, recents push, fresh history baseline,
+// and enters the studio. UI clicks and the IPC load_project handler both go
+// through here — an agent-driven load must land the human in the loaded
+// project too, not leave the Home page lying about what state holds.
+bool open_project_path(AppState& state, const std::string& path);
+
 // ── Save / dirty tracking ─────────────────────────────────────────────────────
 // Call after every successful project save: records the clean history point
 // (project_dirty goes false) and queues the home-screen thumbnail capture.

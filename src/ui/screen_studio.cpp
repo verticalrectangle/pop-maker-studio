@@ -644,10 +644,13 @@ void ui_studio(AppState& state) {
         }
     }
 
-    // IPC may have added new video clips — trigger proxy scan on next frame.
+    // IPC may have added new video clips — refresh slots through the queue
+    // (drains a few per frame with the progress banner when large). The old
+    // synchronous reopen_video_slots here froze the UI for seconds when the
+    // flag covered a whole project's worth of sources.
     if (state.proxy_scan_needed) {
         state.proxy_scan_needed = false;
-        reopen_video_slots(state);
+        queue_video_slot_opens(state);
     }
 
     // Project open in progress: open a few decoder slots per frame (each can
@@ -921,29 +924,9 @@ void ui_studio(AppState& state) {
             }
             if (ImGui::MenuItem("Open Project…", "Ctrl+Shift+O")) {
                 std::string picked = filepicker_open("Open project", "PMS Project", "*.pms");
-                if (!picked.empty()) {
-                    AppState loaded;
-                    if (project_load(loaded, picked)) {
-                        bool mr = state.models_ready, ms = state.models_skipped;
-                        transcribe_cancel(); history_clear();
-                        audio_shutdown(); audio_clips_clear(); video_close();
-                        state = std::move(loaded);
-                        state.models_ready = mr; state.models_skipped = ms;
-                        state.in_studio = true;
-                        state.project_path = picked;
-                        audio_init();
-                        if (!state.audio_path.empty()) audio_load(state.audio_path.c_str());
-                        queue_video_slot_opens(state);   // incremental — progress bar, no freeze
-                        // Ensure sources for all Audio clips
-                        for (auto& tr : state.tracks)
-                            for (auto& cl : tr.clips)
-                                if (cl.clip_type == ClipType::Audio && !cl.text.empty())
-                                    audio_source_ensure(cl.text);
-                        recent_projects_push(picked);
-                        history_push(state, "Open project");  // baseline so the first edit is undoable
-                        mark_project_clean(state);
-                    }
-                }
+                // Shared load path (teardown, async slot opens, history baseline)
+                // — the same one Home cards and IPC load_project use.
+                if (!picked.empty()) open_project_path(state, picked);
             }
             if (ImGui::MenuItem("Save Project", "Ctrl+S")) {
                 if (state.project_path.empty())

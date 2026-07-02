@@ -2932,18 +2932,14 @@ static json dispatch(AppState& state, const std::string& method, const json& par
     if (method == "load_project") {
         std::string path = params.value("path", "");
         if (path.empty()) { err = "path is required"; return {}; }
-        bool mr = state.models_ready;
-        bool ms = state.models_skipped;
-        if (!project_load(state, path)) { err = "project_load failed"; return {}; }
-        state.project_path   = path;   // exports default next to the .pms
-        state.models_ready   = mr;
-        state.models_skipped = ms;
-        state.proxy_scan_needed = true;
-        // Fresh history with a baseline snapshot: the old project's entries
-        // must not bleed into this one, and history_undo() can't step back
-        // past entry 0, so the first edit needs a predecessor to restore.
-        history_clear();
-        history_push(state, "Load project");
+        // Same path the Home screen and Open menu use — full teardown/reboot,
+        // async slot opens (progress bar, no freeze) and in_studio=true so the
+        // human UI follows the agent into the loaded project. The old inline
+        // version skipped all of that: audio kept playing the previous
+        // project, the window stayed on Home, and its proxy_scan_needed flag
+        // triggered the SYNCHRONOUS all-sources slot sweep on the next studio
+        // frame — a multi-second freeze.
+        if (!open_project_path(state, path)) { err = "project_load failed"; return {}; }
         json r; r["path"] = path;
         return r;
     }
