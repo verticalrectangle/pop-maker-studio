@@ -527,7 +527,7 @@ static GLuint g_solid_tex = 0;
 // previously shared MAX*2 with the mirror face-warp — now exclusive.
 // + a dedicated bank for the face-filter picker previews (one per filter id) so
 // the whole grid of warps can be shown at once without clobbering each other.
-static const int kFacePreviewSlots    = 12;  // >= face_filter_count() so picker previews never share an FBO
+static const int kFacePreviewSlots    = 24;  // >= face_filter_count() so picker previews never share an FBO
 static const int kFacePreviewSlotBase = MAX_VIDEO_TRACKS * 4 + 2;
 static const int kMaxSlots = MAX_VIDEO_TRACKS * 4 + 2 + kFacePreviewSlots;
 static const int kFaceClipSlotBase = MAX_VIDEO_TRACKS * 2 + 1;
@@ -810,6 +810,11 @@ uniform vec4 u_feat;     // eye_r, mouth_x, mouth_y, mouth_r
 uniform vec4 u_amt;      // smooth, brighten, warmth, eye_pop
 uniform vec4 u_makeup;   // blush, lip_tint, _, _
 uniform vec4 u_cheeks;   // cheekL xy, cheekR xy (px)
+uniform vec4 u_blushc;   // blush color rgb, _
+uniform vec4 u_lipc;     // lip color rgb, _
+uniform vec4 u_eyeglow;  // rgb, amount
+uniform vec4 u_cyber;    // skin_tint, desat, chrome, scanlines
+uniform vec4 u_tintc;    // skin tint color rgb, _
 uniform float u_brow_r;
 float lum(vec3 c) { return dot(c, vec3(0.299, 0.587, 0.114)); }
 void main() {
@@ -880,8 +885,7 @@ void main() {
         float cL = 1.0 - smoothstep(br2 * 0.3, br2, distance(p, u_cheeks.xy));
         float cR = 1.0 - smoothstep(br2 * 0.3, br2, distance(p, u_cheeks.zw));
         float bm = max(cL, cR) * u_makeup.x * mask * skin_chroma;
-        vec3 rosy = vec3(1.0, 0.45, 0.55);
-        col = mix(col, col * (0.75 + 0.5 * rosy), bm * 0.55);
+        col = mix(col, col * (0.75 + 0.5 * u_blushc.rgb), bm * 0.55);
     }
     // Lip tint: rosy saturation inside the mouth disc, only on pixels that
     // already read reddish (lips) — a gray mic in front stays gray.
@@ -889,9 +893,34 @@ void main() {
         float lm2 = 1.0 - smoothstep(mr * 0.35, mr * 0.95, distance(p, u_feat.yz));
         float lippy = smoothstep(0.01, 0.09, col.r - col.g);
         float t = u_makeup.y * lm2 * lippy;
-        col.r = min(1.0, col.r * (1.0 + 0.22 * t) + 0.04 * t);
-        col.g *= 1.0 - 0.10 * t;
-        col.b *= 1.0 - 0.02 * t;
+        // Colorize toward the lip color, keeping the lip's own shading — a
+        // dark goth plum and a hot Barbie pink both read as lipstick.
+        vec3 lip_target = u_lipc.rgb * (0.30 + 1.05 * lum(col));
+        col = mix(col, clamp(lip_target, 0.0, 1.0), t * 0.85);
+    }
+
+    // ── Cyber layer (all skin-masked; runs after makeup) ──────────────────
+    if (u_cyber.x + u_cyber.y + u_cyber.z + u_cyber.w > 0.001) {
+        float lm3 = lum(col);
+        // Desaturate → tint → chrome curve → scanlines.
+        col = mix(col, vec3(lm3), u_cyber.y * mask);
+        col = mix(col, u_tintc.rgb * (0.15 + 1.1 * lm3), u_cyber.x * mask);
+        if (u_cyber.z > 0.001) {
+            vec3 crm = clamp((col - 0.5) * 2.2 + 0.5, 0.0, 1.0);
+            crm += smoothstep(0.75, 0.98, lm3) * 0.25;   // hard speculars
+            col = mix(col, crm, u_cyber.z * mask);
+        }
+        if (u_cyber.w > 0.001) {
+            float sl = 0.5 + 0.5 * sin(p.y * 1.4);
+            col *= 1.0 - u_cyber.w * mask * 0.35 * smoothstep(0.55, 0.95, sl);
+            col += u_tintc.rgb * u_cyber.w * mask * 0.06 * (1.0 - sl);
+        }
+    }
+    // Eye glow: additive colored halo, larger + softer than eye pop.
+    if (u_eyeglow.a > 0.001) {
+        float gL = 1.0 - smoothstep(er * 0.3, er * 1.6, distance(p, u_eyes.xy));
+        float gR = 1.0 - smoothstep(er * 0.3, er * 1.6, distance(p, u_eyes.zw));
+        col += u_eyeglow.rgb * (u_eyeglow.a * 0.55 * max(gL, gR));
     }
     frag = vec4(clamp(col, 0.0, 1.0), texture(u_tex, v_uv).a);
 }
@@ -939,6 +968,11 @@ uintptr_t face_beauty_apply(uintptr_t src_tex, int slot, int w, int h,
     glUniform4f(u("u_amt"), p.smooth, p.brighten, p.warmth, p.eye_pop);
     glUniform4f(u("u_makeup"), p.blush, p.lip_tint, 0.f, 0.f);
     glUniform4f(u("u_cheeks"), p.cheekL_x, p.cheekL_y, p.cheekR_x, p.cheekR_y);
+    glUniform4f(u("u_blushc"), p.blush_col[0], p.blush_col[1], p.blush_col[2], 0.f);
+    glUniform4f(u("u_lipc"), p.lip_col[0], p.lip_col[1], p.lip_col[2], 0.f);
+    glUniform4f(u("u_eyeglow"), p.eye_glow_col[0], p.eye_glow_col[1], p.eye_glow_col[2], p.eye_glow);
+    glUniform4f(u("u_cyber"), p.skin_tint, p.desat, p.chrome, p.scanlines);
+    glUniform4f(u("u_tintc"), p.tint_col[0], p.tint_col[1], p.tint_col[2], 0.f);
     glUniform1f(u("u_brow_r"), p.brow_r);
     glDrawArrays(GL_TRIANGLES, 0, 3);
 

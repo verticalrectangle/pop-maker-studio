@@ -15,6 +15,8 @@
 static const char* k_names[] = {
     "None", "Natural", "Big Eyes", "Tiny Face", "Big Mouth", "Alien", "Doggy",
     "Douyin", "Porcelain", "Soft Glam", "Honey",
+    "Peach", "Cherry", "Goth", "Barbie", "Bronze",
+    "Chrome", "Neon", "Cyborg", "Hologram", "Rave",
 };
 const char* face_filter_name(int id) {
     if (id < 0 || id >= (int)(sizeof(k_names)/sizeof(k_names[0]))) return "?";
@@ -76,9 +78,16 @@ static inline float bl(const FaceObs& o, int idx) {
 // porcelain-bright; and makeup (blush, lip tint, eye pop) does the heavy
 // lifting that warps used to overdo.
 struct BeautyLook {
-    float smooth, brighten, warmth, eye_pop, blush, lip;   // skin + makeup
-    float eyes, cheek, vline, nose, lips_plump;            // shape
+    float smooth = 0, brighten = 0, warmth = 0, eye_pop = 0, blush = 0, lip = 0;
+    float eyes = 0, cheek = 0, vline = 0, nose = 0, lips_plump = 0;
+    float blush_col[3] = {1.f, 0.45f, 0.55f};   // default rosy
+    float lip_col[3]   = {0.95f, 0.25f, 0.35f};
+    // cyber
+    float eye_glow = 0; float eye_glow_col[3] = {0.2f, 0.9f, 1.f};
+    float skin_tint = 0; float tint_col[3] = {0.7f, 0.8f, 1.f};
+    float desat = 0, chrome = 0, scanlines = 0;
 };
+static void set3(float* d, float r, float g, float b) { d[0]=r; d[1]=g; d[2]=b; }
 static bool beauty_look_for(int filter_id, BeautyLook& L) {
     switch ((FaceFilter)filter_id) {
         case FaceFilter::Pretty:     // "Natural" — believable everyday clean-up
@@ -95,6 +104,69 @@ static bool beauty_look_for(int filter_id, BeautyLook& L) {
             return true;
         case FaceFilter::Honey:      // warm golden glow, soft everything
             L = {0.60f, 0.34f, 0.45f, 0.24f, 0.24f, 0.16f,  0.08f, 0.04f, 0.06f, 0.08f, 0.05f};
+            return true;
+
+        // ── Makeup looks ─────────────────────────────────────────────────
+        case FaceFilter::Peach:      // sunny coral — summer skin
+            L = {0.58f, 0.30f, 0.30f, 0.25f, 0.50f, 0.42f,  0.08f, 0.05f, 0.07f, 0.10f, 0.05f};
+            set3(L.blush_col, 1.f, 0.55f, 0.38f);
+            set3(L.lip_col,   1.f, 0.42f, 0.30f);
+            return true;
+        case FaceFilter::Cherry:     // K-drama cherry lips on pale skin
+            L = {0.72f, 0.34f, 0.02f, 0.28f, 0.22f, 0.62f,  0.09f, 0.05f, 0.09f, 0.12f, 0.06f};
+            set3(L.blush_col, 1.f, 0.55f, 0.62f);
+            set3(L.lip_col,   0.85f, 0.08f, 0.16f);
+            return true;
+        case FaceFilter::Goth:       // pale, cool, plum-black lips
+            L = {0.62f, 0.20f, 0.00f, 0.35f, 0.10f, 0.75f,  0.07f, 0.05f, 0.08f, 0.10f, 0.03f};
+            set3(L.blush_col, 0.75f, 0.55f, 0.70f);
+            set3(L.lip_col,   0.28f, 0.05f, 0.14f);
+            L.desat = 0.28f;
+            return true;
+        case FaceFilter::Barbie:     // maximum pink everything
+            L = {0.78f, 0.42f, 0.10f, 0.42f, 0.60f, 0.55f,  0.14f, 0.08f, 0.12f, 0.16f, 0.08f};
+            set3(L.blush_col, 1.f, 0.45f, 0.75f);
+            set3(L.lip_col,   1.f, 0.25f, 0.60f);
+            return true;
+        case FaceFilter::Bronze:     // golden-hour bronze glow
+            L = {0.60f, 0.30f, 0.55f, 0.30f, 0.38f, 0.30f,  0.08f, 0.06f, 0.08f, 0.10f, 0.04f};
+            set3(L.blush_col, 0.95f, 0.60f, 0.35f);
+            set3(L.lip_col,   0.80f, 0.42f, 0.28f);
+            return true;
+
+        // ── Cyber looks ──────────────────────────────────────────────────
+        case FaceFilter::Chrome:     // liquid-metal skin
+            L = {0.85f, 0.00f, 0.f, 0.f, 0.f, 0.f,  0.06f, 0.04f, 0.06f, 0.f, 0.f};
+            L.desat = 0.85f; L.chrome = 0.60f; L.skin_tint = 0.22f;
+            set3(L.tint_col, 0.75f, 0.82f, 0.95f);
+            L.eye_glow = 0.25f; set3(L.eye_glow_col, 0.8f, 0.9f, 1.f);
+            return true;
+        case FaceFilter::Neon:       // electric magenta/cyan club face
+            L = {0.55f, 0.15f, 0.f, 0.f, 0.55f, 0.60f,  0.10f, 0.05f, 0.08f, 0.10f, 0.05f};
+            set3(L.blush_col, 0.25f, 0.85f, 1.f);        // cyan cheek light
+            set3(L.lip_col,   1.f, 0.10f, 0.80f);        // electric magenta
+            L.eye_glow = 0.55f; set3(L.eye_glow_col, 1.f, 0.15f, 0.85f);
+            L.skin_tint = 0.10f; set3(L.tint_col, 0.75f, 0.65f, 1.f);
+            return true;
+        case FaceFilter::Cyborg:     // cold steel + red optics
+            L = {0.75f, 0.05f, 0.f, 0.f, 0.f, 0.f,  0.05f, 0.04f, 0.05f, 0.f, 0.f};
+            L.desat = 0.7f; L.chrome = 0.45f; L.skin_tint = 0.35f;
+            set3(L.tint_col, 0.62f, 0.72f, 0.85f);
+            L.eye_glow = 0.75f; set3(L.eye_glow_col, 1.f, 0.12f, 0.10f);
+            return true;
+        case FaceFilter::Hologram:   // scanlined cyan projection
+            L = {0.50f, 0.20f, 0.f, 0.f, 0.f, 0.f,  0.f, 0.f, 0.f, 0.f, 0.f};
+            L.skin_tint = 0.55f; set3(L.tint_col, 0.35f, 0.95f, 1.f);
+            L.desat = 0.5f; L.scanlines = 0.85f;
+            L.eye_glow = 0.35f; set3(L.eye_glow_col, 0.4f, 1.f, 1.f);
+            return true;
+        case FaceFilter::Rave:       // UV blacklight — purple skin, acid accents
+            L = {0.55f, 0.10f, 0.f, 0.f, 0.55f, 0.60f,  0.10f, 0.f, 0.f, 0.f, 0.06f};
+            L.skin_tint = 0.40f; set3(L.tint_col, 0.55f, 0.35f, 1.f);
+            set3(L.blush_col, 0.35f, 1.f, 0.45f);        // acid green cheeks
+            set3(L.lip_col,   0.95f, 0.95f, 0.20f);      // yellow lip
+            L.eye_glow = 0.45f; set3(L.eye_glow_col, 0.5f, 1.f, 0.3f);
+            L.scanlines = 0.20f;
             return true;
         default: return false;
     }
@@ -392,6 +464,15 @@ uintptr_t face_filter_apply_obs(int filter_id, float amount, const FaceObs& obs,
         bp.lip_tint = L.lip      * amount;
         bp.cheekL_x = obs.pts[50][0];  bp.cheekL_y = obs.pts[50][1];   // mesh cheeks
         bp.cheekR_x = obs.pts[280][0]; bp.cheekR_y = obs.pts[280][1];
+        memcpy(bp.blush_col, L.blush_col, sizeof(bp.blush_col));
+        memcpy(bp.lip_col,   L.lip_col,   sizeof(bp.lip_col));
+        bp.eye_glow = L.eye_glow * amount;
+        memcpy(bp.eye_glow_col, L.eye_glow_col, sizeof(bp.eye_glow_col));
+        bp.skin_tint = L.skin_tint * amount;
+        memcpy(bp.tint_col, L.tint_col, sizeof(bp.tint_col));
+        bp.desat     = L.desat     * amount;
+        bp.chrome    = L.chrome    * amount;
+        bp.scanlines = L.scanlines * amount;
         bp.upx = a.up[0]; bp.upy = a.up[1];
         // Face ellipse: center midway eyes→chin, sized from chin↔forehead
         // (mesh 10) and the cheek span (234/454), with margin for the jawline.

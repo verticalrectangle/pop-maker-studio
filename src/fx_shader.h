@@ -28,9 +28,19 @@ struct FaceBeautyParams {
     float brighten = 0.f;   // 0..1 soft-light skin lift
     float warmth   = 0.f;   // 0..1 warm tint on skin
     float eye_pop  = 0.f;   // 0..1 eye brightening
-    float blush    = 0.f;   // 0..1 rosy cheek makeup
-    float lip_tint = 0.f;   // 0..1 rosy lip color
+    float blush    = 0.f;   // 0..1 cheek makeup
+    float lip_tint = 0.f;   // 0..1 lip color
+    float blush_col[3] = {1.f, 0.45f, 0.55f};   // makeup colors
+    float lip_col[3]   = {0.95f, 0.25f, 0.35f};
     float cheekL_x = 0, cheekL_y = 0, cheekR_x = 0, cheekR_y = 0;
+    // Cyber layer: skin recolor / chrome / holo — all masked to skin.
+    float eye_glow = 0.f;   // 0..1 additive colored glow at the eyes
+    float eye_glow_col[3] = {0.2f, 0.9f, 1.f};
+    float skin_tint = 0.f;  // 0..1 colorize skin toward tint_col (luma kept)
+    float tint_col[3] = {0.7f, 0.8f, 1.f};
+    float desat     = 0.f;  // 0..1 desaturate skin
+    float chrome    = 0.f;  // 0..1 metallic contrast curve on skin
+    float scanlines = 0.f;  // 0..1 holo scanlines on skin
     // mask geometry (pixels)
     float face_cx = 0, face_cy = 0;     // face ellipse center
     float face_rx = 1, face_ry = 1;     // semi-axes along right/up basis

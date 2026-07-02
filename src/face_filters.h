@@ -20,11 +20,15 @@ static const int MAX_FACE_BUMPS = 12;
 // appended so serialized face_filter ints stay stable.
 enum class FaceFilter {
     None = 0, Pretty, BigEyes, TinyFace, BigMouth, Alien, Doggy,
-    Glam, Porcelain, Sculpt, Honey
+    Glam, Porcelain, Sculpt, Honey,
+    // Makeup looks (colored blush/lip through the same beauty engine)
+    Peach, Cherry, Goth, Barbie, Bronze,
+    // Cyber looks (skin tint / chrome / scanlines / eye glow)
+    Chrome, Neon, Cyborg, Hologram, Rave
 };
 inline bool face_filter_is_beauty(int id) {
     return id == (int)FaceFilter::Pretty ||
-           (id >= (int)FaceFilter::Glam && id <= (int)FaceFilter::Honey);
+           (id >= (int)FaceFilter::Glam && id <= (int)FaceFilter::Rave);
 }
 const char* face_filter_name(int id);
 int         face_filter_count();
