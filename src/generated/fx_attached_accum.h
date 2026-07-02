@@ -818,6 +818,29 @@ static void fx_accum_from_attached(CreativeFXAccum& acc, FXType type, float amou
             if ((int)pv.size() > 5) acc.greenscreen_spill = fmaxf(acc.greenscreen_spill, pv[5]);
             acc.any_gen_fx = true;
             break;
+        case FXType::RetroBeauty:
+            acc.retro_beauty_on = true;
+            acc.retro_beauty_amount = fmaxf(acc.retro_beauty_amount, amount);
+            if ((int)pv.size() > 0) acc.retro_beauty_glow = fmaxf(acc.retro_beauty_glow, pv[0]);
+            if ((int)pv.size() > 1) acc.retro_beauty_fade = fmaxf(acc.retro_beauty_fade, pv[1]);
+            if ((int)pv.size() > 2) acc.retro_beauty_blush = fmaxf(acc.retro_beauty_blush, pv[2]);
+            acc.any_gen_fx = true;
+            break;
+        case FXType::Insta2016:
+            acc.insta_2016_on = true;
+            acc.insta_2016_amount = fmaxf(acc.insta_2016_amount, amount);
+            if ((int)pv.size() > 0) acc.insta_2016_fade = fmaxf(acc.insta_2016_fade, pv[0]);
+            if ((int)pv.size() > 1) acc.insta_2016_pop = fmaxf(acc.insta_2016_pop, pv[1]);
+            if ((int)pv.size() > 2) acc.insta_2016_warmth = fmaxf(acc.insta_2016_warmth, pv[2]);
+            acc.any_gen_fx = true;
+            break;
+        case FXType::GlassSkin:
+            acc.glass_skin_on = true;
+            acc.glass_skin_amount = fmaxf(acc.glass_skin_amount, amount);
+            if ((int)pv.size() > 0) acc.glass_skin_radius = fmaxf(acc.glass_skin_radius, pv[0]);
+            if ((int)pv.size() > 1) acc.glass_skin_gloss = fmaxf(acc.glass_skin_gloss, pv[1]);
+            acc.any_gen_fx = true;
+            break;
         default: break;
     }
 }

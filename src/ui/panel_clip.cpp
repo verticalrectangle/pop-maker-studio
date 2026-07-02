@@ -709,6 +709,14 @@ static void section_color(AppState& state, Clip& clip, float w) {
             ImGuiColorEditFlags_NoLabel | ImGuiColorEditFlags_AlphaBar);
         if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Clip color");
         palette_widget("##pal_subcol", clip.sub_color);
+        ImGui::SameLine(0.f, 6.f);
+        {
+            float dp[3];
+            if (ui_dropper_button("##dp_subcol", dp)) {
+                clip.sub_color[0] = dp[0]; clip.sub_color[1] = dp[1]; clip.sub_color[2] = dp[2];
+                history_push(state, "Clip color (picked)");
+            }
+        }
     }
     ImGui::PopStyleColor();
 }
@@ -755,6 +763,15 @@ bool section_text_style(AppState& state, TextStyle& ts, float w) {
         ImGui::SameLine(0.f, 4.f); ImGui::SetNextItemWidth(sw - 130.f);
         if (ImGui::ColorEdit4("##ts_scol", ts.shadow_col,
                 ImGuiColorEditFlags_NoLabel | ImGuiColorEditFlags_AlphaBar)) edited = true;
+        ImGui::SameLine(0.f, 4.f);
+        {
+            float dp_[3];
+            if (ui_dropper_button("##dp_scol", dp_)) {
+                ts.shadow_col[0] = dp_[0]; ts.shadow_col[1] = dp_[1]; ts.shadow_col[2] = dp_[2];
+                edited = true;
+                history_push(state, "Shadow color (picked)");
+            }
+        }
         if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Shadow color");
     }
 
@@ -771,6 +788,15 @@ bool section_text_style(AppState& state, TextStyle& ts, float w) {
         ImGui::SameLine(0.f, 4.f); ImGui::SetNextItemWidth(sw - 100.f);
         if (ImGui::ColorEdit4("##ts_stkcol", ts.stroke_col,
                 ImGuiColorEditFlags_NoLabel | ImGuiColorEditFlags_AlphaBar)) edited = true;
+        ImGui::SameLine(0.f, 4.f);
+        {
+            float dp_[3];
+            if (ui_dropper_button("##dp_stkcol", dp_)) {
+                ts.stroke_col[0] = dp_[0]; ts.stroke_col[1] = dp_[1]; ts.stroke_col[2] = dp_[2];
+                edited = true;
+                history_push(state, "Stroke color (picked)");
+            }
+        }
         if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Stroke color");
     }
 
@@ -787,6 +813,15 @@ bool section_text_style(AppState& state, TextStyle& ts, float w) {
         ImGui::SameLine(0.f, 4.f); ImGui::SetNextItemWidth(sw - 100.f);
         if (ImGui::ColorEdit4("##ts_gcol", ts.glow_col,
                 ImGuiColorEditFlags_NoLabel | ImGuiColorEditFlags_AlphaBar)) edited = true;
+        ImGui::SameLine(0.f, 4.f);
+        {
+            float dp_[3];
+            if (ui_dropper_button("##dp_gcol", dp_)) {
+                ts.glow_col[0] = dp_[0]; ts.glow_col[1] = dp_[1]; ts.glow_col[2] = dp_[2];
+                edited = true;
+                history_push(state, "Glow color (picked)");
+            }
+        }
         if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Glow color");
     }
 
@@ -799,6 +834,15 @@ bool section_text_style(AppState& state, TextStyle& ts, float w) {
         ImGui::SetNextItemWidth(sw);
         if (ImGui::ColorEdit4("##ts_bgcol", ts.bg_col,
                 ImGuiColorEditFlags_NoLabel | ImGuiColorEditFlags_AlphaBar)) edited = true;
+        ImGui::SameLine(0.f, 4.f);
+        {
+            float dp_[3];
+            if (ui_dropper_button("##dp_bgcol", dp_)) {
+                ts.bg_col[0] = dp_[0]; ts.bg_col[1] = dp_[1]; ts.bg_col[2] = dp_[2];
+                edited = true;
+                history_push(state, "Background color (picked)");
+            }
+        }
         if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Background color");
         ImGui::SetNextItemWidth(54.f);
         if (ImGui::SliderFloat("pad x##ts_bpx", &ts.bg_pad_x, 0.f, 40.f, "%.0f")) edited = true;

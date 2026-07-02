@@ -105,3 +105,6 @@
         case FXType::GlowUp: return "GLOW";
         case FXType::CamShake: return "SHAKE";
         case FXType::GreenScreen: return "KEY";
+        case FXType::RetroBeauty: return "RB16";
+        case FXType::Insta2016: return "2016";
+        case FXType::GlassSkin: return "GLAS";

@@ -105,3 +105,6 @@
     GlowUp,   // Glow Up
     CamShake,   // Cam Shake
     GreenScreen,   // Chroma Key
+    RetroBeauty,   // Retro Beauty
+    Insta2016,   // 2016
+    GlassSkin,   // Glass Skin

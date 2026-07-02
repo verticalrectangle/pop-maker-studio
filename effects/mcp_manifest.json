@@ -3146,5 +3146,93 @@
         "fmt": "%.2f"
       }
     ]
+  },
+  {
+    "id": "retro_beauty",
+    "label": "Retro Beauty",
+    "category": "Beauty",
+    "description": "2016 beauty-cam \u00b7 diffusion glow, milky fade, warm-pink cast \u00b7 pair with Skin Smooth",
+    "params": [
+      {
+        "name": "glow",
+        "label": "Glow",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.6,
+        "fmt": "%.2f"
+      },
+      {
+        "name": "fade",
+        "label": "Fade",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.5,
+        "fmt": "%.2f"
+      },
+      {
+        "name": "blush",
+        "label": "Blush",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.35,
+        "fmt": "%.2f"
+      }
+    ]
+  },
+  {
+    "id": "insta_2016",
+    "label": "2016",
+    "category": "Color",
+    "description": "the 2016 feed grade \u00b7 faded blacks, sat punch, warm mids over teal shadows, corner vignette",
+    "params": [
+      {
+        "name": "fade",
+        "label": "Fade",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.45,
+        "fmt": "%.2f"
+      },
+      {
+        "name": "pop",
+        "label": "Pop",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.6,
+        "fmt": "%.2f"
+      },
+      {
+        "name": "warmth",
+        "label": "Warmth",
+        "min": -1.0,
+        "max": 1.0,
+        "default": 0.35,
+        "fmt": "%.2f"
+      }
+    ]
+  },
+  {
+    "id": "glass_skin",
+    "label": "Glass Skin",
+    "category": "Beauty",
+    "description": "modern K-beauty \u00b7 chroma-gated smoothing + dewy wet-highlight sheen",
+    "params": [
+      {
+        "name": "radius",
+        "label": "Smoothness",
+        "min": 1.0,
+        "max": 6.0,
+        "default": 3.5,
+        "fmt": "%.1f px"
+      },
+      {
+        "name": "gloss",
+        "label": "Gloss",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.5,
+        "fmt": "%.2f"
+      }
+    ]
   }
 ]

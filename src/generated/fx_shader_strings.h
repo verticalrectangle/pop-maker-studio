@@ -3282,3 +3282,137 @@ void main() {
     frag = vec4(rgb, a * c.a);
 }
 )glsl";
+
+static const char* k_retro_beauty_frag = R"glsl(
+#version 330 core
+in vec2 v_uv;
+out vec4 frag;
+uniform sampler2D u_tex;
+uniform float u_tex_w;
+uniform float u_tex_h;
+uniform float u_glow;    // 0..1 diffusion halo
+uniform float u_fade;    // 0..1 milky lifted blacks
+uniform float u_blush;   // 0..1 warm-pink era cast
+
+// 2016 beauty-cam: the front-camera-app look of the era — heavy diffusion
+// glow, milky faded blacks, and that warm-pink cast every selfie app baked
+// in. Pair with Skin Smooth for the full time machine.
+void main() {
+    vec2 px = vec2(1.0 / u_tex_w, 1.0 / u_tex_h);
+    vec4 src = texture(u_tex, v_uv);
+    vec3 c = src.rgb;
+
+    // Wide soft-focus: sparse 5x5 at 4px stride, screen-blended.
+    vec3 bsum = vec3(0.0);
+    for (int dy = -2; dy <= 2; ++dy)
+        for (int dx = -2; dx <= 2; ++dx)
+            bsum += texture(u_tex, v_uv + vec2(float(dx), float(dy)) * 4.0 * px).rgb;
+    bsum *= (1.0 / 25.0);
+    vec3 scr = 1.0 - (1.0 - c) * (1.0 - bsum);
+    c = mix(c, scr, u_glow * 0.7);
+
+    // Milky fade: lift the floor, soften the ceiling.
+    c = c * (1.0 - u_fade * 0.22) + vec3(u_fade * 0.16);
+    c = mix(c, smoothstep(vec3(0.0), vec3(1.05), c), u_fade * 0.5);
+
+    // Era cast: warm pink into mids, a whisper of magenta in shadows.
+    float lum = dot(c, vec3(0.299, 0.587, 0.114));
+    float mids = 4.0 * lum * (1.0 - lum);
+    c.r += u_blush * 0.055 * mids;
+    c.g += u_blush * 0.012 * mids;
+    c.b += u_blush * 0.030 * (1.0 - lum);
+
+    frag = vec4(clamp(c, 0.0, 1.0), src.a);
+}
+)glsl";
+
+static const char* k_insta_2016_frag = R"glsl(
+#version 330 core
+in vec2 v_uv;
+out vec4 frag;
+uniform sampler2D u_tex;
+uniform float u_fade;     // 0..1 lifted-blacks film fade
+uniform float u_pop;      // 0..1 saturation punch
+uniform float u_warmth;   // -1..1 cool<->warm split
+
+// The 2016 feed grade: faded blacks, punchy saturation, warm mids over
+// slightly teal shadows, and a soft corner vignette — the year every photo
+// looked like this.
+void main() {
+    vec4 src = texture(u_tex, v_uv);
+    vec3 c = src.rgb;
+    float lum = dot(c, vec3(0.299, 0.587, 0.114));
+
+    // Fade: lift blacks toward warm gray, roll highlights off slightly.
+    c = c * (1.0 - u_fade * 0.18) + vec3(0.10, 0.095, 0.09) * u_fade;
+
+    // Warm/teal split: warmth into mids+highs, teal into shadows.
+    float hi = smoothstep(0.35, 0.9, lum);
+    float lo = 1.0 - smoothstep(0.1, 0.5, lum);
+    c.r += 0.070 * u_warmth * hi;
+    c.g += 0.020 * u_warmth * hi;
+    c.b -= 0.045 * u_warmth * hi;
+    c.b += 0.040 * abs(u_warmth) * lo;
+    c.g += 0.015 * abs(u_warmth) * lo;
+
+    // Saturation pop with skin protection (don't nuke faces orange).
+    float sat = 1.0 + u_pop * 0.55;
+    vec3 gray = vec3(dot(c, vec3(0.299, 0.587, 0.114)));
+    float skin = smoothstep(0.12, 0.0, abs(c.r - c.g - 0.10)) * step(c.b, c.g);
+    c = mix(gray, c, mix(sat, 1.0 + u_pop * 0.2, skin));
+
+    // Soft corner vignette rides the pop.
+    vec2 d = v_uv - 0.5;
+    c *= 1.0 - u_pop * 0.22 * smoothstep(0.35, 0.75, dot(d, d) * 2.0);
+
+    frag = vec4(clamp(c, 0.0, 1.0), src.a);
+}
+)glsl";
+
+static const char* k_glass_skin_frag = R"glsl(
+#version 330 core
+in vec2 v_uv;
+out vec4 frag;
+uniform sampler2D u_tex;
+uniform float u_tex_w;
+uniform float u_tex_h;
+uniform float u_radius;   // smoothing radius px
+uniform float u_gloss;    // 0..1 wet-highlight sheen
+
+// Glass skin (the modern K-beauty look): chroma-gated bilateral smoothing
+// like Skin Smooth, plus a luminous "wet" sheen — skin speculars get
+// expanded so the surface reads dewy instead of matte.
+float luma(vec3 c) { return dot(c, vec3(0.299, 0.587, 0.114)); }
+float skin_mask(vec3 c) {
+    float cb = 0.5 - 0.168736 * c.r - 0.331264 * c.g + 0.5 * c.b;
+    float cr = 0.5 + 0.5 * c.r - 0.418688 * c.g - 0.081312 * c.b;
+    float mb = smoothstep(0.262, 0.342, cb) * (1.0 - smoothstep(0.458, 0.538, cb));
+    float mr = smoothstep(0.482, 0.562, cr) * (1.0 - smoothstep(0.638, 0.718, cr));
+    return mb * mr;
+}
+void main() {
+    vec2 px = vec2(1.0 / u_tex_w, 1.0 / u_tex_h);
+    vec4 src = texture(u_tex, v_uv);
+    float mask = skin_mask(src.rgb);
+    vec3 c = src.rgb;
+    if (mask > 0.01) {
+        float lc = luma(c);
+        vec3 acc = c; float wsum = 1.0;
+        float r = max(1.0, u_radius);
+        for (float dy = -2.0; dy <= 2.0; dy += 1.0)
+            for (float dx = -2.0; dx <= 2.0; dx += 1.0) {
+                if (dx == 0.0 && dy == 0.0) continue;
+                vec3 s = texture(u_tex, v_uv + vec2(dx, dy) * (r * 0.5) * px).rgb;
+                float dl = abs(luma(s) - lc);
+                float w2 = exp(-dl * dl * 60.0) * exp(-(dx*dx + dy*dy) * 0.12);
+                acc += s * w2; wsum += w2;
+            }
+        c = mix(c, acc / wsum, mask);
+        // Wet sheen: expand skin speculars + gentle luminous lift.
+        float lum2 = luma(c);
+        float spec = smoothstep(0.62, 0.95, lum2);
+        c += u_gloss * mask * (spec * 0.22 + 0.035);
+    }
+    frag = vec4(clamp(c, 0.0, 1.0), src.a);
+}
+)glsl";

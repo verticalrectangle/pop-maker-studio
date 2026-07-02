@@ -105,3 +105,6 @@
         case FXType::GlowUp: return IM_COL32(255,210,140,255);
         case FXType::CamShake: return IM_COL32(255,90,90,255);
         case FXType::GreenScreen: return IM_COL32(50,220,120,255);
+        case FXType::RetroBeauty: return IM_COL32(255,150,190,255);
+        case FXType::Insta2016: return IM_COL32(255,140,60,255);
+        case FXType::GlassSkin: return IM_COL32(180,230,255,255);

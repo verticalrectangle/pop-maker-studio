@@ -110,7 +110,8 @@ static bool ui_widget_claims_mouse() {
     ImGuiContext& g = *GImGui;
     // ui_splitter_capture(): the panel-resize handles are raw hit-tests, not
     // ImGui items — while one is hot or dragging, the press belongs to it.
-    return g.HoveredIdPreviousFrame != 0 || g.ActiveId != 0 || ui_splitter_capture();
+    return g.HoveredIdPreviousFrame != 0 || g.ActiveId != 0 || ui_splitter_capture() ||
+           ui_dropper_active();
 }
 
 bool camera_live_native_dims(int& cw, int& ch);   // defined below
@@ -2041,6 +2042,44 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
             {p.x + w, p.y + h},    {p.x, p.y + h},
             {0.f, 1.f}, {1.f, 1.f}, {1.f, 0.f}, {0.f, 0.f},
             IM_COL32_WHITE);
+
+        // ── Eyedropper: sample the rendered scene under the cursor ────────────
+        // Armed by ui_dropper_button next to any color picker. Reads ONE pixel
+        // from the scene texture via a scratch FBO (the pick click is swallowed
+        // by ui_widget_claims_mouse's dropper gate, so nothing gets selected).
+        if (ui_dropper_active()) {
+            ImVec2 mp = ImGui::GetIO().MousePos;
+            bool over = mp.x >= p.x && mp.x < p.x + w && mp.y >= p.y && mp.y < p.y + h;
+            if (over) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+            if (ImGui::IsKeyPressed(ImGuiKey_Escape) || ImGui::IsMouseClicked(1)) {
+                ui_dropper_cancel();
+            } else if (over && ImGui::IsMouseClicked(0)) {
+                GLint tw = 0, th = 0;
+                glBindTexture(GL_TEXTURE_2D, (GLuint)scene_tex);
+                glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_WIDTH,  &tw);
+                glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_HEIGHT, &th);
+                glBindTexture(GL_TEXTURE_2D, 0);
+                if (tw > 0 && th > 0) {
+                    float u = (mp.x - p.x) / w;
+                    float v = (mp.y - p.y) / h;          // image space, top-left origin
+                    int sx = (int)(u * (float)tw);
+                    int sy = (int)((1.f - v) * (float)th);   // GL row 0 = bottom
+                    sx = sx < 0 ? 0 : (sx >= tw ? tw - 1 : sx);
+                    sy = sy < 0 ? 0 : (sy >= th ? th - 1 : sy);
+                    static GLuint s_pick_fbo = 0;
+                    if (!s_pick_fbo) glGenFramebuffers(1, &s_pick_fbo);
+                    GLint prev_fbo = 0;
+                    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prev_fbo);
+                    glBindFramebuffer(GL_FRAMEBUFFER, s_pick_fbo);
+                    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                                           GL_TEXTURE_2D, (GLuint)scene_tex, 0);
+                    uint8_t px4[4] = {};
+                    glReadPixels(sx, sy, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, px4);
+                    glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)prev_fbo);
+                    ui_dropper_feed(px4[0] / 255.f, px4[1] / 255.f, px4[2] / 255.f);
+                }
+            }
+        }
     }
 
     // ── Pass 2: Text clips (drawn on top of scene) ────────────────────────────

@@ -571,6 +571,91 @@ int decouple_fx_to_new_track(AppState& state, int ti, int ci) {
     return new_ti;
 }
 
+// ── Eyedropper ────────────────────────────────────────────────────────────────
+static struct {
+    std::string owner;      // dropper button id that armed the pick
+    bool  active = false;   // waiting for a canvas click
+    bool  has    = false;   // a sample landed, owner hasn't consumed it yet
+    float rgb[3] = {};
+} g_dropper;
+
+bool ui_dropper_active() { return g_dropper.active; }
+void ui_dropper_cancel() { g_dropper.active = false; g_dropper.has = false; g_dropper.owner.clear(); }
+void ui_dropper_feed(float r, float g, float b) {
+    if (!g_dropper.active) return;
+    g_dropper.rgb[0] = r; g_dropper.rgb[1] = g; g_dropper.rgb[2] = b;
+    g_dropper.active = false;
+    g_dropper.has    = true;
+}
+
+bool ui_dropper_button(const char* id, float rgb_out[3]) {
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    bool armed = g_dropper.active && g_dropper.owner == id;
+    ImGui::InvisibleButton(id, {18.f, 18.f});
+    ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
+    bool hov = ImGui::IsItemHovered();
+    ImU32 bg = armed ? IM_COL32(70, 110, 200, 255)
+             : hov   ? IM_COL32(60, 60, 78, 255) : IM_COL32(40, 40, 52, 255);
+    dl->AddRectFilled(a, b, bg, 4.f);
+    // Pipette glyph: diagonal barrel + tip dot.
+    ImU32 fg = armed ? IM_COL32(255, 255, 255, 255) : IM_COL32(200, 205, 220, 230);
+    float x0 = a.x + 4.5f, y0 = b.y - 4.5f, x1 = b.x - 5.f, y1 = a.y + 5.f;
+    dl->AddLine({x0 + 1.5f, y0 - 1.5f}, {x1, y1}, fg, 2.f);
+    dl->AddCircleFilled({x0, y0}, 1.8f, fg);
+    dl->AddLine({x1 - 1.f, y1 - 2.f}, {x1 + 2.f, y1 + 1.f}, fg, 3.f);
+    if (hov) ImGui::SetTooltip(armed ? "Click the preview to sample (Esc cancels)"
+                                     : "Pick a color from the preview");
+    if (ImGui::IsItemClicked()) {
+        if (armed) { ui_dropper_cancel(); }
+        else { g_dropper.owner = id; g_dropper.active = true; g_dropper.has = false; }
+    }
+    if (g_dropper.has && g_dropper.owner == id) {
+        rgb_out[0] = g_dropper.rgb[0];
+        rgb_out[1] = g_dropper.rgb[1];
+        rgb_out[2] = g_dropper.rgb[2];
+        g_dropper.has = false;
+        g_dropper.owner.clear();
+        return true;
+    }
+    return false;
+}
+
+bool lib_search_match(const std::string& query, const char* hay1, const char* hay2) {
+    if (query.empty()) return true;
+    auto contains = [](const char* hay, const std::string& needle) {
+        if (!hay) return false;
+        std::string h(hay);
+        for (auto& c : h) c = (char)std::tolower((unsigned char)c);
+        return h.find(needle) != std::string::npos;
+    };
+    std::string q(query);
+    for (auto& c : q) c = (char)std::tolower((unsigned char)c);
+    return contains(hay1, q) || contains(hay2, q);
+}
+
+bool category_pills(const char* id, const std::vector<const char*>& cats,
+                    std::string& sel, std::string& query) {
+    ImGui::PushID(id);
+    // Search row above the pills: field + clear button.
+    char buf[96];
+    strncpy(buf, query.c_str(), sizeof(buf) - 1);
+    buf[sizeof(buf) - 1] = '\0';
+    ImGui::PushStyleColor(ImGuiCol_FrameBg, Col::bg_soft);
+    float cw = ImGui::GetContentRegionAvail().x;
+    ImGui::SetNextItemWidth(query.empty() ? cw : cw - 26.f);
+    if (ImGui::InputTextWithHint("##libsearch", "Search\xe2\x80\xa6", buf, sizeof(buf)))
+        query = buf;
+    ImGui::PopStyleColor();
+    if (!query.empty()) {
+        ImGui::SameLine(0.f, 4.f);
+        if (ui_btn("\xc3\x97", false, true)) query.clear();
+    }
+    ImGui::Dummy({0.f, 2.f});
+    ImGui::PopID();
+    bool changed = category_pills(id, cats, sel);
+    return changed;
+}
+
 bool category_pills(const char* id, const std::vector<const char*>& cats, std::string& sel) {
     // Drop a stale filter (category no longer present) back to All.
     if (!sel.empty()) {

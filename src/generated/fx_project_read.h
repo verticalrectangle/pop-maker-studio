@@ -705,3 +705,24 @@
         c.fx_greenscreen_spill = r.pod<float>();
         c.fx_greenscreen_spill_beat = r.pod<float>();
     }
+    if (g_fx_read_version >= 64u) {
+        c.fx_retro_beauty_amount = r.pod<float>();
+        c.fx_retro_beauty_glow = r.pod<float>();
+        c.fx_retro_beauty_glow_beat = r.pod<float>();
+        c.fx_retro_beauty_fade = r.pod<float>();
+        c.fx_retro_beauty_fade_beat = r.pod<float>();
+        c.fx_retro_beauty_blush = r.pod<float>();
+        c.fx_retro_beauty_blush_beat = r.pod<float>();
+        c.fx_insta_2016_amount = r.pod<float>();
+        c.fx_insta_2016_fade = r.pod<float>();
+        c.fx_insta_2016_fade_beat = r.pod<float>();
+        c.fx_insta_2016_pop = r.pod<float>();
+        c.fx_insta_2016_pop_beat = r.pod<float>();
+        c.fx_insta_2016_warmth = r.pod<float>();
+        c.fx_insta_2016_warmth_beat = r.pod<float>();
+        c.fx_glass_skin_amount = r.pod<float>();
+        c.fx_glass_skin_radius = r.pod<float>();
+        c.fx_glass_skin_radius_beat = r.pod<float>();
+        c.fx_glass_skin_gloss = r.pod<float>();
+        c.fx_glass_skin_gloss_beat = r.pod<float>();
+    }

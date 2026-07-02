@@ -719,3 +719,23 @@
             cfx.greenscreen_smoothness = 0.08f;
             cfx.greenscreen_spill = 0.5f;
             break;
+        case FXType::RetroBeauty:
+            cfx.retro_beauty_on = true;
+            cfx.retro_beauty_amount = 1.0f;
+            cfx.retro_beauty_glow = 0.6f;
+            cfx.retro_beauty_fade = 0.5f;
+            cfx.retro_beauty_blush = 0.35f;
+            break;
+        case FXType::Insta2016:
+            cfx.insta_2016_on = true;
+            cfx.insta_2016_amount = 1.0f;
+            cfx.insta_2016_fade = 0.45f;
+            cfx.insta_2016_pop = 0.6f;
+            cfx.insta_2016_warmth = 0.35f;
+            break;
+        case FXType::GlassSkin:
+            cfx.glass_skin_on = true;
+            cfx.glass_skin_amount = 1.0f;
+            cfx.glass_skin_radius = 3.5f;
+            cfx.glass_skin_gloss = 0.5f;
+            break;

@@ -7484,3 +7484,215 @@
                 }
             }
             break;
+
+        case FXType::RetroBeauty:
+            kfx("fx_retro_beauty_amount", "Amount", &clip.fx_retro_beauty_amount, 0.0f, 1.0f, "%.2f", sw);
+            ImGui::Dummy({0.f, 4.f});
+            {
+                bool _bon = clip.fx_retro_beauty_glow_beat > 0.001f;
+                if (_bon) {
+                    ui_label("Glow");
+                    ImGui::BeginDisabled();
+                    ImGui::SetNextItemWidth(sw - 26.f);
+                    ImGui::SliderFloat("##gen_retro_beauty_glow", &clip.fx_retro_beauty_glow, 0.0f, 1.0f, "%.2f");
+                    ImGui::EndDisabled();
+                } else {
+                    kfx("fx_retro_beauty_glow", "Glow", &clip.fx_retro_beauty_glow, 0.0f, 1.0f, "%.2f", sw - 26.f);
+                }
+                ImGui::SameLine(0.f, 4.f);
+                ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
+                if (ImGui::SmallButton("B##bt_retro_beauty_glow")) {
+                    clip.fx_retro_beauty_glow_beat = _bon ? 0.f : 0.5f;
+                    history_push(state, "Retro Beauty: Beat Sync");
+                }
+                ImGui::PopStyleColor();
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_retro_beauty_glow", &clip.fx_retro_beauty_glow_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Retro Beauty: Beat Intensity");
+                }
+            }
+            ImGui::Dummy({0.f, 4.f});
+            {
+                bool _bon = clip.fx_retro_beauty_fade_beat > 0.001f;
+                if (_bon) {
+                    ui_label("Fade");
+                    ImGui::BeginDisabled();
+                    ImGui::SetNextItemWidth(sw - 26.f);
+                    ImGui::SliderFloat("##gen_retro_beauty_fade", &clip.fx_retro_beauty_fade, 0.0f, 1.0f, "%.2f");
+                    ImGui::EndDisabled();
+                } else {
+                    kfx("fx_retro_beauty_fade", "Fade", &clip.fx_retro_beauty_fade, 0.0f, 1.0f, "%.2f", sw - 26.f);
+                }
+                ImGui::SameLine(0.f, 4.f);
+                ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
+                if (ImGui::SmallButton("B##bt_retro_beauty_fade")) {
+                    clip.fx_retro_beauty_fade_beat = _bon ? 0.f : 0.5f;
+                    history_push(state, "Retro Beauty: Beat Sync");
+                }
+                ImGui::PopStyleColor();
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_retro_beauty_fade", &clip.fx_retro_beauty_fade_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Retro Beauty: Beat Intensity");
+                }
+            }
+            ImGui::Dummy({0.f, 4.f});
+            {
+                bool _bon = clip.fx_retro_beauty_blush_beat > 0.001f;
+                if (_bon) {
+                    ui_label("Blush");
+                    ImGui::BeginDisabled();
+                    ImGui::SetNextItemWidth(sw - 26.f);
+                    ImGui::SliderFloat("##gen_retro_beauty_blush", &clip.fx_retro_beauty_blush, 0.0f, 1.0f, "%.2f");
+                    ImGui::EndDisabled();
+                } else {
+                    kfx("fx_retro_beauty_blush", "Blush", &clip.fx_retro_beauty_blush, 0.0f, 1.0f, "%.2f", sw - 26.f);
+                }
+                ImGui::SameLine(0.f, 4.f);
+                ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
+                if (ImGui::SmallButton("B##bt_retro_beauty_blush")) {
+                    clip.fx_retro_beauty_blush_beat = _bon ? 0.f : 0.5f;
+                    history_push(state, "Retro Beauty: Beat Sync");
+                }
+                ImGui::PopStyleColor();
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_retro_beauty_blush", &clip.fx_retro_beauty_blush_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Retro Beauty: Beat Intensity");
+                }
+            }
+            break;
+
+        case FXType::Insta2016:
+            kfx("fx_insta_2016_amount", "Amount", &clip.fx_insta_2016_amount, 0.0f, 1.0f, "%.2f", sw);
+            ImGui::Dummy({0.f, 4.f});
+            {
+                bool _bon = clip.fx_insta_2016_fade_beat > 0.001f;
+                if (_bon) {
+                    ui_label("Fade");
+                    ImGui::BeginDisabled();
+                    ImGui::SetNextItemWidth(sw - 26.f);
+                    ImGui::SliderFloat("##gen_insta_2016_fade", &clip.fx_insta_2016_fade, 0.0f, 1.0f, "%.2f");
+                    ImGui::EndDisabled();
+                } else {
+                    kfx("fx_insta_2016_fade", "Fade", &clip.fx_insta_2016_fade, 0.0f, 1.0f, "%.2f", sw - 26.f);
+                }
+                ImGui::SameLine(0.f, 4.f);
+                ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
+                if (ImGui::SmallButton("B##bt_insta_2016_fade")) {
+                    clip.fx_insta_2016_fade_beat = _bon ? 0.f : 0.5f;
+                    history_push(state, "2016: Beat Sync");
+                }
+                ImGui::PopStyleColor();
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_insta_2016_fade", &clip.fx_insta_2016_fade_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "2016: Beat Intensity");
+                }
+            }
+            ImGui::Dummy({0.f, 4.f});
+            {
+                bool _bon = clip.fx_insta_2016_pop_beat > 0.001f;
+                if (_bon) {
+                    ui_label("Pop");
+                    ImGui::BeginDisabled();
+                    ImGui::SetNextItemWidth(sw - 26.f);
+                    ImGui::SliderFloat("##gen_insta_2016_pop", &clip.fx_insta_2016_pop, 0.0f, 1.0f, "%.2f");
+                    ImGui::EndDisabled();
+                } else {
+                    kfx("fx_insta_2016_pop", "Pop", &clip.fx_insta_2016_pop, 0.0f, 1.0f, "%.2f", sw - 26.f);
+                }
+                ImGui::SameLine(0.f, 4.f);
+                ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
+                if (ImGui::SmallButton("B##bt_insta_2016_pop")) {
+                    clip.fx_insta_2016_pop_beat = _bon ? 0.f : 0.5f;
+                    history_push(state, "2016: Beat Sync");
+                }
+                ImGui::PopStyleColor();
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_insta_2016_pop", &clip.fx_insta_2016_pop_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "2016: Beat Intensity");
+                }
+            }
+            ImGui::Dummy({0.f, 4.f});
+            {
+                bool _bon = clip.fx_insta_2016_warmth_beat > 0.001f;
+                if (_bon) {
+                    ui_label("Warmth");
+                    ImGui::BeginDisabled();
+                    ImGui::SetNextItemWidth(sw - 26.f);
+                    ImGui::SliderFloat("##gen_insta_2016_warmth", &clip.fx_insta_2016_warmth, -1.0f, 1.0f, "%.2f");
+                    ImGui::EndDisabled();
+                } else {
+                    kfx("fx_insta_2016_warmth", "Warmth", &clip.fx_insta_2016_warmth, -1.0f, 1.0f, "%.2f", sw - 26.f);
+                }
+                ImGui::SameLine(0.f, 4.f);
+                ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
+                if (ImGui::SmallButton("B##bt_insta_2016_warmth")) {
+                    clip.fx_insta_2016_warmth_beat = _bon ? 0.f : 0.5f;
+                    history_push(state, "2016: Beat Sync");
+                }
+                ImGui::PopStyleColor();
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_insta_2016_warmth", &clip.fx_insta_2016_warmth_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "2016: Beat Intensity");
+                }
+            }
+            break;
+
+        case FXType::GlassSkin:
+            kfx("fx_glass_skin_amount", "Amount", &clip.fx_glass_skin_amount, 0.0f, 1.0f, "%.2f", sw);
+            ImGui::Dummy({0.f, 4.f});
+            {
+                bool _bon = clip.fx_glass_skin_radius_beat > 0.001f;
+                if (_bon) {
+                    ui_label("Smoothness");
+                    ImGui::BeginDisabled();
+                    ImGui::SetNextItemWidth(sw - 26.f);
+                    ImGui::SliderFloat("##gen_glass_skin_radius", &clip.fx_glass_skin_radius, 1.0f, 6.0f, "%.1f px");
+                    ImGui::EndDisabled();
+                } else {
+                    kfx("fx_glass_skin_radius", "Smoothness", &clip.fx_glass_skin_radius, 1.0f, 6.0f, "%.1f px", sw - 26.f);
+                }
+                ImGui::SameLine(0.f, 4.f);
+                ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
+                if (ImGui::SmallButton("B##bt_glass_skin_radius")) {
+                    clip.fx_glass_skin_radius_beat = _bon ? 0.f : 0.5f;
+                    history_push(state, "Glass Skin: Beat Sync");
+                }
+                ImGui::PopStyleColor();
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_glass_skin_radius", &clip.fx_glass_skin_radius_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Glass Skin: Beat Intensity");
+                }
+            }
+            ImGui::Dummy({0.f, 4.f});
+            {
+                bool _bon = clip.fx_glass_skin_gloss_beat > 0.001f;
+                if (_bon) {
+                    ui_label("Gloss");
+                    ImGui::BeginDisabled();
+                    ImGui::SetNextItemWidth(sw - 26.f);
+                    ImGui::SliderFloat("##gen_glass_skin_gloss", &clip.fx_glass_skin_gloss, 0.0f, 1.0f, "%.2f");
+                    ImGui::EndDisabled();
+                } else {
+                    kfx("fx_glass_skin_gloss", "Gloss", &clip.fx_glass_skin_gloss, 0.0f, 1.0f, "%.2f", sw - 26.f);
+                }
+                ImGui::SameLine(0.f, 4.f);
+                ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
+                if (ImGui::SmallButton("B##bt_glass_skin_gloss")) {
+                    clip.fx_glass_skin_gloss_beat = _bon ? 0.f : 0.5f;
+                    history_push(state, "Glass Skin: Beat Sync");
+                }
+                ImGui::PopStyleColor();
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_glass_skin_gloss", &clip.fx_glass_skin_gloss_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Glass Skin: Beat Intensity");
+                }
+            }
+            break;

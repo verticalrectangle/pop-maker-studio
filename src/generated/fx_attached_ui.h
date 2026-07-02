@@ -2290,6 +2290,70 @@ static void fx_attached_inspector(AttachedFX& afx, float sw, AppState& state, Cl
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Chroma Key: Spill Kill");
             break;
         }
+        case FXType::RetroBeauty: {
+            if ((int)afx.params.size() < 3) afx.params.resize(3, 0.f);
+            ui_label("Amount");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##afx_retro_beauty_amount", &afx.amount, 0.0f, 1.0f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Retro Beauty: Amount");
+            ImGui::Dummy({0.f, 4.f});
+            ui_label("Glow");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##afx_retro_beauty_glow", &afx.params[0], 0.0f, 1.0f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Retro Beauty: Glow");
+            ImGui::Dummy({0.f, 4.f});
+            ui_label("Fade");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##afx_retro_beauty_fade", &afx.params[1], 0.0f, 1.0f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Retro Beauty: Fade");
+            ImGui::Dummy({0.f, 4.f});
+            ui_label("Blush");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##afx_retro_beauty_blush", &afx.params[2], 0.0f, 1.0f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Retro Beauty: Blush");
+            break;
+        }
+        case FXType::Insta2016: {
+            if ((int)afx.params.size() < 3) afx.params.resize(3, 0.f);
+            ui_label("Amount");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##afx_insta_2016_amount", &afx.amount, 0.0f, 1.0f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "2016: Amount");
+            ImGui::Dummy({0.f, 4.f});
+            ui_label("Fade");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##afx_insta_2016_fade", &afx.params[0], 0.0f, 1.0f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "2016: Fade");
+            ImGui::Dummy({0.f, 4.f});
+            ui_label("Pop");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##afx_insta_2016_pop", &afx.params[1], 0.0f, 1.0f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "2016: Pop");
+            ImGui::Dummy({0.f, 4.f});
+            ui_label("Warmth");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##afx_insta_2016_warmth", &afx.params[2], -1.0f, 1.0f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "2016: Warmth");
+            break;
+        }
+        case FXType::GlassSkin: {
+            if ((int)afx.params.size() < 2) afx.params.resize(2, 0.f);
+            ui_label("Amount");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##afx_glass_skin_amount", &afx.amount, 0.0f, 1.0f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Glass Skin: Amount");
+            ImGui::Dummy({0.f, 4.f});
+            ui_label("Smoothness");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##afx_glass_skin_radius", &afx.params[0], 1.0f, 6.0f, "%.1f px");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Glass Skin: Smoothness");
+            ImGui::Dummy({0.f, 4.f});
+            ui_label("Gloss");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##afx_glass_skin_gloss", &afx.params[1], 0.0f, 1.0f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Glass Skin: Gloss");
+            break;
+        }
         default: break;
     }
 }

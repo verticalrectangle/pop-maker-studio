@@ -269,6 +269,25 @@ void palette_widget(const char* id, float* rgb);
 // if the selection changed this frame. Shared by the typography / FX / background
 // libraries so they all filter in place the same way.
 bool category_pills(const char* id, const std::vector<const char*>& cats, std::string& sel);
+// Search-enabled variant: draws a search field ABOVE the pills. `query` is the
+// live filter text; combine with lib_search_match in the panel's item loop.
+bool category_pills(const char* id, const std::vector<const char*>& cats,
+                    std::string& sel, std::string& query);
+// Case-insensitive substring match over up to two haystacks (label +
+// description). Empty query matches everything.
+bool lib_search_match(const std::string& query, const char* hay1,
+                      const char* hay2 = nullptr);
+
+// ── Eyedropper ────────────────────────────────────────────────────────────────
+// A small pipette button to place beside any color picker. Clicking arms the
+// dropper; the next click on the preview canvas samples the rendered pixel
+// (canvas feeds it via ui_dropper_feed) and the SAME call site returns true
+// once with the picked color — no dangling pointers, keyframe-aware at the
+// caller (route the result through kf_color_edit where applicable).
+bool ui_dropper_button(const char* id, float rgb_out[3]);
+bool ui_dropper_active();
+void ui_dropper_feed(float r, float g, float b);
+void ui_dropper_cancel();
 
 // ── group_words helpers (defined in pipeline.cpp, used by panel_animation) ────
 std::vector<Clip> group_words(const std::vector<Clip>& words, SubtitleMode mode,

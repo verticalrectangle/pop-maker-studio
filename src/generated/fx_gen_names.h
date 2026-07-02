@@ -105,3 +105,6 @@
     "glow_up",
     "cam_shake",
     "greenscreen",
+    "retro_beauty",
+    "insta_2016",
+    "glass_skin",

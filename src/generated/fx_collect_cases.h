@@ -1990,3 +1990,58 @@
                 acc.greenscreen_spill = fmaxf(acc.greenscreen_spill, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
+        case FXType::RetroBeauty:
+            acc.retro_beauty_on = true;
+            acc.any_gen_fx = true;
+            acc.retro_beauty_amount = fmaxf(acc.retro_beauty_amount, cl.eval_prop("fx_retro_beauty_amount", _cl_t));
+            {
+                float _bi = cl.fx_retro_beauty_glow_beat;
+                float _bv = cl.eval_prop("fx_retro_beauty_glow", _cl_t);
+                acc.retro_beauty_glow = fmaxf(acc.retro_beauty_glow, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
+            }
+            {
+                float _bi = cl.fx_retro_beauty_fade_beat;
+                float _bv = cl.eval_prop("fx_retro_beauty_fade", _cl_t);
+                acc.retro_beauty_fade = fmaxf(acc.retro_beauty_fade, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
+            }
+            {
+                float _bi = cl.fx_retro_beauty_blush_beat;
+                float _bv = cl.eval_prop("fx_retro_beauty_blush", _cl_t);
+                acc.retro_beauty_blush = fmaxf(acc.retro_beauty_blush, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
+            }
+            break;
+        case FXType::Insta2016:
+            acc.insta_2016_on = true;
+            acc.any_gen_fx = true;
+            acc.insta_2016_amount = fmaxf(acc.insta_2016_amount, cl.eval_prop("fx_insta_2016_amount", _cl_t));
+            {
+                float _bi = cl.fx_insta_2016_fade_beat;
+                float _bv = cl.eval_prop("fx_insta_2016_fade", _cl_t);
+                acc.insta_2016_fade = fmaxf(acc.insta_2016_fade, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
+            }
+            {
+                float _bi = cl.fx_insta_2016_pop_beat;
+                float _bv = cl.eval_prop("fx_insta_2016_pop", _cl_t);
+                acc.insta_2016_pop = fmaxf(acc.insta_2016_pop, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
+            }
+            {
+                float _bi = cl.fx_insta_2016_warmth_beat;
+                float _bv = cl.eval_prop("fx_insta_2016_warmth", _cl_t);
+                acc.insta_2016_warmth = fmaxf(acc.insta_2016_warmth, (_bi > 0.001f) ? (-1.0f + (1.0f - -1.0f) * _bi * _cl_beat_pulse) : _bv);
+            }
+            break;
+        case FXType::GlassSkin:
+            acc.glass_skin_on = true;
+            acc.any_gen_fx = true;
+            acc.glass_skin_amount = fmaxf(acc.glass_skin_amount, cl.eval_prop("fx_glass_skin_amount", _cl_t));
+            {
+                float _bi = cl.fx_glass_skin_radius_beat;
+                float _bv = cl.eval_prop("fx_glass_skin_radius", _cl_t);
+                acc.glass_skin_radius = fmaxf(acc.glass_skin_radius, (_bi > 0.001f) ? (1.0f + (6.0f - 1.0f) * _bi * _cl_beat_pulse) : _bv);
+            }
+            {
+                float _bi = cl.fx_glass_skin_gloss_beat;
+                float _bv = cl.eval_prop("fx_glass_skin_gloss", _cl_t);
+                acc.glass_skin_gloss = fmaxf(acc.glass_skin_gloss, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
+            }
+            break;

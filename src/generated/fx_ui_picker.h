@@ -105,3 +105,6 @@
         {FXType::GlowUp, "Glow Up", "Soft-focus portrait glow  ·  warmth + lift  ·  diffusion-filter look", IM_COL32(255,210,140,255), "Beauty"},
         {FXType::CamShake, "Cam Shake", "Handheld camera shake  ·  continuous jitter + micro-zoom  ·  TikTok energy", IM_COL32(255,90,90,255), "Motion"},
         {FXType::GreenScreen, "Chroma Key", "Clean colour keyer - green screen - keys a colour out so the track below shows through", IM_COL32(50,220,120,255), "Tools"},
+        {FXType::RetroBeauty, "Retro Beauty", "2016 beauty-cam · diffusion glow, milky fade, warm-pink cast · pair with Skin Smooth", IM_COL32(255,150,190,255), "Beauty"},
+        {FXType::Insta2016, "2016", "the 2016 feed grade · faded blacks, sat punch, warm mids over teal shadows, corner vignette", IM_COL32(255,140,60,255), "Color"},
+        {FXType::GlassSkin, "Glass Skin", "modern K-beauty · chroma-gated smoothing + dewy wet-highlight sheen", IM_COL32(180,230,255,255), "Beauty"},

@@ -106,5 +106,8 @@ static const FXType k_gen_fx_types[] = {
     FXType::GlowUp,
     FXType::CamShake,
     FXType::GreenScreen,
+    FXType::RetroBeauty,
+    FXType::Insta2016,
+    FXType::GlassSkin,
 };
-static const int k_gen_fx_count = 106;
+static const int k_gen_fx_count = 109;

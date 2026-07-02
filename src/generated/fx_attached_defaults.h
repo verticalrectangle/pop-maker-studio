@@ -107,6 +107,9 @@ static std::vector<float> fx_attached_defaults(FXType type) {
         case FXType::GlowUp: return {0.5f, 0.25f, 0.15f};
         case FXType::CamShake: return {0.5f, 1.0f};
         case FXType::GreenScreen: return {0.0f, 1.0f, 0.0f, 0.4f, 0.08f, 0.5f};
+        case FXType::RetroBeauty: return {0.6f, 0.5f, 0.35f};
+        case FXType::Insta2016: return {0.45f, 0.6f, 0.35f};
+        case FXType::GlassSkin: return {3.5f, 0.5f};
         default: return {};
     }
 }

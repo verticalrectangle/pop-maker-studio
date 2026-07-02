@@ -12,7 +12,7 @@
 // ── Binary serialization helpers ──────────────────────────────────────────────
 
 static const uint32_t MAGIC   = 0x534D5001u; // "PMS\x01"
-static const uint32_t VERSION = 63u;  // v63: track groups (GroupHead folder rows: children + collapsed)
+static const uint32_t VERSION = 64u;  // v64: retro_beauty + insta_2016 + glass_skin generated FX
 
 // Version used to gate the registry-effect read block (generated/fx_project_read.h).
 // Normally the file's format version; project_load decrements it by 1 on a retry

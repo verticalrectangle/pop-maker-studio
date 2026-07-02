@@ -508,3 +508,17 @@
     float greenscreen_similarity = 0.01f;
     float greenscreen_smoothness = 0.0f;
     float greenscreen_spill = 0.0f;
+    bool  retro_beauty_on = false;
+    float retro_beauty_amount = 0.0f;
+    float retro_beauty_glow = 0.0f;
+    float retro_beauty_fade = 0.0f;
+    float retro_beauty_blush = 0.0f;
+    bool  insta_2016_on = false;
+    float insta_2016_amount = 0.0f;
+    float insta_2016_fade = 0.0f;
+    float insta_2016_pop = 0.0f;
+    float insta_2016_warmth = -1.0f;
+    bool  glass_skin_on = false;
+    float glass_skin_amount = 0.0f;
+    float glass_skin_radius = 1.0f;
+    float glass_skin_gloss = 0.0f;

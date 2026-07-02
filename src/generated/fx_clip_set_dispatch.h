@@ -1011,5 +1011,33 @@ static bool fx_clip_set_param(Clip& c, const std::string& fx_id,
         if (param == "spill_beat") { c.fx_greenscreen_spill_beat = value; return true; }
         return false;
     }
+    if (fx_id == "retro_beauty") {
+        if (param == "amount") { c.fx_retro_beauty_amount = value; return true; }
+        if (param == "glow") { c.fx_retro_beauty_glow = value; return true; }
+        if (param == "glow_beat") { c.fx_retro_beauty_glow_beat = value; return true; }
+        if (param == "fade") { c.fx_retro_beauty_fade = value; return true; }
+        if (param == "fade_beat") { c.fx_retro_beauty_fade_beat = value; return true; }
+        if (param == "blush") { c.fx_retro_beauty_blush = value; return true; }
+        if (param == "blush_beat") { c.fx_retro_beauty_blush_beat = value; return true; }
+        return false;
+    }
+    if (fx_id == "insta_2016") {
+        if (param == "amount") { c.fx_insta_2016_amount = value; return true; }
+        if (param == "fade") { c.fx_insta_2016_fade = value; return true; }
+        if (param == "fade_beat") { c.fx_insta_2016_fade_beat = value; return true; }
+        if (param == "pop") { c.fx_insta_2016_pop = value; return true; }
+        if (param == "pop_beat") { c.fx_insta_2016_pop_beat = value; return true; }
+        if (param == "warmth") { c.fx_insta_2016_warmth = value; return true; }
+        if (param == "warmth_beat") { c.fx_insta_2016_warmth_beat = value; return true; }
+        return false;
+    }
+    if (fx_id == "glass_skin") {
+        if (param == "amount") { c.fx_glass_skin_amount = value; return true; }
+        if (param == "radius") { c.fx_glass_skin_radius = value; return true; }
+        if (param == "radius_beat") { c.fx_glass_skin_radius_beat = value; return true; }
+        if (param == "gloss") { c.fx_glass_skin_gloss = value; return true; }
+        if (param == "gloss_beat") { c.fx_glass_skin_gloss_beat = value; return true; }
+        return false;
+    }
     return false;
 }

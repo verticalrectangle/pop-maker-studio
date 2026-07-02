@@ -497,6 +497,7 @@ void panel_typography(AppState& state, float w) {
     // Category filter pills (in place) — pick a category instead of scrolling
     // the whole catalogue. Shared with the FX / background libraries.
     static std::string s_typo_cat;   // empty = All
+    static std::string* s_typo_q = nullptr;
     {
         std::vector<const char*> cats;
         for (int i = 0; i < g_n_typo_presets; ++i) {
@@ -505,8 +506,10 @@ void panel_typography(AppState& state, float w) {
             for (auto* x : cats) if (strcmp(x, c) == 0) { seen = true; break; }
             if (!seen) cats.push_back(c);
         }
-        category_pills("typocat", cats, s_typo_cat);
+        static std::string s_typo_query;
+        category_pills("typocat", cats, s_typo_cat, s_typo_query);
         ImGui::Dummy({0.f, 8.f});
+        s_typo_q = &s_typo_query;
     }
 
     const float gap    = 4.f;
@@ -519,6 +522,7 @@ void panel_typography(AppState& state, float w) {
     for (int i = 0; i < g_n_typo_presets; ++i) {
         const TypographyPreset& pr = g_typo_presets[i];
         if (!s_typo_cat.empty() && s_typo_cat != pr.category) continue;
+        if (s_typo_q && !lib_search_match(*s_typo_q, pr.label, pr.tagline)) continue;
         bool selected = (state.typo_preset_id == pr.id);
 
         // Category label — full width, resets column. Only in "All" mode; when a
@@ -775,6 +779,15 @@ void panel_typography(AppState& state, float w) {
         typo_restyle_live(state);
     }
     palette_widget("##pal_typo", col_buf);
+    ImGui::SameLine(0.f, 6.f);
+    {
+        float dp[3];
+        if (ui_dropper_button("##dp_typo", dp)) {
+            col_buf[0] = dp[0]; col_buf[1] = dp[1]; col_buf[2] = dp[2];
+            memcpy(tw.color, col_buf, sizeof(tw.color)); tw.tweak(TF_Color);
+            typo_restyle_live(state);
+        }
+    }
     // Only a palette-swatch click (which mutates col_buf in place) is a real
     // edit. Compare against what we loaded (src_col) so just opening the tab
     // doesn't fire a spurious restyle.

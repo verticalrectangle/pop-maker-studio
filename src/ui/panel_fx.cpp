@@ -207,14 +207,18 @@ void panel_adjustment_library(AppState& state, float w) {
 
     // Category filter pills (in place) — pick a group instead of scrolling.
     static std::string s_adj_cat;
+    static std::string* s_adj_q = nullptr;
     {
         std::vector<const char*> cats = {"Color", "Blur", "Vignette", "Combo"};
         if (!state.user_presets.empty()) cats.push_back("Mine");
         cats.push_back("Tone");
-        category_pills("adjcat", cats, s_adj_cat);
+        static std::string s_adj_query;
+        category_pills("adjcat", cats, s_adj_cat, s_adj_query);
         ImGui::Dummy({0.f, 6.f});
+        s_adj_q = &s_adj_query;
     }
     auto adj_vis = [&](const char* key) { return s_adj_cat.empty() || s_adj_cat == key; };
+    (void)0;
 
     float card_w  = w - 8.f;  // single column like FX cards
     float card_h  = 80.f;
@@ -326,6 +330,7 @@ void panel_adjustment_library(AppState& state, float w) {
 
         for (int i = 0; i < (int)g_builtin_presets.size(); ++i) {
             if (g_builtin_presets[i].category != cat) continue;
+            if (s_adj_q && !lib_search_match(*s_adj_q, g_builtin_presets[i].name.c_str())) continue;
             draw_preset_card(g_builtin_presets[i], i);
             ImGui::Dummy({0.f, 4.f});
         }
@@ -1005,6 +1010,7 @@ void panel_background(AppState& state, float w, bool clip_only) {
     // ── Preset grid ───────────────────────────────────────────────────────────
     // Category filter pills (in place) — pick a category instead of scrolling.
     static std::string s_bg_cat;
+    static std::string* s_bg_q = nullptr;
     {
         std::vector<const char*> cats;
         for (int pi = 0; pi < g_n_bg_presets; ++pi) {
@@ -1013,8 +1019,10 @@ void panel_background(AppState& state, float w, bool clip_only) {
             for (auto* x : cats) if (strcmp(x, cc) == 0) { seen = true; break; }
             if (!seen) cats.push_back(cc);
         }
-        category_pills("bgcat", cats, s_bg_cat);
+        static std::string s_bg_query;
+        category_pills("bgcat", cats, s_bg_cat, s_bg_query);
         ImGui::Dummy({0.f, 6.f});
+        s_bg_q = &s_bg_query;
     }
 
     const char* cur_cat = nullptr;
@@ -1027,6 +1035,7 @@ void panel_background(AppState& state, float w, bool clip_only) {
     for (int pi = 0; pi < g_n_bg_presets; ++pi) {
         const BgPreset& pr = g_bg_presets[pi];
         if (!s_bg_cat.empty() && strcmp(pr.category, s_bg_cat.c_str()) != 0) continue;
+        if (s_bg_q && !lib_search_match(*s_bg_q, pr.label)) continue;
 
         // Inline category label only in "All" mode; the pill names it otherwise.
         if (!cur_cat || strcmp(cur_cat, pr.category) != 0) {
@@ -1151,6 +1160,7 @@ void panel_fx_creative(AppState& state, float w) {
     // Category filter pills (in place) — pick a category instead of scrolling
     // the whole catalogue. Only categories that actually have cards are listed.
     static std::string s_fx_cat;
+    static std::string* s_fx_q = nullptr;   // set below; read by the card loops
     {
         std::vector<const char*> cats;
         for (int c = 0; c < n_cats; ++c) {
@@ -1158,8 +1168,10 @@ void panel_fx_creative(AppState& state, float w) {
                 if (!fx_type_is_adjustment_style(g_fx_cards[i].type) &&
                     card_in_cat(g_fx_cards[i], c)) { cats.push_back(g_fx_categories[c]); break; }
         }
-        category_pills("fxcat", cats, s_fx_cat);
+        static std::string s_fx_query;
+        category_pills("fxcat", cats, s_fx_cat, s_fx_query);
         ImGui::Dummy({0.f, 6.f});
+        s_fx_q = &s_fx_query;
     }
 
     for (int c = 0; c < n_cats; ++c) {
@@ -1167,7 +1179,8 @@ void panel_fx_creative(AppState& state, float w) {
     int cat_count = 0;
     for (int i = 0; i < g_n_fx_cards; ++i)
         if (!fx_type_is_adjustment_style(g_fx_cards[i].type) &&
-            card_in_cat(g_fx_cards[i], c)) ++cat_count;
+            card_in_cat(g_fx_cards[i], c) &&
+            lib_search_match(*s_fx_q, g_fx_cards[i].name, g_fx_cards[i].tagline)) ++cat_count;
     if (cat_count == 0) continue;
 
     // With a pill active there's only one category, so the pill is the header —
@@ -1188,6 +1201,7 @@ void panel_fx_creative(AppState& state, float w) {
     for (int i = 0; i < g_n_fx_cards; ++i) {
         if (fx_type_is_adjustment_style(g_fx_cards[i].type)) continue;
         if (!card_in_cat(g_fx_cards[i], c)) continue;
+        if (!lib_search_match(*s_fx_q, g_fx_cards[i].name, g_fx_cards[i].tagline)) continue;
         const FXCard& fc = g_fx_cards[i];
         ImGui::PushID(i + 9000);
         ImVec2 cp = ImGui::GetCursorScreenPos();
@@ -2088,6 +2102,20 @@ void panel_fx_clip(AppState& state, float w) {
             }
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Chroma Key: color");
             palette_widget("##pal_ck", col3);
+            ImGui::SameLine(0.f, 6.f);
+            {
+                float dp[3];
+                if (ui_dropper_button("##dp_ck", dp)) {
+                    clip.fx_chroma_key_r = dp[0];
+                    clip.fx_chroma_key_g = dp[1];
+                    clip.fx_chroma_key_b = dp[2];
+                    // Keyframe-aware: mirrors the pick into the key at the
+                    // playhead when the color is animated (same path as the
+                    // wheel edit).
+                    kf_color_edit(state, clip, "fx_chroma_key", dp[0], dp[1], dp[2]);
+                    history_push(state, "Chroma Key: color (picked)");
+                }
+            }
             if (col3[0] != clip.fx_chroma_key_r || col3[1] != clip.fx_chroma_key_g || col3[2] != clip.fx_chroma_key_b) {
                 clip.fx_chroma_key_r = col3[0]; clip.fx_chroma_key_g = col3[1]; clip.fx_chroma_key_b = col3[2];
                 kf_color_edit(state, clip, "fx_chroma_key", col3[0], col3[1], col3[2]);
@@ -2114,6 +2142,20 @@ void panel_fx_clip(AppState& state, float w) {
             }
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Chroma Melt: color");
             palette_widget("##pal_cm", col3);
+            ImGui::SameLine(0.f, 6.f);
+            {
+                float dp[3];
+                if (ui_dropper_button("##dp_cm", dp)) {
+                    clip.fx_chroma_melt_r = dp[0];
+                    clip.fx_chroma_melt_g = dp[1];
+                    clip.fx_chroma_melt_b = dp[2];
+                    // Keyframe-aware: mirrors the pick into the key at the
+                    // playhead when the color is animated (same path as the
+                    // wheel edit).
+                    kf_color_edit(state, clip, "fx_chroma_melt", dp[0], dp[1], dp[2]);
+                    history_push(state, "Chroma Melt: color (picked)");
+                }
+            }
             if (col3[0] != clip.fx_chroma_melt_r || col3[1] != clip.fx_chroma_melt_g || col3[2] != clip.fx_chroma_melt_b) {
                 clip.fx_chroma_melt_r = col3[0]; clip.fx_chroma_melt_g = col3[1]; clip.fx_chroma_melt_b = col3[2];
                 kf_color_edit(state, clip, "fx_chroma_melt", col3[0], col3[1], col3[2]);
@@ -2140,6 +2182,20 @@ void panel_fx_clip(AppState& state, float w) {
             }
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Chroma Echo: color");
             palette_widget("##pal_ce", col3);
+            ImGui::SameLine(0.f, 6.f);
+            {
+                float dp[3];
+                if (ui_dropper_button("##dp_ce", dp)) {
+                    clip.fx_chroma_echo_r = dp[0];
+                    clip.fx_chroma_echo_g = dp[1];
+                    clip.fx_chroma_echo_b = dp[2];
+                    // Keyframe-aware: mirrors the pick into the key at the
+                    // playhead when the color is animated (same path as the
+                    // wheel edit).
+                    kf_color_edit(state, clip, "fx_chroma_echo", dp[0], dp[1], dp[2]);
+                    history_push(state, "Chroma Echo: color (picked)");
+                }
+            }
             if (col3[0] != clip.fx_chroma_echo_r || col3[1] != clip.fx_chroma_echo_g || col3[2] != clip.fx_chroma_echo_b) {
                 clip.fx_chroma_echo_r = col3[0]; clip.fx_chroma_echo_g = col3[1]; clip.fx_chroma_echo_b = col3[2];
                 kf_color_edit(state, clip, "fx_chroma_echo", col3[0], col3[1], col3[2]);
@@ -2166,6 +2222,20 @@ void panel_fx_clip(AppState& state, float w) {
             }
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Chroma Frame: color");
             palette_widget("##pal_cf", col3);
+            ImGui::SameLine(0.f, 6.f);
+            {
+                float dp[3];
+                if (ui_dropper_button("##dp_cf", dp)) {
+                    clip.fx_chroma_frame_r = dp[0];
+                    clip.fx_chroma_frame_g = dp[1];
+                    clip.fx_chroma_frame_b = dp[2];
+                    // Keyframe-aware: mirrors the pick into the key at the
+                    // playhead when the color is animated (same path as the
+                    // wheel edit).
+                    kf_color_edit(state, clip, "fx_chroma_frame", dp[0], dp[1], dp[2]);
+                    history_push(state, "Chroma Frame: color (picked)");
+                }
+            }
             if (col3[0] != clip.fx_chroma_frame_r || col3[1] != clip.fx_chroma_frame_g || col3[2] != clip.fx_chroma_frame_b) {
                 clip.fx_chroma_frame_r = col3[0]; clip.fx_chroma_frame_g = col3[1]; clip.fx_chroma_frame_b = col3[2];
                 kf_color_edit(state, clip, "fx_chroma_frame", col3[0], col3[1], col3[2]);
