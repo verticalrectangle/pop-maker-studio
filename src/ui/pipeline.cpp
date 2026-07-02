@@ -1,6 +1,7 @@
 #include "studio_types.h"
 #include "studio_shared.h"
 #include "pipeline.h"
+#include "panel_media.h"
 #include "panel_animation.h"
 #include "app.h"
 #include "audio.h"
@@ -309,17 +310,36 @@ void poll_clip_beat_analysis(AppState& state) {
                 if (cl.source_id != r.source_id) continue;
                 cl.beats_analyzing = false;
                 if (r.ok) { cl.beat_bpm = r.bpm; cl.beats = r.beats; }
+                // Persist the failure: bpm = -1 means "no beats detectable in
+                // this source" (silent b-roll, no audio stream). Without the
+                // sentinel these clips stayed beats.empty() and re-analyzed on
+                // EVERY project open, forever.
+                else cl.beat_bpm = -1.f;
             }
         }
     }
 
-    // Auto-trigger for any Audio/Video clip that has no beats and isn't pending
+    // Auto-trigger for any Audio/Video clip that has no beats and isn't
+    // pending — THROTTLED. This used to fire one detached beat_detect thread
+    // per distinct source in a single frame (~40 concurrent full audio
+    // decodes on a media-heavy project), which pegged every core and starved
+    // the UI for seconds right as a freshly opened project drew its first
+    // studio frame. At most 2 in flight; the rest trickle in on later frames.
+    int in_flight;
+    {
+        std::lock_guard<std::mutex> lk(s_beat_pending_mtx);
+        in_flight = (int)s_beat_pending.size();
+    }
     for (auto& track : state.tracks) {
         for (auto& cl : track.clips) {
+            if (in_flight >= 2) return;
             if (cl.clip_type != ClipType::Video && cl.clip_type != ClipType::Audio) continue;
             if (cl.source_id.empty() || !cl.beats.empty() || cl.beats_analyzing) continue;
+            if (cl.beat_bpm < 0.f) continue;              // known beat-less source
+            if (is_image_path(cl.source_id)) continue;    // stills have no audio
             cl.beats_analyzing = true;
             kick_clip_beat_detect(cl.source_id);
+            ++in_flight;
         }
     }
 }

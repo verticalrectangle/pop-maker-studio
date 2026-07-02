@@ -3424,6 +3424,12 @@ static void process_client(Client& cl, AppState& state) {
 // ── Public API ────────────────────────────────────────────────────────────────
 
 void ipc_server_start() {
+    // Test rig escape hatch: a second instance for measurement/debugging must
+    // not unlink+steal the live app's socket.
+    if (getenv("PMS_NO_IPC")) {
+        fprintf(stdout, "[ipc] disabled (PMS_NO_IPC)\n");
+        return;
+    }
     g_sock_path = "/tmp/pop-maker-studio.sock";
 
     // Remove stale socket

@@ -1,5 +1,6 @@
 #include "screens.h"
 #include "studio_shared.h"
+#include <chrono>
 #include "filepicker.h"
 #include "theme.h"
 #include "app.h"
@@ -160,18 +161,31 @@ void enter_new_project(AppState& state) {
 
 bool open_project_path(AppState& state, const std::string& path) {
     if (path.empty()) return false;
+    // Phase timings on stderr — the open used to freeze with no clue where.
+    auto t0 = std::chrono::steady_clock::now();
+    auto lap = [&](const char* what) {
+        auto t1 = std::chrono::steady_clock::now();
+        fprintf(stderr, "[open] %-22s %6.1f ms\n", what,
+                std::chrono::duration<double, std::milli>(t1 - t0).count());
+        t0 = t1;
+    };
     AppState loaded;
     if (!project_load(loaded, path)) return false;
+    lap("parse .pms");
     bool mr = state.models_ready, ms = state.models_skipped;
     transcribe_cancel(); history_clear();
+    lap("transcribe/history");
     audio_shutdown(); audio_clips_clear(); video_close();
+    lap("audio/video teardown");
     state = std::move(loaded);
     state.models_ready = mr; state.models_skipped = ms;
     state.project_path = path;
     state.splash_timer = 0.f;
     state.in_studio    = true;
     audio_init();
+    lap("audio_init");
     if (!state.audio_path.empty()) audio_load(state.audio_path.c_str());
+    lap("audio_load kick");
     // Slots open incrementally in the studio frame (progress bar) — opening
     // them here synchronously froze the app for seconds on media-heavy projects.
     queue_video_slot_opens(state);
@@ -179,9 +193,11 @@ bool open_project_path(AppState& state, const std::string& path) {
         for (auto& cl : tr.clips)
             if (cl.clip_type == ClipType::Audio && !cl.text.empty())
                 audio_source_ensure(cl.text);
+    lap("queue+audio ensure");
     recent_projects_push(path);
     history_push(state, "Open project");
     mark_project_clean(state);
+    lap("recents+history");
     return true;
 }
 
@@ -389,9 +405,12 @@ void ui_home(AppState& state) {
                     mtime_str(recents[i]).c_str());
         ImGui::PopID();
     }
-    // Reserve the last row's full height so the child scrolls to it cleanly.
+    // Reserve the last row's full height so the child scrolls to it cleanly
+    // (a real item — a bare SetCursorPos doesn't grow the region and trips
+    // ImGui's extend-boundaries warning).
     int rows = ((int)recents.size() + cols - 1) / cols;
-    ImGui::SetCursorPos({0.f, rows * (card_h + gap)});
+    ImGui::SetCursorPos({0.f, rows * (card_h + gap) - 1.f});
+    ImGui::Dummy({1.f, 1.f});
     ImGui::EndChild();
     ImGui::PopStyleColor();
     if (!to_open.empty()) open_project_path(state, to_open);

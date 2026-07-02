@@ -250,6 +250,31 @@ bool proxy_load(const std::string& video_path, ProxyInfo& out) {
 
     out.frame_count = (int)count;
 
+    // Probe sidecar: fps + dims from a previous proxy_load, keyed to the
+    // proxy's frame count. Without it, EVERY slot open forked two synchronous
+    // ffprobes (fps/duration on the original + dims on the MJPEG) — ~250 ms of
+    // blocked main thread per source, which is what made opening a
+    // media-heavy project freeze for seconds.
+    std::string cache_path = out.idx_path + ".probe";
+    {
+        FILE* c = fopen(cache_path.c_str(), "r");
+        if (c) {
+            long long cc = 0, fn = 0, fd = 0;
+            int cw = 0, ch = 0;
+            if (fscanf(c, "%lld %lld %lld %d %d", &cc, &fn, &fd, &cw, &ch) == 5 &&
+                cc == (long long)count && fd > 0 && cw > 0 && ch > 0) {
+                out.fps_num = (int64_t)fn;
+                out.fps_den = (int64_t)fd;
+                out.fps     = (double)fn / (double)fd;
+                out.width   = cw;
+                out.height  = ch;
+                fclose(c);
+                return true;
+            }
+            fclose(c);
+        }
+    }
+
     // Determine the proxy's frame rate. Raw MJPEG has no reliable fps
     // metadata, and the original's r_frame_rate is NOT the proxy's rate
     // either: the transcode forces "-r 30" (CFR), so a 60 fps screencast
@@ -334,7 +359,18 @@ bool proxy_load(const std::string& video_path, ProxyInfo& out) {
         }
     }
 
-    return out.width > 0 && out.height > 0 && out.fps > 0.0;
+    bool ok = out.width > 0 && out.height > 0 && out.fps > 0.0;
+    if (ok) {
+        // Persist the probe so the next open of this proxy skips both forks.
+        FILE* c = fopen(cache_path.c_str(), "w");
+        if (c) {
+            fprintf(c, "%lld %lld %lld %d %d\n", (long long)out.frame_count,
+                    (long long)out.fps_num, (long long)out.fps_den,
+                    out.width, out.height);
+            fclose(c);
+        }
+    }
+    return ok;
 }
 
 // ── Image detection ───────────────────────────────────────────────────────────

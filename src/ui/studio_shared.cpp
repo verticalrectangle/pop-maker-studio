@@ -765,12 +765,25 @@ void queue_video_slot_opens(AppState& state) {
 
 void tick_video_slot_opens(AppState& state, double budget_ms) {
     if (state.slot_open_queue.empty()) return;
-    double t0 = ImGui::GetTime();
+    // steady_clock, NOT ImGui::GetTime(): ImGui's clock only advances at
+    // NewFrame, so a budget measured with it never trips inside a frame — the
+    // "incremental" drain processed the ENTIRE queue in one frame and froze
+    // the UI for the sum of every source's open cost.
+    auto t0 = std::chrono::steady_clock::now();
+    auto ms_since = [](std::chrono::steady_clock::time_point s) {
+        return std::chrono::duration<double, std::milli>(
+                   std::chrono::steady_clock::now() - s).count();
+    };
     size_t i = 0;
     for (; i < state.slot_open_queue.size(); ++i) {
         auto& [slot, src] = state.slot_open_queue[i];
+        auto it0 = std::chrono::steady_clock::now();
         open_video_slot_now(state, slot, src);
-        if ((ImGui::GetTime() - t0) * 1000.0 > budget_ms) { ++i; break; }
+        double it_ms = ms_since(it0);
+        if (it_ms > 50.0)
+            fprintf(stderr, "[open] slot %d took %.0f ms: %s\n",
+                    slot, it_ms, src.c_str());
+        if (ms_since(t0) > budget_ms) { ++i; break; }
     }
     state.slot_open_queue.erase(state.slot_open_queue.begin(),
                                 state.slot_open_queue.begin() + (long)i);

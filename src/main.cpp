@@ -8,6 +8,7 @@
 #include <unistd.h>
 #include <deque>
 #include <string>
+#include <chrono>
 #include <filesystem>
 
 #include "app.h"
@@ -262,6 +263,14 @@ int main(int argc, char** argv) {
             break;
         }
     }
+    // --open <path>: load a project immediately (same path as a Home click) —
+    // measurement/test rig companion to PMS_NO_IPC.
+    for (int i = 1; i < argc - 1; ++i) {
+        if (std::string(argv[i]) == "--open") {
+            open_project_path(state, argv[i + 1]);
+            break;
+        }
+    }
 
     // Vsync is on during normal interactive use (smooth UI, low CPU). While an
     // export is running we let the main loop free-run so render_tick_gl isn't
@@ -284,6 +293,20 @@ int main(int argc, char** argv) {
         if (state.quit_confirmed) break;
 
         glfwPollEvents();
+        // PMS_FRAME_DEBUG=1: log frames that stall the UI (>100 ms) — used to
+        // hunt the "project open freezes for a bit" reports.
+        static const bool s_fdbg = getenv("PMS_FRAME_DEBUG") != nullptr;
+        static std::chrono::steady_clock::time_point s_f_prev = std::chrono::steady_clock::now();
+        if (s_fdbg) {
+            auto now = std::chrono::steady_clock::now();
+            double ms = std::chrono::duration<double, std::milli>(now - s_f_prev).count();
+            s_f_prev = now;
+            static int s_fno = 0;
+            ++s_fno;
+            if (ms > 100.0)
+                fprintf(stderr, "[frame] #%d took %.0f ms (in_studio=%d, slot_q=%d)\n",
+                        s_fno, ms, (int)state.in_studio, (int)state.slot_open_queue.size());
+        }
         drain_dropped_queue();   // single-file drops: feed one path per frame
         drain_bin_pending(state); // multi-file drops: dump all into the bin
 
