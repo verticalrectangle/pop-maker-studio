@@ -333,12 +333,21 @@ void ui_home(AppState& state) {
 
     const float grid_top = 176.f + yoff;
     const float card_w = 224.f, card_h = 150.f, gap = 16.f;
-    int cols = std::max(1, (int)((W - pad * 2 + gap) / (card_w + gap)));
+    // The grid lives in a scrolling child clipped ABOVE the cache footer
+    // (bottom-left, at H-48) — with enough recents the absolutely-positioned
+    // cards used to march straight over the "Media cache / Clear cache" row.
+    const float FOOTER_H = 64.f;
+    float grid_h = fmaxf(card_h, H - grid_top - FOOTER_H);
+    ImGui::SetCursorPos({pad, grid_top});
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, IM_COL32(0, 0, 0, 0));
+    ImGui::BeginChild("##recent_grid", {W - pad * 2.f, grid_h});
+    float grid_w = ImGui::GetContentRegionAvail().x;
+    int cols = std::max(1, (int)((grid_w + gap) / (card_w + gap)));
     ImDrawList* dl = ImGui::GetWindowDrawList();
     std::string to_open;
     for (int i = 0; i < (int)recents.size(); ++i) {
         int r = i / cols, c = i % cols;
-        ImVec2 cp = {pad + c * (card_w + gap), grid_top + r * (card_h + gap)};
+        ImVec2 cp = {c * (card_w + gap), r * (card_h + gap)};
         ImGui::SetCursorPos(cp);
         ImGui::PushID(i);
         ImGui::InvisibleButton("##proj", {card_w, card_h});
@@ -380,5 +389,10 @@ void ui_home(AppState& state) {
                     mtime_str(recents[i]).c_str());
         ImGui::PopID();
     }
+    // Reserve the last row's full height so the child scrolls to it cleanly.
+    int rows = ((int)recents.size() + cols - 1) / cols;
+    ImGui::SetCursorPos({0.f, rows * (card_h + gap)});
+    ImGui::EndChild();
+    ImGui::PopStyleColor();
     if (!to_open.empty()) open_project_path(state, to_open);
 }
