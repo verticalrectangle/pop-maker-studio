@@ -2560,12 +2560,15 @@ void panel_multifx_for(AppState& state, float w, int b_ti, int b_ci) {
     }
 
     // ── Parameters for selected sub-effect ────────────────────────────────
+    // Default to the FIRST entry instead of "nothing selected": chains built
+    // by an agent (add_multifx_brick) or loaded from disk arrive with
+    // fx_chain_selected = -1, and the old early-return rendered the list with
+    // NO parameter section — on a solo brick that read as "params don't work"
+    // (the welded flow masked it because interactive adds select as they go).
+    if (brick.fx_chain_selected < 0 ||
+        brick.fx_chain_selected >= (int)brick.fx_chain.size())
+        brick.fx_chain_selected = 0;
     int si = brick.fx_chain_selected;
-    if (si < 0 || si >= (int)brick.fx_chain.size()) {
-        glass_host_layout(state, brick, w, b_ti);
-        ImGui::Dummy({0.f, 8.f});
-        return;
-    }
     Clip& clip = brick.fx_chain[si];   // named 'clip' so generated includes work
 
     ImGui::Dummy({0.f, 8.f}); ui_separator(); ImGui::Dummy({0.f, 8.f});
@@ -2893,8 +2896,13 @@ void panel_audio_multifx_for(AppState& state, float w, int b_ti, int b_ci) {
     if (paste_idx >= 0)    fx_chain_paste(state, brick, paste_idx);
     else if (paste_append) fx_chain_paste(state, brick, -1);
 
+    // Default to the first entry — see the video Multi-FX panel note (agent-
+    // built / freshly loaded chains arrive with fx_chain_selected = -1).
+    if (brick.fx_chain_selected < 0 ||
+        brick.fx_chain_selected >= (int)brick.fx_chain.size())
+        brick.fx_chain_selected = 0;
     int si = brick.fx_chain_selected;
-    if (si < 0 || si >= (int)brick.fx_chain.size()) { ImGui::Dummy({0.f, 8.f}); return; }
+    if (brick.fx_chain.empty()) { ImGui::Dummy({0.f, 8.f}); return; }
     Clip& se = brick.fx_chain[(size_t)si];
 
     ImGui::Dummy({0.f, 8.f}); ui_separator(); ImGui::Dummy({0.f, 6.f});

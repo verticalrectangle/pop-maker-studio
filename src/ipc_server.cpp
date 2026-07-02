@@ -746,6 +746,52 @@ static bool fx_overlap_on_track(const AppState& state, int ti,
     return false;
 }
 
+// One row, one stream: content (video/audio/background/record) and text
+// (text/subtitle/lyrics) clips each occupy the timeline exclusively — no two
+// of them may overlap on the same track. FX/adjustment bricks are exempt
+// (they ride over content and have fx_overlap_on_track above). The 1 ms slack
+// keeps frame-adjacent clips (touching at a boundary) legal under snap
+// rounding. skip_ci: the clip being moved/trimmed, -1 when adding. This is
+// the ONE overlap rule for every IPC mutation (add/add_sequence/move/trim) —
+// it used to live only in add_clip, so the other paths let agents stack
+// clips the UI would have rejected.
+static bool clip_type_is_text_kind(ClipType t) {
+    return t == ClipType::Text || t == ClipType::Subtitle || t == ClipType::Lyrics;
+}
+static bool clip_type_occupies_row(ClipType t) {
+    return clip_type_is_text_kind(t) ||
+           t == ClipType::Video  || t == ClipType::Audio ||
+           t == ClipType::Background ||
+           t == ClipType::VideoRecord || t == ClipType::Record;
+}
+static bool row_overlap_on_track(const AppState& state, int ti, ClipType ct,
+                                 float start, float end, int skip_ci,
+                                 std::string& err) {
+    if (!clip_type_occupies_row(ct)) return false;
+    for (int ci = 0; ci < (int)state.tracks[ti].clips.size(); ++ci) {
+        if (ci == skip_ci) continue;
+        const Clip& oc = state.tracks[ti].clips[ci];
+        if (!clip_type_occupies_row(oc.clip_type)) continue;
+        if (start < oc.end - 1e-3f && end > oc.start + 1e-3f) {
+            if (clip_type_is_text_kind(ct) != clip_type_is_text_kind(oc.clip_type)) {
+                err = "text and content can't share a track — put the text "
+                      "on its own track (it still renders on top)";
+            } else {
+                char buf[224];
+                snprintf(buf, sizeof(buf),
+                         "clip overlap: [%.3fs \xe2\x80\x93 %.3fs] collides with clip %d "
+                         "[%.3fs \xe2\x80\x93 %.3fs] on this track. Clips on one track "
+                         "can't overlap — choose a free slot, trim/move the existing "
+                         "clip, or use another track.",
+                         start, end, ci, oc.start, oc.end);
+                err = buf;
+            }
+            return true;
+        }
+    }
+    return false;
+}
+
 // ── Bounds checking helpers ───────────────────────────────────────────────────
 
 static bool check_track(const AppState& state, int ti, std::string& err) {
@@ -2165,6 +2211,8 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         if (clip_is_fx(cl) &&
             fx_overlap_on_track(state, ti, start, start + dur, ci, err))
             return {};
+        if (row_overlap_on_track(state, ti, cl.clip_type, start, start + dur, ci, err))
+            return {};
         cl.start = start;
         cl.end   = start + dur;
         return json::object();
@@ -2174,12 +2222,15 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         int ti = track_by_name_or_index(state, params), ci = params.value("clip", -1);
         if (!check_clip(state, ti, ci, err)) return {};
         Clip& cl = state.tracks[ti].clips[ci];
-        if (clip_is_fx(cl)) {
+        {
             float ns = params.contains("start")
                 ? snap_to_frame(params["start"].get<float>(), state.fps) : cl.start;
             float ne = params.contains("end")
                 ? snap_end_to_frame(params["end"].get<float>(), state.fps) : cl.end;
-            if (fx_overlap_on_track(state, ti, ns, ne, ci, err)) return {};
+            if (clip_is_fx(cl) && fx_overlap_on_track(state, ti, ns, ne, ci, err))
+                return {};
+            if (row_overlap_on_track(state, ti, cl.clip_type, ns, ne, ci, err))
+                return {};
         }
         float old_start = cl.start;
         if (params.contains("start")) {
@@ -2293,36 +2344,8 @@ static json dispatch(AppState& state, const std::string& method, const json& par
             !is_image_clip && state.audio_path.empty())
             state.audio_path = state.vocals_path = text;
 
-        // One row, one stream: content (video/audio/background) and text
-        // (text/subtitle/lyrics) clips each occupy the timeline exclusively, so no
-        // two of them may overlap on the same track. Catches BOTH text-vs-content
-        // AND content-vs-content / text-vs-text overlap — the latter is what let
-        // the agent stack video clips so the lower-index one rendered straight over
-        // its neighbour (it "kept playing" through the next clip). FX/adjustment
-        // bricks (Effect, MultiFX, BodyFX, AudioMultiFX, Bus) are exempt: they ride
-        // over content by design and have their own non-overlap rule above.
-        // Frame-adjacent clips (touching at a boundary) are fine — hence the 1ms
-        // slack so snap rounding can't trip a false overlap.
-        {
-            auto is_txt = [](ClipType t){ return t==ClipType::Text ||
-                t==ClipType::Subtitle || t==ClipType::Lyrics; };
-            auto is_con = [](ClipType t){ return t==ClipType::Video ||
-                t==ClipType::Audio || t==ClipType::Background ||
-                t==ClipType::VideoRecord || t==ClipType::Record; };
-            auto occupies_row = [&](ClipType t){ return is_txt(t) || is_con(t); };
-            if (occupies_row(cl.clip_type))
-                for (const auto& oc : state.tracks[ti].clips)
-                    if (occupies_row(oc.clip_type) &&
-                        cl.start < oc.end - 1e-3f && cl.end > oc.start + 1e-3f) {
-                        err = (is_txt(cl.clip_type) != is_txt(oc.clip_type))
-                            ? "text and content can't share a track — put the text "
-                              "on its own track (it still renders on top)"
-                            : "clip overlap: that time range is already occupied on "
-                              "this track. Clips on one track can't overlap — choose a "
-                              "free slot, trim/move the existing clip, or use another track.";
-                        return {};
-                    }
-        }
+        if (row_overlap_on_track(state, ti, cl.clip_type, cl.start, cl.end, -1, err))
+            return {};
         state.tracks[ti].clips.push_back(cl);
         int new_ci = (int)state.tracks[ti].clips.size() - 1;
         // Glow + scroll to it so an agent-placed brick is visibly surfaced.
@@ -2437,6 +2460,12 @@ static json dispatch(AppState& state, const std::string& method, const json& par
             cl.start = start; cl.end = end; cl.text = text;
             if (!apply_bg_preset(cl, text, err)) return {};
             if (clip_is_fx(cl) && fx_overlap_on_track(state, ti, start, end, -1, err))
+                return {};
+            // Same one-row-one-stream rule as add_clip. Checked against the
+            // track as it grows, so entries within one batch can't stack either
+            // (this path had no content check at all — the source of agent-
+            // dropped overlapping clips).
+            if (row_overlap_on_track(state, ti, cl.clip_type, cl.start, cl.end, -1, err))
                 return {};
             if (cl.clip_type == ClipType::Video || cl.clip_type == ClipType::Audio)
                 cl.source_id = text;
