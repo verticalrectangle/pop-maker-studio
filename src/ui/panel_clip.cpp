@@ -2317,6 +2317,16 @@ void panel_clip(AppState& state, float w) {
                         mic.rec_pair_id = pid;
                         mic.start       = clip.start;
                         mic.end         = clip.end;
+                        // Re-created twin joins the camera's selection group
+                        // (make one if the camera brick has none).
+                        if (clip.group_id == 0) {
+                            int gid2 = 0;
+                            for (auto& tr2 : state.tracks)
+                                for (auto& c3 : tr2.clips)
+                                    if (c3.group_id > gid2) gid2 = c3.group_id;
+                            clip.group_id = gid2 + 1;
+                        }
+                        mic.group_id = clip.group_id;
                         Track tm;
                         char tn[32];
                         snprintf(tn, sizeof(tn), "Cam Mic %d", (int)state.tracks.size() + 1);

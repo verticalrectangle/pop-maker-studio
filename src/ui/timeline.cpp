@@ -36,6 +36,12 @@
 #include <vector>
 #include "json.hpp"
 
+// Deferred selection collapse: a plain press on an already-selected clip keeps
+// the multi-selection (so dragging moves the whole group); if the press ends
+// WITHOUT a drag, the release collapses the selection to this clip. The old
+// collapse-on-press made "box select then drag" move only the grabbed clip.
+static int s_sel_collapse_ti = -1, s_sel_collapse_ci = -1;
+
 // Pull whole groups into the multi-selection: any selected clip with a
 // non-zero group_id drags in every clip sharing that id. Runs after any
 // selection change (click, box select, right-click collapse).
@@ -2248,6 +2254,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                     bool ctrl  = ImGui::GetIO().KeyCtrl;
                     bool shift = ImGui::GetIO().KeyShift;
                     bool alt   = ImGui::GetIO().KeyAlt;   // Alt = ignore grouping, pick the single clip
+                    s_sel_collapse_ti = -1; s_sel_collapse_ci = -1;
                     if (ctrl) {
                         if (state.clip_selection.count(key)) {
                             state.clip_selection.erase(key);
@@ -2276,9 +2283,19 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                         for (auto& e : all)
                             if (e.start >= t_lo && e.start <= t_hi)
                                 state.clip_selection.insert({e.ti, e.ci});
-                    } else {
+                    } else if (!state.clip_selection.count(key)) {
+                        // Plain press OUTSIDE the selection: collapse to this clip.
                         state.clip_selection.clear();
                         state.clip_selection.insert(key);
+                    } else {
+                        // Plain press on a clip ALREADY in the multi-selection:
+                        // keep the selection so a drag moves the whole group.
+                        // If the press ends without a drag, collapse to this
+                        // clip on release (s_sel_collapse_pending) — the old
+                        // collapse-on-press made "box select then drag" move
+                        // only the grabbed clip.
+                        s_sel_collapse_ti = ti;
+                        s_sel_collapse_ci = ci;
                     }
                     if (!alt) expand_selection_groups(state);
                     state.selected_track = ti;
@@ -4747,7 +4764,21 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
             }
             }
         }
+        // Deferred collapse: the press landed on an already-selected clip and
+        // kept the multi-selection for a potential group drag — it never
+        // moved, so NOW it reads as "select just this clip". (goto cancels
+        // skip this on purpose; an aborted drag shouldn't reshape selection.)
+        if (!s_drag_moved && !drag_left && !drag_right &&
+            s_sel_collapse_ti == drag_track && s_sel_collapse_ci == drag_clip &&
+            drag_track >= 0) {
+            state.clip_selection.clear();
+            state.clip_selection.insert({drag_track, drag_clip});
+            if (!ImGui::GetIO().KeyAlt) expand_selection_groups(state);
+            state.selected_track = drag_track;
+            state.selected_clip  = drag_clip;
+        }
         drag_done:
+        s_sel_collapse_ti = -1; s_sel_collapse_ci = -1;
         drag_track=-1; drag_clip=-1; drag_left=false; drag_right=false;
         drag_hot_track=-1; drag_hot_gap=-1;
         g_tl.drag_merge_ti = -1; g_tl.drag_merge_ci = -1;

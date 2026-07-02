@@ -1276,15 +1276,25 @@ void add_video_record_brick(AppState& state) {
         for (auto& c : tr.clips)
             if (c.rec_pair_id > pair_id) pair_id = c.rec_pair_id;
     ++pair_id;
+    // The pair is also a selection GROUP: clicking either brick selects both,
+    // and dragging moves them together — they record in lockstep, so they
+    // should stay aligned on the timeline too.
+    int gid = 0;
+    for (auto& tr : state.tracks)
+        for (auto& c : tr.clips)
+            if (c.group_id > gid) gid = c.group_id;
+    ++gid;
 
     Clip cl;
     cl.clip_type   = ClipType::VideoRecord;
     cl.rec_pair_id = pair_id;
+    cl.group_id    = gid;
     cl.start       = snap_to_frame(state.playhead, (int)qfps);
     cl.end         = snap_end_to_frame(cl.start + 8.f, (int)qfps);
     Clip mic;
     mic.clip_type   = ClipType::Record;
     mic.rec_pair_id = pair_id;
+    mic.group_id    = gid;
     mic.start       = cl.start;
     mic.end         = cl.end;
 
