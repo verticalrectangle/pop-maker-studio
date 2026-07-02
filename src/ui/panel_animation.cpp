@@ -750,10 +750,14 @@ void panel_typography(AppState& state, float w) {
 
     ui_label("Font Size"); typo_hold_btn(state, TF_FontSize);
     float fs = tw.on(TF_FontSize) ? tw.font_size : (pr ? pr->font_size : 0.09f);
+    // Stored as a fraction of canvas height; shown in output pixels (the same
+    // px the renderer produces: font px = fraction * canvas height).
+    float out_h  = output_px_height(state);
+    float fs_px  = fs * out_h;
     ImGui::SetNextItemWidth(full_w);
     ImGui::PushStyleColor(ImGuiCol_FrameBg, Col::bg_soft);
-    if (ImGui::SliderFloat("##tyfo", &fs, 0.03f, 0.30f, "%.2f")) {
-        tw.font_size = fs; tw.tweak(TF_FontSize);
+    if (ImGui::SliderFloat("##tyfo", &fs_px, 0.03f * out_h, 0.30f * out_h, "%.0f px")) {
+        tw.font_size = fs_px / out_h; tw.tweak(TF_FontSize);
         typo_restyle_live(state);
     }
     ImGui::PopStyleColor();

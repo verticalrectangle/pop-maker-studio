@@ -430,10 +430,14 @@ static void section_position(AppState& state, Clip& clip, float w) {
                 &clip.sub_wrap_w, 0.1f, 1.f, "%.2f");
 
     ImGui::Dummy({0.f, 4.f});
-    // Font size is stored as a fraction of canvas height; expose as 1–50 percent
-    // (disp=100). The Reset button clears it back to auto (0).
+    // Font size is stored as a fraction of canvas height; expose it in output
+    // PIXELS (disp = canvas height, exactly what the renderer multiplies by —
+    // render.cpp: font px = font_size * out_h). The old percent display made
+    // 0.2 read as "20" with no visible unit anchor. The Reset button clears
+    // back to auto (0).
+    float out_h = output_px_height(state);
     ::kf_slider(state, clip, sti, sci, bar_w - 52.f, "font_size", "Font size",
-                &clip.font_size, 1.f, 50.f, "%.1f%%", 100.f);
+                &clip.font_size, 0.01f * out_h, 0.5f * out_h, "%.0f px", out_h);
     ImGui::SameLine(0.f, 4.f);
     if (ui_btn("Reset##fs", clip.font_size == 0.f, true)) {
         clip.font_size = 0.f;

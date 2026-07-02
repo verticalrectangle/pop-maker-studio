@@ -167,6 +167,10 @@ bool ui_slider_home(AppState& state, float* v, float defv, const char* hist_labe
 // Default ("homebase") value of a keyframable clip prop — what a fresh Clip
 // carries. Returns cur when the prop isn't in the kClipKfFields registry.
 float clip_prop_default(const char* prop, float cur);
+// Output canvas height in pixels for the current format (1920 vertical,
+// 1080 horizontal/square) — the reference that fraction-based sizes
+// (font_size et al.) scale against at render time.
+float output_px_height(const AppState& state);
 // Default for any float member of a struct instance, derived by pointer
 // offset against a default-constructed twin — no per-field registry needed.
 // Returns *v unchanged when v doesn't point inside obj (e.g. a local copy).

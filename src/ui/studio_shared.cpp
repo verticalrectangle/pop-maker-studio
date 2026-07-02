@@ -612,6 +612,14 @@ void marker_jump(AppState& state, int dir) {
     if (best >= 0.f) seek_to(state, best);
 }
 
+float output_px_height(const AppState& state) {
+    switch (state.format) {
+        case OutputFormat::Horizontal: return 1080.f;
+        case OutputFormat::Square:     return 1080.f;
+        default:                       return 1920.f;   // Vertical
+    }
+}
+
 // ── Splitter capture ──────────────────────────────────────────────────────────
 static bool g_splitter_capture = false;
 void ui_set_splitter_capture(bool on) { g_splitter_capture = on; }
