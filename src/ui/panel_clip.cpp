@@ -1881,8 +1881,27 @@ void panel_clip(AppState& state, float w) {
             static std::string s_rec_error;
             if (ImGui::Button("\xe2\x97\x8f Record", {bar_w, 34.f})) {
                 s_rec_error.clear();
-                if (!recorder_start(state, state.selected_track, state.selected_clip))
+                // Paired MIC brick: hand off to the camera side — it warms the
+                // camera first, then starts this recorder in lockstep so the
+                // take trays pair by pass. Solo brick records audio directly.
+                int cam_ti = -1, cam_ci = -1;
+                if (clip.rec_pair_id != 0 && !vrecorder_active()) {
+                    for (int pti = 0; pti < (int)state.tracks.size() && cam_ti < 0; ++pti)
+                        for (int pci = 0; pci < (int)state.tracks[pti].clips.size(); ++pci) {
+                            Clip& pc = state.tracks[pti].clips[pci];
+                            if (pc.clip_type == ClipType::VideoRecord && !pc.rec_photo &&
+                                pc.rec_pair_id == clip.rec_pair_id) {
+                                cam_ti = pti; cam_ci = pci;
+                                break;
+                            }
+                        }
+                }
+                if (cam_ti >= 0) {
+                    if (!vrecorder_start(state, cam_ti, cam_ci))
+                        s_rec_error = "Could not start the paired camera.";
+                } else if (!recorder_start(state, state.selected_track, state.selected_clip)) {
                     s_rec_error = "Could not open the microphone.";
+                }
             }
             ImGui::PopStyleColor(3);
             if (busy) ImGui::EndDisabled();
@@ -2235,260 +2254,73 @@ void panel_clip(AppState& state, float w) {
                 ImGui::EndTooltip();
             }
 
-            // Audio capture — record the mic with the webcam (video takes only).
-            // Mirrors the Audio Record brick's mic settings 1:1 (device picker,
-            // hear-yourself, noise gate, hear-effects) so both bricks behave the
-            // same — plus the video-specific A/V offset.
+            // Record A/V pair: audio lives on the paired MIC brick (same
+            // pair id) — one Record press runs both recorders on the shared
+            // loop clock, so video take N and audio take N are the same pass.
+            // Mic device / monitoring / gate settings live on the MIC brick's
+            // own panel. (Legacy pre-pair bricks recorded a muxed mkv; those
+            // takes still play, new recordings are video-only unless paired.)
             if (!clip.rec_photo) {
                 ImGui::Dummy({0.f, 6.f});
-                ImGui::Checkbox("Record mic", &clip.rec_audio);
-                if (ImGui::IsItemHovered()) {
-                    ImGui::BeginTooltip();
-                    ImGui::TextUnformatted("Capture the microphone with the webcam so each\n"
-                                           "take is a synced audio + video clip.");
-                    ImGui::EndTooltip();
+                int pair_ti = -1, pair_ci = -1;
+                if (clip.rec_pair_id != 0) {
+                    for (int pti = 0; pti < (int)state.tracks.size() && pair_ti < 0; ++pti)
+                        for (int pci = 0; pci < (int)state.tracks[pti].clips.size(); ++pci) {
+                            Clip& pc = state.tracks[pti].clips[pci];
+                            if (&pc != &clip && pc.clip_type == ClipType::Record &&
+                                pc.rec_pair_id == clip.rec_pair_id) {
+                                pair_ti = pti; pair_ci = pci;
+                                break;
+                            }
+                        }
                 }
-                if (clip.rec_audio) {
-                    // ── Mic device picker (shared with Audio Record) + camera-mic ─
-                    static std::vector<std::string> s_mic_devs;
-                    static bool s_mic_devs_init = false;
-                    if (!s_mic_devs_init) { s_mic_devs = audio_capture_devices(); s_mic_devs_init = true; }
-                    // Which capture device is the camera's own mic. Cached — the
-                    // lookup re-enumerates V4L2 + audio, so only recompute when the
-                    // camera selection changes.
-                    static int s_cam_mic = -1, s_cam_mic_for = -2;
-                    int cur_cam = vrecorder_device_selected();
-                    if (cur_cam != s_cam_mic_for) {
-                        s_cam_mic = vrecorder_camera_mic(cur_cam);
-                        s_cam_mic_for = cur_cam;
-                    }
-                    int cam_mic = s_cam_mic;
-                    bool busy = recorder_active();
-                    int  mic_sel = audio_capture_selected();
-                    const char* mcur = (mic_sel >= 0 && mic_sel < (int)s_mic_devs.size())
-                                       ? s_mic_devs[mic_sel].c_str() : "System default";
-                    ImGui::Dummy({0.f, 4.f});
-                    if (busy) ImGui::BeginDisabled();
-                    ImGui::PushStyleColor(ImGuiCol_FrameBg, Col::bg_soft);
-                    ImGui::SetNextItemWidth(bar_w);
-                    if (ImGui::BeginCombo("##vrec_mic", mcur)) {
-                        if (ImGui::IsWindowAppearing()) {
-                            s_mic_devs = audio_capture_devices();
-                            s_cam_mic = vrecorder_camera_mic(cur_cam); cam_mic = s_cam_mic;
-                        }
-                        if (ImGui::Selectable("System default", mic_sel < 0))
-                            audio_capture_select(-1);
-                        for (int di = 0; di < (int)s_mic_devs.size(); ++di) {
-                            ImGui::PushID(di);
-                            char lbl[176];
-                            if (di == cam_mic)
-                                snprintf(lbl, sizeof(lbl), "\xf0\x9f\x93\xb7 %s  (camera mic)",
-                                         s_mic_devs[(size_t)di].c_str());
-                            else
-                                snprintf(lbl, sizeof(lbl), "%s", s_mic_devs[(size_t)di].c_str());
-                            if (ImGui::Selectable(lbl, mic_sel == di))
-                                audio_capture_select(di);
-                            ImGui::PopID();
-                        }
-                        ImGui::EndCombo();
-                    }
+                if (pair_ti >= 0) {
+                    ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(90, 200, 120, 255));
+                    ImGui::TextWrapped("\xe2\x9c\x93 Paired with MIC brick on '%s' \xe2\x80\x94 "
+                                       "Record runs both; takes pair by pass.",
+                                       state.tracks[(size_t)pair_ti].name.c_str());
                     ImGui::PopStyleColor();
-                    if (busy) ImGui::EndDisabled();
-
-                    // Which device the synced take records from — and whether it's
-                    // the camera's own mic (consistent latency → tight sync) or a
-                    // separate one (the A/V offset may need a nudge).
-                    ImGui::Dummy({0.f, 2.f});
-                    if (cam_mic >= 0 && mic_sel == cam_mic) {
-                        ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(90, 200, 120, 255));
-                        ImGui::TextWrapped("\xe2\x9c\x93 Camera's own mic (%s) \xe2\x80\x94 tightest A/V sync.",
-                                           s_mic_devs[(size_t)cam_mic].c_str());
-                        ImGui::PopStyleColor();
-                    } else if (cam_mic >= 0) {
-                        ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(232, 184, 74, 255));
-                        ImGui::TextWrapped("Recording a separate mic. The camera's own mic (%s) is "
-                                           "available \xe2\x80\x94 it gives steadier A/V sync.",
-                                           s_mic_devs[(size_t)cam_mic].c_str());
-                        ImGui::PopStyleColor();
-                    } else {
-                        ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
-                        ImGui::TextWrapped("No camera mic detected \xe2\x80\x94 recording from %s. "
-                                           "Tune the A/V offset if lips drift.", mcur);
-                        ImGui::PopStyleColor();
+                    ImGui::SameLine(0.f, 8.f);
+                    if (ui_btn("Select##recpair", false, true)) {
+                        state.selected_track = pair_ti;
+                        state.selected_clip  = pair_ci;
+                        clip_flash(state, pair_ti, pair_ci, /*reveal=*/true);
                     }
-
+                } else if (clip.rec_pair_id != 0) {
+                    ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(232, 184, 74, 255));
+                    ImGui::TextWrapped("Paired MIC brick was deleted \xe2\x80\x94 recording is "
+                                       "video-only.");
+                    ImGui::PopStyleColor();
+                } else {
+                    ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+                    ImGui::TextWrapped("Video-only brick \xe2\x80\x94 no paired mic.");
+                    ImGui::PopStyleColor();
+                }
+                // Re-create (or first-time create) the mic twin.
+                if (pair_ti < 0) {
                     ImGui::Dummy({0.f, 4.f});
-                    ImGui::SetNextItemWidth(bar_w - 70.f);
-                    ImGui::SliderFloat("A/V offset", &clip.rec_av_offset_ms,
-                                       -200.f, 200.f, "%.0f ms");
-                    ui_slider_home(state, &clip.rec_av_offset_ms, 0.f, "A/V offset");
-                    if (ImGui::IsItemHovered()) {
-                        ImGui::BeginTooltip();
-                        ImGui::TextUnformatted("Nudge audio against video to dial out fixed\n"
-                                               "camera latency. + delays the audio. Only needed\n"
-                                               "if the lips drift on playback.");
-                        ImGui::EndTooltip();
-                    }
-
-                    // ── Measure A/V offset (GCC-PHAT) + A/B ───────────────────
-                    // Only meaningful when a SEPARATE mic is the source and the
-                    // camera has its own mic: we record both for a few seconds
-                    // (the cam mic rides the video pipeline, so it stands in for
-                    // the video's timing) and cross-correlate to find the lag.
-                    // If you're already on the camera mic there's nothing to
-                    // measure — you're aligned by construction.
-                    if (cam_mic >= 0 && mic_sel != cam_mic) {
-                        static bool  s_m_has = false;
-                        static float s_m_off = 0.f, s_m_conf = 0.f;
-                        static std::string s_m_err;
-
-                        // Pick up a finished run and apply it to this clip.
-                        AVMeasureResult mr;
-                        if (av_measure_poll(mr)) {
-                            if (mr.ok) {
-                                s_m_has = true; s_m_off = mr.offset_ms; s_m_conf = mr.confidence;
-                                s_m_err.clear();
-                                clip.rec_av_offset_ms =
-                                    mr.offset_ms < -200.f ? -200.f :
-                                    (mr.offset_ms > 200.f ? 200.f : mr.offset_ms);
-                            } else {
-                                s_m_has = false; s_m_err = mr.error;
-                            }
+                    if (ui_btn("Add paired MIC brick", false, true)) {
+                        int pid = clip.rec_pair_id;
+                        if (pid == 0) {
+                            for (auto& tr : state.tracks)
+                                for (auto& c2 : tr.clips)
+                                    if (c2.rec_pair_id > pid) pid = c2.rec_pair_id;
+                            ++pid;
+                            clip.rec_pair_id = pid;
                         }
-
-                        bool measuring = av_measure_active();
-                        ImGui::Dummy({0.f, 2.f});
-                        if (measuring) {
-                            ImGui::BeginDisabled();
-                            char lbl[48];
-                            snprintf(lbl, sizeof(lbl), "Listening\xe2\x80\xa6 %.1fs", av_measure_elapsed());
-                            ImGui::Button(lbl, {bar_w - 70.f, 0.f});
-                            ImGui::EndDisabled();
-                        } else if (ImGui::Button("Measure A/V offset", {bar_w - 70.f, 0.f})) {
-                            std::string clean = audio_capture_pulse_source(mic_sel);
-                            std::string camsr = audio_capture_pulse_source(cam_mic);
-                            if (clean.empty()) clean = "default";
-                            av_measure_start(clean, camsr, 3.5f);
-                            s_m_err.clear();
-                        }
-                        if (!measuring && ImGui::IsItemHovered()) {
-                            ImGui::BeginTooltip();
-                            ImGui::TextUnformatted("Make a sharp sound (a clap) for ~3 seconds.\n"
-                                                   "Records your mic and the camera's mic together\n"
-                                                   "and measures the lag between them, then sets\n"
-                                                   "the A/V offset for you.");
-                            ImGui::EndTooltip();
-                        }
-
-                        if (measuring) {
-                            ImGui::SameLine(0.f, 8.f);
-                            ImGui::TextColored(ImVec4(0.62f, 0.78f, 1.f, 1.f), "clap now");
-                        }
-
-                        if (s_m_has && !measuring) {
-                            // A/B: flip the live offset between the measured value
-                            // and 0 so you can play a take both ways and judge it.
-                            bool on_meas = fabsf(clip.rec_av_offset_ms - s_m_off) < 0.5f;
-                            ImGui::Dummy({0.f, 2.f});
-                            if (ImGui::RadioButton("Measured", on_meas))
-                                clip.rec_av_offset_ms =
-                                    s_m_off < -200.f ? -200.f : (s_m_off > 200.f ? 200.f : s_m_off);
-                            ImGui::SameLine(0.f, 10.f);
-                            if (ImGui::RadioButton("Off", fabsf(clip.rec_av_offset_ms) < 0.5f))
-                                clip.rec_av_offset_ms = 0.f;
-                            ImGui::SameLine(0.f, 10.f);
-                            ImGui::TextDisabled("(%+.0f ms)", s_m_off);
-
-                            if (s_m_conf < 0.5f) {
-                                ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(232, 184, 74, 255));
-                                ImGui::TextWrapped("Weak match \xe2\x80\x94 the room may have been too "
-                                                   "quiet. Try again with a clear clap.");
-                                ImGui::PopStyleColor();
-                            }
-                        }
-                        if (!s_m_err.empty() && !measuring) {
-                            ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(232, 120, 100, 255));
-                            ImGui::TextWrapped("%s", s_m_err.c_str());
-                            ImGui::PopStyleColor();
-                        }
-                    }
-
-                    // Clean input monitoring — same as the Audio Record brick:
-                    // hear yourself + a live mic meter while you frame the shot.
-                    ImGui::Dummy({0.f, 6.f});
-                    bool amon = audio_monitor_get();
-                    if (ImGui::Checkbox("Hear yourself", &amon)) {
-                        if (amon) { if (audio_capture_start()) audio_monitor_set(true); }
-                        else {
-                            audio_monitor_set(false);
-                            if (!recorder_active()) audio_capture_stop();
-                        }
-                    }
-                    if (ImGui::IsItemHovered()) {
-                        ImGui::BeginTooltip();
-                        ImGui::TextUnformatted("Hear your mic in your headphones and watch the\n"
-                                               "level while you set up \xe2\x80\x94 doesn't affect the\n"
-                                               "recorded take.");
-                        ImGui::EndTooltip();
-                    }
-
-                    // Noise gate — same controls as Audio Record.
-                    ImGui::SameLine(0.f, 12.f);
-                    bool gate = audio_gate_get();
-                    if (ImGui::Checkbox("Reduce mic noise", &gate)) audio_gate_set(gate);
-                    if (ImGui::IsItemHovered()) {
-                        ImGui::BeginTooltip();
-                        ImGui::TextUnformatted("Mutes the mic between phrases so hiss and room\n"
-                                               "noise don't pile up.");
-                        ImGui::EndTooltip();
-                    }
-                    if (gate) {
-                        ImGui::Dummy({0.f, 2.f});
-                        ImGui::Indent(22.f);
-                        bool bake = audio_gate_bake_get();
-                        if (ImGui::Checkbox("Apply to recordings", &bake)) audio_gate_bake_set(bake);
-                        if (ImGui::IsItemHovered()) {
-                            ImGui::BeginTooltip();
-                            ImGui::TextUnformatted("Off: the take keeps the raw mic and only what you\n"
-                                                   "hear is cleaned. On: the noise cleanup is baked\n"
-                                                   "into the recorded take itself.");
-                            ImGui::EndTooltip();
-                        }
-                        ImGui::Unindent(22.f);
-                    }
-
-                    // Hear effects — sing/talk through the brick's coupled audio FX.
-                    {
-                        auto segs = collect_audio_fx_segments(state, state.selected_track, clip);
-                        bool has_fx = !segs.empty();
-                        if (!has_fx) ImGui::BeginDisabled();
-                        bool hfx = audio_monitor_fx_get();
-                        if (ImGui::Checkbox("Hear effects", &hfx)) audio_monitor_fx_set(hfx);
-                        if (!has_fx) ImGui::EndDisabled();
-                        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-                            ImGui::BeginTooltip();
-                            ImGui::TextUnformatted(has_fx
-                                ? "Monitor through this brick's audio effects live.\n"
-                                  "Recordings stay dry \xe2\x80\x94 playback applies them."
-                                : "Drop an audio effect on this brick first \xe2\x80\x94\n"
-                                  "autotune, reverb, delay\xe2\x80\xa6");
-                            ImGui::EndTooltip();
-                        }
-                    }
-
-                    if (audio_capture_active()) {
-                        ImGui::Dummy({0.f, 4.f});
-                        static float s_cam_mic_lvl = 0.f;
-                        s_cam_mic_lvl = fmaxf(audio_input_peak(), s_cam_mic_lvl * 0.85f);
-                        float lvl = fminf(1.f, s_cam_mic_lvl);
-                        ImDrawList* pdl = ImGui::GetWindowDrawList();
-                        ImVec2 mp = ImGui::GetCursorScreenPos();
-                        pdl->AddRectFilled(mp, {mp.x + bar_w, mp.y + 6.f}, IM_COL32(35,35,50,255), 3.f);
-                        ImU32 lc = lvl > 0.9f ? IM_COL32(230,60,60,255)
-                                 : lvl > 0.7f ? IM_COL32(230,180,60,255)
-                                              : IM_COL32(70,200,110,255);
-                        pdl->AddRectFilled(mp, {mp.x + bar_w*lvl, mp.y + 6.f}, lc, 3.f);
-                        ImGui::Dummy({0.f, 10.f});
+                        Clip mic;
+                        mic.clip_type   = ClipType::Record;
+                        mic.rec_pair_id = pid;
+                        mic.start       = clip.start;
+                        mic.end         = clip.end;
+                        Track tm;
+                        char tn[32];
+                        snprintf(tn, sizeof(tn), "Cam Mic %d", (int)state.tracks.size() + 1);
+                        tm.name = tn;
+                        tm.clips.push_back(std::move(mic));
+                        int at = state.selected_track + 1;
+                        state.tracks.insert(state.tracks.begin() + at, std::move(tm));
+                        history_push(state, "Add paired MIC brick");
                     }
                 }
             }

@@ -1232,23 +1232,48 @@ void add_record_brick(AppState& state) {
 void add_video_record_brick(AppState& state) {
     float qfps = tl_fps(state);
     if (!(qfps > 0.f)) qfps = 30.f;
+
+    // Record A/V pair: the camera brick arrives WITH a mic twin on the track
+    // below, both stamped with a fresh pair id. Recording the camera runs both
+    // recorders on the shared loop clock — cycle N of one is cycle N of the
+    // other, so their take trays pair by index (and the best video take can
+    // ship with the best audio take). Don't want sound? Delete the MIC brick.
+    int pair_id = 0;
+    for (auto& tr : state.tracks)
+        for (auto& c : tr.clips)
+            if (c.rec_pair_id > pair_id) pair_id = c.rec_pair_id;
+    ++pair_id;
+
     Clip cl;
-    cl.clip_type = ClipType::VideoRecord;
-    cl.start     = snap_to_frame(state.playhead, (int)qfps);
-    cl.end       = snap_end_to_frame(cl.start + 8.f, (int)qfps);
+    cl.clip_type   = ClipType::VideoRecord;
+    cl.rec_pair_id = pair_id;
+    cl.start       = snap_to_frame(state.playhead, (int)qfps);
+    cl.end         = snap_end_to_frame(cl.start + 8.f, (int)qfps);
+    Clip mic;
+    mic.clip_type   = ClipType::Record;
+    mic.rec_pair_id = pair_id;
+    mic.start       = cl.start;
+    mic.end         = cl.end;
+
+    int idx = (int)state.tracks.size() + 1;
     Track t;
     char n[32];
-    snprintf(n, sizeof(n), "Camera %d", (int)state.tracks.size() + 1);
+    snprintf(n, sizeof(n), "Camera %d", idx);
     t.name = n;
     float clip_end = cl.end;
     t.clips.push_back(std::move(cl));
+    Track tm;
+    snprintf(n, sizeof(n), "Cam Mic %d", idx);
+    tm.name = n;
+    tm.clips.push_back(std::move(mic));
+    state.tracks.insert(state.tracks.begin(), std::move(tm));
     state.tracks.insert(state.tracks.begin(), std::move(t));
     state.selected_track = 0;
     state.selected_clip  = 0;
     clip_flash(state, 0, 0, /*reveal=*/true);
     // If the brick lands past the current view, zoom out to fit it.
     state.tl_zoom_to_fit_end = fmaxf(state.tl_zoom_to_fit_end, clip_end);
-    history_push(state, "Add Record Brick");
+    history_push(state, "Add Record A/V Bricks");
 }
 
 void add_photo_capture_brick(AppState& state) {

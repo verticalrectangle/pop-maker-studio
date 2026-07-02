@@ -407,11 +407,20 @@ struct Clip {
     // and renders through the normal image-still path. Same camera panel.
     bool rec_photo = false;
 
-    // Video Record brick: capture the mic alongside the webcam so each take is a
-    // synced A/V mp4 (one ffmpeg captures both → single clock). rec_av_offset_ms
-    // nudges audio vs video to dial out fixed device latency (+ = delay audio).
+    // LEGACY (pre-v61 A/V capture): the camera brick used to mux the mic into
+    // each take via one ffmpeg (+ rec_av_offset_ms manual nudge). Superseded by
+    // the record PAIR below — kept only so old projects round-trip and their
+    // muxed .mkv takes keep playing. New recordings never read these.
     bool  rec_audio       = true;
     float rec_av_offset_ms = 0.f;
+
+    // Record A/V pair: a camera (VideoRecord) brick and a mic (Record) brick
+    // that record together on the shared loop clock. Same non-zero id on both
+    // sides = paired. Starting the camera starts the mic recorder in lockstep
+    // (cycle N of one is cycle N of the other, so take trays pair by index),
+    // and each side keeps its own takes — best video + best audio can come
+    // from different passes. 0 = unpaired (solo brick, records its own medium).
+    int rec_pair_id = 0;
 
     // Content clip: when true, the coupled FX chains expand into per-FX timing
     // lanes drawn beneath the clip (the track grows), so each effect's run can
