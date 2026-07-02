@@ -2293,11 +2293,20 @@ VideoFrame* video_decode_frame_at(int slot, double seconds) {
     // AVSEEK_FLAG_BACKWARD lands on the keyframe before the target.
     // Decode forward, keeping the last frame whose pts <= seconds.
     // Stop as soon as we decode a frame past the target (we already have the right one).
+    //
+    // Drain-before-send ordering is load-bearing: decoders with an internal
+    // frame delay (dav1d/AV1 — the yt-dlp webm case) return EAGAIN from
+    // avcodec_send_packet while output frames are pending. The old
+    // send-then-drain loop ignored send_packet's return, so on a full decoder
+    // the packet was silently dropped and its frame never emitted — every ~8th
+    // frame on AV1 sources. The export then served the NEXT frame early
+    // (forward jerk), and the following call saw a backward request and did a
+    // full seek+flush re-decode (~40 packets) — a 4 Hz judder plus a big
+    // slowdown, export-only (preview plays all-intra MJPEG proxies, which
+    // have no decode delay). Draining the decoder dry before each read/send
+    // makes EAGAIN impossible and keeps AV1 emission in display order.
     bool done = false;
-    while (!done && av_read_frame(ex.fmt_ctx, pkt) >= 0) {
-        if (pkt->stream_index != ex.stream_idx) { av_packet_unref(pkt); continue; }
-        avcodec_send_packet(ex.codec_ctx, pkt);
-        av_packet_unref(pkt);
+    while (!done) {
         while (!done && avcodec_receive_frame(ex.codec_ctx, frm) == 0) {
             double pts = frm->pts * av_q2d(st->time_base);
             if (pts > seconds + frame_dur * 0.5) {
@@ -2325,6 +2334,11 @@ VideoFrame* video_decode_frame_at(int slot, double seconds) {
                 if (pts >= seconds - frame_dur * 0.5) done = true;
             }
         }
+        if (done) break;
+        if (av_read_frame(ex.fmt_ctx, pkt) < 0) break;  // EOF
+        if (pkt->stream_index != ex.stream_idx) { av_packet_unref(pkt); continue; }
+        avcodec_send_packet(ex.codec_ctx, pkt);  // cannot EAGAIN: decoder just drained
+        av_packet_unref(pkt);
     }
 
     if (result) {
