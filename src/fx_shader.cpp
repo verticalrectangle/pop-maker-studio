@@ -1053,6 +1053,123 @@ void main() {
     frag = vec4(clamp(col, 0.0, 1.0), texture(u_tex, v_uv).a);
 }
 )";
+// ── UV-mapped face makeup pass ─────────────────────────────────────────────
+// Draws the tracked face mesh (MediaPipe canonical UVs, 898 tris) textured
+// with an authored makeup PNG. Per-pixel lighting adaptation ties pigment to
+// the skin beneath (luminance + color cast) so a texture authored under
+// neutral light sits naturally in a warm/dim room.
+#include "generated/face_uv_mesh.h"
+
+static const char* k_face_mk_vs = R"(#version 330 core
+layout(location = 0) in vec2 a_px;   // landmark position, texture pixels
+layout(location = 1) in vec2 a_uv;   // canonical makeup-texture UV
+uniform vec2 u_dim;
+out vec2 v_mkuv;
+out vec2 v_srcuv;
+void main() {
+    v_mkuv  = a_uv;
+    v_srcuv = a_px / u_dim;
+    gl_Position = vec4(v_srcuv * 2.0 - 1.0, 0.0, 1.0);
+}
+)";
+
+static const char* k_face_mk_fs = R"(#version 330 core
+in vec2 v_mkuv;
+in vec2 v_srcuv;
+out vec4 frag;
+uniform sampler2D u_mk;
+uniform sampler2D u_src;
+uniform float u_opacity;
+uniform float u_adapt;    // 0 = raw decal, 1 = full lighting adaptation
+float lum2(vec3 c) { return dot(c, vec3(0.299, 0.587, 0.114)); }
+void main() {
+    vec4 mk   = texture(u_mk, v_mkuv);
+    vec3 base = texture(u_src, v_srcuv).rgb;
+    float bl  = lum2(base);
+    vec3 tint = base / max(bl, 0.04);
+    vec3 lit  = mk.rgb
+              * mix(vec3(1.0), clamp(tint, 0.55, 1.6), u_adapt * 0.65)
+              * mix(1.0, clamp(bl * 1.9, 0.20, 1.45), u_adapt * 0.85);
+    frag = vec4(mix(base, clamp(lit, 0.0, 1.0), mk.a * u_opacity), 1.0);
+}
+)";
+
+static GLuint g_face_mk_prog = 0;
+static GLuint g_face_mk_vao = 0, g_face_mk_vbo = 0, g_face_mk_ibo = 0;
+static struct { GLuint tex = 0, fbo = 0; int w = 0, h = 0; } g_makeup_out[kMaxSlots];
+
+uintptr_t face_makeup_apply(uintptr_t src_tex, int slot, int w, int h,
+                            const float (*pts)[2], unsigned makeup_tex,
+                            float opacity, float adapt) {
+    if (!src_tex || !makeup_tex || slot < 0 || slot >= kMaxSlots ||
+        w <= 0 || h <= 0 || opacity <= 0.001f)
+        return src_tex;
+    if (!g_face_mk_prog) {
+        g_face_mk_prog = link_prog2(k_face_mk_vs, k_face_mk_fs);
+        if (!g_face_mk_prog) return src_tex;
+        glGenVertexArrays(1, &g_face_mk_vao);
+        glGenBuffers(1, &g_face_mk_vbo);
+        glGenBuffers(1, &g_face_mk_ibo);
+        glBindVertexArray(g_face_mk_vao);
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, g_face_mk_ibo);
+        glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(k_face_tris),
+                     k_face_tris, GL_STATIC_DRAW);
+        glBindBuffer(GL_ARRAY_BUFFER, g_face_mk_vbo);
+        glBufferData(GL_ARRAY_BUFFER, FACE_UV_NPTS * 4 * sizeof(float),
+                     nullptr, GL_DYNAMIC_DRAW);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)0);
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float),
+                              (void*)(2 * sizeof(float)));
+        glBindVertexArray(0);
+    }
+    // Save bindings BEFORE the ensure (make_tex_fbo leaves its FBO bound).
+    GLint prev_fbo = 0, prev_vp[4];
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prev_fbo);
+    glGetIntegerv(GL_VIEWPORT, prev_vp);
+    auto& s = g_makeup_out[slot];
+    if (s.w != w || s.h != h) {
+        if (s.fbo) { glDeleteFramebuffers(1, &s.fbo); glDeleteTextures(1, &s.tex); s.fbo = s.tex = 0; }
+        make_tex_fbo(s.tex, s.fbo, w, h);
+        s.w = w; s.h = h;
+    }
+    GLboolean was_blend = glIsEnabled(GL_BLEND);
+    glDisable(GL_BLEND);
+    // Base copy, then the textured mesh over it (fragment blends in-shader so
+    // it can light-adapt against the base).
+    draw_pass(s.fbo, (GLuint)src_tex, w, h, g_prog.blit);
+    float vtx[FACE_UV_NPTS * 4];
+    for (int i = 0; i < FACE_UV_NPTS; ++i) {
+        vtx[i * 4 + 0] = pts[i][0];
+        vtx[i * 4 + 1] = pts[i][1];
+        vtx[i * 4 + 2] = k_face_uv[i][0];
+        vtx[i * 4 + 3] = k_face_uv[i][1];
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, s.fbo);
+    glViewport(0, 0, w, h);
+    glUseProgram(g_face_mk_prog);
+    glBindVertexArray(g_face_mk_vao);
+    glBindBuffer(GL_ARRAY_BUFFER, g_face_mk_vbo);
+    glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(vtx), vtx);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, (GLuint)makeup_tex);
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, (GLuint)src_tex);
+    glUniform1i(glGetUniformLocation(g_face_mk_prog, "u_mk"), 0);
+    glUniform1i(glGetUniformLocation(g_face_mk_prog, "u_src"), 1);
+    glUniform2f(glGetUniformLocation(g_face_mk_prog, "u_dim"), (float)w, (float)h);
+    glUniform1f(glGetUniformLocation(g_face_mk_prog, "u_opacity"), opacity);
+    glUniform1f(glGetUniformLocation(g_face_mk_prog, "u_adapt"), adapt);
+    glDrawElements(GL_TRIANGLES, FACE_UV_NTRI * 3, GL_UNSIGNED_SHORT, 0);
+    glBindVertexArray(0);
+    glActiveTexture(GL_TEXTURE0);
+    if (was_blend) glEnable(GL_BLEND);
+    glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)prev_fbo);
+    glViewport(prev_vp[0], prev_vp[1], prev_vp[2], prev_vp[3]);
+    return s.tex;
+}
+
 static GLuint g_face_beauty_prog = 0;
 // Own buffer per slot — the warp pass reads this output into g_out[slot];
 // sharing g_out here would be a same-texture read/write feedback loop.

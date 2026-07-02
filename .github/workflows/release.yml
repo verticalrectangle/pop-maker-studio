@@ -100,7 +100,7 @@ jobs:
           curl -fsSL -o release/models/rvc_pitch_bases.bin              "${BASE}/rvc/rvc_pitch_bases.bin"
 
           mkdir -p release/models/face
-          for F in yunet.onnx face_landmarks_v2.onnx face_blendshapes.onnx \
+          for F in yunet.onnx face_landmarks_v2.onnx face_blendshapes.onnx makeup_douyin.png \
                    sprite_ear.png sprite_nose.png sprite_tongue.png; do
             curl -fsSL -o "release/models/face/${F}"                    "${BASE}/face/${F}"
           done

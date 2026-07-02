@@ -89,6 +89,8 @@ struct BeautyLook {
     float nose_blush = 0.f, freckles = 0.f;   // e-girl layer
     float chin_tuck = 0.f, jaw_shade = 0.f;    // double-chin treatment
     float lash = 0.f, liner = 0.f, lash_wing = 0.f;   // lashes, eyeliner, wing
+    const char* makeup_tex = nullptr;  // UV-mapped makeup PNG (models/face/)
+    float makeup_adapt = 1.f;          // lighting adaptation amount
     float blush_raise = 0.40f;  // 0 = mid-cheek (contour), 1 = under-eye
     float eye_glow = 0; float eye_glow_col[3] = {0.2f, 0.9f, 1.f};
     float skin_tint = 0; float tint_col[3] = {0.7f, 0.8f, 1.f};
@@ -105,11 +107,15 @@ static bool beauty_look_for(int filter_id, BeautyLook& L) {
             // Alien-avoidance: pale but NOT flat — moderate brighten, a hint
             // of warmth, and the under-jaw shadow restores the dimension the
             // smoothing removes. Chin tuck + shade hide a double chin.
-            L = {0.68f, 0.30f, 0.05f, 0.42f, 0.45f, 0.50f,  0.13f, 0.09f, 0.24f, 0.18f, 0.05f};
-            set3(L.blush_col, 1.f, 0.55f, 0.60f);        // soft pink, riding high
-            set3(L.lip_col,   0.88f, 0.16f, 0.24f);      // rose red, gradient center
+            // The painted UV texture carries lips/liner/lash/blush; the
+            // procedural layers keep skin, shape, and the chin treatment
+            // (light procedural echoes underlay the texture).
+            L = {0.68f, 0.30f, 0.05f, 0.42f, 0.15f, 0.12f,  0.13f, 0.09f, 0.24f, 0.18f, 0.05f};
+            set3(L.blush_col, 1.f, 0.55f, 0.60f);
+            set3(L.lip_col,   0.88f, 0.16f, 0.24f);
             L.chin_tuck = 0.80f; L.jaw_shade = 0.75f;
-                        L.lash = 0.60f; L.liner = 0.50f; L.lash_wing = 0.35f;
+            L.makeup_tex = "makeup_douyin.png";
+            L.lash = 0.15f; L.liner = 0.00f; L.lash_wing = 0.20f;
             return true;
         case FaceFilter::Porcelain:  // maximum skin, cool light, shape untouched
             L = {0.92f, 0.38f, 0.00f, 0.28f, 0.14f, 0.10f,  0.03f, 0.f,   0.f,   0.f,   0.f};
@@ -712,6 +718,21 @@ uintptr_t face_filter_apply_obs(int filter_id, float amount, const FaceObs& obs,
             }
         }
         tex = face_beauty_apply(tex, slot, w, h, bp);
+        // UV-mapped makeup texture: drawn as the tracked mesh, pre-warp so
+        // shape changes deform the pigment with the skin.
+        if (L.makeup_tex) {
+            int mw = 0, mh = 0;
+            GLuint mk = sprite_tex(L.makeup_tex, mw, mh);
+            if (mk) {
+                static float mpts[FT_NPTS][2];
+                for (int i = 0; i < 468; ++i) {
+                    mpts[i][0] = PX(obs.pts[i][0]);
+                    mpts[i][1] = PY(obs.pts[i][1]);
+                }
+                tex = face_makeup_apply(tex, slot, w, h, mpts, mk,
+                                        amount, L.makeup_adapt);
+            }
+        }
     }
     FaceWarpBump bumps[MAX_FACE_BUMPS];
     int nb = face_filter_bumps(filter_id, amount, obs, bumps);

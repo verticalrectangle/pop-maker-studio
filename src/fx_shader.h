@@ -64,6 +64,22 @@ struct FaceBeautyParams {
 uintptr_t face_beauty_apply(uintptr_t src_tex, int slot, int w, int h,
                             const FaceBeautyParams& p);
 
+// UV-mapped makeup: draws the tracked face mesh (MediaPipe canonical UVs)
+// textured with a makeup PNG, with per-pixel lighting adaptation. pts =
+// landmark pixels in TEXTURE space (>= 468 entries).
+uintptr_t face_makeup_apply(uintptr_t src_tex, int slot, int w, int h,
+                            const float (*pts)[2], unsigned makeup_tex,
+                            float opacity, float adapt);
+
+// UV-mapped makeup: draws the tracked face mesh (MediaPipe canonical UVs,
+// 898 tris) textured with a makeup PNG over the frame. pts = 468+ landmark
+// pixels in TEXTURE space. Per-pixel lighting adaptation ties the pigment to
+// the skin under it (luminance + color cast), so authored-neutral textures
+// sit naturally in warm/dim light.
+uintptr_t face_makeup_apply(uintptr_t src_tex, int slot, int w, int h,
+                            const float (*pts)[2], unsigned makeup_tex,
+                            float opacity, float adapt);
+
 uintptr_t face_warp_apply(uintptr_t src_tex, int slot, int w, int h,
                           const float* bumps, int n_bumps);
 
