@@ -28,6 +28,17 @@ if(NOT APPLE)
     pkg_check_modules(PIPEWIRE libpipewire-0.3)
 endif()
 
+# pkg_check_modules splits keg -L paths into *_LIBRARY_DIRS; on Linux the
+# libs sit in /usr/lib (default search) so this is a no-op, but Homebrew
+# kegs (macOS) live off-path and the linker needs these. Empty vars are
+# harmless. Applies to every target defined below.
+link_directories(
+    ${AVCODEC_LIBRARY_DIRS} ${AVFORMAT_LIBRARY_DIRS} ${AVUTIL_LIBRARY_DIRS}
+    ${SWRESAMPLE_LIBRARY_DIRS} ${SWSCALE_LIBRARY_DIRS} ${FREETYPE_LIBRARY_DIRS}
+    ${AUBIO_LIBRARY_DIRS} ${TURBOJPEG_LIBRARY_DIRS} ${FFTW_LIBRARY_DIRS}
+    ${GLFW_LIBRARY_DIRS} ${VTERM_LIBRARY_DIRS} ${PIPEWIRE_LIBRARY_DIRS}
+)
+
 # ── ImGui ─────────────────────────────────────────────────────────────────────
 set(IMGUI_DIR ${CMAKE_SOURCE_DIR}/vendor/imgui)
 set(IMGUI_SOURCES
