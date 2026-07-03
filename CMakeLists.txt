@@ -249,7 +249,9 @@ endif()
     if(EXISTS ${ONNXRUNTIME_ROOT}/include/onnxruntime/onnxruntime_cxx_api.h)
         target_include_directories(pms-engine PRIVATE ${ONNXRUNTIME_ROOT}/include/onnxruntime)
     endif()
-    target_link_directories(pms-engine PRIVATE ${ONNXRUNTIME_ROOT}/lib)
+    # PUBLIC: engine-smoke / the app link the static pms-engine and must
+    # inherit the keg -L (Linux masked this — ORT in /usr/lib).
+    target_link_directories(pms-engine PUBLIC ${ONNXRUNTIME_ROOT}/lib)
 else()
 if(NOT PMS_ENGINE_ONLY)
     target_include_directories(pop-maker-studio PRIVATE /usr/include/onnxruntime)
