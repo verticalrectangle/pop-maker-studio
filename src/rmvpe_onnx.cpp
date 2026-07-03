@@ -13,6 +13,7 @@
 #include <filesystem>
 #include <memory>
 #include <mutex>
+#include <complex>
 #include <vector>
 
 namespace fs = std::filesystem;
@@ -92,11 +93,15 @@ std::vector<float> rmvpe_f0(const std::vector<float>& wav16k)
     // STFT magnitudes → log-mel [128, T]
     static std::mutex fftw_mu;   // fftw plan creation is not thread-safe
     std::vector<float> frame(kNFFT);
-    std::vector<fftwf_complex> spec_c(kBins);
+    // std::complex<float> is layout-compatible with fftwf_complex (FFTW docs
+    // §4.1.1); vector<fftwf_complex> is vector-of-C-array, which libc++
+    // (macOS) rejects outright.
+    std::vector<std::complex<float>> spec_c(kBins);
     fftwf_plan plan;
     {
         std::lock_guard<std::mutex> lk(fftw_mu);
-        plan = fftwf_plan_dft_r2c_1d(kNFFT, frame.data(), spec_c.data(),
+        plan = fftwf_plan_dft_r2c_1d(kNFFT, frame.data(),
+                                     reinterpret_cast<fftwf_complex*>(spec_c.data()),
                                      FFTW_ESTIMATE);
     }
 
@@ -108,8 +113,7 @@ std::vector<float> rmvpe_f0(const std::vector<float>& wav16k)
         for (int i = 0; i < kNFFT; i++) frame[(size_t)i] = src[i] * win[(size_t)i];
         fftwf_execute(plan);
         for (int k = 0; k < kBins; k++)
-            mag[(size_t)k] = std::sqrt(spec_c[(size_t)k][0] * spec_c[(size_t)k][0] +
-                                       spec_c[(size_t)k][1] * spec_c[(size_t)k][1]);
+            mag[(size_t)k] = std::abs(spec_c[(size_t)k]);
         for (int m = 0; m < kMels; m++) {
             const float* w = fb.data() + (size_t)m * kBins;
             double acc = 0.0;
