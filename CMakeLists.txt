@@ -30,19 +30,25 @@ set(IMGUI_SOURCES
     ${IMGUI_DIR}/imgui_draw.cpp
     ${IMGUI_DIR}/imgui_tables.cpp
     ${IMGUI_DIR}/imgui_widgets.cpp
-    ${IMGUI_DIR}/backends/imgui_impl_glfw.cpp
     ${IMGUI_DIR}/backends/imgui_impl_opengl3.cpp
     ${IMGUI_DIR}/misc/freetype/imgui_freetype.cpp
 )
+# GLFW backend is app-only — the engine never touches windowing.
+set(IMGUI_APP_SOURCES
+    ${IMGUI_DIR}/backends/imgui_impl_glfw.cpp
+)
 
 # ── Sources ───────────────────────────────────────────────────────────────────
-set(SOURCES
+# ENGINE sources: portable core (timeline, serializer, FX, ML, audio, IPC
+# dispatcher). Must not include "ui/..." headers or the GLFW backend — every
+# app-side symbol they need is declared in src/engine_seams.h, and
+# tools/check_engine_deps.sh enforces the boundary at build time. This is the
+# set that becomes pms_engine.xcframework for iOS (docs/IOS_PORT_PLAN.md).
+set(PMS_ENGINE_SOURCES
     src/paths.cpp
     src/rmvpe_onnx.cpp
     src/runtime_fx.cpp
     src/ipc_server.cpp
-    src/main.cpp
-    src/app.cpp
     src/audio.cpp
     src/loudness.cpp
     src/audio_pw.cpp
@@ -57,7 +63,6 @@ set(SOURCES
     src/transcribe.cpp
     src/render.cpp
     src/history.cpp
-    src/filepicker.cpp
     src/video.cpp
     src/proxy.cpp
     src/conform.cpp
@@ -79,10 +84,24 @@ set(SOURCES
     src/hubert_onnx.cpp
     src/separate.cpp
     src/forced_align.cpp
+    src/agent_harness.cpp
+    src/project.cpp
+    src/fx_shader.cpp
+    src/presets.cpp
+    src/overlay_renderer.cpp
+    src/text_renderer.cpp
+)
+
+
+# APP sources: desktop shell — windowing, panels, pickers, terminal.
+set(PMS_APP_SOURCES
+    src/main.cpp
+    src/app.cpp
+    src/filepicker.cpp
+    src/terminal.cpp
     src/ui/screen_splash.cpp
     src/ui/screen_setup.cpp
     src/ui/screen_home.cpp
-    src/terminal.cpp
     src/ui/screen_studio.cpp
     src/ui/studio_shared.cpp
     src/ui/canvas.cpp
@@ -95,22 +114,31 @@ set(SOURCES
     src/ui/export_ui.cpp
     src/ui/panel_terminal.cpp
     src/ui/panel_agent.cpp
-    src/agent_harness.cpp
     src/ui/theme.cpp
-    src/project.cpp
-    src/fx_shader.cpp
-    src/presets.cpp
-    src/overlay_renderer.cpp
-    src/text_renderer.cpp
 )
 
-add_executable(pop-maker-studio ${SOURCES} ${IMGUI_SOURCES})
+# The engine as a static library: the compile-time boundary the iOS port
+# builds on. Links standalone once engine_seams.h empties out; until then the
+# app's objects satisfy the seam symbols at executable link time.
+add_library(pms-engine STATIC ${PMS_ENGINE_SOURCES} ${IMGUI_SOURCES})
+
+add_executable(pop-maker-studio ${PMS_APP_SOURCES} ${IMGUI_APP_SOURCES})
+target_link_libraries(pop-maker-studio PRIVATE pms-engine)
+add_custom_target(check_engine_deps
+    COMMAND ${CMAKE_SOURCE_DIR}/tools/check_engine_deps.sh
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    COMMENT "Checking engine/app boundary (engine_seams.h rules)"
+)
+add_dependencies(pms-engine check_engine_deps)
+
 
 if(PIPEWIRE_FOUND)
     target_compile_definitions(pop-maker-studio PRIVATE HAVE_PIPEWIRE)
+    target_compile_definitions(pms-engine PRIVATE HAVE_PIPEWIRE)
 endif()
 
-target_include_directories(pop-maker-studio PRIVATE
+foreach(_pms_tgt pop-maker-studio pms-engine)
+target_include_directories(${_pms_tgt} PRIVATE
     src
     ${IMGUI_DIR}
     ${IMGUI_DIR}/backends
@@ -127,6 +155,18 @@ target_include_directories(pop-maker-studio PRIVATE
     ${VTERM_INCLUDE_DIRS}
     ${TURBOJPEG_INCLUDE_DIRS}
     ${PIPEWIRE_INCLUDE_DIRS}
+)
+endforeach()
+
+target_link_libraries(pms-engine PUBLIC
+    OpenGL::GL
+    ${AVCODEC_LIBRARIES} ${AVFORMAT_LIBRARIES} ${AVUTIL_LIBRARIES}
+    ${SWRESAMPLE_LIBRARIES} ${SWSCALE_LIBRARIES} ${FREETYPE_LIBRARIES}
+    ${AUBIO_LIBRARIES} ${TURBOJPEG_LIBRARIES} ${PIPEWIRE_LIBRARIES}
+    onnxruntime
+    $<IF:$<TARGET_EXISTS:whisper::whisper>,whisper::whisper,whisper>
+    fftw3f
+    dl pthread
 )
 
 target_link_libraries(pop-maker-studio PRIVATE
@@ -151,16 +191,22 @@ target_link_libraries(pop-maker-studio PRIVATE
 if(DEFINED ONNXRUNTIME_ROOT)
     target_include_directories(pop-maker-studio PRIVATE ${ONNXRUNTIME_ROOT}/include)
     target_link_directories(pop-maker-studio PRIVATE ${ONNXRUNTIME_ROOT}/lib)
+    target_include_directories(pms-engine PRIVATE ${ONNXRUNTIME_ROOT}/include)
+    target_link_directories(pms-engine PRIVATE ${ONNXRUNTIME_ROOT}/lib)
 else()
     target_include_directories(pop-maker-studio PRIVATE /usr/include/onnxruntime)
+    target_include_directories(pms-engine PRIVATE /usr/include/onnxruntime)
 endif()
 
 target_compile_definitions(pop-maker-studio PRIVATE IMGUI_ENABLE_FREETYPE)
+target_compile_definitions(pms-engine PRIVATE IMGUI_ENABLE_FREETYPE)
 
-target_compile_options(pop-maker-studio PRIVATE
+foreach(_pms_tgt pop-maker-studio pms-engine)
+target_compile_options(${_pms_tgt} PRIVATE
     -Wall -Wextra -Wno-unused-parameter
     $<$<CONFIG:Release>:-O2>
 )
+endforeach()
 
 # Embed Inter font as a compiled byte array
 add_custom_command(
@@ -178,6 +224,7 @@ add_custom_command(
 )
 add_custom_target(embed_font DEPENDS ${CMAKE_BINARY_DIR}/inter_font.h)
 add_dependencies(pop-maker-studio embed_font)
+add_dependencies(pms-engine embed_font)
 
 # Embed JetBrains Mono as a compiled byte array (used by the terminal panel)
 add_custom_command(
@@ -208,6 +255,7 @@ add_custom_target(embed_display DEPENDS ${CMAKE_BINARY_DIR}/display_fonts.h)
 add_dependencies(pop-maker-studio embed_display)
 
 target_include_directories(pop-maker-studio PRIVATE ${CMAKE_BINARY_DIR})
+target_include_directories(pms-engine PRIVATE ${CMAKE_BINARY_DIR})
 
 # Embed portrait preview photo as raw RGB
 add_custom_command(
@@ -261,6 +309,7 @@ add_custom_command(
     COMMENT "Embedding face-filter preview photo"
 )
 add_custom_target(embed_face DEPENDS ${CMAKE_BINARY_DIR}/face_preview.h)
+add_dependencies(pms-engine embed_face)
 add_dependencies(pop-maker-studio embed_face)
 
 # Guard: the in-app agent harness compiles src/generated/agent_tools.h, generated
@@ -344,3 +393,36 @@ add_executable(bg_remove_probe tools/bg_remove_probe.cpp)
 target_include_directories(bg_remove_probe PRIVATE ${CMAKE_SOURCE_DIR}/vendor)
 target_link_libraries(bg_remove_probe PRIVATE m)
 target_compile_options(bg_remove_probe PRIVATE -Wall -Wextra -Wno-unused-parameter -O2)
+
+# ── vc_cli: standalone voice conversion CLI (HuBERT pipeline) ──────────────────
+add_executable(vc_cli
+    tools/vc_cli.cpp
+    src/vc_onnx.cpp
+    src/rmvpe_onnx.cpp
+    src/rvc_onnx.cpp
+    src/pth_reader.cpp
+    src/hubert_onnx.cpp
+    src/faiss_ivf.cpp
+    src/paths.cpp
+)
+target_include_directories(vc_cli PRIVATE
+    src
+    ${AVCODEC_INCLUDE_DIRS}
+    ${AVFORMAT_INCLUDE_DIRS}
+    ${AVUTIL_INCLUDE_DIRS}
+)
+if(DEFINED ONNXRUNTIME_ROOT)
+    target_include_directories(vc_cli PRIVATE ${ONNXRUNTIME_ROOT}/include)
+    target_link_directories(vc_cli PRIVATE ${ONNXRUNTIME_ROOT}/lib)
+else()
+    target_include_directories(vc_cli PRIVATE /usr/include/onnxruntime)
+endif()
+target_link_libraries(vc_cli PRIVATE
+    ${AVCODEC_LIBRARIES}
+    ${AVFORMAT_LIBRARIES}
+    ${AVUTIL_LIBRARIES}
+    onnxruntime fftw3f dl pthread
+)
+target_compile_options(vc_cli PRIVATE
+    -Wall -Wextra -Wno-unused-parameter -O2
+)

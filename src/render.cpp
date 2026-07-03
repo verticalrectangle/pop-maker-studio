@@ -49,7 +49,7 @@
 #include <cstdarg>
 
 #include "audio.h"             // audio_source_cached / audio_fx_cached (FX bake)
-#include "ui/studio_shared.h"  // collect_audio_fx_for_clip
+#include "engine_seams.h"
 
 namespace fs = std::filesystem;
 

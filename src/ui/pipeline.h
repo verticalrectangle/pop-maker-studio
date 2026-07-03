@@ -37,7 +37,6 @@ void draw_pipeline_strip(AppState& state, float w);
 // human in the same panel as the full pipeline.
 void draw_search_strip(float w);
 
-// ── Safe-zone constants (used by canvas & typography) ─────────────────────────
-static constexpr float SAFE_TOP  = 0.08f;
-static constexpr float SAFE_BOT  = 0.20f;
-static constexpr float SAFE_SIDE = 0.05f;
+// Safe-zone constants (SAFE_TOP/BOT/SIDE) moved to engine_seams.h — the
+// overlay renderer (engine) needs them too.
+#include "../engine_seams.h"

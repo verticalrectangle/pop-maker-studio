@@ -1,7 +1,6 @@
 #include "overlay_renderer.h"
 #include "app.h"
-#include "ui/theme.h"
-#include "ui/pipeline.h"  // SAFE_TOP, SAFE_BOT
+#include "engine_seams.h"
 #include "text_renderer.h"
 #include "text_anim.h"
 

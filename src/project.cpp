@@ -1,7 +1,6 @@
 #include "project.h"
-#include "ui/timeline.h"
+#include "engine_seams.h"
 #include "body_fx.h"
-#include "ui/panel_media.h"  // bin_backfill_from_timeline
 #include <algorithm>
 #include <fstream>
 #include <cstdint>

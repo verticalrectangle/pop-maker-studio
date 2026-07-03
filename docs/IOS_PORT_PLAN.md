@@ -73,6 +73,17 @@ architecture, the face tracker (pure ORT + math).
 
 ## Phase 0 — Engine extraction (desktop-only work, no Apple hardware needed)
 
+> **STATUS 2026-07-03: first milestone landed.** `pms-engine` static lib
+> builds from 45 engine sources + ImGui core/GL backend; the app links it.
+> Engine↔app boundary is compile-enforced: engine sources may not include
+> `ui/...` or the GLFW backend (tools/check_engine_deps.sh runs in the
+> build, same pattern as the agent-tools sync check). Every cross-boundary
+> need is declared in `src/engine_seams.h` — currently 23 app-implemented
+> symbols (the hoist backlog; the header documents each). Next: hoist the
+> engine-logic implementations out of ui/ (pipeline.cpp, studio_shared.cpp
+> collectors, overlap resolution) until the seam is empty and the lib links
+> standalone.
+
 Goal: a `pms-engine` static-lib CMake target that compiles with **no** GLFW,
 ImGui, X11, or process-spawn code, consumed by the existing desktop app as
 proof. This is the largest de-risking step and it improves the desktop

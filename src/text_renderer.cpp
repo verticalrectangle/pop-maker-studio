@@ -1,6 +1,5 @@
 #include "text_renderer.h"
 #include "text_anim.h"
-#include "ui/theme.h"
 #include <cmath>
 
 static ImU32 col_f4_alpha(const float c[4], float extra_alpha) {
@@ -382,7 +381,10 @@ void render_text_block(TextRenderCtx ctx, const std::vector<std::string>& lines)
                 tcol = IM_COL32((int)(clip->sub_color[0]*255), (int)(clip->sub_color[1]*255),
                                  (int)(clip->sub_color[2]*255), (int)(a*255));
             } else if (ctx.eff_style == AnimStyle::Block) {
-                tcol = to_u32(Col::bg);
+                // App-theme background color, inlined: Block style knocks the
+                // text out of its plate. (Was to_u32(Col::bg) — theme.h is
+                // app-side; the engine renders with the literal, Col::bg = black.)
+                tcol = IM_COL32(0, 0, 0, 255);
             } else {
                 tcol = IM_COL32(255, 255, 255, (int)(255.f * alpha));
             }
