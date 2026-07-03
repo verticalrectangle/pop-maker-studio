@@ -4,9 +4,11 @@
 //                  fmax 8000, slaney filterbank+norm, log(clamp(., 1e-5)))
 //   mel frames padded to a multiple of 32 for the U-Net, cropped after.
 //   decode: argmax + 9-bin weighted average of cents, threshold 0.03.
+#include "platform.h"
 #include "rmvpe_onnx.h"
 #include "paths.h"
 #include <onnxruntime_cxx_api.h>
+#if PMS_HAS_FFTW
 #include <fftw3.h>
 #include <cmath>
 #include <cstring>
@@ -190,3 +192,7 @@ std::vector<float> rmvpe_f0(const std::vector<float>& wav16k)
         return {};
     }
 }
+
+#else
+// PMS_HAS_FFTW=0 headless stubs (filled from linker)
+#endif  // PMS_HAS_FFTW

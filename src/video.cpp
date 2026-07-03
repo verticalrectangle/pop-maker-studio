@@ -1,3 +1,4 @@
+#include "platform.h"
 #include "video.h"
 #include "fx_shader.h"
 
@@ -11,6 +12,7 @@
 // ── stb_image_write — JPEG encode for datamosh preview ───────────────────────
 #include "stb_image_write.h"
 
+#if PMS_HAS_FFMPEG
 extern "C" {
 #include <libavformat/avformat.h>
 #include <libavcodec/avcodec.h>
@@ -3044,3 +3046,16 @@ uintptr_t video_adj_preview_texture(int unique_id,
     ap.tex = tmp.tex;
     return (uintptr_t)ap.tex;
 }
+
+#else
+void video_close(int) {}
+bool video_is_gif(int) { return false; }
+bool video_open_gif(int, const std::string&) { return false; }
+bool video_open_native(int, const std::string&) { return false; }
+bool video_open_proxy(int, const ProxyInfo&) { return false; }
+void video_open_still(int, const std::string&) {}
+float video_probe_duration(const std::string&) { return 0; }
+MediaFileInfo video_probe_file(const std::string&) { return {}; }
+PreviewSource video_source(int) { return PreviewSource::None; }
+std::string video_extract_segment(const std::string&, double, double, const std::string&, bool) { return {}; }
+#endif  // PMS_HAS_FFMPEG

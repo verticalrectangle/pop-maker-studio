@@ -2,6 +2,7 @@
 // Model: Kim_Vocal_2.onnx  (UVR5 community, battle-tested)
 // Pipeline: ffmpeg decode → STFT (FFTW3) → chunked ONNX → ISTFT → ffmpeg encode.
 // Stems: vocals (model output) + instrumental (original − vocals).
+#include "platform.h"
 #include "separate.h"
 #include "paths.h"
 #include <onnxruntime_cxx_api.h>
@@ -14,6 +15,7 @@
 #  include <dnnl_provider_options.h>
 #  define PMS_HAVE_DNNL 1
 #endif
+#if PMS_HAS_FFTW
 #include <fftw3.h>
 #include <filesystem>
 #include <cmath>
@@ -366,3 +368,8 @@ std::string separate_run(
     prog(1.f, "Separation complete");
     return {};
 }
+
+#else
+bool separate_model_exists() { return false; }
+std::string separate_run(const std::string&, const std::string&, const std::string&, std::function<void(float, const std::string&)>, float, float) { return {}; }
+#endif  // PMS_HAS_FFTW

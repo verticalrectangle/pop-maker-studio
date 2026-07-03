@@ -1,5 +1,7 @@
+#include "platform.h"
 #include "body_fx.h"
 
+#if PMS_HAS_GL
 #include "gl_compat.h"
 
 // stb_image implementation is already compiled in video.cpp
@@ -1501,3 +1503,13 @@ void body_fx_evict_mask_cache(const std::string& mask_dir) {
         }
     }
 }
+
+#else
+uintptr_t body_fx_apply(BodyFXType, uintptr_t s, unsigned, int, int, const float*, float, float, const float*, float) { return s; }
+const BodyFXInfo* body_fx_find_info(BodyFXType) { return nullptr; }
+int body_fx_info_count() { return 0; }
+const BodyFXInfo* body_fx_info_list() { return nullptr; }
+unsigned body_fx_mask_texture(const std::string&, int) { return 0; }
+void body_fx_evict_mask_cache(const std::string&) {}
+void body_fx_invalidate_mask_index(const std::string&) {}
+#endif  // PMS_HAS_GL

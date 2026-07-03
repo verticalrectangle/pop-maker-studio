@@ -6,8 +6,11 @@
 #endif
 
 extern "C" {
+#include "platform.h"
+#if PMS_HAS_FFMPEG
 #include <libavformat/avformat.h>
 #include <libavutil/mathematics.h>
+#endif
 }
 
 #define MINIAUDIO_IMPLEMENTATION
@@ -584,6 +587,7 @@ bool audio_load(const std::string& path) {
     g_loading.store(true);
 
     // Probe container duration synchronously (fast — header only).
+#if PMS_HAS_FFMPEG
     {
         AVFormatContext* fc = nullptr;
         if (avformat_open_input(&fc, path.c_str(), nullptr, nullptr) == 0) {
@@ -592,6 +596,7 @@ bool audio_load(const std::string& path) {
             avformat_close_input(&fc);
         }
     }
+#endif
 
     std::thread([path]() {
         static const char* TMP = "/tmp/pms_audio_decode.raw";
@@ -944,6 +949,9 @@ bool audio_monitor_chain_active() {
 }
 
 bool audio_probe(const std::string& path, AudioMeta& meta) {
+#if !PMS_HAS_FFMPEG
+    (void)path; (void)meta; return false;   // AVFoundation probe = Phase 4
+#else
     AVFormatContext* fmt_ctx = nullptr;
     if (avformat_open_input(&fmt_ctx, path.c_str(), nullptr, nullptr) < 0) return false;
     if (avformat_find_stream_info(fmt_ctx, nullptr) < 0) {
@@ -964,6 +972,7 @@ bool audio_probe(const std::string& path, AudioMeta& meta) {
     }
     avformat_close_input(&fmt_ctx);
     return true;
+#endif
 }
 
 // ── Clip-based audio ──────────────────────────────────────────────────────────

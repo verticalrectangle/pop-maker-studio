@@ -1,6 +1,8 @@
+#include "platform.h"
 #include "runtime_fx.h"
 #include "json.hpp"
 
+#if PMS_HAS_GL
 #include "gl_compat.h"
 
 #include <filesystem>
@@ -385,3 +387,9 @@ std::string runtime_fx_validate(const std::string& glsl_body,
     if (prog) glDeleteProgram(prog);
     return err;
 }
+
+#else
+uintptr_t runtime_fx_apply(const std::string&, uintptr_t s, int, int, const std::vector<float>&, float, float) { return s; }
+void runtime_fx_poll(const std::string&) {}
+std::string runtime_fx_validate(const std::string&, const std::vector<RuntimeFXParam>&) { return {}; }
+#endif  // PMS_HAS_GL

@@ -6,26 +6,34 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # ── Dependencies ──────────────────────────────────────────────────────────────
-find_package(OpenGL REQUIRED)
 find_package(PkgConfig REQUIRED)
 find_package(whisper CONFIG QUIET)
+pkg_check_modules(FREETYPE  REQUIRED freetype2)   # text — needed on every platform
 if(NOT PMS_ENGINE_ONLY)
     pkg_check_modules(GLFW REQUIRED glfw3)
     pkg_check_modules(VTERM REQUIRED vterm)
 endif()
-pkg_check_modules(AVCODEC  REQUIRED libavcodec)
-pkg_check_modules(AVFORMAT REQUIRED libavformat)
-pkg_check_modules(AVUTIL   REQUIRED libavutil)
-pkg_check_modules(SWRESAMPLE REQUIRED libswresample)
-pkg_check_modules(SWSCALE   REQUIRED libswscale)
-pkg_check_modules(FREETYPE  REQUIRED freetype2)
-pkg_check_modules(AUBIO     REQUIRED aubio)
-pkg_check_modules(TURBOJPEG REQUIRED libturbojpeg)
-pkg_check_modules(FFTW      REQUIRED fftw3f)
+# ffmpeg / aubio / fftw / turbojpeg / OpenGL — desktop capabilities the
+# headless (iOS) build stubs out (PMS_HEADLESS). Skip finding them there.
+if(NOT PMS_HEADLESS)
+    find_package(OpenGL REQUIRED)
+    pkg_check_modules(AVCODEC  REQUIRED libavcodec)
+    pkg_check_modules(AVFORMAT REQUIRED libavformat)
+    pkg_check_modules(AVUTIL   REQUIRED libavutil)
+    pkg_check_modules(SWRESAMPLE REQUIRED libswresample)
+    pkg_check_modules(SWSCALE   REQUIRED libswscale)
+    pkg_check_modules(AUBIO     REQUIRED aubio)
+    pkg_check_modules(TURBOJPEG REQUIRED libturbojpeg)
+    pkg_check_modules(FFTW      REQUIRED fftw3f)
+endif()
 # Native low-latency audio backend (perf mode); optional — the miniaudio
 # duplex path is the fallback when PipeWire is absent.
-if(NOT APPLE)
+if(NOT APPLE AND NOT PMS_HEADLESS)
     pkg_check_modules(PIPEWIRE libpipewire-0.3)
+endif()
+
+if(PMS_HEADLESS)
+    add_compile_definitions(PMS_HEADLESS=1)
 endif()
 
 # pkg_check_modules splits keg -L paths into *_LIBRARY_DIRS; on Linux the
@@ -60,12 +68,13 @@ set(IMGUI_APP_SOURCES
 # app-side symbol they need is declared in src/engine_seams.h, and
 # tools/check_engine_deps.sh enforces the boundary at build time. This is the
 # set that becomes pms_engine.xcframework for iOS (docs/IOS_PORT_PLAN.md).
-# PipeWire backend is Linux-only.
-if(NOT APPLE)
+# PipeWire backend is Linux-desktop-only (excluded on Apple + headless/iOS).
+if(NOT APPLE AND NOT PMS_HEADLESS)
     list(APPEND PMS_PLATFORM_ENGINE_SOURCES src/audio_pw.cpp)
 endif()
 
 option(PMS_ENGINE_ONLY "Build only pms-engine + engine-smoke (no desktop app; macOS Phase 2 bring-up)" OFF)
+option(PMS_HEADLESS "Engine with no ffmpeg/GL/fftw/process-spawn — iOS-shaped stubs (Phase 2.3)" OFF)
 
 set(PMS_ENGINE_SOURCES
     src/paths.cpp
@@ -76,6 +85,7 @@ set(PMS_ENGINE_SOURCES
     src/app_state.cpp
     src/project_meta.cpp
     src/typography_core.cpp
+    src/stb_impl.cpp
     src/pms_engine.cpp
     src/engine_runtime.cpp
     src/rmvpe_onnx.cpp
@@ -171,7 +181,7 @@ target_link_libraries(engine-smoke PRIVATE pms-engine)
 target_include_directories(engine-smoke PRIVATE src)
 
 
-if(PIPEWIRE_FOUND)
+if(PIPEWIRE_FOUND AND NOT PMS_HEADLESS)
 if(NOT PMS_ENGINE_ONLY)
     target_compile_definitions(pop-maker-studio PRIVATE HAVE_PIPEWIRE)
 endif()
@@ -206,15 +216,21 @@ target_include_directories(${_pms_tgt} PRIVATE
 endforeach()
 
 target_link_libraries(pms-engine PUBLIC
-    OpenGL::GL
-    ${AVCODEC_LIBRARIES} ${AVFORMAT_LIBRARIES} ${AVUTIL_LIBRARIES}
-    ${SWRESAMPLE_LIBRARIES} ${SWSCALE_LIBRARIES} ${FREETYPE_LIBRARIES}
-    ${AUBIO_LIBRARIES} ${TURBOJPEG_LIBRARIES} ${PIPEWIRE_LIBRARIES}
+    ${FREETYPE_LIBRARIES}
     onnxruntime
     $<IF:$<TARGET_EXISTS:whisper::whisper>,whisper::whisper,whisper>
-    ${FFTW_LIBRARIES}
-    dl pthread
+    pthread
 )
+if(NOT PMS_HEADLESS)
+    target_link_libraries(pms-engine PUBLIC
+        OpenGL::GL
+        ${AVCODEC_LIBRARIES} ${AVFORMAT_LIBRARIES} ${AVUTIL_LIBRARIES}
+        ${SWRESAMPLE_LIBRARIES} ${SWSCALE_LIBRARIES}
+        ${AUBIO_LIBRARIES} ${TURBOJPEG_LIBRARIES} ${PIPEWIRE_LIBRARIES}
+        ${FFTW_LIBRARIES}
+        dl
+    )
+endif()
 
 if(NOT PMS_ENGINE_ONLY)
 target_link_libraries(pop-maker-studio PRIVATE

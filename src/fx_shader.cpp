@@ -1,6 +1,8 @@
+#include "platform.h"
 #include "fx_shader.h"
 #include "bg_presets.h"
 
+#if PMS_HAS_GL
 #include "gl_compat.h"
 
 #include <imgui.h>
@@ -1897,3 +1899,21 @@ void fx_blit(uintptr_t src_tex, unsigned dst_fbo, int w, int h) {
     glViewport(prev_vp[0], prev_vp[1], prev_vp[2], prev_vp[3]);
     glBindVertexArray(0);
 }
+
+#else
+uintptr_t bg_render_to_texture(const char*, int, int, int, float, float, float, const float*, const float*, const float*) { return 0; }
+uintptr_t face_beauty_apply(uintptr_t s, int, int, int, const FaceBeautyParams&) { return s; }
+uintptr_t face_makeup_apply(uintptr_t s, int, int, int, const float (*)[2], unsigned, float, float, float, float, float, float, float, float, float) { return s; }
+uintptr_t face_makeup_apply(uintptr_t s, int, int, int, const float (*)[2], unsigned, float, float) { return s; }
+uintptr_t face_warp_apply(uintptr_t s, int, int, int, const float*, int) { return s; }
+uintptr_t face_sprites_apply(uintptr_t s, int, int, int, const FaceSpriteQuad*, int) { return s; }
+int fx_face_clip_slot(int) { return 0; }
+int fx_face_preview_slot(int) { return 0; }
+uintptr_t fx_apply(uintptr_t s, int, int, int, const EffectAccum&, const CreativeFXAccum&, float) { return s; }
+uintptr_t fx_preview_gen_effect(FXType, uintptr_t s, int, int, float) { return s; }
+void fx_blit(uintptr_t, unsigned, int, int) {}
+void scene_add_layer(uintptr_t, float, float, float, float, float, float, float, float, float, float, float) {}
+uintptr_t scene_result() { return 0; }
+void fx_shader_init() {}
+void fx_shader_shutdown() {}
+#endif  // PMS_HAS_GL

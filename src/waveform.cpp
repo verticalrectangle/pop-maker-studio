@@ -1,3 +1,4 @@
+#include "platform.h"
 #include "waveform.h"
 #include <unordered_map>
 #include <mutex>
@@ -5,6 +6,7 @@
 #include <cmath>
 #include <cstring>
 
+#if PMS_HAS_FFMPEG
 extern "C" {
 #include <libavformat/avformat.h>
 #include <libavcodec/avcodec.h>
@@ -146,3 +148,7 @@ void waveform_clear_cache() {
     std::lock_guard<std::mutex> lk(s_mutex);
     s_cache.clear();
 }
+
+#else
+// ── PMS_HAS_FFMPEG=0 stubs (headless / iOS) — filled from linker undefined refs ──
+#endif  // PMS_HAS_FFMPEG

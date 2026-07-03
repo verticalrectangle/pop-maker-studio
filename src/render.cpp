@@ -1,3 +1,4 @@
+#include "platform.h"
 #include "render.h"
 #include "inter_font.h"   // inter_black_ttf[], inter_black_ttf_size
 #include "bg_remove.h"
@@ -10,14 +11,11 @@
 #include "face_filters.h"
 #include "face_cache.h"
 
+#if PMS_HAS_FFMPEG
 #include "gl_compat.h"
 #include <imgui_impl_opengl3.h>
 
-#define STB_IMAGE_WRITE_IMPLEMENTATION
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wmissing-field-initializers"
-#include "stb_image_write.h"
-#pragma GCC diagnostic pop
+#include "stb_image_write.h"  // impl in stb_impl.cpp (always compiled)
 
 #include "stb_image.h"  // declarations only — implementation lives in video.cpp
 #include "proxy.h"      // proxy_load — the counted frame rate the bg masks are keyed by
@@ -3452,3 +3450,9 @@ void render_tick_gl(AppState& state) {
         g_perf.reset();
     }
 }
+
+#else
+void render_cancel() {}
+void render_start_gl(AppState&) {}
+void render_tick_gl(AppState&) {}
+#endif  // PMS_HAS_FFMPEG
