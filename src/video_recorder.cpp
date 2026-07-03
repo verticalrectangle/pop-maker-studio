@@ -17,6 +17,7 @@
 #include <vector>
 
 #include <fcntl.h>
+#include <signal.h>   // kill() — was transitively included via linux headers
 #ifdef __linux__
 #include <linux/videodev2.h>
 #endif
