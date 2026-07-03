@@ -11,7 +11,8 @@
 // ── Binary serialization helpers ──────────────────────────────────────────────
 
 static const uint32_t MAGIC   = 0x534D5001u; // "PMS\x01"
-static const uint32_t VERSION = 64u;  // v64: retro_beauty + insta_2016 + glass_skin generated FX
+static const uint32_t VERSION = 64u;
+extern "C" uint32_t pms_project_version() { return VERSION; }  // C ABI (pms_engine.h)  // v64: retro_beauty + insta_2016 + glass_skin generated FX
 
 // Version used to gate the registry-effect read block (generated/fx_project_read.h).
 // Normally the file's format version; project_load decrements it by 1 on a retry

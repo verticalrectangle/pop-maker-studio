@@ -86,8 +86,13 @@ architecture, the face tracker (pure ORT + math).
 > paths.cpp). The one UI side effect found inside engine logic (panel flip
 > after generate_typography) became a registered hook, no-op headless.
 > engine_seams.h now declares only app-provided EXTRAS (hooks + geometry
-> writers), not link dependencies. Remaining for Phase 0 exit: the
-> pms_engine.h C ABI wrapper + a headless engine_command test target.
+> writers), not link dependencies. **PHASE 0 EXIT MET**: src/pms_engine.h
+> C ABI (create/tick/command/events, matching the pms-ios contract) over
+> the socket-free engine_command chokepoint, proven by the `engine-smoke`
+> target — a binary linking ONLY pms-engine that drives levers headless
+> (add_track/add_clip/get_all_clips/save_project) and passes. CI-able.
+> Remaining Phase 0 niceties: migrate the frame-loop worker pumps into
+> pms_tick; formalize the event queue feed.
 
 Goal: a `pms-engine` static-lib CMake target that compiles with **no** GLFW,
 ImGui, X11, or process-spawn code, consumed by the existing desktop app as

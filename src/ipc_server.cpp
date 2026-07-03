@@ -860,6 +860,26 @@ void ipc_debug_input_tick() {
 // ── Command dispatch ──────────────────────────────────────────────────────────
 
 static json dispatch(AppState& state, const std::string& method, const json& params, std::string& err,
+                     int client_fd, const std::string& req_id);
+
+std::string engine_command(AppState& state, const std::string& json_request) {
+    json reply;
+    try {
+        json req = json::parse(json_request);
+        std::string method = req.value("method", "");
+        json params = req.value("params", json::object());
+        std::string err;
+        json result = dispatch(state, method, params, err, /*client_fd=*/-1,
+                               req.value("id", std::string("engine")));
+        if (!err.empty()) reply = {{"id", req.value("id", "engine")}, {"error", err}};
+        else              reply = {{"id", req.value("id", "engine")}, {"result", result}};
+    } catch (const std::exception& e) {
+        reply = {{"id", "engine"}, {"error", std::string("JSON parse error: ") + e.what()}};
+    }
+    return reply.dump();
+}
+
+static json dispatch(AppState& state, const std::string& method, const json& params, std::string& err,
                      int client_fd = -1, const std::string& req_id = "") {
     // ── Log to agent activity panel ───────────────────────────────────────────
     {

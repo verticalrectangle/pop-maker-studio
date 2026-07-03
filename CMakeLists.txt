@@ -53,6 +53,7 @@ set(PMS_ENGINE_SOURCES
     src/app_state.cpp
     src/project_meta.cpp
     src/typography_core.cpp
+    src/pms_engine.cpp
     src/rmvpe_onnx.cpp
     src/runtime_fx.cpp
     src/ipc_server.cpp
@@ -137,6 +138,12 @@ add_custom_target(check_engine_deps
     COMMENT "Checking engine/app boundary (engine_seams.h rules)"
 )
 add_dependencies(pms-engine check_engine_deps)
+
+# Phase 0 proof: the engine driven headless through the C ABI (no app, no
+# socket, no window). CI-able: build + run = the boundary holds.
+add_executable(engine-smoke tools/engine_smoke.cpp)
+target_link_libraries(engine-smoke PRIVATE pms-engine)
+target_include_directories(engine-smoke PRIVATE src)
 
 
 if(PIPEWIRE_FOUND)
