@@ -17,7 +17,9 @@
 #include <vector>
 
 #include <fcntl.h>
+#ifdef __linux__
 #include <linux/videodev2.h>
+#endif
 #include <sys/ioctl.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -62,6 +64,13 @@ static bool s_pair_started = false;          // we launched the audio recorder
 
 // ── Devices ───────────────────────────────────────────────────────────────────
 
+#ifndef __linux__
+// Camera enumeration is V4L2 on Linux; the Apple CaptureBackend
+// (AVFoundation) lands in Playbook Phase 4/5. Until then: no devices —
+// the fake-cam env path still works for the rig.
+std::vector<VCamDevice> vrecorder_devices() { return {}; }
+static bool device_has_mjpeg(const std::string&) { return false; }
+#else
 std::vector<VCamDevice> vrecorder_devices() {
     std::vector<VCamDevice> out;
     for (int i = 0; i < 16; ++i) {
@@ -162,6 +171,7 @@ static bool device_has_mjpeg(const std::string& path) {
     s_mjpeg_cache[path] = found;
     return found;
 }
+#endif  // __linux__
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
