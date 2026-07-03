@@ -1900,6 +1900,15 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         return r;
     }
 
+    if (method == "set_virtual_mic") {
+        bool on = params.value("on", true);
+        if (!audio_vmic_set(on)) {
+            err = "virtual mic unavailable — needs PipeWire (build flag HAVE_PIPEWIRE + a running PipeWire session)";
+            return {};
+        }
+        return {{"on", audio_vmic_get()}};
+    }
+
     if (method == "set_camera_monitor") {
         bool on = params.value("on", true);
         vrecorder_monitor_set(on);

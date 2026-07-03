@@ -66,6 +66,7 @@ static bool              g_duplex_init = false;
 static bool              g_cap_init    = false;  // perf mode active (either backend)
 static bool              g_perf_pw     = false;  // native PipeWire backend in use
 static std::atomic<bool> g_monitor_on{false};
+static std::atomic<bool> g_vmic_on{false};
 
 // Monitor ring — SPSC: input block pushes the gated mic, output block drains
 // it into the mix. On the miniaudio duplex backend both happen in the SAME
@@ -424,6 +425,14 @@ static void perf_input_block(const float* in, uint32_t frameCount) {
     const bool gate = g_gate_on.load(std::memory_order_relaxed);
     const bool bake = g_gate_bake.load(std::memory_order_relaxed);
     const bool mon  = g_monitor_on.load(std::memory_order_relaxed);
+#ifdef HAVE_PIPEWIRE
+    const bool vmic = g_vmic_on.load(std::memory_order_relaxed);
+#else
+    const bool vmic = false;
+#endif
+    // Virtual-mic block staging (stack, no allocation on the audio thread).
+    float vm_buf[512 * 2];
+    uint32_t vm_fill = 0;
     // Windowed monitoring: run the FX through the same windowed processor
     // playback/export use, gated on the LIVE playhead — so the monitor follows
     // each brick's span whether you're recording, playing, or just scrubbing.
@@ -450,7 +459,7 @@ static void perf_input_block(const float* in, uint32_t frameCount) {
         float coeff = open > g_gate_gain ? (1.f - GATE_ATTACK) : (1.f - GATE_RELEASE);
         g_gate_gain += coeff * (open - g_gate_gain);
         float gg = gate ? g_gate_gain : 1.f;
-        if (mon && (mw - mr) < MONR_N - 2) {
+        if ((mon || vmic) && (mw - mr) < MONR_N - 2) {
             float ml = l * gg, mr2 = r2 * gg;
             if (fxc) {
                 if (win_mon) {
@@ -462,8 +471,22 @@ static void perf_input_block(const float* in, uint32_t frameCount) {
                 }
                 ++g_mon_frame_ctr;
             }
-            g_monr[mw++ & MONR_MASK] = ml;
-            g_monr[mw++ & MONR_MASK] = mr2;
+            // Local monitor ring only when the user wants to hear themself —
+            // the virtual mic works with local monitoring off (calls).
+            if (mon) {
+                g_monr[mw++ & MONR_MASK] = ml;
+                g_monr[mw++ & MONR_MASK] = mr2;
+            }
+#ifdef HAVE_PIPEWIRE
+            if (vmic) {
+                vm_buf[vm_fill*2]   = ml;
+                vm_buf[vm_fill*2+1] = mr2;
+                if (++vm_fill == 512) {
+                    audio_pw_vmic_push(vm_buf, vm_fill);
+                    vm_fill = 0;
+                }
+            }
+#endif
         }
         // Recorded stream: raw by default; gated only when bake is on.
         float cl = bake ? l * gg : l, cr2 = bake ? r2 * gg : r2;
@@ -475,6 +498,9 @@ static void perf_input_block(const float* in, uint32_t frameCount) {
     g_cap_w.store(cw, std::memory_order_release);
     g_in_peak.store(in_pk, std::memory_order_relaxed);
     g_monr_w.store(mw, std::memory_order_release);
+#ifdef HAVE_PIPEWIRE
+    if (vm_fill) audio_pw_vmic_push(vm_buf, vm_fill);
+#endif
 }
 
 // Performance-mode output: timeline mix + drain the monitor ring on top.
@@ -730,6 +756,26 @@ std::string audio_capture_pulse_source(int index) {
     if (index < 0 || index >= (int)g_cap_dev_ids.size()) return std::string();
     return std::string(g_cap_dev_ids[(size_t)index].pulse);  // pulse name == pw node name
 }
+
+bool audio_vmic_set(bool on) {
+#ifdef HAVE_PIPEWIRE
+    if (on) {
+        if (!audio_pw_vmic_start()) return false;
+        g_vmic_on.store(true, std::memory_order_relaxed);
+        audio_capture_start();          // mic must flow for the source to speak
+        return true;
+    }
+    g_vmic_on.store(false, std::memory_order_relaxed);
+    audio_pw_vmic_stop();
+    // Capture keep-alive is the recorder's decision (it also considers
+    // monitoring/recording); it stops the device on its next tick if idle.
+    return true;
+#else
+    (void)on;
+    return false;                        // no PipeWire on this system
+#endif
+}
+bool audio_vmic_get() { return g_vmic_on.load(std::memory_order_relaxed); }
 
 void audio_monitor_set(bool on) {
     // Monitoring needs the duplex device — enter performance mode if the

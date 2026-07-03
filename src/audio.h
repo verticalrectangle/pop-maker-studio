@@ -77,6 +77,13 @@ bool audio_gate_bake_get();
 // sample in the duplex input path.
 void audio_monitor_fx_set(bool on);
 bool audio_monitor_fx_get();
+
+// Virtual microphone (PipeWire only): expose the PROCESSED record-brick
+// signal (gate + noise reduction + live FX) as a system input device —
+// "Pop Maker Studio Mic" in every app's mic picker. Keeps the capture
+// device running while enabled, independent of local monitoring.
+bool audio_vmic_set(bool on);   // false = start failed (no PipeWire)
+bool audio_vmic_get();
 void audio_monitor_chain_set(const std::vector<AudioFX>& stages);
 // Windowed monitor chain: while the transport rolls, the live mic runs through
 // these source-time FX windows via process_seg (matching playback/export

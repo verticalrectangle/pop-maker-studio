@@ -3,8 +3,8 @@
 // the IPC methods in src/ipc_server.cpp. Regenerate after changing tool
 // definitions:  python3 tools/gen_agent_tools.py
 // 83 agent tools (62 direct-IPC, 21 via the
-// server.py bridge); 7 operator-only tools withheld from the
-// in-app harness (get_canvas_geometry, new_project, set_camera_monitor, set_monitor, ui_input, vrecord_start, vrecord_stop).
+// server.py bridge); 8 operator-only tools withheld from the
+// in-app harness (get_canvas_geometry, new_project, set_camera_monitor, set_monitor, set_virtual_mic, ui_input, vrecord_start, vrecord_stop).
 #pragma once
 
 // JSON array of {name, description, inputSchema, ipc}.

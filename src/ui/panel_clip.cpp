@@ -2097,6 +2097,23 @@ void panel_clip(AppState& state, float w) {
 
             ImGui::Dummy({0.f, 4.f});
             bool mon = audio_monitor_get();
+            {
+                bool vm = audio_vmic_get();
+                if (ImGui::Checkbox("Virtual mic (calls)", &vm)) {
+                    if (vm) audio_vmic_set(true);   // silently unavailable
+                    else    audio_vmic_set(false);   // without PipeWire — the
+                                                     // checkbox just won't stick
+                }
+                if (ImGui::IsItemHovered()) {
+                    ImGui::BeginTooltip();
+                    ImGui::TextUnformatted(
+                        "Expose this brick's processed signal (gate, noise\n"
+                        "reduction, live FX) as a system microphone \xe2\x80\x94 pick\n"
+                        "'Pop Maker Studio Mic' in your call app. Works with\n"
+                        "'Hear yourself' off.");
+                    ImGui::EndTooltip();
+                }
+            }
             if (ImGui::Checkbox("Hear yourself", &mon)) {
                 if (mon) {
                     // Monitoring swaps in the low-latency duplex device so

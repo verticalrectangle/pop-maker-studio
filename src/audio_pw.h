@@ -24,4 +24,16 @@ bool  audio_pw_start(PwInProcess in_cb, PwOutProcess out_cb, const char* capture
 void  audio_pw_stop();
 bool  audio_pw_active();
 float audio_pw_period_s();   // achieved frames-per-cycle / 44100 (one direction)
+
+// ── Virtual microphone ────────────────────────────────────────────────────────
+// A PipeWire node with media.class Audio/Source: every app's input-device
+// list shows "Pop Maker Studio Mic". Feed it the PROCESSED record-brick
+// monitor signal (gate + noise reduction + live FX chain) and calls hear you
+// with the studio chain. Independent lifecycle from the perf-mode pair — it
+// works with either audio backend. Writer side is audio-thread safe
+// (lock-free ring; underruns emit silence).
+bool audio_pw_vmic_start();
+void audio_pw_vmic_stop();
+bool audio_pw_vmic_active();
+void audio_pw_vmic_push(const float* interleaved_lr, uint32_t frames);
 #endif

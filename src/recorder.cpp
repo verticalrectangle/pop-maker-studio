@@ -265,7 +265,7 @@ void recorder_stop(AppState& state, bool keep_partial) {
     audio_capture_drain(s_buf);
     // Keep the device running if the user is monitoring their mic; the
     // capture buffer self-wraps when nobody drains it.
-    if (!audio_monitor_get()) audio_capture_stop();
+    if (!audio_monitor_get() && !audio_vmic_get()) audio_capture_stop();
     audio_clear_loop();
 
     // Keep a partial last pass when it has at least half a second in it —

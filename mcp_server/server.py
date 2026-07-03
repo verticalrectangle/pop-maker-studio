@@ -109,6 +109,7 @@ _CATEGORIES: dict[str, list[str]] = {
     "capture": [
         "take_snapshot", "ui_input", "vrecord_start", "vrecord_stop", "set_monitor",
         "set_camera_monitor", "detect_screen_activity", "get_activity_status",
+        "set_virtual_mic",
     ],
     "playback": ["play", "pause", "seek"],
     "export": ["trigger_export", "get_export_status", "cancel_export"],
@@ -124,6 +125,7 @@ TOOL_CATEGORY: dict[str, str] = {
 # be moving its own mouse or toggling monitors.
 OPERATOR_TOOLS: set[str] = {
     "ui_input", "get_canvas_geometry", "set_monitor", "set_camera_monitor",
+    "set_virtual_mic",
     "vrecord_start", "vrecord_stop",
     # Withheld from the in-app harness: a full project wipe is too destructive for
     # the cheaper model to reach for (it bailed to it mid-task). The IPC handler
@@ -2245,6 +2247,21 @@ async def list_tools() -> list[Tool]:
                     "hear_fx": {"type": "boolean"},
                     "gate":    {"type": "boolean"},
                 },
+            },
+        ),
+        Tool(
+            name="set_virtual_mic",
+            description=(
+                "Toggle the system virtual microphone (PipeWire, Linux): exposes the record "
+                "brick's PROCESSED live signal (gate, noise reduction, live FX chain) as an "
+                "input device named 'Pop Maker Studio Mic' that any app (calls, OBS) can "
+                "select. Keeps the mic capture running while enabled; local monitoring "
+                "('Hear yourself') is independent."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {"on": {"type": "boolean"}},
+                "required": ["on"],
             },
         ),
         Tool(
