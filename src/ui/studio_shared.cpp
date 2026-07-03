@@ -225,15 +225,6 @@ void normalize_timeline_to_grid(AppState& state) {
     if (state.loop_out >= 0.f) state.loop_out = q(state.loop_out);
 }
 
-float last_playable_time(const AppState& state) {
-    if (state.duration <= 0.f) return 0.f;
-    float fps = tl_fps(state);
-    if (!(fps > 0.f)) fps = 30.f;
-    // Start time of the last whole frame: ceil(duration*fps) is the frame count,
-    // minus one → last index, /fps → its start. Always strictly inside [0,duration).
-    float lf = (ceilf(state.duration * fps) - 1.f) / fps;
-    return fmaxf(0.f, lf);
-}
 
 bool loop_region(const AppState& state, float& lo, float& hi) {
     bool custom = state.loop_in >= 0.f && state.loop_out > state.loop_in;
@@ -735,19 +726,6 @@ std::string source_from_key(const std::string& key) {
 }
 
 
-void gc_video_slots(AppState& state) {
-    std::set<std::string> live;
-    for (auto& tr : state.tracks)
-        for (auto& cl : tr.clips)
-            if (clip_is_videolike_type(cl.clip_type) && !cl.text.empty())
-                live.insert(clip_slot_key(clip_video_src(state, cl), cl.start));
-    for (int i = 0; i < MAX_VIDEO_SLOTS; ++i) {
-        if (!state.proxy_paths[i].empty() && !live.count(state.proxy_paths[i])) {
-            video_close(i);
-            state.proxy_paths[i].clear();
-        }
-    }
-}
 
 
 
@@ -756,58 +734,7 @@ void gc_video_slots(AppState& state) {
 
 
 
-// One-time migration: remove the exact old-format sidecars that earlier
-// versions wrote next to a source file (now centralized in the media cache).
-// Only the unambiguous PMS-generated patterns are touched.
-static void migrate_clean_sidecars(const std::string& path) {
-    std::error_code ec;
-    for (const char* sfx : {".pms_proxy.mjpeg", ".pms_proxy.idx",
-                            ".pms_proxy.mjpeg.prog", ".pms_still.jpg"})
-        fs::remove(path + sfx, ec);
-    fs::path p(path), dir = p.parent_path();
-    std::string fname = p.filename().string(), stem = p.stem().string();
-    if (fs::exists(dir, ec)) {
-        for (auto& e : fs::directory_iterator(dir, ec)) {
-            std::string n = e.path().filename().string();
-            if (n.rfind(fname + ".pms_conform_", 0) == 0) fs::remove(e.path(), ec);
-        }
-    }
-    fs::remove_all(dir / (stem + "_bg_masks"), ec);
-    fs::remove_all(dir / (stem + "_bg_hires"), ec);
-}
 
-void conform_tick(AppState& state) {
-    bool reopen = false, probed_one = false;
-    for (auto& tr : state.tracks) {
-        for (auto& cl : tr.clips) {
-            if (cl.clip_type != ClipType::Video || cl.text.empty()) continue;
-            // Lazy native-fps probe — at most one ffprobe per frame so a load of
-            // many clips doesn't hitch.
-            // Probe when unprobed (src_fps 0). Also re-probe a loaded looping
-            // clip that's missing its duration: src_fps is serialized but
-            // src_duration (v46 projects) is not, so a saved GIF needs its loop
-            // length recovered. -1 = probed-but-none, so we don't retry forever.
-            if ((cl.src_fps == 0.f ||
-                 (cl.clip_loop && cl.src_duration == 0.f)) && !probed_one) {
-                MediaFileInfo mi = video_probe_file(cl.text);
-                cl.src_fps = (mi.fps > 0.0) ? (float)mi.fps : -1.f;
-                cl.src_duration = (mi.duration > 0.0) ? (float)mi.duration : -1.f;
-                // Animated GIFs are loops by nature — default to seamless conform.
-                if (mi.fps > 0.0 && is_animated_image(cl.text)) cl.clip_loop = true;
-                migrate_clean_sidecars(cl.text);   // sweep old scattered files
-                probed_one = true;
-            }
-            if (!clip_needs_conform(cl, state.fps)) continue;
-            conform_start(cl.text, state.fps, cl.conform_smooth, cl.clip_loop);
-            bool ready = conform_is_ready(cl.text, state.fps, cl.conform_smooth, cl.clip_loop);
-            if (ready) proxy_start(conform_path(cl.text, state.fps, cl.conform_smooth, cl.clip_loop));
-            // Edge-trigger a slot reopen so the preview swaps to the conform the
-            // moment it lands (and back to the original if it ever goes away).
-            if (ready != cl.conform_ready_cache) { cl.conform_ready_cache = ready; reopen = true; }
-        }
-    }
-    if (reopen) { gc_video_slots(state); reopen_video_slots(state); }
-}
 
 float project_end(const AppState& state) {
     float end = 0.f;

@@ -91,8 +91,12 @@ architecture, the face tracker (pure ORT + math).
 > the socket-free engine_command chokepoint, proven by the `engine-smoke`
 > target — a binary linking ONLY pms-engine that drives levers headless
 > (add_track/add_clip/get_all_clips/save_project) and passes. CI-able.
-> Remaining Phase 0 niceties: migrate the frame-loop worker pumps into
-> pms_tick; formalize the event queue feed.
+> Niceties DONE: engine_runtime.{h,cpp} — engine_tick is the single
+> heartbeat (fx coupling, conform, beat polls, recorders, playhead clamp,
+> export/render/slot-opens when gl_ready) called by BOTH the desktop frame
+> and pms_tick; the event feed diffs state into typed events (playhead,
+> pipeline, loudness @7Hz, face_track, takes) matching the pms-ios Swift
+> bridge, drained by pms_poll_events. Phase 0 fully closed.
 
 Goal: a `pms-engine` static-lib CMake target that compiles with **no** GLFW,
 ImGui, X11, or process-spawn code, consumed by the existing desktop app as

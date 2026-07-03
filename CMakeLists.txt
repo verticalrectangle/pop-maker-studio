@@ -54,6 +54,7 @@ set(PMS_ENGINE_SOURCES
     src/project_meta.cpp
     src/typography_core.cpp
     src/pms_engine.cpp
+    src/engine_runtime.cpp
     src/rmvpe_onnx.cpp
     src/runtime_fx.cpp
     src/ipc_server.cpp

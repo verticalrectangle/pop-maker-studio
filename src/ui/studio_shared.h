@@ -123,13 +123,11 @@ std::string source_from_key(const std::string& key);
 // reveal: scroll the timeline to the new clip (default). Pass false for drops —
 // the user placed it where they're already looking, so just glow it in place.
 void add_clip_to_track(AppState& state, int track_idx, const std::string& path, ClipType ct, bool reveal = true);
-void gc_video_slots(AppState& state);
 void reopen_video_slots(AppState& state);
 // Incremental slot opening for project load: queue every video-like source,
 // then open a few per frame (tick) so the UI shows progress instead of
 // freezing. reopen_video_slots() stays synchronous for small in-session heals.
 void queue_video_slot_opens(AppState& state);
-void tick_video_slot_opens(AppState& state, double budget_ms = 20.0);
 
 // ── Project open (THE load path) ──────────────────────────────────────────────
 // Loads a .pms and performs the full swap: transcript/audio teardown, state
@@ -194,7 +192,6 @@ inline float struct_field_default(const T& obj, const float* v) {
 std::string clip_video_src(const AppState& state, const Clip& cl);
 // Per-frame: probe native fps lazily, kick conforms, and reopen video slots when
 // a conform becomes ready so the preview/export swap to it. Call from app_frame.
-void conform_tick(AppState& state);
 float project_end(const AppState& state);
 bool  is_audio_file(const std::string& path);
 

@@ -386,7 +386,7 @@ void ui_studio(AppState& state) {
     }
 
     handle_shortcuts(state);
-    poll_clip_beat_analysis(state);
+    // (poll_clip_beat_analysis runs in engine_tick)
 
     // Keep state.duration in sync with actual clip content every frame.
     if (!state.tracks.empty()) {
@@ -656,7 +656,7 @@ void ui_studio(AppState& state) {
     // Project open in progress: open a few decoder slots per frame (each can
     // spawn an ffprobe) and surface a progress bar instead of freezing the UI.
     if (!state.slot_open_queue.empty()) {
-        tick_video_slot_opens(state);
+        // (the slot-open tick itself runs in engine_tick; this is the banner)
         int done  = state.slot_open_total - (int)state.slot_open_queue.size();
         char msg[96];
         snprintf(msg, sizeof(msg), "Opening project…  %d / %d media sources",
@@ -779,8 +779,7 @@ void ui_studio(AppState& state) {
     last_stage = state.pipeline.stage;
 
     // Loop recorder: drain mic, slice takes on the loop-cycle clock.
-    recorder_tick(state);
-    vrecorder_tick(state);
+    // (recorder_tick / vrecorder_tick run in engine_tick)
     monitor_chain_sync(state);
 
     // Push clip snapshots to audio system every frame.

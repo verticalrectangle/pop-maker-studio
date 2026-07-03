@@ -22,6 +22,7 @@
 #include "ui/panel_terminal.h"
 #include "ui/studio_shared.h"   // last_playable_time
 #include "conform.h"            // conform_cancel
+#include "engine_runtime.h"
 #include <imgui.h>
 #include <algorithm>
 #include <chrono>
@@ -46,16 +47,11 @@ void app_init(AppState& state) {
 }
 
 void app_frame(AppState& state) {
-    // Coupled FX bricks track their host every frame — drags, trims, splits
-    // and deletions all resolve here instead of in each edit path.
-    fx_coupling_tick(state);
-
-    // Frame-rate conform: probe native fps, transcode mismatched clips to the
-    // project rate in the background, and swap the preview/export to the
-    // conformed copy when it lands.
-    conform_tick(state);
-
     ImGuiIO& io = ImGui::GetIO();
+    // All engine worker pumps live in one heartbeat now (engine_runtime) —
+    // shared with the C ABI's pms_tick. GL is current here.
+    engine_tick(state, io.DeltaTime, /*gl_ready=*/true);
+
     ImGui::SetNextWindowPos({0, 0});
     ImGui::SetNextWindowSize(io.DisplaySize);
     ImGui::SetNextWindowBgAlpha(1.f);
@@ -140,29 +136,7 @@ void app_frame(AppState& state) {
             }
         }
     }
-    // Single source of truth when paused: the playhead can never sit past the
-    // last frame (replaces the old render-time nudge in canvas.cpp). Left alone
-    // while a record-brick loop cycles past current content.
-    if (!state.playing && !audio_loop_active() && state.duration > 0.f)
-        state.playhead = fmaxf(0.f, fminf(state.playhead, last_playable_time(state)));
-
-    // IPC-requested export: pick up on GL thread before ticking the render.
-    if (state.export_request && !state.render.running) {
-        state.export_request = false;
-        if (!state.export_out_path.empty())
-            state.out_mp4 = state.export_out_path;
-        // sync gif path
-        std::string mp4 = state.out_mp4;
-        size_t dot = mp4.rfind('.');
-        state.out_gif = (dot != std::string::npos ? mp4.substr(0, dot) : mp4) + ".gif";
-        render_start_gl(state);
-    }
-
-    // Drive one export frame per app frame (GL calls must be on main thread).
-    render_tick_gl(state);
-
-    // Hot-reload custom effects and dispatch IPC messages.
-    runtime_fx_poll(g_managed_dir + "/effects");
+    // (export pickup / render tick / fx hot-reload run inside engine_tick)
     ipc_server_poll(state);
 
     if (state.splash_timer > 0.f) {

@@ -7,6 +7,7 @@
 #include "pms_engine.h"
 #include "app.h"
 #include "ipc_server.h"
+#include "engine_runtime.h"
 #include "globals.h"
 #include "json.hpp"
 #include <cstdlib>
@@ -52,9 +53,9 @@ void pms_destroy(pms_engine* e) { delete e; }
 void pms_tick(pms_engine* e, double dt) {
     if (!e) return;
     e->clock += dt;
-    // Worker pumps (proxy scans, slot opens, pipeline polls) currently run
-    // inside the desktop frame; they migrate here as the app loop thins out
-    // (tracked in docs/IOS_PORT_PLAN.md Phase 0 exit).
+    // The shared engine heartbeat (same function the desktop frame calls).
+    // gl_ready=false until the RenderSurface seam provides a context here.
+    engine_tick(e->state, dt, /*gl_ready=*/false);
 }
 
 char* pms_command(pms_engine* e, const char* json_request) {
@@ -64,11 +65,7 @@ char* pms_command(pms_engine* e, const char* json_request) {
 
 char* pms_poll_events(pms_engine* e) {
     if (!e) return dup_cstr("[]");
-    std::lock_guard<std::mutex> lk(e->events_mtx);
-    nlohmann::json arr = nlohmann::json::array();
-    for (auto& ev : e->events) arr.push_back(std::move(ev));
-    e->events.clear();
-    return dup_cstr(arr.dump());
+    return dup_cstr(engine_drain_events());
 }
 
 void pms_free(char* p) { free(p); }
