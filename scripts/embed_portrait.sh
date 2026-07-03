@@ -9,7 +9,9 @@ INPUT="$1"
 OUTPUT="$2"
 PW=270
 PH=480
-TMP=$(mktemp /tmp/portrait_preview_XXXXXX.rgb)
+# BSD mktemp (macOS) requires the Xs at the END of the template.
+TMP=$(mktemp /tmp/portrait_preview_XXXXXX).rgb
+trap 'rm -f "${TMP%.rgb}" "$TMP"' EXIT
 
 # Center-crop to 9:16 using input height as reference, scale to PW×PH
 ffmpeg -y -i "$INPUT" \

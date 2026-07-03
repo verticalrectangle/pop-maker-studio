@@ -10,7 +10,9 @@ INPUT="$1"
 OUTPUT="$2"
 FW=300
 FH=400
-TMP=$(mktemp /tmp/face_preview_XXXXXX.rgb)
+# BSD mktemp (macOS) requires the Xs at the END of the template.
+TMP=$(mktemp /tmp/face_preview_XXXXXX).rgb
+trap 'rm -f "${TMP%.rgb}" "$TMP"' EXIT
 
 # Center-crop to 3:4 using input width as reference, scale to FW×FH.
 ffmpeg -y -i "$INPUT" \
