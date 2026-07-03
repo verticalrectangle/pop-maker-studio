@@ -67,8 +67,12 @@ void      face_filter_preview_dims(int* w, int* h);
 // the take's cached landmark pass (kicking the background build if missing).
 // Returns tex unchanged until the cache is ready. Shared by the preview and
 // export compositors so they cannot diverge.
+// `sync_track`: when the landmark cache isn't current, true = run inference
+// synchronously on this frame (export: deterministic), false = feed the async
+// tracker and use its latest result (preview: real-time, ~1 frame behind).
 uintptr_t face_filter_apply_take(const Clip& cl, double src_t,
-                                 uintptr_t tex, int video_slot, int w, int h);
+                                 uintptr_t tex, int video_slot, int w, int h,
+                                 bool sync_track = false);
 
 // Doggy overlay: ears, nose, tongue drawn from landmarks. `to_screen` maps
 // frame UV → screen px (the mirror's quad mapping, mirrored/rotated).

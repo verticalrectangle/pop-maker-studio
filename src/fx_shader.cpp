@@ -1196,6 +1196,27 @@ uintptr_t face_makeup_apply(uintptr_t src_tex, int slot, int w, int h,
         vtx[i * 4 + 2] = k_face_uv[i][0];
         vtx[i * 4 + 3] = k_face_uv[i][1];
     }
+    // Cull folded triangles: under yaw the far side of the face self-occludes
+    // and its triangles flip winding — drawing them smears the hidden eye's
+    // makeup across the visible cheek. Majority sign = frontal.
+    static unsigned short live_tris[FACE_UV_NTRI * 3];
+    int n_live = 0, n_pos = 0;
+    static float sa[FACE_UV_NTRI];
+    for (int t = 0; t < FACE_UV_NTRI; ++t) {
+        const unsigned short* tr = k_face_tris[t];
+        float ax = pts[tr[1]][0] - pts[tr[0]][0], ay = pts[tr[1]][1] - pts[tr[0]][1];
+        float bx2 = pts[tr[2]][0] - pts[tr[0]][0], by2 = pts[tr[2]][1] - pts[tr[0]][1];
+        sa[t] = ax * by2 - ay * bx2;
+        if (sa[t] > 0.f) ++n_pos;
+    }
+    bool front_pos = n_pos * 2 >= FACE_UV_NTRI;
+    for (int t = 0; t < FACE_UV_NTRI; ++t) {
+        if ((sa[t] > 0.f) != front_pos) continue;
+        live_tris[n_live * 3 + 0] = k_face_tris[t][0];
+        live_tris[n_live * 3 + 1] = k_face_tris[t][1];
+        live_tris[n_live * 3 + 2] = k_face_tris[t][2];
+        ++n_live;
+    }
     glBindFramebuffer(GL_FRAMEBUFFER, s.fbo);
     glViewport(0, 0, w, h);
     glUseProgram(g_face_mk_prog);
@@ -1215,7 +1236,10 @@ uintptr_t face_makeup_apply(uintptr_t src_tex, int slot, int w, int h,
                 eyeL_x, eyeL_y, eyeR_x, eyeR_y);
     glUniform4f(glGetUniformLocation(g_face_mk_prog, "u_mk_blink"),
                 blink_l, blink_r, eye_r, 0.f);
-    glDrawElements(GL_TRIANGLES, FACE_UV_NTRI * 3, GL_UNSIGNED_SHORT, 0);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, g_face_mk_ibo);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, n_live * 3 * sizeof(unsigned short),
+                 live_tris, GL_DYNAMIC_DRAW);
+    glDrawElements(GL_TRIANGLES, n_live * 3, GL_UNSIGNED_SHORT, 0);
     glBindVertexArray(0);
     glActiveTexture(GL_TEXTURE0);
     if (was_blend) glEnable(GL_BLEND);

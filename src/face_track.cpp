@@ -159,9 +159,18 @@ static bool detect_face(const uint8_t* rgb, int w, int h,
 }
 
 // Landmarks from a face box (any source: detector or previous landmarks).
+// Roll of a face from its eye corners — drives the roll-normalized crop.
+static float roll_of(const FaceObs& o) {
+    return atan2f(o.pts[263][1] - o.pts[33][1], o.pts[263][0] - o.pts[33][0]);
+}
+
+// `roll` rotates the sampling grid so the face lands UPRIGHT in the crop —
+// the landmark model badly degrades past ~30° of head tilt (Alexis's rotation
+// test: liner on the forehead, lip tint on the nose). MediaPipe's own
+// pipeline does exactly this; feeding raw crops was the rigid part.
 static bool landmarks_from_box(const uint8_t* rgb, int w, int h,
                                float bx1, float by1, float bx2, float by2,
-                               FaceObs& out) {
+                               FaceObs& out, float roll = 0.f) {
     if (!ensure_sessions()) return false;
     out = FaceObs{};
     out.w = w; out.h = h;
@@ -171,19 +180,22 @@ static bool landmarks_from_box(const uint8_t* rgb, int w, int h,
     float cx = (bx1 + bx2) * 0.5f, cy = (by1 + by2) * 0.5f;
     float size = std::max(bx2 - bx1, by2 - by1) * 1.6f;
     float half = size * 0.5f;
+    float cr = cosf(roll), sr = sinf(roll);
     static std::vector<float> crop;
     crop.assign((size_t)256 * 256 * 3, 0.f);
     for (int y = 0; y < 256; ++y) {
-        int sy = (int)(cy - half + (y / 256.f) * size);
-        if (sy < 0) sy = 0; if (sy >= h) sy = h - 1;
-        const uint8_t* row = rgb + (size_t)sy * w * 3;
+        float ly = (y / 256.f) * size - half;
         for (int x = 0; x < 256; ++x) {
-            int sx = (int)(cx - half + (x / 256.f) * size);
+            float lx = (x / 256.f) * size - half;
+            int sx = (int)(cx + lx * cr - ly * sr);
+            int sy = (int)(cy + lx * sr + ly * cr);
             if (sx < 0) sx = 0; if (sx >= w) sx = w - 1;
+            if (sy < 0) sy = 0; if (sy >= h) sy = h - 1;
+            const uint8_t* px = rgb + ((size_t)sy * w + sx) * 3;
             float* dst = &crop[((size_t)y * 256 + x) * 3];
-            dst[0] = (float)row[sx * 3 + 0] / 255.f;
-            dst[1] = (float)row[sx * 3 + 1] / 255.f;
-            dst[2] = (float)row[sx * 3 + 2] / 255.f;
+            dst[0] = (float)px[0] / 255.f;
+            dst[1] = (float)px[1] / 255.f;
+            dst[2] = (float)px[2] / 255.f;
         }
     }
     int64_t lmk_shape[4] = {1, 256, 256, 3};
@@ -202,16 +214,24 @@ static bool landmarks_from_box(const uint8_t* rgb, int w, int h,
     if (getenv("PMS_FACE_DEBUG"))
         fprintf(stderr, "[face] mesh conf=%.3f (flag=%.2f)\n", conf, flag);
     if (conf < 0.45f) return false;                          // no face in the crop
+    // Rotate landmarks back into frame coords; keep the UPRIGHT (crop-space)
+    // coords too — the blendshape net wants an upright face as much as the
+    // landmark net does (tilted blinks misfired before this).
+    static float up_pts[FT_NPTS][2];
     for (int k = 0; k < FT_NPTS; ++k) {
-        out.pts[k][0] = mesh[k*3]   / 256.f * size + (cx - half);
-        out.pts[k][1] = mesh[k*3+1] / 256.f * size + (cy - half);
+        float lx = mesh[k*3]   / 256.f * size - half;
+        float ly = mesh[k*3+1] / 256.f * size - half;
+        out.pts[k][0] = cx + lx * cr - ly * sr;
+        out.pts[k][1] = cy + lx * sr + ly * cr;
+        up_pts[k][0] = cx + lx;
+        up_pts[k][1] = cy + ly;
     }
 
-    // ── Blendshapes: 146-landmark subset in frame pixels → 52 coefficients ───
+    // ── Blendshapes: 146-landmark subset (upright coords) → 52 coefficients ──
     static float sub[146 * 2];
     for (int k = 0; k < 146; ++k) {
-        sub[k*2]   = out.pts[kBlendSubset[k]][0];
-        sub[k*2+1] = out.pts[kBlendSubset[k]][1];
+        sub[k*2]   = up_pts[kBlendSubset[k]][0];
+        sub[k*2+1] = up_pts[kBlendSubset[k]][1];
     }
     int64_t bls_shape[3] = {1, 146, 2};
     Ort::Value bls_in = Ort::Value::CreateTensor<float>(
@@ -229,6 +249,36 @@ static bool landmarks_from_box(const uint8_t* rgb, int w, int h,
     out.score = conf;
     out.valid = true;
     return true;
+}
+
+// Roll ladder: run the fast path (expected roll) first; if the model isn't
+// confident, fan out over candidate angles and keep the best. A face tilted
+// past what the landmark net tolerates (~30°) is unfindable from a single
+// bad prior — the ladder recovers from any angle at the cost of a few extra
+// ms on failure frames only.
+static bool landmarks_best_roll(const uint8_t* rgb, int w, int h,
+                                float b1, float b2, float b3, float b4,
+                                FaceObs& out, float expect_roll) {
+    bool fast_ok = landmarks_from_box(rgb, w, h, b1, b2, b3, b4, out, expect_roll);
+    if (fast_ok && out.score >= 0.80f) return true;
+    // The net's confidence is NOT a reliable arbiter between roll candidates
+    // (it can be confidently wrong on off-axis crops) — so the expected-roll
+    // result is the INCUMBENT: a challenger must beat it by a clear margin.
+    FaceObs best = out;
+    bool have = fast_ok;
+    float bar = fast_ok ? out.score + 0.08f : 0.f;
+    const float cands[8] = {0.f, 0.55f, -0.55f, 1.1f, -1.1f, 1.5708f, -1.5708f, 3.14159f};
+    for (float c : cands) {
+        if (fabsf(c - expect_roll) < 0.15f) continue;
+        FaceObs trial;
+        if (landmarks_from_box(rgb, w, h, b1, b2, b3, b4, trial, c) &&
+            trial.score > bar) {
+            best = trial; bar = trial.score; have = true;
+            if (bar >= 0.85f) break;
+        }
+    }
+    out = best;
+    return have && best.valid;
 }
 
 // Full pipeline (sync path / cold start).
@@ -278,10 +328,15 @@ static void rot180(std::vector<uint8_t>& f, int w, int h) {
 // for an upside-down crop — without this check a stale flip state poses
 // every overlay as if the face looked another way.
 static bool upright_ok(const FaceObs& o) {
-    float eyy = (o.pts[468][1] + o.pts[473][1]) * 0.5f;   // iris centers
-    float chin = o.pts[152][1];
-    float face_h = fabsf(chin - eyy);
-    return chin - eyy > face_h * 0.4f;               // chin clearly below
+    // Roll-aware: the old check (chin strictly below the eyes in IMAGE y)
+    // rejected legitimately tilted heads past ~60°. The real job is to
+    // arbitrate 180°-flip candidates — so only reject when the face is
+    // closer to upside-down than upright.
+    float exd = (o.pts[468][0] + o.pts[473][0]) * 0.5f - o.pts[152][0];
+    float eyd = (o.pts[468][1] + o.pts[473][1]) * 0.5f - o.pts[152][1];
+    // eyes-to-chin vector should point generally UP (negative y); allow any
+    // tilt short of past-horizontal-plus (~115°).
+    return atan2f(fabsf(exd), -eyd) < 2.0f;
 }
 
 // Garbage-landmark guard: the landmark net answers SOMETHING for any crop; a
@@ -385,9 +440,20 @@ static bool detect_both_orientations(const std::vector<uint8_t>& frame,
         std::swap(cands[0], cands[1]);
     for (Cand& cd : cands) {
         if (!cd.det) continue;
-        if (landmarks_from_box(cd.img->data(), fw, fh,
-                               cd.b[0], cd.b[1], cd.b[2], cd.b[3], obs) &&
-            upright_ok(obs) &&
+        bool got = landmarks_best_roll(cd.img->data(), fw, fh,
+                                       cd.b[0], cd.b[1], cd.b[2], cd.b[3],
+                                       obs, 0.f);
+        // Refine once with the measured roll (the ladder may have landed on
+        // a coarse candidate).
+        if (got) {
+            float r0 = roll_of(obs);
+            FaceObs fine;
+            if (landmarks_from_box(cd.img->data(), fw, fh,
+                                   cd.b[0], cd.b[1], cd.b[2], cd.b[3],
+                                   fine, r0) && fine.score >= obs.score * 0.9f)
+                obs = fine;
+        }
+        if (got && upright_ok(obs) &&
             lm_sane(obs, cd.b[0], cd.b[1], cd.b[2], cd.b[3])) {
             obs.score = cd.score;
             flip180 = cd.flipped;
@@ -446,7 +512,8 @@ static void worker_main() {
             pb1 = nb1; pb2 = nb2; pb3 = nb3; pb4 = nb4;
         }
         if (have_prev && ++s_since_detect < 60) {
-            ok = landmarks_from_box(frame.data(), fw, fh, pb1, pb2, pb3, pb4, obs);
+            ok = landmarks_best_roll(frame.data(), fw, fh, pb1, pb2, pb3, pb4, obs,
+                                     g_latest.valid ? roll_of(g_latest) : 0.f);
             if (ok && (!upright_ok(obs) ||
                        !lm_sane(obs, pb1, pb2, pb3, pb4)))
                 ok = false;                       // wrong pose → re-detect
@@ -606,7 +673,8 @@ bool face_track_build_cache(const std::string& video_path, int rot_q,
                 float n3 = (float)fw - 1.f - b1, n4 = (float)fh - 1.f - b2;
                 b1 = n1; b2 = n2; b3 = n3; b4 = n4;
             }
-            ok = landmarks_from_box(frame.data(), fw, fh, b1, b2, b3, b4, obs);
+            ok = landmarks_best_roll(frame.data(), fw, fh, b1, b2, b3, b4, obs,
+                                     smooth.valid ? roll_of(smooth) : 0.f);
             if (ok && (!upright_ok(obs) || !lm_sane(obs, b1, b2, b3, b4)))
                 ok = false;
         }
@@ -681,7 +749,7 @@ bool face_track_build_cache(const std::string& video_path, int rot_q,
     std::string tmp = out_path + ".tmp";
     FILE* f = fopen(tmp.c_str(), "wb");
     if (!f) return false;
-    uint32_t magic = 0x46534D50, version = 4;   // v4: adaptive smoothing (v3 lagged fast motion)   // 'PMSF'
+    uint32_t magic = 0x46534D50, version = 8;   // v8: incumbent-margin roll arbitration   // 'PMSF'
     int32_t  rq = rot_q, rw = W, rh = H;
     float    fps = (float)info.fps;
     uint32_t count = (uint32_t)n;

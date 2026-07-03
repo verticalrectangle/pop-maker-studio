@@ -1,6 +1,7 @@
 #include "face_filters.h"
 #include "face_cache.h"
 #include "paths.h"
+#define GL_GLEXT_PROTOTYPES
 #include <GL/gl.h>
 #include <GL/glext.h>
 #include "stb_image.h"
@@ -756,14 +757,59 @@ uintptr_t face_filter_apply_obs(int filter_id, float amount, const FaceObs& obs,
 // Playback/export: face filter on a take's decoded frame, via the cached
 // landmark pass (kicking the background build if missing).
 uintptr_t face_filter_apply_take(const Clip& cl, double src_t,
-                                 uintptr_t tex, int video_slot, int w, int h) {
+                                 uintptr_t tex, int video_slot, int w, int h,
+                                 bool sync_track) {
     if (cl.face_filter == 0 || cl.text.empty() || w <= 0 || h <= 0 ||
         !face_track_available())
         return tex;
     int rot_q = ((int)lroundf(cl.rotation / 90.f) % 4 + 4) % 4;
     face_cache_request(cl.text, rot_q);          // no-op once built
     FaceObs obs;
-    if (!face_cache_obs(cl.text, rot_q, src_t, obs)) return tex;
+    bool have = face_cache_obs(cl.text, rot_q, src_t, obs);
+    if (!have) {
+        // The bake isn't current (building, or stale version). Track LIVE on
+        // this frame instead of showing unfiltered/frozen makeup — the cache
+        // is a fast-path, never the only path. Half-res download; the roll
+        // ladder inside the tracker handles rotated sources.
+        int hw2 = w / 2, hh2 = h / 2;
+        if (hw2 >= 64 && hh2 >= 64) {
+            static GLuint s_dl_fbo = 0;
+            static std::vector<uint8_t> rgb;
+            rgb.resize((size_t)hw2 * hh2 * 3);
+            GLint prev_read = 0, prev_draw = 0;
+            glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &prev_read);
+            glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &prev_draw);
+            if (!s_dl_fbo) glGenFramebuffers(1, &s_dl_fbo);
+            glBindFramebuffer(GL_READ_FRAMEBUFFER, s_dl_fbo);
+            glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                                   GL_TEXTURE_2D, (GLuint)tex, 0);
+            // Direct sub-sampled read: full-res read + CPU decimate is slower
+            // than reading every other pixel via a tiny scratch — keep it
+            // simple and read full rows at stride 2.
+            static std::vector<uint8_t> full;
+            full.resize((size_t)w * h * 3);
+            glPixelStorei(GL_PACK_ALIGNMENT, 1);
+            glReadPixels(0, 0, w, h, GL_RGB, GL_UNSIGNED_BYTE, full.data());
+            glBindFramebuffer(GL_READ_FRAMEBUFFER, (GLuint)prev_read);
+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, (GLuint)prev_draw);
+            for (int y = 0; y < hh2; ++y) {
+                const uint8_t* srow = &full[(size_t)(y * 2) * w * 3];
+                uint8_t* drow = &rgb[(size_t)y * hw2 * 3];
+                for (int x = 0; x < hw2; ++x) {
+                    drow[x*3+0] = srow[x*2*3+0];
+                    drow[x*3+1] = srow[x*2*3+1];
+                    drow[x*3+2] = srow[x*2*3+2];
+                }
+            }
+            if (sync_track) {
+                have = face_track_run_sync(rgb.data(), hw2, hh2, obs);
+            } else {
+                face_track_submit(rgb.data(), hw2, hh2);
+                have = face_track_latest(obs) && obs.valid;
+            }
+        }
+    }
+    if (!have) return tex;
     return face_filter_apply_obs(cl.face_filter, cl.face_filter_amt, obs,
                                  (float)src_t, tex,
                                  fx_face_clip_slot(video_slot), w, h);

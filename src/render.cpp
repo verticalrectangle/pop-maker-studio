@@ -2362,7 +2362,8 @@ static bool gl_render_vid_clip(ImDrawList& dl, const Clip* cl, float at_time,
     // Export prep blocks until the cache is built (see export start).
     if (cl->face_filter != 0)
         cur_tex = face_filter_apply_take(*cl, (double)src_t, cur_tex,
-                                         fx_slot, vid_w, vid_h);
+                                         fx_slot, vid_w, vid_h,
+                                         /*sync_track=*/true);
 
     // BodyFX is now a solid brick on its own track — applied post-composite (see below).
 
