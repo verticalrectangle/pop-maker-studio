@@ -9,7 +9,10 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 find_package(OpenGL REQUIRED)
 find_package(PkgConfig REQUIRED)
 find_package(whisper CONFIG QUIET)
-pkg_check_modules(GLFW REQUIRED glfw3)
+if(NOT PMS_ENGINE_ONLY)
+    pkg_check_modules(GLFW REQUIRED glfw3)
+    pkg_check_modules(VTERM REQUIRED vterm)
+endif()
 pkg_check_modules(AVCODEC  REQUIRED libavcodec)
 pkg_check_modules(AVFORMAT REQUIRED libavformat)
 pkg_check_modules(AVUTIL   REQUIRED libavutil)
@@ -17,11 +20,12 @@ pkg_check_modules(SWRESAMPLE REQUIRED libswresample)
 pkg_check_modules(SWSCALE   REQUIRED libswscale)
 pkg_check_modules(FREETYPE  REQUIRED freetype2)
 pkg_check_modules(AUBIO     REQUIRED aubio)
-pkg_check_modules(VTERM     REQUIRED vterm)
 pkg_check_modules(TURBOJPEG REQUIRED libturbojpeg)
 # Native low-latency audio backend (perf mode); optional — the miniaudio
 # duplex path is the fallback when PipeWire is absent.
-pkg_check_modules(PIPEWIRE libpipewire-0.3)
+if(NOT APPLE)
+    pkg_check_modules(PIPEWIRE libpipewire-0.3)
+endif()
 
 # ── ImGui ─────────────────────────────────────────────────────────────────────
 set(IMGUI_DIR ${CMAKE_SOURCE_DIR}/vendor/imgui)
@@ -44,6 +48,13 @@ set(IMGUI_APP_SOURCES
 # app-side symbol they need is declared in src/engine_seams.h, and
 # tools/check_engine_deps.sh enforces the boundary at build time. This is the
 # set that becomes pms_engine.xcframework for iOS (docs/IOS_PORT_PLAN.md).
+# PipeWire backend is Linux-only.
+if(NOT APPLE)
+    list(APPEND PMS_PLATFORM_ENGINE_SOURCES src/audio_pw.cpp)
+endif()
+
+option(PMS_ENGINE_ONLY "Build only pms-engine + engine-smoke (no desktop app; macOS Phase 2 bring-up)" OFF)
+
 set(PMS_ENGINE_SOURCES
     src/paths.cpp
     src/timeline_core.cpp
@@ -60,7 +71,6 @@ set(PMS_ENGINE_SOURCES
     src/ipc_server.cpp
     src/audio.cpp
     src/loudness.cpp
-    src/audio_pw.cpp
     src/face_track.cpp
     src/face_cache.cpp
     src/face_filters.cpp
@@ -129,10 +139,12 @@ set(PMS_APP_SOURCES
 # The engine as a static library: the compile-time boundary the iOS port
 # builds on. Links standalone once engine_seams.h empties out; until then the
 # app's objects satisfy the seam symbols at executable link time.
-add_library(pms-engine STATIC ${PMS_ENGINE_SOURCES} ${IMGUI_SOURCES})
+add_library(pms-engine STATIC ${PMS_ENGINE_SOURCES} ${PMS_PLATFORM_ENGINE_SOURCES} ${IMGUI_SOURCES})
 
+if(NOT PMS_ENGINE_ONLY)
 add_executable(pop-maker-studio ${PMS_APP_SOURCES} ${IMGUI_APP_SOURCES})
 target_link_libraries(pop-maker-studio PRIVATE pms-engine)
+endif()
 add_custom_target(check_engine_deps
     COMMAND ${CMAKE_SOURCE_DIR}/tools/check_engine_deps.sh
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
@@ -148,11 +160,18 @@ target_include_directories(engine-smoke PRIVATE src)
 
 
 if(PIPEWIRE_FOUND)
+if(NOT PMS_ENGINE_ONLY)
     target_compile_definitions(pop-maker-studio PRIVATE HAVE_PIPEWIRE)
+endif()
     target_compile_definitions(pms-engine PRIVATE HAVE_PIPEWIRE)
 endif()
 
-foreach(_pms_tgt pop-maker-studio pms-engine)
+if(PMS_ENGINE_ONLY)
+    set(PMS_ALL_TARGETS pms-engine)
+else()
+    set(PMS_ALL_TARGETS pop-maker-studio pms-engine)
+endif()
+foreach(_pms_tgt ${PMS_ALL_TARGETS})
 target_include_directories(${_pms_tgt} PRIVATE
     src
     ${IMGUI_DIR}
@@ -184,6 +203,7 @@ target_link_libraries(pms-engine PUBLIC
     dl pthread
 )
 
+if(NOT PMS_ENGINE_ONLY)
 target_link_libraries(pop-maker-studio PRIVATE
     OpenGL::GL
     ${GLFW_LIBRARIES}
@@ -202,21 +222,30 @@ target_link_libraries(pop-maker-studio PRIVATE
     fftw3f
     dl pthread
 )
+endif()
 
 if(DEFINED ONNXRUNTIME_ROOT)
+if(NOT PMS_ENGINE_ONLY)
     target_include_directories(pop-maker-studio PRIVATE ${ONNXRUNTIME_ROOT}/include)
+endif()
+if(NOT PMS_ENGINE_ONLY)
     target_link_directories(pop-maker-studio PRIVATE ${ONNXRUNTIME_ROOT}/lib)
+endif()
     target_include_directories(pms-engine PRIVATE ${ONNXRUNTIME_ROOT}/include)
     target_link_directories(pms-engine PRIVATE ${ONNXRUNTIME_ROOT}/lib)
 else()
+if(NOT PMS_ENGINE_ONLY)
     target_include_directories(pop-maker-studio PRIVATE /usr/include/onnxruntime)
+endif()
     target_include_directories(pms-engine PRIVATE /usr/include/onnxruntime)
 endif()
 
+if(NOT PMS_ENGINE_ONLY)
 target_compile_definitions(pop-maker-studio PRIVATE IMGUI_ENABLE_FREETYPE)
+endif()
 target_compile_definitions(pms-engine PRIVATE IMGUI_ENABLE_FREETYPE)
 
-foreach(_pms_tgt pop-maker-studio pms-engine)
+foreach(_pms_tgt ${PMS_ALL_TARGETS})
 target_compile_options(${_pms_tgt} PRIVATE
     -Wall -Wextra -Wno-unused-parameter
     $<$<CONFIG:Release>:-O2>
@@ -238,7 +267,10 @@ add_custom_command(
     COMMENT "Embedding Inter fonts"
 )
 add_custom_target(embed_font DEPENDS ${CMAKE_BINARY_DIR}/inter_font.h)
+if(NOT PMS_ENGINE_ONLY)
 add_dependencies(pop-maker-studio embed_font)
+endif()
+add_dependencies(pms-engine embed_font)
 add_dependencies(pms-engine embed_font)
 
 # Embed JetBrains Mono as a compiled byte array (used by the terminal panel)
@@ -252,7 +284,9 @@ add_custom_command(
     COMMENT "Embedding JetBrains Mono font"
 )
 add_custom_target(embed_mono DEPENDS ${CMAKE_BINARY_DIR}/mono_font.h)
+if(NOT PMS_ENGINE_ONLY)
 add_dependencies(pop-maker-studio embed_mono)
+endif()
 
 # Embed all bundled display typefaces (typography presets) as one byte-array
 # header with a master table. Add/remove a .ttf in assets/fonts/display and
@@ -267,9 +301,13 @@ add_custom_command(
     COMMENT "Embedding ${CMAKE_SOURCE_DIR}/assets/fonts/display display typefaces"
 )
 add_custom_target(embed_display DEPENDS ${CMAKE_BINARY_DIR}/display_fonts.h)
+if(NOT PMS_ENGINE_ONLY)
 add_dependencies(pop-maker-studio embed_display)
+endif()
 
+if(NOT PMS_ENGINE_ONLY)
 target_include_directories(pop-maker-studio PRIVATE ${CMAKE_BINARY_DIR})
+endif()
 target_include_directories(pms-engine PRIVATE ${CMAKE_BINARY_DIR})
 
 # Embed portrait preview photo as raw RGB
@@ -283,7 +321,10 @@ add_custom_command(
     COMMENT "Embedding portrait preview image"
 )
 add_custom_target(embed_portrait DEPENDS ${CMAKE_BINARY_DIR}/portrait_preview.h)
+if(NOT PMS_ENGINE_ONLY)
 add_dependencies(pop-maker-studio embed_portrait)
+endif()
+add_dependencies(pms-engine embed_portrait)
 
 # Embed the FX-preview motion source clip (CC BY 3.0 — see CREDITS) as a byte array
 add_custom_command(
@@ -296,7 +337,10 @@ add_custom_command(
     COMMENT "Embedding FX-preview motion source"
 )
 add_custom_target(embed_fx_motion DEPENDS ${CMAKE_BINARY_DIR}/fx_motion_webm.h)
+if(NOT PMS_ENGINE_ONLY)
 add_dependencies(pop-maker-studio embed_fx_motion)
+endif()
+add_dependencies(pms-engine embed_fx_motion)
 
 # Embed the beauty-FX preview backdrop (assets/imgs/beauty_fx.jpg) as a 9:16
 # source for face-centric effects (Skin Smooth, Glow Up)
@@ -310,7 +354,10 @@ add_custom_command(
     COMMENT "Embedding beauty-FX preview source"
 )
 add_custom_target(embed_fx_face DEPENDS ${CMAKE_BINARY_DIR}/fx_face.h)
+if(NOT PMS_ENGINE_ONLY)
 add_dependencies(pop-maker-studio embed_fx_face)
+endif()
+add_dependencies(pms-engine embed_fx_face)
 
 # Embed base face photo as raw RGB — source for the camera brick's face-filter
 # preview thumbnails (live landmark-warp render). Swap assets/imgs/face.jpg.
@@ -325,7 +372,9 @@ add_custom_command(
 )
 add_custom_target(embed_face DEPENDS ${CMAKE_BINARY_DIR}/face_preview.h)
 add_dependencies(pms-engine embed_face)
+if(NOT PMS_ENGINE_ONLY)
 add_dependencies(pop-maker-studio embed_face)
+endif()
 
 # Guard: the in-app agent harness compiles src/generated/agent_tools.h, generated
 # from mcp_server/server.py by tools/gen_agent_tools.py. If server.py changed
@@ -339,17 +388,23 @@ if(PYTHON3_EXECUTABLE)
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
         COMMENT "Checking agent_tools.h is in sync with mcp_server/server.py"
     )
+if(NOT PMS_ENGINE_ONLY)
     add_dependencies(pop-maker-studio check_agent_tools)
 endif()
+endif()
 
+if(NOT PMS_ENGINE_ONLY)
 install(TARGETS pop-maker-studio DESTINATION bin)
+endif()
 
 # Copy bundled models to build dir so the binary can find them next to itself
+if(NOT PMS_ENGINE_ONLY)
 add_custom_command(TARGET pop-maker-studio POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:pop-maker-studio>/models
     COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/models $<TARGET_FILE_DIR:pop-maker-studio>/models
     COMMENT "Copying bundled models to build dir"
 )
+endif()
 
 # ── export-hubert CLI tool ────────────────────────────────────────────────────
 add_executable(export-hubert

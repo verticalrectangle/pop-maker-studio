@@ -1,9 +1,7 @@
 #include "runtime_fx.h"
 #include "json.hpp"
 
-#define GL_GLEXT_PROTOTYPES
-#include <GL/gl.h>
-#include <GL/glext.h>
+#include "gl_compat.h"
 
 #include <filesystem>
 #include <fstream>

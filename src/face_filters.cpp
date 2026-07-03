@@ -1,9 +1,7 @@
 #include "face_filters.h"
 #include "face_cache.h"
 #include "paths.h"
-#define GL_GLEXT_PROTOTYPES
-#include <GL/gl.h>
-#include <GL/glext.h>
+#include "gl_compat.h"
 #include "stb_image.h"
 #include <cmath>
 #include <string>

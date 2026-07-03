@@ -10,9 +10,7 @@
 #include "face_filters.h"
 #include "face_cache.h"
 
-#define GL_GLEXT_PROTOTYPES
-#include <GL/gl.h>
-#include <GL/glext.h>
+#include "gl_compat.h"
 #include <imgui_impl_opengl3.h>
 
 #define STB_IMAGE_WRITE_IMPLEMENTATION

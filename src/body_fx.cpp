@@ -1,8 +1,6 @@
 #include "body_fx.h"
 
-#define GL_GLEXT_PROTOTYPES
-#include <GL/gl.h>
-#include <GL/glext.h>
+#include "gl_compat.h"
 
 // stb_image implementation is already compiled in video.cpp
 // Just include the header without the implementation define

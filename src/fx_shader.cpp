@@ -1,9 +1,7 @@
 #include "fx_shader.h"
 #include "bg_presets.h"
 
-#define GL_GLEXT_PROTOTYPES
-#include <GL/gl.h>
-#include <GL/glext.h>
+#include "gl_compat.h"
 
 #include <imgui.h>
 #include <imgui_internal.h>

@@ -27,9 +27,7 @@ extern "C" {
 #include <functional>
 #include <deque>
 
-#define GL_GLEXT_PROTOTYPES
-#include <GL/gl.h>
-#include <GL/glext.h>
+#include "gl_compat.h"
 
 #include <cstdio>
 #include <cstring>
