@@ -400,8 +400,8 @@ static void draw_crop_mode(AppState& state, ImDrawList* dl, ImVec2 p, float w, f
     }
 }
 
-static CanvasHandleGeom s_handle_geom;
-CanvasHandleGeom canvas_handle_geom() { return s_handle_geom; }
+// Handle-geometry storage hoisted to the engine (src/ui_geom.cpp).
+#define s_handle_geom g_canvas_handle_geom
 
 // True when the mouse sits on one of the selection's transform handles
 // (geometry from last frame's draw_canvas_handles). Layer picking runs
@@ -1025,8 +1025,8 @@ static struct {
 // self-view. Glass FX + face filter are baked into the texture so the live
 // preview and the recorded take render through the same machinery.
 static FaceObs s_mirror_obs;          // latest tracked face (raw-frame coords)
-static MirrorDebugGeom s_mirror_dbg;
-MirrorDebugGeom mirror_debug_geom() { return s_mirror_dbg; }
+// Mirror-geometry storage hoisted to the engine (src/ui_geom.cpp).
+#define s_mirror_dbg g_mirror_dbg_geom
 static int     s_mirror_filter = 0;
 static float   s_mirror_filter_amt = 1.f;
 

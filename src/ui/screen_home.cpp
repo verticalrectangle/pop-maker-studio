@@ -23,48 +23,9 @@ namespace fs = std::filesystem;
 extern ImFont* g_font_black;
 extern ImFont* g_font_bold;
 
-// ── Recent-projects persistence (mirrors recent_media) ────────────────────────
-static std::string recents_path() {
-    const char* h = getenv("HOME");
-    return h ? std::string(h) + "/.config/pop-maker-studio/recent_projects.json"
-             : "/tmp/pop_maker_recent_projects.json";
-}
 
-static std::vector<std::string>& recents_store() {
-    static std::vector<std::string> s;
-    static bool loaded = false;
-    if (!loaded) {
-        loaded = true;
-        try {
-            std::ifstream f(recents_path());
-            if (f) {
-                auto j = nlohmann::json::parse(f, nullptr, false);
-                if (!j.is_discarded() && j.is_array())
-                    s = j.get<std::vector<std::string>>();
-            }
-        } catch (...) {}
-    }
-    return s;
-}
 
-std::vector<std::string> recent_projects_list() {
-    std::vector<std::string> out;
-    for (auto& p : recents_store())
-        if (!p.empty() && fs::exists(p)) out.push_back(p);
-    return out;
-}
 
-void recent_projects_push(const std::string& path) {
-    if (path.empty()) return;
-    auto& v = recents_store();
-    v.erase(std::remove(v.begin(), v.end(), path), v.end());
-    v.insert(v.begin(), path);
-    if (v.size() > 30) v.resize(30);
-    try {
-        fs::create_directories(fs::path(recents_path()).parent_path());
-        std::ofstream(recents_path()) << nlohmann::json(v).dump(2);
-    } catch (...) {}
-}
 
 // ── Autosave / crash recovery ───────────────────────────────────────────────────
 // We continuously write the live project to a fixed recovery slot while editing.
@@ -73,15 +34,6 @@ void recent_projects_push(const std::string& path) {
 extern std::string g_managed_dir;  // ~/.local/share/pop-maker-studio
 static std::string mtime_str(const std::string& path);  // defined below
 
-static std::string recovery_dir() {
-    std::string base = !g_managed_dir.empty()
-        ? g_managed_dir
-        : (getenv("HOME") ? std::string(getenv("HOME")) + "/.local/share/pop-maker-studio"
-                          : std::string("/tmp/pop-maker-studio"));
-    return base + "/recovery";
-}
-static std::string recovery_pms()  { return recovery_dir() + "/autosave.pms"; }
-static std::string recovery_meta() { return recovery_dir() + "/autosave.json"; }
 
 static bool project_has_content(const AppState& s) {
     for (auto& tr : s.tracks)
@@ -89,11 +41,6 @@ static bool project_has_content(const AppState& s) {
     return false;
 }
 
-void recovery_clear() {
-    std::error_code ec;
-    fs::remove(recovery_pms(), ec);
-    fs::remove(recovery_meta(), ec);
-}
 
 void autosave_tick(AppState& state, float dt) {
     static float    accum    = 0.f;
@@ -109,29 +56,29 @@ void autosave_tick(AppState& state, float dt) {
     if (pos == last_pos) return;         // nothing changed since the last write
 
     try {
-        fs::create_directories(recovery_dir());
-        std::string tmp = recovery_pms() + ".tmp";
+        fs::create_directories(fs::path(recovery_pms_path()).parent_path());
+        std::string tmp = recovery_pms_path() + ".tmp";
         if (project_save(state, tmp)) {
             std::error_code ec;
-            fs::rename(tmp, recovery_pms(), ec);   // atomic swap
+            fs::rename(tmp, recovery_pms_path(), ec);   // atomic swap
             if (ec) { fs::remove(tmp, ec); return; }
             nlohmann::json m;
             m["orig_path"] = state.project_path;
             m["name"]      = state.project_path.empty()
                                  ? std::string("Untitled project")
                                  : fs::path(state.project_path).stem().string();
-            std::ofstream(recovery_meta()) << m.dump(2);
+            std::ofstream(recovery_meta_path()) << m.dump(2);
             last_pos = pos;
         }
     } catch (...) {}
 }
 
 bool recovery_available(std::string* name, std::string* when) {
-    if (!fs::exists(recovery_pms())) return false;
+    if (!fs::exists(recovery_pms_path())) return false;
     if (name) {
         *name = "Recovered project";
         try {
-            std::ifstream f(recovery_meta());
+            std::ifstream f(recovery_meta_path());
             if (f) {
                 auto j = nlohmann::json::parse(f, nullptr, false);
                 if (!j.is_discarded() && j.contains("name"))
@@ -139,7 +86,7 @@ bool recovery_available(std::string* name, std::string* when) {
             }
         } catch (...) {}
     }
-    if (when) *when = mtime_str(recovery_pms());
+    if (when) *when = mtime_str(recovery_pms_path());
     return true;
 }
 
@@ -159,57 +106,16 @@ void enter_new_project(AppState& state) {
     mark_project_clean(state);
 }
 
-bool open_project_path(AppState& state, const std::string& path) {
-    if (path.empty()) return false;
-    // Phase timings on stderr — the open used to freeze with no clue where.
-    auto t0 = std::chrono::steady_clock::now();
-    auto lap = [&](const char* what) {
-        auto t1 = std::chrono::steady_clock::now();
-        fprintf(stderr, "[open] %-22s %6.1f ms\n", what,
-                std::chrono::duration<double, std::milli>(t1 - t0).count());
-        t0 = t1;
-    };
-    AppState loaded;
-    if (!project_load(loaded, path)) return false;
-    lap("parse .pms");
-    bool mr = state.models_ready, ms = state.models_skipped;
-    transcribe_cancel(); history_clear();
-    lap("transcribe/history");
-    audio_shutdown(); audio_clips_clear(); video_close();
-    lap("audio/video teardown");
-    state = std::move(loaded);
-    state.models_ready = mr; state.models_skipped = ms;
-    state.project_path = path;
-    state.splash_timer = 0.f;
-    state.in_studio    = true;
-    audio_init();
-    lap("audio_init");
-    if (!state.audio_path.empty()) audio_load(state.audio_path.c_str());
-    lap("audio_load kick");
-    // Slots open incrementally in the studio frame (progress bar) — opening
-    // them here synchronously froze the app for seconds on media-heavy projects.
-    queue_video_slot_opens(state);
-    for (auto& tr : state.tracks)
-        for (auto& cl : tr.clips)
-            if (cl.clip_type == ClipType::Audio && !cl.text.empty())
-                audio_source_ensure(cl.text);
-    lap("queue+audio ensure");
-    recent_projects_push(path);
-    history_push(state, "Open project");
-    mark_project_clean(state);
-    lap("recents+history");
-    return true;
-}
 
 // Restore the crash-recovery slot into the live editor. Unlike open_project_path
 // we point project_path at the *original* location (from the meta sidecar), so the
 // next Save lands where the user expected — not on the recovery file itself.
 static void restore_recovery(AppState& state) {
     AppState loaded;
-    if (!project_load(loaded, recovery_pms())) return;
+    if (!project_load(loaded, recovery_pms_path())) return;
     std::string orig;
     try {
-        std::ifstream f(recovery_meta());
+        std::ifstream f(recovery_meta_path());
         if (f) {
             auto j = nlohmann::json::parse(f, nullptr, false);
             if (!j.is_discarded() && j.contains("orig_path"))

@@ -19,7 +19,6 @@ std::string fmt_time_short(float s);
 // ── Playback helpers ──────────────────────────────────────────────────────────
 void seek_to(AppState& state, float t);
 void toggle_play(AppState& state);
-float tl_fps(const AppState& state);
 // Latest position the playhead can occupy and still show a frame: the start of
 // the last whole frame. Clips are half-open [start,end), so a playhead at exactly
 // `duration` selects nothing — this is the real end-of-timeline for playback,
@@ -120,13 +119,10 @@ bool duplicate_selected_clips(AppState& state);
 // visible, not locked, not managed (managed = lyric/typography tracks — those
 // keep their reserved spot even when empty). Returns -1 when none exists and
 // the caller should create a fresh track.
-int find_empty_track(const AppState& state);
-std::string clip_slot_key(const std::string& src, float start);
 std::string source_from_key(const std::string& key);
 // reveal: scroll the timeline to the new clip (default). Pass false for drops —
 // the user placed it where they're already looking, so just glow it in place.
 void add_clip_to_track(AppState& state, int track_idx, const std::string& path, ClipType ct, bool reveal = true);
-int  slot_for_video(AppState& state, const std::string& key, const std::string& src);
 void gc_video_slots(AppState& state);
 void reopen_video_slots(AppState& state);
 // Incremental slot opening for project load: queue every video-like source,
@@ -193,7 +189,6 @@ inline float struct_field_default(const T& obj, const float* v) {
 // ── Frame-rate conform ────────────────────────────────────────────────────────
 // True if this clip's native fps differs enough from the project to warrant a
 // conform (src_fps must already be probed; stills/src_fps<=0 are never conformed).
-bool clip_needs_conform(const Clip& cl, int project_fps);
 // The file the proxy/export should actually decode for this clip: the conformed
 // copy when it's ready, otherwise the original (clip.text).
 std::string clip_video_src(const AppState& state, const Clip& cl);
@@ -272,19 +267,14 @@ void ui_dropper_feed(float r, float g, float b);
 void ui_dropper_cancel();
 
 // ── group_words helpers (defined in pipeline.cpp, used by panel_animation) ────
-std::vector<Clip> group_words(const std::vector<Clip>& words, SubtitleMode mode,
-                               int custom_n = 5, float pause_gap = 0.8f, int max_words = 8);
 // Segment-accurate grouping: words + Whisper segments (same time space) → clips.
 std::vector<Clip> read_segment_clips(const std::string& seg_path);
-std::vector<Clip> group_words_segmented(const std::vector<Clip>& words,
-                                        const std::vector<Clip>& segments,
-                                        SubtitleMode mode, float pause_gap = 0.3f,
-                                        int max_words = 0);
 
 // ── Panel-view write access ───────────────────────────────────────────────────
 // Defined in screen_studio.cpp; some helpers (add_clip_to_track, panel_media,
 // generate_typography) need to switch the panel on selection changes.
 extern PanelView s_panel_view;
+void app_register_engine_hooks();   // wire app callbacks into engine hook points
 
 // A timeline interaction (clicking an FX lane below an expanded clip) can ask the
 // props panel to open a specific view NEXT — overriding the default view that the

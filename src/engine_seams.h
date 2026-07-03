@@ -29,6 +29,17 @@ static constexpr float SAFE_TOP  = 0.08f;
 static constexpr float SAFE_BOT  = 0.20f;
 static constexpr float SAFE_SIDE = 0.05f;
 
+// ── Media bin (impl: src/media_bin.cpp — hoisted) ────────────────────────────
+enum class MediaKind { Video, Image, Audio };
+struct RecentMedia { std::vector<std::string> videos, images, audio; };
+RecentMedia& recent_media();
+void recent_media_push(const std::string& path, MediaKind kind);
+MediaKind kind_for_path(const std::string& path);
+bool bin_contains(const AppState& state, const std::string& path);
+float tl_fps(const AppState& state);
+bool clip_needs_conform(const Clip& cl, int project_fps);
+bool is_animated_image(const std::string& p);
+
 // ── Frame-grid snapping (pure engine logic, MOVED here from ui) ──────────────
 inline float snap_to_frame(float t, int fps) {
     if (fps <= 0) return t;
@@ -42,6 +53,9 @@ inline float snap_end_to_frame(float t, int fps) {
     return std::ceil(t * fps - 1e-4f) / fps;
 }
 float snap_to_frame(const AppState& state, float t);
+int find_empty_track(const AppState& state);
+std::string clip_slot_key(const std::string& src, float start);
+int slot_for_video(AppState& state, const std::string& key, const std::string& src);
 
 // ── Timeline geometry snapshot (agents drive the UI via ui_input) ────────────
 struct TLGeomClip { int track, clip; float x0, y0, x1, y1; bool has_fx, expanded; float disc_cx, disc_cy; };
@@ -64,6 +78,11 @@ int  group_head_of(const AppState& state, int ti);
 // ── Project open/save chokepoint (impl: ui/studio_shared.cpp) ────────────────
 bool open_project_path(AppState& state, const std::string& path);
 void recent_projects_push(const std::string& path);
+std::vector<std::string> recent_projects_list();
+std::string recovery_pms_path();
+std::string recovery_meta_path();
+void mark_project_clean(AppState& state);
+void queue_video_slot_opens(AppState& state);
 
 // ── Overlap resolution shared by UI drops and IPC adds (ui/studio_shared.cpp)
 bool row_overlap_on_track(AppState& state, int ti, float start, float end,
@@ -81,8 +100,14 @@ std::vector<AudioFXSegment> collect_audio_fx_segments(const AppState& state,
                                                       const Clip& audio_clip);
 
 // ── Typography (impl: ui/panel_animation.cpp) ────────────────────────────────
-void    generate_typography(AppState& state);
-ImFont* typo_font_get(const char* id);
+void    generate_typography(AppState& state);          // impl: typography_core.cpp (engine)
+void    apply_typo_style(Clip& c, const struct TypographyPreset& pr,
+                         const AppState& state);        // impl: typography_core.cpp (engine)
+void    app_focus_typography_panel();                   // engine-owned; no-op unless the app registers
+void    set_focus_typography_hook(void (*fn)());        // app registers its panel flip here
+ImFont* typo_font_get(const char* id);           // impl: text_renderer.cpp (engine)
+void    typo_font_clear();                        // theme_apply() calls these
+void    typo_font_register(const char* name, ImFont* font);
 
 // ── ML pipeline (impl: ui/pipeline.cpp — engine logic, hoist) ────────────────
 void import_file(AppState& state, const std::string& path);
@@ -113,6 +138,11 @@ struct CanvasHandleGeom {
     float rot_deg = 0;                         // clip rotation (handles rotate with it)
 };
 CanvasHandleGeom canvas_handle_geom();
+// App-writable stores behind the accessors above (engine owns storage —
+// see src/ui_geom.cpp; the desktop UI fills them per frame).
+extern CanvasHandleGeom g_canvas_handle_geom;
+extern MirrorDebugGeom  g_mirror_dbg_geom;
+extern TLGeom           g_tl_geom;
 
 // Injected pointer/keyboard input for agent-driven UI (ui_input lever). The
 // engine dispatcher forwards to this; the app implements it against ImGuiIO.

@@ -285,73 +285,6 @@ static void merge_fx_clips(Clip& target, Clip dragged) {
     }
 }
 
-// Couple the brick at (ti, ci) to the content clip at host_ci: chain entries
-// are re-windowed against the host span so effective timing survives the
-// snap, singles convert to a Video Multi-FX, and a host that already owns a
-// coupled chain absorbs the new entries instead of growing a second brick.
-// Returns the index of the resulting coupled brick.
-int timeline_couple_fx_brick(AppState& state, int ti, int ci, int host_ci) {
-    auto& clips = state.tracks[ti].clips;
-    const Clip host = clips[(size_t)host_ci];   // copy: erase below shifts refs
-    const float h0 = host.start, hlen = host.end - host.start;
-    Clip brick = clips[(size_t)ci];
-
-    auto window_entry = [&](Clip& se, float b0, float b1) {
-        float abs0 = (se.rel_end <= 0.f) ? b0 : b0 + se.rel_start;
-        float abs1 = (se.rel_end <= 0.f) ? b1 : b0 + se.rel_end;
-        se.rel_start = fmaxf(0.f, abs0 - h0);
-        se.rel_end   = fmaxf(se.rel_start, fminf(abs1 - h0, hlen));
-        if (se.rel_start <= 0.001f && se.rel_end >= hlen - 0.001f) {
-            se.rel_start = 0.f;   // full-host window = "always on"
-            se.rel_end   = 0.f;
-        }
-        se.fx_coupled = false;
-        se.fx_host_sid.clear();
-    };
-
-    std::vector<Clip> entries;
-    if (is_chain_brick(brick)) entries = brick.fx_chain;
-    else {
-        Clip se = brick;
-        se.fx_chain.clear();
-        se.rel_start = se.rel_end = 0.f;
-        entries.push_back(se);
-    }
-    for (auto& se : entries) window_entry(se, brick.start, brick.end);
-
-    const ClipType chain_type = fx_brick_is_audio_kind(clips[(size_t)ci])
-                              ? ClipType::AudioMultiFX : ClipType::MultiFX;
-
-    // Coupling an audio FX brick onto a record brick turns "Hear effects" on, so
-    // you immediately monitor through it (and can dial in its dry/wet).
-    if (chain_type == ClipType::AudioMultiFX &&
-        (host.clip_type == ClipType::Record ||
-         host.clip_type == ClipType::VideoRecord))
-        audio_monitor_fx_set(true);
-
-    // Host already has a coupled chain of this kind? Merge into it.
-    for (int k = 0; k < (int)clips.size(); ++k) {
-        if (k == ci) continue;
-        Clip& oc = clips[(size_t)k];
-        if (oc.clip_type == chain_type && oc.fx_coupled &&
-            fx_coupled_host(state, ti, oc) == host_ci) {
-            for (auto& se : entries) oc.fx_chain.push_back(se);
-            if (oc.fx_chain_selected < 0) oc.fx_chain_selected = 0;
-            clips.erase(clips.begin() + ci);
-            return k > ci ? k - 1 : k;
-        }
-    }
-
-    Clip& b = clips[(size_t)ci];
-    b.clip_type         = chain_type;
-    b.fx_chain          = std::move(entries);
-    b.fx_chain_selected = b.fx_chain.empty() ? -1 : 0;
-    b.fx_coupled        = true;
-    b.fx_host_sid       = fx_host_fingerprint(host);
-    b.start = host.start;
-    b.end   = host.end;
-    return ci;
-}
 
 // Pick the clip an FX brick should couple to. A deliberate drop should land on
 // the clip you point at, so prefer the hostable clip whose span contains `ref_t`
@@ -695,8 +628,8 @@ static void couple_pending_tick(AppState& state) {
 
 // ── Timeline ──────────────────────────────────────────────────────────────────
 
-static TLGeom s_tl_geom;
-const TLGeom& tl_geom() { return s_tl_geom; }
+// Timeline-geometry storage hoisted to the engine (src/ui_geom.cpp).
+#define s_tl_geom g_tl_geom
 
 void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h) {
     s_tl_geom.clips.clear();

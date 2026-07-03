@@ -46,6 +46,13 @@ set(IMGUI_APP_SOURCES
 # set that becomes pms_engine.xcframework for iOS (docs/IOS_PORT_PLAN.md).
 set(PMS_ENGINE_SOURCES
     src/paths.cpp
+    src/timeline_core.cpp
+    src/media_bin.cpp
+    src/ui_geom.cpp
+    src/pipeline_core.cpp
+    src/app_state.cpp
+    src/project_meta.cpp
+    src/typography_core.cpp
     src/rmvpe_onnx.cpp
     src/runtime_fx.cpp
     src/ipc_server.cpp
@@ -106,7 +113,7 @@ set(PMS_APP_SOURCES
     src/ui/studio_shared.cpp
     src/ui/canvas.cpp
     src/ui/timeline.cpp
-    src/ui/pipeline.cpp
+    src/ui/pipeline_ui.cpp
     src/ui/panel_clip.cpp
     src/ui/panel_animation.cpp
     src/ui/panel_fx.cpp

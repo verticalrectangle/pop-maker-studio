@@ -29,7 +29,6 @@ namespace fs = std::filesystem;
 
 // Definitions of globals declared in globals.h
 std::string g_dropped_file;
-std::string g_managed_dir;
 std::vector<std::string> g_drop_batch;
 
 // Drop queues. Single-file drops follow the legacy g_dropped_file path so the

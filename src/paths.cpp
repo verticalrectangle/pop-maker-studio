@@ -1,4 +1,9 @@
 #include "paths.h"
+#include "globals.h"
+
+// Managed-storage root (takes, proxies, recovery). Defined engine-side; the
+// app main() fills it during startup.
+std::string g_managed_dir;
 std::atomic<bool> g_shutdown{false};
 #include <unistd.h>
 #include <cstdio>

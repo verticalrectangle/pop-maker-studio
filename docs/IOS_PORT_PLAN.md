@@ -73,16 +73,21 @@ architecture, the face tracker (pure ORT + math).
 
 ## Phase 0 — Engine extraction (desktop-only work, no Apple hardware needed)
 
-> **STATUS 2026-07-03: first milestone landed.** `pms-engine` static lib
-> builds from 45 engine sources + ImGui core/GL backend; the app links it.
-> Engine↔app boundary is compile-enforced: engine sources may not include
-> `ui/...` or the GLFW backend (tools/check_engine_deps.sh runs in the
-> build, same pattern as the agent-tools sync check). Every cross-boundary
-> need is declared in `src/engine_seams.h` — currently 23 app-implemented
-> symbols (the hoist backlog; the header documents each). Next: hoist the
-> engine-logic implementations out of ui/ (pipeline.cpp, studio_shared.cpp
-> collectors, overlap resolution) until the seam is empty and the lib links
-> standalone.
+> **STATUS 2026-07-03: `pms-engine` LINKS STANDALONE.** Whole-archive link
+> test resolves with ZERO app symbols. Hoisted in the burn-down: the ML/
+> import/subtitle pipeline (ui/pipeline.cpp → pipeline_core.cpp, whole),
+> app.cpp's core state machinery (PropTrack/eval_prop/kf table/FX coupling/
+> collectors → app_state.cpp), timeline+slot-open+audio-FX-collection
+> helpers (→ timeline_core.cpp), media bin (→ media_bin.cpp), recents/
+> recovery/open-project (→ project_meta.cpp), typography generation
+> (→ typography_core.cpp), the font registry + g_font_black (→
+> text_renderer.cpp, app registers faces), UI geometry stores (→
+> ui_geom.cpp, app writes engine-owned globals), g_managed_dir (→
+> paths.cpp). The one UI side effect found inside engine logic (panel flip
+> after generate_typography) became a registered hook, no-op headless.
+> engine_seams.h now declares only app-provided EXTRAS (hooks + geometry
+> writers), not link dependencies. Remaining for Phase 0 exit: the
+> pms_engine.h C ABI wrapper + a headless engine_command test target.
 
 Goal: a `pms-engine` static-lib CMake target that compiles with **no** GLFW,
 ImGui, X11, or process-spawn code, consumed by the existing desktop app as

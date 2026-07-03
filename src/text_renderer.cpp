@@ -2,6 +2,28 @@
 #include "text_anim.h"
 #include <cmath>
 
+
+// ── Typography font registry (hoisted from ui/theme.cpp) ─────────────────────
+// The app's theme_apply() registers faces after building the atlas; the
+// engine (text renderer, overlay renderer, typography pipeline) resolves
+// faces by id. Storage engine-side so typo_font_get links into pms-engine.
+ImFont* g_font_black = nullptr;   // assigned by the app after atlas build
+namespace {
+    struct TypoFace { const char* name; ImFont* font; };
+    std::vector<TypoFace> g_typo_faces;
+}
+void typo_font_clear() { g_typo_faces.clear(); }
+void typo_font_register(const char* name, ImFont* font) {
+    g_typo_faces.push_back({name, font});
+}
+ImFont* typo_font_get(const char* id) {
+    if (id && *id)
+        for (const auto& f : g_typo_faces)
+            if (f.font && strcmp(f.name, id) == 0) return f.font;
+    return g_font_black;   // default lyrics face / graceful fallback
+}
+
+
 static ImU32 col_f4_alpha(const float c[4], float extra_alpha) {
     float a = c[3] * extra_alpha;
     return IM_COL32((int)(c[0]*255), (int)(c[1]*255), (int)(c[2]*255), (int)(a*255));
