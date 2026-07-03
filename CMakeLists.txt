@@ -8,7 +8,11 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 # ── Dependencies ──────────────────────────────────────────────────────────────
 find_package(PkgConfig REQUIRED)
 find_package(whisper CONFIG QUIET)
-pkg_check_modules(FREETYPE  REQUIRED freetype2)   # text — needed on every platform
+# freetype backs ImGui's rasterizer on desktop; headless/iOS falls back to
+# ImGui's built-in stb_truetype (the engine has no direct freetype use).
+if(NOT PMS_HEADLESS)
+    pkg_check_modules(FREETYPE REQUIRED freetype2)
+endif()
 if(NOT PMS_ENGINE_ONLY)
     pkg_check_modules(GLFW REQUIRED glfw3)
     pkg_check_modules(VTERM REQUIRED vterm)
@@ -55,8 +59,10 @@ set(IMGUI_SOURCES
     ${IMGUI_DIR}/imgui_tables.cpp
     ${IMGUI_DIR}/imgui_widgets.cpp
     ${IMGUI_DIR}/backends/imgui_impl_opengl3.cpp
-    ${IMGUI_DIR}/misc/freetype/imgui_freetype.cpp
 )
+if(NOT PMS_HEADLESS)
+    list(APPEND IMGUI_SOURCES ${IMGUI_DIR}/misc/freetype/imgui_freetype.cpp)
+endif()
 # GLFW backend is app-only — the engine never touches windowing.
 set(IMGUI_APP_SOURCES
     ${IMGUI_DIR}/backends/imgui_impl_glfw.cpp
@@ -216,13 +222,13 @@ target_include_directories(${_pms_tgt} PRIVATE
 endforeach()
 
 target_link_libraries(pms-engine PUBLIC
-    ${FREETYPE_LIBRARIES}
     onnxruntime
     $<IF:$<TARGET_EXISTS:whisper::whisper>,whisper::whisper,whisper>
     pthread
 )
 if(NOT PMS_HEADLESS)
     target_link_libraries(pms-engine PUBLIC
+        ${FREETYPE_LIBRARIES}
         OpenGL::GL
         ${AVCODEC_LIBRARIES} ${AVFORMAT_LIBRARIES} ${AVUTIL_LIBRARIES}
         ${SWRESAMPLE_LIBRARIES} ${SWSCALE_LIBRARIES}
@@ -278,7 +284,9 @@ endif()
 if(NOT PMS_ENGINE_ONLY)
 target_compile_definitions(pop-maker-studio PRIVATE IMGUI_ENABLE_FREETYPE)
 endif()
-target_compile_definitions(pms-engine PRIVATE IMGUI_ENABLE_FREETYPE)
+if(NOT PMS_HEADLESS)
+    target_compile_definitions(pms-engine PRIVATE IMGUI_ENABLE_FREETYPE)
+endif()
 
 foreach(_pms_tgt ${PMS_ALL_TARGETS})
 target_compile_options(${_pms_tgt} PRIVATE
