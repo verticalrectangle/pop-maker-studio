@@ -24,6 +24,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <unistd.h>   // mkdtemp (stdlib.h on glibc, unistd.h on macOS)
 #include <cmath>
 #include <algorithm>
 #include <filesystem>
