@@ -21,6 +21,7 @@ pkg_check_modules(SWSCALE   REQUIRED libswscale)
 pkg_check_modules(FREETYPE  REQUIRED freetype2)
 pkg_check_modules(AUBIO     REQUIRED aubio)
 pkg_check_modules(TURBOJPEG REQUIRED libturbojpeg)
+pkg_check_modules(FFTW      REQUIRED fftw3f)
 # Native low-latency audio backend (perf mode); optional — the miniaudio
 # duplex path is the fallback when PipeWire is absent.
 if(NOT APPLE)
@@ -188,6 +189,7 @@ target_include_directories(${_pms_tgt} PRIVATE
     ${AUBIO_INCLUDE_DIRS}
     ${VTERM_INCLUDE_DIRS}
     ${TURBOJPEG_INCLUDE_DIRS}
+    ${FFTW_INCLUDE_DIRS}
     ${PIPEWIRE_INCLUDE_DIRS}
 )
 endforeach()
@@ -199,7 +201,7 @@ target_link_libraries(pms-engine PUBLIC
     ${AUBIO_LIBRARIES} ${TURBOJPEG_LIBRARIES} ${PIPEWIRE_LIBRARIES}
     onnxruntime
     $<IF:$<TARGET_EXISTS:whisper::whisper>,whisper::whisper,whisper>
-    fftw3f
+    ${FFTW_LIBRARIES}
     dl pthread
 )
 
@@ -219,7 +221,7 @@ target_link_libraries(pop-maker-studio PRIVATE
     ${PIPEWIRE_LIBRARIES}
     onnxruntime
     $<IF:$<TARGET_EXISTS:whisper::whisper>,whisper::whisper,whisper>
-    fftw3f
+    ${FFTW_LIBRARIES}
     dl pthread
 )
 endif()
