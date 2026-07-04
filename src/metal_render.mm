@@ -1,5 +1,6 @@
 // metal_render.mm — Metal RenderSurface backend (Phase 3, iOS).
 #import <Metal/Metal.h>
+#import <CoreVideo/CoreVideo.h>
 #include "metal_render.h"
 #include <vector>
 #include <mutex>
@@ -98,6 +99,27 @@ void metal_render_set_content_bgra(const void* bgra, int w, int h) {
     }
     [g_content replaceRegion:MTLRegionMake2D(0, 0, w, h) mipmapLevel:0
                    withBytes:bgra bytesPerRow:(NSUInteger)w * 4];
+}
+
+void metal_render_submit_pixelbuffer(void* cv_pixel_buffer) {
+    if (!cv_pixel_buffer) { metal_render_set_content_bgra(nullptr, 0, 0); return; }
+    CVPixelBufferRef pb = (CVPixelBufferRef)cv_pixel_buffer;
+    CVPixelBufferLockBaseAddress(pb, kCVPixelBufferLock_ReadOnly);
+    int w = (int)CVPixelBufferGetWidth(pb);
+    int h = (int)CVPixelBufferGetHeight(pb);
+    size_t stride = CVPixelBufferGetBytesPerRow(pb);
+    const uint8_t* base = (const uint8_t*)CVPixelBufferGetBaseAddress(pb);
+    if (base && w > 0 && h > 0) {
+        if (stride == (size_t)w * 4) {
+            metal_render_set_content_bgra(base, w, h);
+        } else {                                   // repack strided rows tight
+            std::vector<uint8_t> tight((size_t)w * h * 4);
+            for (int y = 0; y < h; ++y)
+                memcpy(&tight[(size_t)y * w * 4], base + (size_t)y * stride, (size_t)w * 4);
+            metal_render_set_content_bgra(tight.data(), w, h);
+        }
+    }
+    CVPixelBufferUnlockBaseAddress(pb, kCVPixelBufferLock_ReadOnly);
 }
 
 int metal_render_frame(void* mtl_texture, int w, int h, double t) {

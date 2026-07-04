@@ -17,6 +17,11 @@ void metal_render_init(void* mtl_device);
 // the background. Pass null / 0 dims to clear back to the aurora. Thread-safe.
 void metal_render_set_content_bgra(const void* bgra, int w, int h);
 
+// Set the content frame from a CVPixelBufferRef (32BGRA) — the AVFoundation
+// capture/decode output. Handles row stride. Bridged void* (CoreVideo not in
+// this header to keep it plain C). Thread-safe.
+void metal_render_submit_pixelbuffer(void* cv_pixel_buffer);
+
 // Composite one frame into `mtl_texture` (id<MTLTexture>, bridged). `t` drives
 // time-based animation (wall clock). Returns 0 on success, non-zero if Metal
 // isn't ready. No-op (returns 1) if init hasn't run.
