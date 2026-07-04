@@ -28,3 +28,14 @@
 #  define PMS_HAS_FFTW   1
 #  define PMS_HAS_SPAWN  1
 #endif
+
+// Subprocess shim: system() is unavailable on iOS. pms_system() runs the
+// command where spawning is allowed (desktop), and no-ops with an error code
+// on iOS — the callers (proxy gen, model download, ffmpeg measure) are
+// media/tooling paths superseded by the AVFoundation MediaBackend (Phase 4).
+#include <cstdlib>
+#if PMS_HAS_SPAWN
+static inline int pms_system(const char* c) { return ::system(c); }
+#else
+static inline int pms_system(const char*) { return -1; }
+#endif

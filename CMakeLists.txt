@@ -167,6 +167,11 @@ set(PMS_APP_SOURCES
 # The engine as a static library: the compile-time boundary the iOS port
 # builds on. Links standalone once engine_seams.h empties out; until then the
 # app's objects satisfy the seam symbols at executable link time.
+# miniaudio's Apple backend pulls in CoreAudio/Foundation (Objective-C);
+# audio.cpp must compile as Objective-C++ on Apple.
+if(APPLE)
+    set_source_files_properties(src/audio.cpp PROPERTIES COMPILE_FLAGS "-x objective-c++")
+endif()
 add_library(pms-engine STATIC ${PMS_ENGINE_SOURCES} ${PMS_PLATFORM_ENGINE_SOURCES} ${IMGUI_SOURCES})
 
 if(NOT PMS_ENGINE_ONLY)

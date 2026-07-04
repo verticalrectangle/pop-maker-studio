@@ -1,4 +1,5 @@
 #include "av_measure.h"
+#include "platform.h"
 #include "av_sync.h"
 
 #include <atomic>
@@ -94,7 +95,7 @@ void run_measure(std::string clean_src, std::string cam_src, float capture_s) {
              capture_s, clean_wav.c_str(),
              capture_s, cam_wav.c_str());
 
-    int rc = system(cmd);
+    int rc = pms_system(cmd);
     if (rc != 0) {
         res.error = "Couldn't record the two mics (is the camera mic free?).";
     } else {

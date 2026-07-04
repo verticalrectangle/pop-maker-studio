@@ -1,4 +1,5 @@
 #include "proxy.h"
+#include "platform.h"
 #include "paths.h"
 
 #include <cmath>
@@ -395,7 +396,7 @@ static bool is_svg_ext(const std::string& path) {
 static bool rasterize_svg(const std::string& src, const std::string& dst_png) {
     std::string cmd = "rsvg-convert --width=2000 --keep-aspect-ratio --format=png -o \""
                       + dst_png + "\" \"" + src + "\" 2>/dev/null";
-    return system(cmd.c_str()) == 0 && fs::exists(dst_png);  // NOLINT
+    return pms_system(cmd.c_str()) == 0 && fs::exists(dst_png);  // NOLINT
 }
 
 // ── Still generation ──────────────────────────────────────────────────────────
@@ -661,7 +662,7 @@ void proxy_start(const std::string& video_path) {
             if (!fs::exists(still)) {
                 std::string tmp = still + ".tmp.png";
                 std::string cmd = "heif-convert \"" + video_path + "\" \"" + tmp + "\" 2>/dev/null";
-                if (system(cmd.c_str()) == 0 && fs::exists(tmp)) { // NOLINT
+                if (pms_system(cmd.c_str()) == 0 && fs::exists(tmp)) { // NOLINT
                     const char* a2[] = {"ffmpeg","-hide_banner","-loglevel","error",
                                         "-y","-i",tmp.c_str(),"-frames:v","1",
                                         still.c_str(), nullptr};
