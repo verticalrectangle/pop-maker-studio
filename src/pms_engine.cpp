@@ -68,6 +68,13 @@ char* pms_poll_events(pms_engine* e) {
     return dup_cstr(engine_drain_events());
 }
 
+int pms_render(pms_engine*, void*, int, int) {
+    return 0;   // Metal RenderSurface = Phase 3
+}
+void pms_submit_camera_frame(pms_engine*, void*, int, double) {}   // Phase 4
+void pms_submit_mic_block(pms_engine*, const float*, size_t, double) {}  // Phase 4
+char* pms_model_status(pms_engine*) { return dup_cstr("[]"); }
+
 void pms_free(char* p) { free(p); }
 
 uint32_t pms_abi_version(void) { return PMS_ENGINE_ABI; }

@@ -29,6 +29,20 @@ void        pms_destroy(pms_engine*);
 // Advance clocks / pump worker results. Call once per frame.
 void pms_tick(pms_engine*, double dt_seconds);
 
+// Composite the current frame into a Metal texture (MTLTexture*, bridged
+// void*). Returns 0 on success. STUB until the Metal RenderSurface (Phase 3).
+int pms_render(pms_engine*, void* mtl_texture, int width, int height);
+
+// Capture intake (AVFoundation feeds these). STUB until the CaptureBackend
+// (Phase 4). camera: CVPixelBufferRef; mic: interleaved stereo float.
+void pms_submit_camera_frame(pms_engine*, void* cv_pixel_buffer,
+                             int rotation_quarter_turns, double host_time_seconds);
+void pms_submit_mic_block(pms_engine*, const float* interleaved_lr,
+                          size_t frames, double sample_rate);
+
+// JSON status of model packs (bundled/absent/downloading/ready).
+char* pms_model_status(pms_engine*);
+
 // Execute one lever (same JSON protocol as the desktop IPC socket / agent
 // tools; see docs/LEVERS.md in pms-ios). Returns a malloc'd JSON string —
 // free with pms_free. Thread: main.
