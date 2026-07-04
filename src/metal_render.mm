@@ -37,12 +37,12 @@ fragment float4 bg_f(VOut in [[stage_in]], constant BgUni& u [[buffer(0)]]) {
 }
 
 // (2) textured quad — aspect-fit rect passed as half-extents in NDC
-struct QuadUni { float2 half; };    // sx, sy in [0,1]
+struct QuadUni { float2 he; };    // half-extents sx, sy in [0,1] ('half' is a reserved MSL type)
 vertex VOut quad_v(uint vid [[vertex_id]], constant QuadUni& u [[buffer(0)]]) {
     float2 c[4] = { float2(0,0), float2(1,0), float2(0,1), float2(1,1) };  // tri-strip
     float2 uv = c[vid];
     VOut o;
-    o.pos = float4((uv * 2.0 - 1.0) * u.half, 0.0, 1.0);
+    o.pos = float4((uv * 2.0 - 1.0) * u.he, 0.0, 1.0);
     o.uv  = float2(uv.x, 1.0 - uv.y);   // flip to top-left origin
     return o;
 }
