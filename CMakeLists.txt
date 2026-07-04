@@ -174,6 +174,14 @@ if(APPLE)
 endif()
 add_library(pms-engine STATIC ${PMS_ENGINE_SOURCES} ${PMS_PLATFORM_ENGINE_SOURCES} ${IMGUI_SOURCES})
 
+# miniaudio's Apple backend needs the CoreAudio/AVFoundation stack. macOS
+# auto-links some; iOS requires them explicit.
+if(APPLE)
+    target_link_libraries(pms-engine PUBLIC
+        "-framework AVFoundation" "-framework AudioToolbox"
+        "-framework CoreAudio" "-framework CoreFoundation")
+endif()
+
 if(NOT PMS_ENGINE_ONLY)
 add_executable(pop-maker-studio ${PMS_APP_SOURCES} ${IMGUI_APP_SOURCES})
 target_link_libraries(pop-maker-studio PRIVATE pms-engine)
