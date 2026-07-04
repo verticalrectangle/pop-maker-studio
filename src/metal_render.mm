@@ -60,6 +60,8 @@ static id<MTLRenderPipelineState> g_quad_pso = nil;  // textured blit
 static id<MTLTexture>             g_content = nil;    // current frame (BGRA8)
 static int                        g_cw = 0, g_ch = 0;
 static std::mutex                 g_content_mu;
+static CVMetalTextureCacheRef     g_texcache = NULL;  // zero-copy CVPixelBuffer→MTLTexture
+static CVMetalTextureRef          g_cvtex    = NULL;  // keeps the mapped frame alive
 
 void metal_render_init(void* mtl_device) {
     if (g_dev) return;
@@ -84,12 +86,20 @@ void metal_render_init(void* mtl_device) {
     q.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
     g_quad_pso = [g_dev newRenderPipelineStateWithDescriptor:q error:&err];
     if (!g_quad_pso) NSLog(@"[metal_render] quad pipeline: %@", err);
+
+    CVMetalTextureCacheCreate(kCFAllocatorDefault, NULL, g_dev, NULL, &g_texcache);
+}
+
+// Release any zero-copy CVMetalTexture mapping (call under g_content_mu).
+static void release_cvtex() {
+    if (g_cvtex) { CFRelease(g_cvtex); g_cvtex = NULL; }
 }
 
 void metal_render_set_content_bgra(const void* bgra, int w, int h) {
     std::lock_guard<std::mutex> lk(g_content_mu);
+    release_cvtex();
     if (!g_dev || !bgra || w <= 0 || h <= 0) { g_content = nil; g_cw = g_ch = 0; return; }
-    if (!g_content || g_cw != w || g_ch != h) {
+    if (!g_content || g_cw != w || g_ch != h || g_content.pixelFormat != MTLPixelFormatBGRA8Unorm) {
         MTLTextureDescriptor* td = [MTLTextureDescriptor
             texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
             width:w height:h mipmapped:NO];
@@ -102,24 +112,29 @@ void metal_render_set_content_bgra(const void* bgra, int w, int h) {
 }
 
 void metal_render_submit_pixelbuffer(void* cv_pixel_buffer) {
-    if (!cv_pixel_buffer) { metal_render_set_content_bgra(nullptr, 0, 0); return; }
+    if (!cv_pixel_buffer) {          // clear back to the aurora
+        std::lock_guard<std::mutex> lk(g_content_mu);
+        release_cvtex(); g_content = nil; g_cw = g_ch = 0; return;
+    }
+    if (!g_texcache) return;
     CVPixelBufferRef pb = (CVPixelBufferRef)cv_pixel_buffer;
-    CVPixelBufferLockBaseAddress(pb, kCVPixelBufferLock_ReadOnly);
     int w = (int)CVPixelBufferGetWidth(pb);
     int h = (int)CVPixelBufferGetHeight(pb);
-    size_t stride = CVPixelBufferGetBytesPerRow(pb);
-    const uint8_t* base = (const uint8_t*)CVPixelBufferGetBaseAddress(pb);
-    if (base && w > 0 && h > 0) {
-        if (stride == (size_t)w * 4) {
-            metal_render_set_content_bgra(base, w, h);
-        } else {                                   // repack strided rows tight
-            std::vector<uint8_t> tight((size_t)w * h * 4);
-            for (int y = 0; y < h; ++y)
-                memcpy(&tight[(size_t)y * w * 4], base + (size_t)y * stride, (size_t)w * 4);
-            metal_render_set_content_bgra(tight.data(), w, h);
-        }
-    }
-    CVPixelBufferUnlockBaseAddress(pb, kCVPixelBufferLock_ReadOnly);
+
+    // Zero-copy: map the IOSurface-backed pixel buffer straight to an MTLTexture
+    // (no CPU copy/upload) — the fix for 1080p/4K choppiness.
+    CVMetalTextureRef cvt = NULL;
+    CVReturn r = CVMetalTextureCacheCreateTextureFromImage(
+        kCFAllocatorDefault, g_texcache, pb, NULL,
+        MTLPixelFormatBGRA8Unorm, w, h, 0, &cvt);
+    if (r != kCVReturnSuccess || !cvt) { if (cvt) CFRelease(cvt); return; }
+
+    std::lock_guard<std::mutex> lk(g_content_mu);
+    release_cvtex();
+    g_cvtex   = cvt;                                   // retain until next frame / render
+    g_content = CVMetalTextureGetTexture(cvt);
+    g_cw = w; g_ch = h;
+    CVMetalTextureCacheFlush(g_texcache, 0);
 }
 
 int metal_render_frame(void* mtl_texture, int w, int h, double t) {
