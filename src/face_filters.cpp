@@ -484,6 +484,7 @@ static GLuint sprite_tex(const char* name, int& w, int& h) {
         std::string path = app_models_dir() + "/face/" + name;
         int c = 0;
         unsigned char* px = stbi_load(path.c_str(), &sl.w, &sl.h, &c, 4);
+#if PMS_HAS_GL
         if (px) {
             glGenTextures(1, &sl.tex);
             glBindTexture(GL_TEXTURE_2D, sl.tex);
@@ -494,6 +495,9 @@ static GLuint sprite_tex(const char* name, int& w, int& h) {
             glBindTexture(GL_TEXTURE_2D, 0);
             stbi_image_free(px);
         }
+#else
+        if (px) stbi_image_free(px);
+#endif
     }
     w = sl.w; h = sl.h;
     return sl.tex;
@@ -770,6 +774,7 @@ uintptr_t face_filter_apply_take(const Clip& cl, double src_t,
         // is a fast-path, never the only path. Half-res download; the roll
         // ladder inside the tracker handles rotated sources.
         int hw2 = w / 2, hh2 = h / 2;
+#if PMS_HAS_GL
         if (hw2 >= 64 && hh2 >= 64) {
             static GLuint s_dl_fbo = 0;
             static std::vector<uint8_t> rgb;
@@ -806,6 +811,9 @@ uintptr_t face_filter_apply_take(const Clip& cl, double src_t,
                 have = face_track_latest(obs) && obs.valid;
             }
         }
+#else
+        (void)hw2; (void)hh2;   // no GL readback path on iOS (Metal = Phase 3)
+#endif
     }
     if (!have) return tex;
     return face_filter_apply_obs(cl.face_filter, cl.face_filter_amt, obs,
@@ -823,6 +831,7 @@ static bool    s_facep_inited = false;  // base uploaded + detection attempted
 static void facep_ensure() {
     if (s_facep_inited) return;
     s_facep_inited = true;
+#if PMS_HAS_GL
     glGenTextures(1, &s_facep_base);
     glBindTexture(GL_TEXTURE_2D, s_facep_base);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
@@ -832,6 +841,7 @@ static void facep_ensure() {
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, face_preview_w, face_preview_h, 0,
                  GL_RGB, GL_UNSIGNED_BYTE, face_preview_rgb);
     glBindTexture(GL_TEXTURE_2D, 0);
+#endif
     // One synchronous landmark pass on the base face — reused for every filter.
     if (face_track_available())
         face_track_run_sync(face_preview_rgb, face_preview_w, face_preview_h, s_facep_obs);

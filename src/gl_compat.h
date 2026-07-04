@@ -10,8 +10,12 @@
 #ifdef __APPLE__
 #include <TargetConditionals.h>
 #if TARGET_OS_IPHONE
-// iOS has no OpenGL at all — the GL renderer is compiled out under
-// PMS_HEADLESS; gl_compat.h resolves to nothing here (Metal = Phase 3).
+// iOS has no OpenGL — the GL renderer is compiled out under PMS_HEADLESS.
+// Keep the handle typedefs so scattered handle vars (GLuint tex = 0) in
+// otherwise-core files compile; the actual gl* CALLS are #if PMS_HAS_GL.
+typedef unsigned int GLuint;
+typedef int          GLint;
+typedef unsigned int GLenum;
 #else
 #define GL_SILENCE_DEPRECATION
 #include <OpenGL/gl3.h>
