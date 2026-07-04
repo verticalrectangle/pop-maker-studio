@@ -12,6 +12,11 @@
 // Called from pms_create with the app's MTLDevice (bridged void*). Idempotent.
 void metal_render_init(void* mtl_device);
 
+// Set the current content frame — BGRA8, tightly packed, top-left origin (the
+// AVFoundation / camera pixel layout). pms_render composites it aspect-fit over
+// the background. Pass null / 0 dims to clear back to the aurora. Thread-safe.
+void metal_render_set_content_bgra(const void* bgra, int w, int h);
+
 // Composite one frame into `mtl_texture` (id<MTLTexture>, bridged). `t` drives
 // time-based animation (wall clock). Returns 0 on success, non-zero if Metal
 // isn't ready. No-op (returns 1) if init hasn't run.
