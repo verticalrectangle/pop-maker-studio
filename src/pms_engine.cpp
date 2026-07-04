@@ -8,6 +8,9 @@
 #include "app.h"
 #include "ipc_server.h"
 #include "engine_runtime.h"
+#if defined(__APPLE__)
+#include "metal_render.h"
+#endif
 #include "globals.h"
 #include "json.hpp"
 #include <cstdlib>
@@ -32,8 +35,7 @@ static char* dup_cstr(const std::string& s) {
 
 extern "C" {
 
-pms_engine* pms_create(void* /*graphics_device — Metal on iOS; desktop GL
-                         callers own their context*/,
+pms_engine* pms_create(void* graphics_device,   // MTLDevice* on iOS; null on desktop
                        const char* asset_root,
                        const char* state_root) {
     auto* e = new pms_engine();
@@ -45,6 +47,9 @@ pms_engine* pms_create(void* /*graphics_device — Metal on iOS; desktop GL
     // asset_root: models resolve relative to the binary today
     // (app_models_dir); an explicit override lands with the iOS bundle work.
     (void)asset_root;
+#if defined(__APPLE__)
+    if (graphics_device) metal_render_init(graphics_device);
+#endif
     return e;
 }
 
@@ -68,8 +73,14 @@ char* pms_poll_events(pms_engine* e) {
     return dup_cstr(engine_drain_events());
 }
 
-int pms_render(pms_engine*, void*, int, int) {
-    return 0;   // Metal RenderSurface = Phase 3
+int pms_render(pms_engine* e, void* mtl_texture, int w, int h) {
+#if defined(__APPLE__)
+    if (!e) return 1;
+    return metal_render_frame(mtl_texture, w, h, e->clock);
+#else
+    (void)e; (void)mtl_texture; (void)w; (void)h;
+    return 0;   // desktop renders through its own GL loop
+#endif
 }
 void pms_submit_camera_frame(pms_engine*, void*, int, double) {}   // Phase 4
 void pms_submit_mic_block(pms_engine*, const float*, size_t, double) {}  // Phase 4

@@ -78,6 +78,10 @@ set(IMGUI_APP_SOURCES
 if(NOT APPLE AND NOT PMS_HEADLESS)
     list(APPEND PMS_PLATFORM_ENGINE_SOURCES src/audio_pw.cpp)
 endif()
+# Metal RenderSurface (Phase 3) — Apple only.
+if(APPLE)
+    list(APPEND PMS_PLATFORM_ENGINE_SOURCES src/metal_render.mm)
+endif()
 
 option(PMS_ENGINE_ONLY "Build only pms-engine + engine-smoke (no desktop app; macOS Phase 2 bring-up)" OFF)
 option(PMS_HEADLESS "Engine with no ffmpeg/GL/fftw/process-spawn — iOS-shaped stubs (Phase 2.3)" OFF)
@@ -179,7 +183,8 @@ add_library(pms-engine STATIC ${PMS_ENGINE_SOURCES} ${PMS_PLATFORM_ENGINE_SOURCE
 if(APPLE)
     target_link_libraries(pms-engine PUBLIC
         "-framework AVFoundation" "-framework AudioToolbox"
-        "-framework CoreAudio" "-framework CoreFoundation")
+        "-framework CoreAudio" "-framework CoreFoundation"
+        "-framework Metal" "-framework QuartzCore")
 endif()
 
 if(NOT PMS_ENGINE_ONLY)
