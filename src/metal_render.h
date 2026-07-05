@@ -26,3 +26,7 @@ void metal_render_submit_pixelbuffer(void* cv_pixel_buffer);
 // time-based animation (wall clock). Returns 0 on success, non-zero if Metal
 // isn't ready. No-op (returns 1) if init hasn't run.
 int  metal_render_frame(void* mtl_texture, int w, int h, double t);
+
+// Set the render-time FX applied to the current frame (fed from the engine's
+// live_fx state by pms_render). type 0 = none; 1 = chromatic_aberration.
+void metal_render_set_live_fx(int type, float amount);

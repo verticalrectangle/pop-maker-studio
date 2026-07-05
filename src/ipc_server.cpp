@@ -1964,6 +1964,31 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         return json::object();
     }
 
+    if (method == "set_live_fx") {
+        // iOS render-time FX stack (applied by the Metal backend to the submitted
+        // frame). First increment supports chromatic_aberration; pick it + its
+        // amount from the stack, else clear. type 1 = chromatic_aberration.
+        state.live_fx_type = 0;
+        state.live_fx_amount = 0.0f;
+        if (params.contains("fx") && params["fx"].is_array()) {
+            for (const auto& fx : params["fx"]) {
+                if (fx.value("fx_type", std::string()) == "chromatic_aberration") {
+                    state.live_fx_type = 1;
+                    float amt = 1.0f;
+                    if (fx.contains("params") && fx["params"].is_object()) {
+                        const auto& p = fx["params"];
+                        if (p.contains("amount") && p["amount"].is_number()) amt = p["amount"].get<float>();
+                        else for (auto it = p.begin(); it != p.end(); ++it)
+                            if (it->is_number()) { amt = it->get<float>(); break; }
+                    }
+                    state.live_fx_amount = amt;
+                    break;
+                }
+            }
+        }
+        return json{{"ok", true}, {"type", state.live_fx_type}, {"amount", state.live_fx_amount}};
+    }
+
     if (method == "validate_glsl") {
         std::string glsl = params.value("glsl", "");
         std::vector<RuntimeFXParam> ps;

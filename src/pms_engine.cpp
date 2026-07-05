@@ -76,6 +76,7 @@ char* pms_poll_events(pms_engine* e) {
 int pms_render(pms_engine* e, void* mtl_texture, int w, int h) {
 #if defined(__APPLE__)
     if (!e) return 1;
+    metal_render_set_live_fx(e->state.live_fx_type, e->state.live_fx_amount);
     return metal_render_frame(mtl_texture, w, h, e->clock);
 #else
     (void)e; (void)mtl_texture; (void)w; (void)h;

@@ -47,8 +47,20 @@ vertex VOut quad_v(uint vid [[vertex_id]], constant QuadUni& u [[buffer(0)]]) {
     o.uv  = float2(uv.x, 1.0 - uv.y);   // flip to top-left origin
     return o;
 }
-fragment float4 quad_f(VOut in [[stage_in]], texture2d<float> tex [[texture(0)]]) {
+// Live-FX applied inline in the blit (first increment: one hand-written effect
+// proves the Swift-lever → engine → Metal-FX → preview path; the transpiled
+// shader library for all 109 rides a real multi-pass chain afterward).
+struct FxUni { int type; float amount; };
+fragment float4 quad_f(VOut in [[stage_in]], texture2d<float> tex [[texture(0)]],
+                       constant FxUni& fx [[buffer(0)]]) {
     constexpr sampler s(mag_filter::linear, min_filter::linear, address::clamp_to_edge);
+    if (fx.type == 1) {                          // chromatic_aberration
+        float2 off = (in.uv - 0.5) * (fx.amount * 0.03);
+        float r = tex.sample(s, in.uv + off).r;
+        float g = tex.sample(s, in.uv).g;
+        float b = tex.sample(s, in.uv - off).b;
+        return float4(r, g, b, 1.0);
+    }
     return float4(tex.sample(s, in.uv).rgb, 1.0);
 }
 )";
@@ -62,6 +74,14 @@ static int                        g_cw = 0, g_ch = 0;
 static std::mutex                 g_content_mu;
 static CVMetalTextureCacheRef     g_texcache = NULL;  // zero-copy CVPixelBuffer→MTLTexture
 static CVMetalTextureRef          g_cvtex    = NULL;  // keeps the mapped frame alive
+static int                        g_fx_type   = 0;    // live-FX applied in the blit (0 = none)
+static float                      g_fx_amount = 0.0f;
+
+// Set the render-time FX applied to the current frame (from pms_render, off the
+// engine's live_fx state). type 0 = none; 1 = chromatic_aberration.
+void metal_render_set_live_fx(int type, float amount) {
+    g_fx_type = type; g_fx_amount = amount;
+}
 
 void metal_render_init(void* mtl_device) {
     if (g_dev) return;
@@ -167,6 +187,8 @@ int metal_render_frame(void* mtl_texture, int w, int h, double t) {
             [enc setRenderPipelineState:g_quad_pso];
             float half[2] = { sx, sy };
             [enc setVertexBytes:half length:sizeof(half) atIndex:0];
+            struct { int type; float amount; } fxu = { g_fx_type, g_fx_amount };
+            [enc setFragmentBytes:&fxu length:sizeof(fxu) atIndex:0];
             [enc setFragmentTexture:g_content atIndex:0];
             [enc drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
         }
