@@ -389,10 +389,22 @@ int metal_render_frame(void* mtl_texture, int w, int h, double t) {
     }
 
     // Main pass: aurora background + aspect-fit blit of `source`.
+    // DIAGNOSTIC: color the letterbox by FX-runner state so a screenshot pinpoints
+    // the failure (temporary). none=default, RED=stack populated but manifest not
+    // loaded, ORANGE=manifest ok but shader/PSO failed, GREEN=PSO built (applying).
+    MTLClearColor clearC = MTLClearColorMake(0.02, 0.02, 0.03, 1.0);
+    {
+        std::vector<LiveFx> st; { std::lock_guard<std::mutex> lk(g_stack_mu); st = g_stack; }
+        if (!st.empty()) {
+            if (g_manifest.empty())                 clearC = MTLClearColorMake(0.55, 0.0, 0.0, 1.0);
+            else if (!get_fx_program(st[0].fx_type))clearC = MTLClearColorMake(0.65, 0.32, 0.0, 1.0);
+            else                                    clearC = MTLClearColorMake(0.0, 0.45, 0.0, 1.0);
+        }
+    }
     MTLRenderPassDescriptor* rp = [MTLRenderPassDescriptor new];
     rp.colorAttachments[0].texture     = target;
     rp.colorAttachments[0].loadAction  = MTLLoadActionClear;
-    rp.colorAttachments[0].clearColor  = MTLClearColorMake(0.02, 0.02, 0.03, 1.0);
+    rp.colorAttachments[0].clearColor  = clearC;
     rp.colorAttachments[0].storeAction = MTLStoreActionStore;
     id<MTLCommandBuffer>        cb  = [g_queue commandBuffer];
     id<MTLRenderCommandEncoder> enc = [cb renderCommandEncoderWithDescriptor:rp];
