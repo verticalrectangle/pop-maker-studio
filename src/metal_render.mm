@@ -113,6 +113,15 @@ static std::string                g_shader_dir;            // optional override 
 static NSString* shader_path(const char* name, const char* ext) {
     if (!g_shader_dir.empty())
         return [NSString stringWithFormat:@"%s/%s.%s", g_shader_dir.c_str(), name, ext];
+    // Resolve directly from the bundle resource URL — pathForResource:inDirectory:
+    // doesn't reliably find files inside a folder-reference (blue folder).
+    NSFileManager* fm = [NSFileManager defaultManager];
+    NSString* file = [NSString stringWithFormat:@"%s.%s", name, ext];
+    NSURL* res = [[NSBundle mainBundle] resourceURL];
+    NSString* inMsl = [[[res URLByAppendingPathComponent:@"msl"] URLByAppendingPathComponent:file] path];
+    if ([fm fileExistsAtPath:inMsl]) return inMsl;
+    NSString* atRoot = [[res URLByAppendingPathComponent:file] path];
+    if ([fm fileExistsAtPath:atRoot]) return atRoot;
     return [[NSBundle mainBundle] pathForResource:[NSString stringWithUTF8String:name]
                                            ofType:[NSString stringWithUTF8String:ext] inDirectory:@"msl"];
 }
