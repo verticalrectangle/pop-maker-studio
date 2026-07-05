@@ -83,14 +83,14 @@ int pms_render(pms_engine* e, void* mtl_texture, int w, int h) {
     return 0;   // desktop renders through its own GL loop
 #endif
 }
-void pms_submit_camera_frame(pms_engine*, void* cv_pixel_buffer, int, double) {
+void pms_submit_camera_frame(pms_engine*, void* cv_pixel_buffer, int, double host_time) {
 #if defined(__APPLE__)
-    // Feed the AVFoundation frame straight to the Metal compositor. Full engine
-    // intake (timeline placement, per-clip decode) is the rest of Phase 4; this
-    // gives a live preview now.
+    // Feed the AVFoundation frame straight to the Metal compositor. host_time is
+    // the frame's timeline position, used to window FX to their brick spans.
     metal_render_submit_pixelbuffer(cv_pixel_buffer);
+    metal_render_set_content_time(host_time);
 #else
-    (void)cv_pixel_buffer;
+    (void)cv_pixel_buffer; (void)host_time;
 #endif
 }
 void pms_submit_mic_block(pms_engine*, const float*, size_t, double) {}  // Phase 4

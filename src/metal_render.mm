@@ -96,9 +96,11 @@ struct ManifestEntry { std::vector<ParamField> params; size_t params_size = 0; s
 static std::unordered_map<std::string, ManifestEntry> g_manifest;
 static bool g_manifest_loaded = false;
 
-struct LiveFx { std::string fx_type; float amount = 1.0f; std::map<std::string, float> params; };
+struct LiveFx { std::string fx_type; float amount = 1.0f; float start = -1e30f, end = 1e30f;
+                std::map<std::string, float> params; };
 static std::vector<LiveFx> g_stack;
 static std::mutex          g_stack_mu;
+static double              g_content_time = 0.0;   // timeline time of the current frame (for FX windowing)
 
 struct FxProgram { id<MTLRenderPipelineState> pso = nil; const ManifestEntry* m = nullptr; bool tried = false; };
 static std::unordered_map<std::string, FxProgram> g_fx_progs;
@@ -231,6 +233,8 @@ void metal_render_set_live_fx_stack(const char* json_utf8) {
             for (const auto& e : arr) {
                 LiveFx fx; fx.fx_type = e.value("fx_type", std::string());
                 if (fx.fx_type.empty()) continue;
+                fx.start = e.value("start", -1e30f);        // brick span (default = always on)
+                fx.end   = e.value("end",    1e30f);
                 if (e.contains("params") && e["params"].is_object())
                     for (auto it = e["params"].begin(); it != e["params"].end(); ++it)
                         if (it.value().is_number()) fx.params[it.key()] = it.value().get<float>();
@@ -245,6 +249,9 @@ void metal_render_set_live_fx_stack(const char* json_utf8) {
 }
 
 void metal_render_set_shader_dir(const char* dir) { g_shader_dir = dir ? dir : ""; }
+
+// Timeline time of the current content frame — FX apply only within [start,end].
+void metal_render_set_content_time(double t) { g_content_time = t; }
 
 // Diagnostic snapshot of the FX runner (for the `fx_debug` IPC command).
 const char* metal_render_fx_debug() {
@@ -377,6 +384,7 @@ int metal_render_frame(void* mtl_texture, int w, int h, double t) {
             id<MTLTexture> cur = source; int dst = 0;
             std::vector<uint8_t> pbuf;
             for (auto& fx : stack) {
+                if (!(fx.start <= g_content_time && g_content_time < fx.end)) continue;  // out of brick span
                 FxProgram* p = get_fx_program(fx.fx_type);
                 if (!p || !g_ping[dst]) continue;                 // unknown effect → skip
                 MTLRenderPassDescriptor* rpF = [MTLRenderPassDescriptor new];

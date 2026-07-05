@@ -39,3 +39,6 @@ void metal_render_set_shader_dir(const char* dir);
 // FX-runner diagnostic JSON (manifest_count, has_content, stack[] with per-effect
 // in_manifest/pso_ok) — surfaced through the `fx_debug` IPC command.
 const char* metal_render_fx_debug(void);
+
+// Timeline time of the current content frame — FX apply only within their [start,end].
+void metal_render_set_content_time(double t);
