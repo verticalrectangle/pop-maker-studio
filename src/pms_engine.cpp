@@ -83,6 +83,11 @@ int pms_render(pms_engine* e, void* mtl_texture, int w, int h) {
     return 0;   // desktop renders through its own GL loop
 #endif
 }
+void pms_render_wait(pms_engine*) {
+#if defined(__APPLE__)
+    metal_render_wait();
+#endif
+}
 void pms_submit_camera_frame(pms_engine*, void* cv_pixel_buffer, int, double host_time) {
 #if defined(__APPLE__)
     // Feed the AVFoundation frame straight to the Metal compositor. host_time is

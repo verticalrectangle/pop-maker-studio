@@ -33,6 +33,10 @@ void pms_tick(pms_engine*, double dt_seconds);
 // void*). Returns 0 on success. STUB until the Metal RenderSurface (Phase 3).
 int pms_render(pms_engine*, void* mtl_texture, int width, int height);
 
+// Block until the GPU has finished the committed render — for offline export
+// (submit a frame, render into an output texture, wait, read it back, encode).
+void pms_render_wait(pms_engine*);
+
 // Capture intake (AVFoundation feeds these). STUB until the CaptureBackend
 // (Phase 4). camera: CVPixelBufferRef; mic: interleaved stereo float.
 void pms_submit_camera_frame(pms_engine*, void* cv_pixel_buffer,
