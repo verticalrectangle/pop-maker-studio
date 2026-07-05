@@ -134,17 +134,22 @@ static void load_manifest() {
     if (!d) { NSLog(@"[fx] params_manifest.json not found"); return; }
     try {
         fxjson m = fxjson::parse(std::string((const char*)d.bytes, d.length));
-        for (auto it = m.begin(); it != m.end(); ++it) {
+        auto add = [&](const std::string& name, const fxjson& entry) {
+            if (name.empty()) return;
             ManifestEntry e;
-            e.params_size = it.value().value("params_size", (size_t)0);
-            e.entry = it.value().value("entry", std::string("fx_") + it.key());
-            for (const auto& pf : it.value().value("params", fxjson::array()))
+            e.params_size = entry.value("params_size", (size_t)0);
+            e.entry = entry.value("entry", std::string("fx_") + name);
+            for (const auto& pf : entry.value("params", fxjson::array()))
                 e.params.push_back({ pf.value("name", std::string()), pf.value("count", 0),
                                      (size_t)pf.value("offset", 0) });
-            g_manifest[it.key()] = std::move(e);
-        }
+            g_manifest[name] = std::move(e);
+        };
+        if (m.is_array())                                    // [{shader,params,...}, ...]
+            for (const auto& entry : m) add(entry.value("shader", std::string()), entry);
+        else                                                 // {name: {params,...}, ...}
+            for (auto it = m.begin(); it != m.end(); ++it) add(it.key(), it.value());
         NSLog(@"[fx] manifest loaded: %zu effects", g_manifest.size());
-    } catch (...) { NSLog(@"[fx] manifest parse failed"); }
+    } catch (const std::exception& ex) { NSLog(@"[fx] manifest parse failed: %s", ex.what()); }
 }
 
 static FxProgram* get_fx_program(const std::string& fx_type) {
