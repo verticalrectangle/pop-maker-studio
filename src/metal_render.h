@@ -27,6 +27,11 @@ void metal_render_submit_pixelbuffer(void* cv_pixel_buffer);
 // isn't ready. No-op (returns 1) if init hasn't run.
 int  metal_render_frame(void* mtl_texture, int w, int h, double t);
 
-// Set the render-time FX applied to the current frame (fed from the engine's
-// live_fx state by pms_render). type 0 = none; 1 = chromatic_aberration.
-void metal_render_set_live_fx(int type, float amount);
+// Set the ordered render-time FX stack the Metal backend applies to the current
+// frame — a JSON array [{"fx_type":str,"params":{name:num,...}}, ...] (the
+// set_live_fx payload). Cheap when unchanged; parses + rebuilds only on change.
+void metal_render_set_live_fx_stack(const char* json_utf8);
+
+// Optional: override where msl/<name>.metal + params_manifest.json are loaded
+// from (default = the app bundle's msl/ dir). For headless/test.
+void metal_render_set_shader_dir(const char* dir);

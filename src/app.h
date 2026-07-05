@@ -706,10 +706,9 @@ struct AppState {
     float splash_timer = 1.6f;  // counts down from launch; studio shows when <= 0
     bool  in_studio    = false; // false = show the home/launcher; true = the editor
 
-    // iOS live-FX: render-time FX the Metal backend applies to the submitted
-    // frame (set via the `set_live_fx` lever; type 0 = none, 1 = chromatic_aberration).
-    int   live_fx_type   = 0;
-    float live_fx_amount = 0.0f;
+    // iOS live-FX: the ordered render-time FX stack the Metal backend applies to
+    // the submitted frame (JSON array of {fx_type,params}), set via `set_live_fx`.
+    std::string live_fx_json;
 
     // files
     std::string project_path;   // path of the .pms file last saved/loaded (empty = unsaved)
