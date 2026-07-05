@@ -253,6 +253,15 @@ void metal_render_set_shader_dir(const char* dir) { g_shader_dir = dir ? dir : "
 // Timeline time of the current content frame — FX apply only within [start,end].
 void metal_render_set_content_time(double t) { g_content_time = t; }
 
+// Block until the GPU has finished all committed frames — for offline export
+// (render a frame, wait, read it back, encode). g_queue is in-order, so an empty
+// command buffer committed + waited flushes the render chain.
+void metal_render_wait(void) {
+    if (!g_queue) return;
+    id<MTLCommandBuffer> cb = [g_queue commandBuffer];
+    [cb commit]; [cb waitUntilCompleted];
+}
+
 // Diagnostic snapshot of the FX runner (for the `fx_debug` IPC command).
 const char* metal_render_fx_debug() {
     static std::string s;
