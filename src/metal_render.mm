@@ -241,6 +241,27 @@ void metal_render_set_live_fx_stack(const char* json_utf8) {
 
 void metal_render_set_shader_dir(const char* dir) { g_shader_dir = dir ? dir : ""; }
 
+// Diagnostic snapshot of the FX runner (for the `fx_debug` IPC command).
+const char* metal_render_fx_debug() {
+    static std::string s;
+    fxjson j;
+    j["manifest_count"] = (int)g_manifest.size();
+    j["has_content"]    = (g_content != nil);
+    fxjson stk = fxjson::array();
+    { std::lock_guard<std::mutex> lk(g_stack_mu);
+      for (auto& f : g_stack) {
+          fxjson e;
+          e["fx_type"]     = f.fx_type;
+          e["amount"]      = f.amount;
+          e["in_manifest"] = (g_manifest.find(f.fx_type) != g_manifest.end());
+          e["pso_ok"]      = (get_fx_program(f.fx_type) != nullptr);
+          stk.push_back(e);
+      } }
+    j["stack"] = stk;
+    s = j.dump();
+    return s.c_str();
+}
+
 void metal_render_init(void* mtl_device) {
     if (g_dev) return;
     g_dev = (__bridge id<MTLDevice>)mtl_device;

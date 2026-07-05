@@ -1,4 +1,7 @@
 #include "ipc_server.h"
+#ifdef __APPLE__
+#include "metal_render.h"   // metal_render_fx_debug for the fx_debug command
+#endif
 #include "audio.h"
 #include "recorder.h"
 #include "video_recorder.h"
@@ -1970,6 +1973,14 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         bool has = params.contains("fx") && params["fx"].is_array();
         state.live_fx_json = has ? params["fx"].dump() : std::string();
         return json{{"ok", true}, {"count", has ? params["fx"].size() : 0}};
+    }
+
+    if (method == "fx_debug") {          // FX-runner state (manifest/stack/pso) — iOS only
+#ifdef __APPLE__
+        return json::parse(metal_render_fx_debug());
+#else
+        return json::object();
+#endif
     }
 
     if (method == "validate_glsl") {
