@@ -30,6 +30,7 @@ static const char* k_gen_fx_names[] = {
 };
 
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <sys/un.h>
 #include <unistd.h>
 #include <fcntl.h>
@@ -98,6 +99,37 @@ static bool        g_in_batch    = false;
 static bool        g_auto_batched = false;   // true when batch was opened implicitly
 static std::string g_batch_label;
 static AppState*   g_batch_state = nullptr;
+// Pre-batch snapshot captured at begin_batch so abort_batch can roll the
+// state back to exactly where the batch started (same fields history.cpp's
+// capture/restore covers) without pushing a history entry.
+static TimelineSnapshot g_batch_snapshot;
+static bool             g_batch_has_snapshot = false;
+
+static void batch_snapshot_capture(const AppState& state) {
+    g_batch_snapshot                = TimelineSnapshot{};
+    g_batch_snapshot.tracks         = state.tracks;
+    g_batch_snapshot.selected_track = state.selected_track;
+    g_batch_snapshot.selected_clip  = state.selected_clip;
+    g_batch_snapshot.subtitle_mode  = state.subtitle_mode;
+    g_batch_snapshot.subtitle_n     = state.subtitle_n;
+    g_batch_snapshot.style          = state.style;
+    g_batch_snapshot.font_weight    = state.font_weight;
+    g_batch_snapshot.format         = state.format;
+    g_batch_snapshot.lyrics_edits   = state.lyrics_edits;
+    g_batch_has_snapshot            = true;
+}
+
+static void batch_snapshot_restore(AppState& state) {
+    state.tracks         = g_batch_snapshot.tracks;
+    state.selected_track = g_batch_snapshot.selected_track;
+    state.selected_clip  = g_batch_snapshot.selected_clip;
+    state.subtitle_mode  = g_batch_snapshot.subtitle_mode;
+    state.subtitle_n     = g_batch_snapshot.subtitle_n;
+    state.style          = g_batch_snapshot.style;
+    state.font_weight    = g_batch_snapshot.font_weight;
+    state.format         = g_batch_snapshot.format;
+    state.lyrics_edits   = g_batch_snapshot.lyrics_edits;
+}
 
 // ── Async progress streaming ──────────────────────────────────────────────────
 // Long-running ops mark the client fd "busy", stream {"type":"progress"} lines,
@@ -446,6 +478,160 @@ static InterpType interp_from_str(const std::string& s) {
     return InterpType::EaseBoth;
 }
 
+// Inverse of parse_fx_type: FXType → the snake_case id string the handlers
+// (add_effect_brick, set_clip_fx, add_multifx_brick) accept.
+static std::string fx_type_str(FXType t) {
+    switch (t) {
+        case FXType::Grade:        return "grade";
+        case FXType::Blur:         return "blur";
+        case FXType::Vignette:     return "vignette";
+        case FXType::Glitch:       return "glitch";
+        case FXType::ZoomPunch:    return "zoom_punch";
+        case FXType::LUT:          return "lut";
+        case FXType::LightLeak:    return "light_leak";
+        case FXType::VHS:          return "vhs";
+        case FXType::Datamosh:     return "datamosh";
+        case FXType::ChromaKey:    return "chroma_key";
+        case FXType::ChromaMelt:   return "chroma_melt";
+        case FXType::ChromaEcho:   return "chroma_echo";
+        case FXType::ChromaFrame:  return "chroma_frame";
+        case FXType::KenBurns:     return "ken_burns";
+        case FXType::AudioAutotune:     return "audio_autotune";
+        case FXType::AudioPitch:        return "audio_pitch";
+        case FXType::AudioFormant:      return "audio_formant";
+        case FXType::AudioDelay:        return "audio_delay";
+        case FXType::AudioReverb:       return "audio_reverb";
+        case FXType::AudioVoiceConvert: return "audio_voice_convert";
+        default: break;
+    }
+    for (int i = 0; i < k_gen_fx_count; ++i)
+        if (k_gen_fx_types[i] == t) return k_gen_fx_names[i];
+    return "unknown";
+}
+
+static const char* format_str(OutputFormat f) {
+    switch (f) {
+        case OutputFormat::Horizontal: return "horizontal";
+        case OutputFormat::Square:     return "square";
+        default:                       return "vertical";
+    }
+}
+
+// Inverse of apply_effect_params: emit the current param values of an Effect
+// clip as {name: value}, using exactly the names apply_effect_params /
+// set_clip_fx accept — so a client can round-trip fx bricks losslessly.
+static json effect_params_to_json(const Clip& c, const std::string& fx_id) {
+    json p = json::object();
+    switch (c.fx_type) {
+        case FXType::Grade:
+            p["brightness"] = c.fx_brightness;
+            p["contrast"]   = c.fx_contrast;
+            p["saturation"] = c.fx_saturation;
+            p["hue"]        = c.fx_hue;
+            break;
+        case FXType::Blur:     p["blur"]     = c.fx_blur;     break;
+        case FXType::Vignette: p["vignette"] = c.fx_vignette; break;
+        case FXType::Glitch:
+            p["glitch_chroma"]           = c.fx_glitch_chroma;
+            p["glitch_jitter"]           = c.fx_glitch_jitter;
+            p["glitch_corruption"]       = c.fx_glitch_corruption;
+            p["glitch_corruption_bleed"] = c.fx_glitch_corruption_bleed;
+            break;
+        case FXType::ZoomPunch:
+            p["zoom_strength"] = c.fx_zoom_strength;
+            p["zoom_decay"]    = c.fx_zoom_decay;
+            p["zoom_shake"]    = c.fx_zoom_shake;
+            break;
+        case FXType::LUT: break;   // LUT file path rides in the clip, not params
+        case FXType::LightLeak:
+            p["leak_intensity"] = c.fx_leak_intensity;
+            p["leak_speed"]     = c.fx_leak_speed;
+            break;
+        case FXType::VHS:
+            p["vhs_noise"]    = c.fx_vhs_noise;
+            p["vhs_bleed"]    = c.fx_vhs_bleed;
+            p["vhs_tracking"] = c.fx_vhs_tracking;
+            break;
+        case FXType::Datamosh:
+            p["datamosh_intensity"] = c.fx_datamosh_intensity;
+            p["datamosh_spread"]    = c.fx_datamosh_spread;
+            break;
+        case FXType::ChromaKey:
+            p["chroma_key_r"]         = c.fx_chroma_key_r;
+            p["chroma_key_g"]         = c.fx_chroma_key_g;
+            p["chroma_key_b"]         = c.fx_chroma_key_b;
+            p["chroma_key_threshold"] = c.fx_chroma_key_threshold;
+            p["chroma_key_softness"]  = c.fx_chroma_key_softness;
+            break;
+        case FXType::ChromaMelt:
+            p["chroma_melt_r"]         = c.fx_chroma_melt_r;
+            p["chroma_melt_g"]         = c.fx_chroma_melt_g;
+            p["chroma_melt_b"]         = c.fx_chroma_melt_b;
+            p["chroma_melt_threshold"] = c.fx_chroma_melt_threshold;
+            p["chroma_melt_persist"]   = c.fx_chroma_melt_persist;
+            break;
+        case FXType::ChromaEcho:
+            p["chroma_echo_r"]         = c.fx_chroma_echo_r;
+            p["chroma_echo_g"]         = c.fx_chroma_echo_g;
+            p["chroma_echo_b"]         = c.fx_chroma_echo_b;
+            p["chroma_echo_threshold"] = c.fx_chroma_echo_threshold;
+            p["chroma_echo_persist"]   = c.fx_chroma_echo_persist;
+            break;
+        case FXType::ChromaFrame:
+            p["chroma_frame_r"]         = c.fx_chroma_frame_r;
+            p["chroma_frame_g"]         = c.fx_chroma_frame_g;
+            p["chroma_frame_b"]         = c.fx_chroma_frame_b;
+            p["chroma_frame_threshold"] = c.fx_chroma_frame_threshold;
+            p["chroma_frame_taps"]      = c.fx_chroma_frame_taps;
+            p["chroma_frame_spacing"]   = c.fx_chroma_frame_spacing;
+            p["chroma_frame_falloff"]   = c.fx_chroma_frame_falloff;
+            break;
+        // Audio FX bricks: the creation-param names add_effect_brick accepts.
+        case FXType::AudioAutotune:
+            p["key"]      = c.audio_fx.autotune_key;
+            p["scale"]    = c.audio_fx.autotune_scale;
+            p["speed_ms"] = c.audio_fx.autotune_speed;
+            p["dry_wet"]  = c.audio_fx.mix;
+            break;
+        case FXType::AudioPitch:
+            p["semitones"] = c.audio_fx.pitch_semitones;
+            p["dry_wet"]   = c.audio_fx.mix;
+            break;
+        case FXType::AudioFormant:
+            p["shift"]   = c.audio_fx.formant_shift;
+            p["dry_wet"] = c.audio_fx.mix;
+            break;
+        case FXType::AudioDelay:
+            p["time"]     = c.audio_fx.delay_time;
+            p["feedback"] = c.audio_fx.delay_feedback;
+            p["mix"]      = c.audio_fx.delay_mix;
+            p["dry_wet"]  = c.audio_fx.mix;
+            break;
+        case FXType::AudioReverb:
+            p["room"]    = c.audio_fx.reverb_room;
+            p["damp"]    = c.audio_fx.reverb_damp;
+            p["mix"]     = c.audio_fx.reverb_mix;
+            p["dry_wet"] = c.audio_fx.mix;
+            break;
+        default: {
+            // Generated shader FX: registry fields are named fx_<id>_<param>.
+            // Verify each suffix against fx_clip_set_param on a scratch clip so
+            // an id that happens to prefix another id's fields can't leak params.
+            static Clip probe;
+            const std::string prefix = "fx_" + fx_id + "_";
+            for (int i = 0; i < kClipKfFieldCount; ++i) {
+                const char* n = kClipKfFields[i].name;
+                if (strncmp(n, prefix.c_str(), prefix.size()) != 0) continue;
+                std::string pname = n + prefix.size();
+                if (!fx_clip_set_param(probe, fx_id, pname, 0.f)) continue;
+                p[pname] = c.*(kClipKfFields[i].f);
+            }
+            break;
+        }
+    }
+    return p;
+}
+
 static json clip_to_json_slim(int idx, const Clip& c) {
     json j;
     j["index"]    = idx;
@@ -564,6 +750,45 @@ static json clip_to_json(int idx, const Clip& c) {
         j["selected_take"] = c.rec_take_sel;
         if (c.clip_type == ClipType::VideoRecord) j["photo_mode"] = c.rec_photo;
     }
+    // FX projection — WHICH effect an Effect brick holds + its params, so a
+    // client (iOS projection) can hydrate/rebuild the brick losslessly.
+    if (c.clip_type == ClipType::Effect) {
+        std::string fid = fx_type_str(c.fx_type);
+        j["fx_type"]   = fid;
+        j["fx_params"] = effect_params_to_json(c, fid);
+        if (fx_type_is_audio_fx(c.fx_type)) {
+            json a;
+            a["autotune_on"]     = c.audio_fx.autotune_on;
+            a["pitch_on"]        = c.audio_fx.pitch_on;
+            a["pitch_semitones"] = c.audio_fx.pitch_semitones;
+            a["formant_on"]      = c.audio_fx.formant_on;
+            a["delay_on"]        = c.audio_fx.delay_on;
+            a["reverb_on"]       = c.audio_fx.reverb_on;
+            j["audio_fx"]        = a;
+        }
+    }
+    if (c.clip_type == ClipType::MultiFX || c.clip_type == ClipType::AudioMultiFX) {
+        json chain = json::array();
+        for (const Clip& se : c.fx_chain) {
+            json e;
+            e["rel_start"] = se.rel_start;
+            e["rel_end"]   = se.rel_end;
+            if (se.clip_type == ClipType::BodyFX) {
+                const BodyFXInfo* info = body_fx_find_info(se.body_fx_type);
+                e["fx_type"]        = "body_fx";
+                e["body_fx_type"]   = info ? info->name : "None";
+                e["body_fx_amount"] = se.body_fx_amount;
+                e["body_fx_params"] = {se.body_fx_params[0], se.body_fx_params[1],
+                                       se.body_fx_params[2], se.body_fx_params[3]};
+            } else {
+                std::string fid = fx_type_str(se.fx_type);
+                e["fx_type"]   = fid;
+                e["fx_params"] = effect_params_to_json(se, fid);
+            }
+            chain.push_back(e);
+        }
+        j["fx_chain"] = chain;
+    }
     if (c.fx_coupled) j["coupled"] = true;
     return j;
 }
@@ -578,6 +803,7 @@ static json state_to_json_slim(const AppState& state) {
     j["transcript_ready"] = !state.words_json_path.empty() &&
                             (bool)std::ifstream(state.words_json_path);
     j["playhead"]         = state.playhead;
+    j["format"]           = format_str(state.format);
     json tracks_arr = json::array();
     for (int ti = 0; ti < (int)state.tracks.size(); ++ti) {
         const Track& t = state.tracks[ti];
@@ -620,6 +846,7 @@ static json state_to_json(const AppState& state) {
     j["transcript_ready"] = !state.words_json_path.empty() &&
                             (bool)std::ifstream(state.words_json_path);
     j["playhead"]        = state.playhead;
+    j["format"]          = format_str(state.format);
 
     // Beats (truncated to 3 decimal places)
     json beats_arr = json::array();
@@ -666,6 +893,39 @@ static json state_to_json(const AppState& state) {
     j["bin"] = bin_arr;
 
     return j;
+}
+
+// Read-only project summary: parse the .pms at `path` into a TEMPORARY
+// AppState (project_load only parses — no audio/video/render teardown, unlike
+// open_project_path) and report card-level metadata. Shared by
+// get_project_summary and list_recent_projects.
+static json project_summary_json(const std::string& path, std::string& err) {
+    struct stat st{};
+    if (::stat(path.c_str(), &st) != 0) { err = "cannot stat " + path; return {}; }
+    AppState tmp;
+    if (!project_load(tmp, path)) { err = "project_load failed for " + path; return {}; }
+    float dur = tmp.duration;
+    int clip_count = 0, fx_count = 0;
+    for (const auto& t : tmp.tracks) {
+        for (const auto& c : t.clips) {
+            if (c.end > dur) dur = c.end;
+            if (c.clip_type == ClipType::Effect  || c.clip_type == ClipType::MultiFX ||
+                c.clip_type == ClipType::AudioMultiFX || c.clip_type == ClipType::BodyFX)
+                ++fx_count;
+            else
+                ++clip_count;
+        }
+    }
+    json r;
+    r["path"]          = path;
+    r["name"]          = std::filesystem::path(path).stem().string();
+    r["duration"]      = dur;
+    r["fps"]           = tmp.fps;
+    r["format"]        = format_str(tmp.format);
+    r["clip_count"]    = clip_count;
+    r["fx_count"]      = fx_count;
+    r["modified_unix"] = (int64_t)st.st_mtime;
+    return r;
 }
 
 // ── ClipType parsing ──────────────────────────────────────────────────────────
@@ -865,6 +1125,20 @@ void ipc_debug_input_tick() {
 static json dispatch(AppState& state, const std::string& method, const json& params, std::string& err,
                      int client_fd, const std::string& req_id);
 
+// Close an implicitly opened batch: one mutation = one undo step. The socket
+// path does this in process_client; in-process callers (pms_command, the
+// agent harness) come through engine_command, which must close it too or the
+// first mutation leaves a stale open batch (undo never advances, and the next
+// explicit begin_batch errors out).
+static void close_auto_batch(AppState& state) {
+    if (!(g_auto_batched && g_in_batch)) return;
+    history_push(state, g_batch_label);
+    g_in_batch     = false;
+    g_auto_batched = false;
+    g_batch_label.clear();
+    g_batch_state  = nullptr;
+}
+
 std::string engine_command(AppState& state, const std::string& json_request) {
     json reply;
     try {
@@ -872,8 +1146,15 @@ std::string engine_command(AppState& state, const std::string& json_request) {
         std::string method = req.value("method", "");
         json params = req.value("params", json::object());
         std::string err;
-        json result = dispatch(state, method, params, err, /*client_fd=*/-1,
-                               req.value("id", std::string("engine")));
+        json result;
+        try {
+            result = dispatch(state, method, params, err, /*client_fd=*/-1,
+                              req.value("id", std::string("engine")));
+        } catch (...) {
+            close_auto_batch(state);
+            throw;
+        }
+        close_auto_batch(state);
         if (!err.empty()) reply = {{"id", req.value("id", "engine")}, {"error", err}};
         else              reply = {{"id", req.value("id", "engine")}, {"result", result}};
     } catch (const std::exception& e) {
@@ -914,6 +1195,28 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         // ASCII map of the track-layering system (Z-order, timing, overlaps) so a
         // non-vision agent can actually picture the editing surface.
         r["timeline"] = build_timeline_ascii(state);
+        return r;
+    }
+
+    if (method == "get_project_summary") {
+        std::string path = params.value("path", "");
+        if (path.empty()) { err = "path is required"; return {}; }
+        return project_summary_json(path, err);
+    }
+
+    if (method == "list_recent_projects") {
+        json arr = json::array();
+        for (const auto& p : recent_projects_list()) {
+            std::string serr;
+            json s = project_summary_json(p, serr);
+            if (!serr.empty()) {   // unreadable entry: visible, not silently dropped
+                json bad; bad["path"] = p; bad["error"] = serr;
+                arr.push_back(std::move(bad));
+            } else {
+                arr.push_back(std::move(s));
+            }
+        }
+        json r; r["projects"] = arr;
         return r;
     }
 
@@ -2010,6 +2313,7 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         g_in_batch    = true;
         g_batch_label = params.value("label", "MCP edit");
         g_batch_state = &state;
+        batch_snapshot_capture(state);   // abort_batch rolls back to here
         state.agent_active = true;
         state.agent_msg    = g_batch_label;
         return json::object();
@@ -2018,17 +2322,38 @@ static json dispatch(AppState& state, const std::string& method, const json& par
     if (method == "end_batch") {
         if (!g_in_batch) { err = "not in a batch"; return {}; }
         history_push(state, g_batch_label);
-        g_in_batch         = false;
-        g_auto_batched     = false;
+        g_in_batch           = false;
+        g_auto_batched       = false;
+        g_batch_has_snapshot = false;
         g_batch_label.clear();
-        g_batch_state      = nullptr;
-        state.agent_active = false;
+        g_batch_state        = nullptr;
+        state.agent_active   = false;
         state.agent_msg.clear();
         json r;
         r["duration"]         = state.duration;
         r["project_path"]     = state.project_path;
         r["transcript_ready"] = !state.words_json_path.empty() &&
                                 (bool)std::ifstream(state.words_json_path);
+        return r;
+    }
+
+    if (method == "abort_batch") {
+        // Compound-edit failure recovery: roll the state back to the snapshot
+        // captured at begin_batch and drop the batch WITHOUT pushing history —
+        // as if the batch never happened. Lenient when no batch is open (the
+        // failure being recovered from may have been begin_batch itself).
+        json r;
+        if (!g_in_batch) { r["aborted"] = false; return r; }
+        if (g_batch_has_snapshot && g_batch_state == &state)
+            batch_snapshot_restore(state);
+        g_in_batch           = false;
+        g_auto_batched       = false;
+        g_batch_has_snapshot = false;
+        g_batch_label.clear();
+        g_batch_state        = nullptr;
+        state.agent_active   = false;
+        state.agent_msg.clear();
+        r["aborted"] = true;
         return r;
     }
 
@@ -3027,11 +3352,27 @@ static json dispatch(AppState& state, const std::string& method, const json& par
     }
 
     if (method == "set_clip_fx") {
-        int ti = params.value("track", -1), ci = params.value("clip", -1);
+        int ti = track_by_name_or_index(state, params), ci = params.value("clip", -1);
         if (!check_clip(state, ti, ci, err)) return {};
         std::string fx_id = params.value("fx_id", "");
         if (fx_id.empty()) { err = "fx_id is required"; return {}; }
-        Clip& cl = state.tracks[ti].clips[ci];
+        Clip& brick = state.tracks[ti].clips[ci];
+        // A MultiFX/AudioMultiFX brick (every auto-coupled brick is one) holds
+        // its effects in fx_chain — parameterise the matching sub-clip there,
+        // not the brick's own (unused) scalar fields.
+        Clip* target = &brick;
+        if (brick.clip_type == ClipType::MultiFX ||
+            brick.clip_type == ClipType::AudioMultiFX) {
+            FXType want = parse_fx_type(fx_id);
+            target = nullptr;
+            for (auto& se : brick.fx_chain)
+                if (se.clip_type == ClipType::Effect && se.fx_type == want) target = &se;
+            if (!target) {
+                err = "effect '" + fx_id + "' is not in this brick's chain";
+                return {};
+            }
+        }
+        Clip& cl = *target;
         if (params.contains("amount"))
             fx_clip_set_param(cl, fx_id, "amount", params["amount"].get<float>());
         if (params.contains("params") && params["params"].is_object()) {
@@ -3043,8 +3384,11 @@ static json dispatch(AppState& state, const std::string& method, const json& par
                 }
             }
         }
-        // Set FX type so the effect clip renders
-        cl.fx_type = FXType::Grade;  // will be overridden if clip is Effect type
+        // Keep the Effect brick's type in sync with the fx being parameterised
+        // so it renders (and projects) as that effect — the old hardcoded
+        // FXType::Grade reset e.g. a pixelate brick to grade on every edit.
+        if (cl.clip_type == ClipType::Effect)
+            cl.fx_type = parse_fx_type(fx_id);
         return json::object();
     }
 

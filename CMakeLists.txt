@@ -202,7 +202,7 @@ add_dependencies(pms-engine check_engine_deps)
 # socket, no window). CI-able: build + run = the boundary holds.
 add_executable(engine-smoke tools/engine_smoke.cpp)
 target_link_libraries(engine-smoke PRIVATE pms-engine)
-target_include_directories(engine-smoke PRIVATE src)
+target_include_directories(engine-smoke PRIVATE src ${CMAKE_SOURCE_DIR}/vendor)
 
 
 if(PIPEWIRE_FOUND AND NOT PMS_HEADLESS)
