@@ -1,8 +1,18 @@
 #pragma once
 #include <atomic>
 #include <string>
-std::string app_models_dir();    // <binary_dir>/models
-std::string wav2vec2_ctc_path(); // <binary_dir>/models/wav2vec2_ctc.onnx
+
+// ── Asset root override ───────────────────────────────────────────────────────
+// On iOS the bundle path arrives through pms_create(asset_root); on desktop no
+// override is set and paths stay binary-relative (readlink /proc/self/exe).
+void pms_set_asset_root(std::string root);
+// The effective asset root: the override when set, else the binary's directory.
+std::string app_asset_root();
+// Models directory. With an asset-root override: bundled models under
+// <asset_root>/models first, else downloaded packs under <state_root>/models.
+// Without an override (desktop): <binary_dir>/models, unchanged.
+std::string app_models_dir();
+std::string wav2vec2_ctc_path(); // app_models_dir()/wav2vec2_ctc.onnx
 
 // ── Centralized media cache ───────────────────────────────────────────────────
 // Derived, regeneratable artifacts (proxies, conforms, stills, bg masks) live

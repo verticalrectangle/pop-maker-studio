@@ -2282,6 +2282,41 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         return json{{"ok", true}, {"count", has ? params["fx"].size() : 0}};
     }
 
+    if (method == "list_body_fx") {
+        // The BodyFXInfo table (body_fx.h) as a manifest: names/taglines/
+        // categories/param defs only — frag_body (GLSL) and accent (ImU32)
+        // are renderer/UI internals and are deliberately not exposed.
+        auto slug = [](const char* label) {
+            std::string s;
+            for (const char* p = label; *p; ++p) {
+                char c = *p;
+                if (c >= 'A' && c <= 'Z') s.push_back((char)(c - 'A' + 'a'));
+                else if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9'))
+                    s.push_back(c);
+                else if (!s.empty() && s.back() != '_') s.push_back('_');
+            }
+            while (!s.empty() && s.back() == '_') s.pop_back();
+            return s;
+        };
+        json effects = json::array();
+        const BodyFXInfo* infos = body_fx_info_list();
+        int n = body_fx_info_count();
+        for (int i = 0; i < n; ++i) {
+            const BodyFXInfo& fx = infos[i];
+            json ps = json::array();
+            for (int pi = 0; pi < fx.n_params && pi < 4; ++pi) {
+                const BodyFXParamDef& pd = fx.params[pi];
+                ps.push_back({{"name", slug(pd.label)}, {"label", pd.label},
+                              {"min", pd.min_val}, {"max", pd.max_val},
+                              {"default", pd.default_val}});
+            }
+            effects.push_back({{"name", fx.name}, {"tagline", fx.tagline},
+                               {"category", fx.category}, {"params", ps}});
+        }
+        json r; r["effects"] = effects;
+        return r;
+    }
+
     if (method == "fx_debug") {          // FX-runner state (manifest/stack/pso) — iOS only
 #ifdef __APPLE__
         return json::parse(metal_render_fx_debug());

@@ -13,6 +13,7 @@
 #include "metal_render.h"
 #endif
 #include "globals.h"
+#include "paths.h"
 #include "json.hpp"
 #include <cstdlib>
 #include <cstring>
@@ -45,9 +46,9 @@ pms_engine* pms_create(void* graphics_device,   // MTLDevice* on iOS; null on de
         std::error_code ec;
         std::filesystem::create_directories(g_managed_dir, ec);
     }
-    // asset_root: models resolve relative to the binary today
-    // (app_models_dir); an explicit override lands with the iOS bundle work.
-    (void)asset_root;
+    // asset_root: centralized path override (paths.cpp). When set, bundled
+    // assets/models resolve under it instead of the binary's directory.
+    if (asset_root && *asset_root) pms_set_asset_root(asset_root);
 #if defined(__APPLE__)
     if (graphics_device) metal_render_init(graphics_device);
 #endif
@@ -114,7 +115,46 @@ void pms_submit_mic_block(pms_engine* e, const float* interleaved_lr,
     if (!e || !interleaved_lr || frames == 0) return;
     audio_capture_push(interleaved_lr, frames, sample_rate);
 }
-char* pms_model_status(pms_engine*) { return dup_cstr("[]"); }
+char* pms_model_status(pms_engine*) {
+    // Real status for every model file the engine references (transcribe,
+    // bg_remove, separate, vc/rvc, forced_align, vision_caption, face_track).
+    namespace fs = std::filesystem;
+    static const struct { const char* name; const char* file; } kModels[] = {
+        { "whisper",             "ggml-large-v3-turbo-q5_0.bin" },
+        { "rvm",                 "rvm_mobilenetv3_fp32.onnx"    },
+        { "u2net_human_seg",     "u2net_human_seg.onnx"         },
+        { "kim_vocal_2",         "Kim_Vocal_2.onnx"             },
+        { "hubert",              "hubert.onnx"                  },
+        { "rmvpe",               "rmvpe.onnx"                   },
+        { "rvc_pitch_bases",     "rvc_pitch_bases.bin"          },
+        { "wav2vec2_ctc",        "wav2vec2_ctc.onnx"            },
+        { "moondream_encoder",   "moondream-encoder.onnx"       },
+        { "moondream_decoder",   "moondream-decoder.onnx"       },
+        { "moondream_embed",     "embed_tokens.onnx"            },
+        { "moondream_tokenizer", "moondream-tokenizer.json"     },
+        { "face_yunet",          "face/yunet.onnx"              },
+        { "face_landmarks",      "face/face_landmarks_v2.onnx"  },
+        { "face_blendshapes",    "face/face_blendshapes.onnx"   },
+    };
+    std::string mdir = app_models_dir();
+    nlohmann::json out;
+    out["models_dir"] = mdir;
+    nlohmann::json arr = nlohmann::json::array();
+    for (const auto& m : kModels) {
+        std::error_code ec;
+        fs::path p = fs::path(mdir) / m.file;
+        bool present = fs::exists(p, ec) && !ec;
+        uint64_t bytes = 0;
+        if (present) {
+            auto sz = fs::file_size(p, ec);
+            if (!ec) bytes = (uint64_t)sz;
+        }
+        arr.push_back({{"name", m.name}, {"file", m.file},
+                       {"present", present}, {"bytes", bytes}});
+    }
+    out["models"] = arr;
+    return dup_cstr(out.dump());
+}
 
 void pms_free(char* p) { free(p); }
 

@@ -1,6 +1,9 @@
 #include "platform.h"
 #include "body_fx.h"
 
+// The effect INFO TABLE (names, params, GLSL sources — plain data) is
+// available in every build: headless/iOS builds serve it through
+// list_body_fx / clip projection even though the GL runtime below is stubbed.
 #if PMS_HAS_GL
 #include "gl_compat.h"
 
@@ -10,6 +13,7 @@
 
 #include "bg_remove.h"
 #include "generated/body_fx_preview.h"   // embedded card-preview portrait + body mask
+#endif  // PMS_HAS_GL (GL-only includes)
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -1040,6 +1044,18 @@ static const BodyFXInfo g_body_fx_infos[] = {
 
 static const int k_n_body_fx = (int)(sizeof(g_body_fx_infos) / sizeof(g_body_fx_infos[0]));
 
+// Info accessors — metadata only, available in every build (headless included).
+const BodyFXInfo* body_fx_info_list() { return g_body_fx_infos; }
+int               body_fx_info_count() { return k_n_body_fx; }
+
+const BodyFXInfo* body_fx_find_info(BodyFXType t) {
+    for (int i = 0; i < k_n_body_fx; ++i)
+        if (g_body_fx_infos[i].type == t) return &g_body_fx_infos[i];
+    return nullptr;
+}
+
+#if PMS_HAS_GL
+
 // ── GL state ──────────────────────────────────────────────────────────────────
 
 static GLuint g_programs[(int)BodyFXType::Count] = {};
@@ -1261,14 +1277,8 @@ void body_fx_shutdown() {
     g_mask_lru.clear();
 }
 
-const BodyFXInfo* body_fx_info_list() { return g_body_fx_infos; }
-int               body_fx_info_count() { return k_n_body_fx; }
-
-const BodyFXInfo* body_fx_find_info(BodyFXType t) {
-    for (int i = 0; i < k_n_body_fx; ++i)
-        if (g_body_fx_infos[i].type == t) return &g_body_fx_infos[i];
-    return nullptr;
-}
+// (body_fx_info_list / body_fx_info_count / body_fx_find_info live above the
+//  PMS_HAS_GL guard — the info table is metadata, available headless.)
 
 // Invalidate the seek-table cache for a mask directory (call after append/rewrite).
 void body_fx_invalidate_mask_index(const std::string& mask_dir) {
@@ -1505,10 +1515,8 @@ void body_fx_evict_mask_cache(const std::string& mask_dir) {
 }
 
 #else
+// GL runtime stubs only — the info table above stays live headless.
 uintptr_t body_fx_apply(BodyFXType, uintptr_t s, unsigned, int, int, const float*, float, float, const float*, float) { return s; }
-const BodyFXInfo* body_fx_find_info(BodyFXType) { return nullptr; }
-int body_fx_info_count() { return 0; }
-const BodyFXInfo* body_fx_info_list() { return nullptr; }
 unsigned body_fx_mask_texture(const std::string&, int) { return 0; }
 void body_fx_evict_mask_cache(const std::string&) {}
 void body_fx_invalidate_mask_index(const std::string&) {}

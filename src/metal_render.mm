@@ -87,6 +87,86 @@ fragment float4 blend_f(FSOut in [[stage_in]], texture2d<float> pre [[texture(0)
 }
 )";
 
+// ── Body FX MSL ──────────────────────────────────────────────────────────────
+// Hand-written matte-consuming passes (live-FX entries with fx_type "body_fx").
+// Ports of the desktop GLSL bodies in body_fx.cpp (k_frag_NeonOutline /
+// k_frag_DepthBlur / k_frag_GlitchBody) onto the FX-chain fragment ABI: the
+// shared fullscreen vertex (fs_v) + content at texture(0), plus the person
+// matte at texture(1). Compiled at runtime like the transpiled registry.
+// Param names/defaults mirror body_fx.cpp's BodyFXInfo table (see
+// body_param()); wet/dry `amount` rides the chain's automatic blend pass.
+static NSString* const kBodySrc = @R"(
+#include <metal_stdlib>
+using namespace metal;
+
+struct FSOut { float4 pos [[position]]; float2 v_uv [[user(locn0)]]; };
+// Plain floats (no float2) — byte layout matches the CPU-side BodyUni exactly.
+struct BodyUni { float p0; float p1; float p2; float p3; float time; float tw; float th; };
+
+float body_hash(float2 p) { return fract(sin(dot(p, float2(127.1, 311.7))) * 43758.5453); }
+float3 body_hue2rgb(float h) {
+    h = fract(h);
+    return clamp(abs(fract(h + float3(0.0, 2.0/3.0, 1.0/3.0)) * 6.0 - 3.0) - 1.0, 0.0, 1.0);
+}
+
+// "Neon Outline" — glow along the matte edge (screen-space gradient of the
+// matte, hue-cycling color, additive over the body). p0 = Glow Width, p1 = Hue.
+fragment float4 body_neon_outline(FSOut in [[stage_in]], constant BodyUni& u [[buffer(0)]],
+                                  texture2d<float> src [[texture(0)]],
+                                  texture2d<float> matte [[texture(1)]]) {
+    constexpr sampler s(mag_filter::linear, min_filter::linear, address::clamp_to_edge);
+    float4 orig = src.sample(s, in.v_uv);
+    float  m    = matte.sample(s, in.v_uv).r;
+    float2 px   = float2(1.0 / u.tw, 1.0 / u.th);
+    float  w    = u.p0 + 1.0;
+    float  e    = 0.0;
+    for (float dx = -w; dx <= w; dx += 1.0)
+        for (float dy = -w; dy <= w; dy += 1.0)
+            e = max(e, abs(m - matte.sample(s, in.v_uv + float2(dx, dy) * px).r));
+    float  edge = smoothstep(0.05, 0.5, e);
+    float3 glow = body_hue2rgb(fract(u.p1 + u.time * 0.2));
+    float3 body = orig.rgb + glow * edge * 2.0;
+    return float4(mix(orig.rgb, body, m), orig.a);   // body-only, bg untouched (desktop parity)
+}
+
+// "Depth Blur" — sharp person (matte≈1), box-blurred background (matte≈0).
+// p0 = Blur Radius (px). 9x9 single-pass box (desktop parity).
+fragment float4 body_depth_blur(FSOut in [[stage_in]], constant BodyUni& u [[buffer(0)]],
+                                texture2d<float> src [[texture(0)]],
+                                texture2d<float> matte [[texture(1)]]) {
+    constexpr sampler s(mag_filter::linear, min_filter::linear, address::clamp_to_edge);
+    float4 orig = src.sample(s, in.v_uv);
+    float  m    = matte.sample(s, in.v_uv).r;
+    float  rx   = u.p0 / u.tw, ry = u.p0 / u.th;
+    float4 blurred = float4(0.0);
+    for (int i = -4; i <= 4; ++i)
+        for (int j = -4; j <= 4; ++j)
+            blurred += src.sample(s, clamp(in.v_uv + float2(float(i) * rx, float(j) * ry),
+                                           0.0, 1.0));
+    blurred /= 81.0;
+    return float4(mix(blurred.rgb, orig.rgb, m), orig.a);
+}
+
+// "Glitch Body" — time-animated horizontal slice displacement + RGB split
+// inside the person only (matte≈1). p0 = Chroma (px), p1 = Jitter.
+fragment float4 body_glitch(FSOut in [[stage_in]], constant BodyUni& u [[buffer(0)]],
+                            texture2d<float> src [[texture(0)]],
+                            texture2d<float> matte [[texture(1)]]) {
+    constexpr sampler s(mag_filter::linear, min_filter::linear, address::clamp_to_edge);
+    float4 orig  = src.sample(s, in.v_uv);
+    float  m     = matte.sample(s, in.v_uv).r;
+    float  chroma = u.p0 / u.tw;
+    float  y_id  = floor(in.v_uv.y * u.th);
+    float  rnd   = body_hash(float2(y_id, floor(u.time * 12.0)));
+    float  jshift = (rnd > 1.0 - u.p1 * 0.4)
+                  ? (body_hash(float2(y_id, u.time * 8.0)) - 0.5) * u.p1 * 0.12 : 0.0;
+    float r = src.sample(s, clamp(float2(in.v_uv.x + jshift + chroma, in.v_uv.y), 0.0, 1.0)).r;
+    float g = src.sample(s, clamp(float2(in.v_uv.x + jshift,          in.v_uv.y), 0.0, 1.0)).g;
+    float b = src.sample(s, clamp(float2(in.v_uv.x + jshift - chroma, in.v_uv.y), 0.0, 1.0)).b;
+    return float4(mix(orig.rgb, float3(r, g, b), m), orig.a);
+}
+)";
+
 static id<MTLDevice>              g_dev     = nil;
 static id<MTLCommandQueue>        g_queue   = nil;
 static id<MTLRenderPipelineState> g_bg_pso  = nil;   // background aurora
@@ -117,10 +197,66 @@ static std::unordered_map<std::string, ManifestEntry> g_manifest;
 static bool g_manifest_loaded = false;
 
 struct LiveFx { std::string fx_type; float amount = 1.0f; float start = -1e30f, end = 1e30f;
-                std::map<std::string, float> params; };
+                std::map<std::string, float> params;
+                std::string body_fx_type;           // fx_type == "body_fx" only
+                int         body_pass = -1; };      // index into the body pass table, -1 unknown
 static std::vector<LiveFx> g_stack;
 static std::mutex          g_stack_mu;
 static double              g_content_time = 0.0;   // timeline time of the current frame (for FX windowing)
+// Per-entry pass status of the last rendered frame, index-aligned with g_stack
+// (guarded by g_stack_mu; surfaced through metal_render_fx_debug).
+static std::vector<std::string> g_pass_status;
+
+// ── Body FX (matte-consuming hand-written passes) ────────────────────────────
+// Selected by BodyFXInfo name (body_fx.cpp table). "Body Glitch" accepted as an
+// alias of the desktop's "Glitch Body".
+enum { kBodyNeonOutline = 0, kBodyDepthBlur = 1, kBodyGlitch = 2, kBodyPassCount = 3 };
+static const char* const kBodyEntry[kBodyPassCount] =
+    { "body_neon_outline", "body_depth_blur", "body_glitch" };
+static id<MTLRenderPipelineState> g_body_pso[kBodyPassCount] = { nil, nil, nil };
+static bool g_body_tried = false;
+
+static int body_pass_index(const std::string& name) {
+    if (name == "Neon Outline") return kBodyNeonOutline;
+    if (name == "Depth Blur")   return kBodyDepthBlur;
+    if (name == "Glitch Body" || name == "Body Glitch") return kBodyGlitch;
+    return -1;
+}
+
+// Byte-for-byte mirror of the MSL BodyUni (plain floats, no alignment traps).
+struct BodyUniCPU { float p0, p1, p2, p3, time, tw, th; };
+
+// Named param lookup with the desktop BodyFXInfo label first, then friendlier
+// aliases, then the positional slot name; falls back to the table default.
+static float body_param(const LiveFx& fx, std::initializer_list<const char*> names, float def) {
+    for (const char* n : names) {
+        auto it = fx.params.find(n);
+        if (it != fx.params.end()) return it->second;
+    }
+    return def;
+}
+
+// Defaults per body_fx.cpp's BodyFXInfo table:
+//   Neon Outline: {"Glow Width", 1..4, 2}, {"Hue", 0..1, 0.8}
+//   Depth Blur:   {"Blur Radius (px)", 0..20, 8}
+//   Glitch Body:  {"Chroma (px)", 0..20, 8}, {"Jitter", 0..1, 0.3}
+static BodyUniCPU body_uniforms(const LiveFx& fx, int w, int h, double t) {
+    BodyUniCPU u = { 0, 0, 0, 0, (float)t, (float)w, (float)h };
+    switch (fx.body_pass) {
+        case kBodyNeonOutline:
+            u.p0 = body_param(fx, { "Glow Width", "glow_width", "width", "p0" }, 2.0f);
+            u.p1 = body_param(fx, { "Hue", "hue", "p1" }, 0.8f);
+            break;
+        case kBodyDepthBlur:
+            u.p0 = body_param(fx, { "Blur Radius (px)", "blur_radius_px", "blur_radius", "radius", "p0" }, 8.0f);
+            break;
+        case kBodyGlitch:
+            u.p0 = body_param(fx, { "Chroma (px)", "chroma_px", "chroma", "p0" }, 8.0f);
+            u.p1 = body_param(fx, { "Jitter", "jitter", "p1" }, 0.3f);
+            break;
+    }
+    return u;
+}
 
 struct FxProgram { id<MTLRenderPipelineState> pso = nil; const ManifestEntry* m = nullptr; bool tried = false; };
 static std::unordered_map<std::string, FxProgram> g_fx_progs;
@@ -131,6 +267,30 @@ static id<MTLTexture>             g_ping[2]       = { nil, nil };
 static int                        g_pw = 0, g_ph = 0;
 static id<MTLSamplerState>        g_fx_sampler    = nil;
 static std::string                g_shader_dir;            // optional override (headless/test)
+
+// Lazily compile the three hand-written body passes (shared library, one PSO
+// each). Deferred until the first body_fx entry so plain stacks pay nothing.
+static id<MTLRenderPipelineState> get_body_pso(int pass) {
+    if (!g_body_tried) {
+        g_body_tried = true;
+        if (g_dev && g_fs_v) {
+            NSError* err = nil;
+            id<MTLLibrary> lib = [g_dev newLibraryWithSource:kBodySrc options:nil error:&err];
+            if (!lib) NSLog(@"[body_fx] library: %@", err);
+            for (int k = 0; lib && k < kBodyPassCount; ++k) {
+                id<MTLFunction> frag = [lib newFunctionWithName:
+                    [NSString stringWithUTF8String:kBodyEntry[k]]];
+                if (!frag) { NSLog(@"[body_fx] %s: function not found", kBodyEntry[k]); continue; }
+                MTLRenderPipelineDescriptor* rd = [MTLRenderPipelineDescriptor new];
+                rd.vertexFunction = g_fs_v; rd.fragmentFunction = frag;
+                rd.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
+                g_body_pso[k] = [g_dev newRenderPipelineStateWithDescriptor:rd error:&err];
+                if (!g_body_pso[k]) NSLog(@"[body_fx] %s pso: %@", kBodyEntry[k], err);
+            }
+        }
+    }
+    return (pass >= 0 && pass < kBodyPassCount) ? g_body_pso[pass] : nil;
+}
 
 static NSString* shader_path(const char* name, const char* ext) {
     if (!g_shader_dir.empty())
@@ -255,6 +415,10 @@ void metal_render_set_live_fx_stack(const char* json_utf8) {
                 if (fx.fx_type.empty()) continue;
                 fx.start = e.value("start", -1e30f);        // brick span (default = always on)
                 fx.end   = e.value("end",    1e30f);
+                if (fx.fx_type == "body_fx") {                 // matte-consuming pass
+                    fx.body_fx_type = e.value("body_fx_type", std::string());
+                    fx.body_pass    = body_pass_index(fx.body_fx_type);
+                }
                 if (e.contains("params") && e["params"].is_object())
                     for (auto it = e["params"].begin(); it != e["params"].end(); ++it)
                         if (it.value().is_number()) fx.params[it.key()] = it.value().get<float>();
@@ -294,12 +458,23 @@ const char* metal_render_fx_debug() {
       if (g_matte_tex) j["matte_time"] = g_matte_time; }
     fxjson stk = fxjson::array();
     { std::lock_guard<std::mutex> lk(g_stack_mu);
-      for (auto& f : g_stack) {
+      for (size_t i = 0; i < g_stack.size(); ++i) {
+          const auto& f = g_stack[i];
           fxjson e;
-          e["fx_type"]     = f.fx_type;
-          e["amount"]      = f.amount;
-          e["in_manifest"] = (g_manifest.find(f.fx_type) != g_manifest.end());
-          e["pso_ok"]      = (get_fx_program(f.fx_type) != nullptr);
+          e["fx_type"] = f.fx_type;
+          e["amount"]  = f.amount;
+          if (f.fx_type == "body_fx") {
+              e["body_fx_type"] = f.body_fx_type;
+              e["known"]        = (f.body_pass >= 0);        // false = skipped, never ran
+              e["pso_ok"]       = (get_body_pso(f.body_pass) != nil);
+          } else {
+              e["in_manifest"] = (g_manifest.find(f.fx_type) != g_manifest.end());
+              e["pso_ok"]      = (get_fx_program(f.fx_type) != nullptr);
+          }
+          // Pass status of the last rendered frame (index-aligned; may lag one
+          // stack update): applied / out_of_window / no_matte / unknown_body_fx
+          // / unknown_fx / pso_failed / no_content.
+          if (i < g_pass_status.size()) e["status"] = g_pass_status[i];
           stk.push_back(e);
       } }
     j["stack"] = stk;

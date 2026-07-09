@@ -106,6 +106,49 @@ int main() {
     if (pms_abi_version() != PMS_ENGINE_ABI) { fprintf(stderr, "abi mismatch\n"); return 1; }
     printf("engine up: abi %u, .pms v%u\n", pms_abi_version(), pms_project_version());
 
+    // ── list_body_fx: the BodyFXInfo manifest over the command channel ───────
+    {
+        json r = cmd(e, "list_body_fx");
+        expect(r.contains("effects") && r["effects"].is_array(),
+               "list_body_fx must return an effects array");
+        expect(r["effects"].size() >= 10,
+               "list_body_fx must return >= 10 effects (got " +
+               std::to_string(r["effects"].size()) + ")");
+        bool neon = false;
+        for (const auto& fx : r["effects"]) {
+            expect(fx.contains("name") && fx["name"].is_string() &&
+                   !fx["name"].get<std::string>().empty(),
+                   "every body FX entry needs a non-empty name");
+            expect(fx.contains("params") && fx["params"].is_array(),
+                   "every body FX entry needs a params array");
+            for (const auto& p : fx["params"])
+                expect(p.contains("name") && p.contains("label") &&
+                       p.contains("min") && p.contains("max") &&
+                       p.contains("default"),
+                       "body FX params need name/label/min/max/default");
+            if (fx["name"].get<std::string>() == "Neon Outline") neon = true;
+        }
+        expect(neon, "list_body_fx must contain exactly-named \"Neon Outline\"");
+    }
+
+    // ── pms_model_status: real JSON from the C ABI ────────────────────────────
+    {
+        char* ms = pms_model_status(e);
+        expect(ms != nullptr, "pms_model_status must return a string");
+        json j = json::parse(ms ? ms : "", nullptr, false);
+        pms_free(ms);
+        expect(!j.is_discarded(), "pms_model_status must return valid JSON");
+        expect(j.contains("models_dir") && j["models_dir"].is_string(),
+               "pms_model_status must report models_dir");
+        expect(j.contains("models") && j["models"].is_array() &&
+               !j["models"].empty(),
+               "pms_model_status must report a non-empty models array");
+        for (const auto& m : j["models"])
+            expect(m.contains("name") && m["name"].is_string() &&
+                   m.contains("present") && m["present"].is_boolean(),
+                   "every model entry needs name + present");
+    }
+
     // ── External mic-capture injection (pms_submit_mic_block) ────────────────
     // Push 48 kHz interleaved stereo sine blocks through the C ABI; the audio
     // module resamples to 44.1k at push time and counts post-resample frames.

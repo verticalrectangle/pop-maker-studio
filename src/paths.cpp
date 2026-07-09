@@ -104,7 +104,34 @@ unsigned long long cache_prune(unsigned long long cap_bytes) {
     return freed;
 }
 
+// ── Asset root override ───────────────────────────────────────────────────────
+static std::string g_asset_root;
+
+void pms_set_asset_root(std::string root) { g_asset_root = std::move(root); }
+
+static std::string binary_dir() {
+    char buf[4096] = {};
+    ssize_t n = readlink("/proc/self/exe", buf, sizeof(buf)-1);
+    if (n <= 0) return ".";
+    return fs::path(buf).parent_path().string();
+}
+
+std::string app_asset_root() {
+    return g_asset_root.empty() ? binary_dir() : g_asset_root;
+}
+
 std::string app_models_dir() {
+    if (!g_asset_root.empty()) {
+        // iOS/bundle mode: bundled models under the asset root win; otherwise
+        // fall through to downloaded packs under the managed state root.
+        std::string bundled = (fs::path(g_asset_root) / "models").string();
+        std::error_code ec;
+        if (fs::exists(bundled, ec)) return bundled;
+        if (!g_managed_dir.empty())
+            return (fs::path(g_managed_dir) / "models").string();
+        return bundled;
+    }
+    // Desktop: models sit next to the binary (historic behavior).
     char buf[4096] = {};
     ssize_t n = readlink("/proc/self/exe", buf, sizeof(buf)-1);
     if (n <= 0) return "models";
