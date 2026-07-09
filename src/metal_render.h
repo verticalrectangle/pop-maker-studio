@@ -40,6 +40,13 @@ void metal_render_set_shader_dir(const char* dir);
 // in_manifest/pso_ok) — surfaced through the `fx_debug` IPC command.
 const char* metal_render_fx_debug(void);
 
+// Latest person matte from the platform segmenter (Vision) — a OneComponent8
+// (R8) CVPixelBufferRef bridged as void*; retained here, previous released.
+// NULL clears (content blits plain again). Same camera frame as the content
+// buffer, so it is sampled with the content's normalized UVs. `t` is the host
+// time of the matte frame. Thread-safe.
+void metal_render_submit_matte(void* cv_pixel_buffer_r8, double t);
+
 // Timeline time of the current content frame — FX apply only within their [start,end].
 void metal_render_set_content_time(double t);
 

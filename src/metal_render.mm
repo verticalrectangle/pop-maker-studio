@@ -58,6 +58,18 @@ fragment float4 quad_f(VOut in [[stage_in]], texture2d<float> tex [[texture(0)]]
     return float4(tex.sample(s, in.uv).rgb, 1.0);
 }
 
+// (2b) matte composite — same aspect-fit quad, but the person matte (R8, from
+// the platform segmenter) becomes the source alpha: the person stays from the
+// content frame, the background shows whatever is already in the target (the
+// engine's background render). Matte and content are the same camera frame, so
+// one set of normalized UVs samples both. Blending: srcAlpha/1-srcAlpha.
+fragment float4 matte_f(VOut in [[stage_in]], texture2d<float> tex [[texture(0)]],
+                        texture2d<float> matte [[texture(1)]]) {
+    constexpr sampler s(mag_filter::linear, min_filter::linear, address::clamp_to_edge);
+    float a = matte.sample(s, in.uv).r;
+    return float4(tex.sample(s, in.uv).rgb, a);
+}
+
 // (3) fullscreen pass for the FX chain — emits v_uv [[user(locn0)]] to match the
 // transpiled fragment ABI (fx_<name>(in, Params [[buffer(0)]], u_tex [[texture(0)]],
 // u_texSmplr [[sampler(0)]])). One oversized triangle.
@@ -84,6 +96,14 @@ static int                        g_cw = 0, g_ch = 0;
 static std::mutex                 g_content_mu;
 static CVMetalTextureCacheRef     g_texcache = NULL;  // zero-copy CVPixelBuffer→MTLTexture
 static CVMetalTextureRef          g_cvtex    = NULL;  // keeps the mapped frame alive
+// Person matte (background replacement) — latest R8 CVPixelBuffer from the
+// platform segmenter, mapped zero-copy like the content frame. All guarded by
+// g_content_mu alongside the content frame they composite with.
+static id<MTLRenderPipelineState> g_matte_pso   = nil;   // matte composite blit
+static CVPixelBufferRef           g_matte_pb    = NULL;  // retained latest matte
+static CVMetalTextureRef          g_matte_cvtex = NULL;  // keeps the mapping alive
+static id<MTLTexture>             g_matte_tex   = nil;
+static double                     g_matte_time  = 0.0;
 // ── FX runner ────────────────────────────────────────────────────────────────
 // Loads the transpiled MSL registry (Shaders/msl/<name>.metal + params_manifest
 // .json, bundled by the app) and runs the live-FX stack as a ping-pong chain over
@@ -268,6 +288,10 @@ const char* metal_render_fx_debug() {
     fxjson j;
     j["manifest_count"] = (int)g_manifest.size();
     j["has_content"]    = (g_content != nil);
+    { std::lock_guard<std::mutex> lk(g_content_mu);
+      j["has_matte"]     = (g_matte_tex != nil);
+      j["matte_pso_ok"]  = (g_matte_pso != nil);
+      if (g_matte_tex) j["matte_time"] = g_matte_time; }
     fxjson stk = fxjson::array();
     { std::lock_guard<std::mutex> lk(g_stack_mu);
       for (auto& f : g_stack) {
@@ -307,6 +331,21 @@ void metal_render_init(void* mtl_device) {
     g_quad_pso = [g_dev newRenderPipelineStateWithDescriptor:q error:&err];
     if (!g_quad_pso) NSLog(@"[metal_render] quad pipeline: %@", err);
 
+    // Matte composite blit — alpha blending so the person (matte=1) keeps the
+    // content pixel and the background (matte=0) keeps the engine background
+    // already rendered into the target.
+    MTLRenderPipelineDescriptor* mq = [MTLRenderPipelineDescriptor new];
+    mq.vertexFunction   = [lib newFunctionWithName:@"quad_v"];
+    mq.fragmentFunction = [lib newFunctionWithName:@"matte_f"];
+    mq.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
+    mq.colorAttachments[0].blendingEnabled             = YES;
+    mq.colorAttachments[0].sourceRGBBlendFactor        = MTLBlendFactorSourceAlpha;
+    mq.colorAttachments[0].destinationRGBBlendFactor   = MTLBlendFactorOneMinusSourceAlpha;
+    mq.colorAttachments[0].sourceAlphaBlendFactor      = MTLBlendFactorOne;
+    mq.colorAttachments[0].destinationAlphaBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
+    g_matte_pso = [g_dev newRenderPipelineStateWithDescriptor:mq error:&err];
+    if (!g_matte_pso) NSLog(@"[metal_render] matte pipeline: %@", err);
+
     // FX runner: shared fullscreen vertex, wet/dry blend PSO, sampler, manifest.
     g_fs_v = [lib newFunctionWithName:@"fs_v"];
     MTLRenderPipelineDescriptor* bl = [MTLRenderPipelineDescriptor new];
@@ -329,6 +368,44 @@ void metal_render_init(void* mtl_device) {
 // Release any zero-copy CVMetalTexture mapping (call under g_content_mu).
 static void release_cvtex() {
     if (g_cvtex) { CFRelease(g_cvtex); g_cvtex = NULL; }
+}
+
+// Release the stored matte (call under g_content_mu).
+static void release_matte() {
+    if (g_matte_cvtex) { CFRelease(g_matte_cvtex); g_matte_cvtex = NULL; }
+    if (g_matte_pb)    { CVPixelBufferRelease(g_matte_pb); g_matte_pb = NULL; }
+    g_matte_tex = nil;
+}
+
+// Store the latest person matte — an R8 (OneComponent8) CVPixelBufferRef from
+// the platform segmenter. Retains the buffer (releases the previous); NULL
+// clears. Mapped zero-copy through the same texture cache as the content frame.
+void metal_render_submit_matte(void* cv_pixel_buffer_r8, double t) {
+    if (!cv_pixel_buffer_r8) {
+        std::lock_guard<std::mutex> lk(g_content_mu);
+        release_matte();
+        return;
+    }
+    if (!g_texcache) return;
+    CVPixelBufferRef pb = (CVPixelBufferRef)cv_pixel_buffer_r8;
+    int w = (int)CVPixelBufferGetWidth(pb);
+    int h = (int)CVPixelBufferGetHeight(pb);
+    CVMetalTextureRef cvt = NULL;
+    CVReturn r = CVMetalTextureCacheCreateTextureFromImage(
+        kCFAllocatorDefault, g_texcache, pb, NULL,
+        MTLPixelFormatR8Unorm, w, h, 0, &cvt);
+    if (r != kCVReturnSuccess || !cvt) {
+        if (cvt) CFRelease(cvt);
+        NSLog(@"[metal_render] matte map failed (%d)", (int)r);
+        return;
+    }
+    std::lock_guard<std::mutex> lk(g_content_mu);
+    release_matte();
+    CVPixelBufferRetain(pb);
+    g_matte_pb    = pb;
+    g_matte_cvtex = cvt;
+    g_matte_tex   = CVMetalTextureGetTexture(cvt);
+    g_matte_time  = t;
 }
 
 void metal_render_set_content_bgra(const void* bgra, int w, int h) {
@@ -379,9 +456,16 @@ int metal_render_frame(void* mtl_texture, int w, int h, double t) {
 
     // Capture the content texture (ARC + Metal command-buffer retention keep it
     // alive across the async passes even if a new frame is submitted meanwhile).
+    // The matte is captured under the same lock so content+matte stay a pair;
+    // its CVMetalTextureRef is retained until the command buffer completes.
     id<MTLTexture> source = nil; int sw = 0, sh = 0;
+    id<MTLTexture> matte = nil; CVMetalTextureRef matte_cvtex = NULL;
     { std::lock_guard<std::mutex> lk(g_content_mu);
-      if (g_content && g_cw > 0 && g_ch > 0) { source = g_content; sw = g_cw; sh = g_ch; } }
+      if (g_content && g_cw > 0 && g_ch > 0) { source = g_content; sw = g_cw; sh = g_ch; }
+      if (g_matte_tex && g_matte_cvtex) {
+          matte = g_matte_tex;
+          matte_cvtex = (CVMetalTextureRef)CFRetain(g_matte_cvtex);
+      } }
 
     // Run the FX chain (ping-pong) → `source` becomes the last pass output.
     if (source) {
@@ -443,16 +527,42 @@ int metal_render_frame(void* mtl_texture, int w, int h, double t) {
     struct { float t; float rx, ry; } bgu = { (float)t, (float)w, (float)h };
     [enc setFragmentBytes:&bgu length:sizeof(bgu) atIndex:0];
     [enc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+    int rc = 0;
     if (source && g_quad_pso && sw > 0 && sh > 0) {
         float ta = (float)w / (float)h, ca = (float)sw / (float)sh;
         float sx = ca > ta ? 1.0f : ca / ta, sy = ca > ta ? ta / ca : 1.0f;
-        [enc setRenderPipelineState:g_quad_pso];
         float half[2] = { sx, sy };
-        [enc setVertexBytes:half length:sizeof(half) atIndex:0];
-        [enc setFragmentTexture:source atIndex:0];
-        [enc drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
+        if (matte && !g_matte_pso) {
+            // Matte requested but the composite pipeline failed to build — a
+            // real error, not a silent skip. Blit plain and report it.
+            static bool s_logged = false;
+            if (!s_logged) { s_logged = true; NSLog(@"[metal_render] matte pso unavailable — compositing without matte"); }
+            rc = 2;
+        }
+        if (matte && g_matte_pso) {
+            // Background replacement: the engine background is already in the
+            // target; blend the content over it with the person matte as alpha.
+            // Matte and content are the same camera frame, so the identical
+            // aspect-fit quad + normalized UVs sample both.
+            [enc setRenderPipelineState:g_matte_pso];
+            [enc setVertexBytes:half length:sizeof(half) atIndex:0];
+            [enc setFragmentTexture:source atIndex:0];
+            [enc setFragmentTexture:matte atIndex:1];
+            [enc drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
+        } else {
+            [enc setRenderPipelineState:g_quad_pso];
+            [enc setVertexBytes:half length:sizeof(half) atIndex:0];
+            [enc setFragmentTexture:source atIndex:0];
+            [enc drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
+        }
     }
     [enc endEncoding];
+    if (matte_cvtex) {
+        // Keep the CVMetalTexture mapping (and its IOSurface) alive until the
+        // GPU has finished sampling it, even if a new matte replaces the global.
+        CVMetalTextureRef held = matte_cvtex;
+        [cb addCompletedHandler:^(id<MTLCommandBuffer>) { CFRelease(held); }];
+    }
     [cb commit];
-    return 0;
+    return rc;
 }

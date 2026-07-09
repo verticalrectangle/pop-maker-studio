@@ -2203,6 +2203,10 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         r["gate"]          = audio_gate_get();
         r["hear_fx"]       = audio_monitor_fx_get();
         r["chain_active"]  = audio_monitor_chain_active();
+        // External capture injection (audio_capture_push / pms_submit_mic_block):
+        // post-resample frames accepted into / rejected by the injected ring.
+        r["capture_injected_frames"] = audio_capture_injected_frames();
+        r["capture_dropped_frames"]  = audio_capture_dropped_frames();
         return r;
     }
 

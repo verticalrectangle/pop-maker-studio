@@ -106,6 +106,62 @@ int main() {
     if (pms_abi_version() != PMS_ENGINE_ABI) { fprintf(stderr, "abi mismatch\n"); return 1; }
     printf("engine up: abi %u, .pms v%u\n", pms_abi_version(), pms_project_version());
 
+    // ── External mic-capture injection (pms_submit_mic_block) ────────────────
+    // Push 48 kHz interleaved stereo sine blocks through the C ABI; the audio
+    // module resamples to 44.1k at push time and counts post-resample frames.
+    // get_audio_perf must reflect the accepted count and report zero drops;
+    // then overfill the fixed ring (131072 frames) and drops must appear.
+    {
+        json perf0 = cmd(e, "get_audio_perf");
+        expect(perf0.contains("capture_injected_frames") &&
+               perf0.contains("capture_dropped_frames"),
+               "get_audio_perf must expose capture_injected/dropped_frames");
+        expect(perf0["capture_injected_frames"].get<uint64_t>() == 0 &&
+               perf0["capture_dropped_frames"].get<uint64_t>() == 0,
+               "injection counters must start at zero");
+
+        // Null/zero guards must be no-ops (not crashes).
+        pms_submit_mic_block(nullptr, nullptr, 0, 0.0);
+        pms_submit_mic_block(e, nullptr, 480, 48000.0);
+        std::vector<float> blk(480 * 2);
+        pms_submit_mic_block(e, blk.data(), 0, 48000.0);
+
+        const size_t BLK = 480; const int NBLK = 10;  // 4800 frames @ 48k
+        double ph = 0.0;
+        for (int b = 0; b < NBLK; ++b) {
+            for (size_t f = 0; f < BLK; ++f) {
+                float s = (float)std::sin(ph);
+                ph += 2.0 * 3.14159265358979323846 * 440.0 / 48000.0;
+                blk[f*2] = s; blk[f*2+1] = s;
+            }
+            pms_submit_mic_block(e, blk.data(), BLK, 48000.0);
+        }
+        for (int i = 0; i < 3; ++i) pms_tick(e, 1.0 / 60.0);
+
+        json perf = cmd(e, "get_audio_perf");
+        uint64_t inj  = perf["capture_injected_frames"].get<uint64_t>();
+        uint64_t drop = perf["capture_dropped_frames"].get<uint64_t>();
+        // Post-resample count: 4800 * 44100/48000 = 4410 (± a few frames of
+        // linear-resampler boundary rounding).
+        const double want = (double)(NBLK * BLK) * 44100.0 / 48000.0;
+        expect(std::fabs((double)inj - want) <= 8.0,
+               "injected frame counter must be ~" + std::to_string((int)want) +
+               " post-resample (got " + std::to_string(inj) + ")");
+        expect(drop == 0, "no drops expected while the ring has room (got " +
+               std::to_string(drop) + ")");
+
+        // Overflow: push far more than the 131072-frame ring capacity without
+        // draining. Policy is reject-newest, so drops must be counted.
+        std::vector<float> big(4096 * 2, 0.25f);
+        for (int b = 0; b < 64; ++b)              // 262144 frames @ 44.1k
+            pms_submit_mic_block(e, big.data(), 4096, 44100.0);
+        perf = cmd(e, "get_audio_perf");
+        expect(perf["capture_dropped_frames"].get<uint64_t>() > 0,
+               "overfilling the injected ring must increment the drop counter");
+        expect(perf["capture_injected_frames"].get<uint64_t>() > inj,
+               "accepted counter must still have grown while filling the ring");
+    }
+
     // ── Project setup ─────────────────────────────────────────────────────────
     cmd(e, "new_project", {{"force", true}});
     cmd(e, "set_format", {{"format", "vertical"}});

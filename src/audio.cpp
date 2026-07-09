@@ -89,6 +89,28 @@ static constexpr uint32_t CAP_N    = 1u << 21;
 static constexpr uint32_t CAP_MASK = CAP_N - 1;
 static float                 g_cap_ring[CAP_N];
 static std::atomic<uint32_t> g_cap_w{0}, g_cap_r{0};
+
+// Injected-capture ring — SPSC: an EXTERNAL capture thread writes
+// (audio_capture_push — the iOS mic path), audio_capture_drain reads. It is a
+// separate ring from g_cap_ring because that ring's producer is the duplex
+// audio callback; two producers on one SPSC ring would race. 2^18 floats =
+// 131072 stereo frames ≈ 2.97 s @ 44.1k — plenty for a per-frame drain.
+// Overflow: REJECT NEWEST — post-resample frames that don't fit are dropped
+// and counted (same don't-overwrite-unread policy as the native ring).
+// Pure memory: works in PMS_HEADLESS builds with no device and no PipeWire.
+static constexpr uint32_t INJ_N    = 1u << 18;
+static constexpr uint32_t INJ_MASK = INJ_N - 1;
+static float                 g_inj_ring[INJ_N];
+static std::atomic<uint32_t> g_inj_w{0}, g_inj_r{0};
+static std::atomic<uint64_t> g_inj_frames{0};   // post-resample frames accepted
+static std::atomic<uint64_t> g_inj_dropped{0};  // post-resample frames rejected
+// Linear-resampler carry (producer thread only): fractional source position
+// past the last frame of the previous push, plus that frame for interpolation
+// continuity across block boundaries.
+static double g_inj_phase    = 0.0;
+static float  g_inj_prev_l   = 0.f, g_inj_prev_r = 0.f;
+static bool   g_inj_has_prev = false;
+static double g_inj_rate     = 0.0;  // rate change ⇒ reset the carry
 // Live input peak (0–1) of the most recent capture buffer — for a mic meter
 // while monitoring, independent of whether anything is recording.
 static std::atomic<float>    g_in_peak{0.f};
@@ -883,14 +905,97 @@ float audio_input_peak() {
     return g_cap_init ? g_in_peak.load(std::memory_order_relaxed) : 0.f;
 }
 
+// External-capture injection: copy + (if needed) linear-resample the block
+// into the injected SPSC ring. Runs on the pushing capture thread — never the
+// render callback — so resampling here is fine. No allocation, no locks.
+// Overflow = reject newest: frames that don't fit are dropped and counted.
+void audio_capture_push(const float* in, size_t frames, double sample_rate) {
+    if (!in || frames == 0 || !(sample_rate > 0.0)) return;
+
+    uint32_t       w = g_inj_w.load(std::memory_order_relaxed);
+    const uint32_t r = g_inj_r.load(std::memory_order_acquire);
+    uint64_t accepted = 0, dropped = 0;
+    auto emit = [&](float l, float rr) {
+        if ((uint32_t)(w - r) < INJ_N - 2) {
+            g_inj_ring[w++ & INJ_MASK] = l;
+            g_inj_ring[w++ & INJ_MASK] = rr;
+            ++accepted;
+        } else {
+            ++dropped;  // reject newest — never overwrite undrained audio
+        }
+    };
+
+    if (sample_rate == 44100.0) {
+        for (size_t f = 0; f < frames; ++f) emit(in[f*2], in[f*2+1]);
+        g_inj_has_prev = false;  // rate matches: no resampler carry
+        g_inj_phase    = 0.0;
+        g_inj_rate     = sample_rate;
+    } else {
+        if (sample_rate != g_inj_rate) {  // stream (re)start or rate change
+            g_inj_has_prev = false;
+            g_inj_phase    = 0.0;
+            g_inj_rate     = sample_rate;
+        }
+        // Virtual source stream = [prev frame?] + this block; fractional
+        // position p advances by src/dst rate per output sample and carries
+        // across pushes so block boundaries stay continuous.
+        const double step = sample_rate / 44100.0;
+        const size_t off  = g_inj_has_prev ? 1 : 0;
+        const size_t M    = frames + off;                 // source frames avail
+        auto s_l = [&](size_t i) { return (off && i == 0) ? g_inj_prev_l : in[(i - off) * 2]; };
+        auto s_r = [&](size_t i) { return (off && i == 0) ? g_inj_prev_r : in[(i - off) * 2 + 1]; };
+        const double last = (double)(M - 1);
+        double p = g_inj_phase;
+        while (p <= last) {
+            const size_t i    = (size_t)p;
+            const double frac = p - (double)i;
+            float l, rr;
+            if (i + 1 < M) {
+                l  = (float)(s_l(i) + frac * (s_l(i + 1) - s_l(i)));
+                rr = (float)(s_r(i) + frac * (s_r(i + 1) - s_r(i)));
+            } else {  // p == last exactly: frac 0, no right neighbor needed
+                l = s_l(i); rr = s_r(i);
+            }
+            emit(l, rr);
+            p += step;
+        }
+        g_inj_phase    = p - last;  // ∈ (0, step] past the last source frame
+        g_inj_prev_l   = in[(frames - 1) * 2];
+        g_inj_prev_r   = in[(frames - 1) * 2 + 1];
+        g_inj_has_prev = true;
+    }
+
+    g_inj_w.store(w, std::memory_order_release);
+    if (accepted) g_inj_frames.fetch_add(accepted, std::memory_order_relaxed);
+    if (dropped)  g_inj_dropped.fetch_add(dropped, std::memory_order_relaxed);
+}
+
+uint64_t audio_capture_injected_frames() { return g_inj_frames.load(std::memory_order_relaxed); }
+uint64_t audio_capture_dropped_frames()  { return g_inj_dropped.load(std::memory_order_relaxed); }
+
 void audio_capture_drain(std::vector<float>& out) {
-    const uint32_t w = g_cap_w.load(std::memory_order_acquire);
-    uint32_t       r = g_cap_r.load(std::memory_order_relaxed);
-    size_t n = (size_t)(w - r);
-    if (n == 0) return;
-    out.reserve(out.size() + n);
-    while (r != w) out.push_back(g_cap_ring[r++ & CAP_MASK]);
-    g_cap_r.store(r, std::memory_order_release);
+    // Native device capture (duplex callback producer).
+    {
+        const uint32_t w = g_cap_w.load(std::memory_order_acquire);
+        uint32_t       r = g_cap_r.load(std::memory_order_relaxed);
+        if (r != w) {
+            out.reserve(out.size() + (size_t)(w - r));
+            while (r != w) out.push_back(g_cap_ring[r++ & CAP_MASK]);
+            g_cap_r.store(r, std::memory_order_release);
+        }
+    }
+    // Injected capture (audio_capture_push producer) drains through the same
+    // contract. In practice only one source is live at a time (iOS injects,
+    // desktop uses the device), so appending both is unambiguous.
+    {
+        const uint32_t w = g_inj_w.load(std::memory_order_acquire);
+        uint32_t       r = g_inj_r.load(std::memory_order_relaxed);
+        if (r != w) {
+            out.reserve(out.size() + (size_t)(w - r));
+            while (r != w) out.push_back(g_inj_ring[r++ & INJ_MASK]);
+            g_inj_r.store(r, std::memory_order_release);
+        }
+    }
 }
 
 float audio_capture_latency() {

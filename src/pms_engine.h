@@ -44,6 +44,11 @@ void pms_submit_camera_frame(pms_engine*, void* cv_pixel_buffer,
 void pms_submit_mic_block(pms_engine*, const float* interleaved_lr,
                           size_t frames, double sample_rate);
 
+// Person matte from the platform segmenter (Vision on iOS): a retained
+// OneComponent8 CVPixelBufferRef bridged as void*. NULL clears the matte.
+void pms_submit_person_matte(pms_engine*, void* cv_pixel_buffer_r8,
+                             double host_time_seconds);
+
 // JSON status of model packs (bundled/absent/downloading/ready).
 char* pms_model_status(pms_engine*);
 
@@ -57,7 +62,7 @@ char* pms_poll_events(pms_engine*);
 
 void pms_free(char*);
 
-#define PMS_ENGINE_ABI 1
+#define PMS_ENGINE_ABI 2
 uint32_t pms_abi_version(void);
 uint32_t pms_project_version(void);
 

@@ -44,7 +44,26 @@ float audio_input_peak();       // live mic peak 0–1 (0 when not capturing)
 #include "loudness.h"
 LoudnessSnapshot audio_master_meter();
 // Move all captured samples since the last drain into `out` (appends).
+// Drains BOTH native device capture and externally injected capture
+// (audio_capture_push) through this one contract.
 void  audio_capture_drain(std::vector<float>& out);
+
+// ── External capture injection (iOS mic path; Linux-testable) ─────────────────
+// Push interleaved stereo f32 from an external capture source (e.g. an
+// AVAudioEngine tap on iOS). The samples are COPIED before returning into a
+// fixed-capacity SPSC ring — no allocation, no locks. If sample_rate differs
+// from the engine's 44100 Hz the block is linearly resampled at push time
+// (push runs on the capture thread, never the render callback; fractional
+// phase carries across pushes for a continuous stream). Single producer:
+// call from one thread at a time.
+// Overflow policy: REJECT NEWEST — post-resample frames that don't fit are
+// dropped (and counted); buffered-but-undrained audio is never overwritten.
+// Works in PMS_HEADLESS builds (pure memory ring — no device, no PipeWire).
+void audio_capture_push(const float* interleaved_lr, size_t frames,
+                        double sample_rate);
+// Counters (monotonic since process start; surfaced by get_audio_perf):
+uint64_t audio_capture_injected_frames();  // post-resample frames accepted
+uint64_t audio_capture_dropped_frames();   // post-resample frames rejected (ring full)
 float audio_capture_latency();  // input period in seconds (0 if not capturing)
 
 // Capture device picker. Index -1 = system default. The list refreshes on

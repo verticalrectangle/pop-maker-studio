@@ -6,6 +6,7 @@
 // exactly what the headless test target and early SwiftUI screens need.
 #include "pms_engine.h"
 #include "app.h"
+#include "audio.h"
 #include "ipc_server.h"
 #include "engine_runtime.h"
 #if defined(__APPLE__)
@@ -98,7 +99,21 @@ void pms_submit_camera_frame(pms_engine*, void* cv_pixel_buffer, int, double hos
     (void)cv_pixel_buffer; (void)host_time;
 #endif
 }
-void pms_submit_mic_block(pms_engine*, const float*, size_t, double) {}  // Phase 4
+void pms_submit_person_matte(pms_engine*, void* cv_pixel_buffer_r8, double host_time) {
+#if defined(__APPLE__)
+    metal_render_submit_matte(cv_pixel_buffer_r8, host_time);
+#else
+    (void)cv_pixel_buffer_r8; (void)host_time;
+#endif
+}
+void pms_submit_mic_block(pms_engine* e, const float* interleaved_lr,
+                          size_t frames, double sample_rate) {
+    // Thin shim onto the audio module's injected-capture ring (audio.h):
+    // copies + resamples to 44.1k at push time on the caller's capture
+    // thread; drained by audio_capture_drain like native device capture.
+    if (!e || !interleaved_lr || frames == 0) return;
+    audio_capture_push(interleaved_lr, frames, sample_rate);
+}
 char* pms_model_status(pms_engine*) { return dup_cstr("[]"); }
 
 void pms_free(char* p) { free(p); }
