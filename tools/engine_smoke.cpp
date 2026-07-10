@@ -213,6 +213,18 @@ int main() {
     cmd(e, "add_track", {{"name", "V"}, {"position", 0}});
     cmd(e, "add_track", {{"name", "T"}, {"position", 1}});
 
+    // ── move_track: track order IS canvas z-order — reorder + round-trip ─────
+    {
+        json mv = cmd(e, "move_track", {{"from", 0}, {"to", 1}});
+        expect(mv["order"].size() == 2 && mv["order"][0] == "T" && mv["order"][1] == "V",
+               "move_track 0->1 must yield order [T, V]");
+        mv = cmd(e, "move_track", {{"from", 1}, {"to", 0}});
+        expect(mv["order"][0] == "V" && mv["order"][1] == "T",
+               "move_track back must restore order [V, T]");
+        json bad = cmd_raw(e, "move_track", {{"from", 7}, {"to", 0}});
+        expect(bad.contains("error"), "move_track with a bad index must be rejected");
+    }
+
     // ── Clips: video-typed (image path — no decode needed) + text ────────────
     std::string fake_png = std::string(k_root) + "/fake_clip.png";
     json r = cmd(e, "add_clip", {{"track", 0}, {"type", "video"}, {"start", 0.0},

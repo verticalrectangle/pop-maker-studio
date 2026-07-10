@@ -49,6 +49,18 @@ void pms_submit_mic_block(pms_engine*, const float* interleaved_lr,
 void pms_submit_person_matte(pms_engine*, void* cv_pixel_buffer_r8,
                              double host_time_seconds);
 
+// Submit one visual layer's frame, addressed by engine clip identity
+// (track index, clip index). BGRA CVPixelBufferRef bridged as void*; the
+// engine retains it until superseded. Text/overlay layers may be submitted
+// once and persist until replaced or cleared (pass NULL to clear that key).
+// rotation_quarter_turns rotates the buffer upright (camera parity). When any
+// layer frames are present pms_render walks the timeline tracks as a scene
+// compositor; with none it falls back to the single-content (camera) path.
+void pms_submit_layer_frame(pms_engine*, int track, int clip,
+                            void* cv_pixel_buffer_bgra,
+                            int rotation_quarter_turns,
+                            double host_time_seconds);
+
 // JSON status of model packs (bundled/absent/downloading/ready).
 char* pms_model_status(pms_engine*);
 
@@ -62,7 +74,7 @@ char* pms_poll_events(pms_engine*);
 
 void pms_free(char*);
 
-#define PMS_ENGINE_ABI 2
+#define PMS_ENGINE_ABI 3
 uint32_t pms_abi_version(void);
 uint32_t pms_project_version(void);
 

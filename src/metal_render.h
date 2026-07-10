@@ -9,6 +9,8 @@
 // transpiled MSL registry, then textured layers, text, and the FX passes).
 #include <cstdint>
 
+struct AppState;   // app.h — the renderer walks state.tracks for the scene loop
+
 // Called from pms_create with the app's MTLDevice (bridged void*). Idempotent.
 void metal_render_init(void* mtl_device);
 
@@ -25,7 +27,17 @@ void metal_render_submit_pixelbuffer(void* cv_pixel_buffer);
 // Composite one frame into `mtl_texture` (id<MTLTexture>, bridged). `t` drives
 // time-based animation (wall clock). Returns 0 on success, non-zero if Metal
 // isn't ready. No-op (returns 1) if init hasn't run.
-int  metal_render_frame(void* mtl_texture, int w, int h, double t);
+// `state` (may be null): when any layer frames are present the renderer runs
+// the scene compositor over state->tracks (desktop canvas.cpp Pass-1 parity);
+// otherwise it falls back to the legacy single-content path.
+int  metal_render_frame(void* mtl_texture, int w, int h, double t,
+                        const AppState* state);
+
+// Store one visual layer's frame keyed by engine (track, clip): a BGRA
+// CVPixelBufferRef mapped zero-copy, retained until superseded. NULL clears
+// the key. rotation in quarter turns rotates the buffer upright. Thread-safe.
+void metal_render_submit_layer(int track, int clip, void* cv_pixel_buffer_bgra,
+                               int rotation_quarter_turns, double host_time_seconds);
 
 // Set the ordered render-time FX stack the Metal backend applies to the current
 // frame — a JSON array [{"fx_type":str,"params":{name:num,...}}, ...] (the

@@ -3181,6 +3181,38 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         return r;
     }
 
+    if (method == "move_track") {
+        // Reorder the layer stack: track index IS canvas z-order (0 = top lane
+        // = frontmost; the scene composites bottom-to-top). {from, to} are
+        // indices in the current order; the track lands AT index `to`.
+        int from = params.value("from", -1);
+        int to   = params.value("to",   -1);
+        if (!check_track(state, from, err)) return {};
+        if (to < 0) to = 0;
+        if (to >= (int)state.tracks.size()) to = (int)state.tracks.size() - 1;
+        if (from != to) {
+            Track moved = std::move(state.tracks[(size_t)from]);
+            state.tracks.erase(state.tracks.begin() + from);
+            state.tracks.insert(state.tracks.begin() + to, std::move(moved));
+            // Re-map indices that address tracks by position.
+            auto remap = [&](int ti) {
+                if (ti == from) return to;
+                if (from < to  && ti > from && ti <= to) return ti - 1;
+                if (to  < from && ti >= to  && ti < from) return ti + 1;
+                return ti;
+            };
+            state.selected_track  = remap(state.selected_track);
+            state.crop_edit_track = remap(state.crop_edit_track);
+            for (auto& tr : state.tracks)
+                for (auto& cl : tr.clips)
+                    if (cl.beat_src_track >= 0) cl.beat_src_track = remap(cl.beat_src_track);
+        }
+        json r; r["track"] = to;
+        r["order"] = json::array();
+        for (auto& tr : state.tracks) r["order"].push_back(tr.name);
+        return r;
+    }
+
     if (method == "delete_track") {
         int ti = track_by_name_or_index(state, params);
         if (!check_track(state, ti, err)) return {};

@@ -78,8 +78,10 @@ char* pms_poll_events(pms_engine* e) {
 int pms_render(pms_engine* e, void* mtl_texture, int w, int h) {
 #if defined(__APPLE__)
     if (!e) return 1;
+    // Legacy single-content fallback still consumes the set_live_fx adapter;
+    // the scene path (any layer frames submitted) derives FX from AppState.
     metal_render_set_live_fx_stack(e->state.live_fx_json.c_str());
-    return metal_render_frame(mtl_texture, w, h, e->clock);
+    return metal_render_frame(mtl_texture, w, h, e->clock, &e->state);
 #else
     (void)e; (void)mtl_texture; (void)w; (void)h;
     return 0;   // desktop renders through its own GL loop
@@ -105,6 +107,17 @@ void pms_submit_person_matte(pms_engine*, void* cv_pixel_buffer_r8, double host_
     metal_render_submit_matte(cv_pixel_buffer_r8, host_time);
 #else
     (void)cv_pixel_buffer_r8; (void)host_time;
+#endif
+}
+void pms_submit_layer_frame(pms_engine*, int track, int clip,
+                            void* cv_pixel_buffer_bgra,
+                            int rotation_quarter_turns, double host_time) {
+#if defined(__APPLE__)
+    metal_render_submit_layer(track, clip, cv_pixel_buffer_bgra,
+                              rotation_quarter_turns, host_time);
+#else
+    (void)track; (void)clip; (void)cv_pixel_buffer_bgra;
+    (void)rotation_quarter_turns; (void)host_time;
 #endif
 }
 void pms_submit_mic_block(pms_engine* e, const float* interleaved_lr,
