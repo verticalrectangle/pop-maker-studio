@@ -2339,6 +2339,34 @@ static json dispatch(AppState& state, const std::string& method, const json& par
 #endif
     }
 
+    if (method == "clear_layer_frames") {   // record mode: un-shadow the camera path
+#ifdef __APPLE__
+        metal_render_clear_layers();
+#endif
+        return json{{"ok", true}};
+    }
+
+    if (method == "face_track_enable") {    // camera side-feed to the face worker
+        bool on = params.value("on", true);
+        face_feed_enable(on);
+        return json{{"ok", true}, {"on", on},
+                    {"models_present", face_track_available()}};
+    }
+
+    if (method == "face_debug") {           // tracker status for the record UI / tests
+        FaceObs obs;
+        bool has = face_track_latest(obs);
+        json j;
+        j["models_present"] = face_track_available();
+        j["feed_enabled"]   = face_feed_enabled();
+        j["valid"]          = has && obs.valid;
+        j["score"]          = has ? obs.score : 0.f;
+        j["has_blend"]      = has && obs.has_blend;
+        j["frame_w"]        = has ? obs.w : 0;
+        j["frame_h"]        = has ? obs.h : 0;
+        return j;
+    }
+
     if (method == "validate_glsl") {
         std::string glsl = params.value("glsl", "");
         std::vector<RuntimeFXParam> ps;

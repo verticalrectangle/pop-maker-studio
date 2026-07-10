@@ -78,26 +78,8 @@ static inline float bl(const FaceObs& o, int idx) {
 // square flat chin); cheek slimming sits at the mid-jaw, gently; skin runs
 // porcelain-bright; and makeup (blush, lip tint, eye pop) does the heavy
 // lifting that warps used to overdo.
-struct BeautyLook {
-    float smooth = 0, brighten = 0, warmth = 0, eye_pop = 0, blush = 0, lip = 0;
-    float eyes = 0, cheek = 0, vline = 0, nose = 0, lips_plump = 0;
-    float blush_col[3] = {1.f, 0.45f, 0.55f};   // default rosy
-    float lip_col[3]   = {0.95f, 0.25f, 0.35f};
-    // cyber
-    float lip_grad = 1.f;      // 1 = bitten-lip gradient, 0 = full matte
-    float nose_blush = 0.f, freckles = 0.f;   // e-girl layer
-    float chin_tuck = 0.f, jaw_shade = 0.f;    // (tuck retired: warped the neck)
-    float chin_smooth = 0.f;                    // double-chin crease erase
-    float lash = 0.f, liner = 0.f, lash_wing = 0.f;   // lashes, eyeliner, wing
-    const char* makeup_tex = nullptr;  // UV-mapped makeup PNG (models/face/)
-    float makeup_adapt = 1.f;          // lighting adaptation amount
-    float blush_raise = 0.40f;  // 0 = mid-cheek (contour), 1 = under-eye
-    float eye_glow = 0; float eye_glow_col[3] = {0.2f, 0.9f, 1.f};
-    float skin_tint = 0; float tint_col[3] = {0.7f, 0.8f, 1.f};
-    float desat = 0, chrome = 0, scanlines = 0;
-};
 static void set3(float* d, float r, float g, float b) { d[0]=r; d[1]=g; d[2]=b; }
-static bool beauty_look_for(int filter_id, BeautyLook& L) {
+bool beauty_look_for(int filter_id, BeautyLook& L) {
     switch ((FaceFilter)filter_id) {
         case FaceFilter::Pretty:     // "Natural" — believable everyday clean-up
             L = {0.42f, 0.16f, 0.08f, 0.15f, 0.10f, 0.08f,  0.06f, 0.03f, 0.05f, 0.10f, 0.03f};
@@ -323,12 +305,13 @@ static bool beauty_look_for(int filter_id, BeautyLook& L) {
     }
 }
 
-int face_filter_bumps(int filter_id, float amount, const FaceObs& obs,
-                      FaceWarpBump* out) {
+// Shape half of a parametric beauty look — shared by the enum path below and
+// the Makeup Studio's custom looks (face_fx live entries on Metal).
+int face_filter_bumps_look(const BeautyLook& L, float amount, const FaceObs& obs,
+                           FaceWarpBump* out) {
     if (!obs.valid || obs.w <= 0 || obs.h <= 0) return 0;
     Anchors a = anchors_from(obs);
     const float iw = 1.f / obs.w, ih = 1.f / obs.h;
-    // radii in frame-height units so they're aspect-stable
     const float eyeR  = a.eyeDist * 0.40f * ih;
     const float amt   = amount;
     int n = 0;
@@ -341,26 +324,12 @@ int face_filter_bumps(int filter_id, float amount, const FaceObs& obs,
         out[n].dx = dxp * iw;   out[n].dy = dyp * ih;
         ++n;
     };
-    // Push a point toward the face's central axis: take the component of
-    // (faceC - p) perpendicular to `up` — rotation-proof inward direction.
     auto inward = [&](const float* p, float k, float* dxy) {
         float vx = a.faceC[0] - p[0], vy = a.faceC[1] - p[1];
         float along = vx * a.up[0] + vy * a.up[1];
         dxy[0] = (vx - along * a.up[0]) * k;
         dxy[1] = (vy - along * a.up[1]) * k;
     };
-
-    switch ((FaceFilter)filter_id) {
-        case FaceFilter::Pretty:
-        case FaceFilter::Glam:
-        case FaceFilter::Porcelain:
-        case FaceFilter::Sculpt:
-        case FaceFilter::Honey: {
-            // Shape half of the beauty looks (skin half runs on the GPU in
-            // face_beauty_apply). Same layered face-basis recipe, scaled per
-            // look — Porcelain barely warps, Sculpt carves.
-            BeautyLook L;
-            if (!beauty_look_for(filter_id, L)) break;
             float d[2];
             if (L.eyes > 0.f) {
                 bump(a.eyeA, eyeR, L.eyes * amt, 0, 0);
@@ -420,7 +389,47 @@ int face_filter_bumps(int filter_id, float amount, const FaceObs& obs,
             }
             if (L.lips_plump > 0.f)
                 bump(a.mouth, a.mouthW * 0.55f * ih, L.lips_plump * amt, 0, 0);
-            break;
+    return n;
+}
+
+int face_filter_bumps(int filter_id, float amount, const FaceObs& obs,
+                      FaceWarpBump* out) {
+    if (!obs.valid || obs.w <= 0 || obs.h <= 0) return 0;
+    Anchors a = anchors_from(obs);
+    const float iw = 1.f / obs.w, ih = 1.f / obs.h;
+    // radii in frame-height units so they're aspect-stable
+    const float eyeR  = a.eyeDist * 0.40f * ih;
+    const float amt   = amount;
+    int n = 0;
+    auto bump = [&](const float* c, float radius, float scale,
+                    float dxp, float dyp) {
+        if (n >= MAX_FACE_BUMPS) return;
+        out[n].cx = c[0] * iw;  out[n].cy = c[1] * ih;
+        out[n].radius = radius;
+        out[n].scale  = scale;
+        out[n].dx = dxp * iw;   out[n].dy = dyp * ih;
+        ++n;
+    };
+    // Push a point toward the face's central axis: take the component of
+    // (faceC - p) perpendicular to `up` — rotation-proof inward direction.
+    auto inward = [&](const float* p, float k, float* dxy) {
+        float vx = a.faceC[0] - p[0], vy = a.faceC[1] - p[1];
+        float along = vx * a.up[0] + vy * a.up[1];
+        dxy[0] = (vx - along * a.up[0]) * k;
+        dxy[1] = (vy - along * a.up[1]) * k;
+    };
+
+    switch ((FaceFilter)filter_id) {
+        case FaceFilter::Pretty:
+        case FaceFilter::Glam:
+        case FaceFilter::Porcelain:
+        case FaceFilter::Sculpt:
+        case FaceFilter::Honey: {
+            // Shape half of the beauty looks (skin half runs on the GPU in
+            // face_beauty_apply) — shared with the Studio path.
+            BeautyLook L;
+            if (!beauty_look_for(filter_id, L)) break;
+            return face_filter_bumps_look(L, amount, obs, out);
         }
         case FaceFilter::BigEyes: {
             // Expression-reactive: widen with eyeWide, deflate on blinks —
@@ -622,16 +631,19 @@ void face_filter_draw_doggy(ImDrawList* dl, const FaceObs& obs, float amount,
 // Warp + doggy sprites for a tracked face, rendered into the slot's FBO.
 // `obs` lives in the texture's pixel space (w×h). Returns tex unchanged when
 // the filter produces nothing. `anim_t` drives the tongue wag.
-uintptr_t face_filter_apply_obs(int filter_id, float amount, const FaceObs& obs,
-                                float anim_t, uintptr_t tex,
-                                int slot, int w, int h) {
-    if (filter_id == 0 || w <= 0 || h <= 0 || !obs.valid) return tex;
-    // Beauty looks: GPU skin pass first (own buffer), then the shape warp
+// Assemble the platform-neutral render plan (see face_filters.h). This is
+// the exact parameter assembly face_filter_apply_obs used inline — moved out
+// so the iOS Metal runner shares it with the desktop GL path.
+bool face_filter_build_plan_look(const BeautyLook& L, float amount,
+                                 const FaceObs& obs, int w, int h,
+                                 FaceRenderPlan& out) {
+    out = FaceRenderPlan{};
+    if (w <= 0 || h <= 0 || !obs.valid) return false;
+    // Beauty look: GPU skin pass first (own buffer), then the shape warp
     // reads its output — smoothing samples the undistorted image.
-    BeautyLook L;
-    if (beauty_look_for(filter_id, L)) {
+    {
+        FaceBeautyParams& bp = out.beauty;
         Anchors a = anchors_from(obs);
-        FaceBeautyParams bp;
         // COORDINATE SPACE: obs landmarks live in the OBSERVATION's pixel
         // space (full-res raw for takes), but the texture being processed is
         // w×h (a half-res proxy in playback). The warp path normalizes to UV
@@ -724,29 +736,61 @@ uintptr_t face_filter_apply_obs(int filter_id, float amount, const FaceObs& obs,
                 bp.lip_poly[i][1] = PY(obs.pts[kLipRing[i]][1]);
             }
         }
-        tex = face_beauty_apply(tex, slot, w, h, bp);
-        // UV-mapped makeup texture: drawn as the tracked mesh, pre-warp so
-        // shape changes deform the pigment with the skin.
+        out.has_beauty = true;
+        // UV-mapped makeup texture: pre-warp so shape changes deform the
+        // pigment with the skin. Landmarks rescaled to texture space.
         if (L.makeup_tex) {
-            int mw = 0, mh = 0;
-            GLuint mk = sprite_tex(L.makeup_tex, mw, mh);
-            if (mk) {
-                static float mpts[FT_NPTS][2];
-                for (int i = 0; i < 468; ++i) {
-                    mpts[i][0] = PX(obs.pts[i][0]);
-                    mpts[i][1] = PY(obs.pts[i][1]);
-                }
-                tex = face_makeup_apply(tex, slot, w, h, mpts, mk,
-                                        amount, L.makeup_adapt,
-                                        bp.eyeL_x, bp.eyeL_y, bp.eyeR_x, bp.eyeR_y,
-                                        bp.eye_r, bp.blink_l, bp.blink_r);
+            out.makeup_tex     = L.makeup_tex;
+            out.makeup_opacity = amount;
+            out.makeup_adapt   = L.makeup_adapt;
+            for (int i = 0; i < FT_NPTS; ++i) {
+                out.mesh_pts[i][0] = PX(obs.pts[i][0]);
+                out.mesh_pts[i][1] = PY(obs.pts[i][1]);
             }
         }
     }
-    FaceWarpBump bumps[MAX_FACE_BUMPS];
-    int nb = face_filter_bumps(filter_id, amount, obs, bumps);
-    if (nb > 0)
-        tex = face_warp_apply(tex, slot, w, h, (const float*)bumps, nb);
+    out.n_bumps = face_filter_bumps_look(L, amount, obs, out.bumps);
+    out.valid = out.has_beauty || out.makeup_tex || out.n_bumps > 0;
+    return out.valid;
+}
+
+// Enum-preset wrapper: beauty looks route through the parametric builder;
+// pure-warp filters (BigEyes, Alien, ...) carry only their bump set.
+bool face_filter_build_plan(int filter_id, float amount, const FaceObs& obs,
+                            int w, int h, FaceRenderPlan& out) {
+    out = FaceRenderPlan{};
+    if (filter_id == 0 || w <= 0 || h <= 0 || !obs.valid) return false;
+    BeautyLook L;
+    if (beauty_look_for(filter_id, L))
+        return face_filter_build_plan_look(L, amount, obs, w, h, out);
+    out.n_bumps = face_filter_bumps(filter_id, amount, obs, out.bumps);
+    out.valid = out.n_bumps > 0;
+    return out.valid;
+}
+
+uintptr_t face_filter_apply_obs(int filter_id, float amount, const FaceObs& obs,
+                                float anim_t, uintptr_t tex,
+                                int slot, int w, int h) {
+    if (filter_id == 0 || w <= 0 || h <= 0 || !obs.valid) return tex;
+    FaceRenderPlan plan;
+    face_filter_build_plan(filter_id, amount, obs, w, h, plan);
+    if (plan.has_beauty)
+        tex = face_beauty_apply(tex, slot, w, h, plan.beauty);
+    if (plan.makeup_tex) {
+        int mw = 0, mh = 0;
+        GLuint mk = sprite_tex(plan.makeup_tex, mw, mh);
+        if (mk)
+            tex = face_makeup_apply(tex, slot, w, h, plan.mesh_pts, mk,
+                                    plan.makeup_opacity, plan.makeup_adapt,
+                                    plan.beauty.eyeL_x, plan.beauty.eyeL_y,
+                                    plan.beauty.eyeR_x, plan.beauty.eyeR_y,
+                                    plan.beauty.eye_r,
+                                    plan.beauty.blink_l, plan.beauty.blink_r);
+    }
+    if (plan.n_bumps > 0)
+        tex = face_warp_apply(tex, slot, w, h,
+                              (const float*)plan.bumps, plan.n_bumps);
+
     if (filter_id == (int)FaceFilter::Doggy) {
         FaceSpriteQuad quads[4];
         int nq = face_filter_doggy_quads(obs, amount, anim_t, quads, 4);

@@ -38,6 +38,8 @@
 #undef Marker
 #include "../src/pms_engine.h"
 #include "../src/metal_render.h"
+#include "stb_image.h"
+#include <unistd.h>
 #include "../src/app.h"          // AppState/Track/Clip — case f builds a scene directly
 #include "json.hpp"
 #include <cstdio>
@@ -663,6 +665,123 @@ static void case_chroma_feedback(CVPixelBufferRef green, CVPixelBufferRef gradie
     printf("  [l] chroma feedback family holds temporal state\n");
 }
 
+// n. Matte-keyed chroma (record/selfie mode): with matte_key=1 the person
+// matte is the key — the subject half stays live while the background half
+// keeps temporal ghosts. Uses a left-half-white R8 matte.
+static void case_chroma_matte_key(CVPixelBufferRef red, CVPixelBufferRef blue) {
+    const std::string C = "n.chroma_matte_key";
+    // R8 matte: left half = subject (1), right half = background (0).
+    NSDictionary* attrs = @{ (id)kCVPixelBufferIOSurfacePropertiesKey: @{},
+                             (id)kCVPixelBufferMetalCompatibilityKey: @YES };
+    CVPixelBufferRef matte = NULL;
+    CVReturn r = CVPixelBufferCreate(kCFAllocatorDefault, W, H,
+                                     kCVPixelFormatType_OneComponent8,
+                                     (__bridge CFDictionaryRef)attrs, &matte);
+    if (r != kCVReturnSuccess || !matte) fail(C, "matte CVPixelBufferCreate failed");
+    CVPixelBufferLockBaseAddress(matte, 0);
+    uint8_t* base = (uint8_t*)CVPixelBufferGetBaseAddress(matte);
+    size_t   bpr  = CVPixelBufferGetBytesPerRow(matte);
+    for (int y = 0; y < H; ++y)
+        for (int x = 0; x < W; ++x)
+            base[(size_t)y * bpr + x] = (x < W / 2) ? 255 : 0;
+    CVPixelBufferUnlockBaseAddress(matte, 0);
+    pms_submit_person_matte(g_e, matte, 0.1);
+
+    // matte_key is a LIVE-stack-only param (record mode) — exercise the real
+    // record path: set_live_fx + camera frames on the single-content path
+    // (no layer frames stored → legacy renderer, exactly what RecordView hits).
+    build_video_project(C);
+    // Also covers clear_layer_frames: a stored layer frame would shadow the
+    // camera path (the RecordView bug) — the command must drop it.
+    submit_layer(0, 0, red, 0.05);
+    cmd(C, "clear_layer_frames", json::object());
+    cmd(C, "set_live_fx",
+        {{"fx", json::array({ {{"fx_type", "chroma_echo"},
+                               {"params", {{"matte_key", 1.0},
+                                           {"chroma_echo_persist", 0.92}}}} })}});
+    // Stamp red into the feedback, then switch to blue.
+    pms_submit_camera_frame(g_e, red, 0, 0.10);  (void)render_frame(C + ".stamp");
+    pms_submit_camera_frame(g_e, blue, 0, 0.30);
+    Img out = render_frame(C + ".ghost");
+    // Reference: the same blue frame with the stack cleared.
+    cmd(C, "set_live_fx", {{"fx", json::array()}});
+    Img plain = render_frame(C + ".plain");
+    PxRect left  = {8, 8, W / 2 - 8, H - 8};
+    PxRect right = {W / 2 + 8, 8, W - 8, H - 8};
+    double dl = frac_diff(out, plain, 12, left);
+    double dr = frac_diff(out, plain, 12, right);
+    check(dl < 0.02, C, "subject half (matte=1) was ghosted (diff frac=" +
+          std::to_string(dl) + ") — matte key not respected");
+    check(dr > 0.05, C, "background half (matte=0) shows no ghost (diff frac=" +
+          std::to_string(dr) + ") — matte-keyed feedback dead");
+    pms_submit_camera_frame(g_e, NULL, 0, 0);
+    pms_submit_person_matte(g_e, NULL, 0);
+    CVPixelBufferRelease(matte);
+    printf("  [n] matte-keyed chroma: subject crisp, background ghosts\n");
+}
+
+// o. face_fx end-to-end: the REAL record-mode makeup path — face models +
+// tracker worker + camera side-feed + the Metal beauty/warp passes. Feeds the
+// repo test portrait as camera frames, waits for the worker to lock on, then
+// asserts a procedural makeup look (Barbie: blush/lip/lash + shape) visibly
+// changes the frame. Skips (with a note) when models are absent.
+static void case_face_fx(CVPixelBufferRef unused) {
+    (void)unused;
+    const std::string C = "o.face_fx";
+    json fd = cmd(C, "face_track_enable", {{"on", true}});
+    if (!fd.value("models_present", false)) {
+        printf("  [o] face models missing — face_fx case SKIPPED\n");
+        return;
+    }
+    int iw = 0, ih = 0, n = 0;
+    unsigned char* rgb = stbi_load("assets/test_face.png", &iw, &ih, &n, 3);
+    if (!rgb) fail(C, "cannot load assets/test_face.png");
+    NSDictionary* attrs = @{ (id)kCVPixelBufferIOSurfacePropertiesKey: @{},
+                             (id)kCVPixelBufferMetalCompatibilityKey: @YES };
+    CVPixelBufferRef pb = NULL;
+    CVPixelBufferCreate(kCFAllocatorDefault, iw, ih, kCVPixelFormatType_32BGRA,
+                        (__bridge CFDictionaryRef)attrs, &pb);
+    if (!pb) fail(C, "camera pixel buffer alloc failed");
+    CVPixelBufferLockBaseAddress(pb, 0);
+    uint8_t* dst = (uint8_t*)CVPixelBufferGetBaseAddress(pb);
+    size_t bpr = CVPixelBufferGetBytesPerRow(pb);
+    for (int y = 0; y < ih; ++y)
+        for (int x = 0; x < iw; ++x) {
+            const unsigned char* px = rgb + ((size_t)y * iw + x) * 3;
+            uint8_t* q = dst + (size_t)y * bpr + (size_t)x * 4;
+            q[0] = px[2]; q[1] = px[1]; q[2] = px[0]; q[3] = 255;
+        }
+    CVPixelBufferUnlockBaseAddress(pb, 0);
+    stbi_image_free(rgb);
+
+    build_video_project(C);
+    clear_layer(0, 0);
+    cmd(C, "set_live_fx", {{"fx", json::array()}});
+    // Feed frames until the worker locks on (async — poll face_debug).
+    bool locked = false;
+    for (int k = 0; k < 100 && !locked; ++k) {
+        pms_submit_camera_frame(g_e, pb, 0, 0.1);
+        usleep(50 * 1000);
+        locked = cmd(C, "face_debug", json::object()).value("valid", false);
+    }
+    check(locked, C, "face worker never produced a valid observation");
+    Img plain = render_frame(C + ".plain");
+    cmd(C, "set_live_fx",
+        {{"fx", json::array({ {{"fx_type", "face_fx"},
+                               {"params", {{"face_filter", 14.0},   // Barbie
+                                           {"face_amount", 1.0}}}} })}});
+    pms_submit_camera_frame(g_e, pb, 0, 0.2);
+    Img out = render_frame(C + ".made_up");
+    double diff = frac_diff(out, plain, 6);
+    check(diff > 0.01, C, "face_fx (Barbie) changed no pixels (diff frac=" +
+          std::to_string(diff) + ") — makeup passes dead");
+    cmd(C, "set_live_fx", {{"fx", json::array()}});
+    cmd(C, "face_track_enable", {{"on", false}});
+    pms_submit_camera_frame(g_e, NULL, 0, 0);
+    CVPixelBufferRelease(pb);
+    printf("  [o] face_fx: tracker locked, makeup passes change pixels (%.3f)\n", diff);
+}
+
 // ── Main ─────────────────────────────────────────────────────────────────────
 
 int main() {
@@ -715,6 +834,8 @@ int main() {
         case_all_manifest_fx(checker);
         case_legacy_fx(gradient, green, checker);
         case_chroma_feedback(green, gradient);
+        case_chroma_matte_key(red, blue);
+        case_face_fx(checker);
 
         CVPixelBufferRelease(green);    CVPixelBufferRelease(gradient);
         CVPixelBufferRelease(red);      CVPixelBufferRelease(blue);

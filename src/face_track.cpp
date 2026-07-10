@@ -586,6 +586,12 @@ bool face_track_dump_last(const char* path) {
     return true;
 }
 
+// Camera side-feed gate (see face_track.h). Atomic — flipped from the IPC
+// thread, read on the capture thread.
+static std::atomic<bool> g_face_feed{false};
+void face_feed_enable(bool on) { g_face_feed.store(on, std::memory_order_relaxed); }
+bool face_feed_enabled()       { return g_face_feed.load(std::memory_order_relaxed); }
+
 void face_track_submit(const uint8_t* rgb, int w, int h) {
     if (!face_track_available() || w <= 0 || h <= 0) return;
     if (!g_worker_started) {

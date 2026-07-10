@@ -9,6 +9,11 @@
 #undef Marker
 #include "metal_render.h"
 #include "app.h"          // AppState/Track/Clip — the scene compositor walks these
+#include "face_filters.h" // BeautyLook + face_filter_build_plan_look (face_fx)
+#include "face_track.h"   // live FaceObs for the record-mode makeup passes
+#include "paths.h"        // app_models_dir() — makeup PNGs live in models/face
+#include "stb_image.h"    // makeup texture load (impl compiled in video.cpp)
+#include "generated/face_uv_mesh.h"   // canonical UVs + 898-tri topology
 #include "json.hpp"
 #include <vector>
 #include <mutex>
@@ -248,13 +253,29 @@ using namespace metal;
 struct FSOut { float4 pos [[position]]; float2 v_uv [[user(locn0)]]; };
 struct ChromaUni { float key_r; float key_g; float key_b; float threshold;
                    float persist; float head; float ntaps; float falloff;
-                   float tw; float th; };
+                   float tw; float th; float matte_key; };
+
+// Foreground term: person matte when matte_key is set (selfie mode — the
+// subject stays crisp, the BACKGROUND trails), else colour-distance from the
+// key (classic green-screen mode).
+static float chroma_fg(float2 uv, float3 kc_avg, constant ChromaUni& u,
+                       texture2d<float> matte, bool soft) {
+    constexpr sampler s(mag_filter::linear, min_filter::linear, address::clamp_to_edge);
+    if (u.matte_key > 0.5) return matte.sample(s, uv).r;
+    float3 key   = float3(u.key_r, u.key_g, u.key_b);
+    float  lum_k = dot(key,    float3(0.299, 0.587, 0.114));
+    float  lum_p = dot(kc_avg, float3(0.299, 0.587, 0.114));
+    float  dist  = length((kc_avg - lum_p) - (key - lum_k));
+    return soft ? smoothstep(u.threshold, u.threshold + 0.12, dist)
+                : step(u.threshold, dist);
+}
 
 // Chroma melt — keyed background keeps the prior frame, drifting sideways →
 // smear trails. Soft matte on a box-averaged colour (codec-noise tolerant).
 fragment float4 chroma_melt_f(FSOut in [[stage_in]], constant ChromaUni& u [[buffer(0)]],
                               texture2d<float> src [[texture(0)]],
-                              texture2d<float> fb  [[texture(1)]]) {
+                              texture2d<float> fb  [[texture(1)]],
+                              texture2d<float> matte [[texture(2)]]) {
     constexpr sampler s(mag_filter::linear, min_filter::linear, address::clamp_to_edge);
     float3 cur = src.sample(s, in.v_uv).rgb;
     float2 tx  = float2(1.0 / u.tw, 1.0 / u.th);
@@ -263,11 +284,7 @@ fragment float4 chroma_melt_f(FSOut in [[stage_in]], constant ChromaUni& u [[buf
               + src.sample(s, in.v_uv + float2(-2.0*tx.x, 0.0)).rgb
               + src.sample(s, in.v_uv + float2(0.0,  2.0*tx.y)).rgb
               + src.sample(s, in.v_uv + float2(0.0, -2.0*tx.y)).rgb) * 0.2;
-    float3 key   = float3(u.key_r, u.key_g, u.key_b);
-    float  lum_k = dot(key, float3(0.299, 0.587, 0.114));
-    float  lum_p = dot(kc,  float3(0.299, 0.587, 0.114));
-    float  dist  = length((kc - lum_p) - (key - lum_k));
-    float  fg    = smoothstep(u.threshold, u.threshold + 0.12, dist);
+    float  fg    = chroma_fg(in.v_uv, kc, u, matte, true);
     float3 prev  = fb.sample(s, in.v_uv + float2(1.5*tx.x, 0.0)).rgb;
     float3 trail = mix(cur, prev, u.persist);
     return float4(mix(trail, cur, fg), 1.0);
@@ -277,7 +294,8 @@ fragment float4 chroma_melt_f(FSOut in [[stage_in]], constant ChromaUni& u [[buf
 // subject's past frames as distinct fading ghosts.
 fragment float4 chroma_echo_f(FSOut in [[stage_in]], constant ChromaUni& u [[buffer(0)]],
                               texture2d<float> src [[texture(0)]],
-                              texture2d<float> fb  [[texture(1)]]) {
+                              texture2d<float> fb  [[texture(1)]],
+                              texture2d<float> matte [[texture(2)]]) {
     constexpr sampler s(mag_filter::linear, min_filter::linear, address::clamp_to_edge);
     float3 cur = src.sample(s, in.v_uv).rgb;
     float2 tx  = float2(1.0 / u.tw, 1.0 / u.th);
@@ -286,11 +304,7 @@ fragment float4 chroma_echo_f(FSOut in [[stage_in]], constant ChromaUni& u [[buf
               + src.sample(s, in.v_uv + float2(-2.0*tx.x, 0.0)).rgb
               + src.sample(s, in.v_uv + float2(0.0,  2.0*tx.y)).rgb
               + src.sample(s, in.v_uv + float2(0.0, -2.0*tx.y)).rgb) * 0.2;
-    float3 key   = float3(u.key_r, u.key_g, u.key_b);
-    float  lum_k = dot(key, float3(0.299, 0.587, 0.114));
-    float  lum_p = dot(kc,  float3(0.299, 0.587, 0.114));
-    float  dist  = length((kc - lum_p) - (key - lum_k));
-    float  fg    = step(u.threshold, dist);
+    float  fg    = chroma_fg(in.v_uv, kc, u, matte, false);
     float3 prev  = fb.sample(s, in.v_uv).rgb;
     float3 echo  = mix(cur, prev, u.persist);
     return float4(mix(echo, cur, fg), 1.0);
@@ -298,29 +312,343 @@ fragment float4 chroma_echo_f(FSOut in [[stage_in]], constant ChromaUni& u [[buf
 
 // Chroma frame — discrete multi-tap delay from the snapshot ring. head/ntaps
 // arrive as floats (plain-float uniform); RING must match kChromaRingLayers.
+// In matte mode the ring holds PRE-MASKED snapshots (alpha = subject matte,
+// written by chroma_snapshot_f) so each tap composites only the past subject.
 fragment float4 chroma_frame_f(FSOut in [[stage_in]], constant ChromaUni& u [[buffer(0)]],
                                texture2d<float>       src  [[texture(0)]],
-                               texture2d_array<float> ring [[texture(1)]]) {
+                               texture2d_array<float> ring [[texture(1)]],
+                               texture2d<float>       matte [[texture(2)]]) {
     constexpr sampler s(mag_filter::linear, min_filter::linear, address::clamp_to_edge);
     const int RING = 8;
     float3 key   = float3(u.key_r, u.key_g, u.key_b);
     float  lum_k = dot(key, float3(0.299, 0.587, 0.114));
     float3 live  = src.sample(s, in.v_uv).rgb;
-    float  live_fg = step(u.threshold,
-                          length((live - dot(live, float3(0.299,0.587,0.114))) - (key - lum_k)));
+    float  live_fg = chroma_fg(in.v_uv, live, u, matte, false);
     int head  = int(u.head);
     int ntaps = int(u.ntaps);
     float3 echo = live;
     for (int i = RING - 1; i >= 0; --i) {
         if (i >= ntaps) continue;
         int layer = ((head - i) % RING + RING) % RING;
-        float3 tcol = ring.sample(s, in.v_uv, layer).rgb;
-        float  m    = step(u.threshold,
-                           length((tcol - dot(tcol, float3(0.299,0.587,0.114))) - (key - lum_k)));
-        float  a    = m * pow(u.falloff, float(i));
-        echo = mix(echo, tcol, a);
+        float4 tap = ring.sample(s, in.v_uv, layer);
+        float  m   = (u.matte_key > 0.5)
+                   ? tap.a
+                   : step(u.threshold,
+                          length((tap.rgb - dot(tap.rgb, float3(0.299,0.587,0.114))) - (key - lum_k)));
+        float  a   = m * pow(u.falloff, float(i));
+        echo = mix(echo, tap.rgb, a);
     }
     return float4(mix(echo, live, live_fg), 1.0);
+}
+
+// Matte-masked ring snapshot: rgb = frame, a = subject matte (matte mode only;
+// colour mode snapshots via a plain blit, alpha unused).
+fragment float4 chroma_snapshot_f(FSOut in [[stage_in]],
+                                  texture2d<float> src   [[texture(0)]],
+                                  texture2d<float> matte [[texture(1)]]) {
+    constexpr sampler s(mag_filter::linear, min_filter::linear, address::clamp_to_edge);
+    return float4(src.sample(s, in.v_uv).rgb, matte.sample(s, in.v_uv).r);
+}
+)";
+
+// ── Face FX MSL (makeup looks) ───────────────────────────────────────────────
+// Hand-written ports of the desktop face passes in fx_shader.cpp
+// (k_face_beauty_fs / k_face_mk_vs+fs / k_face_warp_fs — keep in sync).
+// Geometry arrives fully assembled from face_filter_build_plan_look
+// (face_filters.cpp), so these shaders are as dumb as their GL twins.
+// All uniforms are plain float arrays — byte layout matches the CPU mirrors.
+static NSString* const kFaceSrc = @R"(
+#include <metal_stdlib>
+using namespace metal;
+
+struct FSOut { float4 pos [[position]]; float2 v_uv [[user(locn0)]]; };
+
+// ── warp: up to 12 local bumps (radial scale + shift, gaussian falloff) ─────
+struct FaceWarpUni { float n; float aspect; float pad0; float pad1;
+                     float ba[48]; float bb[48]; };
+fragment float4 face_warp_f(FSOut in [[stage_in]], constant FaceWarpUni& u [[buffer(0)]],
+                            texture2d<float> src [[texture(0)]]) {
+    constexpr sampler s(mag_filter::linear, min_filter::linear, address::clamp_to_edge);
+    float2 uv = in.v_uv;
+    int n = int(u.n);
+    for (int i = 0; i < 12; ++i) {
+        if (i >= n) break;
+        float2 c = float2(u.ba[i*4+0], u.ba[i*4+1]);
+        float  r = max(u.ba[i*4+2], 1e-4);
+        float2 d = in.v_uv - c;
+        d.x *= u.aspect;
+        float g = exp(-dot(d, d) / (r * r * 0.45));
+        uv -= (float2(u.bb[i*4+0], u.bb[i*4+1]) + (in.v_uv - c) * u.ba[i*4+3]) * g;
+    }
+    return src.sample(s, clamp(uv, float2(0.001), float2(0.999)));
+}
+
+// ── beauty: skin mask + smoothing + brighten/warmth + procedural makeup ─────
+struct FaceBeautyUni {
+    float dim[2]; float up[2];
+    float face[4]; float eyes[4]; float feat[4]; float amt[4]; float makeup[4];
+    float cheeks[4]; float blushc[4]; float lipc[4]; float eyeglow[4];
+    float cyber[4]; float tintc[4]; float mouthax[4];
+    float lippoly[24];
+    float nose[4]; float lash[4]; float chin[4]; float eyeout[4];
+    float lidL[14]; float lidR[14];
+    float brow_r; float pad0; float blink[2];
+};
+static float f_lum(float3 c) { return dot(c, float3(0.299, 0.587, 0.114)); }
+static float f_seg(float2 p, float2 a, float2 b) {
+    float2 e = b - a;
+    float t = clamp(dot(p - a, e) / max(dot(e, e), 1e-4), 0.0, 1.0);
+    return length(p - (a + e * t));
+}
+fragment float4 face_beauty_f(FSOut in [[stage_in]], constant FaceBeautyUni& u [[buffer(0)]],
+                              texture2d<float> src [[texture(0)]]) {
+    constexpr sampler s(mag_filter::linear, min_filter::linear, address::clamp_to_edge);
+    float2 dim = float2(u.dim[0], u.dim[1]);
+    float2 p   = in.v_uv * dim;
+    float4 c0  = src.sample(s, in.v_uv);
+    float3 col = c0.rgb;
+    float2 upv = float2(u.up[0], u.up[1]);
+    float2 rightv = float2(-upv.y, upv.x);
+    float2 d = p - float2(u.face[0], u.face[1]);
+    float a = dot(d, rightv) / max(u.face[2], 1.0);
+    float b = dot(d, upv)    / max(u.face[3], 1.0);
+    float mask = 1.0 - smoothstep(0.72, 1.05, length(float2(a, b)));
+    mask *= 1.0 - smoothstep(0.84, 1.0, -b);
+    float er = max(u.feat[0], 1.0);
+    float2 eyeL = float2(u.eyes[0], u.eyes[1]), eyeR = float2(u.eyes[2], u.eyes[3]);
+    float holeL = 1.0 - smoothstep(er * 0.7, er * 1.25, distance(p, eyeL));
+    float holeR = 1.0 - smoothstep(er * 0.7, er * 1.25, distance(p, eyeR));
+    float2 browL = eyeL + upv * er * 1.2, browR = eyeR + upv * er * 1.2;
+    float br = max(u.brow_r, 1.0);
+    float holeBL = 1.0 - smoothstep(br * 0.6, br * 1.1, distance(p, browL));
+    float holeBR = 1.0 - smoothstep(br * 0.6, br * 1.1, distance(p, browR));
+    float mr = max(u.feat[3], 1.0);
+    float2 mouth = float2(u.feat[1], u.feat[2]);
+    float holeM = 1.0 - smoothstep(mr * 0.75, mr * 1.3, distance(p, mouth));
+    mask *= (1.0 - holeL) * (1.0 - holeR) * (1.0 - holeM)
+          * (1.0 - holeBL * 0.85) * (1.0 - holeBR * 0.85);
+
+    if (u.amt[0] > 0.001 && mask > 0.003) {           // bilateral-lite smooth
+        float rad = max(u.face[2], u.face[3]) * 0.045;
+        const float2 taps[12] = {
+            float2(-0.326,-0.406), float2(-0.840,-0.074), float2(-0.696, 0.457),
+            float2(-0.203, 0.621), float2( 0.962,-0.195), float2( 0.473,-0.480),
+            float2( 0.519, 0.767), float2( 0.185,-0.893), float2( 0.507, 0.064),
+            float2( 0.896, 0.412), float2(-0.322,-0.933), float2(-0.792,-0.598)};
+        float l0 = f_lum(col);
+        float3 acc = col; float wsum = 1.0;
+        for (int i = 0; i < 12; ++i) {
+            float3 c = src.sample(s, in.v_uv + taps[i] * rad / dim).rgb;
+            float wl = exp(-pow((f_lum(c) - l0) * 9.0, 2.0));
+            acc += c * wl; wsum += wl;
+        }
+        col = mix(col, acc / wsum, u.amt[0] * mask);
+    }
+    if (u.amt[1] > 0.001) {                            // soft-light brighten
+        float3 lift = col + (float3(1.0) - col) * col * 0.9;
+        col = mix(col, lift, u.amt[1] * mask);
+    }
+    if (u.amt[2] > 0.001)
+        col += float3(0.035, 0.012, -0.02) * (u.amt[2] * mask);
+    if (u.amt[3] > 0.001) {                            // eye pop
+        float eL = 1.0 - smoothstep(er * 0.35, er * 0.95, distance(p, eyeL));
+        float eR = 1.0 - smoothstep(er * 0.35, er * 0.95, distance(p, eyeR));
+        col *= 1.0 + u.amt[3] * 0.30 * max(eL, eR);
+    }
+    if (u.chin[2] > 0.001) {                           // double-chin crease erase
+        float below = smoothstep(0.70, 0.95, -b) * (1.0 - smoothstep(1.30, 1.55, -b));
+        float reg = below * (1.0 - smoothstep(er * 1.3, er * 2.3,
+                                              distance(p, float2(u.chin[0], u.chin[1]))));
+        if (reg > 0.003) {
+            float2 px2 = 1.0 / dim;
+            float rad = er * 0.55;
+            float3 acc = float3(0.0);
+            for (int i = 0; i < 12; ++i) {
+                float ang = float(i) * 0.5236;
+                float rr2 = (0.35 + 0.65 * fract(float(i) * 0.618)) * rad;
+                acc += src.sample(s, in.v_uv + float2(cos(ang), sin(ang)) * rr2 * px2).rgb;
+            }
+            col = mix(col, acc * (1.0 / 12.0), reg * u.chin[2] * 0.8);
+        }
+    }
+    if (u.makeup[3] > 0.001) {                         // under-jaw contour shadow
+        float elen = length(float2(a, b));
+        float band = smoothstep(0.94, 1.03, elen) * (1.0 - smoothstep(1.03, 1.18, elen));
+        float below = smoothstep(0.45, 0.85, -b);
+        float2 chin_px = float2(u.face[0], u.face[1]) - upv * u.face[3] * 0.92;
+        float near_chin = 1.0 - smoothstep(u.face[2] * 0.55, u.face[2] * 0.95,
+                                           distance(p, chin_px));
+        float sh = u.makeup[3] * band * below * near_chin;
+        col *= 1.0 - sh * float3(0.20, 0.22, 0.24);
+    }
+    // Skin-chroma gate (YCbCr window) — keeps makeup off mics/hands/props.
+    float m_cb = 0.5 - 0.168736 * col.r - 0.331264 * col.g + 0.5 * col.b;
+    float m_cr = 0.5 + 0.5 * col.r - 0.418688 * col.g - 0.081312 * col.b;
+    float skin_chroma = smoothstep(0.27, 0.31, m_cb) * (1.0 - smoothstep(0.45, 0.50, m_cb))
+                      * smoothstep(0.50, 0.54, m_cr) * (1.0 - smoothstep(0.66, 0.70, m_cr));
+    if (u.makeup[0] > 0.001) {                         // blush discs
+        float br2 = max(u.face[2], u.face[3]) * 0.30;
+        float cL = 1.0 - smoothstep(br2 * 0.3, br2, distance(p, float2(u.cheeks[0], u.cheeks[1])));
+        float cR = 1.0 - smoothstep(br2 * 0.3, br2, distance(p, float2(u.cheeks[2], u.cheeks[3])));
+        float bm = max(cL, cR) * u.makeup[0] * mask * skin_chroma;
+        col = mix(col, col * (0.75 + 0.5 * float3(u.blushc[0], u.blushc[1], u.blushc[2])), bm * 0.55);
+    }
+    if (u.nose[2] + u.nose[3] > 0.001) {               // e-girl nose blush + freckles
+        float2 nb = float2(dot(p - float2(u.nose[0], u.nose[1]), rightv),
+                           dot(p - float2(u.nose[0], u.nose[1]), upv)) / max(er, 1.0);
+        float band = 1.0 - smoothstep(0.55, 1.0, length(nb * float2(0.50, 1.55)));
+        if (u.nose[2] > 0.001) {
+            float m_cb2 = 0.5 - 0.168736 * col.r - 0.331264 * col.g + 0.5 * col.b;
+            float m_cr2 = 0.5 + 0.5 * col.r - 0.418688 * col.g - 0.081312 * col.b;
+            float sk2 = smoothstep(0.27, 0.31, m_cb2) * (1.0 - smoothstep(0.45, 0.50, m_cb2))
+                      * smoothstep(0.50, 0.54, m_cr2) * (1.0 - smoothstep(0.66, 0.70, m_cr2));
+            col = mix(col, col * (0.75 + 0.5 * float3(u.blushc[0], u.blushc[1], u.blushc[2])),
+                      band * u.nose[2] * mask * sk2 * 0.50);
+        }
+        if (u.nose[3] > 0.001) {
+            float2 cell = floor(nb * 6.0);
+            float2 fr2  = fract(nb * 6.0);
+            float h1 = fract(sin(dot(cell, float2(127.1, 311.7))) * 43758.5453);
+            float2 jit = fract(sin(float2(dot(cell, float2(269.5, 183.3)),
+                                          dot(cell, float2(419.2, 371.9)))) * 43758.5453);
+            float fd = length(fr2 - 0.30 - jit * 0.40);
+            float rsz  = 0.11 + 0.10 * fract(h1 * 7.31);
+            float dotm = (1.0 - smoothstep(rsz * 0.4, rsz + 0.06, fd)) * step(0.45, h1);
+            float op   = 0.35 + 0.30 * fract(h1 * 13.7);
+            col = mix(col, col * float3(0.74, 0.55, 0.45),
+                      dotm * band * u.nose[3] * mask * op);
+        }
+    }
+    if (u.makeup[1] > 0.001) {                         // lip tint (polygon mask)
+        int crossings = 0;
+        float dmin = 1e9;
+        for (int i = 0; i < 12; ++i) {
+            float2 a2 = float2(u.lippoly[i*2], u.lippoly[i*2+1]);
+            int j = (i == 11) ? 0 : i + 1;
+            float2 b2 = float2(u.lippoly[j*2], u.lippoly[j*2+1]);
+            if ((a2.y > p.y) != (b2.y > p.y)) {
+                float xin = a2.x + (p.y - a2.y) * (b2.x - a2.x) / (b2.y - a2.y);
+                if (p.x < xin) crossings++;
+            }
+            dmin = min(dmin, f_seg(p, a2, b2));
+        }
+        float inside  = float((crossings & 1) == 1);
+        float feather = max(u.mouthax[1] * 0.30, 1.5);
+        float lm2 = inside * smoothstep(0.0, feather * 0.8, dmin);
+        float2 md = p - mouth;
+        float la = dot(md, rightv) / max(u.mouthax[0], 1.0);
+        float lb = dot(md, upv)    / max(u.mouthax[1], 1.0);
+        float grad = 1.0 - 0.55 * u.makeup[2] * smoothstep(0.25, 1.0, length(float2(la, lb)));
+        float deep  = inside * smoothstep(feather, feather * 2.2, dmin);
+        float lippy = max(smoothstep(0.03, 0.12, col.r - col.g), deep);
+        float t = u.makeup[1] * lm2 * grad * lippy;
+        float3 lip_target = float3(u.lipc[0], u.lipc[1], u.lipc[2]) * (0.30 + 1.05 * f_lum(col));
+        col = mix(col, clamp(lip_target, 0.0, 1.0), t * 0.85);
+    }
+    if (u.cyber[0] + u.cyber[1] + u.cyber[2] + u.cyber[3] > 0.001) {   // cyber layer
+        float lm3 = f_lum(col);
+        float3 tintc = float3(u.tintc[0], u.tintc[1], u.tintc[2]);
+        col = mix(col, float3(lm3), u.cyber[1] * mask);
+        col = mix(col, tintc * (0.15 + 1.1 * lm3), u.cyber[0] * mask);
+        if (u.cyber[2] > 0.001) {
+            float3 crm = clamp((col - 0.5) * 2.2 + 0.5, 0.0, 1.0);
+            crm += smoothstep(0.75, 0.98, lm3) * 0.25;
+            col = mix(col, crm, u.cyber[2] * mask);
+        }
+        if (u.cyber[3] > 0.001) {
+            float sl = 0.5 + 0.5 * sin(p.y * 1.4);
+            col *= 1.0 - u.cyber[3] * mask * 0.35 * smoothstep(0.55, 0.95, sl);
+            col += tintc * u.cyber[3] * mask * 0.06 * (1.0 - sl);
+        }
+    }
+    if (u.lash[0] + u.lash[2] > 0.001) {               // lashes + liner + wing
+        float3 ink = float3(0.04, 0.03, 0.04);
+        for (int side = 0; side < 2; ++side) {
+            float bfade = 1.0 - 0.9 * smoothstep(0.25, 0.55,
+                                    side == 0 ? u.blink[0] : u.blink[1]);
+            float2 outc = side == 0 ? float2(u.eyeout[0], u.eyeout[1])
+                                    : float2(u.eyeout[2], u.eyeout[3]);
+            float dmin2 = 1e9; float tbest = 0.0;
+            for (int i = 0; i < 6; ++i) {
+                float2 a3 = side == 0 ? float2(u.lidL[i*2],     u.lidL[i*2+1])
+                                      : float2(u.lidR[i*2],     u.lidR[i*2+1]);
+                float2 b3 = side == 0 ? float2(u.lidL[(i+1)*2], u.lidL[(i+1)*2+1])
+                                      : float2(u.lidR[(i+1)*2], u.lidR[(i+1)*2+1]);
+                float2 e3 = b3 - a3;
+                float ts = clamp(dot(p - a3, e3) / max(dot(e3, e3), 1e-4), 0.0, 1.0);
+                float dd = length(p - (a3 + e3 * ts));
+                if (dd < dmin2) { dmin2 = dd; tbest = (float(i) + ts) / 6.0; }
+            }
+            float above = dot(p - outc, upv);
+            float taper = 1.0 - tbest * 0.6;
+            if (u.lash[2] > 0.001) {
+                float lt = er * 0.055 * taper;
+                float line = 1.0 - smoothstep(lt * 0.5, lt, dmin2);
+                col = mix(col, ink, line * u.lash[2] * 0.95 * bfade);
+            }
+            if (u.lash[0] > 0.001) {
+                float bt = er * 0.16 * taper;
+                float band = (1.0 - smoothstep(bt * 0.35, bt, dmin2))
+                           * smoothstep(-er * 0.05, er * 0.10, above);
+                col = mix(col, col * 0.30, band * u.lash[0] * 0.75 * bfade);
+            }
+            if (u.lash[1] > 0.001) {
+                float2 inc = side == 0 ? float2(u.lidL[12], u.lidL[13])
+                                       : float2(u.lidR[12], u.lidR[13]);
+                float2 outdir = normalize(outc - inc);
+                float2 w1 = outc + (outdir * 0.80 + upv * 0.35) * er * u.lash[1];
+                float wd = f_seg(p, outc, w1);
+                float along = clamp(dot(p - outc, w1 - outc) /
+                                    max(dot(w1 - outc, w1 - outc), 1e-4), 0.0, 1.0);
+                float wt = mix(er * 0.10, er * 0.015, along);
+                float wing = 1.0 - smoothstep(wt * 0.4, wt, wd);
+                col = mix(col, ink, wing * max(u.lash[0], u.lash[2]) * 0.92 * bfade);
+            }
+        }
+    }
+    if (u.eyeglow[3] > 0.001) {                        // eye glow halo
+        float gL = 1.0 - smoothstep(er * 0.3, er * 1.6, distance(p, eyeL));
+        float gR = 1.0 - smoothstep(er * 0.3, er * 1.6, distance(p, eyeR));
+        col += float3(u.eyeglow[0], u.eyeglow[1], u.eyeglow[2])
+             * (u.eyeglow[3] * 0.55 * max(gL, gR));
+    }
+    return float4(clamp(col, 0.0, 1.0), c0.a);
+}
+
+// ── UV-mapped makeup mesh (tracked 478-pt mesh × authored makeup PNG) ────────
+struct FaceMkUni { float dim[2]; float opacity; float adapt;
+                   float eyes[4]; float blink[2]; float eye_r; float pad0; };
+struct MkVOut { float4 pos [[position]]; float2 mkuv; float2 srcuv; };
+vertex MkVOut face_mk_v(uint vid [[vertex_id]],
+                        device const float4* vtx [[buffer(0)]],
+                        constant FaceMkUni& u [[buffer(1)]]) {
+    float4 v = vtx[vid];                 // px.xy, uv.xy
+    MkVOut o;
+    o.mkuv  = v.zw;
+    o.srcuv = v.xy / float2(u.dim[0], u.dim[1]);
+    // Framebuffer Y-down vs NDC Y-up: flip so texture-space px land upright.
+    o.pos = float4(o.srcuv.x * 2.0 - 1.0, 1.0 - o.srcuv.y * 2.0, 0.0, 1.0);
+    return o;
+}
+fragment float4 face_mk_f(MkVOut in [[stage_in]], constant FaceMkUni& u [[buffer(0)]],
+                          texture2d<float> mk  [[texture(0)]],
+                          texture2d<float> srct [[texture(1)]]) {
+    constexpr sampler s(mag_filter::linear, min_filter::linear, address::clamp_to_edge);
+    float4 mkc  = mk.sample(s, in.mkuv);
+    float3 base = srct.sample(s, in.srcuv).rgb;
+    float2 ppx = in.srcuv * float2(u.dim[0], u.dim[1]);
+    float er2 = max(u.eye_r, 1.0);
+    float nearL = 1.0 - smoothstep(er2 * 0.8, er2 * 2.2, distance(ppx, float2(u.eyes[0], u.eyes[1])));
+    float nearR = 1.0 - smoothstep(er2 * 0.8, er2 * 2.2, distance(ppx, float2(u.eyes[2], u.eyes[3])));
+    float bfade = 1.0 - 0.9 * max(nearL * smoothstep(0.25, 0.55, u.blink[0]),
+                                  nearR * smoothstep(0.25, 0.55, u.blink[1]));
+    float mka = mkc.a * bfade;
+    float bl  = f_lum(base);
+    float3 tint = base / max(bl, 0.04);
+    float3 lit  = mkc.rgb
+                * mix(float3(1.0), clamp(tint, 0.55, 1.6), u.adapt * 0.65)
+                * mix(1.0, clamp(bl * 1.9, 0.20, 1.45), u.adapt * 0.85);
+    return float4(mix(base, clamp(lit, 0.0, 1.0), mka * u.opacity), 1.0);
 }
 )";
 
@@ -389,7 +717,8 @@ static bool g_manifest_loaded = false;
 struct LiveFx { std::string fx_type; float amount = 1.0f; float start = -1e30f, end = 1e30f;
                 std::map<std::string, float> params;
                 std::string body_fx_type;           // fx_type == "body_fx" only
-                int         body_pass = -1; };      // index into the body pass table, -1 unknown
+                int         body_pass = -1;         // index into the body pass table, -1 unknown
+                std::string face_makeup_tex; };     // fx_type == "face_fx": UV makeup PNG name
 static std::vector<LiveFx> g_stack;
 static std::mutex          g_stack_mu;
 static double              g_content_time = 0.0;   // timeline time of the current frame (for FX windowing)
@@ -455,11 +784,12 @@ static BodyUniCPU body_uniforms(const LiveFx& fx, int w, int h, double t) {
 // (track<<12)|clip, the per-track bus uses -(track+16), the single-content
 // (camera) path uses -2. Entries untouched for kChromaGCFrames frames are
 // dropped (clip deleted / stack changed) so textures don't leak.
-enum { kChromaMelt = 0, kChromaEcho = 1, kChromaFrame = 2, kChromaPassCount = 3 };
+enum { kChromaMelt = 0, kChromaEcho = 1, kChromaFrame = 2, kChromaPassCount = 3,
+       kChromaSnapshot = 3, kChromaPsoCount = 4 };   // snapshot = internal helper pass
 enum { kChromaRingLayers = 8, kChromaGCFrames = 600 };
-static const char* const kChromaEntry[kChromaPassCount] =
-    { "chroma_melt_f", "chroma_echo_f", "chroma_frame_f" };
-static id<MTLRenderPipelineState> g_chroma_pso[kChromaPassCount] = { nil, nil, nil };
+static const char* const kChromaEntry[kChromaPsoCount] =
+    { "chroma_melt_f", "chroma_echo_f", "chroma_frame_f", "chroma_snapshot_f" };
+static id<MTLRenderPipelineState> g_chroma_pso[kChromaPsoCount] = { nil, nil, nil, nil };
 static bool g_chroma_tried = false;
 
 static int chroma_pass_index(const std::string& fx_type) {
@@ -471,7 +801,7 @@ static int chroma_pass_index(const std::string& fx_type) {
 
 // Byte-for-byte mirror of the MSL ChromaUni (plain floats).
 struct ChromaUniCPU { float key_r, key_g, key_b, threshold,
-                            persist, head, ntaps, falloff, tw, th; };
+                            persist, head, ntaps, falloff, tw, th, matte_key; };
 
 struct ChromaFbState {
     id<MTLTexture> feedback = nil;      // melt/echo: previous pass output
@@ -497,9 +827,11 @@ static float chroma_param(const LiveFx& fx, const char* name, float def) {
     return it != fx.params.end() ? it->second : def;
 }
 
-// Defaults mirror the Clip field initializers in app.h.
+// Defaults mirror the Clip field initializers in app.h. `matte_key` is a
+// live-stack-only param (record mode): 1 = the person matte is the key.
 static ChromaUniCPU chroma_uniforms(const LiveFx& fx, int pass, int w, int h) {
-    ChromaUniCPU u = { 0, 1, 0, 0.30f, 0, 0, 0, 0, (float)w, (float)h };
+    ChromaUniCPU u = { 0, 1, 0, 0.30f, 0, 0, 0, 0, (float)w, (float)h,
+                       chroma_param(fx, "matte_key", 0.f) };
     switch (pass) {
         case kChromaMelt:
             u.key_r     = chroma_param(fx, "chroma_melt_r", 0.f);
@@ -525,6 +857,123 @@ static ChromaUniCPU chroma_uniforms(const LiveFx& fx, int pass, int w, int h) {
             break;
     }
     return u;
+}
+
+// ── Face FX (makeup looks — stateless passes over live FaceObs) ─────────────
+enum { kFaceWarp = 0, kFaceBeauty = 1, kFaceMesh = 2, kFacePsoCount = 3 };
+static id<MTLRenderPipelineState> g_face_pso[kFacePsoCount] = { nil, nil, nil };
+static bool g_face_tried = false;
+
+// CPU mirrors of the MSL uniform structs (plain floats — layouts match).
+struct FaceWarpUniCPU { float n, aspect, pad0, pad1; float ba[48]; float bb[48]; };
+struct FaceBeautyUniCPU {
+    float dim[2]; float up[2];
+    float face[4]; float eyes[4]; float feat[4]; float amt[4]; float makeup[4];
+    float cheeks[4]; float blushc[4]; float lipc[4]; float eyeglow[4];
+    float cyber[4]; float tintc[4]; float mouthax[4];
+    float lippoly[24];
+    float nose[4]; float lash[4]; float chin[4]; float eyeout[4];
+    float lidL[14]; float lidR[14];
+    float brow_r; float pad0; float blink[2];
+};
+struct FaceMkUniCPU { float dim[2]; float opacity, adapt;
+                      float eyes[4]; float blink[2]; float eye_r, pad0; };
+
+// Makeup PNGs (models/face/, canonical-UV space) → RGBA8 textures, by name.
+static std::map<std::string, id<MTLTexture>> g_face_mk_tex;
+
+static id<MTLTexture> face_makeup_texture(const char* name) {
+    auto it = g_face_mk_tex.find(name);
+    if (it != g_face_mk_tex.end()) return it->second;
+    std::string path = app_models_dir() + "/face/" + name;
+    int w = 0, h = 0, n = 0;
+    unsigned char* rgba = stbi_load(path.c_str(), &w, &h, &n, 4);
+    id<MTLTexture> tex = nil;
+    if (rgba && w > 0 && h > 0) {
+        MTLTextureDescriptor* td = [MTLTextureDescriptor
+            texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
+            width:w height:h mipmapped:NO];
+        td.usage = MTLTextureUsageShaderRead;
+        tex = [g_dev newTextureWithDescriptor:td];
+        [tex replaceRegion:MTLRegionMake2D(0, 0, w, h) mipmapLevel:0
+                 withBytes:rgba bytesPerRow:(NSUInteger)w * 4];
+    } else {
+        NSLog(@"[face_fx] makeup texture missing: %s", path.c_str());
+    }
+    if (rgba) stbi_image_free(rgba);
+    g_face_mk_tex[name] = tex;             // negative-cache misses too
+    return tex;
+}
+
+static id<MTLRenderPipelineState> get_face_pso(int which);   // after g_fs_v
+
+// Fill the beauty uniform from the plan's FaceBeautyParams (1:1 field map —
+// the GL path feeds the same values through glUniform calls).
+static FaceBeautyUniCPU face_beauty_uniforms(const FaceBeautyParams& p, int w, int h) {
+    FaceBeautyUniCPU u = {};
+    u.dim[0] = (float)w; u.dim[1] = (float)h;
+    u.up[0] = p.upx; u.up[1] = p.upy;
+    u.face[0] = p.face_cx; u.face[1] = p.face_cy; u.face[2] = p.face_rx; u.face[3] = p.face_ry;
+    u.eyes[0] = p.eyeL_x; u.eyes[1] = p.eyeL_y; u.eyes[2] = p.eyeR_x; u.eyes[3] = p.eyeR_y;
+    u.feat[0] = p.eye_r; u.feat[1] = p.mouth_x; u.feat[2] = p.mouth_y; u.feat[3] = p.mouth_r;
+    u.amt[0] = p.smooth; u.amt[1] = p.brighten; u.amt[2] = p.warmth; u.amt[3] = p.eye_pop;
+    u.makeup[0] = p.blush; u.makeup[1] = p.lip_tint; u.makeup[2] = p.lip_grad; u.makeup[3] = p.jaw_shade;
+    u.cheeks[0] = p.cheekL_x; u.cheeks[1] = p.cheekL_y; u.cheeks[2] = p.cheekR_x; u.cheeks[3] = p.cheekR_y;
+    for (int i = 0; i < 3; ++i) {
+        u.blushc[i] = p.blush_col[i]; u.lipc[i] = p.lip_col[i];
+        u.eyeglow[i] = p.eye_glow_col[i]; u.tintc[i] = p.tint_col[i];
+    }
+    u.eyeglow[3] = p.eye_glow;
+    u.cyber[0] = p.skin_tint; u.cyber[1] = p.desat; u.cyber[2] = p.chrome; u.cyber[3] = p.scanlines;
+    u.mouthax[0] = p.mouth_sw; u.mouthax[1] = p.mouth_sh;
+    for (int i = 0; i < 12; ++i) {
+        u.lippoly[i*2]   = p.lip_poly[i][0];
+        u.lippoly[i*2+1] = p.lip_poly[i][1];
+    }
+    u.nose[0] = p.nose_x; u.nose[1] = p.nose_y; u.nose[2] = p.nose_blush; u.nose[3] = p.freckles;
+    u.lash[0] = p.lash; u.lash[1] = p.lash_wing; u.lash[2] = p.liner;
+    u.chin[0] = p.chin_x; u.chin[1] = p.chin_y; u.chin[2] = p.chin_smooth;
+    u.eyeout[0] = p.eyeoutL_x; u.eyeout[1] = p.eyeoutL_y;
+    u.eyeout[2] = p.eyeoutR_x; u.eyeout[3] = p.eyeoutR_y;
+    for (int i = 0; i < 7; ++i) {
+        u.lidL[i*2] = p.lidL[i][0]; u.lidL[i*2+1] = p.lidL[i][1];
+        u.lidR[i*2] = p.lidR[i][0]; u.lidR[i*2+1] = p.lidR[i][1];
+    }
+    u.brow_r = p.brow_r;
+    u.blink[0] = p.blink_l; u.blink[1] = p.blink_r;
+    return u;
+}
+
+// A BeautyLook from a face_fx live entry: optional preset base (face_filter)
+// overlaid with per-field params — the Makeup Studio's custom looks arrive
+// exactly this way (no enum growth per look).
+static BeautyLook face_look_from(const LiveFx& fx) {
+    BeautyLook L{};
+    auto it = fx.params.find("face_filter");
+    if (it != fx.params.end() && (int)it->second > 0)
+        beauty_look_for((int)it->second, L);
+    auto ov = [&](const char* k, float& dst) {
+        auto p = fx.params.find(k);
+        if (p != fx.params.end()) dst = p->second;
+    };
+    ov("smooth", L.smooth); ov("brighten", L.brighten); ov("warmth", L.warmth);
+    ov("eye_pop", L.eye_pop); ov("blush", L.blush); ov("lip", L.lip);
+    ov("eyes", L.eyes); ov("cheek", L.cheek); ov("vline", L.vline);
+    ov("nose", L.nose); ov("lips_plump", L.lips_plump);
+    ov("lip_grad", L.lip_grad); ov("nose_blush", L.nose_blush);
+    ov("freckles", L.freckles); ov("jaw_shade", L.jaw_shade);
+    ov("chin_smooth", L.chin_smooth);
+    ov("lash", L.lash); ov("liner", L.liner); ov("lash_wing", L.lash_wing);
+    ov("blush_r", L.blush_col[0]); ov("blush_g", L.blush_col[1]); ov("blush_b", L.blush_col[2]);
+    ov("lip_r", L.lip_col[0]); ov("lip_g", L.lip_col[1]); ov("lip_b", L.lip_col[2]);
+    ov("blush_raise", L.blush_raise); ov("makeup_adapt", L.makeup_adapt);
+    ov("eye_glow", L.eye_glow);
+    ov("glow_r", L.eye_glow_col[0]); ov("glow_g", L.eye_glow_col[1]); ov("glow_b", L.eye_glow_col[2]);
+    ov("skin_tint", L.skin_tint);
+    ov("tint_r", L.tint_col[0]); ov("tint_g", L.tint_col[1]); ov("tint_b", L.tint_col[2]);
+    ov("desat", L.desat); ov("chrome", L.chrome); ov("scanlines", L.scanlines);
+    if (!fx.face_makeup_tex.empty()) L.makeup_tex = fx.face_makeup_tex.c_str();
+    return L;
 }
 
 struct FxProgram { id<MTLRenderPipelineState> pso = nil; const ManifestEntry* m = nullptr; bool tried = false; };
@@ -578,6 +1027,35 @@ static id<MTLRenderPipelineState> get_body_pso(int pass) {
     return (pass >= 0 && pass < kBodyPassCount) ? g_body_pso[pass] : nil;
 }
 
+// Lazily compile the face passes (warp / beauty fullscreen + the UV mesh
+// pipeline with its own vertex function).
+static id<MTLRenderPipelineState> get_face_pso(int which) {
+    if (!g_face_tried) {
+        g_face_tried = true;
+        if (g_dev && g_fs_v) {
+            NSError* err = nil;
+            id<MTLLibrary> lib = [g_dev newLibraryWithSource:kFaceSrc options:nil error:&err];
+            if (!lib) NSLog(@"[face_fx] library: %@", err);
+            if (lib) {
+                auto make = [&](int slot, NSString* frag, id<MTLFunction> vfn) {
+                    id<MTLFunction> f = [lib newFunctionWithName:frag];
+                    if (!f) { NSLog(@"[face_fx] %@ not found", frag); return; }
+                    MTLRenderPipelineDescriptor* rd = [MTLRenderPipelineDescriptor new];
+                    rd.vertexFunction = vfn; rd.fragmentFunction = f;
+                    rd.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
+                    g_face_pso[slot] = [g_dev newRenderPipelineStateWithDescriptor:rd error:&err];
+                    if (!g_face_pso[slot]) NSLog(@"[face_fx] %@ pso: %@", frag, err);
+                };
+                make(kFaceWarp,   @"face_warp_f",   g_fs_v);
+                make(kFaceBeauty, @"face_beauty_f", g_fs_v);
+                id<MTLFunction> mv = [lib newFunctionWithName:@"face_mk_v"];
+                if (mv) make(kFaceMesh, @"face_mk_f", mv);
+            }
+        }
+    }
+    return (which >= 0 && which < kFacePsoCount) ? g_face_pso[which] : nil;
+}
+
 // Lazily compile the three chroma passes (same pattern as the body passes).
 static id<MTLRenderPipelineState> get_chroma_pso(int pass) {
     if (!g_chroma_tried) {
@@ -586,7 +1064,7 @@ static id<MTLRenderPipelineState> get_chroma_pso(int pass) {
             NSError* err = nil;
             id<MTLLibrary> lib = [g_dev newLibraryWithSource:kChromaSrc options:nil error:&err];
             if (!lib) NSLog(@"[chroma_fx] library: %@", err);
-            for (int k = 0; lib && k < kChromaPassCount; ++k) {
+            for (int k = 0; lib && k < kChromaPsoCount; ++k) {
                 id<MTLFunction> frag = [lib newFunctionWithName:
                     [NSString stringWithUTF8String:kChromaEntry[k]]];
                 if (!frag) { NSLog(@"[chroma_fx] %s: function not found", kChromaEntry[k]); continue; }
@@ -598,7 +1076,7 @@ static id<MTLRenderPipelineState> get_chroma_pso(int pass) {
             }
         }
     }
-    return (pass >= 0 && pass < kChromaPassCount) ? g_chroma_pso[pass] : nil;
+    return (pass >= 0 && pass < kChromaPsoCount) ? g_chroma_pso[pass] : nil;
 }
 
 static NSString* shader_path(const char* name, const char* ext) {
@@ -730,6 +1208,142 @@ static id<MTLTexture> run_fx_stack(id<MTLCommandBuffer> cb, id<MTLTexture> src,
         const LiveFx& fx = stack[i];
         if (!(fx.start <= window_t && window_t < fx.end)) { set_status(i, "out_of_window"); continue; }
 
+        // ── face_fx: multi-pass makeup look (beauty → UV mesh → warp) ────────
+        // Fully self-encoded (its passes don't fit the shared single-pass
+        // encode below). Live camera only for now: obs comes from the face
+        // worker; layer chains report no_face until the take-cache port.
+        if (fx.fx_type == "face_fx") {
+            if (!face_track_available()) { set_status(i, "face_models_missing"); continue; }
+            FaceObs obs;
+            if (!face_track_latest(obs) || !obs.valid) { set_status(i, "no_face"); continue; }
+            id<MTLRenderPipelineState> warp_pso   = get_face_pso(kFaceWarp);
+            id<MTLRenderPipelineState> beauty_pso = get_face_pso(kFaceBeauty);
+            id<MTLRenderPipelineState> mesh_pso   = get_face_pso(kFaceMesh);
+            if (!warp_pso || !beauty_pso || !mesh_pso) {
+                set_status(i, "pso_failed"); if (result) result->pso_failed = true; continue;
+            }
+            BeautyLook look = face_look_from(fx);
+            float famt = 1.f;
+            { auto p = fx.params.find("face_amount"); if (p != fx.params.end()) famt = p->second; }
+            FaceRenderPlan plan;
+            if (!face_filter_build_plan_look(look, famt, obs, sw, sh, plan) || !plan.valid) {
+                set_status(i, "face_plan_empty"); continue;
+            }
+            // 1. beauty (skin + procedural makeup) — fullscreen.
+            if (plan.has_beauty) {
+                MTLRenderPassDescriptor* rp1 = [MTLRenderPassDescriptor new];
+                rp1.colorAttachments[0].texture     = ping[dst];
+                rp1.colorAttachments[0].loadAction  = MTLLoadActionDontCare;
+                rp1.colorAttachments[0].storeAction = MTLStoreActionStore;
+                id<MTLRenderCommandEncoder> e1 = [cb renderCommandEncoderWithDescriptor:rp1];
+                [e1 setRenderPipelineState:beauty_pso];
+                FaceBeautyUniCPU bu = face_beauty_uniforms(plan.beauty, sw, sh);
+                [e1 setFragmentBytes:&bu length:sizeof(bu) atIndex:0];
+                [e1 setFragmentTexture:cur atIndex:0];
+                [e1 drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+                [e1 endEncoding];
+                cur = ping[dst]; dst ^= 1;
+            }
+            // 2. UV-mapped makeup texture over the tracked mesh (pre-warp so
+            //    pigment deforms with the skin). Base copy + mesh on top.
+            id<MTLTexture> mk = plan.makeup_tex ? face_makeup_texture(plan.makeup_tex) : nil;
+            if (mk) {
+                id<MTLTexture> target = ping[dst];
+                id<MTLBlitCommandEncoder> bl = [cb blitCommandEncoder];
+                [bl copyFromTexture:cur sourceSlice:0 sourceLevel:0
+                       sourceOrigin:MTLOriginMake(0, 0, 0)
+                         sourceSize:MTLSizeMake(sw, sh, 1)
+                          toTexture:target destinationSlice:0
+                   destinationLevel:0 destinationOrigin:MTLOriginMake(0, 0, 0)];
+                [bl endEncoding];
+                // Vertex buffer: landmark px + canonical UV; index buffer with
+                // fold-culled triangles (majority-winding rule, GL parity).
+                static float vtx[FACE_UV_NPTS * 4];
+                for (int k = 0; k < FACE_UV_NPTS; ++k) {
+                    vtx[k*4+0] = plan.mesh_pts[k][0];
+                    vtx[k*4+1] = plan.mesh_pts[k][1];
+                    vtx[k*4+2] = k_face_uv[k][0];
+                    vtx[k*4+3] = k_face_uv[k][1];
+                }
+                static unsigned short live_tris[FACE_UV_NTRI * 3];
+                static float sa[FACE_UV_NTRI];
+                int n_live = 0, n_pos = 0;
+                for (int t2 = 0; t2 < FACE_UV_NTRI; ++t2) {
+                    const unsigned short* tr = k_face_tris[t2];
+                    float ax = plan.mesh_pts[tr[1]][0] - plan.mesh_pts[tr[0]][0];
+                    float ay = plan.mesh_pts[tr[1]][1] - plan.mesh_pts[tr[0]][1];
+                    float bx2 = plan.mesh_pts[tr[2]][0] - plan.mesh_pts[tr[0]][0];
+                    float by2 = plan.mesh_pts[tr[2]][1] - plan.mesh_pts[tr[0]][1];
+                    sa[t2] = ax * by2 - ay * bx2;
+                    if (sa[t2] > 0.f) ++n_pos;
+                }
+                bool front_pos = n_pos * 2 >= FACE_UV_NTRI;
+                for (int t2 = 0; t2 < FACE_UV_NTRI; ++t2) {
+                    if ((sa[t2] > 0.f) != front_pos) continue;
+                    live_tris[n_live*3+0] = k_face_tris[t2][0];
+                    live_tris[n_live*3+1] = k_face_tris[t2][1];
+                    live_tris[n_live*3+2] = k_face_tris[t2][2];
+                    ++n_live;
+                }
+                if (n_live > 0) {
+                    id<MTLBuffer> vb = [g_dev newBufferWithBytes:vtx length:sizeof(vtx)
+                                                         options:MTLResourceStorageModeShared];
+                    id<MTLBuffer> ib = [g_dev newBufferWithBytes:live_tris
+                                                          length:(NSUInteger)n_live * 3 * sizeof(unsigned short)
+                                                         options:MTLResourceStorageModeShared];
+                    FaceMkUniCPU mu = {};
+                    mu.dim[0] = (float)sw; mu.dim[1] = (float)sh;
+                    mu.opacity = plan.makeup_opacity; mu.adapt = plan.makeup_adapt;
+                    mu.eyes[0] = plan.beauty.eyeL_x; mu.eyes[1] = plan.beauty.eyeL_y;
+                    mu.eyes[2] = plan.beauty.eyeR_x; mu.eyes[3] = plan.beauty.eyeR_y;
+                    mu.blink[0] = plan.beauty.blink_l; mu.blink[1] = plan.beauty.blink_r;
+                    mu.eye_r = plan.beauty.eye_r;
+                    MTLRenderPassDescriptor* rp2 = [MTLRenderPassDescriptor new];
+                    rp2.colorAttachments[0].texture     = target;
+                    rp2.colorAttachments[0].loadAction  = MTLLoadActionLoad;
+                    rp2.colorAttachments[0].storeAction = MTLStoreActionStore;
+                    id<MTLRenderCommandEncoder> e2 = [cb renderCommandEncoderWithDescriptor:rp2];
+                    [e2 setRenderPipelineState:mesh_pso];
+                    [e2 setVertexBuffer:vb offset:0 atIndex:0];
+                    [e2 setVertexBytes:&mu length:sizeof(mu) atIndex:1];
+                    [e2 setFragmentBytes:&mu length:sizeof(mu) atIndex:0];
+                    [e2 setFragmentTexture:mk atIndex:0];
+                    [e2 setFragmentTexture:cur atIndex:1];
+                    [e2 drawIndexedPrimitives:MTLPrimitiveTypeTriangle
+                                   indexCount:(NSUInteger)n_live * 3
+                                    indexType:MTLIndexTypeUInt16
+                                  indexBuffer:ib indexBufferOffset:0];
+                    [e2 endEncoding];
+                }
+                cur = target; dst ^= 1;
+            }
+            // 3. shape warp — fullscreen, last so it deforms skin + pigment.
+            if (plan.n_bumps > 0) {
+                FaceWarpUniCPU wu = {};
+                wu.n = (float)std::min(plan.n_bumps, 12);
+                wu.aspect = (float)sw / (float)sh;
+                for (int k = 0; k < plan.n_bumps && k < 12; ++k) {
+                    wu.ba[k*4+0] = plan.bumps[k].cx;  wu.ba[k*4+1] = plan.bumps[k].cy;
+                    wu.ba[k*4+2] = plan.bumps[k].radius; wu.ba[k*4+3] = plan.bumps[k].scale;
+                    wu.bb[k*4+0] = plan.bumps[k].dx;  wu.bb[k*4+1] = plan.bumps[k].dy;
+                }
+                MTLRenderPassDescriptor* rp3 = [MTLRenderPassDescriptor new];
+                rp3.colorAttachments[0].texture     = ping[dst];
+                rp3.colorAttachments[0].loadAction  = MTLLoadActionDontCare;
+                rp3.colorAttachments[0].storeAction = MTLStoreActionStore;
+                id<MTLRenderCommandEncoder> e3 = [cb renderCommandEncoderWithDescriptor:rp3];
+                [e3 setRenderPipelineState:warp_pso];
+                [e3 setFragmentBytes:&wu length:sizeof(wu) atIndex:0];
+                [e3 setFragmentTexture:cur atIndex:0];
+                [e3 drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+                [e3 endEncoding];
+                cur = ping[dst]; dst ^= 1;
+            }
+            set_status(i, "applied");
+            if (result) result->applied++;
+            continue;
+        }
+
         id<MTLRenderPipelineState> pso = nil;
         const ManifestEntry* mf = nullptr;
         ChromaFbState* cst = nullptr;                 // chroma feedback entry
@@ -738,6 +1352,10 @@ static id<MTLTexture> run_fx_stack(id<MTLCommandBuffer> cb, id<MTLTexture> src,
         if (!is_body && chroma_pass >= 0) {
             pso = get_chroma_pso(chroma_pass);
             if (!pso) { set_status(i, "pso_failed"); if (result) result->pso_failed = true; continue; }
+            // matte_key = 1 keys on the person matte (selfie mode) — requires one.
+            if (chroma_param(fx, "matte_key", 0.f) > 0.5f && !matte) {
+                set_status(i, "no_matte"); continue;
+            }
             cst = &g_chroma_fb[{chain_id, (int)i, fx.fx_type}];
             cst->last_used = g_frame_serial;
             if (cst->w != sw || cst->h != sh) {       // (re)allocate state textures
@@ -770,13 +1388,32 @@ static id<MTLTexture> run_fx_stack(id<MTLCommandBuffer> cb, id<MTLTexture> src,
                     cst->head = (cst->head + 1) % kChromaRingLayers;
                     if (cst->count < kChromaRingLayers) cst->count++;
                     cst->last_t = window_t;
-                    id<MTLBlitCommandEncoder> bl = [cb blitCommandEncoder];
-                    [bl copyFromTexture:cur sourceSlice:0 sourceLevel:0
-                           sourceOrigin:MTLOriginMake(0, 0, 0)
-                             sourceSize:MTLSizeMake(sw, sh, 1)
-                              toTexture:cst->ring destinationSlice:cst->head
-                       destinationLevel:0 destinationOrigin:MTLOriginMake(0, 0, 0)];
-                    [bl endEncoding];
+                    bool matte_mode = chroma_param(fx, "matte_key", 0.f) > 0.5f && matte;
+                    id<MTLRenderPipelineState> snap =
+                        matte_mode ? get_chroma_pso(kChromaSnapshot) : nil;
+                    if (snap) {
+                        // Matte mode: pre-masked snapshot (rgb = frame,
+                        // a = subject matte) so taps composite only the subject.
+                        MTLRenderPassDescriptor* rs = [MTLRenderPassDescriptor new];
+                        rs.colorAttachments[0].texture     = cst->ring;
+                        rs.colorAttachments[0].slice       = cst->head;
+                        rs.colorAttachments[0].loadAction  = MTLLoadActionDontCare;
+                        rs.colorAttachments[0].storeAction = MTLStoreActionStore;
+                        id<MTLRenderCommandEncoder> es = [cb renderCommandEncoderWithDescriptor:rs];
+                        [es setRenderPipelineState:snap];
+                        [es setFragmentTexture:cur atIndex:0];
+                        [es setFragmentTexture:matte atIndex:1];
+                        [es drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+                        [es endEncoding];
+                    } else {
+                        id<MTLBlitCommandEncoder> bl = [cb blitCommandEncoder];
+                        [bl copyFromTexture:cur sourceSlice:0 sourceLevel:0
+                               sourceOrigin:MTLOriginMake(0, 0, 0)
+                                 sourceSize:MTLSizeMake(sw, sh, 1)
+                                  toTexture:cst->ring destinationSlice:cst->head
+                           destinationLevel:0 destinationOrigin:MTLOriginMake(0, 0, 0)];
+                        [bl endEncoding];
+                    }
                 }
             }
         } else if (is_body) {
@@ -818,6 +1455,9 @@ static id<MTLTexture> run_fx_stack(id<MTLCommandBuffer> cb, id<MTLTexture> src,
                 // frame instead (trail == cur, i.e. no ghost yet).
                 [e setFragmentTexture:(cst->primed ? cst->feedback : cur) atIndex:1];
             }
+            // texture(2) is statically referenced by the shader — bind cur as
+            // a harmless stand-in when no matte exists (colour-key mode).
+            [e setFragmentTexture:(matte ? matte : cur) atIndex:2];
             [e setFragmentBytes:&u length:sizeof(u) atIndex:0];
             [e setFragmentTexture:cur atIndex:0];
         } else if (is_body) {
@@ -888,6 +1528,8 @@ void metal_render_set_live_fx_stack(const char* json_utf8) {
                     fx.body_fx_type = e.value("body_fx_type", std::string());
                     fx.body_pass    = body_pass_index(fx.body_fx_type);
                 }
+                if (fx.fx_type == "face_fx")                   // makeup look
+                    fx.face_makeup_tex = e.value("face_makeup_tex", std::string());
                 if (e.contains("params") && e["params"].is_object())
                     for (auto it = e["params"].begin(); it != e["params"].end(); ++it)
                         if (it.value().is_number()) fx.params[it.key()] = it.value().get<float>();
@@ -1103,6 +1745,42 @@ void metal_render_submit_layer(int track, int clip, void* cv_pixel_buffer_bgra,
         g_scene_clock = host_time_seconds;
         g_scene_clock_valid = true;
     }
+}
+
+// Camera → face-tracker side-feed: stride-2 BGRA→RGB copy to the worker,
+// gated by face_feed_enabled() so plain recording pays nothing.
+void metal_render_face_feed(void* cv_pixel_buffer_bgra) {
+    if (!cv_pixel_buffer_bgra || !face_feed_enabled()) return;
+    CVPixelBufferRef pb = (CVPixelBufferRef)cv_pixel_buffer_bgra;
+    if (CVPixelBufferGetPixelFormatType(pb) != kCVPixelFormatType_32BGRA) return;
+    if (CVPixelBufferLockBaseAddress(pb, kCVPixelBufferLock_ReadOnly) != kCVReturnSuccess) return;
+    const uint8_t* base = (const uint8_t*)CVPixelBufferGetBaseAddress(pb);
+    const size_t   bpr  = CVPixelBufferGetBytesPerRow(pb);
+    const int fw = (int)CVPixelBufferGetWidth(pb);
+    const int fh = (int)CVPixelBufferGetHeight(pb);
+    const int step = (fw > 720 || fh > 720) ? 2 : 1;   // 720x1280 → 360x640
+    const int dw = fw / step, dh = fh / step;
+    static thread_local std::vector<uint8_t> rgb;
+    rgb.resize((size_t)dw * dh * 3);
+    for (int y = 0; y < dh; ++y) {
+        const uint8_t* row = base + (size_t)y * step * bpr;
+        uint8_t* dst = rgb.data() + (size_t)y * dw * 3;
+        for (int x = 0; x < dw; ++x) {
+            const uint8_t* px = row + (size_t)x * step * 4;   // B G R A
+            dst[x*3+0] = px[2]; dst[x*3+1] = px[1]; dst[x*3+2] = px[0];
+        }
+    }
+    CVPixelBufferUnlockBaseAddress(pb, kCVPixelBufferLock_ReadOnly);
+    face_track_submit(rgb.data(), dw, dh);
+}
+
+// Drop every stored layer frame + invalidate the scene clock (record mode:
+// the camera path must not be shadowed by stale timeline frames).
+void metal_render_clear_layers(void) {
+    std::lock_guard<std::mutex> lk(g_content_mu);
+    for (auto& kv : g_layers) release_layer(kv.second);
+    g_layers.clear();
+    g_scene_clock_valid = false;
 }
 
 // Store the latest person matte — an R8 (OneComponent8) CVPixelBufferRef from
@@ -1763,12 +2441,17 @@ static int render_legacy(id<MTLCommandBuffer> cb, id<MTLTexture> target, int w, 
     { std::lock_guard<std::mutex> lk(g_stack_mu); stack = g_stack; }
     std::vector<std::string> statuses;
     int rc0 = 0;
+    // Background cutout only when the stack asks for it (Remove Background
+    // body entry). A matte may now be present for other consumers (matte-keyed
+    // chroma, body passes) — it must not remove the background by itself.
+    bool want_cutout = false;
     if (source && !stack.empty()) {
         FxRunResult rr;
         source = run_fx_stack(cb, source, sw, sh, /*chain_id=*/-2,
                               stack, t, g_content_time,
                               matte, &statuses, &rr);
         if (rr.pso_failed) rc0 = 4;
+        want_cutout = rr.matte_cutout;
     } else if (!stack.empty()) {
         statuses.assign(stack.size(), "no_content");
     }
@@ -1790,14 +2473,14 @@ static int render_legacy(id<MTLCommandBuffer> cb, id<MTLTexture> target, int w, 
         float ta = (float)w / (float)h, ca = (float)sw / (float)sh;
         float sx = ca > ta ? 1.0f : ca / ta, sy = ca > ta ? ta / ca : 1.0f;
         float half[2] = { sx, sy };
-        if (matte && !g_matte_pso) {
+        if (matte && want_cutout && !g_matte_pso) {
             // Matte requested but the composite pipeline failed to build — a
             // real error, not a silent skip. Blit plain and report it.
             static bool s_logged = false;
             if (!s_logged) { s_logged = true; NSLog(@"[metal_render] matte pso unavailable — compositing without matte"); }
             rc = 2;
         }
-        if (matte && g_matte_pso) {
+        if (matte && want_cutout && g_matte_pso) {
             // Background replacement: the engine background is already in the
             // target; blend the content over it with the person matte as alpha.
             [enc setRenderPipelineState:g_matte_pso];

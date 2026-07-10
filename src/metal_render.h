@@ -39,6 +39,16 @@ int  metal_render_frame(void* mtl_texture, int w, int h, double t,
 void metal_render_submit_layer(int track, int clip, void* cv_pixel_buffer_bgra,
                                int rotation_quarter_turns, double host_time_seconds);
 
+// Camera frame → face-tracker side-feed (stride-2 BGRA→RGB) when the
+// face_track_enable gate is on. No-op otherwise; called per camera frame.
+void metal_render_face_feed(void* cv_pixel_buffer_bgra);
+
+// Drop EVERY stored layer frame (and invalidate the scene clock). Record mode
+// calls this (clear_layer_frames command) so the renderer falls back to the
+// single-content camera path — stale timeline frames otherwise shadow the
+// live camera indefinitely. Thread-safe.
+void metal_render_clear_layers(void);
+
 // Set the ordered render-time FX stack the Metal backend applies to the current
 // frame — a JSON array [{"fx_type":str,"params":{name:num,...}}, ...] (the
 // set_live_fx payload). Cheap when unchanged; parses + rebuilds only on change.

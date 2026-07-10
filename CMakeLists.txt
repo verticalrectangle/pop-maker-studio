@@ -204,6 +204,14 @@ add_executable(engine-smoke tools/engine_smoke.cpp)
 target_link_libraries(engine-smoke PRIVATE pms-engine)
 target_include_directories(engine-smoke PRIVATE src ${CMAKE_SOURCE_DIR}/vendor)
 
+# face-smoke: functional gate for the face-tracking stack (MAKEUP_PLAN Stage 1)
+# — loads assets/test_face.png and runs the real YuNet → landmarks →
+# blendshapes pipeline through face_track_run_sync. Requires models/face/*
+# (tools/fetch_face_models.py).
+add_executable(face-smoke tools/face_smoke.cpp)
+target_link_libraries(face-smoke PRIVATE pms-engine)
+target_include_directories(face-smoke PRIVATE src ${CMAKE_SOURCE_DIR}/vendor)
+
 # metal-render-test: numeric offscreen assertions for the Metal scene
 # compositor + FX runner (the iOS render path) on a macOS host GPU. Drives the
 # real C ABI (pms_create/pms_command/pms_submit_layer_frame/pms_render) and

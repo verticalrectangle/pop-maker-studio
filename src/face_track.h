@@ -48,6 +48,12 @@ bool face_track_available();  // models found (models/face/*.onnx)
 void face_track_submit(const uint8_t* rgb, int w, int h);
 bool face_track_latest(FaceObs& out);
 
+// Camera side-feed gate (iOS record mode): pms_submit_camera_frame only
+// converts + submits frames to the face worker while this is on, so plain
+// recording pays nothing. Toggled by the face_track_enable command.
+void face_feed_enable(bool on);
+bool face_feed_enabled();
+
 // Synchronous single-frame run (take analysis pass) — no smoothing.
 bool face_track_run_sync(const uint8_t* rgb, int w, int h, FaceObs& out);
 

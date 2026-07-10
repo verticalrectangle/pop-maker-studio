@@ -92,14 +92,19 @@ void pms_render_wait(pms_engine*) {
     metal_render_wait();
 #endif
 }
-void pms_submit_camera_frame(pms_engine*, void* cv_pixel_buffer, int, double host_time) {
+void pms_submit_camera_frame(pms_engine*, void* cv_pixel_buffer, int rotation, double host_time) {
 #if defined(__APPLE__)
     // Feed the AVFoundation frame straight to the Metal compositor. host_time is
     // the frame's timeline position, used to window FX to their brick spans.
     metal_render_submit_pixelbuffer(cv_pixel_buffer);
     metal_render_set_content_time(host_time);
+    // Face side-feed (record-mode makeup filters) — conversion + gating live
+    // in metal_render.mm (CoreVideo there; CarbonCore's Marker collides with
+    // the engine's in plain C++ TUs). Upright frames only.
+    if (cv_pixel_buffer && rotation == 0)
+        metal_render_face_feed(cv_pixel_buffer);
 #else
-    (void)cv_pixel_buffer; (void)host_time;
+    (void)cv_pixel_buffer; (void)rotation; (void)host_time;
 #endif
 }
 void pms_submit_person_matte(pms_engine*, void* cv_pixel_buffer_r8, double host_time) {
