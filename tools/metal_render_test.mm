@@ -577,6 +577,92 @@ static void case_wet_dry(CVPixelBufferRef checker) {
           std::to_string(d_full) + ") — wet/dry blend not running");
 }
 
+// k. Legacy hand-wired FX (fx_shader.cpp family) — Metal ports transpiled from
+// shaders/legacy/*.glsl. Each must resolve a PSO, report applied, and visibly
+// change the frame at deliberately non-identity params.
+static void case_legacy_fx(CVPixelBufferRef gradient, CVPixelBufferRef green,
+                           CVPixelBufferRef checker) {
+    const std::string C = "k.legacy_fx";
+    struct LegacyCase { const char* id; json params; CVPixelBufferRef content; };
+    const LegacyCase cases[] = {
+        {"grade",      {{"brightness", 0.4}, {"contrast", 1.0}, {"saturation", 1.0}, {"hue", 0.0}}, gradient},
+        // Checker, not gradient: a symmetric blur of a linear ramp is identity.
+        {"blur",       {{"blur", 10.0}}, checker},
+        {"vignette",   {{"vignette", 0.9}}, gradient},
+        {"glitch",     {{"glitch_chroma", 15.0}, {"glitch_jitter", 0.8},
+                        {"glitch_corruption", 0.6}, {"glitch_corruption_bleed", 0.0}}, gradient},
+        {"vhs",        {{"vhs_noise", 0.8}, {"vhs_bleed", 15.0}, {"vhs_tracking", 0.8}}, gradient},
+        {"light_leak", {{"leak_intensity", 1.0}, {"leak_speed", 1.0}}, gradient},
+        {"datamosh",   {{"datamosh_intensity", 1.0}, {"datamosh_spread", 1.0}}, gradient},
+        // Green content + green key → the layer keys out entirely.
+        {"chroma_key", {{"chroma_key_r", 0.0}, {"chroma_key_g", 1.0}, {"chroma_key_b", 0.0},
+                        {"chroma_key_threshold", 0.30}, {"chroma_key_softness", 0.15}}, green},
+    };
+    std::vector<std::string> failed, unchanged;
+    for (const auto& lc : cases) {
+        const std::string CC = C + "." + lc.id;
+        build_video_project(CC);
+        submit_layer(0, 0, lc.content, 1.0);
+        Img base = render_frame(CC + ".base");
+        cmd(CC, "add_effect_brick",
+            {{"track", 0}, {"fx_type", lc.id}, {"start", 0.0}, {"end", 4.0},
+             {"params", lc.params}});
+        Img fx = render_frame(CC);
+        json d = fx_debug(CC);
+        if (d["scene"].value("glass_applied", 0) < 1)
+            failed.push_back(std::string(lc.id) + " → " +
+                             d["scene"].value("notes", json::array()).dump());
+        else if (frac_diff(fx, base, 4) < 0.01)
+            unchanged.push_back(lc.id);
+        clear_layer(0, 0);
+    }
+    if (!failed.empty()) {
+        std::string s; for (auto& f : failed) s += "\n    " + f;
+        fail(C, "legacy FX did not apply:" + s);
+    }
+    if (!unchanged.empty()) {
+        std::string s; for (auto& u : unchanged) s += u + " ";
+        fail(C, "legacy FX applied but changed no pixels: " + s);
+    }
+    printf("  [k] %zu legacy FX applied with visible effect\n",
+           sizeof(cases) / sizeof(cases[0]));
+}
+
+// l. Chroma feedback family — temporal state must survive across frames:
+// stamp a non-keyed subject into the feedback/ring, then feed pure key-color
+// content; the ghost of the subject must still be visible (a stateless pass
+// would render the two key-color frames identically).
+static void case_chroma_feedback(CVPixelBufferRef green, CVPixelBufferRef gradient) {
+    const std::string C = "l.chroma_feedback";
+    const char* fxs[] = {"chroma_melt", "chroma_echo", "chroma_frame"};
+    for (const char* fx : fxs) {
+        const std::string CC = C + "." + fx;
+        build_video_project(CC);
+        cmd(CC, "add_effect_brick",
+            {{"track", 0}, {"fx_type", fx}, {"start", 0.0}, {"end", 8.0}});
+        // Baseline: key-color content with virgin state → plain green out.
+        submit_layer(0, 0, green, 0.10);
+        Img base = render_frame(CC + ".base");
+        json d = fx_debug(CC);
+        check(d["scene"].value("glass_applied", 0) >= 1, CC,
+              std::string("chroma pass did not apply; scene=") + d["scene"].dump());
+        // Stamp the subject over several advancing-clock frames (chroma_frame
+        // snapshots its ring on the scene clock at `spacing` cadence).
+        submit_layer(0, 0, gradient, 0.30); (void)render_frame(CC + ".stamp1");
+        submit_layer(0, 0, gradient, 0.50); (void)render_frame(CC + ".stamp2");
+        submit_layer(0, 0, gradient, 0.70); (void)render_frame(CC + ".stamp3");
+        // Back to pure key color: the ghost must persist.
+        submit_layer(0, 0, green, 0.90);
+        Img ghost = render_frame(CC + ".ghost");
+        double diff = frac_diff(ghost, base, 8);
+        check(diff > 0.02, CC,
+              "no temporal ghost after content returned to the key color (diff frac=" +
+              std::to_string(diff) + ") — feedback state not persisting");
+        clear_layer(0, 0);
+    }
+    printf("  [l] chroma feedback family holds temporal state\n");
+}
+
 // ── Main ─────────────────────────────────────────────────────────────────────
 
 int main() {
@@ -627,6 +713,8 @@ int main() {
         case_bus_scope(gradient, yellow);
         case_wet_dry(checker);
         case_all_manifest_fx(checker);
+        case_legacy_fx(gradient, green, checker);
+        case_chroma_feedback(green, gradient);
 
         CVPixelBufferRelease(green);    CVPixelBufferRelease(gradient);
         CVPixelBufferRelease(red);      CVPixelBufferRelease(blue);

@@ -1,6 +1,6 @@
 {
   "_comment": "Pop Maker Studio — generated effects registry. Run tools/codegen_effects.py after changes.",
-  "project_version": 24,
+  "project_version": 25,
   "effects": [
     {
       "id": "pixelate",
@@ -4876,6 +4876,604 @@
       ],
       "amount_default": 0.9,
       "category": "Beauty"
+    },
+    {
+      "id": "porcelain_skin",
+      "enum": "PorcelainSkin",
+      "label": "Porcelain",
+      "abbrev": "PORC",
+      "color": [
+        255,
+        190,
+        200,
+        255
+      ],
+      "description": "Edge-aware skin smoothing  ·  brighten + even tone  ·  studio finish",
+      "shader": "shaders/porcelain_skin.glsl",
+      "params": [
+        {
+          "name": "smooth",
+          "label": "Smoothing",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 0.7,
+          "fmt": "%.2f",
+          "curve": 1.0
+        },
+        {
+          "name": "brighten",
+          "label": "Brighten",
+          "min": 0.0,
+          "max": 0.5,
+          "default": 0.15,
+          "fmt": "%.2f",
+          "curve": 1.0
+        },
+        {
+          "name": "warmth",
+          "label": "Warmth",
+          "min": -1.0,
+          "max": 1.0,
+          "default": 0.05,
+          "fmt": "%.2f",
+          "curve": 1.0
+        }
+      ],
+      "amount_default": 1.0,
+      "category": "Makeup",
+      "since_version": 25
+    },
+    {
+      "id": "blush_doll",
+      "enum": "BlushDoll",
+      "label": "Blush Doll",
+      "abbrev": "BLSH",
+      "color": [
+        255,
+        150,
+        180,
+        255
+      ],
+      "description": "Rosy blush wash + soft skin + doll-bright eyes  ·  peach or pink",
+      "shader": "shaders/blush_doll.glsl",
+      "params": [
+        {
+          "name": "blush",
+          "label": "Blush",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 0.5,
+          "fmt": "%.2f",
+          "curve": 1.0
+        },
+        {
+          "name": "smooth",
+          "label": "Smoothing",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 0.5,
+          "fmt": "%.2f",
+          "curve": 1.0
+        },
+        {
+          "name": "tint",
+          "label": "Peach ↔ Pink",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 0.5,
+          "fmt": "%.2f",
+          "curve": 1.0
+        }
+      ],
+      "amount_default": 1.0,
+      "category": "Makeup",
+      "since_version": 25
+    },
+    {
+      "id": "honey_glow",
+      "enum": "HoneyGlow",
+      "label": "Honey Glow",
+      "abbrev": "HONY",
+      "color": [
+        255,
+        200,
+        110,
+        255
+      ],
+      "description": "Golden-hour warmth  ·  soft bloom halo  ·  lifted warm shadows",
+      "shader": "shaders/honey_glow.glsl",
+      "params": [
+        {
+          "name": "glow",
+          "label": "Glow",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 0.6,
+          "fmt": "%.2f",
+          "curve": 1.0
+        },
+        {
+          "name": "warmth",
+          "label": "Warmth",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 0.5,
+          "fmt": "%.2f",
+          "curve": 1.0
+        },
+        {
+          "name": "lift",
+          "label": "Shadow Lift",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 0.3,
+          "fmt": "%.2f",
+          "curve": 1.0
+        }
+      ],
+      "amount_default": 1.0,
+      "category": "Makeup",
+      "since_version": 25
+    },
+    {
+      "id": "soft_glam",
+      "enum": "SoftGlam",
+      "label": "Soft Glam",
+      "abbrev": "GLAM",
+      "color": [
+        235,
+        170,
+        255,
+        255
+      ],
+      "description": "Evening glam  ·  teal/champagne split tone  ·  glitter speculars",
+      "shader": "shaders/soft_glam.glsl",
+      "params": [
+        {
+          "name": "glam",
+          "label": "Smoothing",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 0.6,
+          "fmt": "%.2f",
+          "curve": 1.0
+        },
+        {
+          "name": "split",
+          "label": "Split Tone",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 0.5,
+          "fmt": "%.2f",
+          "curve": 1.0
+        },
+        {
+          "name": "sparkle",
+          "label": "Sparkle",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 0.3,
+          "fmt": "%.2f",
+          "curve": 1.0
+        }
+      ],
+      "amount_default": 1.0,
+      "category": "Makeup",
+      "since_version": 25
+    },
+    {
+      "id": "acid_trip",
+      "enum": "AcidTrip",
+      "label": "Acid Trip",
+      "abbrev": "ACID",
+      "color": [
+        170,
+        255,
+        90,
+        255
+      ],
+      "description": "Luma-banded hue cycling + UV wobble  ·  iridescent drift",
+      "shader": "shaders/acid_trip.glsl",
+      "params": [
+        {
+          "name": "trip",
+          "label": "Trip Depth",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 0.6,
+          "fmt": "%.2f",
+          "curve": 1.0
+        },
+        {
+          "name": "speed",
+          "label": "Speed",
+          "min": 0.0,
+          "max": 4.0,
+          "default": 1.0,
+          "fmt": "%.2f",
+          "curve": 1.0
+        },
+        {
+          "name": "wobble",
+          "label": "Wobble",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 0.4,
+          "fmt": "%.2f",
+          "curve": 1.0
+        }
+      ],
+      "amount_default": 1.0,
+      "category": "Trippy",
+      "since_version": 25
+    },
+    {
+      "id": "liquid_marble",
+      "enum": "LiquidMarble",
+      "label": "Liquid Marble",
+      "abbrev": "MARB",
+      "color": [
+        130,
+        200,
+        255,
+        255
+      ],
+      "description": "Domain-warped ink flow  ·  wet marbled refraction",
+      "shader": "shaders/liquid_marble.glsl",
+      "params": [
+        {
+          "name": "flow",
+          "label": "Flow",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 0.5,
+          "fmt": "%.2f",
+          "curve": 1.0
+        },
+        {
+          "name": "scale",
+          "label": "Swirl Scale",
+          "min": 1.0,
+          "max": 10.0,
+          "default": 4.0,
+          "fmt": "%.1f",
+          "curve": 1.0
+        },
+        {
+          "name": "speed",
+          "label": "Speed",
+          "min": 0.0,
+          "max": 4.0,
+          "default": 1.0,
+          "fmt": "%.2f",
+          "curve": 1.0
+        }
+      ],
+      "amount_default": 1.0,
+      "category": "Trippy",
+      "since_version": 25
+    },
+    {
+      "id": "fractal_mirror",
+      "enum": "FractalMirror",
+      "label": "Fractal Mirror",
+      "abbrev": "FRCT",
+      "color": [
+        255,
+        120,
+        220,
+        255
+      ],
+      "description": "Recursive kaleido folds  ·  living mandala from the frame",
+      "shader": "shaders/fractal_mirror.glsl",
+      "params": [
+        {
+          "name": "folds",
+          "label": "Folds",
+          "min": 1.0,
+          "max": 6.0,
+          "default": 4.0,
+          "fmt": "%.0f",
+          "curve": 1.0
+        },
+        {
+          "name": "drift",
+          "label": "Drift",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 0.3,
+          "fmt": "%.2f",
+          "curve": 1.0
+        },
+        {
+          "name": "zoom",
+          "label": "Breathe Zoom",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 0.2,
+          "fmt": "%.2f",
+          "curve": 1.0
+        }
+      ],
+      "amount_default": 1.0,
+      "category": "Trippy",
+      "since_version": 25
+    },
+    {
+      "id": "breathe_warp",
+      "enum": "BreatheWarp",
+      "label": "Breathe",
+      "abbrev": "BRTH",
+      "color": [
+        160,
+        160,
+        255,
+        255
+      ],
+      "description": "Radial breathing zoom  ·  edge chroma bloom  ·  dreamstate",
+      "shader": "shaders/breathe_warp.glsl",
+      "params": [
+        {
+          "name": "breathe",
+          "label": "Depth",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 0.5,
+          "fmt": "%.2f",
+          "curve": 1.0
+        },
+        {
+          "name": "rate",
+          "label": "Rate",
+          "min": 0.0,
+          "max": 4.0,
+          "default": 1.0,
+          "fmt": "%.2f",
+          "curve": 1.0
+        },
+        {
+          "name": "chroma",
+          "label": "Edge Chroma",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 0.3,
+          "fmt": "%.2f",
+          "curve": 1.0
+        }
+      ],
+      "amount_default": 1.0,
+      "category": "Trippy",
+      "since_version": 25
+    },
+    {
+      "id": "melt_drip",
+      "enum": "MeltDrip",
+      "label": "Melt Drip",
+      "abbrev": "MELT",
+      "color": [
+        255,
+        140,
+        60,
+        255
+      ],
+      "description": "Columns sag like molten wax  ·  heat-haze shimmer",
+      "shader": "shaders/melt_drip.glsl",
+      "params": [
+        {
+          "name": "melt",
+          "label": "Melt",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 0.5,
+          "fmt": "%.2f",
+          "curve": 1.0
+        },
+        {
+          "name": "drip",
+          "label": "Drip Ragged",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 0.5,
+          "fmt": "%.2f",
+          "curve": 1.0
+        },
+        {
+          "name": "haze",
+          "label": "Heat Haze",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 0.3,
+          "fmt": "%.2f",
+          "curve": 1.0
+        }
+      ],
+      "amount_default": 1.0,
+      "category": "Trippy",
+      "since_version": 25
+    },
+    {
+      "id": "neon_city",
+      "enum": "NeonCity",
+      "label": "Neon City",
+      "abbrev": "NEON",
+      "color": [
+        0,
+        230,
+        255,
+        255
+      ],
+      "description": "Teal/magenta duotone + scanlines + neon streak bloom",
+      "shader": "shaders/neon_city.glsl",
+      "params": [
+        {
+          "name": "neon",
+          "label": "Grade",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 0.7,
+          "fmt": "%.2f",
+          "curve": 1.0
+        },
+        {
+          "name": "scanline",
+          "label": "Scanlines",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 0.3,
+          "fmt": "%.2f",
+          "curve": 1.0
+        },
+        {
+          "name": "streak",
+          "label": "Neon Streaks",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 0.4,
+          "fmt": "%.2f",
+          "curve": 1.0
+        }
+      ],
+      "amount_default": 1.0,
+      "category": "Cyberpunk",
+      "since_version": 25
+    },
+    {
+      "id": "chrome_pulse",
+      "enum": "ChromePulse",
+      "label": "Chrome Pulse",
+      "abbrev": "CHRM",
+      "color": [
+        180,
+        220,
+        255,
+        255
+      ],
+      "description": "Liquid-metal tone curve  ·  pulsing cyan rim glow",
+      "shader": "shaders/chrome_pulse.glsl",
+      "params": [
+        {
+          "name": "chrome",
+          "label": "Metallize",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 0.6,
+          "fmt": "%.2f",
+          "curve": 1.0
+        },
+        {
+          "name": "pulse",
+          "label": "Pulse Rate",
+          "min": 0.0,
+          "max": 4.0,
+          "default": 1.0,
+          "fmt": "%.2f",
+          "curve": 1.0
+        },
+        {
+          "name": "edge",
+          "label": "Rim Glow",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 0.5,
+          "fmt": "%.2f",
+          "curve": 1.0
+        }
+      ],
+      "amount_default": 1.0,
+      "category": "Cyberpunk",
+      "since_version": 25
+    },
+    {
+      "id": "hud_glitch",
+      "enum": "HudGlitch",
+      "label": "HUD Glitch",
+      "abbrev": "HUD",
+      "color": [
+        80,
+        255,
+        200,
+        255
+      ],
+      "description": "Interface overlay  ·  cyan tint  ·  digital block dropouts",
+      "shader": "shaders/hud_glitch.glsl",
+      "params": [
+        {
+          "name": "hud",
+          "label": "HUD Lines",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 0.5,
+          "fmt": "%.2f",
+          "curve": 1.0
+        },
+        {
+          "name": "dropout",
+          "label": "Dropouts",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 0.3,
+          "fmt": "%.2f",
+          "curve": 1.0
+        },
+        {
+          "name": "tint",
+          "label": "Cyan Tint",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 0.5,
+          "fmt": "%.2f",
+          "curve": 1.0
+        }
+      ],
+      "amount_default": 1.0,
+      "category": "Cyberpunk",
+      "since_version": 25
+    },
+    {
+      "id": "night_drive",
+      "enum": "NightDrive",
+      "label": "Night Drive",
+      "abbrev": "NITE",
+      "color": [
+        90,
+        130,
+        255,
+        255
+      ],
+      "description": "Blue-hour grade  ·  sodium highlights  ·  anamorphic flares",
+      "shader": "shaders/night_drive.glsl",
+      "params": [
+        {
+          "name": "night",
+          "label": "Grade",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 0.7,
+          "fmt": "%.2f",
+          "curve": 1.0
+        },
+        {
+          "name": "sodium",
+          "label": "Sodium Highs",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 0.5,
+          "fmt": "%.2f",
+          "curve": 1.0
+        },
+        {
+          "name": "flare",
+          "label": "Flares",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 0.4,
+          "fmt": "%.2f",
+          "curve": 1.0
+        }
+      ],
+      "amount_default": 1.0,
+      "category": "Cyberpunk",
+      "since_version": 25
     }
   ]
 }

@@ -108,3 +108,16 @@
         case FXType::RetroBeauty: return "RB16";
         case FXType::Insta2016: return "2016";
         case FXType::GlassSkin: return "GLAS";
+        case FXType::PorcelainSkin: return "PORC";
+        case FXType::BlushDoll: return "BLSH";
+        case FXType::HoneyGlow: return "HONY";
+        case FXType::SoftGlam: return "GLAM";
+        case FXType::AcidTrip: return "ACID";
+        case FXType::LiquidMarble: return "MARB";
+        case FXType::FractalMirror: return "FRCT";
+        case FXType::BreatheWarp: return "BRTH";
+        case FXType::MeltDrip: return "MELT";
+        case FXType::NeonCity: return "NEON";
+        case FXType::ChromePulse: return "CHRM";
+        case FXType::HudGlitch: return "HUD";
+        case FXType::NightDrive: return "NITE";

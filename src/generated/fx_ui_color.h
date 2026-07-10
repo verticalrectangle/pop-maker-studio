@@ -108,3 +108,16 @@
         case FXType::RetroBeauty: return IM_COL32(255,150,190,255);
         case FXType::Insta2016: return IM_COL32(255,140,60,255);
         case FXType::GlassSkin: return IM_COL32(180,230,255,255);
+        case FXType::PorcelainSkin: return IM_COL32(255,190,200,255);
+        case FXType::BlushDoll: return IM_COL32(255,150,180,255);
+        case FXType::HoneyGlow: return IM_COL32(255,200,110,255);
+        case FXType::SoftGlam: return IM_COL32(235,170,255,255);
+        case FXType::AcidTrip: return IM_COL32(170,255,90,255);
+        case FXType::LiquidMarble: return IM_COL32(130,200,255,255);
+        case FXType::FractalMirror: return IM_COL32(255,120,220,255);
+        case FXType::BreatheWarp: return IM_COL32(160,160,255,255);
+        case FXType::MeltDrip: return IM_COL32(255,140,60,255);
+        case FXType::NeonCity: return IM_COL32(0,230,255,255);
+        case FXType::ChromePulse: return IM_COL32(180,220,255,255);
+        case FXType::HudGlitch: return IM_COL32(80,255,200,255);
+        case FXType::NightDrive: return IM_COL32(90,130,255,255);

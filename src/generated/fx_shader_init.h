@@ -108,4 +108,17 @@ void fx_generated_init() {
     g_gen_progs[(int)FXType::RetroBeauty] = link_prog(k_retro_beauty_frag);
     g_gen_progs[(int)FXType::Insta2016] = link_prog(k_insta_2016_frag);
     g_gen_progs[(int)FXType::GlassSkin] = link_prog(k_glass_skin_frag);
+    g_gen_progs[(int)FXType::PorcelainSkin] = link_prog(k_porcelain_skin_frag);
+    g_gen_progs[(int)FXType::BlushDoll] = link_prog(k_blush_doll_frag);
+    g_gen_progs[(int)FXType::HoneyGlow] = link_prog(k_honey_glow_frag);
+    g_gen_progs[(int)FXType::SoftGlam] = link_prog(k_soft_glam_frag);
+    g_gen_progs[(int)FXType::AcidTrip] = link_prog(k_acid_trip_frag);
+    g_gen_progs[(int)FXType::LiquidMarble] = link_prog(k_liquid_marble_frag);
+    g_gen_progs[(int)FXType::FractalMirror] = link_prog(k_fractal_mirror_frag);
+    g_gen_progs[(int)FXType::BreatheWarp] = link_prog(k_breathe_warp_frag);
+    g_gen_progs[(int)FXType::MeltDrip] = link_prog(k_melt_drip_frag);
+    g_gen_progs[(int)FXType::NeonCity] = link_prog(k_neon_city_frag);
+    g_gen_progs[(int)FXType::ChromePulse] = link_prog(k_chrome_pulse_frag);
+    g_gen_progs[(int)FXType::HudGlitch] = link_prog(k_hud_glitch_frag);
+    g_gen_progs[(int)FXType::NightDrive] = link_prog(k_night_drive_frag);
 }

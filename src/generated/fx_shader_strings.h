@@ -3416,3 +3416,502 @@ void main() {
     frag = vec4(clamp(c, 0.0, 1.0), src.a);
 }
 )glsl";
+
+static const char* k_porcelain_skin_frag = R"glsl(
+// Porcelain Skin — luma-guided smoothing + brighten + tone evening. A
+// full-frame beauty pass (no face tracking): smoothing is edge-aware (bilateral
+// approximation) so eyes/lips/hair keep detail while skin planes flatten.
+#version 330 core
+in vec2 v_uv;
+out vec4 frag;
+uniform sampler2D u_tex;
+uniform float u_tex_w;
+uniform float u_tex_h;
+uniform float u_smooth;    // 0..1 skin smoothing strength
+uniform float u_brighten;  // 0..0.5 lift
+uniform float u_warmth;    // -1..1 cool/warm shift
+
+void main() {
+    vec2 px = vec2(1.0 / u_tex_w, 1.0 / u_tex_h);
+    vec4 c = texture(u_tex, v_uv);
+    // Bilateral-ish blur: 12-tap disc, weights fall off with color distance so
+    // edges survive.
+    vec3 acc = c.rgb;
+    float wsum = 1.0;
+    for (int i = 0; i < 12; i++) {
+        float a = float(i) * 0.5236 * 6.28318 / 6.28318 + float(i) * 2.39996;
+        float r = 2.0 + 4.0 * fract(float(i) * 0.618034);
+        vec3 s = texture(u_tex, v_uv + vec2(cos(a), sin(a)) * r * px).rgb;
+        float w = exp(-dot(s - c.rgb, s - c.rgb) * 18.0);
+        acc += s * w;
+        wsum += w;
+    }
+    vec3 smoothed = acc / wsum;
+    // Skin-probability mask: warm hues, mid luminance.
+    float lum = dot(c.rgb, vec3(0.299, 0.587, 0.114));
+    float skin = smoothstep(0.15, 0.35, lum) * (1.0 - smoothstep(0.75, 0.95, lum))
+               * smoothstep(0.0, 0.08, c.r - c.b) * step(c.b, c.r);
+    vec3 rgb = mix(c.rgb, smoothed, u_smooth * clamp(skin * 1.4, 0.0, 1.0));
+    // Gentle lift with highlight rolloff (porcelain brightness, no clipping).
+    rgb = rgb + u_brighten * (1.0 - rgb) * (0.6 + 0.4 * skin);
+    // Warmth: shift R up / B down proportionally.
+    rgb.r = clamp(rgb.r + u_warmth * 0.06, 0.0, 1.0);
+    rgb.b = clamp(rgb.b - u_warmth * 0.05, 0.0, 1.0);
+    frag = vec4(clamp(rgb, 0.0, 1.0), c.a);
+}
+)glsl";
+
+static const char* k_blush_doll_frag = R"glsl(
+// Blush Doll — soft-skin base + rosy blush wash on skin midtones + brightened
+// eyes/teeth zone (bright neutrals). Full-frame doll-makeup look, no landmarks:
+// the blush rides a skin-tone mask weighted toward the frame's center band
+// where a face usually sits in selfie framing.
+#version 330 core
+in vec2 v_uv;
+out vec4 frag;
+uniform sampler2D u_tex;
+uniform float u_tex_w;
+uniform float u_tex_h;
+uniform float u_blush;   // 0..1 blush strength
+uniform float u_smooth;  // 0..1 skin smoothing
+uniform float u_tint;    // 0 = peach, 1 = pink
+
+void main() {
+    vec2 px = vec2(1.0 / u_tex_w, 1.0 / u_tex_h);
+    vec4 c = texture(u_tex, v_uv);
+    // Cheap 8-tap soft base.
+    vec3 blur = c.rgb;
+    for (int i = 0; i < 8; i++) {
+        float a = float(i) * 0.785398;
+        blur += texture(u_tex, v_uv + vec2(cos(a), sin(a)) * 3.0 * px).rgb;
+    }
+    blur /= 9.0;
+    float lum = dot(c.rgb, vec3(0.299, 0.587, 0.114));
+    float skin = smoothstep(0.18, 0.4, lum) * (1.0 - smoothstep(0.8, 0.95, lum))
+               * smoothstep(0.0, 0.08, c.r - c.b);
+    vec3 rgb = mix(c.rgb, blur, u_smooth * skin);
+    // Center-band weight: strongest in the middle vertical third.
+    float band = 1.0 - smoothstep(0.18, 0.5, abs(v_uv.y - 0.45));
+    vec3 blush_col = mix(vec3(1.0, 0.55, 0.42), vec3(1.0, 0.45, 0.62), u_tint);
+    float bw = u_blush * skin * band * 0.45;
+    rgb = mix(rgb, blush_col * (0.4 + 0.6 * lum + 0.3), bw);
+    // Doll pop: brighten near-white neutrals (eyes/teeth) slightly.
+    float neutral = 1.0 - smoothstep(0.05, 0.15, abs(c.r - c.g) + abs(c.g - c.b));
+    float bright = smoothstep(0.55, 0.8, lum);
+    rgb += neutral * bright * 0.12 * u_blush;
+    frag = vec4(clamp(rgb, 0.0, 1.0), c.a);
+}
+)glsl";
+
+static const char* k_honey_glow_frag = R"glsl(
+// Honey Glow — golden-hour warmth + soft bloom + lifted shadows. The
+// "sunset filter": bright areas bleed a honey-colored halo, shadows go warm
+// instead of gray.
+#version 330 core
+in vec2 v_uv;
+out vec4 frag;
+uniform sampler2D u_tex;
+uniform float u_tex_w;
+uniform float u_tex_h;
+uniform float u_glow;    // 0..1 bloom strength
+uniform float u_warmth;  // 0..1 golden shift
+uniform float u_lift;    // 0..1 shadow lift
+
+void main() {
+    vec2 px = vec2(1.0 / u_tex_w, 1.0 / u_tex_h);
+    vec4 c = texture(u_tex, v_uv);
+    // Bright-pass bloom: 12-tap wide disc of thresholded samples.
+    vec3 bloom = vec3(0.0);
+    for (int i = 0; i < 12; i++) {
+        float a = float(i) * 2.39996;
+        float r = 3.0 + 9.0 * fract(float(i) * 0.618034);
+        vec3 s = texture(u_tex, v_uv + vec2(cos(a), sin(a)) * r * px).rgb;
+        float b = max(max(s.r, s.g), s.b);
+        bloom += s * smoothstep(0.55, 0.9, b);
+    }
+    bloom /= 12.0;
+    vec3 honey = vec3(1.0, 0.78, 0.45);
+    vec3 rgb = c.rgb + bloom * honey * u_glow * 0.9;
+    // Warm grade: push highlights gold, keep blacks.
+    float lum = dot(rgb, vec3(0.299, 0.587, 0.114));
+    rgb = mix(rgb, rgb * honey * 1.15, u_warmth * (0.3 + 0.7 * lum));
+    // Lift shadows toward warm brown, filmic.
+    rgb = mix(rgb, max(rgb, vec3(0.14, 0.09, 0.05)), u_lift * (1.0 - lum));
+    frag = vec4(clamp(rgb, 0.0, 1.0), c.a);
+}
+)glsl";
+
+static const char* k_soft_glam_frag = R"glsl(
+// Soft Glam — evening-makeup look: edge-aware smoothing, teal-shadow /
+// champagne-highlight split tone, and animated micro-sparkle on the brightest
+// speculars (glitter without particles).
+#version 330 core
+in vec2 v_uv;
+out vec4 frag;
+uniform sampler2D u_tex;
+uniform float u_tex_w;
+uniform float u_tex_h;
+uniform float u_time;
+uniform float u_glam;     // 0..1 smoothing strength
+uniform float u_split;    // 0..1 split-tone strength
+uniform float u_sparkle;  // 0..1 glitter on speculars
+
+float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+
+void main() {
+    vec2 px = vec2(1.0 / u_tex_w, 1.0 / u_tex_h);
+    vec4 c = texture(u_tex, v_uv);
+    vec3 acc = c.rgb;
+    float wsum = 1.0;
+    for (int i = 0; i < 10; i++) {
+        float a = float(i) * 2.39996;
+        float r = 2.0 + 3.5 * fract(float(i) * 0.618034);
+        vec3 s = texture(u_tex, v_uv + vec2(cos(a), sin(a)) * r * px).rgb;
+        float w = exp(-dot(s - c.rgb, s - c.rgb) * 14.0);
+        acc += s * w; wsum += w;
+    }
+    vec3 rgb = mix(c.rgb, acc / wsum, u_glam * 0.8);
+    // Split tone: shadows toward teal, highlights toward champagne.
+    float lum = dot(rgb, vec3(0.299, 0.587, 0.114));
+    vec3 shadow_tone = vec3(0.85, 1.0, 1.05);
+    vec3 high_tone   = vec3(1.08, 1.0, 0.9);
+    rgb *= mix(shadow_tone, high_tone, smoothstep(0.25, 0.75, lum)) * u_split
+         + vec3(1.0) * (1.0 - u_split);
+    // Micro sparkle: hashed glints that flicker on strong speculars.
+    float spec = smoothstep(0.78, 0.95, lum);
+    vec2 cell = floor(v_uv * vec2(u_tex_w, u_tex_h) / 3.0);
+    float g = hash(cell + floor(u_time * 8.0));
+    rgb += vec3(1.0) * step(0.985, g) * spec * u_sparkle * 0.8;
+    frag = vec4(clamp(rgb, 0.0, 1.0), c.a);
+}
+)glsl";
+
+static const char* k_acid_trip_frag = R"glsl(
+// Acid Trip — time-cycling hue rotation banded by luminance + sine UV wobble.
+// Different brightness bands rotate at different speeds so the image
+// iridesces instead of just color-cycling.
+#version 330 core
+in vec2 v_uv;
+out vec4 frag;
+uniform sampler2D u_tex;
+uniform float u_time;
+uniform float u_trip;    // 0..1 hue-cycle depth
+uniform float u_speed;   // 0..4 cycle speed
+uniform float u_wobble;  // 0..1 UV wobble
+
+vec3 hue_rotate(vec3 c, float rad) {
+    float ch = cos(rad), sh = sin(rad);
+    mat3 m = mat3(
+        0.299+0.701*ch+0.168*sh, 0.299-0.299*ch-0.328*sh, 0.299-0.299*ch+1.250*sh,
+        0.587-0.587*ch+0.330*sh, 0.587+0.413*ch+0.035*sh, 0.587-0.587*ch-1.050*sh,
+        0.114-0.114*ch-0.497*sh, 0.114-0.114*ch+0.292*sh, 0.114+0.886*ch-0.203*sh
+    );
+    return clamp(m * c, 0.0, 1.0);
+}
+
+void main() {
+    float t = u_time * u_speed;
+    vec2 uv = v_uv;
+    uv.x += sin(uv.y * 9.0 + t * 1.3) * 0.02 * u_wobble;
+    uv.y += cos(uv.x * 7.0 + t * 1.7) * 0.02 * u_wobble;
+    vec4 c = texture(u_tex, clamp(uv, 0.0, 1.0));
+    float lum = dot(c.rgb, vec3(0.299, 0.587, 0.114));
+    // Band the rotation by luminance so shadows and highlights drift apart.
+    float band = floor(lum * 4.0) / 4.0;
+    float rot = (t * 0.8 + band * 2.5 + lum * 1.5) * u_trip;
+    vec3 rgb = hue_rotate(c.rgb, rot);
+    // Saturation push proportional to trip depth.
+    float l2 = dot(rgb, vec3(0.299, 0.587, 0.114));
+    rgb = mix(vec3(l2), rgb, 1.0 + u_trip * 0.6);
+    frag = vec4(clamp(rgb, 0.0, 1.0), c.a);
+}
+)glsl";
+
+static const char* k_liquid_marble_frag = R"glsl(
+// Liquid Marble — flowing domain-warped refraction. The image is pulled
+// through layered sine/noise flow fields like wet marbled ink.
+#version 330 core
+in vec2 v_uv;
+out vec4 frag;
+uniform sampler2D u_tex;
+uniform float u_time;
+uniform float u_flow;    // 0..1 warp depth
+uniform float u_scale;   // 1..10 swirl frequency
+uniform float u_speed;   // 0..4 flow speed
+
+float n2(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+float noise(vec2 p) {
+    vec2 i = floor(p), f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(n2(i), n2(i + vec2(1, 0)), f.x),
+               mix(n2(i + vec2(0, 1)), n2(i + vec2(1, 1)), f.x), f.y);
+}
+
+void main() {
+    float t = u_time * u_speed * 0.4;
+    vec2 p = v_uv * u_scale;
+    // Two octaves of domain warp.
+    vec2 q = vec2(noise(p + vec2(0.0, t)), noise(p + vec2(5.2, t * 1.3)));
+    vec2 r = vec2(noise(p + 4.0 * q + vec2(1.7, 9.2 - t)),
+                  noise(p + 4.0 * q + vec2(8.3, 2.8 + t)));
+    vec2 warp = (q - 0.5 + (r - 0.5) * 0.7) * 0.12 * u_flow;
+    vec4 c = texture(u_tex, clamp(v_uv + warp, 0.0, 1.0));
+    // Ink-vein shading: darken along steep flow gradients.
+    float vein = smoothstep(0.35, 0.0, abs(r.x - r.y));
+    c.rgb *= 1.0 - vein * 0.25 * u_flow;
+    frag = c;
+}
+)glsl";
+
+static const char* k_fractal_mirror_frag = R"glsl(
+// Fractal Mirror — recursive kaleidoscopic folding with slow zoom drift.
+// Each iteration mirrors the plane about a rotating axis, so the frame turns
+// into a living mandala built from itself.
+#version 330 core
+in vec2 v_uv;
+out vec4 frag;
+uniform sampler2D u_tex;
+uniform float u_time;
+uniform float u_folds;   // 1..6 fold iterations
+uniform float u_drift;   // 0..1 rotation drift speed
+uniform float u_zoom;    // 0..1 breathing zoom depth
+
+void main() {
+    vec2 p = v_uv - 0.5;
+    float t = u_time * u_drift;
+    float z = 1.0 + sin(u_time * 0.5) * 0.25 * u_zoom;
+    p *= z;
+    int folds = int(clamp(u_folds, 1.0, 6.0));
+    for (int i = 0; i < 6; i++) {
+        if (i >= folds) break;
+        float a = t * (0.3 + 0.13 * float(i)) + float(i) * 0.7853;
+        vec2 ax = vec2(cos(a), sin(a));
+        // Reflect across the axis if on the negative side.
+        float d = dot(p, vec2(-ax.y, ax.x));
+        p -= 2.0 * min(0.0, d) * vec2(-ax.y, ax.x);
+        p *= 1.08;                       // slight zoom per fold
+    }
+    vec2 uv = fract(p + 0.5);
+    // Mirror-tile so wrap seams are symmetric, not hard cuts.
+    uv = abs(uv * 2.0 - 1.0);
+    frag = texture(u_tex, uv);
+}
+)glsl";
+
+static const char* k_breathe_warp_frag = R"glsl(
+// Breathe Warp — slow radial breathing zoom with chroma separation that grows
+// toward the edges. Subtle at low amounts (dreamy), full melt at high.
+#version 330 core
+in vec2 v_uv;
+out vec4 frag;
+uniform sampler2D u_tex;
+uniform float u_time;
+uniform float u_breathe;  // 0..1 zoom depth
+uniform float u_rate;     // 0..4 breaths per ~6s
+uniform float u_chroma;   // 0..1 edge chroma split
+
+void main() {
+    vec2 d = v_uv - 0.5;
+    float r = length(d);
+    float phase = sin(u_time * u_rate) * 0.5 + 0.5;
+    // Radial zoom that eases harder near the edges (non-linear breathing).
+    float amt = u_breathe * 0.12 * phase * (0.4 + r * 1.6);
+    vec2 uv = 0.5 + d * (1.0 - amt);
+    float ca = u_chroma * 0.012 * (r * 2.0) * (0.5 + phase);
+    vec2 dir = r > 0.0001 ? d / r : vec2(0.0);
+    float cr = texture(u_tex, clamp(uv + dir * ca, 0.0, 1.0)).r;
+    float cg = texture(u_tex, clamp(uv,            0.0, 1.0)).g;
+    float cb = texture(u_tex, clamp(uv - dir * ca, 0.0, 1.0)).b;
+    float a  = texture(u_tex, clamp(uv,            0.0, 1.0)).a;
+    frag = vec4(cr, cg, cb, a);
+}
+)glsl";
+
+static const char* k_melt_drip_frag = R"glsl(
+// Melt Drip — the frame sags downward in noise-chosen columns with heat-haze
+// shimmer, like paint or wax melting off the screen. Stateless (no feedback):
+// the melt amount is a function of time + column noise.
+#version 330 core
+in vec2 v_uv;
+out vec4 frag;
+uniform sampler2D u_tex;
+uniform float u_time;
+uniform float u_melt;   // 0..1 sag depth
+uniform float u_drip;   // 0..1 column raggedness
+uniform float u_haze;   // 0..1 heat shimmer
+
+float hash(float n) { return fract(sin(n) * 43758.5453); }
+float noise1(float x) {
+    float i = floor(x), f = fract(x);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(hash(i), hash(i + 1.0), f);
+}
+
+void main() {
+    // Column-based sag: each x gets a melt offset from smooth 1-D noise, and
+    // pixels lower in the frame sag more (drip fronts).
+    float col = noise1(v_uv.x * (8.0 + u_drip * 30.0) + u_time * 0.3);
+    float front = pow(v_uv.y, 1.5);
+    float sag = u_melt * 0.25 * col * front;
+    vec2 uv = v_uv;
+    uv.y = clamp(uv.y - sag, 0.0, 1.0);
+    // Heat haze: fine horizontal shimmer scaled by haze.
+    uv.x += sin(uv.y * 60.0 + u_time * 5.0) * 0.004 * u_haze;
+    vec4 c = texture(u_tex, clamp(uv, 0.0, 1.0));
+    // Slight warm push in strongly melted zones (molten glow).
+    c.rgb += vec3(0.10, 0.04, 0.0) * (sag / max(0.25 * u_melt, 1e-4)) * u_melt;
+    frag = clamp(c, 0.0, 1.0);
+}
+)glsl";
+
+static const char* k_neon_city_frag = R"glsl(
+// Neon City — the cyberpunk hero grade: teal shadows / magenta highlights,
+// scanlines, and horizontal neon bloom streaks off bright signs.
+#version 330 core
+in vec2 v_uv;
+out vec4 frag;
+uniform sampler2D u_tex;
+uniform float u_tex_w;
+uniform float u_tex_h;
+uniform float u_time;
+uniform float u_neon;      // 0..1 grade strength
+uniform float u_scanline;  // 0..1 scanline visibility
+uniform float u_streak;    // 0..1 horizontal bloom streaks
+
+void main() {
+    vec2 px = vec2(1.0 / u_tex_w, 1.0 / u_tex_h);
+    vec4 c = texture(u_tex, v_uv);
+    // Horizontal streak bloom: sample a wide row of thresholded brights.
+    vec3 streak = vec3(0.0);
+    for (int i = -6; i <= 6; i++) {
+        vec3 s = texture(u_tex, clamp(v_uv + vec2(float(i) * 4.0 * px.x, 0.0), 0.0, 1.0)).rgb;
+        float b = max(max(s.r, s.g), s.b);
+        streak += s * smoothstep(0.6, 0.95, b) * (1.0 - abs(float(i)) / 7.0);
+    }
+    streak /= 6.0;
+    // Duotone grade: teal shadows, magenta highs, pivot on luma.
+    float lum = dot(c.rgb, vec3(0.299, 0.587, 0.114));
+    vec3 teal    = vec3(0.05, 0.85, 0.9);
+    vec3 magenta = vec3(1.0, 0.2, 0.85);
+    vec3 duo = mix(teal * lum * 1.3, magenta * lum * 1.15, smoothstep(0.2, 0.8, lum));
+    vec3 rgb = mix(c.rgb, duo, u_neon * 0.75);
+    rgb += streak * magenta * u_streak * 0.8;
+    // Scanlines with slow roll.
+    float sl = sin((v_uv.y + u_time * 0.02) * u_tex_h * 1.8) * 0.5 + 0.5;
+    rgb *= 1.0 - u_scanline * 0.25 * sl;
+    frag = vec4(clamp(rgb, 0.0, 1.0), c.a);
+}
+)glsl";
+
+static const char* k_chrome_pulse_frag = R"glsl(
+// Chrome Pulse — liquid-metal look: luma remapped through a sharp metallic
+// curve, cool chrome tint, and edge glow that pulses with time.
+#version 330 core
+in vec2 v_uv;
+out vec4 frag;
+uniform sampler2D u_tex;
+uniform float u_tex_w;
+uniform float u_tex_h;
+uniform float u_time;
+uniform float u_chrome;  // 0..1 metallization
+uniform float u_pulse;   // 0..4 pulse speed
+uniform float u_edge;    // 0..1 edge glow strength
+
+void main() {
+    vec2 px = vec2(1.0 / u_tex_w, 1.0 / u_tex_h);
+    vec4 c = texture(u_tex, v_uv);
+    float lum = dot(c.rgb, vec3(0.299, 0.587, 0.114));
+    // Metallic transfer curve: multiple reflections along the tone ramp.
+    float m = 0.5 + 0.5 * sin(lum * 12.0 - 1.5);
+    m = mix(lum, m * smoothstep(0.05, 0.9, lum), 0.85);
+    vec3 chrome = vec3(m) * vec3(0.85, 0.92, 1.05);
+    // Edge detect for rim glow.
+    float l1 = dot(texture(u_tex, v_uv + vec2(px.x * 2.0, 0.0)).rgb, vec3(0.299, 0.587, 0.114));
+    float l2 = dot(texture(u_tex, v_uv + vec2(0.0, px.y * 2.0)).rgb, vec3(0.299, 0.587, 0.114));
+    float edge = clamp(abs(lum - l1) + abs(lum - l2), 0.0, 1.0) * 4.0;
+    float beat = 0.6 + 0.4 * sin(u_time * u_pulse * 2.0);
+    vec3 glow = vec3(0.4, 0.8, 1.0) * edge * u_edge * beat;
+    vec3 rgb = mix(c.rgb, chrome, u_chrome) + glow;
+    frag = vec4(clamp(rgb, 0.0, 1.0), c.a);
+}
+)glsl";
+
+static const char* k_hud_glitch_frag = R"glsl(
+// HUD Glitch — cyberpunk interface overlay: cyan-shifted tint, thin HUD frame
+// lines + corner ticks, and time-hashed digital block dropouts.
+#version 330 core
+in vec2 v_uv;
+out vec4 frag;
+uniform sampler2D u_tex;
+uniform float u_tex_w;
+uniform float u_tex_h;
+uniform float u_time;
+uniform float u_hud;      // 0..1 HUD line visibility
+uniform float u_dropout;  // 0..1 block dropout rate
+uniform float u_tint;     // 0..1 cyan shift
+
+float hash2(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+
+void main() {
+    vec2 uv = v_uv;
+    float tq = floor(u_time * 6.0);
+    // Digital dropouts: some 24px blocks shift and quantize.
+    vec2 blk = floor(uv * vec2(u_tex_w, u_tex_h) / 24.0);
+    float br = hash2(blk + tq * 2.3);
+    if (br < u_dropout * 0.35) {
+        uv.x += (hash2(blk.yx + tq) - 0.5) * 0.08;
+        uv = clamp(uv, 0.0, 1.0);
+    }
+    vec4 c = texture(u_tex, uv);
+    vec3 rgb = c.rgb;
+    if (br < u_dropout * 0.35)
+        rgb = floor(rgb * 5.0) / 5.0 * vec3(0.7, 1.1, 1.2);   // posterized cyan block
+    // Cyan tint riding luma.
+    float lum = dot(rgb, vec3(0.299, 0.587, 0.114));
+    rgb = mix(rgb, vec3(lum) * vec3(0.55, 1.0, 1.1), u_tint * 0.6);
+    // HUD chrome: frame border, thirds ticks, sweeping scan bar.
+    float bord = step(min(min(v_uv.x, 1.0 - v_uv.x), min(v_uv.y, 1.0 - v_uv.y)), 0.004);
+    float thirds = step(abs(v_uv.x - 0.3333), 0.0008) + step(abs(v_uv.x - 0.6667), 0.0008);
+    float sweep = smoothstep(0.008, 0.0, abs(v_uv.y - fract(u_time * 0.11)));
+    vec3 hud_col = vec3(0.3, 1.0, 0.95);
+    rgb += hud_col * (bord * 0.9 + thirds * 0.35 + sweep * 0.25) * u_hud;
+    frag = vec4(clamp(rgb, 0.0, 1.0), c.a);
+}
+)glsl";
+
+static const char* k_night_drive_frag = R"glsl(
+// Night Drive — blue-hour city grade: crushed cool shadows, sodium-orange
+// highlight split, and anamorphic horizontal flares off the brightest lights.
+#version 330 core
+in vec2 v_uv;
+out vec4 frag;
+uniform sampler2D u_tex;
+uniform float u_tex_w;
+uniform float u_tex_h;
+uniform float u_night;   // 0..1 grade strength
+uniform float u_sodium;  // 0..1 orange highlight push
+uniform float u_flare;   // 0..1 anamorphic flare strength
+
+void main() {
+    vec2 px = vec2(1.0 / u_tex_w, 1.0 / u_tex_h);
+    vec4 c = texture(u_tex, v_uv);
+    // Wide anamorphic flare: long horizontal reach, hard threshold.
+    vec3 flare = vec3(0.0);
+    for (int i = -8; i <= 8; i++) {
+        vec3 s = texture(u_tex, clamp(v_uv + vec2(float(i) * 7.0 * px.x, 0.0), 0.0, 1.0)).rgb;
+        float b = max(max(s.r, s.g), s.b);
+        flare += s * smoothstep(0.75, 0.98, b) * (1.0 - abs(float(i)) / 9.0);
+    }
+    flare /= 8.0;
+    float lum = dot(c.rgb, vec3(0.299, 0.587, 0.114));
+    // Cool the shadows/mids, crush blacks slightly.
+    vec3 cool = c.rgb * vec3(0.75, 0.85, 1.2);
+    cool = max(cool - 0.03, 0.0) * 1.03;
+    // Sodium-vapor highlights.
+    vec3 sodium = vec3(1.0, 0.62, 0.25);
+    vec3 rgb = mix(c.rgb, cool, u_night * (1.0 - smoothstep(0.5, 0.9, lum)));
+    rgb = mix(rgb, rgb * sodium * 1.25, u_sodium * smoothstep(0.55, 0.9, lum));
+    rgb += flare * vec3(0.5, 0.7, 1.2) * u_flare;
+    frag = vec4(clamp(rgb, 0.0, 1.0), c.a);
+}
+)glsl";

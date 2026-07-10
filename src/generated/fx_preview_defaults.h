@@ -739,3 +739,94 @@
             cfx.glass_skin_radius = 3.5f;
             cfx.glass_skin_gloss = 0.5f;
             break;
+        case FXType::PorcelainSkin:
+            cfx.porcelain_skin_on = true;
+            cfx.porcelain_skin_amount = 1.0f;
+            cfx.porcelain_skin_smooth = 0.7f;
+            cfx.porcelain_skin_brighten = 0.15f;
+            cfx.porcelain_skin_warmth = 0.05f;
+            break;
+        case FXType::BlushDoll:
+            cfx.blush_doll_on = true;
+            cfx.blush_doll_amount = 1.0f;
+            cfx.blush_doll_blush = 0.5f;
+            cfx.blush_doll_smooth = 0.5f;
+            cfx.blush_doll_tint = 0.5f;
+            break;
+        case FXType::HoneyGlow:
+            cfx.honey_glow_on = true;
+            cfx.honey_glow_amount = 1.0f;
+            cfx.honey_glow_glow = 0.6f;
+            cfx.honey_glow_warmth = 0.5f;
+            cfx.honey_glow_lift = 0.3f;
+            break;
+        case FXType::SoftGlam:
+            cfx.soft_glam_on = true;
+            cfx.soft_glam_amount = 1.0f;
+            cfx.soft_glam_glam = 0.6f;
+            cfx.soft_glam_split = 0.5f;
+            cfx.soft_glam_sparkle = 0.3f;
+            break;
+        case FXType::AcidTrip:
+            cfx.acid_trip_on = true;
+            cfx.acid_trip_amount = 1.0f;
+            cfx.acid_trip_trip = 0.6f;
+            cfx.acid_trip_speed = 1.0f;
+            cfx.acid_trip_wobble = 0.4f;
+            break;
+        case FXType::LiquidMarble:
+            cfx.liquid_marble_on = true;
+            cfx.liquid_marble_amount = 1.0f;
+            cfx.liquid_marble_flow = 0.5f;
+            cfx.liquid_marble_scale = 4.0f;
+            cfx.liquid_marble_speed = 1.0f;
+            break;
+        case FXType::FractalMirror:
+            cfx.fractal_mirror_on = true;
+            cfx.fractal_mirror_amount = 1.0f;
+            cfx.fractal_mirror_folds = 4.0f;
+            cfx.fractal_mirror_drift = 0.3f;
+            cfx.fractal_mirror_zoom = 0.2f;
+            break;
+        case FXType::BreatheWarp:
+            cfx.breathe_warp_on = true;
+            cfx.breathe_warp_amount = 1.0f;
+            cfx.breathe_warp_breathe = 0.5f;
+            cfx.breathe_warp_rate = 1.0f;
+            cfx.breathe_warp_chroma = 0.3f;
+            break;
+        case FXType::MeltDrip:
+            cfx.melt_drip_on = true;
+            cfx.melt_drip_amount = 1.0f;
+            cfx.melt_drip_melt = 0.5f;
+            cfx.melt_drip_drip = 0.5f;
+            cfx.melt_drip_haze = 0.3f;
+            break;
+        case FXType::NeonCity:
+            cfx.neon_city_on = true;
+            cfx.neon_city_amount = 1.0f;
+            cfx.neon_city_neon = 0.7f;
+            cfx.neon_city_scanline = 0.3f;
+            cfx.neon_city_streak = 0.4f;
+            break;
+        case FXType::ChromePulse:
+            cfx.chrome_pulse_on = true;
+            cfx.chrome_pulse_amount = 1.0f;
+            cfx.chrome_pulse_chrome = 0.6f;
+            cfx.chrome_pulse_pulse = 1.0f;
+            cfx.chrome_pulse_edge = 0.5f;
+            break;
+        case FXType::HudGlitch:
+            cfx.hud_glitch_on = true;
+            cfx.hud_glitch_amount = 1.0f;
+            cfx.hud_glitch_hud = 0.5f;
+            cfx.hud_glitch_dropout = 0.3f;
+            cfx.hud_glitch_tint = 0.5f;
+            break;
+        case FXType::NightDrive:
+            cfx.night_drive_on = true;
+            cfx.night_drive_amount = 1.0f;
+            cfx.night_drive_night = 0.7f;
+            cfx.night_drive_sodium = 0.5f;
+            cfx.night_drive_flare = 0.4f;
+            break;

@@ -110,6 +110,19 @@ static std::vector<float> fx_attached_defaults(FXType type) {
         case FXType::RetroBeauty: return {0.6f, 0.5f, 0.35f};
         case FXType::Insta2016: return {0.45f, 0.6f, 0.35f};
         case FXType::GlassSkin: return {3.5f, 0.5f};
+        case FXType::PorcelainSkin: return {0.7f, 0.15f, 0.05f};
+        case FXType::BlushDoll: return {0.5f, 0.5f, 0.5f};
+        case FXType::HoneyGlow: return {0.6f, 0.5f, 0.3f};
+        case FXType::SoftGlam: return {0.6f, 0.5f, 0.3f};
+        case FXType::AcidTrip: return {0.6f, 1.0f, 0.4f};
+        case FXType::LiquidMarble: return {0.5f, 4.0f, 1.0f};
+        case FXType::FractalMirror: return {4.0f, 0.3f, 0.2f};
+        case FXType::BreatheWarp: return {0.5f, 1.0f, 0.3f};
+        case FXType::MeltDrip: return {0.5f, 0.5f, 0.3f};
+        case FXType::NeonCity: return {0.7f, 0.3f, 0.4f};
+        case FXType::ChromePulse: return {0.6f, 1.0f, 0.5f};
+        case FXType::HudGlitch: return {0.5f, 0.3f, 0.5f};
+        case FXType::NightDrive: return {0.7f, 0.5f, 0.4f};
         default: return {};
     }
 }

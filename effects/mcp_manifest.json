@@ -3234,5 +3234,821 @@
         "fmt": "%.2f"
       }
     ]
+  },
+  {
+    "id": "porcelain_skin",
+    "label": "Porcelain",
+    "category": "Makeup",
+    "description": "Edge-aware skin smoothing  \u00b7  brighten + even tone  \u00b7  studio finish",
+    "params": [
+      {
+        "name": "smooth",
+        "label": "Smoothing",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.7,
+        "fmt": "%.2f"
+      },
+      {
+        "name": "brighten",
+        "label": "Brighten",
+        "min": 0.0,
+        "max": 0.5,
+        "default": 0.15,
+        "fmt": "%.2f"
+      },
+      {
+        "name": "warmth",
+        "label": "Warmth",
+        "min": -1.0,
+        "max": 1.0,
+        "default": 0.05,
+        "fmt": "%.2f"
+      }
+    ]
+  },
+  {
+    "id": "blush_doll",
+    "label": "Blush Doll",
+    "category": "Makeup",
+    "description": "Rosy blush wash + soft skin + doll-bright eyes  \u00b7  peach or pink",
+    "params": [
+      {
+        "name": "blush",
+        "label": "Blush",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.5,
+        "fmt": "%.2f"
+      },
+      {
+        "name": "smooth",
+        "label": "Smoothing",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.5,
+        "fmt": "%.2f"
+      },
+      {
+        "name": "tint",
+        "label": "Peach \u2194 Pink",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.5,
+        "fmt": "%.2f"
+      }
+    ]
+  },
+  {
+    "id": "honey_glow",
+    "label": "Honey Glow",
+    "category": "Makeup",
+    "description": "Golden-hour warmth  \u00b7  soft bloom halo  \u00b7  lifted warm shadows",
+    "params": [
+      {
+        "name": "glow",
+        "label": "Glow",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.6,
+        "fmt": "%.2f"
+      },
+      {
+        "name": "warmth",
+        "label": "Warmth",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.5,
+        "fmt": "%.2f"
+      },
+      {
+        "name": "lift",
+        "label": "Shadow Lift",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.3,
+        "fmt": "%.2f"
+      }
+    ]
+  },
+  {
+    "id": "soft_glam",
+    "label": "Soft Glam",
+    "category": "Makeup",
+    "description": "Evening glam  \u00b7  teal/champagne split tone  \u00b7  glitter speculars",
+    "params": [
+      {
+        "name": "glam",
+        "label": "Smoothing",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.6,
+        "fmt": "%.2f"
+      },
+      {
+        "name": "split",
+        "label": "Split Tone",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.5,
+        "fmt": "%.2f"
+      },
+      {
+        "name": "sparkle",
+        "label": "Sparkle",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.3,
+        "fmt": "%.2f"
+      }
+    ]
+  },
+  {
+    "id": "acid_trip",
+    "label": "Acid Trip",
+    "category": "Trippy",
+    "description": "Luma-banded hue cycling + UV wobble  \u00b7  iridescent drift",
+    "params": [
+      {
+        "name": "trip",
+        "label": "Trip Depth",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.6,
+        "fmt": "%.2f"
+      },
+      {
+        "name": "speed",
+        "label": "Speed",
+        "min": 0.0,
+        "max": 4.0,
+        "default": 1.0,
+        "fmt": "%.2f"
+      },
+      {
+        "name": "wobble",
+        "label": "Wobble",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.4,
+        "fmt": "%.2f"
+      }
+    ]
+  },
+  {
+    "id": "liquid_marble",
+    "label": "Liquid Marble",
+    "category": "Trippy",
+    "description": "Domain-warped ink flow  \u00b7  wet marbled refraction",
+    "params": [
+      {
+        "name": "flow",
+        "label": "Flow",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.5,
+        "fmt": "%.2f"
+      },
+      {
+        "name": "scale",
+        "label": "Swirl Scale",
+        "min": 1.0,
+        "max": 10.0,
+        "default": 4.0,
+        "fmt": "%.1f"
+      },
+      {
+        "name": "speed",
+        "label": "Speed",
+        "min": 0.0,
+        "max": 4.0,
+        "default": 1.0,
+        "fmt": "%.2f"
+      }
+    ]
+  },
+  {
+    "id": "fractal_mirror",
+    "label": "Fractal Mirror",
+    "category": "Trippy",
+    "description": "Recursive kaleido folds  \u00b7  living mandala from the frame",
+    "params": [
+      {
+        "name": "folds",
+        "label": "Folds",
+        "min": 1.0,
+        "max": 6.0,
+        "default": 4.0,
+        "fmt": "%.0f"
+      },
+      {
+        "name": "drift",
+        "label": "Drift",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.3,
+        "fmt": "%.2f"
+      },
+      {
+        "name": "zoom",
+        "label": "Breathe Zoom",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.2,
+        "fmt": "%.2f"
+      }
+    ]
+  },
+  {
+    "id": "breathe_warp",
+    "label": "Breathe",
+    "category": "Trippy",
+    "description": "Radial breathing zoom  \u00b7  edge chroma bloom  \u00b7  dreamstate",
+    "params": [
+      {
+        "name": "breathe",
+        "label": "Depth",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.5,
+        "fmt": "%.2f"
+      },
+      {
+        "name": "rate",
+        "label": "Rate",
+        "min": 0.0,
+        "max": 4.0,
+        "default": 1.0,
+        "fmt": "%.2f"
+      },
+      {
+        "name": "chroma",
+        "label": "Edge Chroma",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.3,
+        "fmt": "%.2f"
+      }
+    ]
+  },
+  {
+    "id": "melt_drip",
+    "label": "Melt Drip",
+    "category": "Trippy",
+    "description": "Columns sag like molten wax  \u00b7  heat-haze shimmer",
+    "params": [
+      {
+        "name": "melt",
+        "label": "Melt",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.5,
+        "fmt": "%.2f"
+      },
+      {
+        "name": "drip",
+        "label": "Drip Ragged",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.5,
+        "fmt": "%.2f"
+      },
+      {
+        "name": "haze",
+        "label": "Heat Haze",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.3,
+        "fmt": "%.2f"
+      }
+    ]
+  },
+  {
+    "id": "neon_city",
+    "label": "Neon City",
+    "category": "Cyberpunk",
+    "description": "Teal/magenta duotone + scanlines + neon streak bloom",
+    "params": [
+      {
+        "name": "neon",
+        "label": "Grade",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.7,
+        "fmt": "%.2f"
+      },
+      {
+        "name": "scanline",
+        "label": "Scanlines",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.3,
+        "fmt": "%.2f"
+      },
+      {
+        "name": "streak",
+        "label": "Neon Streaks",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.4,
+        "fmt": "%.2f"
+      }
+    ]
+  },
+  {
+    "id": "chrome_pulse",
+    "label": "Chrome Pulse",
+    "category": "Cyberpunk",
+    "description": "Liquid-metal tone curve  \u00b7  pulsing cyan rim glow",
+    "params": [
+      {
+        "name": "chrome",
+        "label": "Metallize",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.6,
+        "fmt": "%.2f"
+      },
+      {
+        "name": "pulse",
+        "label": "Pulse Rate",
+        "min": 0.0,
+        "max": 4.0,
+        "default": 1.0,
+        "fmt": "%.2f"
+      },
+      {
+        "name": "edge",
+        "label": "Rim Glow",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.5,
+        "fmt": "%.2f"
+      }
+    ]
+  },
+  {
+    "id": "hud_glitch",
+    "label": "HUD Glitch",
+    "category": "Cyberpunk",
+    "description": "Interface overlay  \u00b7  cyan tint  \u00b7  digital block dropouts",
+    "params": [
+      {
+        "name": "hud",
+        "label": "HUD Lines",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.5,
+        "fmt": "%.2f"
+      },
+      {
+        "name": "dropout",
+        "label": "Dropouts",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.3,
+        "fmt": "%.2f"
+      },
+      {
+        "name": "tint",
+        "label": "Cyan Tint",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.5,
+        "fmt": "%.2f"
+      }
+    ]
+  },
+  {
+    "id": "night_drive",
+    "label": "Night Drive",
+    "category": "Cyberpunk",
+    "description": "Blue-hour grade  \u00b7  sodium highlights  \u00b7  anamorphic flares",
+    "params": [
+      {
+        "name": "night",
+        "label": "Grade",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.7,
+        "fmt": "%.2f"
+      },
+      {
+        "name": "sodium",
+        "label": "Sodium Highs",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.5,
+        "fmt": "%.2f"
+      },
+      {
+        "name": "flare",
+        "label": "Flares",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.4,
+        "fmt": "%.2f"
+      }
+    ]
+  },
+  {
+    "id": "chroma_key",
+    "label": "Chroma Key Pro",
+    "category": "Chroma",
+    "description": "Clean color-range keyer  \u00b7  composite over the layer below  \u00b7  spill kill",
+    "params": [
+      {
+        "name": "chroma_key_r",
+        "label": "Key R",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.0,
+        "fmt": "%.2f"
+      },
+      {
+        "name": "chroma_key_g",
+        "label": "Key G",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 1.0,
+        "fmt": "%.2f"
+      },
+      {
+        "name": "chroma_key_b",
+        "label": "Key B",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.0,
+        "fmt": "%.2f"
+      },
+      {
+        "name": "chroma_key_threshold",
+        "label": "Threshold",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.3,
+        "fmt": "%.2f"
+      },
+      {
+        "name": "chroma_key_softness",
+        "label": "Edge Softness",
+        "min": 0.001,
+        "max": 1.0,
+        "default": 0.15,
+        "fmt": "%.2f"
+      }
+    ]
+  },
+  {
+    "id": "chroma_melt",
+    "label": "Chroma Melt",
+    "category": "Chroma",
+    "description": "Trippy chroma smear  \u00b7  keyed feedback trail  \u00b7  motion melts sideways",
+    "params": [
+      {
+        "name": "chroma_melt_r",
+        "label": "Key R",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.0,
+        "fmt": "%.2f"
+      },
+      {
+        "name": "chroma_melt_g",
+        "label": "Key G",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 1.0,
+        "fmt": "%.2f"
+      },
+      {
+        "name": "chroma_melt_b",
+        "label": "Key B",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.0,
+        "fmt": "%.2f"
+      },
+      {
+        "name": "chroma_melt_threshold",
+        "label": "Threshold",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.3,
+        "fmt": "%.2f"
+      },
+      {
+        "name": "chroma_melt_persist",
+        "label": "Persist",
+        "min": 0.0,
+        "max": 0.98,
+        "default": 0.88,
+        "fmt": "%.2f"
+      }
+    ]
+  },
+  {
+    "id": "chroma_echo",
+    "label": "Chroma Echo",
+    "category": "Chroma",
+    "description": "Keyed feedback echo  \u00b7  stacks past frames (crisp ghosts)",
+    "params": [
+      {
+        "name": "chroma_echo_r",
+        "label": "Key R",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.0,
+        "fmt": "%.2f"
+      },
+      {
+        "name": "chroma_echo_g",
+        "label": "Key G",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 1.0,
+        "fmt": "%.2f"
+      },
+      {
+        "name": "chroma_echo_b",
+        "label": "Key B",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.0,
+        "fmt": "%.2f"
+      },
+      {
+        "name": "chroma_echo_threshold",
+        "label": "Threshold",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.3,
+        "fmt": "%.2f"
+      },
+      {
+        "name": "chroma_echo_persist",
+        "label": "Persist",
+        "min": 0.0,
+        "max": 0.98,
+        "default": 0.92,
+        "fmt": "%.2f"
+      }
+    ]
+  },
+  {
+    "id": "chroma_frame",
+    "label": "Chroma Frame",
+    "category": "Chroma",
+    "description": "Keyed multi-tap delay  \u00b7  discrete frame echoes  \u00b7  beat-syncable",
+    "params": [
+      {
+        "name": "chroma_frame_r",
+        "label": "Key R",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.0,
+        "fmt": "%.2f"
+      },
+      {
+        "name": "chroma_frame_g",
+        "label": "Key G",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 1.0,
+        "fmt": "%.2f"
+      },
+      {
+        "name": "chroma_frame_b",
+        "label": "Key B",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.0,
+        "fmt": "%.2f"
+      },
+      {
+        "name": "chroma_frame_threshold",
+        "label": "Threshold",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.3,
+        "fmt": "%.2f"
+      },
+      {
+        "name": "chroma_frame_taps",
+        "label": "Taps",
+        "min": 1.0,
+        "max": 8.0,
+        "default": 4.0,
+        "fmt": "%.0f"
+      },
+      {
+        "name": "chroma_frame_spacing",
+        "label": "Spacing (s)",
+        "min": 0.02,
+        "max": 1.0,
+        "default": 0.12,
+        "fmt": "%.2f"
+      },
+      {
+        "name": "chroma_frame_falloff",
+        "label": "Falloff",
+        "min": 0.2,
+        "max": 0.98,
+        "default": 0.75,
+        "fmt": "%.2f"
+      }
+    ]
+  },
+  {
+    "id": "grade",
+    "label": "Color Grade",
+    "category": "Color",
+    "description": "Classic grade  \u00b7  brightness / contrast / saturation / hue",
+    "params": [
+      {
+        "name": "brightness",
+        "label": "Brightness",
+        "min": -1.0,
+        "max": 1.0,
+        "default": 0.0,
+        "fmt": "%.2f"
+      },
+      {
+        "name": "contrast",
+        "label": "Contrast",
+        "min": 0.0,
+        "max": 3.0,
+        "default": 1.0,
+        "fmt": "%.2f"
+      },
+      {
+        "name": "saturation",
+        "label": "Saturation",
+        "min": 0.0,
+        "max": 3.0,
+        "default": 1.0,
+        "fmt": "%.2f"
+      },
+      {
+        "name": "hue",
+        "label": "Hue",
+        "min": -180.0,
+        "max": 180.0,
+        "default": 0.0,
+        "fmt": "%.0f deg"
+      }
+    ]
+  },
+  {
+    "id": "blur",
+    "label": "Blur",
+    "category": "Tools",
+    "description": "Soft gaussian-style blur  \u00b7  dreamy diffusion",
+    "params": [
+      {
+        "name": "blur",
+        "label": "Radius",
+        "min": 0.0,
+        "max": 14.0,
+        "default": 6.0,
+        "fmt": "%.1f px"
+      }
+    ]
+  },
+  {
+    "id": "vignette",
+    "label": "Vignette",
+    "category": "Film",
+    "description": "Darkened corners  \u00b7  cinematic frame focus",
+    "params": [
+      {
+        "name": "vignette",
+        "label": "Amount",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.4,
+        "fmt": "%.2f"
+      }
+    ]
+  },
+  {
+    "id": "glitch",
+    "label": "Glitch (Classic)",
+    "category": "Glitch",
+    "description": "RGB split + row jitter + block corruption  \u00b7  the original",
+    "params": [
+      {
+        "name": "glitch_chroma",
+        "label": "Chroma (px)",
+        "min": 0.0,
+        "max": 20.0,
+        "default": 8.0,
+        "fmt": "%.0f px"
+      },
+      {
+        "name": "glitch_jitter",
+        "label": "Jitter",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.3,
+        "fmt": "%.2f"
+      },
+      {
+        "name": "glitch_corruption",
+        "label": "Corruption",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.2,
+        "fmt": "%.2f"
+      },
+      {
+        "name": "glitch_corruption_bleed",
+        "label": "Corruption Bleed",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.0,
+        "fmt": "%.2f"
+      }
+    ]
+  },
+  {
+    "id": "vhs",
+    "label": "VHS (Classic)",
+    "category": "Film",
+    "description": "Chroma bleed + grain + tracking glitch  \u00b7  worn-tape look",
+    "params": [
+      {
+        "name": "vhs_noise",
+        "label": "Noise",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.3,
+        "fmt": "%.2f"
+      },
+      {
+        "name": "vhs_bleed",
+        "label": "Bleed (px)",
+        "min": 0.0,
+        "max": 20.0,
+        "default": 8.0,
+        "fmt": "%.0f px"
+      },
+      {
+        "name": "vhs_tracking",
+        "label": "Tracking",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.3,
+        "fmt": "%.2f"
+      }
+    ]
+  },
+  {
+    "id": "light_leak",
+    "label": "Light Leak (Classic)",
+    "category": "Light",
+    "description": "Drifting warm flares  \u00b7  analog film leak",
+    "params": [
+      {
+        "name": "leak_intensity",
+        "label": "Intensity",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.6,
+        "fmt": "%.2f"
+      },
+      {
+        "name": "leak_speed",
+        "label": "Speed",
+        "min": 0.0,
+        "max": 4.0,
+        "default": 1.0,
+        "fmt": "%.2f"
+      }
+    ]
+  },
+  {
+    "id": "datamosh",
+    "label": "Datamosh (Classic)",
+    "category": "Glitch",
+    "description": "Saturation-matted chroma drag  \u00b7  compression corruption look",
+    "params": [
+      {
+        "name": "datamosh_intensity",
+        "label": "Intensity",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.6,
+        "fmt": "%.2f"
+      },
+      {
+        "name": "datamosh_spread",
+        "label": "Spread",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.3,
+        "fmt": "%.2f"
+      }
+    ]
   }
 ]

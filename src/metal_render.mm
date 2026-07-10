@@ -233,6 +233,97 @@ fragment float4 body_glitch(FSOut in [[stage_in]], constant BodyUni& u [[buffer(
 }
 )";
 
+// ── Chroma feedback FX MSL ───────────────────────────────────────────────────
+// Hand-written ports of the desktop chroma feedback family (k_chroma_melt_frag /
+// k_chroma_echo_frag / k_chroma_frame_frag in fx_shader.cpp — keep in sync).
+// These are stateful: melt/echo read the previous frame's own output from a
+// persistent per-chain feedback texture; frame reads a per-chain ring of past
+// snapshots (2D array, 8 layers). The state lives CPU-side in g_chroma_fb,
+// keyed by (chain, stack index, fx_type) — see the chroma branch of
+// run_fx_stack. Uniform layout is plain floats (CPU mirror: ChromaUniCPU).
+static NSString* const kChromaSrc = @R"(
+#include <metal_stdlib>
+using namespace metal;
+
+struct FSOut { float4 pos [[position]]; float2 v_uv [[user(locn0)]]; };
+struct ChromaUni { float key_r; float key_g; float key_b; float threshold;
+                   float persist; float head; float ntaps; float falloff;
+                   float tw; float th; };
+
+// Chroma melt — keyed background keeps the prior frame, drifting sideways →
+// smear trails. Soft matte on a box-averaged colour (codec-noise tolerant).
+fragment float4 chroma_melt_f(FSOut in [[stage_in]], constant ChromaUni& u [[buffer(0)]],
+                              texture2d<float> src [[texture(0)]],
+                              texture2d<float> fb  [[texture(1)]]) {
+    constexpr sampler s(mag_filter::linear, min_filter::linear, address::clamp_to_edge);
+    float3 cur = src.sample(s, in.v_uv).rgb;
+    float2 tx  = float2(1.0 / u.tw, 1.0 / u.th);
+    float3 kc = (cur
+              + src.sample(s, in.v_uv + float2( 2.0*tx.x, 0.0)).rgb
+              + src.sample(s, in.v_uv + float2(-2.0*tx.x, 0.0)).rgb
+              + src.sample(s, in.v_uv + float2(0.0,  2.0*tx.y)).rgb
+              + src.sample(s, in.v_uv + float2(0.0, -2.0*tx.y)).rgb) * 0.2;
+    float3 key   = float3(u.key_r, u.key_g, u.key_b);
+    float  lum_k = dot(key, float3(0.299, 0.587, 0.114));
+    float  lum_p = dot(kc,  float3(0.299, 0.587, 0.114));
+    float  dist  = length((kc - lum_p) - (key - lum_k));
+    float  fg    = smoothstep(u.threshold, u.threshold + 0.12, dist);
+    float3 prev  = fb.sample(s, in.v_uv + float2(1.5*tx.x, 0.0)).rgb;
+    float3 trail = mix(cur, prev, u.persist);
+    return float4(mix(trail, cur, fg), 1.0);
+}
+
+// Chroma echo — crisp sibling: HARD matte + no drift, keyed pixels stack the
+// subject's past frames as distinct fading ghosts.
+fragment float4 chroma_echo_f(FSOut in [[stage_in]], constant ChromaUni& u [[buffer(0)]],
+                              texture2d<float> src [[texture(0)]],
+                              texture2d<float> fb  [[texture(1)]]) {
+    constexpr sampler s(mag_filter::linear, min_filter::linear, address::clamp_to_edge);
+    float3 cur = src.sample(s, in.v_uv).rgb;
+    float2 tx  = float2(1.0 / u.tw, 1.0 / u.th);
+    float3 kc = (cur
+              + src.sample(s, in.v_uv + float2( 2.0*tx.x, 0.0)).rgb
+              + src.sample(s, in.v_uv + float2(-2.0*tx.x, 0.0)).rgb
+              + src.sample(s, in.v_uv + float2(0.0,  2.0*tx.y)).rgb
+              + src.sample(s, in.v_uv + float2(0.0, -2.0*tx.y)).rgb) * 0.2;
+    float3 key   = float3(u.key_r, u.key_g, u.key_b);
+    float  lum_k = dot(key, float3(0.299, 0.587, 0.114));
+    float  lum_p = dot(kc,  float3(0.299, 0.587, 0.114));
+    float  dist  = length((kc - lum_p) - (key - lum_k));
+    float  fg    = step(u.threshold, dist);
+    float3 prev  = fb.sample(s, in.v_uv).rgb;
+    float3 echo  = mix(cur, prev, u.persist);
+    return float4(mix(echo, cur, fg), 1.0);
+}
+
+// Chroma frame — discrete multi-tap delay from the snapshot ring. head/ntaps
+// arrive as floats (plain-float uniform); RING must match kChromaRingLayers.
+fragment float4 chroma_frame_f(FSOut in [[stage_in]], constant ChromaUni& u [[buffer(0)]],
+                               texture2d<float>       src  [[texture(0)]],
+                               texture2d_array<float> ring [[texture(1)]]) {
+    constexpr sampler s(mag_filter::linear, min_filter::linear, address::clamp_to_edge);
+    const int RING = 8;
+    float3 key   = float3(u.key_r, u.key_g, u.key_b);
+    float  lum_k = dot(key, float3(0.299, 0.587, 0.114));
+    float3 live  = src.sample(s, in.v_uv).rgb;
+    float  live_fg = step(u.threshold,
+                          length((live - dot(live, float3(0.299,0.587,0.114))) - (key - lum_k)));
+    int head  = int(u.head);
+    int ntaps = int(u.ntaps);
+    float3 echo = live;
+    for (int i = RING - 1; i >= 0; --i) {
+        if (i >= ntaps) continue;
+        int layer = ((head - i) % RING + RING) % RING;
+        float3 tcol = ring.sample(s, in.v_uv, layer).rgb;
+        float  m    = step(u.threshold,
+                           length((tcol - dot(tcol, float3(0.299,0.587,0.114))) - (key - lum_k)));
+        float  a    = m * pow(u.falloff, float(i));
+        echo = mix(echo, tcol, a);
+    }
+    return float4(mix(echo, live, live_fg), 1.0);
+}
+)";
+
 static id<MTLDevice>              g_dev     = nil;
 static id<MTLCommandQueue>        g_queue   = nil;
 static id<MTLRenderPipelineState> g_bg_pso  = nil;   // background aurora
@@ -357,6 +448,85 @@ static BodyUniCPU body_uniforms(const LiveFx& fx, int w, int h, double t) {
     return u;
 }
 
+// ── Chroma feedback FX (stateful hand-written passes) ────────────────────────
+// The desktop chroma family (fx_shader.cpp) keeps per-slot GPU state; here the
+// state is keyed by (chain id, stack index, fx_type) so a melt on layer A and a
+// melt on layer B never share trails. chain ids: per-layer glass chains use
+// (track<<12)|clip, the per-track bus uses -(track+16), the single-content
+// (camera) path uses -2. Entries untouched for kChromaGCFrames frames are
+// dropped (clip deleted / stack changed) so textures don't leak.
+enum { kChromaMelt = 0, kChromaEcho = 1, kChromaFrame = 2, kChromaPassCount = 3 };
+enum { kChromaRingLayers = 8, kChromaGCFrames = 600 };
+static const char* const kChromaEntry[kChromaPassCount] =
+    { "chroma_melt_f", "chroma_echo_f", "chroma_frame_f" };
+static id<MTLRenderPipelineState> g_chroma_pso[kChromaPassCount] = { nil, nil, nil };
+static bool g_chroma_tried = false;
+
+static int chroma_pass_index(const std::string& fx_type) {
+    if (fx_type == "chroma_melt")  return kChromaMelt;
+    if (fx_type == "chroma_echo")  return kChromaEcho;
+    if (fx_type == "chroma_frame") return kChromaFrame;
+    return -1;
+}
+
+// Byte-for-byte mirror of the MSL ChromaUni (plain floats).
+struct ChromaUniCPU { float key_r, key_g, key_b, threshold,
+                            persist, head, ntaps, falloff, tw, th; };
+
+struct ChromaFbState {
+    id<MTLTexture> feedback = nil;      // melt/echo: previous pass output
+    id<MTLTexture> ring     = nil;      // frame: 2D array of past snapshots
+    int      head = -1, count = 0;      // ring cursor
+    double   last_t = -1e9;             // last snapshot time (frame)
+    int      w = 0, h = 0;
+    bool     primed = false;            // feedback holds a valid prior frame
+    uint64_t last_used = 0;             // frame serial, for GC
+};
+static std::map<std::tuple<int, int, std::string>, ChromaFbState> g_chroma_fb;
+static uint64_t g_frame_serial = 0;
+
+static void chroma_fb_gc() {
+    for (auto it = g_chroma_fb.begin(); it != g_chroma_fb.end();)
+        if (g_frame_serial - it->second.last_used > kChromaGCFrames)
+            it = g_chroma_fb.erase(it);
+        else ++it;
+}
+
+static float chroma_param(const LiveFx& fx, const char* name, float def) {
+    auto it = fx.params.find(name);
+    return it != fx.params.end() ? it->second : def;
+}
+
+// Defaults mirror the Clip field initializers in app.h.
+static ChromaUniCPU chroma_uniforms(const LiveFx& fx, int pass, int w, int h) {
+    ChromaUniCPU u = { 0, 1, 0, 0.30f, 0, 0, 0, 0, (float)w, (float)h };
+    switch (pass) {
+        case kChromaMelt:
+            u.key_r     = chroma_param(fx, "chroma_melt_r", 0.f);
+            u.key_g     = chroma_param(fx, "chroma_melt_g", 1.f);
+            u.key_b     = chroma_param(fx, "chroma_melt_b", 0.f);
+            u.threshold = chroma_param(fx, "chroma_melt_threshold", 0.30f);
+            u.persist   = chroma_param(fx, "chroma_melt_persist",   0.88f);
+            break;
+        case kChromaEcho:
+            u.key_r     = chroma_param(fx, "chroma_echo_r", 0.f);
+            u.key_g     = chroma_param(fx, "chroma_echo_g", 1.f);
+            u.key_b     = chroma_param(fx, "chroma_echo_b", 0.f);
+            u.threshold = chroma_param(fx, "chroma_echo_threshold", 0.30f);
+            u.persist   = chroma_param(fx, "chroma_echo_persist",   0.92f);
+            break;
+        case kChromaFrame:
+            u.key_r     = chroma_param(fx, "chroma_frame_r", 0.f);
+            u.key_g     = chroma_param(fx, "chroma_frame_g", 1.f);
+            u.key_b     = chroma_param(fx, "chroma_frame_b", 0.f);
+            u.threshold = chroma_param(fx, "chroma_frame_threshold", 0.30f);
+            u.ntaps     = chroma_param(fx, "chroma_frame_taps",    4.f);
+            u.falloff   = chroma_param(fx, "chroma_frame_falloff", 0.75f);
+            break;
+    }
+    return u;
+}
+
 struct FxProgram { id<MTLRenderPipelineState> pso = nil; const ManifestEntry* m = nullptr; bool tried = false; };
 static std::unordered_map<std::string, FxProgram> g_fx_progs;
 
@@ -406,6 +576,29 @@ static id<MTLRenderPipelineState> get_body_pso(int pass) {
         }
     }
     return (pass >= 0 && pass < kBodyPassCount) ? g_body_pso[pass] : nil;
+}
+
+// Lazily compile the three chroma passes (same pattern as the body passes).
+static id<MTLRenderPipelineState> get_chroma_pso(int pass) {
+    if (!g_chroma_tried) {
+        g_chroma_tried = true;
+        if (g_dev && g_fs_v) {
+            NSError* err = nil;
+            id<MTLLibrary> lib = [g_dev newLibraryWithSource:kChromaSrc options:nil error:&err];
+            if (!lib) NSLog(@"[chroma_fx] library: %@", err);
+            for (int k = 0; lib && k < kChromaPassCount; ++k) {
+                id<MTLFunction> frag = [lib newFunctionWithName:
+                    [NSString stringWithUTF8String:kChromaEntry[k]]];
+                if (!frag) { NSLog(@"[chroma_fx] %s: function not found", kChromaEntry[k]); continue; }
+                MTLRenderPipelineDescriptor* rd = [MTLRenderPipelineDescriptor new];
+                rd.vertexFunction = g_fs_v; rd.fragmentFunction = frag;
+                rd.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
+                g_chroma_pso[k] = [g_dev newRenderPipelineStateWithDescriptor:rd error:&err];
+                if (!g_chroma_pso[k]) NSLog(@"[chroma_fx] %s pso: %@", kChromaEntry[k], err);
+            }
+        }
+    }
+    return (pass >= 0 && pass < kChromaPassCount) ? g_chroma_pso[pass] : nil;
 }
 
 static NSString* shader_path(const char* name, const char* ext) {
@@ -515,7 +708,7 @@ static void fill_params(const ManifestEntry& m, const LiveFx& fx, int w, int h, 
 // *matte_cutout (the cutout happens at composite time, not as a chain pass).
 struct FxRunResult { int applied = 0; bool matte_cutout = false; bool pso_failed = false; };
 static id<MTLTexture> run_fx_stack(id<MTLCommandBuffer> cb, id<MTLTexture> src,
-                                   int sw, int sh,
+                                   int sw, int sh, int chain_id,
                                    const std::vector<LiveFx>& stack,
                                    double anim_t, double window_t,
                                    id<MTLTexture> matte,
@@ -539,8 +732,54 @@ static id<MTLTexture> run_fx_stack(id<MTLCommandBuffer> cb, id<MTLTexture> src,
 
         id<MTLRenderPipelineState> pso = nil;
         const ManifestEntry* mf = nullptr;
+        ChromaFbState* cst = nullptr;                 // chroma feedback entry
+        int chroma_pass = chroma_pass_index(fx.fx_type);
         bool is_body = (fx.fx_type == "body_fx");
-        if (is_body) {
+        if (!is_body && chroma_pass >= 0) {
+            pso = get_chroma_pso(chroma_pass);
+            if (!pso) { set_status(i, "pso_failed"); if (result) result->pso_failed = true; continue; }
+            cst = &g_chroma_fb[{chain_id, (int)i, fx.fx_type}];
+            cst->last_used = g_frame_serial;
+            if (cst->w != sw || cst->h != sh) {       // (re)allocate state textures
+                *cst = ChromaFbState{};
+                cst->last_used = g_frame_serial;
+                cst->w = sw; cst->h = sh;
+                MTLTextureDescriptor* td = [MTLTextureDescriptor
+                    texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+                    width:sw height:sh mipmapped:NO];
+                td.usage = MTLTextureUsageShaderRead | MTLTextureUsageRenderTarget;
+                if (chroma_pass == kChromaFrame) {
+                    td.textureType = MTLTextureType2DArray;
+                    td.arrayLength = kChromaRingLayers;
+                    cst->ring = [g_dev newTextureWithDescriptor:td];
+                } else {
+                    cst->feedback = [g_dev newTextureWithDescriptor:td];
+                }
+            }
+            if ((chroma_pass == kChromaFrame && !cst->ring) ||
+                (chroma_pass != kChromaFrame && !cst->feedback)) {
+                set_status(i, "pso_failed"); if (result) result->pso_failed = true; continue;
+            }
+            if (chroma_pass == kChromaFrame) {
+                // Snapshot cadence + scrub reset mirror the desktop FrameRing.
+                float spacing = fmaxf(0.01f, chroma_param(fx, "chroma_frame_spacing", 0.12f));
+                if (window_t < cst->last_t - 0.001 || window_t - cst->last_t > spacing * 8.0) {
+                    cst->head = -1; cst->count = 0; cst->last_t = -1e9;
+                }
+                if (cst->head < 0 || window_t - cst->last_t >= spacing) {
+                    cst->head = (cst->head + 1) % kChromaRingLayers;
+                    if (cst->count < kChromaRingLayers) cst->count++;
+                    cst->last_t = window_t;
+                    id<MTLBlitCommandEncoder> bl = [cb blitCommandEncoder];
+                    [bl copyFromTexture:cur sourceSlice:0 sourceLevel:0
+                           sourceOrigin:MTLOriginMake(0, 0, 0)
+                             sourceSize:MTLSizeMake(sw, sh, 1)
+                              toTexture:cst->ring destinationSlice:cst->head
+                       destinationLevel:0 destinationOrigin:MTLOriginMake(0, 0, 0)];
+                    [bl endEncoding];
+                }
+            }
+        } else if (is_body) {
             if (fx.body_fx_type == "Remove Background") {
                 // The cutout is the person-matte composite itself.
                 if (matte) { if (result) result->matte_cutout = true; set_status(i, "matte_cutout"); }
@@ -568,7 +807,20 @@ static id<MTLTexture> run_fx_stack(id<MTLCommandBuffer> cb, id<MTLTexture> src,
         rpF.colorAttachments[0].storeAction = MTLStoreActionStore;
         id<MTLRenderCommandEncoder> e = [cb renderCommandEncoderWithDescriptor:rpF];
         [e setRenderPipelineState:pso];
-        if (is_body) {
+        if (cst) {
+            ChromaUniCPU u = chroma_uniforms(fx, chroma_pass, sw, sh);
+            if (chroma_pass == kChromaFrame) {
+                u.head  = (float)cst->head;
+                u.ntaps = fminf(u.ntaps, (float)cst->count);
+                [e setFragmentTexture:cst->ring atIndex:1];
+            } else {
+                // First frame: the feedback slot is garbage — read the live
+                // frame instead (trail == cur, i.e. no ghost yet).
+                [e setFragmentTexture:(cst->primed ? cst->feedback : cur) atIndex:1];
+            }
+            [e setFragmentBytes:&u length:sizeof(u) atIndex:0];
+            [e setFragmentTexture:cur atIndex:0];
+        } else if (is_body) {
             BodyUniCPU u = body_uniforms(fx, sw, sh, anim_t);
             [e setFragmentBytes:&u length:sizeof(u) atIndex:0];
             [e setFragmentTexture:cur atIndex:0];
@@ -582,6 +834,18 @@ static id<MTLTexture> run_fx_stack(id<MTLCommandBuffer> cb, id<MTLTexture> src,
         [e drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
         [e endEncoding];
         id<MTLTexture> post = ping[dst]; dst ^= 1;
+        if (cst && chroma_pass != kChromaFrame) {
+            // Persist this pass's output as next frame's feedback (the desktop
+            // reads last frame's slot output the same way).
+            id<MTLBlitCommandEncoder> bl = [cb blitCommandEncoder];
+            [bl copyFromTexture:post sourceSlice:0 sourceLevel:0
+                   sourceOrigin:MTLOriginMake(0, 0, 0)
+                     sourceSize:MTLSizeMake(sw, sh, 1)
+                      toTexture:cst->feedback destinationSlice:0
+               destinationLevel:0 destinationOrigin:MTLOriginMake(0, 0, 0)];
+            [bl endEncoding];
+            cst->primed = true;
+        }
         if (fx.amount < 0.999f && g_fx_blend_pso) {           // wet/dry blend
             MTLRenderPassDescriptor* rpB = [MTLRenderPassDescriptor new];
             rpB.colorAttachments[0].texture     = ping[dst];
@@ -967,7 +1231,71 @@ static void scene_push_fx(std::vector<LiveFx>& out, const Clip& cl, float t) {
             fx.params[pname] = cl.eval_prop(n, t);
         }
     } else {
+        // Legacy hand-wired FX: emit the same param names effect_params_to_json
+        // uses (ipc_server.cpp), which are also the manifest/uniform names the
+        // Metal ports of these passes expect. Fields read directly — legacy FX
+        // params are not keyframable.
         fx.fx_type = named_fx_id(cl.fx_type);
+        switch (cl.fx_type) {
+            case FXType::Grade:
+                fx.params["brightness"] = cl.fx_brightness;
+                fx.params["contrast"]   = cl.fx_contrast;
+                fx.params["saturation"] = cl.fx_saturation;
+                fx.params["hue"]        = cl.fx_hue;
+                break;
+            case FXType::Blur:     fx.params["blur"]     = cl.fx_blur;     break;
+            case FXType::Vignette: fx.params["vignette"] = cl.fx_vignette; break;
+            case FXType::Glitch:
+                fx.params["glitch_chroma"]           = cl.fx_glitch_chroma;
+                fx.params["glitch_jitter"]           = cl.fx_glitch_jitter;
+                fx.params["glitch_corruption"]       = cl.fx_glitch_corruption;
+                fx.params["glitch_corruption_bleed"] = cl.fx_glitch_corruption_bleed;
+                break;
+            case FXType::VHS:
+                fx.params["vhs_noise"]    = cl.fx_vhs_noise;
+                fx.params["vhs_bleed"]    = cl.fx_vhs_bleed;
+                fx.params["vhs_tracking"] = cl.fx_vhs_tracking;
+                break;
+            case FXType::LightLeak:
+                fx.params["leak_intensity"] = cl.fx_leak_intensity;
+                fx.params["leak_speed"]     = cl.fx_leak_speed;
+                break;
+            case FXType::Datamosh:
+                fx.params["datamosh_intensity"] = cl.fx_datamosh_intensity;
+                fx.params["datamosh_spread"]    = cl.fx_datamosh_spread;
+                break;
+            case FXType::ChromaKey:
+                fx.params["chroma_key_r"]         = cl.fx_chroma_key_r;
+                fx.params["chroma_key_g"]         = cl.fx_chroma_key_g;
+                fx.params["chroma_key_b"]         = cl.fx_chroma_key_b;
+                fx.params["chroma_key_threshold"] = cl.fx_chroma_key_threshold;
+                fx.params["chroma_key_softness"]  = cl.fx_chroma_key_softness;
+                break;
+            case FXType::ChromaMelt:
+                fx.params["chroma_melt_r"]         = cl.fx_chroma_melt_r;
+                fx.params["chroma_melt_g"]         = cl.fx_chroma_melt_g;
+                fx.params["chroma_melt_b"]         = cl.fx_chroma_melt_b;
+                fx.params["chroma_melt_threshold"] = cl.fx_chroma_melt_threshold;
+                fx.params["chroma_melt_persist"]   = cl.fx_chroma_melt_persist;
+                break;
+            case FXType::ChromaEcho:
+                fx.params["chroma_echo_r"]         = cl.fx_chroma_echo_r;
+                fx.params["chroma_echo_g"]         = cl.fx_chroma_echo_g;
+                fx.params["chroma_echo_b"]         = cl.fx_chroma_echo_b;
+                fx.params["chroma_echo_threshold"] = cl.fx_chroma_echo_threshold;
+                fx.params["chroma_echo_persist"]   = cl.fx_chroma_echo_persist;
+                break;
+            case FXType::ChromaFrame:
+                fx.params["chroma_frame_r"]         = cl.fx_chroma_frame_r;
+                fx.params["chroma_frame_g"]         = cl.fx_chroma_frame_g;
+                fx.params["chroma_frame_b"]         = cl.fx_chroma_frame_b;
+                fx.params["chroma_frame_threshold"] = cl.fx_chroma_frame_threshold;
+                fx.params["chroma_frame_taps"]      = cl.fx_chroma_frame_taps;
+                fx.params["chroma_frame_spacing"]   = cl.fx_chroma_frame_spacing;
+                fx.params["chroma_frame_falloff"]   = cl.fx_chroma_frame_falloff;
+                break;
+            default: break;
+        }
     }
     auto a = fx.params.find("amount");
     if (a != fx.params.end()) fx.amount = a->second;
@@ -1170,7 +1498,8 @@ static int render_scene(id<MTLCommandBuffer> cb, id<MTLTexture> target, int w, i
             std::vector<LiveFx> stack = scene_glass_stack(st, ti, t);
             if (!stack.empty()) {
                 std::vector<std::string> sts; FxRunResult rr;
-                tex = run_fx_stack(cb, tex, lf.w, lf.h, stack, t, t, matte, &sts, &rr);
+                tex = run_fx_stack(cb, tex, lf.w, lf.h, (ti << 12) | ci,
+                                   stack, t, t, matte, &sts, &rr);
                 glass_n += rr.applied; applied_here = rr.applied;
                 cutout = rr.matte_cutout;
                 if (rr.pso_failed) rc = 4;
@@ -1361,8 +1690,8 @@ static int render_scene(id<MTLCommandBuffer> cb, id<MTLTexture> target, int w, i
             std::vector<LiveFx> bus = scene_bus_stack(st, ti, t);
             if (!bus.empty()) {
                 std::vector<std::string> sts; FxRunResult rr;
-                id<MTLTexture> out = run_fx_stack(cb, g_scene[cur], w, h, bus, t, t,
-                                                  matte, &sts, &rr);
+                id<MTLTexture> out = run_fx_stack(cb, g_scene[cur], w, h, -(ti + 16),
+                                                  bus, t, t, matte, &sts, &rr);
                 note_statuses(ti, bus, sts, "bus");
                 if (rr.pso_failed) rc = 4;
                 if (rr.matte_cutout)
@@ -1436,7 +1765,8 @@ static int render_legacy(id<MTLCommandBuffer> cb, id<MTLTexture> target, int w, 
     int rc0 = 0;
     if (source && !stack.empty()) {
         FxRunResult rr;
-        source = run_fx_stack(cb, source, sw, sh, stack, t, g_content_time,
+        source = run_fx_stack(cb, source, sw, sh, /*chain_id=*/-2,
+                              stack, t, g_content_time,
                               matte, &statuses, &rr);
         if (rr.pso_failed) rc0 = 4;
     } else if (!stack.empty()) {
@@ -1489,6 +1819,8 @@ static int render_legacy(id<MTLCommandBuffer> cb, id<MTLTexture> target, int w, 
 int metal_render_frame(void* mtl_texture, int w, int h, double t, const AppState* state) {
     if (!g_queue || !g_bg_pso || !mtl_texture) return 1;
     id<MTLTexture> target = (__bridge id<MTLTexture>)mtl_texture;
+    ++g_frame_serial;                 // chroma feedback GC clock
+    if ((g_frame_serial & 63) == 0) chroma_fb_gc();
 
     // Snapshot content + matte + layer frames under the lock. Every CoreVideo
     // mapping used this frame is retained until the command buffer completes

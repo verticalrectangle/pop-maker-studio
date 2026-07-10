@@ -841,6 +841,110 @@ static void fx_accum_from_attached(CreativeFXAccum& acc, FXType type, float amou
             if ((int)pv.size() > 1) acc.glass_skin_gloss = fmaxf(acc.glass_skin_gloss, pv[1]);
             acc.any_gen_fx = true;
             break;
+        case FXType::PorcelainSkin:
+            acc.porcelain_skin_on = true;
+            acc.porcelain_skin_amount = fmaxf(acc.porcelain_skin_amount, amount);
+            if ((int)pv.size() > 0) acc.porcelain_skin_smooth = fmaxf(acc.porcelain_skin_smooth, pv[0]);
+            if ((int)pv.size() > 1) acc.porcelain_skin_brighten = fmaxf(acc.porcelain_skin_brighten, pv[1]);
+            if ((int)pv.size() > 2) acc.porcelain_skin_warmth = fmaxf(acc.porcelain_skin_warmth, pv[2]);
+            acc.any_gen_fx = true;
+            break;
+        case FXType::BlushDoll:
+            acc.blush_doll_on = true;
+            acc.blush_doll_amount = fmaxf(acc.blush_doll_amount, amount);
+            if ((int)pv.size() > 0) acc.blush_doll_blush = fmaxf(acc.blush_doll_blush, pv[0]);
+            if ((int)pv.size() > 1) acc.blush_doll_smooth = fmaxf(acc.blush_doll_smooth, pv[1]);
+            if ((int)pv.size() > 2) acc.blush_doll_tint = fmaxf(acc.blush_doll_tint, pv[2]);
+            acc.any_gen_fx = true;
+            break;
+        case FXType::HoneyGlow:
+            acc.honey_glow_on = true;
+            acc.honey_glow_amount = fmaxf(acc.honey_glow_amount, amount);
+            if ((int)pv.size() > 0) acc.honey_glow_glow = fmaxf(acc.honey_glow_glow, pv[0]);
+            if ((int)pv.size() > 1) acc.honey_glow_warmth = fmaxf(acc.honey_glow_warmth, pv[1]);
+            if ((int)pv.size() > 2) acc.honey_glow_lift = fmaxf(acc.honey_glow_lift, pv[2]);
+            acc.any_gen_fx = true;
+            break;
+        case FXType::SoftGlam:
+            acc.soft_glam_on = true;
+            acc.soft_glam_amount = fmaxf(acc.soft_glam_amount, amount);
+            if ((int)pv.size() > 0) acc.soft_glam_glam = fmaxf(acc.soft_glam_glam, pv[0]);
+            if ((int)pv.size() > 1) acc.soft_glam_split = fmaxf(acc.soft_glam_split, pv[1]);
+            if ((int)pv.size() > 2) acc.soft_glam_sparkle = fmaxf(acc.soft_glam_sparkle, pv[2]);
+            acc.any_gen_fx = true;
+            break;
+        case FXType::AcidTrip:
+            acc.acid_trip_on = true;
+            acc.acid_trip_amount = fmaxf(acc.acid_trip_amount, amount);
+            if ((int)pv.size() > 0) acc.acid_trip_trip = fmaxf(acc.acid_trip_trip, pv[0]);
+            if ((int)pv.size() > 1) acc.acid_trip_speed = fmaxf(acc.acid_trip_speed, pv[1]);
+            if ((int)pv.size() > 2) acc.acid_trip_wobble = fmaxf(acc.acid_trip_wobble, pv[2]);
+            acc.any_gen_fx = true;
+            break;
+        case FXType::LiquidMarble:
+            acc.liquid_marble_on = true;
+            acc.liquid_marble_amount = fmaxf(acc.liquid_marble_amount, amount);
+            if ((int)pv.size() > 0) acc.liquid_marble_flow = fmaxf(acc.liquid_marble_flow, pv[0]);
+            if ((int)pv.size() > 1) acc.liquid_marble_scale = fmaxf(acc.liquid_marble_scale, pv[1]);
+            if ((int)pv.size() > 2) acc.liquid_marble_speed = fmaxf(acc.liquid_marble_speed, pv[2]);
+            acc.any_gen_fx = true;
+            break;
+        case FXType::FractalMirror:
+            acc.fractal_mirror_on = true;
+            acc.fractal_mirror_amount = fmaxf(acc.fractal_mirror_amount, amount);
+            if ((int)pv.size() > 0) acc.fractal_mirror_folds = fmaxf(acc.fractal_mirror_folds, pv[0]);
+            if ((int)pv.size() > 1) acc.fractal_mirror_drift = fmaxf(acc.fractal_mirror_drift, pv[1]);
+            if ((int)pv.size() > 2) acc.fractal_mirror_zoom = fmaxf(acc.fractal_mirror_zoom, pv[2]);
+            acc.any_gen_fx = true;
+            break;
+        case FXType::BreatheWarp:
+            acc.breathe_warp_on = true;
+            acc.breathe_warp_amount = fmaxf(acc.breathe_warp_amount, amount);
+            if ((int)pv.size() > 0) acc.breathe_warp_breathe = fmaxf(acc.breathe_warp_breathe, pv[0]);
+            if ((int)pv.size() > 1) acc.breathe_warp_rate = fmaxf(acc.breathe_warp_rate, pv[1]);
+            if ((int)pv.size() > 2) acc.breathe_warp_chroma = fmaxf(acc.breathe_warp_chroma, pv[2]);
+            acc.any_gen_fx = true;
+            break;
+        case FXType::MeltDrip:
+            acc.melt_drip_on = true;
+            acc.melt_drip_amount = fmaxf(acc.melt_drip_amount, amount);
+            if ((int)pv.size() > 0) acc.melt_drip_melt = fmaxf(acc.melt_drip_melt, pv[0]);
+            if ((int)pv.size() > 1) acc.melt_drip_drip = fmaxf(acc.melt_drip_drip, pv[1]);
+            if ((int)pv.size() > 2) acc.melt_drip_haze = fmaxf(acc.melt_drip_haze, pv[2]);
+            acc.any_gen_fx = true;
+            break;
+        case FXType::NeonCity:
+            acc.neon_city_on = true;
+            acc.neon_city_amount = fmaxf(acc.neon_city_amount, amount);
+            if ((int)pv.size() > 0) acc.neon_city_neon = fmaxf(acc.neon_city_neon, pv[0]);
+            if ((int)pv.size() > 1) acc.neon_city_scanline = fmaxf(acc.neon_city_scanline, pv[1]);
+            if ((int)pv.size() > 2) acc.neon_city_streak = fmaxf(acc.neon_city_streak, pv[2]);
+            acc.any_gen_fx = true;
+            break;
+        case FXType::ChromePulse:
+            acc.chrome_pulse_on = true;
+            acc.chrome_pulse_amount = fmaxf(acc.chrome_pulse_amount, amount);
+            if ((int)pv.size() > 0) acc.chrome_pulse_chrome = fmaxf(acc.chrome_pulse_chrome, pv[0]);
+            if ((int)pv.size() > 1) acc.chrome_pulse_pulse = fmaxf(acc.chrome_pulse_pulse, pv[1]);
+            if ((int)pv.size() > 2) acc.chrome_pulse_edge = fmaxf(acc.chrome_pulse_edge, pv[2]);
+            acc.any_gen_fx = true;
+            break;
+        case FXType::HudGlitch:
+            acc.hud_glitch_on = true;
+            acc.hud_glitch_amount = fmaxf(acc.hud_glitch_amount, amount);
+            if ((int)pv.size() > 0) acc.hud_glitch_hud = fmaxf(acc.hud_glitch_hud, pv[0]);
+            if ((int)pv.size() > 1) acc.hud_glitch_dropout = fmaxf(acc.hud_glitch_dropout, pv[1]);
+            if ((int)pv.size() > 2) acc.hud_glitch_tint = fmaxf(acc.hud_glitch_tint, pv[2]);
+            acc.any_gen_fx = true;
+            break;
+        case FXType::NightDrive:
+            acc.night_drive_on = true;
+            acc.night_drive_amount = fmaxf(acc.night_drive_amount, amount);
+            if ((int)pv.size() > 0) acc.night_drive_night = fmaxf(acc.night_drive_night, pv[0]);
+            if ((int)pv.size() > 1) acc.night_drive_sodium = fmaxf(acc.night_drive_sodium, pv[1]);
+            if ((int)pv.size() > 2) acc.night_drive_flare = fmaxf(acc.night_drive_flare, pv[2]);
+            acc.any_gen_fx = true;
+            break;
         default: break;
     }
 }

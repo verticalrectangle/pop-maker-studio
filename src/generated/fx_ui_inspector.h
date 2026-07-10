@@ -7696,3 +7696,1030 @@
                 }
             }
             break;
+
+        case FXType::PorcelainSkin:
+            kfx("fx_porcelain_skin_amount", "Amount", &clip.fx_porcelain_skin_amount, 0.0f, 1.0f, "%.2f", sw);
+            ImGui::Dummy({0.f, 4.f});
+            {
+                bool _bon = clip.fx_porcelain_skin_smooth_beat > 0.001f;
+                if (_bon) {
+                    ui_label("Smoothing");
+                    ImGui::BeginDisabled();
+                    ImGui::SetNextItemWidth(sw - 26.f);
+                    ImGui::SliderFloat("##gen_porcelain_skin_smooth", &clip.fx_porcelain_skin_smooth, 0.0f, 1.0f, "%.2f");
+                    ImGui::EndDisabled();
+                } else {
+                    kfx("fx_porcelain_skin_smooth", "Smoothing", &clip.fx_porcelain_skin_smooth, 0.0f, 1.0f, "%.2f", sw - 26.f);
+                }
+                ImGui::SameLine(0.f, 4.f);
+                ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
+                if (ImGui::SmallButton("B##bt_porcelain_skin_smooth")) {
+                    clip.fx_porcelain_skin_smooth_beat = _bon ? 0.f : 0.5f;
+                    history_push(state, "Porcelain: Beat Sync");
+                }
+                ImGui::PopStyleColor();
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_porcelain_skin_smooth", &clip.fx_porcelain_skin_smooth_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Porcelain: Beat Intensity");
+                }
+            }
+            ImGui::Dummy({0.f, 4.f});
+            {
+                bool _bon = clip.fx_porcelain_skin_brighten_beat > 0.001f;
+                if (_bon) {
+                    ui_label("Brighten");
+                    ImGui::BeginDisabled();
+                    ImGui::SetNextItemWidth(sw - 26.f);
+                    ImGui::SliderFloat("##gen_porcelain_skin_brighten", &clip.fx_porcelain_skin_brighten, 0.0f, 0.5f, "%.2f");
+                    ImGui::EndDisabled();
+                } else {
+                    kfx("fx_porcelain_skin_brighten", "Brighten", &clip.fx_porcelain_skin_brighten, 0.0f, 0.5f, "%.2f", sw - 26.f);
+                }
+                ImGui::SameLine(0.f, 4.f);
+                ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
+                if (ImGui::SmallButton("B##bt_porcelain_skin_brighten")) {
+                    clip.fx_porcelain_skin_brighten_beat = _bon ? 0.f : 0.5f;
+                    history_push(state, "Porcelain: Beat Sync");
+                }
+                ImGui::PopStyleColor();
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_porcelain_skin_brighten", &clip.fx_porcelain_skin_brighten_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Porcelain: Beat Intensity");
+                }
+            }
+            ImGui::Dummy({0.f, 4.f});
+            {
+                bool _bon = clip.fx_porcelain_skin_warmth_beat > 0.001f;
+                if (_bon) {
+                    ui_label("Warmth");
+                    ImGui::BeginDisabled();
+                    ImGui::SetNextItemWidth(sw - 26.f);
+                    ImGui::SliderFloat("##gen_porcelain_skin_warmth", &clip.fx_porcelain_skin_warmth, -1.0f, 1.0f, "%.2f");
+                    ImGui::EndDisabled();
+                } else {
+                    kfx("fx_porcelain_skin_warmth", "Warmth", &clip.fx_porcelain_skin_warmth, -1.0f, 1.0f, "%.2f", sw - 26.f);
+                }
+                ImGui::SameLine(0.f, 4.f);
+                ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
+                if (ImGui::SmallButton("B##bt_porcelain_skin_warmth")) {
+                    clip.fx_porcelain_skin_warmth_beat = _bon ? 0.f : 0.5f;
+                    history_push(state, "Porcelain: Beat Sync");
+                }
+                ImGui::PopStyleColor();
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_porcelain_skin_warmth", &clip.fx_porcelain_skin_warmth_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Porcelain: Beat Intensity");
+                }
+            }
+            break;
+
+        case FXType::BlushDoll:
+            kfx("fx_blush_doll_amount", "Amount", &clip.fx_blush_doll_amount, 0.0f, 1.0f, "%.2f", sw);
+            ImGui::Dummy({0.f, 4.f});
+            {
+                bool _bon = clip.fx_blush_doll_blush_beat > 0.001f;
+                if (_bon) {
+                    ui_label("Blush");
+                    ImGui::BeginDisabled();
+                    ImGui::SetNextItemWidth(sw - 26.f);
+                    ImGui::SliderFloat("##gen_blush_doll_blush", &clip.fx_blush_doll_blush, 0.0f, 1.0f, "%.2f");
+                    ImGui::EndDisabled();
+                } else {
+                    kfx("fx_blush_doll_blush", "Blush", &clip.fx_blush_doll_blush, 0.0f, 1.0f, "%.2f", sw - 26.f);
+                }
+                ImGui::SameLine(0.f, 4.f);
+                ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
+                if (ImGui::SmallButton("B##bt_blush_doll_blush")) {
+                    clip.fx_blush_doll_blush_beat = _bon ? 0.f : 0.5f;
+                    history_push(state, "Blush Doll: Beat Sync");
+                }
+                ImGui::PopStyleColor();
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_blush_doll_blush", &clip.fx_blush_doll_blush_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Blush Doll: Beat Intensity");
+                }
+            }
+            ImGui::Dummy({0.f, 4.f});
+            {
+                bool _bon = clip.fx_blush_doll_smooth_beat > 0.001f;
+                if (_bon) {
+                    ui_label("Smoothing");
+                    ImGui::BeginDisabled();
+                    ImGui::SetNextItemWidth(sw - 26.f);
+                    ImGui::SliderFloat("##gen_blush_doll_smooth", &clip.fx_blush_doll_smooth, 0.0f, 1.0f, "%.2f");
+                    ImGui::EndDisabled();
+                } else {
+                    kfx("fx_blush_doll_smooth", "Smoothing", &clip.fx_blush_doll_smooth, 0.0f, 1.0f, "%.2f", sw - 26.f);
+                }
+                ImGui::SameLine(0.f, 4.f);
+                ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
+                if (ImGui::SmallButton("B##bt_blush_doll_smooth")) {
+                    clip.fx_blush_doll_smooth_beat = _bon ? 0.f : 0.5f;
+                    history_push(state, "Blush Doll: Beat Sync");
+                }
+                ImGui::PopStyleColor();
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_blush_doll_smooth", &clip.fx_blush_doll_smooth_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Blush Doll: Beat Intensity");
+                }
+            }
+            ImGui::Dummy({0.f, 4.f});
+            {
+                bool _bon = clip.fx_blush_doll_tint_beat > 0.001f;
+                if (_bon) {
+                    ui_label("Peach ↔ Pink");
+                    ImGui::BeginDisabled();
+                    ImGui::SetNextItemWidth(sw - 26.f);
+                    ImGui::SliderFloat("##gen_blush_doll_tint", &clip.fx_blush_doll_tint, 0.0f, 1.0f, "%.2f");
+                    ImGui::EndDisabled();
+                } else {
+                    kfx("fx_blush_doll_tint", "Peach ↔ Pink", &clip.fx_blush_doll_tint, 0.0f, 1.0f, "%.2f", sw - 26.f);
+                }
+                ImGui::SameLine(0.f, 4.f);
+                ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
+                if (ImGui::SmallButton("B##bt_blush_doll_tint")) {
+                    clip.fx_blush_doll_tint_beat = _bon ? 0.f : 0.5f;
+                    history_push(state, "Blush Doll: Beat Sync");
+                }
+                ImGui::PopStyleColor();
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_blush_doll_tint", &clip.fx_blush_doll_tint_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Blush Doll: Beat Intensity");
+                }
+            }
+            break;
+
+        case FXType::HoneyGlow:
+            kfx("fx_honey_glow_amount", "Amount", &clip.fx_honey_glow_amount, 0.0f, 1.0f, "%.2f", sw);
+            ImGui::Dummy({0.f, 4.f});
+            {
+                bool _bon = clip.fx_honey_glow_glow_beat > 0.001f;
+                if (_bon) {
+                    ui_label("Glow");
+                    ImGui::BeginDisabled();
+                    ImGui::SetNextItemWidth(sw - 26.f);
+                    ImGui::SliderFloat("##gen_honey_glow_glow", &clip.fx_honey_glow_glow, 0.0f, 1.0f, "%.2f");
+                    ImGui::EndDisabled();
+                } else {
+                    kfx("fx_honey_glow_glow", "Glow", &clip.fx_honey_glow_glow, 0.0f, 1.0f, "%.2f", sw - 26.f);
+                }
+                ImGui::SameLine(0.f, 4.f);
+                ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
+                if (ImGui::SmallButton("B##bt_honey_glow_glow")) {
+                    clip.fx_honey_glow_glow_beat = _bon ? 0.f : 0.5f;
+                    history_push(state, "Honey Glow: Beat Sync");
+                }
+                ImGui::PopStyleColor();
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_honey_glow_glow", &clip.fx_honey_glow_glow_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Honey Glow: Beat Intensity");
+                }
+            }
+            ImGui::Dummy({0.f, 4.f});
+            {
+                bool _bon = clip.fx_honey_glow_warmth_beat > 0.001f;
+                if (_bon) {
+                    ui_label("Warmth");
+                    ImGui::BeginDisabled();
+                    ImGui::SetNextItemWidth(sw - 26.f);
+                    ImGui::SliderFloat("##gen_honey_glow_warmth", &clip.fx_honey_glow_warmth, 0.0f, 1.0f, "%.2f");
+                    ImGui::EndDisabled();
+                } else {
+                    kfx("fx_honey_glow_warmth", "Warmth", &clip.fx_honey_glow_warmth, 0.0f, 1.0f, "%.2f", sw - 26.f);
+                }
+                ImGui::SameLine(0.f, 4.f);
+                ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
+                if (ImGui::SmallButton("B##bt_honey_glow_warmth")) {
+                    clip.fx_honey_glow_warmth_beat = _bon ? 0.f : 0.5f;
+                    history_push(state, "Honey Glow: Beat Sync");
+                }
+                ImGui::PopStyleColor();
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_honey_glow_warmth", &clip.fx_honey_glow_warmth_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Honey Glow: Beat Intensity");
+                }
+            }
+            ImGui::Dummy({0.f, 4.f});
+            {
+                bool _bon = clip.fx_honey_glow_lift_beat > 0.001f;
+                if (_bon) {
+                    ui_label("Shadow Lift");
+                    ImGui::BeginDisabled();
+                    ImGui::SetNextItemWidth(sw - 26.f);
+                    ImGui::SliderFloat("##gen_honey_glow_lift", &clip.fx_honey_glow_lift, 0.0f, 1.0f, "%.2f");
+                    ImGui::EndDisabled();
+                } else {
+                    kfx("fx_honey_glow_lift", "Shadow Lift", &clip.fx_honey_glow_lift, 0.0f, 1.0f, "%.2f", sw - 26.f);
+                }
+                ImGui::SameLine(0.f, 4.f);
+                ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
+                if (ImGui::SmallButton("B##bt_honey_glow_lift")) {
+                    clip.fx_honey_glow_lift_beat = _bon ? 0.f : 0.5f;
+                    history_push(state, "Honey Glow: Beat Sync");
+                }
+                ImGui::PopStyleColor();
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_honey_glow_lift", &clip.fx_honey_glow_lift_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Honey Glow: Beat Intensity");
+                }
+            }
+            break;
+
+        case FXType::SoftGlam:
+            kfx("fx_soft_glam_amount", "Amount", &clip.fx_soft_glam_amount, 0.0f, 1.0f, "%.2f", sw);
+            ImGui::Dummy({0.f, 4.f});
+            {
+                bool _bon = clip.fx_soft_glam_glam_beat > 0.001f;
+                if (_bon) {
+                    ui_label("Smoothing");
+                    ImGui::BeginDisabled();
+                    ImGui::SetNextItemWidth(sw - 26.f);
+                    ImGui::SliderFloat("##gen_soft_glam_glam", &clip.fx_soft_glam_glam, 0.0f, 1.0f, "%.2f");
+                    ImGui::EndDisabled();
+                } else {
+                    kfx("fx_soft_glam_glam", "Smoothing", &clip.fx_soft_glam_glam, 0.0f, 1.0f, "%.2f", sw - 26.f);
+                }
+                ImGui::SameLine(0.f, 4.f);
+                ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
+                if (ImGui::SmallButton("B##bt_soft_glam_glam")) {
+                    clip.fx_soft_glam_glam_beat = _bon ? 0.f : 0.5f;
+                    history_push(state, "Soft Glam: Beat Sync");
+                }
+                ImGui::PopStyleColor();
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_soft_glam_glam", &clip.fx_soft_glam_glam_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Soft Glam: Beat Intensity");
+                }
+            }
+            ImGui::Dummy({0.f, 4.f});
+            {
+                bool _bon = clip.fx_soft_glam_split_beat > 0.001f;
+                if (_bon) {
+                    ui_label("Split Tone");
+                    ImGui::BeginDisabled();
+                    ImGui::SetNextItemWidth(sw - 26.f);
+                    ImGui::SliderFloat("##gen_soft_glam_split", &clip.fx_soft_glam_split, 0.0f, 1.0f, "%.2f");
+                    ImGui::EndDisabled();
+                } else {
+                    kfx("fx_soft_glam_split", "Split Tone", &clip.fx_soft_glam_split, 0.0f, 1.0f, "%.2f", sw - 26.f);
+                }
+                ImGui::SameLine(0.f, 4.f);
+                ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
+                if (ImGui::SmallButton("B##bt_soft_glam_split")) {
+                    clip.fx_soft_glam_split_beat = _bon ? 0.f : 0.5f;
+                    history_push(state, "Soft Glam: Beat Sync");
+                }
+                ImGui::PopStyleColor();
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_soft_glam_split", &clip.fx_soft_glam_split_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Soft Glam: Beat Intensity");
+                }
+            }
+            ImGui::Dummy({0.f, 4.f});
+            {
+                bool _bon = clip.fx_soft_glam_sparkle_beat > 0.001f;
+                if (_bon) {
+                    ui_label("Sparkle");
+                    ImGui::BeginDisabled();
+                    ImGui::SetNextItemWidth(sw - 26.f);
+                    ImGui::SliderFloat("##gen_soft_glam_sparkle", &clip.fx_soft_glam_sparkle, 0.0f, 1.0f, "%.2f");
+                    ImGui::EndDisabled();
+                } else {
+                    kfx("fx_soft_glam_sparkle", "Sparkle", &clip.fx_soft_glam_sparkle, 0.0f, 1.0f, "%.2f", sw - 26.f);
+                }
+                ImGui::SameLine(0.f, 4.f);
+                ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
+                if (ImGui::SmallButton("B##bt_soft_glam_sparkle")) {
+                    clip.fx_soft_glam_sparkle_beat = _bon ? 0.f : 0.5f;
+                    history_push(state, "Soft Glam: Beat Sync");
+                }
+                ImGui::PopStyleColor();
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_soft_glam_sparkle", &clip.fx_soft_glam_sparkle_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Soft Glam: Beat Intensity");
+                }
+            }
+            break;
+
+        case FXType::AcidTrip:
+            kfx("fx_acid_trip_amount", "Amount", &clip.fx_acid_trip_amount, 0.0f, 1.0f, "%.2f", sw);
+            ImGui::Dummy({0.f, 4.f});
+            {
+                bool _bon = clip.fx_acid_trip_trip_beat > 0.001f;
+                if (_bon) {
+                    ui_label("Trip Depth");
+                    ImGui::BeginDisabled();
+                    ImGui::SetNextItemWidth(sw - 26.f);
+                    ImGui::SliderFloat("##gen_acid_trip_trip", &clip.fx_acid_trip_trip, 0.0f, 1.0f, "%.2f");
+                    ImGui::EndDisabled();
+                } else {
+                    kfx("fx_acid_trip_trip", "Trip Depth", &clip.fx_acid_trip_trip, 0.0f, 1.0f, "%.2f", sw - 26.f);
+                }
+                ImGui::SameLine(0.f, 4.f);
+                ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
+                if (ImGui::SmallButton("B##bt_acid_trip_trip")) {
+                    clip.fx_acid_trip_trip_beat = _bon ? 0.f : 0.5f;
+                    history_push(state, "Acid Trip: Beat Sync");
+                }
+                ImGui::PopStyleColor();
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_acid_trip_trip", &clip.fx_acid_trip_trip_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Acid Trip: Beat Intensity");
+                }
+            }
+            ImGui::Dummy({0.f, 4.f});
+            {
+                bool _bon = clip.fx_acid_trip_speed_beat > 0.001f;
+                if (_bon) {
+                    ui_label("Speed");
+                    ImGui::BeginDisabled();
+                    ImGui::SetNextItemWidth(sw - 26.f);
+                    ImGui::SliderFloat("##gen_acid_trip_speed", &clip.fx_acid_trip_speed, 0.0f, 4.0f, "%.2f");
+                    ImGui::EndDisabled();
+                } else {
+                    kfx("fx_acid_trip_speed", "Speed", &clip.fx_acid_trip_speed, 0.0f, 4.0f, "%.2f", sw - 26.f);
+                }
+                ImGui::SameLine(0.f, 4.f);
+                ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
+                if (ImGui::SmallButton("B##bt_acid_trip_speed")) {
+                    clip.fx_acid_trip_speed_beat = _bon ? 0.f : 0.5f;
+                    history_push(state, "Acid Trip: Beat Sync");
+                }
+                ImGui::PopStyleColor();
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_acid_trip_speed", &clip.fx_acid_trip_speed_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Acid Trip: Beat Intensity");
+                }
+            }
+            ImGui::Dummy({0.f, 4.f});
+            {
+                bool _bon = clip.fx_acid_trip_wobble_beat > 0.001f;
+                if (_bon) {
+                    ui_label("Wobble");
+                    ImGui::BeginDisabled();
+                    ImGui::SetNextItemWidth(sw - 26.f);
+                    ImGui::SliderFloat("##gen_acid_trip_wobble", &clip.fx_acid_trip_wobble, 0.0f, 1.0f, "%.2f");
+                    ImGui::EndDisabled();
+                } else {
+                    kfx("fx_acid_trip_wobble", "Wobble", &clip.fx_acid_trip_wobble, 0.0f, 1.0f, "%.2f", sw - 26.f);
+                }
+                ImGui::SameLine(0.f, 4.f);
+                ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
+                if (ImGui::SmallButton("B##bt_acid_trip_wobble")) {
+                    clip.fx_acid_trip_wobble_beat = _bon ? 0.f : 0.5f;
+                    history_push(state, "Acid Trip: Beat Sync");
+                }
+                ImGui::PopStyleColor();
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_acid_trip_wobble", &clip.fx_acid_trip_wobble_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Acid Trip: Beat Intensity");
+                }
+            }
+            break;
+
+        case FXType::LiquidMarble:
+            kfx("fx_liquid_marble_amount", "Amount", &clip.fx_liquid_marble_amount, 0.0f, 1.0f, "%.2f", sw);
+            ImGui::Dummy({0.f, 4.f});
+            {
+                bool _bon = clip.fx_liquid_marble_flow_beat > 0.001f;
+                if (_bon) {
+                    ui_label("Flow");
+                    ImGui::BeginDisabled();
+                    ImGui::SetNextItemWidth(sw - 26.f);
+                    ImGui::SliderFloat("##gen_liquid_marble_flow", &clip.fx_liquid_marble_flow, 0.0f, 1.0f, "%.2f");
+                    ImGui::EndDisabled();
+                } else {
+                    kfx("fx_liquid_marble_flow", "Flow", &clip.fx_liquid_marble_flow, 0.0f, 1.0f, "%.2f", sw - 26.f);
+                }
+                ImGui::SameLine(0.f, 4.f);
+                ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
+                if (ImGui::SmallButton("B##bt_liquid_marble_flow")) {
+                    clip.fx_liquid_marble_flow_beat = _bon ? 0.f : 0.5f;
+                    history_push(state, "Liquid Marble: Beat Sync");
+                }
+                ImGui::PopStyleColor();
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_liquid_marble_flow", &clip.fx_liquid_marble_flow_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Liquid Marble: Beat Intensity");
+                }
+            }
+            ImGui::Dummy({0.f, 4.f});
+            {
+                bool _bon = clip.fx_liquid_marble_scale_beat > 0.001f;
+                if (_bon) {
+                    ui_label("Swirl Scale");
+                    ImGui::BeginDisabled();
+                    ImGui::SetNextItemWidth(sw - 26.f);
+                    ImGui::SliderFloat("##gen_liquid_marble_scale", &clip.fx_liquid_marble_scale, 1.0f, 10.0f, "%.1f");
+                    ImGui::EndDisabled();
+                } else {
+                    kfx("fx_liquid_marble_scale", "Swirl Scale", &clip.fx_liquid_marble_scale, 1.0f, 10.0f, "%.1f", sw - 26.f);
+                }
+                ImGui::SameLine(0.f, 4.f);
+                ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
+                if (ImGui::SmallButton("B##bt_liquid_marble_scale")) {
+                    clip.fx_liquid_marble_scale_beat = _bon ? 0.f : 0.5f;
+                    history_push(state, "Liquid Marble: Beat Sync");
+                }
+                ImGui::PopStyleColor();
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_liquid_marble_scale", &clip.fx_liquid_marble_scale_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Liquid Marble: Beat Intensity");
+                }
+            }
+            ImGui::Dummy({0.f, 4.f});
+            {
+                bool _bon = clip.fx_liquid_marble_speed_beat > 0.001f;
+                if (_bon) {
+                    ui_label("Speed");
+                    ImGui::BeginDisabled();
+                    ImGui::SetNextItemWidth(sw - 26.f);
+                    ImGui::SliderFloat("##gen_liquid_marble_speed", &clip.fx_liquid_marble_speed, 0.0f, 4.0f, "%.2f");
+                    ImGui::EndDisabled();
+                } else {
+                    kfx("fx_liquid_marble_speed", "Speed", &clip.fx_liquid_marble_speed, 0.0f, 4.0f, "%.2f", sw - 26.f);
+                }
+                ImGui::SameLine(0.f, 4.f);
+                ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
+                if (ImGui::SmallButton("B##bt_liquid_marble_speed")) {
+                    clip.fx_liquid_marble_speed_beat = _bon ? 0.f : 0.5f;
+                    history_push(state, "Liquid Marble: Beat Sync");
+                }
+                ImGui::PopStyleColor();
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_liquid_marble_speed", &clip.fx_liquid_marble_speed_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Liquid Marble: Beat Intensity");
+                }
+            }
+            break;
+
+        case FXType::FractalMirror:
+            kfx("fx_fractal_mirror_amount", "Amount", &clip.fx_fractal_mirror_amount, 0.0f, 1.0f, "%.2f", sw);
+            ImGui::Dummy({0.f, 4.f});
+            {
+                bool _bon = clip.fx_fractal_mirror_folds_beat > 0.001f;
+                if (_bon) {
+                    ui_label("Folds");
+                    ImGui::BeginDisabled();
+                    ImGui::SetNextItemWidth(sw - 26.f);
+                    ImGui::SliderFloat("##gen_fractal_mirror_folds", &clip.fx_fractal_mirror_folds, 1.0f, 6.0f, "%.0f");
+                    ImGui::EndDisabled();
+                } else {
+                    kfx("fx_fractal_mirror_folds", "Folds", &clip.fx_fractal_mirror_folds, 1.0f, 6.0f, "%.0f", sw - 26.f);
+                }
+                ImGui::SameLine(0.f, 4.f);
+                ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
+                if (ImGui::SmallButton("B##bt_fractal_mirror_folds")) {
+                    clip.fx_fractal_mirror_folds_beat = _bon ? 0.f : 0.5f;
+                    history_push(state, "Fractal Mirror: Beat Sync");
+                }
+                ImGui::PopStyleColor();
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_fractal_mirror_folds", &clip.fx_fractal_mirror_folds_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Fractal Mirror: Beat Intensity");
+                }
+            }
+            ImGui::Dummy({0.f, 4.f});
+            {
+                bool _bon = clip.fx_fractal_mirror_drift_beat > 0.001f;
+                if (_bon) {
+                    ui_label("Drift");
+                    ImGui::BeginDisabled();
+                    ImGui::SetNextItemWidth(sw - 26.f);
+                    ImGui::SliderFloat("##gen_fractal_mirror_drift", &clip.fx_fractal_mirror_drift, 0.0f, 1.0f, "%.2f");
+                    ImGui::EndDisabled();
+                } else {
+                    kfx("fx_fractal_mirror_drift", "Drift", &clip.fx_fractal_mirror_drift, 0.0f, 1.0f, "%.2f", sw - 26.f);
+                }
+                ImGui::SameLine(0.f, 4.f);
+                ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
+                if (ImGui::SmallButton("B##bt_fractal_mirror_drift")) {
+                    clip.fx_fractal_mirror_drift_beat = _bon ? 0.f : 0.5f;
+                    history_push(state, "Fractal Mirror: Beat Sync");
+                }
+                ImGui::PopStyleColor();
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_fractal_mirror_drift", &clip.fx_fractal_mirror_drift_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Fractal Mirror: Beat Intensity");
+                }
+            }
+            ImGui::Dummy({0.f, 4.f});
+            {
+                bool _bon = clip.fx_fractal_mirror_zoom_beat > 0.001f;
+                if (_bon) {
+                    ui_label("Breathe Zoom");
+                    ImGui::BeginDisabled();
+                    ImGui::SetNextItemWidth(sw - 26.f);
+                    ImGui::SliderFloat("##gen_fractal_mirror_zoom", &clip.fx_fractal_mirror_zoom, 0.0f, 1.0f, "%.2f");
+                    ImGui::EndDisabled();
+                } else {
+                    kfx("fx_fractal_mirror_zoom", "Breathe Zoom", &clip.fx_fractal_mirror_zoom, 0.0f, 1.0f, "%.2f", sw - 26.f);
+                }
+                ImGui::SameLine(0.f, 4.f);
+                ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
+                if (ImGui::SmallButton("B##bt_fractal_mirror_zoom")) {
+                    clip.fx_fractal_mirror_zoom_beat = _bon ? 0.f : 0.5f;
+                    history_push(state, "Fractal Mirror: Beat Sync");
+                }
+                ImGui::PopStyleColor();
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_fractal_mirror_zoom", &clip.fx_fractal_mirror_zoom_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Fractal Mirror: Beat Intensity");
+                }
+            }
+            break;
+
+        case FXType::BreatheWarp:
+            kfx("fx_breathe_warp_amount", "Amount", &clip.fx_breathe_warp_amount, 0.0f, 1.0f, "%.2f", sw);
+            ImGui::Dummy({0.f, 4.f});
+            {
+                bool _bon = clip.fx_breathe_warp_breathe_beat > 0.001f;
+                if (_bon) {
+                    ui_label("Depth");
+                    ImGui::BeginDisabled();
+                    ImGui::SetNextItemWidth(sw - 26.f);
+                    ImGui::SliderFloat("##gen_breathe_warp_breathe", &clip.fx_breathe_warp_breathe, 0.0f, 1.0f, "%.2f");
+                    ImGui::EndDisabled();
+                } else {
+                    kfx("fx_breathe_warp_breathe", "Depth", &clip.fx_breathe_warp_breathe, 0.0f, 1.0f, "%.2f", sw - 26.f);
+                }
+                ImGui::SameLine(0.f, 4.f);
+                ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
+                if (ImGui::SmallButton("B##bt_breathe_warp_breathe")) {
+                    clip.fx_breathe_warp_breathe_beat = _bon ? 0.f : 0.5f;
+                    history_push(state, "Breathe: Beat Sync");
+                }
+                ImGui::PopStyleColor();
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_breathe_warp_breathe", &clip.fx_breathe_warp_breathe_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Breathe: Beat Intensity");
+                }
+            }
+            ImGui::Dummy({0.f, 4.f});
+            {
+                bool _bon = clip.fx_breathe_warp_rate_beat > 0.001f;
+                if (_bon) {
+                    ui_label("Rate");
+                    ImGui::BeginDisabled();
+                    ImGui::SetNextItemWidth(sw - 26.f);
+                    ImGui::SliderFloat("##gen_breathe_warp_rate", &clip.fx_breathe_warp_rate, 0.0f, 4.0f, "%.2f");
+                    ImGui::EndDisabled();
+                } else {
+                    kfx("fx_breathe_warp_rate", "Rate", &clip.fx_breathe_warp_rate, 0.0f, 4.0f, "%.2f", sw - 26.f);
+                }
+                ImGui::SameLine(0.f, 4.f);
+                ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
+                if (ImGui::SmallButton("B##bt_breathe_warp_rate")) {
+                    clip.fx_breathe_warp_rate_beat = _bon ? 0.f : 0.5f;
+                    history_push(state, "Breathe: Beat Sync");
+                }
+                ImGui::PopStyleColor();
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_breathe_warp_rate", &clip.fx_breathe_warp_rate_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Breathe: Beat Intensity");
+                }
+            }
+            ImGui::Dummy({0.f, 4.f});
+            {
+                bool _bon = clip.fx_breathe_warp_chroma_beat > 0.001f;
+                if (_bon) {
+                    ui_label("Edge Chroma");
+                    ImGui::BeginDisabled();
+                    ImGui::SetNextItemWidth(sw - 26.f);
+                    ImGui::SliderFloat("##gen_breathe_warp_chroma", &clip.fx_breathe_warp_chroma, 0.0f, 1.0f, "%.2f");
+                    ImGui::EndDisabled();
+                } else {
+                    kfx("fx_breathe_warp_chroma", "Edge Chroma", &clip.fx_breathe_warp_chroma, 0.0f, 1.0f, "%.2f", sw - 26.f);
+                }
+                ImGui::SameLine(0.f, 4.f);
+                ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
+                if (ImGui::SmallButton("B##bt_breathe_warp_chroma")) {
+                    clip.fx_breathe_warp_chroma_beat = _bon ? 0.f : 0.5f;
+                    history_push(state, "Breathe: Beat Sync");
+                }
+                ImGui::PopStyleColor();
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_breathe_warp_chroma", &clip.fx_breathe_warp_chroma_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Breathe: Beat Intensity");
+                }
+            }
+            break;
+
+        case FXType::MeltDrip:
+            kfx("fx_melt_drip_amount", "Amount", &clip.fx_melt_drip_amount, 0.0f, 1.0f, "%.2f", sw);
+            ImGui::Dummy({0.f, 4.f});
+            {
+                bool _bon = clip.fx_melt_drip_melt_beat > 0.001f;
+                if (_bon) {
+                    ui_label("Melt");
+                    ImGui::BeginDisabled();
+                    ImGui::SetNextItemWidth(sw - 26.f);
+                    ImGui::SliderFloat("##gen_melt_drip_melt", &clip.fx_melt_drip_melt, 0.0f, 1.0f, "%.2f");
+                    ImGui::EndDisabled();
+                } else {
+                    kfx("fx_melt_drip_melt", "Melt", &clip.fx_melt_drip_melt, 0.0f, 1.0f, "%.2f", sw - 26.f);
+                }
+                ImGui::SameLine(0.f, 4.f);
+                ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
+                if (ImGui::SmallButton("B##bt_melt_drip_melt")) {
+                    clip.fx_melt_drip_melt_beat = _bon ? 0.f : 0.5f;
+                    history_push(state, "Melt Drip: Beat Sync");
+                }
+                ImGui::PopStyleColor();
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_melt_drip_melt", &clip.fx_melt_drip_melt_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Melt Drip: Beat Intensity");
+                }
+            }
+            ImGui::Dummy({0.f, 4.f});
+            {
+                bool _bon = clip.fx_melt_drip_drip_beat > 0.001f;
+                if (_bon) {
+                    ui_label("Drip Ragged");
+                    ImGui::BeginDisabled();
+                    ImGui::SetNextItemWidth(sw - 26.f);
+                    ImGui::SliderFloat("##gen_melt_drip_drip", &clip.fx_melt_drip_drip, 0.0f, 1.0f, "%.2f");
+                    ImGui::EndDisabled();
+                } else {
+                    kfx("fx_melt_drip_drip", "Drip Ragged", &clip.fx_melt_drip_drip, 0.0f, 1.0f, "%.2f", sw - 26.f);
+                }
+                ImGui::SameLine(0.f, 4.f);
+                ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
+                if (ImGui::SmallButton("B##bt_melt_drip_drip")) {
+                    clip.fx_melt_drip_drip_beat = _bon ? 0.f : 0.5f;
+                    history_push(state, "Melt Drip: Beat Sync");
+                }
+                ImGui::PopStyleColor();
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_melt_drip_drip", &clip.fx_melt_drip_drip_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Melt Drip: Beat Intensity");
+                }
+            }
+            ImGui::Dummy({0.f, 4.f});
+            {
+                bool _bon = clip.fx_melt_drip_haze_beat > 0.001f;
+                if (_bon) {
+                    ui_label("Heat Haze");
+                    ImGui::BeginDisabled();
+                    ImGui::SetNextItemWidth(sw - 26.f);
+                    ImGui::SliderFloat("##gen_melt_drip_haze", &clip.fx_melt_drip_haze, 0.0f, 1.0f, "%.2f");
+                    ImGui::EndDisabled();
+                } else {
+                    kfx("fx_melt_drip_haze", "Heat Haze", &clip.fx_melt_drip_haze, 0.0f, 1.0f, "%.2f", sw - 26.f);
+                }
+                ImGui::SameLine(0.f, 4.f);
+                ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
+                if (ImGui::SmallButton("B##bt_melt_drip_haze")) {
+                    clip.fx_melt_drip_haze_beat = _bon ? 0.f : 0.5f;
+                    history_push(state, "Melt Drip: Beat Sync");
+                }
+                ImGui::PopStyleColor();
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_melt_drip_haze", &clip.fx_melt_drip_haze_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Melt Drip: Beat Intensity");
+                }
+            }
+            break;
+
+        case FXType::NeonCity:
+            kfx("fx_neon_city_amount", "Amount", &clip.fx_neon_city_amount, 0.0f, 1.0f, "%.2f", sw);
+            ImGui::Dummy({0.f, 4.f});
+            {
+                bool _bon = clip.fx_neon_city_neon_beat > 0.001f;
+                if (_bon) {
+                    ui_label("Grade");
+                    ImGui::BeginDisabled();
+                    ImGui::SetNextItemWidth(sw - 26.f);
+                    ImGui::SliderFloat("##gen_neon_city_neon", &clip.fx_neon_city_neon, 0.0f, 1.0f, "%.2f");
+                    ImGui::EndDisabled();
+                } else {
+                    kfx("fx_neon_city_neon", "Grade", &clip.fx_neon_city_neon, 0.0f, 1.0f, "%.2f", sw - 26.f);
+                }
+                ImGui::SameLine(0.f, 4.f);
+                ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
+                if (ImGui::SmallButton("B##bt_neon_city_neon")) {
+                    clip.fx_neon_city_neon_beat = _bon ? 0.f : 0.5f;
+                    history_push(state, "Neon City: Beat Sync");
+                }
+                ImGui::PopStyleColor();
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_neon_city_neon", &clip.fx_neon_city_neon_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Neon City: Beat Intensity");
+                }
+            }
+            ImGui::Dummy({0.f, 4.f});
+            {
+                bool _bon = clip.fx_neon_city_scanline_beat > 0.001f;
+                if (_bon) {
+                    ui_label("Scanlines");
+                    ImGui::BeginDisabled();
+                    ImGui::SetNextItemWidth(sw - 26.f);
+                    ImGui::SliderFloat("##gen_neon_city_scanline", &clip.fx_neon_city_scanline, 0.0f, 1.0f, "%.2f");
+                    ImGui::EndDisabled();
+                } else {
+                    kfx("fx_neon_city_scanline", "Scanlines", &clip.fx_neon_city_scanline, 0.0f, 1.0f, "%.2f", sw - 26.f);
+                }
+                ImGui::SameLine(0.f, 4.f);
+                ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
+                if (ImGui::SmallButton("B##bt_neon_city_scanline")) {
+                    clip.fx_neon_city_scanline_beat = _bon ? 0.f : 0.5f;
+                    history_push(state, "Neon City: Beat Sync");
+                }
+                ImGui::PopStyleColor();
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_neon_city_scanline", &clip.fx_neon_city_scanline_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Neon City: Beat Intensity");
+                }
+            }
+            ImGui::Dummy({0.f, 4.f});
+            {
+                bool _bon = clip.fx_neon_city_streak_beat > 0.001f;
+                if (_bon) {
+                    ui_label("Neon Streaks");
+                    ImGui::BeginDisabled();
+                    ImGui::SetNextItemWidth(sw - 26.f);
+                    ImGui::SliderFloat("##gen_neon_city_streak", &clip.fx_neon_city_streak, 0.0f, 1.0f, "%.2f");
+                    ImGui::EndDisabled();
+                } else {
+                    kfx("fx_neon_city_streak", "Neon Streaks", &clip.fx_neon_city_streak, 0.0f, 1.0f, "%.2f", sw - 26.f);
+                }
+                ImGui::SameLine(0.f, 4.f);
+                ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
+                if (ImGui::SmallButton("B##bt_neon_city_streak")) {
+                    clip.fx_neon_city_streak_beat = _bon ? 0.f : 0.5f;
+                    history_push(state, "Neon City: Beat Sync");
+                }
+                ImGui::PopStyleColor();
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_neon_city_streak", &clip.fx_neon_city_streak_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Neon City: Beat Intensity");
+                }
+            }
+            break;
+
+        case FXType::ChromePulse:
+            kfx("fx_chrome_pulse_amount", "Amount", &clip.fx_chrome_pulse_amount, 0.0f, 1.0f, "%.2f", sw);
+            ImGui::Dummy({0.f, 4.f});
+            {
+                bool _bon = clip.fx_chrome_pulse_chrome_beat > 0.001f;
+                if (_bon) {
+                    ui_label("Metallize");
+                    ImGui::BeginDisabled();
+                    ImGui::SetNextItemWidth(sw - 26.f);
+                    ImGui::SliderFloat("##gen_chrome_pulse_chrome", &clip.fx_chrome_pulse_chrome, 0.0f, 1.0f, "%.2f");
+                    ImGui::EndDisabled();
+                } else {
+                    kfx("fx_chrome_pulse_chrome", "Metallize", &clip.fx_chrome_pulse_chrome, 0.0f, 1.0f, "%.2f", sw - 26.f);
+                }
+                ImGui::SameLine(0.f, 4.f);
+                ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
+                if (ImGui::SmallButton("B##bt_chrome_pulse_chrome")) {
+                    clip.fx_chrome_pulse_chrome_beat = _bon ? 0.f : 0.5f;
+                    history_push(state, "Chrome Pulse: Beat Sync");
+                }
+                ImGui::PopStyleColor();
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_chrome_pulse_chrome", &clip.fx_chrome_pulse_chrome_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Chrome Pulse: Beat Intensity");
+                }
+            }
+            ImGui::Dummy({0.f, 4.f});
+            {
+                bool _bon = clip.fx_chrome_pulse_pulse_beat > 0.001f;
+                if (_bon) {
+                    ui_label("Pulse Rate");
+                    ImGui::BeginDisabled();
+                    ImGui::SetNextItemWidth(sw - 26.f);
+                    ImGui::SliderFloat("##gen_chrome_pulse_pulse", &clip.fx_chrome_pulse_pulse, 0.0f, 4.0f, "%.2f");
+                    ImGui::EndDisabled();
+                } else {
+                    kfx("fx_chrome_pulse_pulse", "Pulse Rate", &clip.fx_chrome_pulse_pulse, 0.0f, 4.0f, "%.2f", sw - 26.f);
+                }
+                ImGui::SameLine(0.f, 4.f);
+                ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
+                if (ImGui::SmallButton("B##bt_chrome_pulse_pulse")) {
+                    clip.fx_chrome_pulse_pulse_beat = _bon ? 0.f : 0.5f;
+                    history_push(state, "Chrome Pulse: Beat Sync");
+                }
+                ImGui::PopStyleColor();
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_chrome_pulse_pulse", &clip.fx_chrome_pulse_pulse_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Chrome Pulse: Beat Intensity");
+                }
+            }
+            ImGui::Dummy({0.f, 4.f});
+            {
+                bool _bon = clip.fx_chrome_pulse_edge_beat > 0.001f;
+                if (_bon) {
+                    ui_label("Rim Glow");
+                    ImGui::BeginDisabled();
+                    ImGui::SetNextItemWidth(sw - 26.f);
+                    ImGui::SliderFloat("##gen_chrome_pulse_edge", &clip.fx_chrome_pulse_edge, 0.0f, 1.0f, "%.2f");
+                    ImGui::EndDisabled();
+                } else {
+                    kfx("fx_chrome_pulse_edge", "Rim Glow", &clip.fx_chrome_pulse_edge, 0.0f, 1.0f, "%.2f", sw - 26.f);
+                }
+                ImGui::SameLine(0.f, 4.f);
+                ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
+                if (ImGui::SmallButton("B##bt_chrome_pulse_edge")) {
+                    clip.fx_chrome_pulse_edge_beat = _bon ? 0.f : 0.5f;
+                    history_push(state, "Chrome Pulse: Beat Sync");
+                }
+                ImGui::PopStyleColor();
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_chrome_pulse_edge", &clip.fx_chrome_pulse_edge_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Chrome Pulse: Beat Intensity");
+                }
+            }
+            break;
+
+        case FXType::HudGlitch:
+            kfx("fx_hud_glitch_amount", "Amount", &clip.fx_hud_glitch_amount, 0.0f, 1.0f, "%.2f", sw);
+            ImGui::Dummy({0.f, 4.f});
+            {
+                bool _bon = clip.fx_hud_glitch_hud_beat > 0.001f;
+                if (_bon) {
+                    ui_label("HUD Lines");
+                    ImGui::BeginDisabled();
+                    ImGui::SetNextItemWidth(sw - 26.f);
+                    ImGui::SliderFloat("##gen_hud_glitch_hud", &clip.fx_hud_glitch_hud, 0.0f, 1.0f, "%.2f");
+                    ImGui::EndDisabled();
+                } else {
+                    kfx("fx_hud_glitch_hud", "HUD Lines", &clip.fx_hud_glitch_hud, 0.0f, 1.0f, "%.2f", sw - 26.f);
+                }
+                ImGui::SameLine(0.f, 4.f);
+                ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
+                if (ImGui::SmallButton("B##bt_hud_glitch_hud")) {
+                    clip.fx_hud_glitch_hud_beat = _bon ? 0.f : 0.5f;
+                    history_push(state, "HUD Glitch: Beat Sync");
+                }
+                ImGui::PopStyleColor();
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_hud_glitch_hud", &clip.fx_hud_glitch_hud_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "HUD Glitch: Beat Intensity");
+                }
+            }
+            ImGui::Dummy({0.f, 4.f});
+            {
+                bool _bon = clip.fx_hud_glitch_dropout_beat > 0.001f;
+                if (_bon) {
+                    ui_label("Dropouts");
+                    ImGui::BeginDisabled();
+                    ImGui::SetNextItemWidth(sw - 26.f);
+                    ImGui::SliderFloat("##gen_hud_glitch_dropout", &clip.fx_hud_glitch_dropout, 0.0f, 1.0f, "%.2f");
+                    ImGui::EndDisabled();
+                } else {
+                    kfx("fx_hud_glitch_dropout", "Dropouts", &clip.fx_hud_glitch_dropout, 0.0f, 1.0f, "%.2f", sw - 26.f);
+                }
+                ImGui::SameLine(0.f, 4.f);
+                ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
+                if (ImGui::SmallButton("B##bt_hud_glitch_dropout")) {
+                    clip.fx_hud_glitch_dropout_beat = _bon ? 0.f : 0.5f;
+                    history_push(state, "HUD Glitch: Beat Sync");
+                }
+                ImGui::PopStyleColor();
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_hud_glitch_dropout", &clip.fx_hud_glitch_dropout_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "HUD Glitch: Beat Intensity");
+                }
+            }
+            ImGui::Dummy({0.f, 4.f});
+            {
+                bool _bon = clip.fx_hud_glitch_tint_beat > 0.001f;
+                if (_bon) {
+                    ui_label("Cyan Tint");
+                    ImGui::BeginDisabled();
+                    ImGui::SetNextItemWidth(sw - 26.f);
+                    ImGui::SliderFloat("##gen_hud_glitch_tint", &clip.fx_hud_glitch_tint, 0.0f, 1.0f, "%.2f");
+                    ImGui::EndDisabled();
+                } else {
+                    kfx("fx_hud_glitch_tint", "Cyan Tint", &clip.fx_hud_glitch_tint, 0.0f, 1.0f, "%.2f", sw - 26.f);
+                }
+                ImGui::SameLine(0.f, 4.f);
+                ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
+                if (ImGui::SmallButton("B##bt_hud_glitch_tint")) {
+                    clip.fx_hud_glitch_tint_beat = _bon ? 0.f : 0.5f;
+                    history_push(state, "HUD Glitch: Beat Sync");
+                }
+                ImGui::PopStyleColor();
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_hud_glitch_tint", &clip.fx_hud_glitch_tint_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "HUD Glitch: Beat Intensity");
+                }
+            }
+            break;
+
+        case FXType::NightDrive:
+            kfx("fx_night_drive_amount", "Amount", &clip.fx_night_drive_amount, 0.0f, 1.0f, "%.2f", sw);
+            ImGui::Dummy({0.f, 4.f});
+            {
+                bool _bon = clip.fx_night_drive_night_beat > 0.001f;
+                if (_bon) {
+                    ui_label("Grade");
+                    ImGui::BeginDisabled();
+                    ImGui::SetNextItemWidth(sw - 26.f);
+                    ImGui::SliderFloat("##gen_night_drive_night", &clip.fx_night_drive_night, 0.0f, 1.0f, "%.2f");
+                    ImGui::EndDisabled();
+                } else {
+                    kfx("fx_night_drive_night", "Grade", &clip.fx_night_drive_night, 0.0f, 1.0f, "%.2f", sw - 26.f);
+                }
+                ImGui::SameLine(0.f, 4.f);
+                ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
+                if (ImGui::SmallButton("B##bt_night_drive_night")) {
+                    clip.fx_night_drive_night_beat = _bon ? 0.f : 0.5f;
+                    history_push(state, "Night Drive: Beat Sync");
+                }
+                ImGui::PopStyleColor();
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_night_drive_night", &clip.fx_night_drive_night_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Night Drive: Beat Intensity");
+                }
+            }
+            ImGui::Dummy({0.f, 4.f});
+            {
+                bool _bon = clip.fx_night_drive_sodium_beat > 0.001f;
+                if (_bon) {
+                    ui_label("Sodium Highs");
+                    ImGui::BeginDisabled();
+                    ImGui::SetNextItemWidth(sw - 26.f);
+                    ImGui::SliderFloat("##gen_night_drive_sodium", &clip.fx_night_drive_sodium, 0.0f, 1.0f, "%.2f");
+                    ImGui::EndDisabled();
+                } else {
+                    kfx("fx_night_drive_sodium", "Sodium Highs", &clip.fx_night_drive_sodium, 0.0f, 1.0f, "%.2f", sw - 26.f);
+                }
+                ImGui::SameLine(0.f, 4.f);
+                ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
+                if (ImGui::SmallButton("B##bt_night_drive_sodium")) {
+                    clip.fx_night_drive_sodium_beat = _bon ? 0.f : 0.5f;
+                    history_push(state, "Night Drive: Beat Sync");
+                }
+                ImGui::PopStyleColor();
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_night_drive_sodium", &clip.fx_night_drive_sodium_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Night Drive: Beat Intensity");
+                }
+            }
+            ImGui::Dummy({0.f, 4.f});
+            {
+                bool _bon = clip.fx_night_drive_flare_beat > 0.001f;
+                if (_bon) {
+                    ui_label("Flares");
+                    ImGui::BeginDisabled();
+                    ImGui::SetNextItemWidth(sw - 26.f);
+                    ImGui::SliderFloat("##gen_night_drive_flare", &clip.fx_night_drive_flare, 0.0f, 1.0f, "%.2f");
+                    ImGui::EndDisabled();
+                } else {
+                    kfx("fx_night_drive_flare", "Flares", &clip.fx_night_drive_flare, 0.0f, 1.0f, "%.2f", sw - 26.f);
+                }
+                ImGui::SameLine(0.f, 4.f);
+                ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
+                if (ImGui::SmallButton("B##bt_night_drive_flare")) {
+                    clip.fx_night_drive_flare_beat = _bon ? 0.f : 0.5f;
+                    history_push(state, "Night Drive: Beat Sync");
+                }
+                ImGui::PopStyleColor();
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_night_drive_flare", &clip.fx_night_drive_flare_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Night Drive: Beat Intensity");
+                }
+            }
+            break;

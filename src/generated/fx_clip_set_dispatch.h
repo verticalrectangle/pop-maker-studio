@@ -1039,5 +1039,135 @@ static bool fx_clip_set_param(Clip& c, const std::string& fx_id,
         if (param == "gloss_beat") { c.fx_glass_skin_gloss_beat = value; return true; }
         return false;
     }
+    if (fx_id == "porcelain_skin") {
+        if (param == "amount") { c.fx_porcelain_skin_amount = value; return true; }
+        if (param == "smooth") { c.fx_porcelain_skin_smooth = value; return true; }
+        if (param == "smooth_beat") { c.fx_porcelain_skin_smooth_beat = value; return true; }
+        if (param == "brighten") { c.fx_porcelain_skin_brighten = value; return true; }
+        if (param == "brighten_beat") { c.fx_porcelain_skin_brighten_beat = value; return true; }
+        if (param == "warmth") { c.fx_porcelain_skin_warmth = value; return true; }
+        if (param == "warmth_beat") { c.fx_porcelain_skin_warmth_beat = value; return true; }
+        return false;
+    }
+    if (fx_id == "blush_doll") {
+        if (param == "amount") { c.fx_blush_doll_amount = value; return true; }
+        if (param == "blush") { c.fx_blush_doll_blush = value; return true; }
+        if (param == "blush_beat") { c.fx_blush_doll_blush_beat = value; return true; }
+        if (param == "smooth") { c.fx_blush_doll_smooth = value; return true; }
+        if (param == "smooth_beat") { c.fx_blush_doll_smooth_beat = value; return true; }
+        if (param == "tint") { c.fx_blush_doll_tint = value; return true; }
+        if (param == "tint_beat") { c.fx_blush_doll_tint_beat = value; return true; }
+        return false;
+    }
+    if (fx_id == "honey_glow") {
+        if (param == "amount") { c.fx_honey_glow_amount = value; return true; }
+        if (param == "glow") { c.fx_honey_glow_glow = value; return true; }
+        if (param == "glow_beat") { c.fx_honey_glow_glow_beat = value; return true; }
+        if (param == "warmth") { c.fx_honey_glow_warmth = value; return true; }
+        if (param == "warmth_beat") { c.fx_honey_glow_warmth_beat = value; return true; }
+        if (param == "lift") { c.fx_honey_glow_lift = value; return true; }
+        if (param == "lift_beat") { c.fx_honey_glow_lift_beat = value; return true; }
+        return false;
+    }
+    if (fx_id == "soft_glam") {
+        if (param == "amount") { c.fx_soft_glam_amount = value; return true; }
+        if (param == "glam") { c.fx_soft_glam_glam = value; return true; }
+        if (param == "glam_beat") { c.fx_soft_glam_glam_beat = value; return true; }
+        if (param == "split") { c.fx_soft_glam_split = value; return true; }
+        if (param == "split_beat") { c.fx_soft_glam_split_beat = value; return true; }
+        if (param == "sparkle") { c.fx_soft_glam_sparkle = value; return true; }
+        if (param == "sparkle_beat") { c.fx_soft_glam_sparkle_beat = value; return true; }
+        return false;
+    }
+    if (fx_id == "acid_trip") {
+        if (param == "amount") { c.fx_acid_trip_amount = value; return true; }
+        if (param == "trip") { c.fx_acid_trip_trip = value; return true; }
+        if (param == "trip_beat") { c.fx_acid_trip_trip_beat = value; return true; }
+        if (param == "speed") { c.fx_acid_trip_speed = value; return true; }
+        if (param == "speed_beat") { c.fx_acid_trip_speed_beat = value; return true; }
+        if (param == "wobble") { c.fx_acid_trip_wobble = value; return true; }
+        if (param == "wobble_beat") { c.fx_acid_trip_wobble_beat = value; return true; }
+        return false;
+    }
+    if (fx_id == "liquid_marble") {
+        if (param == "amount") { c.fx_liquid_marble_amount = value; return true; }
+        if (param == "flow") { c.fx_liquid_marble_flow = value; return true; }
+        if (param == "flow_beat") { c.fx_liquid_marble_flow_beat = value; return true; }
+        if (param == "scale") { c.fx_liquid_marble_scale = value; return true; }
+        if (param == "scale_beat") { c.fx_liquid_marble_scale_beat = value; return true; }
+        if (param == "speed") { c.fx_liquid_marble_speed = value; return true; }
+        if (param == "speed_beat") { c.fx_liquid_marble_speed_beat = value; return true; }
+        return false;
+    }
+    if (fx_id == "fractal_mirror") {
+        if (param == "amount") { c.fx_fractal_mirror_amount = value; return true; }
+        if (param == "folds") { c.fx_fractal_mirror_folds = value; return true; }
+        if (param == "folds_beat") { c.fx_fractal_mirror_folds_beat = value; return true; }
+        if (param == "drift") { c.fx_fractal_mirror_drift = value; return true; }
+        if (param == "drift_beat") { c.fx_fractal_mirror_drift_beat = value; return true; }
+        if (param == "zoom") { c.fx_fractal_mirror_zoom = value; return true; }
+        if (param == "zoom_beat") { c.fx_fractal_mirror_zoom_beat = value; return true; }
+        return false;
+    }
+    if (fx_id == "breathe_warp") {
+        if (param == "amount") { c.fx_breathe_warp_amount = value; return true; }
+        if (param == "breathe") { c.fx_breathe_warp_breathe = value; return true; }
+        if (param == "breathe_beat") { c.fx_breathe_warp_breathe_beat = value; return true; }
+        if (param == "rate") { c.fx_breathe_warp_rate = value; return true; }
+        if (param == "rate_beat") { c.fx_breathe_warp_rate_beat = value; return true; }
+        if (param == "chroma") { c.fx_breathe_warp_chroma = value; return true; }
+        if (param == "chroma_beat") { c.fx_breathe_warp_chroma_beat = value; return true; }
+        return false;
+    }
+    if (fx_id == "melt_drip") {
+        if (param == "amount") { c.fx_melt_drip_amount = value; return true; }
+        if (param == "melt") { c.fx_melt_drip_melt = value; return true; }
+        if (param == "melt_beat") { c.fx_melt_drip_melt_beat = value; return true; }
+        if (param == "drip") { c.fx_melt_drip_drip = value; return true; }
+        if (param == "drip_beat") { c.fx_melt_drip_drip_beat = value; return true; }
+        if (param == "haze") { c.fx_melt_drip_haze = value; return true; }
+        if (param == "haze_beat") { c.fx_melt_drip_haze_beat = value; return true; }
+        return false;
+    }
+    if (fx_id == "neon_city") {
+        if (param == "amount") { c.fx_neon_city_amount = value; return true; }
+        if (param == "neon") { c.fx_neon_city_neon = value; return true; }
+        if (param == "neon_beat") { c.fx_neon_city_neon_beat = value; return true; }
+        if (param == "scanline") { c.fx_neon_city_scanline = value; return true; }
+        if (param == "scanline_beat") { c.fx_neon_city_scanline_beat = value; return true; }
+        if (param == "streak") { c.fx_neon_city_streak = value; return true; }
+        if (param == "streak_beat") { c.fx_neon_city_streak_beat = value; return true; }
+        return false;
+    }
+    if (fx_id == "chrome_pulse") {
+        if (param == "amount") { c.fx_chrome_pulse_amount = value; return true; }
+        if (param == "chrome") { c.fx_chrome_pulse_chrome = value; return true; }
+        if (param == "chrome_beat") { c.fx_chrome_pulse_chrome_beat = value; return true; }
+        if (param == "pulse") { c.fx_chrome_pulse_pulse = value; return true; }
+        if (param == "pulse_beat") { c.fx_chrome_pulse_pulse_beat = value; return true; }
+        if (param == "edge") { c.fx_chrome_pulse_edge = value; return true; }
+        if (param == "edge_beat") { c.fx_chrome_pulse_edge_beat = value; return true; }
+        return false;
+    }
+    if (fx_id == "hud_glitch") {
+        if (param == "amount") { c.fx_hud_glitch_amount = value; return true; }
+        if (param == "hud") { c.fx_hud_glitch_hud = value; return true; }
+        if (param == "hud_beat") { c.fx_hud_glitch_hud_beat = value; return true; }
+        if (param == "dropout") { c.fx_hud_glitch_dropout = value; return true; }
+        if (param == "dropout_beat") { c.fx_hud_glitch_dropout_beat = value; return true; }
+        if (param == "tint") { c.fx_hud_glitch_tint = value; return true; }
+        if (param == "tint_beat") { c.fx_hud_glitch_tint_beat = value; return true; }
+        return false;
+    }
+    if (fx_id == "night_drive") {
+        if (param == "amount") { c.fx_night_drive_amount = value; return true; }
+        if (param == "night") { c.fx_night_drive_night = value; return true; }
+        if (param == "night_beat") { c.fx_night_drive_night_beat = value; return true; }
+        if (param == "sodium") { c.fx_night_drive_sodium = value; return true; }
+        if (param == "sodium_beat") { c.fx_night_drive_sodium_beat = value; return true; }
+        if (param == "flare") { c.fx_night_drive_flare = value; return true; }
+        if (param == "flare_beat") { c.fx_night_drive_flare_beat = value; return true; }
+        return false;
+    }
     return false;
 }

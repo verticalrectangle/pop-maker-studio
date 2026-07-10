@@ -185,8 +185,8 @@ static const FXCard g_fx_cards[] = {
 // Toolbox display order. Cards keep registry order within a category; any
 // category not listed here lands in the trailing "Other" bucket.
 static const char* g_fx_categories[] = {
-    "Beauty", "Tools", "Glitch", "Color", "Film", "Light",
-    "Warp", "Pattern", "Art", "Motion", "Other",
+    "Beauty", "Makeup", "Tools", "Glitch", "Color", "Film", "Light",
+    "Warp", "Pattern", "Art", "Motion", "Trippy", "Cyberpunk", "Other",
 };
 static const int g_n_fx_cards = (int)(sizeof(g_fx_cards) / sizeof(g_fx_cards[0]));
 
