@@ -248,6 +248,50 @@ int main() {
     expect(r.value("left_clip", -1) == 0 && r.value("right_clip", -1) == 1,
            "split_clip should report left=0 right=1");
 
+    // ── Canvas transform round-trip (CANVAS_PLAN.md stage 0) ─────────────────
+    // The verbose projection must carry the per-clip canvas transform so the
+    // iOS editing surface can read back what set_clip_prop(s) wrote.
+    {
+        proj = cmd(e, "get_project", {{"verbose", true}});
+        const json& c = proj["tracks"][0]["clips"][0];
+        expect(near_eq(c.value("pos_x", -1.0), 0.5) &&
+               near_eq(c.value("pos_y", -1.0), 0.5) &&
+               near_eq(c.value("scale_x", -1.0), 1.0) &&
+               near_eq(c.value("rotation", -1.0), 0.0) &&
+               near_eq(c.value("crop_l", -1.0), 0.0) &&
+               c.contains("flip_h") && !c["flip_h"].get<bool>(),
+               "verbose projection must carry default canvas transform fields");
+        cmd(e, "set_clip_props", {{"ops", json::array({
+            {{"track", 0}, {"clip", 0}, {"prop", "pos_x"},    {"value", 0.25}},
+            {{"track", 0}, {"clip", 0}, {"prop", "scale_y"},  {"value", 1.5}},
+            {{"track", 0}, {"clip", 0}, {"prop", "rotation"}, {"value", 30.0}},
+            {{"track", 0}, {"clip", 0}, {"prop", "crop_l"},   {"value", 0.1}},
+            {{"track", 0}, {"clip", 0}, {"prop", "flip_h"},   {"value", true}}})}});
+        proj = cmd(e, "get_project", {{"verbose", true}});
+        const json& c2 = proj["tracks"][0]["clips"][0];
+        expect(near_eq(c2.value("pos_x", -1.0), 0.25) &&
+               near_eq(c2.value("scale_y", -1.0), 1.5) &&
+               near_eq(c2.value("rotation", -1.0), 30.0) &&
+               near_eq(c2.value("crop_l", -1.0), 0.1) &&
+               c2["flip_h"].get<bool>(),
+               "canvas transform props must round-trip through set_clip_props");
+        // crop clamp: crop_r is limited to 0.95 - crop_l (engine-side rule the
+        // iOS crop UI mirrors).
+        cmd(e, "set_clip_prop", {{"track", 0}, {"clip", 0},
+                                 {"prop", "crop_r"}, {"value", 0.99}});
+        proj = cmd(e, "get_project", {{"verbose", true}});
+        expect(near_eq(proj["tracks"][0]["clips"][0].value("crop_r", -1.0), 0.85),
+               "crop_r must clamp to 0.95 - crop_l");
+        // restore neutral transform so later scene/FX assertions see defaults
+        cmd(e, "set_clip_props", {{"ops", json::array({
+            {{"track", 0}, {"clip", 0}, {"prop", "pos_x"},    {"value", 0.5}},
+            {{"track", 0}, {"clip", 0}, {"prop", "scale_y"},  {"value", 1.0}},
+            {{"track", 0}, {"clip", 0}, {"prop", "rotation"}, {"value", 0.0}},
+            {{"track", 0}, {"clip", 0}, {"prop", "crop_l"},   {"value", 0.0}},
+            {{"track", 0}, {"clip", 0}, {"prop", "crop_r"},   {"value", 0.0}},
+            {{"track", 0}, {"clip", 0}, {"prop", "flip_h"},   {"value", false}}})}});
+    }
+
     // ── Effect brick over the video: couples → becomes a MultiFX glass brick
     // snapped to the host span, with the effect windowed in fx_chain.
     r = cmd(e, "add_effect_brick", {{"track", 0}, {"fx_type", "pixelate"},

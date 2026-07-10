@@ -675,6 +675,20 @@ static json clip_to_json(int idx, const Clip& c) {
     j["speed"]       = c.speed;
     j["opacity"]     = c.opacity;
     j["muted"]       = c.muted;
+    // Canvas transform + crop + flips (base values; keyframes project separately
+    // under "keyframes"). The iOS canvas surface round-trips these via
+    // set_clip_prop(s), so the verbose projection must carry them.
+    j["pos_x"]       = c.pos_x;
+    j["pos_y"]       = c.pos_y;
+    j["scale_x"]     = c.scale_x;
+    j["scale_y"]     = c.scale_y;
+    j["rotation"]    = c.rotation;
+    j["crop_l"]      = c.crop_l;
+    j["crop_t"]      = c.crop_t;
+    j["crop_r"]      = c.crop_r;
+    j["crop_b"]      = c.crop_b;
+    j["flip_h"]      = c.flip_h;
+    j["flip_v"]      = c.flip_v;
     j["clip_style"]  = anim_style_str(c.clip_style);
     j["font_size"]   = c.font_size;
     j["karaoke"]     = c.karaoke;
