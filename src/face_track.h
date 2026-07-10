@@ -47,6 +47,12 @@ bool face_track_available();  // models found (models/face/*.onnx)
 // thread at mirror rate); latest returns the most recent smoothed result.
 void face_track_submit(const uint8_t* rgb, int w, int h);
 bool face_track_latest(FaceObs& out);
+// Multi-face: up to max_n concurrent faces (tracked independently, each
+// velocity-extrapolated to the read instant). Returns the count written.
+int  face_track_latest_all(FaceObs* out, int max_n);
+// How many faces the worker tracks (1..4, default 2). Cost is one landmark
+// run per face per frame — set 1 for single-selfie battery mode.
+void face_track_set_max_faces(int n);
 
 // Camera side-feed gate (iOS record mode): pms_submit_camera_frame only
 // converts + submits frames to the face worker while this is on, so plain

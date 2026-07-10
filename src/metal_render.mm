@@ -1214,8 +1214,11 @@ static id<MTLTexture> run_fx_stack(id<MTLCommandBuffer> cb, id<MTLTexture> src,
         // worker; layer chains report no_face until the take-cache port.
         if (fx.fx_type == "face_fx") {
             if (!face_track_available()) { set_status(i, "face_models_missing"); continue; }
-            FaceObs obs;
-            if (!face_track_latest(obs) || !obs.valid) { set_status(i, "no_face"); continue; }
+            // Every tracked face gets the look (lag-compensated landmarks —
+            // face_track_latest_all extrapolates to the render instant).
+            FaceObs faces[4];
+            int n_faces = face_track_latest_all(faces, 4);
+            if (n_faces < 1) { set_status(i, "no_face"); continue; }
             id<MTLRenderPipelineState> warp_pso   = get_face_pso(kFaceWarp);
             id<MTLRenderPipelineState> beauty_pso = get_face_pso(kFaceBeauty);
             id<MTLRenderPipelineState> mesh_pso   = get_face_pso(kFaceMesh);
@@ -1225,10 +1228,12 @@ static id<MTLTexture> run_fx_stack(id<MTLCommandBuffer> cb, id<MTLTexture> src,
             BeautyLook look = face_look_from(fx);
             float famt = 1.f;
             { auto p = fx.params.find("face_amount"); if (p != fx.params.end()) famt = p->second; }
+            int applied_faces = 0;
+            for (int fi = 0; fi < n_faces; ++fi) {
+            const FaceObs& obs = faces[fi];
             FaceRenderPlan plan;
-            if (!face_filter_build_plan_look(look, famt, obs, sw, sh, plan) || !plan.valid) {
-                set_status(i, "face_plan_empty"); continue;
-            }
+            if (!face_filter_build_plan_look(look, famt, obs, sw, sh, plan) || !plan.valid)
+                continue;
             // 1. beauty (skin + procedural makeup) — fullscreen.
             if (plan.has_beauty) {
                 MTLRenderPassDescriptor* rp1 = [MTLRenderPassDescriptor new];
@@ -1339,8 +1344,10 @@ static id<MTLTexture> run_fx_stack(id<MTLCommandBuffer> cb, id<MTLTexture> src,
                 [e3 endEncoding];
                 cur = ping[dst]; dst ^= 1;
             }
-            set_status(i, "applied");
-            if (result) result->applied++;
+            ++applied_faces;
+            }   // per-face loop
+            set_status(i, applied_faces > 0 ? "applied" : "face_plan_empty");
+            if (result && applied_faces > 0) result->applied++;
             continue;
         }
 

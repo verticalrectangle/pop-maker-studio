@@ -12,7 +12,9 @@
 #include "../src/face_track.h"
 #include "../src/paths.h"
 #include "stb_image.h"
+#include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <cmath>
 
 int main(int argc, char** argv) {
@@ -54,6 +56,27 @@ int main(int argc, char** argv) {
         return 1;
     }
     printf("face smoke: PASS\n");
+
+    // --bench N (argv[3]): time the pipeline. run_sync = detect + landmarks +
+    // blendshapes (the WORST case — the live worker skips the detector in
+    // tracking mode, so per-frame cost there is roughly the landmark share).
+    if (argc > 3) {
+        int iters = atoi(argv[3]);
+        if (iters > 0) {
+            using clk = std::chrono::steady_clock;
+            double best = 1e9, sum = 0;
+            for (int i = 0; i < iters; ++i) {
+                FaceObs o;
+                auto t0 = clk::now();
+                face_track_run_sync(rgb, w, h, o);
+                double ms = std::chrono::duration<double, std::milli>(clk::now() - t0).count();
+                sum += ms; if (ms < best) best = ms;
+            }
+            printf("face bench: full pipeline avg %.1f ms, best %.1f ms over %d runs "
+                   "(%dx%d input; live tracking mode runs the landmark share only)\n",
+                   sum / iters, best, iters, w, h);
+        }
+    }
     stbi_image_free(rgb);
     return 0;
 }

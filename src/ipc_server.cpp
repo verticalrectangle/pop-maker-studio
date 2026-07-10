@@ -2349,21 +2349,29 @@ static json dispatch(AppState& state, const std::string& method, const json& par
     if (method == "face_track_enable") {    // camera side-feed to the face worker
         bool on = params.value("on", true);
         face_feed_enable(on);
+        if (params.contains("max_faces"))
+            face_track_set_max_faces(params.value("max_faces", 2));
         return json{{"ok", true}, {"on", on},
                     {"models_present", face_track_available()}};
     }
 
     if (method == "face_debug") {           // tracker status for the record UI / tests
-        FaceObs obs;
-        bool has = face_track_latest(obs);
+        extern std::atomic<int> g_dbg_cycle_us, g_dbg_lmk_us, g_dbg_read_age_us;
+        FaceObs faces[4];
+        int n = face_track_latest_all(faces, 4);
         json j;
         j["models_present"] = face_track_available();
         j["feed_enabled"]   = face_feed_enabled();
-        j["valid"]          = has && obs.valid;
-        j["score"]          = has ? obs.score : 0.f;
-        j["has_blend"]      = has && obs.has_blend;
-        j["frame_w"]        = has ? obs.w : 0;
-        j["frame_h"]        = has ? obs.h : 0;
+        j["n_faces"]        = n;
+        j["valid"]          = n > 0;
+        j["score"]          = n > 0 ? faces[0].score : 0.f;
+        j["has_blend"]      = n > 0 && faces[0].has_blend;
+        j["frame_w"]        = n > 0 ? faces[0].w : 0;
+        j["frame_h"]        = n > 0 ? faces[0].h : 0;
+        // Latency budget, observable on device (µs → ms).
+        j["worker_cycle_ms"] = g_dbg_cycle_us.load() / 1000.0;
+        j["landmark_ms"]     = g_dbg_lmk_us.load() / 1000.0;
+        j["read_age_ms"]     = g_dbg_read_age_us.load() / 1000.0;
         return j;
     }
 

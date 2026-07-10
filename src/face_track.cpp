@@ -4,7 +4,9 @@
 
 #include <onnxruntime_cxx_api.h>
 
+#include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <cstdio>
 #include <cstring>
@@ -72,17 +74,22 @@ static const int kBlendSubset[146] = {
 
 static constexpr int DET_S = 640;   // YuNet export is fixed 640x640
 
-// Detect-only pass → face box. The worker calls it sparsely; between detects
+// Detect pass → face boxes. The worker calls it sparsely; between detects
 // the landmark net tracks from its own previous output (a few ms), which is
 // what makes the live filters feel realtime.
 // YuNet decode (opencv_zoo face_detection_yunet): per-stride grids, score =
 // sqrt(cls·obj); box center = (cell + bbox[0..1])·stride, size =
 // exp(bbox[2..3])·stride; kps offsets decode like the center. Input is raw
 // 0-255 BGR NCHW (no normalization).
-static bool detect_face(const uint8_t* rgb, int w, int h,
-                        float& bx1, float& by1, float& bx2, float& by2,
-                        float* score_out = nullptr, float* kps_out = nullptr) {
-    if (!ensure_sessions()) return false;
+//
+// Multi-face: every anchor above threshold becomes a candidate; greedy NMS
+// (IoU 0.4) keeps the top max_n by score. detect_face() below is the
+// single-best wrapper the cold-start/orientation path uses.
+struct DetFace { float b[4]; float score; float kps[10]; };
+
+static int detect_faces(const uint8_t* rgb, int w, int h,
+                        DetFace* out, int max_n) {
+    if (!ensure_sessions() || max_n <= 0) return 0;
     static std::vector<float> blob;
     blob.assign((size_t)3 * DET_S * DET_S, 0.f);
     float scale = std::min((float)DET_S / w, (float)DET_S / h);
@@ -112,49 +119,75 @@ static bool detect_face(const uint8_t* rgb, int w, int h,
     try {
         det_out = g_det->Run(Ort::RunOptions{nullptr}, det_in_names, &det_in, 1,
                              det_out_names, 12);
-    } catch (...) { return false; }
+    } catch (...) { return 0; }
 
-    float best_score = 0.55f;
-    bx1 = by1 = bx2 = by2 = 0.f;
-    float kps[10] = {};
     const int strides[3] = {8, 16, 32};
-    for (int s = 0; s < 3; ++s) {
-        const float* cls = det_out[s].GetTensorData<float>();
-        const float* obj = det_out[s + 3].GetTensorData<float>();
-        const float* bb  = det_out[s + 6].GetTensorData<float>();
-        const float* kp  = det_out[s + 9].GetTensorData<float>();
-        int side = DET_S / strides[s];
+    std::vector<DetFace> cands;
+    for (int st = 0; st < 3; ++st) {
+        const float* cls = det_out[st].GetTensorData<float>();
+        const float* obj = det_out[3 + st].GetTensorData<float>();
+        const float* bb  = det_out[6 + st].GetTensorData<float>();
+        const float* kp  = det_out[9 + st].GetTensorData<float>();
+        int side = DET_S / strides[st];
         int n = side * side;
         for (int j = 0; j < n; ++j) {
             float c = cls[j]; if (c < 0.f) c = 0.f; if (c > 1.f) c = 1.f;
             float o = obj[j]; if (o < 0.f) o = 0.f; if (o > 1.f) o = 1.f;
             float score = sqrtf(c * o);
-            if (score <= best_score) continue;
-            best_score = score;
+            if (score <= 0.55f) continue;
+            DetFace f; f.score = score;
             float col = (float)(j % side), row_ = (float)(j / side);
-            float cx = (col + bb[j*4+0]) * strides[s];
-            float cy = (row_ + bb[j*4+1]) * strides[s];
-            float bw = expf(bb[j*4+2]) * strides[s];
-            float bh = expf(bb[j*4+3]) * strides[s];
-            bx1 = cx - bw * 0.5f; by1 = cy - bh * 0.5f;
-            bx2 = cx + bw * 0.5f; by2 = cy + bh * 0.5f;
-            // 5-point kps (eyeR, eyeL, nose, mouthR, mouthL in YuNet order —
-            // consumers only compare eye-pair vs mouth-pair y, so order
-            // within each pair doesn't matter).
+            float cx = (col + bb[j*4+0]) * strides[st];
+            float cy = (row_ + bb[j*4+1]) * strides[st];
+            float bw = expf(bb[j*4+2]) * strides[st];
+            float bh = expf(bb[j*4+3]) * strides[st];
+            f.b[0] = cx - bw * 0.5f; f.b[1] = cy - bh * 0.5f;
+            f.b[2] = cx + bw * 0.5f; f.b[3] = cy + bh * 0.5f;
             for (int k = 0; k < 5; ++k) {
-                kps[k*2]   = (kp[j*10 + k*2]   + col)  * strides[s];
-                kps[k*2+1] = (kp[j*10 + k*2+1] + row_) * strides[s];
+                f.kps[k*2]   = (kp[j*10 + k*2]   + col)  * strides[st];
+                f.kps[k*2+1] = (kp[j*10 + k*2+1] + row_) * strides[st];
             }
+            cands.push_back(f);
         }
     }
+    // Greedy NMS by score, IoU 0.4.
+    std::sort(cands.begin(), cands.end(),
+              [](const DetFace& a, const DetFace& b) { return a.score > b.score; });
+    auto iou = [](const DetFace& a, const DetFace& b) {
+        float x0 = std::max(a.b[0], b.b[0]), y0 = std::max(a.b[1], b.b[1]);
+        float x1 = std::min(a.b[2], b.b[2]), y1 = std::min(a.b[3], b.b[3]);
+        float inter = std::max(0.f, x1 - x0) * std::max(0.f, y1 - y0);
+        float ua = (a.b[2]-a.b[0]) * (a.b[3]-a.b[1]) +
+                   (b.b[2]-b.b[0]) * (b.b[3]-b.b[1]) - inter;
+        return ua > 0.f ? inter / ua : 0.f;
+    };
+    int n_out = 0;
+    for (const DetFace& c : cands) {
+        bool dup = false;
+        for (int k = 0; k < n_out && !dup; ++k)
+            if (iou(c, out[k]) > 0.4f) dup = true;
+        if (dup) continue;
+        out[n_out] = c;
+        // back to frame coords
+        for (int k = 0; k < 4; ++k)  out[n_out].b[k]   /= scale;
+        for (int k = 0; k < 10; ++k) out[n_out].kps[k] /= scale;
+        if (++n_out >= max_n) break;
+    }
     if (getenv("PMS_FACE_DEBUG"))
-        fprintf(stderr, "[face] yunet best=%.3f box=(%.0f,%.0f,%.0f,%.0f)\n",
-                best_score, bx1, by1, bx2, by2);
-    if (best_score <= 0.55f) return false;
-    bx1 /= scale; by1 /= scale; bx2 /= scale; by2 /= scale;
-    if (score_out) *score_out = best_score;
-    if (kps_out)
-        for (int k = 0; k < 10; ++k) kps_out[k] = kps[k] / scale;
+        fprintf(stderr, "[face] yunet faces=%d best=%.3f\n",
+                n_out, n_out ? out[0].score : 0.f);
+    return n_out;
+}
+
+// Single-best wrapper (cold start / orientation arbitration path).
+static bool detect_face(const uint8_t* rgb, int w, int h,
+                        float& bx1, float& by1, float& bx2, float& by2,
+                        float* score_out = nullptr, float* kps_out = nullptr) {
+    DetFace f;
+    if (detect_faces(rgb, w, h, &f, 1) < 1) return false;
+    bx1 = f.b[0]; by1 = f.b[1]; bx2 = f.b[2]; by2 = f.b[3];
+    if (score_out) *score_out = f.score;
+    if (kps_out) for (int k = 0; k < 10; ++k) kps_out[k] = f.kps[k];
     return true;
 }
 
@@ -308,11 +341,32 @@ static inline float adaptive_alpha(float speed_px, float frame_w) {
     float a = 0.35f + (speed_px / frame_w) * 45.f;
     return a > 1.f ? 1.f : a;
 }
-static FaceObs    g_latest;        // adaptively smoothed
-static FaceObs    g_raw_prev;
 std::atomic<int>  g_dbg_flip180{0};      // worker debug state (IPC readout)
 std::atomic<int>  g_dbg_since_detect{0};
 std::atomic<int>  g_dbg_detects{0};
+// Perf counters (microseconds, EMA) — face_debug reads these so the latency
+// budget is observable on device, not guessed.
+std::atomic<int>  g_dbg_cycle_us{0};     // full worker cycle per frame
+std::atomic<int>  g_dbg_lmk_us{0};       // one landmark-net run
+std::atomic<int>  g_dbg_read_age_us{0};  // obs age at the last consumer read
+
+static double steady_now() {
+    using namespace std::chrono;
+    return duration<double>(steady_clock::now().time_since_epoch()).count();
+}
+
+// ── Multi-face track table ────────────────────────────────────────────────────
+// Each track owns the exact state the single-face loop used (smoothed obs,
+// detector-box geometry, redetect cadence) plus a per-landmark velocity field
+// (px/sec) for read-time lag compensation: consumers get landmarks
+// extrapolated to "now", so makeup rides a moving face instead of trailing
+// the worker's latency. Guarded by g_latest_mtx.
+static constexpr int FT_MAX_FACES = 4;
+static std::atomic<int> g_max_faces{2};   // face_track_set_max_faces (1..4)
+void face_track_set_max_faces(int n) {
+    if (n < 1) n = 1; if (n > FT_MAX_FACES) n = FT_MAX_FACES;
+    g_max_faces.store(n, std::memory_order_relaxed);
+}
 
 static void rot180(std::vector<uint8_t>& f, int w, int h) {
     const size_t n = (size_t)w * h;
@@ -384,6 +438,17 @@ static void store_box_geom(const FaceObs& obs_submitted, const float box[4],
     g.dy = (box[1] + box[3]) * 0.5f - cy;
     g.valid = true;
 }
+
+struct FaceTrack {
+    bool       active = false;
+    FaceObs    smooth;                    // published, submitted coords
+    float      vel[FT_NPTS][2] = {};      // px/sec, submitted coords
+    DetBoxGeom boxg;
+    int        since_detect = 0;
+    int        misses = 0;
+    double     t_frame = 0;               // steady seconds of last update
+};
+static FaceTrack g_tracks[FT_MAX_FACES];
 
 static void crop_box_from_prev(const FaceObs& prev, const DetBoxGeom& g,
                                float& b1, float& b2, float& b3, float& b4) {
@@ -472,10 +537,110 @@ static void flip_box(float b[4], int fw, int fh) {
     b[0] = n1; b[1] = n2; b[2] = n3; b[3] = n4;
 }
 
+// One tracked face's per-frame update: crop from its previous landmarks,
+// run the landmark net, guard, smooth, and refresh its velocity field.
+// Returns false when the track lost the face this frame.
+static bool track_step(FaceTrack& t, const std::vector<uint8_t>& frame,
+                       int fw, int fh, bool flip180, double now) {
+    float pb1, pb2, pb3, pb4;
+    crop_box_from_prev(t.smooth, t.boxg, pb1, pb2, pb3, pb4);
+    if (flip180) {
+        float nb1 = (float)fw - 1.f - pb3, nb2 = (float)fh - 1.f - pb4;
+        float nb3 = (float)fw - 1.f - pb1, nb4 = (float)fh - 1.f - pb2;
+        pb1 = nb1; pb2 = nb2; pb3 = nb3; pb4 = nb4;
+    }
+    FaceObs obs;
+    double t0 = steady_now();
+    bool ok = landmarks_best_roll(frame.data(), fw, fh, pb1, pb2, pb3, pb4, obs,
+                                  roll_of(t.smooth));
+    g_dbg_lmk_us.store((int)((steady_now() - t0) * 1e6));
+    if (ok && flip180) {
+        for (int k = 0; k < FT_NPTS; ++k) {
+            obs.pts[k][0] = (float)fw - 1.f - obs.pts[k][0];
+            obs.pts[k][1] = (float)fh - 1.f - obs.pts[k][1];
+        }
+    }
+    if (ok && flip180) {
+        // guards ran in working coords via landmarks_best_roll's crop; re-run
+        // the upright check in submitted coords (orientation-sensitive).
+        ok = upright_ok(obs);
+    } else if (ok) {
+        ok = upright_ok(obs);
+    }
+    if (ok) {
+        float ub1 = pb1, ub2 = pb2, ub3 = pb3, ub4 = pb4;
+        if (flip180) { float b[4] = {pb1, pb2, pb3, pb4}; flip_box(b, fw, fh);
+                       ub1 = b[0]; ub2 = b[1]; ub3 = b[2]; ub4 = b[3]; }
+        ok = lm_sane(obs, ub1, ub2, ub3, ub4);
+    }
+    if (!ok) return false;
+    // Smooth + velocity (px/sec) for read-time extrapolation.
+    double dt = now - t.t_frame;
+    if (dt < 1e-3 || dt > 0.5) dt = 1.0 / 30.0;
+    for (int k = 0; k < FT_NPTS; ++k) {
+        float px = t.smooth.pts[k][0], py = t.smooth.pts[k][1];
+        float ddx = obs.pts[k][0] - px;
+        float ddy = obs.pts[k][1] - py;
+        float alpha = adaptive_alpha(sqrtf(ddx*ddx + ddy*ddy), (float)obs.w);
+        t.smooth.pts[k][0] += ddx * alpha;
+        t.smooth.pts[k][1] += ddy * alpha;
+        float vx = (t.smooth.pts[k][0] - px) / (float)dt;
+        float vy = (t.smooth.pts[k][1] - py) / (float)dt;
+        t.vel[k][0] += (vx - t.vel[k][0]) * 0.5f;    // velocity EMA
+        t.vel[k][1] += (vy - t.vel[k][1]) * 0.5f;
+    }
+    if (obs.has_blend) {
+        if (!t.smooth.has_blend) {
+            for (int k = 0; k < FT_NBLEND; ++k) t.smooth.blend[k] = obs.blend[k];
+        } else {
+            for (int k = 0; k < FT_NBLEND; ++k) {
+                float db = obs.blend[k] - t.smooth.blend[k];
+                float ab = 0.4f + fabsf(db) * 6.f;
+                t.smooth.blend[k] += db * (ab > 1.f ? 1.f : ab);
+            }
+        }
+        t.smooth.has_blend = true;
+    }
+    t.smooth.score = obs.score;
+    t.smooth.valid = true;
+    t.smooth.w = obs.w; t.smooth.h = obs.h;
+    t.t_frame = now;
+    t.misses = 0;
+    return true;
+}
+
+// Seed a fresh track from a detector box (landmarks + guards inside).
+static bool track_seed(FaceTrack& t, const std::vector<uint8_t>& frame,
+                       int fw, int fh, bool flip180, const DetFace& df,
+                       double now) {
+    FaceObs obs;
+    if (!landmarks_best_roll(frame.data(), fw, fh,
+                             df.b[0], df.b[1], df.b[2], df.b[3], obs, 0.f))
+        return false;
+    if (!upright_ok(obs) || !lm_sane(obs, df.b[0], df.b[1], df.b[2], df.b[3]))
+        return false;
+    float box[4] = {df.b[0], df.b[1], df.b[2], df.b[3]};
+    if (flip180) {
+        for (int k = 0; k < FT_NPTS; ++k) {
+            obs.pts[k][0] = (float)fw - 1.f - obs.pts[k][0];
+            obs.pts[k][1] = (float)fh - 1.f - obs.pts[k][1];
+        }
+        flip_box(box, fw, fh);
+    }
+    t = FaceTrack{};
+    t.smooth = obs;
+    t.smooth.score = df.score;
+    store_box_geom(t.smooth, box, t.boxg);
+    t.t_frame = now;
+    t.active = true;
+    return true;
+}
+
 static void worker_main() {
     std::vector<uint8_t> frame;
     int fw = 0, fh = 0;
     static bool s_flip180 = false;   // camera mounted upside down — detected
+    int since_detect = 0;            // global redetect cadence (new faces)
     while (!g_worker_quit.load()) {
         {
             std::unique_lock<std::mutex> lk(g_work_mtx);
@@ -485,90 +650,92 @@ static void worker_main() {
             fw = g_pend_w; fh = g_pend_h;
             g_pend_fresh = false;
         }
+        double now = steady_now();
+        double cyc0 = now;
         if (s_flip180) rot180(frame, fw, fh);
-        // Tracking mode: while locked, skip the heavy detector and crop a
-        // DETECT-SHAPED box re-centred on the previous landmarks (the
-        // landmark net is a few ms, so the loop runs at camera rate).
-        // Re-detect on loss or every ~2 s.
-        static int s_since_detect = 0;
-        static DetBoxGeom s_boxg;
-        FaceObs obs;
-        bool ok = false;
-        bool have_prev = false;
-        float pb1 = 0, pb2 = 0, pb3 = 0, pb4 = 0;
-        {
-            std::lock_guard<std::mutex> lk(g_latest_mtx);
-            if (g_latest.valid && g_latest.w == fw && g_latest.h == fh &&
-                s_boxg.valid) {
-                have_prev = true;
-                crop_box_from_prev(g_latest, s_boxg, pb1, pb2, pb3, pb4);
+
+        // Track pass: every active track follows its face at camera rate
+        // (landmark net only — the heavy detector runs sparsely below).
+        FaceTrack local[FT_MAX_FACES];
+        { std::lock_guard<std::mutex> lk(g_latest_mtx);
+          for (int i = 0; i < FT_MAX_FACES; ++i) local[i] = g_tracks[i]; }
+        int max_faces = g_max_faces.load(std::memory_order_relaxed);
+        int active = 0;
+        for (int i = 0; i < FT_MAX_FACES; ++i) {
+            FaceTrack& t = local[i];
+            if (!t.active) continue;
+            if (t.smooth.w != fw || t.smooth.h != fh) { t.active = false; continue; }
+            if (!track_step(t, frame, fw, fh, s_flip180, now)) {
+                t.smooth.score *= 0.7f;
+                if (++t.misses > 8 || t.smooth.score < 0.15f) t.active = false;
             }
+            if (t.active) ++active;
         }
-        if (have_prev && s_flip180) {
-            // prev landmarks are in submitted coords; the working frame is
-            // flipped — flip the crop box to match.
-            float nb1 = (float)fw - 1.f - pb3, nb2 = (float)fh - 1.f - pb4;
-            float nb3 = (float)fw - 1.f - pb1, nb4 = (float)fh - 1.f - pb2;
-            pb1 = nb1; pb2 = nb2; pb3 = nb3; pb4 = nb4;
-        }
-        if (have_prev && ++s_since_detect < 60) {
-            ok = landmarks_best_roll(frame.data(), fw, fh, pb1, pb2, pb3, pb4, obs,
-                                     g_latest.valid ? roll_of(g_latest) : 0.f);
-            if (ok && (!upright_ok(obs) ||
-                       !lm_sane(obs, pb1, pb2, pb3, pb4)))
-                ok = false;                       // wrong pose → re-detect
-        }
-        bool fresh_detect = false;
-        float det_box[4] = {0, 0, 0, 0};
-        if (!ok) {
-            s_since_detect = 0;
-            ok = detect_both_orientations(frame, fw, fh, s_flip180, obs, det_box);
-            fresh_detect = ok;
-        }
-        if (ok && s_flip180) {
-            // Publish landmarks in the SUBMITTED frame's coordinates.
-            for (int k = 0; k < FT_NPTS; ++k) {
-                obs.pts[k][0] = (float)fw - 1.f - obs.pts[k][0];
-                obs.pts[k][1] = (float)fh - 1.f - obs.pts[k][1];
+        ++since_detect;
+
+        // Detect pass: cold start (orientation arbitration), face lost, every
+        // ~2 s while short of max_faces — associates boxes to tracks by
+        // center distance, seeds new tracks from the unmatched ones.
+        bool need_detect =
+            active == 0 || (active < max_faces && since_detect >= 45) ||
+            since_detect >= 120;
+        if (need_detect) {
+            since_detect = 0;
+            ++g_dbg_detects;
+            if (active == 0) {
+                // Cold start keeps the both-orientations arbitration.
+                FaceObs obs; float det_box[4];
+                if (detect_both_orientations(frame, fw, fh, s_flip180, obs, det_box)) {
+                    if (s_flip180) {
+                        for (int k = 0; k < FT_NPTS; ++k) {
+                            obs.pts[k][0] = (float)fw - 1.f - obs.pts[k][0];
+                            obs.pts[k][1] = (float)fh - 1.f - obs.pts[k][1];
+                        }
+                        flip_box(det_box, fw, fh);
+                    }
+                    local[0] = FaceTrack{};
+                    local[0].smooth = obs;
+                    store_box_geom(obs, det_box, local[0].boxg);
+                    local[0].t_frame = now;
+                    local[0].active = true;
+                    active = 1;
+                }
             }
-            if (fresh_detect) flip_box(det_box, fw, fh);
-        }
-        if (fresh_detect) { store_box_geom(obs, det_box, s_boxg); ++g_dbg_detects; }
-        g_dbg_flip180.store(s_flip180 ? 1 : 0);
-        g_dbg_since_detect.store(s_since_detect);
-        std::lock_guard<std::mutex> lk(g_latest_mtx);
-        if (!ok) {
-            g_latest.score *= 0.7f;
-            if (g_latest.score < 0.15f) g_latest.valid = false;
-            continue;
-        }
-        if (!g_latest.valid || g_latest.w != obs.w || g_latest.h != obs.h) {
-            g_latest = obs;            // fresh lock-on
-        } else {
-            // Jump = new face/cut → snap; light EMA otherwise (the tracking
-            // loop runs at camera rate now, so smoothing can be gentle).
-            for (int k = 0; k < FT_NPTS; ++k) {
-                float ddx = obs.pts[k][0] - g_latest.pts[k][0];
-                float ddy = obs.pts[k][1] - g_latest.pts[k][1];
-                float alpha = adaptive_alpha(sqrtf(ddx*ddx + ddy*ddy), (float)obs.w);
-                g_latest.pts[k][0] += ddx * alpha;
-                g_latest.pts[k][1] += ddy * alpha;
-            }
-            if (obs.has_blend) {
-                if (!g_latest.has_blend) {
-                    for (int k = 0; k < FT_NBLEND; ++k) g_latest.blend[k] = obs.blend[k];
-                } else {
-                    for (int k = 0; k < FT_NBLEND; ++k) {
-                        float db = obs.blend[k] - g_latest.blend[k];
-                        float ab = 0.4f + fabsf(db) * 6.f;
-                        g_latest.blend[k] += db * (ab > 1.f ? 1.f : ab);
+            if (active > 0 && max_faces > 1) {
+                DetFace dets[FT_MAX_FACES * 2];
+                int nd = detect_faces(frame.data(), fw, fh, dets, max_faces * 2);
+                for (int d = 0; d < nd; ++d) {
+                    // det box is in WORKING coords; compare against tracks in
+                    // submitted coords (flip if needed).
+                    float b[4] = {dets[d].b[0], dets[d].b[1], dets[d].b[2], dets[d].b[3]};
+                    if (s_flip180) flip_box(b, fw, fh);
+                    float bcx = (b[0] + b[2]) * 0.5f, bcy = (b[1] + b[3]) * 0.5f;
+                    float bw = b[2] - b[0];
+                    bool matched = false;
+                    for (int i = 0; i < FT_MAX_FACES && !matched; ++i) {
+                        if (!local[i].active) continue;
+                        float cx, cy; lm_centroid(local[i].smooth, cx, cy);
+                        if (fabsf(cx - bcx) < bw * 0.6f && fabsf(cy - bcy) < bw * 0.6f) {
+                            store_box_geom(local[i].smooth, b, local[i].boxg);
+                            matched = true;
+                        }
+                    }
+                    if (matched) continue;
+                    for (int i = 0; i < FT_MAX_FACES; ++i) {
+                        if (local[i].active) continue;
+                        if (active >= max_faces) break;
+                        if (track_seed(local[i], frame, fw, fh, s_flip180, dets[d], now))
+                            ++active;
+                        break;
                     }
                 }
-                g_latest.has_blend = true;
             }
-            g_latest.score = obs.score;
-            g_latest.valid = true;
         }
+        g_dbg_flip180.store(s_flip180 ? 1 : 0);
+        g_dbg_since_detect.store(since_detect);
+        g_dbg_cycle_us.store((int)((steady_now() - cyc0) * 1e6));
+        std::lock_guard<std::mutex> lk(g_latest_mtx);
+        for (int i = 0; i < FT_MAX_FACES; ++i) g_tracks[i] = local[i];
     }
 }
 
@@ -606,10 +773,36 @@ void face_track_submit(const uint8_t* rgb, int w, int h) {
     g_work_cv.notify_one();
 }
 
-bool face_track_latest(FaceObs& out) {
+// Read-time lag compensation: the worker's smoothed landmarks are
+// extrapolated along their velocity to "now" (clamped to 2 frames), so the
+// render consumes where the face IS, not where it was when the worker ran.
+static void predict_obs(const FaceTrack& t, double now, FaceObs& out) {
+    out = t.smooth;
+    double age = now - t.t_frame;
+    if (age < 0) age = 0;
+    if (age > 0.066) age = 0.066;
+    for (int k = 0; k < FT_NPTS; ++k) {
+        out.pts[k][0] += t.vel[k][0] * (float)age;
+        out.pts[k][1] += t.vel[k][1] * (float)age;
+    }
+    g_dbg_read_age_us.store((int)(age * 1e6));
+}
+
+int face_track_latest_all(FaceObs* out, int max_n) {
+    if (!out || max_n <= 0) return 0;
+    double now = steady_now();
     std::lock_guard<std::mutex> lk(g_latest_mtx);
-    out = g_latest;
-    return out.valid;
+    int n = 0;
+    for (int i = 0; i < FT_MAX_FACES && n < max_n; ++i) {
+        if (!g_tracks[i].active || !g_tracks[i].smooth.valid) continue;
+        predict_obs(g_tracks[i], now, out[n]);
+        ++n;
+    }
+    return n;
+}
+
+bool face_track_latest(FaceObs& out) {
+    return face_track_latest_all(&out, 1) == 1;
 }
 
 bool face_track_run_sync(const uint8_t* rgb, int w, int h, FaceObs& out) {
