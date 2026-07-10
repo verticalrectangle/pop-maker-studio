@@ -1,3 +1,7 @@
+#include <cmath>
+#include <filesystem>
+#include "../src/paths.h"
+#include <algorithm>
 // metal_render_test.mm — numeric offscreen verification of the Metal scene
 // compositor + FX runner (the iOS render path), run on a macOS host GPU.
 //
@@ -227,6 +231,24 @@ static std::string bgr_str(const double c[3]) {
     char buf[64];
     snprintf(buf, sizeof buf, "(B=%.1f G=%.1f R=%.1f)", c[0], c[1], c[2]);
     return buf;
+}
+struct RegionStats { double mean_lum, std_lum; int max_chan, min_chan; };
+static RegionStats region_stats(const Img& im, PxRect r) {
+    double sum = 0.0, sum2 = 0.0; long n = 0;
+    int maxc = 0, minc = 255;
+    for (int y = r.y0; y < r.y1; ++y)
+        for (int x = r.x0; x < r.x1; ++x) {
+            const uint8_t* p = at(im, x, y);
+            int m = std::max((int)p[0], std::max((int)p[1], (int)p[2]));
+            int n2 = std::min((int)p[0], std::min((int)p[1], (int)p[2]));
+            maxc = std::max(maxc, m); minc = std::min(minc, n2);
+            double lum = 0.114 * p[0] + 0.587 * p[1] + 0.299 * p[2];
+            sum += lum; sum2 += lum * lum; ++n;
+        }
+    double mean = n ? sum / n : 0.0;
+    double var = n ? sum2 / n - mean * mean : 0.0;
+    RegionStats st; st.mean_lum = mean; st.std_lum = std::sqrt(std::max(0.0, var));
+    st.max_chan = maxc; st.min_chan = minc; return st;
 }
 
 // ── Cases ────────────────────────────────────────────────────────────────────
@@ -766,11 +788,63 @@ static void case_face_fx(CVPixelBufferRef unused) {
     }
     check(locked, C, "face worker never produced a valid observation");
     Img plain = render_frame(C + ".plain");
+
+    // UV-mesh material blend: dark pigment should keep skin detail, not flatten.
+    const std::string goth_tex = "makeup_goth.png";
+    bool goth_present = std::filesystem::exists(app_models_dir() + "/face/" + goth_tex);
+    if (goth_present) {
+        cmd(C, "set_live_fx",
+            {{"fx", json::array({ {{"fx_type", "face_fx"},
+                                   {"face_makeup_tex", goth_tex},
+                                   {"params", {{"face_filter", 0.0},
+                                               {"face_amount", 1.0}}}} })}});
+        pms_submit_camera_frame(g_e, pb, 0, 0.2);
+        Img goth = render_frame(C + ".goth");
+        double gdiff = frac_diff(goth, plain, 6);
+        check(gdiff > 0.01, C, "face_fx (makeup_goth) changed no pixels (diff=" +
+              std::to_string(gdiff) + ")");
+        PxRect eye = {0, 260, W, 300};
+        RegionStats p_eye = region_stats(plain, eye);
+        RegionStats g_eye = region_stats(goth, eye);
+        check(g_eye.std_lum > p_eye.std_lum * 0.5, C,
+              "dark pigment flattened source detail (goth std=" +
+              std::to_string(g_eye.std_lum) + " vs plain=" + std::to_string(p_eye.std_lum) + ")");
+        printf("  [o] face_fx/goth: diff=%.3f, detail preserved (std %.1f vs %.1f)\n",
+               gdiff, g_eye.std_lum, p_eye.std_lum);
+    }
+
+    // Bright low-alpha gloss should add highlight, not paint white over the source.
+    const std::string gloss_tex = "makeup_cherry_gloss.png";
+    bool gloss_present = std::filesystem::exists(app_models_dir() + "/face/" + gloss_tex);
+    if (gloss_present) {
+        cmd(C, "set_live_fx",
+            {{"fx", json::array({ {{"fx_type", "face_fx"},
+                                   {"face_makeup_tex", gloss_tex},
+                                   {"params", {{"face_filter", 0.0},
+                                               {"face_amount", 1.0}}}} })}});
+        pms_submit_camera_frame(g_e, pb, 0, 0.3);
+        Img glossy = render_frame(C + ".gloss");
+        double gldiff = frac_diff(glossy, plain, 6);
+        check(gldiff > 0.01, C, "face_fx (makeup_cherry_gloss) changed no pixels (diff=" +
+              std::to_string(gldiff) + ")");
+        PxRect gloss = {0, 300, W, 400};
+        RegionStats p_gloss = region_stats(plain, gloss);
+        RegionStats a_gloss = region_stats(glossy, gloss);
+        check(a_gloss.mean_lum < p_gloss.mean_lum + 12.0, C,
+              "gloss over-brightened mean (cherry gloss mean=" +
+              std::to_string(a_gloss.mean_lum) + " vs plain=" + std::to_string(p_gloss.mean_lum) + ")");
+        check(a_gloss.max_chan < p_gloss.max_chan + 14 && a_gloss.max_chan < 252, C,
+              "gloss clipped to white (cherry gloss max=" + std::to_string(a_gloss.max_chan) + ")");
+        printf("  [o] face_fx/cherry_gloss: diff=%.3f, gloss non-clipped (max %d, mean %.1f)\n",
+               gldiff, a_gloss.max_chan, a_gloss.mean_lum);
+    }
+
+    // Keep the original procedural smoke check.
     cmd(C, "set_live_fx",
         {{"fx", json::array({ {{"fx_type", "face_fx"},
                                {"params", {{"face_filter", 14.0},   // Barbie
                                            {"face_amount", 1.0}}}} })}});
-    pms_submit_camera_frame(g_e, pb, 0, 0.2);
+    pms_submit_camera_frame(g_e, pb, 0, 0.4);
     Img out = render_frame(C + ".made_up");
     double diff = frac_diff(out, plain, 6);
     check(diff > 0.01, C, "face_fx (Barbie) changed no pixels (diff frac=" +

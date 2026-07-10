@@ -1133,12 +1133,16 @@ void main() {
     float bfade = 1.0 - 0.9 * max(nearL * smoothstep(0.25, 0.55, u_mk_blink.x),
                                   nearR * smoothstep(0.25, 0.55, u_mk_blink.y));
     mk.a *= bfade;
-    float bl  = lum2(base);
-    vec3 tint = base / max(bl, 0.04);
+    float base_lum = lum2(base);
+    vec3 tint = base / max(base_lum, 0.04);
     vec3 lit  = mk.rgb
-              * mix(vec3(1.0), clamp(tint, 0.55, 1.6), u_adapt * 0.65)
-              * mix(1.0, clamp(bl * 1.9, 0.20, 1.45), u_adapt * 0.85);
-    frag = vec4(mix(base, clamp(lit, 0.0, 1.0), mk.a * u_opacity), 1.0);
+              * mix(vec3(1.0), clamp(tint, 0.55, 1.0), u_adapt * 0.65)
+              * mix(1.0, clamp(base_lum * 1.9, 0.20, 1.0), u_adapt * 0.85);
+    vec3 blend = clamp(lit, 0.0, 1.0);
+    // Material-aware blend: dark pigments deepen, chromatic midtones tint,
+    // bright low-alpha texels add a soft, non-clipping highlight.
+    vec3 out = base + (2.0 * blend - 1.0) * base * (1.0 - base);
+    frag = vec4(mix(base, out, mk.a * u_opacity), 1.0);
 }
 )";
 

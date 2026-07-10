@@ -643,12 +643,16 @@ fragment float4 face_mk_f(MkVOut in [[stage_in]], constant FaceMkUni& u [[buffer
     float bfade = 1.0 - 0.9 * max(nearL * smoothstep(0.25, 0.55, u.blink[0]),
                                   nearR * smoothstep(0.25, 0.55, u.blink[1]));
     float mka = mkc.a * bfade;
-    float bl  = f_lum(base);
-    float3 tint = base / max(bl, 0.04);
+    float base_lum = f_lum(base);
+    float3 tint = base / max(base_lum, 0.04);
     float3 lit  = mkc.rgb
-                * mix(float3(1.0), clamp(tint, 0.55, 1.6), u.adapt * 0.65)
-                * mix(1.0, clamp(bl * 1.9, 0.20, 1.45), u.adapt * 0.85);
-    return float4(mix(base, clamp(lit, 0.0, 1.0), mka * u.opacity), 1.0);
+                * mix(float3(1.0), clamp(tint, 0.55, 1.0), u.adapt * 0.65)
+                * mix(1.0, clamp(base_lum * 1.9, 0.20, 1.0), u.adapt * 0.85);
+    float3 blend = clamp(lit, 0.0, 1.0);
+    // Material-aware blend: dark pigments deepen, chromatic midtones tint,
+    // bright low-alpha texels add a soft, non-clipping highlight.
+    float3 out = base + (2.0 * blend - 1.0) * base * (1.0 - base);
+    return float4(mix(base, out, mka * u.opacity), 1.0);
 }
 )";
 
