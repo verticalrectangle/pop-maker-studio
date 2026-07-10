@@ -204,6 +204,20 @@ add_executable(engine-smoke tools/engine_smoke.cpp)
 target_link_libraries(engine-smoke PRIVATE pms-engine)
 target_include_directories(engine-smoke PRIVATE src ${CMAKE_SOURCE_DIR}/vendor)
 
+# metal-render-test: numeric offscreen assertions for the Metal scene
+# compositor + FX runner (the iOS render path) on a macOS host GPU. Drives the
+# real C ABI (pms_create/pms_command/pms_submit_layer_frame/pms_render) and
+# reads pixels back. Regression gate for FX-not-rendering class bugs; set
+# PMS_SHADER_DIR to the transpiled Shaders/msl dir (default ~/dev/pms-ios/…).
+if(APPLE)
+    add_executable(metal-render-test tools/metal_render_test.mm)
+    target_link_libraries(metal-render-test PRIVATE pms-engine
+        "-framework Metal" "-framework CoreVideo" "-framework IOSurface"
+        "-framework QuartzCore" "-framework Foundation")
+    target_include_directories(metal-render-test PRIVATE src ${CMAKE_SOURCE_DIR}/vendor)
+    target_compile_options(metal-render-test PRIVATE -Wall -Wextra -Wno-unused-parameter)
+endif()
+
 
 if(PIPEWIRE_FOUND AND NOT PMS_HEADLESS)
 if(NOT PMS_ENGINE_ONLY)

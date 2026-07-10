@@ -1,56 +1,640 @@
-// metal_render_test.mm — offscreen verification of the Metal RenderSurface.
-// Feeds the engine's embedded portrait through metal_render_set_content_bgra
-// and renders one frame into a BGRA8 texture → PNG. Proves the textured-quad
-// compositor (the "over" operator) works with real image data, no sim/device.
+// metal_render_test.mm — numeric offscreen verification of the Metal scene
+// compositor + FX runner (the iOS render path), run on a macOS host GPU.
+//
+// Drives the REAL app flow through the C ABI: pms_create(MTLDevice) →
+// pms_command (new_project / add_track / add_clip / add_effect_brick /
+// add_multifx_brick / set_clip_prop) → pms_submit_layer_frame with synthetic
+// CVPixelBuffers → pms_render into an offscreen BGRA8 texture → readback →
+// pixel assertions. fx_debug (pms_command) is dumped on every failure.
+//
+// Cases:
+//   a. background only — legacy path renders the aurora, scene inactive
+//   b. one video layer — scene path active, layer pixels dominate
+//   c. REPRO: video + coupled pixelate brick (0..2), gradient layer at t=1.0
+//      → pixels must DIFFER from the no-FX render (the user's FX-not-
+//      rendering bug lands here)
+//   d. time window: same scene at t=3.0 (outside the brick) → pixels EQUAL
+//   e. two-FX order: uncoupled [pixelate→fisheye] vs [fisheye→pixelate] on a
+//      rail track → outputs differ (warp composition is order-sensitive)
+//   f. transitions: two adjacent clips with a Dissolve — mid-transition frame
+//      is a blend (differs from both pure frames; both colors present)
+//   g. text layer: half-transparent raster on a higher track composites over
+//      the video layer
+//   h. bus scope: uncoupled brick on a track between two video tracks alters
+//      the lower layer's region but not the upper layer's pixels
+//
+// Shader lookup: the FX runner loads Shaders/msl/<name>.metal +
+// params_manifest.json from the app bundle; headless we point it at a
+// directory via metal_render_set_shader_dir. Set PMS_SHADER_DIR (default:
+// $HOME/dev/pms-ios/Shaders/msl).
+//
+// Prints "metal render test: PASS" and exits 0; exits nonzero with the named
+// failing case otherwise.
+// CarbonCore's AIFF.h (pulled in by CoreVideo on macOS) has a legacy
+// `struct Marker` that collides with the engine's (app.h). Shield it.
+#define Marker PMSCarbonAIFFMarker
 #import <Metal/Metal.h>
+#import <CoreVideo/CoreVideo.h>
+#undef Marker
+#include "../src/pms_engine.h"
 #include "../src/metal_render.h"
-#include "portrait_preview.h"     // generated (build dir on -I); RGB portrait
-#include <vector>
+#include "../src/app.h"          // AppState/Track/Clip — case f builds a scene directly
+#include "json.hpp"
 #include <cstdio>
-#define STB_IMAGE_WRITE_IMPLEMENTATION
-#include "../vendor/stb_image_write.h"
+#include <cstdlib>
+#include <cstring>
+#include <string>
+#include <vector>
+#include <functional>
 
-int main(int argc, char** argv) {
-    @autoreleasepool {
-        int W = 270, H = 480;
-        id<MTLDevice> dev = MTLCreateSystemDefaultDevice();
-        if (!dev) { fprintf(stderr, "no Metal device\n"); return 2; }
-        metal_render_init((__bridge void*)dev);
+using json = nlohmann::json;
 
-        // Embedded portrait is RGB; the content path wants BGRA (AVFoundation layout).
-        int cw = portrait_preview_w, ch = portrait_preview_h;
-        std::vector<uint8_t> bgra((size_t)cw * ch * 4);
-        for (size_t i = 0; i < (size_t)cw * ch; ++i) {
-            bgra[i*4+0] = portrait_preview_rgb[i*3+2];  // B
-            bgra[i*4+1] = portrait_preview_rgb[i*3+1];  // G
-            bgra[i*4+2] = portrait_preview_rgb[i*3+0];  // R
-            bgra[i*4+3] = 255;
+static const int W = 360, H = 640;      // 9:16 canvas
+static pms_engine*        g_e      = nullptr;
+static id<MTLDevice>      g_dev    = nil;
+static id<MTLTexture>     g_target = nil;
+static id<MTLCommandQueue> g_rq    = nil;
+
+// ── Failure plumbing ─────────────────────────────────────────────────────────
+
+static std::string fx_debug_str() {
+    if (!g_e) return "{}";
+    char* r = pms_command(g_e, "{\"id\":\"d\",\"method\":\"fx_debug\",\"params\":{}}");
+    std::string s = r ? r : "{}";
+    pms_free(r);
+    return s;
+}
+
+static void fail(const std::string& case_name, const std::string& msg) {
+    fprintf(stderr, "metal render test: FAIL [%s] %s\n", case_name.c_str(), msg.c_str());
+    fprintf(stderr, "fx_debug: %s\n", fx_debug_str().c_str());
+    exit(1);
+}
+
+static void check(bool ok, const std::string& case_name, const std::string& msg) {
+    if (!ok) fail(case_name, msg);
+}
+
+// Send one lever; assert success; return the result payload.
+static json cmd(const std::string& case_name, const std::string& method,
+                const json& params = json::object()) {
+    json req = {{"id", "t"}, {"method", method}, {"params", params}};
+    char* r = pms_command(g_e, req.dump().c_str());
+    std::string out = r ? r : "";
+    pms_free(r);
+    json reply = json::parse(out, nullptr, false);
+    if (reply.is_discarded()) fail(case_name, method + ": unparsable reply: " + out);
+    if (reply.contains("error"))
+        fail(case_name, method + " errored: " + reply["error"].dump());
+    return reply.value("result", json::object());
+}
+
+static json fx_debug(const std::string& case_name) {
+    json j = json::parse(fx_debug_str(), nullptr, false);
+    if (j.is_discarded()) fail(case_name, "fx_debug: unparsable reply");
+    return j.value("result", json::object());   // unwrap the {id,result} envelope
+}
+
+// ── Synthetic CVPixelBuffers ─────────────────────────────────────────────────
+// IOSurface-backed 32BGRA so CVMetalTextureCache maps them zero-copy, exactly
+// like the AVFoundation buffers the app submits.
+
+static CVPixelBufferRef make_pb(int w, int h,
+        const std::function<void(uint8_t* row, int x, int y, uint8_t* px)>& fill) {
+    NSDictionary* attrs = @{ (id)kCVPixelBufferIOSurfacePropertiesKey: @{},
+                             (id)kCVPixelBufferMetalCompatibilityKey: @YES };
+    CVPixelBufferRef pb = NULL;
+    CVReturn r = CVPixelBufferCreate(kCFAllocatorDefault, w, h,
+                                     kCVPixelFormatType_32BGRA,
+                                     (__bridge CFDictionaryRef)attrs, &pb);
+    if (r != kCVReturnSuccess || !pb) fail("setup", "CVPixelBufferCreate failed");
+    CVPixelBufferLockBaseAddress(pb, 0);
+    uint8_t* base = (uint8_t*)CVPixelBufferGetBaseAddress(pb);
+    size_t   bpr  = CVPixelBufferGetBytesPerRow(pb);
+    for (int y = 0; y < h; ++y) {
+        uint8_t* row = base + (size_t)y * bpr;
+        for (int x = 0; x < w; ++x) fill(row, x, y, row + (size_t)x * 4);
+    }
+    CVPixelBufferUnlockBaseAddress(pb, 0);
+    return pb;
+}
+
+// Solid premultiplied BGRA.
+static CVPixelBufferRef make_solid(int w, int h, uint8_t b, uint8_t g, uint8_t r, uint8_t a = 255) {
+    return make_pb(w, h, [=](uint8_t*, int, int, uint8_t* px) {
+        px[0] = b; px[1] = g; px[2] = r; px[3] = a;
+    });
+}
+
+// Diagonal gradient (opaque): B ramps with x, G ramps with y, R with x+y —
+// smooth in every direction so warps/quantizers visibly rearrange it.
+static CVPixelBufferRef make_gradient(int w, int h) {
+    return make_pb(w, h, [=](uint8_t*, int x, int y, uint8_t* px) {
+        px[0] = (uint8_t)(x * 255 / (w - 1));
+        px[1] = (uint8_t)(y * 255 / (h - 1));
+        px[2] = (uint8_t)(((x + y) * 255) / (w + h - 2));
+        px[3] = 255;
+    });
+}
+
+// 20px checkerboard (opaque black/white): maximal contrast so pixelate(40)
+// produces ~full-range deltas and a 50% wet/dry blend stays far above noise.
+static CVPixelBufferRef make_checker(int w, int h) {
+    return make_pb(w, h, [=](uint8_t*, int x, int y, uint8_t* px) {
+        uint8_t v = (((x / 20) + (y / 20)) & 1) ? 255 : 0;
+        px[0] = v; px[1] = v; px[2] = v; px[3] = 255;
+    });
+}
+
+static void submit_layer(int track, int clip, CVPixelBufferRef pb, double host_time) {
+    pms_submit_layer_frame(g_e, track, clip, (void*)pb, 0, host_time);
+}
+static void clear_layer(int track, int clip) {
+    pms_submit_layer_frame(g_e, track, clip, NULL, 0, -1.0);
+}
+
+// ── Render + readback ────────────────────────────────────────────────────────
+
+struct Img { std::vector<uint8_t> px; };   // W*H BGRA
+
+static Img read_target() {
+    id<MTLCommandBuffer> cb = [g_rq commandBuffer];
+    id<MTLBlitCommandEncoder> bl = [cb blitCommandEncoder];
+#if TARGET_OS_OSX || defined(__MAC_OS_X_VERSION_MIN_REQUIRED)
+    if (g_target.storageMode == MTLStorageModeManaged) [bl synchronizeResource:g_target];
+#endif
+    [bl endEncoding];
+    [cb commit]; [cb waitUntilCompleted];
+    Img im; im.px.resize((size_t)W * H * 4);
+    [g_target getBytes:im.px.data() bytesPerRow:(NSUInteger)W * 4
+            fromRegion:MTLRegionMake2D(0, 0, W, H) mipmapLevel:0];
+    return im;
+}
+
+static Img render_frame(const std::string& case_name) {
+    int rc = pms_render(g_e, (__bridge void*)g_target, W, H);
+    if (rc != 0) fail(case_name, "pms_render rc=" + std::to_string(rc));
+    pms_render_wait(g_e);
+    return read_target();
+}
+
+// ── Pixel assertions ─────────────────────────────────────────────────────────
+
+struct PxRect { int x0, y0, x1, y1; };       // half-open
+static const PxRect kFull = {0, 0, W, H};
+
+static const uint8_t* at(const Img& im, int x, int y) {
+    return im.px.data() + ((size_t)y * W + x) * 4;
+}
+
+static int px_diff(const uint8_t* a, const uint8_t* b) {
+    int d = 0;
+    for (int c = 0; c < 3; ++c) d = std::max(d, std::abs((int)a[c] - (int)b[c]));
+    return d;
+}
+
+// Fraction of pixels in `r` whose max BGR channel delta exceeds `tol`.
+static double frac_diff(const Img& a, const Img& b, int tol, PxRect r = kFull) {
+    long n = 0, diff = 0;
+    for (int y = r.y0; y < r.y1; ++y)
+        for (int x = r.x0; x < r.x1; ++x) {
+            ++n;
+            if (px_diff(at(a, x, y), at(b, x, y)) > tol) ++diff;
         }
-        metal_render_set_content_bgra(bgra.data(), cw, ch);
+    return n ? (double)diff / (double)n : 0.0;
+}
+
+static int max_region_diff(const Img& a, const Img& b, PxRect r) {
+    int d = 0;
+    for (int y = r.y0; y < r.y1; ++y)
+        for (int x = r.x0; x < r.x1; ++x)
+            d = std::max(d, px_diff(at(a, x, y), at(b, x, y)));
+    return d;
+}
+
+// Average BGR over a rect.
+static void avg_bgr(const Img& im, PxRect r, double out[3]) {
+    double s[3] = {0, 0, 0}; long n = 0;
+    for (int y = r.y0; y < r.y1; ++y)
+        for (int x = r.x0; x < r.x1; ++x, ++n)
+            for (int c = 0; c < 3; ++c) s[c] += at(im, x, y)[c];
+    for (int c = 0; c < 3; ++c) out[c] = n ? s[c] / n : 0.0;
+}
+
+static std::string bgr_str(const double c[3]) {
+    char buf[64];
+    snprintf(buf, sizeof buf, "(B=%.1f G=%.1f R=%.1f)", c[0], c[1], c[2]);
+    return buf;
+}
+
+// ── Cases ────────────────────────────────────────────────────────────────────
+
+// a. Background only: no project content, no layer frames — the legacy path
+// must still render (aurora, non-uniform, not black), scene inactive.
+static void case_background_only() {
+    const std::string C = "a.background_only";
+    Img im = render_frame(C);
+    json dbg = fx_debug(C);
+    check(dbg.contains("scene") && dbg["scene"].value("active", true) == false, C,
+          "scene compositor ran with no layer frames (expected legacy path)");
+    double top[3], bottom[3];
+    avg_bgr(im, {0, 0, W, 40}, top);
+    avg_bgr(im, {0, H - 40, W, H}, bottom);
+    check(top[0] + top[1] + top[2] + bottom[0] + bottom[1] + bottom[2] > 3.0, C,
+          "aurora rendered all-black: top=" + bgr_str(top) + " bottom=" + bgr_str(bottom));
+    double d = 0;
+    for (int c = 0; c < 3; ++c) d = std::max(d, std::abs(top[c] - bottom[c]));
+    check(d > 1.0, C, "aurora is uniform (no vertical structure) — background pass suspect");
+}
+
+// Shared project for b/c/d: one track, one video clip 0..4.
+static void build_video_project(const std::string& C) {
+    cmd(C, "new_project", {{"force", true}});
+    cmd(C, "add_track", {{"name", "V"}, {"position", 0}});
+    cmd(C, "add_clip", {{"track", 0}, {"type", "video"}, {"start", 0.0}, {"end", 4.0},
+                        {"text", "/tmp/pms_mrt_fake.mp4"}});
+}
+
+// b. One video layer → scene active, layer pixels dominate the center.
+static void case_one_layer(CVPixelBufferRef green) {
+    const std::string C = "b.one_video_layer";
+    build_video_project(C);
+    submit_layer(0, 0, green, 1.0);
+    Img im = render_frame(C);
+    json dbg = fx_debug(C);
+    check(dbg["scene"].value("active", false), C, "scene.active is false with a layer submitted");
+    check(!dbg["scene"]["layers_drawn"].empty(), C,
+          "no layers drawn; scene=" + dbg["scene"].dump());
+    double c[3]; avg_bgr(im, {W/2 - 20, H/2 - 20, W/2 + 20, H/2 + 20}, c);
+    check(std::abs(c[0] - 20) < 6 && std::abs(c[1] - 200) < 6 && std::abs(c[2] - 20) < 6, C,
+          "center is not the submitted layer color: " + bgr_str(c) + " expected (B=20 G=200 R=20)");
+}
+
+// c. REPRO: coupled pixelate brick over the clip; gradient frame at t=1.0
+// (inside the brick's 0..2 window) → output must differ from the no-FX render.
+static Img g_nofx_gradient;   // baseline shared with case d
+static void case_glass_fx(CVPixelBufferRef gradient) {
+    const std::string C = "c.glass_pixelate";
+    build_video_project(C);
+    submit_layer(0, 0, gradient, 1.0);
+    g_nofx_gradient = render_frame(C);   // no-FX baseline, same frame/time
+
+    json r = cmd(C, "add_effect_brick",
+                 {{"track", 0}, {"fx_type", "pixelate"}, {"start", 0.0}, {"end", 2.0},
+                  {"params", {{"size", 40.0}}}});
+    check(r.value("coupled", false), C, "pixelate brick did not auto-couple: " + r.dump());
+
+    // The engine playhead is only coarsely reconciled in the app (5 Hz preview)
+    // and FROZEN during export — park it OUTSIDE the brick's window so the test
+    // fails if FX windows read state.playhead instead of the frame clock (the
+    // exact FX-don't-render bug: frames at t=1.0 must still get the brick).
+    cmd(C, "seek", {{"time", 3.0}});
+
+    Img fx = render_frame(C);
+    json dbg = fx_debug(C);
+    check(dbg["scene"].value("glass_applied", 0) >= 1, C,
+          "glass chain reported 0 applied passes; scene=" + dbg["scene"].dump());
+    double d = frac_diff(fx, g_nofx_gradient, 8);
+    check(d > 0.01, C,
+          "pixelate(size 40) left the frame unchanged (diff frac=" + std::to_string(d) +
+          ") — FX are not rendering; scene=" + dbg["scene"].dump());
+    // Numeric correctness: pixelate output is CONSTANT within each 40px block
+    // (the 360x640 layer maps 1:1 onto the canvas) and steps across blocks.
+    int in_block  = px_diff(at(fx, 10, 10), at(fx, 30, 30));
+    int x_block   = px_diff(at(fx, 10, 10), at(fx, 50, 10));
+    check(in_block <= 3, C, "pixelate block is not constant (in-block diff=" +
+          std::to_string(in_block) + ") — params/UV path wrong");
+    check(x_block >= 10, C, "pixelate blocks do not step across the boundary (diff=" +
+          std::to_string(x_block) + ") — u_size not reaching the shader");
+}
+
+// d. Same scene at t=3.0 — outside the brick's 0..2 window → equals no-FX.
+static void case_fx_window(CVPixelBufferRef gradient) {
+    const std::string C = "d.fx_time_window";
+    // Converse of case c: park the playhead INSIDE the brick window while the
+    // frame clock is outside — a playhead-driven window would wrongly apply.
+    cmd(C, "seek", {{"time", 1.0}});
+    submit_layer(0, 0, gradient, 3.0);   // moves the scene clock past the brick
+    Img im = render_frame(C);
+    json dbg = fx_debug(C);
+    check(dbg["scene"].value("glass_applied", 0) == 0, C,
+          "brick applied outside its window; scene=" + dbg["scene"].dump());
+    int md = max_region_diff(im, g_nofx_gradient, kFull);
+    check(md <= 2, C, "frame at t=3.0 differs from the no-FX render (max diff=" +
+          std::to_string(md) + ") — FX window leaking; scene=" + dbg["scene"].dump());
+}
+
+// e. Two-FX order on an uncoupled rail brick: pixelate→fisheye vs
+// fisheye→pixelate are different warp compositions.
+static Img render_rail_chain(const std::string& C, CVPixelBufferRef gradient,
+                             const json& effects) {
+    cmd(C, "new_project", {{"force", true}});
+    cmd(C, "add_track", {{"name", "RAIL"}, {"position", 0}});
+    cmd(C, "add_track", {{"name", "V"}, {"position", 1}});
+    cmd(C, "add_clip", {{"track", 1}, {"type", "video"}, {"start", 0.0}, {"end", 4.0},
+                        {"text", "/tmp/pms_mrt_fake.mp4"}});
+    json r = cmd(C, "add_multifx_brick",
+                 {{"track", 0}, {"start", 0.0}, {"end", 4.0}, {"effects", effects}});
+    check(!r.value("coupled", true), C,
+          "rail brick unexpectedly coupled (no host on its track): " + r.dump());
+    submit_layer(1, 0, gradient, 1.0);
+    Img im = render_frame(C);
+    json dbg = fx_debug(C);
+    check(dbg["scene"].value("bus_applied", 0) == 2, C,
+          "expected 2 bus passes applied, scene=" + dbg["scene"].dump());
+    clear_layer(1, 0);
+    return im;
+}
+
+static void case_fx_order(CVPixelBufferRef gradient) {
+    const std::string C = "e.two_fx_order";
+    json pixelate = {{"fx_type", "pixelate"}, {"params", {{"size", 40.0}}}};
+    json fisheye  = {{"fx_type", "fisheye"}};
+    Img ab = render_rail_chain(C, gradient, json::array({pixelate, fisheye}));
+    Img ba = render_rail_chain(C, gradient, json::array({fisheye, pixelate}));
+    double d = frac_diff(ab, ba, 8);
+    check(d > 0.01, C, "pixelate→fisheye equals fisheye→pixelate (diff frac=" +
+          std::to_string(d) + ") — chain order is not honored");
+    // And both must actually differ from the raw gradient scene.
+    double da = frac_diff(ab, g_nofx_gradient, 8);
+    check(da > 0.01, C, "bus chain left the frame unchanged (diff frac=" +
+          std::to_string(da) + ")");
+
+    // Cross-track variant: one brick per rail track (lower rail applies first).
+    // Exercises two scene copy-backs in a single frame (aliasing trap).
+    auto rails = [&](const json& lower_fx, const json& upper_fx) {
+        cmd(C, "new_project", {{"force", true}});
+        cmd(C, "add_track", {{"name", "R0"}, {"position", 0}});
+        cmd(C, "add_track", {{"name", "R1"}, {"position", 1}});
+        cmd(C, "add_track", {{"name", "V"},  {"position", 2}});
+        cmd(C, "add_clip", {{"track", 2}, {"type", "video"}, {"start", 0.0}, {"end", 4.0},
+                            {"text", "/tmp/pms_mrt_fake.mp4"}});
+        cmd(C, "add_effect_brick", {{"track", 1}, {"fx_type", lower_fx["fx_type"]},
+                                    {"start", 0.0}, {"end", 4.0}, {"params", lower_fx["params"]}});
+        cmd(C, "add_effect_brick", {{"track", 0}, {"fx_type", upper_fx["fx_type"]},
+                                    {"start", 0.0}, {"end", 4.0}, {"params", upper_fx["params"]}});
+        submit_layer(2, 0, gradient, 1.0);
+        Img im = render_frame(C);
+        json dbg2 = fx_debug(C);
+        check(dbg2["scene"].value("bus_applied", 0) == 2, C,
+              "cross-track: expected 2 bus passes; scene=" + dbg2["scene"].dump());
+        clear_layer(2, 0);
+        return im;
+    };
+    json pix = {{"fx_type", "pixelate"}, {"params", {{"size", 40.0}}}};
+    json fis = {{"fx_type", "fisheye"}, {"params", json::object()}};
+    Img ab2 = rails(pix, fis);   // pixelate (lower rail) then fisheye (upper rail)
+    Img ba2 = rails(fis, pix);
+    double d2 = frac_diff(ab2, ba2, 8);
+    check(d2 > 0.01, C, "cross-track bus order not honored (diff frac=" + std::to_string(d2) + ")");
+    // Track-stack order must equal chain order (desktop parity).
+    double dsame = frac_diff(ab2, ab, 4);
+    check(dsame < 0.02, C, "two rail tracks disagree with one chained brick (diff frac=" +
+          std::to_string(dsame) + ") — scene copy-back suspect");
+}
+
+// f. Transition smoke: Dissolve mid-frame is a blend of both clips. No IPC
+// lever sets transitions, so this case drives the real compositor directly
+// with a hand-built AppState (same metal_render_frame the C ABI calls).
+static void case_transition(CVPixelBufferRef red, CVPixelBufferRef blue) {
+    const std::string C = "f.dissolve_transition";
+    AppState st;
+    st.tracks.emplace_back();
+    Track& tr = st.tracks[0];
+    tr.name = "V";
+    Clip a;  a.clip_type = ClipType::Video; a.start = 0.f; a.end = 2.f;
+    a.transition_type = TransitionType::Dissolve;
+    a.transition_pre = 0.5f; a.transition_post = 0.5f;
+    Clip b;  b.clip_type = ClipType::Video; b.start = 2.f; b.end = 4.f;
+    tr.clips.push_back(a);
+    tr.clips.push_back(b);
+
+    auto render_at = [&](double t) {
+        metal_render_submit_layer(0, 0, (void*)red,  0, t);
+        metal_render_submit_layer(0, 1, (void*)blue, 0, t);
+        int rc = metal_render_frame((__bridge void*)g_target, W, H, 0.0, &st);
+        if (rc != 0) fail(C, "metal_render_frame rc=" + std::to_string(rc));
+        metal_render_wait();
+        return read_target();
+    };
+    Img pure_a = render_at(1.0);    // before the transition zone
+    Img mid    = render_at(1.9);    // inside pre (1.5..2.0)
+    Img pure_b = render_at(2.6);    // past post (2.0..2.5)
+    metal_render_submit_layer(0, 0, NULL, 0, -1.0);
+    metal_render_submit_layer(0, 1, NULL, 0, -1.0);
+
+    PxRect c = {W/2 - 20, H/2 - 20, W/2 + 20, H/2 + 20};
+    double ca[3], cm[3], cb2[3];
+    avg_bgr(pure_a, c, ca); avg_bgr(mid, c, cm); avg_bgr(pure_b, c, cb2);
+    check(ca[2] > 180 && ca[0] < 60, C, "pure A frame is not red: " + bgr_str(ca));
+    check(cb2[0] > 180 && cb2[2] < 60, C, "pure B frame is not blue: " + bgr_str(cb2));
+    check(max_region_diff(mid, pure_a, c) > 20 && max_region_diff(mid, pure_b, c) > 20, C,
+          "mid-transition frame equals a pure frame: mid=" + bgr_str(cm));
+    check(cm[2] > 20 && cm[0] > 20, C,
+          "mid-transition is not a blend of both clips: " + bgr_str(cm));
+}
+
+// g. Text layer on a higher track composites over the video layer.
+static void case_text_layer(CVPixelBufferRef video, CVPixelBufferRef text_raster) {
+    const std::string C = "g.text_layer";
+    cmd(C, "new_project", {{"force", true}});
+    cmd(C, "add_track", {{"name", "T"}, {"position", 0}});
+    cmd(C, "add_track", {{"name", "V"}, {"position", 1}});
+    cmd(C, "add_clip", {{"track", 1}, {"type", "video"}, {"start", 0.0}, {"end", 4.0},
+                        {"text", "/tmp/pms_mrt_fake.mp4"}});
+    cmd(C, "add_clip", {{"track", 0}, {"type", "text"}, {"start", 0.0}, {"end", 4.0},
+                        {"text", "hello"}});
+    submit_layer(1, 0, video, 1.0);
+    Img base = render_frame(C);
+    submit_layer(0, 0, text_raster, -1.0);   // static raster: no scene clock
+    Img over = render_frame(C);
+    json dbg = fx_debug(C);
+    clear_layer(0, 0);
+    clear_layer(1, 0);
+
+    PxRect c = {W/2 - 20, H/2 - 20, W/2 + 20, H/2 + 20};
+    double cb[3], co[3];
+    avg_bgr(base, c, cb); avg_bgr(over, c, co);
+    // raster = premultiplied 50% red over dark-blue video: R rises, B halves.
+    check(co[2] > cb[2] + 60, C, "text raster did not composite over the video: base=" +
+          bgr_str(cb) + " over=" + bgr_str(co) + "; scene=" + dbg["scene"].dump());
+    check(co[0] < cb[0] - 40, C, "text alpha not honored (background not attenuated): base=" +
+          bgr_str(cb) + " over=" + bgr_str(co));
+}
+
+// h. Bus scope: an uncoupled brick on the track BETWEEN two video tracks
+// filters the accumulated scene below it (lower layer) but the upper layer,
+// drawn afterwards, stays untouched.
+static void case_bus_scope(CVPixelBufferRef gradient, CVPixelBufferRef yellow) {
+    const std::string C = "h.bus_scope";
+    auto build = [&](bool with_brick) {
+        cmd(C, "new_project", {{"force", true}});
+        cmd(C, "add_track", {{"name", "VU"},   {"position", 0}});
+        cmd(C, "add_track", {{"name", "RAIL"}, {"position", 1}});
+        cmd(C, "add_track", {{"name", "VL"},   {"position", 2}});
+        cmd(C, "add_clip", {{"track", 0}, {"type", "video"}, {"start", 0.0}, {"end", 4.0},
+                            {"text", "/tmp/pms_mrt_fake_u.mp4"}});
+        cmd(C, "add_clip", {{"track", 2}, {"type", "video"}, {"start", 0.0}, {"end", 4.0},
+                            {"text", "/tmp/pms_mrt_fake_l.mp4"}});
+        // Upper layer: small solid patch, upper-right quadrant.
+        cmd(C, "set_clip_prop", {{"track", 0}, {"clip", 0}, {"prop", "scale_x"}, {"value", 0.35}});
+        cmd(C, "set_clip_prop", {{"track", 0}, {"clip", 0}, {"prop", "scale_y"}, {"value", 0.35}});
+        cmd(C, "set_clip_prop", {{"track", 0}, {"clip", 0}, {"prop", "pos_x"},   {"value", 0.75}});
+        cmd(C, "set_clip_prop", {{"track", 0}, {"clip", 0}, {"prop", "pos_y"},   {"value", 0.25}});
+        if (with_brick) {
+            json r = cmd(C, "add_effect_brick",
+                         {{"track", 1}, {"fx_type", "posterize"}, {"start", 0.0}, {"end", 4.0},
+                          {"params", {{"levels", 3.0}}}});
+            check(!r.value("coupled", true), C, "rail brick unexpectedly coupled: " + r.dump());
+        }
+        submit_layer(0, 0, yellow, 1.0);
+        submit_layer(2, 0, gradient, 1.0);
+        Img im = render_frame(C);
+        clear_layer(0, 0);
+        clear_layer(2, 0);
+        return im;
+    };
+    Img base = build(false);
+    Img fx   = build(true);
+    json dbg = fx_debug(C);
+    check(dbg["scene"].value("bus_applied", 0) >= 1, C,
+          "rail brick applied 0 bus passes; scene=" + dbg["scene"].dump());
+    // Upper layer center (pos 0.75/0.25 of the canvas): must be identical.
+    PxRect up = {(int)(0.75 * W) - 10, (int)(0.25 * H) - 10,
+               (int)(0.75 * W) + 10, (int)(0.25 * H) + 10};
+    int ud = max_region_diff(fx, base, up);
+    check(ud <= 2, C, "bus FX on a middle track altered the UPPER layer (max diff=" +
+          std::to_string(ud) + ") — bus scope broken; scene=" + dbg["scene"].dump());
+    // Lower-left region (gradient only): must be posterized.
+    PxRect low = {20, (int)(0.70 * H), (int)(0.40 * W), (int)(0.95 * H)};
+    double ld = frac_diff(fx, base, 8, low);
+    check(ld > 0.05, C, "bus FX did not alter the lower layer region (diff frac=" +
+          std::to_string(ld) + "); scene=" + dbg["scene"].dump());
+}
+
+// i. Every generated FX in the manifest must resolve + apply as a glass brick
+// (PSO compiles from the transpiled MSL, params buffer fills, pass encodes).
+// A single shader failing to compile is exactly the "FX don't render" class.
+static void case_all_manifest_fx(CVPixelBufferRef checker) {
+    const std::string C = "i.all_manifest_fx";
+    // The generated FX registry — the same table ipc_server/metal_render use.
+    static const char* k_ids[] = {
+#include "../src/generated/fx_gen_names.h"
+    };
+    std::vector<std::string> ids(k_ids, k_ids + sizeof(k_ids) / sizeof(k_ids[0]));
+    std::vector<std::string> failed, unchanged;
+    check(!ids.empty(), C, "generated FX registry is empty");
+    build_video_project(C);
+    submit_layer(0, 0, checker, 1.0);
+    Img nofx = render_frame(C);
+    clear_layer(0, 0);
+    for (const std::string& id : ids) {
+        if (id.empty()) continue;
+        if (id == "ken_burns") continue;   // desktop CPU path (render.cpp), no fragment shader — accepted gap
+        build_video_project(C + "." + id);
+        cmd(C, "add_effect_brick",
+            {{"track", 0}, {"fx_type", id}, {"start", 0.0}, {"end", 4.0}});
+        submit_layer(0, 0, checker, 1.0);
+        Img fx = render_frame(C + "." + id);
+        json d = fx_debug(C);
+        if (d["scene"].value("glass_applied", 0) < 1)
+            failed.push_back(id + " → " + d["scene"].value("notes", json::array()).dump());
+        else if (frac_diff(fx, nofx, 4) < 0.001)
+            unchanged.push_back(id);   // informational: identity at defaults on this content
+        clear_layer(0, 0);
+    }
+    if (!unchanged.empty()) {
+        std::string s; for (auto& u : unchanged) s += u + " ";
+        printf("  [i] note: identity-at-defaults fx (applied but no pixel change): %s\n", s.c_str());
+    }
+    if (!failed.empty()) {
+        std::string s; for (auto& f : failed) s += "\n    " + f;
+        fail(C, "generated FX did not apply:" + s);
+    }
+    printf("  [i] %zu generated FX applied (%zu identity at defaults)\n",
+           ids.size(), unchanged.size());
+}
+
+// j. Wet/dry: amount 0.5 must blend — differ from both the no-FX frame and
+// the amount-1.0 frame (exercises the automatic blend pass).
+static void case_wet_dry(CVPixelBufferRef checker) {
+    const std::string C = "j.wet_dry_amount";
+    build_video_project(C);
+    submit_layer(0, 0, checker, 1.0);
+    Img nofx = render_frame(C);
+    cmd(C, "add_effect_brick",
+        {{"track", 0}, {"fx_type", "pixelate"}, {"start", 0.0}, {"end", 4.0},
+         {"params", {{"size", 40.0}, {"amount", 1.0}}}});
+    Img full = render_frame(C);
+    cmd(C, "set_clip_fx", {{"track", 0}, {"clip", 1}, {"fx_id", "pixelate"}, {"amount", 0.5}});
+    Img half = render_frame(C);
+    clear_layer(0, 0);
+    double d_nofx = frac_diff(half, nofx, 30);
+    double d_full = frac_diff(half, full, 30);
+    check(d_nofx > 0.05, C, "amount 0.5 left the frame unchanged (diff frac vs no-FX=" +
+          std::to_string(d_nofx) + ")");
+    check(d_full > 0.05, C, "amount 0.5 equals amount 1.0 (diff frac=" +
+          std::to_string(d_full) + ") — wet/dry blend not running");
+}
+
+// ── Main ─────────────────────────────────────────────────────────────────────
+
+int main() {
+    @autoreleasepool {
+        // FX shader registry: point the runner at the transpiled MSL dir
+        // BEFORE pms_create (metal_render_init loads the manifest).
+        const char* sd = getenv("PMS_SHADER_DIR");
+        std::string shader_dir = sd ? sd : std::string(getenv("HOME") ? getenv("HOME") : "")
+                                              + "/dev/pms-ios/Shaders/msl";
+        metal_render_set_shader_dir(shader_dir.c_str());
+
+        g_dev = MTLCreateSystemDefaultDevice();
+        if (!g_dev) { fprintf(stderr, "metal render test: FAIL [setup] no Metal device\n"); return 2; }
+        g_e = pms_create((__bridge void*)g_dev, "", "/tmp/pms-metal-render-test");
+        if (!g_e) { fprintf(stderr, "metal render test: FAIL [setup] pms_create failed\n"); return 2; }
+
+        json dbg = fx_debug("setup");
+        if (dbg.value("manifest_count", 0) < 50)
+            fail("setup", "FX manifest not loaded from '" + shader_dir +
+                          "' (manifest_count=" + std::to_string(dbg.value("manifest_count", 0)) +
+                          ") — set PMS_SHADER_DIR to Shaders/msl");
 
         MTLTextureDescriptor* td = [MTLTextureDescriptor
             texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
             width:W height:H mipmapped:NO];
         td.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
         td.storageMode = MTLStorageModeManaged;
-        id<MTLTexture> tex = [dev newTextureWithDescriptor:td];
+        g_target = [g_dev newTextureWithDescriptor:td];
+        g_rq = [g_dev newCommandQueue];
 
-        int rc = metal_render_frame((__bridge void*)tex, W, H, 1.6);
-        if (rc != 0) { fprintf(stderr, "render rc=%d\n", rc); return 3; }
+        CVPixelBufferRef green    = make_solid(W, H, 20, 200, 20);
+        CVPixelBufferRef gradient = make_gradient(W, H);
+        CVPixelBufferRef red      = make_solid(W, H, 30, 30, 220);
+        CVPixelBufferRef blue     = make_solid(W, H, 220, 40, 30);
+        CVPixelBufferRef darkblue = make_solid(W, H, 180, 40, 20);
+        CVPixelBufferRef yellow   = make_solid(W, H, 20, 210, 230);
+        CVPixelBufferRef halfred  = make_solid(W, H, 0, 0, 128, 128);  // premultiplied 50% red
+        CVPixelBufferRef checker  = make_checker(W, H);
 
-        id<MTLCommandQueue> q = [dev newCommandQueue];
-        id<MTLCommandBuffer> cb = [q commandBuffer];
-        id<MTLBlitCommandEncoder> bl = [cb blitCommandEncoder];
-        [bl synchronizeResource:tex]; [bl endEncoding];
-        [cb commit]; [cb waitUntilCompleted];
+        case_background_only();
+        case_one_layer(green);
+        case_glass_fx(gradient);
+        case_fx_window(gradient);
+        clear_layer(0, 0);
+        case_fx_order(gradient);
+        case_transition(red, blue);
+        case_text_layer(darkblue, halfred);
+        case_bus_scope(gradient, yellow);
+        case_wet_dry(checker);
+        case_all_manifest_fx(checker);
 
-        std::vector<uint8_t> pix((size_t)W*H*4), rgb((size_t)W*H*3);
-        [tex getBytes:pix.data() bytesPerRow:W*4
-           fromRegion:MTLRegionMake2D(0,0,W,H) mipmapLevel:0];
-        for (size_t i=0;i<(size_t)W*H;i++){ rgb[i*3+0]=pix[i*4+2]; rgb[i*3+1]=pix[i*4+1]; rgb[i*3+2]=pix[i*4+0]; }
-        const char* out = argc>1 ? argv[1] : "/tmp/metal_test.png";
-        stbi_write_png(out, W, H, 3, rgb.data(), W*3);
-        printf("wrote %s (%dx%d) with %dx%d content\n", out, W, H, cw, ch);
+        CVPixelBufferRelease(green);    CVPixelBufferRelease(gradient);
+        CVPixelBufferRelease(red);      CVPixelBufferRelease(blue);
+        CVPixelBufferRelease(darkblue); CVPixelBufferRelease(yellow);
+        CVPixelBufferRelease(halfred);  CVPixelBufferRelease(checker);
+
+        pms_destroy(g_e);
+        printf("metal render test: PASS\n");
     }
     return 0;
 }

@@ -1,7 +1,12 @@
 // metal_render.mm — Metal RenderSurface backend (Phase 3, iOS).
+// On macOS (host test build) CoreVideo drags in CarbonCore's AIFF.h whose
+// legacy `struct Marker` collides with the engine's Marker (app.h). Rename
+// the Carbon one for the framework includes only — we never touch it.
+#define Marker PMSCarbonAIFFMarker
 #import <Metal/Metal.h>
 #import <CoreVideo/CoreVideo.h>
 #import <Foundation/Foundation.h>
+#undef Marker
 #include "metal_render.h"
 #include "app.h"          // AppState/Track/Clip — the scene compositor walks these
 #include "json.hpp"
@@ -260,6 +265,15 @@ struct LayerFrame {
     double            t   = 0.0;      // host/timeline time of the frame
 };
 static std::map<std::pair<int,int>, LayerFrame> g_layers;
+
+// Scene clock: the timeline time of the LATEST submitted frame (host_time >= 0;
+// static layers like text rasters pass -1 = "no clock"). This — not
+// state.playhead — drives layer activity and FX windows: preview follows the
+// AVPlayer clock exactly (state.playhead is only 5 Hz-reconciled), and export
+// stamps each output frame's time (state.playhead is FROZEN during export —
+// using it froze every FX window at the export start instant).
+static double g_scene_clock = 0.0;
+static bool   g_scene_clock_valid = false;
 
 // Scene compositor pipelines + targets.
 static id<MTLRenderPipelineState> g_layer_pso       = nil;  // transform quad, premul over
@@ -821,6 +835,10 @@ void metal_render_submit_layer(int track, int clip, void* cv_pixel_buffer_bgra,
     lf.w = w; lf.h = h;
     lf.rot = ((rotation_quarter_turns % 4) + 4) % 4;
     lf.t   = host_time_seconds;
+    if (host_time_seconds >= 0.0) {           // latest submission wins (seeks go backward too)
+        g_scene_clock = host_time_seconds;
+        g_scene_clock_valid = true;
+    }
 }
 
 // Store the latest person matte — an R8 (OneComponent8) CVPixelBufferRef from
@@ -1069,7 +1087,9 @@ static int render_scene(id<MTLCommandBuffer> cb, id<MTLTexture> target, int w, i
                         double wall_t, const AppState& st,
                         const std::map<std::pair<int,int>, LayerFrame>& layers,
                         id<MTLTexture> matte) {
-    const float t = st.playhead;   // FX windows + animation run on timeline time
+    // FX windows + layer activity + keyframes run on the FRAME clock (latest
+    // submitted frame time), not state.playhead — see g_scene_clock.
+    const float t = g_scene_clock_valid ? (float)g_scene_clock : st.playhead;
     int rc = 0;
     fxjson drawn = fxjson::array(), skipped = fxjson::array(), notes = fxjson::array();
     int glass_n = 0, bus_n = 0, trans_n = 0;
