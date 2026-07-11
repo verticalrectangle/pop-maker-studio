@@ -425,10 +425,10 @@ def el_lip(img, style=None, color=None, alpha=None, seed=0, **kw):
 LINER_STYLES = {
     'soft':     {'wing': 0.0,  'width': 0.030, 'alpha': 165, 'blur': 0.008, 'raise': 0.0},
     'tightline':{'wing': 0.0,  'width': 0.012, 'alpha': 140, 'blur': 0.006, 'raise': 0.015},
-    'wing':     {'wing': 0.28, 'width': 0.040, 'alpha': 210, 'blur': 0.008, 'raise': 0.0},
-    'siren':    {'wing': 0.42, 'width': 0.034, 'alpha': 220, 'blur': 0.008, 'raise': 0.0},
-    'graphic':  {'wing': 0.34, 'width': 0.055, 'alpha': 230, 'blur': 0.008, 'raise': 0.0},
-    'smudged':  {'wing': 0.30, 'width': 0.038, 'alpha': 190, 'blur': 0.018, 'raise': 0.01},
+    'wing':     {'wing': 0.16, 'width': 0.040, 'alpha': 210, 'blur': 0.008, 'raise': 0.0},
+    'siren':    {'wing': 0.24, 'width': 0.034, 'alpha': 220, 'blur': 0.008, 'raise': 0.0},
+    'graphic':  {'wing': 0.20, 'width': 0.055, 'alpha': 230, 'blur': 0.008, 'raise': 0.0},
+    'smudged':  {'wing': 0.18, 'width': 0.038, 'alpha': 190, 'blur': 0.018, 'raise': 0.01},
 }
 
 def el_liner(img, style='soft', color=(26, 14, 18), alpha=None, seed=0):
@@ -450,7 +450,20 @@ def el_liner(img, style='soft', color=(26, 14, 18), alpha=None, seed=0):
             xoff, yoff = _side_offset(rng, 0.01, 0.005)
             tip = (o[0] + sign * ed * st['wing'] + xoff,
                    o[1] - ed * st['wing'] * 0.55 + yoff)
-            d.line([o, tip], fill=color + (alpha,), width=max(1, int(w * 0.9)))
+            # Taper the wing: full width at the outer corner, narrowing to
+            # zero at the tip with a proportional alpha fade so it feathers
+            # instead of ending as a constant-ink spike.
+            w_tip = max(1, int(ed * st['width']))
+            steps = 8
+            for si in range(steps):
+                t0 = si / steps
+                t1 = (si + 1) / steps
+                p0 = (o[0] + (tip[0] - o[0]) * t0, o[1] + (tip[1] - o[1]) * t0)
+                p1 = (o[0] + (tip[0] - o[0]) * t1, o[1] + (tip[1] - o[1]) * t1)
+                w_seg = max(1, int(w_tip * (1.0 - t0) * 0.9))
+                a_seg = int(alpha * (1.0 - t0 * 0.7))
+                draw_tapered_line(d, p0, p1, w_seg, max(1, int(w_seg * 0.5)),
+                                  color + (a_seg,))
     return over(img, l.filter(ImageFilter.GaussianBlur(ed * st['blur'])))
 
 def el_lashes(img, strength=0.7, style='doll', lower=False, color=(20, 12, 16), seed=0):

@@ -669,6 +669,23 @@ fragment float4 face_mk_f(MkVOut in [[stage_in]], constant FaceMkUni& u [[buffer
     // Material-aware blend: dark pigments deepen, chromatic midtones tint,
     // bright low-alpha texels add a soft, non-clipping highlight.
     float3 out = base + (2.0 * blend - 1.0) * base * (1.0 - base);
+    // Depth cue for dark pigment (lashes, liner): very dark, high-alpha
+    // texels get a subtle luma-based highlight on the upper edge and a
+    // shadow on the lower edge, simulating raised hair/ink catching light.
+    // This breaks the flat-decal read without a full normal map pass.
+    float mk_lum = f_lum(mkc.rgb);
+    float is_dark_pigment = smoothstep(0.12, 0.0, mk_lum) * smoothstep(0.3, 0.7, mka);
+    if (is_dark_pigment > 0.01) {
+        // Sample a neighbor above in makeup-texture space (1024²) at a
+        // radius proportional to the eye radius — ~40% of er, enough to
+        // cross the skin/pigment boundary above a lash stroke (which is
+        // 3-5 texels wide). A 1-texel offset is sub-pixel and invisible.
+        float2 mkpx = float2(0.0, -er2 * 0.4 / 1024.0);
+        float3 above = mk.sample(s, in.mkuv + mkpx).rgb;
+        float above_lum = f_lum(above);
+        float edge = clamp((above_lum - mk_lum) * 3.0, -1.0, 1.0);
+        out += float3(0.06, 0.05, 0.05) * edge * is_dark_pigment;
+    }
     return float4(mix(base, out, mka * u.opacity), 1.0);
 }
 )";

@@ -1039,7 +1039,7 @@ void main() {
     // the true shape, use it). Liner is a crisp line ON the lid edge; the
     // lash band sits just above it, thicker toward the outer corner; the
     // wing extends from the outer corner.
-    if (u_lash.x + u_lash.z > 0.001) {
+    if (u_lash.x + u_lash.y + u_lash.z > 0.001) {
         vec3 ink = vec3(0.04, 0.03, 0.04);
         for (int side = 0; side < 2; ++side) {
             float bfade = 1.0 - 0.9 * smoothstep(0.25, 0.55,
@@ -1071,13 +1071,24 @@ void main() {
             if (u_lash.y > 0.001) {              // wing from the outer corner
                 vec2 inc = side == 0 ? u_lidL[6] : u_lidR[6];
                 vec2 outdir = normalize(outc - inc);
-                vec2 w1 = outc + (outdir * 0.80 + u_up * 0.35) * er * u_lash.y;
-                float wd = seg_dist(p, outc, w1);
-                float along = clamp(dot(p - outc, w1 - outc) /
-                                    max(dot(w1 - outc, w1 - outc), 1e-4), 0.0, 1.0);
+                // Eye-local up: perpendicular to outer→inner corner direction,
+                // rotated toward the brow. Follows the eye's own orientation
+                // so head tilt doesn't misorient the wing.
+                vec2 eye_up = vec2(-outdir.y, outdir.x);
+                if (dot(eye_up, u_up) < 0.0) eye_up = -eye_up;
+                // Quadratic Bézier outc→w_mid→w_tip curves the wing upward
+                // toward the tip, following the brow bone.
+                vec2 w_mid = outc + (outdir * 0.80 + eye_up * 0.35) * er * u_lash.y;
+                vec2 w_tip = w_mid + eye_up * er * u_lash.y * 0.25;
+                float along = clamp(dot(p - outc, w_tip - outc) /
+                                    max(dot(w_tip - outc, w_tip - outc), 1e-4), 0.0, 1.0);
+                vec2 wp = mix(mix(outc, w_mid, along), mix(w_mid, w_tip, along), along);
+                float wd = distance(p, wp);
                 float wt = mix(er * 0.10, er * 0.015, along);
                 float wing = 1.0 - smoothstep(wt * 0.4, wt, wd);
-                col = mix(col, ink, wing * max(u_lash.x, u_lash.z) * 0.92 * bfade);
+                // Tip alpha fade: feather the last 40% to zero.
+                float tip_fade = 1.0 - smoothstep(0.60, 1.0, along);
+                col = mix(col, ink, wing * u_lash.y * tip_fade * 0.92 * bfade);
             }
         }
     }
@@ -1142,6 +1153,18 @@ void main() {
     // Material-aware blend: dark pigments deepen, chromatic midtones tint,
     // bright low-alpha texels add a soft, non-clipping highlight.
     vec3 out = base + (2.0 * blend - 1.0) * base * (1.0 - base);
+    // Depth cue for dark pigment (lashes, liner): very dark, high-alpha
+    // texels get a subtle luma-based edge highlight/shadow, simulating
+    // raised hair/ink catching light. Breaks the flat-decal read.
+    float mk_lum = lum2(mk.rgb);
+    float is_dark_pigment = smoothstep(0.12, 0.0, mk_lum) * smoothstep(0.3, 0.7, mk.a);
+    if (is_dark_pigment > 0.01) {
+        vec2 mkpx = vec2(0.0, -er2 * 0.4 / 1024.0);
+        vec3 above = texture(u_mk, v_mkuv + mkpx).rgb;
+        float above_lum = lum2(above);
+        float edge = clamp((above_lum - mk_lum) * 3.0, -1.0, 1.0);
+        out += vec3(0.06, 0.05, 0.05) * edge * is_dark_pigment;
+    }
     frag = vec4(mix(base, out, mk.a * u_opacity), 1.0);
 }
 )";

@@ -677,23 +677,18 @@ bool face_filter_build_plan_look(const BeautyLook& L, float amount,
         bp.chin_x = PX(a.chin[0]); bp.chin_y = PY(a.chin[1]);
         bp.chin_smooth = L.chin_smooth * amount;
         // When a UV makeup texture plate is bound it already carries painted
-        // lash hairs and eyeliner; the procedural lash band and liner line
-        // would double them and flatten the painted hairs into a dark smudge.
-        // Suppress both so only the plate's hairs show. The wing is a shape
-        // element the plate does NOT carry, so it stays — but scaled by the
-        // overall intensity like every other makeup scalar.
+        // lash hairs, eyeliner, AND a wing tip — the procedural lash band,
+        // liner line, and wing would double them. Suppress all three so only
+        // the plate's painted elements show.
         if (L.makeup_tex) {
             bp.lash       = 0.f;
             bp.liner      = 0.f;
+            bp.lash_wing  = 0.f;
         } else {
             bp.lash       = L.lash       * amount;
             bp.liner      = L.liner      * amount;
+            bp.lash_wing  = L.lash_wing  * amount;  // wing length scales with intensity
         }
-        if (obs.has_blend) {
-            bp.blink_l = obs.blend[FB_EYE_BLINK_L];
-            bp.blink_r = obs.blend[FB_EYE_BLINK_R];
-        }
-        bp.lash_wing  = L.lash_wing * amount;  // wing length scales with intensity
         bp.eyeoutL_x = PX(obs.pts[33][0]);  bp.eyeoutL_y = PY(obs.pts[33][1]);
         bp.eyeoutR_x = PX(obs.pts[263][0]); bp.eyeoutR_y = PY(obs.pts[263][1]);
         // Upper-lid chains, outer→inner — the lash/liner ride these.
