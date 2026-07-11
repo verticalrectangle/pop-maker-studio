@@ -561,7 +561,7 @@ fragment float4 face_beauty_f(FSOut in [[stage_in]], constant FaceBeautyUni& u [
             col += tintc * u.cyber[3] * mask * 0.06 * (1.0 - sl);
         }
     }
-    if (u.lash[0] + u.lash[2] > 0.001) {               // lashes + liner + wing
+    if (u.lash[0] + u.lash[1] + u.lash[2] > 0.001) {   // lashes + liner + wing
         float3 ink = float3(0.04, 0.03, 0.04);
         for (int side = 0; side < 2; ++side) {
             float bfade = 1.0 - 0.9 * smoothstep(0.25, 0.55,
@@ -596,13 +596,30 @@ fragment float4 face_beauty_f(FSOut in [[stage_in]], constant FaceBeautyUni& u [
                 float2 inc = side == 0 ? float2(u.lidL[12], u.lidL[13])
                                        : float2(u.lidR[12], u.lidR[13]);
                 float2 outdir = normalize(outc - inc);
-                float2 w1 = outc + (outdir * 0.80 + upv * 0.35) * er * u.lash[1];
-                float wd = f_seg(p, outc, w1);
-                float along = clamp(dot(p - outc, w1 - outc) /
-                                    max(dot(w1 - outc, w1 - outc), 1e-4), 0.0, 1.0);
+                // Eye-local up: perpendicular to the outer→inner corner
+                // direction, rotated toward the brow. This follows the eye's
+                // own orientation rather than the global face-up, so head tilt
+                // doesn't send the wing the wrong way relative to the eye.
+                float2 eye_up = float2(-outdir.y, outdir.x);
+                if (dot(eye_up, upv) < 0.0) eye_up = -eye_up;
+                // Curve the wing upward along its length by blending the
+                // straight outward direction with the eye-local up, more so
+                // toward the tip — follows the brow bone, not a straight spike.
+                float2 w_mid = outc + (outdir * 0.80 + eye_up * 0.35) * er * u.lash[1];
+                float2 w_tip = w_mid + eye_up * er * u.lash[1] * 0.25;
+                // Parametric position along the wing (0 at outer corner, 1 at tip).
+                float along = clamp(dot(p - outc, w_tip - outc) /
+                                    max(dot(w_tip - outc, w_tip - outc), 1e-4), 0.0, 1.0);
+                // Quadratic Bézier through outc → w_mid → w_tip curves the
+                // wing upward toward the tip, following the brow bone.
+                float2 wp = mix(mix(outc, w_mid, along), mix(w_mid, w_tip, along), along);
+                float wd = distance(p, wp);
                 float wt = mix(er * 0.10, er * 0.015, along);
                 float wing = 1.0 - smoothstep(wt * 0.4, wt, wd);
-                col = mix(col, ink, wing * max(u.lash[0], u.lash[2]) * 0.92 * bfade);
+                // Tip alpha fade: feather the last 40% of the wing to zero so
+                // it doesn't end as a constant-ink spike.
+                float tip_fade = 1.0 - smoothstep(0.60, 1.0, along);
+                col = mix(col, ink, wing * u.lash[1] * tip_fade * 0.92 * bfade);
             }
         }
     }
