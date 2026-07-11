@@ -20,6 +20,8 @@ NINJA="$(command -v ninja || echo "$HOME/tools/ninja")"
 
 git submodule update --init --depth 1 vendor/imgui
 
+# Stale CMake caches (e.g. from a different generator) break reconfiguration.
+rm -rf build-mac
 "$CMAKE" -B build-mac -S . -G Ninja \
     -DCMAKE_MAKE_PROGRAM="$NINJA" \
     -DPMS_ENGINE_ONLY=ON \
