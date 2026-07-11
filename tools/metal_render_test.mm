@@ -869,7 +869,9 @@ int main() {
 
         g_dev = MTLCreateSystemDefaultDevice();
         if (!g_dev) { fprintf(stderr, "metal render test: FAIL [setup] no Metal device\n"); return 2; }
-        g_e = pms_create((__bridge void*)g_dev, "", "/tmp/pms-metal-render-test");
+        const char* asset_root = getenv("PMS_ASSET_ROOT");
+        if (!asset_root) asset_root = "";
+        g_e = pms_create((__bridge void*)g_dev, asset_root, "/tmp/pms-metal-render-test");
         if (!g_e) { fprintf(stderr, "metal render test: FAIL [setup] pms_create failed\n"); return 2; }
 
         json dbg = fx_debug("setup");

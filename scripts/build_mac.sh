@@ -29,9 +29,20 @@ git submodule update --init --depth 1 vendor/imgui
     -DCMAKE_CXX_FLAGS="-I$PREFIX/opt/ggml/include"
 
 "$NINJA" -C build-mac engine-smoke
-echo "built: build-mac/engine-smoke"
+"$NINJA" -C build-mac metal-render-test
+echo "built: build-mac/engine-smoke + metal-render-test"
 
 if [[ "${1:-}" == "--run" ]]; then
     rm -rf /tmp/pms-engine-smoke
     ./build-mac/engine-smoke
+
+    # Metal regression gate for the iOS render path (uses pms-ios assets for face models).
+    export PMS_ASSET_ROOT="${PMS_ASSET_ROOT:-$HOME/dev/pms-ios/Engine/EngineAssets}"
+    export PMS_SHADER_DIR="${PMS_SHADER_DIR:-$HOME/dev/pms-ios/Shaders/msl}"
+    if [ -d "$PMS_ASSET_ROOT" ]; then
+        echo "running: metal-render-test (assets=$PMS_ASSET_ROOT, shaders=$PMS_SHADER_DIR)"
+        ./build-mac/metal-render-test
+    else
+        echo "warning: PMS_ASSET_ROOT ($PMS_ASSET_ROOT) not found; metal-render-test skipped"
+    fi
 fi
